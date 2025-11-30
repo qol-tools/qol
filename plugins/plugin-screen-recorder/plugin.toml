@@ -1,0 +1,16 @@
+[plugin]
+name = "Screen Recorder"
+description = "Record screen regions with optional audio support"
+version = "1.0.0"
+author = "KMRH47"
+
+[menu]
+label = "🎬 Screen Recorder"
+items = [
+    { type = "action", id = "record", label = "Start/Stop Recording", action = "run" },
+    { type = "separator" },
+    { type = "checkbox", id = "audio-enable", label = "Enable Audio", checked = true, action = "toggle-config", config_key = "audio.enabled" },
+    { type = "action", id = "audio-settings", label = "Audio Settings...", action = "settings" },
+]
+
+# No background daemon needed for this plugin
