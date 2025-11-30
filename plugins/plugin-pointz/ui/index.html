@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PointZ Remote</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📱 PointZ Remote</h1>
+            <p class="subtitle">Control your PC from mobile devices</p>
+        </header>
+
+        <div id="status" class="status-card loading">
+            <div class="spinner"></div>
+            <p>Connecting to PointZerver...</p>
+        </div>
+
+        <div id="qr-section" class="qr-section hidden">
+            <div class="info-grid">
+                <div class="info-item">
+                    <label>Hostname</label>
+                    <span id="hostname">—</span>
+                </div>
+                <div class="info-item">
+                    <label>IP Address</label>
+                    <span id="ip">—</span>
+                </div>
+                <div class="info-item">
+                    <label>Discovery Port</label>
+                    <span id="discovery-port">—</span>
+                </div>
+                <div class="info-item">
+                    <label>Command Port</label>
+                    <span id="command-port">—</span>
+                </div>
+            </div>
+
+            <div class="qr-container">
+                <h2>Scan to Download App</h2>
+                <div id="qr-code"></div>
+                <a id="download-link" href="#" target="_blank">Direct Download</a>
+            </div>
+        </div>
+
+        <div id="error-section" class="error-section hidden">
+            <h2>⚠️ Server Not Running</h2>
+            <p>PointZerver daemon is not responding.</p>
+            <p class="hint">Make sure the daemon is started via qol-tray.</p>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
+

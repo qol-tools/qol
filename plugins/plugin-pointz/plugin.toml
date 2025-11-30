@@ -1,0 +1,17 @@
+[plugin]
+name = "PointZ Remote"
+description = "Control your PC from mobile devices"
+version = "0.4.0"
+author = "KMRH47"
+
+[menu]
+label = "📱 PointZ"
+items = [
+    { type = "action", id = "settings", label = "Settings", action = "settings" },
+]
+
+[daemon]
+enabled = true
+command = "run.sh"
+restart_on_crash = true
+
