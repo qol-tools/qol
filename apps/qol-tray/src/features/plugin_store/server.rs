@@ -9,7 +9,8 @@ use axum::{
 };
 use serde::Serialize;
 use tokio::sync::oneshot;
-use tower_http::services::ServeDir;
+use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
+use axum::http::HeaderValue;
 use anyhow::Result;
 
 use crate::plugins::PluginLoader;
@@ -44,10 +45,17 @@ pub async fn start_ui_server(static_dir: &str) -> Result<UiServerHandle> {
         .route("/uninstall/:id", post(uninstall_plugin))
         .route("/ws/install/:id", get(install_ws));
 
+    let static_service = ServeDir::new(static_dir);
+    let no_cache = SetResponseHeaderLayer::overriding(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-cache, no-store, must-revalidate"),
+    );
+
     let app = Router::new()
         .nest("/api", api)
         .nest("/plugins", plugin_ui::router(plugins_dir))
-        .fallback_service(ServeDir::new(static_dir));
+        .fallback_service(static_service)
+        .layer(no_cache);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:42700").await?;
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
