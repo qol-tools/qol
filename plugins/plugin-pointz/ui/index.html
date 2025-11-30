@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PointZ Remote</title>
+    <title>PointZ</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>📱 PointZ Remote</h1>
-            <p class="subtitle">Control your PC from mobile devices</p>
+            <img src="https://raw.githubusercontent.com/qol-tools/pointZ/main/assets/pz-banner.svg" alt="PointZ" class="banner">
+            <p class="subtitle">Mobile app for controlling your PC cursor from Android/iOS</p>
         </header>
 
         <div id="status" class="status-card loading">
@@ -46,9 +46,9 @@
         </div>
 
         <div id="error-section" class="error-section hidden">
-            <h2>⚠️ Server Not Running</h2>
-            <p>PointZerver daemon is not responding.</p>
-            <p class="hint">Make sure the daemon is started via qol-tray.</p>
+            <h2>⚠️ Connection Failed</h2>
+            <p>Could not connect to PointZerver status endpoint.</p>
+            <p class="hint">The daemon may be running but CORS is blocking the request.</p>
         </div>
     </div>
 
@@ -56,4 +56,3 @@
     <script src="app.js"></script>
 </body>
 </html>
-
