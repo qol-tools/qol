@@ -1,0 +1,14 @@
+{
+  "audio": {
+    "enabled": true,
+    "inputs": ["mic", "system"],
+    "mic_device": "default",
+    "system_device": "default"
+  },
+  "video": {
+    "crf": 18,
+    "preset": "veryfast",
+    "framerate": 60,
+    "format": "mkv"
+  }
+}

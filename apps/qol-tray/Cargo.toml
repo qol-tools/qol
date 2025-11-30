@@ -1,0 +1,56 @@
+[package]
+name = "qol-tray"
+version = "0.1.0"
+edition = "2021"
+description = "Quality of Life Tray - Pluggable system tray daemon for utility scripts"
+license = "MIT"
+authors = ["KMRH47"]
+
+[features]
+default = []
+plugin-store = ["dep:reqwest"]
+
+[dependencies]
+# Core async runtime
+tokio = { version = "1.35", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# System tray
+tray-icon = "0.12"
+
+# File watching for hot-reloading plugins
+notify = "6.1"
+
+# Path utilities
+dirs = "5.0"
+
+# HTTP client for GitHub API (optional, only for plugin-store feature)
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"], optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+
+[package.metadata.deb]
+maintainer = "KMRH47"
+copyright = "2025, KMRH47"
+extended-description = """\
+Quality of Life Tray - A pluggable system tray daemon for managing utility scripts and tools.
+Load custom plugins to extend functionality."""
+depends = "$auto, libgtk-3-0, libayatana-appindicator3-1"
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/qol-tray", "usr/bin/", "755"],
+]
