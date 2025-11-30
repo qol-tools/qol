@@ -56,26 +56,31 @@ impl MenuProvider for PluginStore {
 async fn open_plugin_browser(handle: Arc<Mutex<Option<server::UiServerHandle>>>) -> Result<()> {
     let mut guard = handle.lock().await;
 
-    if guard.is_none() {
+    let url = if let Some(ref server) = *guard {
+        format!("http://{}", server.addr)
+    } else {
         let ui_dir = std::env::current_dir()?.join("ui");
         log::info!("Serving UI from: {:?}", ui_dir);
         let server = server::start_ui_server(ui_dir.to_str().unwrap()).await?;
         let url = format!("http://{}", server.addr);
-
-        #[cfg(target_os = "linux")]
-        std::process::Command::new("xdg-open").arg(&url).spawn()?;
-
-        #[cfg(target_os = "macos")]
-        std::process::Command::new("open").arg(&url).spawn()?;
-
-        #[cfg(target_os = "windows")]
-        std::process::Command::new("cmd").args(&["/C", "start", &url]).spawn()?;
-
-        log::info!("Plugin store UI started at {}", url);
+        log::info!("Plugin store server started at {}", url);
         *guard = Some(server);
-    } else {
-        log::info!("Plugin store UI already running");
-    }
+        url
+    };
+
+    open_url(&url)?;
+    Ok(())
+}
+
+fn open_url(url: &str) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    std::process::Command::new("xdg-open").arg(url).spawn()?;
+
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open").arg(url).spawn()?;
+
+    #[cfg(target_os = "windows")]
+    std::process::Command::new("cmd").args(["/C", "start", url]).spawn()?;
 
     Ok(())
 }
