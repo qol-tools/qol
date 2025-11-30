@@ -1,6 +1,5 @@
 use super::plugin_ui;
 
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use axum::{
     extract::{Path, ws::{WebSocketUpgrade, WebSocket}},
@@ -31,7 +30,6 @@ struct UninstallResult {
 }
 
 pub struct UiServerHandle {
-    pub addr: SocketAddr,
     #[allow(dead_code)]
     shutdown_tx: oneshot::Sender<()>,
 }
@@ -52,8 +50,6 @@ pub async fn start_ui_server(static_dir: &str) -> Result<UiServerHandle> {
         .fallback_service(ServeDir::new(static_dir));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:42700").await?;
-    let addr = listener.local_addr()?;
-
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
     tokio::spawn(async move {
@@ -65,7 +61,7 @@ pub async fn start_ui_server(static_dir: &str) -> Result<UiServerHandle> {
             .ok();
     });
 
-    Ok(UiServerHandle { addr, shutdown_tx })
+    Ok(UiServerHandle { shutdown_tx })
 }
 
 fn get_installed_plugin_ids(plugins_dir: &std::path::Path) -> std::collections::HashSet<String> {
