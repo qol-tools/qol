@@ -58,7 +58,6 @@ impl PluginInstaller {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub async fn uninstall(&self, plugin_id: &str) -> Result<()> {
         let plugin_dir = self.plugins_dir.join(plugin_id);
 

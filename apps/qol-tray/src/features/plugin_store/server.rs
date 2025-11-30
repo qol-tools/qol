@@ -24,6 +24,12 @@ struct PluginInfo {
     installed: bool,
 }
 
+#[derive(Serialize)]
+struct UninstallResult {
+    success: bool,
+    message: String,
+}
+
 pub struct UiServerHandle {
     pub addr: SocketAddr,
     #[allow(dead_code)]
@@ -37,6 +43,7 @@ pub async fn start_ui_server(static_dir: &str) -> Result<UiServerHandle> {
     let api = Router::new()
         .route("/plugins", get(list_plugins))
         .route("/install/:id", post(install_plugin))
+        .route("/uninstall/:id", post(uninstall_plugin))
         .route("/ws/install/:id", get(install_ws));
 
     let app = Router::new()
@@ -152,6 +159,42 @@ async fn install_plugin(Path(id): Path<String>) -> Json<PluginInfo> {
                 description: format!("Installation failed: {}", e),
                 version: "1.0.0".to_string(),
                 installed: false,
+            })
+        }
+    }
+}
+
+async fn uninstall_plugin(Path(id): Path<String>) -> Json<UninstallResult> {
+    use super::installer::PluginInstaller;
+
+    log::info!("Uninstall requested for plugin: {}", id);
+
+    let plugins_dir = match PluginLoader::default_plugin_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            log::error!("Failed to get plugins directory: {}", e);
+            return Json(UninstallResult {
+                success: false,
+                message: format!("Failed to access plugins directory: {}", e),
+            });
+        }
+    };
+
+    let installer = PluginInstaller::new(plugins_dir);
+
+    match installer.uninstall(&id).await {
+        Ok(_) => {
+            log::info!("Plugin {} uninstalled successfully", id);
+            Json(UninstallResult {
+                success: true,
+                message: "Uninstalled successfully".to_string(),
+            })
+        }
+        Err(e) => {
+            log::error!("Failed to uninstall plugin {}: {}", id, e);
+            Json(UninstallResult {
+                success: false,
+                message: format!("Uninstall failed: {}", e),
             })
         }
     }

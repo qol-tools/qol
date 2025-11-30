@@ -27,13 +27,17 @@ function renderPlugins(plugins) {
             <h3>${plugin.name}</h3>
             <div class="version">v${plugin.version}</div>
             <div class="description">${plugin.description}</div>
-            <button
-                class="${plugin.installed ? 'installed' : 'install'}"
-                onclick="${plugin.installed ? '' : `installPlugin('${plugin.id}')`}"
-                ${plugin.installed ? 'disabled' : ''}
-            >
-                ${plugin.installed ? 'Installed' : 'Install'}
-            </button>
+            <div class="button-group">
+                ${plugin.installed ? `
+                    <button class="uninstall" onclick="uninstallPlugin('${plugin.id}')">
+                        Uninstall
+                    </button>
+                ` : `
+                    <button class="install" onclick="installPlugin('${plugin.id}')">
+                        Install
+                    </button>
+                `}
+            </div>
         </div>
     `).join('');
 }
@@ -55,6 +59,34 @@ async function installPlugin(id) {
         alert(`Plugin ${id} installed successfully! Restart QoL Tray to see changes.`);
     } catch (error) {
         alert(`Failed to install plugin: ${error.message}`);
+    }
+}
+
+async function uninstallPlugin(id) {
+    if (!confirm(`Uninstall ${id}? This will remove the plugin files.`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/uninstall/${id}`, {
+            method: 'POST'
+        });
+
+        const result = await response.json();
+
+        if (!result.success) {
+            throw new Error(result.message);
+        }
+
+        const plugin = allPlugins.find(p => p.id === id);
+        if (plugin) {
+            plugin.installed = false;
+            renderPlugins(allPlugins);
+        }
+
+        alert(`Plugin ${id} uninstalled. Restart QoL Tray to apply changes.`);
+    } catch (error) {
+        alert(`Failed to uninstall plugin: ${error.message}`);
     }
 }
 
