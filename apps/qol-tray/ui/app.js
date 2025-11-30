@@ -44,10 +44,7 @@ function renderPlugins(plugins) {
 
 async function installPlugin(id) {
     try {
-        const response = await fetch(`/api/install/${id}`, {
-            method: 'POST'
-        });
-
+        const response = await fetch(`/api/install/${id}`, { method: 'POST' });
         if (!response.ok) throw new Error('Installation failed');
 
         const plugin = allPlugins.find(p => p.id === id);
@@ -55,38 +52,25 @@ async function installPlugin(id) {
             plugin.installed = true;
             renderPlugins(allPlugins);
         }
-
-        alert(`Plugin ${id} installed successfully!`);
     } catch (error) {
-        alert(`Failed to install plugin: ${error.message}`);
+        console.error(`Failed to install plugin: ${error.message}`);
     }
 }
 
 async function uninstallPlugin(id) {
-    if (!confirm(`Uninstall ${id}? This will remove the plugin files.`)) {
-        return;
-    }
-
     try {
-        const response = await fetch(`/api/uninstall/${id}`, {
-            method: 'POST'
-        });
-
+        const response = await fetch(`/api/uninstall/${id}`, { method: 'POST' });
         const result = await response.json();
 
-        if (!result.success) {
-            throw new Error(result.message);
-        }
+        if (!result.success) throw new Error(result.message);
 
         const plugin = allPlugins.find(p => p.id === id);
         if (plugin) {
             plugin.installed = false;
             renderPlugins(allPlugins);
         }
-
-        alert(`Plugin ${id} uninstalled.`);
     } catch (error) {
-        alert(`Failed to uninstall plugin: ${error.message}`);
+        console.error(`Failed to uninstall plugin: ${error.message}`);
     }
 }
 
