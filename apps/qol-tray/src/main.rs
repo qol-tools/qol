@@ -1,11 +1,14 @@
 mod menu;
 mod plugins;
 mod tray;
+mod features;
 
 use anyhow::Result;
 use plugins::PluginManager;
 use tray::TrayManager;
+use features::FeatureRegistry;
 use std::sync::{Arc, Mutex};
+use tokio::sync::broadcast;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -14,15 +17,21 @@ async fn main() -> Result<()> {
 
     log::info!("Starting QoL Tray daemon...");
 
+    let (shutdown_tx, mut shutdown_rx) = broadcast::channel::<()>(1);
+
     let mut plugin_manager = PluginManager::new();
     plugin_manager.load_plugins()?;
     let plugin_manager = Arc::new(Mutex::new(plugin_manager));
 
-    let _tray = TrayManager::new(plugin_manager)?;
+    let mut feature_registry = FeatureRegistry::new();
+    feature_registry.register(Box::new(features::plugin_store::PluginStore::new()));
+    let feature_registry = Arc::new(feature_registry);
+
+    let _tray = TrayManager::new(plugin_manager, feature_registry, shutdown_tx)?;
 
     log::info!("QoL Tray daemon started successfully");
 
-    loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    }
+    shutdown_rx.recv().await.ok();
+    log::info!("Shutdown signal received, exiting...");
+    Ok(())
 }

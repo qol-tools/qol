@@ -1,17 +1,24 @@
 use crate::plugins::PluginManager;
+use crate::features::FeatureRegistry;
 use anyhow::Result;
 use std::sync::{Arc, Mutex};
+use tokio::sync::broadcast;
 use tray_icon::{TrayIconBuilder, Icon};
 use gtk::{self, glib};
 
-pub fn create_tray(plugin_manager: Arc<Mutex<PluginManager>>, icon: Icon) -> Result<()> {
+pub fn create_tray(
+    plugin_manager: Arc<Mutex<PluginManager>>,
+    feature_registry: Arc<FeatureRegistry>,
+    shutdown_tx: broadcast::Sender<()>,
+    icon: Icon,
+) -> Result<()> {
     std::thread::spawn(move || {
         if gtk::init().is_err() {
             log::error!("Failed to initialize GTK");
             return;
         }
 
-        let (menu, router) = match crate::menu::builder::build_menu(plugin_manager) {
+        let (menu, router) = match crate::menu::builder::build_menu(plugin_manager, feature_registry) {
             Ok(result) => result,
             Err(e) => {
                 log::error!("Failed to build menu: {}", e);
@@ -33,7 +40,7 @@ pub fn create_tray(plugin_manager: Arc<Mutex<PluginManager>>, icon: Icon) -> Res
             }
         };
 
-        setup_event_loop(router);
+        setup_event_loop(router, shutdown_tx);
         std::mem::forget(tray_icon);
         gtk::main();
     });
@@ -41,7 +48,7 @@ pub fn create_tray(plugin_manager: Arc<Mutex<PluginManager>>, icon: Icon) -> Res
     Ok(())
 }
 
-fn setup_event_loop(router: crate::menu::router::EventRouter) {
+fn setup_event_loop(router: crate::menu::router::EventRouter, shutdown_tx: broadcast::Sender<()>) {
     use tray_icon::menu::MenuEvent;
 
     let menu_receiver = MenuEvent::receiver();
@@ -52,8 +59,17 @@ fn setup_event_loop(router: crate::menu::router::EventRouter) {
             let event_id = event.id.0.clone();
             log::debug!("Menu event: {}", event_id);
 
-            if let Err(e) = router.route(&event_id) {
-                log::error!("Error handling menu event: {}", e);
+            match router.route(&event_id) {
+                Ok(crate::menu::router::HandlerResult::Quit) => {
+                    log::info!("Quitting application");
+                    gtk::main_quit();
+                    let _ = shutdown_tx.send(());
+                    return glib::ControlFlow::Break;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    log::error!("Error handling menu event: {}", e);
+                }
             }
         }
         glib::ControlFlow::Continue
