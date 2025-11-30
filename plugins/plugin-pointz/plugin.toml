@@ -5,7 +5,8 @@ version = "0.4.0"
 author = "KMRH47"
 
 [menu]
-label = "📱 PointZ"
+label = "PointZ"
+icon = "icon.png"
 items = [
     { type = "action", id = "settings", label = "Settings", action = "settings" },
 ]
@@ -14,4 +15,3 @@ items = [
 enabled = true
 command = "run.sh"
 restart_on_crash = true
-
