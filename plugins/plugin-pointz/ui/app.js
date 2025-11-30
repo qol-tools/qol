@@ -6,6 +6,7 @@ async function fetchStatus() {
         if (!response.ok) throw new Error('Server error');
         return await response.json();
     } catch (error) {
+        console.error('Failed to fetch status:', error);
         return null;
     }
 }
@@ -19,17 +20,19 @@ function showStatus(status) {
     document.getElementById('ip').textContent = status.ip || 'Not available';
     document.getElementById('discovery-port').textContent = status.discovery_port;
     document.getElementById('command-port').textContent = status.command_port;
-
     document.getElementById('download-link').href = status.app_download_url;
 
     const qrContainer = document.getElementById('qr-code');
     qrContainer.innerHTML = '';
 
-    QRCode.toCanvas(status.app_download_url, { width: 200, margin: 0 }, (error, canvas) => {
-        if (!error) {
-            qrContainer.appendChild(canvas);
-        }
-    });
+    QRCode.toDataURL(status.app_download_url, { width: 200, margin: 1 })
+        .then(url => {
+            const img = document.createElement('img');
+            img.src = url;
+            img.alt = 'QR Code';
+            qrContainer.appendChild(img);
+        })
+        .catch(err => console.error('QR generation failed:', err));
 }
 
 function showError() {
@@ -55,4 +58,3 @@ setInterval(async () => {
         showStatus(status);
     }
 }, 5000);
-
