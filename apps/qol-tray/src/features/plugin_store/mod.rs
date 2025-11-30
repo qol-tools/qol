@@ -24,24 +24,18 @@ impl PluginStore {
 impl MenuProvider for PluginStore {
     fn menu_items(&self) -> Vec<PluginMenuItem> {
         vec![
-            PluginMenuItem::Submenu {
+            PluginMenuItem::Action {
                 id: "plugin_store".to_string(),
-                label: "Plugin Store".to_string(),
-                items: vec![
-                    PluginMenuItem::Action {
-                        id: "browse".to_string(),
-                        label: "Browse Plugins".to_string(),
-                        action: crate::plugins::ActionType::Run,
-                        config_key: None,
-                    },
-                ],
+                label: "🔌 Plugin Store".to_string(),
+                action: crate::plugins::ActionType::Run,
+                config_key: None,
             },
         ]
     }
 
     fn handle_event(&self, event_id: &str) -> Result<()> {
         log::info!("PluginStore received event: {}", event_id);
-        if event_id.ends_with("::plugin_store::browse") || event_id.ends_with("::browse") {
+        if event_id.ends_with("::plugin_store") {
             let handle = self.server_handle.clone();
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().unwrap();
