@@ -87,11 +87,9 @@ fn setup_event_loop(
     let router = Arc::new(Mutex::new(router));
 
     glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
-        // Check for plugin refresh requests
         if refresh_rx.try_recv().is_ok() {
             log::info!("Refreshing plugins and menu...");
 
-            // Reload plugins
             {
                 let mut manager = plugin_manager.lock().unwrap();
                 if let Err(e) = manager.reload_plugins() {
@@ -99,7 +97,6 @@ fn setup_event_loop(
                 }
             }
 
-            // Rebuild menu
             match crate::menu::builder::build_menu(
                 plugin_manager.clone(),
                 feature_registry.clone(),
@@ -117,7 +114,6 @@ fn setup_event_loop(
             }
         }
 
-        // Handle menu events
         while let Ok(event) = menu_receiver.try_recv() {
             let event_id = event.id.0.clone();
             log::debug!("Menu event: {}", event_id);

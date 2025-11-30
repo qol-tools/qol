@@ -64,6 +64,8 @@ header p {
     border-radius: 8px;
     padding: 1.5rem;
     transition: transform 0.2s, border-color 0.2s;
+    display: flex;
+    flex-direction: column;
 }
 
 .plugin-card:hover {
@@ -85,6 +87,7 @@ header p {
 .plugin-card .description {
     margin-bottom: 1rem;
     color: #ccc;
+    flex: 1;
 }
 
 .plugin-card .button-group {
