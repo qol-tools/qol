@@ -1,4 +1,4 @@
-use crate::features::plugin_manager::PluginManager;
+use crate::plugins::PluginManager;
 use anyhow::Result;
 use std::sync::{Arc, Mutex};
 use tray_icon::{TrayIconBuilder, Icon};
@@ -11,7 +11,13 @@ pub fn create_tray(plugin_manager: Arc<Mutex<PluginManager>>, icon: Icon) -> Res
             return;
         }
 
-        let menu = crate::features::tray::menu::build_menu(&plugin_manager);
+        let (menu, router) = match crate::menu::builder::build_menu(plugin_manager) {
+            Ok(result) => result,
+            Err(e) => {
+                log::error!("Failed to build menu: {}", e);
+                return;
+            }
+        };
 
         let tray_icon = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
@@ -27,7 +33,7 @@ pub fn create_tray(plugin_manager: Arc<Mutex<PluginManager>>, icon: Icon) -> Res
             }
         };
 
-        setup_event_loop(plugin_manager);
+        setup_event_loop(router);
         std::mem::forget(tray_icon);
         gtk::main();
     });
@@ -35,18 +41,18 @@ pub fn create_tray(plugin_manager: Arc<Mutex<PluginManager>>, icon: Icon) -> Res
     Ok(())
 }
 
-fn setup_event_loop(plugin_manager: Arc<Mutex<PluginManager>>) {
+fn setup_event_loop(router: crate::menu::router::EventRouter) {
     use tray_icon::menu::MenuEvent;
-    use crate::features::tray::menu::handle_menu_event;
 
     let menu_receiver = MenuEvent::receiver();
+    let router = Arc::new(router);
 
     glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
         while let Ok(event) = menu_receiver.try_recv() {
             let event_id = event.id.0.clone();
             log::debug!("Menu event: {}", event_id);
 
-            if let Err(e) = handle_menu_event(&plugin_manager, &event_id) {
+            if let Err(e) = router.route(&event_id) {
                 log::error!("Error handling menu event: {}", e);
             }
         }

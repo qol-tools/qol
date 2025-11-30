@@ -1,8 +1,7 @@
 mod platform;
-pub mod menu;
 mod icon;
 
-use crate::features::plugin_manager::PluginManager;
+use crate::plugins::PluginManager;
 use anyhow::Result;
 use std::sync::{Arc, Mutex};
 

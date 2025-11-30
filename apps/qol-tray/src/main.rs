@@ -1,8 +1,10 @@
-mod features;
+mod menu;
+mod plugins;
+mod tray;
 
 use anyhow::Result;
-use features::plugin_manager::PluginManager;
-use features::tray::TrayManager;
+use plugins::PluginManager;
+use tray::TrayManager;
 use std::sync::{Arc, Mutex};
 
 #[tokio::main]
@@ -14,10 +16,9 @@ async fn main() -> Result<()> {
 
     let mut plugin_manager = PluginManager::new();
     plugin_manager.load_plugins()?;
-
     let plugin_manager = Arc::new(Mutex::new(plugin_manager));
 
-    let _tray = TrayManager::new(Arc::clone(&plugin_manager))?;
+    let _tray = TrayManager::new(plugin_manager)?;
 
     log::info!("QoL Tray daemon started successfully");
 

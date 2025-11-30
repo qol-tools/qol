@@ -46,19 +46,6 @@ impl PluginManager {
             .ok_or_else(|| anyhow::anyhow!("Plugin not found: {}", id))?;
         plugin.update_config(key, value)
     }
-
-    pub fn reload(&mut self) -> Result<()> {
-        log::info!("Reloading all plugins...");
-
-        for plugin in self.plugins.values_mut() {
-            let _ = plugin.stop_daemon();
-        }
-
-        self.plugins.clear();
-        self.load_plugins()?;
-
-        Ok(())
-    }
 }
 
 impl Default for PluginManager {

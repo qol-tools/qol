@@ -7,7 +7,7 @@ mod windows;
 #[cfg(target_os = "macos")]
 mod macos;
 
-use crate::features::plugin_manager::PluginManager;
+use crate::plugins::PluginManager;
 use anyhow::Result;
 use std::sync::{Arc, Mutex};
 use tray_icon::Icon;
@@ -28,14 +28,15 @@ pub fn create_tray(plugin_manager: Arc<Mutex<PluginManager>>, icon: Icon) -> Res
     Ok(PlatformTray::Linux)
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(not(target_os = "linux"))]
 pub fn create_tray(plugin_manager: Arc<Mutex<PluginManager>>, icon: Icon) -> Result<PlatformTray> {
-    let tray = windows::create_tray(plugin_manager, icon)?;
-    Ok(PlatformTray::Standard(tray))
-}
+    let (menu, router) = crate::menu::builder::build_menu(plugin_manager)?;
 
-#[cfg(target_os = "macos")]
-pub fn create_tray(plugin_manager: Arc<Mutex<PluginManager>>, icon: Icon) -> Result<PlatformTray> {
-    let tray = macos::create_tray(plugin_manager, icon)?;
+    #[cfg(target_os = "windows")]
+    let tray = windows::create_tray(menu, router, icon)?;
+
+    #[cfg(target_os = "macos")]
+    let tray = macos::create_tray(menu, router, icon)?;
+
     Ok(PlatformTray::Standard(tray))
 }

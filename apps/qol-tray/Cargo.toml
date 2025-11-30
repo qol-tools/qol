@@ -6,9 +6,16 @@ description = "Quality of Life Tray - Pluggable system tray daemon for utility s
 license = "MIT"
 authors = ["KMRH47"]
 
+[[bin]]
+name = "qol-tray"
+path = "src/main.rs"
+
+[lib]
+name = "qol_tray"
+path = "src/lib.rs"
+
 [features]
 default = []
-plugin-store = ["dep:reqwest"]
 
 [dependencies]
 # Core async runtime
@@ -36,8 +43,8 @@ notify = "6.1"
 # Path utilities
 dirs = "5.0"
 
-# HTTP client for GitHub API (optional, only for plugin-store feature)
-reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"], optional = true }
+# Global state management
+once_cell = "1.19"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"

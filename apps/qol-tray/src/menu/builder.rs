@@ -1,32 +1,55 @@
-use crate::features::plugin_manager::{PluginManager, MenuItem as PluginMenuItem, ActionType};
+use super::router::{EventRouter, EventRoute, EventPattern, EventHandler, HandlerResult};
+use crate::plugins::{PluginManager, PluginManifest, MenuItem as PluginMenuItem, ActionType};
 use anyhow::Result;
 use std::sync::{Arc, Mutex};
-use tray_icon::menu::{Menu, MenuItem, PredefinedMenuItem, CheckMenuItem, Submenu};
+use tray_icon::menu::{Menu, MenuItem, CheckMenuItem, Submenu, PredefinedMenuItem};
 
-pub fn build_menu(plugin_manager: &Arc<Mutex<PluginManager>>) -> Menu {
+pub fn build_menu(plugin_manager: Arc<Mutex<PluginManager>>) -> Result<(Menu, EventRouter)> {
     let menu = Menu::new();
+    let mut all_routes = Vec::new();
 
     let manager = plugin_manager.lock().unwrap();
+
     for plugin in manager.plugins() {
-        let plugin_submenu = Submenu::new(&plugin.manifest.menu.label, true);
+        let submenu = Submenu::new(&plugin.manifest.menu.label, true);
 
         for item in &plugin.manifest.menu.items {
-            add_menu_item(&plugin_submenu, item, &plugin.id);
+            add_menu_item(&submenu, item, &plugin.id);
         }
 
-        let _ = menu.append(&plugin_submenu);
+        let _ = menu.append(&submenu);
+
+        let plugin_id = plugin.id.clone();
+        let manifest = plugin.manifest.clone();
+        let pm = plugin_manager.clone();
+
+        let route = EventRoute {
+            pattern: EventPattern::Prefix(format!("{}::", plugin_id)),
+            handler: EventHandler::Sync(Box::new(move |event_id| {
+                handle_plugin_event(&pm, event_id, &plugin_id, &manifest)
+            })),
+        };
+        all_routes.push(route);
     }
+
     drop(manager);
 
     let _ = menu.append(&PredefinedMenuItem::separator());
 
-    let reload_item = MenuItem::with_id("__reload__", "Reload Plugins", true, None);
-    let _ = menu.append(&reload_item);
-
     let quit_item = MenuItem::with_id("__quit__", "Quit", true, None);
     let _ = menu.append(&quit_item);
 
-    menu
+    let quit_route = EventRoute {
+        pattern: EventPattern::Exact("__quit__".to_string()),
+        handler: EventHandler::Sync(Box::new(|_| {
+            log::info!("Quit requested");
+            Ok(HandlerResult::Quit)
+        })),
+    };
+    all_routes.push(quit_route);
+
+    let router = EventRouter::new(all_routes);
+    Ok((menu, router))
 }
 
 fn add_menu_item(parent: &Submenu, item: &PluginMenuItem, plugin_id: &str) {
@@ -55,60 +78,48 @@ fn add_menu_item(parent: &Submenu, item: &PluginMenuItem, plugin_id: &str) {
     }
 }
 
-pub fn handle_menu_event(plugin_manager: &Arc<Mutex<PluginManager>>, event_id: &str) -> Result<()> {
-    match event_id {
-        "__quit__" => {
-            log::info!("Quit requested");
-            std::process::exit(0);
-        }
-        "__reload__" => {
-            log::info!("Reload plugins requested");
-            let mut manager = plugin_manager.lock().unwrap();
-            manager.reload()?;
-            drop(manager);
-            return Ok(());
-        }
-        _ => {}
-    }
-
+fn handle_plugin_event(
+    plugin_manager: &Arc<Mutex<PluginManager>>,
+    event_id: &str,
+    plugin_id: &str,
+    manifest: &PluginManifest,
+) -> Result<HandlerResult> {
     let parts: Vec<&str> = event_id.split("::").collect();
     if parts.len() != 2 {
-        log::warn!("Invalid event ID format: {}", event_id);
-        return Ok(());
+        return Ok(HandlerResult::Continue);
     }
 
-    let (plugin_id, item_id) = (parts[0], parts[1]);
-
-    let manager = plugin_manager.lock().unwrap();
-    let plugin = manager.get(plugin_id)
-        .ok_or_else(|| anyhow::anyhow!("Plugin not found: {}", plugin_id))?;
-
-    let action = find_menu_item_action(&plugin.manifest.menu.items, item_id);
+    let item_id = parts[1];
+    let action = find_menu_item_action(&manifest.menu.items, item_id);
 
     match action {
         Some((ActionType::Run, _)) => {
-            drop(manager);
             let manager = plugin_manager.lock().unwrap();
             manager.execute_plugin(plugin_id)?;
+            Ok(HandlerResult::Continue)
         }
         Some((ActionType::ToggleConfig, Some(config_key))) => {
+            let manager = plugin_manager.lock().unwrap();
+            let plugin = manager.get(plugin_id)
+                .ok_or_else(|| anyhow::anyhow!("Plugin not found"))?;
+
             let current_value = get_config_value(plugin, &config_key)?;
-            let new_value = !current_value;
             drop(manager);
 
             let manager = plugin_manager.lock().unwrap();
-            manager.update_plugin_config(plugin_id, &config_key, serde_json::json!(new_value))?;
-            log::info!("Toggled config {} for plugin {}: {}", config_key, plugin_id, new_value);
+            manager.update_plugin_config(plugin_id, &config_key, serde_json::json!(!current_value))?;
+            log::info!("Toggled config {} for plugin {}: {}", config_key, plugin_id, !current_value);
+            Ok(HandlerResult::Continue)
         }
         Some((ActionType::Settings, _)) => {
             log::info!("Settings not yet implemented for plugin: {}", plugin_id);
+            Ok(HandlerResult::Continue)
         }
         _ => {
             log::warn!("Unknown action for menu item: {}", item_id);
+            Ok(HandlerResult::Continue)
         }
     }
-
-    Ok(())
 }
 
 fn find_menu_item_action(items: &[PluginMenuItem], id: &str) -> Option<(ActionType, Option<String>)> {
@@ -131,7 +142,7 @@ fn find_menu_item_action(items: &[PluginMenuItem], id: &str) -> Option<(ActionTy
     None
 }
 
-fn get_config_value(plugin: &crate::features::plugin_manager::Plugin, key: &str) -> Result<bool> {
+fn get_config_value(plugin: &crate::plugins::Plugin, key: &str) -> Result<bool> {
     if !plugin.config_path.exists() {
         return Ok(false);
     }
