@@ -35,6 +35,16 @@ pub fn create_tray(
     Ok(PlatformTray::Linux)
 }
 
+#[cfg(target_os = "linux")]
+pub fn request_plugin_refresh() {
+    linux::request_plugin_refresh();
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn request_plugin_refresh() {
+    log::warn!("Plugin refresh not yet implemented on this platform");
+}
+
 #[cfg(not(target_os = "linux"))]
 pub fn create_tray(
     plugin_manager: Arc<Mutex<PluginManager>>,

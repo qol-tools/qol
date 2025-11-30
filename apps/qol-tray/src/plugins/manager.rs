@@ -27,6 +27,21 @@ impl PluginManager {
         Ok(())
     }
 
+    pub fn reload_plugins(&mut self) -> Result<()> {
+        log::info!("Reloading plugins...");
+
+        // Stop all daemons
+        for plugin in self.plugins.values_mut() {
+            let _ = plugin.stop_daemon();
+        }
+
+        // Clear existing plugins
+        self.plugins.clear();
+
+        // Load fresh
+        self.load_plugins()
+    }
+
     pub fn get(&self, id: &str) -> Option<&Plugin> {
         self.plugins.get(id)
     }

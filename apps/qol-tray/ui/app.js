@@ -56,7 +56,7 @@ async function installPlugin(id) {
             renderPlugins(allPlugins);
         }
 
-        alert(`Plugin ${id} installed successfully! Restart QoL Tray to see changes.`);
+        alert(`Plugin ${id} installed successfully!`);
     } catch (error) {
         alert(`Failed to install plugin: ${error.message}`);
     }
@@ -84,7 +84,7 @@ async function uninstallPlugin(id) {
             renderPlugins(allPlugins);
         }
 
-        alert(`Plugin ${id} uninstalled. Restart QoL Tray to apply changes.`);
+        alert(`Plugin ${id} uninstalled.`);
     } catch (error) {
         alert(`Failed to uninstall plugin: ${error.message}`);
     }
