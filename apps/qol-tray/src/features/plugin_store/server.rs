@@ -51,7 +51,7 @@ pub async fn start_ui_server(static_dir: &str) -> Result<UiServerHandle> {
         .nest("/plugins", plugin_ui::router(plugins_dir))
         .fallback_service(ServeDir::new(static_dir));
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:42700").await?;
     let addr = listener.local_addr()?;
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();

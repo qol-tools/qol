@@ -6,18 +6,23 @@ mod plugin_ui;
 use crate::features::MenuProvider;
 use crate::plugins::MenuItem as PluginMenuItem;
 use anyhow::Result;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
-pub struct PluginStore {
-    server_handle: Arc<Mutex<Option<server::UiServerHandle>>>,
-}
+const SERVER_PORT: u16 = 42700;
+
+pub struct PluginStore;
 
 impl PluginStore {
     pub fn new() -> Self {
-        Self {
-            server_handle: Arc::new(Mutex::new(None)),
-        }
+        Self
+    }
+
+    pub async fn start_server() -> Result<()> {
+        let ui_dir = std::env::current_dir()?.join("ui");
+        log::info!("Starting plugin server from: {:?}", ui_dir);
+        let _server = server::start_ui_server(ui_dir.to_str().unwrap()).await?;
+        log::info!("Plugin server started at http://127.0.0.1:{}", SERVER_PORT);
+        std::mem::forget(_server);
+        Ok(())
     }
 }
 
@@ -36,40 +41,10 @@ impl MenuProvider for PluginStore {
     fn handle_event(&self, event_id: &str) -> Result<()> {
         log::info!("PluginStore received event: {}", event_id);
         if event_id.ends_with("::plugin_store") {
-            let handle = self.server_handle.clone();
-            std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async move {
-                    if let Err(e) = open_plugin_browser(handle).await {
-                        log::error!("Failed to open plugin browser: {}", e);
-                    }
-                    loop {
-                        tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
-                    }
-                });
-            });
+            open_url(&format!("http://127.0.0.1:{}", SERVER_PORT))?;
         }
         Ok(())
     }
-}
-
-async fn open_plugin_browser(handle: Arc<Mutex<Option<server::UiServerHandle>>>) -> Result<()> {
-    let mut guard = handle.lock().await;
-
-    let url = if let Some(ref server) = *guard {
-        format!("http://{}", server.addr)
-    } else {
-        let ui_dir = std::env::current_dir()?.join("ui");
-        log::info!("Serving UI from: {:?}", ui_dir);
-        let server = server::start_ui_server(ui_dir.to_str().unwrap()).await?;
-        let url = format!("http://{}", server.addr);
-        log::info!("Plugin store server started at {}", url);
-        *guard = Some(server);
-        url
-    };
-
-    open_url(&url)?;
-    Ok(())
 }
 
 fn open_url(url: &str) -> Result<()> {

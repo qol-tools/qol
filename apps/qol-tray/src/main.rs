@@ -27,6 +27,8 @@ async fn main() -> Result<()> {
     feature_registry.register(Box::new(features::plugin_store::PluginStore::new()));
     let feature_registry = Arc::new(feature_registry);
 
+    features::plugin_store::PluginStore::start_server().await?;
+
     let _tray = TrayManager::new(plugin_manager, feature_registry, shutdown_tx)?;
 
     log::info!("QoL Tray daemon started successfully");
