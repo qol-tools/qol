@@ -9,9 +9,9 @@ use axum::{
 
 pub fn router(plugins_dir: PathBuf) -> Router {
     Router::new()
-        .route("/{plugin_id}", get(serve_plugin_index))
-        .route("/{plugin_id}/", get(serve_plugin_index))
-        .route("/{plugin_id}/*path", get(serve_plugin_file))
+        .route("/:plugin_id", get(serve_plugin_index))
+        .route("/:plugin_id/", get(serve_plugin_index))
+        .route("/:plugin_id/*path", get(serve_plugin_file))
         .with_state(plugins_dir)
 }
 
@@ -31,17 +31,28 @@ async fn serve_plugin_file(
 
 async fn serve_file(plugins_dir: &Path, plugin_id: &str, file_path: &str) -> Response {
     let ui_path = plugins_dir.join(plugin_id).join("ui").join(file_path);
+    log::debug!("Serving plugin file: {:?}", ui_path);
+
+    if !ui_path.exists() {
+        log::warn!("Plugin UI file not found: {:?}", ui_path);
+        return (StatusCode::NOT_FOUND, "File not found").into_response();
+    }
 
     if !is_safe_path(&ui_path, plugins_dir) {
+        log::warn!("Plugin UI path not safe: {:?}", ui_path);
         return (StatusCode::FORBIDDEN, "Access denied").into_response();
     }
 
     match tokio::fs::read(&ui_path).await {
         Ok(contents) => {
             let mime = guess_mime(&ui_path);
+            log::debug!("Serving {:?} as {}", ui_path, mime);
             ([(header::CONTENT_TYPE, mime)], contents).into_response()
         }
-        Err(_) => (StatusCode::NOT_FOUND, "File not found").into_response(),
+        Err(e) => {
+            log::error!("Failed to read plugin UI file {:?}: {}", ui_path, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read file").into_response()
+        }
     }
 }
 
