@@ -1,9 +1,10 @@
 use super::router::{EventRouter, EventRoute, EventPattern, EventHandler, HandlerResult};
-use crate::plugins::{PluginManager, PluginManifest, MenuItem as PluginMenuItem, ActionType};
+use crate::plugins::{PluginManager, PluginManifest, MenuItem as PluginMenuItem, ActionType, Plugin};
 use crate::features::FeatureRegistry;
 use anyhow::Result;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
-use tray_icon::menu::{Menu, MenuItem, CheckMenuItem, Submenu, PredefinedMenuItem};
+use tray_icon::menu::{Menu, MenuItem, CheckMenuItem, Submenu, PredefinedMenuItem, IconMenuItem, Icon};
 
 pub fn build_menu(
     plugin_manager: Arc<Mutex<PluginManager>>,
@@ -15,13 +16,23 @@ pub fn build_menu(
     let manager = plugin_manager.lock().unwrap();
 
     for plugin in manager.plugins() {
-        let submenu = Submenu::new(&plugin.manifest.menu.label, true);
+        let icon = load_plugin_icon(plugin);
+        let items = &plugin.manifest.menu.items;
 
-        for item in &plugin.manifest.menu.items {
-            add_menu_item(&submenu, item, &plugin.id);
+        if items.len() == 1 && icon.is_some() {
+            if let PluginMenuItem::Action { id, label, .. } = &items[0] {
+                let full_id = format!("{}::{}", plugin.id, id);
+                let combined_label = format!("{} - {}", plugin.manifest.menu.label, label);
+                let icon_item = IconMenuItem::with_id(&full_id, &combined_label, true, icon, None);
+                let _ = menu.append(&icon_item);
+            }
+        } else {
+            let submenu = Submenu::new(&plugin.manifest.menu.label, true);
+            for item in items {
+                add_menu_item(&submenu, item, &plugin.id);
+            }
+            let _ = menu.append(&submenu);
         }
-
-        let _ = menu.append(&submenu);
 
         let plugin_id = plugin.id.clone();
         let manifest = plugin.manifest.clone();
@@ -212,4 +223,17 @@ fn get_config_value(plugin: &crate::plugins::Plugin, key: &str) -> Result<bool> 
     }
 
     current.as_bool().ok_or_else(|| anyhow::anyhow!("Value is not a boolean"))
+}
+
+fn load_plugin_icon(plugin: &Plugin) -> Option<Icon> {
+    let icon_path = plugin.manifest.menu.icon.as_ref()?;
+    let full_path = plugin.path.join(icon_path);
+    load_icon_from_path(&full_path)
+}
+
+fn load_icon_from_path(path: &Path) -> Option<Icon> {
+    let img = image::open(path).ok()?.into_rgba8();
+    let (width, height) = img.dimensions();
+    let rgba = img.into_raw();
+    Icon::from_rgba(rgba, width, height).ok()
 }
