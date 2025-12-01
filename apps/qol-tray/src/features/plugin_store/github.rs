@@ -11,23 +11,28 @@ struct GitHubRepo {
     html_url: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+}
+
 pub struct GitHubClient {
     org: String,
+    client: reqwest::Client,
 }
 
 impl GitHubClient {
     pub fn new(org: impl Into<String>) -> Self {
         Self {
             org: org.into(),
-            
+            client: reqwest::Client::new(),
         }
     }
 
     pub async fn list_plugins(&self) -> Result<Vec<PluginMetadata>> {
         let url = format!("https://api.github.com/orgs/{}/repos", self.org);
-        let client = reqwest::Client::new();
 
-        let repos: Vec<GitHubRepo> = client
+        let repos: Vec<GitHubRepo> = self.client
             .get(&url)
             .header("User-Agent", "qol-tray")
             .send()
@@ -40,7 +45,8 @@ impl GitHubClient {
 
         for repo in plugin_repos {
             if let Ok(manifest) = self.fetch_plugin_manifest(&repo.name).await {
-                plugins.push(build_plugin_metadata(repo, manifest));
+                let version = self.resolve_version(&manifest).await;
+                plugins.push(build_plugin_metadata(repo, manifest, version));
             }
         }
 
@@ -52,9 +58,8 @@ impl GitHubClient {
             "https://raw.githubusercontent.com/{}/{}/main/plugin.toml",
             self.org, repo_name
         );
-        let client = reqwest::Client::new();
 
-        let content = client
+        let content = self.client
             .get(&url)
             .header("User-Agent", "qol-tray")
             .send()
@@ -64,6 +69,31 @@ impl GitHubClient {
 
         let manifest: crate::plugins::PluginManifest = toml::from_str(&content)?;
         Ok(manifest)
+    }
+
+    async fn resolve_version(&self, manifest: &crate::plugins::PluginManifest) -> String {
+        if let Some(deps) = &manifest.dependencies {
+            if let Some(binary) = deps.binaries.first() {
+                if let Ok(version) = self.fetch_latest_release(&binary.repo).await {
+                    return version;
+                }
+            }
+        }
+        manifest.plugin.version.clone()
+    }
+
+    async fn fetch_latest_release(&self, repo: &str) -> Result<String> {
+        let url = format!("https://api.github.com/repos/{}/releases/latest", repo);
+
+        let release: GitHubRelease = self.client
+            .get(&url)
+            .header("User-Agent", "qol-tray")
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        Ok(release.tag_name.trim_start_matches('v').to_string())
     }
 }
 
@@ -75,12 +105,12 @@ fn filter_plugin_repos(repos: &[GitHubRepo]) -> Vec<&GitHubRepo> {
     repos.iter().filter(|r| is_plugin_repo(&r.name)).collect()
 }
 
-fn build_plugin_metadata(repo: &GitHubRepo, manifest: crate::plugins::PluginManifest) -> PluginMetadata {
+fn build_plugin_metadata(repo: &GitHubRepo, manifest: crate::plugins::PluginManifest, version: String) -> PluginMetadata {
     PluginMetadata {
         id: repo.name.clone(),
         name: manifest.plugin.name,
         description: manifest.plugin.description,
-        version: manifest.plugin.version,
+        version,
         repo_url: repo.html_url.clone(),
     }
 }
@@ -122,6 +152,7 @@ mod tests {
                 items: vec![],
             },
             daemon: None,
+            dependencies: None,
         }
     }
 
@@ -187,15 +218,16 @@ mod tests {
         // Arrange
         let repo = make_repo("plugin-screen-recorder");
         let manifest = make_manifest("Screen Recorder", "1.2.3");
+        let version = "2.0.0".to_string();
 
         // Act
-        let metadata = build_plugin_metadata(&repo, manifest);
+        let metadata = build_plugin_metadata(&repo, manifest, version);
 
         // Assert
         assert_eq!(metadata.id, "plugin-screen-recorder");
         assert_eq!(metadata.name, "Screen Recorder");
         assert_eq!(metadata.description, "Test plugin");
-        assert_eq!(metadata.version, "1.2.3");
+        assert_eq!(metadata.version, "2.0.0");
         assert_eq!(metadata.repo_url, "https://github.com/test/plugin-screen-recorder");
     }
 }
