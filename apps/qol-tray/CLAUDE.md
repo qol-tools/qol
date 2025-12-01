@@ -21,7 +21,7 @@ cargo build --features plugin-store
 
 ## Architecture
 
-**Data-driven structure:** Core infrastructure consumes plugin manifest data. No feature registration system.
+**Minimal tray menu:** The tray menu only has "Plugins" (opens browser UI) and "Quit". All plugin interaction happens in the browser.
 
 ### Core Modules
 
@@ -33,11 +33,10 @@ cargo build --features plugin-store
 - Files: `mod.rs` (Plugin struct), `manager.rs` (PluginManager), `loader.rs` (scan/load), `manifest.rs` (data structures)
 
 **src/menu/** - Menu abstraction and event routing
-- `builder.rs`: Builds menu from PluginManager, renders all items generically
+- `builder.rs`: Builds minimal menu (features + Quit), no per-plugin items
 - `router.rs`: EventRouter with EventPattern (Exact/Prefix) for O(k) routing
 - EventHandler supports Sync/Async execution
-- Core items (Quit) hardcoded in builder, plugins loaded from manifests
-- Event format: `plugin-id::menu-item-id`
+- Event format: `feature-id::menu-item-id`
 
 **src/tray/** - System tray UI with platform abstraction
 - Platform-specific implementations in `platform/` subdirectory
@@ -46,12 +45,12 @@ cargo build --features plugin-store
 - `PlatformTray` enum handles platform differences at compile time
 - `icon.rs`: Icon loading from embedded RGBA data
 
-**plugin-store** (optional feature) - GitHub plugin browser/installer
-- Only compiled with `--features plugin-store` flag
-- Fetches plugins from `github.com/qol-tools/*` organization
-- Looks for repos prefixed with `plugin-`
-- Uses git clone/pull for install/update operations
-- Not core functionality - manual plugin installation works without it
+**src/features/plugin_store/** - Browser-based plugin management
+- Serves web UI at `http://127.0.0.1:42700`
+- Landing page shows installed plugins and plugin store
+- Plugin settings accessed via `/plugins/{plugin_id}/`
+- API endpoints for install/uninstall operations
+- Fetches available plugins from `github.com/qol-tools/*`
 
 ### Platform Abstraction Pattern
 
@@ -131,11 +130,11 @@ To update icon:
 
 ## Plugin Development
 
-Plugins are external to this codebase. They live in `~/.config/qol-tray/plugins/`. See example at `examples/plugins/screen-recorder/`.
+Plugins are external to this codebase. They live in `~/.config/qol-tray/plugins/`.
 
-The daemon only provides:
+The daemon provides:
 - Plugin loading and manifest parsing
-- Tray menu generation
+- Browser-based settings UI (each plugin can have `ui/index.html`)
 - Config file management (read/write JSON)
 - Process execution (scripts and daemons)
 

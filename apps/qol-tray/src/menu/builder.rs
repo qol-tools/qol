@@ -1,10 +1,9 @@
 use super::router::{EventRouter, EventRoute, EventPattern, EventHandler, HandlerResult};
-use crate::plugins::{PluginManager, MenuItem as PluginMenuItem, Plugin};
+use crate::plugins::{PluginManager, MenuItem as PluginMenuItem};
 use crate::features::FeatureRegistry;
 use anyhow::Result;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
-use tray_icon::menu::{Menu, MenuItem, CheckMenuItem, Submenu, PredefinedMenuItem, IconMenuItem, Icon};
+use tray_icon::menu::{Menu, MenuItem, CheckMenuItem, Submenu, PredefinedMenuItem};
 
 pub fn build_menu(
     plugin_manager: Arc<Mutex<PluginManager>>,
@@ -12,32 +11,6 @@ pub fn build_menu(
 ) -> Result<(Menu, EventRouter)> {
     let menu = Menu::new();
     let mut all_routes = Vec::new();
-
-    let manager = plugin_manager.lock().unwrap();
-
-    for plugin in manager.plugins() {
-        let plugin_id = plugin.id.clone();
-        let full_id = format!("{}::open", plugin_id);
-        let label = &plugin.manifest.menu.label;
-
-        if let Some(icon) = load_plugin_icon(plugin) {
-            let icon_item = IconMenuItem::with_id(&full_id, label, true, Some(icon), None);
-            let _ = menu.append(&icon_item);
-        } else {
-            let menu_item = MenuItem::with_id(&full_id, label, true, None);
-            let _ = menu.append(&menu_item);
-        }
-
-        let route = EventRoute {
-            pattern: EventPattern::Prefix(format!("{}::", plugin_id)),
-            handler: EventHandler::Sync(Box::new(move |_| {
-                open_plugin_ui(&plugin_id)
-            })),
-        };
-        all_routes.push(route);
-    }
-
-    drop(manager);
 
     for (idx, feature) in feature_registry.features().iter().enumerate() {
         let items = feature.menu_items();
@@ -107,22 +80,6 @@ pub fn build_menu(
     Ok((menu, router))
 }
 
-fn open_plugin_ui(plugin_id: &str) -> Result<HandlerResult> {
-    let url = format!("http://127.0.0.1:42700/plugins/{}/", plugin_id);
-    
-    #[cfg(target_os = "linux")]
-    std::process::Command::new("xdg-open").arg(&url).spawn()?;
-
-    #[cfg(target_os = "macos")]
-    std::process::Command::new("open").arg(&url).spawn()?;
-
-    #[cfg(target_os = "windows")]
-    std::process::Command::new("cmd").args(["/C", "start", &url]).spawn()?;
-
-    log::info!("Opened plugin UI: {}", url);
-    Ok(HandlerResult::Continue)
-}
-
 fn add_menu_item(parent: &Submenu, item: &PluginMenuItem, prefix_id: &str) {
     match item {
         PluginMenuItem::Action { id, label, .. } => {
@@ -147,17 +104,4 @@ fn add_menu_item(parent: &Submenu, item: &PluginMenuItem, prefix_id: &str) {
             let _ = parent.append(&submenu);
         }
     }
-}
-
-fn load_plugin_icon(plugin: &Plugin) -> Option<Icon> {
-    let icon_path = plugin.manifest.menu.icon.as_ref()?;
-    let full_path = plugin.path.join(icon_path);
-    load_icon_from_path(&full_path)
-}
-
-fn load_icon_from_path(path: &Path) -> Option<Icon> {
-    let img = image::open(path).ok()?.into_rgba8();
-    let (width, height) = img.dimensions();
-    let rgba = img.into_raw();
-    Icon::from_rgba(rgba, width, height).ok()
 }
