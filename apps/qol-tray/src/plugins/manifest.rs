@@ -6,6 +6,21 @@ pub struct PluginManifest {
     pub menu: MenuConfig,
     #[serde(default)]
     pub daemon: Option<DaemonConfig>,
+    #[serde(default)]
+    pub dependencies: Option<Dependencies>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct Dependencies {
+    #[serde(default)]
+    pub binaries: Vec<BinaryDependency>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BinaryDependency {
+    pub name: String,
+    pub repo: String,
+    pub pattern: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
