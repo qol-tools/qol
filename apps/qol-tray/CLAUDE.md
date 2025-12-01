@@ -93,7 +93,7 @@ Action types:
 - **Single responsibility** - Split logical chunks into focused modules
 - **Type safety** - Define data structures explicitly, validate API responses
 - **Scalability** - Design for N plugins, not hardcoded assumptions
-- **Keyboard-first** - All interactions accessible via keyboard
+- **Keyboard-first** - All interactions MUST be accessible via keyboard. This is critical. Design keyboard flow first, then add mouse/hover as secondary. Use single-letter shortcuts (e.g., `d` for delete) since Mac lacks Delete key. Always show keyboard hints in UI.
 ### Test Style
 
 - **AAA Pattern** - All tests follow Arrange-Act-Assert pattern with explicit comments
