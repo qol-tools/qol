@@ -8,7 +8,7 @@ use axum::{
     Json, Router,
     http::{StatusCode, header},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 use axum::http::HeaderValue;
@@ -41,6 +41,16 @@ struct InstalledPlugin {
     has_ui: bool,
 }
 
+#[derive(Deserialize)]
+struct TokenRequest {
+    token: String,
+}
+
+#[derive(Serialize)]
+struct TokenStatus {
+    has_token: bool,
+}
+
 pub struct UiServerHandle {
     #[allow(dead_code)]
     shutdown_tx: oneshot::Sender<()>,
@@ -58,6 +68,9 @@ pub async fn start_ui_server(static_dir: &str) -> Result<UiServerHandle> {
         .route("/install/:id", post(install_plugin))
         .route("/uninstall/:id", post(uninstall_plugin))
         .route("/ws/install/:id", get(install_ws))
+        .route("/github-token", get(get_token_status))
+        .route("/github-token", post(set_github_token))
+        .route("/github-token", axum::routing::delete(delete_github_token))
         .with_state(plugins_dir_clone);
 
     let static_service = ServeDir::new(static_dir);
@@ -285,6 +298,38 @@ async fn serve_cover(
         Err(e) => {
             log::error!("Failed to read cover image: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read cover").into_response()
+        }
+    }
+}
+
+async fn get_token_status() -> Json<TokenStatus> {
+    Json(TokenStatus {
+        has_token: super::github::get_stored_token().is_some(),
+    })
+}
+
+async fn set_github_token(Json(payload): Json<TokenRequest>) -> impl IntoResponse {
+    match super::github::store_token(&payload.token) {
+        Ok(_) => {
+            log::info!("GitHub token stored successfully");
+            (StatusCode::OK, "Token stored").into_response()
+        }
+        Err(e) => {
+            log::error!("Failed to store GitHub token: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to store token: {}", e)).into_response()
+        }
+    }
+}
+
+async fn delete_github_token() -> impl IntoResponse {
+    match super::github::delete_token() {
+        Ok(_) => {
+            log::info!("GitHub token deleted");
+            (StatusCode::OK, "Token deleted").into_response()
+        }
+        Err(e) => {
+            log::error!("Failed to delete GitHub token: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to delete token: {}", e)).into_response()
         }
     }
 }

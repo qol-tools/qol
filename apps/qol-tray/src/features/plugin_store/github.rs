@@ -1,7 +1,15 @@
 use anyhow::Result;
 use serde::Deserialize;
+use std::path::PathBuf;
 
 const PLUGIN_PREFIX: &str = "plugin-";
+
+fn token_path() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("qol-tray")
+        .join(".github-token")
+}
 
 #[derive(Debug, Deserialize)]
 struct GitHubRepo {
@@ -19,26 +27,79 @@ struct GitHubRelease {
 pub struct GitHubClient {
     org: String,
     client: reqwest::Client,
+    token: Option<String>,
+}
+
+pub fn get_stored_token() -> Option<String> {
+    let path = token_path();
+    match std::fs::read_to_string(&path) {
+        Ok(token) => {
+            let token = token.trim().to_string();
+            if token.is_empty() {
+                None
+            } else {
+                log::info!("Loaded GitHub token from {:?}", path);
+                Some(token)
+            }
+        }
+        Err(_) => None,
+    }
+}
+
+pub fn store_token(token: &str) -> Result<()> {
+    let path = token_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, token.trim())?;
+    log::info!("Stored GitHub token to {:?}", path);
+    Ok(())
+}
+
+pub fn delete_token() -> Result<()> {
+    let path = token_path();
+    if path.exists() {
+        std::fs::remove_file(&path)?;
+    }
+    Ok(())
 }
 
 impl GitHubClient {
     pub fn new(org: impl Into<String>) -> Self {
+        let token = get_stored_token();
         Self {
             org: org.into(),
             client: reqwest::Client::new(),
+            token,
         }
+    }
+
+    fn build_request(&self, url: &str) -> reqwest::RequestBuilder {
+        let mut req = self.client
+            .get(url)
+            .header("User-Agent", "qol-tray");
+        
+        if let Some(token) = &self.token {
+            req = req.header("Authorization", format!("Bearer {}", token));
+        }
+        
+        req
     }
 
     pub async fn list_plugins(&self) -> Result<Vec<PluginMetadata>> {
         let url = format!("https://api.github.com/orgs/{}/repos", self.org);
 
-        let repos: Vec<GitHubRepo> = self.client
-            .get(&url)
-            .header("User-Agent", "qol-tray")
+        let response = self.build_request(&url)
             .send()
-            .await?
-            .json()
             .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("GitHub API returned {}: {}", status, body);
+        }
+
+        let repos: Vec<GitHubRepo> = response.json().await?;
 
         let plugin_repos = filter_plugin_repos(&repos);
         let mut plugins = Vec::new();
@@ -59,9 +120,7 @@ impl GitHubClient {
             self.org, repo_name
         );
 
-        let content = self.client
-            .get(&url)
-            .header("User-Agent", "qol-tray")
+        let content = self.build_request(&url)
             .send()
             .await?
             .text()
@@ -85,15 +144,20 @@ impl GitHubClient {
     async fn fetch_latest_release(&self, repo: &str) -> Result<String> {
         let url = format!("https://api.github.com/repos/{}/releases/latest", repo);
 
-        let release: GitHubRelease = self.client
-            .get(&url)
-            .header("User-Agent", "qol-tray")
+        let response = self.build_request(&url)
             .send()
-            .await?
-            .json()
             .await?;
 
+        if !response.status().is_success() {
+            anyhow::bail!("GitHub API returned {}", response.status());
+        }
+
+        let release: GitHubRelease = response.json().await?;
         Ok(release.tag_name.trim_start_matches('v').to_string())
+    }
+
+    pub fn has_token(&self) -> bool {
+        self.token.is_some()
     }
 }
 
