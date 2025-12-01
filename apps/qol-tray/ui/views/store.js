@@ -252,38 +252,31 @@ function updateSelection() {
 }
 
 export function handleKey(e) {
-    if (e.key === 'r' && !e.ctrlKey && !e.metaKey) {
-        e.preventDefault();
-        refreshPlugins();
-        return;
-    }
-    
-    if (e.key === 'Enter') {
-        e.preventDefault();
-        const selected = document.querySelector('.plugin-card.selected');
-        if (selected) {
-            const pluginId = selected.dataset.pluginId;
-            const isInstalled = selected.dataset.installed === 'true';
-            if (!isInstalled) {
-                installPlugin(pluginId);
-            }
-        }
-        return;
-    }
-    
-    const handlers = {
-        ArrowUp: () => navigate(-1),
-        ArrowDown: () => navigate(1),
-        ArrowLeft: () => navigate(-1),
-        ArrowRight: () => navigate(1)
-    };
-    
-    const handler = handlers[e.key];
+    const handler = keyHandlers[e.key];
     if (handler) {
         e.preventDefault();
         handler();
     }
 }
+
+function installSelected() {
+    const selected = document.querySelector('.plugin-card.selected');
+    if (!selected) return;
+    
+    const isInstalled = selected.dataset.installed === 'true';
+    if (isInstalled) return;
+    
+    installPlugin(selected.dataset.pluginId);
+}
+
+const keyHandlers = {
+    r: refreshPlugins,
+    ArrowUp: () => navigate(-1),
+    ArrowDown: () => navigate(1),
+    ArrowLeft: () => navigate(-1),
+    ArrowRight: () => navigate(1),
+    Enter: installSelected
+};
 
 function navigate(delta) {
     const cards = document.querySelectorAll('.plugin-card');

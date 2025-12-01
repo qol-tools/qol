@@ -214,53 +214,63 @@ async function confirmUninstall() {
 
 export function handleKey(e) {
     if (state.confirmModalOpen) {
-        if (e.key === 'Escape') {
-            e.preventDefault();
-            closeConfirmModal();
-        } else if (e.key === 'Enter') {
-            e.preventDefault();
-            confirmUninstall();
-        }
+        handleModalKey(e);
         return;
     }
     
     if (state.contextMenuOpen) {
-        if (e.key === 'Escape') {
-            e.preventDefault();
-            closeAllContextMenus();
-        } else if (e.key === 'Enter') {
-            e.preventDefault();
-            const plugin = state.plugins[state.selectedIndex];
-            if (plugin) {
-                closeAllContextMenus();
-                showConfirmModal(plugin.id);
-            }
-        }
+        handleContextMenuKey(e);
         return;
     }
     
-    const handlers = {
-        ArrowUp: () => navigate(-state.columns),
-        ArrowDown: () => navigate(state.columns),
-        ArrowLeft: () => navigate(-1),
-        ArrowRight: () => navigate(1),
-        Enter: openSelected,
-        d: () => {
-            const plugin = state.plugins[state.selectedIndex];
-            if (plugin) showConfirmModal(plugin.id);
-        },
-        D: () => {
-            const plugin = state.plugins[state.selectedIndex];
-            if (plugin) showConfirmModal(plugin.id);
-        }
-    };
-    
-    const handler = handlers[e.key];
+    const handler = keyHandlers[e.key];
     if (handler) {
         e.preventDefault();
         handler();
     }
 }
+
+function handleModalKey(e) {
+    if (e.key === 'Escape') {
+        e.preventDefault();
+        closeConfirmModal();
+    } else if (e.key === 'Enter') {
+        e.preventDefault();
+        confirmUninstall();
+    }
+}
+
+function handleContextMenuKey(e) {
+    if (e.key === 'Escape') {
+        e.preventDefault();
+        closeAllContextMenus();
+        return;
+    }
+    
+    if (e.key !== 'Enter') return;
+    
+    e.preventDefault();
+    const plugin = state.plugins[state.selectedIndex];
+    if (!plugin) return;
+    
+    closeAllContextMenus();
+    showConfirmModal(plugin.id);
+}
+
+function deleteSelected() {
+    const plugin = state.plugins[state.selectedIndex];
+    if (plugin) showConfirmModal(plugin.id);
+}
+
+const keyHandlers = {
+    ArrowUp: () => navigate(-state.columns),
+    ArrowDown: () => navigate(state.columns),
+    ArrowLeft: () => navigate(-1),
+    ArrowRight: () => navigate(1),
+    Enter: openSelected,
+    d: deleteSelected,
+    D: deleteSelected
+};
 
 function navigate(delta) {
     const total = state.plugins.length;
