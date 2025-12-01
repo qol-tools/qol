@@ -45,9 +45,8 @@ impl PluginInstaller {
         let content = tokio::fs::read_to_string(&manifest_path).await?;
         let manifest: crate::plugins::PluginManifest = toml::from_str(&content)?;
 
-        let deps = match manifest.dependencies {
-            Some(d) => d,
-            None => return Ok(()),
+        let Some(deps) = manifest.dependencies else {
+            return Ok(());
         };
 
         for binary in deps.binaries {

@@ -141,10 +141,12 @@ async fn list_plugins(
 
     let installed_plugins = get_installed_plugin_ids(&plugins_dir);
 
-    match client.list_plugins_cached(query.refresh).await {
+    let cache_age = cache_age_secs();
+    
+    let plugins = match client.list_plugins_cached(query.refresh).await {
         Ok(metadata_list) => {
             log::info!("Got {} plugins", metadata_list.len());
-            let plugins = metadata_list
+            metadata_list
                 .into_iter()
                 .map(|m| PluginInfo {
                     id: m.id.clone(),
@@ -153,20 +155,18 @@ async fn list_plugins(
                     version: m.version,
                     installed: installed_plugins.contains(&m.id),
                 })
-                .collect();
-            Json(PluginsResponse {
-                plugins,
-                cache_age_secs: cache_age_secs(),
-            })
+                .collect()
         }
         Err(e) => {
             log::error!("Failed to fetch plugins: {}", e);
-            Json(PluginsResponse {
-                plugins: vec![],
-                cache_age_secs: cache_age_secs(),
-            })
+            vec![]
         }
-    }
+    };
+    
+    Json(PluginsResponse {
+        plugins,
+        cache_age_secs: cache_age,
+    })
 }
 
 async fn install_plugin(Path(id): Path<String>) -> Json<PluginInfo> {
