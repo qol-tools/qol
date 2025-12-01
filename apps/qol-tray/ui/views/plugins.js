@@ -10,7 +10,10 @@ export const id = 'plugins';
 const state = {
     plugins: [],
     selectedIndex: 0,
-    columns: 4
+    columns: 4,
+    contextMenuOpen: false,
+    confirmModalOpen: false,
+    pendingUninstallId: null
 };
 
 let container = null;
@@ -24,7 +27,7 @@ export function render(containerEl) {
             </header>
             <div id="plugins-grid" class="plugin-grid"></div>
             <footer class="help">
-                ←↑↓→ navigate • Enter open
+                ←↑↓→ navigate • Enter open • d delete
             </footer>
         </div>
     `;
@@ -43,6 +46,7 @@ async function loadPlugins() {
         if (!response.ok) throw new Error('Failed to fetch plugins');
         
         state.plugins = await response.json();
+        state.plugins.sort((a, b) => a.name.localeCompare(b.name));
         renderGrid();
         updateSelection();
     } catch (error) {
@@ -64,9 +68,13 @@ function renderGrid() {
         const noUiClass = plugin.has_ui ? '' : 'no-ui';
         
         return `
-            <div class="plugin-card ${noUiClass}" data-index="${index}">
+            <div class="plugin-card ${noUiClass}" data-index="${index}" data-plugin-id="${plugin.id}">
                 <img src="${coverUrl}" alt="${plugin.name}" onerror="this.src='${PLACEHOLDER_SVG}'">
                 <div class="plugin-name">${plugin.name}</div>
+                <button class="plugin-cog" aria-label="Plugin options">⚙</button>
+                <div class="plugin-context-menu">
+                    <button class="context-delete">Delete</button>
+                </div>
             </div>
         `;
     }).join('');
@@ -84,6 +92,34 @@ function updateSelection() {
 }
 
 function handleClick(e) {
+    if (state.confirmModalOpen) {
+        handleModalClick(e);
+        return;
+    }
+    
+    const cog = e.target.closest('.plugin-cog');
+    if (cog) {
+        e.stopPropagation();
+        const card = cog.closest('.plugin-card');
+        toggleContextMenu(card);
+        return;
+    }
+    
+    const deleteBtn = e.target.closest('.context-delete');
+    if (deleteBtn) {
+        e.stopPropagation();
+        const card = deleteBtn.closest('.plugin-card');
+        const pluginId = card.dataset.pluginId;
+        closeAllContextMenus();
+        showConfirmModal(pluginId);
+        return;
+    }
+    
+    if (state.contextMenuOpen) {
+        closeAllContextMenus();
+        return;
+    }
+    
     const card = e.target.closest('.plugin-card');
     if (!card) return;
     
@@ -96,13 +132,127 @@ function handleClick(e) {
     }
 }
 
+function toggleContextMenu(card) {
+    const menu = card.querySelector('.plugin-context-menu');
+    const wasOpen = menu.classList.contains('open');
+    
+    closeAllContextMenus();
+    
+    if (!wasOpen) {
+        menu.classList.add('open');
+        state.contextMenuOpen = true;
+    }
+}
+
+function closeAllContextMenus() {
+    document.querySelectorAll('.plugin-context-menu.open').forEach(m => m.classList.remove('open'));
+    state.contextMenuOpen = false;
+}
+
+function showConfirmModal(pluginId) {
+    state.pendingUninstallId = pluginId;
+    state.confirmModalOpen = true;
+    
+    const plugin = state.plugins.find(p => p.id === pluginId);
+    const pluginName = plugin ? plugin.name : pluginId;
+    
+    const modal = document.createElement('div');
+    modal.className = 'confirm-modal';
+    modal.innerHTML = `
+        <div class="confirm-modal-content">
+            <h3>Delete "${pluginName}"?</h3>
+            <p>This will uninstall the plugin and remove all its data.</p>
+            <div class="confirm-modal-buttons">
+                <button class="confirm-cancel">Cancel (Esc)</button>
+                <button class="confirm-delete">Delete (Enter)</button>
+            </div>
+        </div>
+    `;
+    
+    container.appendChild(modal);
+}
+
+function handleModalClick(e) {
+    if (e.target.closest('.confirm-cancel') || e.target.classList.contains('confirm-modal')) {
+        closeConfirmModal();
+        return;
+    }
+    
+    if (e.target.closest('.confirm-delete')) {
+        confirmUninstall();
+        return;
+    }
+}
+
+function closeConfirmModal() {
+    const modal = container.querySelector('.confirm-modal');
+    if (modal) modal.remove();
+    state.confirmModalOpen = false;
+    state.pendingUninstallId = null;
+}
+
+async function confirmUninstall() {
+    const pluginId = state.pendingUninstallId;
+    closeConfirmModal();
+    
+    if (!pluginId) return;
+    
+    try {
+        const response = await fetch(`/api/uninstall/${pluginId}`, { method: 'POST' });
+        const result = await response.json();
+        
+        if (!result.success) throw new Error(result.message);
+        
+        state.plugins = state.plugins.filter(p => p.id !== pluginId);
+        state.selectedIndex = Math.min(state.selectedIndex, Math.max(0, state.plugins.length - 1));
+        renderGrid();
+        updateSelection();
+    } catch (error) {
+        console.error(`Failed to uninstall plugin: ${error.message}`);
+    }
+}
+
 export function handleKey(e) {
+    if (state.confirmModalOpen) {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            closeConfirmModal();
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            confirmUninstall();
+        }
+        return;
+    }
+    
+    if (state.contextMenuOpen) {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            closeAllContextMenus();
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            const plugin = state.plugins[state.selectedIndex];
+            if (plugin) {
+                closeAllContextMenus();
+                showConfirmModal(plugin.id);
+            }
+        }
+        return;
+    }
+    
     const handlers = {
         ArrowUp: () => navigate(-state.columns),
         ArrowDown: () => navigate(state.columns),
         ArrowLeft: () => navigate(-1),
         ArrowRight: () => navigate(1),
-        Enter: openSelected
+        Enter: openSelected,
+        d: () => {
+            const plugin = state.plugins[state.selectedIndex];
+            if (plugin) showConfirmModal(plugin.id);
+        },
+        D: () => {
+            const plugin = state.plugins[state.selectedIndex];
+            if (plugin) showConfirmModal(plugin.id);
+        }
     };
     
     const handler = handlers[e.key];
