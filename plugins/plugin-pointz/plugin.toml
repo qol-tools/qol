@@ -15,3 +15,8 @@ items = [
 enabled = true
 command = "run.sh"
 restart_on_crash = true
+
+[[dependencies.binaries]]
+name = "pointzerver"
+repo = "qol-tools/pointZ"
+pattern = "pointzerver-{os}-{arch}"
