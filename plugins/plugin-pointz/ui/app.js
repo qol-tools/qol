@@ -1,3 +1,5 @@
+import QRCode from 'https://esm.sh/qrcode@1.5.4';
+
 const STATUS_URL = 'http://127.0.0.1:45460/status';
 
 async function fetchStatus() {
