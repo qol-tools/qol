@@ -203,7 +203,6 @@ async fn install_plugin(Path(id): Path<String>) -> Json<PluginInfo> {
     }
 
     log::info!("Plugin {} installed successfully", id);
-    crate::tray::request_plugin_refresh();
     Json(PluginInfo {
         id: id.clone(),
         name: id.clone(),
@@ -240,7 +239,6 @@ async fn uninstall_plugin(Path(id): Path<String>) -> Json<UninstallResult> {
     }
 
     log::info!("Plugin {} uninstalled successfully", id);
-    crate::tray::request_plugin_refresh();
     Json(UninstallResult {
         success: true,
         message: "Uninstalled successfully".to_string(),

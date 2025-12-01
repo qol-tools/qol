@@ -22,7 +22,3 @@ impl TrayManager {
         Ok(Self { _tray: tray })
     }
 }
-
-pub fn request_plugin_refresh() {
-    platform::request_plugin_refresh();
-}

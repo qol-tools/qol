@@ -33,11 +33,7 @@ Flattened nested conditionals across the codebase:
 
 ## Current State
 
-App compiles. All features work. Cache system operational.
-
-**Known warnings:**
-- `plugin_manager` unused in `build_menu` function signature
-- `has_token` method unused in GitHubClient
+App compiles. All features work. Cache system operational. No warnings.
 
 ## What's Next
 

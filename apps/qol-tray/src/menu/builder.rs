@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use tray_icon::menu::{Menu, MenuItem, CheckMenuItem, Submenu, PredefinedMenuItem};
 
 pub fn build_menu(
-    plugin_manager: Arc<Mutex<PluginManager>>,
+    _plugin_manager: Arc<Mutex<PluginManager>>,
     feature_registry: Arc<FeatureRegistry>,
 ) -> Result<(Menu, EventRouter)> {
     let menu = Menu::new();

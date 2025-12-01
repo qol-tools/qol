@@ -5,17 +5,6 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 use tray_icon::{TrayIconBuilder, Icon};
 use gtk::{self, glib};
-use once_cell::sync::OnceCell;
-use std::sync::mpsc;
-
-static PLUGIN_REFRESH_TX: OnceCell<mpsc::Sender<()>> = OnceCell::new();
-
-pub fn request_plugin_refresh() {
-    if let Some(tx) = PLUGIN_REFRESH_TX.get() {
-        let _ = tx.send(());
-        log::info!("Plugin refresh requested");
-    }
-}
 
 pub fn create_tray(
     plugin_manager: Arc<Mutex<PluginManager>>,
@@ -23,9 +12,6 @@ pub fn create_tray(
     shutdown_tx: broadcast::Sender<()>,
     icon: Icon,
 ) -> Result<()> {
-    let (refresh_tx, _refresh_rx) = mpsc::channel::<()>();
-    let _ = PLUGIN_REFRESH_TX.set(refresh_tx);
-
     std::thread::spawn(move || {
         if gtk::init().is_err() {
             log::error!("Failed to initialize GTK");

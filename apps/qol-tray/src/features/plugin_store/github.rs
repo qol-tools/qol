@@ -87,12 +87,6 @@ pub fn write_cache(plugins: &[PluginMetadata]) -> Result<()> {
     Ok(())
 }
 
-pub fn is_cache_valid() -> bool {
-    read_cache()
-        .map(|c| current_timestamp() - c.timestamp < CACHE_TTL_SECS)
-        .unwrap_or(false)
-}
-
 pub fn cache_age_secs() -> Option<u64> {
     read_cache().map(|c| current_timestamp() - c.timestamp)
 }
@@ -254,10 +248,6 @@ impl GitHubClient {
 
         let release: GitHubRelease = response.json().await?;
         Ok(release.tag_name.trim_start_matches('v').to_string())
-    }
-
-    pub fn has_token(&self) -> bool {
-        self.token.is_some()
     }
 
     pub async fn list_plugins_cached(&self, force_refresh: bool) -> Result<Vec<PluginMetadata>> {

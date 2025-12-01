@@ -26,17 +26,6 @@ impl PluginManager {
         Ok(())
     }
 
-    pub fn reload_plugins(&mut self) -> Result<()> {
-        log::info!("Reloading plugins...");
-
-        for plugin in self.plugins.values_mut() {
-            let _ = plugin.stop_daemon();
-        }
-
-        self.plugins.clear();
-        self.load_plugins()
-    }
-
     pub fn plugins(&self) -> impl Iterator<Item = &Plugin> {
         self.plugins.values()
     }
