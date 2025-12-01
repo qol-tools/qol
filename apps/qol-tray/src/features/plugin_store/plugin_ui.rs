@@ -43,17 +43,17 @@ async fn serve_file(plugins_dir: &Path, plugin_id: &str, file_path: &str) -> Res
         return (StatusCode::FORBIDDEN, "Access denied").into_response();
     }
 
-    match tokio::fs::read(&ui_path).await {
-        Ok(contents) => {
-            let mime = guess_mime(&ui_path);
-            log::debug!("Serving {:?} as {}", ui_path, mime);
-            ([(header::CONTENT_TYPE, mime)], contents).into_response()
-        }
+    let contents = match tokio::fs::read(&ui_path).await {
+        Ok(contents) => contents,
         Err(e) => {
             log::error!("Failed to read plugin UI file {:?}: {}", ui_path, e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read file").into_response()
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read file").into_response();
         }
-    }
+    };
+
+    let mime = guess_mime(&ui_path);
+    log::debug!("Serving {:?} as {}", ui_path, mime);
+    ([(header::CONTENT_TYPE, mime)], contents).into_response()
 }
 
 fn is_safe_path(requested: &Path, base: &Path) -> bool {

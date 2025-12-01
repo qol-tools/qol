@@ -191,29 +191,26 @@ async fn install_plugin(Path(id): Path<String>) -> Json<PluginInfo> {
     let installer = PluginInstaller::new(plugins_dir);
     let repo_url = format!("https://github.com/qol-tools/{}.git", id);
 
-    match installer.install(&repo_url, &id).await {
-        Ok(_) => {
-            log::info!("Plugin {} installed successfully", id);
-            crate::tray::request_plugin_refresh();
-            Json(PluginInfo {
-                id: id.clone(),
-                name: id.clone(),
-                description: "Installed successfully".to_string(),
-                version: "1.0.0".to_string(),
-                installed: true,
-            })
-        }
-        Err(e) => {
-            log::error!("Failed to install plugin {}: {}", id, e);
-            Json(PluginInfo {
-                id: id.clone(),
-                name: id.clone(),
-                description: format!("Installation failed: {}", e),
-                version: "1.0.0".to_string(),
-                installed: false,
-            })
-        }
+    if let Err(e) = installer.install(&repo_url, &id).await {
+        log::error!("Failed to install plugin {}: {}", id, e);
+        return Json(PluginInfo {
+            id: id.clone(),
+            name: id.clone(),
+            description: format!("Installation failed: {}", e),
+            version: "1.0.0".to_string(),
+            installed: false,
+        });
     }
+
+    log::info!("Plugin {} installed successfully", id);
+    crate::tray::request_plugin_refresh();
+    Json(PluginInfo {
+        id: id.clone(),
+        name: id.clone(),
+        description: "Installed successfully".to_string(),
+        version: "1.0.0".to_string(),
+        installed: true,
+    })
 }
 
 async fn uninstall_plugin(Path(id): Path<String>) -> Json<UninstallResult> {
@@ -234,23 +231,20 @@ async fn uninstall_plugin(Path(id): Path<String>) -> Json<UninstallResult> {
 
     let installer = PluginInstaller::new(plugins_dir);
 
-    match installer.uninstall(&id).await {
-        Ok(_) => {
-            log::info!("Plugin {} uninstalled successfully", id);
-            crate::tray::request_plugin_refresh();
-            Json(UninstallResult {
-                success: true,
-                message: "Uninstalled successfully".to_string(),
-            })
-        }
-        Err(e) => {
-            log::error!("Failed to uninstall plugin {}: {}", id, e);
-            Json(UninstallResult {
-                success: false,
-                message: format!("Uninstall failed: {}", e),
-            })
-        }
+    if let Err(e) = installer.uninstall(&id).await {
+        log::error!("Failed to uninstall plugin {}: {}", id, e);
+        return Json(UninstallResult {
+            success: false,
+            message: format!("Uninstall failed: {}", e),
+        });
     }
+
+    log::info!("Plugin {} uninstalled successfully", id);
+    crate::tray::request_plugin_refresh();
+    Json(UninstallResult {
+        success: true,
+        message: "Uninstalled successfully".to_string(),
+    })
 }
 
 async fn install_ws(ws: WebSocketUpgrade, Path(id): Path<String>) -> impl IntoResponse {
@@ -268,32 +262,29 @@ async fn list_installed(
     axum::extract::State(_plugins_dir): axum::extract::State<PathBuf>,
 ) -> Json<Vec<InstalledPlugin>> {
     let mut manager = PluginManager::new();
-    
-    match manager.load_plugins() {
-        Ok(_) => {
-            let plugins: Vec<InstalledPlugin> = manager.plugins()
-                .map(|plugin| {
-                    let cover_path = plugin.path.join("cover.png");
-                    let ui_path = plugin.path.join("ui").join("index.html");
-                    
-                    InstalledPlugin {
-                        id: plugin.id.clone(),
-                        name: plugin.manifest.plugin.name.clone(),
-                        description: plugin.manifest.plugin.description.clone(),
-                        version: plugin.manifest.plugin.version.clone(),
-                        has_cover: cover_path.exists(),
-                        has_ui: ui_path.exists(),
-                    }
-                })
-                .collect();
-            
-            Json(plugins)
-        }
-        Err(e) => {
-            log::error!("Failed to load installed plugins: {}", e);
-            Json(vec![])
-        }
+
+    if let Err(e) = manager.load_plugins() {
+        log::error!("Failed to load installed plugins: {}", e);
+        return Json(vec![]);
     }
+
+    let plugins: Vec<InstalledPlugin> = manager.plugins()
+        .map(|plugin| {
+            let cover_path = plugin.path.join("cover.png");
+            let ui_path = plugin.path.join("ui").join("index.html");
+
+            InstalledPlugin {
+                id: plugin.id.clone(),
+                name: plugin.manifest.plugin.name.clone(),
+                description: plugin.manifest.plugin.description.clone(),
+                version: plugin.manifest.plugin.version.clone(),
+                has_cover: cover_path.exists(),
+                has_ui: ui_path.exists(),
+            }
+        })
+        .collect();
+
+    Json(plugins)
 }
 
 async fn serve_cover(
@@ -306,19 +297,15 @@ async fn serve_cover(
         return (StatusCode::NOT_FOUND, "Cover not found").into_response();
     }
     
-    match tokio::fs::read(&cover_path).await {
-        Ok(data) => {
-            (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, "image/png")],
-                data,
-            ).into_response()
-        }
+    let data = match tokio::fs::read(&cover_path).await {
+        Ok(data) => data,
         Err(e) => {
             log::error!("Failed to read cover image: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read cover").into_response()
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read cover").into_response();
         }
-    }
+    };
+
+    (StatusCode::OK, [(header::CONTENT_TYPE, "image/png")], data).into_response()
 }
 
 async fn get_token_status() -> Json<TokenStatus> {
@@ -328,27 +315,21 @@ async fn get_token_status() -> Json<TokenStatus> {
 }
 
 async fn set_github_token(Json(payload): Json<TokenRequest>) -> impl IntoResponse {
-    match super::github::store_token(&payload.token) {
-        Ok(_) => {
-            log::info!("GitHub token stored successfully");
-            (StatusCode::OK, "Token stored").into_response()
-        }
-        Err(e) => {
-            log::error!("Failed to store GitHub token: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to store token: {}", e)).into_response()
-        }
+    if let Err(e) = super::github::store_token(&payload.token) {
+        log::error!("Failed to store GitHub token: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to store token: {}", e)).into_response();
     }
+
+    log::info!("GitHub token stored successfully");
+    (StatusCode::OK, "Token stored".to_string()).into_response()
 }
 
 async fn delete_github_token() -> impl IntoResponse {
-    match super::github::delete_token() {
-        Ok(_) => {
-            log::info!("GitHub token deleted");
-            (StatusCode::OK, "Token deleted").into_response()
-        }
-        Err(e) => {
-            log::error!("Failed to delete GitHub token: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to delete token: {}", e)).into_response()
-        }
+    if let Err(e) = super::github::delete_token() {
+        log::error!("Failed to delete GitHub token: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to delete token: {}", e)).into_response();
     }
+
+    log::info!("GitHub token deleted");
+    (StatusCode::OK, "Token deleted".to_string()).into_response()
 }
