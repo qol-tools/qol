@@ -112,11 +112,13 @@ header {
     margin-bottom: 1rem;
 }
 
+#qr-code img,
 #qr-code canvas {
     display: block;
 }
 
 #download-link {
+    display: block;
     color: #4a9eff;
     text-decoration: none;
     font-size: 0.9rem;
