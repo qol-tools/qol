@@ -97,6 +97,18 @@ pub fn cache_age_secs() -> Option<u64> {
     read_cache().map(|c| current_timestamp() - c.timestamp)
 }
 
+fn get_valid_cache() -> Option<Vec<PluginMetadata>> {
+    let cache = read_cache()?;
+    let age = current_timestamp() - cache.timestamp;
+    
+    if age >= CACHE_TTL_SECS {
+        return None;
+    }
+    
+    log::info!("Using cached plugin data ({} seconds old)", age);
+    Some(cache.plugins.into_iter().map(PluginMetadata::from).collect())
+}
+
 #[derive(Debug, Deserialize)]
 struct GitHubRepo {
     name: String,
@@ -118,18 +130,15 @@ pub struct GitHubClient {
 
 pub fn get_stored_token() -> Option<String> {
     let path = token_path();
-    match std::fs::read_to_string(&path) {
-        Ok(token) => {
-            let token = token.trim().to_string();
-            if token.is_empty() {
-                None
-            } else {
-                log::info!("Loaded GitHub token from {:?}", path);
-                Some(token)
-            }
-        }
-        Err(_) => None,
+    let token = std::fs::read_to_string(&path).ok()?;
+    let token = token.trim();
+    
+    if token.is_empty() {
+        return None;
     }
+    
+    log::info!("Loaded GitHub token from {:?}", path);
+    Some(token.to_string())
 }
 
 pub fn store_token(token: &str) -> Result<()> {
@@ -217,14 +226,19 @@ impl GitHubClient {
     }
 
     async fn resolve_version(&self, manifest: &crate::plugins::PluginManifest) -> String {
-        if let Some(deps) = &manifest.dependencies {
-            if let Some(binary) = deps.binaries.first() {
-                if let Ok(version) = self.fetch_latest_release(&binary.repo).await {
-                    return version;
-                }
-            }
-        }
-        manifest.plugin.version.clone()
+        let repo = manifest
+            .dependencies
+            .as_ref()
+            .and_then(|d| d.binaries.first())
+            .map(|b| &b.repo);
+
+        let Some(repo) = repo else {
+            return manifest.plugin.version.clone();
+        };
+
+        self.fetch_latest_release(repo)
+            .await
+            .unwrap_or_else(|_| manifest.plugin.version.clone())
     }
 
     async fn fetch_latest_release(&self, repo: &str) -> Result<String> {
@@ -248,11 +262,8 @@ impl GitHubClient {
 
     pub async fn list_plugins_cached(&self, force_refresh: bool) -> Result<Vec<PluginMetadata>> {
         if !force_refresh {
-            if let Some(cache) = read_cache() {
-                if current_timestamp() - cache.timestamp < CACHE_TTL_SECS {
-                    log::info!("Using cached plugin data ({} seconds old)", current_timestamp() - cache.timestamp);
-                    return Ok(cache.plugins.into_iter().map(PluginMetadata::from).collect());
-                }
+            if let Some(plugins) = get_valid_cache() {
+                return Ok(plugins);
             }
         }
 
