@@ -1,7 +1,5 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## Development Commands
 
 ```bash
@@ -12,11 +10,6 @@ make run            # Build and run with info logging
 make run-debug      # Build and run with debug logging
 make install        # Install to /usr/bin and setup autostart
 make clean          # Clean build artifacts
-```
-
-Build with optional plugin-store feature:
-```bash
-cargo build --features plugin-store
 ```
 
 ## Architecture
@@ -51,25 +44,6 @@ cargo build --features plugin-store
 - Plugin settings accessed via `/plugins/{plugin_id}/`
 - API endpoints for install/uninstall operations
 - Fetches available plugins from `github.com/qol-tools/*`
-
-### Platform Abstraction Pattern
-
-Platform-specific code lives in `platform/` subdirectories with conditional compilation:
-
-```rust
-#[cfg(target_os = "linux")]
-mod linux;
-
-#[cfg(target_os = "windows")]
-mod windows;
-
-pub enum PlatformTray {
-    #[cfg(target_os = "linux")]
-    Linux,
-    #[cfg(not(target_os = "linux"))]
-    Standard(TrayIcon),
-}
-```
 
 ### Plugin Manifest Format
 
@@ -109,7 +83,16 @@ Action types:
 - **Short commit messages** - One-liners, no fluff, no co-authors
 - **No dead code warnings** - Remove unused code or gate with feature flags
 - Platform-specific code belongs in `platform/` directories, not root modules
+- **No builds or tests unless asked** - Do not run `cargo build`, `cargo run`, `make`, or browser tests unless explicitly requested. These operations are expensive.
 
+### Frontend Architecture
+
+- **Functional and declarative** - Pure render functions, no imperative DOM manipulation
+- **Data-driven** - UI derived from state, not manually synchronized
+- **Single responsibility** - Split logical chunks into focused modules
+- **Type safety** - Define data structures explicitly, validate API responses
+- **Scalability** - Design for N plugins, not hardcoded assumptions
+- **Keyboard-first** - All interactions accessible via keyboard
 ### Test Style
 
 - **AAA Pattern** - All tests follow Arrange-Act-Assert pattern with explicit comments
