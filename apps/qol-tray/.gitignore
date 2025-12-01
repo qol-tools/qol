@@ -6,3 +6,4 @@ Cargo.lock
 *~
 .DS_Store
 .github-token
+.plugin-cache.json

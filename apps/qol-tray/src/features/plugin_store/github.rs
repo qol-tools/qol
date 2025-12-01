@@ -1,14 +1,100 @@
 use anyhow::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const PLUGIN_PREFIX: &str = "plugin-";
+const CACHE_TTL_SECS: u64 = 3600;
 
-fn token_path() -> PathBuf {
+fn config_dir() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("qol-tray")
-        .join(".github-token")
+}
+
+fn token_path() -> PathBuf {
+    config_dir().join(".github-token")
+}
+
+fn cache_path() -> PathBuf {
+    config_dir().join(".plugin-cache.json")
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginCache {
+    pub timestamp: u64,
+    pub plugins: Vec<CachedPlugin>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedPlugin {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    pub repo_url: String,
+}
+
+impl From<PluginMetadata> for CachedPlugin {
+    fn from(m: PluginMetadata) -> Self {
+        Self {
+            id: m.id,
+            name: m.name,
+            description: m.description,
+            version: m.version,
+            repo_url: m.repo_url,
+        }
+    }
+}
+
+impl From<CachedPlugin> for PluginMetadata {
+    fn from(c: CachedPlugin) -> Self {
+        Self {
+            id: c.id,
+            name: c.name,
+            description: c.description,
+            version: c.version,
+            repo_url: c.repo_url,
+        }
+    }
+}
+
+fn current_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+pub fn read_cache() -> Option<PluginCache> {
+    let path = cache_path();
+    let content = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+pub fn write_cache(plugins: &[PluginMetadata]) -> Result<()> {
+    let path = cache_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let cache = PluginCache {
+        timestamp: current_timestamp(),
+        plugins: plugins.iter().cloned().map(CachedPlugin::from).collect(),
+    };
+    let content = serde_json::to_string(&cache)?;
+    std::fs::write(&path, content)?;
+    log::info!("Plugin cache written to {:?}", path);
+    Ok(())
+}
+
+pub fn is_cache_valid() -> bool {
+    read_cache()
+        .map(|c| current_timestamp() - c.timestamp < CACHE_TTL_SECS)
+        .unwrap_or(false)
+}
+
+pub fn cache_age_secs() -> Option<u64> {
+    read_cache().map(|c| current_timestamp() - c.timestamp)
 }
 
 #[derive(Debug, Deserialize)]
@@ -159,6 +245,26 @@ impl GitHubClient {
     pub fn has_token(&self) -> bool {
         self.token.is_some()
     }
+
+    pub async fn list_plugins_cached(&self, force_refresh: bool) -> Result<Vec<PluginMetadata>> {
+        if !force_refresh {
+            if let Some(cache) = read_cache() {
+                if current_timestamp() - cache.timestamp < CACHE_TTL_SECS {
+                    log::info!("Using cached plugin data ({} seconds old)", current_timestamp() - cache.timestamp);
+                    return Ok(cache.plugins.into_iter().map(PluginMetadata::from).collect());
+                }
+            }
+        }
+
+        log::info!("Fetching fresh plugin data from GitHub");
+        let plugins = self.list_plugins().await?;
+        
+        if let Err(e) = write_cache(&plugins) {
+            log::warn!("Failed to write plugin cache: {}", e);
+        }
+        
+        Ok(plugins)
+    }
 }
 
 fn is_plugin_repo(name: &str) -> bool {
@@ -179,13 +285,12 @@ fn build_plugin_metadata(repo: &GitHubRepo, manifest: crate::plugins::PluginMani
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PluginMetadata {
     pub id: String,
     pub name: String,
     pub description: String,
     pub version: String,
-    #[allow(dead_code)]
     pub repo_url: String,
 }
 

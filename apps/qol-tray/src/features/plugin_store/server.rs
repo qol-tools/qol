@@ -26,6 +26,18 @@ struct PluginInfo {
 }
 
 #[derive(Serialize)]
+struct PluginsResponse {
+    plugins: Vec<PluginInfo>,
+    cache_age_secs: Option<u64>,
+}
+
+#[derive(Deserialize, Default)]
+struct PluginsQuery {
+    #[serde(default)]
+    refresh: bool,
+}
+
+#[derive(Serialize)]
 struct UninstallResult {
     success: bool,
     message: String,
@@ -116,10 +128,12 @@ fn get_installed_plugin_ids(plugins_dir: &std::path::Path) -> std::collections::
         .unwrap_or_default()
 }
 
-async fn list_plugins() -> Json<Vec<PluginInfo>> {
-    use super::github::GitHubClient;
+async fn list_plugins(
+    axum::extract::Query(query): axum::extract::Query<PluginsQuery>,
+) -> Json<PluginsResponse> {
+    use super::github::{GitHubClient, cache_age_secs};
 
-    log::info!("API /plugins called");
+    log::info!("API /plugins called (refresh={})", query.refresh);
 
     let client = GitHubClient::new("qol-tools");
     let plugins_dir = PluginLoader::default_plugin_dir()
@@ -127,10 +141,9 @@ async fn list_plugins() -> Json<Vec<PluginInfo>> {
 
     let installed_plugins = get_installed_plugin_ids(&plugins_dir);
 
-    log::info!("Fetching plugins from GitHub...");
-    match client.list_plugins().await {
+    match client.list_plugins_cached(query.refresh).await {
         Ok(metadata_list) => {
-            log::info!("Found {} plugins from GitHub", metadata_list.len());
+            log::info!("Got {} plugins", metadata_list.len());
             let plugins = metadata_list
                 .into_iter()
                 .map(|m| PluginInfo {
@@ -141,11 +154,17 @@ async fn list_plugins() -> Json<Vec<PluginInfo>> {
                     installed: installed_plugins.contains(&m.id),
                 })
                 .collect();
-            Json(plugins)
+            Json(PluginsResponse {
+                plugins,
+                cache_age_secs: cache_age_secs(),
+            })
         }
         Err(e) => {
-            log::error!("Failed to fetch plugins from GitHub: {}", e);
-            Json(vec![])
+            log::error!("Failed to fetch plugins: {}", e);
+            Json(PluginsResponse {
+                plugins: vec![],
+                cache_age_secs: cache_age_secs(),
+            })
         }
     }
 }
