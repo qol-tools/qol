@@ -157,6 +157,54 @@ header p {
     font-size: 1.1rem;
 }
 
+.header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+}
+
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.cache-age {
+    color: #666;
+    font-size: 0.85rem;
+}
+
+.refresh-btn {
+    width: 2.5rem;
+    height: 2.5rem;
+    border: 1px solid #444;
+    border-radius: 6px;
+    background: #2a2a2a;
+    color: #ccc;
+    font-size: 1.2rem;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s, transform 0.3s;
+}
+
+.refresh-btn:hover:not(:disabled) {
+    background: #3a3a3a;
+    color: #fff;
+}
+
+.refresh-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.refresh-btn.spinning {
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
 .search-bar {
     margin-bottom: 2rem;
 }

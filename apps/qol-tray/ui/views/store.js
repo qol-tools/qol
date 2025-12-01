@@ -5,19 +5,36 @@ const state = {
     selectedIndex: 0,
     searchQuery: '',
     hasToken: false,
-    showTokenInput: false
+    showTokenInput: false,
+    cacheAgeSecs: null,
+    loading: false
 };
 
 let container = null;
 let searchInput = null;
+
+function formatCacheAge(secs) {
+    if (secs === null || secs === undefined) return '';
+    if (secs < 60) return 'just now';
+    if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+    return `${Math.floor(secs / 3600)}h ago`;
+}
 
 export function render(containerEl) {
     container = containerEl;
     container.innerHTML = `
         <div class="view-container">
             <header>
-                <h1>Plugin Store</h1>
-                <p>Browse and install plugins for QoL Tray</p>
+                <div class="header-row">
+                    <div>
+                        <h1>Plugin Store</h1>
+                        <p>Browse and install plugins for QoL Tray</p>
+                    </div>
+                    <div class="header-actions">
+                        <span id="cache-age" class="cache-age"></span>
+                        <button id="refresh-btn" class="refresh-btn" title="Refresh (r)">↻</button>
+                    </div>
+                </div>
             </header>
             <div class="search-bar">
                 <input type="text" id="store-search" placeholder="Search plugins...">
@@ -26,6 +43,9 @@ export function render(containerEl) {
             <div id="store-list" class="plugins-grid">
                 <div class="loading">Loading plugins...</div>
             </div>
+            <footer class="help">
+                ←↑↓→ navigate • Enter install • r refresh
+            </footer>
         </div>
     `;
     
@@ -38,6 +58,8 @@ export function render(containerEl) {
     if (listEl) {
         listEl.addEventListener('click', handleListClick);
     }
+    
+    document.getElementById('refresh-btn')?.addEventListener('click', () => refreshPlugins());
     
     checkTokenStatus();
     loadPlugins();
@@ -114,15 +136,21 @@ async function saveToken() {
     }
 }
 
-async function loadPlugins() {
+async function loadPlugins(forceRefresh = false) {
     const listEl = document.getElementById('store-list');
     if (!listEl) return;
     
+    state.loading = true;
+    updateRefreshButton();
+    
     try {
-        const response = await fetch('/api/plugins');
+        const url = forceRefresh ? '/api/plugins?refresh=true' : '/api/plugins';
+        const response = await fetch(url);
         if (!response.ok) throw new Error('Failed to fetch plugins');
         
-        state.plugins = await response.json();
+        const data = await response.json();
+        state.plugins = data.plugins;
+        state.cacheAgeSecs = data.cache_age_secs;
         
         if (state.plugins.length === 0 && !state.hasToken) {
             showRateLimitBanner();
@@ -131,10 +159,34 @@ async function loadPlugins() {
         state.plugins.sort((a, b) => a.name.localeCompare(b.name));
         renderPlugins(state.plugins);
         updateSelection();
+        updateCacheAge();
     } catch (error) {
         if (listEl) {
             listEl.innerHTML = `<div class="error">Error loading plugins: ${error.message}</div>`;
         }
+    } finally {
+        state.loading = false;
+        updateRefreshButton();
+    }
+}
+
+function refreshPlugins() {
+    if (state.loading) return;
+    loadPlugins(true);
+}
+
+function updateCacheAge() {
+    const el = document.getElementById('cache-age');
+    if (el) {
+        el.textContent = formatCacheAge(state.cacheAgeSecs);
+    }
+}
+
+function updateRefreshButton() {
+    const btn = document.getElementById('refresh-btn');
+    if (btn) {
+        btn.disabled = state.loading;
+        btn.classList.toggle('spinning', state.loading);
     }
 }
 
@@ -200,6 +252,12 @@ function updateSelection() {
 }
 
 export function handleKey(e) {
+    if (e.key === 'r' && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        refreshPlugins();
+        return;
+    }
+    
     if (e.key === 'Enter') {
         e.preventDefault();
         const selected = document.querySelector('.plugin-card.selected');
