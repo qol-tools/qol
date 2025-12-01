@@ -3,7 +3,9 @@ export const id = 'store';
 const state = {
     plugins: [],
     selectedIndex: 0,
-    searchQuery: ''
+    searchQuery: '',
+    hasToken: false,
+    showTokenInput: false
 };
 
 let container = null;
@@ -20,6 +22,7 @@ export function render(containerEl) {
             <div class="search-bar">
                 <input type="text" id="store-search" placeholder="Search plugins...">
             </div>
+            <div id="token-banner"></div>
             <div id="store-list" class="plugins-grid">
                 <div class="loading">Loading plugins...</div>
             </div>
@@ -36,7 +39,79 @@ export function render(containerEl) {
         listEl.addEventListener('click', handleListClick);
     }
     
+    checkTokenStatus();
     loadPlugins();
+}
+
+async function checkTokenStatus() {
+    try {
+        const response = await fetch('/api/github-token');
+        const data = await response.json();
+        state.hasToken = data.has_token;
+    } catch (e) {
+        state.hasToken = false;
+    }
+}
+
+function showRateLimitBanner() {
+    const banner = document.getElementById('token-banner');
+    if (!banner) return;
+    
+    if (state.showTokenInput) {
+        banner.innerHTML = `
+            <div class="token-input-container">
+                <input type="password" id="github-token-input" placeholder="Paste GitHub token (no scopes needed)">
+                <button id="save-token-btn">Save</button>
+                <button id="cancel-token-btn">Cancel</button>
+            </div>
+            <p class="token-help">
+                <a href="https://github.com/settings/tokens/new" target="_blank">Create token</a> — no scopes needed, just for rate limits
+            </p>
+        `;
+        
+        document.getElementById('save-token-btn')?.addEventListener('click', saveToken);
+        document.getElementById('cancel-token-btn')?.addEventListener('click', () => {
+            state.showTokenInput = false;
+            showRateLimitBanner();
+        });
+    } else {
+        banner.innerHTML = `
+            <div class="rate-limit-banner">
+                <span>GitHub API rate limit reached.</span>
+                <button id="add-token-btn">Add GitHub Token</button>
+            </div>
+        `;
+        
+        document.getElementById('add-token-btn')?.addEventListener('click', () => {
+            state.showTokenInput = true;
+            showRateLimitBanner();
+            document.getElementById('github-token-input')?.focus();
+        });
+    }
+}
+
+async function saveToken() {
+    const input = document.getElementById('github-token-input');
+    const token = input?.value?.trim();
+    
+    if (!token) return;
+    
+    try {
+        const response = await fetch('/api/github-token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token })
+        });
+        
+        if (response.ok) {
+            state.hasToken = true;
+            state.showTokenInput = false;
+            document.getElementById('token-banner').innerHTML = '';
+            loadPlugins();
+        }
+    } catch (e) {
+        console.error('Failed to save token:', e);
+    }
 }
 
 async function loadPlugins() {
@@ -48,6 +123,12 @@ async function loadPlugins() {
         if (!response.ok) throw new Error('Failed to fetch plugins');
         
         state.plugins = await response.json();
+        
+        if (state.plugins.length === 0 && !state.hasToken) {
+            showRateLimitBanner();
+        }
+        
+        state.plugins.sort((a, b) => a.name.localeCompare(b.name));
         renderPlugins(state.plugins);
         updateSelection();
     } catch (error) {
@@ -67,13 +148,13 @@ function renderPlugins(plugins) {
     }
     
     listEl.innerHTML = plugins.map((plugin, index) => `
-        <div class="plugin-card" data-index="${index}" data-plugin-id="${plugin.id}" data-installed="${plugin.installed}">
+        <div class="plugin-card ${plugin.installed ? 'installed' : ''}" data-index="${index}" data-plugin-id="${plugin.id}" data-installed="${plugin.installed}">
             <h3>${plugin.name}</h3>
             <div class="version">v${plugin.version}</div>
             <div class="description">${plugin.description}</div>
             <div class="button-group">
                 ${plugin.installed ? `
-                    <button class="uninstall">Uninstall</button>
+                    <span class="installed-badge">Installed</span>
                 ` : `
                     <button class="install">Install</button>
                 `}
@@ -86,13 +167,9 @@ function handleListClick(e) {
     const card = e.target.closest('.plugin-card');
     if (!card) return;
     
-    if (e.target.tagName === 'BUTTON') {
+    if (e.target.tagName === 'BUTTON' && e.target.classList.contains('install')) {
         const pluginId = card.dataset.pluginId;
-        if (e.target.classList.contains('install')) {
-            installPlugin(pluginId);
-        } else {
-            uninstallPlugin(pluginId);
-        }
+        installPlugin(pluginId);
         return;
     }
     
@@ -129,9 +206,7 @@ export function handleKey(e) {
         if (selected) {
             const pluginId = selected.dataset.pluginId;
             const isInstalled = selected.dataset.installed === 'true';
-            if (isInstalled) {
-                uninstallPlugin(pluginId);
-            } else {
+            if (!isInstalled) {
                 installPlugin(pluginId);
             }
         }
@@ -192,23 +267,6 @@ async function installPlugin(id) {
     }
 }
 
-async function uninstallPlugin(id) {
-    try {
-        const response = await fetch(`/api/uninstall/${id}`, { method: 'POST' });
-        const result = await response.json();
-        
-        if (!result.success) throw new Error(result.message);
-        
-        const plugin = state.plugins.find(p => p.id === id);
-        if (plugin) {
-            plugin.installed = false;
-            renderPlugins(getFilteredPlugins());
-            updateSelection();
-        }
-    } catch (error) {
-        console.error(`Failed to uninstall plugin: ${error.message}`);
-    }
-}
 
 export function onFocus() {
     updateSelection();
