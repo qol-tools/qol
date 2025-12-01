@@ -29,11 +29,12 @@ async fn main() -> Result<()> {
 
     features::plugin_store::PluginStore::start_server().await?;
 
-    let _tray = TrayManager::new(plugin_manager, feature_registry, shutdown_tx)?;
+    let _tray = TrayManager::new(plugin_manager.clone(), feature_registry, shutdown_tx)?;
 
     log::info!("QoL Tray daemon started successfully");
 
     shutdown_rx.recv().await.ok();
+    drop(plugin_manager);
     log::info!("Shutdown signal received, exiting...");
     Ok(())
 }
