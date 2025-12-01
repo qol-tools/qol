@@ -5,38 +5,61 @@ const PLACEHOLDER_SVG = 'data:image/svg+xml,' + encodeURIComponent(
     '</svg>'
 );
 
+export const id = 'plugins';
+
 const state = {
     plugins: [],
     selectedIndex: 0,
     columns: 4
 };
 
-async function init() {
+let container = null;
+
+export function render(containerEl) {
+    container = containerEl;
+    container.innerHTML = `
+        <div class="view-container">
+            <header>
+                <h1>Plugins</h1>
+            </header>
+            <div id="plugins-grid" class="plugin-grid"></div>
+            <footer class="help">
+                ←↑↓→ navigate • Enter open
+            </footer>
+        </div>
+    `;
+    
+    loadPlugins();
+}
+
+async function loadPlugins() {
+    const gridEl = document.getElementById('plugins-grid');
+    if (!gridEl) return;
+    
+    gridEl.addEventListener('click', handleClick);
+    
     try {
         const response = await fetch('/api/installed');
         if (!response.ok) throw new Error('Failed to fetch plugins');
         
         state.plugins = await response.json();
-        render();
+        renderGrid();
         updateSelection();
-        
-        document.addEventListener('keydown', handleKeydown);
-        document.getElementById('grid').addEventListener('click', handleClick);
     } catch (error) {
-        document.getElementById('grid').innerHTML = 
-            `<div class="error">Error loading plugins: ${error.message}</div>`;
+        gridEl.innerHTML = `<div class="error">Error loading plugins: ${error.message}</div>`;
     }
 }
 
-function render() {
-    const grid = document.getElementById('grid');
+function renderGrid() {
+    const gridEl = document.getElementById('plugins-grid');
+    if (!gridEl) return;
     
     if (state.plugins.length === 0) {
-        grid.innerHTML = '<div class="empty">No plugins installed. Press Tab to open the store.</div>';
+        gridEl.innerHTML = '<div class="empty">No plugins installed. Press Tab to open the store.</div>';
         return;
     }
     
-    grid.innerHTML = state.plugins.map((plugin, index) => {
+    gridEl.innerHTML = state.plugins.map((plugin, index) => {
         const coverUrl = plugin.has_cover ? `/api/cover/${plugin.id}` : PLACEHOLDER_SVG;
         const noUiClass = plugin.has_ui ? '' : 'no-ui';
         
@@ -73,14 +96,13 @@ function handleClick(e) {
     }
 }
 
-function handleKeydown(e) {
+export function handleKey(e) {
     const handlers = {
         ArrowUp: () => navigate(-state.columns),
         ArrowDown: () => navigate(state.columns),
         ArrowLeft: () => navigate(-1),
         ArrowRight: () => navigate(1),
-        Enter: openSelected,
-        Tab: () => !e.shiftKey && (window.location.href = '/store.html')
+        Enter: openSelected
     };
     
     const handler = handlers[e.key];
@@ -111,4 +133,17 @@ function openSelected() {
     }
 }
 
-init();
+export function onFocus() {
+    updateSelection();
+}
+
+export function onBlur() {
+}
+
+export function cleanup() {
+    const grid = document.getElementById('plugins-grid');
+    if (grid) {
+        grid.removeEventListener('click', handleClick);
+    }
+}
+

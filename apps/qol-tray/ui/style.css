@@ -9,6 +9,55 @@ body {
     background: #1a1a1a;
     color: #e0e0e0;
     line-height: 1.6;
+    margin: 0;
+    padding: 0;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.app-container {
+    display: flex;
+    height: 100vh;
+}
+
+#sidebar {
+    width: 200px;
+    background: #252525;
+    border-right: 1px solid #333;
+    padding: 1rem 0;
+    overflow-y: auto;
+}
+
+.sidebar-item {
+    padding: 0.75rem 1.5rem;
+    color: #ccc;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+    user-select: none;
+}
+
+.sidebar-item:hover {
+    background: #2a2a2a;
+}
+
+.sidebar-item.active {
+    background: #1a1a1a;
+    color: #4a9eff;
+    border-left: 3px solid #4a9eff;
+}
+
+#content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 2rem;
+}
+
+.view-container {
+    max-width: 1400px;
+    margin: 0 auto;
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
 }
 
 .container {
@@ -143,11 +192,18 @@ header p {
     display: flex;
     flex-direction: column;
     aspect-ratio: auto;
+    cursor: pointer;
 }
 
 .plugins-grid .plugin-card:hover {
     transform: translateY(-4px);
     border-color: #4a9eff;
+}
+
+.plugins-grid .plugin-card.selected {
+    border-color: #4a9eff;
+    transform: translateY(-4px);
+    box-shadow: 0 4px 12px rgba(74, 158, 255, 0.3);
 }
 
 .plugins-grid .plugin-card h3 {
