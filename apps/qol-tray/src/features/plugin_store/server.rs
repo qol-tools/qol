@@ -6,6 +6,7 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
+    http::{StatusCode, header},
 };
 use serde::Serialize;
 use tokio::sync::oneshot;
@@ -13,7 +14,7 @@ use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 use axum::http::HeaderValue;
 use anyhow::Result;
 
-use crate::plugins::PluginLoader;
+use crate::plugins::{PluginLoader, PluginManager};
 
 #[derive(Serialize)]
 struct PluginInfo {
@@ -30,6 +31,16 @@ struct UninstallResult {
     message: String,
 }
 
+#[derive(Serialize)]
+struct InstalledPlugin {
+    id: String,
+    name: String,
+    description: String,
+    version: String,
+    has_cover: bool,
+    has_ui: bool,
+}
+
 pub struct UiServerHandle {
     #[allow(dead_code)]
     shutdown_tx: oneshot::Sender<()>,
@@ -39,11 +50,15 @@ pub async fn start_ui_server(static_dir: &str) -> Result<UiServerHandle> {
     let plugins_dir = PluginLoader::default_plugin_dir()
         .unwrap_or_else(|_| PathBuf::from("~/.config/qol-tray/plugins"));
 
+    let plugins_dir_clone = plugins_dir.clone();
     let api = Router::new()
         .route("/plugins", get(list_plugins))
+        .route("/installed", get(list_installed))
+        .route("/cover/:id", get(serve_cover))
         .route("/install/:id", post(install_plugin))
         .route("/uninstall/:id", post(uninstall_plugin))
-        .route("/ws/install/:id", get(install_ws));
+        .route("/ws/install/:id", get(install_ws))
+        .with_state(plugins_dir_clone);
 
     let static_service = ServeDir::new(static_dir);
     let no_cache = SetResponseHeaderLayer::overriding(
@@ -215,4 +230,61 @@ async fn install_progress_socket(mut socket: WebSocket, id: String) {
     let _ = socket
         .send(Message::Text(format!("Starting install for {}", id)))
         .await;
+}
+
+async fn list_installed(
+    axum::extract::State(_plugins_dir): axum::extract::State<PathBuf>,
+) -> Json<Vec<InstalledPlugin>> {
+    let mut manager = PluginManager::new();
+    
+    match manager.load_plugins() {
+        Ok(_) => {
+            let plugins: Vec<InstalledPlugin> = manager.plugins()
+                .map(|plugin| {
+                    let cover_path = plugin.path.join("cover.png");
+                    let ui_path = plugin.path.join("ui").join("index.html");
+                    
+                    InstalledPlugin {
+                        id: plugin.id.clone(),
+                        name: plugin.manifest.plugin.name.clone(),
+                        description: plugin.manifest.plugin.description.clone(),
+                        version: plugin.manifest.plugin.version.clone(),
+                        has_cover: cover_path.exists(),
+                        has_ui: ui_path.exists(),
+                    }
+                })
+                .collect();
+            
+            Json(plugins)
+        }
+        Err(e) => {
+            log::error!("Failed to load installed plugins: {}", e);
+            Json(vec![])
+        }
+    }
+}
+
+async fn serve_cover(
+    Path(plugin_id): Path<String>,
+    axum::extract::State(plugins_dir): axum::extract::State<PathBuf>,
+) -> impl IntoResponse {
+    let cover_path = plugins_dir.join(&plugin_id).join("cover.png");
+    
+    if !cover_path.exists() {
+        return (StatusCode::NOT_FOUND, "Cover not found").into_response();
+    }
+    
+    match tokio::fs::read(&cover_path).await {
+        Ok(data) => {
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "image/png")],
+                data,
+            ).into_response()
+        }
+        Err(e) => {
+            log::error!("Failed to read cover image: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read cover").into_response()
+        }
+    }
 }

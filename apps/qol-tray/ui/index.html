@@ -3,25 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>QoL Tray - Plugin Store</title>
+    <title>QoL Tray</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>Plugin Store</h1>
-            <p>Browse and install plugins for QoL Tray</p>
+            <h1>Plugins</h1>
         </header>
-
-        <div class="search-bar">
-            <input type="text" id="search" placeholder="Search plugins...">
-        </div>
-
-        <div id="plugins-list" class="plugins-grid">
-            <div class="loading">Loading plugins...</div>
-        </div>
+        <div id="grid" class="plugin-grid"></div>
+        <footer class="help">
+            ←↑↓→ navigate • Enter open • Tab store
+        </footer>
     </div>
-
     <script src="app.js"></script>
 </body>
 </html>

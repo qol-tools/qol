@@ -1,86 +1,114 @@
-let allPlugins = [];
+const PLACEHOLDER_SVG = 'data:image/svg+xml,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">' +
+    '<rect fill="#333" width="300" height="200"/>' +
+    '<text fill="#666" x="50%" y="50%" text-anchor="middle" dy=".3em" font-family="sans-serif" font-size="14">No Cover</text>' +
+    '</svg>'
+);
 
-async function loadPlugins() {
-    const container = document.getElementById('plugins-list');
+const state = {
+    plugins: [],
+    selectedIndex: 0,
+    columns: 4
+};
 
+async function init() {
     try {
-        const response = await fetch('/api/plugins');
+        const response = await fetch('/api/installed');
         if (!response.ok) throw new Error('Failed to fetch plugins');
-
-        allPlugins = await response.json();
-        renderPlugins(allPlugins);
+        
+        state.plugins = await response.json();
+        render();
+        updateSelection();
+        
+        document.addEventListener('keydown', handleKeydown);
+        document.getElementById('grid').addEventListener('click', handleClick);
     } catch (error) {
-        container.innerHTML = `<div class="error">Error loading plugins: ${error.message}</div>`;
+        document.getElementById('grid').innerHTML = 
+            `<div class="error">Error loading plugins: ${error.message}</div>`;
     }
 }
 
-function renderPlugins(plugins) {
-    const container = document.getElementById('plugins-list');
-
-    if (plugins.length === 0) {
-        container.innerHTML = '<div class="loading">No plugins found</div>';
+function render() {
+    const grid = document.getElementById('grid');
+    
+    if (state.plugins.length === 0) {
+        grid.innerHTML = '<div class="empty">No plugins installed. Press Tab to open the store.</div>';
         return;
     }
-
-    container.innerHTML = plugins.map(plugin => `
-        <div class="plugin-card">
-            <h3>${plugin.name}</h3>
-            <div class="version">v${plugin.version}</div>
-            <div class="description">${plugin.description}</div>
-            <div class="button-group">
-                ${plugin.installed ? `
-                    <button class="uninstall" onclick="uninstallPlugin('${plugin.id}')">
-                        Uninstall
-                    </button>
-                ` : `
-                    <button class="install" onclick="installPlugin('${plugin.id}')">
-                        Install
-                    </button>
-                `}
+    
+    grid.innerHTML = state.plugins.map((plugin, index) => {
+        const coverUrl = plugin.has_cover ? `/api/cover/${plugin.id}` : PLACEHOLDER_SVG;
+        const noUiClass = plugin.has_ui ? '' : 'no-ui';
+        
+        return `
+            <div class="plugin-card ${noUiClass}" data-index="${index}">
+                <img src="${coverUrl}" alt="${plugin.name}" onerror="this.src='${PLACEHOLDER_SVG}'">
+                <div class="plugin-name">${plugin.name}</div>
             </div>
-        </div>
-    `).join('');
+        `;
+    }).join('');
 }
 
-async function installPlugin(id) {
-    try {
-        const response = await fetch(`/api/install/${id}`, { method: 'POST' });
-        if (!response.ok) throw new Error('Installation failed');
-
-        const plugin = allPlugins.find(p => p.id === id);
-        if (plugin) {
-            plugin.installed = true;
-            renderPlugins(allPlugins);
-        }
-    } catch (error) {
-        console.error(`Failed to install plugin: ${error.message}`);
+function updateSelection() {
+    document.querySelectorAll('.plugin-card').forEach((card, i) => {
+        card.classList.toggle('selected', i === state.selectedIndex);
+    });
+    
+    const selected = document.querySelector('.plugin-card.selected');
+    if (selected) {
+        selected.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 }
 
-async function uninstallPlugin(id) {
-    try {
-        const response = await fetch(`/api/uninstall/${id}`, { method: 'POST' });
-        const result = await response.json();
-
-        if (!result.success) throw new Error(result.message);
-
-        const plugin = allPlugins.find(p => p.id === id);
-        if (plugin) {
-            plugin.installed = false;
-            renderPlugins(allPlugins);
-        }
-    } catch (error) {
-        console.error(`Failed to uninstall plugin: ${error.message}`);
+function handleClick(e) {
+    const card = e.target.closest('.plugin-card');
+    if (!card) return;
+    
+    const index = parseInt(card.dataset.index, 10);
+    if (index !== state.selectedIndex) {
+        state.selectedIndex = index;
+        updateSelection();
+    } else {
+        openSelected();
     }
 }
 
-document.getElementById('search').addEventListener('input', (e) => {
-    const query = e.target.value.toLowerCase();
-    const filtered = allPlugins.filter(p =>
-        p.name.toLowerCase().includes(query) ||
-        p.description.toLowerCase().includes(query)
-    );
-    renderPlugins(filtered);
-});
+function handleKeydown(e) {
+    const handlers = {
+        ArrowUp: () => navigate(-state.columns),
+        ArrowDown: () => navigate(state.columns),
+        ArrowLeft: () => navigate(-1),
+        ArrowRight: () => navigate(1),
+        Enter: openSelected,
+        Tab: () => !e.shiftKey && (window.location.href = '/store.html')
+    };
+    
+    const handler = handlers[e.key];
+    if (handler) {
+        e.preventDefault();
+        handler();
+    }
+}
 
-loadPlugins();
+function navigate(delta) {
+    const total = state.plugins.length;
+    if (total === 0) return;
+    
+    const newIndex = Math.max(0, Math.min(total - 1, state.selectedIndex + delta));
+    
+    if (newIndex !== state.selectedIndex) {
+        state.selectedIndex = newIndex;
+        updateSelection();
+    }
+}
+
+function openSelected() {
+    if (state.plugins.length === 0) return;
+    
+    const plugin = state.plugins[state.selectedIndex];
+    if (plugin.has_ui) {
+        window.location.href = `/plugins/${plugin.id}/`;
+    }
+}
+
+init();
