@@ -1,7 +1,7 @@
 [plugin]
 name = "PointZerver"
 description = "Control your PC from mobile devices"
-version = "0.4.0"
+version = "1.0.0"
 author = "KMRH47"
 
 [menu]
