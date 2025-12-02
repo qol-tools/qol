@@ -19,7 +19,55 @@ async fn serve_plugin_index(
     AxumPath(plugin_id): AxumPath<String>,
     axum::extract::State(plugins_dir): axum::extract::State<PathBuf>,
 ) -> Response {
-    serve_file(&plugins_dir, &plugin_id, "index.html").await
+    let ui_path = plugins_dir.join(&plugin_id).join("ui").join("index.html");
+
+    if !ui_path.exists() {
+        return (StatusCode::NOT_FOUND, "File not found").into_response();
+    }
+
+    if !is_safe_path(&ui_path, &plugins_dir) {
+        return (StatusCode::FORBIDDEN, "Access denied").into_response();
+    }
+
+    let contents = match tokio::fs::read_to_string(&ui_path).await {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("Failed to read plugin UI: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read file").into_response();
+        }
+    };
+
+    let injected = inject_plugin_wrapper(&contents);
+    ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], injected).into_response()
+}
+
+fn inject_plugin_wrapper(html: &str) -> String {
+    const NAV_HEADER: &str = r#"<div id="qol-plugin-nav" style="position:fixed;top:0;left:0;right:0;background:#1a1a1a;border-bottom:1px solid #333;padding:0.5rem 1rem;display:flex;align-items:center;gap:1rem;z-index:9999;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
+<a href="/" style="color:#4a9eff;text-decoration:none;font-size:0.9rem">← Back</a>
+</div>
+<div style="height:2.5rem"></div>"#;
+
+    const NAV_FOOTER: &str = r#"<div id="qol-plugin-footer" style="position:fixed;bottom:0;left:0;right:0;background:#1a1a1a;border-top:1px solid #333;padding:0.5rem;text-align:center;color:#666;font-size:0.85rem;z-index:9999;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
+Esc back
+</div>
+<script>document.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();window.location.href='/';}})</script>"#;
+
+    let with_header = if let Some(pos) = html.find("<body") {
+        if let Some(end) = html[pos..].find('>') {
+            let insert_pos = pos + end + 1;
+            format!("{}{}{}", &html[..insert_pos], NAV_HEADER, &html[insert_pos..])
+        } else {
+            html.to_string()
+        }
+    } else {
+        html.to_string()
+    };
+
+    if let Some(pos) = with_header.rfind("</body>") {
+        format!("{}{}{}", &with_header[..pos], NAV_FOOTER, &with_header[pos..])
+    } else {
+        with_header
+    }
 }
 
 async fn serve_plugin_file(
