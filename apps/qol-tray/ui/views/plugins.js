@@ -51,9 +51,18 @@ async function loadPlugins() {
         restoreSelection();
         renderGrid();
         updateSelection();
+        
+        checkForUpdates();
     } catch (error) {
         gridEl.innerHTML = `<div class="error">Error loading plugins: ${error.message}</div>`;
     }
+}
+
+async function checkForUpdates() {
+    try {
+        await fetch('/api/plugins');
+        await refreshPlugins();
+    } catch (e) {}
 }
 
 function restoreSelection() {
@@ -269,19 +278,25 @@ async function updatePlugin(pluginId) {
         const result = await response.json();
         
         if (!result.success) throw new Error(result.message);
-        
-        const plugin = state.plugins.find(p => p.id === pluginId);
-        if (plugin && plugin.available_version) {
-            plugin.version = plugin.available_version;
-            plugin.update_available = false;
-            plugin.available_version = null;
-        }
     } catch (error) {
         console.error(`Failed to update plugin: ${error.message}`);
     } finally {
         state.updating.delete(pluginId);
+        await refreshPlugins();
+    }
+}
+
+async function refreshPlugins() {
+    try {
+        const response = await fetch('/api/installed');
+        if (!response.ok) throw new Error('Failed to fetch plugins');
+        
+        state.plugins = await response.json();
+        state.plugins.sort((a, b) => a.name.localeCompare(b.name));
         renderGrid();
         updateSelection();
+    } catch (error) {
+        console.error(`Failed to refresh plugins: ${error.message}`);
     }
 }
 
