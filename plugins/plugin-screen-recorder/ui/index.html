@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Screen Recorder</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎬 Screen Recorder</h1>
+            <p class="subtitle">Configure recording settings</p>
+        </header>
+
+        <section class="settings-section">
+            <h2>Audio</h2>
+            <div class="setting-row">
+                <label class="toggle-label">
+                    <input type="checkbox" id="audio-enabled">
+                    <span>Enable Audio Recording</span>
+                </label>
+            </div>
+            <div class="setting-row audio-inputs">
+                <label>Audio Sources</label>
+                <div class="checkbox-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="input-mic" value="mic">
+                        <span>Microphone</span>
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="input-system" value="system">
+                        <span>System Audio</span>
+                    </label>
+                </div>
+            </div>
+            <div class="setting-row audio-inputs">
+                <label for="mic-device">Microphone Device</label>
+                <input type="text" id="mic-device" placeholder="default">
+            </div>
+            <div class="setting-row audio-inputs">
+                <label for="system-device">System Audio Device</label>
+                <input type="text" id="system-device" placeholder="default">
+            </div>
+        </section>
+
+        <section class="settings-section">
+            <h2>Video</h2>
+            <div class="setting-row">
+                <label for="framerate">Framerate</label>
+                <select id="framerate">
+                    <option value="30">30 FPS</option>
+                    <option value="60">60 FPS</option>
+                    <option value="120">120 FPS</option>
+                </select>
+            </div>
+            <div class="setting-row">
+                <label for="crf">Quality (CRF)</label>
+                <div class="range-container">
+                    <input type="range" id="crf" min="0" max="51" value="18">
+                    <span id="crf-value">18</span>
+                </div>
+                <span class="hint">Lower = better quality, larger file (0-51)</span>
+            </div>
+            <div class="setting-row">
+                <label for="preset">Encoding Preset</label>
+                <select id="preset">
+                    <option value="ultrafast">Ultra Fast</option>
+                    <option value="superfast">Super Fast</option>
+                    <option value="veryfast">Very Fast</option>
+                    <option value="faster">Faster</option>
+                    <option value="fast">Fast</option>
+                    <option value="medium">Medium</option>
+                    <option value="slow">Slow</option>
+                </select>
+            </div>
+            <div class="setting-row">
+                <label for="format">Output Format</label>
+                <select id="format">
+                    <option value="mkv">MKV</option>
+                    <option value="mp4">MP4</option>
+                    <option value="webm">WebM</option>
+                </select>
+            </div>
+        </section>
+
+        <div class="actions">
+            <button id="save-btn" class="primary">Save Settings</button>
+            <span id="save-status"></span>
+        </div>
+
+        <footer class="help">
+            <p>Recordings are saved to <code>~/Videos</code></p>
+            <p>Use your configured hotkey to start/stop recording</p>
+        </footer>
+    </div>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>
+
