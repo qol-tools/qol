@@ -13,7 +13,8 @@ const state = {
     columns: 4,
     contextMenuOpen: false,
     confirmModalOpen: false,
-    pendingUninstallId: null
+    pendingUninstallId: null,
+    updating: new Set()
 };
 
 let container = null;
@@ -27,7 +28,7 @@ export function render(containerEl) {
             </header>
             <div id="plugins-grid" class="plugin-grid"></div>
             <footer class="help">
-                ←↑↓→ navigate • Enter open • d delete
+                ←↑↓→ navigate • Enter open • u update • d delete
             </footer>
         </div>
     `;
@@ -66,13 +67,21 @@ function renderGrid() {
     gridEl.innerHTML = state.plugins.map((plugin, index) => {
         const coverUrl = plugin.has_cover ? `/api/cover/${plugin.id}` : PLACEHOLDER_SVG;
         const noUiClass = plugin.has_ui ? '' : 'no-ui';
+        const updateClass = plugin.update_available ? 'has-update' : '';
+        const isUpdating = state.updating.has(plugin.id);
         
         return `
-            <div class="plugin-card ${noUiClass}" data-index="${index}" data-plugin-id="${plugin.id}">
+            <div class="plugin-card ${noUiClass} ${updateClass}" data-index="${index}" data-plugin-id="${plugin.id}">
                 <img src="${coverUrl}" alt="${plugin.name}" onerror="this.src='${PLACEHOLDER_SVG}'">
                 <div class="plugin-name">${plugin.name}</div>
+                ${plugin.update_available ? `
+                    <button class="plugin-update ${isUpdating ? 'updating' : ''}" aria-label="Update plugin" ${isUpdating ? 'disabled' : ''}>
+                        ${isUpdating ? '↻' : '↑'} ${plugin.available_version}
+                    </button>
+                ` : ''}
                 <button class="plugin-cog" aria-label="Plugin options">⚙</button>
                 <div class="plugin-context-menu">
+                    ${plugin.update_available ? '<button class="context-update">Update</button>' : ''}
                     <button class="context-delete">Delete</button>
                 </div>
             </div>
@@ -94,6 +103,23 @@ function updateSelection() {
 function handleClick(e) {
     if (state.confirmModalOpen) {
         handleModalClick(e);
+        return;
+    }
+    
+    const updateBtn = e.target.closest('.plugin-update');
+    if (updateBtn && !updateBtn.disabled) {
+        e.stopPropagation();
+        const card = updateBtn.closest('.plugin-card');
+        updatePlugin(card.dataset.pluginId);
+        return;
+    }
+    
+    const contextUpdate = e.target.closest('.context-update');
+    if (contextUpdate) {
+        e.stopPropagation();
+        const card = contextUpdate.closest('.plugin-card');
+        closeAllContextMenus();
+        updatePlugin(card.dataset.pluginId);
         return;
     }
     
@@ -212,6 +238,41 @@ async function confirmUninstall() {
     }
 }
 
+async function updatePlugin(pluginId) {
+    if (state.updating.has(pluginId)) return;
+    
+    state.updating.add(pluginId);
+    renderGrid();
+    updateSelection();
+    
+    try {
+        const response = await fetch(`/api/update/${pluginId}`, { method: 'POST' });
+        const result = await response.json();
+        
+        if (!result.success) throw new Error(result.message);
+        
+        const plugin = state.plugins.find(p => p.id === pluginId);
+        if (plugin && plugin.available_version) {
+            plugin.version = plugin.available_version;
+            plugin.update_available = false;
+            plugin.available_version = null;
+        }
+    } catch (error) {
+        console.error(`Failed to update plugin: ${error.message}`);
+    } finally {
+        state.updating.delete(pluginId);
+        renderGrid();
+        updateSelection();
+    }
+}
+
+function updateSelected() {
+    const plugin = state.plugins[state.selectedIndex];
+    if (plugin?.update_available) {
+        updatePlugin(plugin.id);
+    }
+}
+
 export function handleKey(e) {
     if (state.confirmModalOpen) {
         handleModalKey(e);
@@ -269,7 +330,9 @@ const keyHandlers = {
     ArrowRight: () => navigate(1),
     Enter: openSelected,
     d: deleteSelected,
-    D: deleteSelected
+    D: deleteSelected,
+    u: updateSelected,
+    U: updateSelected
 };
 
 function navigate(delta) {

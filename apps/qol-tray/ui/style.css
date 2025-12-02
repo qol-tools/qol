@@ -367,21 +367,71 @@ header p {
     transform: translateY(0);
 }
 
+.context-update,
 .context-delete {
     display: block;
     width: 100%;
     padding: 0.6rem 1rem;
     border: none;
     background: transparent;
-    color: #ff6b6b;
     font-size: 0.9rem;
     text-align: left;
     cursor: pointer;
     transition: background 0.2s;
 }
 
+.context-update {
+    color: #4ade80;
+}
+
+.context-update:hover {
+    background: rgba(74, 222, 128, 0.15);
+}
+
+.context-delete {
+    color: #ff6b6b;
+}
+
 .context-delete:hover {
     background: rgba(255, 107, 107, 0.15);
+}
+
+.plugin-update {
+    position: absolute;
+    top: 0.5rem;
+    left: 0.5rem;
+    padding: 0.3rem 0.6rem;
+    border: none;
+    border-radius: 4px;
+    background: #4ade80;
+    color: #000;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.2s;
+    z-index: 20;
+}
+
+.plugin-update:hover:not(:disabled) {
+    background: #22c55e;
+    transform: scale(1.05);
+}
+
+.plugin-update:disabled {
+    cursor: not-allowed;
+}
+
+.plugin-update.updating {
+    animation: spin 0.8s linear infinite;
+}
+
+.plugin-card.has-update {
+    border-color: #4ade80;
+}
+
+.plugin-card.has-update.selected {
+    border-color: #4ade80;
+    box-shadow: 0 0 12px rgba(74, 222, 128, 0.3);
 }
 
 .confirm-modal {
