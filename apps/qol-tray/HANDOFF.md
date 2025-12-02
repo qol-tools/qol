@@ -2,92 +2,86 @@
 
 ## What Was Done This Session
 
-### 1. Hotkey Modal Keyboard-First Overhaul
-Rewrote `ui/views/hotkeys.js` modal to be properly keyboard-driven:
+### 1. Frontend Refactoring
+Refactored complex functions per CLAUDE.md complexity thresholds:
 
-- **Enter on shortcut field** → starts recording (removed separate Record button)
-- **Tab/Shift+Tab** → cycles through all fields
-- **Enter on selects** → advances to next field
-- **Enter on checkbox** → toggles it
-- **s key** → saves immediately (except when in select)
-- **Esc** → closes modal
-- Auto-advance to next field after recording completes
-- Visual feedback: pulsing red border during recording, focus outlines on buttons
+- **hotkeys.js `handleModalKey()`** — extracted 92-line function into 5 focused handlers:
+  - `handleRecordingKey(e)` — recording mode logic
+  - `handleModalNavigation(e, ctx)` — Tab/Shift+Tab cycling
+  - `handleModalAction(e, ctx)` — Enter/Escape/s key dispatch
+  - `enterHandlers` config array — declarative element→action mapping
+  - `getModalContext()` / `syncFieldIndex()` — context helpers
 
-### 2. Hotkey Reload on Config Change
-Backend now reloads hotkeys when config is saved via UI:
+- **plugins.js `handleClick()`** — replaced 8 sequential ifs with `clickHandlers` config array
 
-- Added `trigger_reload()` function with `OnceLock<Sender<()>>` channel
-- Listener thread receives reload signal and re-registers hotkeys
-- Fixed unregister issue: now drops `GlobalHotKeyManager` entirely and creates fresh one (Linux workaround for hotkey grab not releasing)
+- **store.js `showRateLimitBanner()`** — split into `renderTokenInput()` and `renderRateLimitMessage()`
 
-### 3. Hotkey Event State Filtering
-Fixed multiple hotkey fires by filtering event state:
+- **CLAUDE.md** — added "Complexity Thresholds" section with lessons learned
 
-- Added `HotKeyState` import from `global_hotkey`
-- Only execute on `HotKeyState::Pressed` events, ignore `Released`
-- Root cause: crate fires both press and release events, code was executing on both
+### 2. Plugin Page Navigation
+Injected back button and keyboard guide into plugin settings pages:
 
-### 4. Plugin Action Execution Fix
-Removed action argument passing to `run.sh` — plugins shouldn't know about qol-tray internals:
+- `plugin_ui.rs` now wraps plugin HTML with fixed header/footer
+- Back link at top, "Esc back" hint at bottom
+- Escape key navigates back to home
+- No changes required to individual plugins
 
-- `execute_plugin_action()` no longer passes action as `$1`
-- Plugins just expose their script, qol-tray just runs it
+### 3. Plugin Selection Retention
+Selection persists when navigating to/from plugin pages:
 
-## Known Issues
+- `saveSelection()` stores to localStorage before navigating
+- `restoreSelection()` loads on plugins view init
 
-### 1. Plugin jq Dependency
-Screen recorder plugin requires `jq` but it's not in PATH when spawned from qol-tray. Options:
-- Install `jq` system-wide: `sudo apt install jq`
-- Or update plugin to not require `jq` (use bash-native JSON parsing or embed defaults)
+### 4. Store Footer Positioning
+Fixed footer appearing under plugins instead of at page bottom:
 
-### 2. Installed vs Dev Plugin Mismatch
-- **Dev path**: `/media/kmrh47/WD_SN850X/Git/qol-tools/plugin-screen-recorder/`
-- **Installed path**: `~/.config/qol-tray/plugins/plugin-screen-recorder/`
-- Changes to dev don't affect installed. Need to reinstall or symlink.
+- Added `flex: 1` and `align-content: start` to `.plugins-grid`
+
+### 5. Plugin Update Reactivity
+Fixed UI not updating after plugin updates:
+
+- `updatePlugin()` now calls `refreshPlugins()` after completion
+- `checkForUpdates()` runs on plugins page load — fetches GitHub data in background
+- Update badges now appear without visiting store first
+
+### 6. Org-Wide Automatic Plugin Releases
+Set up semantic-release in `qol-tools/.github` for zero-config releases:
+
+- **release-plugins.yml** — scans repos with `qol-tray-plugin` topic, runs semantic-release
+- **auto-label-plugins.yml** — triggers on repo creation, labels `plugin-*` repos
+- Version bumps based on conventional commits (`fix:` → patch, `feat:` → minor, `!` → major)
+- Updates `plugin.toml` version, creates tag, publishes GitHub release
+- Requires `ORG_PAT` org secret with `repo` scope
 
 ## Current State
 
-- Hotkey registration/unregistration: **Working**
-- Hotkey reload on config change: **Working**
-- Hotkey UI (add/edit/delete/toggle): **Working**
-- Keyboard navigation in modal: **Working**
-- Screen recorder toggle (start/stop): **Working**
+- Refactored frontend code: **Done**
+- Plugin page back button: **Working**
+- Selection retention: **Working**
+- Store footer: **Fixed**
+- Plugin update reactivity: **Working**
+- Automatic releases: **Working** (both plugins released v1.0.0)
 
-## What's Next
+## Key Files Changed
 
-1. **Fix plugin PATH issue** — ensure spawned processes inherit proper PATH
-2. **Default hotkey bindings** — create default `hotkeys.json` with screen recorder binding
-3. **Plugin dev workflow** — consider symlinking dev plugins to installed location
+| File | Changes |
+|------|---------|
+| `ui/views/hotkeys.js` | Extracted `handleModalKey` into focused handlers |
+| `ui/views/plugins.js` | Click handler config, selection persistence, update refresh |
+| `ui/views/store.js` | Split rate limit banner renderers |
+| `ui/style.css` | Footer positioning fix |
+| `src/features/plugin_store/plugin_ui.rs` | Inject nav header/footer into plugin pages |
+| `CLAUDE.md` | Added complexity thresholds section |
 
-## Key Files
+## Org Workflow Files
 
 | File | Purpose |
 |------|---------|
-| `src/hotkeys/mod.rs` | HotkeyManager, reload mechanism, event filtering, execution |
-| `src/features/plugin_store/server.rs` | API endpoints, triggers reload on save |
-| `ui/views/hotkeys.js` | Hotkey configuration UI with keyboard-first modal |
-| `ui/style.css` | Recording animation, focus styles |
+| `qol-tools/.github/.github/workflows/release-plugins.yml` | Auto-release all plugins |
+| `qol-tools/.github/.github/workflows/auto-label-plugins.yml` | Label new plugin repos |
 
-## API Endpoints
+## Notes
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/hotkeys` | GET/PUT | Read/write hotkey config (PUT triggers reload) |
-| `/api/installed` | GET | List installed plugins with actions |
-
-## Hotkey Config Format
-
-```json
-{
-  "hotkeys": [
-    {
-      "id": "hk-1234567890",
-      "key": "Shift+Super+R",
-      "plugin_id": "plugin-screen-recorder",
-      "action": "record",
-      "enabled": true
-    }
-  ]
-}
-```
+- Semantic-release uses **git tags** as version source, not manifest
+- Repos without tags start at v1.0.0 regardless of manifest version
+- Both plugin-pointz and plugin-screen-recorder now at v1.0.0 with proper tags
