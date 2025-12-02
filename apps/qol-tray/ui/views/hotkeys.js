@@ -360,8 +360,17 @@ export function handleKey(e) {
 }
 
 function handleModalKey(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    
     if (state.recordingKey) {
-        e.preventDefault();
+        if (e.key === 'Escape') {
+            stopKeyRecording(document.getElementById('hotkey-key')?.value || '');
+            return;
+        }
+        if (e.key === 'Tab') {
+            return;
+        }
         const key = formatKeyEvent(e);
         if (key && !['Ctrl', 'Alt', 'Shift', 'Super'].includes(key)) {
             stopKeyRecording(key);
@@ -370,10 +379,8 @@ function handleModalKey(e) {
     }
     
     if (e.key === 'Escape') {
-        e.preventDefault();
         closeEditModal();
-    } else if (e.key === 'Enter') {
-        e.preventDefault();
+    } else if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') {
         saveHotkey();
     }
 }
@@ -403,6 +410,10 @@ function navigate(delta) {
         state.selectedIndex = newIndex;
         updateSelection();
     }
+}
+
+export function isBlocking() {
+    return state.editModalOpen;
 }
 
 export function onFocus() {

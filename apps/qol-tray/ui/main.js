@@ -52,6 +52,13 @@ function switchView(viewId) {
 }
 
 function handleKeydown(e) {
+    if (activeView?.isBlocking?.()) {
+        if (activeView.handleKey) {
+            activeView.handleKey(e);
+        }
+        return;
+    }
+    
     if (e.key === 'Tab' && !e.shiftKey) {
         e.preventDefault();
         const currentIndex = VIEW_ORDER.indexOf(activeViewId);
