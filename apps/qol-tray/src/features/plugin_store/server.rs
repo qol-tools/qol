@@ -88,6 +88,8 @@ pub async fn start_ui_server(static_dir: &str) -> Result<UiServerHandle> {
         .route("/github-token", get(get_token_status))
         .route("/github-token", post(set_github_token))
         .route("/github-token", axum::routing::delete(delete_github_token))
+        .route("/hotkeys", get(get_hotkeys))
+        .route("/hotkeys", axum::routing::put(set_hotkeys))
         .with_state(plugins_dir_clone);
 
     let static_service = ServeDir::new(static_dir);
@@ -449,6 +451,64 @@ async fn delete_github_token() -> impl IntoResponse {
 
     log::info!("GitHub token deleted");
     (StatusCode::OK, "Token deleted".to_string()).into_response()
+}
+
+async fn get_hotkeys() -> impl IntoResponse {
+    use crate::hotkeys::HotkeyManager;
+
+    let manager = match HotkeyManager::new() {
+        Ok(m) => m,
+        Err(e) => {
+            log::error!("Failed to create HotkeyManager: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to load hotkeys").into_response();
+        }
+    };
+
+    let config = match manager.load_config() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("Failed to load hotkey config: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to load hotkeys").into_response();
+        }
+    };
+
+    let json = match serde_json::to_vec(&config) {
+        Ok(j) => j,
+        Err(e) => {
+            log::error!("Failed to serialize hotkey config: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to serialize hotkeys").into_response();
+        }
+    };
+
+    (StatusCode::OK, [(header::CONTENT_TYPE, "application/json")], json).into_response()
+}
+
+async fn set_hotkeys(body: axum::body::Bytes) -> impl IntoResponse {
+    use crate::hotkeys::{HotkeyConfig, HotkeyManager};
+
+    let config: HotkeyConfig = match serde_json::from_slice(&body) {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("Invalid hotkey config JSON: {}", e);
+            return (StatusCode::BAD_REQUEST, "Invalid JSON").into_response();
+        }
+    };
+
+    let manager = match HotkeyManager::new() {
+        Ok(m) => m,
+        Err(e) => {
+            log::error!("Failed to create HotkeyManager: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save hotkeys").into_response();
+        }
+    };
+
+    if let Err(e) = manager.save_config(&config) {
+        log::error!("Failed to save hotkey config: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save hotkeys").into_response();
+    }
+
+    log::info!("Hotkey config saved");
+    (StatusCode::OK, "Hotkeys saved").into_response()
 }
 
 #[cfg(test)]
