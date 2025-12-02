@@ -2,117 +2,79 @@
 
 ## What Was Done This Session
 
-### 1. Hotkey Module Code Review & Fixes
-Fixed issues in `src/hotkeys/mod.rs`:
+### 1. Hotkey Modal Keyboard-First Overhaul
+Rewrote `ui/views/hotkeys.js` modal to be properly keyboard-driven:
 
-- **Bug fix**: `unregister_all()` was passing empty slice — now tracks registered hotkeys in `Vec<HotKey>` field
-- **Removed dead code**: Removed `#[allow(dead_code)]` from `save_config` by wiring it to API
-- **Refactored**: Replaced 70-line match statement with `static KEY_CODE_MAP: Lazy<HashMap>`
-- **Derived Default**: Replaced manual `Default` impl with `#[derive(Default)]`
+- **Enter on shortcut field** → starts recording (removed separate Record button)
+- **Tab/Shift+Tab** → cycles through all fields
+- **Enter on selects** → advances to next field
+- **Enter on checkbox** → toggles it
+- **s key** → saves immediately (except when in select)
+- **Esc** → closes modal
+- Auto-advance to next field after recording completes
+- Visual feedback: pulsing red border during recording, focus outlines on buttons
 
-### 2. Hotkey Unit Tests
-Added 14 tests in `src/hotkeys/mod.rs`:
+### 2. Hotkey Reload on Config Change
+Backend now reloads hotkeys when config is saved via UI:
 
-- `parse_key_code_*` — letter, digit, function, special, navigation keys
-- `parse_hotkey_*` — single key, modifiers, whitespace, case insensitivity
+- Added `trigger_reload()` function with `OnceLock<Sender<()>>` channel
+- Listener thread receives reload signal and re-registers hotkeys
+- Fixed unregister issue: now drops `GlobalHotKeyManager` entirely and creates fresh one (Linux workaround for hotkey grab not releasing)
 
-### 3. Hotkeys API Endpoints
-Added to `server.rs`:
+### 3. Hotkey Event State Filtering
+Fixed multiple hotkey fires by filtering event state:
 
-- `GET /api/hotkeys` — Read hotkey config
-- `PUT /api/hotkeys` — Save hotkey config
+- Added `HotKeyState` import from `global_hotkey`
+- Only execute on `HotKeyState::Pressed` events, ignore `Released`
+- Root cause: crate fires both press and release events, code was executing on both
 
-### 4. Git Tag Versioning for Plugins
-Changed plugin version detection to use git tags instead of `plugin.toml`:
+### 4. Plugin Action Execution Fix
+Removed action argument passing to `run.sh` — plugins shouldn't know about qol-tray internals:
 
-- Added `fetch_latest_tag()` in `github.rs`
-- `build_plugin_metadata()` now prefers tag version, falls back to manifest
-- Update detection now works when you push new tags (no need to bump `plugin.toml`)
+- `execute_plugin_action()` no longer passes action as `$1`
+- Plugins just expose their script, qol-tray just runs it
 
-### 5. Hotkeys UI Implementation
-Full implementation in `ui/views/hotkeys.js`:
+## Known Issues
 
-- List view with shortcut, plugin, action, status columns
-- Keyboard navigation: ↑↓ navigate, Enter edit, `a` add, `d` delete, Space toggle
-- Edit modal with key recording (captures Ctrl/Alt/Shift/Super + key)
-- Persistence via `/api/hotkeys`
+### 1. Plugin jq Dependency
+Screen recorder plugin requires `jq` but it's not in PATH when spawned from qol-tray. Options:
+- Install `jq` system-wide: `sudo apt install jq`
+- Or update plugin to not require `jq` (use bash-native JSON parsing or embed defaults)
 
-### 6. Modal Keyboard Isolation Fix
-Fixed bugs in hotkeys UI:
-
-- Added `isBlocking()` export checked by `main.js` before Tab handling
-- Tab no longer switches views when modal is open
-- Key recording ignores Tab/Escape, properly handles cancel
-
-### 7. CLAUDE.md Update
-Clarified atomic commit guidelines:
-> One logical change per commit. Split distinct changes (bug fix, refactor, tests) into separate commits.
+### 2. Installed vs Dev Plugin Mismatch
+- **Dev path**: `/media/kmrh47/WD_SN850X/Git/qol-tools/plugin-screen-recorder/`
+- **Installed path**: `~/.config/qol-tray/plugins/plugin-screen-recorder/`
+- Changes to dev don't affect installed. Need to reinstall or symlink.
 
 ## Current State
 
-App compiles with no warnings. All features working:
-- Plugin updates via git tags ✓
-- Hotkey backend (registration, execution) ✓
-- Hotkey UI (add, edit, delete, toggle, key recording) ✓
-
-## Commits This Session
-
-```
-74a51c2 fix(ui): block Tab navigation when modal open, fix key recording
-67cc538 style(ui): add hotkeys view styles
-22b8707 feat(ui): implement hotkeys configuration view
-0e1bcce feat(github): use git tags for plugin version detection
-5db36c7 feat(api): add hotkeys config endpoints
-2c32875 docs: clarify atomic commit guidelines
-7cf9691 test(hotkeys): add unit tests for parsing functions
-10c0806 refactor(hotkeys): use static map for key code parsing
-9ae5952 refactor(hotkeys): remove dead_code annotation from save_config
-e9ca57c fix(hotkeys): track registered hotkeys for proper unregister
-```
+- Hotkey registration/unregistration: **Working**
+- Hotkey reload on config change: **Working**
+- Hotkey UI (add/edit/delete/toggle): **Working**
+- Keyboard navigation in modal: **Working**
+- Screen recorder toggle (start/stop): **Working**
 
 ## What's Next
 
-1. **Default hotkey bindings** — Create default `hotkeys.json` with screen recorder binding
-2. **Hotkey reload** — Backend should reload hotkeys when config changes (currently requires restart)
-3. **Screen recorder plugin version** — Bump version and push tag to test update flow
+1. **Fix plugin PATH issue** — ensure spawned processes inherit proper PATH
+2. **Default hotkey bindings** — create default `hotkeys.json` with screen recorder binding
+3. **Plugin dev workflow** — consider symlinking dev plugins to installed location
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `src/main.rs` | Entry point, starts hotkey listener |
-| `src/hotkeys/mod.rs` | HotkeyManager, config loading, event handling, 14 tests |
-| `src/features/plugin_store/server.rs` | API endpoints including hotkeys |
-| `src/features/plugin_store/github.rs` | GitHub API, tag-based versioning |
-| `ui/main.js` | View routing, keyboard handling with `isBlocking()` check |
-| `ui/views/hotkeys.js` | Hotkey configuration UI |
-| `ui/views/plugins.js` | Plugin grid with update buttons |
+| `src/hotkeys/mod.rs` | HotkeyManager, reload mechanism, event filtering, execution |
+| `src/features/plugin_store/server.rs` | API endpoints, triggers reload on save |
+| `ui/views/hotkeys.js` | Hotkey configuration UI with keyboard-first modal |
+| `ui/style.css` | Recording animation, focus styles |
 
 ## API Endpoints
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/api/plugins` | GET | List available plugins (uses cache) |
-| `/api/plugins?refresh=true` | GET | Force refresh from GitHub |
-| `/api/installed` | GET | List installed plugins (with update info) |
-| `/api/install/:id` | POST | Install plugin |
-| `/api/update/:id` | POST | Update plugin (git pull) |
-| `/api/uninstall/:id` | POST | Uninstall plugin |
-| `/api/plugins/:id/config` | GET/PUT | Read/write plugin config |
-| `/api/hotkeys` | GET/PUT | Read/write hotkey config |
-| `/api/github-token` | GET/POST/DELETE | Token management |
-| `/api/cover/:id` | GET | Plugin cover image |
-| `/plugins/:id/` | GET | Serve plugin UI |
-
-## Storage Paths
-
-| File | Purpose |
-|------|---------|
-| `~/.config/qol-tray/.github-token` | GitHub personal access token |
-| `~/.config/qol-tray/.plugin-cache.json` | Cached plugin list from GitHub |
-| `~/.config/qol-tray/hotkeys.json` | Global hotkey bindings |
-| `~/.config/qol-tray/plugins/` | Installed plugins directory |
-| `~/.config/qol-tray/plugins/:id/config.json` | Per-plugin configuration |
+| `/api/hotkeys` | GET/PUT | Read/write hotkey config (PUT triggers reload) |
+| `/api/installed` | GET | List installed plugins with actions |
 
 ## Hotkey Config Format
 
@@ -121,33 +83,11 @@ e9ca57c fix(hotkeys): track registered hotkeys for proper unregister
   "hotkeys": [
     {
       "id": "hk-1234567890",
-      "key": "Ctrl+Shift+R",
+      "key": "Shift+Super+R",
       "plugin_id": "plugin-screen-recorder",
-      "action": "run",
+      "action": "record",
       "enabled": true
     }
   ]
 }
 ```
-
-Supported modifiers: `Ctrl`, `Alt`, `Shift`, `Super`/`Win`/`Meta`/`Cmd`
-Supported keys: A-Z, 0-9, F1-F12, Space, Enter, Escape, arrows, etc.
-
-## Plugin Repos
-
-| Repo | Purpose |
-|------|---------|
-| `qol-tools/plugin-pointz` | PointZ remote control plugin |
-| `qol-tools/plugin-screen-recorder` | Screen recording plugin |
-| `qol-tools/pointZ` | PointZ app (Flutter + Rust server) |
-
-## User Preferences
-
-- Keyboard-first UI (single-letter shortcuts like `d`, `r`, `u`)
-- Functional/declarative code patterns
-- No comments in code
-- No builds/tests unless explicitly asked
-- Atomic commits with conventional prefixes (one logical change per commit)
-- Flatten nested conditionals, use early returns
-- AAA pattern for unit tests (Arrange-Act-Assert)
-- Direct communication, no fluff
