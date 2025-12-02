@@ -82,6 +82,8 @@ pub async fn start_ui_server(static_dir: &str) -> Result<UiServerHandle> {
         .route("/install/:id", post(install_plugin))
         .route("/update/:id", post(update_plugin))
         .route("/uninstall/:id", post(uninstall_plugin))
+        .route("/plugins/:id/config", get(get_plugin_config))
+        .route("/plugins/:id/config", axum::routing::put(set_plugin_config))
         .route("/ws/install/:id", get(install_ws))
         .route("/github-token", get(get_token_status))
         .route("/github-token", post(set_github_token))
@@ -374,6 +376,53 @@ async fn serve_cover(
     };
 
     (StatusCode::OK, [(header::CONTENT_TYPE, "image/png")], data).into_response()
+}
+
+async fn get_plugin_config(
+    Path(plugin_id): Path<String>,
+    axum::extract::State(plugins_dir): axum::extract::State<PathBuf>,
+) -> impl IntoResponse {
+    let config_path = plugins_dir.join(&plugin_id).join("config.json");
+
+    if !config_path.exists() {
+        return (StatusCode::NOT_FOUND, "Config not found").into_response();
+    }
+
+    let data = match tokio::fs::read(&config_path).await {
+        Ok(data) => data,
+        Err(e) => {
+            log::error!("Failed to read config: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read config").into_response();
+        }
+    };
+
+    (StatusCode::OK, [(header::CONTENT_TYPE, "application/json")], data).into_response()
+}
+
+async fn set_plugin_config(
+    Path(plugin_id): Path<String>,
+    axum::extract::State(plugins_dir): axum::extract::State<PathBuf>,
+    body: axum::body::Bytes,
+) -> impl IntoResponse {
+    let config_path = plugins_dir.join(&plugin_id).join("config.json");
+    let plugin_dir = plugins_dir.join(&plugin_id);
+
+    if !plugin_dir.exists() {
+        return (StatusCode::NOT_FOUND, "Plugin not found").into_response();
+    }
+
+    if let Err(e) = serde_json::from_slice::<serde_json::Value>(&body) {
+        log::error!("Invalid JSON in config: {}", e);
+        return (StatusCode::BAD_REQUEST, "Invalid JSON").into_response();
+    }
+
+    if let Err(e) = tokio::fs::write(&config_path, &body).await {
+        log::error!("Failed to write config: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to write config").into_response();
+    }
+
+    log::info!("Config saved for plugin: {}", plugin_id);
+    (StatusCode::OK, "Config saved").into_response()
 }
 
 async fn get_token_status() -> Json<TokenStatus> {
