@@ -111,11 +111,6 @@ struct GitHubRepo {
     html_url: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct GitHubRelease {
-    tag_name: String,
-}
-
 pub struct GitHubClient {
     org: String,
     client: reqwest::Client,
@@ -195,8 +190,7 @@ impl GitHubClient {
 
         for repo in plugin_repos {
             if let Ok(manifest) = self.fetch_plugin_manifest(&repo.name).await {
-                let version = self.resolve_version(&manifest).await;
-                plugins.push(build_plugin_metadata(repo, manifest, version));
+                plugins.push(build_plugin_metadata(repo, manifest));
             }
         }
 
@@ -217,37 +211,6 @@ impl GitHubClient {
 
         let manifest: crate::plugins::PluginManifest = toml::from_str(&content)?;
         Ok(manifest)
-    }
-
-    async fn resolve_version(&self, manifest: &crate::plugins::PluginManifest) -> String {
-        let repo = manifest
-            .dependencies
-            .as_ref()
-            .and_then(|d| d.binaries.first())
-            .map(|b| &b.repo);
-
-        let Some(repo) = repo else {
-            return manifest.plugin.version.clone();
-        };
-
-        self.fetch_latest_release(repo)
-            .await
-            .unwrap_or_else(|_| manifest.plugin.version.clone())
-    }
-
-    async fn fetch_latest_release(&self, repo: &str) -> Result<String> {
-        let url = format!("https://api.github.com/repos/{}/releases/latest", repo);
-
-        let response = self.build_request(&url)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            anyhow::bail!("GitHub API returned {}", response.status());
-        }
-
-        let release: GitHubRelease = response.json().await?;
-        Ok(release.tag_name.trim_start_matches('v').to_string())
     }
 
     pub async fn list_plugins_cached(&self, force_refresh: bool) -> Result<Vec<PluginMetadata>> {
@@ -276,12 +239,12 @@ fn filter_plugin_repos(repos: &[GitHubRepo]) -> Vec<&GitHubRepo> {
     repos.iter().filter(|r| is_plugin_repo(&r.name)).collect()
 }
 
-fn build_plugin_metadata(repo: &GitHubRepo, manifest: crate::plugins::PluginManifest, version: String) -> PluginMetadata {
+fn build_plugin_metadata(repo: &GitHubRepo, manifest: crate::plugins::PluginManifest) -> PluginMetadata {
     PluginMetadata {
         id: repo.name.clone(),
         name: manifest.plugin.name,
         description: manifest.plugin.description,
-        version,
+        version: manifest.plugin.version,
         repo_url: repo.html_url.clone(),
     }
 }
@@ -388,16 +351,15 @@ mod tests {
         // Arrange
         let repo = make_repo("plugin-screen-recorder");
         let manifest = make_manifest("Screen Recorder", "1.2.3");
-        let version = "2.0.0".to_string();
 
         // Act
-        let metadata = build_plugin_metadata(&repo, manifest, version);
+        let metadata = build_plugin_metadata(&repo, manifest);
 
         // Assert
         assert_eq!(metadata.id, "plugin-screen-recorder");
         assert_eq!(metadata.name, "Screen Recorder");
         assert_eq!(metadata.description, "Test plugin");
-        assert_eq!(metadata.version, "2.0.0");
+        assert_eq!(metadata.version, "1.2.3");
         assert_eq!(metadata.repo_url, "https://github.com/test/plugin-screen-recorder");
     }
 }
