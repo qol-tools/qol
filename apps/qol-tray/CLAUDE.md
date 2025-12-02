@@ -79,9 +79,9 @@ Action types:
 ### Code Style
 
 - **No comments** - Code removed all comments; keep it that way
-- **Conventional commits** - Use format: `feat:`, `fix:`, `refactor:`, etc.
+- **Conventional commits** - Use format: `feat:`, `fix:`, `refactor:`, `test:`, etc.
 - **Short commit messages** - One-liners, no fluff, no co-authors
-- **Atomic commits** - Each commit must represent a working state; group related changes together
+- **Atomic commits** - One logical change per commit. Split distinct changes (bug fix, refactor, tests) into separate commits. Each commit must compile and represent a working state.
 - **No dead code warnings** - Remove unused code or gate with feature flags
 - Platform-specific code belongs in `platform/` directories, not root modules
 - **No builds or tests unless asked** - Do not run `cargo build`, `cargo run`, `make`, or browser tests unless explicitly requested. These operations are expensive.
