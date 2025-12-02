@@ -579,3 +579,217 @@ header p {
 .token-help a:hover {
     text-decoration: underline;
 }
+
+.hotkeys-list {
+    flex: 1;
+}
+
+.hotkey-header {
+    display: grid;
+    grid-template-columns: 200px 1fr 120px 80px;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    background: #252525;
+    border-radius: 8px 8px 0 0;
+    border: 1px solid #333;
+    border-bottom: none;
+    font-weight: 600;
+    color: #888;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.hotkey-row {
+    display: grid;
+    grid-template-columns: 200px 1fr 120px 80px;
+    gap: 1rem;
+    padding: 1rem;
+    background: #2a2a2a;
+    border: 1px solid #333;
+    border-top: none;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+}
+
+.hotkey-row:last-child {
+    border-radius: 0 0 8px 8px;
+}
+
+.hotkey-row:hover {
+    background: #303030;
+}
+
+.hotkey-row.selected {
+    background: #2a3a4a;
+    border-color: #4a9eff;
+    border-top: 1px solid #4a9eff;
+}
+
+.hotkey-row.selected + .hotkey-row {
+    border-top-color: #4a9eff;
+}
+
+.hotkey-row.disabled {
+    opacity: 0.5;
+}
+
+.hotkey-row .col-key kbd {
+    display: inline-block;
+    padding: 0.3rem 0.6rem;
+    background: #1a1a1a;
+    border: 1px solid #444;
+    border-radius: 4px;
+    font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+    font-size: 0.9rem;
+    color: #4a9eff;
+}
+
+.hotkey-row .col-status {
+    text-align: center;
+    font-size: 0.8rem;
+}
+
+.hotkey-row:not(.disabled) .col-status {
+    color: #4ade80;
+}
+
+.edit-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+}
+
+.edit-modal-content {
+    background: #2a2a2a;
+    border: 1px solid #444;
+    border-radius: 12px;
+    padding: 2rem;
+    width: 100%;
+    max-width: 450px;
+}
+
+.edit-modal-content h3 {
+    color: #fff;
+    margin-bottom: 1.5rem;
+    font-size: 1.3rem;
+}
+
+.form-group {
+    margin-bottom: 1.25rem;
+}
+
+.form-group label {
+    display: block;
+    color: #888;
+    font-size: 0.9rem;
+    margin-bottom: 0.5rem;
+}
+
+.form-group input[type="text"],
+.form-group select {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    border: 1px solid #444;
+    border-radius: 6px;
+    background: #1a1a1a;
+    color: #e0e0e0;
+    font-size: 1rem;
+}
+
+.form-group input[type="text"]:focus,
+.form-group select:focus {
+    outline: none;
+    border-color: #4a9eff;
+}
+
+.key-input-row {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.key-input-row input {
+    flex: 1;
+    font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+}
+
+.key-record-btn {
+    padding: 0.75rem 1rem;
+    border: 1px solid #4a9eff;
+    border-radius: 6px;
+    background: transparent;
+    color: #4a9eff;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+    white-space: nowrap;
+}
+
+.key-record-btn:hover {
+    background: #4a9eff;
+    color: #fff;
+}
+
+.checkbox-label {
+    display: flex !important;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 1.1rem;
+    height: 1.1rem;
+    accent-color: #4a9eff;
+}
+
+.modal-buttons {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1.5rem;
+}
+
+.modal-buttons button {
+    flex: 1;
+    padding: 0.75rem 1rem;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.modal-cancel {
+    background: #3a3a3a;
+    color: #ccc;
+}
+
+.modal-cancel:hover {
+    background: #444;
+}
+
+.modal-save {
+    background: #4a9eff;
+    color: #fff;
+}
+
+.modal-save:hover {
+    background: #3a8eef;
+}
+
+kbd {
+    display: inline-block;
+    padding: 0.2rem 0.4rem;
+    background: #333;
+    border: 1px solid #444;
+    border-radius: 3px;
+    font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+    font-size: 0.85em;
+}
