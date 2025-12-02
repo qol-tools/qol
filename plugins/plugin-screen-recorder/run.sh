@@ -5,20 +5,13 @@
 
 set -euo pipefail
 
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
-
-# Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="$SCRIPT_DIR/config.json"
 
 pidfile="/tmp/record-region.pid"
 logfile="/tmp/record-region.log"
 indicator_pidfile="/tmp/record-region-indicator.pid"
-color="${1:-#ff2b2b}"
-thickness="${2:-4}"
-snap_margin_px=50  # snap to screen edge if within this many pixels
+snap_margin_px=50
 
 # Load config from JSON
 load_config() {
