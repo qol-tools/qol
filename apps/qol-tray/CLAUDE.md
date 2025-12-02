@@ -94,6 +94,16 @@ Action types:
 - **Type safety** - Define data structures explicitly, validate API responses
 - **Scalability** - Design for N plugins, not hardcoded assumptions
 - **Keyboard-first** - All interactions MUST be accessible via keyboard. This is critical. Design keyboard flow first, then add mouse/hover as secondary. Use single-letter shortcuts (e.g., `d` for delete) since Mac lacks Delete key. Always show keyboard hints in UI.
+
+### Complexity Thresholds
+
+- **Max 50 lines per function** - Split beyond this
+- **Max 2 levels of nesting** - Extract inner logic into helpers
+- **One concern per function** - Don't mix state management, navigation, and action dispatch
+- **Sequential ifs checking selectors** → Use config array with `{ selector, handler }` objects
+- **Conditional rendering with shared structure** → Extract state-specific render functions
+- **Key event handlers** → Separate recording/navigation/actions, use declarative handler maps
+
 ### Test Style
 
 - **AAA Pattern** - All tests follow Arrange-Act-Assert pattern with explicit comments
