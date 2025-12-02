@@ -2,9 +2,10 @@ mod menu;
 mod plugins;
 mod tray;
 mod features;
+mod hotkeys;
 
 use anyhow::Result;
-use plugins::PluginManager;
+use plugins::{PluginManager, PluginLoader};
 use tray::TrayManager;
 use features::FeatureRegistry;
 use std::sync::{Arc, Mutex};
@@ -28,6 +29,12 @@ async fn main() -> Result<()> {
     let feature_registry = Arc::new(feature_registry);
 
     features::plugin_store::PluginStore::start_server().await?;
+
+    if let Ok(plugins_dir) = PluginLoader::default_plugin_dir() {
+        if let Err(e) = hotkeys::start_hotkey_listener(plugins_dir) {
+            log::warn!("Failed to start hotkey listener: {}", e);
+        }
+    }
 
     let _tray = TrayManager::new(plugin_manager.clone(), feature_registry, shutdown_tx)?;
 

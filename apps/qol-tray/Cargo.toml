@@ -56,6 +56,9 @@ tower-http = { version = "0.6", features = ["fs", "trace", "set-header"] }
 # HTTP client for GitHub API
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
+# Global hotkeys
+global-hotkey = { version = "0.7", features = ["serde"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
 
