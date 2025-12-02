@@ -44,6 +44,12 @@ struct UninstallResult {
 }
 
 #[derive(Serialize)]
+struct PluginAction {
+    id: String,
+    label: String,
+}
+
+#[derive(Serialize)]
 struct InstalledPlugin {
     id: String,
     name: String,
@@ -53,6 +59,7 @@ struct InstalledPlugin {
     has_ui: bool,
     available_version: Option<String>,
     update_available: bool,
+    actions: Vec<PluginAction>,
 }
 
 #[derive(Deserialize)]
@@ -323,6 +330,8 @@ async fn list_installed(
                 .map(|av| is_newer_version(av, &plugin.manifest.plugin.version))
                 .unwrap_or(false);
 
+            let actions = extract_actions(&plugin.manifest.menu.items);
+
             InstalledPlugin {
                 id: plugin.id.clone(),
                 name: plugin.manifest.plugin.name.clone(),
@@ -332,11 +341,34 @@ async fn list_installed(
                 has_ui: ui_path.exists(),
                 available_version,
                 update_available,
+                actions,
             }
         })
         .collect();
 
     Json(plugins)
+}
+
+fn extract_actions(items: &[crate::plugins::MenuItem]) -> Vec<PluginAction> {
+    use crate::plugins::MenuItem;
+    let mut actions = Vec::new();
+    
+    for item in items {
+        match item {
+            MenuItem::Action { id, label, .. } => {
+                actions.push(PluginAction {
+                    id: id.clone(),
+                    label: label.clone(),
+                });
+            }
+            MenuItem::Submenu { items, .. } => {
+                actions.extend(extract_actions(items));
+            }
+            _ => {}
+        }
+    }
+    
+    actions
 }
 
 fn is_newer_version(available: &str, installed: &str) -> bool {

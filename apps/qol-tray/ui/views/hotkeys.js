@@ -83,17 +83,24 @@ function renderList() {
         ${state.hotkeys.map((hk, index) => {
             const plugin = state.plugins.find(p => p.id === hk.plugin_id);
             const pluginName = plugin?.name || hk.plugin_id;
+            const actionLabel = getActionLabel(plugin, hk.action);
             
             return `
                 <div class="hotkey-row ${hk.enabled ? '' : 'disabled'}" data-index="${index}">
                     <span class="col-key"><kbd>${hk.key}</kbd></span>
                     <span class="col-plugin">${pluginName}</span>
-                    <span class="col-action">${hk.action}</span>
+                    <span class="col-action">${actionLabel}</span>
                     <span class="col-status">${hk.enabled ? '●' : '○'}</span>
                 </div>
             `;
         }).join('')}
     `;
+}
+
+function getActionLabel(plugin, actionId) {
+    if (!plugin) return actionId;
+    const action = plugin.actions?.find(a => a.id === actionId);
+    return action ? action.label : actionId;
 }
 
 function updateSelection() {
@@ -166,9 +173,9 @@ function openEditModal(hotkey = null) {
             <h3>${title}</h3>
             
             <div class="form-group">
-                <label>Shortcut</label>
+                <label>Shortcut <span class="hint">(Press 'r' to record)</span></label>
                 <div class="key-input-row">
-                    <input type="text" id="hotkey-key" value="${hotkey?.key || ''}" readonly placeholder="Click Record...">
+                    <input type="text" id="hotkey-key" value="${hotkey?.key || ''}" readonly placeholder="Click Record or press 'r'">
                     <button class="key-record-btn">Record</button>
                 </div>
             </div>
@@ -184,7 +191,7 @@ function openEditModal(hotkey = null) {
             <div class="form-group">
                 <label>Action</label>
                 <select id="hotkey-action">
-                    <option value="run" ${hotkey?.action === 'run' ? 'selected' : ''}>Run</option>
+                    <option value="">Select plugin first...</option>
                 </select>
             </div>
             
@@ -203,6 +210,29 @@ function openEditModal(hotkey = null) {
     `;
     
     container.appendChild(modal);
+    
+    const pluginSelect = document.getElementById('hotkey-plugin');
+    pluginSelect.addEventListener('change', () => updateActionOptions(pluginSelect.value));
+    
+    if (hotkey?.plugin_id) {
+        updateActionOptions(hotkey.plugin_id, hotkey.action);
+    }
+}
+
+function updateActionOptions(pluginId, selectedAction = null) {
+    const actionSelect = document.getElementById('hotkey-action');
+    if (!actionSelect) return;
+    
+    const plugin = state.plugins.find(p => p.id === pluginId);
+    
+    if (!plugin || !plugin.actions || plugin.actions.length === 0) {
+        actionSelect.innerHTML = '<option value="run">Run</option>';
+        return;
+    }
+    
+    actionSelect.innerHTML = plugin.actions.map(a => 
+        `<option value="${a.id}" ${selectedAction === a.id ? 'selected' : ''}>${a.label}</option>`
+    ).join('');
 }
 
 function closeEditModal() {
@@ -217,7 +247,11 @@ function startKeyRecording() {
     state.recordingKey = true;
     const input = document.getElementById('hotkey-key');
     const btn = container.querySelector('.key-record-btn');
-    if (input) input.placeholder = 'Press keys...';
+    if (input) {
+        input.placeholder = 'Press keys...';
+        input.value = '';
+        input.classList.add('recording');
+    }
     if (btn) btn.textContent = 'Recording...';
 }
 
@@ -226,8 +260,9 @@ function stopKeyRecording(key) {
     const input = document.getElementById('hotkey-key');
     const btn = container.querySelector('.key-record-btn');
     if (input) {
-        input.value = key;
-        input.placeholder = 'Click Record...';
+        if (key) input.value = key;
+        input.placeholder = 'Click Record or press \'r\'';
+        input.classList.remove('recording');
     }
     if (btn) btn.textContent = 'Record';
 }
@@ -378,10 +413,20 @@ function handleModalKey(e) {
         return;
     }
     
+    // Keyboard shortcuts in modal
     if (e.key === 'Escape') {
         closeEditModal();
-    } else if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') {
+        return;
+    }
+    
+    if (e.key === 'Enter' && e.target.tagName !== 'BUTTON' && e.target.tagName !== 'SELECT') {
         saveHotkey();
+        return;
+    }
+    
+    if (e.key === 'r' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT') {
+        startKeyRecording();
+        return;
     }
 }
 

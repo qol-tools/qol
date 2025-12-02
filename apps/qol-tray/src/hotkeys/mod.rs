@@ -208,22 +208,21 @@ pub fn start_hotkey_listener(
 
 fn execute_plugin_action(plugins_dir: &PathBuf, plugin_id: &str, action: &str) {
     let plugin_dir = plugins_dir.join(plugin_id);
-    
-    if action == "run" {
-        let script_path = plugin_dir.join("run.sh");
-        if script_path.exists() {
-            log::info!("Executing: {:?}", script_path);
-            match std::process::Command::new("bash")
-                .arg(&script_path)
-                .current_dir(&plugin_dir)
-                .spawn()
-            {
-                Ok(_) => log::info!("Plugin action started"),
-                Err(e) => log::error!("Failed to execute plugin action: {}", e),
-            }
-        } else {
-            log::warn!("Plugin script not found: {:?}", script_path);
+    let script_path = plugin_dir.join("run.sh");
+
+    if script_path.exists() {
+        log::info!("Executing: {:?} with action {}", script_path, action);
+        match std::process::Command::new("bash")
+            .arg(&script_path)
+            .arg(action)
+            .current_dir(&plugin_dir)
+            .spawn()
+        {
+            Ok(_) => log::info!("Plugin action started"),
+            Err(e) => log::error!("Failed to execute plugin action: {}", e),
         }
+    } else {
+        log::warn!("Plugin script not found: {:?}", script_path);
     }
 }
 
