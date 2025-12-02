@@ -51,6 +51,8 @@ struct InstalledPlugin {
     version: String,
     has_cover: bool,
     has_ui: bool,
+    available_version: Option<String>,
+    update_available: bool,
 }
 
 #[derive(Deserialize)]
@@ -78,6 +80,7 @@ pub async fn start_ui_server(static_dir: &str) -> Result<UiServerHandle> {
         .route("/installed", get(list_installed))
         .route("/cover/:id", get(serve_cover))
         .route("/install/:id", post(install_plugin))
+        .route("/update/:id", post(update_plugin))
         .route("/uninstall/:id", post(uninstall_plugin))
         .route("/ws/install/:id", get(install_ws))
         .route("/github-token", get(get_token_status))
@@ -212,6 +215,39 @@ async fn install_plugin(Path(id): Path<String>) -> Json<PluginInfo> {
     })
 }
 
+async fn update_plugin(Path(id): Path<String>) -> Json<UninstallResult> {
+    use super::installer::PluginInstaller;
+
+    log::info!("Update requested for plugin: {}", id);
+
+    let plugins_dir = match PluginLoader::default_plugin_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            log::error!("Failed to get plugins directory: {}", e);
+            return Json(UninstallResult {
+                success: false,
+                message: format!("Failed to access plugins directory: {}", e),
+            });
+        }
+    };
+
+    let installer = PluginInstaller::new(plugins_dir);
+
+    if let Err(e) = installer.update(&id).await {
+        log::error!("Failed to update plugin {}: {}", id, e);
+        return Json(UninstallResult {
+            success: false,
+            message: format!("Update failed: {}", e),
+        });
+    }
+
+    log::info!("Plugin {} updated successfully", id);
+    Json(UninstallResult {
+        success: true,
+        message: "Updated successfully".to_string(),
+    })
+}
+
 async fn uninstall_plugin(Path(id): Path<String>) -> Json<UninstallResult> {
     use super::installer::PluginInstaller;
 
@@ -259,6 +295,9 @@ async fn install_progress_socket(mut socket: WebSocket, id: String) {
 async fn list_installed(
     axum::extract::State(_plugins_dir): axum::extract::State<PathBuf>,
 ) -> Json<Vec<InstalledPlugin>> {
+    use super::github::read_cache;
+    use std::collections::HashMap;
+
     let mut manager = PluginManager::new();
 
     if let Err(e) = manager.load_plugins() {
@@ -266,10 +305,19 @@ async fn list_installed(
         return Json(vec![]);
     }
 
+    let cached_versions: HashMap<String, String> = read_cache()
+        .map(|c| c.plugins.into_iter().map(|p| (p.id, p.version)).collect())
+        .unwrap_or_default();
+
     let plugins: Vec<InstalledPlugin> = manager.plugins()
         .map(|plugin| {
             let cover_path = plugin.path.join("cover.png");
             let ui_path = plugin.path.join("ui").join("index.html");
+            let available_version = cached_versions.get(&plugin.id).cloned();
+            let update_available = available_version
+                .as_ref()
+                .map(|av| is_newer_version(av, &plugin.manifest.plugin.version))
+                .unwrap_or(false);
 
             InstalledPlugin {
                 id: plugin.id.clone(),
@@ -278,11 +326,33 @@ async fn list_installed(
                 version: plugin.manifest.plugin.version.clone(),
                 has_cover: cover_path.exists(),
                 has_ui: ui_path.exists(),
+                available_version,
+                update_available,
             }
         })
         .collect();
 
     Json(plugins)
+}
+
+fn is_newer_version(available: &str, installed: &str) -> bool {
+    let parse = |s: &str| -> Vec<u32> {
+        s.trim_start_matches('v')
+            .split('.')
+            .filter_map(|p| p.parse().ok())
+            .collect()
+    };
+    
+    let av = parse(available);
+    let iv = parse(installed);
+    
+    for i in 0..av.len().max(iv.len()) {
+        let a = av.get(i).copied().unwrap_or(0);
+        let b = iv.get(i).copied().unwrap_or(0);
+        if a > b { return true; }
+        if a < b { return false; }
+    }
+    false
 }
 
 async fn serve_cover(
@@ -330,4 +400,139 @@ async fn delete_github_token() -> impl IntoResponse {
 
     log::info!("GitHub token deleted");
     (StatusCode::OK, "Token deleted".to_string()).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_newer_version_returns_true_when_major_is_higher() {
+        // Arrange
+        let available = "2.0.0";
+        let installed = "1.0.0";
+
+        // Act
+        let result = is_newer_version(available, installed);
+
+        // Assert
+        assert!(result);
+    }
+
+    #[test]
+    fn is_newer_version_returns_true_when_minor_is_higher() {
+        // Arrange
+        let available = "1.2.0";
+        let installed = "1.1.0";
+
+        // Act
+        let result = is_newer_version(available, installed);
+
+        // Assert
+        assert!(result);
+    }
+
+    #[test]
+    fn is_newer_version_returns_true_when_patch_is_higher() {
+        // Arrange
+        let available = "1.0.5";
+        let installed = "1.0.4";
+
+        // Act
+        let result = is_newer_version(available, installed);
+
+        // Assert
+        assert!(result);
+    }
+
+    #[test]
+    fn is_newer_version_returns_false_when_versions_are_equal() {
+        // Arrange
+        let available = "1.2.3";
+        let installed = "1.2.3";
+
+        // Act
+        let result = is_newer_version(available, installed);
+
+        // Assert
+        assert!(!result);
+    }
+
+    #[test]
+    fn is_newer_version_returns_false_when_installed_is_newer() {
+        // Arrange
+        let available = "1.0.0";
+        let installed = "2.0.0";
+
+        // Act
+        let result = is_newer_version(available, installed);
+
+        // Assert
+        assert!(!result);
+    }
+
+    #[test]
+    fn is_newer_version_handles_v_prefix() {
+        // Arrange
+        let available = "v2.0.0";
+        let installed = "v1.0.0";
+
+        // Act
+        let result = is_newer_version(available, installed);
+
+        // Assert
+        assert!(result);
+    }
+
+    #[test]
+    fn is_newer_version_handles_mixed_v_prefix() {
+        // Arrange
+        let available = "v1.5.0";
+        let installed = "1.4.0";
+
+        // Act
+        let result = is_newer_version(available, installed);
+
+        // Assert
+        assert!(result);
+    }
+
+    #[test]
+    fn is_newer_version_handles_different_segment_counts() {
+        // Arrange
+        let available = "1.0.0.1";
+        let installed = "1.0.0";
+
+        // Act
+        let result = is_newer_version(available, installed);
+
+        // Assert
+        assert!(result);
+    }
+
+    #[test]
+    fn is_newer_version_returns_false_for_shorter_equal_version() {
+        // Arrange
+        let available = "1.0";
+        let installed = "1.0.0";
+
+        // Act
+        let result = is_newer_version(available, installed);
+
+        // Assert
+        assert!(!result);
+    }
+
+    #[test]
+    fn is_newer_version_handles_two_segment_versions() {
+        // Arrange
+        let available = "1.5";
+        let installed = "1.4";
+
+        // Act
+        let result = is_newer_version(available, installed);
+
+        // Assert
+        assert!(result);
+    }
 }

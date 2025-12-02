@@ -86,7 +86,6 @@ impl PluginInstaller {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub async fn update(&self, plugin_id: &str) -> Result<()> {
         let plugin_dir = self.plugins_dir.join(plugin_id);
 
