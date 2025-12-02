@@ -421,97 +421,110 @@ export function handleKey(e) {
     }
 }
 
-function handleModalKey(e) {
-    if (state.recordingKey) {
-        e.preventDefault();
-        e.stopPropagation();
-        
-        if (e.key === 'Escape') {
-            stopKeyRecording(document.getElementById('hotkey-key')?.value || '');
-            return;
-        }
-
-        if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) {
-            const current = formatKeyEvent(e);
-            const input = document.getElementById('hotkey-key');
-            if (input && current) {
-                input.value = current;
-            }
-            return;
-        }
-
-        const key = formatKeyEvent(e);
-        if (key && !['Ctrl', 'Alt', 'Shift', 'Super'].includes(key)) {
-            stopKeyRecording(key);
-            focusNextField();
-        }
-        return;
-    }
-    
+function getModalContext() {
     const activeEl = document.activeElement;
     const fields = getModalFields();
     const currentIndex = fields.indexOf(activeEl);
-    if (currentIndex !== -1) {
-        state.modalFieldIndex = currentIndex;
+    return { activeEl, fields, currentIndex };
+}
+
+function syncFieldIndex(ctx) {
+    if (ctx.currentIndex !== -1) {
+        state.modalFieldIndex = ctx.currentIndex;
     }
-    
+}
+
+function handleRecordingKey(e) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (e.key === 'Escape') {
+        stopKeyRecording(document.getElementById('hotkey-key')?.value || '');
+        return true;
+    }
+
+    const MODIFIERS = ['Control', 'Alt', 'Shift', 'Meta'];
+    if (MODIFIERS.includes(e.key)) {
+        const current = formatKeyEvent(e);
+        const input = document.getElementById('hotkey-key');
+        if (input && current) {
+            input.value = current;
+        }
+        return true;
+    }
+
+    const key = formatKeyEvent(e);
+    const MODIFIER_NAMES = ['Ctrl', 'Alt', 'Shift', 'Super'];
+    if (key && !MODIFIER_NAMES.includes(key)) {
+        stopKeyRecording(key);
+        focusNextField();
+    }
+    return true;
+}
+
+function handleModalNavigation(e, ctx) {
+    if (e.key !== 'Tab') return false;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (ctx.fields.length === 0) return true;
+
+    const direction = e.shiftKey ? -1 : 1;
+    state.modalFieldIndex = (state.modalFieldIndex + direction + ctx.fields.length) % ctx.fields.length;
+    ctx.fields[state.modalFieldIndex]?.focus();
+    return true;
+}
+
+const enterHandlers = [
+    { match: el => el.id === 'hotkey-key', action: () => startKeyRecording() },
+    { match: el => el.classList.contains('modal-save'), action: () => saveHotkey() },
+    { match: el => el.classList.contains('modal-cancel'), action: () => closeEditModal() },
+    { match: el => el.type === 'checkbox', action: el => { el.checked = !el.checked; } },
+    { match: () => true, action: () => focusNextField() }
+];
+
+function handleModalAction(e, ctx) {
     if (e.key === 'Escape') {
         e.preventDefault();
         closeEditModal();
-        return;
+        return true;
     }
-    
+
     if (e.key === 's' && !e.ctrlKey && !e.altKey && !e.metaKey) {
-        if (activeEl.tagName !== 'SELECT') {
+        if (ctx.activeEl.tagName !== 'SELECT') {
             e.preventDefault();
             saveHotkey();
-            return;
+            return true;
         }
     }
-    
-    if (e.key === 'Tab') {
-        e.preventDefault();
-        e.stopPropagation();
-        
-        if (fields.length === 0) return;
-        
-        const direction = e.shiftKey ? -1 : 1;
-        state.modalFieldIndex = (state.modalFieldIndex + direction + fields.length) % fields.length;
-        fields[state.modalFieldIndex]?.focus();
-        return;
-    }
-    
+
     if (e.key === 'Enter') {
         e.preventDefault();
         e.stopPropagation();
-        
-        if (activeEl.id === 'hotkey-key') {
-            startKeyRecording();
-            return;
-        }
-        
-        if (activeEl.classList.contains('modal-save')) {
-            saveHotkey();
-            return;
-        }
-        
-        if (activeEl.classList.contains('modal-cancel')) {
-            closeEditModal();
-            return;
-        }
-        
-        if (activeEl.type === 'checkbox') {
-            activeEl.checked = !activeEl.checked;
-            return;
-        }
-        
-        focusNextField();
+        const handler = enterHandlers.find(h => h.match(ctx.activeEl));
+        handler.action(ctx.activeEl);
+        return true;
+    }
+
+    if (e.key === ' ' && ctx.activeEl.type === 'checkbox') {
+        return true;
+    }
+
+    return false;
+}
+
+function handleModalKey(e) {
+    if (state.recordingKey) {
+        handleRecordingKey(e);
         return;
     }
-    
-    if (e.key === ' ' && activeEl.type === 'checkbox') {
-        return;
-    }
+
+    const ctx = getModalContext();
+    syncFieldIndex(ctx);
+
+    if (handleModalAction(e, ctx)) return;
+    if (handleModalNavigation(e, ctx)) return;
 }
 
 function focusNextField() {
