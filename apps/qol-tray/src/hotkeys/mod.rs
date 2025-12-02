@@ -3,6 +3,7 @@ use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
     GlobalHotKeyEvent, GlobalHotKeyManager,
 };
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -149,75 +150,36 @@ fn parse_hotkey(s: &str) -> Option<HotKey> {
     Some(HotKey::new(Some(modifiers), code))
 }
 
+static KEY_CODE_MAP: Lazy<HashMap<&'static str, Code>> = Lazy::new(|| {
+    HashMap::from([
+        ("a", Code::KeyA), ("b", Code::KeyB), ("c", Code::KeyC), ("d", Code::KeyD),
+        ("e", Code::KeyE), ("f", Code::KeyF), ("g", Code::KeyG), ("h", Code::KeyH),
+        ("i", Code::KeyI), ("j", Code::KeyJ), ("k", Code::KeyK), ("l", Code::KeyL),
+        ("m", Code::KeyM), ("n", Code::KeyN), ("o", Code::KeyO), ("p", Code::KeyP),
+        ("q", Code::KeyQ), ("r", Code::KeyR), ("s", Code::KeyS), ("t", Code::KeyT),
+        ("u", Code::KeyU), ("v", Code::KeyV), ("w", Code::KeyW), ("x", Code::KeyX),
+        ("y", Code::KeyY), ("z", Code::KeyZ),
+        ("0", Code::Digit0), ("1", Code::Digit1), ("2", Code::Digit2), ("3", Code::Digit3),
+        ("4", Code::Digit4), ("5", Code::Digit5), ("6", Code::Digit6), ("7", Code::Digit7),
+        ("8", Code::Digit8), ("9", Code::Digit9),
+        ("f1", Code::F1), ("f2", Code::F2), ("f3", Code::F3), ("f4", Code::F4),
+        ("f5", Code::F5), ("f6", Code::F6), ("f7", Code::F7), ("f8", Code::F8),
+        ("f9", Code::F9), ("f10", Code::F10), ("f11", Code::F11), ("f12", Code::F12),
+        ("space", Code::Space), ("enter", Code::Enter), ("return", Code::Enter),
+        ("escape", Code::Escape), ("esc", Code::Escape), ("tab", Code::Tab),
+        ("backspace", Code::Backspace), ("delete", Code::Delete), ("del", Code::Delete),
+        ("insert", Code::Insert), ("ins", Code::Insert), ("home", Code::Home),
+        ("end", Code::End), ("pageup", Code::PageUp), ("pgup", Code::PageUp),
+        ("pagedown", Code::PageDown), ("pgdn", Code::PageDown),
+        ("up", Code::ArrowUp), ("down", Code::ArrowDown),
+        ("left", Code::ArrowLeft), ("right", Code::ArrowRight),
+        ("printscreen", Code::PrintScreen), ("print", Code::PrintScreen), ("prtsc", Code::PrintScreen),
+        ("pause", Code::Pause),
+    ])
+});
+
 fn parse_key_code(s: &str) -> Option<Code> {
-    match s.to_lowercase().as_str() {
-        "a" => Some(Code::KeyA),
-        "b" => Some(Code::KeyB),
-        "c" => Some(Code::KeyC),
-        "d" => Some(Code::KeyD),
-        "e" => Some(Code::KeyE),
-        "f" => Some(Code::KeyF),
-        "g" => Some(Code::KeyG),
-        "h" => Some(Code::KeyH),
-        "i" => Some(Code::KeyI),
-        "j" => Some(Code::KeyJ),
-        "k" => Some(Code::KeyK),
-        "l" => Some(Code::KeyL),
-        "m" => Some(Code::KeyM),
-        "n" => Some(Code::KeyN),
-        "o" => Some(Code::KeyO),
-        "p" => Some(Code::KeyP),
-        "q" => Some(Code::KeyQ),
-        "r" => Some(Code::KeyR),
-        "s" => Some(Code::KeyS),
-        "t" => Some(Code::KeyT),
-        "u" => Some(Code::KeyU),
-        "v" => Some(Code::KeyV),
-        "w" => Some(Code::KeyW),
-        "x" => Some(Code::KeyX),
-        "y" => Some(Code::KeyY),
-        "z" => Some(Code::KeyZ),
-        "0" => Some(Code::Digit0),
-        "1" => Some(Code::Digit1),
-        "2" => Some(Code::Digit2),
-        "3" => Some(Code::Digit3),
-        "4" => Some(Code::Digit4),
-        "5" => Some(Code::Digit5),
-        "6" => Some(Code::Digit6),
-        "7" => Some(Code::Digit7),
-        "8" => Some(Code::Digit8),
-        "9" => Some(Code::Digit9),
-        "f1" => Some(Code::F1),
-        "f2" => Some(Code::F2),
-        "f3" => Some(Code::F3),
-        "f4" => Some(Code::F4),
-        "f5" => Some(Code::F5),
-        "f6" => Some(Code::F6),
-        "f7" => Some(Code::F7),
-        "f8" => Some(Code::F8),
-        "f9" => Some(Code::F9),
-        "f10" => Some(Code::F10),
-        "f11" => Some(Code::F11),
-        "f12" => Some(Code::F12),
-        "space" => Some(Code::Space),
-        "enter" | "return" => Some(Code::Enter),
-        "escape" | "esc" => Some(Code::Escape),
-        "tab" => Some(Code::Tab),
-        "backspace" => Some(Code::Backspace),
-        "delete" | "del" => Some(Code::Delete),
-        "insert" | "ins" => Some(Code::Insert),
-        "home" => Some(Code::Home),
-        "end" => Some(Code::End),
-        "pageup" | "pgup" => Some(Code::PageUp),
-        "pagedown" | "pgdn" => Some(Code::PageDown),
-        "up" => Some(Code::ArrowUp),
-        "down" => Some(Code::ArrowDown),
-        "left" => Some(Code::ArrowLeft),
-        "right" => Some(Code::ArrowRight),
-        "printscreen" | "print" | "prtsc" => Some(Code::PrintScreen),
-        "pause" => Some(Code::Pause),
-        _ => None,
-    }
+    KEY_CODE_MAP.get(s.to_lowercase().as_str()).copied()
 }
 
 pub fn start_hotkey_listener(
