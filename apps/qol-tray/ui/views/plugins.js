@@ -48,11 +48,26 @@ async function loadPlugins() {
         
         state.plugins = await response.json();
         state.plugins.sort((a, b) => a.name.localeCompare(b.name));
+        restoreSelection();
         renderGrid();
         updateSelection();
     } catch (error) {
         gridEl.innerHTML = `<div class="error">Error loading plugins: ${error.message}</div>`;
     }
+}
+
+function restoreSelection() {
+    const saved = localStorage.getItem('plugins-selected-index');
+    if (saved !== null) {
+        const index = parseInt(saved, 10);
+        if (index >= 0 && index < state.plugins.length) {
+            state.selectedIndex = index;
+        }
+    }
+}
+
+function saveSelection() {
+    localStorage.setItem('plugins-selected-index', state.selectedIndex.toString());
 }
 
 function renderGrid() {
@@ -356,6 +371,7 @@ function openSelected() {
     
     const plugin = state.plugins[state.selectedIndex];
     if (plugin.has_ui) {
+        saveSelection();
         window.location.href = `/plugins/${plugin.id}/`;
     }
 }
