@@ -78,38 +78,42 @@ async function checkTokenStatus() {
 function showRateLimitBanner() {
     const banner = document.getElementById('token-banner');
     if (!banner) return;
-    
-    if (state.showTokenInput) {
-        banner.innerHTML = `
-            <div class="token-input-container">
-                <input type="password" id="github-token-input" placeholder="Paste GitHub token (no scopes needed)">
-                <button id="save-token-btn">Save</button>
-                <button id="cancel-token-btn">Cancel</button>
-            </div>
-            <p class="token-help">
-                <a href="https://github.com/settings/tokens/new" target="_blank">Create token</a> — no scopes needed, just for rate limits
-            </p>
-        `;
-        
-        document.getElementById('save-token-btn')?.addEventListener('click', saveToken);
-        document.getElementById('cancel-token-btn')?.addEventListener('click', () => {
-            state.showTokenInput = false;
-            showRateLimitBanner();
-        });
-    } else {
-        banner.innerHTML = `
-            <div class="rate-limit-banner">
-                <span>GitHub API rate limit reached.</span>
-                <button id="add-token-btn">Add GitHub Token</button>
-            </div>
-        `;
-        
-        document.getElementById('add-token-btn')?.addEventListener('click', () => {
-            state.showTokenInput = true;
-            showRateLimitBanner();
-            document.getElementById('github-token-input')?.focus();
-        });
-    }
+
+    state.showTokenInput ? renderTokenInput(banner) : renderRateLimitMessage(banner);
+}
+
+function renderTokenInput(banner) {
+    banner.innerHTML = `
+        <div class="token-input-container">
+            <input type="password" id="github-token-input" placeholder="Paste GitHub token (no scopes needed)">
+            <button id="save-token-btn">Save</button>
+            <button id="cancel-token-btn">Cancel</button>
+        </div>
+        <p class="token-help">
+            <a href="https://github.com/settings/tokens/new" target="_blank">Create token</a> — no scopes needed, just for rate limits
+        </p>
+    `;
+
+    document.getElementById('save-token-btn')?.addEventListener('click', saveToken);
+    document.getElementById('cancel-token-btn')?.addEventListener('click', () => {
+        state.showTokenInput = false;
+        showRateLimitBanner();
+    });
+}
+
+function renderRateLimitMessage(banner) {
+    banner.innerHTML = `
+        <div class="rate-limit-banner">
+            <span>GitHub API rate limit reached.</span>
+            <button id="add-token-btn">Add GitHub Token</button>
+        </div>
+    `;
+
+    document.getElementById('add-token-btn')?.addEventListener('click', () => {
+        state.showTokenInput = true;
+        showRateLimitBanner();
+        document.getElementById('github-token-input')?.focus();
+    });
 }
 
 async function saveToken() {
