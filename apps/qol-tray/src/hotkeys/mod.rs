@@ -66,7 +66,6 @@ impl HotkeyManager {
         Ok(config)
     }
 
-    #[allow(dead_code)]
     pub fn save_config(&self, config: &HotkeyConfig) -> Result<()> {
         if let Some(parent) = self.config_path.parent() {
             std::fs::create_dir_all(parent)?;
