@@ -693,6 +693,11 @@ header p {
     margin-bottom: 0.5rem;
 }
 
+.form-group label .hint {
+    color: #666;
+    font-size: 0.8rem;
+}
+
 .form-group input[type="text"],
 .form-group select {
     width: 100%;
@@ -718,23 +723,21 @@ header p {
 .key-input-row input {
     flex: 1;
     font-family: 'SF Mono', Monaco, 'Courier New', monospace;
-}
-
-.key-record-btn {
-    padding: 0.75rem 1rem;
-    border: 1px solid #4a9eff;
-    border-radius: 6px;
-    background: transparent;
-    color: #4a9eff;
-    font-size: 0.9rem;
     cursor: pointer;
-    transition: background 0.2s, color 0.2s;
-    white-space: nowrap;
 }
 
-.key-record-btn:hover {
-    background: #4a9eff;
-    color: #fff;
+.key-input-row input:focus {
+    border-color: #4a9eff;
+}
+
+.key-input-row input.recording {
+    border-color: #ff6b6b;
+    animation: pulse-border 1s ease-in-out infinite;
+}
+
+@keyframes pulse-border {
+    0%, 100% { border-color: #ff6b6b; }
+    50% { border-color: #ff9999; }
 }
 
 .checkbox-label {
@@ -782,6 +785,16 @@ header p {
 
 .modal-save:hover {
     background: #3a8eef;
+}
+
+.modal-buttons button:focus {
+    outline: 2px solid #4a9eff;
+    outline-offset: 2px;
+}
+
+.checkbox-label input[type="checkbox"]:focus {
+    outline: 2px solid #4a9eff;
+    outline-offset: 2px;
 }
 
 kbd {

@@ -15,6 +15,7 @@ use axum::http::HeaderValue;
 use anyhow::Result;
 
 use crate::plugins::{PluginLoader, PluginManager};
+use crate::hotkeys::trigger_reload;
 
 #[derive(Serialize)]
 struct PluginInfo {
@@ -539,6 +540,7 @@ async fn set_hotkeys(body: axum::body::Bytes) -> impl IntoResponse {
         return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save hotkeys").into_response();
     }
 
+    trigger_reload();
     log::info!("Hotkey config saved");
     (StatusCode::OK, "Hotkeys saved").into_response()
 }

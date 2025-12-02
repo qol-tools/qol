@@ -1,12 +1,22 @@
 use anyhow::Result;
 use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
-    GlobalHotKeyEvent, GlobalHotKeyManager,
+    GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
 };
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Sender};
+use std::sync::OnceLock;
+
+static RELOAD_SENDER: OnceLock<Sender<()>> = OnceLock::new();
+
+pub fn trigger_reload() {
+    if let Some(sender) = RELOAD_SENDER.get() {
+        let _ = sender.send(());
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HotkeyConfig {
@@ -31,7 +41,7 @@ pub struct HotkeyAction {
 }
 
 pub struct HotkeyManager {
-    manager: GlobalHotKeyManager,
+    manager: Option<GlobalHotKeyManager>,
     registered: Vec<HotKey>,
     bindings: HashMap<u32, HotkeyAction>,
     config_path: PathBuf,
@@ -39,11 +49,10 @@ pub struct HotkeyManager {
 
 impl HotkeyManager {
     pub fn new() -> Result<Self> {
-        let manager = GlobalHotKeyManager::new()?;
         let config_path = Self::config_path()?;
 
         Ok(Self {
-            manager,
+            manager: None,
             registered: Vec::new(),
             bindings: HashMap::new(),
             config_path,
@@ -79,6 +88,8 @@ impl HotkeyManager {
     pub fn register_hotkeys(&mut self, config: &HotkeyConfig) -> Result<()> {
         self.unregister_all();
 
+        let new_manager = GlobalHotKeyManager::new()?;
+
         for binding in &config.hotkeys {
             if !binding.enabled {
                 continue;
@@ -92,7 +103,7 @@ impl HotkeyManager {
                 }
             };
 
-            if let Err(e) = self.manager.register(hotkey) {
+            if let Err(e) = new_manager.register(hotkey) {
                 log::error!("Failed to register hotkey {}: {}", binding.key, e);
                 continue;
             }
@@ -109,14 +120,21 @@ impl HotkeyManager {
             log::info!("Registered hotkey: {} -> {}::{}", binding.key, binding.plugin_id, binding.action);
         }
 
+        self.manager = Some(new_manager);
         Ok(())
     }
 
     fn unregister_all(&mut self) {
-        if !self.registered.is_empty() {
-            let _ = self.manager.unregister_all(&self.registered);
-            self.registered.clear();
+        if let Some(ref manager) = self.manager {
+            if !self.registered.is_empty() {
+                log::info!("Unregistering {} hotkeys", self.registered.len());
+                if let Err(e) = manager.unregister_all(&self.registered) {
+                    log::error!("Failed to unregister hotkeys: {}", e);
+                }
+            }
         }
+        self.manager = None;
+        self.registered.clear();
         self.bindings.clear();
     }
 
@@ -189,14 +207,33 @@ pub fn start_hotkey_listener(
     let config = manager.load_config()?;
     manager.register_hotkeys(&config)?;
 
-    let receiver = GlobalHotKeyEvent::receiver();
+    let hotkey_receiver = GlobalHotKeyEvent::receiver();
+    let (reload_tx, reload_rx) = mpsc::channel::<()>();
+    let _ = RELOAD_SENDER.set(reload_tx);
 
     std::thread::spawn(move || {
         loop {
-            if let Ok(event) = receiver.try_recv() {
-                if let Some(action) = manager.get_action(&event) {
-                    log::info!("Hotkey triggered: {}::{}", action.plugin_id, action.action);
-                    execute_plugin_action(&plugins_dir, &action.plugin_id, &action.action);
+            if let Ok(()) = reload_rx.try_recv() {
+                log::info!("Reloading hotkeys...");
+                match manager.load_config() {
+                    Ok(config) => {
+                        if let Err(e) = manager.register_hotkeys(&config) {
+                            log::error!("Failed to register hotkeys: {}", e);
+                        } else {
+                            log::info!("Hotkeys reloaded successfully");
+                        }
+                    }
+                    Err(e) => log::error!("Failed to load hotkey config: {}", e),
+                }
+            }
+
+            if let Ok(event) = hotkey_receiver.try_recv() {
+                if event.state == HotKeyState::Pressed {
+                    if let Some(action) = manager.get_action(&event) {
+                        let key = format!("{}::{}", action.plugin_id, action.action);
+                        log::info!("Hotkey triggered: {}", key);
+                        execute_plugin_action(&plugins_dir, &action.plugin_id, &action.action);
+                    }
                 }
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
@@ -206,15 +243,14 @@ pub fn start_hotkey_listener(
     Ok(())
 }
 
-fn execute_plugin_action(plugins_dir: &PathBuf, plugin_id: &str, action: &str) {
+fn execute_plugin_action(plugins_dir: &PathBuf, plugin_id: &str, _action: &str) {
     let plugin_dir = plugins_dir.join(plugin_id);
     let script_path = plugin_dir.join("run.sh");
 
     if script_path.exists() {
-        log::info!("Executing: {:?} with action {}", script_path, action);
+        log::info!("Executing: {:?}", script_path);
         match std::process::Command::new("bash")
             .arg(&script_path)
-            .arg(action)
             .current_dir(&plugin_dir)
             .spawn()
         {

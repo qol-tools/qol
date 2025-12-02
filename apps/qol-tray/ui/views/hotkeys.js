@@ -6,7 +6,8 @@ const state = {
     selectedIndex: -1,
     editModalOpen: false,
     recordingKey: false,
-    editingHotkey: null
+    editingHotkey: null,
+    modalFieldIndex: 0
 };
 
 let container = null;
@@ -148,7 +149,7 @@ function handleModalClick(e) {
         return;
     }
     
-    if (e.target.closest('.key-record-btn')) {
+    if (e.target.closest('#hotkey-key')) {
         startKeyRecording();
         return;
     }
@@ -173,16 +174,15 @@ function openEditModal(hotkey = null) {
             <h3>${title}</h3>
             
             <div class="form-group">
-                <label>Shortcut <span class="hint">(Press 'r' to record)</span></label>
+                <label>Shortcut <span class="hint">(Enter to record)</span></label>
                 <div class="key-input-row">
-                    <input type="text" id="hotkey-key" value="${hotkey?.key || ''}" readonly placeholder="Click Record or press 'r'">
-                    <button class="key-record-btn">Record</button>
+                    <input type="text" id="hotkey-key" tabindex="1" value="${hotkey?.key || ''}" readonly placeholder="Press Enter to record">
                 </div>
             </div>
             
             <div class="form-group">
                 <label>Plugin</label>
-                <select id="hotkey-plugin">
+                <select id="hotkey-plugin" tabindex="2">
                     <option value="">Select plugin...</option>
                     ${pluginOptions}
                 </select>
@@ -190,26 +190,28 @@ function openEditModal(hotkey = null) {
             
             <div class="form-group">
                 <label>Action</label>
-                <select id="hotkey-action">
+                <select id="hotkey-action" tabindex="3">
                     <option value="">Select plugin first...</option>
                 </select>
             </div>
             
             <div class="form-group">
                 <label class="checkbox-label">
-                    <input type="checkbox" id="hotkey-enabled" ${hotkey?.enabled !== false ? 'checked' : ''}>
+                    <input type="checkbox" id="hotkey-enabled" tabindex="4" ${hotkey?.enabled !== false ? 'checked' : ''}>
                     Enabled
                 </label>
             </div>
             
             <div class="modal-buttons">
-                <button class="modal-cancel">Cancel (Esc)</button>
-                <button class="modal-save">Save (Enter)</button>
+                <button class="modal-cancel" tabindex="5">Cancel <kbd>Esc</kbd></button>
+                <button class="modal-save" tabindex="6">Save <kbd>S</kbd></button>
             </div>
         </div>
     `;
     
     container.appendChild(modal);
+    
+    modal.addEventListener('click', handleModalClick);
     
     const pluginSelect = document.getElementById('hotkey-plugin');
     pluginSelect.addEventListener('change', () => updateActionOptions(pluginSelect.value));
@@ -217,6 +219,29 @@ function openEditModal(hotkey = null) {
     if (hotkey?.plugin_id) {
         updateActionOptions(hotkey.plugin_id, hotkey.action);
     }
+    
+    setTimeout(() => {
+        const keyInput = document.getElementById('hotkey-key');
+        if (keyInput) {
+            keyInput.focus();
+            state.modalFieldIndex = 0;
+        }
+    }, 0);
+}
+
+function getModalFields() {
+    if (!state.editModalOpen) return [];
+    const modal = container.querySelector('.edit-modal');
+    if (!modal) return [];
+    
+    return [
+        document.getElementById('hotkey-key'),
+        document.getElementById('hotkey-plugin'),
+        document.getElementById('hotkey-action'),
+        document.getElementById('hotkey-enabled'),
+        container.querySelector('.modal-cancel'),
+        container.querySelector('.modal-save')
+    ].filter(Boolean);
 }
 
 function updateActionOptions(pluginId, selectedAction = null) {
@@ -246,25 +271,21 @@ function closeEditModal() {
 function startKeyRecording() {
     state.recordingKey = true;
     const input = document.getElementById('hotkey-key');
-    const btn = container.querySelector('.key-record-btn');
     if (input) {
-        input.placeholder = 'Press keys...';
+        input.placeholder = 'Press keys... (Esc to cancel)';
         input.value = '';
         input.classList.add('recording');
     }
-    if (btn) btn.textContent = 'Recording...';
 }
 
 function stopKeyRecording(key) {
     state.recordingKey = false;
     const input = document.getElementById('hotkey-key');
-    const btn = container.querySelector('.key-record-btn');
     if (input) {
         if (key) input.value = key;
-        input.placeholder = 'Click Record or press \'r\'';
+        input.placeholder = 'Press Enter to record';
         input.classList.remove('recording');
     }
-    if (btn) btn.textContent = 'Record';
 }
 
 function formatKeyEvent(e) {
@@ -274,8 +295,14 @@ function formatKeyEvent(e) {
     if (e.shiftKey) parts.push('Shift');
     if (e.metaKey) parts.push('Super');
     
+    // Don't format if only modifiers are pressed
+    if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) {
+        if (parts.length > 0) return parts.join('+');
+        return '';
+    }
+    
     const key = getKeyName(e.code);
-    if (key && !['Control', 'Alt', 'Shift', 'Meta'].includes(key)) {
+    if (key) {
         parts.push(key);
     }
     
@@ -395,39 +422,105 @@ export function handleKey(e) {
 }
 
 function handleModalKey(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    
     if (state.recordingKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        
         if (e.key === 'Escape') {
             stopKeyRecording(document.getElementById('hotkey-key')?.value || '');
             return;
         }
-        if (e.key === 'Tab') {
+
+        if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) {
+            const current = formatKeyEvent(e);
+            const input = document.getElementById('hotkey-key');
+            if (input && current) {
+                input.value = current;
+            }
             return;
         }
+
         const key = formatKeyEvent(e);
         if (key && !['Ctrl', 'Alt', 'Shift', 'Super'].includes(key)) {
             stopKeyRecording(key);
+            focusNextField();
         }
         return;
     }
     
-    // Keyboard shortcuts in modal
+    const activeEl = document.activeElement;
+    const fields = getModalFields();
+    const currentIndex = fields.indexOf(activeEl);
+    if (currentIndex !== -1) {
+        state.modalFieldIndex = currentIndex;
+    }
+    
     if (e.key === 'Escape') {
+        e.preventDefault();
         closeEditModal();
         return;
     }
     
-    if (e.key === 'Enter' && e.target.tagName !== 'BUTTON' && e.target.tagName !== 'SELECT') {
-        saveHotkey();
+    if (e.key === 's' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        if (activeEl.tagName !== 'SELECT') {
+            e.preventDefault();
+            saveHotkey();
+            return;
+        }
+    }
+    
+    if (e.key === 'Tab') {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        if (fields.length === 0) return;
+        
+        const direction = e.shiftKey ? -1 : 1;
+        state.modalFieldIndex = (state.modalFieldIndex + direction + fields.length) % fields.length;
+        fields[state.modalFieldIndex]?.focus();
         return;
     }
     
-    if (e.key === 'r' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT') {
-        startKeyRecording();
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        if (activeEl.id === 'hotkey-key') {
+            startKeyRecording();
+            return;
+        }
+        
+        if (activeEl.classList.contains('modal-save')) {
+            saveHotkey();
+            return;
+        }
+        
+        if (activeEl.classList.contains('modal-cancel')) {
+            closeEditModal();
+            return;
+        }
+        
+        if (activeEl.type === 'checkbox') {
+            activeEl.checked = !activeEl.checked;
+            return;
+        }
+        
+        focusNextField();
         return;
     }
+    
+    if (e.key === ' ' && activeEl.type === 'checkbox') {
+        return;
+    }
+}
+
+function focusNextField() {
+    const fields = getModalFields();
+    if (fields.length === 0) return;
+    
+    const nextIndex = (state.modalFieldIndex + 1) % fields.length;
+    state.modalFieldIndex = nextIndex;
+    fields[nextIndex]?.focus();
 }
 
 const keyHandlers = {
