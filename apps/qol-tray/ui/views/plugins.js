@@ -100,55 +100,59 @@ function updateSelection() {
     }
 }
 
+const clickHandlers = [
+    {
+        selector: '.plugin-update:not([disabled])',
+        handler: el => updatePlugin(el.closest('.plugin-card').dataset.pluginId)
+    },
+    {
+        selector: '.context-update',
+        handler: el => {
+            closeAllContextMenus();
+            updatePlugin(el.closest('.plugin-card').dataset.pluginId);
+        }
+    },
+    {
+        selector: '.plugin-cog',
+        handler: el => toggleContextMenu(el.closest('.plugin-card'))
+    },
+    {
+        selector: '.context-delete',
+        handler: el => {
+            const pluginId = el.closest('.plugin-card').dataset.pluginId;
+            closeAllContextMenus();
+            showConfirmModal(pluginId);
+        }
+    }
+];
+
 function handleClick(e) {
     if (state.confirmModalOpen) {
         handleModalClick(e);
         return;
     }
-    
-    const updateBtn = e.target.closest('.plugin-update');
-    if (updateBtn && !updateBtn.disabled) {
-        e.stopPropagation();
-        const card = updateBtn.closest('.plugin-card');
-        updatePlugin(card.dataset.pluginId);
-        return;
+
+    for (const { selector, handler } of clickHandlers) {
+        const target = e.target.closest(selector);
+        if (target) {
+            e.stopPropagation();
+            handler(target);
+            return;
+        }
     }
-    
-    const contextUpdate = e.target.closest('.context-update');
-    if (contextUpdate) {
-        e.stopPropagation();
-        const card = contextUpdate.closest('.plugin-card');
-        closeAllContextMenus();
-        updatePlugin(card.dataset.pluginId);
-        return;
-    }
-    
-    const cog = e.target.closest('.plugin-cog');
-    if (cog) {
-        e.stopPropagation();
-        const card = cog.closest('.plugin-card');
-        toggleContextMenu(card);
-        return;
-    }
-    
-    const deleteBtn = e.target.closest('.context-delete');
-    if (deleteBtn) {
-        e.stopPropagation();
-        const card = deleteBtn.closest('.plugin-card');
-        const pluginId = card.dataset.pluginId;
-        closeAllContextMenus();
-        showConfirmModal(pluginId);
-        return;
-    }
-    
+
     if (state.contextMenuOpen) {
         closeAllContextMenus();
         return;
     }
-    
+
+    handleCardClick(e);
+}
+
+function handleCardClick(e) {
     const card = e.target.closest('.plugin-card');
     if (!card) return;
-    
+
     const index = parseInt(card.dataset.index, 10);
     if (index !== state.selectedIndex) {
         state.selectedIndex = index;
