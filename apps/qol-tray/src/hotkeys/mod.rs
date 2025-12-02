@@ -7,16 +7,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HotkeyConfig {
     #[serde(default)]
     pub hotkeys: Vec<HotkeyBinding>,
-}
-
-impl Default for HotkeyConfig {
-    fn default() -> Self {
-        Self { hotkeys: vec![] }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +31,7 @@ pub struct HotkeyAction {
 
 pub struct HotkeyManager {
     manager: GlobalHotKeyManager,
+    registered: Vec<HotKey>,
     bindings: HashMap<u32, HotkeyAction>,
     config_path: PathBuf,
 }
@@ -48,6 +43,7 @@ impl HotkeyManager {
 
         Ok(Self {
             manager,
+            registered: Vec::new(),
             bindings: HashMap::new(),
             config_path,
         })
@@ -101,6 +97,7 @@ impl HotkeyManager {
                 continue;
             }
 
+            self.registered.push(hotkey);
             self.bindings.insert(
                 hotkey.id(),
                 HotkeyAction {
@@ -116,7 +113,10 @@ impl HotkeyManager {
     }
 
     fn unregister_all(&mut self) {
-        let _ = self.manager.unregister_all(&[]);
+        if !self.registered.is_empty() {
+            let _ = self.manager.unregister_all(&self.registered);
+            self.registered.clear();
+        }
         self.bindings.clear();
     }
 
