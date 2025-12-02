@@ -2,89 +2,91 @@
 
 ## What Was Done This Session
 
-### 1. Plugin Update Feature
-Added ability to detect and update plugins with newer versions:
+### 1. Hotkey Module Code Review & Fixes
+Fixed issues in `src/hotkeys/mod.rs`:
 
-- `server.rs`: Added `available_version`, `update_available` fields to `InstalledPlugin`
-- `server.rs`: Added `is_newer_version()` function with semver comparison
-- `server.rs`: Added `/api/update/:id` endpoint using `git pull`
-- `plugins.js`: Update button on plugin cards, `u` keyboard shortcut
-- `style.css`: Green update button styling, `.has-update` border highlight
-- 10 unit tests for `is_newer_version()`
+- **Bug fix**: `unregister_all()` was passing empty slice — now tracks registered hotkeys in `Vec<HotKey>` field
+- **Removed dead code**: Removed `#[allow(dead_code)]` from `save_config` by wiring it to API
+- **Refactored**: Replaced 70-line match statement with `static KEY_CODE_MAP: Lazy<HashMap>`
+- **Derived Default**: Replaced manual `Default` impl with `#[derive(Default)]`
 
-### 2. Version Comparison Fix
-Fixed false positives for update detection:
+### 2. Hotkey Unit Tests
+Added 14 tests in `src/hotkeys/mod.rs`:
 
-- **Problem:** Cache stored dependency binary version (e.g., `0.4.4` from pointZ releases)
-- **Actual:** Installed plugin had its own manifest version (e.g., `0.4.0`)
-- **Fix:** Removed `resolve_version()` from `github.rs`, now uses plugin manifest version only
+- `parse_key_code_*` — letter, digit, function, special, navigation keys
+- `parse_hotkey_*` — single key, modifiers, whitespace, case insensitivity
 
-### 3. Plugin-PointZ QR Code Fix (Again)
-The unpkg CDN path `build/qrcode.min.js` doesn't exist in qrcode@1.5.4:
+### 3. Hotkeys API Endpoints
+Added to `server.rs`:
 
-- Changed to ESM import: `import QRCode from 'https://esm.sh/qrcode@1.5.4'`
-- Made `app.js` a module, centered QR code and download link
-- Pushed to `qol-tools/plugin-pointz`
+- `GET /api/hotkeys` — Read hotkey config
+- `PUT /api/hotkeys` — Save hotkey config
 
-### 4. PointZ Release Workflow Fix
-Flutter APK build was missing from releases:
+### 4. Git Tag Versioning for Plugins
+Changed plugin version detection to use git tags instead of `plugin.toml`:
 
-- Restored `build-apk` job to `.github/workflows/release.yml`
-- Added `needs: [build, build-apk]` to release job
-- Created tag `v0.4.4` to trigger new release with APK
+- Added `fetch_latest_tag()` in `github.rs`
+- `build_plugin_metadata()` now prefers tag version, falls back to manifest
+- Update detection now works when you push new tags (no need to bump `plugin.toml`)
 
-### 5. Plugin Config API
-Added endpoints for reading/writing plugin config files:
+### 5. Hotkeys UI Implementation
+Full implementation in `ui/views/hotkeys.js`:
 
-- `GET /api/plugins/:id/config` — Read `config.json`
-- `PUT /api/plugins/:id/config` — Write `config.json`
+- List view with shortcut, plugin, action, status columns
+- Keyboard navigation: ↑↓ navigate, Enter edit, `a` add, `d` delete, Space toggle
+- Edit modal with key recording (captures Ctrl/Alt/Shift/Super + key)
+- Persistence via `/api/hotkeys`
 
-### 6. Screen Recorder Plugin UI
-Created settings UI for `plugin-screen-recorder`:
+### 6. Modal Keyboard Isolation Fix
+Fixed bugs in hotkeys UI:
 
-- `ui/index.html`, `ui/style.css`, `ui/app.js`
-- Audio settings (enable, mic/system inputs, devices)
-- Video settings (framerate, CRF, preset, format)
-- Pushed to `qol-tools/plugin-screen-recorder`
+- Added `isBlocking()` export checked by `main.js` before Tab handling
+- Tab no longer switches views when modal is open
+- Key recording ignores Tab/Escape, properly handles cancel
 
-### 7. Global Hotkey System
-Added global hotkey support for triggering plugin actions:
-
-- New `src/hotkeys/mod.rs` module
-- Uses `global-hotkey` crate (v0.7)
-- `HotkeyManager` loads config, registers hotkeys, routes events
-- `parse_hotkey()` parses strings like `Ctrl+Shift+R`
-- Executes plugin `run.sh` on hotkey trigger
+### 7. CLAUDE.md Update
+Clarified atomic commit guidelines:
+> One logical change per commit. Split distinct changes (bug fix, refactor, tests) into separate commits.
 
 ## Current State
 
-App compiles with no warnings. Plugin updates work correctly. Global hotkeys backbone is in place.
+App compiles with no warnings. All features working:
+- Plugin updates via git tags ✓
+- Hotkey backend (registration, execution) ✓
+- Hotkey UI (add, edit, delete, toggle, key recording) ✓
+
+## Commits This Session
+
+```
+74a51c2 fix(ui): block Tab navigation when modal open, fix key recording
+67cc538 style(ui): add hotkeys view styles
+22b8707 feat(ui): implement hotkeys configuration view
+0e1bcce feat(github): use git tags for plugin version detection
+5db36c7 feat(api): add hotkeys config endpoints
+2c32875 docs: clarify atomic commit guidelines
+7cf9691 test(hotkeys): add unit tests for parsing functions
+10c0806 refactor(hotkeys): use static map for key code parsing
+9ae5952 refactor(hotkeys): remove dead_code annotation from save_config
+e9ca57c fix(hotkeys): track registered hotkeys for proper unregister
+```
 
 ## What's Next
 
-1. **Hotkeys UI** — Implement `ui/views/hotkeys.js` for configuring hotkeys in browser
-2. **Default bindings** — Create default `hotkeys.json` with screen recorder binding
-3. **Hotkey recording** — Capture keypress to set hotkey (instead of typing string)
+1. **Default hotkey bindings** — Create default `hotkeys.json` with screen recorder binding
+2. **Hotkey reload** — Backend should reload hotkeys when config changes (currently requires restart)
+3. **Screen recorder plugin version** — Bump version and push tag to test update flow
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
 | `src/main.rs` | Entry point, starts hotkey listener |
-| `src/hotkeys/mod.rs` | HotkeyManager, config loading, event handling |
-| `src/features/plugin_store/server.rs` | API endpoints including config |
+| `src/hotkeys/mod.rs` | HotkeyManager, config loading, event handling, 14 tests |
+| `src/features/plugin_store/server.rs` | API endpoints including hotkeys |
+| `src/features/plugin_store/github.rs` | GitHub API, tag-based versioning |
+| `ui/main.js` | View routing, keyboard handling with `isBlocking()` check |
+| `ui/views/hotkeys.js` | Hotkey configuration UI |
 | `ui/views/plugins.js` | Plugin grid with update buttons |
-| `ui/views/hotkeys.js` | Placeholder for hotkey configuration |
-
-## Storage Paths
-
-| File | Purpose |
-|------|---------|
-| `~/.config/qol-tray/.github-token` | GitHub personal access token |
-| `~/.config/qol-tray/.plugin-cache.json` | Cached plugin list from GitHub |
-| `~/.config/qol-tray/hotkeys.json` | Global hotkey bindings |
-| `~/.config/qol-tray/plugins/` | Installed plugins directory |
-| `~/.config/qol-tray/plugins/:id/config.json` | Per-plugin configuration |
 
 ## API Endpoints
 
@@ -97,9 +99,20 @@ App compiles with no warnings. Plugin updates work correctly. Global hotkeys bac
 | `/api/update/:id` | POST | Update plugin (git pull) |
 | `/api/uninstall/:id` | POST | Uninstall plugin |
 | `/api/plugins/:id/config` | GET/PUT | Read/write plugin config |
+| `/api/hotkeys` | GET/PUT | Read/write hotkey config |
 | `/api/github-token` | GET/POST/DELETE | Token management |
 | `/api/cover/:id` | GET | Plugin cover image |
 | `/plugins/:id/` | GET | Serve plugin UI |
+
+## Storage Paths
+
+| File | Purpose |
+|------|---------|
+| `~/.config/qol-tray/.github-token` | GitHub personal access token |
+| `~/.config/qol-tray/.plugin-cache.json` | Cached plugin list from GitHub |
+| `~/.config/qol-tray/hotkeys.json` | Global hotkey bindings |
+| `~/.config/qol-tray/plugins/` | Installed plugins directory |
+| `~/.config/qol-tray/plugins/:id/config.json` | Per-plugin configuration |
 
 ## Hotkey Config Format
 
@@ -107,7 +120,7 @@ App compiles with no warnings. Plugin updates work correctly. Global hotkeys bac
 {
   "hotkeys": [
     {
-      "id": "record",
+      "id": "hk-1234567890",
       "key": "Ctrl+Shift+R",
       "plugin_id": "plugin-screen-recorder",
       "action": "run",
@@ -134,7 +147,7 @@ Supported keys: A-Z, 0-9, F1-F12, Space, Enter, Escape, arrows, etc.
 - Functional/declarative code patterns
 - No comments in code
 - No builds/tests unless explicitly asked
-- Atomic commits with conventional prefixes
+- Atomic commits with conventional prefixes (one logical change per commit)
 - Flatten nested conditionals, use early returns
 - AAA pattern for unit tests (Arrange-Act-Assert)
 - Direct communication, no fluff
