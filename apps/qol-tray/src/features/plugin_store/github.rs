@@ -204,19 +204,21 @@ impl GitHubClient {
     }
 
     async fn fetch_plugin_manifest(&self, repo_name: &str) -> Result<crate::plugins::PluginManifest> {
-        let url = format!(
-            "https://raw.githubusercontent.com/{}/{}/main/plugin.toml",
-            self.org, repo_name
-        );
+        for branch in ["main", "master"] {
+            let url = format!(
+                "https://raw.githubusercontent.com/{}/{}/{}/plugin.toml",
+                self.org, repo_name, branch
+            );
 
-        let content = self.build_request(&url)
-            .send()
-            .await?
-            .text()
-            .await?;
+            let response = self.build_request(&url).send().await?;
+            if response.status().is_success() {
+                let content = response.text().await?;
+                let manifest: crate::plugins::PluginManifest = toml::from_str(&content)?;
+                return Ok(manifest);
+            }
+        }
 
-        let manifest: crate::plugins::PluginManifest = toml::from_str(&content)?;
-        Ok(manifest)
+        anyhow::bail!("plugin.toml not found on main or master branch")
     }
 
     async fn fetch_latest_tag(&self, repo_name: &str) -> Option<String> {

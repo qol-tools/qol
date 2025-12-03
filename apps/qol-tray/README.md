@@ -14,19 +14,20 @@
 
 ## What is this?
 
-QoL Tray is a single system tray daemon that hosts plugins. Instead of 15 different apps cluttering your tray, you get one clean icon with a menu that does everything.
+QoL Tray is a single system tray daemon that hosts plugins. Instead of 15 different apps cluttering your tray, you get one clean icon that opens a browser-based dashboard.
 
 ```
-┌─────────────────────────┐
-│ 📱 PointZ               │ → Control PC from phone
-│ 📋 Clipboard History    │ → Never lose a paste again
-│ ⏱️  Pomodoro            │ → Focus timer
-│ ───────────────────     │
-│ 🔌 Plugin Store         │ → Browse & install more
-│ ───────────────────     │
-│ Quit                    │
-└─────────────────────────┘
+┌─────────────────┐
+│ 🔌 Plugins      │ → Opens browser UI
+│ ───────────     │
+│ Quit            │
+└─────────────────┘
 ```
+
+All plugin management happens in the browser at `http://127.0.0.1:42700`:
+- View installed plugins
+- Browse and install from the plugin store
+- Configure plugin settings
 
 Each plugin is just a folder with a manifest and a script. No compilation needed. Works with any language.
 
@@ -45,9 +46,9 @@ qol-tray
 
 ## Plugin Store
 
-Click **Plugin Store → Browse Plugins** in the tray menu. Install plugins with one click.
+Click **Plugins** in the tray menu to open the browser UI. The store tab shows available plugins from [github.com/qol-tools](https://github.com/qol-tools) (repos with `qol-tray-plugin` topic).
 
-Official plugins live at [github.com/qol-tools](https://github.com/qol-tools) (repos prefixed with `plugin-`).
+Install with one click. Updates are detected automatically.
 
 Or install manually:
 ```bash
@@ -86,10 +87,19 @@ items = [
 
 | Type | Description |
 |------|-------------|
-| `action` | Executes `run.sh` when clicked |
-| `checkbox` | Toggles a boolean in `config.json` |
+| `action` | Triggers an action (see action types below) |
+| `checkbox` | Toggles a boolean in `config.json` via `toggle-config` action |
 | `separator` | Visual divider |
-| `submenu` | Nested menu |
+| `submenu` | Nested menu with child items |
+| `submenu` | Nested menu with child items |
+
+### Action types
+
+| Action | Description |
+|--------|-------------|
+| `run` | Executes `run.sh` |
+| `toggle-config` | Toggles boolean at `config_key` path in `config.json` |
+| `settings` | Reserved for future use |
 
 ### Daemon plugins
 
@@ -106,10 +116,10 @@ restart_on_crash = true
 
 Drop an `index.html` in `ui/` and it becomes accessible at:
 ```
-http://localhost:PORT/plugins/my-plugin/
+http://127.0.0.1:42700/plugins/my-plugin/
 ```
 
-Accessible via **Settings** in the plugin's menu.
+Click the plugin card in the browser UI to access settings.
 
 ## Platform Support
 
@@ -129,3 +139,4 @@ MIT
 <div align="center">
 <sub>Built with Rust. No Electron. No bloat.</sub>
 </div>
+
