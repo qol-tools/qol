@@ -1,0 +1,19 @@
+[plugin]
+name = "Window Actions"
+description = "Window snapping, centering, and multi-monitor management"
+version = "1.0.0"
+
+[menu]
+label = "Window Actions"
+items = [
+    { type = "action", id = "snap-left", label = "Snap Left", action = "run" },
+    { type = "action", id = "snap-right", label = "Snap Right", action = "run" },
+    { type = "action", id = "snap-bottom", label = "Snap Bottom", action = "run" },
+    { type = "action", id = "maximize", label = "Maximize", action = "run" },
+    { type = "action", id = "minimize", label = "Minimize", action = "run" },
+    { type = "action", id = "restore", label = "Restore", action = "run" },
+    { type = "action", id = "center", label = "Center", action = "run" },
+    { type = "action", id = "move-monitor-left", label = "Move to Left Monitor", action = "run" },
+    { type = "action", id = "move-monitor-right", label = "Move to Right Monitor", action = "run" },
+]
+
