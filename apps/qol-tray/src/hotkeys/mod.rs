@@ -243,14 +243,15 @@ pub fn start_hotkey_listener(
     Ok(())
 }
 
-fn execute_plugin_action(plugins_dir: &PathBuf, plugin_id: &str, _action: &str) {
+fn execute_plugin_action(plugins_dir: &PathBuf, plugin_id: &str, action: &str) {
     let plugin_dir = plugins_dir.join(plugin_id);
     let script_path = plugin_dir.join("run.sh");
 
     if script_path.exists() {
-        log::info!("Executing: {:?}", script_path);
+        log::info!("Executing: {:?} {}", script_path, action);
         match std::process::Command::new("bash")
             .arg(&script_path)
+            .arg(action)
             .current_dir(&plugin_dir)
             .spawn()
         {
