@@ -1,15 +1,7 @@
 #!/usr/bin/env bash
 
 get_active_window() {
-    local win
-    win=$(xdotool getactivewindow 2>/dev/null || echo "")
-    [ -z "$win" ] && return 1
-    
-    if ! xprop -id "$win" _NET_WM_WINDOW_TYPE 2>/dev/null | grep -qE "_NET_WM_WINDOW_TYPE_(NORMAL|DIALOG|UTILITY)"; then
-        return 1
-    fi
-    
-    echo "$win"
+    xdotool getactivewindow 2>/dev/null
 }
 
 get_window_geometry() {
@@ -64,9 +56,21 @@ find_window_monitor() {
     return 1
 }
 
+is_maximized() {
+    local win="$1"
+    xprop -id "$win" _NET_WM_STATE 2>/dev/null | grep -q "_NET_WM_STATE_MAXIMIZED"
+}
+
 unmaximize_window() {
     local win="$1"
     wmctrl -ir "$win" -b remove,maximized_vert,maximized_horz 2>/dev/null
+}
+
+unmaximize_if_needed() {
+    local win="$1"
+    if is_maximized "$win"; then
+        unmaximize_window "$win"
+    fi
 }
 
 maximize_window() {

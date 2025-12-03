@@ -1,45 +1,73 @@
 #!/usr/bin/env bash
 set -euo pipefail
-source "$(dirname "$(readlink -f "$0")")/lib.sh"
 
-win=$(get_active_window) || exit 0
-read -r win_x win_y win_w win_h < <(get_window_geometry "$win")
-[ -z "$win_x" ] && exit 0
+CACHE="/tmp/qol-monitors.cache"
+CACHE_TTL=60
 
-win_cx=$((win_x + win_w / 2))
-win_cy=$((win_y + win_h / 2))
+win=$(xdotool getactivewindow 2>/dev/null) || exit 0
 
-mapfile -t monitors < <(get_monitors | sort -t'+' -k3 -n)
+# Get Frame extents
+read -r left right top bottom < <(xprop -id "$win" _NET_FRAME_EXTENTS 2>/dev/null | grep -oP '[0-9]+' | xargs)
+frame_top=${top:-0}
+
+# Get client window geometry (content only)
+eval "$(xwininfo -id "$win" 2>/dev/null | awk '
+    /Absolute upper-left X:/ {print "win_x="$4}
+    /Absolute upper-left Y:/ {print "win_y="$4}
+    /Width:/ {print "win_w="$2}
+    /Height:/ {print "win_h="$2}
+')"
+[ -z "${win_x:-}" ] && exit 0
+
+# Actual visual top-left including titlebar
+visual_x=$((win_x - ${left:-0}))
+visual_y=$((win_y - frame_top))
+
+if [[ -f "$CACHE" ]] && (( $(date +%s) - $(stat -c %Y "$CACHE") < CACHE_TTL )); then
+    mapfile -t monitors < "$CACHE"
+else
+    mapfile -t monitors < <(xrandr --query 2>/dev/null | awk '
+        / connected/ {
+            for(i=1; i<=NF; i++) {
+                if ($i ~ /^[0-9]+x[0-9]+\+[0-9]+\+[0-9]+$/) print $i
+            }
+        }
+    ' | sort -t'+' -k3 -n)
+    printf '%s\n' "${monitors[@]}" > "$CACHE"
+fi
+
 [ ${#monitors[@]} -lt 2 ] && exit 0
+
+# Center point for monitor detection
+win_cx=$((visual_x + win_w / 2))
+win_cy=$((visual_y + win_h / 2))
 
 current_idx=-1
 for i in "${!monitors[@]}"; do
-    mon="${monitors[$i]}"
-    IFS='x+' read -r mon_w mon_h mon_x mon_y <<< "$mon"
-    
+    IFS='x+' read -r mon_w mon_h mon_x mon_y <<< "${monitors[$i]}"
     if (( win_cx >= mon_x && win_cx < mon_x + mon_w && win_cy >= mon_y && win_cy < mon_y + mon_h )); then
         current_idx=$i
+        cur_w=$mon_w cur_h=$mon_h cur_x=$mon_x cur_y=$mon_y
         break
     fi
 done
-
 [ "$current_idx" -lt 0 ] && exit 0
 
 target_idx=$(( (current_idx + 1) % ${#monitors[@]} ))
-target="${monitors[$target_idx]}"
+IFS='x+' read -r tgt_w tgt_h tgt_x tgt_y <<< "${monitors[$target_idx]}"
 
-IFS='x+' read -r tgt_w tgt_h tgt_x tgt_y <<< "$target"
+# Calculate relative center position
+cur_cx_rel=$(( win_cx - cur_x ))
+cur_cy_rel=$(( win_cy - cur_y ))
 
-IFS='x+' read -r cur_w cur_h cur_x cur_y <<< "${monitors[$current_idx]}"
+tgt_cx_rel=$(( cur_cx_rel * tgt_w / cur_w ))
+tgt_cy_rel=$(( cur_cy_rel * tgt_h / cur_h ))
 
-rel_x=$(( win_x - cur_x ))
-rel_y=$(( win_y - cur_y ))
+# New center -> New top-left
+new_cx=$(( tgt_x + tgt_cx_rel ))
+new_cy=$(( tgt_y + tgt_cy_rel ))
 
-new_x=$(( tgt_x + rel_x * tgt_w / cur_w ))
-new_y=$(( tgt_y + rel_y * tgt_h / cur_h ))
-new_w=$(( win_w * tgt_w / cur_w ))
-new_h=$(( win_h * tgt_h / cur_h ))
+new_x=$(( new_cx - win_w / 2 ))
+new_y=$(( new_cy - win_h / 2 ))
 
-unmaximize_window "$win"
-move_resize_window "$win" "$new_x" "$new_y" "$new_w" "$new_h"
-
+xdotool windowmove "$win" "$new_x" "$new_y"

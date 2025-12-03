@@ -8,6 +8,5 @@ read -r win_x win_y win_w win_h < <(get_window_geometry "$win")
 
 read -r mon_w mon_h mon_x mon_y < <(find_window_monitor "$win_x" "$win_y" "$win_w" "$win_h") || exit 0
 
-unmaximize_window "$win"
+unmaximize_if_needed "$win"
 move_resize_window "$win" "$((mon_x + mon_w / 2))" "$mon_y" "$((mon_w / 2))" "$mon_h"
-

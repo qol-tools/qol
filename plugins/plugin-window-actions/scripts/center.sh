@@ -14,6 +14,5 @@ read -r mon_w mon_h mon_x mon_y < <(find_window_monitor "$win_x" "$win_y" "$win_
 new_x=$(( mon_x + (mon_w - CENTER_W) / 2 ))
 new_y=$(( mon_y + (mon_h - CENTER_H) / 2 ))
 
-unmaximize_window "$win"
+unmaximize_if_needed "$win"
 move_resize_window "$win" "$new_x" "$new_y" "$CENTER_W" "$CENTER_H"
-
