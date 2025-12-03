@@ -22,7 +22,7 @@ export function render(containerEl) {
             </header>
             <div id="hotkeys-list" class="hotkeys-list"></div>
             <footer class="help">
-                ↑↓ navigate • Enter edit • a add • d delete • Space toggle
+                ↑↓ navigate • Enter edit • a add • d delete
             </footer>
         </div>
     `;
@@ -79,7 +79,6 @@ function renderList() {
             <span class="col-key">Shortcut</span>
             <span class="col-plugin">Plugin</span>
             <span class="col-action">Action</span>
-            <span class="col-status">Status</span>
         </div>
         ${state.hotkeys.map((hk, index) => {
             const plugin = state.plugins.find(p => p.id === hk.plugin_id);
@@ -87,11 +86,10 @@ function renderList() {
             const actionLabel = getActionLabel(plugin, hk.action);
             
             return `
-                <div class="hotkey-row ${hk.enabled ? '' : 'disabled'}" data-index="${index}">
+                <div class="hotkey-row" data-index="${index}">
                     <span class="col-key"><kbd>${hk.key}</kbd></span>
                     <span class="col-plugin">${pluginName}</span>
                     <span class="col-action">${actionLabel}</span>
-                    <span class="col-status">${hk.enabled ? '●' : '○'}</span>
                 </div>
             `;
         }).join('')}
@@ -190,22 +188,15 @@ function openEditModal(hotkey = null, keepPlugin = null) {
             </div>
             
             <div class="form-group">
-                <label>Shortcut <span class="hint">(Enter to record)</span></label>
+                <label>Shortcut <span class="hint">(click to record)</span></label>
                 <div class="key-input-row">
-                    <input type="text" id="hotkey-key" tabindex="3" value="${hotkey?.key || ''}" readonly placeholder="Press Enter to record">
+                    <input type="text" id="hotkey-key" tabindex="3" value="${hotkey?.key || ''}" readonly placeholder="Click to record shortcut">
                 </div>
             </div>
             
-            <div class="form-group">
-                <label class="checkbox-label">
-                    <input type="checkbox" id="hotkey-enabled" tabindex="4" ${hotkey?.enabled !== false ? 'checked' : ''}>
-                    Enabled
-                </label>
-            </div>
-            
             <div class="modal-buttons">
-                <button class="modal-cancel" tabindex="5">Cancel <kbd>Esc</kbd></button>
-                <button class="modal-save" tabindex="6">Save <kbd>Ctrl+S</kbd></button>
+                <button class="modal-cancel" tabindex="4">Cancel <kbd>Esc</kbd></button>
+                <button class="modal-save" tabindex="5">Save <kbd>Enter</kbd></button>
             </div>
         </div>
     `;
@@ -239,7 +230,6 @@ function getModalFields() {
         document.getElementById('hotkey-plugin'),
         document.getElementById('hotkey-action'),
         document.getElementById('hotkey-key'),
-        document.getElementById('hotkey-enabled'),
         container.querySelector('.modal-cancel'),
         container.querySelector('.modal-save')
     ].filter(Boolean);
@@ -361,7 +351,6 @@ async function saveHotkey() {
     const key = document.getElementById('hotkey-key')?.value;
     const pluginId = document.getElementById('hotkey-plugin')?.value;
     const action = document.getElementById('hotkey-action')?.value;
-    const enabled = document.getElementById('hotkey-enabled')?.checked ?? true;
     
     if (!key || !pluginId || !action) {
         return;
@@ -372,7 +361,7 @@ async function saveHotkey() {
         key,
         plugin_id: pluginId,
         action,
-        enabled
+        enabled: true
     };
     
     const isEditing = !!state.editingHotkey;
@@ -420,16 +409,6 @@ async function deleteSelected() {
     await persistHotkeys();
 }
 
-async function toggleSelected() {
-    if (state.selectedIndex < 0 || state.selectedIndex >= state.hotkeys.length) return;
-    
-    state.hotkeys[state.selectedIndex].enabled = !state.hotkeys[state.selectedIndex].enabled;
-    
-    renderList();
-    updateSelection();
-    
-    await persistHotkeys();
-}
 
 async function persistHotkeys() {
     try {
@@ -511,14 +490,6 @@ function handleModalNavigation(e, ctx) {
     return true;
 }
 
-const enterHandlers = [
-    { match: el => el.id === 'hotkey-key', action: () => startKeyRecording() },
-    { match: el => el.classList.contains('modal-save'), action: () => saveHotkey() },
-    { match: el => el.classList.contains('modal-cancel'), action: () => closeEditModal() },
-    { match: el => el.type === 'checkbox', action: el => { el.checked = !el.checked; } },
-    { match: () => true, action: () => focusNextField() }
-];
-
 function handleModalAction(e, ctx) {
     if (e.key === 'Escape') {
         e.preventDefault();
@@ -526,21 +497,14 @@ function handleModalAction(e, ctx) {
         return true;
     }
 
-    if (e.key === 's' && e.ctrlKey && !e.altKey && !e.metaKey) {
-        e.preventDefault();
-        saveHotkey();
-        return true;
-    }
-
     if (e.key === 'Enter') {
         e.preventDefault();
         e.stopPropagation();
-        const handler = enterHandlers.find(h => h.match(ctx.activeEl));
-        handler.action(ctx.activeEl);
-        return true;
-    }
-
-    if (e.key === ' ' && ctx.activeEl.type === 'checkbox') {
+        if (ctx.activeEl.classList.contains('modal-cancel')) {
+            closeEditModal();
+        } else {
+            saveHotkey();
+        }
         return true;
     }
 
@@ -580,8 +544,7 @@ const keyHandlers = {
     a: () => openEditModal(),
     A: () => openEditModal(),
     d: deleteSelected,
-    D: deleteSelected,
-    ' ': toggleSelected
+    D: deleteSelected
 };
 
 function navigate(delta) {
