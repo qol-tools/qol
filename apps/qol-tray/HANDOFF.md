@@ -2,86 +2,90 @@
 
 ## What Was Done This Session
 
-### 1. Frontend Refactoring
-Refactored complex functions per CLAUDE.md complexity thresholds:
+### 1. README Update
+Updated README.md to reflect current architecture:
+- Tray menu now minimal: just "Plugins" and "Quit"
+- All plugin interaction happens in browser UI at `http://127.0.0.1:42700`
+- Documented plugin store discovery via `qol-tray-plugin` topic
+- Split action types into separate table
 
-- **hotkeys.js `handleModalKey()`** — extracted 92-line function into 5 focused handlers:
-  - `handleRecordingKey(e)` — recording mode logic
-  - `handleModalNavigation(e, ctx)` — Tab/Shift+Tab cycling
-  - `handleModalAction(e, ctx)` — Enter/Escape/s key dispatch
-  - `enterHandlers` config array — declarative element→action mapping
-  - `getModalContext()` / `syncFieldIndex()` — context helpers
+### 2. Created plugin-window-actions
+New plugin for window management with 9 actions:
+- `snap-left`, `snap-right`, `snap-bottom`
+- `center` (1152x892, centered on current monitor)
+- `maximize`, `minimize`, `restore` (LIFO from WM stacking order)
+- `move-monitor-left`, `move-monitor-right` (wraps around)
 
-- **plugins.js `handleClick()`** — replaced 8 sequential ifs with `clickHandlers` config array
+Structure:
+```
+plugin-window-actions/
+├── plugin.toml
+├── run.sh              # dispatcher
+└── scripts/
+    ├── lib.sh          # shared monitor detection
+    └── *.sh            # action scripts
+```
 
-- **store.js `showRateLimitBanner()`** — split into `renderTokenInput()` and `renderRateLimitMessage()`
+All scripts have multi-monitor support with proportional scaling when monitors differ in resolution.
 
-- **CLAUDE.md** — added "Complexity Thresholds" section with lessons learned
+Repo: https://github.com/qol-tools/plugin-window-actions
 
-### 2. Plugin Page Navigation
-Injected back button and keyboard guide into plugin settings pages:
+### 3. Plugin Manifest Fetching Fix
+`github.rs` now tries both `main` and `master` branches when fetching `plugin.toml`:
+- Fixes plugins that use `master` as default branch
+- Falls back gracefully if neither exists
 
-- `plugin_ui.rs` now wraps plugin HTML with fixed header/footer
-- Back link at top, "Esc back" hint at bottom
-- Escape key navigates back to home
-- No changes required to individual plugins
+### 4. Hotkey Execution Fix
+`src/hotkeys/mod.rs` now passes action ID as first argument to `run.sh`:
+- Was: `bash run.sh`
+- Now: `bash run.sh <action-id>`
 
-### 3. Plugin Selection Retention
-Selection persists when navigating to/from plugin pages:
+### 5. Hotkey Modal UX Improvements
+Major refactor of `ui/views/hotkeys.js`:
 
-- `saveSelection()` stores to localStorage before navigating
-- `restoreSelection()` loads on plugins view init
+**Field order changed**: Plugin → Action → Shortcut (logical flow)
 
-### 4. Store Footer Positioning
-Fixed footer appearing under plugins instead of at page bottom:
+**Modal stays open** after saving new hotkey:
+- Shortcut field clears
+- Already-assigned actions filtered from dropdown
+- Closes automatically when all actions assigned
 
-- Added `flex: 1` and `align-content: start` to `.plugins-grid`
+**Removed enabled toggle**:
+- Hotkeys are always enabled if they exist
+- Delete to disable
+- Removed status column from list view
 
-### 5. Plugin Update Reactivity
-Fixed UI not updating after plugin updates:
-
-- `updatePlugin()` now calls `refreshPlugins()` after completion
-- `checkForUpdates()` runs on plugins page load — fetches GitHub data in background
-- Update badges now appear without visiting store first
-
-### 6. Org-Wide Automatic Plugin Releases
-Set up semantic-release in `qol-tools/.github` for zero-config releases:
-
-- **release-plugins.yml** — scans repos with `qol-tray-plugin` topic, runs semantic-release
-- **auto-label-plugins.yml** — triggers on repo creation, labels `plugin-*` repos
-- Version bumps based on conventional commits (`fix:` → patch, `feat:` → minor, `!` → major)
-- Updates `plugin.toml` version, creates tag, publishes GitHub release
-- Requires `ORG_PAT` org secret with `repo` scope
+**Keyboard shortcuts**:
+- Enter on shortcut field → starts recording
+- Enter on other fields → advances to next field
+- Ctrl+Enter anywhere → saves
+- Esc → cancels
 
 ## Current State
 
-- Refactored frontend code: **Done**
-- Plugin page back button: **Working**
-- Selection retention: **Working**
-- Store footer: **Fixed**
-- Plugin update reactivity: **Working**
-- Automatic releases: **Working** (both plugins released v1.0.0)
+- README: **Updated**
+- plugin-window-actions: **Working** (installed, hotkeys bindable)
+- Manifest fetching: **Fixed** (main/master fallback)
+- Hotkey execution: **Fixed** (action ID passed)
+- Hotkey modal UX: **Improved**
 
 ## Key Files Changed
 
 | File | Changes |
 |------|---------|
-| `ui/views/hotkeys.js` | Extracted `handleModalKey` into focused handlers |
-| `ui/views/plugins.js` | Click handler config, selection persistence, update refresh |
-| `ui/views/store.js` | Split rate limit banner renderers |
-| `ui/style.css` | Footer positioning fix |
-| `src/features/plugin_store/plugin_ui.rs` | Inject nav header/footer into plugin pages |
-| `CLAUDE.md` | Added complexity thresholds section |
+| `README.md` | Updated to reflect browser-based UI architecture |
+| `src/features/plugin_store/github.rs` | Try main then master for plugin.toml |
+| `src/hotkeys/mod.rs` | Pass action ID to run.sh |
+| `ui/views/hotkeys.js` | Modal UX overhaul, removed enabled toggle |
 
-## Org Workflow Files
+## New Plugin Repo
 
-| File | Purpose |
-|------|---------|
-| `qol-tools/.github/.github/workflows/release-plugins.yml` | Auto-release all plugins |
-| `qol-tools/.github/.github/workflows/auto-label-plugins.yml` | Label new plugin repos |
+| Repo | Description |
+|------|-------------|
+| `qol-tools/plugin-window-actions` | Window snapping, centering, multi-monitor |
 
 ## Notes
 
-- Semantic-release uses **git tags** as version source, not manifest
-- Repos without tags start at v1.0.0 regardless of manifest version
-- Both plugin-pointz and plugin-screen-recorder now at v1.0.0 with proper tags
+- Window actions use `xdotool`, `wmctrl`, `xrandr`, `xprop` — X11 only
+- Monitor detection finds which monitor contains window center point
+- Move-to-monitor scales window position/size proportionally
