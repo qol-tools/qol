@@ -155,16 +155,17 @@ function handleModalClick(e) {
     }
 }
 
-function openEditModal(hotkey = null) {
+function openEditModal(hotkey = null, keepPlugin = null) {
     state.editModalOpen = true;
     state.editingHotkey = hotkey;
     state.recordingKey = false;
     
     const isNew = !hotkey;
     const title = isNew ? 'Add Hotkey' : 'Edit Hotkey';
+    const selectedPluginId = keepPlugin || hotkey?.plugin_id || '';
     
     const pluginOptions = state.plugins.map(p => 
-        `<option value="${p.id}" ${hotkey?.plugin_id === p.id ? 'selected' : ''}>${p.name}</option>`
+        `<option value="${p.id}" ${selectedPluginId === p.id ? 'selected' : ''}>${p.name}</option>`
     ).join('');
     
     const modal = document.createElement('div');
@@ -174,15 +175,8 @@ function openEditModal(hotkey = null) {
             <h3>${title}</h3>
             
             <div class="form-group">
-                <label>Shortcut <span class="hint">(Enter to record)</span></label>
-                <div class="key-input-row">
-                    <input type="text" id="hotkey-key" tabindex="1" value="${hotkey?.key || ''}" readonly placeholder="Press Enter to record">
-                </div>
-            </div>
-            
-            <div class="form-group">
                 <label>Plugin</label>
-                <select id="hotkey-plugin" tabindex="2">
+                <select id="hotkey-plugin" tabindex="1">
                     <option value="">Select plugin...</option>
                     ${pluginOptions}
                 </select>
@@ -190,9 +184,16 @@ function openEditModal(hotkey = null) {
             
             <div class="form-group">
                 <label>Action</label>
-                <select id="hotkey-action" tabindex="3">
+                <select id="hotkey-action" tabindex="2">
                     <option value="">Select plugin first...</option>
                 </select>
+            </div>
+            
+            <div class="form-group">
+                <label>Shortcut <span class="hint">(Enter to record)</span></label>
+                <div class="key-input-row">
+                    <input type="text" id="hotkey-key" tabindex="3" value="${hotkey?.key || ''}" readonly placeholder="Press Enter to record">
+                </div>
             </div>
             
             <div class="form-group">
@@ -204,7 +205,7 @@ function openEditModal(hotkey = null) {
             
             <div class="modal-buttons">
                 <button class="modal-cancel" tabindex="5">Cancel <kbd>Esc</kbd></button>
-                <button class="modal-save" tabindex="6">Save <kbd>S</kbd></button>
+                <button class="modal-save" tabindex="6">Save <kbd>Ctrl+S</kbd></button>
             </div>
         </div>
     `;
@@ -216,14 +217,14 @@ function openEditModal(hotkey = null) {
     const pluginSelect = document.getElementById('hotkey-plugin');
     pluginSelect.addEventListener('change', () => updateActionOptions(pluginSelect.value));
     
-    if (hotkey?.plugin_id) {
-        updateActionOptions(hotkey.plugin_id, hotkey.action);
+    if (selectedPluginId) {
+        updateActionOptions(selectedPluginId, hotkey?.action);
     }
     
     setTimeout(() => {
-        const keyInput = document.getElementById('hotkey-key');
-        if (keyInput) {
-            keyInput.focus();
+        const pluginEl = document.getElementById('hotkey-plugin');
+        if (pluginEl) {
+            pluginEl.focus();
             state.modalFieldIndex = 0;
         }
     }, 0);
@@ -235,13 +236,19 @@ function getModalFields() {
     if (!modal) return [];
     
     return [
-        document.getElementById('hotkey-key'),
         document.getElementById('hotkey-plugin'),
         document.getElementById('hotkey-action'),
+        document.getElementById('hotkey-key'),
         document.getElementById('hotkey-enabled'),
         container.querySelector('.modal-cancel'),
         container.querySelector('.modal-save')
     ].filter(Boolean);
+}
+
+function getAssignedActions(pluginId) {
+    return state.hotkeys
+        .filter(h => h.plugin_id === pluginId && h.id !== state.editingHotkey?.id)
+        .map(h => h.action);
 }
 
 function updateActionOptions(pluginId, selectedAction = null) {
@@ -255,7 +262,17 @@ function updateActionOptions(pluginId, selectedAction = null) {
         return;
     }
     
-    actionSelect.innerHTML = plugin.actions.map(a => 
+    const assignedActions = getAssignedActions(pluginId);
+    const availableActions = plugin.actions.filter(a => 
+        !assignedActions.includes(a.id) || a.id === selectedAction
+    );
+    
+    if (availableActions.length === 0) {
+        actionSelect.innerHTML = '<option value="">All actions assigned</option>';
+        return;
+    }
+    
+    actionSelect.innerHTML = availableActions.map(a => 
         `<option value="${a.id}" ${selectedAction === a.id ? 'selected' : ''}>${a.label}</option>`
     ).join('');
 }
@@ -346,7 +363,7 @@ async function saveHotkey() {
     const action = document.getElementById('hotkey-action')?.value;
     const enabled = document.getElementById('hotkey-enabled')?.checked ?? true;
     
-    if (!key || !pluginId) {
+    if (!key || !pluginId || !action) {
         return;
     }
     
@@ -358,19 +375,37 @@ async function saveHotkey() {
         enabled
     };
     
-    if (state.editingHotkey) {
+    const isEditing = !!state.editingHotkey;
+    
+    if (isEditing) {
         const idx = state.hotkeys.findIndex(h => h.id === state.editingHotkey.id);
         if (idx !== -1) state.hotkeys[idx] = hotkey;
+        closeEditModal();
     } else {
         state.hotkeys.push(hotkey);
         state.selectedIndex = state.hotkeys.length - 1;
+        resetModalForNextHotkey(pluginId);
     }
     
-    closeEditModal();
     renderList();
     updateSelection();
     
     await persistHotkeys();
+}
+
+function resetModalForNextHotkey(pluginId) {
+    const keyInput = document.getElementById('hotkey-key');
+    if (keyInput) keyInput.value = '';
+    
+    updateActionOptions(pluginId);
+    
+    const actionSelect = document.getElementById('hotkey-action');
+    if (actionSelect && actionSelect.value) {
+        actionSelect.focus();
+        state.modalFieldIndex = 1;
+    } else {
+        closeEditModal();
+    }
 }
 
 async function deleteSelected() {
@@ -491,12 +526,10 @@ function handleModalAction(e, ctx) {
         return true;
     }
 
-    if (e.key === 's' && !e.ctrlKey && !e.altKey && !e.metaKey) {
-        if (ctx.activeEl.tagName !== 'SELECT') {
-            e.preventDefault();
-            saveHotkey();
-            return true;
-        }
+    if (e.key === 's' && e.ctrlKey && !e.altKey && !e.metaKey) {
+        e.preventDefault();
+        saveHotkey();
+        return true;
     }
 
     if (e.key === 'Enter') {
