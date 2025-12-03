@@ -188,15 +188,15 @@ function openEditModal(hotkey = null, keepPlugin = null) {
             </div>
             
             <div class="form-group">
-                <label>Shortcut <span class="hint">(click to record)</span></label>
+                <label>Shortcut <span class="hint">(Enter to record)</span></label>
                 <div class="key-input-row">
-                    <input type="text" id="hotkey-key" tabindex="3" value="${hotkey?.key || ''}" readonly placeholder="Click to record shortcut">
+                    <input type="text" id="hotkey-key" tabindex="3" value="${hotkey?.key || ''}" readonly placeholder="Press Enter to record">
                 </div>
             </div>
             
             <div class="modal-buttons">
                 <button class="modal-cancel" tabindex="4">Cancel <kbd>Esc</kbd></button>
-                <button class="modal-save" tabindex="5">Save <kbd>Enter</kbd></button>
+                <button class="modal-save" tabindex="5">Save <kbd>Ctrl+Enter</kbd></button>
             </div>
         </div>
     `;
@@ -497,13 +497,24 @@ function handleModalAction(e, ctx) {
         return true;
     }
 
+    if (e.key === 'Enter' && e.ctrlKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        saveHotkey();
+        return true;
+    }
+
     if (e.key === 'Enter') {
         e.preventDefault();
         e.stopPropagation();
-        if (ctx.activeEl.classList.contains('modal-cancel')) {
+        if (ctx.activeEl.id === 'hotkey-key') {
+            startKeyRecording();
+        } else if (ctx.activeEl.classList.contains('modal-cancel')) {
             closeEditModal();
-        } else {
+        } else if (ctx.activeEl.classList.contains('modal-save')) {
             saveHotkey();
+        } else {
+            focusNextField();
         }
         return true;
     }
