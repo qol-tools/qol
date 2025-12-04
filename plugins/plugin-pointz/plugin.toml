@@ -6,7 +6,6 @@ author = "KMRH47"
 
 [menu]
 label = "PointZ"
-icon = "icon.png"
 items = [
     { type = "action", id = "settings", label = "Settings", action = "settings" },
 ]
