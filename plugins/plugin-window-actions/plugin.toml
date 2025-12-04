@@ -2,6 +2,7 @@
 name = "Window Actions"
 description = "Window snapping, centering, and multi-monitor management"
 version = "1.0.0"
+author = "KMRH47"
 
 [menu]
 label = "Window Actions"
