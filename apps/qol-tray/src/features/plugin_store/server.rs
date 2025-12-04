@@ -413,21 +413,31 @@ async fn serve_cover(
     (StatusCode::OK, [(header::CONTENT_TYPE, "image/png")], data).into_response()
 }
 
-async fn get_plugin_config(
-    Path(plugin_id): Path<String>,
-    axum::extract::State(plugins_dir): axum::extract::State<PathBuf>,
-) -> impl IntoResponse {
-    let config_path = plugins_dir.join(&plugin_id).join("config.json");
+async fn get_plugin_config(Path(plugin_id): Path<String>) -> impl IntoResponse {
+    let manager = match crate::plugins::PluginConfigManager::new() {
+        Ok(m) => m,
+        Err(e) => {
+            log::error!("Failed to create config manager: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to access config").into_response();
+        }
+    };
 
-    if !config_path.exists() {
-        return (StatusCode::NOT_FOUND, "Config not found").into_response();
-    }
-
-    let data = match tokio::fs::read(&config_path).await {
-        Ok(data) => data,
+    let config = match manager.get_config(&plugin_id) {
+        Ok(Some(config)) => config,
+        Ok(None) => {
+            return (StatusCode::NOT_FOUND, "Config not found").into_response();
+        }
         Err(e) => {
             log::error!("Failed to read config: {}", e);
             return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read config").into_response();
+        }
+    };
+
+    let data = match serde_json::to_vec(&config) {
+        Ok(d) => d,
+        Err(e) => {
+            log::error!("Failed to serialize config: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to serialize config").into_response();
         }
     };
 
@@ -436,22 +446,25 @@ async fn get_plugin_config(
 
 async fn set_plugin_config(
     Path(plugin_id): Path<String>,
-    axum::extract::State(plugins_dir): axum::extract::State<PathBuf>,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
-    let config_path = plugins_dir.join(&plugin_id).join("config.json");
-    let plugin_dir = plugins_dir.join(&plugin_id);
+    let config = match serde_json::from_slice::<serde_json::Value>(&body) {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("Invalid JSON in config: {}", e);
+            return (StatusCode::BAD_REQUEST, "Invalid JSON").into_response();
+        }
+    };
 
-    if !plugin_dir.exists() {
-        return (StatusCode::NOT_FOUND, "Plugin not found").into_response();
-    }
+    let manager = match crate::plugins::PluginConfigManager::new() {
+        Ok(m) => m,
+        Err(e) => {
+            log::error!("Failed to create config manager: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to access config").into_response();
+        }
+    };
 
-    if let Err(e) = serde_json::from_slice::<serde_json::Value>(&body) {
-        log::error!("Invalid JSON in config: {}", e);
-        return (StatusCode::BAD_REQUEST, "Invalid JSON").into_response();
-    }
-
-    if let Err(e) = tokio::fs::write(&config_path, &body).await {
+    if let Err(e) = manager.set_config(&plugin_id, config) {
         log::error!("Failed to write config: {}", e);
         return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to write config").into_response();
     }

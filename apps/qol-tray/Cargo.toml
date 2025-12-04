@@ -62,6 +62,9 @@ global-hotkey = { version = "0.7", features = ["serde"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
 
+[dev-dependencies]
+tempfile = "3.8"
+
 [package.metadata.deb]
 maintainer = "KMRH47"
 copyright = "2025, KMRH47"
