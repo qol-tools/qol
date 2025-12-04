@@ -2,7 +2,11 @@
 set -euo pipefail
 source "$(dirname "$(readlink -f "$0")")/lib.sh"
 
-win=$(get_active_window) || exit 0
+win="${1:-}"
+if [ -z "$win" ]; then
+    win=$(get_active_window) || exit 0
+fi
+
 read -r win_x win_y win_w win_h < <(get_window_geometry "$win")
 [ -z "$win_x" ] && exit 0
 

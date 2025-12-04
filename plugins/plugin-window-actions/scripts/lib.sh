@@ -83,3 +83,74 @@ move_resize_window() {
     wmctrl -ir "$win" -e "0,$x,$y,$w,$h" 2>/dev/null
 }
 
+is_close() {
+    local a="${1:-0}"
+    local b="${2:-0}"
+    local tol="${3:-0}"
+    local diff=$((a - b))
+    (( diff < 0 )) && diff=$(( -diff ))
+    (( diff <= tol ))
+}
+
+unsnap_window_via_keyboard() {
+    local win="$1"
+    xdotool windowactivate --sync "$win" 2>/dev/null
+    sleep 0.05
+    xdotool key --window "$win" super+Down 2>/dev/null
+    sleep 0.25
+}
+
+force_move_resize_window() {
+    local win="$1" x="$2" y="$3" w="$4" h="$5"
+    local log="${6:-/dev/null}"
+    
+    echo "force_move_resize: win=$win x=$x y=$y w=$w h=$h" >> "$log"
+    
+    unsnap_window_via_keyboard "$win"
+    
+    eval "$(xwininfo -id "$win" 2>/dev/null | awk '
+        /Absolute upper-left X:/ {print "old_x="$4}
+        /Absolute upper-left Y:/ {print "old_y="$4}
+        /Width:/ {print "old_w="$2}
+        /Height:/ {print "old_h="$2}
+    ')"
+    
+    echo "After unsnap: old_x=$old_x old_y=$old_y old_w=$old_w old_h=$old_h" >> "$log"
+    
+    wmctrl -ir "$win" -b remove,maximized_vert,maximized_horz 2>/dev/null
+    wmctrl -ir "$win" -b remove,fullscreen 2>/dev/null
+    xprop -id "$win" -remove _GTK_EDGE_CONSTRAINTS 2>/dev/null
+    sleep 0.1
+    
+    move_resize_window "$win" "$x" "$y" "$w" "$h"
+    sleep 0.15
+    
+    eval "$(xwininfo -id "$win" 2>/dev/null | awk '
+        /Absolute upper-left X:/ {print "new_x="$4}
+        /Absolute upper-left Y:/ {print "new_y="$4}
+        /Width:/ {print "new_w="$2}
+        /Height:/ {print "new_h="$2}
+    ')"
+    
+    echo "After move: new_x=$new_x new_y=$new_y new_w=$new_w new_h=$new_h" >> "$log"
+    
+    local x_diff=$((new_x - x))
+    local y_diff=$((new_y - y))
+    if (( x_diff < 0 )); then x_diff=$(( -x_diff )); fi
+    if (( y_diff < 0 )); then y_diff=$(( -y_diff )); fi
+    
+    if (( x_diff > 50 || y_diff > 50 )); then
+        echo "Move failed, trying xdotool directly" >> "$log"
+        xdotool windowactivate --sync "$win" 2>/dev/null
+        sleep 0.05
+        xdotool windowsize "$win" "$w" "$h" 2>/dev/null
+        xdotool windowmove --sync "$win" "$x" "$y" 2>/dev/null
+        sleep 0.15
+        
+        eval "$(xwininfo -id "$win" 2>/dev/null | awk '
+            /Absolute upper-left X:/ {print "final_x="$4}
+            /Absolute upper-left Y:/ {print "final_y="$4}
+        ')"
+        echo "Final position: x=$final_x y=$final_y" >> "$log"
+    fi
+}

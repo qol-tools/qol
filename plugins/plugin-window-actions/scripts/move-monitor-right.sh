@@ -1,87 +1,42 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CACHE="/tmp/qol-monitors.cache"
-CACHE_TTL=60
+result=$(gdbus call --session --dest org.Cinnamon --object-path /org/Cinnamon --method org.Cinnamon.Eval "
+    const win = global.display.focus_window;
+    if (!win) {
+        'ERROR: No focused window';
+    } else {
+        const beforeRect = win.get_frame_rect();
+        const beforeWorkArea = win.get_work_area_current_monitor();
+        const beforeMonitor = win.get_monitor();
 
-win=$(xdotool getactivewindow 2>/dev/null) || exit 0
+        const widthRatio = beforeRect.width / beforeWorkArea.width;
+        const heightRatio = beforeRect.height / beforeWorkArea.height;
+        const xRatio = (beforeRect.x - beforeWorkArea.x) / beforeWorkArea.width;
+        const yRatio = (beforeRect.y - beforeWorkArea.y) / beforeWorkArea.height;
 
-# Clear tiled/snapped state BEFORE reading geometry
-wmctrl -ir "$win" -b remove,maximized_vert,maximized_horz 2>/dev/null
-xprop -id "$win" -remove _NET_WM_STATE 2>/dev/null
+        const numMonitors = global.display.get_n_monitors();
+        const nextMonitor = (beforeMonitor + 1) % numMonitors;
 
-# Small delay to let WM process state change
-sleep 0.02
+        win.move_to_monitor(nextMonitor);
 
-# NOW read geometry (after state is cleared)
-read -r left right top bottom < <(xprop -id "$win" _NET_FRAME_EXTENTS 2>/dev/null | grep -oP '[0-9]+' | xargs)
-frame_left=${left:-0}
-frame_right=${right:-0}
-frame_top=${top:-0}
-frame_bottom=${bottom:-0}
+        const afterWorkArea = win.get_work_area_current_monitor();
+        const newWidth = Math.floor(afterWorkArea.width * widthRatio);
+        const newHeight = Math.floor(afterWorkArea.height * heightRatio);
+        const newX = afterWorkArea.x + Math.floor(afterWorkArea.width * xRatio);
+        const newY = afterWorkArea.y + Math.floor(afterWorkArea.height * yRatio);
 
-eval "$(xwininfo -id "$win" 2>/dev/null | awk '
-    /Absolute upper-left X:/ {print "win_x="$4}
-    /Absolute upper-left Y:/ {print "win_y="$4}
-    /Width:/ {print "win_w="$2}
-    /Height:/ {print "win_h="$2}
-')"
-[ -z "${win_x:-}" ] && exit 0
+        win.move_resize_frame(true, newX, newY, newWidth, newHeight);
 
-visual_x=$((win_x - frame_left))
-visual_y=$((win_y - frame_top))
-visual_w=$((win_w + frame_left + frame_right))
-visual_h=$((win_h + frame_top + frame_bottom))
+        'Moved from monitor ' + beforeMonitor + ' to ' + nextMonitor + ' | fullscreen=' + win.is_fullscreen();
+    }
+" 2>&1)
 
-if [[ -f "$CACHE" ]] && (( $(date +%s) - $(stat -c %Y "$CACHE") < CACHE_TTL )); then
-    mapfile -t monitors < "$CACHE"
-else
-    mapfile -t monitors < <(xrandr --query 2>/dev/null | awk '
-        / connected/ {
-            for(i=1; i<=NF; i++) {
-                if ($i ~ /^[0-9]+x[0-9]+\+[0-9]+\+[0-9]+$/) print $i
-            }
-        }
-    ' | sort -t'+' -k2 -n)
-    printf '%s\n' "${monitors[@]}" > "$CACHE"
-fi
-
-[ ${#monitors[@]} -lt 2 ] && exit 0
-
-win_cx=$((visual_x + visual_w / 2))
-win_cy=$((visual_y + visual_h / 2))
-
-current_idx=-1
-for i in "${!monitors[@]}"; do
-    IFS='x+' read -r mon_w mon_h mon_x mon_y <<< "${monitors[$i]}"
-    if (( win_cx >= mon_x && win_cx < mon_x + mon_w && win_cy >= mon_y && win_cy < mon_y + mon_h )); then
-        current_idx=$i
-        cur_w=$mon_w cur_h=$mon_h cur_x=$mon_x cur_y=$mon_y
-        break
+if echo "$result" | grep -q "to 1 |"; then
+    if ! echo "$result" | grep -q "fullscreen=true"; then
+        eval $(xdotool getmouselocation --shell)
+        xdotool mousemove --sync 3200 1439
+        sleep 0.1
+        xdotool mousemove $X $Y
     fi
-done
-[ "$current_idx" -lt 0 ] && exit 0
-
-target_idx=$(( (current_idx + 1) % ${#monitors[@]} ))
-IFS='x+' read -r tgt_w tgt_h tgt_x tgt_y <<< "${monitors[$target_idx]}"
-
-cur_cx_rel=$(( win_cx - cur_x ))
-cur_cy_rel=$(( win_cy - cur_y ))
-
-tgt_cx_rel=$(( cur_cx_rel * tgt_w / cur_w ))
-tgt_cy_rel=$(( cur_cy_rel * tgt_h / cur_h ))
-
-new_w=$(( win_w * tgt_w / cur_w ))
-new_h=$(( win_h * tgt_h / cur_h ))
-
-new_visual_w=$((new_w + frame_left + frame_right))
-new_visual_h=$((new_h + frame_top + frame_bottom))
-
-new_cx=$(( tgt_x + tgt_cx_rel ))
-new_cy=$(( tgt_y + tgt_cy_rel ))
-
-new_x=$(( new_cx - new_visual_w / 2 ))
-new_y=$(( new_cy - new_visual_h / 2 ))
-
-xdotool windowsize "$win" "$new_w" "$new_h"
-xdotool windowmove "$win" "$new_x" "$new_y"
+fi
