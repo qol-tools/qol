@@ -1,13 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
-source "$(dirname "$(readlink -f "$0")")/lib.sh"
 
-win=$(get_active_window) || exit 0
-read -r win_x win_y win_w win_h < <(get_window_geometry "$win")
-[ -z "$win_x" ] && exit 0
+gdbus call --session --dest org.Cinnamon --object-path /org/Cinnamon --method org.Cinnamon.Eval "
+    const win = global.display.focus_window;
+    if (!win) {
+        'ERROR: No focused window';
+    } else {
+        if (win.maximized_horizontally || win.maximized_vertically) {
+            win.unmaximize(3);
+        }
 
-read -r mon_w mon_h mon_x mon_y < <(find_window_monitor "$win_x" "$win_y" "$win_w" "$win_h") || exit 0
+        const workArea = win.get_work_area_current_monitor();
+        const newWidth = workArea.width;
+        const newHeight = Math.floor(workArea.height / 2);
+        const newX = workArea.x;
+        const newY = workArea.y + Math.floor(workArea.height / 2);
 
-unmaximize_window "$win"
-move_resize_window "$win" "$mon_x" "$((mon_y + mon_h / 2))" "$mon_w" "$((mon_h / 2))"
+        win.move_resize_frame(true, newX, newY, newWidth, newHeight);
+
+        'Snapped to bottom half';
+    }
+" 2>&1 > /dev/null
 
