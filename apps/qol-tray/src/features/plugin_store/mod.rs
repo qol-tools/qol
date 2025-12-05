@@ -17,9 +17,8 @@ impl PluginStore {
     }
 
     pub async fn start_server() -> Result<()> {
-        let ui_dir = std::env::current_dir()?.join("ui");
-        log::info!("Starting plugin server from: {:?}", ui_dir);
-        let _server = server::start_ui_server(ui_dir.to_str().unwrap()).await?;
+        log::info!("Starting plugin server with embedded UI");
+        let _server = server::start_ui_server().await?;
         log::info!("Plugin server started at http://127.0.0.1:{}", SERVER_PORT);
         std::mem::forget(_server);
         Ok(())
