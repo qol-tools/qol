@@ -1,11 +1,11 @@
-#!/bin/bash
+#!/bin/sh
 set -e
 
 case "$1" in
     configure)
         for user_home in /home/*; do
             user=$(basename "$user_home")
-            if id "$user" &>/dev/null; then
+            if id "$user" >/dev/null 2>&1; then
                 config_dir="$user_home/.config/qol-tray"
                 autostart_dir="$user_home/.config/autostart"
 
