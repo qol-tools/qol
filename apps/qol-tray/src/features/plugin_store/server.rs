@@ -10,12 +10,17 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
-use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
+use tower_http::set_header::SetResponseHeaderLayer;
 use axum::http::HeaderValue;
 use anyhow::Result;
+use rust_embed::Embed;
 
 use crate::plugins::{PluginLoader, PluginManager};
 use crate::hotkeys::trigger_reload;
+
+#[derive(Embed)]
+#[folder = "ui/"]
+struct UiAssets;
 
 #[derive(Serialize)]
 struct PluginInfo {
@@ -78,7 +83,40 @@ pub struct UiServerHandle {
     shutdown_tx: oneshot::Sender<()>,
 }
 
-pub async fn start_ui_server(static_dir: &str) -> Result<UiServerHandle> {
+async fn serve_embedded(axum::extract::Path(path): axum::extract::Path<String>) -> impl IntoResponse {
+    serve_embedded_file(&path)
+}
+
+async fn serve_embedded_index() -> impl IntoResponse {
+    serve_embedded_file("index.html")
+}
+
+fn serve_embedded_file(path: &str) -> impl IntoResponse {
+    let mime = if path.ends_with(".html") {
+        "text/html"
+    } else if path.ends_with(".css") {
+        "text/css"
+    } else if path.ends_with(".js") {
+        "application/javascript"
+    } else if path.ends_with(".png") {
+        "image/png"
+    } else if path.ends_with(".svg") {
+        "image/svg+xml"
+    } else {
+        "application/octet-stream"
+    };
+
+    match UiAssets::get(path) {
+        Some(content) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, mime)],
+            content.data.into_owned(),
+        ).into_response(),
+        None => (StatusCode::NOT_FOUND, "Not found").into_response(),
+    }
+}
+
+pub async fn start_ui_server() -> Result<UiServerHandle> {
     let plugins_dir = PluginLoader::default_plugin_dir()
         .unwrap_or_else(|_| PathBuf::from("~/.config/qol-tray/plugins"));
 
@@ -100,7 +138,6 @@ pub async fn start_ui_server(static_dir: &str) -> Result<UiServerHandle> {
         .route("/hotkeys", axum::routing::put(set_hotkeys))
         .with_state(plugins_dir_clone);
 
-    let static_service = ServeDir::new(static_dir);
     let no_cache = SetResponseHeaderLayer::overriding(
         axum::http::header::CACHE_CONTROL,
         HeaderValue::from_static("no-cache, no-store, must-revalidate"),
@@ -109,7 +146,8 @@ pub async fn start_ui_server(static_dir: &str) -> Result<UiServerHandle> {
     let app = Router::new()
         .nest("/api", api)
         .nest("/plugins", plugin_ui::router(plugins_dir))
-        .fallback_service(static_service)
+        .route("/", get(serve_embedded_index))
+        .route("/*path", get(serve_embedded))
         .layer(no_cache);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:42700").await?;
