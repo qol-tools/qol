@@ -1,0 +1,29 @@
+#!/bin/bash
+set -e
+
+case "$1" in
+    configure)
+        for user_home in /home/*; do
+            user=$(basename "$user_home")
+            if id "$user" &>/dev/null; then
+                config_dir="$user_home/.config/qol-tray"
+                autostart_dir="$user_home/.config/autostart"
+
+                if [ ! -d "$config_dir" ]; then
+                    mkdir -p "$config_dir/plugins"
+                    chown -R "$user:$user" "$config_dir"
+                fi
+
+                if [ ! -d "$autostart_dir" ]; then
+                    mkdir -p "$autostart_dir"
+                    chown "$user:$user" "$autostart_dir"
+                fi
+
+                cp /usr/share/applications/qol-tray.desktop "$autostart_dir/qol-tray.desktop"
+                chown "$user:$user" "$autostart_dir/qol-tray.desktop"
+            fi
+        done
+        ;;
+esac
+
+exit 0

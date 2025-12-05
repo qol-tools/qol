@@ -1,4 +1,4 @@
-.PHONY: build release install uninstall run clean test
+.PHONY: build release install uninstall run clean test deb
 
 build:
 	cargo build
@@ -44,3 +44,6 @@ clean:
 
 test:
 	cargo test
+
+deb: release
+	cargo deb --no-build

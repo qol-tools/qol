@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=QoL Tray
+Comment=Quality of Life Tray daemon
+Exec=/usr/bin/qol-tray
+Icon=qol-tray
+Terminal=false
+Categories=Utility;
+X-GNOME-Autostart-enabled=true
+StartupNotify=false
