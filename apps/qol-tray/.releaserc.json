@@ -4,10 +4,10 @@
     "@semantic-release/commit-analyzer",
     "@semantic-release/release-notes-generator",
     ["@semantic-release/exec", {
-      "prepareCmd": "sed -i 's/^version = \"[^\"]*\"/version = \"${nextRelease.version}\"/' Cargo.toml && make deb"
+      "prepareCmd": "sed -i 's/^version = \"[^\"]*\"/version = \"${nextRelease.version}\"/' Cargo.toml && cargo update -p qol-tray && make deb"
     }],
     ["@semantic-release/git", {
-      "assets": ["Cargo.toml"],
+      "assets": ["Cargo.toml", "Cargo.lock"],
       "message": "chore(release): ${nextRelease.version}"
     }],
     ["@semantic-release/github", {
