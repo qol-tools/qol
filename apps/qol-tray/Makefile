@@ -21,7 +21,8 @@ deb:
 	cargo deb --no-build
 
 release:
-	@OLD=$$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/'); \
+	@cargo test && \
+	OLD=$$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/'); \
 	MAJOR=$$(echo $$OLD | cut -d. -f1); \
 	MINOR=$$(echo $$OLD | cut -d. -f2); \
 	PATCH=$$(echo $$OLD | cut -d. -f3); \
