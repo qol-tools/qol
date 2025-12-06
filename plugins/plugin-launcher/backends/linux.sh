@@ -42,4 +42,23 @@ search_and_filter() {
     echo "$results"
 }
 
-search_and_filter | head -n "$limit"
+prioritize_results() {
+    local desktop=()
+    local executable=()
+    local other=()
+
+    while IFS= read -r path; do
+        [[ -z "$path" ]] && continue
+        if [[ "$path" == *.desktop ]]; then
+            desktop+=("$path")
+        elif [[ -x "$path" && -f "$path" ]]; then
+            executable+=("$path")
+        else
+            other+=("$path")
+        fi
+    done
+
+    printf '%s\n' "${desktop[@]}" "${executable[@]}" "${other[@]}"
+}
+
+search_and_filter | prioritize_results | head -n "$limit"
