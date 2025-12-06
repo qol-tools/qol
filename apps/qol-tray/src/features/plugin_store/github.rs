@@ -1,3 +1,4 @@
+use crate::paths;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -6,18 +7,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const PLUGIN_PREFIX: &str = "plugin-";
 const CACHE_TTL_SECS: u64 = 3600;
 
-fn config_dir() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("qol-tray")
-}
-
 fn token_path() -> PathBuf {
-    config_dir().join(".github-token")
+    paths::github_token_path().unwrap_or_else(|_| PathBuf::from(".github-token"))
 }
 
 fn cache_path() -> PathBuf {
-    config_dir().join(".plugin-cache.json")
+    paths::plugin_cache_path().unwrap_or_else(|_| PathBuf::from(".plugin-cache.json"))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -329,14 +324,39 @@ mod tests {
     }
 
     #[test]
-    fn is_plugin_repo_returns_false_for_non_plugin_prefix() {
-        // Arrange
-        let names = ["screen-recorder", "my-plugin", "pluginstore", ""];
+    fn is_plugin_repo_returns_false_for_no_prefix() {
+        // Act
+        let result = is_plugin_repo("screen-recorder");
 
-        // Act & Assert
-        for name in names {
-            assert!(!is_plugin_repo(name), "Expected false for '{}'", name);
-        }
+        // Assert
+        assert!(!result);
+    }
+
+    #[test]
+    fn is_plugin_repo_returns_false_for_wrong_prefix() {
+        // Act
+        let result = is_plugin_repo("my-plugin");
+
+        // Assert
+        assert!(!result);
+    }
+
+    #[test]
+    fn is_plugin_repo_returns_false_for_partial_prefix() {
+        // Act
+        let result = is_plugin_repo("pluginstore");
+
+        // Assert
+        assert!(!result);
+    }
+
+    #[test]
+    fn is_plugin_repo_returns_false_for_empty_string() {
+        // Act
+        let result = is_plugin_repo("");
+
+        // Assert
+        assert!(!result);
     }
 
     #[test]

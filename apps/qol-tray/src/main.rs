@@ -1,9 +1,11 @@
-mod menu;
-mod plugins;
-mod tray;
 mod features;
 mod hotkeys;
+mod menu;
+mod paths;
+mod plugins;
+mod tray;
 mod updates;
+mod version;
 
 use anyhow::Result;
 use plugins::{PluginManager, PluginLoader};
