@@ -2,12 +2,6 @@
 
 Universal file search launcher for qol-tray.
 
-## Installation
-
-```bash
-git clone https://github.com/qol-tools/plugin-launcher ~/.config/qol-tray/plugins/plugin-launcher
-```
-
 ## Usage
 
 Trigger via hotkey, then:
@@ -20,18 +14,25 @@ Trigger via hotkey, then:
 | `Alt+Enter` | Copy path to clipboard |
 | `Esc` | Close |
 
-## Search Backends
+## Features
 
-| Platform | Backend |
-|----------|---------|
-| Linux | plocate |
-| macOS | mdfind (Spotlight) |
-| Windows | Everything CLI / Windows Search |
+- Instant startup
+- Window appears on monitor with focused window
+- Multi-word search support
+- Searches mounted drives under `/media/`
 
-## Building
+## Dependencies
+
+| Platform | Requirements | Status |
+|----------|--------------|--------|
+| Linux | `plocate`, `xdotool` | ✓ Tested |
+| macOS | Spotlight (built-in) | Untested |
+| Windows | [Everything CLI](https://www.voidtools.com/support/everything/command_line_interface/) | Untested |
+
+### Linux: Index Mounted Drives
 
 ```bash
-cargo build --release
+~/.config/qol-tray/plugins/plugin-launcher/backends/update-dbs.sh
 ```
 
 ## License
