@@ -234,5 +234,13 @@ mod tests {
 
         // Assert
         assert_eq!(result, Some(expected_config));
+
+        // Cleanup - restore_from_backup writes to real plugin dir
+        let _ = std::fs::remove_dir_all(
+            PluginConfigManager::plugin_config_path("test-plugin")
+                .unwrap()
+                .parent()
+                .unwrap(),
+        );
     }
 }
