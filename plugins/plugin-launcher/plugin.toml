@@ -3,13 +3,15 @@ name = "Launcher"
 description = "Universal search with action modifiers"
 version = "0.1.0"
 author = "KMRH47"
-init = "init.sh"
+
+[daemon]
+enabled = true
+command = "target/release/launcher"
 
 [menu]
 label = "Launcher"
 items = [
     { type = "action", id = "open", label = "Open Launcher", action = "run" },
-    { type = "action", id = "settings", label = "Settings...", action = "settings" },
 ]
 
 [[dependencies.binaries]]

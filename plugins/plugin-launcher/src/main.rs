@@ -597,7 +597,7 @@ fn main() {
             .unwrap()
     };
 
-    if !env::args().any(|a| a == "--preload") {
+    if env::args().any(|a| a == "--show") {
         let _ = proxy.send_event(UserEvent::Show);
     }
 

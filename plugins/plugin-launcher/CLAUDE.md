@@ -18,18 +18,17 @@ This is a qol-tray plugin providing a universal file search launcher using wry (
 
 ### Core Flow
 
-1. `init.sh` runs on qol-tray startup → launches daemon with `--preload` (WebView ready but hidden)
+1. qol-tray starts daemon via `[daemon]` config → WebView ready but hidden
 2. User triggers hotkey → `run.sh` sends "show" via Unix socket → instant window display
 3. User types query → JS sends IPC to Rust → background thread calls platform search backend
 4. Results returned via `evaluate_script` → JS renders results
-5. User selects result with modifier key → Rust executes action → window hides (not closed)
+5. User selects result with modifier key → Rust records frequency, executes action → window hides
 
 ### Key Components
 
-- `src/main.rs` - wry WebView setup, IPC handling, daemon mode, window positioning
+- `src/main.rs` - wry WebView setup, IPC handling, daemon mode, window positioning, frequency tracking
 - `ui/` - Embedded at compile time via `include_str!()`
 - `backends/` - Platform-specific search scripts (plocate, mdfind, Everything)
-- `init.sh` - Preloads daemon on startup
 - `run.sh` - Triggers show via socket
 
 ### Key Functions
