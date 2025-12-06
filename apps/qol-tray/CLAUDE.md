@@ -134,12 +134,18 @@ Frontend-specific:
 
 ### Test Style
 
-- **AAA Pattern** - All tests follow Arrange-Act-Assert pattern with explicit comments
-- **Arrange** - Set up test data and dependencies
-- **Act** - Invoke the system under test
-- **Assert** - Verify expected behavior
-- **Never mix** - Keep each section separate, no Arrange+Act or Act+Assert mixing
-- **Descriptive names** - Use full snake_case descriptions that explain what is being tested
+- **Table-driven tests** - Consolidate similar test cases into a single test with a cases array:
+  ```rust
+  let cases = [("input1", expected1), ("input2", expected2)];
+  for (input, expected) in cases {
+      assert_eq!(func(input), expected, "input: {}", input);
+  }
+  ```
+- **Context in assertions** - Always include identifying info in assertion messages for debugging failed iterations
+- **No tests for thin wrappers** - If a function just calls already-tested functions, don't test it separately. Example: `fn foo(x) { bar(x).baz() }` doesn't need tests if `bar()` and `baz()` are tested.
+- **Meaningful assertions** - Tests must verify specific behavior. Never just assert `result.is_ok()` - check the actual value.
+- **Skip trivial Arrange** - For simple inputs, inline them. Only use explicit Arrange section for complex setup.
+- **Descriptive names** - Use snake_case that explains what is being tested: `version_parsing_extracts_parts` not `test_parse`
 
 ## Icon Management
 
