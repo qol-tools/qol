@@ -2,7 +2,14 @@
 
 ## Current State
 
-qol-tray is a pluggable system tray daemon. Single tray icon opens browser UI at `http://127.0.0.1:42700` for plugin management.
+qol-tray v1.4.3 - Pluggable system tray daemon. Single tray icon opens browser UI at `http://127.0.0.1:42700` for plugin management.
+
+### Recent Changes (Dec 2025)
+- Extracted shared modules: `src/version.rs`, `src/paths.rs`
+- Flattened nested code to max 1 level (icon.rs, linux.rs, hotkeys/mod.rs)
+- Prevented mutex panics in server.rs (proper error handling)
+- Removed unused crates (thiserror, notify, image)
+- Detached spawned processes from terminal stdio
 
 ### What Works
 - System tray icon (SNI protocol)

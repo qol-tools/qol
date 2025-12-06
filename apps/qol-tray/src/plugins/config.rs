@@ -57,34 +57,18 @@ impl PluginConfigManager {
 
     fn restore_from_backup(&self, plugin_id: &str) -> Result<Option<serde_json::Value>> {
         let configs = self.load_configs()?;
-
-        let config = match configs.configs.get(plugin_id) {
-            Some(c) => c.clone(),
-            None => return Ok(None),
+        let Some(config) = configs.configs.get(plugin_id).cloned() else {
+            return Ok(None);
         };
 
         log::info!("Restoring config for plugin from backup: {}", plugin_id);
-
-        let plugin_path = Self::plugin_config_path(plugin_id)?;
-        if let Some(parent) = plugin_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let content = serde_json::to_string_pretty(&config)?;
-        std::fs::write(&plugin_path, content)?;
-
+        write_plugin_config(plugin_id, &config)?;
         log::info!("Config restored for plugin: {}", plugin_id);
         Ok(Some(config))
     }
 
     pub fn set_config(&self, plugin_id: &str, config: serde_json::Value) -> Result<()> {
-        let plugin_path = Self::plugin_config_path(plugin_id)?;
-        if let Some(parent) = plugin_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let content = serde_json::to_string_pretty(&config)?;
-        std::fs::write(&plugin_path, &content)?;
+        write_plugin_config(plugin_id, &config)?;
 
         let mut configs = self.load_configs()?;
         configs.configs.insert(plugin_id.to_string(), config);
@@ -92,6 +76,21 @@ impl PluginConfigManager {
 
         Ok(())
     }
+}
+
+fn write_plugin_config(plugin_id: &str, config: &serde_json::Value) -> Result<()> {
+    let plugin_path = PluginConfigManager::plugin_config_path(plugin_id)?;
+    ensure_parent_dir(&plugin_path)?;
+    let content = serde_json::to_string_pretty(config)?;
+    std::fs::write(&plugin_path, content)?;
+    Ok(())
+}
+
+fn ensure_parent_dir(path: &std::path::Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
