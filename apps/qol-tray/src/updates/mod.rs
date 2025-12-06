@@ -134,74 +134,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn is_newer_version_returns_true_for_major_bump() {
-        // Arrange
-        let latest = "2.0.0";
-        let current = "1.0.0";
+    fn is_newer_version_comparisons() {
+        let cases = [
+            // (latest, current, expected)
+            ("2.0.0", "1.0.0", true),   // major bump
+            ("1.1.0", "1.0.0", true),   // minor bump
+            ("1.0.1", "1.0.0", true),   // patch bump
+            ("1.0.0.1", "1.0.0", true), // extra segment
+            ("1.0.0", "1.0.0", false),  // same version
+            ("1.0.0", "2.0.0", false),  // older version
+            ("1.0", "1.0.0", false),    // shorter version
+        ];
 
-        // Act
-        let result = is_newer_version(latest, current);
-
-        // Assert
-        assert!(result);
-    }
-
-    #[test]
-    fn is_newer_version_returns_true_for_minor_bump() {
-        // Arrange
-        let latest = "1.1.0";
-        let current = "1.0.0";
-
-        // Act
-        let result = is_newer_version(latest, current);
-
-        // Assert
-        assert!(result);
-    }
-
-    #[test]
-    fn is_newer_version_returns_true_for_patch_bump() {
-        // Arrange
-        let latest = "1.0.1";
-        let current = "1.0.0";
-
-        // Act
-        let result = is_newer_version(latest, current);
-
-        // Assert
-        assert!(result);
-    }
-
-    #[test]
-    fn is_newer_version_returns_false_for_same_version() {
-        // Arrange
-        let latest = "1.0.0";
-        let current = "1.0.0";
-
-        // Act
-        let result = is_newer_version(latest, current);
-
-        // Assert
-        assert!(!result);
-    }
-
-    #[test]
-    fn is_newer_version_returns_false_for_older_version() {
-        // Arrange
-        let latest = "1.0.0";
-        let current = "2.0.0";
-
-        // Act
-        let result = is_newer_version(latest, current);
-
-        // Assert
-        assert!(!result);
-    }
-
-    #[test]
-    fn is_newer_version_handles_different_lengths() {
-        // Arrange & Act & Assert
-        assert!(is_newer_version("1.0.0.1", "1.0.0"));
-        assert!(!is_newer_version("1.0", "1.0.0"));
+        for (latest, current, expected) in cases {
+            assert_eq!(
+                is_newer_version(latest, current),
+                expected,
+                "is_newer_version({:?}, {:?})",
+                latest,
+                current
+            );
+        }
     }
 }
