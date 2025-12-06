@@ -28,7 +28,7 @@ async fn main() -> Result<()> {
     feature_registry.register(Box::new(features::plugin_store::PluginStore::new()));
     let feature_registry = Arc::new(feature_registry);
 
-    features::plugin_store::PluginStore::start_server().await?;
+    features::plugin_store::PluginStore::start_server(plugin_manager.clone()).await?;
 
     if let Ok(plugins_dir) = PluginLoader::default_plugin_dir() {
         if let Err(e) = hotkeys::start_hotkey_listener(plugins_dir) {

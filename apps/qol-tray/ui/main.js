@@ -2,32 +2,45 @@ import { render as renderSidebar } from './components/sidebar.js';
 import * as pluginsView from './views/plugins.js';
 import * as storeView from './views/store.js';
 import * as hotkeysView from './views/hotkeys.js';
+import * as devView from './views/dev.js';
 
-const VIEWS = {
+const BASE_VIEWS = {
     plugins: pluginsView,
     store: storeView,
     hotkeys: hotkeysView
 };
 
-const VIEW_ORDER = ['plugins', 'store', 'hotkeys'];
+const BASE_VIEW_ORDER = ['plugins', 'store', 'hotkeys'];
 
+let VIEWS = { ...BASE_VIEWS };
+let VIEW_ORDER = [...BASE_VIEW_ORDER];
+let devEnabled = false;
 let activeViewId = 'plugins';
 let activeView = null;
 
-function init() {
+async function init() {
     const sidebarEl = document.getElementById('sidebar');
-    const contentEl = document.getElementById('content');
-    
+
+    try {
+        const res = await fetch('/api/dev/enabled');
+        devEnabled = res.ok && await res.json();
+    } catch { devEnabled = false; }
+
+    if (devEnabled) {
+        VIEWS = { ...BASE_VIEWS, dev: devView };
+        VIEW_ORDER = [...BASE_VIEW_ORDER, 'dev'];
+    }
+
     updateSidebar();
     switchView('plugins');
-    
+
     document.addEventListener('keydown', handleKeydown);
     sidebarEl.addEventListener('click', handleSidebarClick);
 }
 
 function updateSidebar() {
     const sidebarEl = document.getElementById('sidebar');
-    sidebarEl.innerHTML = renderSidebar(activeViewId);
+    sidebarEl.innerHTML = renderSidebar(activeViewId, VIEW_ORDER);
 }
 
 function switchView(viewId) {

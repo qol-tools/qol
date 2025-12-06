@@ -1,13 +1,14 @@
-export function render(activeViewId) {
-    const views = [
-        { id: 'plugins', label: 'Plugins' },
-        { id: 'store', label: 'Store' },
-        { id: 'hotkeys', label: 'Hotkeys' }
-    ];
-    
-    return views.map(view => `
-        <div class="sidebar-item ${view.id === activeViewId ? 'active' : ''}" data-view="${view.id}">
-            ${view.label}
+const LABELS = {
+    plugins: 'Plugins',
+    store: 'Store',
+    hotkeys: 'Hotkeys',
+    dev: 'Developer'
+};
+
+export function render(activeViewId, viewOrder = ['plugins', 'store', 'hotkeys']) {
+    return viewOrder.map(id => `
+        <div class="sidebar-item ${id === activeViewId ? 'active' : ''}" data-view="${id}">
+            ${LABELS[id] || id}
         </div>
     `).join('');
 }
