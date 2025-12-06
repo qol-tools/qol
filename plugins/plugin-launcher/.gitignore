@@ -1,0 +1,5 @@
+/target
+Cargo.lock
+launcher
+launcher.exe
+*.db
