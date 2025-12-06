@@ -580,10 +580,3 @@ export function onFocus() {
 
 export function onBlur() {
 }
-
-export function cleanup() {
-    const list = document.getElementById('hotkeys-list');
-    if (list) {
-        list.removeEventListener('click', handleClick);
-    }
-}

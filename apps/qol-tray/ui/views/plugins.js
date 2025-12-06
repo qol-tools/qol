@@ -398,10 +398,3 @@ export function onFocus() {
 export function onBlur() {
 }
 
-export function cleanup() {
-    const grid = document.getElementById('plugins-grid');
-    if (grid) {
-        grid.removeEventListener('click', handleClick);
-    }
-}
-
