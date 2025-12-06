@@ -26,9 +26,9 @@ fn add_notification_dot(data: &mut [u8], size: u32) {
 
             if dist_sq <= dot_radius * dot_radius {
                 let idx = ((y as u32 * size + x as u32) * 4) as usize;
-                data[idx] = 220;
-                data[idx + 1] = 50;
-                data[idx + 2] = 50;
+                data[idx] = 230;
+                data[idx + 1] = 150;
+                data[idx + 2] = 0;
                 data[idx + 3] = 255;
             }
         }
