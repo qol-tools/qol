@@ -255,7 +255,7 @@ impl GitHubClient {
 }
 
 fn is_plugin_repo(name: &str) -> bool {
-    name.starts_with(PLUGIN_PREFIX)
+    name.starts_with(PLUGIN_PREFIX) && name != "plugin-template"
 }
 
 fn filter_plugin_repos(repos: &[GitHubRepo]) -> Vec<&GitHubRepo> {
