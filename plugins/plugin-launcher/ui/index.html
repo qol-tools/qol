@@ -3,17 +3,81 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Launcher</title>
+    <title>Launcher Settings</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div id="app">
-        <div class="search-container">
-            <input type="text" id="search" placeholder="Search files..." autofocus>
-            <div class="action-hint" id="action-hint"></div>
+    <div class="container">
+        <header>
+            <h1>Launcher</h1>
+            <p class="subtitle">Configure search ranking behavior</p>
+        </header>
+
+        <section class="settings-section">
+            <h2>Frequency Learning</h2>
+            <div class="setting-row">
+                <label for="half-life">Memory Half-Life (days)</label>
+                <input type="number" id="half-life" min="1" max="90" value="7">
+                <span class="hint">How long until usage frequency fades by half</span>
+            </div>
+            <div class="setting-row">
+                <label for="frequency-bonus">Frequency Boost</label>
+                <input type="number" id="frequency-bonus" min="0" max="2000" step="50" value="500">
+                <span class="hint">Score bonus for frequently-used items (0 = disabled)</span>
+            </div>
+        </section>
+
+        <section class="settings-section">
+            <h2>Result Ranking</h2>
+            <div class="setting-row">
+                <label class="toggle-label">
+                    <input type="checkbox" id="prefer-apps" checked>
+                    <span>Prefer Applications</span>
+                </label>
+                <span class="hint">Rank .desktop files higher than regular files</span>
+            </div>
+            <div class="setting-row">
+                <label class="toggle-label">
+                    <input type="checkbox" id="penalize-hidden" checked>
+                    <span>Deprioritize Hidden Paths</span>
+                </label>
+                <span class="hint">Rank items in hidden directories lower</span>
+            </div>
+            <div class="setting-row">
+                <label for="depth-penalty">Path Depth Penalty</label>
+                <input type="number" id="depth-penalty" min="0" max="20" value="2">
+                <span class="hint">Penalty per directory level (0 = no penalty)</span>
+            </div>
+        </section>
+
+        <section class="settings-section">
+            <h2>Match Scoring</h2>
+            <div class="setting-row">
+                <label for="exact-bonus">Exact Match Bonus</label>
+                <input type="number" id="exact-bonus" min="0" max="500" step="10" value="0">
+                <span class="hint">Lower score = higher rank (0 = best)</span>
+            </div>
+            <div class="setting-row">
+                <label for="prefix-penalty">Prefix Match Penalty</label>
+                <input type="number" id="prefix-penalty" min="0" max="500" step="10" value="100">
+            </div>
+            <div class="setting-row">
+                <label for="contains-penalty">Contains Match Penalty</label>
+                <input type="number" id="contains-penalty" min="0" max="500" step="10" value="200">
+            </div>
+        </section>
+
+        <div class="actions">
+            <button id="reset-btn" class="secondary">Reset to Defaults</button>
+            <button id="save-btn" class="primary">Save Settings</button>
+            <span id="save-status"></span>
         </div>
-        <div id="results"></div>
+
+        <footer class="help">
+            <p>Lower scores rank higher. Changes take effect on next search.</p>
+        </footer>
     </div>
-    <script src="app.js"></script>
+
+    <script type="module" src="app.js"></script>
 </body>
 </html>

@@ -1,145 +1,113 @@
-let results = [];
-let selectedIndex = 0;
-let debounceTimer = null;
+const PLUGIN_ID = window.location.pathname.split('/')[2];
+const CONFIG_URL = `/api/plugins/${PLUGIN_ID}/config`;
 
-const searchInput = document.getElementById('search');
-const resultsContainer = document.getElementById('results');
-const actionHint = document.getElementById('action-hint');
-
-function renderResults() {
-    if (results.length === 0) {
-        resultsContainer.innerHTML = `
-            <div class="empty-state">
-                <div>Type to search files and directories</div>
-                <div class="keyboard-hints">
-                    <span><kbd>Enter</kbd> Open</span>
-                    <span><kbd>Ctrl+Enter</kbd> Terminal</span>
-                    <span><kbd>Shift+Enter</kbd> Folder</span>
-                    <span><kbd>Alt+Enter</kbd> Copy</span>
-                    <span><kbd>Esc</kbd> Close</span>
-                </div>
-            </div>
-        `;
-        return;
-    }
-
-    resultsContainer.innerHTML = results.map((result, index) => `
-        <div class="result-item ${index === selectedIndex ? 'selected' : ''}" data-index="${index}">
-            ${result.icon
-                ? `<img class="result-icon" src="${result.icon}" onerror="this.outerHTML='<span class=\\'result-icon\\'>${result.is_dir ? '📁' : '📄'}</span>'">`
-                : `<span class="result-icon">${result.is_dir ? '📁' : '📄'}</span>`
-            }
-            <div class="result-info">
-                <div class="result-name">${escapeHtml(result.name)}</div>
-                <div class="result-path">${escapeHtml(result.path)}</div>
-            </div>
-        </div>
-    `).join('');
-
-    const selected = resultsContainer.querySelector('.selected');
-    if (selected) {
-        selected.scrollIntoView({ block: 'nearest' });
-    }
-}
-
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-function search(query) {
-    if (!query) {
-        results = [];
-        renderResults();
-        return;
-    }
-    window.ipc.postMessage(JSON.stringify({ type: 'search', query }));
-}
-
-window.onSearchResults = function(data) {
-    results = data;
-    selectedIndex = 0;
-    renderResults();
+const DEFAULTS = {
+    half_life_days: 7,
+    frequency_bonus: 500,
+    prefer_apps: true,
+    penalize_hidden: true,
+    depth_penalty: 2,
+    exact_bonus: 0,
+    prefix_penalty: 100,
+    contains_penalty: 200
 };
 
-function executeSelected(action) {
-    if (results.length === 0) return;
-    const selected = results[selectedIndex];
-    window.ipc.postMessage(JSON.stringify({
-        type: 'execute',
-        path: selected.path,
-        action: action
-    }));
+const elements = {
+    halfLife: document.getElementById('half-life'),
+    frequencyBonus: document.getElementById('frequency-bonus'),
+    preferApps: document.getElementById('prefer-apps'),
+    penalizeHidden: document.getElementById('penalize-hidden'),
+    depthPenalty: document.getElementById('depth-penalty'),
+    exactBonus: document.getElementById('exact-bonus'),
+    prefixPenalty: document.getElementById('prefix-penalty'),
+    containsPenalty: document.getElementById('contains-penalty'),
+    saveBtn: document.getElementById('save-btn'),
+    resetBtn: document.getElementById('reset-btn'),
+    saveStatus: document.getElementById('save-status')
+};
+
+let config = { ...DEFAULTS };
+
+async function loadConfig() {
+    try {
+        const response = await fetch(CONFIG_URL);
+        if (response.ok) {
+            const loaded = await response.json();
+            config = { ...DEFAULTS, ...loaded };
+        }
+    } catch (e) {
+        console.warn('Could not load config, using defaults');
+    }
+    applyConfigToUI();
 }
 
-function close() {
-    window.ipc.postMessage(JSON.stringify({ type: 'close' }));
+function applyConfigToUI() {
+    elements.halfLife.value = config.half_life_days;
+    elements.frequencyBonus.value = config.frequency_bonus;
+    elements.preferApps.checked = config.prefer_apps;
+    elements.penalizeHidden.checked = config.penalize_hidden;
+    elements.depthPenalty.value = config.depth_penalty;
+    elements.exactBonus.value = config.exact_bonus;
+    elements.prefixPenalty.value = config.prefix_penalty;
+    elements.containsPenalty.value = config.contains_penalty;
 }
 
-function updateActionHint(e) {
-    if (e.ctrlKey) {
-        actionHint.textContent = 'Terminal';
-    } else if (e.shiftKey) {
-        actionHint.textContent = 'Open Folder';
-    } else if (e.altKey) {
-        actionHint.textContent = 'Copy Path';
-    } else {
-        actionHint.textContent = '';
+function collectConfigFromUI() {
+    return {
+        half_life_days: parseInt(elements.halfLife.value, 10) || DEFAULTS.half_life_days,
+        frequency_bonus: parseInt(elements.frequencyBonus.value, 10) || 0,
+        prefer_apps: elements.preferApps.checked,
+        penalize_hidden: elements.penalizeHidden.checked,
+        depth_penalty: parseInt(elements.depthPenalty.value, 10) || 0,
+        exact_bonus: parseInt(elements.exactBonus.value, 10) || 0,
+        prefix_penalty: parseInt(elements.prefixPenalty.value, 10) || 0,
+        contains_penalty: parseInt(elements.containsPenalty.value, 10) || 0
+    };
+}
+
+async function saveConfig() {
+    const newConfig = collectConfigFromUI();
+
+    elements.saveBtn.disabled = true;
+    elements.saveStatus.textContent = 'Saving...';
+
+    try {
+        const response = await fetch(CONFIG_URL, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(newConfig, null, 2)
+        });
+
+        if (!response.ok) throw new Error('Save failed');
+
+        config = newConfig;
+        elements.saveStatus.textContent = 'Saved';
+        setTimeout(() => { elements.saveStatus.textContent = ''; }, 2000);
+    } catch (e) {
+        elements.saveStatus.textContent = 'Failed to save';
+        elements.saveStatus.style.color = '#ff6b6b';
+        setTimeout(() => {
+            elements.saveStatus.textContent = '';
+            elements.saveStatus.style.color = '';
+        }, 3000);
+    } finally {
+        elements.saveBtn.disabled = false;
     }
 }
 
-searchInput.addEventListener('input', (e) => {
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
-        search(e.target.value.trim());
-    }, 100);
-});
+function resetToDefaults() {
+    config = { ...DEFAULTS };
+    applyConfigToUI();
+}
+
+elements.saveBtn.addEventListener('click', saveConfig);
+elements.resetBtn.addEventListener('click', resetToDefaults);
 
 document.addEventListener('keydown', (e) => {
-    updateActionHint(e);
-
-    switch (e.key) {
-        case 'Escape':
-            close();
-            break;
-        case 'ArrowDown':
-            e.preventDefault();
-            if (results.length > 0) {
-                selectedIndex = (selectedIndex + 1) % results.length;
-                renderResults();
-            }
-            break;
-        case 'ArrowUp':
-            e.preventDefault();
-            if (results.length > 0) {
-                selectedIndex = (selectedIndex - 1 + results.length) % results.length;
-                renderResults();
-            }
-            break;
-        case 'Enter':
-            e.preventDefault();
-            if (e.ctrlKey) {
-                executeSelected('terminal');
-            } else if (e.shiftKey) {
-                executeSelected('folder');
-            } else if (e.altKey) {
-                executeSelected('copy');
-            } else {
-                executeSelected('open');
-            }
-            break;
+    if (e.key === 's' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        saveConfig();
     }
 });
 
-document.addEventListener('keyup', updateActionHint);
-
-resultsContainer.addEventListener('click', (e) => {
-    const item = e.target.closest('.result-item');
-    if (item) {
-        selectedIndex = parseInt(item.dataset.index, 10);
-        executeSelected('open');
-    }
-});
-
-renderResults();
+loadConfig();
