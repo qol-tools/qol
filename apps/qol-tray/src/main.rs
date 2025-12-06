@@ -3,12 +3,14 @@ mod plugins;
 mod tray;
 mod features;
 mod hotkeys;
+mod updates;
 
 use anyhow::Result;
 use plugins::{PluginManager, PluginLoader};
 use tray::TrayManager;
 use features::FeatureRegistry;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::broadcast;
 
 #[tokio::main]
@@ -17,6 +19,21 @@ async fn main() -> Result<()> {
         .init();
 
     log::info!("Starting QoL Tray daemon...");
+
+    let update_available = match tokio::time::timeout(
+        Duration::from_secs(2),
+        updates::check_for_updates()
+    ).await {
+        Ok(Ok(has_update)) => has_update,
+        Ok(Err(e)) => {
+            log::debug!("Update check failed: {}", e);
+            false
+        }
+        Err(_) => {
+            log::debug!("Update check timed out");
+            false
+        }
+    };
 
     let (shutdown_tx, mut shutdown_rx) = broadcast::channel::<()>(1);
 
@@ -36,7 +53,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    let _tray = TrayManager::new(plugin_manager.clone(), feature_registry, shutdown_tx)?;
+    let _tray = TrayManager::new(plugin_manager.clone(), feature_registry, shutdown_tx, update_available)?;
 
     log::info!("QoL Tray daemon started successfully");
 

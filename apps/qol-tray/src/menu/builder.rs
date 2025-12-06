@@ -1,6 +1,7 @@
 use super::router::{EventRouter, EventRoute, EventPattern, EventHandler, HandlerResult};
 use crate::plugins::{PluginManager, MenuItem as PluginMenuItem};
 use crate::features::FeatureRegistry;
+use crate::updates;
 use anyhow::Result;
 use std::sync::{Arc, Mutex};
 use tray_icon::menu::{Menu, MenuItem, CheckMenuItem, Submenu, PredefinedMenuItem};
@@ -8,6 +9,7 @@ use tray_icon::menu::{Menu, MenuItem, CheckMenuItem, Submenu, PredefinedMenuItem
 pub fn build_menu(
     _plugin_manager: Arc<Mutex<PluginManager>>,
     feature_registry: Arc<FeatureRegistry>,
+    update_available: bool,
 ) -> Result<(Menu, EventRouter)> {
     let menu = Menu::new();
     let mut all_routes = Vec::new();
@@ -63,6 +65,24 @@ pub fn build_menu(
     }
 
     let _ = menu.append(&PredefinedMenuItem::separator());
+
+    if update_available {
+        let version_label = updates::latest_version()
+            .map(|v| format!("⬆ Update to v{}", v))
+            .unwrap_or_else(|| "⬆ Update Available".to_string());
+        let update_item = MenuItem::with_id("__update__", &version_label, true, None);
+        let _ = menu.append(&update_item);
+
+        let update_route = EventRoute {
+            pattern: EventPattern::Exact("__update__".to_string()),
+            handler: EventHandler::Sync(Box::new(|_| {
+                log::info!("Opening releases page");
+                let _ = updates::open_releases_page();
+                Ok(HandlerResult::Continue)
+            })),
+        };
+        all_routes.push(update_route);
+    }
 
     let quit_item = MenuItem::with_id("__quit__", "Quit", true, None);
     let _ = menu.append(&quit_item);
