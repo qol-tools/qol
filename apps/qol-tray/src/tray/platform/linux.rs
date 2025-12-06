@@ -11,6 +11,7 @@ pub fn create_tray(
     feature_registry: Arc<FeatureRegistry>,
     shutdown_tx: broadcast::Sender<()>,
     icon: Icon,
+    update_available: bool,
 ) -> Result<()> {
     std::thread::spawn(move || {
         if gtk::init().is_err() {
@@ -18,7 +19,7 @@ pub fn create_tray(
             return;
         }
 
-        let (menu, router) = match crate::menu::builder::build_menu(plugin_manager, feature_registry) {
+        let (menu, router) = match crate::menu::builder::build_menu(plugin_manager, feature_registry, update_available) {
             Ok(result) => result,
             Err(e) => {
                 log::error!("Failed to build menu: {}", e);
