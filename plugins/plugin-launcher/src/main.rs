@@ -682,76 +682,40 @@ mod tests {
 
         #[test]
         fn extracts_filename_from_absolute_path() {
-            // Arrange
-            let line = "/home/user/documents/file.txt";
-
-            // Act
-            let result = parse_search_result(line);
-
-            // Assert
+            let result = parse_search_result("/a/b/c/file.txt");
             assert_eq!(result.name, "file.txt");
-            assert_eq!(result.path, "/home/user/documents/file.txt");
+            assert_eq!(result.path, "/a/b/c/file.txt");
         }
 
         #[test]
         fn handles_path_with_spaces() {
-            // Arrange
-            let line = "/home/user/my documents/my file.txt";
-
-            // Act
-            let result = parse_search_result(line);
-
-            // Assert
-            assert_eq!(result.name, "my file.txt");
+            let result = parse_search_result("/a/b c/d e.txt");
+            assert_eq!(result.name, "d e.txt");
         }
 
         #[test]
         fn handles_root_path() {
-            // Arrange
-            let line = "/";
-
-            // Act
-            let result = parse_search_result(line);
-
-            // Assert
+            let result = parse_search_result("/");
             assert_eq!(result.name, "/");
             assert_eq!(result.path, "/");
         }
 
         #[test]
         fn handles_hidden_file() {
-            // Arrange
-            let line = "/home/user/.bashrc";
-
-            // Act
-            let result = parse_search_result(line);
-
-            // Assert
-            assert_eq!(result.name, ".bashrc");
+            let result = parse_search_result("/a/b/.hidden");
+            assert_eq!(result.name, ".hidden");
         }
 
         #[test]
         fn handles_deeply_nested_path() {
-            // Arrange
-            let line = "/a/b/c/d/e/f/g/h/i/file.rs";
-
-            // Act
-            let result = parse_search_result(line);
-
-            // Assert
+            let result = parse_search_result("/a/b/c/d/e/f/g/h/i/file.rs");
             assert_eq!(result.name, "file.rs");
             assert_eq!(result.path, "/a/b/c/d/e/f/g/h/i/file.rs");
         }
 
         #[test]
         fn handles_unicode_filename() {
-            // Arrange
-            let line = "/home/user/文档/файл.txt";
-
-            // Act
-            let result = parse_search_result(line);
-
-            // Assert
+            let result = parse_search_result("/a/b/文档/файл.txt");
             assert_eq!(result.name, "файл.txt");
         }
     }
@@ -868,7 +832,7 @@ mod tests {
         #[test]
         fn deserializes_execute_message() {
             // Arrange
-            let json = r#"{"type": "execute", "path": "/home/user/file.txt", "action": "open"}"#;
+            let json = r#"{"type": "execute", "path": "/a/b/file.txt", "action": "open"}"#;
 
             // Act
             let msg: IpcMessage = serde_json::from_str(json).unwrap();
@@ -876,7 +840,7 @@ mod tests {
             // Assert
             match msg {
                 IpcMessage::Execute { path, action } => {
-                    assert_eq!(path, "/home/user/file.txt");
+                    assert_eq!(path, "/a/b/file.txt");
                     assert_eq!(action, "open");
                 }
                 _ => panic!("Expected Execute variant"),
@@ -975,52 +939,37 @@ mod tests {
 
         #[test]
         fn serializes_to_json() {
-            // Arrange
             let result = SearchResult {
-                path: "/home/user/file.txt".to_string(),
+                path: "/a/b/file.txt".to_string(),
                 name: "file.txt".to_string(),
                 is_dir: false,
                 icon: None,
             };
-
-            // Act
             let json = serde_json::to_string(&result).unwrap();
-
-            // Assert
-            assert!(json.contains(r#""path":"/home/user/file.txt""#));
+            assert!(json.contains(r#""path":"/a/b/file.txt""#));
             assert!(json.contains(r#""name":"file.txt""#));
             assert!(json.contains(r#""is_dir":false"#));
         }
 
         #[test]
         fn serializes_directory() {
-            // Arrange
             let result = SearchResult {
-                path: "/home/user/docs".to_string(),
+                path: "/a/b/docs".to_string(),
                 name: "docs".to_string(),
                 is_dir: true,
                 icon: None,
             };
-
-            // Act
             let json = serde_json::to_string(&result).unwrap();
-
-            // Assert
             assert!(json.contains(r#""is_dir":true"#));
         }
 
         #[test]
         fn serializes_vec_of_results() {
-            // Arrange
             let results = vec![
                 SearchResult { path: "/a".to_string(), name: "a".to_string(), is_dir: true, icon: None },
                 SearchResult { path: "/b".to_string(), name: "b".to_string(), is_dir: false, icon: None },
             ];
-
-            // Act
             let json = serde_json::to_string(&results).unwrap();
-
-            // Assert
             assert!(json.starts_with('['));
             assert!(json.ends_with(']'));
             assert!(json.contains(r#""path":"/a""#));
@@ -1144,32 +1093,32 @@ mod tests {
 
         #[test]
         fn extracts_simple_name() {
-            assert_eq!(extract_app_id("/usr/share/applications/firefox.desktop"), "firefox");
+            assert_eq!(extract_app_id("/usr/share/applications/foo.desktop"), "foo");
         }
 
         #[test]
         fn extracts_from_flatpak_path() {
-            assert_eq!(extract_app_id("/var/lib/flatpak/exports/share/applications/org.mozilla.firefox.desktop"), "firefox");
+            assert_eq!(extract_app_id("/var/lib/flatpak/exports/share/applications/org.example.foo.desktop"), "foo");
         }
 
         #[test]
         fn extracts_from_snap_path() {
-            assert_eq!(extract_app_id("/var/lib/snapd/desktop/applications/firefox_firefox.desktop"), "firefox");
+            assert_eq!(extract_app_id("/var/lib/snapd/desktop/applications/foo_foo.desktop"), "foo");
         }
 
         #[test]
         fn handles_hyphenated_name() {
-            assert_eq!(extract_app_id("/usr/share/applications/signal-desktop.desktop"), "signal-desktop");
+            assert_eq!(extract_app_id("/usr/share/applications/foo-bar.desktop"), "foo-bar");
         }
 
         #[test]
         fn handles_underscored_snap_name() {
-            assert_eq!(extract_app_id("/usr/share/applications/discord_discord.desktop"), "discord");
+            assert_eq!(extract_app_id("/usr/share/applications/foo_foo.desktop"), "foo");
         }
 
         #[test]
-        fn handles_user_local_path() {
-            assert_eq!(extract_app_id("/home/user/.local/share/applications/discord.desktop"), "discord");
+        fn handles_local_path() {
+            assert_eq!(extract_app_id("/a/b/.local/share/applications/foo.desktop"), "foo");
         }
     }
 
@@ -1178,12 +1127,12 @@ mod tests {
 
         #[test]
         fn extracts_from_absolute_path() {
-            assert_eq!(extract_filename("/home/user/documents/file.txt"), "file.txt");
+            assert_eq!(extract_filename("/a/b/c/file.txt"), "file.txt");
         }
 
         #[test]
         fn handles_path_with_spaces() {
-            assert_eq!(extract_filename("/home/user/my documents/my file.txt"), "my file.txt");
+            assert_eq!(extract_filename("/a/b c/d e.txt"), "d e.txt");
         }
 
         #[test]
@@ -1193,7 +1142,7 @@ mod tests {
 
         #[test]
         fn handles_hidden_file() {
-            assert_eq!(extract_filename("/home/user/.bashrc"), ".bashrc");
+            assert_eq!(extract_filename("/a/b/.hidden"), ".hidden");
         }
     }
 
@@ -1208,8 +1157,8 @@ mod tests {
         fn removes_duplicate_desktop_files_by_app_id() {
             // Arrange
             let results = vec![
-                make_result("/usr/share/applications/firefox.desktop", "Firefox"),
-                make_result("/home/user/.local/share/applications/firefox.desktop", "Firefox"),
+                make_result("/usr/share/applications/foo.desktop", "Foo"),
+                make_result("/a/.local/share/applications/foo.desktop", "Foo"),
             ];
 
             // Act
@@ -1217,15 +1166,15 @@ mod tests {
 
             // Assert
             assert_eq!(deduped.len(), 1);
-            assert_eq!(deduped[0].path, "/usr/share/applications/firefox.desktop");
+            assert_eq!(deduped[0].path, "/usr/share/applications/foo.desktop");
         }
 
         #[test]
         fn removes_flatpak_duplicates() {
             // Arrange
             let results = vec![
-                make_result("/usr/share/applications/firefox.desktop", "Firefox Web Browser"),
-                make_result("/var/lib/flatpak/exports/share/applications/org.mozilla.firefox.desktop", "Firefox"),
+                make_result("/usr/share/applications/foo.desktop", "Foo App"),
+                make_result("/var/lib/flatpak/exports/share/applications/org.example.foo.desktop", "Foo"),
             ];
 
             // Act
@@ -1239,8 +1188,8 @@ mod tests {
         fn keeps_different_apps() {
             // Arrange
             let results = vec![
-                make_result("/usr/share/applications/firefox.desktop", "Firefox"),
-                make_result("/usr/share/applications/chrome.desktop", "Chrome"),
+                make_result("/usr/share/applications/foo.desktop", "Foo"),
+                make_result("/usr/share/applications/bar.desktop", "Bar"),
             ];
 
             // Act
@@ -1254,8 +1203,8 @@ mod tests {
         fn dedupes_non_desktop_by_name() {
             // Arrange
             let results = vec![
-                make_result("/home/user/Documents", "Documents"),
-                make_result("/media/drive/Documents", "Documents"),
+                make_result("/a/b/docs", "docs"),
+                make_result("/c/d/docs", "docs"),
             ];
 
             // Act
@@ -1269,15 +1218,15 @@ mod tests {
         fn keeps_first_occurrence() {
             // Arrange
             let results = vec![
-                make_result("/first/path/discord.desktop", "Discord"),
-                make_result("/second/path/discord.desktop", "Discord"),
+                make_result("/first/foo.desktop", "Foo"),
+                make_result("/second/foo.desktop", "Foo"),
             ];
 
             // Act
             let deduped = dedupe_results(results);
 
             // Assert
-            assert_eq!(deduped[0].path, "/first/path/discord.desktop");
+            assert_eq!(deduped[0].path, "/first/foo.desktop");
         }
     }
 
@@ -1288,32 +1237,32 @@ mod tests {
 
         #[test]
         fn standard_app_dir_has_low_penalty() {
-            let score = score_path_quality("/usr/share/applications/firefox.desktop", &cfg());
+            let score = score_path_quality("/usr/share/applications/foo.desktop", &cfg());
             assert!(score < 50);
         }
 
         #[test]
         fn autostart_dir_has_higher_penalty() {
-            let score = score_path_quality("/etc/xdg/autostart/something.desktop", &cfg());
+            let score = score_path_quality("/etc/xdg/autostart/foo.desktop", &cfg());
             assert!(score >= 80);
         }
 
         #[test]
         fn hidden_dirs_heavily_penalized() {
-            let score = score_path_quality("/home/user/.config/autostart/app.desktop", &cfg());
+            let score = score_path_quality("/a/.config/autostart/foo.desktop", &cfg());
             assert!(score >= 500);
         }
 
         #[test]
         fn deep_paths_penalized() {
-            let shallow_score = score_path_quality("/usr/share/applications/app.desktop", &cfg());
-            let deep_score = score_path_quality("/a/b/c/d/e/f/g/h/app.desktop", &cfg());
+            let shallow_score = score_path_quality("/usr/share/applications/foo.desktop", &cfg());
+            let deep_score = score_path_quality("/a/b/c/d/e/f/g/h/foo.desktop", &cfg());
             assert!(deep_score > shallow_score);
         }
 
         #[test]
         fn user_local_apps_have_low_penalty() {
-            let score = score_path_quality("/home/user/.local/share/applications/discord.desktop", &cfg());
+            let score = score_path_quality("/a/.local/share/applications/foo.desktop", &cfg());
             assert!(score < 100);
         }
     }
@@ -1551,8 +1500,8 @@ mod tests {
         #[test]
         fn penalize_hidden_enabled_ranks_hidden_lower() {
             // Arrange
-            let visible = "/usr/share/apps/foo";
-            let hidden = "/home/user/.hidden/foo";
+            let visible = "/a/b/foo";
+            let hidden = "/a/.hidden/foo";
             let mut enabled = Config::default();
             enabled.penalize_hidden = true;
             let mut disabled = Config::default();
@@ -1666,8 +1615,8 @@ mod tests {
         #[test]
         fn config_options_combine_correctly() {
             // Arrange
-            let frequent_hidden = make_result("/home/user/.hidden/foo", "foo");
-            let rare_visible = make_result("/usr/share/docs/foo", "foo");
+            let frequent_hidden = make_result("/a/.hidden/foo", "foo");
+            let rare_visible = make_result("/a/b/foo", "foo");
             let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
             let mut freq = FrequencyData::default();
             freq.entries.insert(frequent_hidden.path.clone(), FrequencyEntry { count: 20, last_accessed: now });
