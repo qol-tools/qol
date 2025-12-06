@@ -71,20 +71,60 @@ fn is_newer_version(latest: &str, current: &str) -> bool {
     latest_parts.len() > current_parts.len()
 }
 
-pub fn open_releases_page() -> Result<()> {
+#[cfg(target_os = "linux")]
+pub async fn download_and_install() -> Result<()> {
+    let version = latest_version().ok_or_else(|| anyhow::anyhow!("No update version available"))?;
+
+    let deb_url = format!(
+        "https://github.com/{}/releases/download/v{}/qol-tray_{}_amd64.deb",
+        GITHUB_REPO, version, version
+    );
+
+    let tmp_path = format!("/tmp/qol-tray_{}_amd64.deb", version);
+
+    log::info!("Downloading update from {}", deb_url);
+
+    let client = reqwest::Client::builder()
+        .user_agent("qol-tray")
+        .build()?;
+
+    let response = client.get(&deb_url).send().await?;
+    if !response.status().is_success() {
+        anyhow::bail!("Failed to download update: {}", response.status());
+    }
+
+    let bytes = response.bytes().await?;
+    std::fs::write(&tmp_path, &bytes)?;
+
+    log::info!("Installing update...");
+
+    let status = std::process::Command::new("pkexec")
+        .args(["dpkg", "-i", &tmp_path])
+        .status()?;
+
+    if !status.success() {
+        anyhow::bail!("Failed to install update");
+    }
+
+    let _ = std::fs::remove_file(&tmp_path);
+
+    log::info!("Update installed successfully, restarting...");
+
+    std::process::Command::new("qol-tray").spawn()?;
+    std::process::exit(0);
+}
+
+#[cfg(target_os = "macos")]
+pub async fn download_and_install() -> Result<()> {
     let url = format!("https://github.com/{}/releases/latest", GITHUB_REPO);
-
-    #[cfg(target_os = "linux")]
-    std::process::Command::new("xdg-open").arg(&url).spawn()?;
-
-    #[cfg(target_os = "macos")]
     std::process::Command::new("open").arg(&url).spawn()?;
+    Ok(())
+}
 
-    #[cfg(target_os = "windows")]
-    std::process::Command::new("cmd")
-        .args(["/C", "start", &url])
-        .spawn()?;
-
+#[cfg(target_os = "windows")]
+pub async fn download_and_install() -> Result<()> {
+    let url = format!("https://github.com/{}/releases/latest", GITHUB_REPO);
+    std::process::Command::new("cmd").args(["/C", "start", &url]).spawn()?;
     Ok(())
 }
 

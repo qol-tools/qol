@@ -76,8 +76,13 @@ pub fn build_menu(
         let update_route = EventRoute {
             pattern: EventPattern::Exact("__update__".to_string()),
             handler: EventHandler::Sync(Box::new(|_| {
-                log::info!("Opening releases page");
-                let _ = updates::open_releases_page();
+                log::info!("Starting update download and install");
+                std::thread::spawn(|| {
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    if let Err(e) = rt.block_on(updates::download_and_install()) {
+                        log::error!("Update failed: {}", e);
+                    }
+                });
                 Ok(HandlerResult::Continue)
             })),
         };
