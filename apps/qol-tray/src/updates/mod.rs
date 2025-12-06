@@ -57,41 +57,53 @@ fn is_newer_version(latest: &str, current: &str) -> bool {
 #[cfg(target_os = "linux")]
 pub async fn download_and_install() -> Result<()> {
     let version = latest_version().ok_or_else(|| anyhow::anyhow!("No update version available"))?;
+    let deb_path = download_deb(version).await?;
+    install_deb(&deb_path)?;
+    restart_with_cleanup();
+}
 
-    let deb_url = format!(
+#[cfg(target_os = "linux")]
+async fn download_deb(version: &str) -> Result<std::path::PathBuf> {
+    let url = format!(
         "https://github.com/{}/releases/download/v{}/qol-tray_{}-1_amd64.deb",
         GITHUB_REPO, version, version
     );
+    let path = std::path::PathBuf::from(format!("/tmp/qol-tray_{}-1_amd64.deb", version));
 
-    let tmp_path = format!("/tmp/qol-tray_{}-1_amd64.deb", version);
+    log::info!("Downloading update from {}", url);
 
-    log::info!("Downloading update from {}", deb_url);
+    let client = reqwest::Client::builder().user_agent("qol-tray").build()?;
+    let response = client.get(&url).send().await?;
 
-    let client = reqwest::Client::builder()
-        .user_agent("qol-tray")
-        .build()?;
-
-    let response = client.get(&deb_url).send().await?;
     if !response.status().is_success() {
         anyhow::bail!("Failed to download update: {}", response.status());
     }
 
     let bytes = response.bytes().await?;
-    std::fs::write(&tmp_path, &bytes)?;
+    std::fs::write(&path, &bytes)?;
+    Ok(path)
+}
 
+#[cfg(target_os = "linux")]
+fn install_deb(path: &std::path::Path) -> Result<()> {
     log::info!("Installing update...");
 
     let status = std::process::Command::new("pkexec")
-        .args(["dpkg", "-i", &tmp_path])
+        .args(["dpkg", "-i"])
+        .arg(path)
         .status()?;
 
     if !status.success() {
         anyhow::bail!("Failed to install update");
     }
 
-    let _ = std::fs::remove_file(&tmp_path);
+    let _ = std::fs::remove_file(path);
+    Ok(())
+}
 
-    log::info!("Update installed successfully, stopping daemons...");
+#[cfg(target_os = "linux")]
+fn restart_with_cleanup() -> ! {
+    log::info!("Update installed, stopping daemons...");
 
     let _ = std::process::Command::new("pkill")
         .args(["-f", "plugin-launcher/target"])
@@ -99,8 +111,7 @@ pub async fn download_and_install() -> Result<()> {
     let _ = std::fs::remove_file("/tmp/qol-launcher.sock");
 
     log::info!("Restarting...");
-
-    std::process::Command::new("qol-tray").spawn()?;
+    let _ = std::process::Command::new("qol-tray").spawn();
     std::process::exit(0);
 }
 
