@@ -36,6 +36,7 @@ impl PluginLoader {
             .filter_map(|e| e.ok())
             .map(|e| e.path())
             .filter(|p| p.is_dir())
+            .filter(|p| !p.extension().is_some_and(|ext| ext == "backup"))
             .collect();
 
         let plugins: Vec<Plugin> = paths
