@@ -1512,4 +1512,181 @@ mod tests {
             assert!(bonus2 > bonus1);
         }
     }
+
+    mod config_options {
+        use super::*;
+
+        fn make_result(path: &str, name: &str) -> SearchResult {
+            SearchResult { path: path.to_string(), name: name.to_string(), is_dir: false, icon: None }
+        }
+
+        fn make_app(name: &str) -> SearchResult {
+            make_result(&format!("/usr/share/applications/{}.desktop", name), name)
+        }
+
+        #[test]
+        fn prefer_apps_enabled_ranks_desktop_higher() {
+            // Arrange
+            let app = make_app("foo");
+            let file = make_result("/usr/share/docs/foo", "foo");
+            let freq = FrequencyData::default();
+            let mut enabled = Config::default();
+            enabled.prefer_apps = true;
+            let mut disabled = Config::default();
+            disabled.prefer_apps = false;
+
+            // Act
+            let app_enabled = score_result(&app, "foo", &freq, &enabled);
+            let file_enabled = score_result(&file, "foo", &freq, &enabled);
+            let app_disabled = score_result(&app, "foo", &freq, &disabled);
+            let file_disabled = score_result(&file, "foo", &freq, &disabled);
+
+            // Assert
+            let gap_enabled = file_enabled - app_enabled;
+            let gap_disabled = file_disabled - app_disabled;
+            assert!(gap_enabled > 900, "enabled: app should have ~1000pt advantage, got {}", gap_enabled);
+            assert!(gap_disabled < 100, "disabled: gap should be minimal, got {}", gap_disabled);
+        }
+
+        #[test]
+        fn penalize_hidden_enabled_ranks_hidden_lower() {
+            // Arrange
+            let visible = "/usr/share/apps/foo";
+            let hidden = "/home/user/.hidden/foo";
+            let mut enabled = Config::default();
+            enabled.penalize_hidden = true;
+            let mut disabled = Config::default();
+            disabled.penalize_hidden = false;
+
+            // Act
+            let visible_enabled = score_path_quality(visible, &enabled);
+            let hidden_enabled = score_path_quality(hidden, &enabled);
+            let visible_disabled = score_path_quality(visible, &disabled);
+            let hidden_disabled = score_path_quality(hidden, &disabled);
+
+            // Assert
+            let gap_enabled = hidden_enabled - visible_enabled;
+            let gap_disabled = hidden_disabled - visible_disabled;
+            assert!(gap_enabled >= 500, "enabled: hidden should have 500+ penalty, got {}", gap_enabled);
+            assert!(gap_disabled < 50, "disabled: gap should be minimal, got {}", gap_disabled);
+        }
+
+        #[test]
+        fn depth_penalty_affects_deep_paths() {
+            // Arrange
+            let shallow = "/a/b/foo";
+            let deep = "/a/b/c/d/e/f/foo";
+            let mut high_penalty = Config::default();
+            high_penalty.depth_penalty = 10;
+            high_penalty.penalize_hidden = false;
+            let mut no_penalty = Config::default();
+            no_penalty.depth_penalty = 0;
+            no_penalty.penalize_hidden = false;
+
+            // Act
+            let shallow_high = score_path_quality(shallow, &high_penalty);
+            let deep_high = score_path_quality(deep, &high_penalty);
+            let shallow_none = score_path_quality(shallow, &no_penalty);
+            let deep_none = score_path_quality(deep, &no_penalty);
+
+            // Assert
+            let diff_high = deep_high - shallow_high;
+            let diff_none = deep_none - shallow_none;
+            assert!(diff_high > 30, "high penalty: deep should cost 30+ more, got {}", diff_high);
+            assert_eq!(diff_none, 0, "no penalty: depth should not matter");
+        }
+
+        #[test]
+        fn frequency_bonus_affects_ranking() {
+            // Arrange
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+            let mut freq = FrequencyData::default();
+            freq.entries.insert("/path".to_string(), FrequencyEntry { count: 5, last_accessed: now });
+            let mut high_bonus = Config::default();
+            high_bonus.frequency_bonus = 1000;
+            let mut no_bonus = Config::default();
+            no_bonus.frequency_bonus = 0;
+
+            // Act
+            let bonus_high = calc_frequency_bonus("/path", &freq, &high_bonus);
+            let bonus_none = calc_frequency_bonus("/path", &freq, &no_bonus);
+
+            // Assert
+            assert!(bonus_high > 4000, "high bonus: should get ~5000 (5 * 1000), got {}", bonus_high);
+            assert_eq!(bonus_none, 0, "no bonus: should be zero");
+        }
+
+        #[test]
+        fn half_life_affects_decay_rate() {
+            // Arrange
+            let now = 1000000u64;
+            let seven_days_ago = now - (7 * 86400);
+            let entry = FrequencyEntry { count: 10, last_accessed: seven_days_ago };
+            let short_half_life = 7.0;
+            let long_half_life = 30.0;
+
+            // Act
+            let count_short = effective_count(&entry, now, short_half_life);
+            let count_long = effective_count(&entry, now, long_half_life);
+
+            // Assert
+            assert!((count_short - 5.0).abs() < 0.5, "7-day half-life should halve after 7 days, got {}", count_short);
+            assert!(count_long > 7.0, "30-day half-life should retain >70% after 7 days, got {}", count_long);
+        }
+
+        #[test]
+        fn match_penalties_affect_ranking() {
+            // Arrange
+            let exact = make_app("foo");
+            let prefix = make_app("foobar");
+            let contains = make_app("xfoox");
+            let freq = FrequencyData::default();
+            let mut normal = Config::default();
+            normal.exact_bonus = 0;
+            normal.prefix_penalty = 50;
+            normal.contains_penalty = 100;
+            let mut reversed = Config::default();
+            reversed.exact_bonus = 100;
+            reversed.prefix_penalty = 50;
+            reversed.contains_penalty = 0;
+
+            // Act
+            let exact_normal = score_result(&exact, "foo", &freq, &normal);
+            let prefix_normal = score_result(&prefix, "foo", &freq, &normal);
+            let contains_normal = score_result(&contains, "foo", &freq, &normal);
+            let exact_reversed = score_result(&exact, "foo", &freq, &reversed);
+            let contains_reversed = score_result(&contains, "foo", &freq, &reversed);
+
+            // Assert
+            assert!(exact_normal < prefix_normal, "normal: exact < prefix");
+            assert!(prefix_normal < contains_normal, "normal: prefix < contains");
+            assert!(contains_reversed < exact_reversed, "reversed: contains < exact");
+        }
+
+        #[test]
+        fn config_options_combine_correctly() {
+            // Arrange
+            let frequent_hidden = make_result("/home/user/.hidden/foo", "foo");
+            let rare_visible = make_result("/usr/share/docs/foo", "foo");
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+            let mut freq = FrequencyData::default();
+            freq.entries.insert(frequent_hidden.path.clone(), FrequencyEntry { count: 20, last_accessed: now });
+            let mut favor_frequency = Config::default();
+            favor_frequency.frequency_bonus = 2000;
+            favor_frequency.penalize_hidden = false;
+            let mut favor_visible = Config::default();
+            favor_visible.frequency_bonus = 0;
+            favor_visible.penalize_hidden = true;
+
+            // Act
+            let hidden_freq = score_result(&frequent_hidden, "foo", &freq, &favor_frequency);
+            let visible_freq = score_result(&rare_visible, "foo", &freq, &favor_frequency);
+            let hidden_vis = score_result(&frequent_hidden, "foo", &freq, &favor_visible);
+            let visible_vis = score_result(&rare_visible, "foo", &freq, &favor_visible);
+
+            // Assert
+            assert!(hidden_freq < visible_freq, "favor frequency: hidden ({}) should beat visible ({})", hidden_freq, visible_freq);
+            assert!(visible_vis < hidden_vis, "favor visible: visible ({}) should beat hidden ({})", visible_vis, hidden_vis);
+        }
+    }
 }
