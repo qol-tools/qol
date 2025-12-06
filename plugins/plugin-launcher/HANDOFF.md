@@ -24,11 +24,15 @@ Fully working launcher plugin for qol-tray with:
 
 ## Known Issues / TODO
 
-1. **Terminal detection** - Currently tries gnome-terminal, konsole, xfce4-terminal, xterm in order. Should detect user's default terminal.
+1. **Wayland support** - Uses `xdotool` for focused window detection and `xclip` for clipboard. Needs alternatives:
+   - Focused window: `wlr-foreign-toplevel-management` or portal APIs
+   - Clipboard: `wl-copy` from `wl-clipboard`
 
-2. **Search scoring** - Results come back unsorted from plocate. Could integrate frequency tracking from the original systemsearch extension.
+2. **Terminal detection** - Currently tries gnome-terminal, konsole, xfce4-terminal, xterm in order. Should detect user's default terminal.
 
-3. **macOS/Windows backends** - Exist but untested.
+3. **Search scoring** - Results come back unsorted from plocate. Could integrate frequency tracking from the original systemsearch extension.
+
+4. **macOS/Windows backends** - Exist but untested.
 
 ## Development Setup
 
