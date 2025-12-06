@@ -6,7 +6,7 @@ author = "KMRH47"
 
 [daemon]
 enabled = true
-command = "target/release/launcher"
+command = "launcher"
 
 [menu]
 label = "Launcher"

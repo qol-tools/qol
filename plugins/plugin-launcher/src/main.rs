@@ -215,11 +215,16 @@ fn calculate_centered_position(
 }
 
 fn get_plugin_dir() -> PathBuf {
-    env::current_exe()
-        .ok()
-        .and_then(|p| p.canonicalize().ok())
-        .and_then(|p| p.parent().and_then(|p| p.parent()).and_then(|p| p.parent()).map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."))
+    let exe = env::current_exe().ok().and_then(|p| p.canonicalize().ok());
+    let Some(exe) = exe else { return PathBuf::from(".") };
+    let mut dir = exe.as_path();
+    while let Some(parent) = dir.parent() {
+        if parent.join("backends").is_dir() {
+            return parent.to_path_buf();
+        }
+        dir = parent;
+    }
+    PathBuf::from(".")
 }
 
 fn get_backend_script() -> &'static str {
@@ -632,11 +637,13 @@ fn main() {
     let webview = {
         use tao::platform::unix::WindowExtUnix;
         use wry::WebViewBuilderExtUnix;
-        WebViewBuilder::new()
+        let wv = WebViewBuilder::new()
             .with_html(&html)
             .with_ipc_handler(handler)
             .build_gtk(window.default_vbox().unwrap())
-            .unwrap()
+            .unwrap();
+        window.set_visible(false);
+        wv
     };
 
     if env::args().any(|a| a == "--show") {
