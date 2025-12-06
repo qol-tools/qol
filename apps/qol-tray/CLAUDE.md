@@ -8,6 +8,8 @@ make dev      # Build and run with dev features (Developer tab)
 make test     # Run tests
 make install  # Build release and install to /usr/bin
 make clean    # Clean build artifacts
+make deb      # Build .deb package
+make release  # Bump version, build, push, create GitHub release
 ```
 
 ## Architecture
@@ -34,7 +36,7 @@ make clean    # Clean build artifacts
   - `linux.rs`: GTK-based, spawns separate thread for event loop
   - `windows.rs`, `macos.rs`: Standard tray icon implementation
 - `PlatformTray` enum handles platform differences at compile time
-- `icon.rs`: Icon loading from embedded RGBA data
+- `icon.rs`: Icon loading from embedded RGBA data, supports notification dot variant
 
 **src/features/plugin_store/** - Browser-based plugin management
 - Serves web UI at `http://127.0.0.1:42700`
@@ -42,6 +44,13 @@ make clean    # Clean build artifacts
 - Plugin settings accessed via `/plugins/{plugin_id}/`
 - API endpoints for install/uninstall operations
 - Fetches available plugins from `github.com/qol-tools/*`
+
+**src/updates/** - Auto-update system
+- Checks GitHub API on startup for new releases (2s timeout)
+- Compares semantic versions
+- Shows orange notification dot on tray icon when update available
+- Menu item "⬆ Update to vX.Y.Z" downloads .deb and installs via `pkexec dpkg -i`
+- Kills plugin daemons before restart to avoid socket conflicts
 
 ### Plugin Manifest Format
 
