@@ -2,7 +2,7 @@
 
 ## Current State
 
-Window management plugin for qol-tray with scripts for minimize, restore, and move between monitors.
+Window management plugin for qol-tray (Linux only for now). Scripts for minimize, restore, and move between monitors.
 
 ## Known Issues / TODO
 
