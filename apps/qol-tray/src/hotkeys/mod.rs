@@ -253,6 +253,8 @@ fn execute_plugin_action(plugins_dir: &PathBuf, plugin_id: &str, action: &str) {
             .arg(&script_path)
             .arg(action)
             .current_dir(&plugin_dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .spawn()
         {
             Ok(_) => log::info!("Plugin action started"),
