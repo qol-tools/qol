@@ -108,7 +108,14 @@ pub async fn download_and_install() -> Result<()> {
 
     let _ = std::fs::remove_file(&tmp_path);
 
-    log::info!("Update installed successfully, restarting...");
+    log::info!("Update installed successfully, stopping daemons...");
+
+    let _ = std::process::Command::new("pkill")
+        .args(["-f", "plugin-launcher/target"])
+        .status();
+    let _ = std::fs::remove_file("/tmp/qol-launcher.sock");
+
+    log::info!("Restarting...");
 
     std::process::Command::new("qol-tray").spawn()?;
     std::process::exit(0);
