@@ -1,6 +1,8 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## IMPORTANT: Linux Only
+
+This project supports **Linux only**. Do NOT implement macOS or Windows code. Do NOT add cross-platform abstractions, CI workflows, or conditionals for other operating systems. If platform-specific code exists, ignore it - it is legacy cruft that will be removed.
 
 ## Commands
 
