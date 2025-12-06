@@ -1,0 +1,11 @@
+[plugin]
+name = "My Plugin"
+description = "A qol-tray plugin"
+version = "1.0.0"
+author = ""
+
+[menu]
+label = "My Plugin"
+items = [
+    { type = "action", id = "run", label = "Run", action = "run" },
+]

@@ -1,0 +1,40 @@
+name: Lint
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: '.'
+          severity: warning
+
+  validate-manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate plugin.toml
+        run: |
+          if [[ ! -f plugin.toml ]]; then
+            echo "Missing plugin.toml"
+            exit 1
+          fi
+
+          # Check required fields
+          for field in name description version; do
+            if ! grep -q "^$field = " plugin.toml; then
+              echo "Missing required field: $field"
+              exit 1
+            fi
+          done
+
+          echo "plugin.toml is valid"
