@@ -25,7 +25,10 @@ function renderResults() {
 
     resultsContainer.innerHTML = results.map((result, index) => `
         <div class="result-item ${index === selectedIndex ? 'selected' : ''}" data-index="${index}">
-            <span class="result-icon">${result.is_dir ? '📁' : '📄'}</span>
+            ${result.icon
+                ? `<img class="result-icon" src="${result.icon}" onerror="this.outerHTML='<span class=\\'result-icon\\'>${result.is_dir ? '📁' : '📄'}</span>'">`
+                : `<span class="result-icon">${result.is_dir ? '📁' : '📄'}</span>`
+            }
             <div class="result-info">
                 <div class="result-name">${escapeHtml(result.name)}</div>
                 <div class="result-path">${escapeHtml(result.path)}</div>

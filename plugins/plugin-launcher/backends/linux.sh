@@ -2,63 +2,39 @@
 set -euo pipefail
 
 query="$1"
-limit=50
+[[ -z "$query" ]] && exit 0
+
 cache_dir="$HOME/.cache/qol-launcher-dbs"
-
-if [[ -z "$query" ]]; then
-    exit 0
-fi
-
 mkdir -p "$cache_dir"
-
-read -ra words <<< "$query"
-first_word="${words[0]}"
 
 db_args=()
 for dir in /media/*/; do
     [[ -d "$dir" ]] || continue
-    hash=$(echo -n "$dir" | md5sum | cut -d' ' -f1)
-    db_path="$cache_dir/$hash.db"
+    db_path="$cache_dir/$(echo -n "$dir" | md5sum | cut -d' ' -f1).db"
     [[ -f "$db_path" ]] && db_args+=("-d" "$db_path")
 done
 
-search_and_filter() {
-    local results
-    results=$(
-        {
-            [[ ${#db_args[@]} -gt 0 ]] && plocate --ignore-case --limit 200 "${db_args[@]}" "$first_word" 2>/dev/null || true
-            plocate --ignore-case --limit 200 "$first_word" 2>/dev/null || true
-        } | awk '!seen[$0]++'
+search_plocate() {
+    local pattern="$1" limit="$2"
+    { [[ ${#db_args[@]} -gt 0 ]] && plocate -i -l "$limit" "${db_args[@]}" "$pattern" 2>/dev/null || true
+      plocate -i -l "$limit" "$pattern" 2>/dev/null || true
+    } | grep -v -E "^/timeshift/|/app-install/|^/mnt/" | awk '!seen[$0]++'
+}
+
+search_desktop_dirs() {
+    local dirs=(
+        "/usr/share/applications"
+        "/usr/lib"
+        "$HOME/.local/share/applications"
+        "/var/lib/flatpak/exports/share/applications"
     )
-
-    if [[ ${#words[@]} -le 1 ]]; then
-        echo "$results"
-        return
-    fi
-
-    for word in "${words[@]:1}"; do
-        results=$(echo "$results" | grep -i "$word" || true)
+    for d in "${dirs[@]}"; do
+        find "$d" -maxdepth 3 -iname "*${query}*.desktop" 2>/dev/null || true
     done
-    echo "$results"
 }
 
-prioritize_results() {
-    local desktop=()
-    local executable=()
-    local other=()
-
-    while IFS= read -r path; do
-        [[ -z "$path" ]] && continue
-        if [[ "$path" == *.desktop ]]; then
-            desktop+=("$path")
-        elif [[ -x "$path" && -f "$path" ]]; then
-            executable+=("$path")
-        else
-            other+=("$path")
-        fi
-    done
-
-    printf '%s\n' "${desktop[@]}" "${executable[@]}" "${other[@]}"
-}
-
-search_and_filter | prioritize_results | head -n "$limit"
+{
+    search_desktop_dirs
+    search_plocate "*${query}*.desktop" 30
+    search_plocate "*$query*" 200
+} | awk '!seen[$0]++' | head -n 50

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io::{Read as IoRead, Write as IoWrite};
@@ -6,13 +7,72 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tao::window::WindowBuilder;
 use wry::http::Request;
 use wry::WebViewBuilder;
 
+const HALF_LIFE_DAYS: f64 = 7.0;
+const FREQUENCY_BONUS: i32 = 500;
 const SOCKET_PATH: &str = "/tmp/qol-launcher.sock";
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+struct FrequencyEntry {
+    count: u32,
+    last_accessed: u64,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct FrequencyData {
+    entries: HashMap<String, FrequencyEntry>,
+}
+
+fn get_frequency_path() -> PathBuf {
+    dirs::cache_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("qol-launcher-frequency.json")
+}
+
+fn load_frequency() -> FrequencyData {
+    fs::read_to_string(get_frequency_path())
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_frequency(data: &FrequencyData) {
+    let path = get_frequency_path();
+    let _ = fs::write(path, serde_json::to_string(data).unwrap_or_default());
+}
+
+fn record_access(path: &str) {
+    let mut data = load_frequency();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let entry = data.entries.entry(path.to_string()).or_default();
+    entry.count += 1;
+    entry.last_accessed = now;
+    prune_frequency(&mut data);
+    save_frequency(&data);
+}
+
+fn prune_frequency(data: &mut FrequencyData) {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    data.entries.retain(|_, e| effective_count(e, now) > 0.1);
+    if data.entries.len() > 1000 {
+        let mut items: Vec<_> = data.entries.drain().collect();
+        items.sort_by(|a, b| effective_count(&b.1, now).partial_cmp(&effective_count(&a.1, now)).unwrap());
+        items.truncate(1000);
+        data.entries = items.into_iter().collect();
+    }
+}
+
+fn effective_count(entry: &FrequencyEntry, now: u64) -> f64 {
+    let days_elapsed = (now - entry.last_accessed) as f64 / 86400.0;
+    let decay = (-days_elapsed * 0.693 / HALF_LIFE_DAYS).exp();
+    entry.count as f64 * decay
+}
 
 #[derive(Debug)]
 enum UserEvent {
@@ -23,13 +83,23 @@ enum UserEvent {
 fn handle_socket_message(stream: &mut UnixStream, proxy: &tao::event_loop::EventLoopProxy<UserEvent>) {
     let mut buf = [0u8; 16];
     let Ok(n) = stream.read(&mut buf) else { return };
-    if &buf[..n] != b"show" { return }
-    let _ = proxy.send_event(UserEvent::Show);
+    match &buf[..n] {
+        b"show" => { let _ = proxy.send_event(UserEvent::Show); }
+        b"kill" => std::process::exit(0),
+        _ => {}
+    }
+}
+
+fn send_socket_command(cmd: &[u8]) -> bool {
+    if let Ok(mut stream) = UnixStream::connect(SOCKET_PATH) {
+        let _ = stream.write_all(cmd);
+        return true;
+    }
+    false
 }
 
 fn start_socket_listener(proxy: tao::event_loop::EventLoopProxy<UserEvent>) -> bool {
-    if let Ok(mut stream) = UnixStream::connect(SOCKET_PATH) {
-        let _ = stream.write_all(b"show");
+    if send_socket_command(b"show") {
         return false;
     }
 
@@ -64,6 +134,7 @@ struct SearchResult {
     path: String,
     name: String,
     is_dir: bool,
+    icon: Option<String>,
 }
 
 #[derive(Default)]
@@ -123,14 +194,91 @@ fn get_backend_script() -> &'static str {
     }
 }
 
+fn parse_desktop_file(path: &str) -> (Option<String>, Option<String>) {
+    let Ok(content) = fs::read_to_string(path) else { return (None, None) };
+    let name = content.lines()
+        .find(|l| l.starts_with("Name="))
+        .map(|l| l.trim_start_matches("Name=").to_string());
+    let icon = content.lines()
+        .find(|l| l.starts_with("Icon="))
+        .map(|l| l.trim_start_matches("Icon="))
+        .and_then(resolve_icon_path)
+        .and_then(|p| icon_to_data_url(&p));
+    (name, icon)
+}
+
+fn icon_to_data_url(path: &str) -> Option<String> {
+    let data = fs::read(path).ok()?;
+    let mime = if path.ends_with(".svg") { "image/svg+xml" } else { "image/png" };
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    Some(format!("data:{};base64,{}", mime, STANDARD.encode(&data)))
+}
+
+fn resolve_icon_path(icon_name: &str) -> Option<String> {
+    if std::path::Path::new(icon_name).is_absolute() {
+        return Some(icon_name.to_string());
+    }
+
+    let home = env::var("HOME").unwrap_or_default();
+    let candidates = build_icon_candidates(icon_name, &home);
+    candidates.into_iter().find(|p| std::path::Path::new(p).exists())
+}
+
+fn build_icon_candidates(icon_name: &str, home: &str) -> Vec<String> {
+    let data_dirs = ["/usr/share/icons", "/usr/local/share/icons", "/usr/share/pixmaps"];
+    let local_dir = format!("{}/.local/share/icons", home);
+    let themes = ["hicolor", "Papirus", "Adwaita", "breeze"];
+    let sizes = ["256x256", "128x128", "64x64", "48x48", "scalable"];
+    let categories = ["apps", "applications"];
+    let extensions = ["png", "svg"];
+
+    let mut candidates = Vec::new();
+
+    for base in data_dirs.iter().chain(std::iter::once(&local_dir.as_str())) {
+        add_themed_candidates(&mut candidates, base, icon_name, &themes, &sizes, &categories, &extensions);
+        add_pixmap_candidates(&mut candidates, base, icon_name, &extensions);
+    }
+
+    candidates
+}
+
+fn add_themed_candidates(
+    candidates: &mut Vec<String>, base: &str, icon: &str,
+    themes: &[&str], sizes: &[&str], categories: &[&str], extensions: &[&str],
+) {
+    let combos = themes.iter()
+        .flat_map(|t| sizes.iter().map(move |s| (*t, *s)))
+        .flat_map(|(t, s)| categories.iter().map(move |c| (t, s, *c)))
+        .flat_map(|(t, s, c)| extensions.iter().map(move |e| (t, s, c, *e)));
+
+    for (theme, size, cat, ext) in combos {
+        candidates.push(format!("{}/{}/{}/{}/{}.{}", base, theme, size, cat, icon, ext));
+    }
+}
+
+fn add_pixmap_candidates(candidates: &mut Vec<String>, base: &str, icon: &str, extensions: &[&str]) {
+    for ext in extensions {
+        candidates.push(format!("{}/{}.{}", base, icon, ext));
+    }
+}
+
 fn parse_search_result(line: &str) -> SearchResult {
     let path = line.to_string();
-    let name = PathBuf::from(&path)
+    let is_dir = std::path::Path::new(&path).is_dir();
+    let (name, icon) = if path.ends_with(".desktop") {
+        let (n, i) = parse_desktop_file(&path);
+        (n.unwrap_or_else(|| extract_filename(&path)), i)
+    } else {
+        (extract_filename(&path), None)
+    };
+    SearchResult { path, name, is_dir, icon }
+}
+
+fn extract_filename(path: &str) -> String {
+    PathBuf::from(path)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| path.clone());
-    let is_dir = std::path::Path::new(&path).is_dir();
-    SearchResult { path, name, is_dir }
+        .unwrap_or_else(|| path.to_string())
 }
 
 fn search(query: &str, plugin_dir: &std::path::Path) -> Vec<SearchResult> {
@@ -155,7 +303,87 @@ fn search(query: &str, plugin_dir: &std::path::Path) -> Vec<SearchResult> {
 
     let Ok(out) = output else { return vec![] };
     let stdout = String::from_utf8_lossy(&out.stdout);
-    stdout.lines().filter(|l| !l.is_empty()).map(parse_search_result).collect()
+    let results: Vec<_> = stdout.lines().filter(|l| !l.is_empty()).map(parse_search_result).collect();
+    let freq = load_frequency();
+    sort_by_relevance(dedupe_results(results), query, &freq)
+}
+
+fn dedupe_results(results: Vec<SearchResult>) -> Vec<SearchResult> {
+    let mut seen = std::collections::HashSet::new();
+    results.into_iter().filter(|r| {
+        let key = if r.path.ends_with(".desktop") {
+            extract_app_id(&r.path)
+        } else {
+            r.name.to_lowercase()
+        };
+        seen.insert(key)
+    }).collect()
+}
+
+fn score_result(r: &SearchResult, query: &str, freq: &FrequencyData) -> i32 {
+    let name = r.name.to_lowercase();
+    let q = query.to_lowercase();
+    let path = &r.path;
+
+    let match_penalty = if name == q { 0 }
+        else if name.starts_with(&q) { 100 }
+        else if name.contains(&q) { 200 }
+        else { 300 };
+
+    let type_penalty = if path.ends_with(".desktop") { 0 } else { 1000 };
+
+    let path_penalty = score_path_quality(path);
+
+    let length_penalty = r.name.len() as i32;
+
+    let frequency_bonus = calc_frequency_bonus(path, freq);
+
+    match_penalty + type_penalty + path_penalty + length_penalty - frequency_bonus
+}
+
+fn calc_frequency_bonus(path: &str, freq: &FrequencyData) -> i32 {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    freq.entries.get(path)
+        .map(|e| (effective_count(e, now) * FREQUENCY_BONUS as f64) as i32)
+        .unwrap_or(0)
+}
+
+fn score_path_quality(path: &str) -> i32 {
+    let mut penalty = 0i32;
+
+    let standard_dirs = ["/usr/share/applications", "/usr/lib", ".local/share/applications"];
+    let is_standard = standard_dirs.iter().any(|d| path.contains(d));
+    if !is_standard {
+        penalty += 50;
+    }
+
+    if path.contains("/autostart/") || path.contains("/xdg/") {
+        penalty += 30;
+    }
+
+    let depth = path.matches('/').count();
+    penalty += (depth as i32) * 2;
+
+    let hidden_count = path.split('/')
+        .filter(|p| p.starts_with('.') && *p != ".local")
+        .count();
+    penalty += (hidden_count as i32) * 500;
+
+    penalty
+}
+
+fn sort_by_relevance(mut results: Vec<SearchResult>, query: &str, freq: &FrequencyData) -> Vec<SearchResult> {
+    results.sort_by_key(|r| score_result(r, query, freq));
+    results
+}
+
+fn extract_app_id(path: &str) -> String {
+    let stem = std::path::Path::new(path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let after_dots = stem.split('.').last().unwrap_or(&stem);
+    after_dots.split('_').last().unwrap_or(after_dots).to_lowercase()
 }
 
 fn get_dir(path: &str) -> String {
@@ -169,7 +397,15 @@ fn get_dir(path: &str) -> String {
 
 fn action_open(path: &str) {
     #[cfg(target_os = "linux")]
-    let _ = Command::new("xdg-open").arg(path).spawn();
+    {
+        if path.ends_with(".desktop") {
+            if let Some(name) = std::path::Path::new(path).file_stem() {
+                let _ = Command::new("gtk-launch").arg(name).spawn();
+                return;
+            }
+        }
+        let _ = Command::new("xdg-open").arg(path).spawn();
+    }
     #[cfg(target_os = "macos")]
     let _ = Command::new("open").arg(path).spawn();
     #[cfg(target_os = "windows")]
@@ -211,6 +447,7 @@ fn action_copy(path: &str) {
 }
 
 fn execute_action(path: &str, action: &str) {
+    record_access(path);
     match action {
         "open" => action_open(path),
         "terminal" => action_terminal(path),
@@ -324,6 +561,11 @@ fn show_window_other(window: &tao::window::Window) {
 }
 
 fn main() {
+    if env::args().any(|a| a == "--kill") {
+        send_socket_command(b"kill");
+        return;
+    }
+
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
 
@@ -696,6 +938,7 @@ mod tests {
                 path: "/home/user/file.txt".to_string(),
                 name: "file.txt".to_string(),
                 is_dir: false,
+                icon: None,
             };
 
             // Act
@@ -714,6 +957,7 @@ mod tests {
                 path: "/home/user/docs".to_string(),
                 name: "docs".to_string(),
                 is_dir: true,
+                icon: None,
             };
 
             // Act
@@ -727,8 +971,8 @@ mod tests {
         fn serializes_vec_of_results() {
             // Arrange
             let results = vec![
-                SearchResult { path: "/a".to_string(), name: "a".to_string(), is_dir: true },
-                SearchResult { path: "/b".to_string(), name: "b".to_string(), is_dir: false },
+                SearchResult { path: "/a".to_string(), name: "a".to_string(), is_dir: true, icon: None },
+                SearchResult { path: "/b".to_string(), name: "b".to_string(), is_dir: false, icon: None },
             ];
 
             // Act
@@ -850,6 +1094,515 @@ mod tests {
         #[should_panic]
         fn panics_on_zero_window_size() {
             calculate_centered_position(1920, 1080, 0, 0, 0, 0);
+        }
+    }
+
+    mod extract_app_id {
+        use super::*;
+
+        #[test]
+        fn extracts_simple_name() {
+            assert_eq!(extract_app_id("/usr/share/applications/firefox.desktop"), "firefox");
+        }
+
+        #[test]
+        fn extracts_from_flatpak_path() {
+            assert_eq!(extract_app_id("/var/lib/flatpak/exports/share/applications/org.mozilla.firefox.desktop"), "firefox");
+        }
+
+        #[test]
+        fn extracts_from_snap_path() {
+            assert_eq!(extract_app_id("/var/lib/snapd/desktop/applications/firefox_firefox.desktop"), "firefox");
+        }
+
+        #[test]
+        fn handles_hyphenated_name() {
+            assert_eq!(extract_app_id("/usr/share/applications/signal-desktop.desktop"), "signal-desktop");
+        }
+
+        #[test]
+        fn handles_underscored_snap_name() {
+            assert_eq!(extract_app_id("/usr/share/applications/discord_discord.desktop"), "discord");
+        }
+
+        #[test]
+        fn handles_user_local_path() {
+            assert_eq!(extract_app_id("/home/user/.local/share/applications/discord.desktop"), "discord");
+        }
+    }
+
+    mod extract_filename {
+        use super::*;
+
+        #[test]
+        fn extracts_from_absolute_path() {
+            assert_eq!(extract_filename("/home/user/documents/file.txt"), "file.txt");
+        }
+
+        #[test]
+        fn handles_path_with_spaces() {
+            assert_eq!(extract_filename("/home/user/my documents/my file.txt"), "my file.txt");
+        }
+
+        #[test]
+        fn returns_path_for_root() {
+            assert_eq!(extract_filename("/"), "/");
+        }
+
+        #[test]
+        fn handles_hidden_file() {
+            assert_eq!(extract_filename("/home/user/.bashrc"), ".bashrc");
+        }
+    }
+
+    mod dedupe_results {
+        use super::*;
+
+        fn make_result(path: &str, name: &str) -> SearchResult {
+            SearchResult { path: path.to_string(), name: name.to_string(), is_dir: false, icon: None }
+        }
+
+        #[test]
+        fn removes_duplicate_desktop_files_by_app_id() {
+            // Arrange
+            let results = vec![
+                make_result("/usr/share/applications/firefox.desktop", "Firefox"),
+                make_result("/home/user/.local/share/applications/firefox.desktop", "Firefox"),
+            ];
+
+            // Act
+            let deduped = dedupe_results(results);
+
+            // Assert
+            assert_eq!(deduped.len(), 1);
+            assert_eq!(deduped[0].path, "/usr/share/applications/firefox.desktop");
+        }
+
+        #[test]
+        fn removes_flatpak_duplicates() {
+            // Arrange
+            let results = vec![
+                make_result("/usr/share/applications/firefox.desktop", "Firefox Web Browser"),
+                make_result("/var/lib/flatpak/exports/share/applications/org.mozilla.firefox.desktop", "Firefox"),
+            ];
+
+            // Act
+            let deduped = dedupe_results(results);
+
+            // Assert
+            assert_eq!(deduped.len(), 1);
+        }
+
+        #[test]
+        fn keeps_different_apps() {
+            // Arrange
+            let results = vec![
+                make_result("/usr/share/applications/firefox.desktop", "Firefox"),
+                make_result("/usr/share/applications/chrome.desktop", "Chrome"),
+            ];
+
+            // Act
+            let deduped = dedupe_results(results);
+
+            // Assert
+            assert_eq!(deduped.len(), 2);
+        }
+
+        #[test]
+        fn dedupes_non_desktop_by_name() {
+            // Arrange
+            let results = vec![
+                make_result("/home/user/Documents", "Documents"),
+                make_result("/media/drive/Documents", "Documents"),
+            ];
+
+            // Act
+            let deduped = dedupe_results(results);
+
+            // Assert
+            assert_eq!(deduped.len(), 1);
+        }
+
+        #[test]
+        fn keeps_first_occurrence() {
+            // Arrange
+            let results = vec![
+                make_result("/first/path/discord.desktop", "Discord"),
+                make_result("/second/path/discord.desktop", "Discord"),
+            ];
+
+            // Act
+            let deduped = dedupe_results(results);
+
+            // Assert
+            assert_eq!(deduped[0].path, "/first/path/discord.desktop");
+        }
+    }
+
+    mod score_path_quality {
+        use super::*;
+
+        #[test]
+        fn standard_app_dir_has_low_penalty() {
+            // Arrange
+            let path = "/usr/share/applications/firefox.desktop";
+
+            // Act
+            let score = score_path_quality(path);
+
+            // Assert
+            assert!(score < 50);
+        }
+
+        #[test]
+        fn autostart_dir_has_higher_penalty() {
+            // Arrange
+            let path = "/etc/xdg/autostart/something.desktop";
+
+            // Act
+            let score = score_path_quality(path);
+
+            // Assert
+            assert!(score >= 80);
+        }
+
+        #[test]
+        fn hidden_dirs_heavily_penalized() {
+            // Arrange
+            let path = "/home/user/.config/autostart/app.desktop";
+
+            // Act
+            let score = score_path_quality(path);
+
+            // Assert
+            assert!(score >= 500);
+        }
+
+        #[test]
+        fn deep_paths_penalized() {
+            // Arrange
+            let shallow = "/usr/share/applications/app.desktop";
+            let deep = "/a/b/c/d/e/f/g/h/app.desktop";
+
+            // Act
+            let shallow_score = score_path_quality(shallow);
+            let deep_score = score_path_quality(deep);
+
+            // Assert
+            assert!(deep_score > shallow_score);
+        }
+
+        #[test]
+        fn user_local_apps_have_low_penalty() {
+            // Arrange
+            let path = "/home/user/.local/share/applications/discord.desktop";
+
+            // Act
+            let score = score_path_quality(path);
+
+            // Assert
+            assert!(score < 100);
+        }
+    }
+
+    mod score_result {
+        use super::*;
+
+        fn make_result(path: &str, name: &str) -> SearchResult {
+            SearchResult { path: path.to_string(), name: name.to_string(), is_dir: false, icon: None }
+        }
+
+        fn make_app(name: &str) -> SearchResult {
+            make_result(
+                &format!("/usr/share/applications/{}.desktop", name.to_lowercase()),
+                name,
+            )
+        }
+
+        #[test]
+        fn exact_match_has_lowest_penalty() {
+            // Arrange
+            let r = make_app("foo");
+            let freq = FrequencyData::default();
+
+            // Act
+            let score = score_result(&r, "foo", &freq);
+
+            // Assert
+            assert!(score < 50);
+        }
+
+        #[test]
+        fn prefix_lower_than_contains() {
+            // Arrange
+            let prefix = make_app("foobar");
+            let contains = make_app("xfoo");
+            let freq = FrequencyData::default();
+
+            // Act
+            let prefix_score = score_result(&prefix, "foo", &freq);
+            let contains_score = score_result(&contains, "foo", &freq);
+
+            // Assert
+            assert!(prefix_score < contains_score);
+        }
+
+        #[test]
+        fn desktop_lower_than_folder() {
+            // Arrange
+            let desktop = make_app("foo");
+            let folder = make_result("/some/path/foo", "foo");
+            let freq = FrequencyData::default();
+
+            // Act
+            let desktop_score = score_result(&desktop, "foo", &freq);
+            let folder_score = score_result(&folder, "foo", &freq);
+
+            // Assert
+            assert!(desktop_score < folder_score);
+        }
+
+        #[test]
+        fn shorter_name_lower_score() {
+            // Arrange
+            let short = make_app("foob");
+            let long = make_app("foobar");
+            let freq = FrequencyData::default();
+
+            // Act
+            let short_score = score_result(&short, "foo", &freq);
+            let long_score = score_result(&long, "foo", &freq);
+
+            // Assert
+            assert!(short_score < long_score);
+        }
+
+        #[test]
+        fn standard_path_lower_than_autostart() {
+            // Arrange
+            let standard = make_app("foo");
+            let autostart = make_result("/etc/xdg/autostart/foo.desktop", "foo");
+            let freq = FrequencyData::default();
+
+            // Act
+            let standard_score = score_result(&standard, "foo", &freq);
+            let autostart_score = score_result(&autostart, "foo", &freq);
+
+            // Assert
+            assert!(standard_score < autostart_score);
+        }
+
+        #[test]
+        fn frequency_boost_lowers_score() {
+            // Arrange
+            let r = make_app("foo");
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+            let mut freq = FrequencyData::default();
+            freq.entries.insert(r.path.clone(), FrequencyEntry { count: 5, last_accessed: now });
+
+            // Act
+            let score_with_freq = score_result(&r, "foo", &freq);
+            let score_without_freq = score_result(&r, "foo", &FrequencyData::default());
+
+            // Assert
+            assert!(score_with_freq < score_without_freq);
+        }
+    }
+
+    mod sort_by_relevance {
+        use super::*;
+
+        fn make_result(path: &str, name: &str) -> SearchResult {
+            SearchResult { path: path.to_string(), name: name.to_string(), is_dir: false, icon: None }
+        }
+
+        fn make_app(name: &str) -> SearchResult {
+            SearchResult {
+                path: format!("/usr/share/applications/{}.desktop", name.to_lowercase()),
+                name: name.to_string(),
+                is_dir: false,
+                icon: None,
+            }
+        }
+
+        #[test]
+        fn exact_match_beats_prefix_match() {
+            // Arrange
+            let results = vec![make_app("foobar"), make_app("foo")];
+            let freq = FrequencyData::default();
+
+            // Act
+            let sorted = sort_by_relevance(results, "foo", &freq);
+
+            // Assert
+            assert_eq!(sorted[0].name, "foo");
+        }
+
+        #[test]
+        fn prefix_match_beats_contains_match() {
+            // Arrange
+            let results = vec![make_app("xfoo"), make_app("foobar")];
+            let freq = FrequencyData::default();
+
+            // Act
+            let sorted = sort_by_relevance(results, "foo", &freq);
+
+            // Assert
+            assert_eq!(sorted[0].name, "foobar");
+        }
+
+        #[test]
+        fn desktop_beats_folder_same_name() {
+            // Arrange
+            let results = vec![
+                make_result("/some/path/foo", "foo"),
+                make_app("foo"),
+            ];
+            let freq = FrequencyData::default();
+
+            // Act
+            let sorted = sort_by_relevance(results, "foo", &freq);
+
+            // Assert
+            assert!(sorted[0].path.ends_with(".desktop"));
+        }
+
+        #[test]
+        fn shorter_name_wins_same_match_level() {
+            // Arrange
+            let results = vec![make_app("foobar"), make_app("foob")];
+            let freq = FrequencyData::default();
+
+            // Act
+            let sorted = sort_by_relevance(results, "foo", &freq);
+
+            // Assert
+            assert_eq!(sorted[0].name, "foob");
+        }
+
+        #[test]
+        fn standard_path_beats_autostart() {
+            // Arrange
+            let results = vec![
+                make_result("/etc/xdg/autostart/foo.desktop", "foo"),
+                make_app("foo"),
+            ];
+            let freq = FrequencyData::default();
+
+            // Act
+            let sorted = sort_by_relevance(results, "foo", &freq);
+
+            // Assert
+            assert!(sorted[0].path.contains("/usr/share/applications/"));
+        }
+
+        #[test]
+        fn empty_results_returns_empty() {
+            let freq = FrequencyData::default();
+            assert!(sort_by_relevance(vec![], "test", &freq).is_empty());
+        }
+
+        #[test]
+        fn single_result_unchanged() {
+            // Arrange
+            let results = vec![make_app("test")];
+            let freq = FrequencyData::default();
+
+            // Act
+            let sorted = sort_by_relevance(results, "test", &freq);
+
+            // Assert
+            assert_eq!(sorted.len(), 1);
+        }
+
+        #[test]
+        fn case_insensitive_matching() {
+            // Arrange
+            let results = vec![make_app("FOO"), make_app("foo")];
+            let freq = FrequencyData::default();
+
+            // Act
+            let sorted = sort_by_relevance(results, "Foo", &freq);
+
+            // Assert
+            assert_eq!(sorted.len(), 2);
+        }
+
+        #[test]
+        fn frequent_app_beats_better_match() {
+            // Arrange
+            let results = vec![make_app("foobar"), make_app("xfoo")];
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+            let mut freq = FrequencyData::default();
+            freq.entries.insert(
+                "/usr/share/applications/xfoo.desktop".to_string(),
+                FrequencyEntry { count: 10, last_accessed: now },
+            );
+
+            // Act
+            let sorted = sort_by_relevance(results, "foo", &freq);
+
+            // Assert
+            assert_eq!(sorted[0].name, "xfoo");
+        }
+    }
+
+    mod frequency {
+        use super::*;
+
+        #[test]
+        fn effective_count_no_decay_at_zero_days() {
+            // Arrange
+            let now = 1000000u64;
+            let entry = FrequencyEntry { count: 5, last_accessed: now };
+
+            // Act
+            let count = effective_count(&entry, now);
+
+            // Assert
+            assert!((count - 5.0).abs() < 0.01);
+        }
+
+        #[test]
+        fn effective_count_halves_after_half_life() {
+            // Arrange
+            let now = 1000000u64;
+            let half_life_secs = (HALF_LIFE_DAYS * 86400.0) as u64;
+            let entry = FrequencyEntry { count: 10, last_accessed: now - half_life_secs };
+
+            // Act
+            let count = effective_count(&entry, now);
+
+            // Assert
+            assert!((count - 5.0).abs() < 0.1);
+        }
+
+        #[test]
+        fn calc_frequency_bonus_returns_zero_for_unknown() {
+            // Arrange
+            let freq = FrequencyData::default();
+
+            // Act
+            let bonus = calc_frequency_bonus("/unknown/path", &freq);
+
+            // Assert
+            assert_eq!(bonus, 0);
+        }
+
+        #[test]
+        fn calc_frequency_bonus_scales_with_count() {
+            // Arrange
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+            let mut freq = FrequencyData::default();
+            freq.entries.insert("/path1".to_string(), FrequencyEntry { count: 1, last_accessed: now });
+            freq.entries.insert("/path2".to_string(), FrequencyEntry { count: 5, last_accessed: now });
+
+            // Act
+            let bonus1 = calc_frequency_bonus("/path1", &freq);
+            let bonus2 = calc_frequency_bonus("/path2", &freq);
+
+            // Assert
+            assert!(bonus2 > bonus1);
         }
     }
 }
