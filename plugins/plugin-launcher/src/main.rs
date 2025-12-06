@@ -14,9 +14,47 @@ use tao::window::WindowBuilder;
 use wry::http::Request;
 use wry::WebViewBuilder;
 
-const HALF_LIFE_DAYS: f64 = 7.0;
-const FREQUENCY_BONUS: i32 = 500;
 const SOCKET_PATH: &str = "/tmp/qol-launcher.sock";
+
+#[derive(Serialize, Deserialize, Clone)]
+struct Config {
+    half_life_days: f64,
+    frequency_bonus: i32,
+    prefer_apps: bool,
+    penalize_hidden: bool,
+    depth_penalty: i32,
+    exact_bonus: i32,
+    prefix_penalty: i32,
+    contains_penalty: i32,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            half_life_days: 7.0,
+            frequency_bonus: 500,
+            prefer_apps: true,
+            penalize_hidden: true,
+            depth_penalty: 2,
+            exact_bonus: 0,
+            prefix_penalty: 100,
+            contains_penalty: 200,
+        }
+    }
+}
+
+fn get_config_path() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("qol-tray/plugins/plugin-launcher/config.json")
+}
+
+fn load_config() -> Config {
+    fs::read_to_string(get_config_path())
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 struct FrequencyEntry {
@@ -47,30 +85,30 @@ fn save_frequency(data: &FrequencyData) {
     let _ = fs::write(path, serde_json::to_string(data).unwrap_or_default());
 }
 
-fn record_access(path: &str) {
+fn record_access(path: &str, config: &Config) {
     let mut data = load_frequency();
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
     let entry = data.entries.entry(path.to_string()).or_default();
     entry.count += 1;
     entry.last_accessed = now;
-    prune_frequency(&mut data);
+    prune_frequency(&mut data, config.half_life_days);
     save_frequency(&data);
 }
 
-fn prune_frequency(data: &mut FrequencyData) {
+fn prune_frequency(data: &mut FrequencyData, half_life_days: f64) {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-    data.entries.retain(|_, e| effective_count(e, now) > 0.1);
+    data.entries.retain(|_, e| effective_count(e, now, half_life_days) > 0.1);
     if data.entries.len() > 1000 {
         let mut items: Vec<_> = data.entries.drain().collect();
-        items.sort_by(|a, b| effective_count(&b.1, now).partial_cmp(&effective_count(&a.1, now)).unwrap());
+        items.sort_by(|a, b| effective_count(&b.1, now, half_life_days).partial_cmp(&effective_count(&a.1, now, half_life_days)).unwrap());
         items.truncate(1000);
         data.entries = items.into_iter().collect();
     }
 }
 
-fn effective_count(entry: &FrequencyEntry, now: u64) -> f64 {
+fn effective_count(entry: &FrequencyEntry, now: u64, half_life_days: f64) -> f64 {
     let days_elapsed = (now - entry.last_accessed) as f64 / 86400.0;
-    let decay = (-days_elapsed * 0.693 / HALF_LIFE_DAYS).exp();
+    let decay = (-days_elapsed * 0.693 / half_life_days).exp();
     entry.count as f64 * decay
 }
 
@@ -283,6 +321,7 @@ fn extract_filename(path: &str) -> String {
 
 fn search(query: &str, plugin_dir: &std::path::Path) -> Vec<SearchResult> {
     let script = plugin_dir.join(get_backend_script());
+    let config = load_config();
 
     #[cfg(target_os = "windows")]
     let output = Command::new("powershell")
@@ -305,7 +344,7 @@ fn search(query: &str, plugin_dir: &std::path::Path) -> Vec<SearchResult> {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let results: Vec<_> = stdout.lines().filter(|l| !l.is_empty()).map(parse_search_result).collect();
     let freq = load_frequency();
-    sort_by_relevance(dedupe_results(results), query, &freq)
+    sort_by_relevance(dedupe_results(results), query, &freq, &config)
 }
 
 fn dedupe_results(results: Vec<SearchResult>) -> Vec<SearchResult> {
@@ -320,35 +359,35 @@ fn dedupe_results(results: Vec<SearchResult>) -> Vec<SearchResult> {
     }).collect()
 }
 
-fn score_result(r: &SearchResult, query: &str, freq: &FrequencyData) -> i32 {
+fn score_result(r: &SearchResult, query: &str, freq: &FrequencyData, config: &Config) -> i32 {
     let name = r.name.to_lowercase();
     let q = query.to_lowercase();
     let path = &r.path;
 
-    let match_penalty = if name == q { 0 }
-        else if name.starts_with(&q) { 100 }
-        else if name.contains(&q) { 200 }
+    let match_penalty = if name == q { config.exact_bonus }
+        else if name.starts_with(&q) { config.prefix_penalty }
+        else if name.contains(&q) { config.contains_penalty }
         else { 300 };
 
-    let type_penalty = if path.ends_with(".desktop") { 0 } else { 1000 };
+    let type_penalty = if !config.prefer_apps || path.ends_with(".desktop") { 0 } else { 1000 };
 
-    let path_penalty = score_path_quality(path);
+    let path_penalty = score_path_quality(path, config);
 
     let length_penalty = r.name.len() as i32;
 
-    let frequency_bonus = calc_frequency_bonus(path, freq);
+    let frequency_bonus = calc_frequency_bonus(path, freq, config);
 
     match_penalty + type_penalty + path_penalty + length_penalty - frequency_bonus
 }
 
-fn calc_frequency_bonus(path: &str, freq: &FrequencyData) -> i32 {
+fn calc_frequency_bonus(path: &str, freq: &FrequencyData, config: &Config) -> i32 {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
     freq.entries.get(path)
-        .map(|e| (effective_count(e, now) * FREQUENCY_BONUS as f64) as i32)
+        .map(|e| (effective_count(e, now, config.half_life_days) * config.frequency_bonus as f64) as i32)
         .unwrap_or(0)
 }
 
-fn score_path_quality(path: &str) -> i32 {
+fn score_path_quality(path: &str, config: &Config) -> i32 {
     let mut penalty = 0i32;
 
     let standard_dirs = ["/usr/share/applications", "/usr/lib", ".local/share/applications"];
@@ -362,18 +401,20 @@ fn score_path_quality(path: &str) -> i32 {
     }
 
     let depth = path.matches('/').count();
-    penalty += (depth as i32) * 2;
+    penalty += (depth as i32) * config.depth_penalty;
 
-    let hidden_count = path.split('/')
-        .filter(|p| p.starts_with('.') && *p != ".local")
-        .count();
-    penalty += (hidden_count as i32) * 500;
+    if config.penalize_hidden {
+        let hidden_count = path.split('/')
+            .filter(|p| p.starts_with('.') && *p != ".local")
+            .count();
+        penalty += (hidden_count as i32) * 500;
+    }
 
     penalty
 }
 
-fn sort_by_relevance(mut results: Vec<SearchResult>, query: &str, freq: &FrequencyData) -> Vec<SearchResult> {
-    results.sort_by_key(|r| score_result(r, query, freq));
+fn sort_by_relevance(mut results: Vec<SearchResult>, query: &str, freq: &FrequencyData, config: &Config) -> Vec<SearchResult> {
+    results.sort_by_key(|r| score_result(r, query, freq, config));
     results
 }
 
@@ -447,7 +488,8 @@ fn action_copy(path: &str) {
 }
 
 fn execute_action(path: &str, action: &str) {
-    record_access(path);
+    let config = load_config();
+    record_access(path, &config);
     match action {
         "open" => action_open(path),
         "terminal" => action_terminal(path),
@@ -457,9 +499,9 @@ fn execute_action(path: &str, action: &str) {
     }
 }
 
-const HTML: &str = include_str!("../ui/index.html");
-const CSS: &str = include_str!("../ui/style.css");
-const JS: &str = include_str!("../ui/app.js");
+const HTML: &str = include_str!("../webview/index.html");
+const CSS: &str = include_str!("../webview/style.css");
+const JS: &str = include_str!("../webview/app.js");
 
 fn build_html() -> String {
     HTML.replace(r#"<link rel="stylesheet" href="style.css">"#, &format!("<style>{}</style>", CSS))
@@ -1242,71 +1284,44 @@ mod tests {
     mod score_path_quality {
         use super::*;
 
+        fn cfg() -> Config { Config::default() }
+
         #[test]
         fn standard_app_dir_has_low_penalty() {
-            // Arrange
-            let path = "/usr/share/applications/firefox.desktop";
-
-            // Act
-            let score = score_path_quality(path);
-
-            // Assert
+            let score = score_path_quality("/usr/share/applications/firefox.desktop", &cfg());
             assert!(score < 50);
         }
 
         #[test]
         fn autostart_dir_has_higher_penalty() {
-            // Arrange
-            let path = "/etc/xdg/autostart/something.desktop";
-
-            // Act
-            let score = score_path_quality(path);
-
-            // Assert
+            let score = score_path_quality("/etc/xdg/autostart/something.desktop", &cfg());
             assert!(score >= 80);
         }
 
         #[test]
         fn hidden_dirs_heavily_penalized() {
-            // Arrange
-            let path = "/home/user/.config/autostart/app.desktop";
-
-            // Act
-            let score = score_path_quality(path);
-
-            // Assert
+            let score = score_path_quality("/home/user/.config/autostart/app.desktop", &cfg());
             assert!(score >= 500);
         }
 
         #[test]
         fn deep_paths_penalized() {
-            // Arrange
-            let shallow = "/usr/share/applications/app.desktop";
-            let deep = "/a/b/c/d/e/f/g/h/app.desktop";
-
-            // Act
-            let shallow_score = score_path_quality(shallow);
-            let deep_score = score_path_quality(deep);
-
-            // Assert
+            let shallow_score = score_path_quality("/usr/share/applications/app.desktop", &cfg());
+            let deep_score = score_path_quality("/a/b/c/d/e/f/g/h/app.desktop", &cfg());
             assert!(deep_score > shallow_score);
         }
 
         #[test]
         fn user_local_apps_have_low_penalty() {
-            // Arrange
-            let path = "/home/user/.local/share/applications/discord.desktop";
-
-            // Act
-            let score = score_path_quality(path);
-
-            // Assert
+            let score = score_path_quality("/home/user/.local/share/applications/discord.desktop", &cfg());
             assert!(score < 100);
         }
     }
 
     mod score_result {
         use super::*;
+
+        fn cfg() -> Config { Config::default() }
 
         fn make_result(path: &str, name: &str) -> SearchResult {
             SearchResult { path: path.to_string(), name: name.to_string(), is_dir: false, icon: None }
@@ -1321,96 +1336,59 @@ mod tests {
 
         #[test]
         fn exact_match_has_lowest_penalty() {
-            // Arrange
             let r = make_app("foo");
-            let freq = FrequencyData::default();
-
-            // Act
-            let score = score_result(&r, "foo", &freq);
-
-            // Assert
+            let score = score_result(&r, "foo", &FrequencyData::default(), &cfg());
             assert!(score < 50);
         }
 
         #[test]
         fn prefix_lower_than_contains() {
-            // Arrange
-            let prefix = make_app("foobar");
-            let contains = make_app("xfoo");
             let freq = FrequencyData::default();
-
-            // Act
-            let prefix_score = score_result(&prefix, "foo", &freq);
-            let contains_score = score_result(&contains, "foo", &freq);
-
-            // Assert
+            let prefix_score = score_result(&make_app("foobar"), "foo", &freq, &cfg());
+            let contains_score = score_result(&make_app("xfoo"), "foo", &freq, &cfg());
             assert!(prefix_score < contains_score);
         }
 
         #[test]
         fn desktop_lower_than_folder() {
-            // Arrange
-            let desktop = make_app("foo");
-            let folder = make_result("/some/path/foo", "foo");
             let freq = FrequencyData::default();
-
-            // Act
-            let desktop_score = score_result(&desktop, "foo", &freq);
-            let folder_score = score_result(&folder, "foo", &freq);
-
-            // Assert
+            let desktop_score = score_result(&make_app("foo"), "foo", &freq, &cfg());
+            let folder_score = score_result(&make_result("/some/path/foo", "foo"), "foo", &freq, &cfg());
             assert!(desktop_score < folder_score);
         }
 
         #[test]
         fn shorter_name_lower_score() {
-            // Arrange
-            let short = make_app("foob");
-            let long = make_app("foobar");
             let freq = FrequencyData::default();
-
-            // Act
-            let short_score = score_result(&short, "foo", &freq);
-            let long_score = score_result(&long, "foo", &freq);
-
-            // Assert
+            let short_score = score_result(&make_app("foob"), "foo", &freq, &cfg());
+            let long_score = score_result(&make_app("foobar"), "foo", &freq, &cfg());
             assert!(short_score < long_score);
         }
 
         #[test]
         fn standard_path_lower_than_autostart() {
-            // Arrange
-            let standard = make_app("foo");
-            let autostart = make_result("/etc/xdg/autostart/foo.desktop", "foo");
             let freq = FrequencyData::default();
-
-            // Act
-            let standard_score = score_result(&standard, "foo", &freq);
-            let autostart_score = score_result(&autostart, "foo", &freq);
-
-            // Assert
+            let standard_score = score_result(&make_app("foo"), "foo", &freq, &cfg());
+            let autostart_score = score_result(&make_result("/etc/xdg/autostart/foo.desktop", "foo"), "foo", &freq, &cfg());
             assert!(standard_score < autostart_score);
         }
 
         #[test]
         fn frequency_boost_lowers_score() {
-            // Arrange
             let r = make_app("foo");
             let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
             let mut freq = FrequencyData::default();
             freq.entries.insert(r.path.clone(), FrequencyEntry { count: 5, last_accessed: now });
-
-            // Act
-            let score_with_freq = score_result(&r, "foo", &freq);
-            let score_without_freq = score_result(&r, "foo", &FrequencyData::default());
-
-            // Assert
+            let score_with_freq = score_result(&r, "foo", &freq, &cfg());
+            let score_without_freq = score_result(&r, "foo", &FrequencyData::default(), &cfg());
             assert!(score_with_freq < score_without_freq);
         }
     }
 
     mod sort_by_relevance {
         use super::*;
+
+        fn cfg() -> Config { Config::default() }
 
         fn make_result(path: &str, name: &str) -> SearchResult {
             SearchResult { path: path.to_string(), name: name.to_string(), is_dir: false, icon: None }
@@ -1427,110 +1405,60 @@ mod tests {
 
         #[test]
         fn exact_match_beats_prefix_match() {
-            // Arrange
             let results = vec![make_app("foobar"), make_app("foo")];
-            let freq = FrequencyData::default();
-
-            // Act
-            let sorted = sort_by_relevance(results, "foo", &freq);
-
-            // Assert
+            let sorted = sort_by_relevance(results, "foo", &FrequencyData::default(), &cfg());
             assert_eq!(sorted[0].name, "foo");
         }
 
         #[test]
         fn prefix_match_beats_contains_match() {
-            // Arrange
             let results = vec![make_app("xfoo"), make_app("foobar")];
-            let freq = FrequencyData::default();
-
-            // Act
-            let sorted = sort_by_relevance(results, "foo", &freq);
-
-            // Assert
+            let sorted = sort_by_relevance(results, "foo", &FrequencyData::default(), &cfg());
             assert_eq!(sorted[0].name, "foobar");
         }
 
         #[test]
         fn desktop_beats_folder_same_name() {
-            // Arrange
-            let results = vec![
-                make_result("/some/path/foo", "foo"),
-                make_app("foo"),
-            ];
-            let freq = FrequencyData::default();
-
-            // Act
-            let sorted = sort_by_relevance(results, "foo", &freq);
-
-            // Assert
+            let results = vec![make_result("/some/path/foo", "foo"), make_app("foo")];
+            let sorted = sort_by_relevance(results, "foo", &FrequencyData::default(), &cfg());
             assert!(sorted[0].path.ends_with(".desktop"));
         }
 
         #[test]
         fn shorter_name_wins_same_match_level() {
-            // Arrange
             let results = vec![make_app("foobar"), make_app("foob")];
-            let freq = FrequencyData::default();
-
-            // Act
-            let sorted = sort_by_relevance(results, "foo", &freq);
-
-            // Assert
+            let sorted = sort_by_relevance(results, "foo", &FrequencyData::default(), &cfg());
             assert_eq!(sorted[0].name, "foob");
         }
 
         #[test]
         fn standard_path_beats_autostart() {
-            // Arrange
-            let results = vec![
-                make_result("/etc/xdg/autostart/foo.desktop", "foo"),
-                make_app("foo"),
-            ];
-            let freq = FrequencyData::default();
-
-            // Act
-            let sorted = sort_by_relevance(results, "foo", &freq);
-
-            // Assert
+            let results = vec![make_result("/etc/xdg/autostart/foo.desktop", "foo"), make_app("foo")];
+            let sorted = sort_by_relevance(results, "foo", &FrequencyData::default(), &cfg());
             assert!(sorted[0].path.contains("/usr/share/applications/"));
         }
 
         #[test]
         fn empty_results_returns_empty() {
-            let freq = FrequencyData::default();
-            assert!(sort_by_relevance(vec![], "test", &freq).is_empty());
+            assert!(sort_by_relevance(vec![], "test", &FrequencyData::default(), &cfg()).is_empty());
         }
 
         #[test]
         fn single_result_unchanged() {
-            // Arrange
             let results = vec![make_app("test")];
-            let freq = FrequencyData::default();
-
-            // Act
-            let sorted = sort_by_relevance(results, "test", &freq);
-
-            // Assert
+            let sorted = sort_by_relevance(results, "test", &FrequencyData::default(), &cfg());
             assert_eq!(sorted.len(), 1);
         }
 
         #[test]
         fn case_insensitive_matching() {
-            // Arrange
             let results = vec![make_app("FOO"), make_app("foo")];
-            let freq = FrequencyData::default();
-
-            // Act
-            let sorted = sort_by_relevance(results, "Foo", &freq);
-
-            // Assert
+            let sorted = sort_by_relevance(results, "Foo", &FrequencyData::default(), &cfg());
             assert_eq!(sorted.len(), 2);
         }
 
         #[test]
         fn frequent_app_beats_better_match() {
-            // Arrange
             let results = vec![make_app("foobar"), make_app("xfoo")];
             let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
             let mut freq = FrequencyData::default();
@@ -1538,11 +1466,7 @@ mod tests {
                 "/usr/share/applications/xfoo.desktop".to_string(),
                 FrequencyEntry { count: 10, last_accessed: now },
             );
-
-            // Act
-            let sorted = sort_by_relevance(results, "foo", &freq);
-
-            // Assert
+            let sorted = sort_by_relevance(results, "foo", &freq, &cfg());
             assert_eq!(sorted[0].name, "xfoo");
         }
     }
@@ -1550,58 +1474,41 @@ mod tests {
     mod frequency {
         use super::*;
 
+        const HALF_LIFE_DAYS: f64 = 7.0;
+
+        fn cfg() -> Config { Config::default() }
+
         #[test]
         fn effective_count_no_decay_at_zero_days() {
-            // Arrange
             let now = 1000000u64;
             let entry = FrequencyEntry { count: 5, last_accessed: now };
-
-            // Act
-            let count = effective_count(&entry, now);
-
-            // Assert
+            let count = effective_count(&entry, now, HALF_LIFE_DAYS);
             assert!((count - 5.0).abs() < 0.01);
         }
 
         #[test]
         fn effective_count_halves_after_half_life() {
-            // Arrange
             let now = 1000000u64;
             let half_life_secs = (HALF_LIFE_DAYS * 86400.0) as u64;
             let entry = FrequencyEntry { count: 10, last_accessed: now - half_life_secs };
-
-            // Act
-            let count = effective_count(&entry, now);
-
-            // Assert
+            let count = effective_count(&entry, now, HALF_LIFE_DAYS);
             assert!((count - 5.0).abs() < 0.1);
         }
 
         #[test]
         fn calc_frequency_bonus_returns_zero_for_unknown() {
-            // Arrange
-            let freq = FrequencyData::default();
-
-            // Act
-            let bonus = calc_frequency_bonus("/unknown/path", &freq);
-
-            // Assert
+            let bonus = calc_frequency_bonus("/unknown/path", &FrequencyData::default(), &cfg());
             assert_eq!(bonus, 0);
         }
 
         #[test]
         fn calc_frequency_bonus_scales_with_count() {
-            // Arrange
             let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
             let mut freq = FrequencyData::default();
             freq.entries.insert("/path1".to_string(), FrequencyEntry { count: 1, last_accessed: now });
             freq.entries.insert("/path2".to_string(), FrequencyEntry { count: 5, last_accessed: now });
-
-            // Act
-            let bonus1 = calc_frequency_bonus("/path1", &freq);
-            let bonus2 = calc_frequency_bonus("/path2", &freq);
-
-            // Assert
+            let bonus1 = calc_frequency_bonus("/path1", &freq, &cfg());
+            let bonus2 = calc_frequency_bonus("/path2", &freq, &cfg());
             assert!(bonus2 > bonus1);
         }
     }
