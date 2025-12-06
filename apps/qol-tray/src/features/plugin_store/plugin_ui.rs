@@ -19,14 +19,14 @@ async fn serve_plugin_index(
     AxumPath(plugin_id): AxumPath<String>,
     axum::extract::State(plugins_dir): axum::extract::State<PathBuf>,
 ) -> Response {
+    if !is_safe_id(&plugin_id) {
+        return (StatusCode::FORBIDDEN, "Access denied").into_response();
+    }
+
     let ui_path = plugins_dir.join(&plugin_id).join("ui").join("index.html");
 
     if !ui_path.exists() {
         return (StatusCode::NOT_FOUND, "File not found").into_response();
-    }
-
-    if !is_safe_path(&ui_path, &plugins_dir) {
-        return (StatusCode::FORBIDDEN, "Access denied").into_response();
     }
 
     let contents = match tokio::fs::read_to_string(&ui_path).await {
@@ -81,17 +81,17 @@ async fn serve_plugin_file(
 }
 
 async fn serve_file(plugins_dir: &Path, plugin_id: &str, file_path: &str) -> Response {
+    if !is_safe_id(plugin_id) || !is_safe_subpath(file_path) {
+        log::warn!("Unsafe path: plugin_id={}, file_path={}", plugin_id, file_path);
+        return (StatusCode::FORBIDDEN, "Access denied").into_response();
+    }
+
     let ui_path = plugins_dir.join(plugin_id).join("ui").join(file_path);
     log::debug!("Serving plugin file: {:?}", ui_path);
 
     if !ui_path.exists() {
         log::warn!("Plugin UI file not found: {:?}", ui_path);
         return (StatusCode::NOT_FOUND, "File not found").into_response();
-    }
-
-    if !is_safe_path(&ui_path, plugins_dir) {
-        log::warn!("Plugin UI path not safe: {:?}", ui_path);
-        return (StatusCode::FORBIDDEN, "Access denied").into_response();
     }
 
     let contents = match tokio::fs::read(&ui_path).await {
@@ -107,11 +107,12 @@ async fn serve_file(plugins_dir: &Path, plugin_id: &str, file_path: &str) -> Res
     ([(header::CONTENT_TYPE, mime)], contents).into_response()
 }
 
-fn is_safe_path(requested: &Path, base: &Path) -> bool {
-    match (requested.canonicalize(), base.canonicalize()) {
-        (Ok(req), Ok(base)) => req.starts_with(base),
-        _ => false,
-    }
+fn is_safe_id(id: &str) -> bool {
+    !id.is_empty() && !id.contains('/') && !id.contains('\\') && id != ".." && id != "."
+}
+
+fn is_safe_subpath(path: &str) -> bool {
+    !path.contains("..") && !path.starts_with('/') && !path.starts_with('\\')
 }
 
 fn guess_mime(path: &Path) -> &'static str {
@@ -133,6 +134,40 @@ fn guess_mime(path: &Path) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_safe_id_validation() {
+        let cases = [
+            ("plugin-launcher", true),
+            ("my_plugin", true),
+            ("../etc", false),
+            ("foo/bar", false),
+            ("foo\\bar", false),
+            ("..", false),
+            (".", false),
+            ("", false),
+        ];
+
+        for (id, expected) in cases {
+            assert_eq!(is_safe_id(id), expected, "id: {}", id);
+        }
+    }
+
+    #[test]
+    fn is_safe_subpath_validation() {
+        let cases = [
+            ("index.html", true),
+            ("css/style.css", true),
+            ("../secret.txt", false),
+            ("foo/../bar", false),
+            ("/etc/passwd", false),
+            ("\\windows\\system32", false),
+        ];
+
+        for (path, expected) in cases {
+            assert_eq!(is_safe_subpath(path), expected, "path: {}", path);
+        }
+    }
 
     #[test]
     fn guess_mime_returns_correct_types() {
