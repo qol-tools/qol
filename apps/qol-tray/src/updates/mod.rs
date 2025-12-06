@@ -76,11 +76,11 @@ pub async fn download_and_install() -> Result<()> {
     let version = latest_version().ok_or_else(|| anyhow::anyhow!("No update version available"))?;
 
     let deb_url = format!(
-        "https://github.com/{}/releases/download/v{}/qol-tray_{}_amd64.deb",
+        "https://github.com/{}/releases/download/v{}/qol-tray_{}-1_amd64.deb",
         GITHUB_REPO, version, version
     );
 
-    let tmp_path = format!("/tmp/qol-tray_{}_amd64.deb", version);
+    let tmp_path = format!("/tmp/qol-tray_{}-1_amd64.deb", version);
 
     log::info!("Downloading update from {}", deb_url);
 
