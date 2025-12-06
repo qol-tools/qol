@@ -48,14 +48,31 @@ impl MenuProvider for PluginStore {
 }
 
 fn open_url(url: &str) -> Result<()> {
+    use std::process::Stdio;
+
     #[cfg(target_os = "linux")]
-    std::process::Command::new("xdg-open").arg(url).spawn()?;
+    std::process::Command::new("xdg-open")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
 
     #[cfg(target_os = "macos")]
-    std::process::Command::new("open").arg(url).spawn()?;
+    std::process::Command::new("open")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
 
     #[cfg(target_os = "windows")]
-    std::process::Command::new("cmd").args(["/C", "start", url]).spawn()?;
+    std::process::Command::new("cmd")
+        .args(["/C", "start", url])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
 
     Ok(())
 }
