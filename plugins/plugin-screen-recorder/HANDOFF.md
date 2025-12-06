@@ -2,7 +2,7 @@
 
 ## Current State
 
-Screen recording plugin for qol-tray using ffmpeg.
+Screen recording plugin for qol-tray using ffmpeg (Linux only for now).
 
 ## Known Issues / TODO
 
