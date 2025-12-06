@@ -10,7 +10,7 @@ pub use config::PluginConfigManager;
 
 use anyhow::Result;
 use std::path::PathBuf;
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 
 #[derive(Debug)]
 pub struct Plugin {
@@ -47,6 +47,9 @@ impl Plugin {
         log::info!("Starting daemon for plugin: {}", self.id);
         let child = Command::new(&daemon_path)
             .current_dir(&self.path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()?;
 
         self.daemon_process = Some(child);
