@@ -1,0 +1,18 @@
+[plugin]
+name = "Launcher"
+description = "Universal search with action modifiers"
+version = "0.1.0"
+author = "KMRH47"
+init = "init.sh"
+
+[menu]
+label = "Launcher"
+items = [
+    { type = "action", id = "open", label = "Open Launcher", action = "run" },
+    { type = "action", id = "settings", label = "Settings...", action = "settings" },
+]
+
+[[dependencies.binaries]]
+name = "launcher"
+repo = "qol-tools/plugin-launcher"
+pattern = "launcher-{os}-{arch}"
