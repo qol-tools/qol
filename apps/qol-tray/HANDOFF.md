@@ -2,13 +2,16 @@
 
 ## Current State
 
-qol-tray v1.4.3 - Pluggable system tray daemon. Single tray icon opens browser UI at `http://127.0.0.1:42700` for plugin management.
+qol-tray v1.4.3 - Pluggable system tray daemon for Linux. Single tray icon opens browser UI at `http://127.0.0.1:42700` for plugin management.
+
+**Linux only for now.** Cross-platform support planned for the future.
 
 ### Recent Changes (Dec 2025)
+- Developer tab with plugin linking/unlinking for dev workflow
+- Backup/restore of installed plugins when linking/unlinking
+- Keyboard navigation in Developer tab (arrow keys, Space/Enter)
 - Extracted shared modules: `src/version.rs`, `src/paths.rs`
-- Flattened nested code to max 1 level (icon.rs, linux.rs, hotkeys/mod.rs)
-- Prevented mutex panics in server.rs (proper error handling)
-- Removed unused crates (thiserror, notify, image)
+- Flattened nested code to max 1 level
 - Detached spawned processes from terminal stdio
 
 ### What Works
@@ -18,21 +21,25 @@ qol-tray v1.4.3 - Pluggable system tray daemon. Single tray icon opens browser U
 - Hotkey configuration per plugin action
 - Dual-location config system (survives uninstall/reinstall)
 - Daemon plugin support
-- Developer mode (`make dev`) with plugin reload
+- Developer mode (`make dev`) with plugin linking and reload
 - Auto-update with notification dot and one-click install
-- Local releases via `make release` (runs tests, bumps version, builds .deb, uploads to GitHub)
+- Local releases via `make release`
 
 ### Architecture
-- `src/tray/` - System tray with platform abstraction
+- `src/tray/` - System tray (Linux SNI)
 - `src/plugins/` - Plugin loading, config management
 - `src/features/plugin_store/` - Browser UI server
 - `src/hotkeys/` - Global hotkey registration
-- `src/updates/` - Auto-update system (GitHub API check, .deb download/install)
+- `src/updates/` - Auto-update system
 - `ui/` - Embedded web UI (rust-embed)
 
 ### Developer Mode
 
-`make dev` runs with Developer tab enabled. Press `r` to reload all plugins (stops daemons and restarts them).
+`make dev` runs with Developer tab enabled:
+- Link plugins from dev directories (symlinks)
+- Unlink restores original installed version from backup
+- Press `r` to reload all plugins (stops daemons and restarts)
+- Arrow keys navigate, Space/Enter to toggle
 
 ### Releasing
 
@@ -43,22 +50,20 @@ qol-tray v1.4.3 - Pluggable system tray daemon. Single tray icon opens browser U
 4. Commits, pushes
 5. Creates GitHub release with .deb attached
 
-No cloud CI needed for releases.
+No cloud CI needed.
 
 ## Known Issues / TODO
 
-1. **Wayland support** - qol-tray core works on Wayland (SNI tray, browser UI). Individual plugins may use X11-only tools. See each plugin's HANDOFF.md for details.
-
-2. **macOS/Windows** - Planned but not implemented. Platform abstraction exists in `src/tray/platform/`. Auto-update on these platforms just opens releases page.
+1. **Wayland support** - Core works on Wayland. Individual plugins may use X11-only tools.
 
 ## Plugins
 
-| Plugin | Status | Wayland |
-|--------|--------|---------|
-| plugin-launcher | Working | Needs work (xdotool, xclip) |
-| plugin-pointz | Working | Should work |
-| plugin-screen-recorder | Working | Needs work (xrandr, slop) |
-| plugin-window-actions | Working | Needs work (xdotool, xprop, wmctrl) |
+| Plugin | Status |
+|--------|--------|
+| plugin-launcher | Working |
+| plugin-pointz | Working |
+| plugin-screen-recorder | Working |
+| plugin-window-actions | Working |
 
 ## Config Locations
 
