@@ -21,7 +21,13 @@ deb:
 	cargo deb --no-build
 
 release:
-	@VERSION=$$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/'); \
+	@OLD=$$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/'); \
+	MAJOR=$$(echo $$OLD | cut -d. -f1); \
+	MINOR=$$(echo $$OLD | cut -d. -f2); \
+	PATCH=$$(echo $$OLD | cut -d. -f3); \
+	NEW="$$MAJOR.$$MINOR.$$((PATCH + 1))"; \
+	sed -i "s/^version = \"$$OLD\"/version = \"$$NEW\"/" Cargo.toml && \
 	cargo build --release && \
 	cargo deb --no-build && \
-	gh release create "v$$VERSION" target/debian/*.deb --title "v$$VERSION" --generate-notes
+	git add Cargo.toml && git commit -m "chore(release): v$$NEW" && git push && \
+	gh release create "v$$NEW" target/debian/*.deb --title "v$$NEW" --generate-notes
