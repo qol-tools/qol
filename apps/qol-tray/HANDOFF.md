@@ -1,68 +1,41 @@
 # Session Handoff
 
-## Latest Session: Dual-Location Plugin Config System
+## Current State
 
-### What Was Implemented
-Implemented a dual-location config system to preserve plugin configs across uninstall/reinstall cycles while keeping the filesystem clean and organized.
+qol-tray is a pluggable system tray daemon. Single tray icon opens browser UI at `http://127.0.0.1:42700` for plugin management.
 
-**Architecture:**
-- **Primary location**: `~/.config/qol-tray/plugins/{plugin-id}/config.json`
-  - Clean, organized, easy to browse/edit manually
-  - Lives alongside plugin files
-- **Backup location**: `~/.config/qol-tray/plugin-configs.json`
-  - Single file containing all plugin configs
-  - Survives plugin uninstall
-  - Easy to backup entire system
+### What Works
+- System tray icon (SNI protocol)
+- Browser-based plugin store
+- Plugin install/uninstall with one click
+- Hotkey configuration per plugin action
+- Dual-location config system (survives uninstall/reinstall)
+- Daemon plugin support
 
-**Behavior:**
-- **Auto-sync on write**: Every config save writes to both locations
-- **Auto-restore on read**: If plugin dir config is missing, restores from backup
-- **Transparent**: Zero user intervention needed
-- **Hassle-free**: Works automatically for all plugins
+### Architecture
+- `src/tray/` - System tray with platform abstraction
+- `src/plugins/` - Plugin loading, config management
+- `src/features/plugin_store/` - Browser UI server
+- `src/hotkeys/` - Global hotkey registration
+- `ui/` - Embedded web UI (rust-embed)
 
-### Key Files
-- `src/plugins/config.rs` - PluginConfigManager with dual-location logic
-- `src/plugins/mod.rs` - Export PluginConfigManager
-- `src/features/plugin_store/server.rs` - Updated API endpoints to use manager
-- `Cargo.toml` - Added tempfile dev dependency for tests
+## Known Issues / TODO
 
-### Testing
-- 10 unit tests with AAA pattern (Arrange-Act-Assert)
-- Tests cover: path construction, load/save, restore from backup
-- All tests passing, no warnings
-- Manual test: Screen recorder config syncs correctly to both locations
+1. **Wayland support** - qol-tray core works on Wayland (SNI tray, browser UI). Individual plugins may use X11-only tools. See each plugin's HANDOFF.md for details.
 
-### User Request Context
-User wanted to experiment with uninstalling/reinstalling plugins but was concerned about losing:
-1. Hotkeys (already safe - stored in `hotkeys.json`)
-2. Plugin configs (now safe with dual-location system)
+2. **macOS/Windows** - Planned but not implemented. Platform abstraction exists in `src/tray/platform/`.
 
-Solution provides best of both worlds:
-- Clean filesystem for normal browsing
-- Safety net for uninstall/reinstall scenarios
-- Easy full-system backup (one file)
+## Plugins
 
----
+| Plugin | Status | Wayland |
+|--------|--------|---------|
+| plugin-launcher | Working | Needs work (xdotool, xclip) |
+| plugin-pointz | Working | Should work |
+| plugin-screen-recorder | Working | Needs work (xrandr, slop) |
+| plugin-window-actions | Working | Needs work (xdotool, xprop, wmctrl) |
 
-## Previous Session Summary
+## Config Locations
 
-### 1. README Update
-Updated README.md to reflect current architecture.
-
-### 2. Created plugin-window-actions
-New plugin for window management with 9 actions.
-Repo: https://github.com/qol-tools/plugin-window-actions
-
-### 3. Plugin Manifest Fetching Fix
-`github.rs` now tries both `main` and `master` branches.
-
-### 4. Hotkey Execution Fix
-`src/hotkeys/mod.rs` now passes action ID as first argument to `run.sh`.
-
-### 5. Hotkey Modal UX Improvements
-Major refactor of `ui/views/hotkeys.js`.
-
-## Notes
-- Window actions use `xdotool`, `wmctrl`, `xrandr`, `xprop` — X11 only
-- Cinnamon uses Muffin as its window manager (fork of Mutter)
-- The issue is specifically with Cinnamon's tiling/snapping feature
+- Plugin configs: `~/.config/qol-tray/plugins/{plugin-id}/config.json`
+- Config backup: `~/.config/qol-tray/plugin-configs.json`
+- Hotkeys: `~/.config/qol-tray/hotkeys.json`
