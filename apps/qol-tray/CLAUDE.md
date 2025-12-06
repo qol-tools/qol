@@ -1,5 +1,9 @@
 # CLAUDE.md
 
+## IMPORTANT: Linux Only (For Now)
+
+Cross-platform support is planned for the future, but **not now**. Do NOT implement macOS or Windows code until explicitly asked. Do NOT add cross-platform CI workflows or abstractions. Focus only on Linux. When the user asks for cross-platform support, then implement it.
+
 ## Development Commands
 
 ```bash
