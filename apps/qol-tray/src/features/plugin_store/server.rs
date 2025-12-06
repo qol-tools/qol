@@ -360,11 +360,14 @@ async fn install_progress_socket(mut socket: WebSocket, id: String) {
 
 async fn list_installed(
     State(state): State<AppState>,
-) -> Json<Vec<InstalledPlugin>> {
+) -> Result<Json<Vec<InstalledPlugin>>, StatusCode> {
     use super::github::read_cache;
     use std::collections::HashMap;
 
-    let manager = state.plugin_manager.lock().unwrap();
+    let manager = state.plugin_manager.lock().map_err(|e| {
+        log::error!("Plugin manager mutex poisoned: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     let cached_versions: HashMap<String, String> = read_cache()
         .map(|c| c.plugins.into_iter().map(|p| (p.id, p.version)).collect())
@@ -396,7 +399,7 @@ async fn list_installed(
         })
         .collect();
 
-    Json(plugins)
+    Ok(Json(plugins))
 }
 
 async fn dev_enabled() -> Json<bool> {
@@ -406,7 +409,13 @@ async fn dev_enabled() -> Json<bool> {
 #[cfg(feature = "dev")]
 async fn reload_plugins(State(state): State<AppState>) -> impl IntoResponse {
     log::info!("Developer reload requested");
-    let mut manager = state.plugin_manager.lock().unwrap();
+    let mut manager = match state.plugin_manager.lock() {
+        Ok(m) => m,
+        Err(e) => {
+            log::error!("Plugin manager mutex poisoned: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Plugin manager lock failed").into_response();
+        }
+    };
     match manager.reload_plugins() {
         Ok(_) => {
             log::info!("Plugins reloaded successfully");

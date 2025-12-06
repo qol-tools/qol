@@ -206,34 +206,43 @@ pub fn start_hotkey_listener(
 
     std::thread::spawn(move || {
         loop {
-            if let Ok(()) = reload_rx.try_recv() {
-                log::info!("Reloading hotkeys...");
-                match manager.load_config() {
-                    Ok(config) => {
-                        if let Err(e) = manager.register_hotkeys(&config) {
-                            log::error!("Failed to register hotkeys: {}", e);
-                        } else {
-                            log::info!("Hotkeys reloaded successfully");
-                        }
-                    }
-                    Err(e) => log::error!("Failed to load hotkey config: {}", e),
-                }
-            }
-
-            if let Ok(event) = hotkey_receiver.try_recv() {
-                if event.state == HotKeyState::Pressed {
-                    if let Some(action) = manager.get_action(&event) {
-                        let key = format!("{}::{}", action.plugin_id, action.action);
-                        log::info!("Hotkey triggered: {}", key);
-                        execute_plugin_action(&plugins_dir, &action.plugin_id, &action.action);
-                    }
-                }
-            }
+            try_reload_hotkeys(&reload_rx, &mut manager);
+            try_handle_hotkey(hotkey_receiver, &manager, &plugins_dir);
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
     });
 
     Ok(())
+}
+
+fn try_reload_hotkeys(reload_rx: &mpsc::Receiver<()>, manager: &mut HotkeyManager) {
+    if reload_rx.try_recv().is_err() { return; }
+
+    log::info!("Reloading hotkeys...");
+    let config = match manager.load_config() {
+        Ok(c) => c,
+        Err(e) => { log::error!("Failed to load hotkey config: {}", e); return; }
+    };
+
+    match manager.register_hotkeys(&config) {
+        Ok(()) => log::info!("Hotkeys reloaded successfully"),
+        Err(e) => log::error!("Failed to register hotkeys: {}", e),
+    }
+}
+
+fn try_handle_hotkey(
+    receiver: &global_hotkey::GlobalHotKeyEventReceiver,
+    manager: &HotkeyManager,
+    plugins_dir: &PathBuf,
+) {
+    let event = match receiver.try_recv() {
+        Ok(e) if e.state == HotKeyState::Pressed => e,
+        _ => return,
+    };
+
+    let Some(action) = manager.get_action(&event) else { return };
+    log::info!("Hotkey triggered: {}::{}", action.plugin_id, action.action);
+    execute_plugin_action(plugins_dir, &action.plugin_id, &action.action);
 }
 
 fn execute_plugin_action(plugins_dir: &PathBuf, plugin_id: &str, action: &str) {
