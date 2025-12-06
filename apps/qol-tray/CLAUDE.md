@@ -116,11 +116,18 @@ Action types:
 - **Scalability** - Design for N plugins, not hardcoded assumptions
 - **Keyboard-first** - All interactions MUST be accessible via keyboard. This is critical. Design keyboard flow first, then add mouse/hover as secondary. Use single-letter shortcuts (e.g., `d` for delete) since Mac lacks Delete key. Always show keyboard hints in UI.
 
-### Complexity Thresholds
+### Complexity Thresholds (Deep Modules Philosophy)
 
-- **Max 50 lines per function** - Split beyond this
-- **Max 1 level of nesting** - Flatten code aggressively. Use early returns, extract helpers, or restructure. No nested if/match/loop inside another.
+Inspired by "A Philosophy of Software Design" by John Ousterhout:
+
+- **Deep modules over shallow** - Hide complexity behind simple, clean APIs. A function should do meaningful work, not just delegate. Prefer fewer functions that do more over many trivial wrappers.
+- **Max 50 lines per function** - Split beyond this, but only if it creates genuinely reusable abstractions
+- **Nesting is acceptable** - Common idioms like `for` + `if`, `match` in loop, early returns are fine. Extract helpers only when it genuinely clarifies intent or creates reusable logic.
 - **One concern per function** - Don't mix state management, navigation, and action dispatch
+- **Avoid shallow extractions** - Don't create `ensure_parent_dir()` if it's only called once and the inline version is equally clear. Extract when the abstraction has a meaningful name and hides real complexity.
+- **Clean interfaces** - Public APIs should be obvious and hard to misuse. Internal complexity is fine if the interface is clean.
+
+Frontend-specific:
 - **Sequential ifs checking selectors** → Use config array with `{ selector, handler }` objects
 - **Conditional rendering with shared structure** → Extract state-specific render functions
 - **Key event handlers** → Separate recording/navigation/actions, use declarative handler maps
