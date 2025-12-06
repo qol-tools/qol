@@ -4,8 +4,9 @@ mod installer;
 mod plugin_ui;
 
 use crate::features::MenuProvider;
-use crate::plugins::MenuItem as PluginMenuItem;
+use crate::plugins::{MenuItem as PluginMenuItem, PluginManager};
 use anyhow::Result;
+use std::sync::{Arc, Mutex};
 
 const SERVER_PORT: u16 = 42700;
 
@@ -16,9 +17,9 @@ impl PluginStore {
         Self
     }
 
-    pub async fn start_server() -> Result<()> {
+    pub async fn start_server(plugin_manager: Arc<Mutex<PluginManager>>) -> Result<()> {
         log::info!("Starting plugin server with embedded UI");
-        let _server = server::start_ui_server().await?;
+        let _server = server::start_ui_server(plugin_manager).await?;
         log::info!("Plugin server started at http://127.0.0.1:{}", SERVER_PORT);
         std::mem::forget(_server);
         Ok(())

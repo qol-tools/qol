@@ -1,8 +1,9 @@
 use super::plugin_ui;
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use axum::{
-    extract::{Path, ws::{WebSocketUpgrade, WebSocket}},
+    extract::{Path, State, ws::{WebSocketUpgrade, WebSocket}},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
@@ -17,6 +18,12 @@ use rust_embed::Embed;
 
 use crate::plugins::{PluginLoader, PluginManager};
 use crate::hotkeys::trigger_reload;
+
+#[derive(Clone)]
+struct AppState {
+    plugins_dir: PathBuf,
+    plugin_manager: Arc<Mutex<PluginManager>>,
+}
 
 #[derive(Embed)]
 #[folder = "ui/"]
@@ -116,11 +123,15 @@ fn serve_embedded_file(path: &str) -> impl IntoResponse {
     }
 }
 
-pub async fn start_ui_server() -> Result<UiServerHandle> {
+pub async fn start_ui_server(plugin_manager: Arc<Mutex<PluginManager>>) -> Result<UiServerHandle> {
     let plugins_dir = PluginLoader::default_plugin_dir()
         .unwrap_or_else(|_| PathBuf::from("~/.config/qol-tray/plugins"));
 
-    let plugins_dir_clone = plugins_dir.clone();
+    let app_state = AppState {
+        plugins_dir: plugins_dir.clone(),
+        plugin_manager,
+    };
+
     let api = Router::new()
         .route("/plugins", get(list_plugins))
         .route("/installed", get(list_installed))
@@ -136,7 +147,12 @@ pub async fn start_ui_server() -> Result<UiServerHandle> {
         .route("/github-token", axum::routing::delete(delete_github_token))
         .route("/hotkeys", get(get_hotkeys))
         .route("/hotkeys", axum::routing::put(set_hotkeys))
-        .with_state(plugins_dir_clone);
+        .route("/dev/enabled", get(dev_enabled));
+
+    #[cfg(feature = "dev")]
+    let api = api.route("/dev/reload", post(reload_plugins));
+
+    let api = api.with_state(app_state);
 
     let no_cache = SetResponseHeaderLayer::overriding(
         axum::http::header::CACHE_CONTROL,
@@ -343,17 +359,12 @@ async fn install_progress_socket(mut socket: WebSocket, id: String) {
 }
 
 async fn list_installed(
-    axum::extract::State(_plugins_dir): axum::extract::State<PathBuf>,
+    State(state): State<AppState>,
 ) -> Json<Vec<InstalledPlugin>> {
     use super::github::read_cache;
     use std::collections::HashMap;
 
-    let mut manager = PluginManager::new();
-
-    if let Err(e) = manager.load_plugins() {
-        log::error!("Failed to load installed plugins: {}", e);
-        return Json(vec![]);
-    }
+    let manager = state.plugin_manager.lock().unwrap();
 
     let cached_versions: HashMap<String, String> = read_cache()
         .map(|c| c.plugins.into_iter().map(|p| (p.id, p.version)).collect())
@@ -386,6 +397,26 @@ async fn list_installed(
         .collect();
 
     Json(plugins)
+}
+
+async fn dev_enabled() -> Json<bool> {
+    Json(cfg!(feature = "dev"))
+}
+
+#[cfg(feature = "dev")]
+async fn reload_plugins(State(state): State<AppState>) -> impl IntoResponse {
+    log::info!("Developer reload requested");
+    let mut manager = state.plugin_manager.lock().unwrap();
+    match manager.reload_plugins() {
+        Ok(_) => {
+            log::info!("Plugins reloaded successfully");
+            (StatusCode::OK, "Plugins reloaded").into_response()
+        }
+        Err(e) => {
+            log::error!("Failed to reload plugins: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed: {}", e)).into_response()
+        }
+    }
 }
 
 fn extract_actions(items: &[crate::plugins::MenuItem]) -> Vec<PluginAction> {
@@ -432,9 +463,9 @@ fn is_newer_version(available: &str, installed: &str) -> bool {
 
 async fn serve_cover(
     Path(plugin_id): Path<String>,
-    axum::extract::State(plugins_dir): axum::extract::State<PathBuf>,
+    State(state): State<AppState>,
 ) -> impl IntoResponse {
-    let cover_path = plugins_dir.join(&plugin_id).join("cover.png");
+    let cover_path = state.plugins_dir.join(&plugin_id).join("cover.png");
     
     if !cover_path.exists() {
         return (StatusCode::NOT_FOUND, "Cover not found").into_response();

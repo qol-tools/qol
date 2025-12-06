@@ -26,6 +26,18 @@ impl PluginManager {
         Ok(())
     }
 
+    #[cfg(feature = "dev")]
+    pub fn reload_plugins(&mut self) -> Result<()> {
+        log::info!("Reloading all plugins...");
+        for plugin in self.plugins.values_mut() {
+            if let Err(e) = plugin.stop_daemon() {
+                log::error!("Failed to stop daemon for plugin {}: {}", plugin.id, e);
+            }
+        }
+        self.plugins.clear();
+        self.load_plugins()
+    }
+
     pub fn plugins(&self) -> impl Iterator<Item = &Plugin> {
         self.plugins.values()
     }

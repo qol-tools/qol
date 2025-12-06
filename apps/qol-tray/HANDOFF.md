@@ -11,6 +11,7 @@ qol-tray is a pluggable system tray daemon. Single tray icon opens browser UI at
 - Hotkey configuration per plugin action
 - Dual-location config system (survives uninstall/reinstall)
 - Daemon plugin support
+- Developer mode (`make dev`) with plugin reload
 
 ### Architecture
 - `src/tray/` - System tray with platform abstraction
@@ -18,6 +19,10 @@ qol-tray is a pluggable system tray daemon. Single tray icon opens browser UI at
 - `src/features/plugin_store/` - Browser UI server
 - `src/hotkeys/` - Global hotkey registration
 - `ui/` - Embedded web UI (rust-embed)
+
+### Developer Mode
+
+`make dev` runs with Developer tab enabled. Press `r` to reload all plugins (stops daemons and restarts them).
 
 ## Known Issues / TODO
 

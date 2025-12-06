@@ -3,13 +3,11 @@
 ## Development Commands
 
 ```bash
-make build          # Debug build
-make release        # Release build
-make test           # Run all tests
-make run            # Build and run with info logging
-make run-debug      # Build and run with debug logging
-make install        # Install to /usr/bin and setup autostart
-make clean          # Clean build artifacts
+make run      # Build and run
+make dev      # Build and run with dev features (Developer tab)
+make test     # Run tests
+make install  # Build release and install to /usr/bin
+make clean    # Clean build artifacts
 ```
 
 ## Architecture
