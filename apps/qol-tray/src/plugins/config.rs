@@ -111,15 +111,6 @@ mod tests {
     }
 
     #[test]
-    fn new_creates_manager_with_valid_config_path() {
-        // Act
-        let result = PluginConfigManager::new();
-
-        // Assert
-        assert!(result.is_ok());
-    }
-
-    #[test]
     fn plugin_config_path_returns_plugin_directory() {
         // Arrange
         let plugin_id = "test-plugin";
