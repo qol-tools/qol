@@ -52,22 +52,25 @@ Esc back
 </div>
 <script>document.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();window.location.href='/';}})</script>"#;
 
-    let with_header = if let Some(pos) = html.find("<body") {
-        if let Some(end) = html[pos..].find('>') {
-            let insert_pos = pos + end + 1;
-            format!("{}{}{}", &html[..insert_pos], NAV_HEADER, &html[insert_pos..])
-        } else {
-            html.to_string()
-        }
-    } else {
-        html.to_string()
-    };
+    let with_header = inject_after_body_tag(html, NAV_HEADER);
+    inject_before_closing_body(&with_header, NAV_FOOTER)
+}
 
-    if let Some(pos) = with_header.rfind("</body>") {
-        format!("{}{}{}", &with_header[..pos], NAV_FOOTER, &with_header[pos..])
-    } else {
-        with_header
-    }
+fn inject_after_body_tag(html: &str, content: &str) -> String {
+    let insert_pos = find_body_tag_end(html);
+    let Some(pos) = insert_pos else { return html.to_string() };
+    format!("{}{}{}", &html[..pos], content, &html[pos..])
+}
+
+fn find_body_tag_end(html: &str) -> Option<usize> {
+    let body_start = html.find("<body")?;
+    let tag_end = html[body_start..].find('>')?;
+    Some(body_start + tag_end + 1)
+}
+
+fn inject_before_closing_body(html: &str, content: &str) -> String {
+    let Some(pos) = html.rfind("</body>") else { return html.to_string() };
+    format!("{}{}{}", &html[..pos], content, &html[pos..])
 }
 
 async fn serve_plugin_file(

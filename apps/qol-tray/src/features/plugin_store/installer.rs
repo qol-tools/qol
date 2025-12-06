@@ -20,8 +20,11 @@ impl PluginInstaller {
 
         log::info!("Cloning plugin from {} to {:?}", repo_url, target_dir);
 
+        let target_str = target_dir.to_str()
+            .ok_or_else(|| anyhow::anyhow!("Plugin path contains invalid UTF-8"))?;
+
         let output = tokio::process::Command::new("git")
-            .args(["clone", repo_url, target_dir.to_str().unwrap()])
+            .args(["clone", repo_url, target_str])
             .output()
             .await?;
 
