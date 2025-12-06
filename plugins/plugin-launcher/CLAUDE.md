@@ -1,8 +1,8 @@
 # CLAUDE.md
 
-## IMPORTANT: Linux Only
+## IMPORTANT: Linux Only (For Now)
 
-This project supports **Linux only**. Do NOT implement macOS or Windows code. Do NOT add cross-platform abstractions, CI workflows, or conditionals for other operating systems. If platform-specific code exists, ignore it - it is legacy cruft that will be removed.
+Cross-platform support is planned for the future, but **not now**. Do NOT implement macOS or Windows code until explicitly asked. Do NOT add cross-platform CI workflows or abstractions. Focus only on Linux. When the user asks for cross-platform support, then implement it.
 
 ## Commands
 
