@@ -79,8 +79,14 @@ body {
 .result-icon {
     font-size: 18px;
     width: 24px;
+    height: 24px;
     text-align: center;
     flex-shrink: 0;
+    object-fit: contain;
+}
+
+img.result-icon {
+    border-radius: 4px;
 }
 
 .result-info {
