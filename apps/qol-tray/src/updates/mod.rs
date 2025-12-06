@@ -1,9 +1,7 @@
 use anyhow::Result;
 use serde::Deserialize;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
-static UPDATE_AVAILABLE: AtomicBool = AtomicBool::new(false);
 static LATEST_VERSION: OnceLock<String> = OnceLock::new();
 
 const GITHUB_REPO: &str = "qol-tools/qol-tray";
@@ -14,16 +12,8 @@ struct GitHubRelease {
     tag_name: String,
 }
 
-pub fn has_update() -> bool {
-    UPDATE_AVAILABLE.load(Ordering::Relaxed)
-}
-
 pub fn latest_version() -> Option<&'static str> {
     LATEST_VERSION.get().map(|s| s.as_str())
-}
-
-pub fn current_version() -> &'static str {
-    CURRENT_VERSION
 }
 
 pub async fn check_for_updates() -> Result<bool> {
@@ -47,7 +37,6 @@ pub async fn check_for_updates() -> Result<bool> {
 
     if is_newer_version(latest, CURRENT_VERSION) {
         let _ = LATEST_VERSION.set(latest.to_string());
-        UPDATE_AVAILABLE.store(true, Ordering::Relaxed);
         log::info!(
             "Update available: {} -> {}",
             CURRENT_VERSION,
