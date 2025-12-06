@@ -142,6 +142,8 @@ Frontend-specific:
   }
   ```
 - **Context in assertions** - Always include identifying info in assertion messages for debugging failed iterations
+- **AAA pattern** - Use Arrange/Act/Assert comments for larger, complex tests where structure aids clarity. Omit for table-driven tests and simple one-liner tests where AAA would be redundant.
+- **Generic test data** - Use abstract paths like `/a/b/c/foo` not personal-looking paths like `/home/user/documents/file.txt`. Use generic names (`foo`, `bar`) not real app names (`firefox`, `discord`).
 - **No tests for thin wrappers** - If a function just calls already-tested functions, don't test it separately. Example: `fn foo(x) { bar(x).baz() }` doesn't need tests if `bar()` and `baz()` are tested.
 - **Meaningful assertions** - Tests must verify specific behavior. Never just assert `result.is_ok()` - check the actual value.
 - **Skip trivial Arrange** - For simple inputs, inline them. Only use explicit Arrange section for complex setup.

@@ -150,7 +150,12 @@ pub async fn start_ui_server(plugin_manager: Arc<Mutex<PluginManager>>) -> Resul
         .route("/dev/enabled", get(dev_enabled));
 
     #[cfg(feature = "dev")]
-    let api = api.route("/dev/reload", post(reload_plugins));
+    let api = api
+        .route("/dev/reload", post(reload_plugins))
+        .route("/dev/links", get(list_linked_plugins))
+        .route("/dev/links", post(create_link))
+        .route("/dev/links/:id", axum::routing::delete(delete_link))
+        .route("/dev/discover", get(discover_plugins));
 
     let api = api.with_state(app_state);
 
@@ -611,3 +616,330 @@ async fn set_hotkeys(body: axum::body::Bytes) -> impl IntoResponse {
     (StatusCode::OK, "Hotkeys saved").into_response()
 }
 
+#[cfg(feature = "dev")]
+#[derive(Serialize)]
+struct LinkedPlugin {
+    id: String,
+    name: String,
+    is_symlink: bool,
+    target: Option<String>,
+}
+
+#[cfg(feature = "dev")]
+#[derive(Serialize)]
+struct DiscoveredPlugin {
+    id: String,
+    name: String,
+    path: String,
+    already_linked: bool,
+    installed_not_linked: bool,
+}
+
+#[cfg(feature = "dev")]
+#[derive(Deserialize)]
+struct CreateLinkRequest {
+    path: String,
+}
+
+#[cfg(feature = "dev")]
+async fn list_linked_plugins(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<LinkedPlugin>>, StatusCode> {
+    let plugins_dir = &state.plugins_dir;
+
+    if !plugins_dir.exists() {
+        return Ok(Json(vec![]));
+    }
+
+    let entries = std::fs::read_dir(plugins_dir).map_err(|e| {
+        log::error!("Failed to read plugins dir: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let mut plugins = Vec::new();
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "backup") {
+            continue;
+        }
+        let id = entry.file_name().to_string_lossy().to_string();
+
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        let is_symlink = metadata.file_type().is_symlink();
+        let target = if is_symlink {
+            std::fs::read_link(&path).ok().map(|p| p.to_string_lossy().to_string())
+        } else {
+            None
+        };
+
+        let name = path.join("plugin.toml")
+            .exists()
+            .then(|| {
+                std::fs::read_to_string(path.join("plugin.toml"))
+                    .ok()
+                    .and_then(|s| s.lines()
+                        .find(|l| l.starts_with("name"))
+                        .and_then(|l| l.split('"').nth(1).map(String::from)))
+            })
+            .flatten()
+            .unwrap_or_else(|| id.clone());
+
+        plugins.push(LinkedPlugin { id, name, is_symlink, target });
+    }
+
+    plugins.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(Json(plugins))
+}
+
+#[cfg(feature = "dev")]
+async fn create_link(
+    State(state): State<AppState>,
+    Json(req): Json<CreateLinkRequest>,
+) -> impl IntoResponse {
+    use std::path::Path;
+
+    let source = Path::new(&req.path);
+    if !source.exists() {
+        return (StatusCode::BAD_REQUEST, "Source path does not exist").into_response();
+    }
+
+    if !source.join("plugin.toml").exists() {
+        return (StatusCode::BAD_REQUEST, "No plugin.toml found in source").into_response();
+    }
+
+    let plugin_id = match source.file_name() {
+        Some(name) => name.to_string_lossy().to_string(),
+        None => return (StatusCode::BAD_REQUEST, "Invalid path").into_response(),
+    };
+
+    let link_path = state.plugins_dir.join(&plugin_id);
+
+    if let Err(e) = backup_existing_if_not_symlink(&link_path) {
+        return (StatusCode::CONFLICT, e).into_response();
+    }
+
+    if let Err(e) = create_symlink(source, &link_path) {
+        log::error!("Failed to create symlink: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create link").into_response();
+    }
+
+    log::info!("Created plugin link: {} -> {}", plugin_id, req.path);
+    (StatusCode::OK, "Link created").into_response()
+}
+
+#[cfg(feature = "dev")]
+fn backup_existing_if_not_symlink(path: &std::path::Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|e| format!("Failed to check path: {}", e))?;
+
+    if metadata.file_type().is_symlink() {
+        return Err("Already linked".to_string());
+    }
+
+    let backup_path = path.with_extension("backup");
+    if backup_path.exists() {
+        std::fs::remove_dir_all(&backup_path)
+            .map_err(|e| format!("Failed to remove old backup: {}", e))?;
+    }
+
+    std::fs::rename(path, &backup_path)
+        .map_err(|e| format!("Failed to backup existing: {}", e))
+}
+
+#[cfg(feature = "dev")]
+fn create_symlink(source: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(source, link)
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_dir(source, link)
+    }
+}
+
+#[cfg(feature = "dev")]
+fn remove_symlink(path: &std::path::Path) -> Result<(), String> {
+    if !path.exists() {
+        return Err("Plugin not found".to_string());
+    }
+
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|e| format!("Failed to check link: {}", e))?;
+
+    if !metadata.file_type().is_symlink() {
+        return Err("Not a symlink - use uninstall instead".to_string());
+    }
+
+    std::fs::remove_file(path)
+        .map_err(|e| format!("Failed to remove link: {}", e))
+}
+
+#[cfg(feature = "dev")]
+async fn delete_link(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let link_path = state.plugins_dir.join(&id);
+
+    if let Err(e) = remove_symlink(&link_path) {
+        log::error!("Failed to remove symlink for {}: {}", id, e);
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
+
+    if let Err(e) = restore_from_backup(&link_path) {
+        log::warn!("No backup to restore for {}: {}", id, e);
+    }
+
+    log::info!("Unlinked plugin: {}", id);
+    (StatusCode::OK, "Unlinked").into_response()
+}
+
+#[cfg(feature = "dev")]
+fn restore_from_backup(path: &std::path::Path) -> Result<(), String> {
+    let backup_path = path.with_extension("backup");
+    if !backup_path.exists() {
+        return Err("No backup exists".to_string());
+    }
+
+    std::fs::rename(&backup_path, path)
+        .map_err(|e| format!("Failed to restore backup: {}", e))
+}
+
+#[cfg(feature = "dev")]
+async fn discover_plugins(
+    State(state): State<AppState>,
+) -> Json<Vec<DiscoveredPlugin>> {
+    let plugins_dir = &state.plugins_dir;
+
+    let mut discovered: Vec<DiscoveredPlugin> = get_plugin_search_dirs()
+        .into_iter()
+        .filter(|d| d.exists())
+        .flat_map(scan_dir_for_plugins)
+        .map(|mut p| {
+            let (linked, installed) = check_install_status(plugins_dir, &p.id, &p.path);
+            p.already_linked = linked;
+            p.installed_not_linked = installed;
+            p
+        })
+        .filter(|p| !p.already_linked)
+        .collect();
+
+    discovered.sort_by(|a, b| a.name.cmp(&b.name));
+    Json(discovered)
+}
+
+#[cfg(feature = "dev")]
+fn check_install_status(plugins_dir: &std::path::Path, id: &str, target: &str) -> (bool, bool) {
+    let link_path = plugins_dir.join(id);
+    if !link_path.exists() {
+        return (false, false);
+    }
+
+    let Ok(meta) = std::fs::symlink_metadata(&link_path) else {
+        return (false, true);
+    };
+
+    if !meta.file_type().is_symlink() {
+        return (false, true);
+    }
+
+    let Ok(resolved) = std::fs::read_link(&link_path) else {
+        return (false, true);
+    };
+
+    let is_linked_to_target = resolved.to_string_lossy() == target;
+    (is_linked_to_target, !is_linked_to_target)
+}
+
+#[cfg(feature = "dev")]
+fn scan_dir_for_plugins(dir: std::path::PathBuf) -> Vec<DiscoveredPlugin> {
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return vec![],
+    };
+
+    entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| try_parse_plugin_dir(e.path()))
+        .collect()
+}
+
+#[cfg(feature = "dev")]
+fn try_parse_plugin_dir(path: std::path::PathBuf) -> Option<DiscoveredPlugin> {
+    if !path.is_dir() {
+        return None;
+    }
+
+    let plugin_toml = path.join("plugin.toml");
+    if !plugin_toml.exists() {
+        return None;
+    }
+
+    let id = path.file_name()?.to_string_lossy().to_string();
+    if !id.starts_with("plugin-") || id == "plugin-template" {
+        return None;
+    }
+
+    let name = read_plugin_name(&plugin_toml).unwrap_or_else(|| id.clone());
+
+    Some(DiscoveredPlugin {
+        id,
+        name,
+        path: path.to_string_lossy().to_string(),
+        already_linked: false,
+        installed_not_linked: false,
+    })
+}
+
+#[cfg(feature = "dev")]
+fn read_plugin_name(toml_path: &std::path::Path) -> Option<String> {
+    std::fs::read_to_string(toml_path)
+        .ok()?
+        .lines()
+        .find(|l| l.starts_with("name"))?
+        .split('"')
+        .nth(1)
+        .map(String::from)
+}
+
+#[cfg(feature = "dev")]
+fn get_plugin_search_dirs() -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Some(parent) = cwd.parent() {
+            dirs.push(parent.to_path_buf());
+            add_subdirs(&mut dirs, parent);
+        }
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        for base in ["Git", "Projects", "src", "dev"] {
+            let path = home.join(base);
+            dirs.push(path.clone());
+            add_subdirs(&mut dirs, &path);
+        }
+    }
+
+    dirs
+}
+
+#[cfg(feature = "dev")]
+fn add_subdirs(dirs: &mut Vec<std::path::PathBuf>, parent: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(parent) else { return };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_dir() {
+            dirs.push(path);
+        }
+    }
+}
