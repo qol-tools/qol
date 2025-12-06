@@ -336,13 +336,3 @@ export function onBlur() {
     }
 }
 
-export function cleanup() {
-    const listEl = document.getElementById('store-list');
-    if (listEl) {
-        listEl.removeEventListener('click', handleListClick);
-    }
-    if (searchInput) {
-        searchInput.removeEventListener('input', handleSearch);
-    }
-}
-
