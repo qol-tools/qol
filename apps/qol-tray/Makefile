@@ -1,4 +1,4 @@
-.PHONY: run dev test clean install
+.PHONY: run dev test clean install deb
 
 run:
 	cargo run
@@ -15,3 +15,7 @@ clean:
 install:
 	cargo build --release
 	sudo cp target/release/qol-tray /usr/bin/qol-tray
+
+deb:
+	cargo build --release
+	cargo deb --no-build
