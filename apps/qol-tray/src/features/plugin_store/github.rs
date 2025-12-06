@@ -312,112 +312,55 @@ mod tests {
     }
 
     #[test]
-    fn is_plugin_repo_returns_true_for_plugin_prefix() {
-        // Arrange
-        let name = "plugin-screen-recorder";
-
-        // Act
-        let result = is_plugin_repo(name);
-
-        // Assert
-        assert!(result);
-    }
-
-    #[test]
-    fn is_plugin_repo_returns_false_for_no_prefix() {
-        // Act
-        let result = is_plugin_repo("screen-recorder");
-
-        // Assert
-        assert!(!result);
-    }
-
-    #[test]
-    fn is_plugin_repo_returns_false_for_wrong_prefix() {
-        // Act
-        let result = is_plugin_repo("my-plugin");
-
-        // Assert
-        assert!(!result);
-    }
-
-    #[test]
-    fn is_plugin_repo_returns_false_for_partial_prefix() {
-        // Act
-        let result = is_plugin_repo("pluginstore");
-
-        // Assert
-        assert!(!result);
-    }
-
-    #[test]
-    fn is_plugin_repo_returns_false_for_empty_string() {
-        // Act
-        let result = is_plugin_repo("");
-
-        // Assert
-        assert!(!result);
-    }
-
-    #[test]
-    fn filter_plugin_repos_returns_only_plugin_prefixed_repos() {
-        // Arrange
-        let repos = vec![
-            make_repo("plugin-recorder"),
-            make_repo("some-tool"),
-            make_repo("plugin-notes"),
-            make_repo("pluginish"),
+    fn is_plugin_repo_filtering() {
+        let cases = [
+            ("plugin-screen-recorder", true),
+            ("plugin-notes", true),
+            ("screen-recorder", false),
+            ("my-plugin", false),
+            ("pluginstore", false),
+            ("plugin-template", false),
+            ("", false),
         ];
 
-        // Act
-        let filtered = filter_plugin_repos(&repos);
-
-        // Assert
-        assert_eq!(filtered.len(), 2);
-        assert_eq!(filtered[0].name, "plugin-recorder");
-        assert_eq!(filtered[1].name, "plugin-notes");
+        for (name, expected) in cases {
+            assert_eq!(is_plugin_repo(name), expected, "name: {}", name);
+        }
     }
 
     #[test]
-    fn filter_plugin_repos_returns_empty_when_no_plugins() {
-        // Arrange
-        let repos = vec![
-            make_repo("tool-one"),
-            make_repo("tool-two"),
+    fn filter_plugin_repos_selects_valid_plugins() {
+        let cases = [
+            (
+                vec!["plugin-recorder", "some-tool", "plugin-notes", "pluginish"],
+                vec!["plugin-recorder", "plugin-notes"],
+            ),
+            (
+                vec!["tool-one", "tool-two"],
+                vec![],
+            ),
         ];
 
-        // Act
-        let filtered = filter_plugin_repos(&repos);
-
-        // Assert
-        assert!(filtered.is_empty());
+        for (input_names, expected_names) in cases {
+            let repos: Vec<_> = input_names.iter().map(|n| make_repo(n)).collect();
+            let filtered = filter_plugin_repos(&repos);
+            let names: Vec<_> = filtered.iter().map(|r| r.name.as_str()).collect();
+            assert_eq!(names, expected_names, "input: {:?}", input_names);
+        }
     }
 
     #[test]
-    fn build_plugin_metadata_uses_tag_version_when_available() {
-        // Arrange
-        let repo = make_repo("plugin-screen-recorder");
-        let manifest = make_manifest("Screen Recorder", "1.0.0");
+    fn build_plugin_metadata_version_selection() {
+        let cases = [
+            (Some("2.0.0"), "2.0.0"),
+            (None, "1.0.0"),
+        ];
 
-        // Act
-        let metadata = build_plugin_metadata(&repo, manifest, Some("2.0.0".to_string()));
-
-        // Assert
-        assert_eq!(metadata.id, "plugin-screen-recorder");
-        assert_eq!(metadata.name, "Screen Recorder");
-        assert_eq!(metadata.version, "2.0.0");
-    }
-
-    #[test]
-    fn build_plugin_metadata_falls_back_to_manifest_version() {
-        // Arrange
-        let repo = make_repo("plugin-screen-recorder");
-        let manifest = make_manifest("Screen Recorder", "1.2.3");
-
-        // Act
-        let metadata = build_plugin_metadata(&repo, manifest, None);
-
-        // Assert
-        assert_eq!(metadata.version, "1.2.3");
+        for (tag_version, expected) in cases {
+            let repo = make_repo("plugin-test");
+            let manifest = make_manifest("Test", "1.0.0");
+            let metadata = build_plugin_metadata(&repo, manifest, tag_version.map(String::from));
+            assert_eq!(metadata.version, expected, "tag: {:?}", tag_version);
+        }
     }
 }

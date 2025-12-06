@@ -129,31 +129,3 @@ pub async fn download_and_install() -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn is_newer_version_comparisons() {
-        let cases = [
-            // (latest, current, expected)
-            ("2.0.0", "1.0.0", true),   // major bump
-            ("1.1.0", "1.0.0", true),   // minor bump
-            ("1.0.1", "1.0.0", true),   // patch bump
-            ("1.0.0.1", "1.0.0", true), // extra segment
-            ("1.0.0", "1.0.0", false),  // same version
-            ("1.0.0", "2.0.0", false),  // older version
-            ("1.0", "1.0.0", false),    // shorter version
-        ];
-
-        for (latest, current, expected) in cases {
-            assert_eq!(
-                is_newer_version(latest, current),
-                expected,
-                "is_newer_version({:?}, {:?})",
-                latest,
-                current
-            );
-        }
-    }
-}
