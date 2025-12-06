@@ -135,51 +135,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn guess_mime_returns_correct_type_for_html() {
-        // Arrange
-        let path = PathBuf::from("index.html");
+    fn guess_mime_returns_correct_types() {
+        let cases = [
+            ("index.html", "text/html; charset=utf-8"),
+            ("style.css", "text/css; charset=utf-8"),
+            ("app.js", "application/javascript; charset=utf-8"),
+            ("data.json", "application/json"),
+            ("image.png", "image/png"),
+            ("data.bin", "application/octet-stream"),
+        ];
 
-        // Act
-        let mime = guess_mime(&path);
-
-        // Assert
-        assert_eq!(mime, "text/html; charset=utf-8");
-    }
-
-    #[test]
-    fn guess_mime_returns_correct_type_for_css() {
-        // Arrange
-        let path = PathBuf::from("style.css");
-
-        // Act
-        let mime = guess_mime(&path);
-
-        // Assert
-        assert_eq!(mime, "text/css; charset=utf-8");
-    }
-
-    #[test]
-    fn guess_mime_returns_correct_type_for_javascript() {
-        // Arrange
-        let path = PathBuf::from("app.js");
-
-        // Act
-        let mime = guess_mime(&path);
-
-        // Assert
-        assert_eq!(mime, "application/javascript; charset=utf-8");
-    }
-
-    #[test]
-    fn guess_mime_returns_octet_stream_for_unknown() {
-        // Arrange
-        let path = PathBuf::from("data.bin");
-
-        // Act
-        let mime = guess_mime(&path);
-
-        // Assert
-        assert_eq!(mime, "application/octet-stream");
+        for (filename, expected) in cases {
+            let path = PathBuf::from(filename);
+            assert_eq!(guess_mime(&path), expected, "file: {}", filename);
+        }
     }
 }
 

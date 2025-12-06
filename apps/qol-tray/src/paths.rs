@@ -32,56 +32,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn config_dir_ends_with_qol_tray() {
-        // Arrange & Act
-        let path = config_dir().unwrap();
+    fn paths_have_correct_suffixes() {
+        let cases: Vec<(Result<PathBuf>, &str)> = vec![
+            (config_dir(), "qol-tray"),
+            (plugins_dir(), "qol-tray/plugins"),
+            (hotkeys_path(), "hotkeys.json"),
+            (plugin_configs_path(), "plugin-configs.json"),
+            (github_token_path(), ".github-token"),
+            (plugin_cache_path(), ".plugin-cache.json"),
+        ];
 
-        // Assert
-        assert!(path.ends_with("qol-tray"));
-    }
-
-    #[test]
-    fn plugins_dir_is_under_config_dir() {
-        // Arrange & Act
-        let path = plugins_dir().unwrap();
-
-        // Assert
-        assert!(path.ends_with("qol-tray/plugins"));
-    }
-
-    #[test]
-    fn hotkeys_path_has_correct_filename() {
-        // Arrange & Act
-        let path = hotkeys_path().unwrap();
-
-        // Assert
-        assert!(path.ends_with("hotkeys.json"));
-    }
-
-    #[test]
-    fn plugin_configs_path_has_correct_filename() {
-        // Arrange & Act
-        let path = plugin_configs_path().unwrap();
-
-        // Assert
-        assert!(path.ends_with("plugin-configs.json"));
-    }
-
-    #[test]
-    fn github_token_path_has_correct_filename() {
-        // Arrange & Act
-        let path = github_token_path().unwrap();
-
-        // Assert
-        assert!(path.ends_with(".github-token"));
-    }
-
-    #[test]
-    fn plugin_cache_path_has_correct_filename() {
-        // Arrange & Act
-        let path = plugin_cache_path().unwrap();
-
-        // Assert
-        assert!(path.ends_with(".plugin-cache.json"));
+        for (result, expected_suffix) in cases {
+            let path = result.unwrap();
+            assert!(path.ends_with(expected_suffix), "path {:?} should end with {}", path, expected_suffix);
+        }
     }
 }
