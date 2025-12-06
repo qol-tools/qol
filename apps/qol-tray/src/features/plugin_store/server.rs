@@ -421,44 +421,19 @@ async fn reload_plugins(State(state): State<AppState>) -> impl IntoResponse {
 
 fn extract_actions(items: &[crate::plugins::MenuItem]) -> Vec<PluginAction> {
     use crate::plugins::MenuItem;
-    let mut actions = Vec::new();
-    
-    for item in items {
-        match item {
-            MenuItem::Action { id, label, .. } => {
-                actions.push(PluginAction {
-                    id: id.clone(),
-                    label: label.clone(),
-                });
-            }
-            MenuItem::Submenu { items, .. } => {
-                actions.extend(extract_actions(items));
-            }
-            _ => {}
+
+    items.iter().flat_map(|item| match item {
+        MenuItem::Action { id, label, .. } => {
+            vec![PluginAction { id: id.clone(), label: label.clone() }]
         }
-    }
-    
-    actions
+        MenuItem::Submenu { items, .. } => extract_actions(items),
+        MenuItem::Checkbox { .. } | MenuItem::Separator => vec![],
+    }).collect()
 }
 
 fn is_newer_version(available: &str, installed: &str) -> bool {
-    let parse = |s: &str| -> Vec<u32> {
-        s.trim_start_matches('v')
-            .split('.')
-            .filter_map(|p| p.parse().ok())
-            .collect()
-    };
-    
-    let av = parse(available);
-    let iv = parse(installed);
-    
-    for i in 0..av.len().max(iv.len()) {
-        let a = av.get(i).copied().unwrap_or(0);
-        let b = iv.get(i).copied().unwrap_or(0);
-        if a > b { return true; }
-        if a < b { return false; }
-    }
-    false
+    use crate::version::Version;
+    Version::parse(available).is_newer_than(&Version::parse(installed))
 }
 
 async fn serve_cover(

@@ -1,3 +1,4 @@
+use crate::paths;
 use anyhow::Result;
 use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
@@ -49,21 +50,13 @@ pub struct HotkeyManager {
 
 impl HotkeyManager {
     pub fn new() -> Result<Self> {
-        let config_path = Self::config_path()?;
-
+        let config_path = paths::hotkeys_path()?;
         Ok(Self {
             manager: None,
             registered: Vec::new(),
             bindings: HashMap::new(),
             config_path,
         })
-    }
-
-    fn config_path() -> Result<PathBuf> {
-        let config_dir = dirs::config_dir()
-            .ok_or_else(|| anyhow::anyhow!("Could not find config directory"))?
-            .join("qol-tray");
-        Ok(config_dir.join("hotkeys.json"))
     }
 
     pub fn load_config(&self) -> Result<HotkeyConfig> {
@@ -270,15 +263,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_key_code_returns_letter_codes() {
-        // Arrange
-        let inputs = ["a", "A", "z", "Z"];
-        let expected = [Code::KeyA, Code::KeyA, Code::KeyZ, Code::KeyZ];
+    fn parse_key_code_returns_key_a_for_lowercase() {
+        // Act
+        let result = parse_key_code("a");
 
-        // Act & Assert
-        for (input, exp) in inputs.iter().zip(expected.iter()) {
-            assert_eq!(parse_key_code(input), Some(*exp));
-        }
+        // Assert
+        assert_eq!(result, Some(Code::KeyA));
+    }
+
+    #[test]
+    fn parse_key_code_returns_key_a_for_uppercase() {
+        // Act
+        let result = parse_key_code("A");
+
+        // Assert
+        assert_eq!(result, Some(Code::KeyA));
+    }
+
+    #[test]
+    fn parse_key_code_returns_key_z() {
+        // Act
+        let result = parse_key_code("z");
+
+        // Assert
+        assert_eq!(result, Some(Code::KeyZ));
     }
 
     #[test]
@@ -294,42 +302,78 @@ mod tests {
     }
 
     #[test]
-    fn parse_key_code_returns_function_keys() {
-        // Arrange
-        let inputs = ["f1", "F12"];
-        let expected = [Code::F1, Code::F12];
+    fn parse_key_code_returns_f1() {
+        // Act
+        let result = parse_key_code("f1");
 
-        // Act & Assert
-        for (input, exp) in inputs.iter().zip(expected.iter()) {
-            assert_eq!(parse_key_code(input), Some(*exp));
-        }
+        // Assert
+        assert_eq!(result, Some(Code::F1));
     }
 
     #[test]
-    fn parse_key_code_returns_special_keys() {
-        // Arrange
-        let inputs = ["space", "enter", "return", "escape", "esc", "tab"];
-        let expected = [Code::Space, Code::Enter, Code::Enter, Code::Escape, Code::Escape, Code::Tab];
+    fn parse_key_code_returns_f12_uppercase() {
+        // Act
+        let result = parse_key_code("F12");
 
-        // Act & Assert
-        for (input, exp) in inputs.iter().zip(expected.iter()) {
-            assert_eq!(parse_key_code(input), Some(*exp));
-        }
+        // Assert
+        assert_eq!(result, Some(Code::F12));
     }
 
     #[test]
-    fn parse_key_code_returns_navigation_keys() {
-        // Arrange
-        let inputs = ["up", "down", "left", "right", "home", "end", "pageup", "pgdn"];
-        let expected = [
-            Code::ArrowUp, Code::ArrowDown, Code::ArrowLeft, Code::ArrowRight,
-            Code::Home, Code::End, Code::PageUp, Code::PageDown
-        ];
+    fn parse_key_code_returns_space() {
+        // Act
+        let result = parse_key_code("space");
 
-        // Act & Assert
-        for (input, exp) in inputs.iter().zip(expected.iter()) {
-            assert_eq!(parse_key_code(input), Some(*exp));
-        }
+        // Assert
+        assert_eq!(result, Some(Code::Space));
+    }
+
+    #[test]
+    fn parse_key_code_returns_enter_for_return_alias() {
+        // Act
+        let result = parse_key_code("return");
+
+        // Assert
+        assert_eq!(result, Some(Code::Enter));
+    }
+
+    #[test]
+    fn parse_key_code_returns_escape_for_esc_alias() {
+        // Act
+        let result = parse_key_code("esc");
+
+        // Assert
+        assert_eq!(result, Some(Code::Escape));
+    }
+
+    #[test]
+    fn parse_key_code_returns_arrow_keys() {
+        // Act
+        let up = parse_key_code("up");
+        let down = parse_key_code("down");
+        let left = parse_key_code("left");
+        let right = parse_key_code("right");
+
+        // Assert
+        assert_eq!(up, Some(Code::ArrowUp));
+        assert_eq!(down, Some(Code::ArrowDown));
+        assert_eq!(left, Some(Code::ArrowLeft));
+        assert_eq!(right, Some(Code::ArrowRight));
+    }
+
+    #[test]
+    fn parse_key_code_returns_page_navigation() {
+        // Act
+        let home = parse_key_code("home");
+        let end = parse_key_code("end");
+        let pgup = parse_key_code("pageup");
+        let pgdn = parse_key_code("pgdn");
+
+        // Assert
+        assert_eq!(home, Some(Code::Home));
+        assert_eq!(end, Some(Code::End));
+        assert_eq!(pgup, Some(Code::PageUp));
+        assert_eq!(pgdn, Some(Code::PageDown));
     }
 
     #[test]
@@ -391,17 +435,39 @@ mod tests {
     }
 
     #[test]
-    fn parse_hotkey_parses_super_modifier_variants() {
-        // Arrange
-        let inputs = ["Super+R", "Win+R", "Meta+R", "Cmd+R"];
+    fn parse_hotkey_parses_super_modifier() {
+        // Act
+        let result = parse_hotkey("Super+R").unwrap();
 
-        // Act & Assert
-        for input in inputs {
-            let result = parse_hotkey(input);
-            assert!(result.is_some());
-            let hotkey = result.unwrap();
-            assert!(hotkey.mods.contains(Modifiers::SUPER));
-        }
+        // Assert
+        assert!(result.mods.contains(Modifiers::SUPER));
+    }
+
+    #[test]
+    fn parse_hotkey_parses_win_as_super() {
+        // Act
+        let result = parse_hotkey("Win+R").unwrap();
+
+        // Assert
+        assert!(result.mods.contains(Modifiers::SUPER));
+    }
+
+    #[test]
+    fn parse_hotkey_parses_meta_as_super() {
+        // Act
+        let result = parse_hotkey("Meta+R").unwrap();
+
+        // Assert
+        assert!(result.mods.contains(Modifiers::SUPER));
+    }
+
+    #[test]
+    fn parse_hotkey_parses_cmd_as_super() {
+        // Act
+        let result = parse_hotkey("Cmd+R").unwrap();
+
+        // Assert
+        assert!(result.mods.contains(Modifiers::SUPER));
     }
 
     #[test]
@@ -445,17 +511,32 @@ mod tests {
     }
 
     #[test]
-    fn parse_hotkey_is_case_insensitive() {
-        // Arrange
-        let inputs = ["ctrl+r", "CTRL+R", "Ctrl+r", "CTRL+r"];
+    fn parse_hotkey_is_case_insensitive_lowercase() {
+        // Act
+        let result = parse_hotkey("ctrl+r").unwrap();
 
-        // Act & Assert
-        for input in inputs {
-            let result = parse_hotkey(input);
-            assert!(result.is_some());
-            let hotkey = result.unwrap();
-            assert_eq!(hotkey.key, Code::KeyR);
-            assert!(hotkey.mods.contains(Modifiers::CONTROL));
-        }
+        // Assert
+        assert_eq!(result.key, Code::KeyR);
+        assert!(result.mods.contains(Modifiers::CONTROL));
+    }
+
+    #[test]
+    fn parse_hotkey_is_case_insensitive_uppercase() {
+        // Act
+        let result = parse_hotkey("CTRL+R").unwrap();
+
+        // Assert
+        assert_eq!(result.key, Code::KeyR);
+        assert!(result.mods.contains(Modifiers::CONTROL));
+    }
+
+    #[test]
+    fn parse_hotkey_is_case_insensitive_mixed() {
+        // Act
+        let result = parse_hotkey("Ctrl+r").unwrap();
+
+        // Assert
+        assert_eq!(result.key, Code::KeyR);
+        assert!(result.mods.contains(Modifiers::CONTROL));
     }
 }

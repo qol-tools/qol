@@ -1,3 +1,4 @@
+use crate::paths;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -15,21 +16,12 @@ pub struct PluginConfigManager {
 
 impl PluginConfigManager {
     pub fn new() -> Result<Self> {
-        let config_path = Self::global_config_path()?;
+        let config_path = paths::plugin_configs_path()?;
         Ok(Self { config_path })
     }
 
-    fn global_config_path() -> Result<PathBuf> {
-        let config_dir = dirs::config_dir()
-            .ok_or_else(|| anyhow::anyhow!("Could not find config directory"))?
-            .join("qol-tray");
-        Ok(config_dir.join("plugin-configs.json"))
-    }
-
     fn plugin_config_path(plugin_id: &str) -> Result<PathBuf> {
-        let config_dir = dirs::config_dir()
-            .ok_or_else(|| anyhow::anyhow!("Could not find config directory"))?;
-        Ok(config_dir.join("qol-tray").join("plugins").join(plugin_id).join("config.json"))
+        paths::plugins_dir().map(|p| p.join(plugin_id).join("config.json"))
     }
 
     pub fn load_configs(&self) -> Result<PluginConfigs> {
@@ -126,16 +118,6 @@ mod tests {
 
         // Assert
         assert!(result.is_ok());
-    }
-
-    #[test]
-    fn global_config_path_returns_qol_tray_directory() {
-        // Act
-        let path = PluginConfigManager::global_config_path().unwrap();
-
-        // Assert
-        assert!(path.to_string_lossy().contains("qol-tray"));
-        assert!(path.to_string_lossy().ends_with("plugin-configs.json"));
     }
 
     #[test]

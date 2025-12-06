@@ -93,6 +93,20 @@ Action types:
 - Platform-specific code belongs in `platform/` directories, not root modules
 - **No builds or tests unless asked** - Do not run `cargo build`, `cargo run`, `make`, or browser tests unless explicitly requested. These operations are expensive.
 
+### Single Responsibility Patterns
+
+- **Describe without AND** - If you need "and" to describe a function, split it
+- **Extract by abstraction level** - High-level orchestration shouldn't contain low-level details
+- **Input → Transform → Output** - Functions should be one of: gather input, transform data, produce output. Don't mix I/O with business logic.
+- **Command/Query separation** - Functions either change state OR return data, not both
+
+### Type Safety Patterns
+
+- **Newtypes for domain concepts** - Use `struct PluginId(String)` not raw `String`
+- **Make invalid states unrepresentable** - Use enums to model state machines, not bool flags with optional fields
+- **Parse, don't validate** - Parse into validated types at boundaries, use those types internally
+- **Exhaustive matching** - Always match all enum variants explicitly (no `_ =>`), compiler catches new variants
+
 ### Frontend Architecture
 
 - **Functional and declarative** - Pure render functions, no imperative DOM manipulation
@@ -105,7 +119,7 @@ Action types:
 ### Complexity Thresholds
 
 - **Max 50 lines per function** - Split beyond this
-- **Max 2 levels of nesting** - Extract inner logic into helpers
+- **Max 1 level of nesting** - Flatten code aggressively. Use early returns, extract helpers, or restructure. No nested if/match/loop inside another.
 - **One concern per function** - Don't mix state management, navigation, and action dispatch
 - **Sequential ifs checking selectors** → Use config array with `{ selector, handler }` objects
 - **Conditional rendering with shared structure** → Extract state-specific render functions

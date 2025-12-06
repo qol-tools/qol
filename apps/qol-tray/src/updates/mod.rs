@@ -50,25 +50,8 @@ pub async fn check_for_updates() -> Result<bool> {
 }
 
 fn is_newer_version(latest: &str, current: &str) -> bool {
-    let parse_version = |v: &str| -> Vec<u32> {
-        v.split('.')
-            .filter_map(|s| s.parse().ok())
-            .collect()
-    };
-
-    let latest_parts = parse_version(latest);
-    let current_parts = parse_version(current);
-
-    for (l, c) in latest_parts.iter().zip(current_parts.iter()) {
-        if l > c {
-            return true;
-        }
-        if l < c {
-            return false;
-        }
-    }
-
-    latest_parts.len() > current_parts.len()
+    use crate::version::Version;
+    Version::parse(latest).is_newer_than(&Version::parse(current))
 }
 
 #[cfg(target_os = "linux")]
