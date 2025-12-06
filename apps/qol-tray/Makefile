@@ -1,4 +1,4 @@
-.PHONY: run dev test clean install deb
+.PHONY: run dev test clean install deb release
 
 run:
 	cargo run
@@ -19,3 +19,9 @@ install:
 deb:
 	cargo build --release
 	cargo deb --no-build
+
+release:
+	@VERSION=$$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/'); \
+	cargo build --release && \
+	cargo deb --no-build && \
+	gh release create "v$$VERSION" target/debian/*.deb --title "v$$VERSION" --generate-notes
