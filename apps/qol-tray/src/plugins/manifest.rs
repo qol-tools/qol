@@ -30,6 +30,17 @@ pub struct PluginInfo {
     pub version: String,
     #[serde(default)]
     pub author: Option<String>,
+    #[serde(default)]
+    pub platforms: Option<Vec<String>>,
+}
+
+impl PluginInfo {
+    pub fn supports_current_platform(&self) -> bool {
+        match &self.platforms {
+            None => true,
+            Some(platforms) => platforms.iter().any(|p| p == std::env::consts::OS),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -83,4 +94,49 @@ pub struct DaemonConfig {
     pub command: String,
     #[serde(default)]
     pub restart_on_crash: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_plugin_info(platforms: Option<Vec<&str>>) -> PluginInfo {
+        PluginInfo {
+            name: "Test".to_string(),
+            description: "Test".to_string(),
+            version: "1.0.0".to_string(),
+            author: None,
+            platforms: platforms.map(|p| p.into_iter().map(String::from).collect()),
+        }
+    }
+
+    #[test]
+    fn supports_current_platform_when_none() {
+        let info = make_plugin_info(None);
+        assert!(info.supports_current_platform());
+    }
+
+    #[test]
+    fn supports_current_platform_when_empty() {
+        let info = make_plugin_info(Some(vec![]));
+        assert!(!info.supports_current_platform());
+    }
+
+    #[test]
+    fn supports_current_platform_when_listed() {
+        let info = make_plugin_info(Some(vec![std::env::consts::OS]));
+        assert!(info.supports_current_platform());
+    }
+
+    #[test]
+    fn supports_current_platform_when_not_listed() {
+        let info = make_plugin_info(Some(vec!["not-a-real-os"]));
+        assert!(!info.supports_current_platform());
+    }
+
+    #[test]
+    fn supports_current_platform_with_multiple() {
+        let info = make_plugin_info(Some(vec!["linux", "windows", "macos"]));
+        assert!(info.supports_current_platform());
+    }
 }

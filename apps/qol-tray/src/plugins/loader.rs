@@ -51,6 +51,14 @@ impl PluginLoader {
     fn try_load_plugin(path: &Path) -> Option<Plugin> {
         match Self::load_plugin(path) {
             Ok(plugin) => {
+                if !plugin.manifest.plugin.supports_current_platform() {
+                    log::info!(
+                        "Skipping plugin {} (unsupported platform: {})",
+                        plugin.id,
+                        std::env::consts::OS
+                    );
+                    return None;
+                }
                 log::info!("Loaded plugin: {} ({})", plugin.manifest.plugin.name, plugin.id);
                 Some(plugin)
             }
