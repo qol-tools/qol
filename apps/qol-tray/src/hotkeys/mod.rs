@@ -196,15 +196,22 @@ fn parse_key_code(s: &str) -> Option<Code> {
 pub fn start_hotkey_listener(
     plugins_dir: PathBuf,
 ) -> Result<()> {
-    let mut manager = HotkeyManager::new()?;
-    let config = manager.load_config()?;
-    manager.register_hotkeys(&config)?;
-
-    let hotkey_receiver = GlobalHotKeyEvent::receiver();
     let (reload_tx, reload_rx) = mpsc::channel::<()>();
     let _ = RELOAD_SENDER.set(reload_tx);
 
     std::thread::spawn(move || {
+        let mut manager = match HotkeyManager::new() {
+            Ok(m) => m,
+            Err(e) => { log::error!("Failed to create hotkey manager: {}", e); return; }
+        };
+
+        if let Ok(config) = manager.load_config() {
+            if let Err(e) = manager.register_hotkeys(&config) {
+                log::error!("Failed to register hotkeys: {}", e);
+            }
+        }
+
+        let hotkey_receiver = GlobalHotKeyEvent::receiver();
         loop {
             try_reload_hotkeys(&reload_rx, &mut manager);
             try_handle_hotkey(hotkey_receiver, &manager, &plugins_dir);
