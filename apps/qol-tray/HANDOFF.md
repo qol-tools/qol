@@ -7,6 +7,10 @@ qol-tray v1.4.3 - Pluggable system tray daemon for Linux. Single tray icon opens
 **Linux only for now.** Cross-platform support planned for the future.
 
 ### Recent Changes (Dec 2025)
+- Cross-platform URL opening via `open` crate (replaced 28-line platform-specific code)
+- Windows/macOS tray event handling implemented (was dead code)
+- Merged windows.rs and macos.rs into single `#[cfg(not(target_os = "linux"))]` block in mod.rs
+- Comprehensive edge case tests for version parsing, path safety, hotkey parsing, plugin loading
 - Developer tab with plugin linking/unlinking for dev workflow
 - Auto-reload after link/unlink (keeps PluginManager in sync)
 - Backup/restore of installed plugins when linking/unlinking
@@ -15,7 +19,6 @@ qol-tray v1.4.3 - Pluggable system tray daemon for Linux. Single tray icon opens
 - Plugin version from `plugin.toml` (not git tags)
 - Plugin update uses `git fetch && reset --hard` (handles divergent branches)
 - `make dev` kills existing qol-tray process before starting
-- `open_url()` extracted to `src/paths.rs`
 
 ### What Works
 - System tray icon (SNI protocol)
@@ -29,11 +32,13 @@ qol-tray v1.4.3 - Pluggable system tray daemon for Linux. Single tray icon opens
 - Local releases via `make release`
 
 ### Architecture
-- `src/tray/` - System tray (Linux SNI)
+- `src/tray/` - System tray (Linux SNI, Windows/macOS via tray-icon)
 - `src/plugins/` - Plugin loading, config management
 - `src/features/plugin_store/` - Browser UI server
 - `src/hotkeys/` - Global hotkey registration
 - `src/updates/` - Auto-update system
+- `src/paths.rs` - Shared paths and `open_url()` via `open` crate
+- `src/version.rs` - Semantic version parsing and comparison
 - `ui/` - Embedded web UI (rust-embed)
 
 ### Developer Mode
