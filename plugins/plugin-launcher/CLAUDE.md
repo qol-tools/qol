@@ -80,12 +80,4 @@ window.onSearchResults([{path, name, is_dir}, ...])
 
 Linux backend supports custom plocate databases for mounted drives under `/media/`. Run `backends/update-dbs.sh` to index mounted drives.
 
-## Code Style
-
-- No comments in code
-- Max 50 lines per function
-- Max 2 levels of nesting
-- Conventional commits: `feat:`, `fix:`, `refactor:`, `test:`
-- Short commit messages, no co-authors
-- AAA pattern for tests (Arrange/Act/Assert with comments)
-- UI is embedded at compile time - changes require rebuild
+UI is embedded at compile time - changes require rebuild.
