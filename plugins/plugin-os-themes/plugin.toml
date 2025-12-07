@@ -3,6 +3,7 @@ name = "My Plugin"
 description = "A qol-tray plugin"
 version = "1.0.0"
 author = ""
+# platforms = ["linux", "windows", "macos"]  # Omit for all platforms
 
 [menu]
 label = "My Plugin"
