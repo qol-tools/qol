@@ -8,11 +8,14 @@ qol-tray v1.4.3 - Pluggable system tray daemon for Linux. Single tray icon opens
 
 ### Recent Changes (Dec 2025)
 - Developer tab with plugin linking/unlinking for dev workflow
+- Auto-reload after link/unlink (keeps PluginManager in sync)
 - Backup/restore of installed plugins when linking/unlinking
 - Keyboard navigation in Developer tab (arrow keys, Space/Enter)
 - Extracted shared modules: `src/version.rs`, `src/paths.rs`
-- Flattened nested code to max 1 level
-- Detached spawned processes from terminal stdio
+- Plugin version from `plugin.toml` (not git tags)
+- Plugin update uses `git fetch && reset --hard` (handles divergent branches)
+- `make dev` kills existing qol-tray process before starting
+- `open_url()` extracted to `src/paths.rs`
 
 ### What Works
 - System tray icon (SNI protocol)
