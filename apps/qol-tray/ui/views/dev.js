@@ -9,8 +9,7 @@ const state = {
     selectedIndex: 0,
     showLinkInput: false,
     linkPath: '',
-    linkError: null,
-    confirmUnlink: null
+    linkError: null
 };
 
 let container = null;
@@ -120,19 +119,6 @@ function updateView() {
                 ↑/↓ navigate &nbsp; Space toggle &nbsp; l link &nbsp; r reload
             </footer>
         </div>
-
-        ${state.confirmUnlink ? `
-            <div class="confirm-modal">
-                <div class="confirm-modal-content">
-                    <h3>Unlink Plugin?</h3>
-                    <p>Stop using dev version of "${state.confirmUnlink.name}"? Original will be restored if available.</p>
-                    <div class="confirm-modal-buttons">
-                        <button class="confirm-cancel" data-action="cancel-unlink">Cancel</button>
-                        <button class="confirm-delete" data-action="confirm-unlink">Unlink</button>
-                    </div>
-                </div>
-            </div>
-        ` : ''}
     `;
 
     const input = container.querySelector('#link-path');
@@ -153,8 +139,6 @@ function handleClick(e) {
     if (action === 'add-link') showLinkInput();
     if (action === 'confirm-link') confirmLink();
     if (action === 'cancel-link') cancelLink();
-    if (action === 'confirm-unlink') executeUnlink();
-    if (action === 'cancel-unlink') cancelUnlink();
     if (action === 'quick-link' && path) {
         const id = e.target.dataset.id;
         quickLink(path, id);
@@ -177,13 +161,7 @@ function handleChange(e) {
 
     e.preventDefault();
     checkbox.checked = true;
-    state.confirmUnlink = plugin;
-    updateView();
-}
-
-function cancelUnlink() {
-    state.confirmUnlink = null;
-    updateView();
+    deleteLink(id);
 }
 
 function handleItemActivation() {
@@ -199,15 +177,7 @@ function handleItemActivation() {
     const plugin = state.plugins[state.selectedIndex];
     if (!plugin?.is_symlink) return;
 
-    state.confirmUnlink = plugin;
-    updateView();
-}
-
-async function executeUnlink() {
-    if (!state.confirmUnlink) return;
-    const id = state.confirmUnlink.id;
-    state.confirmUnlink = null;
-    await deleteLink(id);
+    deleteLink(plugin.id);
 }
 
 async function quickLink(path, id) {
@@ -305,18 +275,6 @@ async function reloadPlugins() {
 }
 
 export function handleKey(e) {
-    if (state.confirmUnlink) {
-        if (e.key === 'Escape') {
-            e.preventDefault();
-            cancelUnlink();
-        }
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            executeUnlink();
-        }
-        return;
-    }
-
     if (state.showLinkInput) {
         return;
     }
