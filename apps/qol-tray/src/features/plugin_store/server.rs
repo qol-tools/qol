@@ -217,8 +217,7 @@ async fn list_plugins(
 
     let cache_age = cache_age_secs();
 
-    let force_refresh = query.refresh || cfg!(feature = "dev");
-    let plugins = match client.list_plugins_cached(force_refresh).await {
+    let plugins = match client.list_plugins_cached(query.refresh).await {
         Ok(metadata_list) => {
             log::info!("Got {} plugins", metadata_list.len());
             metadata_list
