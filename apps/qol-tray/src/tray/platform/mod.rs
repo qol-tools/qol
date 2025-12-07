@@ -2,8 +2,10 @@
 mod linux;
 
 use crate::features::FeatureRegistry;
-use crate::menu::router::EventRouter;
 use crate::plugins::PluginManager;
+
+#[cfg(not(target_os = "linux"))]
+use crate::menu::router::EventRouter;
 use anyhow::Result;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
