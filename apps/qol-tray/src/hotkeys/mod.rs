@@ -345,7 +345,51 @@ mod tests {
 
     #[test]
     fn parse_hotkey_returns_none_for_invalid() {
-        assert!(parse_hotkey("").is_none());
-        assert!(parse_hotkey("Ctrl+InvalidKey").is_none());
+        let cases = [
+            "",
+            "Ctrl+InvalidKey",
+            "Ctrl+",
+            "+++",
+            "Ctrl+Shift",
+            "Ctrl+Shift+",
+            "   ",
+        ];
+
+        for input in cases {
+            assert!(parse_hotkey(input).is_none(), "input: {:?}", input);
+        }
+    }
+
+    #[test]
+    fn parse_hotkey_ignores_empty_parts() {
+        let result = parse_hotkey("+R").unwrap();
+        assert_eq!(result.key, Code::KeyR);
+
+        let result = parse_hotkey("Ctrl++R").unwrap();
+        assert_eq!(result.key, Code::KeyR);
+        assert!(result.mods.contains(Modifiers::CONTROL));
+    }
+
+    #[test]
+    fn parse_hotkey_handles_edge_cases() {
+        let cases = [
+            ("r", Some(Code::KeyR)),
+            ("R", Some(Code::KeyR)),
+            ("Ctrl+r", Some(Code::KeyR)),
+            ("ctrl+R", Some(Code::KeyR)),
+            ("Control+R", Some(Code::KeyR)),
+            ("  Ctrl  +  R  ", Some(Code::KeyR)),
+        ];
+
+        for (input, expected_key) in cases {
+            let result = parse_hotkey(input);
+            match expected_key {
+                Some(key) => {
+                    assert!(result.is_some(), "input: {:?} should parse", input);
+                    assert_eq!(result.unwrap().key, key, "input: {:?}", input);
+                }
+                None => assert!(result.is_none(), "input: {:?} should not parse", input),
+            }
+        }
     }
 }

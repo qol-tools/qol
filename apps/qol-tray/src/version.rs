@@ -50,6 +50,44 @@ mod tests {
     }
 
     #[test]
+    fn parse_handles_malformed_input() {
+        let cases = [
+            ("", vec![]),
+            ("v", vec![]),
+            ("...", vec![]),
+            ("abc", vec![]),
+            ("v.1.2", vec![1, 2]),
+            ("1.2.3-alpha", vec![1, 2]),
+            ("1.2.3+build", vec![1, 2]),
+            ("1.2.3-rc.1", vec![1, 2, 1]),
+            ("  1.2.3  ", vec![2]),
+            ("1..2", vec![1, 2]),
+            ("1.2.", vec![1, 2]),
+            (".1.2", vec![1, 2]),
+            ("999999999999999999999.1", vec![1]),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(Version::parse(input).parts, expected, "input: {:?}", input);
+        }
+    }
+
+    #[test]
+    fn is_newer_than_handles_empty_versions() {
+        let cases = [
+            ("1.0.0", "", true),
+            ("", "1.0.0", false),
+            ("", "", false),
+        ];
+
+        for (a, b, expected) in cases {
+            let va = Version::parse(a);
+            let vb = Version::parse(b);
+            assert_eq!(va.is_newer_than(&vb), expected, "{:?} vs {:?}", a, b);
+        }
+    }
+
+    #[test]
     fn is_newer_than_comparisons() {
         let cases = [
             // (version_a, version_b, a_is_newer_than_b)

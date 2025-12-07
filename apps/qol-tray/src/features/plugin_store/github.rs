@@ -292,15 +292,25 @@ mod tests {
         let cases = [
             ("plugin-screen-recorder", true),
             ("plugin-notes", true),
+            ("plugin-a", true),
+            ("plugin-123", true),
+            ("plugin-CAPS", true),
             ("screen-recorder", false),
             ("my-plugin", false),
             ("pluginstore", false),
             ("plugin-template", false),
             ("", false),
+            ("plugin-", true),
+            ("plugin", false),
+            ("PLUGIN-foo", false),
+            ("Plugin-foo", false),
+            (" plugin-foo", false),
+            ("plugin-foo ", true),
+            ("plugin--double", true),
         ];
 
         for (name, expected) in cases {
-            assert_eq!(is_plugin_repo(name), expected, "name: {}", name);
+            assert_eq!(is_plugin_repo(name), expected, "name: {:?}", name);
         }
     }
 
