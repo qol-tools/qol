@@ -118,14 +118,13 @@ fn restart_with_cleanup() -> ! {
 #[cfg(target_os = "macos")]
 pub async fn download_and_install() -> Result<()> {
     let url = format!("https://github.com/{}/releases/latest", GITHUB_REPO);
-    std::process::Command::new("open").arg(&url).spawn()?;
+    crate::paths::open_url(&url)?;
     Ok(())
 }
 
 #[cfg(target_os = "windows")]
 pub async fn download_and_install() -> Result<()> {
     let url = format!("https://github.com/{}/releases/latest", GITHUB_REPO);
-    std::process::Command::new("cmd").args(["/C", "start", &url]).spawn()?;
+    crate::paths::open_url(&url)?;
     Ok(())
 }
-

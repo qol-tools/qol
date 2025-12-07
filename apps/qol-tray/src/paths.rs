@@ -27,6 +27,36 @@ pub fn plugin_cache_path() -> Result<PathBuf> {
     config_dir().map(|p| p.join(".plugin-cache.json"))
 }
 
+pub fn open_url(url: &str) -> Result<()> {
+    use std::process::{Command, Stdio};
+
+    #[cfg(target_os = "linux")]
+    Command::new("xdg-open")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    #[cfg(target_os = "macos")]
+    Command::new("open")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    #[cfg(target_os = "windows")]
+    Command::new("cmd")
+        .args(["/C", "start", url])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
