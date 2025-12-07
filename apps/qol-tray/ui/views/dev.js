@@ -189,7 +189,9 @@ async function quickLink(path, id) {
         });
         if (!res.ok) {
             console.error('Failed to link:', await res.text());
+            return;
         }
+        await triggerReload();
         await loadPlugins();
     } catch (e) {
         console.error('Failed to link:', e);
@@ -233,6 +235,7 @@ async function confirmLink() {
         state.showLinkInput = false;
         state.linkPath = '';
         state.linkError = null;
+        await triggerReload();
         await loadPlugins();
     } catch (e) {
         state.linkError = e.message;
@@ -245,11 +248,17 @@ async function deleteLink(id) {
         const res = await fetch(`/api/dev/links/${id}`, { method: 'DELETE' });
         if (!res.ok) {
             console.error('Failed to delete link:', await res.text());
+            return;
         }
+        await triggerReload();
         await loadPlugins();
     } catch (e) {
         console.error('Failed to delete link:', e);
     }
+}
+
+async function triggerReload() {
+    await fetch('/api/dev/reload', { method: 'POST' });
 }
 
 async function reloadPlugins() {
