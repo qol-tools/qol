@@ -93,6 +93,7 @@ Action types:
 - **Conventional commits** - Use format: `feat:`, `fix:`, `refactor:`, `test:`, etc.
 - **Short commit messages** - One-liners, no fluff, no co-authors
 - **Atomic commits** - One logical change per commit. Split distinct changes (bug fix, refactor, tests) into separate commits. Each commit must compile and represent a working state.
+- **Amend mistakes** - If a refactor fixes a mistake from the previous unpushed commit, amend or squash. Don't create separate "fix the fix" commits.
 - **No dead code warnings** - Remove unused code or gate with feature flags
 - Platform-specific code belongs in `platform/` directories, not root modules
 - **No builds or tests unless asked** - Do not run `cargo build`, `cargo run`, `make`, or browser tests unless explicitly requested. These operations are expensive.
