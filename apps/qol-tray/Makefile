@@ -4,6 +4,7 @@ run:
 	cargo run
 
 dev:
+	-pkill -f 'qol-tray'
 	cargo run --features dev
 
 test:
