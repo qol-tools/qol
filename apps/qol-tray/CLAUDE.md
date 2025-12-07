@@ -38,9 +38,10 @@ make release  # Bump version, build, push, create GitHub release
 **src/tray/** - System tray UI with platform abstraction
 - Platform-specific implementations in `platform/` subdirectory
   - `linux.rs`: GTK-based, spawns separate thread for event loop
-  - `windows.rs`, `macos.rs`: Standard tray icon implementation
+  - `mod.rs`: Contains shared Windows/macOS implementation via `#[cfg(not(target_os = "linux"))]`
 - `PlatformTray` enum handles platform differences at compile time
 - `icon.rs`: Icon loading from embedded RGBA data, supports notification dot variant
+- Uses `tray-icon` crate (cross-platform)
 
 **src/features/plugin_store/** - Browser-based plugin management
 - Serves web UI at `http://127.0.0.1:42700`
