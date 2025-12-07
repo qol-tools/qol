@@ -18,6 +18,7 @@ pub enum PlatformTray {
     #[cfg(target_os = "linux")]
     Linux,
     #[cfg(not(target_os = "linux"))]
+    #[allow(dead_code)]
     Standard(TrayIcon),
 }
 
