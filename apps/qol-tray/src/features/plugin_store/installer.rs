@@ -99,18 +99,45 @@ impl PluginInstaller {
         log::info!("Updating plugin: {}", plugin_id);
 
         let output = tokio::process::Command::new("git")
-            .args(&["pull"])
+            .args(["fetch", "origin"])
             .current_dir(&plugin_dir)
             .output()
             .await?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("Git pull failed: {}", stderr);
+            anyhow::bail!("Git fetch failed: {}", stderr);
+        }
+
+        let branch = self.get_default_branch(&plugin_dir).await?;
+        let output = tokio::process::Command::new("git")
+            .args(["reset", "--hard", &format!("origin/{}", branch)])
+            .current_dir(&plugin_dir)
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("Git reset failed: {}", stderr);
         }
 
         log::info!("Plugin {} updated successfully", plugin_id);
         Ok(())
+    }
+
+    async fn get_default_branch(&self, plugin_dir: &PathBuf) -> Result<String> {
+        let output = tokio::process::Command::new("git")
+            .args(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
+            .current_dir(plugin_dir)
+            .output()
+            .await?;
+
+        if output.status.success() {
+            let branch = String::from_utf8_lossy(&output.stdout);
+            return Ok(branch.trim().trim_start_matches("origin/").to_string());
+        }
+
+        Ok("master".to_string())
     }
 
     pub async fn uninstall(&self, plugin_id: &str) -> Result<()> {
