@@ -2,14 +2,18 @@
 
 ## Current State
 
-qol-tray v1.4.3 - Pluggable system tray daemon for Linux. Single tray icon opens browser UI at `http://127.0.0.1:42700` for plugin management.
+qol-tray v1.4.3 - Pluggable system tray daemon. Single tray icon opens browser UI at `http://127.0.0.1:42700` for plugin management.
 
-**Linux only for now.** Cross-platform support planned for the future.
+**Cross-platform:** Builds and tests pass on Linux, Windows, macOS. Plugins declare platform support via `platforms` field.
 
 ### Recent Changes (Dec 2025)
-- Cross-platform URL opening via `open` crate (replaced 28-line platform-specific code)
-- Windows/macOS tray event handling implemented (was dead code)
-- Merged windows.rs and macos.rs into single `#[cfg(not(target_os = "linux"))]` block in mod.rs
+- Cross-platform CI via GitHub Actions (Linux, Windows, macOS)
+- Plugin platform filtering - `platforms = ["linux"]` in plugin.toml, filters both installed plugins and store listings
+- Fixed Windows hotkey manager thread safety issue
+- Shared CLAUDE.md in parent `/Git/` directory for all qol-tools repos
+- Cross-platform URL opening via `open` crate
+- Windows/macOS tray event handling implemented
+- Merged windows.rs and macos.rs into single `#[cfg(not(target_os = "linux"))]` block
 - Comprehensive edge case tests for version parsing, path safety, hotkey parsing, plugin loading
 - Developer tab with plugin linking/unlinking for dev workflow
 - Auto-reload after link/unlink (keeps PluginManager in sync)
@@ -66,12 +70,12 @@ No cloud CI needed.
 
 ## Plugins
 
-| Plugin | Status |
-|--------|--------|
-| plugin-launcher | Working |
-| plugin-pointz | Working |
-| plugin-screen-recorder | Working |
-| plugin-window-actions | Working |
+| Plugin | Platforms | Status |
+|--------|-----------|--------|
+| plugin-launcher | All | Working |
+| plugin-pointz | All | Working |
+| plugin-screen-recorder | Linux | Working |
+| plugin-window-actions | Linux | Working |
 
 ## Config Locations
 
