@@ -39,6 +39,7 @@ tray-icon = "0.12"
 
 # Path utilities
 dirs = "5.0"
+open = "5"
 
 # Global state management
 once_cell = "1.19"
