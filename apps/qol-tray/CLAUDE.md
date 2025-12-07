@@ -1,4 +1,4 @@
-# CLAUDE.md
+# qol-tray
 
 ## IMPORTANT: Linux Only (For Now)
 
@@ -66,6 +66,7 @@ Plugins define their menu structure in `plugin.toml`:
 name = "Plugin Name"
 description = "Description"
 version = "1.0.0"
+platforms = ["linux"]  # Optional - omit for all platforms
 
 [menu]
 label = "Menu Label"
@@ -88,73 +89,7 @@ Action types:
 - `toggle-config` - Toggle boolean in `config.json` at `config_key` path
 - `settings` - Reserved for future use
 
-### Code Style
-
-- **No comments** - Code removed all comments; keep it that way
-- **Conventional commits** - Use format: `feat:`, `fix:`, `refactor:`, `test:`, etc.
-- **Short commit messages** - One-liners, no fluff, no co-authors
-- **Atomic commits** - One logical change per commit. Split distinct changes (bug fix, refactor, tests) into separate commits. Each commit must compile and represent a working state.
-- **Amend mistakes** - If a refactor fixes a mistake from the previous unpushed commit, amend or squash. Don't create separate "fix the fix" commits.
-- **No dead code warnings** - Remove unused code or gate with feature flags
-- Platform-specific code belongs in `platform/` directories, not root modules
-- **No builds or tests unless asked** - Do not run `cargo build`, `cargo run`, `make`, or browser tests unless explicitly requested. These operations are expensive.
-- **No pushing unless asked** - Commit locally but do not push until the end of a session or when explicitly told. Pushing triggers CI and should be batched.
-
-### Single Responsibility Patterns
-
-- **Describe without AND** - If you need "and" to describe a function, split it
-- **Extract by abstraction level** - High-level orchestration shouldn't contain low-level details
-- **Input → Transform → Output** - Functions should be one of: gather input, transform data, produce output. Don't mix I/O with business logic.
-- **Command/Query separation** - Functions either change state OR return data, not both
-
-### Type Safety Patterns
-
-- **Newtypes for domain concepts** - Use `struct PluginId(String)` not raw `String`
-- **Make invalid states unrepresentable** - Use enums to model state machines, not bool flags with optional fields
-- **Parse, don't validate** - Parse into validated types at boundaries, use those types internally
-- **Exhaustive matching** - Always match all enum variants explicitly (no `_ =>`), compiler catches new variants
-
-### Frontend Architecture
-
-- **Functional and declarative** - Pure render functions, no imperative DOM manipulation
-- **Data-driven** - UI derived from state, not manually synchronized
-- **Single responsibility** - Split logical chunks into focused modules
-- **Type safety** - Define data structures explicitly, validate API responses
-- **Scalability** - Design for N plugins, not hardcoded assumptions
-- **Keyboard-first** - All interactions MUST be accessible via keyboard. This is critical. Design keyboard flow first, then add mouse/hover as secondary. Use single-letter shortcuts (e.g., `d` for delete) since Mac lacks Delete key. Always show keyboard hints in UI.
-
-### Complexity Thresholds (Deep Modules Philosophy)
-
-Inspired by "A Philosophy of Software Design" by John Ousterhout:
-
-- **Deep modules over shallow** - Hide complexity behind simple, clean APIs. A function should do meaningful work, not just delegate. Prefer fewer functions that do more over many trivial wrappers.
-- **Max 50 lines per function** - Split beyond this, but only if it creates genuinely reusable abstractions
-- **Nesting is acceptable** - Common idioms like `for` + `if`, `match` in loop, early returns are fine. Extract helpers only when it genuinely clarifies intent or creates reusable logic.
-- **One concern per function** - Don't mix state management, navigation, and action dispatch
-- **Avoid shallow extractions** - Don't create `ensure_parent_dir()` if it's only called once and the inline version is equally clear. Extract when the abstraction has a meaningful name and hides real complexity.
-- **Clean interfaces** - Public APIs should be obvious and hard to misuse. Internal complexity is fine if the interface is clean.
-
-Frontend-specific:
-- **Sequential ifs checking selectors** → Use config array with `{ selector, handler }` objects
-- **Conditional rendering with shared structure** → Extract state-specific render functions
-- **Key event handlers** → Separate recording/navigation/actions, use declarative handler maps
-
-### Test Style
-
-- **Table-driven tests** - Consolidate similar test cases into a single test with a cases array:
-  ```rust
-  let cases = [("input1", expected1), ("input2", expected2)];
-  for (input, expected) in cases {
-      assert_eq!(func(input), expected, "input: {}", input);
-  }
-  ```
-- **Context in assertions** - Always include identifying info in assertion messages for debugging failed iterations
-- **AAA pattern** - Use Arrange/Act/Assert comments for larger, complex tests where structure aids clarity. Omit for table-driven tests and simple one-liner tests where AAA would be redundant.
-- **Generic test data** - Use abstract paths like `/a/b/c/foo` not personal-looking paths like `/home/user/documents/file.txt`. Use generic names (`foo`, `bar`) not real app names (`firefox`, `discord`).
-- **No tests for thin wrappers** - If a function just calls already-tested functions, don't test it separately. Example: `fn foo(x) { bar(x).baz() }` doesn't need tests if `bar()` and `baz()` are tested.
-- **Meaningful assertions** - Tests must verify specific behavior. Never just assert `result.is_ok()` - check the actual value.
-- **Skip trivial Arrange** - For simple inputs, inline them. Only use explicit Arrange section for complex setup.
-- **Descriptive names** - Use snake_case that explains what is being tested: `version_parsing_extracts_parts` not `test_parse`
+Platform-specific code belongs in `platform/` directories, not root modules.
 
 ## Icon Management
 
