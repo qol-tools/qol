@@ -222,6 +222,7 @@ async fn list_plugins(
             log::info!("Got {} plugins", metadata_list.len());
             metadata_list
                 .into_iter()
+                .filter(|m| m.supports_current_platform())
                 .map(|m| PluginInfo {
                     id: m.id.clone(),
                     name: m.name,

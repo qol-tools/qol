@@ -28,6 +28,8 @@ pub struct CachedPlugin {
     pub description: String,
     pub version: String,
     pub repo_url: String,
+    #[serde(default)]
+    pub platforms: Option<Vec<String>>,
 }
 
 impl From<PluginMetadata> for CachedPlugin {
@@ -38,6 +40,7 @@ impl From<PluginMetadata> for CachedPlugin {
             description: m.description,
             version: m.version,
             repo_url: m.repo_url,
+            platforms: m.platforms,
         }
     }
 }
@@ -50,6 +53,7 @@ impl From<CachedPlugin> for PluginMetadata {
             description: c.description,
             version: c.version,
             repo_url: c.repo_url,
+            platforms: c.platforms,
         }
     }
 }
@@ -244,6 +248,7 @@ fn build_plugin_metadata(repo: &GitHubRepo, manifest: crate::plugins::PluginMani
         description: manifest.plugin.description,
         version: manifest.plugin.version,
         repo_url: repo.html_url.clone(),
+        platforms: manifest.plugin.platforms,
     }
 }
 
@@ -254,6 +259,16 @@ pub struct PluginMetadata {
     pub description: String,
     pub version: String,
     pub repo_url: String,
+    pub platforms: Option<Vec<String>>,
+}
+
+impl PluginMetadata {
+    pub fn supports_current_platform(&self) -> bool {
+        match &self.platforms {
+            None => true,
+            Some(platforms) => platforms.iter().any(|p| p == std::env::consts::OS),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -276,6 +291,7 @@ mod tests {
                 description: "Test plugin".to_string(),
                 version: version.to_string(),
                 author: None,
+                platforms: None,
             },
             menu: MenuConfig {
                 label: "Test".to_string(),

@@ -111,32 +111,20 @@ mod tests {
     }
 
     #[test]
-    fn supports_current_platform_when_none() {
-        let info = make_plugin_info(None);
-        assert!(info.supports_current_platform());
-    }
+    fn supports_current_platform_checks_platforms_list() {
+        let current_os = std::env::consts::OS;
+        let cases: &[(Option<Vec<&str>>, bool)] = &[
+            (None, true),
+            (Some(vec![]), false),
+            (Some(vec![current_os]), true),
+            (Some(vec!["not-a-real-os"]), false),
+            (Some(vec!["linux", "windows", "macos"]), true),
+            (Some(vec!["fake1", "fake2"]), false),
+        ];
 
-    #[test]
-    fn supports_current_platform_when_empty() {
-        let info = make_plugin_info(Some(vec![]));
-        assert!(!info.supports_current_platform());
-    }
-
-    #[test]
-    fn supports_current_platform_when_listed() {
-        let info = make_plugin_info(Some(vec![std::env::consts::OS]));
-        assert!(info.supports_current_platform());
-    }
-
-    #[test]
-    fn supports_current_platform_when_not_listed() {
-        let info = make_plugin_info(Some(vec!["not-a-real-os"]));
-        assert!(!info.supports_current_platform());
-    }
-
-    #[test]
-    fn supports_current_platform_with_multiple() {
-        let info = make_plugin_info(Some(vec!["linux", "windows", "macos"]));
-        assert!(info.supports_current_platform());
+        for (platforms, expected) in cases {
+            let info = make_plugin_info(platforms.clone());
+            assert_eq!(info.supports_current_platform(), *expected, "platforms: {:?}", platforms);
+        }
     }
 }
