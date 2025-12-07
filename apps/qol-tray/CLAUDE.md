@@ -98,6 +98,7 @@ Action types:
 - **No dead code warnings** - Remove unused code or gate with feature flags
 - Platform-specific code belongs in `platform/` directories, not root modules
 - **No builds or tests unless asked** - Do not run `cargo build`, `cargo run`, `make`, or browser tests unless explicitly requested. These operations are expensive.
+- **No pushing unless asked** - Commit locally but do not push until the end of a session or when explicitly told. Pushing triggers CI and should be batched.
 
 ### Single Responsibility Patterns
 
