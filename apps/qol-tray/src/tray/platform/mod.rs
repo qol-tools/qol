@@ -1,21 +1,16 @@
 #[cfg(target_os = "linux")]
 mod linux;
 
-#[cfg(target_os = "windows")]
-mod windows;
-
-#[cfg(target_os = "macos")]
-mod macos;
-
-use crate::plugins::PluginManager;
 use crate::features::FeatureRegistry;
+use crate::menu::router::EventRouter;
+use crate::plugins::PluginManager;
 use anyhow::Result;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 use tray_icon::Icon;
 
 #[cfg(not(target_os = "linux"))]
-use tray_icon::TrayIcon;
+use tray_icon::{TrayIcon, TrayIconBuilder, menu::MenuEvent};
 
 pub enum PlatformTray {
     #[cfg(target_os = "linux")]
@@ -46,11 +41,50 @@ pub fn create_tray(
 ) -> Result<PlatformTray> {
     let (menu, router) = crate::menu::builder::build_menu(plugin_manager, feature_registry, update_available)?;
 
-    #[cfg(target_os = "windows")]
-    let tray = windows::create_tray(menu, router, shutdown_tx, icon)?;
+    let tray_icon = TrayIconBuilder::new()
+        .with_menu(Box::new(menu))
+        .with_tooltip("QoL Tray")
+        .with_icon(icon)
+        .build()?;
 
-    #[cfg(target_os = "macos")]
-    let tray = macos::create_tray(menu, router, shutdown_tx, icon)?;
+    spawn_event_loop(router, shutdown_tx);
 
-    Ok(PlatformTray::Standard(tray))
+    Ok(PlatformTray::Standard(tray_icon))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn spawn_event_loop(router: EventRouter, shutdown_tx: broadcast::Sender<()>) {
+    let router = Arc::new(router);
+    let menu_receiver = MenuEvent::receiver();
+
+    std::thread::spawn(move || {
+        while let Ok(event) = menu_receiver.recv() {
+            if handle_event(&event.id.0, &router, &shutdown_tx) {
+                break;
+            }
+        }
+    });
+}
+
+#[cfg(not(target_os = "linux"))]
+fn handle_event(
+    event_id: &str,
+    router: &EventRouter,
+    shutdown_tx: &broadcast::Sender<()>,
+) -> bool {
+    log::debug!("Menu event: {}", event_id);
+
+    let result = router.route(event_id);
+    if let Err(e) = &result {
+        log::error!("Error handling menu event: {}", e);
+        return false;
+    }
+
+    if matches!(result, Ok(crate::menu::router::HandlerResult::Quit)) {
+        log::info!("Quitting application");
+        let _ = shutdown_tx.send(());
+        return true;
+    }
+
+    false
 }
