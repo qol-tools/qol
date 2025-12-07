@@ -216,8 +216,9 @@ async fn list_plugins(
     let installed_plugins = get_installed_plugin_ids(&plugins_dir);
 
     let cache_age = cache_age_secs();
-    
-    let plugins = match client.list_plugins_cached(query.refresh).await {
+
+    let force_refresh = query.refresh || cfg!(feature = "dev");
+    let plugins = match client.list_plugins_cached(force_refresh).await {
         Ok(metadata_list) => {
             log::info!("Got {} plugins", metadata_list.len());
             metadata_list
