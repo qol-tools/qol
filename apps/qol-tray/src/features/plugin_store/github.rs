@@ -106,10 +106,6 @@ struct GitHubRepo {
     html_url: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct GitHubTag {
-    name: String,
-}
 
 pub struct GitHubClient {
     org: String,
@@ -190,8 +186,7 @@ impl GitHubClient {
 
         for repo in plugin_repos {
             if let Ok(manifest) = self.fetch_plugin_manifest(&repo.name).await {
-                let tag_version = self.fetch_latest_tag(&repo.name).await;
-                plugins.push(build_plugin_metadata(repo, manifest, tag_version));
+                plugins.push(build_plugin_metadata(repo, manifest));
             }
         }
 
@@ -214,21 +209,6 @@ impl GitHubClient {
         }
 
         anyhow::bail!("plugin.toml not found on main or master branch")
-    }
-
-    async fn fetch_latest_tag(&self, repo_name: &str) -> Option<String> {
-        let url = format!(
-            "https://api.github.com/repos/{}/{}/tags?per_page=1",
-            self.org, repo_name
-        );
-
-        let response = self.build_request(&url).send().await.ok()?;
-        if !response.status().is_success() {
-            return None;
-        }
-
-        let tags: Vec<GitHubTag> = response.json().await.ok()?;
-        tags.first().map(|t| t.name.trim_start_matches('v').to_string())
     }
 
     pub async fn list_plugins_cached(&self, force_refresh: bool) -> Result<Vec<PluginMetadata>> {
@@ -257,16 +237,12 @@ fn filter_plugin_repos(repos: &[GitHubRepo]) -> Vec<&GitHubRepo> {
     repos.iter().filter(|r| is_plugin_repo(&r.name)).collect()
 }
 
-fn build_plugin_metadata(
-    repo: &GitHubRepo,
-    manifest: crate::plugins::PluginManifest,
-    tag_version: Option<String>,
-) -> PluginMetadata {
+fn build_plugin_metadata(repo: &GitHubRepo, manifest: crate::plugins::PluginManifest) -> PluginMetadata {
     PluginMetadata {
         id: repo.name.clone(),
         name: manifest.plugin.name,
         description: manifest.plugin.description,
-        version: tag_version.unwrap_or(manifest.plugin.version),
+        version: manifest.plugin.version,
         repo_url: repo.html_url.clone(),
     }
 }
@@ -350,17 +326,10 @@ mod tests {
     }
 
     #[test]
-    fn build_plugin_metadata_version_selection() {
-        let cases = [
-            (Some("2.0.0"), "2.0.0"),
-            (None, "1.0.0"),
-        ];
-
-        for (tag_version, expected) in cases {
-            let repo = make_repo("plugin-test");
-            let manifest = make_manifest("Test", "1.0.0");
-            let metadata = build_plugin_metadata(&repo, manifest, tag_version.map(String::from));
-            assert_eq!(metadata.version, expected, "tag: {:?}", tag_version);
-        }
+    fn build_plugin_metadata_uses_manifest_version() {
+        let repo = make_repo("plugin-test");
+        let manifest = make_manifest("Test", "1.0.0");
+        let metadata = build_plugin_metadata(&repo, manifest);
+        assert_eq!(metadata.version, "1.0.0");
     }
 }
