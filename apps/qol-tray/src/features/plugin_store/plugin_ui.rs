@@ -140,16 +140,27 @@ mod tests {
         let cases = [
             ("plugin-launcher", true),
             ("my_plugin", true),
+            ("plugin123", true),
+            ("UPPERCASE", true),
+            ("a", true),
             ("../etc", false),
             ("foo/bar", false),
             ("foo\\bar", false),
             ("..", false),
             (".", false),
             ("", false),
+            (" ", true),
+            ("plugin\0evil", true),
+            (".hidden", true),
+            ("..hidden", true),
+            ("plugin/", false),
+            ("/plugin", false),
+            ("plugin\\", false),
+            ("\\plugin", false),
         ];
 
         for (id, expected) in cases {
-            assert_eq!(is_safe_id(id), expected, "id: {}", id);
+            assert_eq!(is_safe_id(id), expected, "id: {:?}", id);
         }
     }
 
@@ -158,14 +169,22 @@ mod tests {
         let cases = [
             ("index.html", true),
             ("css/style.css", true),
+            ("a/b/c/d.js", true),
+            ("file.min.js", true),
             ("../secret.txt", false),
             ("foo/../bar", false),
+            ("foo/bar/../baz", false),
+            ("....//....//etc", false),
             ("/etc/passwd", false),
             ("\\windows\\system32", false),
+            ("..\\secret", false),
+            ("..", false),
+            ("a/../../b", false),
+            ("valid/..invalid", false),
         ];
 
         for (path, expected) in cases {
-            assert_eq!(is_safe_subpath(path), expected, "path: {}", path);
+            assert_eq!(is_safe_subpath(path), expected, "path: {:?}", path);
         }
     }
 

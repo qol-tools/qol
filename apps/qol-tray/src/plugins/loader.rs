@@ -174,4 +174,75 @@ items = []
         assert_eq!(plugin.manifest.plugin.description, "A test plugin");
         assert_eq!(plugin.manifest.plugin.version, "1.0.0");
     }
+
+    #[test]
+    fn load_from_dir_skips_backup_directories() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let backup_dir = temp_dir.path().join("plugin-foo.backup");
+        fs::create_dir(&backup_dir).unwrap();
+        fs::write(backup_dir.join("plugin.toml"), VALID_MANIFEST).unwrap();
+
+        let result = PluginLoader::load_from_dir(temp_dir.path()).unwrap();
+
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn load_from_dir_handles_mixed_valid_and_invalid() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let valid = temp_dir.path().join("valid-plugin");
+        fs::create_dir(&valid).unwrap();
+        fs::write(valid.join("plugin.toml"), VALID_MANIFEST).unwrap();
+
+        let no_manifest = temp_dir.path().join("no-manifest");
+        fs::create_dir(&no_manifest).unwrap();
+
+        let invalid_toml = temp_dir.path().join("invalid-toml");
+        fs::create_dir(&invalid_toml).unwrap();
+        fs::write(invalid_toml.join("plugin.toml"), "not valid toml {{{").unwrap();
+
+        fs::write(temp_dir.path().join("just-a-file.txt"), "content").unwrap();
+
+        let result = PluginLoader::load_from_dir(temp_dir.path()).unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, "valid-plugin");
+    }
+
+    #[test]
+    fn load_plugin_handles_special_characters_in_id() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let cases = ["plugin-with-dashes", "plugin_with_underscores", "plugin123"];
+
+        for name in cases {
+            let plugin_dir = temp_dir.path().join(name);
+            fs::create_dir(&plugin_dir).unwrap();
+            fs::write(plugin_dir.join("plugin.toml"), VALID_MANIFEST).unwrap();
+
+            let plugin = PluginLoader::load_plugin(&plugin_dir).unwrap();
+            assert_eq!(plugin.id, name, "plugin name: {}", name);
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn load_from_dir_follows_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let temp_dir = TempDir::new().unwrap();
+        let source_dir = TempDir::new().unwrap();
+
+        fs::write(source_dir.path().join("plugin.toml"), VALID_MANIFEST).unwrap();
+
+        let link_path = temp_dir.path().join("symlinked-plugin");
+        symlink(source_dir.path(), &link_path).unwrap();
+
+        let result = PluginLoader::load_from_dir(temp_dir.path()).unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, "symlinked-plugin");
+    }
 }
