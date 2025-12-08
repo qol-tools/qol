@@ -1,5 +1,9 @@
 # qol-tray
 
+## IMPORTANT: Do NOT Build or Test
+
+Never run `cargo build`, `cargo test`, `make run`, `make test`, or similar commands unless explicitly asked. The user will run these manually.
+
 ## IMPORTANT: Linux Only (For Now)
 
 Cross-platform support is planned for the future, but **not now**. Do NOT implement macOS or Windows code until explicitly asked. Do NOT add cross-platform CI workflows or abstractions. Focus only on Linux. When the user asks for cross-platform support, then implement it.
