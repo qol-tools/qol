@@ -147,7 +147,8 @@ pub async fn start_ui_server(plugin_manager: Arc<Mutex<PluginManager>>) -> Resul
         .route("/github-token", axum::routing::delete(delete_github_token))
         .route("/hotkeys", get(get_hotkeys))
         .route("/hotkeys", axum::routing::put(set_hotkeys))
-        .route("/dev/enabled", get(dev_enabled));
+        .route("/dev/enabled", get(dev_enabled))
+        .route("/version", get(get_version));
 
     #[cfg(feature = "dev")]
     let api = api
@@ -410,6 +411,10 @@ async fn list_installed(
 
 async fn dev_enabled() -> Json<bool> {
     Json(cfg!(feature = "dev"))
+}
+
+async fn get_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
 }
 
 #[cfg(feature = "dev")]
