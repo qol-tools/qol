@@ -304,7 +304,7 @@ async fn update_plugin(Path(id): Path<String>) -> Json<UninstallResult> {
         }
     };
 
-    let installer = PluginInstaller::new(plugins_dir);
+    let installer = PluginInstaller::new(plugins_dir.clone());
 
     if let Err(e) = installer.update(&id).await {
         log::error!("Failed to update plugin {}: {}", id, e);
@@ -314,11 +314,22 @@ async fn update_plugin(Path(id): Path<String>) -> Json<UninstallResult> {
         });
     }
 
+    if let Ok(version) = read_plugin_version(&plugins_dir.join(&id)) {
+        super::github::update_cached_version(&id, &version);
+    }
+
     log::info!("Plugin {} updated successfully", id);
     Json(UninstallResult {
         success: true,
         message: "Updated successfully".to_string(),
     })
+}
+
+fn read_plugin_version(plugin_dir: &std::path::Path) -> Result<String, ()> {
+    let manifest_path = plugin_dir.join("plugin.toml");
+    let content = std::fs::read_to_string(&manifest_path).map_err(|_| ())?;
+    let manifest: crate::plugins::PluginManifest = toml::from_str(&content).map_err(|_| ())?;
+    Ok(manifest.plugin.version)
 }
 
 async fn uninstall_plugin(Path(id): Path<String>) -> Json<UninstallResult> {
