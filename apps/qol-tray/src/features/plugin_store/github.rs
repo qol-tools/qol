@@ -90,6 +90,16 @@ pub fn cache_age_secs() -> Option<u64> {
     read_cache().map(|c| current_timestamp() - c.timestamp)
 }
 
+pub fn update_cached_version(plugin_id: &str, version: &str) {
+    let Some(mut cache) = read_cache() else { return };
+    let Some(plugin) = cache.plugins.iter_mut().find(|p| p.id == plugin_id) else { return };
+
+    plugin.version = version.to_string();
+    let Ok(content) = serde_json::to_string(&cache) else { return };
+    let _ = std::fs::write(cache_path(), content);
+    log::info!("Updated cache version for {}: {}", plugin_id, version);
+}
+
 fn get_valid_cache() -> Option<Vec<PluginMetadata>> {
     let cache = read_cache()?;
     let age = current_timestamp() - cache.timestamp;
