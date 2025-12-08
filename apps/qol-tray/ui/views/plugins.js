@@ -1,3 +1,5 @@
+import { updateSelection as updateSel, navigate as nav } from '../utils.js';
+
 const PLACEHOLDER_SVG = 'data:image/svg+xml,' + encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">' +
     '<rect fill="#333" width="300" height="200"/>' +
@@ -114,14 +116,7 @@ function renderGrid() {
 }
 
 function updateSelection() {
-    document.querySelectorAll('.plugin-card').forEach((card, i) => {
-        card.classList.toggle('selected', i === state.selectedIndex);
-    });
-    
-    const selected = document.querySelector('.plugin-card.selected');
-    if (selected) {
-        selected.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }
+    updateSel('.plugin-card', state.selectedIndex);
 }
 
 const clickHandlers = [
@@ -370,13 +365,7 @@ const keyHandlers = {
 };
 
 function navigate(delta) {
-    const total = state.plugins.length;
-    if (total === 0) return;
-    
-    const newIndex = Math.max(0, Math.min(total - 1, state.selectedIndex + delta));
-    
-    if (newIndex !== state.selectedIndex) {
-        state.selectedIndex = newIndex;
+    if (nav(state, 'selectedIndex', state.plugins.length, delta)) {
         updateSelection();
     }
 }
@@ -395,6 +384,5 @@ export function onFocus() {
     updateSelection();
 }
 
-export function onBlur() {
-}
+export function onBlur() {}
 
