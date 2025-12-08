@@ -187,33 +187,40 @@ header p {
 }
 
 .refresh-btn {
+    position: relative;
     width: 2.5rem;
     height: 2.5rem;
-    border: 1px solid #444;
-    border-radius: 6px;
+    border: 2px solid #444;
+    border-radius: 50%;
     background: #2a2a2a;
     color: #ccc;
     font-size: 1.2rem;
     cursor: pointer;
-    transition: background 0.2s, color 0.2s, transform 0.3s;
+    transition: background 0.2s, color 0.2s, border-color 0.2s;
 }
 
 .refresh-btn:hover:not(:disabled) {
     background: #3a3a3a;
     color: #fff;
+    border-color: #555;
 }
 
 .refresh-btn:disabled {
-    opacity: 0.5;
     cursor: not-allowed;
 }
 
 .refresh-btn.spinning {
+    color: transparent;
+    border-color: #333;
+    border-top-color: #4a9eff;
     animation: spin 0.8s linear infinite;
 }
 
+.refresh-btn.spinning::after {
+    content: "";
+}
+
 @keyframes spin {
-    from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
 }
 
