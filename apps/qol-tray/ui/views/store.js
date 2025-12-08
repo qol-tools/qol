@@ -46,7 +46,7 @@ export function render(containerEl) {
                 <div class="loading">Loading plugins...</div>
             </div>
             <footer class="help">
-                ←↑↓→ navigate • Enter install • r refresh
+                ←↑↓→ navigate • Enter install • Ctrl+R refresh
             </footer>
         </div>
     `;
@@ -251,6 +251,12 @@ function updateSelection() {
 }
 
 export function handleKey(e) {
+    if (e.ctrlKey && e.key === 'r') {
+        e.preventDefault();
+        refreshPlugins();
+        return;
+    }
+
     const handler = keyHandlers[e.key];
     if (handler) {
         e.preventDefault();
@@ -269,7 +275,6 @@ function installSelected() {
 }
 
 const keyHandlers = {
-    r: refreshPlugins,
     ArrowUp: () => navigate(-1),
     ArrowDown: () => navigate(1),
     ArrowLeft: () => navigate(-1),
