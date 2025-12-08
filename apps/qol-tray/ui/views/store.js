@@ -1,3 +1,5 @@
+import { updateSelection as updateSel, navigate as nav } from '../utils.js';
+
 export const id = 'store';
 
 const state = {
@@ -245,14 +247,7 @@ function handleSearch(e) {
 }
 
 function updateSelection() {
-    document.querySelectorAll('.plugin-card').forEach((card, i) => {
-        card.classList.toggle('selected', i === state.selectedIndex);
-    });
-    
-    const selected = document.querySelector('.plugin-card.selected');
-    if (selected) {
-        selected.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }
+    updateSel('.plugin-card', state.selectedIndex);
 }
 
 export function handleKey(e) {
@@ -283,17 +278,8 @@ const keyHandlers = {
 };
 
 function navigate(delta) {
-    const cards = document.querySelectorAll('.plugin-card');
-    const total = cards.length;
-    if (total === 0) {
-        state.selectedIndex = 0;
-        return;
-    }
-    
-    const newIndex = Math.max(0, Math.min(total - 1, state.selectedIndex + delta));
-    
-    if (newIndex !== state.selectedIndex) {
-        state.selectedIndex = newIndex;
+    const total = document.querySelectorAll('.plugin-card').length;
+    if (nav(state, 'selectedIndex', total, delta)) {
         updateSelection();
     }
 }
@@ -331,8 +317,5 @@ export function onFocus() {
 }
 
 export function onBlur() {
-    if (searchInput) {
-        searchInput.blur();
-    }
+    searchInput?.blur();
 }
-

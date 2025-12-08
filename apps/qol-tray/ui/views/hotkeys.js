@@ -1,3 +1,5 @@
+import { updateSelection as updateSel, navigate as nav } from '../utils.js';
+
 export const id = 'hotkeys';
 
 const state = {
@@ -103,14 +105,7 @@ function getActionLabel(plugin, actionId) {
 }
 
 function updateSelection() {
-    document.querySelectorAll('.hotkey-row').forEach((row, i) => {
-        row.classList.toggle('selected', i === state.selectedIndex);
-    });
-    
-    const selected = document.querySelector('.hotkey-row.selected');
-    if (selected) {
-        selected.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }
+    updateSel('.hotkey-row', state.selectedIndex);
 }
 
 function handleClick(e) {
@@ -302,7 +297,6 @@ function formatKeyEvent(e) {
     if (e.shiftKey) parts.push('Shift');
     if (e.metaKey) parts.push('Super');
     
-    // Don't format if only modifiers are pressed
     if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) {
         if (parts.length > 0) return parts.join('+');
         return '';
@@ -559,13 +553,7 @@ const keyHandlers = {
 };
 
 function navigate(delta) {
-    const total = state.hotkeys.length;
-    if (total === 0) return;
-    
-    const newIndex = Math.max(0, Math.min(total - 1, state.selectedIndex + delta));
-    
-    if (newIndex !== state.selectedIndex) {
-        state.selectedIndex = newIndex;
+    if (nav(state, 'selectedIndex', state.hotkeys.length, delta)) {
         updateSelection();
     }
 }
@@ -578,5 +566,4 @@ export function onFocus() {
     updateSelection();
 }
 
-export function onBlur() {
-}
+export function onBlur() {}
