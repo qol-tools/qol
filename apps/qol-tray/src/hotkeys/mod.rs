@@ -1,15 +1,18 @@
+mod types;
+
 use crate::paths;
 use anyhow::Result;
 use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
 };
-use once_cell::sync::Lazy;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::sync::OnceLock;
+
+pub use types::{HotkeyAction, HotkeyConfig};
+use types::{ScriptInfo, KEY_CODE_MAP, SCRIPT_RUNNERS};
 
 static RELOAD_SENDER: OnceLock<Sender<()>> = OnceLock::new();
 
@@ -17,28 +20,6 @@ pub fn trigger_reload() {
     if let Some(sender) = RELOAD_SENDER.get() {
         let _ = sender.send(());
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct HotkeyConfig {
-    #[serde(default)]
-    pub hotkeys: Vec<HotkeyBinding>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HotkeyBinding {
-    pub id: String,
-    pub key: String,
-    pub plugin_id: String,
-    pub action: String,
-    #[serde(default)]
-    pub enabled: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct HotkeyAction {
-    pub plugin_id: String,
-    pub action: String,
 }
 
 pub struct HotkeyManager {
@@ -110,7 +91,12 @@ impl HotkeyManager {
                 },
             );
 
-            log::info!("Registered hotkey: {} -> {}::{}", binding.key, binding.plugin_id, binding.action);
+            log::info!(
+                "Registered hotkey: {} -> {}::{}",
+                binding.key,
+                binding.plugin_id,
+                binding.action
+            );
         }
 
         self.manager = Some(new_manager);
@@ -151,58 +137,28 @@ fn parse_hotkey(s: &str) -> Option<HotKey> {
             "alt" => modifiers |= Modifiers::ALT,
             "shift" => modifiers |= Modifiers::SHIFT,
             "super" | "win" | "meta" | "cmd" => modifiers |= Modifiers::SUPER,
-            key => {
-                key_code = parse_key_code(key);
-            }
+            key => key_code = parse_key_code(key),
         }
     }
 
-    let code = key_code?;
-    Some(HotKey::new(Some(modifiers), code))
+    Some(HotKey::new(Some(modifiers), key_code?))
 }
-
-static KEY_CODE_MAP: Lazy<HashMap<&'static str, Code>> = Lazy::new(|| {
-    HashMap::from([
-        ("a", Code::KeyA), ("b", Code::KeyB), ("c", Code::KeyC), ("d", Code::KeyD),
-        ("e", Code::KeyE), ("f", Code::KeyF), ("g", Code::KeyG), ("h", Code::KeyH),
-        ("i", Code::KeyI), ("j", Code::KeyJ), ("k", Code::KeyK), ("l", Code::KeyL),
-        ("m", Code::KeyM), ("n", Code::KeyN), ("o", Code::KeyO), ("p", Code::KeyP),
-        ("q", Code::KeyQ), ("r", Code::KeyR), ("s", Code::KeyS), ("t", Code::KeyT),
-        ("u", Code::KeyU), ("v", Code::KeyV), ("w", Code::KeyW), ("x", Code::KeyX),
-        ("y", Code::KeyY), ("z", Code::KeyZ),
-        ("0", Code::Digit0), ("1", Code::Digit1), ("2", Code::Digit2), ("3", Code::Digit3),
-        ("4", Code::Digit4), ("5", Code::Digit5), ("6", Code::Digit6), ("7", Code::Digit7),
-        ("8", Code::Digit8), ("9", Code::Digit9),
-        ("f1", Code::F1), ("f2", Code::F2), ("f3", Code::F3), ("f4", Code::F4),
-        ("f5", Code::F5), ("f6", Code::F6), ("f7", Code::F7), ("f8", Code::F8),
-        ("f9", Code::F9), ("f10", Code::F10), ("f11", Code::F11), ("f12", Code::F12),
-        ("space", Code::Space), ("enter", Code::Enter), ("return", Code::Enter),
-        ("escape", Code::Escape), ("esc", Code::Escape), ("tab", Code::Tab),
-        ("backspace", Code::Backspace), ("delete", Code::Delete), ("del", Code::Delete),
-        ("insert", Code::Insert), ("ins", Code::Insert), ("home", Code::Home),
-        ("end", Code::End), ("pageup", Code::PageUp), ("pgup", Code::PageUp),
-        ("pagedown", Code::PageDown), ("pgdn", Code::PageDown),
-        ("up", Code::ArrowUp), ("down", Code::ArrowDown),
-        ("left", Code::ArrowLeft), ("right", Code::ArrowRight),
-        ("printscreen", Code::PrintScreen), ("print", Code::PrintScreen), ("prtsc", Code::PrintScreen),
-        ("pause", Code::Pause),
-    ])
-});
 
 fn parse_key_code(s: &str) -> Option<Code> {
     KEY_CODE_MAP.get(s.to_lowercase().as_str()).copied()
 }
 
-pub fn start_hotkey_listener(
-    plugins_dir: PathBuf,
-) -> Result<()> {
+pub fn start_hotkey_listener(plugins_dir: PathBuf) -> Result<()> {
     let (reload_tx, reload_rx) = mpsc::channel::<()>();
     let _ = RELOAD_SENDER.set(reload_tx);
 
     std::thread::spawn(move || {
         let mut manager = match HotkeyManager::new() {
             Ok(m) => m,
-            Err(e) => { log::error!("Failed to create hotkey manager: {}", e); return; }
+            Err(e) => {
+                log::error!("Failed to create hotkey manager: {}", e);
+                return;
+            }
         };
 
         if let Ok(config) = manager.load_config() {
@@ -223,12 +179,17 @@ pub fn start_hotkey_listener(
 }
 
 fn try_reload_hotkeys(reload_rx: &mpsc::Receiver<()>, manager: &mut HotkeyManager) {
-    if reload_rx.try_recv().is_err() { return; }
+    if reload_rx.try_recv().is_err() {
+        return;
+    }
 
     log::info!("Reloading hotkeys...");
     let config = match manager.load_config() {
         Ok(c) => c,
-        Err(e) => { log::error!("Failed to load hotkey config: {}", e); return; }
+        Err(e) => {
+            log::error!("Failed to load hotkey config: {}", e);
+            return;
+        }
     };
 
     match manager.register_hotkeys(&config) {
@@ -247,31 +208,48 @@ fn try_handle_hotkey(
         _ => return,
     };
 
-    let Some(action) = manager.get_action(&event) else { return };
+    let Some(action) = manager.get_action(&event) else {
+        return;
+    };
     log::info!("Hotkey triggered: {}::{}", action.plugin_id, action.action);
     execute_plugin_action(plugins_dir, &action.plugin_id, &action.action);
 }
 
 fn execute_plugin_action(plugins_dir: &PathBuf, plugin_id: &str, action: &str) {
     let plugin_dir = plugins_dir.join(plugin_id);
-    let script_path = plugin_dir.join("run.sh");
+    let Some(script) = find_plugin_script(&plugin_dir) else {
+        log::warn!("No plugin script found in {:?}", plugin_dir);
+        return;
+    };
 
-    if script_path.exists() {
-        log::info!("Executing: {:?} {}", script_path, action);
-        match std::process::Command::new("bash")
-            .arg(&script_path)
-            .arg(action)
-            .current_dir(&plugin_dir)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
-            Ok(_) => log::info!("Plugin action started"),
-            Err(e) => log::error!("Failed to execute plugin action: {}", e),
-        }
-    } else {
-        log::warn!("Plugin script not found: {:?}", script_path);
+    log::info!("Executing: {:?} {}", script.path, action);
+    let mut cmd = std::process::Command::new(script.shell);
+    if let Some(flag) = script.flag {
+        cmd.arg(flag);
     }
+    let result = cmd
+        .arg(&script.path)
+        .arg(action)
+        .current_dir(&plugin_dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+
+    match result {
+        Ok(_) => log::info!("Plugin action started"),
+        Err(e) => log::error!("Failed to execute plugin action: {}", e),
+    }
+}
+
+fn find_plugin_script(plugin_dir: &std::path::Path) -> Option<ScriptInfo> {
+    SCRIPT_RUNNERS.iter().find_map(|(file, shell, flag)| {
+        let path = plugin_dir.join(file);
+        path.exists().then_some(ScriptInfo {
+            shell,
+            flag: *flag,
+            path,
+        })
+    })
 }
 
 #[cfg(test)]
