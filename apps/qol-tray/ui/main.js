@@ -17,6 +17,7 @@ let VIEW_ORDER = [...BASE_VIEW_ORDER];
 let devEnabled = false;
 let activeViewId = 'plugins';
 let activeView = null;
+let appVersion = null;
 
 async function init() {
     const sidebarEl = document.getElementById('sidebar');
@@ -25,6 +26,11 @@ async function init() {
         const res = await fetch('/api/dev/enabled');
         devEnabled = res.ok && await res.json();
     } catch { devEnabled = false; }
+
+    try {
+        const res = await fetch('/api/version');
+        if (res.ok) appVersion = await res.text();
+    } catch { }
 
     if (devEnabled) {
         VIEWS = { ...BASE_VIEWS, dev: devView };
@@ -40,7 +46,7 @@ async function init() {
 
 function updateSidebar() {
     const sidebarEl = document.getElementById('sidebar');
-    sidebarEl.innerHTML = renderSidebar(activeViewId, VIEW_ORDER);
+    sidebarEl.innerHTML = renderSidebar(activeViewId, VIEW_ORDER, appVersion);
 }
 
 function switchView(viewId) {
