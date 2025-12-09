@@ -269,17 +269,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_key_code_maps_keys_correctly() {
-        let cases = [
+    fn parse_key_code_cases() {
+        let valid = [
             ("a", Code::KeyA),
             ("A", Code::KeyA),
             ("z", Code::KeyZ),
+            ("Z", Code::KeyZ),
+            ("0", Code::Digit0),
             ("5", Code::Digit5),
+            ("9", Code::Digit9),
             ("f1", Code::F1),
+            ("F1", Code::F1),
+            ("f12", Code::F12),
             ("F12", Code::F12),
             ("space", Code::Space),
+            ("SPACE", Code::Space),
             ("return", Code::Enter),
+            ("enter", Code::Enter),
             ("esc", Code::Escape),
+            ("escape", Code::Escape),
+            ("tab", Code::Tab),
+            ("backspace", Code::Backspace),
+            ("delete", Code::Delete),
+            ("insert", Code::Insert),
             ("up", Code::ArrowUp),
             ("down", Code::ArrowDown),
             ("left", Code::ArrowLeft),
@@ -287,126 +299,120 @@ mod tests {
             ("home", Code::Home),
             ("end", Code::End),
             ("pageup", Code::PageUp),
+            ("pgup", Code::PageUp),
+            ("pagedown", Code::PageDown),
             ("pgdn", Code::PageDown),
         ];
 
-        for (input, expected) in cases {
+        for (input, expected) in valid {
             assert_eq!(parse_key_code(input), Some(expected), "input: {}", input);
         }
-    }
 
-    #[test]
-    fn parse_key_code_returns_none_for_unknown() {
-        assert_eq!(parse_key_code("unknown"), None);
-    }
-
-    #[test]
-    fn parse_hotkey_parses_single_key() {
-        let result = parse_hotkey("R").unwrap();
-        assert_eq!(result.key, Code::KeyR);
-    }
-
-    #[test]
-    fn parse_hotkey_parses_modifiers() {
-        let result = parse_hotkey("Ctrl+Shift+Alt+R").unwrap();
-        assert_eq!(result.key, Code::KeyR);
-        assert!(result.mods.contains(Modifiers::CONTROL));
-        assert!(result.mods.contains(Modifiers::SHIFT));
-        assert!(result.mods.contains(Modifiers::ALT));
-    }
-
-    #[test]
-    fn parse_hotkey_maps_super_aliases() {
-        for alias in ["Super+R", "Win+R", "Meta+R", "Cmd+R"] {
-            let result = parse_hotkey(alias).unwrap();
-            assert!(result.mods.contains(Modifiers::SUPER), "alias: {}", alias);
+        let invalid = ["unknown", "", "ctrl", "shift", "f0", "f13", "key", " ", "aa"];
+        for input in invalid {
+            assert_eq!(parse_key_code(input), None, "input: {:?}", input);
         }
     }
 
     #[test]
-    fn parse_hotkey_handles_whitespace() {
-        let result = parse_hotkey("Ctrl + Shift + R").unwrap();
-        assert_eq!(result.key, Code::KeyR);
-        assert!(result.mods.contains(Modifiers::CONTROL));
-        assert!(result.mods.contains(Modifiers::SHIFT));
-    }
+    fn parse_hotkey_valid_cases() {
+        let cases: &[(&str, Code, Modifiers)] = &[
+            ("R", Code::KeyR, Modifiers::empty()),
+            ("r", Code::KeyR, Modifiers::empty()),
+            ("F1", Code::F1, Modifiers::empty()),
+            ("Space", Code::Space, Modifiers::empty()),
+            ("Ctrl+R", Code::KeyR, Modifiers::CONTROL),
+            ("ctrl+r", Code::KeyR, Modifiers::CONTROL),
+            ("CTRL+R", Code::KeyR, Modifiers::CONTROL),
+            ("Control+R", Code::KeyR, Modifiers::CONTROL),
+            ("Alt+R", Code::KeyR, Modifiers::ALT),
+            ("Shift+R", Code::KeyR, Modifiers::SHIFT),
+            ("Super+R", Code::KeyR, Modifiers::SUPER),
+            ("Win+R", Code::KeyR, Modifiers::SUPER),
+            ("Meta+R", Code::KeyR, Modifiers::SUPER),
+            ("Cmd+R", Code::KeyR, Modifiers::SUPER),
+            ("Ctrl+Shift+R", Code::KeyR, Modifiers::CONTROL | Modifiers::SHIFT),
+            ("Ctrl+Alt+R", Code::KeyR, Modifiers::CONTROL | Modifiers::ALT),
+            ("Ctrl+Shift+Alt+R", Code::KeyR, Modifiers::CONTROL | Modifiers::SHIFT | Modifiers::ALT),
+            ("Ctrl+Shift+Alt+Super+R", Code::KeyR, Modifiers::CONTROL | Modifiers::SHIFT | Modifiers::ALT | Modifiers::SUPER),
+            ("  Ctrl  +  R  ", Code::KeyR, Modifiers::CONTROL),
+            ("Ctrl + Shift + R", Code::KeyR, Modifiers::CONTROL | Modifiers::SHIFT),
+            ("+R", Code::KeyR, Modifiers::empty()),
+            ("Ctrl++R", Code::KeyR, Modifiers::CONTROL),
+            ("Ctrl+F12", Code::F12, Modifiers::CONTROL),
+            ("Alt+Tab", Code::Tab, Modifiers::ALT),
+        ];
 
-    #[test]
-    fn parse_hotkey_is_case_insensitive() {
-        for input in ["ctrl+r", "CTRL+R", "Ctrl+r"] {
-            let result = parse_hotkey(input).unwrap();
-            assert_eq!(result.key, Code::KeyR, "input: {}", input);
-            assert!(result.mods.contains(Modifiers::CONTROL), "input: {}", input);
+        for (input, expected_key, expected_mods) in cases {
+            let result = parse_hotkey(input);
+            assert!(result.is_some(), "input: {:?} should parse", input);
+            let hk = result.unwrap();
+            assert_eq!(hk.key, *expected_key, "input: {:?} key mismatch", input);
+            assert_eq!(hk.mods, *expected_mods, "input: {:?} mods mismatch", input);
         }
     }
 
     #[test]
-    fn parse_hotkey_returns_none_for_invalid() {
+    fn parse_hotkey_invalid_cases() {
         let cases = [
             "",
-            "Ctrl+InvalidKey",
-            "Ctrl+",
+            "   ",
             "+++",
+            "Ctrl",
+            "Ctrl+",
             "Ctrl+Shift",
             "Ctrl+Shift+",
-            "   ",
+            "+",
+            "++",
+            "Ctrl+InvalidKey",
+            "Ctrl+Shift+Unknown",
+            "NotAKey",
+            "Ctrl+Alt+",
+            "\t",
+            "\n",
         ];
 
         for input in cases {
-            assert!(parse_hotkey(input).is_none(), "input: {:?}", input);
+            assert!(parse_hotkey(input).is_none(), "input: {:?} should not parse", input);
         }
     }
 
     #[test]
-    fn parse_hotkey_ignores_empty_parts() {
-        let result = parse_hotkey("+R").unwrap();
-        assert_eq!(result.key, Code::KeyR);
-
-        let result = parse_hotkey("Ctrl++R").unwrap();
-        assert_eq!(result.key, Code::KeyR);
-        assert!(result.mods.contains(Modifiers::CONTROL));
-    }
-
-    #[test]
-    fn parse_hotkey_handles_edge_cases() {
-        let cases = [
-            ("r", Some(Code::KeyR)),
-            ("R", Some(Code::KeyR)),
-            ("Ctrl+r", Some(Code::KeyR)),
-            ("ctrl+R", Some(Code::KeyR)),
-            ("Control+R", Some(Code::KeyR)),
-            ("  Ctrl  +  R  ", Some(Code::KeyR)),
-        ];
-
-        for (input, expected_key) in cases {
-            let result = parse_hotkey(input);
-            match expected_key {
-                Some(key) => {
-                    assert!(result.is_some(), "input: {:?} should parse", input);
-                    assert_eq!(result.unwrap().key, key, "input: {:?}", input);
-                }
-                None => assert!(result.is_none(), "input: {:?} should not parse", input),
-            }
-        }
-    }
-
-    #[test]
-    fn is_safe_action_id_validation() {
+    fn is_safe_action_id_cases() {
         let cases = [
             ("run", true),
             ("toggle-feature", true),
             ("action_name", true),
             ("Action123", true),
             ("a", true),
+            ("ABC", true),
+            ("a-b-c", true),
+            ("a_b_c", true),
+            ("123", true),
+            ("a1b2c3", true),
+            (&"a".repeat(64), true),
             ("", false),
+            ("-", false),
             ("--help", false),
             ("-v", false),
+            ("-flag", false),
             ("foo bar", false),
+            ("foo\tbar", false),
             ("foo;bar", false),
+            ("foo&bar", false),
+            ("foo|bar", false),
+            ("foo>bar", false),
+            ("foo<bar", false),
             ("$(whoami)", false),
+            ("`whoami`", false),
             ("foo\0bar", false),
+            ("foo\nbar", false),
+            ("foo/bar", false),
+            ("foo\\bar", false),
             (&"a".repeat(65), false),
-            (&"a".repeat(64), true),
+            ("foo=bar", false),
+            ("foo'bar", false),
+            ("foo\"bar", false),
         ];
 
         for (input, expected) in cases {
