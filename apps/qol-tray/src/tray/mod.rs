@@ -1,10 +1,9 @@
 mod platform;
 pub mod icon;
 
-use crate::plugins::PluginManager;
 use crate::features::FeatureRegistry;
 use anyhow::Result;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::sync::broadcast;
 
 pub struct TrayManager {
@@ -13,7 +12,6 @@ pub struct TrayManager {
 
 impl TrayManager {
     pub fn new(
-        plugin_manager: Arc<Mutex<PluginManager>>,
         feature_registry: Arc<FeatureRegistry>,
         shutdown_tx: broadcast::Sender<()>,
         update_available: bool,
@@ -23,7 +21,7 @@ impl TrayManager {
         } else {
             icon::create_icon()
         };
-        let tray = platform::create_tray(plugin_manager, feature_registry, shutdown_tx, icon, update_available)?;
+        let tray = platform::create_tray(feature_registry, shutdown_tx, icon, update_available)?;
         Ok(Self { _tray: tray })
     }
 }

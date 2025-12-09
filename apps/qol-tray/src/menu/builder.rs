@@ -1,13 +1,12 @@
 use super::router::{EventRouter, EventRoute, EventPattern, EventHandler, HandlerResult};
-use crate::plugins::{PluginManager, MenuItem as PluginMenuItem};
+use crate::plugins::MenuItem as PluginMenuItem;
 use crate::features::FeatureRegistry;
 use crate::updates;
 use anyhow::Result;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tray_icon::menu::{Menu, MenuItem, CheckMenuItem, Submenu, PredefinedMenuItem};
 
 pub fn build_menu(
-    _plugin_manager: Arc<Mutex<PluginManager>>,
     feature_registry: Arc<FeatureRegistry>,
     update_available: bool,
 ) -> Result<(Menu, EventRouter)> {
