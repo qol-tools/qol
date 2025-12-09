@@ -85,7 +85,6 @@ items = [
 [daemon]  # Optional
 enabled = true
 command = "daemon.sh"
-restart_on_crash = false
 ```
 
 Action types:

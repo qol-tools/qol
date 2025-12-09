@@ -92,8 +92,6 @@ pub enum ActionType {
 pub struct DaemonConfig {
     pub enabled: bool,
     pub command: String,
-    #[serde(default)]
-    pub restart_on_crash: bool,
 }
 
 #[cfg(test)]
