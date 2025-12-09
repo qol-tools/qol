@@ -279,11 +279,12 @@ async fn install_plugin(Path(id): Path<String>) -> Json<PluginInfo> {
     }
 
     log::info!("Plugin {} installed successfully", id);
+    let version = read_plugin_version(&plugins_dir.join(&id)).unwrap_or_else(|_| "unknown".into());
     Json(PluginInfo {
         id: id.clone(),
         name: id.clone(),
         description: "Installed successfully".to_string(),
-        version: "1.0.0".to_string(),
+        version,
         installed: true,
     })
 }
