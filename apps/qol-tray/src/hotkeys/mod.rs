@@ -215,7 +215,19 @@ fn try_handle_hotkey(
     execute_plugin_action(plugins_dir, &action.plugin_id, &action.action);
 }
 
+fn is_safe_action_id(action: &str) -> bool {
+    !action.is_empty()
+        && action.len() <= 64
+        && !action.starts_with('-')
+        && action.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 fn execute_plugin_action(plugins_dir: &Path, plugin_id: &str, action: &str) {
+    if !is_safe_action_id(action) {
+        log::warn!("Invalid action ID: {:?}", action);
+        return;
+    }
+
     let plugin_dir = plugins_dir.join(plugin_id);
     let Some(script) = find_plugin_script(&plugin_dir) else {
         log::warn!("No plugin script found in {:?}", plugin_dir);
@@ -375,6 +387,30 @@ mod tests {
                 }
                 None => assert!(result.is_none(), "input: {:?} should not parse", input),
             }
+        }
+    }
+
+    #[test]
+    fn is_safe_action_id_validation() {
+        let cases = [
+            ("run", true),
+            ("toggle-feature", true),
+            ("action_name", true),
+            ("Action123", true),
+            ("a", true),
+            ("", false),
+            ("--help", false),
+            ("-v", false),
+            ("foo bar", false),
+            ("foo;bar", false),
+            ("$(whoami)", false),
+            ("foo\0bar", false),
+            (&"a".repeat(65), false),
+            (&"a".repeat(64), true),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(is_safe_action_id(input), expected, "input: {:?}", input);
         }
     }
 }

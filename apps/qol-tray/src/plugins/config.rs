@@ -14,6 +14,15 @@ pub struct PluginConfigManager {
     config_path: PathBuf,
 }
 
+fn is_safe_plugin_id(id: &str) -> bool {
+    !id.is_empty()
+        && !id.contains('/')
+        && !id.contains('\\')
+        && !id.contains('\0')
+        && id != ".."
+        && id != "."
+}
+
 impl PluginConfigManager {
     pub fn new() -> Result<Self> {
         let config_path = paths::plugin_configs_path()?;
@@ -21,6 +30,9 @@ impl PluginConfigManager {
     }
 
     fn plugin_config_path(plugin_id: &str) -> Result<PathBuf> {
+        if !is_safe_plugin_id(plugin_id) {
+            anyhow::bail!("Invalid plugin ID: {}", plugin_id);
+        }
         paths::plugins_dir().map(|p| p.join(plugin_id).join("config.json"))
     }
 
@@ -240,5 +252,33 @@ mod tests {
                 .parent()
                 .unwrap(),
         );
+    }
+
+    #[test]
+    fn is_safe_plugin_id_validation() {
+        let cases = [
+            ("plugin-launcher", true),
+            ("my_plugin", true),
+            ("plugin123", true),
+            ("a", true),
+            ("../etc", false),
+            ("foo/bar", false),
+            ("foo\\bar", false),
+            ("..", false),
+            (".", false),
+            ("", false),
+            ("plugin\0evil", false),
+        ];
+
+        for (id, expected) in cases {
+            assert_eq!(is_safe_plugin_id(id), expected, "id: {:?}", id);
+        }
+    }
+
+    #[test]
+    fn plugin_config_path_rejects_traversal() {
+        assert!(PluginConfigManager::plugin_config_path("../etc").is_err());
+        assert!(PluginConfigManager::plugin_config_path("foo/bar").is_err());
+        assert!(PluginConfigManager::plugin_config_path("..").is_err());
     }
 }
