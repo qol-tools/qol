@@ -16,6 +16,7 @@ qol-tray v1.4.3 - Pluggable system tray daemon. Single tray icon opens browser U
 - Security: Null byte injection prevention in plugin IDs and file paths
 - Security: Git branch name validation to prevent injection attacks
 - Security: Remove internal error details from HTTP responses
+- Fix: Kill orphan daemon processes on startup (prevents port conflicts after crash)
 - Fix: Git operations have 120s timeout (prevents hanging on network issues)
 - Fix: Graceful daemon shutdown with SIGTERM before SIGKILL (2s timeout)
 - Fix: Daemon startup error visibility (captures stderr, reports immediate exits)
