@@ -7,34 +7,26 @@ qol-tray v1.4.3 - Pluggable system tray daemon. Single tray icon opens browser U
 **Cross-platform:** Builds and tests pass on Linux, Windows, macOS. Plugins declare platform support via `platforms` field.
 
 ### Recent Changes (Dec 2025)
-- Security: Path traversal prevention via canonicalization in plugin UI file serving
+- Security: Action ID validation in hotkey execution (rejects shell metacharacters, leading dashes)
+- Security: Path traversal prevention via shared `is_safe_path_component()` in paths.rs
 - Security: Null byte injection prevention in plugin IDs and file paths
-- Fix: Return actual version after plugin install (was hardcoded "1.0.0")
-- Fix: Handle whitespace in version parsing
-- Fix: Proper TOML parsing for plugin name extraction
-- Fix: Replace broken path fallbacks (~ doesn't expand) with proper error handling
-- Refactor: Removed unused `plugin_manager` param from menu/tray creation
-- Refactor: Removed unused WebSocket endpoint stub
-- Refactor: Removed unused `restart_on_crash` field from DaemonConfig
-- Refactor: Removed dead code (ActionType::Custom, EventHandler::Async, UiServerHandle)
-- Refactor: Simplified UI server startup (no more mem::forget pattern)
+- Fix: Graceful daemon shutdown with SIGTERM before SIGKILL (2s timeout)
+- Fix: Daemon startup error visibility (captures stderr, reports immediate exits)
+- Fix: Return proper HTTP error codes from install_plugin endpoint
+- Fix: Handle uppercase 'V' prefix in version parsing
+- Fix: Server errors now logged instead of silently swallowed
+- Refactor: Removed `.expect()` panics in github.rs path functions (now return Option)
+- Refactor: Consolidated duplicate `is_safe_id` functions into shared `paths::is_safe_path_component`
+- Refactor: Simplified restart_with_cleanup (daemon cleanup happens via Drop)
 - Refactor: Use `&Path` instead of `&PathBuf` in function signatures
+- Tests: Consolidated table-driven tests (hotkeys 10→4, version 4→3)
+- Tests: Added manifest parsing tests (MenuItem, ActionType, full/minimal manifest)
+- Tests: Added HTML body tag parsing tests with quote handling
+- Tests: ~50 new edge cases across hotkeys, version, github, paths modules
 - Cross-platform CI via GitHub Actions (Linux, Windows, macOS)
-- Plugin platform filtering - `platforms = ["linux"]` in plugin.toml, filters both installed plugins and store listings
-- Fixed Windows hotkey manager thread safety issue
-- Shared CLAUDE.md in parent `/Git/` directory for all qol-tools repos
-- Cross-platform URL opening via `open` crate
-- Windows/macOS tray event handling implemented
-- Merged windows.rs and macos.rs into single `#[cfg(not(target_os = "linux"))]` block
-- Comprehensive edge case tests for version parsing, path safety, hotkey parsing, plugin loading
+- Plugin platform filtering - `platforms = ["linux"]` in plugin.toml
 - Developer tab with plugin linking/unlinking for dev workflow
-- Auto-reload after link/unlink (keeps PluginManager in sync)
-- Backup/restore of installed plugins when linking/unlinking
-- Keyboard navigation in Developer tab (arrow keys, Space/Enter)
-- Extracted shared modules: `src/version.rs`, `src/paths.rs`
-- Plugin version from `plugin.toml` (not git tags)
-- Plugin update uses `git fetch && reset --hard` (handles divergent branches)
-- `make dev` kills existing qol-tray process before starting
+- Auto-update with notification dot and one-click install
 
 ### What Works
 - System tray icon (SNI protocol)
