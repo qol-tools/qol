@@ -255,30 +255,57 @@ mod tests {
     }
 
     #[test]
-    fn is_safe_plugin_id_validation() {
-        let cases = [
-            ("plugin-launcher", true),
-            ("my_plugin", true),
-            ("plugin123", true),
-            ("a", true),
-            ("../etc", false),
-            ("foo/bar", false),
-            ("foo\\bar", false),
-            ("..", false),
-            (".", false),
-            ("", false),
-            ("plugin\0evil", false),
+    fn is_safe_plugin_id_cases() {
+        let valid = [
+            "plugin-launcher",
+            "my_plugin",
+            "plugin123",
+            "a",
+            "ABC",
+            "plugin-name-with-dashes",
+            "plugin_name_with_underscores",
+            "MixedCase123",
+            "123numeric",
+            ".hidden",
+            "..hidden",
+            "plugin..name",
+            " spaces ",
         ];
 
-        for (id, expected) in cases {
-            assert_eq!(is_safe_plugin_id(id), expected, "id: {:?}", id);
+        for id in valid {
+            assert!(is_safe_plugin_id(id), "should be valid: {:?}", id);
+        }
+
+        let invalid = [
+            "../etc",
+            "foo/bar",
+            "foo\\bar",
+            "..",
+            ".",
+            "",
+            "plugin\0evil",
+            "/absolute",
+            "\\windows",
+            "a/b/c",
+            "../..",
+            "foo/../bar",
+        ];
+
+        for id in invalid {
+            assert!(!is_safe_plugin_id(id), "should be invalid: {:?}", id);
         }
     }
 
     #[test]
-    fn plugin_config_path_rejects_traversal() {
-        assert!(PluginConfigManager::plugin_config_path("../etc").is_err());
-        assert!(PluginConfigManager::plugin_config_path("foo/bar").is_err());
-        assert!(PluginConfigManager::plugin_config_path("..").is_err());
+    fn plugin_config_path_cases() {
+        let valid = ["plugin-test", "my_plugin", "a"];
+        for id in valid {
+            assert!(PluginConfigManager::plugin_config_path(id).is_ok(), "should work: {:?}", id);
+        }
+
+        let invalid = ["../etc", "foo/bar", "..", ".", "", "a\0b"];
+        for id in invalid {
+            assert!(PluginConfigManager::plugin_config_path(id).is_err(), "should fail: {:?}", id);
+        }
     }
 }

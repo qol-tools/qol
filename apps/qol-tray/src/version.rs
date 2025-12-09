@@ -9,7 +9,7 @@ impl Version {
     pub fn parse(s: &str) -> Self {
         let parts = s
             .trim()
-            .trim_start_matches('v')
+            .trim_start_matches(['v', 'V'])
             .split('.')
             .filter_map(|p| p.parse().ok())
             .collect();
@@ -37,22 +37,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_extracts_version_parts() {
+    fn parse_version_cases() {
         let cases = [
             ("v1.2.3", vec![1, 2, 3]),
             ("1.2.3", vec![1, 2, 3]),
             ("1.5", vec![1, 5]),
             ("1.0.0.1", vec![1, 0, 0, 1]),
-        ];
-
-        for (input, expected) in cases {
-            assert_eq!(Version::parse(input).parts, expected, "input: {}", input);
-        }
-    }
-
-    #[test]
-    fn parse_handles_malformed_input() {
-        let cases = [
+            ("0.0.0", vec![0, 0, 0]),
+            ("10.20.30", vec![10, 20, 30]),
+            ("v0.1.0", vec![0, 1, 0]),
+            ("100.200.300", vec![100, 200, 300]),
             ("", vec![]),
             ("v", vec![]),
             ("...", vec![]),
@@ -62,10 +56,17 @@ mod tests {
             ("1.2.3+build", vec![1, 2]),
             ("1.2.3-rc.1", vec![1, 2, 1]),
             ("  1.2.3  ", vec![1, 2, 3]),
+            ("\t1.2.3\n", vec![1, 2, 3]),
             ("1..2", vec![1, 2]),
             ("1.2.", vec![1, 2]),
             (".1.2", vec![1, 2]),
             ("999999999999999999999.1", vec![1]),
+            ("1.2.3.4.5.6.7.8.9", vec![1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            ("V1.2.3", vec![1, 2, 3]),
+            ("vv1.2.3", vec![1, 2, 3]),
+            ("1.0.0-beta.1", vec![1, 0, 1]),
+            ("1.0.0_1", vec![1, 0]),
+            ("1 . 2 . 3", vec![]),
         ];
 
         for (input, expected) in cases {
@@ -74,11 +75,31 @@ mod tests {
     }
 
     #[test]
-    fn is_newer_than_handles_empty_versions() {
+    fn is_newer_than_cases() {
         let cases = [
+            ("2.0.0", "1.0.0", true),
+            ("1.2.0", "1.1.0", true),
+            ("1.0.5", "1.0.4", true),
+            ("1.0.0.1", "1.0.0", true),
+            ("v1.5.0", "1.4.0", true),
+            ("1.2.3", "1.2.3", false),
+            ("1.0.0", "2.0.0", false),
+            ("1.0", "1.0.0", false),
             ("1.0.0", "", true),
             ("", "1.0.0", false),
             ("", "", false),
+            ("0.0.1", "0.0.0", true),
+            ("0.1.0", "0.0.999", true),
+            ("1.0.0", "0.999.999", true),
+            ("10.0.0", "9.9.9", true),
+            ("1.10.0", "1.9.0", true),
+            ("1.0.10", "1.0.9", true),
+            ("2.0.0", "1.999.999", true),
+            ("1.0.0.0.1", "1.0.0.0.0", true),
+            ("1.0.0", "1.0.0.0", false),
+            ("1.0.0.0", "1.0.0", false),
+            ("v1.0.0", "v1.0.0", false),
+            ("  1.0.1  ", "1.0.0", true),
         ];
 
         for (a, b, expected) in cases {
@@ -89,23 +110,23 @@ mod tests {
     }
 
     #[test]
-    fn is_newer_than_comparisons() {
+    fn version_equality() {
         let cases = [
-            // (version_a, version_b, a_is_newer_than_b)
-            ("2.0.0", "1.0.0", true),   // major bump
-            ("1.2.0", "1.1.0", true),   // minor bump
-            ("1.0.5", "1.0.4", true),   // patch bump
-            ("1.0.0.1", "1.0.0", true), // extra segment
-            ("v1.5.0", "1.4.0", true),  // mixed v prefix
-            ("1.2.3", "1.2.3", false),  // equal
-            ("1.0.0", "2.0.0", false),  // older
-            ("1.0", "1.0.0", false),    // shorter equal
+            ("1.0.0", "1.0.0", true),
+            ("v1.0.0", "1.0.0", true),
+            ("1.0", "1.0.0", true),
+            ("1.0.0", "1.0", true),
+            ("1.0.0.0", "1.0.0", true),
+            ("1.2.3", "1.2.4", false),
+            ("", "", true),
+            ("v", "", true),
         ];
 
         for (a, b, expected) in cases {
             let va = Version::parse(a);
             let vb = Version::parse(b);
-            assert_eq!(va.is_newer_than(&vb), expected, "{} vs {}", a, b);
+            let equal = !va.is_newer_than(&vb) && !vb.is_newer_than(&va);
+            assert_eq!(equal, expected, "{:?} == {:?}", a, b);
         }
     }
 }
