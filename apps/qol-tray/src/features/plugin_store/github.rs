@@ -130,6 +130,13 @@ pub struct GitHubClient {
 
 pub fn get_stored_token() -> Option<String> {
     let path = token_path()?;
+
+    let metadata = std::fs::symlink_metadata(&path).ok()?;
+    if metadata.file_type().is_symlink() {
+        log::warn!("Token file is a symlink, rejecting: {:?}", path);
+        return None;
+    }
+
     let token = std::fs::read_to_string(&path).ok()?;
     let token = token.trim();
 

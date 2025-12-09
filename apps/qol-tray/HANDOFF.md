@@ -7,6 +7,9 @@ qol-tray v1.4.3 - Pluggable system tray daemon. Single tray icon opens browser U
 **Cross-platform:** Builds and tests pass on Linux, Windows, macOS. Plugins declare platform support via `platforms` field.
 
 ### Recent Changes (Dec 2025)
+- Security: Symlink rejection for plugin UI files (TOCTOU mitigation)
+- Security: Symlink rejection for GitHub token file
+- Security: Plugin config JSON size limit (1MB)
 - Security: Plugin ID validation at all server endpoints using `is_safe_path_component()`
 - Security: Action ID validation in hotkey execution (rejects shell metacharacters, leading dashes)
 - Security: Path traversal prevention via shared `is_safe_path_component()` in paths.rs

@@ -128,6 +128,16 @@ async fn serve_file(plugins_dir: &Path, plugin_id: &str, file_path: &str) -> Res
     let ui_path = plugins_dir.join(plugin_id).join("ui").join(file_path);
     log::debug!("Serving plugin file: {:?}", ui_path);
 
+    let metadata = match tokio::fs::symlink_metadata(&ui_path).await {
+        Ok(m) => m,
+        Err(_) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
+    };
+
+    if metadata.file_type().is_symlink() {
+        log::warn!("Symlink rejected: {:?}", ui_path);
+        return (StatusCode::FORBIDDEN, "Access denied").into_response();
+    }
+
     let canonical = match ui_path.canonicalize() {
         Ok(p) => p,
         Err(_) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
@@ -143,16 +153,16 @@ async fn serve_file(plugins_dir: &Path, plugin_id: &str, file_path: &str) -> Res
         return (StatusCode::FORBIDDEN, "Access denied").into_response();
     }
 
-    let contents = match tokio::fs::read(&canonical).await {
+    let contents = match tokio::fs::read(&ui_path).await {
         Ok(contents) => contents,
         Err(e) => {
-            log::error!("Failed to read plugin UI file {:?}: {}", canonical, e);
+            log::error!("Failed to read plugin UI file {:?}: {}", ui_path, e);
             return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read file").into_response();
         }
     };
 
-    let mime = guess_mime(&canonical);
-    log::debug!("Serving {:?} as {}", canonical, mime);
+    let mime = guess_mime(&ui_path);
+    log::debug!("Serving {:?} as {}", ui_path, mime);
     ([(header::CONTENT_TYPE, mime)], contents).into_response()
 }
 

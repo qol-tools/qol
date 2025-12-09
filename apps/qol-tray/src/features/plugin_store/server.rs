@@ -522,12 +522,18 @@ async fn get_plugin_config(Path(plugin_id): Path<String>) -> impl IntoResponse {
     (StatusCode::OK, [(header::CONTENT_TYPE, "application/json")], data).into_response()
 }
 
+const MAX_CONFIG_SIZE: usize = 1024 * 1024;
+
 async fn set_plugin_config(
     Path(plugin_id): Path<String>,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
     if !is_safe_path_component(&plugin_id) {
         return (StatusCode::BAD_REQUEST, "Invalid plugin ID").into_response();
+    }
+
+    if body.len() > MAX_CONFIG_SIZE {
+        return (StatusCode::PAYLOAD_TOO_LARGE, "Config too large").into_response();
     }
 
     let config = match serde_json::from_slice::<serde_json::Value>(&body) {
