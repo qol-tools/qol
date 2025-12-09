@@ -14,14 +14,7 @@ pub struct PluginConfigManager {
     config_path: PathBuf,
 }
 
-fn is_safe_plugin_id(id: &str) -> bool {
-    !id.is_empty()
-        && !id.contains('/')
-        && !id.contains('\\')
-        && !id.contains('\0')
-        && id != ".."
-        && id != "."
-}
+use crate::paths::is_safe_path_component;
 
 impl PluginConfigManager {
     pub fn new() -> Result<Self> {
@@ -30,7 +23,7 @@ impl PluginConfigManager {
     }
 
     fn plugin_config_path(plugin_id: &str) -> Result<PathBuf> {
-        if !is_safe_plugin_id(plugin_id) {
+        if !is_safe_path_component(plugin_id) {
             anyhow::bail!("Invalid plugin ID: {}", plugin_id);
         }
         paths::plugins_dir().map(|p| p.join(plugin_id).join("config.json"))
@@ -252,48 +245,6 @@ mod tests {
                 .parent()
                 .unwrap(),
         );
-    }
-
-    #[test]
-    fn is_safe_plugin_id_cases() {
-        let valid = [
-            "plugin-launcher",
-            "my_plugin",
-            "plugin123",
-            "a",
-            "ABC",
-            "plugin-name-with-dashes",
-            "plugin_name_with_underscores",
-            "MixedCase123",
-            "123numeric",
-            ".hidden",
-            "..hidden",
-            "plugin..name",
-            " spaces ",
-        ];
-
-        for id in valid {
-            assert!(is_safe_plugin_id(id), "should be valid: {:?}", id);
-        }
-
-        let invalid = [
-            "../etc",
-            "foo/bar",
-            "foo\\bar",
-            "..",
-            ".",
-            "",
-            "plugin\0evil",
-            "/absolute",
-            "\\windows",
-            "a/b/c",
-            "../..",
-            "foo/../bar",
-        ];
-
-        for id in invalid {
-            assert!(!is_safe_plugin_id(id), "should be invalid: {:?}", id);
-        }
     }
 
     #[test]

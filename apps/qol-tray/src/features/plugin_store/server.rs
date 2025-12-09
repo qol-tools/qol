@@ -168,7 +168,9 @@ pub async fn start_ui_server(plugin_manager: Arc<Mutex<PluginManager>>) -> Resul
     let listener = tokio::net::TcpListener::bind("127.0.0.1:42700").await?;
 
     tokio::spawn(async move {
-        axum::serve(listener, app).await.ok();
+        if let Err(e) = axum::serve(listener, app).await {
+            log::error!("UI server error: {}", e);
+        }
     });
 
     Ok(())

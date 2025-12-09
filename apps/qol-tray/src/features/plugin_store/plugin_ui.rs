@@ -19,7 +19,7 @@ async fn serve_plugin_index(
     AxumPath(plugin_id): AxumPath<String>,
     axum::extract::State(plugins_dir): axum::extract::State<PathBuf>,
 ) -> Response {
-    if !is_safe_id(&plugin_id) {
+    if !is_safe_path_component(&plugin_id) {
         return (StatusCode::FORBIDDEN, "Access denied").into_response();
     }
 
@@ -120,7 +120,7 @@ async fn serve_plugin_file(
 }
 
 async fn serve_file(plugins_dir: &Path, plugin_id: &str, file_path: &str) -> Response {
-    if !is_safe_id(plugin_id) || !is_safe_subpath(file_path) {
+    if !is_safe_path_component(plugin_id) || !is_safe_subpath(file_path) {
         log::warn!("Unsafe path: plugin_id={}, file_path={}", plugin_id, file_path);
         return (StatusCode::FORBIDDEN, "Access denied").into_response();
     }
@@ -156,14 +156,7 @@ async fn serve_file(plugins_dir: &Path, plugin_id: &str, file_path: &str) -> Res
     ([(header::CONTENT_TYPE, mime)], contents).into_response()
 }
 
-fn is_safe_id(id: &str) -> bool {
-    !id.is_empty()
-        && !id.contains('/')
-        && !id.contains('\\')
-        && !id.contains('\0')
-        && id != ".."
-        && id != "."
-}
+use crate::paths::is_safe_path_component;
 
 fn is_safe_subpath(path: &str) -> bool {
     !path.contains("..")
@@ -191,35 +184,6 @@ fn guess_mime(path: &Path) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn is_safe_id_validation() {
-        let cases = [
-            ("plugin-launcher", true),
-            ("my_plugin", true),
-            ("plugin123", true),
-            ("UPPERCASE", true),
-            ("a", true),
-            ("../etc", false),
-            ("foo/bar", false),
-            ("foo\\bar", false),
-            ("..", false),
-            (".", false),
-            ("", false),
-            (" ", true),
-            ("plugin\0evil", false),
-            (".hidden", true),
-            ("..hidden", true),
-            ("plugin/", false),
-            ("/plugin", false),
-            ("plugin\\", false),
-            ("\\plugin", false),
-        ];
-
-        for (id, expected) in cases {
-            assert_eq!(is_safe_id(id), expected, "id: {:?}", id);
-        }
-    }
 
     #[test]
     fn is_safe_subpath_validation() {
