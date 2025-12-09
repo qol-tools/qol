@@ -19,10 +19,8 @@ impl EventPattern {
     }
 }
 
-#[allow(dead_code)]
 pub enum EventHandler {
     Sync(Box<dyn Fn(&str) -> Result<HandlerResult> + Send + Sync>),
-    Async(Box<dyn Fn(&str) -> Result<()> + Send + Sync>),
 }
 
 pub enum HandlerResult {
@@ -42,13 +40,8 @@ impl EventRouter {
     pub fn route(&self, event_id: &str) -> Result<HandlerResult> {
         for route in &self.routes {
             if route.pattern.matches(event_id) {
-                return match &route.handler {
-                    EventHandler::Sync(f) => f(event_id),
-                    EventHandler::Async(f) => {
-                        f(event_id)?;
-                        Ok(HandlerResult::Continue)
-                    }
-                };
+                let EventHandler::Sync(f) = &route.handler;
+                return f(event_id);
             }
         }
 

@@ -115,8 +115,6 @@ fn get_valid_cache() -> Option<Vec<PluginMetadata>> {
 #[derive(Debug, Deserialize)]
 struct GitHubRepo {
     name: String,
-    #[allow(dead_code)]
-    description: Option<String>,
     html_url: String,
 }
 

@@ -10,7 +10,6 @@ use axum::{
     http::{StatusCode, header},
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::oneshot;
 use tower_http::set_header::SetResponseHeaderLayer;
 use axum::http::HeaderValue;
 use anyhow::Result;
@@ -85,10 +84,6 @@ struct TokenStatus {
     has_token: bool,
 }
 
-pub struct UiServerHandle {
-    #[allow(dead_code)]
-    shutdown_tx: oneshot::Sender<()>,
-}
 
 async fn serve_embedded(axum::extract::Path(path): axum::extract::Path<String>) -> impl IntoResponse {
     serve_embedded_file(&path)
@@ -123,7 +118,7 @@ fn serve_embedded_file(path: &str) -> impl IntoResponse {
     }
 }
 
-pub async fn start_ui_server(plugin_manager: Arc<Mutex<PluginManager>>) -> Result<UiServerHandle> {
+pub async fn start_ui_server(plugin_manager: Arc<Mutex<PluginManager>>) -> Result<()> {
     let plugins_dir = PluginLoader::default_plugin_dir()
         .unwrap_or_else(|_| PathBuf::from("~/.config/qol-tray/plugins"));
 
@@ -172,18 +167,12 @@ pub async fn start_ui_server(plugin_manager: Arc<Mutex<PluginManager>>) -> Resul
         .layer(no_cache);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:42700").await?;
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
     tokio::spawn(async move {
-        axum::serve(listener, app)
-            .with_graceful_shutdown(async {
-                let _ = shutdown_rx.await;
-            })
-            .await
-            .ok();
+        axum::serve(listener, app).await.ok();
     });
 
-    Ok(UiServerHandle { shutdown_tx })
+    Ok(())
 }
 
 fn get_installed_plugin_ids(plugins_dir: &std::path::Path) -> std::collections::HashSet<String> {
