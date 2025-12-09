@@ -683,16 +683,10 @@ async fn list_linked_plugins(
             None
         };
 
-        let name = path.join("plugin.toml")
-            .exists()
-            .then(|| {
-                std::fs::read_to_string(path.join("plugin.toml"))
-                    .ok()
-                    .and_then(|s| s.lines()
-                        .find(|l| l.starts_with("name"))
-                        .and_then(|l| l.split('"').nth(1).map(String::from)))
-            })
-            .flatten()
+        let name = std::fs::read_to_string(path.join("plugin.toml"))
+            .ok()
+            .and_then(|s| toml::from_str::<crate::plugins::PluginManifest>(&s).ok())
+            .map(|m| m.plugin.name)
             .unwrap_or_else(|| id.clone());
 
         plugins.push(LinkedPlugin { id, name, is_symlink, target });
