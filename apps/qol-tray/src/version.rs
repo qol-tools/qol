@@ -8,6 +8,7 @@ pub struct Version {
 impl Version {
     pub fn parse(s: &str) -> Self {
         let parts = s
+            .trim()
             .trim_start_matches('v')
             .split('.')
             .filter_map(|p| p.parse().ok())
@@ -60,7 +61,7 @@ mod tests {
             ("1.2.3-alpha", vec![1, 2]),
             ("1.2.3+build", vec![1, 2]),
             ("1.2.3-rc.1", vec![1, 2, 1]),
-            ("  1.2.3  ", vec![2]),
+            ("  1.2.3  ", vec![1, 2, 3]),
             ("1..2", vec![1, 2]),
             ("1.2.", vec![1, 2]),
             (".1.2", vec![1, 2]),
