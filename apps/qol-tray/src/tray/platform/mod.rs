@@ -2,12 +2,11 @@
 mod linux;
 
 use crate::features::FeatureRegistry;
-use crate::plugins::PluginManager;
 
 #[cfg(not(target_os = "linux"))]
 use crate::menu::router::EventRouter;
 use anyhow::Result;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::sync::broadcast;
 use tray_icon::Icon;
 
@@ -24,25 +23,23 @@ pub enum PlatformTray {
 
 #[cfg(target_os = "linux")]
 pub fn create_tray(
-    plugin_manager: Arc<Mutex<PluginManager>>,
     feature_registry: Arc<FeatureRegistry>,
     shutdown_tx: broadcast::Sender<()>,
     icon: Icon,
     update_available: bool,
 ) -> Result<PlatformTray> {
-    linux::create_tray(plugin_manager, feature_registry, shutdown_tx, icon, update_available)?;
+    linux::create_tray(feature_registry, shutdown_tx, icon, update_available)?;
     Ok(PlatformTray::Linux)
 }
 
 #[cfg(not(target_os = "linux"))]
 pub fn create_tray(
-    plugin_manager: Arc<Mutex<PluginManager>>,
     feature_registry: Arc<FeatureRegistry>,
     shutdown_tx: broadcast::Sender<()>,
     icon: Icon,
     update_available: bool,
 ) -> Result<PlatformTray> {
-    let (menu, router) = crate::menu::builder::build_menu(plugin_manager, feature_registry, update_available)?;
+    let (menu, router) = crate::menu::builder::build_menu(feature_registry, update_available)?;
 
     let tray_icon = TrayIconBuilder::new()
         .with_menu(Box::new(menu))

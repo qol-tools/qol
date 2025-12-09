@@ -264,7 +264,7 @@ async fn install_plugin(Path(id): Path<String>) -> Json<PluginInfo> {
         }
     };
 
-    let installer = PluginInstaller::new(plugins_dir);
+    let installer = PluginInstaller::new(plugins_dir.clone());
     let repo_url = format!("https://github.com/qol-tools/{}.git", id);
 
     if let Err(e) = installer.install(&repo_url, &id).await {

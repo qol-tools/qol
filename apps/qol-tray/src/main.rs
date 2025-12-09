@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    let _tray = TrayManager::new(plugin_manager.clone(), feature_registry, shutdown_tx, update_available)?;
+    let _tray = TrayManager::new(feature_registry, shutdown_tx, update_available)?;
 
     log::info!("QoL Tray daemon started successfully");
 

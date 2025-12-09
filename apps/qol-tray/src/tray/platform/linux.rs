@@ -1,13 +1,11 @@
-use crate::plugins::PluginManager;
 use crate::features::FeatureRegistry;
 use anyhow::Result;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::sync::broadcast;
 use tray_icon::{TrayIconBuilder, Icon};
 use gtk::{self, glib};
 
 pub fn create_tray(
-    plugin_manager: Arc<Mutex<PluginManager>>,
     feature_registry: Arc<FeatureRegistry>,
     shutdown_tx: broadcast::Sender<()>,
     icon: Icon,
@@ -19,7 +17,7 @@ pub fn create_tray(
             return;
         }
 
-        let (menu, router) = match crate::menu::builder::build_menu(plugin_manager, feature_registry, update_available) {
+        let (menu, router) = match crate::menu::builder::build_menu(feature_registry, update_available) {
             Ok(result) => result,
             Err(e) => {
                 log::error!("Failed to build menu: {}", e);
