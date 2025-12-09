@@ -113,3 +113,39 @@ The daemon provides:
 - Process execution (scripts and daemons)
 
 Plugins handle their own logic via shell scripts.
+
+## Lessons Learned
+
+### Test-Driven Bug Discovery
+Adding comprehensive edge case tests often reveals bugs in the implementation:
+- Adding `("V1.2.3", vec![1, 2, 3])` test case revealed version parser only handled lowercase 'v'
+- Adding `("--help", false)` test case revealed action ID validation didn't check leading dashes
+- Adding `("<body data-x='a>b'>", Some(19))` test case revealed HTML parser didn't handle `>` inside quotes
+
+**Pattern:** When adding tests, think about what the implementation *actually does* vs what it *should do*. Write the test for expected behavior first, then fix the implementation if it fails.
+
+### Consolidate Validation Functions
+Path/ID validation functions tend to get duplicated. Keep them in one place:
+- `paths::is_safe_path_component()` - validates single path components (no `/`, `\`, `..`, `.`, null bytes)
+- Used by: `config.rs`, `plugin_ui.rs`, anywhere plugin IDs are used in paths
+
+### Graceful Process Shutdown
+When stopping child processes:
+1. Send SIGTERM first (Unix) to allow graceful cleanup
+2. Wait with timeout (2s is reasonable)
+3. Only SIGKILL if process doesn't respond
+4. Use `libc::kill()` directly - no Rust wrapper needed
+
+### Error Handling Patterns
+- `.expect()` is acceptable for compile-time invariants (embedded assets)
+- `.expect()` is NOT acceptable for runtime operations (file paths, config dirs)
+- Return `Option` or `Result` and let callers decide how to handle
+- Log errors at the point of failure, not just at the top level
+
+### HTML Parsing Edge Cases
+Simple string matching for HTML tags needs to handle:
+- Case insensitivity (`<body>` vs `<BODY>`)
+- Attributes containing `>` (need quote-aware parsing)
+- Tags inside comments (skip `<!-- <body> -->`)
+
+A proper HTML parser would be overkill - just handle the common cases correctly.
