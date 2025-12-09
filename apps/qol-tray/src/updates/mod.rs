@@ -103,14 +103,7 @@ fn install_deb(path: &std::path::Path) -> Result<()> {
 
 #[cfg(target_os = "linux")]
 fn restart_with_cleanup() -> ! {
-    log::info!("Update installed, stopping daemons...");
-
-    let _ = std::process::Command::new("pkill")
-        .args(["-f", "plugin-launcher/target"])
-        .status();
-    let _ = std::fs::remove_file("/tmp/qol-launcher.sock");
-
-    log::info!("Restarting...");
+    log::info!("Update installed, restarting...");
     let _ = std::process::Command::new("qol-tray").spawn();
     std::process::exit(0);
 }

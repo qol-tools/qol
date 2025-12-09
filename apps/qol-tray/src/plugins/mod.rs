@@ -45,24 +45,64 @@ impl Plugin {
         }
 
         log::info!("Starting daemon for plugin: {}", self.id);
-        let child = Command::new(&daemon_path)
+        let mut child = Command::new(&daemon_path)
             .current_dir(&self.path)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()?;
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        match child.try_wait()? {
+            Some(status) if !status.success() => {
+                let stderr = child.stderr.take()
+                    .map(|mut s| {
+                        let mut buf = String::new();
+                        std::io::Read::read_to_string(&mut s, &mut buf).ok();
+                        buf
+                    })
+                    .unwrap_or_default();
+                anyhow::bail!("Daemon exited immediately with {}: {}", status, stderr.trim());
+            }
+            _ => {}
+        }
 
         self.daemon_process = Some(child);
         Ok(())
     }
 
     pub fn stop_daemon(&mut self) -> Result<()> {
-        if let Some(mut child) = self.daemon_process.take() {
-            log::info!("Stopping daemon for plugin: {}", self.id);
-            child.kill()?;
-            child.wait()?;
+        let Some(mut child) = self.daemon_process.take() else {
+            return Ok(());
+        };
+
+        log::info!("Stopping daemon for plugin: {}", self.id);
+
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(child.id() as i32, libc::SIGTERM);
         }
-        Ok(())
+        #[cfg(not(unix))]
+        {
+            let _ = child.kill();
+        }
+
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(2);
+
+        loop {
+            match child.try_wait()? {
+                Some(_) => return Ok(()),
+                None if start.elapsed() >= timeout => {
+                    log::warn!("Daemon for {} didn't exit gracefully, forcing kill", self.id);
+                    child.kill()?;
+                    child.wait()?;
+                    return Ok(());
+                }
+                None => std::thread::sleep(std::time::Duration::from_millis(50)),
+            }
+        }
     }
 }
 

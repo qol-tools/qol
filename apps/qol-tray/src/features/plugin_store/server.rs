@@ -119,8 +119,7 @@ fn serve_embedded_file(path: &str) -> impl IntoResponse {
 }
 
 pub async fn start_ui_server(plugin_manager: Arc<Mutex<PluginManager>>) -> Result<()> {
-    let plugins_dir = PluginLoader::default_plugin_dir()
-        .expect("failed to determine config directory");
+    let plugins_dir = PluginLoader::default_plugin_dir()?;
 
     let app_state = AppState {
         plugins_dir: plugins_dir.clone(),
@@ -199,8 +198,13 @@ async fn list_plugins(
     log::info!("API /plugins called (refresh={})", query.refresh);
 
     let client = GitHubClient::new("qol-tools");
-    let plugins_dir = PluginLoader::default_plugin_dir()
-        .expect("failed to determine config directory");
+    let plugins_dir = match PluginLoader::default_plugin_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            log::error!("Failed to determine config directory: {}", e);
+            return Json(PluginsResponse { plugins: vec![], cache_age_secs: None });
+        }
+    };
 
     let installed_plugins = get_installed_plugin_ids(&plugins_dir);
 
@@ -233,48 +237,33 @@ async fn list_plugins(
     })
 }
 
-async fn install_plugin(Path(id): Path<String>) -> Json<PluginInfo> {
+async fn install_plugin(Path(id): Path<String>) -> Result<Json<PluginInfo>, (StatusCode, String)> {
     use super::installer::PluginInstaller;
 
     log::info!("Install requested for plugin: {}", id);
 
-    let plugins_dir = match PluginLoader::ensure_plugin_dir() {
-        Ok(dir) => dir,
-        Err(e) => {
-            log::error!("Failed to get plugins directory: {}", e);
-            return Json(PluginInfo {
-                id: id.clone(),
-                name: id.clone(),
-                description: format!("Failed to access plugins directory: {}", e),
-                version: "0.0.0".to_string(),
-                installed: false,
-            });
-        }
-    };
+    let plugins_dir = PluginLoader::ensure_plugin_dir().map_err(|e| {
+        log::error!("Failed to get plugins directory: {}", e);
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to access plugins directory: {}", e))
+    })?;
 
     let installer = PluginInstaller::new(plugins_dir.clone());
     let repo_url = format!("https://github.com/qol-tools/{}.git", id);
 
-    if let Err(e) = installer.install(&repo_url, &id).await {
+    installer.install(&repo_url, &id).await.map_err(|e| {
         log::error!("Failed to install plugin {}: {}", id, e);
-        return Json(PluginInfo {
-            id: id.clone(),
-            name: id.clone(),
-            description: format!("Installation failed: {}", e),
-            version: "1.0.0".to_string(),
-            installed: false,
-        });
-    }
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("Installation failed: {}", e))
+    })?;
 
     log::info!("Plugin {} installed successfully", id);
     let version = read_plugin_version(&plugins_dir.join(&id)).unwrap_or_else(|_| "unknown".into());
-    Json(PluginInfo {
+    Ok(Json(PluginInfo {
         id: id.clone(),
         name: id.clone(),
         description: "Installed successfully".to_string(),
         version,
         installed: true,
-    })
+    }))
 }
 
 async fn update_plugin(Path(id): Path<String>) -> Json<UninstallResult> {

@@ -63,9 +63,48 @@ fn inject_after_body_tag(html: &str, content: &str) -> String {
 }
 
 fn find_body_tag_end(html: &str) -> Option<usize> {
-    let body_start = html.find("<body")?;
-    let tag_end = html[body_start..].find('>')?;
-    Some(body_start + tag_end + 1)
+    let lower = html.to_lowercase();
+    let mut search_start = 0;
+
+    while let Some(rel_pos) = lower[search_start..].find("<body") {
+        let body_start = search_start + rel_pos;
+
+        if !is_inside_comment(html, body_start) {
+            let tag_end = find_tag_end(&html[body_start..])?;
+            return Some(body_start + tag_end + 1);
+        }
+
+        search_start = body_start + 5;
+    }
+
+    None
+}
+
+fn find_tag_end(tag: &str) -> Option<usize> {
+    let mut in_quote = None;
+
+    for (i, c) in tag.char_indices() {
+        match (c, in_quote) {
+            ('"' | '\'', None) => in_quote = Some(c),
+            (q, Some(open)) if q == open => in_quote = None,
+            ('>', None) => return Some(i),
+            _ => {}
+        }
+    }
+
+    None
+}
+
+fn is_inside_comment(html: &str, pos: usize) -> bool {
+    let before = &html[..pos];
+    let comment_start = before.rfind("<!--");
+    let comment_end = before.rfind("-->");
+
+    match (comment_start, comment_end) {
+        (Some(start), Some(end)) => start > end,
+        (Some(_), None) => true,
+        _ => false,
+    }
 }
 
 fn inject_before_closing_body(html: &str, content: &str) -> String {
@@ -221,6 +260,44 @@ mod tests {
         for (filename, expected) in cases {
             let path = PathBuf::from(filename);
             assert_eq!(guess_mime(&path), expected, "file: {}", filename);
+        }
+    }
+
+    #[test]
+    fn find_body_tag_end_cases() {
+        let cases = [
+            ("<html><body>", Some(12)),
+            ("<html><BODY>", Some(12)),
+            ("<html><Body class='x'>", Some(22)),
+            ("<!-- <body> --><body>", Some(21)),
+            ("<!-- <body> -->", None),
+            ("", None),
+            ("<html><head></head></html>", None),
+            ("<body data-x='a>b'>", Some(19)),
+            ("<body data-x=\"a>b\">", Some(19)),
+            ("<!--<body>--><body id='real'>", Some(29)),
+            ("<body onclick=\"if(a>b){}\">", Some(26)),
+        ];
+
+        for (html, expected) in cases {
+            assert_eq!(find_body_tag_end(html), expected, "html: {:?}", html);
+        }
+    }
+
+    #[test]
+    fn is_inside_comment_cases() {
+        let cases = [
+            ("<body>", 0, false),
+            ("<!-- <body> -->", 5, true),
+            ("<!-- --> <body>", 9, false),
+            ("<!-- x --> <!-- <body>", 16, true),
+            ("<!-- a --> <!-- b --> x", 22, false),
+            ("<!-- unclosed", 5, true),
+            ("text <!-- comment -->", 0, false),
+        ];
+
+        for (html, pos, expected) in cases {
+            assert_eq!(is_inside_comment(html, pos), expected, "html: {:?}, pos: {}", html, pos);
         }
     }
 }

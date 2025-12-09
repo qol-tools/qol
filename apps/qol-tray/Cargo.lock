@@ -1745,6 +1745,7 @@ dependencies = [
  "env_logger",
  "global-hotkey",
  "gtk",
+ "libc",
  "log",
  "once_cell",
  "open",
