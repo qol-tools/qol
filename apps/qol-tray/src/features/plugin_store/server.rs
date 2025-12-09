@@ -3,7 +3,7 @@ use super::plugin_ui;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use axum::{
-    extract::{Path, State, ws::{WebSocketUpgrade, WebSocket}},
+    extract::{Path, State},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
@@ -141,7 +141,6 @@ pub async fn start_ui_server(plugin_manager: Arc<Mutex<PluginManager>>) -> Resul
         .route("/uninstall/:id", post(uninstall_plugin))
         .route("/plugins/:id/config", get(get_plugin_config))
         .route("/plugins/:id/config", axum::routing::put(set_plugin_config))
-        .route("/ws/install/:id", get(install_ws))
         .route("/github-token", get(get_token_status))
         .route("/github-token", post(set_github_token))
         .route("/github-token", axum::routing::delete(delete_github_token))
@@ -366,16 +365,6 @@ async fn uninstall_plugin(Path(id): Path<String>) -> Json<UninstallResult> {
     })
 }
 
-async fn install_ws(ws: WebSocketUpgrade, Path(id): Path<String>) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| install_progress_socket(socket, id))
-}
-
-async fn install_progress_socket(mut socket: WebSocket, id: String) {
-    use axum::extract::ws::Message;
-    let _ = socket
-        .send(Message::Text(format!("Starting install for {}", id)))
-        .await;
-}
 
 async fn list_installed(
     State(state): State<AppState>,

@@ -48,7 +48,9 @@ fn append_menu_item_to_menu(menu: &Menu, item: &PluginMenuItem, feature_id: &str
             let full_id = format!("{}::{}", feature_id, id);
             log::debug!("Creating submenu with ID: {}", full_id);
             let submenu = Submenu::with_id(&full_id, label, true);
-            sub_items.iter().for_each(|sub| add_menu_item(&submenu, sub, feature_id));
+            for sub in sub_items {
+                add_menu_item(&submenu, sub, feature_id);
+            }
             let _ = menu.append(&submenu);
         }
         PluginMenuItem::Action { id, label, .. } => {
@@ -137,7 +139,9 @@ fn add_menu_item(parent: &Submenu, item: &PluginMenuItem, prefix_id: &str) {
         PluginMenuItem::Submenu { id, label, items } => {
             let full_id = format!("{}::{}", prefix_id, id);
             let submenu = Submenu::with_id(&full_id, label, true);
-            items.iter().for_each(|sub| add_menu_item(&submenu, sub, prefix_id));
+            for sub in items {
+                add_menu_item(&submenu, sub, prefix_id);
+            }
             let _ = parent.append(&submenu);
         }
     }
