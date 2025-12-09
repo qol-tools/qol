@@ -7,14 +7,22 @@ qol-tray v1.4.3 - Pluggable system tray daemon. Single tray icon opens browser U
 **Cross-platform:** Builds and tests pass on Linux, Windows, macOS. Plugins declare platform support via `platforms` field.
 
 ### Recent Changes (Dec 2025)
+- Security: Plugin ID validation at all server endpoints using `is_safe_path_component()`
 - Security: Action ID validation in hotkey execution (rejects shell metacharacters, leading dashes)
 - Security: Path traversal prevention via shared `is_safe_path_component()` in paths.rs
 - Security: Null byte injection prevention in plugin IDs and file paths
+- Security: Git branch name validation to prevent injection attacks
+- Security: Remove internal error details from HTTP responses
+- Fix: Git operations have 120s timeout (prevents hanging on network issues)
 - Fix: Graceful daemon shutdown with SIGTERM before SIGKILL (2s timeout)
 - Fix: Daemon startup error visibility (captures stderr, reports immediate exits)
 - Fix: Return proper HTTP error codes from install_plugin endpoint
 - Fix: Handle uppercase 'V' prefix in version parsing
 - Fix: Server errors now logged instead of silently swallowed
+- Fix: Use `std::env::temp_dir()` instead of hardcoded `/tmp` for updates
+- Fix: Cover image size limit (5MB) to prevent memory exhaustion
+- Refactor: Proper TOML parsing for plugin name extraction (was naive string split)
+- Refactor: Compile-time assertion for icon data size
 - Refactor: Removed `.expect()` panics in github.rs path functions (now return Option)
 - Refactor: Consolidated duplicate `is_safe_id` functions into shared `paths::is_safe_path_component`
 - Refactor: Simplified restart_with_cleanup (daemon cleanup happens via Drop)
@@ -22,7 +30,8 @@ qol-tray v1.4.3 - Pluggable system tray daemon. Single tray icon opens browser U
 - Tests: Consolidated table-driven tests (hotkeys 10→4, version 4→3)
 - Tests: Added manifest parsing tests (MenuItem, ActionType, full/minimal manifest)
 - Tests: Added HTML body tag parsing tests with quote handling
-- Tests: ~50 new edge cases across hotkeys, version, github, paths modules
+- Tests: Added branch name validation tests
+- Tests: ~60 new edge cases across hotkeys, version, github, paths, installer modules
 - Cross-platform CI via GitHub Actions (Linux, Windows, macOS)
 - Plugin platform filtering - `platforms = ["linux"]` in plugin.toml
 - Developer tab with plugin linking/unlinking for dev workflow
