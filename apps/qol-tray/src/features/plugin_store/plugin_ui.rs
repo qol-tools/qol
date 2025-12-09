@@ -89,30 +89,48 @@ async fn serve_file(plugins_dir: &Path, plugin_id: &str, file_path: &str) -> Res
     let ui_path = plugins_dir.join(plugin_id).join("ui").join(file_path);
     log::debug!("Serving plugin file: {:?}", ui_path);
 
-    if !ui_path.exists() {
-        log::warn!("Plugin UI file not found: {:?}", ui_path);
-        return (StatusCode::NOT_FOUND, "File not found").into_response();
+    let canonical = match ui_path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
+    };
+
+    let base_dir = match plugins_dir.join(plugin_id).join("ui").canonicalize() {
+        Ok(p) => p,
+        Err(_) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
+    };
+
+    if !canonical.starts_with(&base_dir) {
+        log::warn!("Path traversal attempt: {:?} escapes {:?}", canonical, base_dir);
+        return (StatusCode::FORBIDDEN, "Access denied").into_response();
     }
 
-    let contents = match tokio::fs::read(&ui_path).await {
+    let contents = match tokio::fs::read(&canonical).await {
         Ok(contents) => contents,
         Err(e) => {
-            log::error!("Failed to read plugin UI file {:?}: {}", ui_path, e);
+            log::error!("Failed to read plugin UI file {:?}: {}", canonical, e);
             return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read file").into_response();
         }
     };
 
-    let mime = guess_mime(&ui_path);
-    log::debug!("Serving {:?} as {}", ui_path, mime);
+    let mime = guess_mime(&canonical);
+    log::debug!("Serving {:?} as {}", canonical, mime);
     ([(header::CONTENT_TYPE, mime)], contents).into_response()
 }
 
 fn is_safe_id(id: &str) -> bool {
-    !id.is_empty() && !id.contains('/') && !id.contains('\\') && id != ".." && id != "."
+    !id.is_empty()
+        && !id.contains('/')
+        && !id.contains('\\')
+        && !id.contains('\0')
+        && id != ".."
+        && id != "."
 }
 
 fn is_safe_subpath(path: &str) -> bool {
-    !path.contains("..") && !path.starts_with('/') && !path.starts_with('\\')
+    !path.contains("..")
+        && !path.contains('\0')
+        && !path.starts_with('/')
+        && !path.starts_with('\\')
 }
 
 fn guess_mime(path: &Path) -> &'static str {
@@ -150,7 +168,7 @@ mod tests {
             (".", false),
             ("", false),
             (" ", true),
-            ("plugin\0evil", true),
+            ("plugin\0evil", false),
             (".hidden", true),
             ("..hidden", true),
             ("plugin/", false),
@@ -181,6 +199,7 @@ mod tests {
             ("..", false),
             ("a/../../b", false),
             ("valid/..invalid", false),
+            ("file\0.txt", false),
         ];
 
         for (path, expected) in cases {
