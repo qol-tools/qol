@@ -72,6 +72,10 @@ impl Plugin {
         Ok(())
     }
 
+    pub fn daemon_pid(&self) -> Option<u32> {
+        self.daemon_process.as_ref().map(|c| c.id())
+    }
+
     pub fn stop_daemon(&mut self) -> Result<()> {
         let Some(mut child) = self.daemon_process.take() else {
             return Ok(());
