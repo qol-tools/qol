@@ -7,6 +7,14 @@ qol-tray v1.4.3 - Pluggable system tray daemon. Single tray icon opens browser U
 **Cross-platform:** Builds and tests pass on Linux, Windows, macOS. Plugins declare platform support via `platforms` field.
 
 ### Recent Changes (Dec 2025)
+- Security: Path traversal prevention via canonicalization in plugin UI file serving
+- Security: Null byte injection prevention in plugin IDs and file paths
+- Fix: Return actual version after plugin install (was hardcoded "1.0.0")
+- Fix: Handle whitespace in version parsing
+- Fix: Proper TOML parsing for plugin name extraction
+- Refactor: Removed unused `plugin_manager` param from menu/tray creation
+- Refactor: Removed unused WebSocket endpoint stub
+- Refactor: Removed unused `restart_on_crash` field from DaemonConfig
 - Cross-platform CI via GitHub Actions (Linux, Windows, macOS)
 - Plugin platform filtering - `platforms = ["linux"]` in plugin.toml, filters both installed plugins and store listings
 - Fixed Windows hotkey manager thread safety issue
