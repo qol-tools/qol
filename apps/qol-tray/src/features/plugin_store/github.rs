@@ -7,12 +7,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const PLUGIN_PREFIX: &str = "plugin-";
 const CACHE_TTL_SECS: u64 = 3600;
 
-fn token_path() -> PathBuf {
-    paths::github_token_path().expect("failed to determine config directory")
+fn token_path() -> Option<PathBuf> {
+    paths::github_token_path().ok()
 }
 
-fn cache_path() -> PathBuf {
-    paths::plugin_cache_path().expect("failed to determine config directory")
+fn cache_path() -> Option<PathBuf> {
+    paths::plugin_cache_path().ok()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -66,13 +66,15 @@ fn current_timestamp() -> u64 {
 }
 
 pub fn read_cache() -> Option<PluginCache> {
-    let path = cache_path();
+    let path = cache_path()?;
     let content = std::fs::read_to_string(&path).ok()?;
     serde_json::from_str(&content).ok()
 }
 
 pub fn write_cache(plugins: &[PluginMetadata]) -> Result<()> {
-    let path = cache_path();
+    let Some(path) = cache_path() else {
+        anyhow::bail!("Could not determine cache path");
+    };
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -93,10 +95,11 @@ pub fn cache_age_secs() -> Option<u64> {
 pub fn update_cached_version(plugin_id: &str, version: &str) {
     let Some(mut cache) = read_cache() else { return };
     let Some(plugin) = cache.plugins.iter_mut().find(|p| p.id == plugin_id) else { return };
+    let Some(path) = cache_path() else { return };
 
     plugin.version = version.to_string();
     let Ok(content) = serde_json::to_string(&cache) else { return };
-    let _ = std::fs::write(cache_path(), content);
+    let _ = std::fs::write(path, content);
     log::info!("Updated cache version for {}: {}", plugin_id, version);
 }
 
@@ -126,20 +129,22 @@ pub struct GitHubClient {
 }
 
 pub fn get_stored_token() -> Option<String> {
-    let path = token_path();
+    let path = token_path()?;
     let token = std::fs::read_to_string(&path).ok()?;
     let token = token.trim();
-    
+
     if token.is_empty() {
         return None;
     }
-    
+
     log::info!("Loaded GitHub token from {:?}", path);
     Some(token.to_string())
 }
 
 pub fn store_token(token: &str) -> Result<()> {
-    let path = token_path();
+    let Some(path) = token_path() else {
+        anyhow::bail!("Could not determine token path");
+    };
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -149,7 +154,9 @@ pub fn store_token(token: &str) -> Result<()> {
 }
 
 pub fn delete_token() -> Result<()> {
-    let path = token_path();
+    let Some(path) = token_path() else {
+        return Ok(());
+    };
     if path.exists() {
         std::fs::remove_file(&path)?;
     }
