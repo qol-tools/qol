@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct PluginInstaller {
     plugins_dir: PathBuf,
@@ -39,7 +39,7 @@ impl PluginInstaller {
         Ok(())
     }
 
-    async fn install_dependencies(&self, plugin_dir: &PathBuf) -> Result<()> {
+    async fn install_dependencies(&self, plugin_dir: &Path) -> Result<()> {
         let manifest_path = plugin_dir.join("plugin.toml");
         if !manifest_path.exists() {
             return Ok(());
@@ -61,7 +61,7 @@ impl PluginInstaller {
 
     async fn install_binary(
         &self,
-        plugin_dir: &PathBuf,
+        plugin_dir: &Path,
         dep: &crate::plugins::manifest::BinaryDependency,
     ) -> Result<()> {
         let asset_name = resolve_asset_pattern(&dep.pattern);
@@ -125,7 +125,7 @@ impl PluginInstaller {
         Ok(())
     }
 
-    async fn get_default_branch(&self, plugin_dir: &PathBuf) -> Result<String> {
+    async fn get_default_branch(&self, plugin_dir: &Path) -> Result<String> {
         let output = tokio::process::Command::new("git")
             .args(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
             .current_dir(plugin_dir)

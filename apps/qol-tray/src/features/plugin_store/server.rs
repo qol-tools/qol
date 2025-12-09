@@ -120,7 +120,7 @@ fn serve_embedded_file(path: &str) -> impl IntoResponse {
 
 pub async fn start_ui_server(plugin_manager: Arc<Mutex<PluginManager>>) -> Result<()> {
     let plugins_dir = PluginLoader::default_plugin_dir()
-        .unwrap_or_else(|_| PathBuf::from("~/.config/qol-tray/plugins"));
+        .expect("failed to determine config directory");
 
     let app_state = AppState {
         plugins_dir: plugins_dir.clone(),
@@ -200,7 +200,7 @@ async fn list_plugins(
 
     let client = GitHubClient::new("qol-tools");
     let plugins_dir = PluginLoader::default_plugin_dir()
-        .unwrap_or_else(|_| PathBuf::from("~/.config/qol-tray/plugins"));
+        .expect("failed to determine config directory");
 
     let installed_plugins = get_installed_plugin_ids(&plugins_dir);
 

@@ -7,7 +7,7 @@ use global_hotkey::{
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
 };
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
 use std::sync::OnceLock;
 
@@ -201,7 +201,7 @@ fn try_reload_hotkeys(reload_rx: &mpsc::Receiver<()>, manager: &mut HotkeyManage
 fn try_handle_hotkey(
     receiver: &global_hotkey::GlobalHotKeyEventReceiver,
     manager: &HotkeyManager,
-    plugins_dir: &PathBuf,
+    plugins_dir: &Path,
 ) {
     let event = match receiver.try_recv() {
         Ok(e) if e.state == HotKeyState::Pressed => e,
@@ -215,7 +215,7 @@ fn try_handle_hotkey(
     execute_plugin_action(plugins_dir, &action.plugin_id, &action.action);
 }
 
-fn execute_plugin_action(plugins_dir: &PathBuf, plugin_id: &str, action: &str) {
+fn execute_plugin_action(plugins_dir: &Path, plugin_id: &str, action: &str) {
     let plugin_dir = plugins_dir.join(plugin_id);
     let Some(script) = find_plugin_script(&plugin_dir) else {
         log::warn!("No plugin script found in {:?}", plugin_dir);

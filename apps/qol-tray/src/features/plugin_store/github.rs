@@ -8,11 +8,11 @@ const PLUGIN_PREFIX: &str = "plugin-";
 const CACHE_TTL_SECS: u64 = 3600;
 
 fn token_path() -> PathBuf {
-    paths::github_token_path().unwrap_or_else(|_| PathBuf::from(".github-token"))
+    paths::github_token_path().expect("failed to determine config directory")
 }
 
 fn cache_path() -> PathBuf {
-    paths::plugin_cache_path().unwrap_or_else(|_| PathBuf::from(".plugin-cache.json"))
+    paths::plugin_cache_path().expect("failed to determine config directory")
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -287,7 +287,6 @@ mod tests {
     fn make_repo(name: &str) -> GitHubRepo {
         GitHubRepo {
             name: name.to_string(),
-            description: Some("Test repo".to_string()),
             html_url: format!("https://github.com/test/{}", name),
         }
     }
