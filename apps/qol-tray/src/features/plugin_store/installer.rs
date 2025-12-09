@@ -1,6 +1,9 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+const GIT_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub struct PluginInstaller {
     plugins_dir: PathBuf,
@@ -23,10 +26,14 @@ impl PluginInstaller {
         let target_str = target_dir.to_str()
             .ok_or_else(|| anyhow::anyhow!("Plugin path contains invalid UTF-8"))?;
 
-        let output = tokio::process::Command::new("git")
-            .args(["clone", repo_url, target_str])
-            .output()
-            .await?;
+        let output = tokio::time::timeout(
+            GIT_TIMEOUT,
+            tokio::process::Command::new("git")
+                .args(["clone", repo_url, target_str])
+                .output(),
+        )
+        .await
+        .context("Git clone timed out")??;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -98,11 +105,15 @@ impl PluginInstaller {
 
         log::info!("Updating plugin: {}", plugin_id);
 
-        let output = tokio::process::Command::new("git")
-            .args(["fetch", "origin"])
-            .current_dir(&plugin_dir)
-            .output()
-            .await?;
+        let output = tokio::time::timeout(
+            GIT_TIMEOUT,
+            tokio::process::Command::new("git")
+                .args(["fetch", "origin"])
+                .current_dir(&plugin_dir)
+                .output(),
+        )
+        .await
+        .context("Git fetch timed out")??;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -110,11 +121,15 @@ impl PluginInstaller {
         }
 
         let branch = self.get_default_branch(&plugin_dir).await?;
-        let output = tokio::process::Command::new("git")
-            .args(["reset", "--hard", &format!("origin/{}", branch)])
-            .current_dir(&plugin_dir)
-            .output()
-            .await?;
+        let output = tokio::time::timeout(
+            GIT_TIMEOUT,
+            tokio::process::Command::new("git")
+                .args(["reset", "--hard", &format!("origin/{}", branch)])
+                .current_dir(&plugin_dir)
+                .output(),
+        )
+        .await
+        .context("Git reset timed out")??;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -126,15 +141,23 @@ impl PluginInstaller {
     }
 
     async fn get_default_branch(&self, plugin_dir: &Path) -> Result<String> {
-        let output = tokio::process::Command::new("git")
-            .args(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
-            .current_dir(plugin_dir)
-            .output()
-            .await?;
+        let output = tokio::time::timeout(
+            Duration::from_secs(10),
+            tokio::process::Command::new("git")
+                .args(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
+                .current_dir(plugin_dir)
+                .output(),
+        )
+        .await
+        .context("Git symbolic-ref timed out")??;
 
         if output.status.success() {
             let branch = String::from_utf8_lossy(&output.stdout);
-            return Ok(branch.trim().trim_start_matches("origin/").to_string());
+            let branch = branch.trim().trim_start_matches("origin/");
+            if is_safe_branch_name(branch) {
+                return Ok(branch.to_string());
+            }
+            log::warn!("Invalid branch name from git: {:?}", branch);
         }
 
         Ok("master".to_string())
@@ -152,6 +175,16 @@ impl PluginInstaller {
         log::info!("Plugin {} uninstalled successfully", plugin_id);
         Ok(())
     }
+}
+
+fn is_safe_branch_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 256
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '/' || c == '.')
+        && !s.starts_with('-')
+        && !s.starts_with('.')
+        && !s.contains("..")
 }
 
 fn resolve_asset_pattern(pattern: &str) -> String {
@@ -224,4 +257,40 @@ async fn download_asset(url: &str, dest: &PathBuf) -> Result<()> {
     let bytes = response.bytes().await?;
     tokio::fs::write(dest, &bytes).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_safe_branch_name_cases() {
+        let valid = [
+            "main",
+            "master",
+            "develop",
+            "feature/foo",
+            "release-1.0",
+            "v1.0.0",
+            "fix_bug",
+            "a",
+        ];
+        for s in valid {
+            assert!(is_safe_branch_name(s), "should be valid: {:?}", s);
+        }
+
+        let invalid = [
+            "",
+            "-leading-dash",
+            ".hidden",
+            "has..double-dots",
+            "has\nline",
+            "has\ttab",
+            "has space",
+            &"x".repeat(300),
+        ];
+        for s in invalid {
+            assert!(!is_safe_branch_name(s), "should be invalid: {:?}", s);
+        }
+    }
 }

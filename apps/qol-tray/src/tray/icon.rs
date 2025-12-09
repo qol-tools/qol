@@ -5,6 +5,11 @@ const ICON_DATA: &[u8] = include_bytes!("../../assets/icon.rgba");
 const DOT_RADIUS: i32 = 8;
 const DOT_COLOR: [u8; 4] = [230, 150, 0, 255];
 
+const _: () = assert!(
+    ICON_DATA.len() == (ICON_SIZE * ICON_SIZE * 4) as usize,
+    "icon.rgba must be 64x64 RGBA"
+);
+
 pub fn create_icon() -> Icon {
     Icon::from_rgba(ICON_DATA.to_vec(), ICON_SIZE, ICON_SIZE)
         .expect("embedded icon.rgba is valid")

@@ -1,5 +1,6 @@
 use super::plugin_ui;
 
+use crate::paths::is_safe_path_component;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use axum::{
@@ -242,11 +243,15 @@ async fn list_plugins(
 async fn install_plugin(Path(id): Path<String>) -> Result<Json<PluginInfo>, (StatusCode, String)> {
     use super::installer::PluginInstaller;
 
+    if !is_safe_path_component(&id) {
+        return Err((StatusCode::BAD_REQUEST, "Invalid plugin ID".to_string()));
+    }
+
     log::info!("Install requested for plugin: {}", id);
 
     let plugins_dir = PluginLoader::ensure_plugin_dir().map_err(|e| {
         log::error!("Failed to get plugins directory: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to access plugins directory: {}", e))
+        (StatusCode::INTERNAL_SERVER_ERROR, "Failed to access plugins directory".to_string())
     })?;
 
     let installer = PluginInstaller::new(plugins_dir.clone());
@@ -254,7 +259,7 @@ async fn install_plugin(Path(id): Path<String>) -> Result<Json<PluginInfo>, (Sta
 
     installer.install(&repo_url, &id).await.map_err(|e| {
         log::error!("Failed to install plugin {}: {}", id, e);
-        (StatusCode::INTERNAL_SERVER_ERROR, format!("Installation failed: {}", e))
+        (StatusCode::INTERNAL_SERVER_ERROR, "Installation failed".to_string())
     })?;
 
     log::info!("Plugin {} installed successfully", id);
@@ -271,6 +276,13 @@ async fn install_plugin(Path(id): Path<String>) -> Result<Json<PluginInfo>, (Sta
 async fn update_plugin(Path(id): Path<String>) -> Json<UninstallResult> {
     use super::installer::PluginInstaller;
 
+    if !is_safe_path_component(&id) {
+        return Json(UninstallResult {
+            success: false,
+            message: "Invalid plugin ID".to_string(),
+        });
+    }
+
     log::info!("Update requested for plugin: {}", id);
 
     let plugins_dir = match PluginLoader::default_plugin_dir() {
@@ -279,7 +291,7 @@ async fn update_plugin(Path(id): Path<String>) -> Json<UninstallResult> {
             log::error!("Failed to get plugins directory: {}", e);
             return Json(UninstallResult {
                 success: false,
-                message: format!("Failed to access plugins directory: {}", e),
+                message: "Failed to access plugins directory".to_string(),
             });
         }
     };
@@ -290,7 +302,7 @@ async fn update_plugin(Path(id): Path<String>) -> Json<UninstallResult> {
         log::error!("Failed to update plugin {}: {}", id, e);
         return Json(UninstallResult {
             success: false,
-            message: format!("Update failed: {}", e),
+            message: "Update failed".to_string(),
         });
     }
 
@@ -315,6 +327,13 @@ fn read_plugin_version(plugin_dir: &std::path::Path) -> Result<String, ()> {
 async fn uninstall_plugin(Path(id): Path<String>) -> Json<UninstallResult> {
     use super::installer::PluginInstaller;
 
+    if !is_safe_path_component(&id) {
+        return Json(UninstallResult {
+            success: false,
+            message: "Invalid plugin ID".to_string(),
+        });
+    }
+
     log::info!("Uninstall requested for plugin: {}", id);
 
     let plugins_dir = match PluginLoader::default_plugin_dir() {
@@ -323,7 +342,7 @@ async fn uninstall_plugin(Path(id): Path<String>) -> Json<UninstallResult> {
             log::error!("Failed to get plugins directory: {}", e);
             return Json(UninstallResult {
                 success: false,
-                message: format!("Failed to access plugins directory: {}", e),
+                message: "Failed to access plugins directory".to_string(),
             });
         }
     };
@@ -334,7 +353,7 @@ async fn uninstall_plugin(Path(id): Path<String>) -> Json<UninstallResult> {
         log::error!("Failed to uninstall plugin {}: {}", id, e);
         return Json(UninstallResult {
             success: false,
-            message: format!("Uninstall failed: {}", e),
+            message: "Uninstall failed".to_string(),
         });
     }
 
@@ -437,16 +456,22 @@ fn is_newer_version(available: &str, installed: &str) -> bool {
     Version::parse(available).is_newer_than(&Version::parse(installed))
 }
 
+const MAX_COVER_SIZE: usize = 5 * 1024 * 1024;
+
 async fn serve_cover(
     Path(plugin_id): Path<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
+    if !is_safe_path_component(&plugin_id) {
+        return (StatusCode::BAD_REQUEST, "Invalid plugin ID").into_response();
+    }
+
     let cover_path = state.plugins_dir.join(&plugin_id).join("cover.png");
-    
+
     if !cover_path.exists() {
         return (StatusCode::NOT_FOUND, "Cover not found").into_response();
     }
-    
+
     let data = match tokio::fs::read(&cover_path).await {
         Ok(data) => data,
         Err(e) => {
@@ -455,10 +480,18 @@ async fn serve_cover(
         }
     };
 
+    if data.len() > MAX_COVER_SIZE {
+        return (StatusCode::PAYLOAD_TOO_LARGE, "Cover image too large").into_response();
+    }
+
     (StatusCode::OK, [(header::CONTENT_TYPE, "image/png")], data).into_response()
 }
 
 async fn get_plugin_config(Path(plugin_id): Path<String>) -> impl IntoResponse {
+    if !is_safe_path_component(&plugin_id) {
+        return (StatusCode::BAD_REQUEST, "Invalid plugin ID").into_response();
+    }
+
     let manager = match crate::plugins::PluginConfigManager::new() {
         Ok(m) => m,
         Err(e) => {
@@ -493,6 +526,10 @@ async fn set_plugin_config(
     Path(plugin_id): Path<String>,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
+    if !is_safe_path_component(&plugin_id) {
+        return (StatusCode::BAD_REQUEST, "Invalid plugin ID").into_response();
+    }
+
     let config = match serde_json::from_slice::<serde_json::Value>(&body) {
         Ok(c) => c,
         Err(e) => {
@@ -527,7 +564,7 @@ async fn get_token_status() -> Json<TokenStatus> {
 async fn set_github_token(Json(payload): Json<TokenRequest>) -> impl IntoResponse {
     if let Err(e) = super::github::store_token(&payload.token) {
         log::error!("Failed to store GitHub token: {}", e);
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to store token: {}", e)).into_response();
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to store token".to_string()).into_response();
     }
 
     log::info!("GitHub token stored successfully");
@@ -537,7 +574,7 @@ async fn set_github_token(Json(payload): Json<TokenRequest>) -> impl IntoRespons
 async fn delete_github_token() -> impl IntoResponse {
     if let Err(e) = super::github::delete_token() {
         log::error!("Failed to delete GitHub token: {}", e);
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to delete token: {}", e)).into_response();
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to delete token".to_string()).into_response();
     }
 
     log::info!("GitHub token deleted");
@@ -769,6 +806,10 @@ async fn delete_link(
     Path(id): Path<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
+    if !is_safe_path_component(&id) {
+        return (StatusCode::BAD_REQUEST, "Invalid plugin ID".to_string()).into_response();
+    }
+
     let link_path = state.plugins_dir.join(&id);
 
     if let Err(e) = remove_symlink(&link_path) {
@@ -883,13 +924,9 @@ fn try_parse_plugin_dir(path: std::path::PathBuf) -> Option<DiscoveredPlugin> {
 
 #[cfg(feature = "dev")]
 fn read_plugin_name(toml_path: &std::path::Path) -> Option<String> {
-    std::fs::read_to_string(toml_path)
-        .ok()?
-        .lines()
-        .find(|l| l.starts_with("name"))?
-        .split('"')
-        .nth(1)
-        .map(String::from)
+    let content = std::fs::read_to_string(toml_path).ok()?;
+    let manifest: crate::plugins::PluginManifest = toml::from_str(&content).ok()?;
+    Some(manifest.plugin.name)
 }
 
 #[cfg(feature = "dev")]

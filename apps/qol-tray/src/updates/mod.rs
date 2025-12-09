@@ -68,7 +68,7 @@ async fn download_deb(version: &str) -> Result<std::path::PathBuf> {
         "https://github.com/{}/releases/download/v{}/qol-tray_{}-1_amd64.deb",
         GITHUB_REPO, version, version
     );
-    let path = std::path::PathBuf::from(format!("/tmp/qol-tray_{}-1_amd64.deb", version));
+    let path = std::env::temp_dir().join(format!("qol-tray_{}-1_amd64.deb", version));
 
     log::info!("Downloading update from {}", url);
 
