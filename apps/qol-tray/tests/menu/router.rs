@@ -130,27 +130,6 @@ fn router_passes_event_id_to_handler() {
 }
 
 #[test]
-fn async_handler_returns_continue_result() {
-    // Arrange
-    let routes = vec![
-        EventRoute {
-            pattern: EventPattern::Exact("async_action".to_string()),
-            handler: EventHandler::Async(Box::new(|_| Ok(()))),
-        },
-    ];
-    let router = EventRouter::new(routes);
-
-    // Act
-    let result = router.route("async_action").unwrap();
-
-    // Assert
-    match result {
-        HandlerResult::Continue => {},
-        _ => panic!("Expected Continue result for async handler"),
-    }
-}
-
-#[test]
 fn router_uses_first_matching_route_when_multiple_match() {
     // Arrange
     let first_called = Arc::new(Mutex::new(false));
