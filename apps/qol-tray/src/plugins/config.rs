@@ -35,9 +35,7 @@ impl PluginConfigManager {
     }
 
     pub fn save_configs(&self, configs: &PluginConfigs) -> Result<()> {
-        if let Some(parent) = self.config_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        ensure_parent_dir(&self.config_path)?;
         let content = serde_json::to_string_pretty(configs)?;
         std::fs::write(&self.config_path, content)?;
         Ok(())

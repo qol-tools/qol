@@ -85,7 +85,6 @@ pub enum ActionType {
     Settings,
     #[serde(rename = "toggle-config")]
     ToggleConfig,
-    Custom,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
