@@ -15,6 +15,8 @@ qol-tray v1.4.3 - Pluggable system tray daemon. Single tray icon opens browser U
 - Refactor: Removed unused `plugin_manager` param from menu/tray creation
 - Refactor: Removed unused WebSocket endpoint stub
 - Refactor: Removed unused `restart_on_crash` field from DaemonConfig
+- Refactor: Removed dead code (ActionType::Custom, EventHandler::Async, UiServerHandle)
+- Refactor: Simplified UI server startup (no more mem::forget pattern)
 - Cross-platform CI via GitHub Actions (Linux, Windows, macOS)
 - Plugin platform filtering - `platforms = ["linux"]` in plugin.toml, filters both installed plugins and store listings
 - Fixed Windows hotkey manager thread safety issue
