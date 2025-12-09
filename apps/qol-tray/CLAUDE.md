@@ -36,7 +36,6 @@ make release  # Bump version, build, push, create GitHub release
 **src/menu/** - Menu abstraction and event routing
 - `builder.rs`: Builds minimal menu (features + Quit), no per-plugin items
 - `router.rs`: EventRouter with EventPattern (Exact/Prefix) for O(k) routing
-- EventHandler supports Sync/Async execution
 - Event format: `feature-id::menu-item-id`
 
 **src/tray/** - System tray UI with platform abstraction
