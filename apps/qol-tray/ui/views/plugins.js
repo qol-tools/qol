@@ -381,6 +381,7 @@ function openSelected() {
 }
 
 export function onFocus() {
+    refreshPlugins();
     updateSelection();
 }
 

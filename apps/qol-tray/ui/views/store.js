@@ -9,7 +9,8 @@ const state = {
     hasToken: false,
     showTokenInput: false,
     cacheAgeSecs: null,
-    loading: false
+    loading: false,
+    installing: new Set()
 };
 
 let container = null;
@@ -199,26 +200,31 @@ function updateRefreshButton() {
 function renderPlugins(plugins) {
     const listEl = document.getElementById('store-list');
     if (!listEl) return;
-    
+
     if (plugins.length === 0) {
         listEl.innerHTML = '<div class="loading">No plugins found</div>';
         return;
     }
-    
-    listEl.innerHTML = plugins.map((plugin, index) => `
-        <div class="plugin-card ${plugin.installed ? 'installed' : ''}" data-index="${index}" data-plugin-id="${plugin.id}" data-installed="${plugin.installed}">
-            <h3>${plugin.name}</h3>
-            <div class="version">v${plugin.version}</div>
-            <div class="description">${plugin.description}</div>
-            <div class="button-group">
-                ${plugin.installed ? `
-                    <span class="installed-badge">Installed</span>
-                ` : `
-                    <button class="install">Install</button>
-                `}
+
+    listEl.innerHTML = plugins.map((plugin, index) => {
+        const isInstalling = state.installing.has(plugin.id);
+        return `
+            <div class="plugin-card ${plugin.installed ? 'installed' : ''} ${isInstalling ? 'installing' : ''}" data-index="${index}" data-plugin-id="${plugin.id}" data-installed="${plugin.installed}">
+                <h3>${plugin.name}</h3>
+                <div class="version">v${plugin.version}</div>
+                <div class="description">${plugin.description}</div>
+                <div class="button-group">
+                    ${plugin.installed ? `
+                        <span class="installed-badge">Installed</span>
+                    ` : isInstalling ? `
+                        <span class="installing-badge">Installing...</span>
+                    ` : `
+                        <button class="install">Install</button>
+                    `}
+                </div>
             </div>
-        </div>
-    `).join('');
+        `;
+    }).join('');
 }
 
 function handleListClick(e) {
@@ -298,18 +304,26 @@ function getFilteredPlugins() {
 }
 
 async function installPlugin(id) {
+    if (state.installing.has(id)) return;
+
+    state.installing.add(id);
+    renderPlugins(getFilteredPlugins());
+    updateSelection();
+
     try {
         const response = await fetch(`/api/install/${id}`, { method: 'POST' });
         if (!response.ok) throw new Error('Installation failed');
-        
+
         const plugin = state.plugins.find(p => p.id === id);
         if (plugin) {
             plugin.installed = true;
-            renderPlugins(getFilteredPlugins());
-            updateSelection();
         }
     } catch (error) {
         console.error(`Failed to install plugin: ${error.message}`);
+    } finally {
+        state.installing.delete(id);
+        renderPlugins(getFilteredPlugins());
+        updateSelection();
     }
 }
 
