@@ -60,13 +60,13 @@ fn daemon_pids_path() -> Option<std::path::PathBuf> {
     paths::config_dir().ok().map(|p| p.join(".daemon-pids"))
 }
 
+#[cfg(unix)]
 fn kill_orphan_daemons() {
     let Some(path) = daemon_pids_path() else { return };
     let Ok(content) = std::fs::read_to_string(&path) else { return };
 
     for line in content.lines() {
         let Ok(pid) = line.trim().parse::<i32>() else { continue };
-        #[cfg(unix)]
         unsafe {
             if libc::kill(pid, 0) == 0 {
                 log::info!("Killing orphan daemon process: {}", pid);
@@ -81,6 +81,9 @@ fn kill_orphan_daemons() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+#[cfg(not(unix))]
+fn kill_orphan_daemons() {}
 
 fn save_daemon_pids(pids: &[u32]) {
     let Some(path) = daemon_pids_path() else { return };

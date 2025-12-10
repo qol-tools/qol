@@ -35,7 +35,7 @@ pub fn run_event_loop() {
     let condvar = QUIT_SIGNAL.get().unwrap();
 
     let guard = mutex.lock().unwrap();
-    let _ = condvar.wait_while(guard, |quit| !*quit);
+    let _guard = condvar.wait_while(guard, |quit| !*quit);
 }
 
 fn signal_quit() {
