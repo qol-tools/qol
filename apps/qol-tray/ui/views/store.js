@@ -46,7 +46,7 @@ export function render(containerEl) {
                 <div class="loading">Loading plugins...</div>
             </div>
             <footer class="help">
-                ←↑↓→ navigate • Enter install • Ctrl+R refresh
+                ←↑↓→ navigate • Enter install • ⌘/Ctrl+R refresh
             </footer>
         </div>
     `;
@@ -251,7 +251,7 @@ function updateSelection() {
 }
 
 export function handleKey(e) {
-    if (e.ctrlKey && e.key === 'r') {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'r') {
         e.preventDefault();
         refreshPlugins();
         return;

@@ -1,4 +1,4 @@
-mod platform;
+pub mod platform;
 pub mod icon;
 
 use crate::features::FeatureRegistry;
@@ -14,6 +14,7 @@ impl TrayManager {
     pub fn new(
         feature_registry: Arc<FeatureRegistry>,
         shutdown_tx: broadcast::Sender<()>,
+        shutdown_rx: broadcast::Receiver<()>,
         update_available: bool,
     ) -> Result<Self> {
         let icon = if update_available {
@@ -21,7 +22,13 @@ impl TrayManager {
         } else {
             icon::create_icon()
         };
-        let tray = platform::create_tray(feature_registry, shutdown_tx, icon, update_available)?;
+        let tray = platform::create_tray(
+            feature_registry,
+            shutdown_tx,
+            shutdown_rx,
+            icon,
+            update_available,
+        )?;
         Ok(Self { _tray: tray })
     }
 }

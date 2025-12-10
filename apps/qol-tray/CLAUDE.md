@@ -4,9 +4,14 @@
 
 Never run `cargo build`, `cargo test`, `make run`, `make test`, or similar commands unless explicitly asked. The user will run these manually.
 
-## IMPORTANT: Linux Only (For Now)
+## Cross-Platform Support
 
-Cross-platform support is planned for the future, but **not now**. Do NOT implement macOS or Windows code until explicitly asked. Do NOT add cross-platform CI workflows or abstractions. Focus only on Linux. When the user asks for cross-platform support, then implement it.
+Platform-specific code lives in `src/tray/platform/`:
+- `linux.rs` - GTK event loop in separate thread
+- `macos.rs` - NSApplication.run() on main thread (objc2)
+- `windows.rs` - Condvar-based blocking
+
+Keep `main.rs` free of `#[cfg(target_os)]` conditionals - all platform differences should be handled in the platform modules.
 
 ## Development Commands
 
@@ -39,9 +44,11 @@ make release  # Bump version, build, push, create GitHub release
 - Event format: `feature-id::menu-item-id`
 
 **src/tray/** - System tray UI with platform abstraction
-- Platform-specific implementations in `platform/` subdirectory
-  - `linux.rs`: GTK-based, spawns separate thread for event loop
-  - `mod.rs`: Contains shared Windows/macOS implementation via `#[cfg(not(target_os = "linux"))]`
+- Platform-specific implementations in `platform/` subdirectory:
+  - `linux.rs`: GTK event loop in separate thread, glib polling for menu events
+  - `macos.rs`: NSApplication.run() on main thread, objc2 for Cocoa bindings
+  - `windows.rs`: Condvar-based blocking, menu events via spawned thread
+  - `mod.rs`: Routing to platform modules, shared `spawn_menu_event_handler`
 - `PlatformTray` enum handles platform differences at compile time
 - `icon.rs`: Icon loading from embedded RGBA data, supports notification dot variant
 - Uses `tray-icon` crate (cross-platform)
@@ -149,3 +156,11 @@ Simple string matching for HTML tags needs to handle:
 - Tags inside comments (skip `<!-- <body> -->`)
 
 A proper HTML parser would be overkill - just handle the common cases correctly.
+
+### macOS Tray Icon Requirements
+On macOS, `tray-icon` crate requires:
+1. Tray icon must be created on the main thread
+2. `NSApplication.run()` must be called on the main thread (blocks until quit)
+3. Tokio runtime must run on a background thread
+
+The pattern is: main thread runs Cocoa event loop, background thread runs tokio for async operations (web server, etc.). Use `objc2` crate for Cocoa bindings.

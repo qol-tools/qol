@@ -7,6 +7,10 @@ qol-tray v1.4.3 - Pluggable system tray daemon. Single tray icon opens browser U
 **Cross-platform:** Builds and tests pass on Linux, Windows, macOS. Plugins declare platform support via `platforms` field.
 
 ### Recent Changes (Dec 2025)
+- macOS: Fixed tray icon not appearing (requires NSApplication.run() on main thread)
+- macOS: Added Cmd+R support alongside Ctrl+R for refresh in browser UI
+- Refactor: Platform-specific tray code split into linux.rs, macos.rs, windows.rs
+- Refactor: main.rs no longer contains any platform-specific code
 - Security: Symlink rejection for plugin UI files (TOCTOU mitigation)
 - Security: Symlink rejection for GitHub token file
 - Security: Plugin config JSON size limit (1MB)
@@ -53,7 +57,10 @@ qol-tray v1.4.3 - Pluggable system tray daemon. Single tray icon opens browser U
 - Local releases via `make release`
 
 ### Architecture
-- `src/tray/` - System tray (Linux SNI, Windows/macOS via tray-icon)
+- `src/tray/` - System tray abstraction
+  - `platform/linux.rs` - GTK event loop in separate thread
+  - `platform/macos.rs` - NSApplication.run() on main thread (objc2)
+  - `platform/windows.rs` - Condvar-based blocking
 - `src/plugins/` - Plugin loading, config management
 - `src/features/plugin_store/` - Browser UI server
 - `src/hotkeys/` - Global hotkey registration
