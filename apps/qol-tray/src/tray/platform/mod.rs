@@ -6,12 +6,14 @@ mod macos;
 mod windows;
 
 use crate::features::FeatureRegistry;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use crate::menu::router::EventRouter;
 use crate::plugins::PluginManager;
 use crate::tray::TrayManager;
 use anyhow::Result;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use tray_icon::menu::MenuEvent;
 use tray_icon::Icon;
 
@@ -81,8 +83,7 @@ where
     Ok(())
 }
 
-/// Shared menu event handler. Spawns a thread that listens for menu events
-/// and calls `on_quit` when the quit action is triggered.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn spawn_menu_event_handler<F>(
     shutdown_tx: broadcast::Sender<()>,
     router: EventRouter,

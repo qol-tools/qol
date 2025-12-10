@@ -9,9 +9,9 @@ use axum::{
 
 pub fn router(plugins_dir: PathBuf) -> Router {
     Router::new()
-        .route("/:plugin_id", get(serve_plugin_index))
-        .route("/:plugin_id/", get(serve_plugin_index))
-        .route("/:plugin_id/*path", get(serve_plugin_file))
+        .route("/{plugin_id}", get(serve_plugin_index))
+        .route("/{plugin_id}/", get(serve_plugin_index))
+        .route("/{plugin_id}/{*path}", get(serve_plugin_file))
         .with_state(plugins_dir)
 }
 

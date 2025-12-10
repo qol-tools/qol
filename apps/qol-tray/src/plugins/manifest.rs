@@ -36,10 +36,14 @@ pub struct PluginInfo {
 
 impl PluginInfo {
     pub fn supports_current_platform(&self) -> bool {
-        match &self.platforms {
-            None => true,
-            Some(platforms) => platforms.iter().any(|p| p == std::env::consts::OS),
-        }
+        supports_current_platform(&self.platforms)
+    }
+}
+
+pub fn supports_current_platform(platforms: &Option<Vec<String>>) -> bool {
+    match platforms {
+        None => true,
+        Some(platforms) => platforms.iter().any(|p| p == std::env::consts::OS),
     }
 }
 

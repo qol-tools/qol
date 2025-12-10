@@ -16,7 +16,7 @@ use axum::http::HeaderValue;
 use anyhow::Result;
 use rust_embed::Embed;
 
-use crate::plugins::{PluginLoader, PluginManager};
+use crate::plugins::{PluginConfigManager, PluginLoader, PluginManager};
 use crate::hotkeys::trigger_reload;
 
 #[derive(Clone)]
@@ -86,7 +86,7 @@ struct TokenStatus {
 }
 
 
-async fn serve_embedded(axum::extract::Path(path): axum::extract::Path<String>) -> impl IntoResponse {
+async fn serve_embedded(Path(path): Path<String>) -> impl IntoResponse {
     serve_embedded_file(&path)
 }
 
@@ -130,12 +130,12 @@ pub async fn start_ui_server(plugin_manager: Arc<Mutex<PluginManager>>) -> Resul
     let api = Router::new()
         .route("/plugins", get(list_plugins))
         .route("/installed", get(list_installed))
-        .route("/cover/:id", get(serve_cover))
-        .route("/install/:id", post(install_plugin))
-        .route("/update/:id", post(update_plugin))
-        .route("/uninstall/:id", post(uninstall_plugin))
-        .route("/plugins/:id/config", get(get_plugin_config))
-        .route("/plugins/:id/config", axum::routing::put(set_plugin_config))
+        .route("/cover/{id}", get(serve_cover))
+        .route("/install/{id}", post(install_plugin))
+        .route("/update/{id}", post(update_plugin))
+        .route("/uninstall/{id}", post(uninstall_plugin))
+        .route("/plugins/{id}/config", get(get_plugin_config))
+        .route("/plugins/{id}/config", axum::routing::put(set_plugin_config))
         .route("/github-token", get(get_token_status))
         .route("/github-token", post(set_github_token))
         .route("/github-token", axum::routing::delete(delete_github_token))
@@ -149,13 +149,13 @@ pub async fn start_ui_server(plugin_manager: Arc<Mutex<PluginManager>>) -> Resul
         .route("/dev/reload", post(reload_plugins))
         .route("/dev/links", get(list_linked_plugins))
         .route("/dev/links", post(create_link))
-        .route("/dev/links/:id", axum::routing::delete(delete_link))
+        .route("/dev/links/{id}", axum::routing::delete(delete_link))
         .route("/dev/discover", get(discover_plugins));
 
     let api = api.with_state(app_state);
 
     let no_cache = SetResponseHeaderLayer::overriding(
-        axum::http::header::CACHE_CONTROL,
+        header::CACHE_CONTROL,
         HeaderValue::from_static("no-cache, no-store, must-revalidate"),
     );
 
@@ -163,7 +163,7 @@ pub async fn start_ui_server(plugin_manager: Arc<Mutex<PluginManager>>) -> Resul
         .nest("/api", api)
         .nest("/plugins", plugin_ui::router(plugins_dir))
         .route("/", get(serve_embedded_index))
-        .route("/*path", get(serve_embedded))
+        .route("/{*path}", get(serve_embedded))
         .layer(no_cache);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:42700").await?;
@@ -240,7 +240,10 @@ async fn list_plugins(
     })
 }
 
-async fn install_plugin(Path(id): Path<String>) -> Result<Json<PluginInfo>, (StatusCode, String)> {
+async fn install_plugin(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<Json<PluginInfo>, (StatusCode, String)> {
     use super::installer::PluginInstaller;
 
     if !is_safe_path_component(&id) {
@@ -262,6 +265,8 @@ async fn install_plugin(Path(id): Path<String>) -> Result<Json<PluginInfo>, (Sta
         (StatusCode::INTERNAL_SERVER_ERROR, "Installation failed".to_string())
     })?;
 
+    reload_manager(&state.plugin_manager);
+
     log::info!("Plugin {} installed successfully", id);
     let version = read_plugin_version(&plugins_dir.join(&id)).unwrap_or_else(|_| "unknown".into());
     Ok(Json(PluginInfo {
@@ -273,7 +278,10 @@ async fn install_plugin(Path(id): Path<String>) -> Result<Json<PluginInfo>, (Sta
     }))
 }
 
-async fn update_plugin(Path(id): Path<String>) -> Json<UninstallResult> {
+async fn update_plugin(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+) -> Json<UninstallResult> {
     use super::installer::PluginInstaller;
 
     if !is_safe_path_component(&id) {
@@ -285,18 +293,7 @@ async fn update_plugin(Path(id): Path<String>) -> Json<UninstallResult> {
 
     log::info!("Update requested for plugin: {}", id);
 
-    let plugins_dir = match PluginLoader::default_plugin_dir() {
-        Ok(dir) => dir,
-        Err(e) => {
-            log::error!("Failed to get plugins directory: {}", e);
-            return Json(UninstallResult {
-                success: false,
-                message: "Failed to access plugins directory".to_string(),
-            });
-        }
-    };
-
-    let installer = PluginInstaller::new(plugins_dir.clone());
+    let installer = PluginInstaller::new(state.plugins_dir.clone());
 
     if let Err(e) = installer.update(&id).await {
         log::error!("Failed to update plugin {}: {}", id, e);
@@ -306,9 +303,11 @@ async fn update_plugin(Path(id): Path<String>) -> Json<UninstallResult> {
         });
     }
 
-    if let Ok(version) = read_plugin_version(&plugins_dir.join(&id)) {
+    if let Ok(version) = read_plugin_version(&state.plugins_dir.join(&id)) {
         super::github::update_cached_version(&id, &version);
     }
+
+    reload_manager(&state.plugin_manager);
 
     log::info!("Plugin {} updated successfully", id);
     Json(UninstallResult {
@@ -324,7 +323,23 @@ fn read_plugin_version(plugin_dir: &std::path::Path) -> Result<String, ()> {
     Ok(manifest.plugin.version)
 }
 
-async fn uninstall_plugin(Path(id): Path<String>) -> Json<UninstallResult> {
+fn reload_manager(plugin_manager: &Arc<Mutex<PluginManager>>) {
+    let mut manager = match plugin_manager.lock() {
+        Ok(m) => m,
+        Err(e) => {
+            log::error!("Plugin manager mutex poisoned: {}", e);
+            return;
+        }
+    };
+    if let Err(e) = manager.reload_plugins() {
+        log::error!("Failed to reload plugins: {}", e);
+    }
+}
+
+async fn uninstall_plugin(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+) -> Json<UninstallResult> {
     use super::installer::PluginInstaller;
 
     if !is_safe_path_component(&id) {
@@ -336,18 +351,7 @@ async fn uninstall_plugin(Path(id): Path<String>) -> Json<UninstallResult> {
 
     log::info!("Uninstall requested for plugin: {}", id);
 
-    let plugins_dir = match PluginLoader::default_plugin_dir() {
-        Ok(dir) => dir,
-        Err(e) => {
-            log::error!("Failed to get plugins directory: {}", e);
-            return Json(UninstallResult {
-                success: false,
-                message: "Failed to access plugins directory".to_string(),
-            });
-        }
-    };
-
-    let installer = PluginInstaller::new(plugins_dir);
+    let installer = PluginInstaller::new(state.plugins_dir.clone());
 
     if let Err(e) = installer.uninstall(&id).await {
         log::error!("Failed to uninstall plugin {}: {}", id, e);
@@ -356,6 +360,8 @@ async fn uninstall_plugin(Path(id): Path<String>) -> Json<UninstallResult> {
             message: "Uninstall failed".to_string(),
         });
     }
+
+    reload_manager(&state.plugin_manager);
 
     log::info!("Plugin {} uninstalled successfully", id);
     Json(UninstallResult {
@@ -487,42 +493,30 @@ async fn serve_cover(
     (StatusCode::OK, [(header::CONTENT_TYPE, "image/png")], data).into_response()
 }
 
+const MAX_CONFIG_SIZE: usize = 1024 * 1024;
+
 async fn get_plugin_config(Path(plugin_id): Path<String>) -> impl IntoResponse {
     if !is_safe_path_component(&plugin_id) {
         return (StatusCode::BAD_REQUEST, "Invalid plugin ID").into_response();
     }
 
-    let manager = match crate::plugins::PluginConfigManager::new() {
-        Ok(m) => m,
-        Err(e) => {
-            log::error!("Failed to create config manager: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to access config").into_response();
-        }
-    };
-
-    let config = match manager.get_config(&plugin_id) {
+    let config = match PluginConfigManager::new().and_then(|m| m.get_config(&plugin_id)) {
         Ok(Some(config)) => config,
-        Ok(None) => {
-            return (StatusCode::NOT_FOUND, "Config not found").into_response();
-        }
+        Ok(None) => return (StatusCode::NOT_FOUND, "Config not found").into_response(),
         Err(e) => {
             log::error!("Failed to read config: {}", e);
             return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read config").into_response();
         }
     };
 
-    let data = match serde_json::to_vec(&config) {
-        Ok(d) => d,
+    match serde_json::to_vec(&config) {
+        Ok(data) => (StatusCode::OK, [(header::CONTENT_TYPE, "application/json")], data).into_response(),
         Err(e) => {
             log::error!("Failed to serialize config: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to serialize config").into_response();
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to serialize config").into_response()
         }
-    };
-
-    (StatusCode::OK, [(header::CONTENT_TYPE, "application/json")], data).into_response()
+    }
 }
-
-const MAX_CONFIG_SIZE: usize = 1024 * 1024;
 
 async fn set_plugin_config(
     Path(plugin_id): Path<String>,
@@ -536,7 +530,7 @@ async fn set_plugin_config(
         return (StatusCode::PAYLOAD_TOO_LARGE, "Config too large").into_response();
     }
 
-    let config = match serde_json::from_slice::<serde_json::Value>(&body) {
+    let config: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(c) => c,
         Err(e) => {
             log::error!("Invalid JSON in config: {}", e);
@@ -544,21 +538,16 @@ async fn set_plugin_config(
         }
     };
 
-    let manager = match crate::plugins::PluginConfigManager::new() {
-        Ok(m) => m,
-        Err(e) => {
-            log::error!("Failed to create config manager: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to access config").into_response();
+    match PluginConfigManager::new().and_then(|m| m.set_config(&plugin_id, config)) {
+        Ok(()) => {
+            log::info!("Config saved for plugin: {}", plugin_id);
+            (StatusCode::OK, "Config saved").into_response()
         }
-    };
-
-    if let Err(e) = manager.set_config(&plugin_id, config) {
-        log::error!("Failed to write config: {}", e);
-        return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to write config").into_response();
+        Err(e) => {
+            log::error!("Failed to save config: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save config").into_response()
+        }
     }
-
-    log::info!("Config saved for plugin: {}", plugin_id);
-    (StatusCode::OK, "Config saved").into_response()
 }
 
 async fn get_token_status() -> Json<TokenStatus> {
