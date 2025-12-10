@@ -331,7 +331,7 @@ header p { color: var(--text-muted); font-size: 1.1rem; }
 .installing-badge {
     padding: 0.5rem 1rem;
     font-size: 0.9rem;
-    color: var(--text-dim);
+    color: var(--text-muted);
     background: rgba(255, 255, 255, 0.05);
     border-radius: var(--radius-md);
     text-align: center;
