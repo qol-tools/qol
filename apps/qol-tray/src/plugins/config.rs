@@ -2,7 +2,7 @@ use crate::paths;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginConfigs {
@@ -89,7 +89,7 @@ fn write_plugin_config(plugin_id: &str, config: &serde_json::Value) -> Result<()
     Ok(())
 }
 
-fn ensure_parent_dir(path: &std::path::Path) -> Result<()> {
+fn ensure_parent_dir(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }

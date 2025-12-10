@@ -18,11 +18,18 @@ use rust_embed::Embed;
 
 use crate::plugins::{PluginConfigManager, PluginLoader, PluginManager};
 use crate::hotkeys::trigger_reload;
+use tokio::sync::broadcast;
 
 #[derive(Clone)]
 struct AppState {
     plugins_dir: PathBuf,
     plugin_manager: Arc<Mutex<PluginManager>>,
+    events_tx: broadcast::Sender<PluginEvent>,
+}
+
+#[derive(Clone, Debug)]
+enum PluginEvent {
+    Changed,
 }
 
 #[derive(Embed)]
@@ -121,15 +128,18 @@ fn serve_embedded_file(path: &str) -> impl IntoResponse {
 
 pub async fn start_ui_server(plugin_manager: Arc<Mutex<PluginManager>>) -> Result<()> {
     let plugins_dir = PluginLoader::default_plugin_dir()?;
+    let (events_tx, _) = broadcast::channel::<PluginEvent>(16);
 
     let app_state = AppState {
         plugins_dir: plugins_dir.clone(),
         plugin_manager,
+        events_tx,
     };
 
     let api = Router::new()
         .route("/plugins", get(list_plugins))
         .route("/installed", get(list_installed))
+        .route("/events", get(sse_handler))
         .route("/cover/{id}", get(serve_cover))
         .route("/install/{id}", post(install_plugin))
         .route("/update/{id}", post(update_plugin))
@@ -265,7 +275,7 @@ async fn install_plugin(
         (StatusCode::INTERNAL_SERVER_ERROR, "Installation failed".to_string())
     })?;
 
-    reload_manager(&state.plugin_manager);
+    reload_manager_and_notify(&state);
 
     log::info!("Plugin {} installed successfully", id);
     let version = read_plugin_version(&plugins_dir.join(&id)).unwrap_or_else(|_| "unknown".into());
@@ -307,7 +317,7 @@ async fn update_plugin(
         super::github::update_cached_version(&id, &version);
     }
 
-    reload_manager(&state.plugin_manager);
+    reload_manager_and_notify(&state);
 
     log::info!("Plugin {} updated successfully", id);
     Json(UninstallResult {
@@ -323,8 +333,8 @@ fn read_plugin_version(plugin_dir: &std::path::Path) -> Result<String, ()> {
     Ok(manifest.plugin.version)
 }
 
-fn reload_manager(plugin_manager: &Arc<Mutex<PluginManager>>) {
-    let mut manager = match plugin_manager.lock() {
+fn reload_manager_and_notify(state: &AppState) {
+    let mut manager = match state.plugin_manager.lock() {
         Ok(m) => m,
         Err(e) => {
             log::error!("Plugin manager mutex poisoned: {}", e);
@@ -334,6 +344,27 @@ fn reload_manager(plugin_manager: &Arc<Mutex<PluginManager>>) {
     if let Err(e) = manager.reload_plugins() {
         log::error!("Failed to reload plugins: {}", e);
     }
+    let _ = state.events_tx.send(PluginEvent::Changed);
+}
+
+async fn sse_handler(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    use tokio_stream::wrappers::BroadcastStream;
+    use tokio_stream::StreamExt;
+
+    let rx = state.events_tx.subscribe();
+    let stream = BroadcastStream::new(rx).filter_map(|result| {
+        result.ok().map(|event| {
+            let data = match event {
+                PluginEvent::Changed => "changed",
+            };
+            Ok::<_, std::convert::Infallible>(Event::default().data(data))
+        })
+    });
+
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 async fn uninstall_plugin(
@@ -361,7 +392,7 @@ async fn uninstall_plugin(
         });
     }
 
-    reload_manager(&state.plugin_manager);
+    reload_manager_and_notify(&state);
 
     log::info!("Plugin {} uninstalled successfully", id);
     Json(UninstallResult {

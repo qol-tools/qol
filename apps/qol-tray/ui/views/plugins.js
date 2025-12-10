@@ -1,4 +1,5 @@
 import { updateSelection as updateSel, navigate as nav } from '../utils.js';
+import { subscribe } from '../events.js';
 
 const PLACEHOLDER_SVG = 'data:image/svg+xml,' + encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">' +
@@ -20,6 +21,7 @@ const state = {
 };
 
 let container = null;
+let unsubscribe = null;
 
 export function render(containerEl) {
     container = containerEl;
@@ -34,8 +36,11 @@ export function render(containerEl) {
             </footer>
         </div>
     `;
-    
+
     loadPlugins();
+    unsubscribe = subscribe((event) => {
+        if (event === 'changed') refreshPlugins();
+    });
 }
 
 async function loadPlugins() {
@@ -385,5 +390,8 @@ export function onFocus() {
     updateSelection();
 }
 
-export function onBlur() {}
+export function onBlur() {
+    unsubscribe?.();
+    unsubscribe = null;
+}
 

@@ -1,4 +1,5 @@
 import { updateSelection as updateSel, navigate as nav } from '../utils.js';
+import { subscribe } from '../events.js';
 
 export const id = 'store';
 
@@ -15,6 +16,7 @@ const state = {
 
 let container = null;
 let searchInput = null;
+let unsubscribe = null;
 
 function formatCacheAge(secs) {
     if (secs === null || secs === undefined) return '';
@@ -66,6 +68,9 @@ export function render(containerEl) {
     
     checkTokenStatus();
     loadPlugins();
+    unsubscribe = subscribe((event) => {
+        if (event === 'changed') loadPlugins();
+    });
 }
 
 async function checkTokenStatus() {
@@ -337,4 +342,6 @@ export function onFocus() {
 
 export function onBlur() {
     searchInput?.blur();
+    unsubscribe?.();
+    unsubscribe = null;
 }
