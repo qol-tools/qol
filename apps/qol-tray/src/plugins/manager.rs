@@ -34,7 +34,6 @@ impl PluginManager {
         Ok(())
     }
 
-    #[cfg(feature = "dev")]
     pub fn reload_plugins(&mut self) -> Result<()> {
         log::info!("Reloading all plugins...");
         for plugin in self.plugins.values_mut() {

@@ -286,10 +286,7 @@ pub struct PluginMetadata {
 
 impl PluginMetadata {
     pub fn supports_current_platform(&self) -> bool {
-        match &self.platforms {
-            None => true,
-            Some(platforms) => platforms.iter().any(|p| p == std::env::consts::OS),
-        }
+        crate::plugins::manifest::supports_current_platform(&self.platforms)
     }
 }
 
