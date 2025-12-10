@@ -1,5 +1,6 @@
 import { updateSelection as updateSel, navigate as nav } from '../utils.js';
 import { subscribe } from '../events.js';
+import * as installing from '../installing.js';
 
 const PLACEHOLDER_SVG = 'data:image/svg+xml,' + encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">' +
@@ -22,6 +23,8 @@ const state = {
 
 let container = null;
 let unsubscribe = null;
+let unsubscribeInstalling = null;
+let clickHandler = null;
 
 export function render(containerEl) {
     container = containerEl;
@@ -41,14 +44,16 @@ export function render(containerEl) {
     unsubscribe = subscribe((event) => {
         if (event === 'changed') refreshPlugins();
     });
+    unsubscribeInstalling = installing.subscribe(() => renderGrid());
 }
 
 async function loadPlugins() {
     const gridEl = document.getElementById('plugins-grid');
     if (!gridEl) return;
-    
-    gridEl.addEventListener('click', handleClick);
-    
+
+    clickHandler = handleClick;
+    container.addEventListener('click', clickHandler);
+
     try {
         const response = await fetch('/api/installed');
         if (!response.ok) throw new Error('Failed to fetch plugins');
@@ -89,18 +94,29 @@ function saveSelection() {
 function renderGrid() {
     const gridEl = document.getElementById('plugins-grid');
     if (!gridEl) return;
-    
-    if (state.plugins.length === 0) {
+
+    const installingPlugins = installing.getAll();
+    const installedIds = new Set(state.plugins.map(p => p.id));
+    const ghostPlugins = installingPlugins.filter(p => !installedIds.has(p.id));
+
+    if (state.plugins.length === 0 && ghostPlugins.length === 0) {
         gridEl.innerHTML = '<div class="empty">No plugins installed. Press Tab to open the store.</div>';
         return;
     }
-    
-    gridEl.innerHTML = state.plugins.map((plugin, index) => {
+
+    const ghostCards = ghostPlugins.map(plugin => `
+        <div class="plugin-card ghost">
+            <span class="ghost-spinner">↻</span>
+            <div class="plugin-name">${plugin.name}</div>
+        </div>
+    `).join('');
+
+    const pluginCards = state.plugins.map((plugin, index) => {
         const coverUrl = plugin.has_cover ? `/api/cover/${plugin.id}` : PLACEHOLDER_SVG;
         const noUiClass = plugin.has_ui ? '' : 'no-ui';
         const updateClass = plugin.update_available ? 'has-update' : '';
         const isUpdating = state.updating.has(plugin.id);
-        
+
         return `
             <div class="plugin-card ${noUiClass} ${updateClass}" data-index="${index}" data-plugin-id="${plugin.id}">
                 <img src="${coverUrl}" alt="${plugin.name}" onerror="this.src='${PLACEHOLDER_SVG}'">
@@ -118,6 +134,8 @@ function renderGrid() {
             </div>
         `;
     }).join('');
+
+    gridEl.innerHTML = ghostCards + pluginCards;
 }
 
 function updateSelection() {
@@ -393,5 +411,11 @@ export function onFocus() {
 export function onBlur() {
     unsubscribe?.();
     unsubscribe = null;
+    unsubscribeInstalling?.();
+    unsubscribeInstalling = null;
+    if (clickHandler) {
+        container?.removeEventListener('click', clickHandler);
+        clickHandler = null;
+    }
 }
 

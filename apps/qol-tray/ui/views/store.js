@@ -1,5 +1,6 @@
 import { updateSelection as updateSel, navigate as nav } from '../utils.js';
 import { subscribe } from '../events.js';
+import * as installing from '../installing.js';
 
 export const id = 'store';
 
@@ -10,8 +11,7 @@ const state = {
     hasToken: false,
     showTokenInput: false,
     cacheAgeSecs: null,
-    loading: false,
-    installing: new Set()
+    loading: false
 };
 
 let container = null;
@@ -212,7 +212,7 @@ function renderPlugins(plugins) {
     }
 
     listEl.innerHTML = plugins.map((plugin, index) => {
-        const isInstalling = state.installing.has(plugin.id);
+        const isInstalling = installing.has(plugin.id);
         return `
             <div class="plugin-card ${plugin.installed ? 'installed' : ''} ${isInstalling ? 'installing' : ''}" data-index="${index}" data-plugin-id="${plugin.id}" data-installed="${plugin.installed}">
                 <h3>${plugin.name}</h3>
@@ -222,7 +222,7 @@ function renderPlugins(plugins) {
                     ${plugin.installed ? `
                         <span class="installed-badge">Installed</span>
                     ` : isInstalling ? `
-                        <span class="installing-badge">Installing...</span>
+                        <button class="refresh-btn spinning" disabled></button>
                     ` : `
                         <button class="install">Install</button>
                     `}
@@ -309,9 +309,10 @@ function getFilteredPlugins() {
 }
 
 async function installPlugin(id) {
-    if (state.installing.has(id)) return;
+    if (installing.has(id)) return;
 
-    state.installing.add(id);
+    const plugin = state.plugins.find(p => p.id === id);
+    installing.add(id, plugin?.name || id);
     renderPlugins(getFilteredPlugins());
     updateSelection();
 
@@ -319,14 +320,13 @@ async function installPlugin(id) {
         const response = await fetch(`/api/install/${id}`, { method: 'POST' });
         if (!response.ok) throw new Error('Installation failed');
 
-        const plugin = state.plugins.find(p => p.id === id);
         if (plugin) {
             plugin.installed = true;
         }
     } catch (error) {
         console.error(`Failed to install plugin: ${error.message}`);
     } finally {
-        state.installing.delete(id);
+        installing.remove(id);
         renderPlugins(getFilteredPlugins());
         updateSelection();
     }
