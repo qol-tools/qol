@@ -1,9 +1,24 @@
 use crate::features::FeatureRegistry;
 use anyhow::Result;
+use gtk::{self, glib};
+use once_cell::sync::OnceCell;
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tray_icon::{TrayIconBuilder, Icon};
-use gtk::{self, glib};
+use tray_icon::{Icon, TrayIconBuilder};
+
+static SHUTDOWN_RX: OnceCell<std::sync::Mutex<Option<broadcast::Receiver<()>>>> = OnceCell::new();
+
+pub fn store_shutdown_rx(rx: broadcast::Receiver<()>) {
+    let _ = SHUTDOWN_RX.set(std::sync::Mutex::new(Some(rx)));
+}
+
+pub fn run_event_loop() {
+    if let Some(mutex) = SHUTDOWN_RX.get() {
+        if let Some(mut rx) = mutex.lock().unwrap().take() {
+            let _ = rx.blocking_recv();
+        }
+    }
+}
 
 pub fn create_tray(
     feature_registry: Arc<FeatureRegistry>,
