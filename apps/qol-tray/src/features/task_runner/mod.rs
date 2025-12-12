@@ -241,3 +241,241 @@ async fn set_config(
     log::info!("[task-runner] Config saved");
     Ok(StatusCode::OK)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interpolate_single_param() {
+        let cases = [
+            ("echo {{msg}}", &[("msg", "hello")], "echo hello"),
+            ("{{x}}", &[("x", "value")], "value"),
+            ("prefix {{a}} suffix", &[("a", "mid")], "prefix mid suffix"),
+            ("{{foo}}bar", &[("foo", "baz")], "bazbar"),
+            ("bar{{foo}}", &[("foo", "baz")], "barbaz"),
+        ];
+
+        for (template, params, expected) in cases {
+            let map: HashMap<String, String> = params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            assert_eq!(interpolate(template, &map), expected, "template: {:?}", template);
+        }
+    }
+
+    #[test]
+    fn interpolate_multiple_params() {
+        let cases: &[(&str, &[(&str, &str)], &str)] = &[
+            ("{{a}} {{b}}", &[("a", "x"), ("b", "y")], "x y"),
+            ("{{x}}{{y}}{{z}}", &[("x", "1"), ("y", "2"), ("z", "3")], "123"),
+            ("git checkout {{branch}} && cd {{dir}}", &[("branch", "main"), ("dir", "/a/b")], "git checkout main && cd /a/b"),
+            ("{{a}}-{{b}}-{{a}}", &[("a", "X"), ("b", "Y")], "X-Y-X"),
+        ];
+
+        for (template, params, expected) in cases {
+            let map: HashMap<String, String> = params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            assert_eq!(interpolate(template, &map), *expected, "template: {:?}", template);
+        }
+    }
+
+    #[test]
+    fn interpolate_missing_params() {
+        let cases: &[(&str, &[(&str, &str)], &str)] = &[
+            ("{{missing}}", &[], ""),
+            ("hello {{name}}", &[], "hello "),
+            ("{{a}} {{b}}", &[("a", "x")], "x "),
+            ("{{a}}{{missing}}{{b}}", &[("a", "1"), ("b", "2")], "12"),
+        ];
+
+        for (template, params, expected) in cases {
+            let map: HashMap<String, String> = params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            assert_eq!(interpolate(template, &map), *expected, "template: {:?}", template);
+        }
+    }
+
+    #[test]
+    fn interpolate_no_placeholders() {
+        let cases = [
+            ("no placeholders here", "no placeholders here"),
+            ("", ""),
+            ("echo hello world", "echo hello world"),
+            ("{ not a placeholder }", "{ not a placeholder }"),
+            ("{single}", "{single}"),
+            ("{{}", "{{}"),
+            ("}}", "}}"),
+        ];
+
+        let empty: HashMap<String, String> = HashMap::new();
+        for (template, expected) in cases {
+            assert_eq!(interpolate(template, &empty), expected, "template: {:?}", template);
+        }
+    }
+
+    #[test]
+    fn interpolate_special_values() {
+        let cases = [
+            ("{{path}}", &[("path", "/a/b/c")], "/a/b/c"),
+            ("{{url}}", &[("url", "https://example.com?q=1&x=2")], "https://example.com?q=1&x=2"),
+            ("{{json}}", &[("json", r#"{"key": "value"}"#)], r#"{"key": "value"}"#),
+            ("{{empty}}", &[("empty", "")], ""),
+            ("{{spaces}}", &[("spaces", "  a b c  ")], "  a b c  "),
+            ("{{unicode}}", &[("unicode", "日本語")], "日本語"),
+            ("{{emoji}}", &[("emoji", "🚀")], "🚀"),
+            ("{{newline}}", &[("newline", "a\nb\nc")], "a\nb\nc"),
+            ("{{tab}}", &[("tab", "a\tb")], "a\tb"),
+        ];
+
+        for (template, params, expected) in cases {
+            let map: HashMap<String, String> = params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            assert_eq!(interpolate(template, &map), expected, "template: {:?}", template);
+        }
+    }
+
+    #[test]
+    fn interpolate_invalid_syntax_unchanged() {
+        let cases = [
+            "{{}}",
+            "{{ spaces }}",
+            "{{with-dash}}",
+            "{{with.dot}}",
+            "{{with/slash}}",
+            "{single}",
+            "{ {double} }",
+            "{{nested{{inner}}}}",
+            "{{123starts_with_num}}",
+        ];
+
+        let params: HashMap<String, String> = [
+            ("spaces", "x"),
+            ("with-dash", "x"),
+            ("with.dot", "x"),
+        ].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+
+        for template in cases {
+            let result = interpolate(template, &params);
+            assert!(
+                !result.contains("x") || template.contains("x"),
+                "invalid placeholder should not be replaced: {:?} -> {:?}",
+                template,
+                result
+            );
+        }
+    }
+
+    #[test]
+    fn interpolate_valid_identifiers() {
+        let cases = [
+            ("{{a}}", "a"),
+            ("{{A}}", "A"),
+            ("{{abc}}", "abc"),
+            ("{{ABC}}", "ABC"),
+            ("{{a1}}", "a1"),
+            ("{{var_name}}", "var_name"),
+            ("{{CamelCase}}", "CamelCase"),
+            ("{{_underscore}}", "_underscore"),
+            ("{{a123b456}}", "a123b456"),
+        ];
+
+        for (template, key) in cases {
+            let map: HashMap<String, String> = [(key.to_string(), "REPLACED".to_string())].into_iter().collect();
+            assert_eq!(interpolate(template, &map), "REPLACED", "key {:?} should be valid", key);
+        }
+    }
+
+    #[test]
+    fn config_default_timeout() {
+        assert_eq!(default_timeout(), 60);
+    }
+
+    #[test]
+    fn config_deserialize_with_defaults() {
+        let json = r#"{
+            "name": "Test",
+            "command": "echo hello"
+        }"#;
+
+        let config: ActionConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.name, "Test");
+        assert_eq!(config.command, "echo hello");
+        assert_eq!(config.description, "");
+        assert_eq!(config.timeout, 60);
+        assert_eq!(config.cwd, None);
+    }
+
+    #[test]
+    fn config_deserialize_full() {
+        let json = r#"{
+            "name": "Full Action",
+            "description": "A full config",
+            "command": "ls -la",
+            "timeout": 120,
+            "cwd": "/tmp"
+        }"#;
+
+        let config: ActionConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.name, "Full Action");
+        assert_eq!(config.description, "A full config");
+        assert_eq!(config.command, "ls -la");
+        assert_eq!(config.timeout, 120);
+        assert_eq!(config.cwd, Some("/tmp".to_string()));
+    }
+
+    #[test]
+    fn config_serialize_roundtrip() {
+        let original = ActionConfig {
+            name: "Test".to_string(),
+            description: "Desc".to_string(),
+            command: "echo {{msg}}".to_string(),
+            timeout: 30,
+            cwd: Some("/a/b".to_string()),
+        };
+
+        let json = serde_json::to_string(&original).unwrap();
+        let parsed: ActionConfig = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.name, original.name);
+        assert_eq!(parsed.description, original.description);
+        assert_eq!(parsed.command, original.command);
+        assert_eq!(parsed.timeout, original.timeout);
+        assert_eq!(parsed.cwd, original.cwd);
+    }
+
+    #[test]
+    fn task_runner_config_empty() {
+        let config = TaskRunnerConfig::default();
+        assert!(config.actions.is_empty());
+    }
+
+    #[test]
+    fn task_runner_config_deserialize() {
+        let json = r#"{
+            "actions": {
+                "my-action": {
+                    "name": "My Action",
+                    "command": "echo test"
+                }
+            }
+        }"#;
+
+        let config: TaskRunnerConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.actions.len(), 1);
+        assert!(config.actions.contains_key("my-action"));
+        assert_eq!(config.actions["my-action"].name, "My Action");
+    }
+
+    #[test]
+    fn task_runner_config_multiple_actions() {
+        let json = r#"{
+            "actions": {
+                "action1": { "name": "First", "command": "cmd1" },
+                "action2": { "name": "Second", "command": "cmd2", "timeout": 10 },
+                "action3": { "name": "Third", "command": "cmd3", "cwd": "/x" }
+            }
+        }"#;
+
+        let config: TaskRunnerConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.actions.len(), 3);
+        assert_eq!(config.actions["action1"].timeout, 60);
+        assert_eq!(config.actions["action2"].timeout, 10);
+        assert_eq!(config.actions["action3"].cwd, Some("/x".to_string()));
+    }
+}
