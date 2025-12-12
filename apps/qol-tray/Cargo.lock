@@ -1618,6 +1618,7 @@ dependencies = [
  "objc2",
  "once_cell",
  "open",
+ "regex",
  "reqwest",
  "rust-embed",
  "serde",

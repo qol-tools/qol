@@ -169,8 +169,11 @@ pub async fn start_ui_server(plugin_manager: Arc<Mutex<PluginManager>>) -> Resul
         HeaderValue::from_static("no-cache, no-store, must-revalidate"),
     );
 
+    let task_runner = super::super::task_runner::router();
+
     let app = Router::new()
         .nest("/api", api)
+        .nest("/api/task-runner", task_runner)
         .nest("/plugins", plugin_ui::router(plugins_dir))
         .route("/", get(serve_embedded_index))
         .route("/{*path}", get(serve_embedded))
