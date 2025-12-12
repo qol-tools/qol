@@ -226,6 +226,7 @@ header p { color: var(--text-muted); font-size: 1.1rem; }
     grid-template-columns: repeat(4, 1fr);
     gap: 1.5rem;
     flex: 1;
+    align-content: start;
 }
 
 .plugin-card {
