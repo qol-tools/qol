@@ -272,6 +272,7 @@ async function reloadPlugins() {
         const res = await fetch('/api/dev/reload', { method: 'POST' });
         if (res.ok) {
             state.lastReload = new Date().toLocaleTimeString();
+            await loadPlugins();
         } else {
             state.error = await res.text() || 'Reload failed';
         }
