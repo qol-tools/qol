@@ -1,0 +1,16 @@
+[plugin]
+name = "Task Runner"
+description = "Generic HTTP API for browser extensions to execute local tasks (git checkout, open apps, run scripts)"
+version = "1.0.0"
+author = "kaho"
+platforms = ["macos", "linux"]
+
+[menu]
+label = "Task Runner"
+items = [
+    { type = "action", id = "status", label = "Status", action = "run" }
+]
+
+[daemon]
+enabled = true
+command = "daemon.sh"
