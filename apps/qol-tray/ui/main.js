@@ -2,15 +2,17 @@ import { render as renderSidebar } from './components/sidebar.js';
 import * as pluginsView from './views/plugins.js';
 import * as storeView from './views/store.js';
 import * as hotkeysView from './views/hotkeys.js';
+import * as taskRunnerView from './features/task-runner/view.js';
 import * as devView from './views/dev.js';
 
 const BASE_VIEWS = {
     plugins: pluginsView,
     store: storeView,
-    hotkeys: hotkeysView
+    hotkeys: hotkeysView,
+    'task-runner': taskRunnerView
 };
 
-const BASE_VIEW_ORDER = ['plugins', 'store', 'hotkeys'];
+const BASE_VIEW_ORDER = ['plugins', 'store', 'hotkeys', 'task-runner'];
 
 let VIEWS = { ...BASE_VIEWS };
 let VIEW_ORDER = [...BASE_VIEW_ORDER];

@@ -2,6 +2,7 @@ const LABELS = {
     plugins: 'Plugins',
     store: 'Store',
     hotkeys: 'Hotkeys',
+    'task-runner': 'Task Runner',
     dev: 'Developer'
 };
 

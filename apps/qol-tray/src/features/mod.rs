@@ -1,4 +1,5 @@
 pub mod plugin_store;
+pub mod task_runner;
 
 use crate::plugins::MenuItem as PluginMenuItem;
 use anyhow::Result;
