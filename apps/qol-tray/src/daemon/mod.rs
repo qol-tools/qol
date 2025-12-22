@@ -18,6 +18,14 @@ pub struct DiscoveredPluginInfo {
     pub path: String,
 }
 
+#[cfg(feature = "dev")]
+#[derive(Debug, Clone, Serialize)]
+pub struct BuildResultInfo {
+    pub plugin_id: String,
+    pub success: bool,
+    pub output: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DaemonEvent {
@@ -26,6 +34,10 @@ pub enum DaemonEvent {
     DiscoveryStarted,
     #[cfg(feature = "dev")]
     DiscoveryComplete { plugins: Vec<DiscoveredPluginInfo> },
+    #[cfg(feature = "dev")]
+    BuildStarted,
+    #[cfg(feature = "dev")]
+    BuildComplete { results: Vec<BuildResultInfo> },
 }
 
 #[cfg(test)]

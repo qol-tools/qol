@@ -776,6 +776,8 @@ kbd {
 .dev-card-content p { color: var(--text-muted); font-size: 0.9rem; }
 .dev-card-content .last-action { display: block; margin-top: 0.5rem; color: var(--success); font-size: 0.85rem; }
 .dev-card-content .error-msg { display: block; margin-top: 0.5rem; color: var(--danger); font-size: 0.85rem; }
+.dev-card-content .build-success { display: block; margin-top: 0.5rem; color: var(--success); font-size: 0.85rem; }
+.dev-card-content .build-error { display: block; margin-top: 0.5rem; color: var(--danger); font-size: 0.85rem; }
 .dev-card-hint { color: var(--text-faint); }
 
 .dev-section { margin-bottom: 2.5rem; }
