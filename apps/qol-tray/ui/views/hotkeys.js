@@ -190,8 +190,8 @@ function openEditModal(hotkey = null, keepPlugin = null) {
             </div>
             
             <div class="modal-buttons">
-                <button class="modal-cancel" tabindex="4">Cancel <kbd>Esc</kbd></button>
-                <button class="modal-save" tabindex="5">Save <kbd>Ctrl+Enter</kbd></button>
+                <button class="btn btn-ghost modal-cancel" tabindex="4">Cancel <kbd>Esc</kbd></button>
+                <button class="btn btn-primary modal-save" tabindex="5">Save <kbd>Ctrl+Enter</kbd></button>
             </div>
         </div>
     `;
@@ -402,7 +402,6 @@ async function deleteSelected() {
     
     await persistHotkeys();
 }
-
 
 async function persistHotkeys() {
     try {

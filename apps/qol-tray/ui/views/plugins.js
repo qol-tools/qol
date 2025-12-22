@@ -42,7 +42,7 @@ export function render(containerEl) {
 
     loadPlugins();
     unsubscribe = subscribe((event) => {
-        if (event === 'changed') refreshPlugins();
+        if (event.type === 'plugins_changed') refreshPlugins();
     });
     unsubscribeInstalling = installing.subscribe(() => renderGrid());
 }
@@ -235,8 +235,8 @@ function showConfirmModal(pluginId) {
             <h3>Delete "${pluginName}"?</h3>
             <p>This will uninstall the plugin and remove all its data.</p>
             <div class="confirm-modal-buttons">
-                <button class="confirm-cancel">Cancel (Esc)</button>
-                <button class="confirm-delete">Delete (Enter)</button>
+                <button class="btn btn-ghost confirm-cancel">Cancel (Esc)</button>
+                <button class="btn btn-danger confirm-delete">Delete (Enter)</button>
             </div>
         </div>
     `;
@@ -418,4 +418,3 @@ export function onBlur() {
         clickHandler = null;
     }
 }
-
