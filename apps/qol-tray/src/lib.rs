@@ -1,4 +1,7 @@
+pub mod daemon;
 pub mod features;
+#[cfg(feature = "dev")]
+pub mod dev;
 pub mod hotkeys;
 pub mod menu;
 pub mod paths;
