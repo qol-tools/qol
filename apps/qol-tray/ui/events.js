@@ -12,8 +12,14 @@ function ensureConnected() {
 
     eventSource = new EventSource('/api/events');
     eventSource.onmessage = (e) => {
+        let event;
+        try {
+            event = JSON.parse(e.data);
+        } catch {
+            return;
+        }
         for (const listener of listeners) {
-            listener(e.data);
+            listener(event);
         }
     };
     eventSource.onerror = () => {
