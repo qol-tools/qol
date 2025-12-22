@@ -4,6 +4,17 @@
 
 Never run `cargo build`, `cargo test`, `make run`, `make test`, or similar commands unless explicitly asked. The user will run these manually.
 
+## Code Style
+
+- Do not add comments to code. The code should be self-explanatory.
+
+## Git Commits
+
+- NEVER add Co-Author lines to commits
+- Always commit systematically in logical order
+- Each commit must represent a working state with files that are logically tied together
+- Use conventional commit style (feat:, fix:, refactor:, etc.)
+
 ## Cross-Platform Support
 
 Platform-specific code lives in `src/tray/platform/`:
@@ -164,3 +175,31 @@ On macOS, `tray-icon` crate requires:
 3. Tokio runtime must run on a background thread
 
 The pattern is: main thread runs Cocoa event loop, background thread runs tokio for async operations (web server, etc.). Use `objc2` crate for Cocoa bindings.
+
+### Broken Symlink Detection
+On Unix-like systems, `std::path::Path::exists()` returns `false` for broken symlinks. To detect if a symlink exists regardless of its target, use `std::fs::symlink_metadata(path).is_ok()`. This is critical when managing plugin links where targets might be moved or deleted.
+
+### Robust TOML Parsing for Discovery
+When scanning for local plugins, use fallback parsing for `plugin.toml`. Developers often have partial manifests during development. Implementing a `MinimalManifest` fallback ensures discovery works even if required sections like `[menu]` are missing.
+
+### UI Component Consistency
+Reuse UI components across views for consistent look and feel:
+- `.refresh-btn` - Circular spinning button for loading/refresh states (used in store header, dev section header, reload card)
+- `.btn` variants - `.btn-primary`, `.btn-success`, `.btn-ghost`, `.btn-outline-danger`, `.btn-sm`
+- `.badge` variants - `.badge-linked` (green), `.badge-installed` (blue), `.badge-local` (yellow)
+
+When adding loading states, use the existing `.refresh-btn.spinning` pattern rather than custom spinners.
+
+### Stable UI Layouts
+To prevent layout jumping when state changes:
+- Use fixed `min-height` on rows that may have variable content
+- Always render placeholder elements (empty spans) to reserve space
+- Use overlay positioning for transient loading indicators instead of inserting elements that push content
+- Clamp selection indices after list updates to prevent out-of-bounds states
+
+### Smooth Animations During Async Operations
+When showing a spinner during an async operation (e.g., link/unlink), guard all `updateView()` calls to prevent the animation from resetting:
+- Set a state flag (e.g., `linkingId`) before the operation
+- Guard all async callbacks, SSE handlers, and periodic refreshes with `if (state.linkingId) return;`
+- Only clear the flag and call `updateView()` once in the `finally` block
+- This prevents intermediate re-renders that would restart CSS animations
