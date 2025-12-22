@@ -7,6 +7,19 @@ qol-tray v1.4.3 - Pluggable system tray daemon. Single tray icon opens browser U
 **Cross-platform:** Builds and tests pass on Linux, Windows, macOS. Plugins declare platform support via `platforms` field.
 
 ### Recent Changes (Dec 2025)
+- Architecture: Introduced `Daemon` and `EventBus` for structured background tasks and event broadcasting.
+- Dev Mode: Implemented background plugin discovery with `walkdir` and depth-limited scanning.
+- Dev Mode: Unified "Plugin Links" and "Discovered Plugins" into a single, alphabetically sorted list with status badges.
+- Dev Mode: Added manual refresh trigger for discovery (via UI button or `r` key).
+- Dev Mode: Robust TOML parsing with fallback for minimal manifests during development.
+- Dev Mode: Consistent `.refresh-btn` spinner across all loading states (discovery, reload).
+- Dev Mode: Fixed arrow key navigation breaking after link/unlink operations.
+- Dev Mode: Fixed SSE event subscription not restoring after view blur/focus.
+- Dev Mode: Smooth spinner animation during link/unlink (guards against intermediate re-renders).
+- Dev Mode: Keyboard shortcuts: `r` rescan, `Ctrl+r` reload (was both on `r`).
+- UI: Stable layouts with fixed row heights to prevent jumping on state changes.
+- UI: Unified button system (`.btn` variants) and badge styles across views.
+- Fix: Discovery now correctly handles broken symlinks and deduplicates by canonical path.
 - macOS: Fixed tray icon not appearing (requires NSApplication.run() on main thread)
 - macOS: Added Cmd+R support alongside Ctrl+R for refresh in browser UI
 - Refactor: Platform-specific tray code split into linux.rs, macos.rs, windows.rs
@@ -52,7 +65,7 @@ qol-tray v1.4.3 - Pluggable system tray daemon. Single tray icon opens browser U
 - Hotkey configuration per plugin action
 - Dual-location config system (survives uninstall/reinstall)
 - Daemon plugin support
-- Developer mode (`make dev`) with plugin linking and reload
+- Developer mode (`make dev`) with unified plugin management and background discovery
 - Auto-update with notification dot and one-click install
 - Local releases via `make release`
 
@@ -61,6 +74,8 @@ qol-tray v1.4.3 - Pluggable system tray daemon. Single tray icon opens browser U
   - `platform/linux.rs` - GTK event loop in separate thread
   - `platform/macos.rs` - NSApplication.run() on main thread (objc2)
   - `platform/windows.rs` - Condvar-based blocking
+- `src/daemon/` - Background task orchestration and event bus
+- `src/dev/` - Developer-specific discovery and linking logic
 - `src/plugins/` - Plugin loading, config management
 - `src/features/plugin_store/` - Browser UI server
 - `src/hotkeys/` - Global hotkey registration
@@ -72,10 +87,12 @@ qol-tray v1.4.3 - Pluggable system tray daemon. Single tray icon opens browser U
 ### Developer Mode
 
 `make dev` runs with Developer tab enabled:
-- Link plugins from dev directories (symlinks)
+- Unified plugin list showing: Linked (green), Installed (blue), Local Clone (yellow)
+- Link local plugins via symlinks (backs up existing store installs)
 - Unlink restores original installed version from backup
-- Press `r` to reload all plugins (stops daemons and restarts)
-- Arrow keys navigate, Space/Enter to toggle
+- Circular refresh button in section header for rescanning local plugins
+- Reload card with spinning button to restart all daemons
+- Keyboard: ↑/↓ navigate, Space/Enter link/unlink, `r` rescan, `Ctrl+r` reload
 
 ### Releasing
 
