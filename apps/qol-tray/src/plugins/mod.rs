@@ -45,12 +45,19 @@ impl Plugin {
         }
 
         log::info!("Starting daemon for plugin: {}", self.id);
-        let mut child = Command::new(&daemon_path)
-            .current_dir(&self.path)
+        let mut cmd = Command::new(&daemon_path);
+        cmd.current_dir(&self.path)
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit());
+
+        #[cfg(feature = "dev")]
+        cmd.env("RUST_LOG", "debug");
+
+        #[cfg(not(feature = "dev"))]
+        cmd.env("RUST_LOG", "warn");
+
+        let mut child = cmd.spawn()?;
 
         std::thread::sleep(std::time::Duration::from_millis(100));
 
