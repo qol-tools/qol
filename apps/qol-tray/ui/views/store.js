@@ -69,7 +69,7 @@ export function render(containerEl) {
     checkTokenStatus();
     loadPlugins();
     unsubscribe = subscribe((event) => {
-        if (event === 'changed') loadPlugins();
+        if (event.type === 'plugins_changed') loadPlugins();
     });
 }
 
@@ -94,8 +94,8 @@ function renderTokenInput(banner) {
     banner.innerHTML = `
         <div class="token-input-container">
             <input type="password" id="github-token-input" placeholder="Paste GitHub token (no scopes needed)">
-            <button id="save-token-btn">Save</button>
-            <button id="cancel-token-btn">Cancel</button>
+            <button id="save-token-btn" class="btn btn-primary">Save</button>
+            <button id="cancel-token-btn" class="btn btn-ghost">Cancel</button>
         </div>
         <p class="token-help">
             <a href="https://github.com/settings/tokens/new" target="_blank">Create token</a> — no scopes needed, just for rate limits
@@ -113,7 +113,7 @@ function renderRateLimitMessage(banner) {
     banner.innerHTML = `
         <div class="rate-limit-banner">
             <span>GitHub API rate limit reached.</span>
-            <button id="add-token-btn">Add GitHub Token</button>
+            <button id="add-token-btn" class="btn btn-primary">Add GitHub Token</button>
         </div>
     `;
 
@@ -224,7 +224,7 @@ function renderPlugins(plugins) {
                     ` : isInstalling ? `
                         <button class="refresh-btn spinning" disabled></button>
                     ` : `
-                        <button class="install">Install</button>
+                        <button class="btn btn-primary install" style="width: 100%">Install</button>
                     `}
                 </div>
             </div>
@@ -331,7 +331,6 @@ async function installPlugin(id) {
         updateSelection();
     }
 }
-
 
 export function onFocus() {
     updateSelection();
