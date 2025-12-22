@@ -114,9 +114,24 @@ No cloud CI needed.
 | Plugin | Platforms | Status |
 |--------|-----------|--------|
 | plugin-launcher | All | Working |
-| plugin-pointz | All | Working |
+| plugin-pointz | All | Working (self-contained) |
 | plugin-screen-recorder | Linux | Working |
 | plugin-window-actions | Linux | Working |
+
+### plugin-pointz Development
+
+plugin-pointz is self-contained with PointZerver source code included. No external binary download.
+
+```bash
+cd plugin-pointz
+make release        # Build the binary
+```
+
+For development with qol-tray:
+1. Link plugin-pointz in Developer tab
+2. Edit PointZerver source in plugin-pointz/src/
+3. `make release` to rebuild
+4. `Ctrl+r` in qol-tray to reload plugins
 
 ## Config Locations
 
