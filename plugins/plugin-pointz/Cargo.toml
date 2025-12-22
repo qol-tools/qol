@@ -1,0 +1,54 @@
+[package]
+name = "pointzerver"
+version = "0.4.0"
+edition = "2021"
+description = "PointZerver - Headless server for remote PC control from mobile devices"
+license = "MIT"
+
+[dependencies]
+tokio = { version = "1.35", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+thiserror = "1.0"
+async-trait = "0.1"
+log = "0.4"
+env_logger = "0.11"
+chrono = "0.4"
+if-addrs = "0.10"
+hostname = "0.4"
+axum = "0.7"
+tower-http = { version = "0.6", features = ["cors"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Threading",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rdev = "0.5"
+x11 = "2.21"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+rdev = "0.5"
+core-foundation = "0.10"
+cocoa = "0.25"
+objc = "0.2"
+dispatch = "0.2"
+
+[package.metadata.deb]
+maintainer = "KMRH47"
+copyright = "2025, KMRH47"
+extended-description = """\
+PointZerver - Headless server for remote PC control from mobile devices.
+Designed to run as a qol-tray plugin daemon."""
+depends = "$auto, libx11-6, libxdo3"
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/pointzerver", "usr/bin/", "755"],
+]
+
