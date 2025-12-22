@@ -4,6 +4,8 @@ export const id = 'dev';
 
 const state = {
     reloading: false,
+    building: false,
+    buildResults: null,
     lastReload: null,
     error: null,
     plugins: [],
@@ -40,6 +42,14 @@ function handleEvent(event) {
         updateView();
     } else if (event.type === 'plugins_changed') {
         loadLinkedPlugins();
+    } else if (event.type === 'build_started') {
+        state.building = true;
+        state.buildResults = null;
+        updateView();
+    } else if (event.type === 'build_complete') {
+        state.building = false;
+        state.buildResults = event.results || [];
+        updateView();
     }
 }
 
@@ -69,6 +79,18 @@ async function loadPlugins(skipUpdate = false) {
 
 function totalItems() {
     return state.mergedCount || 0;
+}
+
+function renderBuildResults() {
+    if (!state.buildResults || state.buildResults.length === 0) return '';
+
+    const allSuccess = state.buildResults.every(r => r.success);
+    if (allSuccess) {
+        return `<span class="build-success">Build succeeded</span>`;
+    }
+
+    const failed = state.buildResults.filter(r => !r.success);
+    return `<span class="build-error">Build failed: ${failed.map(r => r.plugin_id).join(', ')}</span>`;
 }
 
 function updateView() {
@@ -191,10 +213,11 @@ function updateView() {
             <section class="dev-section">
                 <h2>Actions</h2>
                 <div class="dev-card" data-action="reload">
-                    <button class="refresh-btn ${state.reloading ? 'spinning' : ''}" tabindex="-1">↻</button>
+                    <button class="refresh-btn ${state.building || state.reloading ? 'spinning' : ''}" tabindex="-1">↻</button>
                     <div class="dev-card-content">
-                        <h3>Reload All Plugins</h3>
-                        <p>Restart daemons and rescan for local plugins.</p>
+                        <h3>${state.building ? 'Building...' : 'Reload All Plugins'}</h3>
+                        <p>${state.building ? 'Compiling linked plugins' : 'Build linked plugins and restart daemons.'}</p>
+                        ${renderBuildResults()}
                         ${state.lastReload ? `<span class="last-action">Last: ${state.lastReload}</span>` : ''}
                         ${state.error ? `<span class="error-msg">${state.error}</span>` : ''}
                     </div>
@@ -370,10 +393,11 @@ async function triggerDiscovery() {
 }
 
 async function reloadPlugins() {
-    if (state.reloading) return;
+    if (state.reloading || state.building) return;
 
     state.reloading = true;
     state.error = null;
+    state.buildResults = null;
     updateView();
 
     try {

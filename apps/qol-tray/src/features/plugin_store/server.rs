@@ -19,7 +19,7 @@ use rust_embed::Embed;
 use crate::plugins::{PluginConfigManager, PluginLoader, PluginManager};
 use crate::daemon::{Daemon, DaemonEvent};
 #[cfg(feature = "dev")]
-use crate::daemon::DiscoveryStatus;
+use crate::daemon::{BuildResultInfo, DiscoveryStatus};
 use crate::hotkeys::trigger_reload;
 #[cfg(feature = "dev")]
 use crate::dev;
@@ -459,6 +459,26 @@ async fn get_version() -> &'static str {
 #[cfg(feature = "dev")]
 async fn reload_plugins(State(state): State<AppState>) -> impl IntoResponse {
     log::info!("Developer reload requested");
+
+    state.daemon.events.send(DaemonEvent::BuildStarted);
+
+    let build_results = dev::build_linked_plugins(&state.plugins_dir);
+    let results: Vec<BuildResultInfo> = build_results
+        .into_iter()
+        .map(|r| BuildResultInfo {
+            plugin_id: r.plugin_id,
+            success: r.success,
+            output: r.output,
+        })
+        .collect();
+
+    let all_succeeded = results.is_empty() || results.iter().all(|r| r.success);
+    state.daemon.events.send(DaemonEvent::BuildComplete { results });
+
+    if !all_succeeded {
+        return (StatusCode::OK, "Build completed with errors").into_response();
+    }
+
     let mut manager = match state.plugin_manager.lock() {
         Ok(m) => m,
         Err(e) => {
