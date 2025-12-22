@@ -1,3 +1,6 @@
+mod daemon;
+#[cfg(feature = "dev")]
+mod dev;
 mod features;
 mod hotkeys;
 mod menu;
@@ -8,6 +11,7 @@ mod updates;
 mod version;
 
 use anyhow::Result;
+use daemon::Daemon;
 use features::FeatureRegistry;
 use plugins::{PluginLoader, PluginManager};
 use std::sync::{Arc, Mutex};
@@ -55,16 +59,21 @@ async fn async_init() -> Result<(
     plugin_manager.load_plugins()?;
     let plugin_manager = Arc::new(Mutex::new(plugin_manager));
 
+    let daemon = Daemon::new();
+
     let mut feature_registry = FeatureRegistry::new();
     feature_registry.register(Box::new(features::plugin_store::PluginStore::new()));
     let feature_registry = Arc::new(feature_registry);
 
-    features::plugin_store::PluginStore::start_server(plugin_manager.clone()).await?;
+    features::plugin_store::PluginStore::start_server(plugin_manager.clone(), &daemon).await?;
 
     if let Ok(plugins_dir) = PluginLoader::default_plugin_dir() {
-        if let Err(e) = hotkeys::start_hotkey_listener(plugins_dir) {
+        if let Err(e) = hotkeys::start_hotkey_listener(plugins_dir.clone()) {
             log::warn!("Failed to start hotkey listener: {}", e);
         }
+
+        #[cfg(feature = "dev")]
+        daemon.start_discovery(plugins_dir);
     }
 
     Ok((

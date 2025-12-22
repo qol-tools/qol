@@ -36,6 +36,11 @@ pub fn plugin_cache_path() -> Result<PathBuf> {
     config_dir().map(|p| p.join(".plugin-cache.json"))
 }
 
+#[cfg(feature = "dev")]
+pub fn dev_config_path() -> Result<PathBuf> {
+    config_dir().map(|p| p.join("dev.json"))
+}
+
 pub fn open_url(url: &str) -> Result<()> {
     open::that(url)?;
     Ok(())
