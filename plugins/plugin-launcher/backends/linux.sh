@@ -18,7 +18,7 @@ search_plocate() {
     local pattern="$1" limit="$2"
     { [[ ${#db_args[@]} -gt 0 ]] && plocate -i -l "$limit" "${db_args[@]}" "$pattern" 2>/dev/null || true
       plocate -i -l "$limit" "$pattern" 2>/dev/null || true
-    } | grep -v -E "^/timeshift/|/app-install/|^/mnt/" | awk '!seen[$0]++'
+    } | { grep -v -E "^/timeshift/|/app-install/|^/mnt/" || true; } | awk '!seen[$0]++'
 }
 
 search_desktop_dirs() {
