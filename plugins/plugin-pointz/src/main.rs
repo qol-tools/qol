@@ -28,14 +28,18 @@ async fn main() -> Result<()> {
 
     let input_handler = input::InputHandler::new()?;
     let discovery_service = DiscoveryService::new().await?;
-    let command_service = CommandService::new(input_handler).await?;
+    let command_service = CommandService::new(input_handler)?;
 
     spawn_discovery_service(discovery_service);
     spawn_status_server();
 
     log::info!("PointZerver ready - discovery and command services running");
 
-    command_service.run().await
+    tokio::task::spawn_blocking(move || command_service.run_blocking())
+        .await
+        .map_err(|e| anyhow::anyhow!("Task join error: {}", e))??;
+
+    Ok(())
 }
 
 fn spawn_discovery_service(discovery_service: DiscoveryService) {
