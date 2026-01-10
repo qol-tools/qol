@@ -11,10 +11,15 @@ Never run build or test commands (`cargo build`, `cargo test`, `flutter build`, 
 
 ## Git Commits
 
+- **CRITICAL: Do NOT commit unless explicitly asked by the user or after confirming a fix works**
+- During debugging/iteration, make changes and let the user test them first
+- Only commit when the user confirms the changes are beneficial
+- If making multiple experimental changes, test them all before committing anything
 - NEVER add Co-Author lines or any attribution/generation text
 - Always commit systematically in logical order
 - Each commit must represent a working state with files that are logically tied together
 - Use conventional commit style (feat:, fix:, refactor:, etc.)
+- When you need to squash commits, use `git reset --hard <commit>` and `git push --force`
 
 ## Cross-Platform Support
 
