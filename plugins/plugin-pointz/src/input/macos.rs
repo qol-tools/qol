@@ -67,6 +67,8 @@ fn send_event(event_type: EventType) -> Result<()> {
 #[async_trait::async_trait]
 impl InputHandlerTrait for InputHandlerImpl {
     async fn mouse_move(&self, x: f64, y: f64) -> Result<()> {
+        let start = std::time::Instant::now();
+
         let (new_x, new_y, button) = {
             let mut pos_opt = self
                 .current_pos
@@ -96,6 +98,12 @@ impl InputHandlerTrait for InputHandlerImpl {
         } else {
             send_event(EventType::MouseMove { x: new_x, y: new_y })?;
         }
+
+        let elapsed = start.elapsed();
+        if elapsed.as_micros() > 5000 {
+            log::debug!("Slow mouse_move: {}µs", elapsed.as_micros());
+        }
+
         Ok(())
     }
 
@@ -369,6 +377,29 @@ impl InputHandlerImpl {
             CGEventSetIntegerValueField(event, KCG_MOUSE_EVENT_CLICK_STATE, click_state);
             CGEventPost(0, event);
             CFRelease(event);
+        }
+
+        Ok(())
+    }
+
+    fn send_mouse_move(x: f64, y: f64) -> Result<()> {
+        unsafe {
+            #[repr(C)]
+            struct CGPoint {
+                x: f64,
+                y: f64,
+            }
+
+            extern "C" {
+                fn CGWarpMouseCursorPosition(point: CGPoint) -> i32;
+            }
+
+            let point = CGPoint { x, y };
+            let result = CGWarpMouseCursorPosition(point);
+
+            if result != 0 {
+                return Err(anyhow::anyhow!("Failed to move cursor"));
+            }
         }
 
         Ok(())
