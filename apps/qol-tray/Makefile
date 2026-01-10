@@ -1,25 +1,7 @@
-.PHONY: run dev test clean install deb release
+.PHONY: build release run dev test check clean
 
-run:
-	cargo run
-
-dev:
-	-pkill -f 'qol-tray'
-	cargo run --features dev
-
-test:
-	cargo test
-
-clean:
-	cargo clean
-
-install:
-	cargo build --release
-	sudo cp target/release/qol-tray /usr/bin/qol-tray
-
-deb:
-	cargo build --release
-	cargo deb --no-build
+build:
+	cargo build
 
 release:
 	@cargo test && \
@@ -33,3 +15,19 @@ release:
 	cargo deb --no-build && \
 	git add Cargo.toml && git commit -m "chore(release): v$$NEW" && git push && \
 	gh release create "v$$NEW" target/debian/*.deb --title "v$$NEW" --generate-notes
+
+run:
+	cargo run
+
+dev:
+	-pkill -f 'qol-tray'
+	cargo run --features dev
+
+test:
+	cargo test
+
+check:
+	cargo check
+
+clean:
+	cargo clean
