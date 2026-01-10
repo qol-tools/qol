@@ -1,136 +1,45 @@
-# qol-tray
+# Coding Guidelines
 
 ## IMPORTANT: Do NOT Build or Test
 
-Never run `cargo build`, `cargo test`, `make run`, `make test`, or similar commands unless explicitly asked. The user will run these manually.
+Never run build or test commands (`cargo build`, `cargo test`, `flutter build`, `make`, etc.) unless explicitly asked. The user will run these manually.
 
 ## Code Style
 
 - Do not add comments to code. The code should be self-explanatory.
+- Only use emojis if the user explicitly requests it.
 
 ## Git Commits
 
-- NEVER add Co-Author lines to commits
+- NEVER add Co-Author lines or any attribution/generation text
 - Always commit systematically in logical order
 - Each commit must represent a working state with files that are logically tied together
 - Use conventional commit style (feat:, fix:, refactor:, etc.)
 
 ## Cross-Platform Support
 
-Platform-specific code lives in `src/tray/platform/`:
-- `linux.rs` - GTK event loop in separate thread
-- `macos.rs` - NSApplication.run() on main thread (objc2)
-- `windows.rs` - Condvar-based blocking
+Platform-specific code should be isolated in dedicated modules:
+- Use `platform/` subdirectories for OS-specific implementations
+- Keep main modules free of `#[cfg(target_os)]` conditionals when possible
+- All platform differences should be handled at the platform abstraction layer
+- Test on all target platforms (Linux, macOS, Windows)
 
-Keep `main.rs` free of `#[cfg(target_os)]` conditionals - all platform differences should be handled in the platform modules.
+### Platform-Specific Patterns
 
-## Development Commands
+**Linux:**
+- GTK event loops typically run in separate threads
+- Use X11 bindings for low-level system interactions
 
-```bash
-make run      # Build and run
-make dev      # Build and run with dev features (Developer tab)
-make test     # Run tests
-make install  # Build release and install to /usr/bin
-make clean    # Clean build artifacts
-make deb      # Build .deb package
-make release  # Bump version, build, push, create GitHub release
-```
+**macOS:**
+- UI frameworks (NSApplication, tray icons) MUST be created on the main thread
+- `NSApplication.run()` blocks the main thread until quit
+- Run async runtimes (Tokio) on background threads
+- Use `objc2` crate for Cocoa bindings
+- Use CoreGraphics APIs directly for performance-critical operations
 
-## Architecture
-
-**Minimal tray menu:** The tray menu only has "Plugins" (opens browser UI) and "Quit". All plugin interaction happens in the browser.
-
-### Core Modules
-
-**src/plugins/** - Plugin loading, execution, and configuration
-- Scans `~/.config/qol-tray/plugins/` for plugin directories
-- Each plugin has: `plugin.toml` (manifest), `run.sh` (executable), optional `config.json`
-- Supports daemon processes and config toggles
-- Key types: `Plugin`, `PluginManager`, `PluginManifest`
-- Files: `mod.rs` (Plugin struct), `manager.rs` (PluginManager), `loader.rs` (scan/load), `manifest.rs` (data structures)
-
-**src/menu/** - Menu abstraction and event routing
-- `builder.rs`: Builds minimal menu (features + Quit), no per-plugin items
-- `router.rs`: EventRouter with EventPattern (Exact/Prefix) for O(k) routing
-- Event format: `feature-id::menu-item-id`
-
-**src/tray/** - System tray UI with platform abstraction
-- Platform-specific implementations in `platform/` subdirectory:
-  - `linux.rs`: GTK event loop in separate thread, glib polling for menu events
-  - `macos.rs`: NSApplication.run() on main thread, objc2 for Cocoa bindings
-  - `windows.rs`: Condvar-based blocking, menu events via spawned thread
-  - `mod.rs`: Routing to platform modules, shared `spawn_menu_event_handler`
-- `PlatformTray` enum handles platform differences at compile time
-- `icon.rs`: Icon loading from embedded RGBA data, supports notification dot variant
-- Uses `tray-icon` crate (cross-platform)
-
-**src/features/plugin_store/** - Browser-based plugin management
-- Serves web UI at `http://127.0.0.1:42700`
-- Landing page shows installed plugins and plugin store
-- Plugin settings accessed via `/plugins/{plugin_id}/`
-- API endpoints for install/uninstall operations
-- Fetches available plugins from `github.com/qol-tools/*`
-
-**src/updates/** - Auto-update system
-- Checks GitHub API on startup for new releases (2s timeout)
-- Compares semantic versions
-- Shows orange notification dot on tray icon when update available
-- Menu item "⬆ Update to vX.Y.Z" downloads .deb and installs via `pkexec dpkg -i`
-- Kills plugin daemons before restart to avoid socket conflicts
-
-### Plugin Manifest Format
-
-Plugins define their menu structure in `plugin.toml`:
-
-```toml
-[plugin]
-name = "Plugin Name"
-description = "Description"
-version = "1.0.0"
-platforms = ["linux"]  # Optional - omit for all platforms
-
-[menu]
-label = "Menu Label"
-items = [
-    { type = "action", id = "run", label = "Run", action = "run" },
-    { type = "checkbox", id = "toggle", label = "Enable", checked = true,
-      action = "toggle-config", config_key = "enabled" },
-    { type = "separator" },
-    { type = "submenu", id = "sub", label = "More", items = [...] }
-]
-
-[daemon]  # Optional
-enabled = true
-command = "daemon.sh"
-```
-
-Action types:
-- `run` - Execute `run.sh`
-- `toggle-config` - Toggle boolean in `config.json` at `config_key` path
-- `settings` - Reserved for future use
-
-Platform-specific code belongs in `platform/` directories, not root modules.
-
-## Icon Management
-
-Icon is embedded as raw RGBA data at compile time from `assets/icon.rgba` (64x64 pixels, generated from `icon.png`).
-
-To update icon:
-1. Edit `assets/icon.png`
-2. Convert to RGBA: `python3 -c "from PIL import Image; img = Image.open('assets/icon.png'); open('assets/icon.rgba', 'wb').write(img.tobytes())"`
-3. Rebuild
-
-## Plugin Development
-
-Plugins are external to this codebase. They live in `~/.config/qol-tray/plugins/`.
-
-The daemon provides:
-- Plugin loading and manifest parsing
-- Browser-based settings UI (each plugin can have `ui/index.html`)
-- Config file management (read/write JSON)
-- Process execution (scripts and daemons)
-
-Plugins handle their own logic via shell scripts.
+**Windows:**
+- Use Win32 APIs for system interactions
+- Blocking patterns often use Condvar or WaitForSingleObject
 
 ## Lessons Learned
 
@@ -144,8 +53,9 @@ Adding comprehensive edge case tests often reveals bugs in the implementation:
 
 ### Consolidate Validation Functions
 Path/ID validation functions tend to get duplicated. Keep them in one place:
-- `paths::is_safe_path_component()` - validates single path components (no `/`, `\`, `..`, `.`, null bytes)
-- Used by: `config.rs`, `plugin_ui.rs`, anywhere plugin IDs are used in paths
+- Create shared validation utilities for common patterns (path components, IDs, etc.)
+- Validate for security: no `/`, `\`, `..`, `.`, null bytes in user-provided paths
+- Reuse validation across all entry points
 
 ### Graceful Process Shutdown
 When stopping child processes:
@@ -160,46 +70,69 @@ When stopping child processes:
 - Return `Option` or `Result` and let callers decide how to handle
 - Log errors at the point of failure, not just at the top level
 
-### HTML Parsing Edge Cases
-Simple string matching for HTML tags needs to handle:
-- Case insensitivity (`<body>` vs `<BODY>`)
-- Attributes containing `>` (need quote-aware parsing)
-- Tags inside comments (skip `<!-- <body> -->`)
+### Parsing Edge Cases
+Simple string matching for structured data (HTML, TOML, etc.) needs to handle:
+- Case insensitivity where applicable
+- Quotes and escaped characters
+- Comments and whitespace
+- Partial/incomplete data during development
 
-A proper HTML parser would be overkill - just handle the common cases correctly.
+A proper parser library is better than regex, but if rolling your own, handle the common edge cases correctly.
 
-### macOS Tray Icon Requirements
-On macOS, `tray-icon` crate requires:
-1. Tray icon must be created on the main thread
-2. `NSApplication.run()` must be called on the main thread (blocks until quit)
-3. Tokio runtime must run on a background thread
+### macOS Event Loop Requirements
+On macOS, many system frameworks require specific threading:
+1. UI components must be created on the main thread
+2. Event loops (NSApplication.run()) block the main thread until quit
+3. Async runtimes must run on background threads
 
-The pattern is: main thread runs Cocoa event loop, background thread runs tokio for async operations (web server, etc.). Use `objc2` crate for Cocoa bindings.
+The pattern is: main thread runs system event loop, background thread runs async runtime.
 
 ### Broken Symlink Detection
-On Unix-like systems, `std::path::Path::exists()` returns `false` for broken symlinks. To detect if a symlink exists regardless of its target, use `std::fs::symlink_metadata(path).is_ok()`. This is critical when managing plugin links where targets might be moved or deleted.
+On Unix-like systems, `std::path::Path::exists()` returns `false` for broken symlinks. To detect if a symlink exists regardless of its target, use `std::fs::symlink_metadata(path).is_ok()`. This is critical when managing links where targets might be moved or deleted.
 
-### Robust TOML Parsing for Discovery
-When scanning for local plugins, use fallback parsing for `plugin.toml`. Developers often have partial manifests during development. Implementing a `MinimalManifest` fallback ensures discovery works even if required sections like `[menu]` are missing.
+### Robust Configuration Parsing
+When scanning for configuration files, use fallback parsing patterns:
+- Implement minimal versions of data structures for partial configs
+- Allow optional sections to be missing during development
+- Provide sensible defaults for missing fields
 
 ### UI Component Consistency
 Reuse UI components across views for consistent look and feel:
-- `.refresh-btn` - Circular spinning button for loading/refresh states (used in store header, dev section header, reload card)
-- `.btn` variants - `.btn-primary`, `.btn-success`, `.btn-ghost`, `.btn-outline-danger`, `.btn-sm`
-- `.badge` variants - `.badge-linked` (green), `.badge-installed` (blue), `.badge-local` (yellow)
-
-When adding loading states, use the existing `.refresh-btn.spinning` pattern rather than custom spinners.
+- Define component classes once and reuse (buttons, badges, spinners)
+- Use consistent naming patterns (`.btn-primary`, `.badge-success`, etc.)
+- When adding new states, extend existing patterns rather than creating new ones
 
 ### Stable UI Layouts
 To prevent layout jumping when state changes:
 - Use fixed `min-height` on rows that may have variable content
 - Always render placeholder elements (empty spans) to reserve space
-- Use overlay positioning for transient loading indicators instead of inserting elements that push content
+- Use overlay positioning for transient indicators instead of inserting elements
 - Clamp selection indices after list updates to prevent out-of-bounds states
 
 ### Smooth Animations During Async Operations
-When showing a spinner during an async operation (e.g., link/unlink), guard all `updateView()` calls to prevent the animation from resetting:
-- Set a state flag (e.g., `linkingId`) before the operation
-- Guard all async callbacks, SSE handlers, and periodic refreshes with `if (state.linkingId) return;`
-- Only clear the flag and call `updateView()` once in the `finally` block
+When showing animations during async operations, guard all render calls:
+- Set a state flag before the operation
+- Guard all async callbacks with `if (state.pending) return;`
+- Only clear the flag and re-render once in the `finally` block
 - This prevents intermediate re-renders that would restart CSS animations
+
+### Security Best Practices
+- Validate all user input at boundaries (path components, IDs, file names)
+- Reject path traversal attempts (`..`, absolute paths in user input)
+- Check file sizes before reading to prevent memory exhaustion
+- Use timeouts for network operations to prevent hangs
+- Remove internal error details from user-facing messages
+- Sanitize shell inputs to prevent injection attacks
+
+### Performance Patterns
+- Use appropriate data structures (HashMap for lookups, Vec for iteration)
+- Avoid cloning large data structures unnecessarily
+- Profile before optimizing - measure actual bottlenecks
+- Consider platform-specific optimizations (direct APIs vs libraries)
+- Batch operations when possible (e.g., 16ms intervals for 60fps)
+
+### Cross-Platform File Paths
+- Use `std::path::PathBuf` and `Path` for all file operations
+- Use `std::env::temp_dir()` instead of hardcoded `/tmp`
+- Use platform-appropriate path separators automatically
+- Test file operations on all platforms (case sensitivity, path limits, etc.)
