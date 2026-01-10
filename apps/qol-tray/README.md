@@ -25,7 +25,7 @@ From there you can:
 |----------|--------|
 | Linux (X11) | Supported |
 | Linux (Wayland) | Partial |
-| macOS | Planned |
+| macOS | Supported |
 | Windows | Planned |
 
 ## License
