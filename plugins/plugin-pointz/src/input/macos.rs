@@ -96,7 +96,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         if button.is_some() {
             self.queue_drag_event(x, y, new_x, new_y, button).await?;
         } else {
-            send_event(EventType::MouseMove { x: new_x, y: new_y })?;
+            Self::send_mouse_move(new_x, new_y)?;
         }
 
         let elapsed = start.elapsed();
