@@ -43,7 +43,7 @@ async fn get_status() -> Json<ServerStatus> {
         ip: utils::get_local_ip().map(|ip| ip.to_string()),
         discovery_port: ServerConfig::DISCOVERY_PORT,
         command_port: ServerConfig::COMMAND_PORT,
-        app_download_url: "https://github.com/qol-tools/pointZ/releases/latest".to_string(),
+        app_download_url: "https://github.com/qol-tools/pointz/releases/latest".to_string(),
     })
 }
 
