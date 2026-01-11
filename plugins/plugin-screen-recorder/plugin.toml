@@ -1,7 +1,7 @@
 [plugin]
 name = "Screen Recorder"
 description = "Record screen regions with optional audio support"
-version = "1.0.0"
+version = "1.1.0"
 author = "KMRH47"
 platforms = ["linux"]
 
