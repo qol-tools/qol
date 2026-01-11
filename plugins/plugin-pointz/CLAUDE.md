@@ -25,49 +25,22 @@ Never run build or test commands (`cargo build`, `cargo test`, `flutter build`, 
 
 Platform-specific code should be isolated in dedicated modules:
 - Use `platform/` subdirectories for OS-specific implementations
-- Keep main modules free of `#[cfg(target_os)]` conditionals when possible
+- Keep main modules free of platform conditionals when possible
 - All platform differences should be handled at the platform abstraction layer
-- Test on all target platforms (Linux, macOS, Windows)
-
-### Platform-Specific Patterns
-
-**Linux:**
-- GTK event loops typically run in separate threads
-- Use X11 bindings for low-level system interactions
-
-**macOS:**
-- UI frameworks (NSApplication, tray icons) MUST be created on the main thread
-- `NSApplication.run()` blocks the main thread until quit
-- Run async runtimes (Tokio) on background threads
-- Use `objc2` crate for Cocoa bindings
-- Use CoreGraphics APIs directly for performance-critical operations
-
-**Windows:**
-- Use Win32 APIs for system interactions
-- Blocking patterns often use Condvar or WaitForSingleObject
+- Test on all target platforms
 
 ## Lessons Learned
 
 ### Test-Driven Bug Discovery
-Adding comprehensive edge case tests often reveals bugs in the implementation:
-- Adding `("V1.2.3", vec![1, 2, 3])` test case revealed version parser only handled lowercase 'v'
-- Adding `("--help", false)` test case revealed action ID validation didn't check leading dashes
-- Adding `("<body data-x='a>b'>", Some(19))` test case revealed HTML parser didn't handle `>` inside quotes
+Adding comprehensive edge case tests often reveals bugs in the implementation.
 
 **Pattern:** When adding tests, think about what the implementation *actually does* vs what it *should do*. Write the test for expected behavior first, then fix the implementation if it fails.
 
 ### Consolidate Validation Functions
-Path/ID validation functions tend to get duplicated. Keep them in one place:
-- Create shared validation utilities for common patterns (path components, IDs, etc.)
-- Validate for security: no `/`, `\`, `..`, `.`, null bytes in user-provided paths
+Validation functions tend to get duplicated. Keep them in one place:
+- Create shared validation utilities for common patterns
+- Validate for security: no path traversal, null bytes in user-provided paths
 - Reuse validation across all entry points
-
-### Graceful Process Shutdown
-When stopping child processes:
-1. Send SIGTERM first (Unix) to allow graceful cleanup
-2. Wait with timeout (2s is reasonable)
-3. Only SIGKILL if process doesn't respond
-4. Use `libc::kill()` directly - no Rust wrapper needed
 
 ### Error Handling Patterns
 - `.expect()` is acceptable for compile-time invariants (embedded assets)
@@ -76,7 +49,7 @@ When stopping child processes:
 - Log errors at the point of failure, not just at the top level
 
 ### Parsing Edge Cases
-Simple string matching for structured data (HTML, TOML, etc.) needs to handle:
+Simple string matching for structured data needs to handle:
 - Case insensitivity where applicable
 - Quotes and escaped characters
 - Comments and whitespace
@@ -84,33 +57,16 @@ Simple string matching for structured data (HTML, TOML, etc.) needs to handle:
 
 A proper parser library is better than regex, but if rolling your own, handle the common edge cases correctly.
 
-### macOS Event Loop Requirements
-On macOS, many system frameworks require specific threading:
-1. UI components must be created on the main thread
-2. Event loops (NSApplication.run()) block the main thread until quit
-3. Async runtimes must run on background threads
-
-The pattern is: main thread runs system event loop, background thread runs async runtime.
-
-### Broken Symlink Detection
-On Unix-like systems, `std::path::Path::exists()` returns `false` for broken symlinks. To detect if a symlink exists regardless of its target, use `std::fs::symlink_metadata(path).is_ok()`. This is critical when managing links where targets might be moved or deleted.
-
-### Robust Configuration Parsing
-When scanning for configuration files, use fallback parsing patterns:
-- Implement minimal versions of data structures for partial configs
-- Allow optional sections to be missing during development
-- Provide sensible defaults for missing fields
-
 ### UI Component Consistency
 Reuse UI components across views for consistent look and feel:
-- Define component classes once and reuse (buttons, badges, spinners)
-- Use consistent naming patterns (`.btn-primary`, `.badge-success`, etc.)
+- Define component classes once and reuse
+- Use consistent naming patterns
 - When adding new states, extend existing patterns rather than creating new ones
 
 ### Stable UI Layouts
 To prevent layout jumping when state changes:
-- Use fixed `min-height` on rows that may have variable content
-- Always render placeholder elements (empty spans) to reserve space
+- Use fixed dimensions on elements that may have variable content
+- Always render placeholder elements to reserve space
 - Use overlay positioning for transient indicators instead of inserting elements
 - Clamp selection indices after list updates to prevent out-of-bounds states
 
@@ -119,7 +75,7 @@ When showing animations during async operations, guard all render calls:
 - Set a state flag before the operation
 - Guard all async callbacks with `if (state.pending) return;`
 - Only clear the flag and re-render once in the `finally` block
-- This prevents intermediate re-renders that would restart CSS animations
+- This prevents intermediate re-renders that would restart animations
 
 ### Security Best Practices
 - Validate all user input at boundaries (path components, IDs, file names)
@@ -130,14 +86,14 @@ When showing animations during async operations, guard all render calls:
 - Sanitize shell inputs to prevent injection attacks
 
 ### Performance Patterns
-- Use appropriate data structures (HashMap for lookups, Vec for iteration)
+- Use appropriate data structures for the task at hand
 - Avoid cloning large data structures unnecessarily
 - Profile before optimizing - measure actual bottlenecks
-- Consider platform-specific optimizations (direct APIs vs libraries)
-- Batch operations when possible (e.g., 16ms intervals for 60fps)
+- Consider platform-specific optimizations when justified
+- Batch operations when possible
 
 ### Cross-Platform File Paths
-- Use `std::path::PathBuf` and `Path` for all file operations
-- Use `std::env::temp_dir()` instead of hardcoded `/tmp`
+- Use appropriate path abstractions for your language/framework
+- Avoid hardcoded paths - use environment-specific path helpers
 - Use platform-appropriate path separators automatically
 - Test file operations on all platforms (case sensitivity, path limits, etc.)
