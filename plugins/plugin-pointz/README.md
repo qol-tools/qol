@@ -11,7 +11,7 @@ A [qol-tray](https://github.com/qol-tools/qol-tray) plugin for remote PC control
 
 ## Dependencies
 
-The plugin automatically downloads the `pointzerver` binary from the [pointZ releases](https://github.com/qol-tools/pointZ/releases).
+The plugin automatically downloads the `pointzerver` binary from the [PointZerver releases](https://github.com/qol-tools/pointzerver/releases).
 
 No manual dependency installation required.
 
@@ -40,7 +40,8 @@ git clone https://github.com/qol-tools/plugin-pointz ~/.config/qol-tray/plugins/
 
 ## More Information
 
-For details about the PointZerver daemon and standalone usage, see the [main pointZ repository](https://github.com/qol-tools/pointZ).
+- **Server**: [PointZerver repository](https://github.com/qol-tools/pointzerver)
+- **Mobile App**: [PointZ repository](https://github.com/qol-tools/pointz)
 
 ## License
 
