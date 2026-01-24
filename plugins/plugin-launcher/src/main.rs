@@ -116,6 +116,7 @@ fn effective_count(entry: &FrequencyEntry, now: u64, half_life_days: f64) -> f64
 enum UserEvent {
     SearchComplete(Vec<SearchResult>),
     Show,
+    Resize(u32),
 }
 
 fn handle_socket_message(stream: &mut UnixStream, proxy: &tao::event_loop::EventLoopProxy<UserEvent>) {
@@ -165,6 +166,8 @@ enum IpcMessage {
     Execute { path: String, action: String },
     #[serde(rename = "close")]
     Close,
+    #[serde(rename = "resize")]
+    Resize { height: u32 },
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -523,7 +526,7 @@ fn create_window(event_loop: &tao::event_loop::EventLoop<UserEvent>) -> tao::win
         .with_decorations(false)
         .with_always_on_top(true)
         .with_visible(false)
-        .with_inner_size(tao::dpi::LogicalSize::new(600.0, 400.0))
+        .with_inner_size(tao::dpi::LogicalSize::new(600.0, 42.0))
         .with_resizable(false)
         .build(event_loop)
         .unwrap()
@@ -551,6 +554,9 @@ fn create_ipc_handler(
             IpcMessage::Close => {
                 state.lock().unwrap().should_exit = true;
             }
+            IpcMessage::Resize { height } => {
+                let _ = proxy.send_event(UserEvent::Resize(height));
+            }
         }
     }
 }
@@ -571,7 +577,7 @@ fn show_window_linux(window: &tao::window::Window) {
     let geom = gdk_monitor.geometry();
     let scale = gdk_monitor.scale_factor() as u32;
 
-    let (win_w, win_h) = (600 * scale, 400 * scale);
+    let (win_w, win_h) = (600 * scale, 42 * scale);
     let (x, y) = calculate_centered_position(
         geom.width() as u32, geom.height() as u32,
         win_w, win_h,
@@ -610,6 +616,10 @@ fn show_window_other(window: &tao::window::Window) {
 fn main() {
     if env::args().any(|a| a == "--kill") {
         send_socket_command(b"kill");
+        return;
+    }
+
+    if send_socket_command(b"show") {
         return;
     }
 
@@ -669,6 +679,10 @@ fn main() {
             Event::UserEvent(UserEvent::SearchComplete(ref results)) => {
                 let Ok(json) = serde_json::to_string(results) else { return };
                 let _ = webview.evaluate_script(&format!("window.onSearchResults({})", json));
+            }
+            Event::UserEvent(UserEvent::Resize(height)) => {
+                let clamped = height.clamp(42, 400);
+                window.set_inner_size(tao::dpi::LogicalSize::new(600.0, clamped as f64));
             }
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } |
             Event::WindowEvent { event: WindowEvent::Focused(false), .. } => {
