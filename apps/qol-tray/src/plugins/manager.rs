@@ -1,4 +1,5 @@
 use super::{Plugin, PluginLoader};
+use crate::hotkeys::kill_all_plugin_processes;
 use crate::paths;
 use anyhow::Result;
 use std::collections::HashMap;
@@ -36,6 +37,7 @@ impl PluginManager {
 
     pub fn reload_plugins(&mut self) -> Result<()> {
         log::info!("Reloading all plugins...");
+        kill_all_plugin_processes();
         for plugin in self.plugins.values_mut() {
             if let Err(e) = plugin.stop_daemon() {
                 log::error!("Failed to stop daemon for plugin {}: {}", plugin.id, e);
