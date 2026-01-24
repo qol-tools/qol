@@ -1,6 +1,6 @@
 [package]
 name = "launcher"
-version = "0.1.22"
+version = "0.1.23"
 edition = "2021"
 description = "Universal search launcher with action modifiers"
 license = "MIT"
