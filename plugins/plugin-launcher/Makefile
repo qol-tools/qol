@@ -1,7 +1,10 @@
-.PHONY: test release
+.PHONY: test dev release
 
 test:
 	cargo test
+
+dev:
+	cargo build --release
 
 release:
 	@cargo test && \
