@@ -47,8 +47,29 @@ pub fn build_linked_plugins(plugins_dir: &Path) -> Vec<BuildResult> {
 fn build_plugin(plugin_id: &str, path: &Path) -> BuildResult {
     log::info!("Building linked plugin: {}", plugin_id);
 
+    let target = select_make_target(path);
+    run_make(plugin_id, path, target)
+}
+
+fn select_make_target(path: &Path) -> &'static str {
+    let makefile_path = path.join("Makefile");
+    let Ok(content) = std::fs::read_to_string(makefile_path) else {
+        return "release";
+    };
+
+    for line in content.lines() {
+        if line.starts_with("dev:") || line.starts_with("dev ") {
+            return "dev";
+        }
+    }
+    "release"
+}
+
+fn run_make(plugin_id: &str, path: &Path, target: &str) -> BuildResult {
+    log::info!("Running make {} for {}", target, plugin_id);
+
     let output = Command::new("make")
-        .arg("release")
+        .arg(target)
         .current_dir(path)
         .output();
 
