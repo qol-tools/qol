@@ -9,12 +9,76 @@ use global_hotkey::{
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 pub use types::{HotkeyAction, HotkeyConfig};
 use types::{ScriptInfo, KEY_CODE_MAP, SCRIPT_RUNNERS};
 
 static RELOAD_SENDER: OnceLock<Sender<()>> = OnceLock::new();
+static ACTION_PROCESSES: OnceLock<Mutex<HashMap<String, Vec<u32>>>> = OnceLock::new();
+
+fn get_action_processes() -> &'static Mutex<HashMap<String, Vec<u32>>> {
+    ACTION_PROCESSES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[allow(dead_code)]
+pub fn kill_plugin_processes(plugin_id: &str) {
+    let mut processes = match get_action_processes().lock() {
+        Ok(p) => p,
+        Err(e) => {
+            log::error!("Failed to lock action processes: {}", e);
+            return;
+        }
+    };
+
+    if let Some(pids) = processes.remove(plugin_id) {
+        for pid in pids {
+            kill_process(pid, plugin_id);
+        }
+    }
+}
+
+pub fn kill_all_plugin_processes() {
+    let mut processes = match get_action_processes().lock() {
+        Ok(p) => p,
+        Err(e) => {
+            log::error!("Failed to lock action processes: {}", e);
+            return;
+        }
+    };
+
+    for (plugin_id, pids) in processes.drain() {
+        for pid in pids {
+            kill_process(pid, &plugin_id);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn kill_process(pid: u32, plugin_id: &str) {
+    unsafe {
+        let pid = pid as i32;
+        if libc::kill(pid, 0) == 0 {
+            log::info!("Killing action process {} for plugin {}", pid, plugin_id);
+            libc::kill(pid, libc::SIGTERM);
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            if libc::kill(pid, 0) == 0 {
+                libc::kill(pid, libc::SIGKILL);
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_process(_pid: u32, _plugin_id: &str) {}
+
+fn track_action_process(plugin_id: &str, pid: u32) {
+    let mut processes = match get_action_processes().lock() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    processes.entry(plugin_id.to_string()).or_default().push(pid);
+}
 
 pub fn trigger_reload() {
     if let Some(sender) = RELOAD_SENDER.get() {
@@ -248,7 +312,11 @@ fn execute_plugin_action(plugins_dir: &Path, plugin_id: &str, action: &str) {
         .spawn();
 
     match result {
-        Ok(_) => log::info!("Plugin action started"),
+        Ok(child) => {
+            let pid = child.id();
+            track_action_process(plugin_id, pid);
+            log::info!("Plugin action started (pid: {})", pid);
+        }
         Err(e) => log::error!("Failed to execute plugin action: {}", e),
     }
 }
