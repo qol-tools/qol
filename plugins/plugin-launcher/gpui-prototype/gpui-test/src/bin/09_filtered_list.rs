@@ -63,15 +63,9 @@ impl Focusable for FilterView {
 }
 
 impl Render for FilterView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let filtered = self.filtered_items();
-        let item_height = 32.0;
-        let header_height = 42.0;
         let max_visible = 8;
-        let visible_count = filtered.len().min(max_visible);
-        let total_height = header_height + (visible_count as f32 * item_height);
-
-        window.resize(size(px(500.), px(total_height)));
 
         div()
             .id("filter-view")
@@ -171,7 +165,8 @@ fn main() {
         cx.bind_keys([KeyBinding::new("escape", Quit, None)]);
         cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
 
-        let bounds = Bounds::centered(None, size(px(500.), px(42.)), cx);
+        let height = 42.0 + (8.0 * 32.0);
+        let bounds = Bounds::centered(None, size(px(500.), px(height)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: None,
