@@ -2,6 +2,7 @@
 // Verifies: on_key_down, KeyDownEvent, keystroke handling
 
 use gpui::*;
+use gpui_test::open_window_with_focus;
 
 actions!(test, [Quit]);
 
@@ -99,11 +100,7 @@ fn main() {
             ..Default::default()
         };
 
-        cx.open_window(options, |window, cx| {
-            let view = cx.new(|cx| InputView::new(cx));
-            window.focus(&view.focus_handle(cx));
-            view
-        }).unwrap();
+        open_window_with_focus(cx, options, |_window, cx| InputView::new(cx)).unwrap();
 
         cx.activate(true);
     });

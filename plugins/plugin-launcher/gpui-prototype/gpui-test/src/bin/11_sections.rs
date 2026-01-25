@@ -1,4 +1,5 @@
 use gpui::*;
+use gpui_test::open_window_with_focus;
 
 actions!(test, [Quit]);
 
@@ -151,12 +152,7 @@ fn main() {
             ..Default::default()
         };
 
-        cx.open_window(options, |window, cx| {
-            let view = cx.new(|cx| SectionListView::new(cx));
-            window.focus(&view.focus_handle(cx));
-            window.activate_window();
-            view
-        }).unwrap();
+        open_window_with_focus(cx, options, |_window, cx| SectionListView::new(cx)).unwrap();
 
         cx.activate(true);
     });

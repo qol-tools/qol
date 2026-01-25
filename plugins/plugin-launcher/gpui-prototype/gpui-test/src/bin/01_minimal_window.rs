@@ -2,14 +2,32 @@
 // Verifies: Basic gpui setup, window creation, action handling
 
 use gpui::*;
+use gpui_test::open_window_with_focus;
 
 actions!(test, [Quit]);
 
-struct MinimalView;
+struct MinimalView {
+    focus_handle: FocusHandle,
+}
+
+impl MinimalView {
+    fn new(cx: &mut Context<Self>) -> Self {
+        Self {
+            focus_handle: cx.focus_handle(),
+        }
+    }
+}
+
+impl Focusable for MinimalView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
 
 impl Render for MinimalView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
+            .track_focus(&self.focus_handle)
             .size_full()
             .bg(rgb(0x1e1e2e))
             .flex()
@@ -37,7 +55,7 @@ fn main() {
             ..Default::default()
         };
 
-        cx.open_window(options, |_, cx| cx.new(|_| MinimalView)).unwrap();
+        open_window_with_focus(cx, options, |_window, cx| MinimalView::new(cx)).unwrap();
         cx.activate(true);
     });
 }

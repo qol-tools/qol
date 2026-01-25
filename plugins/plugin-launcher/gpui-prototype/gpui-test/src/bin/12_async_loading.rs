@@ -1,37 +1,62 @@
-// Test: Text input with filtered list
-// Verifies: Combined input + dynamic list filtering (core launcher pattern)
-
 use gpui::*;
 use gpui_test::open_window_with_focus;
+use std::time::Duration;
 
 actions!(test, [Quit]);
 
-struct FilterView {
+struct IndexingView {
     query: String,
     items: Vec<String>,
     selected: usize,
+    indexed: usize,
+    total: usize,
     focus_handle: FocusHandle,
+    started: bool,
 }
 
-impl FilterView {
+impl IndexingView {
     fn new(cx: &mut Context<Self>) -> Self {
         Self {
             query: String::new(),
-            items: vec![
-                "Firefox".into(),
-                "Chrome".into(),
-                "Visual Studio Code".into(),
-                "Slack".into(),
-                "Discord".into(),
-                "Spotify".into(),
-                "Terminal".into(),
-                "Files".into(),
-                "Settings".into(),
-                "Calculator".into(),
-            ],
+            items: Vec::new(),
             selected: 0,
+            indexed: 0,
+            total: 60,
             focus_handle: cx.focus_handle(),
+            started: false,
         }
+    }
+
+    fn start_indexing(&mut self, cx: &mut Context<Self>) {
+        if self.started {
+            return;
+        }
+        self.started = true;
+
+        let total = self.total;
+        let mut all_items = Vec::with_capacity(total);
+        for i in 0..total {
+            all_items.push(format!("Item {}", i + 1));
+        }
+
+        let task = cx.spawn(move |this: WeakEntity<IndexingView>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                for item in all_items {
+                    async_cx.background_executor().timer(Duration::from_millis(40)).await;
+                    let next = item.clone();
+                    this.update(&mut async_cx, |view, cx| {
+                        view.items.push(next);
+                        view.indexed = view.items.len();
+                        if view.selected >= view.filtered_items().len() {
+                            view.selected = view.filtered_items().len().saturating_sub(1);
+                        }
+                        cx.notify();
+                    }).ok();
+                }
+            }
+        });
+        task.detach();
     }
 
     fn filtered_items(&self) -> Vec<&String> {
@@ -57,19 +82,24 @@ impl FilterView {
     }
 }
 
-impl Focusable for FilterView {
+impl Focusable for IndexingView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
 }
 
-impl Render for FilterView {
+impl Render for IndexingView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.start_indexing(cx);
         let filtered = self.filtered_items();
-        let max_visible = 8;
+        let status = if self.indexed < self.total {
+            format!("Indexing… {}/{}", self.indexed, self.total)
+        } else {
+            "Indexing complete".to_string()
+        };
 
         div()
-            .id("filter-view")
+            .id("indexing-view")
             .track_focus(&self.focus_handle)
             .size_full()
             .flex()
@@ -138,10 +168,21 @@ impl Render for FilterView {
                             } else {
                                 self.query.clone()
                             }),
-                    ),
+                    )
+            )
+            .child(
+                div()
+                    .h(px(26.))
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .px_4()
+                    .text_color(rgb(0x6c7086))
+                    .text_size(px(12.))
+                    .child(status)
             )
             .children(
-                filtered.iter().enumerate().take(max_visible).map(|(i, item)| {
+                filtered.iter().enumerate().take(8).map(|(i, item)| {
                     let is_selected = i == self.selected;
                     div()
                         .h(px(32.))
@@ -166,8 +207,7 @@ fn main() {
         cx.bind_keys([KeyBinding::new("escape", Quit, None)]);
         cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
 
-        let height = 42.0 + (8.0 * 32.0);
-        let bounds = Bounds::centered(None, size(px(500.), px(height)), cx);
+        let bounds = Bounds::centered(None, size(px(500.), px(360.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: None,
@@ -177,7 +217,7 @@ fn main() {
             ..Default::default()
         };
 
-        open_window_with_focus(cx, options, |_window, cx| FilterView::new(cx)).unwrap();
+        open_window_with_focus(cx, options, |_window, cx| IndexingView::new(cx)).unwrap();
 
         cx.activate(true);
     });
