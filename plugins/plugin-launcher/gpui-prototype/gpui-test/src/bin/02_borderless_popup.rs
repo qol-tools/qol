@@ -2,14 +2,32 @@
 // Verifies: WindowDecorations::Client, WindowKind::PopUp
 
 use gpui::*;
+use gpui_test::open_window_with_focus;
 
 actions!(test, [Quit]);
 
-struct PopupView;
+struct PopupView {
+    focus_handle: FocusHandle,
+}
+
+impl PopupView {
+    fn new(cx: &mut Context<Self>) -> Self {
+        Self {
+            focus_handle: cx.focus_handle(),
+        }
+    }
+}
+
+impl Focusable for PopupView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
 
 impl Render for PopupView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
+            .track_focus(&self.focus_handle)
             .size_full()
             .bg(rgb(0x1e1e2e))
             .border_1()
@@ -43,7 +61,7 @@ fn main() {
             ..Default::default()
         };
 
-        cx.open_window(options, |_, cx| cx.new(|_| PopupView)).unwrap();
+        open_window_with_focus(cx, options, |_window, cx| PopupView::new(cx)).unwrap();
         cx.activate(true);
     });
 }

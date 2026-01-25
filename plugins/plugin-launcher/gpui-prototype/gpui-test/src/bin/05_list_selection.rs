@@ -2,6 +2,7 @@
 // Verifies: Up/Down navigation, selection state, visual highlight
 
 use gpui::*;
+use gpui_test::open_window_with_focus;
 
 actions!(test, [Quit]);
 
@@ -122,11 +123,7 @@ fn main() {
             ..Default::default()
         };
 
-        cx.open_window(options, |window, cx| {
-            let view = cx.new(|cx| ListView::new(cx));
-            window.focus(&view.focus_handle(cx));
-            view
-        }).unwrap();
+        open_window_with_focus(cx, options, |_window, cx| ListView::new(cx)).unwrap();
 
         cx.activate(true);
     });
