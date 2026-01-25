@@ -6,7 +6,7 @@ test:
 	cargo test
 
 gpui-test:
-	cd $(GPUI_DIR) && cargo test --test property_tests
+	cd $(GPUI_DIR) && cargo test --tests
 
 gpui-list:
 	@ls -1 $(GPUI_DIR)/src/bin/*.rs 2>/dev/null | xargs -I {} basename {} .rs | sort
