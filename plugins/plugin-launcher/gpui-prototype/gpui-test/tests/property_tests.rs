@@ -1,4 +1,5 @@
 use proptest::prelude::*;
+use std::collections::HashSet;
 
 struct FilterDelegate {
     items: Vec<String>,
@@ -45,6 +46,51 @@ impl ListNavState {
     fn move_down(&mut self) {
         if self.selected < self.max_index {
             self.selected += 1;
+        }
+    }
+}
+
+#[derive(Clone)]
+struct SectionEntry {
+    is_header: bool,
+}
+
+struct SectionNavState {
+    entries: Vec<SectionEntry>,
+    selected: usize,
+}
+
+impl SectionNavState {
+    fn new(entries: Vec<SectionEntry>) -> Self {
+        let selected = entries.iter().position(|e| !e.is_header).unwrap_or(0);
+        Self { entries, selected }
+    }
+
+    fn move_up(&mut self) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let mut index = self.selected;
+        while index > 0 {
+            index -= 1;
+            if !self.entries[index].is_header {
+                self.selected = index;
+                return;
+            }
+        }
+    }
+
+    fn move_down(&mut self) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let mut index = self.selected;
+        while index + 1 < self.entries.len() {
+            index += 1;
+            if !self.entries[index].is_header {
+                self.selected = index;
+                return;
+            }
         }
     }
 }
@@ -125,6 +171,41 @@ proptest! {
             delegate_upper.matches.len(),
             "Case sensitivity mismatch"
         );
+    }
+
+    #[test]
+    fn prop_filter_case_insensitive_same_matches(
+        base_query in "[a-z]{1,10}",
+        items in prop::collection::vec("[a-zA-Z]{1,20}", 1..20)
+    ) {
+        let mut delegate_lower = FilterDelegate::new(items.clone());
+        let mut delegate_upper = FilterDelegate::new(items);
+
+        delegate_lower.filter(&base_query.to_lowercase());
+        delegate_upper.filter(&base_query.to_uppercase());
+
+        let lower: HashSet<_> = delegate_lower.matches.iter().cloned().collect();
+        let upper: HashSet<_> = delegate_upper.matches.iter().cloned().collect();
+
+        prop_assert_eq!(lower, upper, "Case insensitive matches differ");
+    }
+
+    #[test]
+    fn prop_filter_preserves_order(
+        query in "[a-zA-Z0-9]{0,5}",
+        items in prop::collection::vec("[a-zA-Z0-9]{1,12}", 0..50)
+    ) {
+        let mut delegate = FilterDelegate::new(items.clone());
+        delegate.filter(&query);
+
+        let q = query.to_lowercase();
+        let expected: Vec<String> = items
+            .iter()
+            .filter(|i| query.is_empty() || i.to_lowercase().contains(&q))
+            .cloned()
+            .collect();
+
+        prop_assert_eq!(delegate.matches, expected, "Filtered order mismatch");
     }
 
     #[test]
@@ -214,6 +295,24 @@ proptest! {
     }
 
     #[test]
+    fn prop_nav_zero_items_stays_zero(
+        moves in prop::collection::vec(prop::bool::ANY, 0..200)
+    ) {
+        let mut state = ListNavState::new(0);
+
+        for go_down in moves {
+            if go_down {
+                state.move_down();
+            } else {
+                state.move_up();
+            }
+
+            prop_assert_eq!(state.selected, 0, "Selection should remain 0");
+            prop_assert_eq!(state.max_index, 0, "Max index should remain 0");
+        }
+    }
+
+    #[test]
     fn prop_window_height_grows_with_items(
         item_count in 0usize..100,
         header in 20.0f32..100.0,
@@ -262,6 +361,109 @@ proptest! {
     }
 
     #[test]
+    fn prop_section_nav_never_selects_header(
+        headers in prop::collection::vec(prop::bool::ANY, 1..30),
+        moves in prop::collection::vec(prop::bool::ANY, 0..200)
+    ) {
+        let entries: Vec<SectionEntry> = headers
+            .into_iter()
+            .map(|is_header| SectionEntry { is_header })
+            .collect();
+        let has_item = entries.iter().any(|e| !e.is_header);
+        let mut state = SectionNavState::new(entries);
+
+        if !has_item {
+            return Ok(());
+        }
+
+        for go_down in moves {
+            if go_down {
+                state.move_down();
+            } else {
+                state.move_up();
+            }
+            prop_assert!(
+                !state.entries[state.selected].is_header,
+                "Selected index {} is a header", state.selected
+            );
+        }
+    }
+
+    #[test]
+    fn prop_section_nav_stays_in_bounds(
+        headers in prop::collection::vec(prop::bool::ANY, 1..30),
+        moves in prop::collection::vec(prop::bool::ANY, 0..200)
+    ) {
+        let entries: Vec<SectionEntry> = headers
+            .into_iter()
+            .map(|is_header| SectionEntry { is_header })
+            .collect();
+        let mut state = SectionNavState::new(entries);
+
+        if state.entries.is_empty() {
+            return Ok(());
+        }
+
+        for go_down in moves {
+            if go_down {
+                state.move_down();
+            } else {
+                state.move_up();
+            }
+            prop_assert!(
+                state.selected < state.entries.len(),
+                "Selection {} out of bounds {}", state.selected, state.entries.len()
+            );
+        }
+    }
+
+    #[test]
+    fn prop_section_nav_up_then_down_reversible(
+        headers in prop::collection::vec(prop::bool::ANY, 1..30),
+        steps in 0usize..20
+    ) {
+        let entries: Vec<SectionEntry> = headers
+            .into_iter()
+            .map(|is_header| SectionEntry { is_header })
+            .collect();
+        let has_item = entries.iter().any(|e| !e.is_header);
+        let mut state = SectionNavState::new(entries);
+
+        if !has_item {
+            return Ok(());
+        }
+
+        let start = state.selected;
+        for _ in 0..steps {
+            state.move_down();
+        }
+        for _ in 0..steps {
+            state.move_up();
+        }
+
+        prop_assert_eq!(state.selected, start, "Selection should return to start");
+    }
+
+    #[test]
+    fn prop_window_height_non_decreasing(
+        count_a in 0usize..50,
+        count_b in 0usize..50,
+        header in 20.0f32..100.0,
+        item_h in 20.0f32..50.0,
+        max_visible in 5usize..20
+    ) {
+        let a = count_a.min(count_b);
+        let b = count_a.max(count_b);
+        let height_a = calculate_window_height(a, header, item_h, max_visible);
+        let height_b = calculate_window_height(b, header, item_h, max_visible);
+
+        prop_assert!(
+            height_b + 0.001 >= height_a,
+            "Height should not decrease: {} -> {}", height_a, height_b
+        );
+    }
+
+    #[test]
     fn prop_filter_then_nav_stays_in_filtered_bounds(
         query in "[a-z]{0,3}",
         items in prop::collection::vec("[a-zA-Z]{2,10}", 5..30),
@@ -294,7 +496,6 @@ proptest! {
 }
 
 const VALID_ICON_EXTENSIONS: &[&str] = &["png", "svg", "jpg", "jpeg", "webp"];
-const PLACEHOLDER_ICON: &str = "placeholder.svg";
 
 #[derive(Debug, Clone, PartialEq)]
 enum IconSource {
@@ -303,13 +504,11 @@ enum IconSource {
     None,
 }
 
-struct IconResolver {
-    base_paths: Vec<String>,
-}
+struct IconResolver;
 
 impl IconResolver {
-    fn new(base_paths: Vec<String>) -> Self {
-        Self { base_paths }
+    fn new() -> Self {
+        Self
     }
 
     fn is_valid_extension(path: &str) -> bool {
@@ -391,7 +590,7 @@ proptest! {
         ext in prop::sample::select(VALID_ICON_EXTENSIONS.to_vec())
     ) {
         let path = format!("{}.{}", name, ext);
-        let resolver = IconResolver::new(vec!["/icons".into()]);
+        let resolver = IconResolver::new();
         let result = resolver.resolve(&path);
 
         prop_assert!(
@@ -401,12 +600,28 @@ proptest! {
     }
 
     #[test]
+    fn prop_icon_valid_extensions_case_insensitive(
+        name in "[a-zA-Z0-9_-]{1,20}",
+        ext in prop::sample::select(VALID_ICON_EXTENSIONS.to_vec())
+    ) {
+        let ext_upper = ext.to_uppercase();
+        let path = format!("{}.{}", name, ext_upper);
+        let resolver = IconResolver::new();
+        let result = resolver.resolve(&path);
+
+        prop_assert!(
+            matches!(result, IconSource::Path(_)),
+            "Uppercase extension '{}' should be accepted, got {:?}", ext_upper, result
+        );
+    }
+
+    #[test]
     fn prop_icon_invalid_extensions_use_placeholder(
         name in "[a-zA-Z0-9_-]{1,20}",
         ext in "(exe|dll|sh|bat|cmd|ps1|js|py)"
     ) {
         let path = format!("{}.{}", name, ext);
-        let resolver = IconResolver::new(vec!["/icons".into()]);
+        let resolver = IconResolver::new();
         let result = resolver.resolve(&path);
 
         prop_assert_eq!(
@@ -423,7 +638,7 @@ proptest! {
         suffix in "[a-zA-Z0-9]{1,10}\\.png"
     ) {
         let path = format!("{}{}{}", prefix, traversal, suffix);
-        let resolver = IconResolver::new(vec!["/icons".into()]);
+        let resolver = IconResolver::new();
         let result = resolver.resolve(&path);
 
         prop_assert_eq!(
@@ -439,7 +654,7 @@ proptest! {
         suffix in "[a-zA-Z0-9]{1,10}\\.png"
     ) {
         let path = format!("{}\0{}", prefix, suffix);
-        let resolver = IconResolver::new(vec!["/icons".into()]);
+        let resolver = IconResolver::new();
         let result = resolver.resolve(&path);
 
         prop_assert_eq!(
@@ -453,7 +668,7 @@ proptest! {
     fn prop_icon_empty_path_returns_none(
         _dummy in Just(())
     ) {
-        let resolver = IconResolver::new(vec!["/icons".into()]);
+        let resolver = IconResolver::new();
         let result = resolver.resolve("");
 
         prop_assert_eq!(result, IconSource::None, "Empty path should return None");
@@ -462,6 +677,23 @@ proptest! {
     #[test]
     fn prop_icon_size_clamped_to_bounds(size in 0u32..256) {
         let icon_size = IconSize::new(size);
+
+        prop_assert!(
+            icon_size.width >= IconSize::MIN && icon_size.width <= IconSize::MAX,
+            "Width {} out of bounds [{}, {}]", icon_size.width, IconSize::MIN, IconSize::MAX
+        );
+        prop_assert!(
+            icon_size.height >= IconSize::MIN && icon_size.height <= IconSize::MAX,
+            "Height {} out of bounds [{}, {}]", icon_size.height, IconSize::MIN, IconSize::MAX
+        );
+    }
+
+    #[test]
+    fn prop_icon_size_from_dimensions_clamped(
+        width in 0u32..256,
+        height in 0u32..256
+    ) {
+        let icon_size = IconSize::from_dimensions(width, height);
 
         prop_assert!(
             icon_size.width >= IconSize::MIN && icon_size.width <= IconSize::MAX,
@@ -497,7 +729,7 @@ proptest! {
         icon_name in "[a-zA-Z0-9_-]{1,15}",
         icon_size in 16u32..48
     ) {
-        let resolver = IconResolver::new(vec!["/icons".into()]);
+        let resolver = IconResolver::new();
         let path = format!("{}.png", icon_name);
         let item = ListItemWithIcon::new(label.clone(), &path, icon_size, &resolver);
 
