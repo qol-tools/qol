@@ -4,4 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-gpui = "0.2"
+gpui = { version = "0.2", features = ["test-support"] }
+
+[dev-dependencies]
+proptest = "1.0"

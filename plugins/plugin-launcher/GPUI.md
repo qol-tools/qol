@@ -240,6 +240,105 @@ self.list_state.update(cx, |state, cx| {
 });
 ```
 
+## Testing
+
+### Setup
+
+```toml
+[dependencies]
+gpui = { version = "0.2", features = ["test-support"] }
+
+[dev-dependencies]
+proptest = "1.0"
+```
+
+### Property-Based Testing (Primary Approach)
+
+We use property-based testing to automatically generate hundreds of test cases. Define properties that must always hold, and proptest generates random inputs to verify them.
+
+```rust
+use proptest::prelude::*;
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(200))]
+
+    #[test]
+    fn prop_filter_matches_contain_query(
+        query in "[a-zA-Z0-9]{0,20}",
+        items in prop::collection::vec("[a-zA-Z0-9]{1,30}", 0..50)
+    ) {
+        let mut delegate = FilterDelegate::new(items);
+        delegate.filter(&query);
+
+        for item in &delegate.matches {
+            prop_assert!(item.to_lowercase().contains(&query.to_lowercase()));
+        }
+    }
+
+    #[test]
+    fn prop_nav_selection_always_in_bounds(
+        item_count in 1usize..100,
+        moves in prop::collection::vec(prop::bool::ANY, 0..200)
+    ) {
+        let mut state = ListNavState::new(item_count);
+        for go_down in moves {
+            if go_down { state.move_down(); } else { state.move_up(); }
+            prop_assert!(state.selected <= state.max_index);
+        }
+    }
+}
+```
+
+**Properties we test:**
+- Filter results always contain the query
+- Filter results are a subset of original items
+- Empty query returns all items
+- Case insensitivity (upper/lower queries match same items)
+- Navigation selection stays within bounds after any move sequence
+- Reversibility (N downs + N ups = original position)
+- Window height caps at maximum
+- Combined filter + nav stays in filtered bounds
+
+### Headless UI Testing (Minimal)
+
+Use `#[gpui::test]` only for testing actual gpui integration (focus, blur, keystrokes). Keep these minimal as they're expensive.
+
+```rust
+#[gpui::test]
+fn test_blur_callback_fires(cx: &mut TestAppContext) {
+    let blur_fired = Rc::new(RefCell::new(false));
+    let flag = blur_fired.clone();
+
+    let window_handle = cx.update(|cx| {
+        cx.open_window(WindowOptions::default(), |window, cx| {
+            let view = cx.new(|cx| BlurTestView::new(cx, flag));
+            window.focus(&view.focus_handle(cx));
+            view
+        }).unwrap()
+    });
+
+    let mut cx = VisualTestContext::from_window(window_handle.into(), cx);
+    cx.update(|window, _| { window.blur(); });
+
+    assert!(*blur_fired.borrow());
+}
+
+#[gpui::test]
+fn test_keystrokes_captured(cx: &mut TestAppContext) {
+    // ... setup ...
+    cx.simulate_keystrokes("a b c up down enter escape");
+    assert_eq!(captured_keys, vec!["a", "b", "c", "up", "down", "enter", "escape"]);
+}
+```
+
+### Running Tests
+
+```bash
+cargo test                           # All tests
+cargo test prop_                     # Only property tests
+cargo test --test integration_tests  # Integration test file
+```
+
 ## Low-Level Patterns (verified)
 
 Alternative to gpui-component for full control.
