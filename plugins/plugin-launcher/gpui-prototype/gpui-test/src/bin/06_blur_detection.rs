@@ -2,6 +2,7 @@
 // Verifies: on_blur for launcher-style popups
 
 use gpui::*;
+use gpui_test::open_window_with_focus;
 
 actions!(test, [Quit]);
 
@@ -70,12 +71,7 @@ fn main() {
             ..Default::default()
         };
 
-        cx.open_window(options, |window, cx| {
-            let view = cx.new(|cx| BlurView::new(cx));
-            window.focus(&view.focus_handle(cx));
-            window.activate_window();
-            view
-        }).unwrap();
+        open_window_with_focus(cx, options, |_window, cx| BlurView::new(cx)).unwrap();
 
         cx.activate(true);
     });
