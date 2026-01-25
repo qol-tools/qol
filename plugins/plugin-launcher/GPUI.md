@@ -15,6 +15,7 @@ Bespoke documentation for gpui, built through hands-on exploration.
 ```toml
 [dependencies]
 gpui = "0.2"
+gpui-component = "0.5.0"
 ```
 
 Requires: Rust stable, macOS or Linux.
@@ -27,16 +28,7 @@ sudo apt install gcc g++ libasound2-dev libfontconfig-dev libwayland-dev \
     libgit2-dev make cmake clang mold libstdc++-14-dev
 ```
 
-Adjust `libstdc++-14-dev` based on Ubuntu version:
-- Ubuntu 24.04+: `libstdc++-14-dev`
-- Ubuntu 22.04: `libstdc++-12-dev`
-- Ubuntu 20.04: `libstdc++-10-dev`
-
-### macOS Dependencies
-
-Xcode with Metal support.
-
-## Minimal Window (verified working on Linux)
+## Minimal Window
 
 ```rust
 use gpui::*;
@@ -62,7 +54,6 @@ fn main() {
         let bounds = Bounds::centered(None, size(px(600.), px(42.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
-            window_min_size: Some(size(px(200.), px(20.))),  // No webkit2gtk min size!
             titlebar: None,
             focus: true,
             ..Default::default()
@@ -99,9 +90,6 @@ impl Render for MyView {
 }
 ```
 
-### FocusHandle
-Tracks keyboard focus. Essential for text input.
-
 ## Styling (Tailwind-like)
 
 Chain methods on elements:
@@ -122,159 +110,292 @@ div()
     .size_full()         // width: 100%, height: 100%
 ```
 
-## Window Sizing
+## Text Input
 
-### Initial size (no minimum constraint!)
+Use `gpui-component` for a robust input field.
+
 ```rust
-let bounds = Bounds::centered(None, size(px(600.), px(42.)), cx);
-let options = WindowOptions {
-    window_bounds: Some(WindowBounds::Windowed(bounds)),
-    window_min_size: Some(size(px(100.), px(20.))),  // Can go tiny!
-    ..Default::default()
-};
-```
+use gpui_component::input::{Input, InputState};
 
-### Runtime resize
-```rust
-// Inside a window context
-window.resize(size(px(600.), px(new_height)));
-```
+struct MyView {
+    input: Entity<InputState>,
+}
 
-Methods available:
-- `window.resize(Size<Pixels>)` - Set content size
-- `window.bounds()` - Get current position/size
-- `window.viewport_size()` - Get drawable area
-
-## Keyboard Input
-
-### Define actions
-```rust
-actions!(launcher, [Submit, Cancel, SelectNext, SelectPrev]);
-```
-
-### Bind keys globally
-```rust
-cx.bind_keys([
-    KeyBinding::new("enter", Submit, None),
-    KeyBinding::new("escape", Cancel, None),
-    KeyBinding::new("down", SelectNext, None),
-    KeyBinding::new("up", SelectPrev, None),
-    KeyBinding::new("ctrl-n", SelectNext, None),
-    KeyBinding::new("ctrl-p", SelectPrev, None),
-]);
-```
-
-### Handle actions
-```rust
 impl MyView {
-    fn submit(&mut self, _: &Submit, cx: &mut ViewContext<Self>) {
-        // Handle enter
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // Create state (needs window access)
+        let input = cx.new(|cx| 
+            InputState::new(window, cx)
+                .placeholder("Search...")
+        );
+        
+        // Listen to changes
+        cx.subscribe_in(&input, window, |_, _, event, _, _| {
+            if let gpui_component::input::InputEvent::Change = event {
+                println!("Input changed");
+            }
+        }).detach();
+
+        Self { input }
+    }
+}
+
+impl Render for MyView {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        Input::new(&self.input)
     }
 }
 ```
 
-### Observe keystrokes
-```rust
-cx.observe_keystrokes(move |event, _, cx| {
-    let keystroke = event.keystroke.clone();
-    // Process keystroke
-});
-```
+## List Rendering
 
-## Text Input
-
-### The hard way (raw gpui)
-700+ lines of code. Implements `EntityInputHandler`. Not recommended.
-
-### The easy way (gpui-component)
-Use the [gpui-component](https://github.com/longbridge/gpui-component) library:
+Use `gpui-component`'s `List` for virtualized lists with keyboard navigation.
 
 ```rust
-use ui::{Input, InputState};
+use gpui_component::list::{List, ListDelegate, ListState, ListItem};
 
-// Create state
-let input_state = cx.new(|cx| InputState::new(cx));
+struct MyDelegate {
+    items: Vec<String>,
+    selected_index: Option<IndexPath>,
+}
 
-// Render
-Input::new(&input_state)
-    .appearance(false)  // No border
-    .placeholder("Search...")
-    .cleanable()        // Show clear button
+impl ListDelegate for MyDelegate {
+    type Item = ListItem;
+
+    fn items_count(&self, _section: usize, _cx: &App) -> usize {
+        self.items.len()
+    }
+
+    fn render_item(&mut self, ix: IndexPath, _window: &mut Window, _cx: &mut Context<ListState<Self>>) -> Option<Self::Item> {
+        Some(ListItem::new(("item", ix.row))
+            .child(self.items[ix.row].clone()))
+    }
+
+    fn set_selected_index(&mut self, ix: Option<IndexPath>, _window: &mut Window, _cx: &mut Context<ListState<Self>>) {
+        self.selected_index = ix;
+    }
+}
+
+// In your view:
+let list_state = cx.new(|cx| ListState::new(delegate, window, cx));
+
+// Render:
+List::new(&list_state).h_full()
 ```
 
-The Input component handles:
-- Text editing (backspace, delete, cut, paste, undo, redo)
-- Navigation (arrows, home, end)
-- Selection (select all, shift+arrows)
-- Focus management
+## Keyboard Navigation
+
+`gpui-component::List` handles Up/Down/Enter automatically if focused.
+To confirm selection:
+
+```rust
+// In MyDelegate
+fn confirm(&mut self, _secondary: bool, _window: &mut Window, _cx: &mut Context<ListState<Self>>) {
+    if let Some(ix) = self.selected_index {
+        println!("Confirmed item at index {:?}", ix);
+    }
+}
+```
 
 ## Focus Management
 
+GPUI uses `FocusHandle` to track focus. `gpui-component` manages this internally for Input and List.
+
+To focus an element programmatically:
+
 ```rust
-struct MyView {
-    focus_handle: FocusHandle,
-}
+// Focus input
+self.input_state.update(cx, |state, cx| state.focus(window, cx));
 
-impl MyView {
-    fn new(cx: &mut ViewContext<Self>) -> Self {
-        Self {
-            focus_handle: cx.focus_handle(),
-        }
-    }
-}
-
-// Focus the element
-self.focus_handle.focus(cx);
-
-// Check if focused
-self.focus_handle.is_focused(cx);
+// Focus list
+self.list_state.update(cx, |state, cx| state.focus(window, cx));
 ```
 
-## Launcher-Specific Patterns
+## Window Resize
 
-### Dynamic height based on results
+Resize the window based on content (e.g., search results).
+
 ```rust
-fn update_height(&self, result_count: usize, window: &mut Window, cx: &mut Context) {
-    let input_height = 42.;
-    let result_height = 36.;
-    let max_results = 8;
-    let visible = result_count.min(max_results);
-    let total = input_height + (visible as f64 * result_height);
-    window.resize(size(px(600.), px(total as f32)));
+fn update_window_height(&self, item_count: usize, window: &mut Window) {
+    let item_height = 24.0;
+    let input_height = 40.0;
+    let max_height = 400.0;
+    
+    let content_height = input_height + (item_count as f32 * item_height);
+    let new_height = content_height.min(max_height);
+    
+    window.resize(size(px(300.0), px(new_height)));
 }
 ```
 
-### Borderless popup window
+## State Updates
+
+Use `cx.notify()` to trigger a re-render of the current view.
+When updating `Entity` state (like `ListState`), use `.update()`:
+
+```rust
+self.list_state.update(cx, |state, cx| {
+    state.delegate_mut().items = new_items;
+    cx.notify(); // Notify the ListState view
+});
+```
+
+## Low-Level Patterns (verified)
+
+Alternative to gpui-component for full control.
+
+### Borderless Popup Window
 ```rust
 WindowOptions {
     titlebar: None,
     window_decorations: Some(WindowDecorations::Client),
-    is_resizable: false,
-    is_movable: true,
+    kind: WindowKind::PopUp,
     focus: true,
     ..Default::default()
 }
 ```
 
-## Gotchas
+### Focusable Trait
+Views that need focus must implement `Focusable`:
+```rust
+impl Focusable for MyView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+```
 
-### Documentation is sparse
-Best source is Zed's source code. Search in `zed/crates/` for patterns.
+### Manual Focus
+```rust
+cx.open_window(options, |window, cx| {
+    let view = cx.new(|cx| MyView::new(cx));
+    window.focus(&view.focus_handle(cx));  // 1 arg only
+    view
+})
+```
 
-### Text input is complex
-Don't build from scratch. Use gpui-component's Input.
+### Key Handling on Elements
+```rust
+div()
+    .id("my-element")
+    .track_focus(&self.focus_handle)
+    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+        match event.keystroke.key.as_str() {
+            "backspace" => { this.query.pop(); cx.notify(); }
+            "a" => { this.query.push('a'); cx.notify(); }
+            _ => {}
+        }
+    }))
+```
 
-### Actions need context
-Actions are dispatched based on focus. Make sure elements have focus handles.
+## Complete Example
 
-### Breaking changes
-Pre-1.0 library. Pin your version in Cargo.toml.
+A fully functional launcher with Input, List, and dynamic resizing.
 
-## TODO
+```rust
+use gpui::*;
+use gpui_component::{
+    input::{Input, InputState},
+    list::{List, ListDelegate, ListState, ListItem},
+    IndexPath, Sizable,
+};
 
-- [x] Test minimal window on Linux (42px works!)
-- [ ] Test dynamic window resize
-- [ ] Test keyboard input (text field)
-- [ ] Test list rendering
-- [ ] Test result selection with keyboard
-- [ ] Test gpui-component Input integration
+struct MyDelegate {
+    items: Vec<String>,
+    matches: Vec<String>,
+    selected_index: Option<IndexPath>,
+}
+
+impl MyDelegate {
+    fn new(items: Vec<String>) -> Self {
+        Self {
+            matches: items.clone(),
+            items,
+            selected_index: None,
+        }
+    }
+
+    fn filter(&mut self, query: &str) {
+        if query.is_empty() {
+            self.matches = self.items.clone();
+        } else {
+            self.matches = self.items
+                .iter()
+                .filter(|i| i.to_lowercase().contains(&query.to_lowercase()))
+                .cloned()
+                .collect();
+        }
+    }
+}
+
+impl ListDelegate for MyDelegate {
+    type Item = ListItem;
+
+    fn items_count(&self, _section: usize, _cx: &App) -> usize {
+        self.matches.len()
+    }
+
+    fn render_item(&mut self, ix: IndexPath, _window: &mut Window, _cx: &mut Context<ListState<Self>>) -> Option<Self::Item> {
+        Some(ListItem::new(("item", ix.row))
+            .child(self.matches[ix.row].clone()))
+    }
+
+    fn set_selected_index(&mut self, ix: Option<IndexPath>, _window: &mut Window, _cx: &mut Context<ListState<Self>>) {
+        self.selected_index = ix;
+    }
+}
+
+struct AppView {
+    input_state: Entity<InputState>,
+    list_state: Entity<ListState<MyDelegate>>,
+}
+
+impl AppView {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let items = vec!["Apple", "Banana", "Cherry"].into_iter().map(String::from).collect();
+        let delegate = MyDelegate::new(items);
+        let list_state = cx.new(|cx| ListState::new(delegate, window, cx));
+        let input_state = cx.new(|cx| InputState::new(window, cx).placeholder("Search..."));
+        
+        Self { input_state, list_state }
+    }
+
+    fn on_input_change(&mut self, _: &gpui_component::input::InputEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let query = self.input_state.read(cx).value();
+        self.list_state.update(cx, |state, cx| {
+             state.delegate_mut().filter(&query);
+             cx.notify();
+        });
+        
+        let count = self.list_state.read(cx).delegate().matches.len();
+        let height = 40.0 + (count as f32 * 24.0).min(300.0);
+        window.resize(size(px(300.0), px(height)));
+    }
+}
+
+impl Render for AppView {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(Input::new(&self.input_state))
+            .child(List::new(&self.list_state).h_full())
+    }
+}
+
+fn main() {
+    Application::new().run(|cx: &mut App| {
+        cx.open_window(WindowOptions::default(), |window, cx| {
+            cx.new(|cx| {
+                let mut view = AppView::new(window, cx);
+                let input = view.input_state.clone();
+                cx.subscribe_in(&input, window, |this: &mut AppView, _, event, window, cx| {
+                    this.on_input_change(event, window, cx);
+                }).detach();
+                view
+            })
+        }).unwrap();
+    });
+}
+```
