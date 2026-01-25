@@ -1,4 +1,6 @@
 /target
+/gpui-prototype/gpui-test/target
+/gpui-prototype/gpui-test-2/target
 Cargo.lock
 launcher
 launcher.exe
