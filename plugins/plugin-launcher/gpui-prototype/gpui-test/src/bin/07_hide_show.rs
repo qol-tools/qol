@@ -1,0 +1,77 @@
+// Test: Minimize window
+// Verifies: minimize_window works on Linux
+
+use gpui::*;
+
+actions!(test, [Quit]);
+
+struct DaemonView {
+    focus_handle: FocusHandle,
+}
+
+impl DaemonView {
+    fn new(cx: &mut Context<Self>) -> Self {
+        Self {
+            focus_handle: cx.focus_handle(),
+        }
+    }
+}
+
+impl Focusable for DaemonView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for DaemonView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("daemon-view")
+            .track_focus(&self.focus_handle)
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .bg(rgb(0x1e1e2e))
+            .on_key_down(cx.listener(|_this, event: &KeyDownEvent, window, _cx| {
+                if event.keystroke.key.as_str() == "m" {
+                    println!("Minimizing...");
+                    window.minimize_window();
+                }
+            }))
+            .child(
+                div()
+                    .text_color(rgb(0xcdd6f4))
+                    .text_size(px(14.))
+                    .child("Press M to minimize, Esc to quit"),
+            )
+    }
+}
+
+fn main() {
+    Application::new().run(|cx: &mut App| {
+        cx.bind_keys([KeyBinding::new("escape", Quit, None)]);
+        cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
+
+        let bounds = Bounds::centered(None, size(px(400.), px(60.)), cx);
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            titlebar: None,
+            window_decorations: Some(WindowDecorations::Client),
+            kind: WindowKind::PopUp,
+            focus: true,
+            ..Default::default()
+        };
+
+        cx.open_window(options, |window, cx| {
+            let view = cx.new(|cx| DaemonView::new(cx));
+            window.focus(&view.focus_handle(cx));
+            window.activate_window();
+            view
+        }).unwrap();
+
+        cx.activate(true);
+    });
+}
