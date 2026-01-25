@@ -12,7 +12,19 @@ gpui-list:
 	@ls -1 $(GPUI_DIR)/src/bin/*.rs 2>/dev/null | xargs -I {} basename {} .rs | sort
 
 gpui-%:
-	cd $(GPUI_DIR) && cargo run --bin $*
+	@NAME="$*"; \
+	if echo "$$NAME" | grep -Eq '^[0-9][0-9]$$'; then \
+		BIN="$$(ls -1 $(GPUI_DIR)/src/bin/$$NAME\_*.rs 2>/dev/null | head -1 | xargs -I {} basename {} .rs)"; \
+	elif ls -1 $(GPUI_DIR)/src/bin/$$NAME.rs >/dev/null 2>&1; then \
+		BIN="$$NAME"; \
+	else \
+		BIN="$$(ls -1 $(GPUI_DIR)/src/bin/*.rs 2>/dev/null | xargs -I {} basename {} .rs | grep -i "$$NAME" | head -1)"; \
+	fi; \
+	if [ -z "$$BIN" ]; then \
+		echo "No bin matches '$$NAME'"; \
+		exit 1; \
+	fi; \
+	cd $(GPUI_DIR) && cargo run --bin "$$BIN"
 
 dev:
 	cargo build --release
