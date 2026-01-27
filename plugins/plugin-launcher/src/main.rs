@@ -107,7 +107,7 @@ fn prune_frequency(data: &mut FrequencyData, half_life_days: f64) {
 }
 
 fn effective_count(entry: &FrequencyEntry, now: u64, half_life_days: f64) -> f64 {
-    let days_elapsed = (now - entry.last_accessed) as f64 / 86400.0;
+    let days_elapsed = now.saturating_sub(entry.last_accessed) as f64 / 86400.0;
     let decay = (-days_elapsed * 0.693 / half_life_days).exp();
     entry.count as f64 * decay
 }
