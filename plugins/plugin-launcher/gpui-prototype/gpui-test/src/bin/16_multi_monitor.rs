@@ -187,13 +187,13 @@ impl MultiMonitorView {
 
                         if received.is_some() {
                             if let Some(view) = view.upgrade() {
-                                let active_display = cx.update_entity(&view, |this: &mut MultiMonitorView, cx: &mut Context<MultiMonitorView>| {
-                                    this.get_active_display(cx)
-                                }).ok().flatten();
+                                let (active_display, click_point) = cx.update_entity(&view, |this: &mut MultiMonitorView, cx: &mut Context<MultiMonitorView>| {
+                                    (this.get_active_display(cx), this.get_recent_click_point())
+                                }).ok().unwrap_or((None, None));
 
                                 if let Some(display) = active_display {
                                     let _ = cx.update(|cx| {
-                                        open_launcher_popup(display, cx);
+                                        open_launcher_popup_at(click_point, display, cx);
                                     });
                                 }
 
@@ -259,6 +259,19 @@ impl MultiMonitorView {
         );
 
         active.and_then(|(id, _)| displays.iter().find(|d| d.id() == id).cloned())
+    }
+
+    fn get_recent_click_point(&self) -> Option<Point<Pixels>> {
+        let is_recent = self
+            .last_click_at
+            .map(|t| t.elapsed() < Duration::from_secs(5))
+            .unwrap_or(false);
+
+        if is_recent {
+            self.last_click.as_ref().map(|info| info.global)
+        } else {
+            None
+        }
     }
 
     fn apply_poll(&mut self, poll: PollResult, cx: &mut Context<Self>) {
@@ -1053,9 +1066,14 @@ impl Render for LauncherPopup {
     }
 }
 
-fn open_launcher_popup(display: Rc<dyn PlatformDisplay>, cx: &mut App) {
+fn open_launcher_popup_at(click_point: Option<Point<Pixels>>, display: Rc<dyn PlatformDisplay>, cx: &mut App) {
     let display_bounds = display.bounds();
-    let center_x = display_bounds.origin.x + (display_bounds.size.width - px(LAUNCHER_WIDTH)) / 2.0;
+
+    let center_x = if let Some(click) = click_point {
+        click.x - px(LAUNCHER_WIDTH / 2.0)
+    } else {
+        display_bounds.origin.x + (display_bounds.size.width - px(LAUNCHER_WIDTH)) / 2.0
+    };
     let center_y = display_bounds.origin.y + (display_bounds.size.height - px(LAUNCHER_HEIGHT)) / 3.0;
 
     let bounds = Bounds::new(
