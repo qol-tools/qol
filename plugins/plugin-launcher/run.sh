@@ -14,7 +14,7 @@ if [[ ! -x "$BINARY" ]]; then
 fi
 
 if [[ "$1" == "open" ]]; then
-    setsid "$BINARY" &
+    setsid "$BINARY" --show &
     exit 0
 else
     exec "$BINARY" "$@"
