@@ -6,5 +6,8 @@ edition = "2021"
 [dependencies]
 gpui = { version = "0.2", features = ["test-support"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", features = ["allow-unsafe-code"] }
+
 [dev-dependencies]
 proptest = "1.0"
