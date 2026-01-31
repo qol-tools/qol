@@ -6,3 +6,4 @@ launcher
 launcher.exe
 *.db
 /.idea
+/.worktrees
