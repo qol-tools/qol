@@ -11,3 +11,9 @@ x11rb = { version = "0.13", features = ["allow-unsafe-code"] }
 
 [dev-dependencies]
 proptest = "1.0"
+
+[patch.crates-io]
+core-text = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
+core-graphics = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
+core-foundation = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
+core-foundation-sys = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
