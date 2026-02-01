@@ -300,18 +300,13 @@ impl MultiMonitorView {
                                     (this.get_active_display(cx), this.get_recent_click_point(), this.launcher_window)
                                 }).ok().unwrap_or((None, None, None));
 
-                                let open_handle = existing_launcher.filter(|h| h.update(cx, |_, _, _| ()).is_ok());
-
-                                if let Some(handle) = open_handle {
+                                if let Some(handle) = existing_launcher.filter(|h| h.update(cx, |_, _, _| ()).is_ok()) {
                                     let _ = cx.update_window(handle.into(), |_, window, _cx| {
                                         window.remove_window();
                                     });
-                                    let _ = cx.update_entity(&view, |this: &mut MultiMonitorView, cx: &mut Context<MultiMonitorView>| {
-                                        this.launcher_window = None;
-                                        this.launcher_status = "Popup closed via F12".to_string();
-                                        cx.notify();
-                                    });
-                                } else if let Some(display) = active_display {
+                                }
+
+                                if let Some(display) = active_display {
                                     let new_handle = cx.update(|cx| {
                                         open_launcher_popup_at(click_point, display, cx)
                                     }).ok().flatten();
@@ -707,15 +702,13 @@ impl Render for MultiMonitorView {
                 match event.keystroke.key.as_str() {
                     "escape" => cx.quit(),
                     "f12" => {
-                        let open_handle = this.launcher_window.filter(|h| h.update(cx, |_, _, _| ()).is_ok());
-
-                        if let Some(handle) = open_handle {
+                        if let Some(handle) = this.launcher_window.filter(|h| h.update(cx, |_, _, _| ()).is_ok()) {
                             let _ = handle.update(cx, |_popup, window, _cx| {
                                 window.remove_window();
                             });
-                            this.launcher_window = None;
-                            this.launcher_status = "Popup closed via F12 (local)".to_string();
-                        } else if let Some(display) = this.get_active_display(cx) {
+                        }
+
+                        if let Some(display) = this.get_active_display(cx) {
                             let click_point = this.get_recent_click_point();
                             this.launcher_window = open_launcher_popup_at(click_point, display, cx);
                             this.launcher_status = "Popup opened via F12 (local)".to_string();
