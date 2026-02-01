@@ -1,10 +1,10 @@
-// Test: Minimize window
-// Verifies: minimize_window works on Linux
+// Test: Hide/show window
+// Verifies: minimize_window on Linux, hide app on macOS (popup windows can't minimize)
 
 use gpui::*;
 use gpui_test::open_window_with_focus;
 
-actions!(test, [Quit]);
+actions!(test, [Quit, Hide]);
 
 struct DaemonView {
     focus_handle: FocusHandle,
@@ -36,17 +36,27 @@ impl Render for DaemonView {
             .justify_center()
             .gap_2()
             .bg(rgb(0x1e1e2e))
-            .on_key_down(cx.listener(|_this, event: &KeyDownEvent, window, _cx| {
+            .on_key_down(cx.listener(|_this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key.as_str() == "m" {
-                    println!("Minimizing...");
-                    window.minimize_window();
+                    #[cfg(target_os = "macos")]
+                    {
+                        let _ = window;
+                        println!("Hiding app (macOS)...");
+                        cx.hide();
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        let _ = cx;
+                        println!("Minimizing window (Linux)...");
+                        window.minimize_window();
+                    }
                 }
             }))
             .child(
                 div()
                     .text_color(rgb(0xcdd6f4))
                     .text_size(px(14.))
-                    .child("Press M to minimize, Esc to quit"),
+                    .child("Press M to hide/minimize, Esc to quit"),
             )
     }
 }
