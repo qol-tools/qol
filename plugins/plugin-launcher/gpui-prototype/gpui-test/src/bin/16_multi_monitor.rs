@@ -1,19 +1,22 @@
 use gpui::*;
 use gpui_test::open_window_with_focus;
-use std::env;
-use std::process::Command;
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
+use std::env;
+#[cfg(target_os = "linux")]
+use std::process::Command;
+#[cfg(target_os = "linux")]
 use x11rb::connection::Connection;
 #[cfg(target_os = "linux")]
 use x11rb::protocol::xproto::{ConnectionExt as _, GrabMode, ModMask};
 
-actions!(test, [Quit]);
+actions!(test, [Quit, OpenLauncher]);
 
 const POLL_INTERVAL_MS: u64 = 100;
+#[cfg(target_os = "linux")]
 const HOTKEY_KEYCODE: u8 = 96;
 const LAUNCHER_WIDTH: f32 = 600.0;
 const LAUNCHER_HEIGHT: f32 = 42.0;
@@ -114,7 +117,110 @@ fn setup_global_hotkey() -> Result<mpsc::Receiver<()>, BackendStatus> {
     Ok(rx)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+fn setup_global_hotkey() -> Result<mpsc::Receiver<()>, BackendStatus> {
+    use std::os::raw::c_void;
+
+    type CGEventRef = *mut c_void;
+    type CFMachPortRef = *mut c_void;
+    type CFRunLoopSourceRef = *mut c_void;
+    type CFRunLoopRef = *mut c_void;
+    type CFStringRef = *const c_void;
+
+    const K_CG_SESSION_EVENT_TAP: u32 = 1;
+    const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
+    const K_CG_EVENT_TAP_OPTION_LISTEN_ONLY: u32 = 1;
+    const K_CG_EVENT_KEY_DOWN: u32 = 10;
+    const K_CG_KEYBOARD_EVENT_KEYCODE: u32 = 9;
+    const F12_KEYCODE: i64 = 111;
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventTapCreate(
+            tap: u32,
+            place: u32,
+            options: u32,
+            events_of_interest: u64,
+            callback: extern "C" fn(*mut c_void, u32, CGEventRef, *mut c_void) -> CGEventRef,
+            user_info: *mut c_void,
+        ) -> CFMachPortRef;
+        fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
+        fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFMachPortCreateRunLoopSource(
+            allocator: *mut c_void,
+            port: CFMachPortRef,
+            order: i64,
+        ) -> CFRunLoopSourceRef;
+        fn CFRunLoopGetCurrent() -> CFRunLoopRef;
+        fn CFRunLoopAddSource(rl: CFRunLoopRef, source: CFRunLoopSourceRef, mode: CFStringRef);
+        fn CFRunLoopRun();
+        static kCFRunLoopCommonModes: CFStringRef;
+    }
+
+    static TX: std::sync::OnceLock<mpsc::Sender<()>> = std::sync::OnceLock::new();
+
+    extern "C" fn callback(
+        _proxy: *mut c_void,
+        event_type: u32,
+        event: CGEventRef,
+        _user_info: *mut c_void,
+    ) -> CGEventRef {
+        if event_type == K_CG_EVENT_KEY_DOWN {
+            let keycode = unsafe { CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE) };
+            if keycode == F12_KEYCODE {
+                if let Some(tx) = TX.get() {
+                    let _ = tx.send(());
+                }
+            }
+        }
+        event
+    }
+
+    let (tx, rx) = mpsc::channel();
+    TX.set(tx).map_err(|_| BackendStatus::err("already initialized"))?;
+
+    std::thread::spawn(move || {
+        let event_mask: u64 = 1 << K_CG_EVENT_KEY_DOWN;
+
+        let tap = unsafe {
+            CGEventTapCreate(
+                K_CG_SESSION_EVENT_TAP,
+                K_CG_HEAD_INSERT_EVENT_TAP,
+                K_CG_EVENT_TAP_OPTION_LISTEN_ONLY,
+                event_mask,
+                callback,
+                std::ptr::null_mut(),
+            )
+        };
+
+        if tap.is_null() {
+            eprintln!("CGEventTapCreate failed - grant Accessibility permission in System Settings");
+            return;
+        }
+
+        unsafe {
+            let source = CFMachPortCreateRunLoopSource(std::ptr::null_mut(), tap, 0);
+            if source.is_null() {
+                eprintln!("CFMachPortCreateRunLoopSource failed");
+                return;
+            }
+            let run_loop = CFRunLoopGetCurrent();
+            CFRunLoopAddSource(run_loop, source, kCFRunLoopCommonModes);
+            CGEventTapEnable(tap, true);
+            CFRunLoopRun();
+        }
+    });
+
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    Ok(rx)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn setup_global_hotkey() -> Result<mpsc::Receiver<()>, BackendStatus> {
     Err(BackendStatus::err("unsupported OS"))
 }
@@ -128,7 +234,9 @@ struct PollResult {
 
 #[derive(Clone, Default)]
 struct PollState {
+    #[cfg(target_os = "linux")]
     button_down: bool,
+    #[cfg(target_os = "linux")]
     xinput_device: Option<String>,
 }
 
@@ -143,6 +251,7 @@ struct MultiMonitorView {
     click_status: BackendStatus,
     hotkey_status: BackendStatus,
     launcher_status: String,
+    launcher_window: Option<WindowHandle<LauncherPopup>>,
     _poll_task: Task<()>,
     _hotkey_task: Option<Task<()>>,
 }
@@ -187,20 +296,32 @@ impl MultiMonitorView {
 
                         if received.is_some() {
                             if let Some(view) = view.upgrade() {
-                                let (active_display, click_point) = cx.update_entity(&view, |this: &mut MultiMonitorView, cx: &mut Context<MultiMonitorView>| {
-                                    (this.get_active_display(cx), this.get_recent_click_point())
-                                }).ok().unwrap_or((None, None));
+                                let (active_display, click_point, existing_launcher) = cx.update_entity(&view, |this: &mut MultiMonitorView, cx: &mut Context<MultiMonitorView>| {
+                                    (this.get_active_display(cx), this.get_recent_click_point(), this.launcher_window)
+                                }).ok().unwrap_or((None, None, None));
 
-                                if let Some(display) = active_display {
-                                    let _ = cx.update(|cx| {
-                                        open_launcher_popup_at(click_point, display, cx);
+                                let open_handle = existing_launcher.filter(|h| h.update(cx, |_, _, _| ()).is_ok());
+
+                                if let Some(handle) = open_handle {
+                                    let _ = cx.update_window(handle.into(), |_, window, _cx| {
+                                        window.remove_window();
+                                    });
+                                    let _ = cx.update_entity(&view, |this: &mut MultiMonitorView, cx: &mut Context<MultiMonitorView>| {
+                                        this.launcher_window = None;
+                                        this.launcher_status = "Popup closed via F12".to_string();
+                                        cx.notify();
+                                    });
+                                } else if let Some(display) = active_display {
+                                    let new_handle = cx.update(|cx| {
+                                        open_launcher_popup_at(click_point, display, cx)
+                                    }).ok().flatten();
+
+                                    let _ = cx.update_entity(&view, |this: &mut MultiMonitorView, cx: &mut Context<MultiMonitorView>| {
+                                        this.launcher_window = new_handle;
+                                        this.launcher_status = "Popup opened via F12".to_string();
+                                        cx.notify();
                                     });
                                 }
-
-                                let _ = cx.update_entity(&view, |this: &mut MultiMonitorView, cx: &mut Context<MultiMonitorView>| {
-                                    this.launcher_status = "Popup opened via F12".to_string();
-                                    cx.notify();
-                                });
                             }
                         }
 
@@ -225,6 +346,7 @@ impl MultiMonitorView {
             click_status: BackendStatus::err("starting"),
             hotkey_status,
             launcher_status: "Press F12 anywhere to open launcher".to_string(),
+            launcher_window: None,
             _poll_task: poll_task,
             _hotkey_task: hotkey_task,
         }
@@ -232,6 +354,7 @@ impl MultiMonitorView {
 
     fn get_active_display(&self, cx: &Context<Self>) -> Option<Rc<dyn PlatformDisplay>> {
         let displays = cx.displays();
+        let display_infos = get_display_infos(&displays);
 
         let click_display_id = self.last_click.as_ref().and_then(|info| info.display_id);
         let click_is_recent = self
@@ -248,7 +371,7 @@ impl MultiMonitorView {
         let focus_display_id = self
             .focus_snapshot
             .as_ref()
-            .and_then(|snapshot| focused_display(&snapshot.bounds, &displays))
+            .and_then(|snapshot| focused_display_from_infos(&snapshot.bounds, &display_infos))
             .map(|(id, _)| id);
 
         let active = resolve_active_display(
@@ -297,7 +420,8 @@ impl MultiMonitorView {
         }
 
         if let Some(point) = poll.click_point {
-            let display_id = display_for_point(&cx.displays(), point);
+            let display_infos = get_display_infos(&cx.displays());
+            let display_id = display_for_point_from_infos(&display_infos, point);
             self.last_click = Some(ClickInfo { global: point, display_id });
             self.last_click_at = Some(Instant::now());
         }
@@ -313,14 +437,15 @@ impl Focusable for MultiMonitorView {
 impl Render for MultiMonitorView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let displays = cx.displays();
-        let union = display_union(&displays);
+        let display_infos = get_display_infos(&displays);
+        let union = display_union_from_infos(&display_infos);
         let window_bounds = window.bounds();
         let window_active = window.is_window_active();
 
         let focus_display = self
             .focus_snapshot
             .as_ref()
-            .and_then(|snapshot| focused_display(&snapshot.bounds, &displays));
+            .and_then(|snapshot| focused_display_from_infos(&snapshot.bounds, &display_infos));
         let focus_display_id = focus_display.map(|(id, _)| id);
         let click_display_id = self.last_click.as_ref().and_then(|info| info.display_id);
 
@@ -450,10 +575,10 @@ impl Render for MultiMonitorView {
         let mut map_children: Vec<AnyElement> = Vec::new();
 
         if let Some(union_bounds) = union.as_ref() {
-            for display in displays.iter() {
-                let bounds = display.bounds();
-                let scaled = scale_bounds(&bounds, union_bounds, map_origin, scale);
-                let id = display.id();
+            for info in display_infos.iter() {
+                let bounds = &info.bounds;
+                let scaled = scale_bounds(bounds, union_bounds, map_origin, scale);
+                let id = info.id;
                 let is_focus = focus_display_id == Some(id);
                 let is_click = click_display_id == Some(id);
                 let is_active = active_display.map(|(active_id, _)| active_id) == Some(id);
@@ -578,6 +703,28 @@ impl Render for MultiMonitorView {
             .flex()
             .flex_col()
             .bg(rgb(0x11111b))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+                match event.keystroke.key.as_str() {
+                    "escape" => cx.quit(),
+                    "f12" => {
+                        let open_handle = this.launcher_window.filter(|h| h.update(cx, |_, _, _| ()).is_ok());
+
+                        if let Some(handle) = open_handle {
+                            let _ = handle.update(cx, |_popup, window, _cx| {
+                                window.remove_window();
+                            });
+                            this.launcher_window = None;
+                            this.launcher_status = "Popup closed via F12 (local)".to_string();
+                        } else if let Some(display) = this.get_active_display(cx) {
+                            let click_point = this.get_recent_click_point();
+                            this.launcher_window = open_launcher_popup_at(click_point, display, cx);
+                            this.launcher_status = "Popup opened via F12 (local)".to_string();
+                        }
+                        cx.notify();
+                    }
+                    _ => {}
+                }
+            }))
             .child(
                 div()
                     .h(header_height)
@@ -725,35 +872,69 @@ fn resolve_active_display(
     }
 }
 
-fn display_union(displays: &[Rc<dyn PlatformDisplay>]) -> Option<Bounds<Pixels>> {
-    let mut iter = displays.iter();
-    let first = iter.next()?.bounds();
-    Some(iter.fold(first, |acc, display| acc.union(&display.bounds())))
+#[derive(Clone)]
+struct DisplayInfo {
+    id: DisplayId,
+    bounds: Bounds<Pixels>,
 }
 
-fn display_for_point(
-    displays: &[Rc<dyn PlatformDisplay>],
+fn get_display_infos(displays: &[Rc<dyn PlatformDisplay>]) -> Vec<DisplayInfo> {
+    #[cfg(target_os = "macos")]
+    {
+        let cg_bounds = get_macos_display_bounds();
+        displays
+            .iter()
+            .enumerate()
+            .map(|(i, display)| {
+                let bounds = cg_bounds.get(i).cloned().unwrap_or_else(|| display.bounds());
+                DisplayInfo {
+                    id: display.id(),
+                    bounds,
+                }
+            })
+            .collect()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        displays
+            .iter()
+            .map(|display| DisplayInfo {
+                id: display.id(),
+                bounds: display.bounds(),
+            })
+            .collect()
+    }
+}
+
+fn display_union_from_infos(infos: &[DisplayInfo]) -> Option<Bounds<Pixels>> {
+    let mut iter = infos.iter();
+    let first = iter.next()?.bounds;
+    Some(iter.fold(first, |acc, info| acc.union(&info.bounds)))
+}
+
+fn display_for_point_from_infos(
+    infos: &[DisplayInfo],
     point: Point<Pixels>,
 ) -> Option<DisplayId> {
-    displays
+    infos
         .iter()
-        .find(|display| display.bounds().contains(&point))
-        .map(|display| display.id())
+        .find(|info| info.bounds.contains(&point))
+        .map(|info| info.id)
 }
 
-fn focused_display(
+fn focused_display_from_infos(
     window_bounds: &Bounds<Pixels>,
-    displays: &[Rc<dyn PlatformDisplay>],
+    infos: &[DisplayInfo],
 ) -> Option<(DisplayId, f64)> {
     let mut best: Option<(DisplayId, f64)> = None;
-    for display in displays.iter() {
-        let area = intersection_area(window_bounds, &display.bounds());
+    for info in infos.iter() {
+        let area = intersection_area(window_bounds, &info.bounds);
         if area <= 0.0 {
             continue;
         }
         match best {
             Some((_, best_area)) if best_area >= area => {}
-            _ => best = Some((display.id(), area)),
+            _ => best = Some((info.id, area)),
         }
     }
     best
@@ -859,7 +1040,78 @@ fn poll_focus() -> (Option<FocusSnapshot>, BackendStatus) {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+fn poll_focus() -> (Option<FocusSnapshot>, BackendStatus) {
+    use std::process::Command;
+
+    let script = r#"
+        tell application "System Events"
+            set frontApp to first application process whose frontmost is true
+            set frontAppName to name of frontApp
+            try
+                set frontWindow to first window of frontApp
+                set {x, y} to position of frontWindow
+                set {w, h} to size of frontWindow
+                return frontAppName & "|" & x & "," & y & "," & w & "," & h
+            on error
+                return "no-window"
+            end try
+        end tell
+    "#;
+
+    let output = Command::new("osascript")
+        .args(["-e", script])
+        .output();
+
+    let Ok(out) = output else {
+        return (None, BackendStatus::err("osascript failed"));
+    };
+
+    if !out.status.success() {
+        return (None, BackendStatus::err("osascript failed"));
+    }
+
+    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if stdout == "no-window" || stdout.is_empty() {
+        return (None, BackendStatus::ok("osascript (no window)"));
+    }
+
+    let pipe_parts: Vec<&str> = stdout.splitn(2, '|').collect();
+    let (app_name, coords_str) = if pipe_parts.len() == 2 {
+        (pipe_parts[0], pipe_parts[1])
+    } else {
+        ("?", stdout.as_str())
+    };
+
+    let parts: Vec<&str> = coords_str.split(',').collect();
+    if parts.len() != 4 {
+        return (None, BackendStatus::err("osascript parse error"));
+    }
+
+    let x = parts[0].parse::<i32>().ok();
+    let y = parts[1].parse::<i32>().ok();
+    let w = parts[2].parse::<i32>().ok();
+    let h = parts[3].parse::<i32>().ok();
+
+    match (x, y, w, h) {
+        (Some(x), Some(y), Some(w), Some(h)) if w > 0 && h > 0 => {
+            println!("Focus: {} at ({}, {}, {}, {})", app_name, x, y, w, h);
+            (
+                Some(FocusSnapshot {
+                    window_id: None,
+                    bounds: Bounds::new(
+                        point(px(x as f32), px(y as f32)),
+                        size(px(w as f32), px(h as f32)),
+                    ),
+                }),
+                BackendStatus::ok("osascript"),
+            )
+        }
+        _ => (None, BackendStatus::err("osascript parse error")),
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn poll_focus() -> (Option<FocusSnapshot>, BackendStatus) {
     (None, BackendStatus::err("unsupported OS"))
 }
@@ -911,7 +1163,12 @@ fn poll_click(state: &mut PollState) -> (Option<Point<Pixels>>, BackendStatus) {
     (click_point, BackendStatus::ok("xinput + xdotool"))
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+fn poll_click(_state: &mut PollState) -> (Option<Point<Pixels>>, BackendStatus) {
+    (None, BackendStatus::err("macOS (click tracking not implemented)"))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn poll_click(_state: &mut PollState) -> (Option<Point<Pixels>>, BackendStatus) {
     (None, BackendStatus::err("unsupported OS"))
 }
@@ -979,6 +1236,7 @@ fn query_mouse_location() -> Option<Point<Pixels>> {
     Some(point(px(x as f32), px(y as f32)))
 }
 
+#[cfg(target_os = "linux")]
 fn parse_shell_i32(output: &str, key: &str) -> Option<i32> {
     for line in output.lines() {
         if let Some(val) = line.strip_prefix(&format!("{}=", key)) {
@@ -988,6 +1246,7 @@ fn parse_shell_i32(output: &str, key: &str) -> Option<i32> {
     None
 }
 
+#[cfg(target_os = "linux")]
 fn parse_shell_u64(output: &str, key: &str) -> Option<u64> {
     for line in output.lines() {
         if let Some(val) = line.strip_prefix(&format!("{}=", key)) {
@@ -1003,11 +1262,7 @@ fn is_wayland_session() -> bool {
         || env::var_os("WAYLAND_DISPLAY").is_some()
 }
 
-#[cfg(not(target_os = "linux"))]
-fn is_wayland_session() -> bool {
-    false
-}
-
+#[cfg(target_os = "linux")]
 fn command_exists(cmd: &str) -> bool {
     env::var_os("PATH")
         .and_then(|paths| {
@@ -1066,8 +1321,13 @@ impl Render for LauncherPopup {
     }
 }
 
-fn open_launcher_popup_at(click_point: Option<Point<Pixels>>, display: Rc<dyn PlatformDisplay>, cx: &mut App) {
-    let display_bounds = display.bounds();
+fn open_launcher_popup_at(click_point: Option<Point<Pixels>>, display: Rc<dyn PlatformDisplay>, cx: &mut App) -> Option<WindowHandle<LauncherPopup>> {
+    let display_infos = get_display_infos(&cx.displays());
+    let display_bounds = display_infos
+        .iter()
+        .find(|info| info.id == display.id())
+        .map(|info| info.bounds)
+        .unwrap_or_else(|| display.bounds());
 
     let center_x = if let Some(click) = click_point {
         click.x - px(LAUNCHER_WIDTH / 2.0)
@@ -1090,12 +1350,105 @@ fn open_launcher_popup_at(click_point: Option<Point<Pixels>>, display: Rc<dyn Pl
         ..Default::default()
     };
 
-    let _ = cx.open_window(options, |_window, cx| cx.new(|cx| LauncherPopup::new(cx)));
+    cx.open_window(options, |_window, cx| cx.new(|cx| LauncherPopup::new(cx))).ok()
+}
+
+#[cfg(target_os = "macos")]
+fn get_macos_display_bounds() -> Vec<Bounds<Pixels>> {
+
+    #[repr(C)]
+    #[derive(Debug, Copy, Clone)]
+    struct CGRect {
+        origin: CGPoint,
+        size: CGSize,
+    }
+
+    #[repr(C)]
+    #[derive(Debug, Copy, Clone)]
+    struct CGPoint {
+        x: f64,
+        y: f64,
+    }
+
+    #[repr(C)]
+    #[derive(Debug, Copy, Clone)]
+    struct CGSize {
+        width: f64,
+        height: f64,
+    }
+
+    type CGDirectDisplayID = u32;
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGGetActiveDisplayList(
+            max_displays: u32,
+            displays: *mut CGDirectDisplayID,
+            display_count: *mut u32,
+        ) -> i32;
+        fn CGDisplayBounds(display: CGDirectDisplayID) -> CGRect;
+    }
+
+    let mut display_ids: [CGDirectDisplayID; 16] = [0; 16];
+    let mut display_count: u32 = 0;
+
+    unsafe {
+        let result = CGGetActiveDisplayList(16, display_ids.as_mut_ptr(), &mut display_count);
+        if result != 0 {
+            return Vec::new();
+        }
+    }
+
+    let mut bounds_list = Vec::new();
+    for i in 0..display_count as usize {
+        let rect = unsafe { CGDisplayBounds(display_ids[i]) };
+        bounds_list.push(Bounds::new(
+            point(px(rect.origin.x as f32), px(rect.origin.y as f32)),
+            size(px(rect.size.width as f32), px(rect.size.height as f32)),
+        ));
+    }
+
+    bounds_list
+}
+
+#[cfg(not(target_os = "macos"))]
+fn get_macos_display_bounds() -> Vec<Bounds<Pixels>> {
+    Vec::new()
 }
 
 fn main() {
     Application::new().run(|cx: &mut App| {
-        cx.bind_keys([KeyBinding::new("escape", Quit, None)]);
+        let displays = cx.displays();
+        println!("gpui detected {} display(s):", displays.len());
+        for (i, display) in displays.iter().enumerate() {
+            let bounds = display.bounds();
+            println!(
+                "  Display {} (gpui): id={} bounds=({}, {}, {}, {})",
+                i,
+                u32::from(display.id()),
+                bounds.origin.x.to_f64() as i32,
+                bounds.origin.y.to_f64() as i32,
+                bounds.size.width.to_f64() as i32,
+                bounds.size.height.to_f64() as i32,
+            );
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let cg_bounds = get_macos_display_bounds();
+            println!("CoreGraphics detected {} display(s):", cg_bounds.len());
+            for (i, bounds) in cg_bounds.iter().enumerate() {
+                println!(
+                    "  Display {} (CG): bounds=({}, {}, {}, {})",
+                    i,
+                    bounds.origin.x.to_f64() as i32,
+                    bounds.origin.y.to_f64() as i32,
+                    bounds.size.width.to_f64() as i32,
+                    bounds.size.height.to_f64() as i32,
+                );
+            }
+        }
+
         cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
 
         let bounds = Bounds::centered(None, size(px(980.), px(720.)), cx);
