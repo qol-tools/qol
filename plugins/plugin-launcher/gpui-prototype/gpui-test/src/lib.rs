@@ -1,3 +1,6 @@
+pub mod desktop_entry;
+pub mod monitor;
+
 use gpui::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
