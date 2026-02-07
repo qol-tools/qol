@@ -35,4 +35,46 @@ impl LauncherState {
     pub fn clear_selection(&mut self) {
         self.selection_anchor = None;
     }
+
+    pub fn selection_text(&self) -> Option<String> {
+        let (start, end) = self.selected_range()?;
+        let start_b = Self::char_to_byte_index(&self.query, start);
+        let end_b = Self::char_to_byte_index(&self.query, end);
+        Some(self.query[start_b..end_b].to_string())
+    }
+
+    pub fn cut_selection(&mut self) -> Option<String> {
+        let selected = self.selection_text()?;
+        self.delete_selection();
+        Some(selected)
+    }
+
+    pub fn paste_text(&mut self, text: &str) -> bool {
+        if text.is_empty() {
+            return false;
+        }
+
+        self.delete_selection();
+        let idx = Self::char_to_byte_index(&self.query, self.cursor);
+        self.query.insert_str(idx, text);
+        self.cursor += text.chars().count();
+        self.clear_selection();
+        true
+    }
+
+    pub(crate) fn char_to_byte_index(s: &str, char_idx: usize) -> usize {
+        s.char_indices().nth(char_idx).map(|(i, _)| i).unwrap_or(s.len())
+    }
+
+    pub(crate) fn delete_selection(&mut self) -> bool {
+        let Some((start, end)) = self.selected_range() else {
+            return false;
+        };
+        let start_b = Self::char_to_byte_index(&self.query, start);
+        let end_b = Self::char_to_byte_index(&self.query, end);
+        self.query.replace_range(start_b..end_b, "");
+        self.cursor = start;
+        self.clear_selection();
+        true
+    }
 }
