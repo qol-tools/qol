@@ -14,7 +14,7 @@ impl LauncherView {
     pub(super) fn handle_key(
         &mut self,
         event: &KeyDownEvent,
-        _window: &mut gpui::Window,
+        window: &mut gpui::Window,
         cx: &mut Context<Self>,
     ) {
         let key = event.keystroke.key.as_str();
@@ -33,7 +33,7 @@ impl LauncherView {
                 self.state.selected = 0;
                 cx.notify();
             }
-            InputEffect::Launch => self.launch_selected(cx),
+            InputEffect::Launch => self.launch_selected(window),
         }
     }
 
@@ -91,7 +91,7 @@ impl LauncherView {
         }
     }
 
-    fn launch_selected(&mut self, cx: &mut Context<Self>) {
+    fn launch_selected(&mut self, window: &mut gpui::Window) {
         self.store.ensure_filtered(&self.state);
         let Some(scored) = self.store.get(self.state.selected) else {
             return;
@@ -100,7 +100,7 @@ impl LauncherView {
             return;
         };
         if actions::launch_item(&item) {
-            cx.quit();
+            window.remove_window();
         }
     }
 }

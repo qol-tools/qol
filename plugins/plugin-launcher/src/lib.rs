@@ -1,3 +1,4 @@
+pub mod daemon;
 pub mod desktop_entry;
 pub mod launcher_app;
 pub mod monitor;

@@ -12,6 +12,16 @@ impl Focusable for LauncherView {
 
 impl Render for LauncherView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.blur_sub.is_none() {
+            self.blur_sub = Some(cx.on_blur(
+                &self.focus_handle,
+                window,
+                |_this, window, _cx| {
+                    window.remove_window();
+                },
+            ));
+        }
+
         self.store.ensure_filtered(&self.state);
         let visible = self.store.result_count().min(MAX_VISIBLE);
         let results_height = visible as f32 * ROW_HEIGHT;
