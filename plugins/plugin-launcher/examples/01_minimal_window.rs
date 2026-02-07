@@ -2,7 +2,7 @@
 // Verifies: Basic gpui setup, window creation, action handling
 
 use gpui::*;
-use gpui_test::open_window_with_focus;
+use launcher::open_window_with_focus;
 
 actions!(test, [Quit]);
 

@@ -2,7 +2,7 @@
 // Verifies: minimize_window on Linux, hide app on macOS (popup windows can't minimize)
 
 use gpui::*;
-use gpui_test::open_window_with_focus;
+use launcher::open_window_with_focus;
 
 actions!(test, [Quit, Hide]);
 

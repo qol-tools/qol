@@ -2,7 +2,7 @@
 // Verifies: overflow_y_scroll, scroll behavior
 
 use gpui::*;
-use gpui_test::open_window_with_focus;
+use launcher::open_window_with_focus;
 
 actions!(test, [Quit]);
 

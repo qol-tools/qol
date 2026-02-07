@@ -1,58 +1,46 @@
-// Test: List with selection highlight and keyboard navigation
-// Verifies: Up/Down navigation, selection state, visual highlight
+// Test: Dynamic window resize based on content
+// Verifies: window.resize() during render, height changes with items
 
 use gpui::*;
-use gpui_test::open_window_with_focus;
+use launcher::open_window_with_focus;
 
 actions!(test, [Quit]);
 
-struct ListView {
+struct ResizeView {
     items: Vec<String>,
-    selected: usize,
     focus_handle: FocusHandle,
 }
 
-impl ListView {
+impl ResizeView {
     fn new(cx: &mut Context<Self>) -> Self {
         Self {
-            items: vec![
-                "Firefox".into(),
-                "Chrome".into(),
-                "Visual Studio Code".into(),
-                "Slack".into(),
-                "Discord".into(),
-                "Spotify".into(),
-                "Terminal".into(),
-                "Files".into(),
-            ],
-            selected: 0,
+            items: vec![],
             focus_handle: cx.focus_handle(),
         }
     }
 
-    fn move_up(&mut self) {
-        if self.selected > 0 {
-            self.selected -= 1;
-        }
-    }
-
-    fn move_down(&mut self) {
-        if self.selected < self.items.len() - 1 {
-            self.selected += 1;
-        }
+    fn update_height(&self, window: &mut Window) {
+        let header_height = 42.0;
+        let item_height = 32.0;
+        let max_items = 8;
+        let visible = self.items.len().min(max_items);
+        let total = header_height + (visible as f32 * item_height);
+        window.resize(size(px(600.), px(total)));
     }
 }
 
-impl Focusable for ListView {
+impl Focusable for ResizeView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
 }
 
-impl Render for ListView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+impl Render for ResizeView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.update_height(window);
+
         div()
-            .id("list-view")
+            .id("resize-view")
             .track_focus(&self.focus_handle)
             .size_full()
             .flex()
@@ -60,17 +48,21 @@ impl Render for ListView {
             .bg(rgb(0x1e1e2e))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
                 match event.keystroke.key.as_str() {
-                    "up" => { this.move_up(); cx.notify(); }
-                    "down" => { this.move_down(); cx.notify(); }
-                    "enter" => {
-                        println!("Selected: {}", this.items[this.selected]);
+                    "a" => {
+                        let n = this.items.len() + 1;
+                        this.items.push(format!("Item {}", n));
+                        cx.notify();
+                    }
+                    "c" => {
+                        this.items.clear();
+                        cx.notify();
                     }
                     _ => {}
                 }
             }))
             .child(
                 div()
-                    .h(px(36.))
+                    .h(px(42.))
                     .w_full()
                     .flex()
                     .items_center()
@@ -79,24 +71,23 @@ impl Render for ListView {
                     .border_color(rgb(0x45475a))
                     .child(
                         div()
-                            .text_color(rgb(0x6c7086))
-                            .text_size(px(12.))
-                            .child("↑/↓ navigate, Enter select, Esc quit"),
+                            .text_color(rgb(0xcdd6f4))
+                            .text_size(px(14.))
+                            .child(format!("Items: {} | A=add, C=clear, Esc=quit", self.items.len())),
                     ),
             )
             .children(
-                self.items.iter().enumerate().map(|(i, item)| {
-                    let is_selected = i == self.selected;
+                self.items.iter().enumerate().take(8).map(|(i, item)| {
                     div()
                         .h(px(32.))
                         .w_full()
                         .flex()
                         .items_center()
                         .px_4()
-                        .bg(if is_selected { rgb(0x45475a) } else { rgb(0x1e1e2e) })
+                        .bg(if i % 2 == 0 { rgb(0x1e1e2e) } else { rgb(0x252536) })
                         .child(
                             div()
-                                .text_color(if is_selected { rgb(0xcdd6f4) } else { rgb(0xa6adc8) })
+                                .text_color(rgb(0xcdd6f4))
                                 .text_size(px(14.))
                                 .child(item.clone()),
                         )
@@ -110,10 +101,7 @@ fn main() {
         cx.bind_keys([KeyBinding::new("escape", Quit, None)]);
         cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
 
-        let item_count = 8;
-        let height = 36.0 + (item_count as f32 * 32.0);
-        let bounds = Bounds::centered(None, size(px(400.), px(height)), cx);
-
+        let bounds = Bounds::centered(None, size(px(600.), px(42.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: None,
@@ -123,7 +111,7 @@ fn main() {
             ..Default::default()
         };
 
-        open_window_with_focus(cx, options, |_window, cx| ListView::new(cx)).unwrap();
+        open_window_with_focus(cx, options, |_window, cx| ResizeView::new(cx)).unwrap();
 
         cx.activate(true);
     });

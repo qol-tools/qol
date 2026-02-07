@@ -1,46 +1,57 @@
-// Test: Borderless popup window (no titlebar, no decorations)
-// Verifies: WindowDecorations::Client, WindowKind::PopUp
+// Test: Close window when focus is lost (blur detection)
+// Verifies: on_blur for launcher-style popups
 
 use gpui::*;
-use gpui_test::open_window_with_focus;
+use launcher::open_window_with_focus;
 
 actions!(test, [Quit]);
 
-struct PopupView {
+struct BlurView {
     focus_handle: FocusHandle,
+    blur_subscription: Option<Subscription>,
 }
 
-impl PopupView {
+impl BlurView {
     fn new(cx: &mut Context<Self>) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
+            blur_subscription: None,
         }
     }
 }
 
-impl Focusable for PopupView {
+impl Focusable for BlurView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
 }
 
-impl Render for PopupView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+impl Render for BlurView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.blur_subscription.is_none() {
+            self.blur_subscription = Some(cx.on_blur(
+                &self.focus_handle,
+                window,
+                |_this, _window, cx| {
+                    println!("Focus lost - quitting");
+                    cx.quit();
+                },
+            ));
+        }
+
         div()
+            .id("blur-view")
             .track_focus(&self.focus_handle)
             .size_full()
-            .bg(rgb(0x1e1e2e))
-            .border_1()
-            .border_color(rgb(0x45475a))
-            .rounded_md()
             .flex()
             .items_center()
             .justify_center()
+            .bg(rgb(0x1e1e2e))
             .child(
                 div()
                     .text_color(rgb(0xcdd6f4))
-                    .text_size(px(16.))
-                    .child("Borderless popup - Press Escape to quit"),
+                    .text_size(px(14.))
+                    .child("Click outside this window to close (blur detection)"),
             )
     }
 }
@@ -50,10 +61,9 @@ fn main() {
         cx.bind_keys([KeyBinding::new("escape", Quit, None)]);
         cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
 
-        let bounds = Bounds::centered(None, size(px(600.), px(42.)), cx);
+        let bounds = Bounds::centered(None, size(px(500.), px(60.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
-            window_min_size: Some(size(px(200.), px(20.))),
             titlebar: None,
             window_decorations: Some(WindowDecorations::Client),
             kind: WindowKind::PopUp,
@@ -61,7 +71,8 @@ fn main() {
             ..Default::default()
         };
 
-        open_window_with_focus(cx, options, |_window, cx| PopupView::new(cx)).unwrap();
+        open_window_with_focus(cx, options, |_window, cx| BlurView::new(cx)).unwrap();
+
         cx.activate(true);
     });
 }
