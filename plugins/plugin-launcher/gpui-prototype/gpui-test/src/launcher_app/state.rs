@@ -3,12 +3,28 @@ use super::layout::HEADER_HEIGHT;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchMode {
     Apps,
+    Files,
 }
 
 impl SearchMode {
     pub fn label(self) -> &'static str {
         match self {
             Self::Apps => "Apps",
+            Self::Files => "Files",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Apps => Self::Files,
+            Self::Files => Self::Apps,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Apps => Self::Files,
+            Self::Files => Self::Apps,
         }
     }
 }
@@ -36,6 +52,11 @@ impl LauncherState {
 
     pub fn query_len(&self) -> usize {
         self.query.chars().count()
+    }
+
+    pub fn cycle_mode(&mut self, reverse: bool) {
+        self.mode = if reverse { self.mode.prev() } else { self.mode.next() };
+        self.selected = 0;
     }
 
     pub fn selected_range(&self) -> Option<(usize, usize)> {
