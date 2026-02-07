@@ -21,7 +21,8 @@ actions!(launcher, [Quit]);
 
 struct LauncherView {
     state: LauncherState,
-    entries: Vec<DesktopEntry>,
+    app_entries: Vec<DesktopEntry>,
+    file_entries: Vec<search::FileEntry>,
     focus_handle: FocusHandle,
 }
 
@@ -29,13 +30,19 @@ impl LauncherView {
     fn new(cx: &mut Context<Self>) -> Self {
         Self {
             state: LauncherState::new(),
-            entries: desktop_entry::scan(&desktop_entry::default_dirs()),
+            app_entries: desktop_entry::scan(&desktop_entry::default_dirs()),
+            file_entries: search::scan_files(),
             focus_handle: cx.focus_handle(),
         }
     }
 
     fn filtered(&self) -> Vec<search::Scored<'_>> {
-        search::filtered(&self.entries, &self.state.query, self.state.mode)
+        search::filtered(
+            &self.app_entries,
+            &self.file_entries,
+            &self.state.query,
+            self.state.mode,
+        )
     }
 
     fn handle_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
@@ -74,7 +81,8 @@ impl LauncherView {
             InputEffect::Notify => cx.notify(),
             InputEffect::Launch => {
                 actions::launch_selected(
-                    &self.entries,
+                    &self.app_entries,
+                    &self.file_entries,
                     &self.state.query,
                     self.state.mode,
                     self.state.selected,

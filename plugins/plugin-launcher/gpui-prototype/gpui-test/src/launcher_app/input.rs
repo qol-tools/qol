@@ -16,6 +16,7 @@ impl LauncherState {
         let shift = modifiers.shift;
 
         match key.as_str() {
+            "tab" => self.cycle_mode(shift),
             "left" => self.move_left(shift),
             "right" => self.move_right(shift),
             "home" => self.move_home(shift),

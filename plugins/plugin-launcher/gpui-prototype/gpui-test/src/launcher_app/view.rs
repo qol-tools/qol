@@ -99,8 +99,8 @@ pub fn result_row(scored: &Scored<'_>, selected: bool, row_height: f32) -> Div {
     let bg = if selected { rgb(BG_SELECTED) } else { rgb(BG) };
 
     let spans: Vec<AnyElement> = scored
-        .entry
-        .name
+        .item
+        .name()
         .char_indices()
         .map(|(i, ch)| {
             let color = if positions.contains(&i) { rgb(HIGHLIGHT) } else { base_color };
