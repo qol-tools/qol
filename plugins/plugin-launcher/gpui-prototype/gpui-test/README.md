@@ -1,6 +1,6 @@
 # GPUI Test
 
-Minimal gpui spike to validate it works on Linux.
+GPUI development crate for the launcher.
 
 ## Linux Dependencies (Ubuntu/Debian)
 
@@ -18,17 +18,56 @@ Adjust `libstdc++-14-dev` based on your Ubuntu version:
 ## Build & Run
 
 ```bash
-cargo run
+cargo run --bin launcher
 ```
 
-## What This Tests
+## Launcher Behavior
 
-1. 42px tall borderless window (proves no min height constraint)
-2. Catppuccin-style dark background
-3. Escape key to quit
-4. Basic text rendering
+- Borderless popup window anchored to active monitor
+- Empty query shows only search bar (no suggestions)
+- Results list grows dynamically by result count
+- List height is capped at 8 rows
+- Fuzzy ranking prioritizes contiguous matches
 
-## Expected Result
+## Keyboard Controls
 
-A small floating bar appears center-top of screen with "Type to search..." text.
-Press Escape to close.
+### Navigation
+
+- `Esc`: close launcher
+- `Up` / `Down`: move selected result
+- `Enter`: launch selected result
+
+### Query Editing
+
+- `Left` / `Right`: move caret
+- `Shift+Left` / `Shift+Right`: selection
+- `Home` / `End`: move to start/end
+- `Shift+Home` / `Shift+End`: select to start/end
+- `Ctrl+A` (`Cmd+A` on macOS): select all
+- `Backspace` / `Delete`: delete backward/forward
+
+### Clipboard
+
+- `Ctrl+C` (`Cmd+C` on macOS): copy selected query text
+- `Ctrl+X` (`Cmd+X` on macOS): cut selected query text
+- `Ctrl+V` (`Cmd+V` on macOS): paste clipboard text into query
+
+`secondary` modifier is used internally:
+- macOS: `Cmd`
+- Linux/Windows: `Ctrl`
+
+## Architecture
+
+Entry point:
+- `src/bin/launcher.rs` -> `gpui_test::launcher_app::run()`
+
+Launcher modules:
+- `src/launcher_app/mod.rs`: composition and GPUI event wiring
+- `src/launcher_app/state.rs`: query/caret/selection state + text editing primitives
+- `src/launcher_app/input.rs`: key handling and editing commands
+- `src/launcher_app/search.rs`: filtering and fuzzy ranking
+- `src/launcher_app/layout.rs`: window sizing constants and resize policy
+- `src/launcher_app/view.rs`: search bar and result row rendering
+- `src/launcher_app/actions.rs`: launch side effects
+
+See `LAUNCHER_ARCHITECTURE.md` for details.

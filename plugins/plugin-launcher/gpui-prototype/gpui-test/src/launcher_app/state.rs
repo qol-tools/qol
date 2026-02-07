@@ -1,6 +1,20 @@
 use super::layout::HEADER_HEIGHT;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SearchMode {
+    Apps,
+}
+
+impl SearchMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Apps => "Apps",
+        }
+    }
+}
+
 pub struct LauncherState {
+    pub mode: SearchMode,
     pub query: String,
     pub cursor: usize,
     pub selection_anchor: Option<usize>,
@@ -11,6 +25,7 @@ pub struct LauncherState {
 impl LauncherState {
     pub fn new() -> Self {
         Self {
+            mode: SearchMode::Apps,
             query: String::new(),
             cursor: 0,
             selection_anchor: None,

@@ -15,6 +15,8 @@ use input::InputEffect;
 use layout::{resize_for_visible_rows, HEADER_HEIGHT, MAX_VISIBLE, ROW_HEIGHT, WINDOW_WIDTH};
 use state::LauncherState;
 
+pub use input::key_to_input_char;
+
 actions!(launcher, [Quit]);
 
 struct LauncherView {
@@ -33,7 +35,7 @@ impl LauncherView {
     }
 
     fn filtered(&self) -> Vec<search::Scored<'_>> {
-        search::filtered(&self.entries, &self.state.query)
+        search::filtered(&self.entries, &self.state.query, self.state.mode)
     }
 
     fn handle_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
@@ -71,7 +73,12 @@ impl LauncherView {
             InputEffect::Ignore => {}
             InputEffect::Notify => cx.notify(),
             InputEffect::Launch => {
-                actions::launch_selected(&self.entries, &self.state.query, self.state.selected);
+                actions::launch_selected(
+                    &self.entries,
+                    &self.state.query,
+                    self.state.mode,
+                    self.state.selected,
+                );
                 cx.quit();
             }
         }
@@ -100,6 +107,7 @@ impl Render for LauncherView {
             .bg(view::bg_color())
             .on_key_down(cx.listener(Self::handle_key))
             .child(view::search_bar(
+                self.state.mode.label(),
                 &self.state.query,
                 self.state.cursor,
                 self.state.selected_range(),
