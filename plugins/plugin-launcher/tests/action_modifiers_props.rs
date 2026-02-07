@@ -3,7 +3,7 @@ use proptest::prelude::*;
 mod common;
 use common::config;
 
-use gpui_test::{action_for_modifiers, action_hint, LaunchAction};
+use launcher::{action_for_modifiers, action_hint, LaunchAction};
 
 #[test]
 fn prop_ctrl_has_priority() {

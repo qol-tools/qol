@@ -1,5 +1,5 @@
 use gpui::*;
-use gpui_test::{
+use launcher::{
     action_for_modifiers, action_hint, action_label, open_window_with_focus, LaunchAction,
 };
 

@@ -1,5 +1,5 @@
 use gpui::*;
-use gpui_test::open_window_with_focus;
+use launcher::open_window_with_focus;
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};

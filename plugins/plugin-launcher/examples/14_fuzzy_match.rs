@@ -1,110 +1,97 @@
 use gpui::*;
-use gpui_test::open_window_with_focus;
-use std::collections::HashMap;
+use launcher::{fuzzy_match, open_window_with_focus, FuzzyMatch};
 
 actions!(test, [Quit]);
 
-const SECS_PER_DAY: u64 = 86400;
-const NOW: u64 = 1_000_000_000;
-const HALF_LIFE_DAYS: f64 = 7.0;
-const FREQUENCY_BONUS: i32 = 500;
-
-struct FrequencyEntry {
-    count: u32,
-    last_accessed: u64,
-}
-
-fn effective_count(entry: &FrequencyEntry, half_life_days: f64) -> f64 {
-    let days_elapsed = NOW.saturating_sub(entry.last_accessed) as f64 / SECS_PER_DAY as f64;
-    let decay = (-days_elapsed * 0.693 / half_life_days).exp();
-    entry.count as f64 * decay
-}
-
-struct ScoredItem {
-    name: String,
-    score: i32,
-}
-
-struct FrecencyView {
+struct FuzzyView {
     query: String,
     items: Vec<String>,
-    frequency: HashMap<String, FrequencyEntry>,
     selected: usize,
     focus_handle: FocusHandle,
 }
 
-impl FrecencyView {
+impl FuzzyView {
     fn new(cx: &mut Context<Self>) -> Self {
-        let items = vec![
-            "Firefox", "Chrome", "VS Code", "Slack", "Discord",
-            "Spotify", "Terminal", "Files", "Settings", "Calculator",
-        ].into_iter().map(String::from).collect();
-
-        let mut frequency = HashMap::new();
-        frequency.insert("Terminal".into(), FrequencyEntry { count: 20, last_accessed: NOW });
-        frequency.insert("Firefox".into(), FrequencyEntry { count: 15, last_accessed: NOW });
-        frequency.insert("VS Code".into(), FrequencyEntry { count: 10, last_accessed: NOW - 3 * SECS_PER_DAY });
-        frequency.insert("Slack".into(), FrequencyEntry { count: 5, last_accessed: NOW - 14 * SECS_PER_DAY });
-
-        Self { query: String::new(), items, frequency, selected: 0, focus_handle: cx.focus_handle() }
+        Self {
+            query: String::new(),
+            items: vec![
+                "Firefox",
+                "Google Chrome",
+                "Visual Studio Code",
+                "Slack",
+                "Discord",
+                "Spotify",
+                "Terminal Emulator",
+                "Files Manager",
+                "System Settings",
+                "Calculator",
+                "LibreOffice Writer",
+                "GIMP Image Editor",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+            selected: 0,
+            focus_handle: cx.focus_handle(),
+        }
     }
 
-    fn score_item(&self, name: &str) -> i32 {
-        let n = name.to_lowercase();
-        let q = self.query.to_lowercase();
+    fn matched_items(&self) -> Vec<(String, FuzzyMatch)> {
+        if self.query.is_empty() {
+            return self.items.iter()
+                .map(|name| (name.clone(), FuzzyMatch { score: 0, positions: vec![] }))
+                .collect();
+        }
 
-        let match_penalty = if q.is_empty() { 0 }
-            else if n == q { 0 }
-            else if n.starts_with(&q) { 100 }
-            else if n.contains(&q) { 200 }
-            else { 10000 };
-
-        let length_penalty = name.len() as i32;
-
-        let frequency_bonus = self.frequency.get(name)
-            .map(|e| (effective_count(e, HALF_LIFE_DAYS) * FREQUENCY_BONUS as f64) as i32)
-            .unwrap_or(0);
-
-        match_penalty + length_penalty - frequency_bonus
-    }
-
-    fn ranked_items(&self) -> Vec<ScoredItem> {
-        let mut scored: Vec<_> = self.items.iter()
-            .map(|name| ScoredItem { name: name.clone(), score: self.score_item(name) })
-            .filter(|item| {
-                if self.query.is_empty() { return true; }
-                let q = self.query.to_lowercase();
-                item.name.to_lowercase().contains(&q)
+        let mut results: Vec<_> = self.items.iter()
+            .filter_map(|name| {
+                fuzzy_match(&self.query, name).map(|m| (name.clone(), m))
             })
             .collect();
-        scored.sort_by_key(|item| item.score);
-        scored
-    }
-
-    fn record_launch(&mut self) {
-        let ranked = self.ranked_items();
-        if let Some(item) = ranked.get(self.selected) {
-            let name = item.name.clone();
-            let entry = self.frequency.entry(name).or_insert(FrequencyEntry { count: 0, last_accessed: NOW });
-            entry.count += 1;
-            entry.last_accessed = NOW;
-        }
+        results.sort_by_key(|(_, m)| m.score);
+        results
     }
 }
 
-impl Focusable for FrecencyView {
+impl Focusable for FuzzyView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
 }
 
-impl Render for FrecencyView {
+fn render_highlighted(name: &str, positions: &[usize], selected: bool) -> Div {
+    let highlight = rgb(0xf9e2af);
+    let normal = if selected { rgb(0xcdd6f4) } else { rgb(0xa6adc8) };
+    let chars: Vec<char> = name.chars().collect();
+
+    let mut container = div().flex().flex_row();
+    let mut i = 0;
+
+    while i < chars.len() {
+        let matched = positions.contains(&i);
+        let mut segment = String::new();
+        while i < chars.len() && positions.contains(&i) == matched {
+            segment.push(chars[i]);
+            i += 1;
+        }
+        container = container.child(
+            div()
+                .text_size(px(14.))
+                .text_color(if matched { highlight } else { normal })
+                .child(segment),
+        );
+    }
+
+    container
+}
+
+impl Render for FuzzyView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let ranked = self.ranked_items();
+        let matched = self.matched_items();
         let max_visible = 8;
 
         div()
-            .id("frecency-view")
+            .id("fuzzy-view")
             .track_focus(&self.focus_handle)
             .size_full()
             .flex()
@@ -114,20 +101,23 @@ impl Render for FrecencyView {
                 let key = &event.keystroke.key;
                 match key.as_str() {
                     "up" => {
-                        if this.selected > 0 { this.selected -= 1; }
+                        if this.selected > 0 {
+                            this.selected -= 1;
+                        }
                         cx.notify();
                     }
                     "down" => {
-                        let max = this.ranked_items().len().saturating_sub(1);
-                        if this.selected < max { this.selected += 1; }
+                        let max = this.matched_items().len().saturating_sub(1);
+                        if this.selected < max {
+                            this.selected += 1;
+                        }
                         cx.notify();
                     }
                     "enter" => {
-                        let ranked = this.ranked_items();
-                        if let Some(item) = ranked.get(this.selected) {
-                            println!("Launched: {} (score: {})", item.name, item.score);
+                        let matched = this.matched_items();
+                        if let Some((name, m)) = matched.get(this.selected) {
+                            println!("Launched: {} (score: {})", name, m.score);
                         }
-                        this.record_launch();
                         this.selected = 0;
                         this.query.clear();
                         cx.notify();
@@ -174,14 +164,14 @@ impl Render for FrecencyView {
                             .text_color(rgb(0xcdd6f4))
                             .text_size(px(16.))
                             .child(if self.query.is_empty() {
-                                "Type to search...".to_string()
+                                "Type to search (try: vsc, ff, gie)...".to_string()
                             } else {
                                 self.query.clone()
                             }),
                     ),
             )
             .children(
-                ranked.iter().enumerate().take(max_visible).map(|(i, item)| {
+                matched.iter().enumerate().take(max_visible).map(|(i, (name, m))| {
                     let is_selected = i == self.selected;
                     div()
                         .h(px(32.))
@@ -191,19 +181,18 @@ impl Render for FrecencyView {
                         .justify_between()
                         .px_4()
                         .bg(if is_selected { rgb(0x45475a) } else { rgb(0x1e1e2e) })
-                        .child(
-                            div()
-                                .text_color(if is_selected { rgb(0xcdd6f4) } else { rgb(0xa6adc8) })
-                                .text_size(px(14.))
-                                .child(item.name.clone()),
-                        )
+                        .child(render_highlighted(name, &m.positions, is_selected))
                         .child(
                             div()
                                 .text_color(rgb(0x585b70))
                                 .text_size(px(11.))
-                                .child(format!("{}", item.score)),
+                                .child(if self.query.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!("{}", m.score)
+                                }),
                         )
-                })
+                }),
             )
     }
 }
@@ -224,7 +213,7 @@ fn main() {
             ..Default::default()
         };
 
-        open_window_with_focus(cx, options, |_window, cx| FrecencyView::new(cx)).unwrap();
+        open_window_with_focus(cx, options, |_window, cx| FuzzyView::new(cx)).unwrap();
         cx.activate(true);
     });
 }

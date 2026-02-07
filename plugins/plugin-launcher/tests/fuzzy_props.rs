@@ -1,4 +1,4 @@
-use gpui_test::{fuzzy_match, FuzzyMatch};
+use launcher::{fuzzy_match, FuzzyMatch};
 use proptest::prelude::*;
 
 mod common;
