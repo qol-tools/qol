@@ -23,6 +23,7 @@ struct LauncherView {
     query: String,
     entries: Vec<DesktopEntry>,
     selected: usize,
+    window_height: f32,
     focus_handle: FocusHandle,
 }
 
@@ -37,11 +38,16 @@ impl LauncherView {
             query: String::new(),
             entries: desktop_entry::scan(&desktop_entry::default_dirs()),
             selected: 0,
+            window_height: HEADER_HEIGHT,
             focus_handle: cx.focus_handle(),
         }
     }
 
     fn filtered(&self) -> Vec<Scored<'_>> {
+        if self.query.trim().is_empty() {
+            return Vec::new();
+        }
+
         let mut results: Vec<Scored<'_>> = self
             .entries
             .iter()
@@ -74,6 +80,14 @@ impl LauncherView {
             spawn_detached(&exec);
         }
         cx.quit();
+    }
+
+    fn resize_for_visible_rows(&mut self, visible: usize, window: &mut Window) {
+        let target_height = HEADER_HEIGHT + (visible as f32 * ROW_HEIGHT);
+        if (self.window_height - target_height).abs() > f32::EPSILON {
+            window.resize(size(px(WINDOW_WIDTH), px(target_height)));
+            self.window_height = target_height;
+        }
     }
 
     fn handle_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
@@ -117,7 +131,10 @@ impl Focusable for LauncherView {
 }
 
 impl Render for LauncherView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let visible = self.filtered().len().min(MAX_VISIBLE);
+        let results_height = visible as f32 * ROW_HEIGHT;
+        self.resize_for_visible_rows(visible, window);
         let filtered = self.filtered();
 
         div()
@@ -129,12 +146,20 @@ impl Render for LauncherView {
             .bg(rgb(BG))
             .on_key_down(cx.listener(Self::handle_key))
             .child(search_bar(&self.query))
-            .children(
-                filtered
-                    .iter()
-                    .enumerate()
-                    .take(MAX_VISIBLE)
-                    .map(|(i, scored)| result_row(scored, i == self.selected)),
+            .child(
+                div()
+                    .h(px(results_height))
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .bg(rgb(BG))
+                    .children(
+                        filtered
+                            .iter()
+                            .enumerate()
+                            .take(MAX_VISIBLE)
+                            .map(|(i, scored)| result_row(scored, i == self.selected)),
+                    ),
             )
     }
 }
@@ -153,6 +178,7 @@ fn search_bar(query: &str) -> Div {
         .items_center()
         .px_4()
         .gap_2()
+        .bg(rgb(BG))
         .border_b_1()
         .border_color(rgb(BORDER))
         .child(div().text_color(rgb(TEXT_MUTED)).text_size(px(16.)).child(">"))
@@ -199,7 +225,7 @@ fn main() {
         cx.bind_keys([KeyBinding::new("escape", Quit, None)]);
         cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
 
-        let height = HEADER_HEIGHT + (MAX_VISIBLE as f32 * ROW_HEIGHT);
+        let height = HEADER_HEIGHT;
         let win_size = size(px(WINDOW_WIDTH), px(height));
         let bounds = monitor::active(cx)
             .map(|m| m.centered_bounds(win_size))
