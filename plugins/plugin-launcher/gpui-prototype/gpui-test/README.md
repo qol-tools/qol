@@ -71,4 +71,9 @@ Launcher modules:
 - `src/launcher_app/actions.rs`: launch side effects on selected item
 - `src/providers/files/*`: file source abstraction and provider implementations
 
+Architecture policy:
+- Every layer stays replaceable through explicit seams (`input`, `state`, `search`, `actions`, `providers`, `platform`).
+- Platform and display-server specifics must stay behind adapters; launcher core remains OS-agnostic.
+- If a feature cannot be added through a seam, introduce/refactor the seam first.
+
 See `LAUNCHER_ARCHITECTURE.md` for details.

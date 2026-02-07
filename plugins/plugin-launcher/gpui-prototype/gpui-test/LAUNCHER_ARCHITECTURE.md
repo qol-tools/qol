@@ -4,6 +4,27 @@
 
 Keep launcher behavior extensible without growing a single large module.
 
+## Abstraction-First Policy
+
+Every layer must be replaceable by introducing one more interface boundary.
+
+Rules:
+- No direct platform dependencies in launcher core modules.
+- No direct provider implementation calls outside composition/factory boundaries.
+- No feature may require touching more than one concern layer to add a new backend.
+- New behavior must be introduced by adding an adapter at an existing seam, or by creating a new seam first.
+
+Required seams:
+- `input` seam: map raw keys to high-level intents.
+- `state` seam: deterministic text/navigation transitions.
+- `search` seam: pure ranking/filtering over provided data.
+- `actions` seam: side effects for selected item execution.
+- `providers` seam: data acquisition/indexing per platform/backend.
+- `platform` seam: backend capability detection and backend-specific integrations.
+
+Non-negotiable constraint:
+- If a module cannot accept a new middle layer without rewrite, refactor before adding functionality.
+
 ## Module Boundaries
 
 - `src/bin/launcher.rs`
@@ -44,6 +65,10 @@ OS-agnostic file provider contract and default provider factory.
 - `src/providers/files/fallback.rs`
 Portable fallback file scanner used when no platform-specific indexed provider is active.
 
+- `src/providers/linux/*` (planned)
+Linux-specific provider implementations behind shared provider contracts.
+Must isolate Wayland/X11/runtime distro differences from launcher core.
+
 ## Data Flow
 
 1. Key event enters `mod.rs::handle_key`.
@@ -60,6 +85,18 @@ Portable fallback file scanner used when no platform-specific indexed provider i
 - Keep filesystem/index integration in `providers/files/*`.
 - Keep provider selection at composition boundary (`launcher_app/mod.rs`) only.
 - Avoid `#[cfg(...)]` inside launcher state/input/view/search modules.
+- Keep display-server specifics (Wayland/X11) behind platform capability adapters.
+
+## Capability Model
+
+Platform adapters expose capabilities, not platform conditionals:
+- `can_global_hotkey`
+- `can_focus_popup`
+- `can_clipboard_monitor`
+- `can_window_positioning`
+
+Feature code consumes capabilities and degrades gracefully when unavailable.
+No feature module should branch on distro name or display server directly.
 
 ## Clipboard + Selection
 
@@ -79,5 +116,15 @@ Clipboard shortcuts target the query field only:
 - Keep platform/window/GPUI wiring in `mod.rs`.
 - Keep rendering and styling in `view.rs`.
 - Keep filesystem/process side effects in `actions.rs`.
+- Add new backend-specific logic in `providers/*` or `platform/*` adapters only.
+
+## Entanglement Check Before Merge
+
+A change must satisfy all checks:
+- Core module compiles without referencing OS/backend crates.
+- Backend/provider can be swapped by changing only factory/composition wiring.
+- Search behavior remains testable with in-memory fixtures only.
+- Action execution remains testable with selected-item inputs only.
+- New mode/backend can be added without editing `view.rs` rendering primitives.
 
 This keeps tests and future feature branches isolated by concern.
