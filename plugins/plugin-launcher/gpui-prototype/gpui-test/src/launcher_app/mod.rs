@@ -7,10 +7,10 @@ mod view;
 
 use gpui::*;
 
-use crate::desktop_entry::{self, DesktopEntry};
 use crate::monitor;
 use crate::open_window_with_focus;
-use crate::providers::files;
+use crate::platform;
+use crate::providers::{apps, files};
 
 use input::InputEffect;
 use layout::{resize_for_visible_rows, HEADER_HEIGHT, MAX_VISIBLE, ROW_HEIGHT, WINDOW_WIDTH};
@@ -22,7 +22,7 @@ actions!(launcher, [Quit]);
 
 struct LauncherView {
     state: LauncherState,
-    app_entries: Vec<DesktopEntry>,
+    app_entries: Vec<apps::AppEntry>,
     file_entries: Vec<files::FileEntry>,
     focus_handle: FocusHandle,
 }
@@ -31,7 +31,7 @@ impl LauncherView {
     fn new(cx: &mut Context<Self>) -> Self {
         Self {
             state: LauncherState::new(),
-            app_entries: desktop_entry::scan(&desktop_entry::default_dirs()),
+            app_entries: apps::default_provider().load_entries(),
             file_entries: files::default_provider().load_entries(),
             focus_handle: cx.focus_handle(),
         }
@@ -144,9 +144,14 @@ pub fn run() {
         cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
 
         let win_size = size(px(WINDOW_WIDTH), px(HEADER_HEIGHT));
-        let bounds = monitor::active(cx)
-            .map(|m| m.centered_bounds(win_size))
-            .unwrap_or_else(|| Bounds::centered(None, win_size, cx));
+        let caps = platform::current_capabilities();
+        let bounds = if caps.can_window_positioning {
+            monitor::active(cx)
+                .map(|m| m.centered_bounds(win_size))
+                .unwrap_or_else(|| Bounds::centered(None, win_size, cx))
+        } else {
+            Bounds::centered(None, win_size, cx)
+        };
 
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),

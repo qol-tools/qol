@@ -69,7 +69,9 @@ Launcher modules:
 - `src/launcher_app/layout.rs`: window sizing constants and resize policy
 - `src/launcher_app/view.rs`: search bar and result row rendering
 - `src/launcher_app/actions.rs`: launch side effects on selected item
+- `src/providers/apps/*`: app source abstraction and platform-specific app providers
 - `src/providers/files/*`: file source abstraction and provider implementations
+- `src/platform/mod.rs`: backend capability model for Linux display servers
 
 Architecture policy:
 - Every layer stays replaceable through explicit seams (`input`, `state`, `search`, `actions`, `providers`, `platform`).

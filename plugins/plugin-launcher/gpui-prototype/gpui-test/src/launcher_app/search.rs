@@ -1,11 +1,11 @@
-use crate::desktop_entry::DesktopEntry;
+use crate::providers::apps::AppEntry;
 use crate::providers::files::FileEntry;
 use crate::{fuzzy_match, FuzzyMatch};
 
 use super::state::SearchMode;
 
 pub enum ResultItem<'a> {
-    App(&'a DesktopEntry),
+    App(&'a AppEntry),
     File(&'a FileEntry),
 }
 
@@ -24,7 +24,7 @@ pub struct Scored<'a> {
 }
 
 pub fn filtered<'a>(
-    app_entries: &'a [DesktopEntry],
+    app_entries: &'a [AppEntry],
     file_entries: &'a [FileEntry],
     query: &str,
     mode: SearchMode,
