@@ -105,14 +105,12 @@ fn search_bar_content(query: &str, cursor: usize, selection: Option<(usize, usiz
     out
 }
 
-pub fn result_row(scored: &Scored<'_>, selected: bool, row_height: f32) -> Div {
+pub fn result_row(scored: &Scored, name: &str, selected: bool, row_height: f32) -> Div {
     let positions = &scored.m.positions;
     let base_color = if selected { rgb(TEXT) } else { rgb(TEXT_DIM) };
     let bg = if selected { rgb(BG_SELECTED) } else { rgb(BG) };
 
-    let spans: Vec<AnyElement> = scored
-        .item
-        .name()
+    let spans: Vec<AnyElement> = name
         .char_indices()
         .map(|(i, ch)| {
             let color = if positions.contains(&i) { rgb(HIGHLIGHT) } else { base_color };

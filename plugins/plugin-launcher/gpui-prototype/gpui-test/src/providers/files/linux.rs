@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use crate::platform::{self, LinuxDisplayBackend};
 
+use super::linux_index;
 use super::fallback::scan_files;
 use super::{FileEntry, FilesProvider};
 
@@ -9,7 +10,13 @@ pub struct LinuxFilesProvider;
 
 impl FilesProvider for LinuxFilesProvider {
     fn load_entries(&self) -> Vec<FileEntry> {
-        scan_files(file_roots())
+        let roots = file_roots();
+        if let Some(entries) = linux_index::load(&roots) {
+            return entries;
+        }
+        let entries = scan_files(roots.clone());
+        linux_index::store(&roots, &entries);
+        entries
     }
 }
 

@@ -1,6 +1,8 @@
 mod fallback;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "linux")]
+mod linux_index;
 
 use std::path::PathBuf;
 

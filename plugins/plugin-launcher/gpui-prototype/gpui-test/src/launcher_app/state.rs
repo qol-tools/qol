@@ -91,7 +91,6 @@ impl LauncherState {
 
     pub fn cycle_mode(&mut self, reverse: bool) {
         self.mode = if reverse { self.mode.prev() } else { self.mode.next() };
-        self.selected = 0;
     }
 
     pub fn increase_fuzziness(&mut self) -> bool {
