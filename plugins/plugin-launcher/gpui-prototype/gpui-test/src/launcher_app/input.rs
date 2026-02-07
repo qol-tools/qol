@@ -158,6 +158,9 @@ pub fn key_to_input_char(key: &str, shift: bool) -> Option<char> {
     if key.chars().count() != 1 {
         return None;
     }
-    let ch = key.chars().next().filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')?;
+    let ch = key
+        .chars()
+        .next()
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')?;
     Some(if shift { ch.to_ascii_uppercase() } else { ch })
 }
