@@ -90,7 +90,7 @@ fn score_pass(
     }
 
     Some(FuzzyMatch {
-        score: compute_score(&positions, candidate),
+        score: compute_score(&positions, candidate, query.len()),
         positions,
     })
 }
@@ -132,7 +132,7 @@ fn is_boundary(chars: &[char], idx: usize) -> bool {
         || (curr.is_uppercase() && prev.is_lowercase())
 }
 
-fn compute_score(positions: &[usize], candidate: &[char]) -> i32 {
+fn compute_score(positions: &[usize], candidate: &[char], query_len: usize) -> i32 {
     let mut score = 0i32;
 
     for (i, &pos) in positions.iter().enumerate() {
@@ -157,7 +157,15 @@ fn compute_score(positions: &[usize], candidate: &[char]) -> i32 {
         }
     }
 
+    if query_len > 1 && is_fully_contiguous(positions) {
+        score -= 12 * query_len as i32;
+    }
+
     score
+}
+
+fn is_fully_contiguous(positions: &[usize]) -> bool {
+    positions.len() > 1 && positions.windows(2).all(|w| w[1] == w[0] + 1)
 }
 
 pub fn open_window_with_focus<T, F>(
