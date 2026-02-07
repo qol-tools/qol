@@ -1,36 +1,28 @@
-.PHONY: test dev release gpui-test gpui-list
-
-GPUI_DIR := gpui-prototype/gpui-test
+.PHONY: test list release
 
 test:
-	cargo test
+	cargo test --tests
 
-gpui-test:
-	cd $(GPUI_DIR) && cargo test --tests
+list:
+	@ls -1 examples/*.rs 2>/dev/null | xargs -I {} basename {} .rs | sort
 
-gpui-list:
-	@ls -1 $(GPUI_DIR)/src/bin/*.rs 2>/dev/null | xargs -I {} basename {} .rs | sort
-
-gpui-%:
+example-%:
 	@NAME="$*"; \
-	if echo "$$NAME" | grep -Eq '^[0-9][0-9]$$'; then \
-		BIN="$$(ls -1 $(GPUI_DIR)/src/bin/$$NAME\_*.rs 2>/dev/null | head -1 | xargs -I {} basename {} .rs)"; \
-	elif ls -1 $(GPUI_DIR)/src/bin/$$NAME.rs >/dev/null 2>&1; then \
+	if ls -1 examples/$$NAME.rs >/dev/null 2>&1; then \
 		BIN="$$NAME"; \
+	elif echo "$$NAME" | grep -Eq '^[0-9][0-9]$$'; then \
+		BIN="$$(ls -1 examples/$$NAME\_*.rs 2>/dev/null | head -1 | xargs -I {} basename {} .rs)"; \
 	else \
-		BIN="$$(ls -1 $(GPUI_DIR)/src/bin/*.rs 2>/dev/null | xargs -I {} basename {} .rs | grep -i "$$NAME" | head -1)"; \
+		BIN="$$(ls -1 examples/*.rs 2>/dev/null | xargs -I {} basename {} .rs | grep -i "$$NAME" | head -1)"; \
 	fi; \
 	if [ -z "$$BIN" ]; then \
-		echo "No bin matches '$$NAME'"; \
+		echo "No example matches '$$NAME'"; \
 		exit 1; \
 	fi; \
-	cd $(GPUI_DIR) && cargo run --bin "$$BIN"
-
-dev:
-	cargo build --release
+	cargo run --example "$$BIN"
 
 release:
-	@cargo test && \
+	@cargo test --tests && \
 	OLD=$$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/'); \
 	MAJOR=$$(echo $$OLD | cut -d. -f1); \
 	MINOR=$$(echo $$OLD | cut -d. -f2); \
