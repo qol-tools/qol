@@ -14,9 +14,13 @@ impl LauncherState {
         let modifiers = &event.keystroke.modifiers;
         let ctrl = modifiers.control;
         let shift = modifiers.shift;
+        let mut query_or_mode_changed = false;
 
         match key.as_str() {
-            "tab" => self.cycle_mode(shift),
+            "tab" => {
+                self.cycle_mode(shift);
+                query_or_mode_changed = true;
+            }
             "left" => self.move_left(shift),
             "right" => self.move_right(shift),
             "home" => self.move_home(shift),
@@ -24,10 +28,21 @@ impl LauncherState {
             "up" => self.move_up(),
             "down" => self.move_down(result_count),
             "enter" => return InputEffect::Launch,
-            "backspace" => self.backspace(),
-            "delete" => self.delete_forward(),
+            "backspace" => {
+                if self.backspace() {
+                    query_or_mode_changed = true;
+                }
+            }
+            "delete" => {
+                if self.delete_forward() {
+                    query_or_mode_changed = true;
+                }
+            }
             "a" if ctrl => self.select_all(),
-            "space" if !ctrl => self.insert_char(' '),
+            "space" if !ctrl => {
+                self.insert_char(' ');
+                query_or_mode_changed = true;
+            }
             _ => {
                 if ctrl || modifiers.alt {
                     return InputEffect::Ignore;
@@ -36,10 +51,13 @@ impl LauncherState {
                     return InputEffect::Ignore;
                 };
                 self.insert_char(ch);
+                query_or_mode_changed = true;
             }
         }
 
-        self.selected = 0;
+        if query_or_mode_changed {
+            self.selected = 0;
+        }
         InputEffect::Notify
     }
 
@@ -72,31 +90,33 @@ impl LauncherState {
         self.clear_selection();
     }
 
-    fn backspace(&mut self) {
+    fn backspace(&mut self) -> bool {
         if self.delete_selection() {
-            return;
+            return true;
         }
         if self.cursor == 0 {
-            return;
+            return false;
         }
         let start = self.cursor - 1;
         let start_b = Self::char_to_byte_index(&self.query, start);
         let end_b = Self::char_to_byte_index(&self.query, self.cursor);
         self.query.replace_range(start_b..end_b, "");
         self.cursor = start;
+        true
     }
 
-    fn delete_forward(&mut self) {
+    fn delete_forward(&mut self) -> bool {
         if self.delete_selection() {
-            return;
+            return true;
         }
         let len = self.query_len();
         if self.cursor >= len {
-            return;
+            return false;
         }
         let start_b = Self::char_to_byte_index(&self.query, self.cursor);
         let end_b = Self::char_to_byte_index(&self.query, self.cursor + 1);
         self.query.replace_range(start_b..end_b, "");
+        true
     }
 
     fn select_all(&mut self) {
