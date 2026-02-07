@@ -28,7 +28,7 @@ proptest! {
 
     #[test]
     fn prop_allowed_single_chars_round_trip_without_shift(
-        key in "[a-zA-Z0-9_-]"
+        key in "[a-zA-Z0-9_.-]"
     ) {
         let ch = key.chars().next().unwrap();
         prop_assert_eq!(key_to_input_char(&key, false), Some(ch));
@@ -45,13 +45,14 @@ proptest! {
     #[test]
     fn prop_disallowed_single_ascii_chars_are_rejected(
         ch in any::<char>().prop_filter(
-            "single-char input must be ASCII punctuation/symbol that launcher should reject",
-            |c| c.is_ascii()
-                && !c.is_ascii_alphanumeric()
-                && *c != '-'
-                && *c != '_'
-                && !c.is_whitespace()
-                && !c.is_control()
+                "single-char input must be ASCII punctuation/symbol that launcher should reject",
+                |c| c.is_ascii()
+                    && !c.is_ascii_alphanumeric()
+                    && *c != '-'
+                    && *c != '_'
+                    && *c != '.'
+                    && !c.is_whitespace()
+                    && !c.is_control()
         ),
         shift in any::<bool>()
     ) {
