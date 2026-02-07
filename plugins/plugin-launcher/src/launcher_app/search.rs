@@ -10,15 +10,6 @@ pub enum ResultItem<'a> {
     File(&'a FileEntry),
 }
 
-impl<'a> ResultItem<'a> {
-    pub fn name(&self) -> &str {
-        match self {
-            Self::App(entry) => &entry.name,
-            Self::File(entry) => &entry.name,
-        }
-    }
-}
-
 #[derive(Clone, Copy)]
 pub enum ResultSource {
     App,
