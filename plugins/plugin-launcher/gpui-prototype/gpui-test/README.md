@@ -36,6 +36,7 @@ cargo run --bin launcher
 - `Esc`: close launcher
 - `Up` / `Down`: move selected result
 - `Enter`: launch selected result
+- `Ctrl+Up` / `Ctrl+Down` (`Cmd+Up` / `Cmd+Down` on macOS): decrease/increase fuzziness
 
 ### Query Editing
 
@@ -55,6 +56,12 @@ cargo run --bin launcher
 `secondary` modifier is used internally:
 - macOS: `Cmd`
 - Linux/Windows: `Ctrl`
+
+## Fuzziness Levels
+
+- `Strict`: enforces extension filtering in file mode when query includes an extension hint like `.png`.
+- `Balanced`: prefers matching extensions but can still show non-matching extensions.
+- `Loose`: does not apply extension-based filtering.
 
 ## Architecture
 

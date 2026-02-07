@@ -43,6 +43,7 @@ impl LauncherView {
             &self.file_entries,
             &self.state.query,
             self.state.mode,
+            self.state.fuzziness,
         )
     }
 
@@ -115,6 +116,7 @@ impl Render for LauncherView {
             .on_key_down(cx.listener(Self::handle_key))
             .child(view::search_bar(
                 self.state.mode.label(),
+                self.state.fuzziness.label(),
                 &self.state.query,
                 self.state.cursor,
                 self.state.selected_range(),

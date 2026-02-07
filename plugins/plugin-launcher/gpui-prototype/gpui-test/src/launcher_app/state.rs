@@ -1,6 +1,39 @@
 use super::layout::HEADER_HEIGHT;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fuzziness {
+    Strict,
+    Balanced,
+    Loose,
+}
+
+impl Fuzziness {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Strict => "Strict",
+            Self::Balanced => "Balanced",
+            Self::Loose => "Loose",
+        }
+    }
+
+    pub fn more(self) -> Self {
+        match self {
+            Self::Strict => Self::Balanced,
+            Self::Balanced => Self::Loose,
+            Self::Loose => Self::Loose,
+        }
+    }
+
+    pub fn less(self) -> Self {
+        match self {
+            Self::Strict => Self::Strict,
+            Self::Balanced => Self::Strict,
+            Self::Loose => Self::Balanced,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchMode {
     Apps,
     Files,
@@ -31,6 +64,7 @@ impl SearchMode {
 
 pub struct LauncherState {
     pub mode: SearchMode,
+    pub fuzziness: Fuzziness,
     pub query: String,
     pub cursor: usize,
     pub selection_anchor: Option<usize>,
@@ -42,6 +76,7 @@ impl LauncherState {
     pub fn new() -> Self {
         Self {
             mode: SearchMode::Apps,
+            fuzziness: Fuzziness::Balanced,
             query: String::new(),
             cursor: 0,
             selection_anchor: None,
@@ -57,6 +92,18 @@ impl LauncherState {
     pub fn cycle_mode(&mut self, reverse: bool) {
         self.mode = if reverse { self.mode.prev() } else { self.mode.next() };
         self.selected = 0;
+    }
+
+    pub fn increase_fuzziness(&mut self) -> bool {
+        let before = self.fuzziness;
+        self.fuzziness = self.fuzziness.more();
+        self.fuzziness != before
+    }
+
+    pub fn decrease_fuzziness(&mut self) -> bool {
+        let before = self.fuzziness;
+        self.fuzziness = self.fuzziness.less();
+        self.fuzziness != before
     }
 
     pub fn selected_range(&self) -> Option<(usize, usize)> {

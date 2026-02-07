@@ -17,6 +17,16 @@ impl LauncherState {
         let mut query_or_mode_changed = false;
 
         match key.as_str() {
+            "up" if ctrl => {
+                if self.decrease_fuzziness() {
+                    query_or_mode_changed = true;
+                }
+            }
+            "down" if ctrl => {
+                if self.increase_fuzziness() {
+                    query_or_mode_changed = true;
+                }
+            }
             "tab" => {
                 self.cycle_mode(shift);
                 query_or_mode_changed = true;
@@ -25,8 +35,8 @@ impl LauncherState {
             "right" => self.move_right(shift),
             "home" => self.move_home(shift),
             "end" => self.move_end(shift),
-            "up" => self.move_up(),
-            "down" => self.move_down(result_count),
+            "up" if !ctrl => self.move_up(),
+            "down" if !ctrl => self.move_down(result_count),
             "enter" => return InputEffect::Launch,
             "backspace" => {
                 if self.backspace() {
