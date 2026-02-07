@@ -11,6 +11,7 @@ Runs the launcher by delegating to `gpui_test::launcher_app::run()`.
 
 - `src/launcher_app/mod.rs`
 Owns GPUI composition, event wiring, and coordination between state/search/view/actions.
+This is the only launcher boundary that chooses provider implementations.
 
 - `src/launcher_app/state.rs`
 Owns mutable launcher state:
@@ -22,8 +23,8 @@ Maps `KeyDownEvent` to state transitions and high-level effects:
 `Ignore`, `Notify`, `Launch`.
 
 - `src/launcher_app/search.rs`
-Pure filtering/ranking pipeline over desktop entries.
-No window or rendering concerns.
+Pure filtering/ranking pipeline over in-memory entries.
+No filesystem access, no provider selection, no window/rendering concerns.
 
 - `src/launcher_app/layout.rs`
 Window layout constants and resize logic.
@@ -34,7 +35,14 @@ Render helpers only:
 search bar with caret/selection rendering and result rows with highlighted fuzzy matches.
 
 - `src/launcher_app/actions.rs`
-Launcher side effects (`spawn` selected command).
+Launcher side effects (`spawn` selected command / open selected file path).
+Consumes selected item directly from controller.
+
+- `src/providers/files/mod.rs`
+OS-agnostic file provider contract and default provider factory.
+
+- `src/providers/files/fallback.rs`
+Portable fallback file scanner used when no platform-specific indexed provider is active.
 
 ## Data Flow
 
@@ -44,6 +52,14 @@ Launcher side effects (`spawn` selected command).
 4. `search::filtered(...)` computes ranked results from current query.
 5. `layout::resize_for_visible_rows(...)` updates popup height.
 6. `view` renders current state and visible rows.
+7. On launch, controller passes selected item to `actions` without recomputing search.
+
+## Cross-Platform Guardrails
+
+- Keep `launcher_app/*` OS-agnostic.
+- Keep filesystem/index integration in `providers/files/*`.
+- Keep provider selection at composition boundary (`launcher_app/mod.rs`) only.
+- Avoid `#[cfg(...)]` inside launcher state/input/view/search modules.
 
 ## Clipboard + Selection
 
