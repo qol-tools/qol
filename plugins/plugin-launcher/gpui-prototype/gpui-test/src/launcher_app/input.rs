@@ -31,7 +31,7 @@ impl LauncherState {
                 if ctrl || modifiers.alt {
                     return InputEffect::Ignore;
                 }
-                let Some(ch) = typeable_char(key, shift) else {
+                let Some(ch) = key_to_input_char(key, shift) else {
                     return InputEffect::Ignore;
                 };
                 self.insert_char(ch);
@@ -133,7 +133,10 @@ impl LauncherState {
     }
 }
 
-fn typeable_char(key: &str, shift: bool) -> Option<char> {
+pub fn key_to_input_char(key: &str, shift: bool) -> Option<char> {
+    if key.chars().count() != 1 {
+        return None;
+    }
     let ch = key.chars().next().filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')?;
     Some(if shift { ch.to_ascii_uppercase() } else { ch })
 }
