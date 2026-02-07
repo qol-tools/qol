@@ -1,22 +1,26 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::{FileEntry, FilesProvider};
+use super::FileEntry;
+#[cfg(not(target_os = "linux"))]
+use super::FilesProvider;
 
+#[cfg(not(target_os = "linux"))]
 pub struct FallbackFilesProvider;
 
+#[cfg(not(target_os = "linux"))]
 impl FilesProvider for FallbackFilesProvider {
     fn load_entries(&self) -> Vec<FileEntry> {
-        scan_files()
+        scan_files(file_roots())
     }
 }
 
 const MAX_FILES: usize = 8_000;
 const MAX_DEPTH: usize = 6;
 
-fn scan_files() -> Vec<FileEntry> {
+pub(crate) fn scan_files(roots: Vec<PathBuf>) -> Vec<FileEntry> {
     let mut files = Vec::new();
-    for root in file_roots() {
+    for root in roots {
         if files.len() >= MAX_FILES {
             break;
         }
@@ -26,6 +30,7 @@ fn scan_files() -> Vec<FileEntry> {
     files
 }
 
+#[cfg(not(target_os = "linux"))]
 fn file_roots() -> Vec<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_default();
     vec![

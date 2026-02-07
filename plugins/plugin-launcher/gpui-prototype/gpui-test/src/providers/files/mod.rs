@@ -1,4 +1,6 @@
 mod fallback;
+#[cfg(target_os = "linux")]
+mod linux;
 
 use std::path::PathBuf;
 
@@ -13,5 +15,12 @@ pub trait FilesProvider: Send + Sync {
 }
 
 pub fn default_provider() -> Box<dyn FilesProvider> {
-    Box::new(fallback::FallbackFilesProvider)
+    #[cfg(target_os = "linux")]
+    {
+        Box::new(linux::LinuxFilesProvider)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Box::new(fallback::FallbackFilesProvider)
+    }
 }

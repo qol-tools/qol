@@ -65,9 +65,14 @@ OS-agnostic file provider contract and default provider factory.
 - `src/providers/files/fallback.rs`
 Portable fallback file scanner used when no platform-specific indexed provider is active.
 
-- `src/providers/linux/*` (planned)
-Linux-specific provider implementations behind shared provider contracts.
-Must isolate Wayland/X11/runtime distro differences from launcher core.
+- `src/providers/apps/*`
+App source abstraction and platform-specific app providers.
+
+- `src/providers/files/linux.rs`
+Linux file provider using XDG roots and user-dirs config.
+
+- `src/platform/mod.rs`
+Platform capability model and Linux display backend detection (X11/Wayland/Unknown).
 
 ## Data Flow
 
