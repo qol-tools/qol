@@ -19,62 +19,129 @@ impl<'a> ResultItem<'a> {
     }
 }
 
-pub struct Scored<'a> {
-    pub item: ResultItem<'a>,
+#[derive(Clone, Copy)]
+pub enum ResultSource {
+    App,
+    File,
+}
+
+pub struct Scored {
+    pub source: ResultSource,
+    pub index: usize,
     pub m: FuzzyMatch,
 }
 
-pub fn filtered<'a>(
-    app_entries: &'a [AppEntry],
-    file_entries: &'a [FileEntry],
+
+pub fn filtered(
+    app_entries: &[AppEntry],
+    file_entries: &[FileEntry],
     query: &str,
     mode: SearchMode,
     fuzziness: Fuzziness,
-) -> Vec<Scored<'a>> {
+) -> Vec<Scored> {
     if query.trim().is_empty() {
         return Vec::new();
     }
-    let extension_hint = extension_hint(query);
+    let hint = extension_hint(query);
 
-    let mut results: Vec<Scored<'_>> = match mode {
+    let results: Vec<Scored> = match mode {
         SearchMode::Apps => app_entries
             .iter()
-            .filter_map(|entry| {
-                fuzzy_match(query, &entry.name).map(|m| Scored {
-                    item: ResultItem::App(entry),
-                    m,
-                })
-            })
+            .enumerate()
+            .filter_map(|(index, entry)| score_app(index, &entry.name, query))
             .collect(),
         SearchMode::Files => file_entries
             .iter()
-            .filter_map(|entry| {
-                let mut m = fuzzy_match(query, &entry.name)?;
-                if let Some(hint) = extension_hint {
-                    let ext_match = matches_extension(&entry.name, hint);
-                    match fuzziness {
-                        Fuzziness::Strict => {
-                            if !ext_match {
-                                return None;
-                            }
-                        }
-                        Fuzziness::Balanced => {
-                            if ext_match {
-                                m.score -= 120;
-                            } else {
-                                m.score += 120;
-                            }
-                        }
-                        Fuzziness::Loose => {}
-                    }
-                }
-                Some(Scored {
-                    item: ResultItem::File(entry),
-                    m,
-                })
+            .enumerate()
+            .filter_map(|(index, entry)| score_file(index, &entry.name, query, hint, fuzziness))
+            .collect(),
+    };
+    sort_by_score(results)
+}
+
+pub fn filtered_from_candidates(
+    app_entries: &[AppEntry],
+    file_entries: &[FileEntry],
+    candidates: &[Scored],
+    query: &str,
+    mode: SearchMode,
+    fuzziness: Fuzziness,
+) -> Vec<Scored> {
+    if query.trim().is_empty() {
+        return Vec::new();
+    }
+    let hint = extension_hint(query);
+
+    let results: Vec<Scored> = match mode {
+        SearchMode::Apps => candidates
+            .iter()
+            .filter(|candidate| matches!(candidate.source, ResultSource::App))
+            .filter_map(|candidate| {
+                let entry = app_entries.get(candidate.index)?;
+                score_app(candidate.index, &entry.name, query)
+            })
+            .collect(),
+        SearchMode::Files => candidates
+            .iter()
+            .filter(|candidate| matches!(candidate.source, ResultSource::File))
+            .filter_map(|candidate| {
+                let entry = file_entries.get(candidate.index)?;
+                score_file(candidate.index, &entry.name, query, hint, fuzziness)
             })
             .collect(),
     };
+    sort_by_score(results)
+}
+
+fn score_app(index: usize, name: &str, query: &str) -> Option<Scored> {
+    Some(Scored {
+        source: ResultSource::App,
+        index,
+        m: fuzzy_match(query, name)?,
+    })
+}
+
+fn score_file(
+    index: usize,
+    name: &str,
+    query: &str,
+    hint: Option<&str>,
+    fuzziness: Fuzziness,
+) -> Option<Scored> {
+    let mut m = fuzzy_match(query, name)?;
+    apply_extension_rule(name, hint, fuzziness, &mut m)?;
+    Some(Scored {
+        source: ResultSource::File,
+        index,
+        m,
+    })
+}
+
+fn apply_extension_rule(
+    name: &str,
+    hint: Option<&str>,
+    fuzziness: Fuzziness,
+    m: &mut FuzzyMatch,
+) -> Option<()> {
+    let Some(hint) = hint else {
+        return Some(());
+    };
+    let ext_match = matches_extension(name, hint);
+    match fuzziness {
+        Fuzziness::Strict if !ext_match => None,
+        Fuzziness::Balanced if ext_match => {
+            m.score -= 120;
+            Some(())
+        }
+        Fuzziness::Balanced => {
+            m.score += 120;
+            Some(())
+        }
+        _ => Some(()),
+    }
+}
+
+fn sort_by_score(mut results: Vec<Scored>) -> Vec<Scored> {
     results.sort_by_key(|s| s.m.score);
     results
 }
@@ -124,10 +191,11 @@ mod tests {
             let results = filtered(&apps, &files, &query, SearchMode::Files, Fuzziness::Strict);
 
             for result in results {
-                let ResultItem::File(file) = result.item else {
-                    prop_assert!(false, "non-file result returned in file mode");
-                    continue;
-                };
+                prop_assert!(
+                    matches!(result.source, ResultSource::File),
+                    "non-file result returned in file mode"
+                );
+                let file = &files[result.index];
                 prop_assert!(
                     matches_extension(&file.name, &ext),
                     "file '{}' should have extension '{}'",

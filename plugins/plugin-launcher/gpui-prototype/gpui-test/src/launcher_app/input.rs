@@ -4,7 +4,8 @@ use super::state::LauncherState;
 
 pub enum InputEffect {
     Ignore,
-    Notify,
+    Navigate,
+    QueryChanged,
     Launch,
 }
 
@@ -14,44 +15,35 @@ impl LauncherState {
         let modifiers = &event.keystroke.modifiers;
         let ctrl = modifiers.control;
         let shift = modifiers.shift;
-        let mut query_or_mode_changed = false;
 
         match key.as_str() {
             "up" if ctrl => {
-                if self.decrease_fuzziness() {
-                    query_or_mode_changed = true;
-                }
+                if self.decrease_fuzziness() { InputEffect::QueryChanged } else { InputEffect::Navigate }
             }
             "down" if ctrl => {
-                if self.increase_fuzziness() {
-                    query_or_mode_changed = true;
-                }
+                if self.increase_fuzziness() { InputEffect::QueryChanged } else { InputEffect::Navigate }
             }
             "tab" => {
                 self.cycle_mode(shift);
-                query_or_mode_changed = true;
+                InputEffect::QueryChanged
             }
-            "left" => self.move_left(shift),
-            "right" => self.move_right(shift),
-            "home" => self.move_home(shift),
-            "end" => self.move_end(shift),
-            "up" if !ctrl => self.move_up(),
-            "down" if !ctrl => self.move_down(result_count),
-            "enter" => return InputEffect::Launch,
+            "left" => { self.move_left(shift); InputEffect::Navigate }
+            "right" => { self.move_right(shift); InputEffect::Navigate }
+            "home" => { self.move_home(shift); InputEffect::Navigate }
+            "end" => { self.move_end(shift); InputEffect::Navigate }
+            "up" if !ctrl => { self.move_up(); InputEffect::Navigate }
+            "down" if !ctrl => { self.move_down(result_count); InputEffect::Navigate }
+            "enter" => InputEffect::Launch,
             "backspace" => {
-                if self.backspace() {
-                    query_or_mode_changed = true;
-                }
+                if self.backspace() { InputEffect::QueryChanged } else { InputEffect::Navigate }
             }
             "delete" => {
-                if self.delete_forward() {
-                    query_or_mode_changed = true;
-                }
+                if self.delete_forward() { InputEffect::QueryChanged } else { InputEffect::Navigate }
             }
-            "a" if ctrl => self.select_all(),
+            "a" if ctrl => { self.select_all(); InputEffect::Navigate }
             "space" if !ctrl => {
                 self.insert_char(' ');
-                query_or_mode_changed = true;
+                InputEffect::QueryChanged
             }
             _ => {
                 if ctrl || modifiers.alt {
@@ -61,14 +53,9 @@ impl LauncherState {
                     return InputEffect::Ignore;
                 };
                 self.insert_char(ch);
-                query_or_mode_changed = true;
+                InputEffect::QueryChanged
             }
         }
-
-        if query_or_mode_changed {
-            self.selected = 0;
-        }
-        InputEffect::Notify
     }
 
     fn move_up(&mut self) {
