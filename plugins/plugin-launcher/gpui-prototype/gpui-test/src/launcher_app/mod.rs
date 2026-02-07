@@ -37,6 +37,35 @@ impl LauncherView {
     }
 
     fn handle_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let key = event.keystroke.key.as_str();
+        let secondary = event.keystroke.modifiers.secondary();
+
+        if secondary && key == "c" {
+            if let Some(text) = self.state.selection_text() {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+            }
+            return;
+        }
+
+        if secondary && key == "x" {
+            if let Some(text) = self.state.cut_selection() {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                self.state.selected = 0;
+                cx.notify();
+            }
+            return;
+        }
+
+        if secondary && key == "v" {
+            if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                if self.state.paste_text(&text) {
+                    self.state.selected = 0;
+                    cx.notify();
+                }
+            }
+            return;
+        }
+
         let result_count = self.filtered().len();
         match self.state.apply_key(event, result_count) {
             InputEffect::Ignore => {}

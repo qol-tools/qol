@@ -63,22 +63,6 @@ impl LauncherState {
         }
     }
 
-    fn char_to_byte_index(s: &str, char_idx: usize) -> usize {
-        s.char_indices().nth(char_idx).map(|(i, _)| i).unwrap_or(s.len())
-    }
-
-    fn delete_selection(&mut self) -> bool {
-        let Some((start, end)) = self.selected_range() else {
-            return false;
-        };
-        let start_b = Self::char_to_byte_index(&self.query, start);
-        let end_b = Self::char_to_byte_index(&self.query, end);
-        self.query.replace_range(start_b..end_b, "");
-        self.cursor = start;
-        self.clear_selection();
-        true
-    }
-
     fn insert_char(&mut self, ch: char) {
         self.delete_selection();
         let idx = Self::char_to_byte_index(&self.query, self.cursor);
