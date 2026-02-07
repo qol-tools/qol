@@ -1,38 +1,34 @@
 # plugin-launcher
 
-Universal file search launcher for qol-tray.
+GPUI-native search launcher for qol-tray.
 
-## Usage
-
-Trigger via hotkey, then:
+## Controls
 
 | Key | Action |
 |-----|--------|
-| `Enter` | Open file/directory |
-| `Ctrl+Enter` | Open in terminal |
-| `Shift+Enter` | Open containing folder |
-| `Alt+Enter` | Copy path to clipboard |
-| `Esc` | Close |
+| Type | Fuzzy search apps/files |
+| Tab | Switch mode (Apps / Files) |
+| Ctrl+Up/Down | Adjust fuzziness (Strict / Balanced / Loose) |
+| Up/Down | Navigate results |
+| Enter | Launch selected |
+| Esc | Quit |
 
-## Features
+## Build
 
-- Instant startup
-- Window appears on monitor with focused window
-- Multi-word search support
-- Searches mounted drives under `/media/`
+```
+cargo build --release
+```
 
-## Dependencies
+Binary: `target/release/launcher`
 
-| Platform | Requirements | Status |
-|----------|--------------|--------|
-| Linux | `plocate`, `xdotool` | ✓ Tested |
-| macOS | Spotlight (built-in) | Untested |
-| Windows | [Everything CLI](https://www.voidtools.com/support/everything/command_line_interface/) | Untested |
+## Examples
 
-### Linux: Index Mounted Drives
+POC prototypes from development are in `examples/`.
 
-```bash
-~/.config/qol-tray/plugins/plugin-launcher/backends/update-dbs.sh
+```
+make list              # list available examples
+make example-01        # run by number
+make example-minimal   # run by name fragment
 ```
 
 ## License
