@@ -174,3 +174,22 @@ proptest! {
         );
     }
 }
+
+#[test]
+fn contiguous_word_match_beats_scattered_early_match() {
+    let query = "code";
+    let contiguous = "Visual Studio Code";
+    let scattered = "Account details";
+
+    let contiguous_score = fuzzy_match(query, contiguous).unwrap().score;
+    let scattered_score = fuzzy_match(query, scattered).unwrap().score;
+
+    assert!(
+        contiguous_score < scattered_score,
+        "Contiguous '{}' scored {} >= scattered '{}' scored {}",
+        contiguous,
+        contiguous_score,
+        scattered,
+        scattered_score
+    );
+}
