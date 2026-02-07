@@ -13,6 +13,7 @@ const BORDER: u32 = 0x45475a;
 
 pub fn search_bar(
     mode_label: &'static str,
+    fuzziness_label: &'static str,
     query: &str,
     cursor: usize,
     selection: Option<(usize, usize)>,
@@ -37,6 +38,17 @@ pub fn search_bar(
                 .text_color(rgb(TEXT_DIM))
                 .text_size(px(12.))
                 .child(mode_label),
+        )
+        .child(
+            div()
+                .h(px(20.))
+                .px_2()
+                .flex()
+                .items_center()
+                .bg(rgb(BG_SELECTED))
+                .text_color(rgb(TEXT_DIM))
+                .text_size(px(12.))
+                .child(fuzziness_label),
         )
         .child(div().text_color(rgb(TEXT_MUTED)).text_size(px(16.)).child(">"))
         .child(
