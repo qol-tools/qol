@@ -65,9 +65,10 @@ Launcher modules:
 - `src/launcher_app/mod.rs`: composition and GPUI event wiring
 - `src/launcher_app/state.rs`: query/caret/selection state + text editing primitives
 - `src/launcher_app/input.rs`: key handling and editing commands
-- `src/launcher_app/search.rs`: filtering and fuzzy ranking
+- `src/launcher_app/search.rs`: pure filtering and fuzzy ranking
 - `src/launcher_app/layout.rs`: window sizing constants and resize policy
 - `src/launcher_app/view.rs`: search bar and result row rendering
-- `src/launcher_app/actions.rs`: launch side effects
+- `src/launcher_app/actions.rs`: launch side effects on selected item
+- `src/providers/files/*`: file source abstraction and provider implementations
 
 See `LAUNCHER_ARCHITECTURE.md` for details.

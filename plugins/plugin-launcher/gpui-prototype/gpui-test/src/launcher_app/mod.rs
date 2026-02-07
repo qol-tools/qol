@@ -10,6 +10,7 @@ use gpui::*;
 use crate::desktop_entry::{self, DesktopEntry};
 use crate::monitor;
 use crate::open_window_with_focus;
+use crate::providers::files;
 
 use input::InputEffect;
 use layout::{resize_for_visible_rows, HEADER_HEIGHT, MAX_VISIBLE, ROW_HEIGHT, WINDOW_WIDTH};
@@ -22,7 +23,7 @@ actions!(launcher, [Quit]);
 struct LauncherView {
     state: LauncherState,
     app_entries: Vec<DesktopEntry>,
-    file_entries: Vec<search::FileEntry>,
+    file_entries: Vec<files::FileEntry>,
     focus_handle: FocusHandle,
 }
 
@@ -31,7 +32,7 @@ impl LauncherView {
         Self {
             state: LauncherState::new(),
             app_entries: desktop_entry::scan(&desktop_entry::default_dirs()),
-            file_entries: search::scan_files(),
+            file_entries: files::default_provider().load_entries(),
             focus_handle: cx.focus_handle(),
         }
     }
@@ -80,14 +81,11 @@ impl LauncherView {
             InputEffect::Ignore => {}
             InputEffect::Notify => cx.notify(),
             InputEffect::Launch => {
-                actions::launch_selected(
-                    &self.app_entries,
-                    &self.file_entries,
-                    &self.state.query,
-                    self.state.mode,
-                    self.state.selected,
-                );
-                cx.quit();
+                let filtered = self.filtered();
+                if let Some(scored) = filtered.get(self.state.selected) {
+                    actions::launch_item(&scored.item);
+                    cx.quit();
+                }
             }
         }
     }

@@ -1,25 +1,12 @@
-use crate::desktop_entry::DesktopEntry;
 use std::process::Command;
 
 use super::search;
-use super::state::SearchMode;
 
-pub fn launch_selected(
-    app_entries: &[DesktopEntry],
-    file_entries: &[search::FileEntry],
-    query: &str,
-    mode: SearchMode,
-    selected: usize,
-) {
-    let filtered = search::filtered(app_entries, file_entries, query, mode);
-    let Some(item) = filtered.get(selected) else {
-        return;
-    };
-
-    match &item.item {
+pub fn launch_item(item: &search::ResultItem<'_>) {
+    match item {
         search::ResultItem::App(entry) => spawn_detached(&entry.exec),
         search::ResultItem::File(entry) => open_path_detached(&entry.path),
-    }
+    };
 }
 
 fn spawn_detached(exec: &str) {
