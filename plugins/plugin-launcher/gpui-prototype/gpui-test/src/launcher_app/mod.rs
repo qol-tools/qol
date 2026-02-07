@@ -83,8 +83,9 @@ impl LauncherView {
             InputEffect::Launch => {
                 let filtered = self.filtered();
                 if let Some(scored) = filtered.get(self.state.selected) {
-                    actions::launch_item(&scored.item);
-                    cx.quit();
+                    if actions::launch_item(&scored.item) {
+                        cx.quit();
+                    }
                 }
             }
         }
