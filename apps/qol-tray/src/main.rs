@@ -62,10 +62,10 @@ async fn async_init() -> Result<(
     let daemon = Daemon::new();
 
     let mut feature_registry = FeatureRegistry::new();
-    feature_registry.register(Box::new(features::plugin_store::PluginStore::new()));
+    feature_registry.register(Box::new(features::plugin_store::Plugins::new()));
     let feature_registry = Arc::new(feature_registry);
 
-    features::plugin_store::PluginStore::start_server(plugin_manager.clone(), &daemon).await?;
+    features::plugin_store::Plugins::start_server(plugin_manager.clone(), &daemon).await?;
 
     if let Ok(plugins_dir) = PluginLoader::default_plugin_dir() {
         if let Err(e) = hotkeys::start_hotkey_listener(plugins_dir.clone()) {
