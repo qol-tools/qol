@@ -10,8 +10,7 @@ mod view;
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::{mpsc, Arc};
-use std::time::Duration;
+use std::sync::{mpsc, Arc, Mutex};
 
 use gpui::*;
 
@@ -170,9 +169,20 @@ fn spawn_command_poll(
     rx: mpsc::Receiver<daemon::Command>,
     cx: &mut App,
 ) {
+    let rx = Arc::new(Mutex::new(rx));
     cx.spawn(async move |cx: &mut AsyncApp| {
         loop {
-            match rx.try_recv().ok() {
+            let next_command = cx
+                .background_spawn({
+                    let rx = rx.clone();
+                    async move {
+                        let guard = rx.lock().ok()?;
+                        guard.recv().ok()
+                    }
+                })
+                .await;
+
+            match next_command {
                 Some(daemon::Command::Show) => {
                     let entries = entries.clone();
                     let active = active.clone();
@@ -183,12 +193,7 @@ fn spawn_command_poll(
                     cx.update(|cx| cx.quit()).ok();
                     break;
                 }
-                None => {
-                    cx.background_spawn(async {
-                        std::thread::sleep(Duration::from_millis(5));
-                    })
-                    .await;
-                }
+                None => break,
             }
         }
     })
