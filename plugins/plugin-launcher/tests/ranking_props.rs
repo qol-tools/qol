@@ -138,6 +138,7 @@ proptest! {
         let freq = FrequencyData::default();
         let prefix = app(&format!("{}x", base));
         let contains = app(&format!("x{}", base));
+        prop_assume!(prefix.name != contains.name);
         let prefix_score = score_result(&prefix, &base, &freq, &cfg);
         let contains_score = score_result(&contains, &base, &freq, &cfg);
         prop_assert!(
