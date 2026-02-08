@@ -10,10 +10,11 @@ use anyhow::Result;
 use std::sync::{Arc, Mutex};
 
 const SERVER_PORT: u16 = 42700;
+const MENU_ITEM_ID: &str = "plugins";
 
-pub struct PluginStore;
+pub struct Plugins;
 
-impl PluginStore {
+impl Plugins {
     pub fn new() -> Self {
         Self
     }
@@ -29,12 +30,12 @@ impl PluginStore {
     }
 }
 
-impl MenuProvider for PluginStore {
+impl MenuProvider for Plugins {
     fn menu_items(&self) -> Vec<PluginMenuItem> {
         vec![
             PluginMenuItem::Action {
-                id: "plugin_store".to_string(),
-                label: "🔌 Plugin Store".to_string(),
+                id: MENU_ITEM_ID.to_string(),
+                label: "🔌 Plugins".to_string(),
                 action: crate::plugins::ActionType::Run,
                 config_key: None,
             },
@@ -42,8 +43,8 @@ impl MenuProvider for PluginStore {
     }
 
     fn handle_event(&self, event_id: &str) -> Result<()> {
-        log::info!("PluginStore received event: {}", event_id);
-        if event_id.ends_with("::plugin_store") {
+        log::info!("Plugins feature received event: {}", event_id);
+        if event_id.ends_with(&format!("::{}", MENU_ITEM_ID)) {
             crate::paths::open_url(&format!("http://127.0.0.1:{}", SERVER_PORT))?;
         }
         Ok(())
