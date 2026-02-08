@@ -3,7 +3,7 @@ pub mod loader;
 pub mod manager;
 pub mod config;
 
-pub use manifest::{PluginManifest, MenuItem, ActionType};
+pub use manifest::{PluginManifest, MenuItem, ActionType, RuntimeConfig};
 pub use loader::PluginLoader;
 pub use manager::PluginManager;
 pub use config::PluginConfigManager;
