@@ -6,26 +6,6 @@ use std::path::{Path, PathBuf};
 
 pub struct PluginLoader;
 
-#[derive(Debug)]
-struct MissingBinaryContractError {
-    plugin_id: String,
-    plugin_path: PathBuf,
-    command_field: &'static str,
-    command: String,
-}
-
-impl std::fmt::Display for MissingBinaryContractError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} {:?} binary not found for plugin {} in {:?}",
-            self.command_field, self.command, self.plugin_id, self.plugin_path
-        )
-    }
-}
-
-impl std::error::Error for MissingBinaryContractError {}
-
 impl PluginLoader {
     pub fn default_plugin_dir() -> Result<PathBuf> {
         paths::plugins_dir()
@@ -90,7 +70,7 @@ impl PluginLoader {
                     plugins.push(plugin);
                 }
                 Err(e) => {
-                    if let Some(missing) = e.downcast_ref::<MissingBinaryContractError>() {
+                    if let Some(missing) = e.downcast_ref::<super::MissingBinaryContractError>() {
                         missing_binaries += 1;
                         log::warn!(
                             "Skipping plugin {} (missing binary): {}",
@@ -139,59 +119,11 @@ impl PluginLoader {
             .to_string();
 
         if manifest.plugin.supports_current_platform() {
-            validate_plugin_execution_contract(&id, &manifest, path)?;
+            super::validate_execution_contract(&id, &manifest, path)?;
         }
 
         Ok(Plugin::new(id, manifest, path.to_path_buf()))
     }
-}
-
-fn validate_plugin_execution_contract(
-    plugin_id: &str,
-    manifest: &PluginManifest,
-    plugin_path: &Path,
-) -> Result<()> {
-    ensure_command_binary_exists(
-        plugin_id,
-        plugin_path,
-        "runtime.command",
-        manifest.runtime.as_ref().map(|runtime| runtime.command.as_str()),
-    )?;
-    ensure_command_binary_exists(
-        plugin_id,
-        plugin_path,
-        "daemon.command",
-        manifest
-            .daemon
-            .as_ref()
-            .filter(|daemon| daemon.enabled)
-            .map(|daemon| daemon.command.as_str()),
-    )?;
-
-    Ok(())
-}
-
-fn ensure_command_binary_exists(
-    plugin_id: &str,
-    plugin_path: &Path,
-    command_field: &'static str,
-    command: Option<&str>,
-) -> Result<()> {
-    let Some(command) = command else {
-        return Ok(());
-    };
-
-    if super::resolve_plugin_command_path(plugin_path, command).is_some() {
-        return Ok(());
-    }
-
-    Err(MissingBinaryContractError {
-        plugin_id: plugin_id.to_string(),
-        plugin_path: plugin_path.to_path_buf(),
-        command_field,
-        command: command.to_string(),
-    }
-    .into())
 }
 
 #[cfg(test)]
