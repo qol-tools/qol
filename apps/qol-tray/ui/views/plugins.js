@@ -1,4 +1,4 @@
-import { updateSelection as updateSel, navigate as nav } from '../utils.js';
+import { updateSelection as updateSel, navigateGrid } from '../utils.js';
 import { subscribe } from '../events.js';
 import * as installing from '../installing.js';
 
@@ -14,7 +14,6 @@ export const id = 'plugins';
 const state = {
     plugins: [],
     selectedIndex: 0,
-    columns: 4,
     contextMenuOpen: false,
     confirmModalOpen: false,
     pendingUninstallId: null,
@@ -33,7 +32,7 @@ export function render(containerEl) {
             <header>
                 <h1>Plugins</h1>
             </header>
-            <div id="plugins-grid" class="plugin-grid"></div>
+            <div id="plugins-grid" class="plugin-grid grid-cards grid-cards--zoom"></div>
             <footer class="help">
                 ←↑↓→ navigate • Enter open • u update • d delete
             </footer>
@@ -376,10 +375,10 @@ function deleteSelected() {
 }
 
 const keyHandlers = {
-    ArrowUp: () => navigate(-state.columns),
-    ArrowDown: () => navigate(state.columns),
-    ArrowLeft: () => navigate(-1),
-    ArrowRight: () => navigate(1),
+    ArrowUp: () => navigateInGrid('up'),
+    ArrowDown: () => navigateInGrid('down'),
+    ArrowLeft: () => navigateInGrid('left'),
+    ArrowRight: () => navigateInGrid('right'),
     Enter: openSelected,
     d: deleteSelected,
     D: deleteSelected,
@@ -387,10 +386,11 @@ const keyHandlers = {
     U: updateSelected
 };
 
-function navigate(delta) {
-    if (nav(state, 'selectedIndex', state.plugins.length, delta)) {
-        updateSelection();
-    }
+function navigateInGrid(direction) {
+    const nextIndex = navigateGrid('#plugins-grid .plugin-card', state.selectedIndex, direction);
+    if (nextIndex === state.selectedIndex) return;
+    state.selectedIndex = nextIndex;
+    updateSelection();
 }
 
 function openSelected() {
