@@ -32,6 +32,12 @@ Install via qol-tray plugin browser or manually:
 git clone https://github.com/qol-tools/plugin-window-actions.git ~/.config/qol-tray/plugins/plugin-window-actions
 ```
 
+For linked dev setups, run:
+
+```bash
+make dev
+```
+
 ## Usage
 
 Bind actions to hotkeys in qol-tray settings for instant window management.
