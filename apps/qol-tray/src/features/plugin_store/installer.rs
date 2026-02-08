@@ -38,18 +38,18 @@ impl PluginInstaller {
         .context("Git clone timed out")??;
 
         if !output.status.success() {
-            self.cleanup_failed_install(&staging_dir).await;
+            self.cleanup_temp_dir(&staging_dir).await;
             let stderr = String::from_utf8_lossy(&output.stderr);
             anyhow::bail!("Git clone failed: {}", stderr);
         }
 
         if let Err(error) = self.install_dependencies(&staging_dir, plugin_id).await {
-            self.cleanup_failed_install(&staging_dir).await;
+            self.cleanup_temp_dir(&staging_dir).await;
             return Err(error);
         }
 
         if let Err(error) = tokio::fs::rename(&staging_dir, &target_dir).await {
-            self.cleanup_failed_install(&staging_dir).await;
+            self.cleanup_temp_dir(&staging_dir).await;
             return Err(error).with_context(|| {
                 format!(
                     "Failed to finalize plugin install from {:?} to {:?}",
@@ -63,25 +63,79 @@ impl PluginInstaller {
     }
 
     fn install_staging_dir(&self, plugin_id: &str) -> PathBuf {
+        self.temporary_plugin_dir(plugin_id, "installing")
+    }
+
+    fn update_staging_dir(&self, plugin_id: &str) -> PathBuf {
+        self.temporary_plugin_dir(plugin_id, "updating")
+    }
+
+    fn update_backup_dir(&self, plugin_id: &str) -> PathBuf {
+        self.temporary_plugin_dir(plugin_id, "backup")
+    }
+
+    fn temporary_plugin_dir(&self, plugin_id: &str, phase: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        self.plugins_dir
-            .join(format!(".{}.installing.{}.{}", plugin_id, std::process::id(), nanos))
+        self.plugins_dir.join(format!(
+            ".{}.{}.{}.{}",
+            plugin_id,
+            phase,
+            std::process::id(),
+            nanos
+        ))
     }
 
-    async fn cleanup_failed_install(&self, install_dir: &Path) {
-        if tokio::fs::metadata(install_dir).await.is_err() {
+    async fn cleanup_temp_dir(&self, path: &Path) {
+        if tokio::fs::metadata(path).await.is_err() {
             return;
         }
 
-        if let Err(error) = tokio::fs::remove_dir_all(install_dir).await {
+        if let Err(error) = tokio::fs::remove_dir_all(path).await {
             log::warn!(
-                "Failed to cleanup incomplete plugin install at {:?}: {}",
-                install_dir,
+                "Failed to cleanup temporary plugin directory {:?}: {}",
+                path,
                 error
             );
+        }
+    }
+
+    async fn swap_plugin_dirs(
+        &self,
+        live_dir: &Path,
+        staging_dir: &Path,
+        backup_dir: &Path,
+    ) -> Result<()> {
+        tokio::fs::rename(live_dir, backup_dir).await.with_context(|| {
+            format!(
+                "Failed to move plugin directory {:?} to backup {:?}",
+                live_dir, backup_dir
+            )
+        })?;
+
+        match tokio::fs::rename(staging_dir, live_dir).await {
+            Ok(()) => {
+                if let Err(error) = tokio::fs::remove_dir_all(backup_dir).await {
+                    log::warn!(
+                        "Failed to cleanup plugin backup directory {:?}: {}",
+                        backup_dir,
+                        error
+                    );
+                }
+                Ok(())
+            }
+            Err(swap_error) => {
+                if let Err(rollback_error) = tokio::fs::rename(backup_dir, live_dir).await {
+                    anyhow::bail!(
+                        "Failed to swap plugin directories: {}; rollback failed: {}",
+                        swap_error,
+                        rollback_error
+                    );
+                }
+                anyhow::bail!("Failed to swap plugin directories: {}", swap_error);
+            }
         }
     }
 
@@ -151,40 +205,84 @@ impl PluginInstaller {
             anyhow::bail!("Plugin not installed: {}", plugin_id);
         }
 
+        let staging_dir = self.update_staging_dir(plugin_id);
+        let backup_dir = self.update_backup_dir(plugin_id);
+
         log::info!("Updating plugin: {}", plugin_id);
+
+        let plugin_dir_str = plugin_dir
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("Plugin path contains invalid UTF-8"))?;
+        let staging_str = staging_dir
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("Plugin path contains invalid UTF-8"))?;
+
+        let clone_output = tokio::time::timeout(
+            GIT_TIMEOUT,
+            tokio::process::Command::new("git")
+                .args(["clone", plugin_dir_str, staging_str])
+                .output(),
+        )
+        .await
+        .context("Git clone timed out")??;
+
+        if !clone_output.status.success() {
+            self.cleanup_temp_dir(&staging_dir).await;
+            let stderr = String::from_utf8_lossy(&clone_output.stderr);
+            anyhow::bail!("Git clone failed: {}", stderr);
+        }
 
         let output = tokio::time::timeout(
             GIT_TIMEOUT,
             tokio::process::Command::new("git")
                 .args(["fetch", "origin"])
-                .current_dir(&plugin_dir)
+                .current_dir(&staging_dir)
                 .output(),
         )
         .await
         .context("Git fetch timed out")??;
 
         if !output.status.success() {
+            self.cleanup_temp_dir(&staging_dir).await;
             let stderr = String::from_utf8_lossy(&output.stderr);
             anyhow::bail!("Git fetch failed: {}", stderr);
         }
 
-        let branch = self.get_default_branch(&plugin_dir).await?;
+        let branch = match self.get_default_branch(&staging_dir).await {
+            Ok(branch) => branch,
+            Err(error) => {
+                self.cleanup_temp_dir(&staging_dir).await;
+                return Err(error);
+            }
+        };
         let output = tokio::time::timeout(
             GIT_TIMEOUT,
             tokio::process::Command::new("git")
                 .args(["reset", "--hard", &format!("origin/{}", branch)])
-                .current_dir(&plugin_dir)
+                .current_dir(&staging_dir)
                 .output(),
         )
         .await
         .context("Git reset timed out")??;
 
         if !output.status.success() {
+            self.cleanup_temp_dir(&staging_dir).await;
             let stderr = String::from_utf8_lossy(&output.stderr);
             anyhow::bail!("Git reset failed: {}", stderr);
         }
 
-        self.install_dependencies(&plugin_dir, plugin_id).await?;
+        if let Err(error) = self.install_dependencies(&staging_dir, plugin_id).await {
+            self.cleanup_temp_dir(&staging_dir).await;
+            return Err(error);
+        }
+
+        if let Err(error) = self
+            .swap_plugin_dirs(&plugin_dir, &staging_dir, &backup_dir)
+            .await
+        {
+            self.cleanup_temp_dir(&staging_dir).await;
+            return Err(error);
+        }
 
         log::info!("Plugin {} updated successfully", plugin_id);
         Ok(())
@@ -352,8 +450,28 @@ mod tests {
         assert!(name.starts_with(".plugin-test.installing."));
     }
 
+    #[test]
+    fn update_staging_dir_uses_hidden_plugin_scoped_prefix() {
+        let root = TempDir::new().unwrap();
+        let installer = PluginInstaller::new(root.path().to_path_buf());
+
+        let staging = installer.update_staging_dir("plugin-test");
+        let name = staging.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with(".plugin-test.updating."));
+    }
+
+    #[test]
+    fn update_backup_dir_uses_hidden_plugin_scoped_prefix() {
+        let root = TempDir::new().unwrap();
+        let installer = PluginInstaller::new(root.path().to_path_buf());
+
+        let backup = installer.update_backup_dir("plugin-test");
+        let name = backup.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with(".plugin-test.backup."));
+    }
+
     #[tokio::test]
-    async fn cleanup_failed_install_removes_directory_tree() {
+    async fn cleanup_temp_dir_removes_directory_tree() {
         let root = TempDir::new().unwrap();
         let installer = PluginInstaller::new(root.path().to_path_buf());
         let install_dir = root.path().join(".plugin-test.installing.1");
@@ -362,7 +480,51 @@ mod tests {
             .await
             .unwrap();
 
-        installer.cleanup_failed_install(&install_dir).await;
+        installer.cleanup_temp_dir(&install_dir).await;
         assert!(!install_dir.exists());
+    }
+
+    #[tokio::test]
+    async fn swap_plugin_dirs_replaces_live_with_staging() {
+        let root = TempDir::new().unwrap();
+        let installer = PluginInstaller::new(root.path().to_path_buf());
+        let live = root.path().join("plugin-test");
+        let staging = root.path().join(".plugin-test.updating.1");
+        let backup = root.path().join(".plugin-test.backup.1");
+
+        tokio::fs::create_dir_all(&live).await.unwrap();
+        tokio::fs::create_dir_all(&staging).await.unwrap();
+        tokio::fs::write(live.join("old.txt"), b"old").await.unwrap();
+        tokio::fs::write(staging.join("new.txt"), b"new").await.unwrap();
+
+        installer
+            .swap_plugin_dirs(&live, &staging, &backup)
+            .await
+            .unwrap();
+
+        assert!(tokio::fs::metadata(live.join("new.txt")).await.is_ok());
+        assert!(tokio::fs::metadata(live.join("old.txt")).await.is_err());
+        assert!(tokio::fs::metadata(&backup).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn swap_plugin_dirs_rolls_back_when_staging_missing() {
+        let root = TempDir::new().unwrap();
+        let installer = PluginInstaller::new(root.path().to_path_buf());
+        let live = root.path().join("plugin-test");
+        let staging = root.path().join(".plugin-test.updating.1");
+        let backup = root.path().join(".plugin-test.backup.1");
+
+        tokio::fs::create_dir_all(&live).await.unwrap();
+        tokio::fs::write(live.join("old.txt"), b"old").await.unwrap();
+
+        assert!(
+            installer
+                .swap_plugin_dirs(&live, &staging, &backup)
+                .await
+                .is_err()
+        );
+        assert!(tokio::fs::metadata(live.join("old.txt")).await.is_ok());
+        assert!(tokio::fs::metadata(&backup).await.is_err());
     }
 }
