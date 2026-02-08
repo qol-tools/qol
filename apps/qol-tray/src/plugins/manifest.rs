@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Component, Path};
 
 use anyhow::{bail, Result};
@@ -50,8 +50,11 @@ impl PluginManifest {
             );
         }
 
+        let menu_action_ids = collect_menu_action_ids(&self.menu.items)?;
+
         if let Some(runtime) = &self.runtime {
             runtime.validate()?;
+            validate_runtime_action_coverage(runtime.actions.as_ref(), &menu_action_ids.executable)?;
         }
         if let Some(daemon) = &self.daemon {
             daemon.validate()?;
@@ -69,6 +72,70 @@ impl RuntimeConfig {
         }
         Ok(())
     }
+}
+
+struct MenuActionIds {
+    all: BTreeSet<String>,
+    executable: BTreeSet<String>,
+}
+
+fn collect_menu_action_ids(items: &[MenuItem]) -> Result<MenuActionIds> {
+    let mut action_ids = MenuActionIds {
+        all: BTreeSet::new(),
+        executable: BTreeSet::new(),
+    };
+    collect_menu_action_ids_inner(items, &mut action_ids)?;
+    Ok(action_ids)
+}
+
+fn collect_menu_action_ids_inner(items: &[MenuItem], action_ids: &mut MenuActionIds) -> Result<()> {
+    for item in items {
+        match item {
+            MenuItem::Action { id, .. } => {
+                if !is_valid_action_id(id) {
+                    bail!("menu contains invalid action id {:?}", id);
+                }
+
+                if !action_ids.all.insert(id.clone()) {
+                    bail!("menu contains duplicate action id {:?}", id);
+                }
+
+                action_ids.executable.insert(id.clone());
+            }
+            MenuItem::Checkbox { id, .. } => {
+                if !is_valid_action_id(id) {
+                    bail!("menu contains invalid action id {:?}", id);
+                }
+
+                if !action_ids.all.insert(id.clone()) {
+                    bail!("menu contains duplicate action id {:?}", id);
+                }
+            }
+            MenuItem::Submenu { items, .. } => {
+                collect_menu_action_ids_inner(items, action_ids)?;
+            }
+            MenuItem::Separator => {}
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_runtime_action_coverage(
+    actions: Option<&HashMap<String, Vec<String>>>,
+    menu_action_ids: &BTreeSet<String>,
+) -> Result<()> {
+    let Some(actions) = actions else {
+        return Ok(());
+    };
+
+    for action_id in menu_action_ids {
+        if !actions.contains_key(action_id) {
+            bail!("runtime.actions missing mapping for menu action {:?}", action_id);
+        }
+    }
+
+    Ok(())
 }
 
 fn validate_runtime_command(command: &str) -> Result<()> {
@@ -626,6 +693,117 @@ mod tests {
 
         let manifest: PluginManifest = toml::from_str(toml).unwrap();
         assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_invalid_action_id_in_menu() {
+        let toml = r#"
+            [plugin]
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = [
+                { type = "action", id = "--bad", label = "Run", action = "run" }
+            ]
+        "#;
+
+        let manifest: PluginManifest = toml::from_str(toml).unwrap();
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_action_id_in_menu() {
+        let toml = r#"
+            [plugin]
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = [
+                { type = "action", id = "run", label = "Run", action = "run" },
+                { type = "action", id = "run", label = "Run Again", action = "run" }
+            ]
+        "#;
+
+        let manifest: PluginManifest = toml::from_str(toml).unwrap();
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_runtime_actions_missing_menu_action_mapping() {
+        let toml = r#"
+            [plugin]
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = [
+                { type = "action", id = "run", label = "Run", action = "run" },
+                { type = "action", id = "settings", label = "Settings", action = "settings" }
+            ]
+
+            [runtime]
+            command = "launcher"
+            actions = { run = ["show"] }
+        "#;
+
+        let manifest: PluginManifest = toml::from_str(toml).unwrap();
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn validate_accepts_runtime_actions_covering_all_menu_actions() {
+        let toml = r#"
+            [plugin]
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = [
+                { type = "action", id = "run", label = "Run", action = "run" },
+                { type = "action", id = "settings", label = "Settings", action = "settings" }
+            ]
+
+            [runtime]
+            command = "launcher"
+            actions = { run = ["show"], settings = ["config"] }
+        "#;
+
+        let manifest: PluginManifest = toml::from_str(toml).unwrap();
+        assert!(manifest.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_does_not_require_runtime_mapping_for_checkbox_items() {
+        let toml = r#"
+            [plugin]
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = [
+                { type = "action", id = "record", label = "Record", action = "run" },
+                { type = "checkbox", id = "audio-enable", label = "Audio", action = "toggle-config", config_key = "audio.enabled" }
+            ]
+
+            [runtime]
+            command = "screen-recorder"
+            actions = { record = ["record"] }
+        "#;
+
+        let manifest: PluginManifest = toml::from_str(toml).unwrap();
+        assert!(manifest.validate().is_ok());
     }
 
     #[test]
