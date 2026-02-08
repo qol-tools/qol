@@ -13,7 +13,9 @@ mod version;
 use anyhow::Result;
 use daemon::Daemon;
 use features::FeatureRegistry;
-use plugins::{PluginLoader, PluginManager};
+#[cfg(feature = "dev")]
+use plugins::PluginLoader;
+use plugins::PluginManager;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;

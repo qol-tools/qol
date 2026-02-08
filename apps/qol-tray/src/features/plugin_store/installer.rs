@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -21,30 +21,68 @@ impl PluginInstaller {
             anyhow::bail!("Plugin already installed: {}", plugin_id);
         }
 
-        log::info!("Cloning plugin from {} to {:?}", repo_url, target_dir);
+        let staging_dir = self.install_staging_dir(plugin_id);
+        log::info!("Cloning plugin from {} to {:?}", repo_url, staging_dir);
 
-        let target_str = target_dir
+        let staging_str = staging_dir
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("Plugin path contains invalid UTF-8"))?;
 
         let output = tokio::time::timeout(
             GIT_TIMEOUT,
             tokio::process::Command::new("git")
-                .args(["clone", repo_url, target_str])
+                .args(["clone", repo_url, staging_str])
                 .output(),
         )
         .await
         .context("Git clone timed out")??;
 
         if !output.status.success() {
+            self.cleanup_failed_install(&staging_dir).await;
             let stderr = String::from_utf8_lossy(&output.stderr);
             anyhow::bail!("Git clone failed: {}", stderr);
         }
 
-        self.install_dependencies(&target_dir, plugin_id).await?;
+        if let Err(error) = self.install_dependencies(&staging_dir, plugin_id).await {
+            self.cleanup_failed_install(&staging_dir).await;
+            return Err(error);
+        }
+
+        if let Err(error) = tokio::fs::rename(&staging_dir, &target_dir).await {
+            self.cleanup_failed_install(&staging_dir).await;
+            return Err(error).with_context(|| {
+                format!(
+                    "Failed to finalize plugin install from {:?} to {:?}",
+                    staging_dir, target_dir
+                )
+            });
+        }
 
         log::info!("Plugin {} installed successfully", plugin_id);
         Ok(())
+    }
+
+    fn install_staging_dir(&self, plugin_id: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        self.plugins_dir
+            .join(format!(".{}.installing.{}.{}", plugin_id, std::process::id(), nanos))
+    }
+
+    async fn cleanup_failed_install(&self, install_dir: &Path) {
+        if tokio::fs::metadata(install_dir).await.is_err() {
+            return;
+        }
+
+        if let Err(error) = tokio::fs::remove_dir_all(install_dir).await {
+            log::warn!(
+                "Failed to cleanup incomplete plugin install at {:?}: {}",
+                install_dir,
+                error
+            );
+        }
     }
 
     async fn install_dependencies(&self, plugin_dir: &Path, plugin_id: &str) -> Result<()> {
@@ -271,6 +309,7 @@ async fn download_asset(url: &str, dest: &PathBuf) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn is_safe_branch_name_cases() {
@@ -301,5 +340,29 @@ mod tests {
         for s in invalid {
             assert!(!is_safe_branch_name(s), "should be invalid: {:?}", s);
         }
+    }
+
+    #[test]
+    fn install_staging_dir_uses_hidden_plugin_scoped_prefix() {
+        let root = TempDir::new().unwrap();
+        let installer = PluginInstaller::new(root.path().to_path_buf());
+
+        let staging = installer.install_staging_dir("plugin-test");
+        let name = staging.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with(".plugin-test.installing."));
+    }
+
+    #[tokio::test]
+    async fn cleanup_failed_install_removes_directory_tree() {
+        let root = TempDir::new().unwrap();
+        let installer = PluginInstaller::new(root.path().to_path_buf());
+        let install_dir = root.path().join(".plugin-test.installing.1");
+        tokio::fs::create_dir_all(install_dir.join("nested")).await.unwrap();
+        tokio::fs::write(install_dir.join("nested").join("file.txt"), b"x")
+            .await
+            .unwrap();
+
+        installer.cleanup_failed_install(&install_dir).await;
+        assert!(!install_dir.exists());
     }
 }
