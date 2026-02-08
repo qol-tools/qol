@@ -299,6 +299,14 @@ fn execute_resolved_action(resolved: &ResolvedAction) -> Result<(), ActionExecut
                     resolved.action_id
                 );
             }
+            super::action_transport::DaemonActionDispatch::Error(message) => {
+                log::warn!(
+                    "Daemon returned error for {}::{}: {}",
+                    resolved.plugin_id,
+                    resolved.action_id,
+                    message
+                );
+            }
         }
     }
 
