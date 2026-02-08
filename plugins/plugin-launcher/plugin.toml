@@ -5,8 +5,8 @@ version = "0.1.2"
 author = "KMRH47"
 
 [runtime]
-command = "run.sh"
-actions = { open = ["open"] }
+command = "launcher"
+actions = { open = ["--show"] }
 
 [daemon]
 enabled = true
