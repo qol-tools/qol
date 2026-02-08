@@ -1,5 +1,6 @@
 use super::{manager::PluginManager, Plugin};
 use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -13,6 +14,51 @@ struct ResolvedAction {
     command_path: Option<PathBuf>,
     args: Vec<String>,
 }
+
+#[derive(Debug)]
+pub enum ActionExecutionError {
+    PluginManagerPoisoned,
+    PluginNotFound(String),
+    InvalidActionId(String),
+    RuntimeCommandEscapesPluginDir { plugin_id: String, command: String },
+    MissingActionMapping { plugin_id: String, action_id: String },
+    NoExecutionTarget { plugin_id: String, action_id: String },
+    SpawnFailed(String),
+}
+
+impl Display for ActionExecutionError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PluginManagerPoisoned => write!(f, "plugin manager lock failed"),
+            Self::PluginNotFound(plugin_id) => write!(f, "plugin not found: {}", plugin_id),
+            Self::InvalidActionId(action_id) => write!(f, "invalid action id: {}", action_id),
+            Self::RuntimeCommandEscapesPluginDir { plugin_id, command } => write!(
+                f,
+                "runtime command escapes plugin dir for {}: {}",
+                plugin_id, command
+            ),
+            Self::MissingActionMapping {
+                plugin_id,
+                action_id,
+            } => {
+                write!(
+                    f,
+                    "missing action mapping for {}::{}",
+                    plugin_id, action_id
+                )
+            }
+            Self::NoExecutionTarget {
+                plugin_id,
+                action_id,
+            } => {
+                write!(f, "no execution target for {}::{}", plugin_id, action_id)
+            }
+            Self::SpawnFailed(error) => write!(f, "spawn failed: {}", error),
+        }
+    }
+}
+
+impl std::error::Error for ActionExecutionError {}
 
 fn get_action_processes() -> &'static Mutex<HashMap<String, Vec<u32>>> {
     ACTION_PROCESSES.get_or_init(|| Mutex::new(HashMap::new()))
@@ -81,34 +127,39 @@ fn track_action_process(plugin_id: &str, pid: u32) {
 }
 
 pub fn execute_action(plugin_manager: &Arc<Mutex<PluginManager>>, plugin_id: &str, action_id: &str) {
-    let resolved = {
-        let plugins = match plugin_manager.lock() {
-            Ok(p) => p,
-            Err(e) => {
-                log::error!("Failed to lock plugin manager: {}", e);
-                return;
-            }
-        };
-
-        let Some(plugin) = plugins.get(plugin_id) else {
-            log::warn!("Plugin not found: {}", plugin_id);
-            return;
-        };
-
-        let Some(resolved) = resolve_action(plugin, action_id) else {
-            return;
-        };
-
-        resolved
-    };
-
-    execute_resolved_action(&resolved);
+    if let Err(error) = try_execute_action(plugin_manager, plugin_id, action_id) {
+        log::warn!(
+            "Plugin action execution failed for {}::{}: {}",
+            plugin_id,
+            action_id,
+            error
+        );
+    }
 }
 
-fn resolve_action(plugin: &Plugin, action_id: &str) -> Option<ResolvedAction> {
+pub fn try_execute_action(
+    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_id: &str,
+    action_id: &str,
+) -> Result<(), ActionExecutionError> {
+    let resolved = {
+        let plugins = plugin_manager
+            .lock()
+            .map_err(|_| ActionExecutionError::PluginManagerPoisoned)?;
+
+        let plugin = plugins
+            .get(plugin_id)
+            .ok_or_else(|| ActionExecutionError::PluginNotFound(plugin_id.to_string()))?;
+
+        resolve_action(plugin, action_id)?
+    };
+
+    execute_resolved_action(&resolved)
+}
+
+fn resolve_action(plugin: &Plugin, action_id: &str) -> Result<ResolvedAction, ActionExecutionError> {
     if !crate::plugins::manifest::is_valid_action_id(action_id) {
-        log::warn!("Invalid action ID: {:?}", action_id);
-        return None;
+        return Err(ActionExecutionError::InvalidActionId(action_id.to_string()));
     }
 
     let daemon_socket = plugin
@@ -126,27 +177,20 @@ fn resolve_action(plugin: &Plugin, action_id: &str) -> Option<ResolvedAction> {
                     .components()
                     .any(|c| c == std::path::Component::ParentDir);
             if has_traversal {
-                log::warn!(
-                    "Plugin {} runtime command escapes plugin directory: {:?}",
-                    plugin.id,
-                    runtime.command
-                );
-                return None;
+                return Err(ActionExecutionError::RuntimeCommandEscapesPluginDir {
+                    plugin_id: plugin.id.clone(),
+                    command: runtime.command.clone(),
+                });
             }
 
             let command_path = plugin.path.join(command);
             let args = match &runtime.actions {
-                Some(map) => match map.get(action_id) {
-                    Some(args) => args.clone(),
-                    None => {
-                        log::warn!(
-                            "Plugin {} has no action mapping for {:?}",
-                            plugin.id,
-                            action_id
-                        );
-                        return None;
+                Some(map) => map.get(action_id).cloned().ok_or_else(|| {
+                    ActionExecutionError::MissingActionMapping {
+                        plugin_id: plugin.id.clone(),
+                        action_id: action_id.to_string(),
                     }
-                },
+                })?,
                 None => vec![action_id.to_string()],
             };
             (Some(command_path), args)
@@ -155,14 +199,13 @@ fn resolve_action(plugin: &Plugin, action_id: &str) -> Option<ResolvedAction> {
     };
 
     if daemon_socket.is_none() && command_path.is_none() {
-        log::warn!(
-            "Plugin {} has neither daemon socket nor runtime config",
-            plugin.id
-        );
-        return None;
+        return Err(ActionExecutionError::NoExecutionTarget {
+            plugin_id: plugin.id.clone(),
+            action_id: action_id.to_string(),
+        });
     }
 
-    Some(ResolvedAction {
+    Ok(ResolvedAction {
         plugin_id: plugin.id.clone(),
         action_id: action_id.to_string(),
         plugin_dir: plugin.path.clone(),
@@ -172,7 +215,7 @@ fn resolve_action(plugin: &Plugin, action_id: &str) -> Option<ResolvedAction> {
     })
 }
 
-fn execute_resolved_action(resolved: &ResolvedAction) {
+fn execute_resolved_action(resolved: &ResolvedAction) -> Result<(), ActionExecutionError> {
     if let Some(socket_path) = &resolved.daemon_socket {
         match super::action_transport::dispatch_daemon_action(socket_path, &resolved.action_id) {
             super::action_transport::DaemonActionDispatch::Handled => {
@@ -181,7 +224,7 @@ fn execute_resolved_action(resolved: &ResolvedAction) {
                     resolved.plugin_id,
                     resolved.action_id
                 );
-                return;
+                return Ok(());
             }
             super::action_transport::DaemonActionDispatch::Fallback => {
                 log::info!(
@@ -200,33 +243,30 @@ fn execute_resolved_action(resolved: &ResolvedAction) {
         }
     }
 
-    let Some(command_path) = &resolved.command_path else {
-        log::warn!(
-            "No runtime fallback configured for {}::{}",
-            resolved.plugin_id,
-            resolved.action_id
-        );
-        return;
-    };
+    let command_path =
+        resolved
+            .command_path
+            .as_ref()
+            .ok_or_else(|| ActionExecutionError::NoExecutionTarget {
+                plugin_id: resolved.plugin_id.clone(),
+                action_id: resolved.action_id.clone(),
+            })?;
 
     log::info!(
         "Executing runtime fallback: {:?} {:?}",
         command_path,
         resolved.args
     );
-    let result = std::process::Command::new(command_path)
+    let child = std::process::Command::new(command_path)
         .args(&resolved.args)
         .current_dir(&resolved.plugin_dir)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .spawn();
+        .spawn()
+        .map_err(|e| ActionExecutionError::SpawnFailed(e.to_string()))?;
 
-    match result {
-        Ok(child) => {
-            let pid = child.id();
-            track_action_process(&resolved.plugin_id, pid);
-            log::info!("Plugin fallback action started (pid: {})", pid);
-        }
-        Err(e) => log::error!("Failed to execute plugin action: {}", e),
-    }
+    let pid = child.id();
+    track_action_process(&resolved.plugin_id, pid);
+    log::info!("Plugin fallback action started (pid: {})", pid);
+    Ok(())
 }

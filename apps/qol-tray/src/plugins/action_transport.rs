@@ -7,7 +7,7 @@ pub enum DaemonActionDispatch {
 }
 
 pub fn dispatch_daemon_action(socket_path: &Path, action_id: &str) -> DaemonActionDispatch {
-    if action_id.is_empty() {
+    if !crate::plugins::manifest::is_valid_action_id(action_id) {
         return DaemonActionDispatch::Fallback;
     }
     dispatch_daemon_action_impl(socket_path, action_id)
@@ -35,11 +35,11 @@ fn dispatch_daemon_action_impl(socket_path: &Path, action_id: &str) -> DaemonAct
     let mut buffer = [0u8; 128];
     let read_result = stream.read(&mut buffer);
     match read_result {
-        Ok(0) => DaemonActionDispatch::Handled,
+        Ok(0) => DaemonActionDispatch::Unavailable,
         Ok(n) => parse_response(&buffer[..n]),
-        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => DaemonActionDispatch::Handled,
-        Err(err) if err.kind() == std::io::ErrorKind::TimedOut => DaemonActionDispatch::Handled,
-        Err(_) => DaemonActionDispatch::Handled,
+        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => DaemonActionDispatch::Unavailable,
+        Err(err) if err.kind() == std::io::ErrorKind::TimedOut => DaemonActionDispatch::Unavailable,
+        Err(_) => DaemonActionDispatch::Unavailable,
     }
 }
 
@@ -52,15 +52,15 @@ fn dispatch_daemon_action_impl(_socket_path: &Path, _action_id: &str) -> DaemonA
 fn parse_response(bytes: &[u8]) -> DaemonActionDispatch {
     let raw = match std::str::from_utf8(bytes) {
         Ok(value) => value.trim().to_ascii_lowercase(),
-        Err(_) => return DaemonActionDispatch::Handled,
+        Err(_) => return DaemonActionDispatch::Unavailable,
     };
-    if raw.is_empty() || raw == "ok" || raw == "handled" {
+    if raw == "ok" || raw == "handled" {
         return DaemonActionDispatch::Handled;
     }
     if raw == "fallback" {
         return DaemonActionDispatch::Fallback;
     }
-    DaemonActionDispatch::Handled
+    DaemonActionDispatch::Unavailable
 }
 
 #[cfg(test)]
@@ -74,8 +74,8 @@ mod tests {
             (b"ok\n".as_slice(), DaemonActionDispatch::Handled),
             (b"handled".as_slice(), DaemonActionDispatch::Handled),
             (b"fallback\n".as_slice(), DaemonActionDispatch::Fallback),
-            (b"".as_slice(), DaemonActionDispatch::Handled),
-            (b"weird".as_slice(), DaemonActionDispatch::Handled),
+            (b"".as_slice(), DaemonActionDispatch::Unavailable),
+            (b"weird".as_slice(), DaemonActionDispatch::Unavailable),
         ];
 
         for (input, expected) in cases {

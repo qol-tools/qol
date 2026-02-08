@@ -63,6 +63,12 @@ struct UninstallResult {
 }
 
 #[derive(Serialize)]
+struct ExecuteActionResult {
+    success: bool,
+    message: String,
+}
+
+#[derive(Serialize)]
 struct PluginAction {
     id: String,
     label: String,
@@ -147,6 +153,7 @@ pub async fn start_ui_server(
         .route("/installed", get(list_installed))
         .route("/events", get(sse_handler))
         .route("/cover/{id}", get(serve_cover))
+        .route("/plugins/{id}/actions/{action}", post(execute_plugin_action))
         .route("/install/{id}", post(install_plugin))
         .route("/update/{id}", post(update_plugin))
         .route("/uninstall/{id}", post(uninstall_plugin))
@@ -408,6 +415,75 @@ async fn uninstall_plugin(
         success: true,
         message: "Uninstalled successfully".to_string(),
     })
+}
+
+async fn execute_plugin_action(
+    Path((id, action)): Path<(String, String)>,
+    State(state): State<AppState>,
+) -> (StatusCode, Json<ExecuteActionResult>) {
+    if !is_safe_path_component(&id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ExecuteActionResult {
+                success: false,
+                message: "Invalid plugin ID".to_string(),
+            }),
+        );
+    }
+
+    match crate::plugins::action_executor::try_execute_action(&state.plugin_manager, &id, &action) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(ExecuteActionResult {
+                success: true,
+                message: "Action dispatched".to_string(),
+            }),
+        ),
+        Err(error @ crate::plugins::action_executor::ActionExecutionError::PluginNotFound(_)) => {
+            log::warn!("Plugin action rejected for {}::{}: {}", id, action, error);
+            (
+                StatusCode::NOT_FOUND,
+                Json(ExecuteActionResult {
+                    success: false,
+                    message: error.to_string(),
+                }),
+            )
+        }
+        Err(error @ crate::plugins::action_executor::ActionExecutionError::InvalidActionId(_)) => {
+            log::warn!("Plugin action rejected for {}::{}: {}", id, action, error);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ExecuteActionResult {
+                    success: false,
+                    message: error.to_string(),
+                }),
+            )
+        }
+        Err(
+            error @ crate::plugins::action_executor::ActionExecutionError::MissingActionMapping {
+                ..
+            },
+        ) => {
+            log::warn!("Plugin action rejected for {}::{}: {}", id, action, error);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ExecuteActionResult {
+                    success: false,
+                    message: error.to_string(),
+                }),
+            )
+        }
+        Err(error) => {
+            log::error!("Plugin action failed for {}::{}: {}", id, action, error);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ExecuteActionResult {
+                    success: false,
+                    message: "Action execution failed".to_string(),
+                }),
+            )
+        }
+    }
 }
 
 async fn list_installed(
