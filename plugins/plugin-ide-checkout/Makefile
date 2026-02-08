@@ -1,7 +1,11 @@
-.PHONY: test run
+.PHONY: dev release
 
-test:
-	python3 -c "import server; print('Syntax OK')"
+BINARY=task-runner
 
-run:
-	python3 server.py
+dev:
+	cargo build
+	cp target/debug/$(BINARY) ./$(BINARY)
+
+release:
+	cargo build --release
+	cp target/release/$(BINARY) ./$(BINARY)
