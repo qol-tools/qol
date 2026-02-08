@@ -5,6 +5,10 @@ version = "1.0.0"
 author = "kaho"
 platforms = ["macos", "linux"]
 
+[runtime]
+command = "run.sh"
+actions = { status = ["status"] }
+
 [menu]
 label = "Task Runner"
 items = [
