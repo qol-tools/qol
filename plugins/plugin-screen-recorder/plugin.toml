@@ -1,12 +1,12 @@
 [plugin]
 name = "Screen Recorder"
 description = "Record screen regions with optional audio support"
-version = "1.1.0"
+version = "1.2.0"
 author = "KMRH47"
 platforms = ["linux"]
 
 [runtime]
-command = "run.sh"
+command = "screen-recorder"
 actions = { record = ["record"], audio-settings = ["audio-settings"] }
 
 [menu]
@@ -19,3 +19,8 @@ items = [
 ]
 
 # No background daemon needed for this plugin
+
+[[dependencies.binaries]]
+name = "screen-recorder"
+repo = "qol-tools/plugin-screen-recorder"
+pattern = "screen-recorder-{os}-{arch}"

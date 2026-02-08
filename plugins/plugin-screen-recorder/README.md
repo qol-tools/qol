@@ -13,16 +13,22 @@ A [qol-tray](https://github.com/qol-tools/qol-tray) plugin for recording screen 
 
 ```bash
 # Ubuntu/Debian
-sudo apt install slop ffmpeg jq xdotool
+sudo apt install slop ffmpeg x11-xserver-utils libnotify-bin
 
 # Arch
-sudo pacman -S slop ffmpeg jq xdotool
+sudo pacman -S slop ffmpeg xorg-xrandr libnotify
 ```
 
 ## Installation
 
 ```bash
 git clone https://github.com/qol-tools/plugin-screen-recorder ~/.config/qol-tray/plugins/plugin-screen-recorder
+```
+
+For linked dev setups, run:
+
+```bash
+make dev
 ```
 
 ## Usage
@@ -71,8 +77,6 @@ Edit `config.json`:
 ## License
 
 MIT
-
-
 
 
 
