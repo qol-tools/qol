@@ -2,8 +2,30 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BINARY="$SCRIPT_DIR/target/release/pointzerver"
 SETTINGS_URL="http://127.0.0.1:42700/plugins/plugin-pointz/"
+
+resolve_binary() {
+    local candidates=(
+        "$SCRIPT_DIR/pointzerver"
+        "$SCRIPT_DIR/target/release/pointzerver"
+        "$SCRIPT_DIR/target/debug/pointzerver"
+    )
+
+    local candidate
+    for candidate in "${candidates[@]}"; do
+        if [[ -x "$candidate" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    if command -v pointzerver >/dev/null 2>&1; then
+        command -v pointzerver
+        return 0
+    fi
+
+    return 1
+}
 
 if [[ "${1:-}" == "settings" ]]; then
     if command -v xdg-open >/dev/null 2>&1; then
@@ -21,9 +43,10 @@ if [[ "${1:-}" == "settings" ]]; then
     exit 1
 fi
 
-if [[ -x "$BINARY" ]]; then
-    exec "$BINARY"
-else
-    echo "pointzerver not built. Run 'make release' in plugin directory." >&2
+BINARY="$(resolve_binary || true)"
+if [[ -z "$BINARY" ]]; then
+    echo "pointzerver binary not found (checked ./pointzerver, ./target/release/pointzerver, ./target/debug/pointzerver, PATH)." >&2
     exit 1
 fi
+
+exec "$BINARY"
