@@ -22,7 +22,7 @@ Moving windows between monitors preserves proportions:
 
 - Linux Mint Cinnamon (or other Cinnamon desktop)
 - Multi-monitor support requires X11
-- Dependencies: `gdbus`, `xdotool` (for panel reveal)
+- Dependencies: `gdbus`, `xdotool`, `wmctrl`, `xprop`
 
 ## Installation
 
@@ -38,11 +38,9 @@ Bind actions to hotkeys in qol-tray settings for instant window management.
 
 ## Implementation
 
-All window operations use the Cinnamon D-Bus API for instant, reliable execution:
-- 0ms latency
-- No stale geometry issues
-- Clean, simple scripts (~10-40 lines each)
-- No complex X11 workarounds needed
+The plugin runs through a single `window-actions` binary entrypoint and receives action IDs from qol-tray runtime dispatch.
+
+Window operations use the Cinnamon D-Bus API for geometry/state actions and X11 tools for minimize/restore/taskbar reveal behavior.
 
 ## License
 

@@ -1,12 +1,23 @@
 [plugin]
 name = "Window Actions"
 description = "Window snapping, centering, and multi-monitor management"
-version = "1.1.0"
+version = "1.2.0"
 author = "KMRH47"
 platforms = ["linux"]
 
 [runtime]
-command = "run.sh"
+command = "window-actions"
+
+[runtime.actions]
+snap-left = ["snap-left"]
+snap-right = ["snap-right"]
+snap-bottom = ["snap-bottom"]
+maximize = ["maximize"]
+minimize = ["minimize"]
+restore = ["restore"]
+center = ["center"]
+move-monitor-left = ["move-monitor-left"]
+move-monitor-right = ["move-monitor-right"]
 
 [menu]
 label = "Window Actions"
@@ -22,3 +33,7 @@ items = [
     { type = "action", id = "move-monitor-right", label = "Move to Right Monitor", action = "run" },
 ]
 
+[[dependencies.binaries]]
+name = "window-actions"
+repo = "qol-tools/plugin-window-actions"
+pattern = "window-actions-{os}-{arch}"

@@ -1,4 +1,7 @@
-.PHONY: test
+.PHONY: dev release
 
-test:
-	@echo "No tests configured"
+dev:
+	cargo build
+
+release:
+	cargo build --release
