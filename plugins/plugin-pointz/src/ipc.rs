@@ -32,7 +32,16 @@ pub async fn run() -> Result<()> {
                     return;
                 }
             };
-            let action = raw.strip_prefix("action:").unwrap_or(raw);
+            let action = match raw.strip_prefix("action:") {
+                Some(action_id) => {
+                    if !is_valid_action_id(action_id) {
+                        let _ = stream.write_all(b"fallback\n").await;
+                        return;
+                    }
+                    action_id
+                }
+                None => raw,
+            };
 
             let response = match action {
                 "settings" => {
@@ -57,6 +66,15 @@ fn socket_path() -> String {
 #[cfg(not(unix))]
 pub async fn run() -> Result<()> {
     Ok(())
+}
+
+fn is_valid_action_id(action: &str) -> bool {
+    !action.is_empty()
+        && action.len() <= 64
+        && !action.starts_with('-')
+        && action
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 fn open_settings() -> bool {
