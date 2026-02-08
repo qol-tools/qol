@@ -54,15 +54,33 @@ fn build_plugin(plugin_id: &str, path: &Path) -> BuildResult {
 fn select_make_target(path: &Path) -> &'static str {
     let makefile_path = path.join("Makefile");
     let Ok(content) = std::fs::read_to_string(makefile_path) else {
-        return "release";
+        return "dev";
     };
 
-    for line in content.lines() {
-        if line.starts_with("dev:") || line.starts_with("dev ") {
-            return "dev";
-        }
+    if has_target(&content, "dev") {
+        return "dev";
     }
-    "release"
+    if has_target(&content, "build") {
+        return "build";
+    }
+    if has_target(&content, "run") {
+        return "run";
+    }
+    if has_target(&content, "all") {
+        return "all";
+    }
+
+    "dev"
+}
+
+fn has_target(content: &str, target: &str) -> bool {
+    let prefix_colon = format!("{}:", target);
+    let prefix_space = format!("{} ", target);
+
+    content
+        .lines()
+        .map(str::trim_start)
+        .any(|line| line.starts_with(&prefix_colon) || line.starts_with(&prefix_space))
 }
 
 fn run_make(plugin_id: &str, path: &Path, target: &str) -> BuildResult {
