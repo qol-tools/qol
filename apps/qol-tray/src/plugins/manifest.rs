@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PluginManifest {
@@ -8,6 +9,15 @@ pub struct PluginManifest {
     pub daemon: Option<DaemonConfig>,
     #[serde(default)]
     pub dependencies: Option<Dependencies>,
+    #[serde(default)]
+    pub runtime: Option<RuntimeConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RuntimeConfig {
+    pub command: String,
+    #[serde(default)]
+    pub actions: Option<HashMap<String, Vec<String>>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -276,6 +286,70 @@ mod tests {
         assert!(manifest.plugin.platforms.is_none());
         assert!(manifest.daemon.is_none());
         assert!(manifest.menu.items.is_empty());
+    }
+
+    #[test]
+    fn parse_runtime_config() {
+        let toml = r#"
+            [plugin]
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [runtime]
+            command = "run.sh"
+            actions = { run = ["show"], settings = ["config"] }
+        "#;
+
+        let manifest: PluginManifest = toml::from_str(toml).unwrap();
+        let runtime = manifest.runtime.unwrap();
+        assert_eq!(runtime.command, "run.sh");
+        let actions = runtime.actions.unwrap();
+        assert_eq!(actions["run"], vec!["show"]);
+        assert_eq!(actions["settings"], vec!["config"]);
+    }
+
+    #[test]
+    fn parse_runtime_without_actions() {
+        let toml = r#"
+            [plugin]
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [runtime]
+            command = "run.sh"
+        "#;
+
+        let manifest: PluginManifest = toml::from_str(toml).unwrap();
+        let runtime = manifest.runtime.unwrap();
+        assert_eq!(runtime.command, "run.sh");
+        assert!(runtime.actions.is_none());
+    }
+
+    #[test]
+    fn manifest_without_runtime_is_none() {
+        let toml = r#"
+            [plugin]
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+        "#;
+
+        let manifest: PluginManifest = toml::from_str(toml).unwrap();
+        assert!(manifest.runtime.is_none());
     }
 
     #[test]
