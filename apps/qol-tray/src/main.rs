@@ -67,12 +67,12 @@ async fn async_init() -> Result<(
 
     features::plugin_store::Plugins::start_server(plugin_manager.clone(), &daemon).await?;
 
-    if let Ok(plugins_dir) = PluginLoader::default_plugin_dir() {
-        if let Err(e) = hotkeys::start_hotkey_listener(plugins_dir.clone()) {
-            log::warn!("Failed to start hotkey listener: {}", e);
-        }
+    if let Err(e) = hotkeys::start_hotkey_listener(plugin_manager.clone()) {
+        log::warn!("Failed to start hotkey listener: {}", e);
+    }
 
-        #[cfg(feature = "dev")]
+    #[cfg(feature = "dev")]
+    if let Ok(plugins_dir) = PluginLoader::default_plugin_dir() {
         daemon.start_discovery(plugins_dir);
     }
 

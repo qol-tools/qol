@@ -2,7 +2,6 @@ use global_hotkey::hotkey::Code;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HotkeyConfig {
@@ -25,21 +24,6 @@ pub struct HotkeyAction {
     pub plugin_id: String,
     pub action: String,
 }
-
-pub struct ScriptInfo {
-    pub shell: &'static str,
-    pub flag: Option<&'static str>,
-    pub path: PathBuf,
-}
-
-pub const SCRIPT_RUNNERS: &[(&str, &str, Option<&str>)] = &[
-    #[cfg(windows)]
-    ("run.bat", "cmd", Some("/c")),
-    #[cfg(windows)]
-    ("run.ps1", "powershell", Some("-File")),
-    #[cfg(not(windows))]
-    ("run.sh", "bash", None),
-];
 
 pub static KEY_CODE_MAP: Lazy<HashMap<&'static str, Code>> = Lazy::new(|| {
     HashMap::from([
