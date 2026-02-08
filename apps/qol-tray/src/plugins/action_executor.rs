@@ -277,6 +277,7 @@ fn resolve_runtime_target(
 fn execute_resolved_action(resolved: &ResolvedAction) -> Result<(), ActionExecutionError> {
     if let Some(socket_path) = &resolved.daemon_socket {
         match super::action_transport::dispatch_daemon_action(socket_path, &resolved.action_id) {
+            #[cfg(unix)]
             super::action_transport::DaemonActionDispatch::Handled => {
                 log::info!(
                     "Plugin action handled via daemon socket: {}::{}",
@@ -299,6 +300,7 @@ fn execute_resolved_action(resolved: &ResolvedAction) -> Result<(), ActionExecut
                     resolved.action_id
                 );
             }
+            #[cfg(unix)]
             super::action_transport::DaemonActionDispatch::Error(message) => {
                 log::warn!(
                     "Daemon returned error for {}::{}: {}",
