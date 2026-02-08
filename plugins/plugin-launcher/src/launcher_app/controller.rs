@@ -34,7 +34,17 @@ impl LauncherView {
                 cx.notify();
             }
             InputEffect::Launch => self.launch_selected(window),
-            InputEffect::Dismiss => window.remove_window(),
+            InputEffect::Dismiss => {
+                #[cfg(target_os = "macos")]
+                {
+                    let _ = window;
+                    cx.hide();
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    window.minimize_window();
+                }
+            }
         }
     }
 
@@ -101,7 +111,14 @@ impl LauncherView {
             return;
         };
         if actions::launch_item(&item) {
-            window.remove_window();
+            #[cfg(target_os = "macos")]
+            {
+                window.remove_window();
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                window.minimize_window();
+            }
         }
     }
 }

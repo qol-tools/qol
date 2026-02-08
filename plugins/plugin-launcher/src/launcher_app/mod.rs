@@ -8,6 +8,8 @@ mod search;
 mod state;
 mod view;
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
@@ -81,6 +83,18 @@ impl LauncherView {
     }
 }
 
+fn hide_window(window: &mut Window, cx: &mut App) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = window;
+        cx.hide();
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        window.minimize_window();
+    }
+}
+
 fn open_keepalive_window(cx: &mut App) {
     let bounds = Bounds::centered(None, size(px(1.), px(1.)), cx);
     let options = WindowOptions {
@@ -95,29 +109,33 @@ fn open_keepalive_window(cx: &mut App) {
     let _ = cx
         .open_window(options, |_window, cx| cx.new(KeepAliveView::new))
         .map(|w| {
-            w.update(cx, |_, window, cx| {
-                #[cfg(target_os = "macos")]
-                {
-                    let _ = window;
-                    cx.hide();
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    window.minimize_window();
-                }
-            })
-            .ok();
+            w.update(cx, |_, window, cx| hide_window(window, cx)).ok();
         });
 }
 
-fn close_active_window(cx: &mut App) {
-    if let Some(active) = cx.active_window() {
-        let _ = active.update(cx, |_, window, _cx| window.remove_window());
+fn activate_or_open_launcher(
+    entries: Arc<PreloadedEntries>,
+    active: Rc<RefCell<Option<WindowHandle<LauncherView>>>>,
+    cx: &mut App,
+) {
+    if let Some(existing) = active.borrow().as_ref() {
+        if existing
+            .update(cx, |view, window, cx| {
+                view.state.query.clear();
+                view.state.cursor = 0;
+                view.state.selected = 0;
+                view.state.clear_selection();
+                view.store.ensure_filtered(&view.state);
+                window.activate_window();
+                cx.notify();
+            })
+            .is_ok()
+        {
+            cx.activate(true);
+            return;
+        }
+        active.borrow_mut().take();
     }
-}
-
-fn open_launcher(entries: Arc<PreloadedEntries>, cx: &mut App) {
-    close_active_window(cx);
 
     let win_size = size(px(WINDOW_WIDTH), px(HEADER_HEIGHT));
     let caps = platform::current_capabilities();
@@ -138,34 +156,39 @@ fn open_launcher(entries: Arc<PreloadedEntries>, cx: &mut App) {
         ..Default::default()
     };
 
-    let _ = open_window_with_focus(cx, options, move |_window, cx| {
+    if let Ok(handle) = open_window_with_focus(cx, options, move |_window, cx| {
         LauncherView::new(entries.clone(), cx)
-    });
+    }) {
+        *active.borrow_mut() = Some(handle);
+    }
     cx.activate(true);
 }
 
 fn spawn_command_poll(
     entries: Arc<PreloadedEntries>,
+    active: Rc<RefCell<Option<WindowHandle<LauncherView>>>>,
     rx: mpsc::Receiver<daemon::Command>,
     cx: &mut App,
 ) {
     cx.spawn(async move |cx: &mut AsyncApp| {
         loop {
-            cx.background_spawn(async {
-                std::thread::sleep(Duration::from_millis(50));
-            })
-            .await;
-
             match rx.try_recv().ok() {
                 Some(daemon::Command::Show) => {
                     let entries = entries.clone();
-                    cx.update(move |cx| open_launcher(entries.clone(), cx)).ok();
+                    let active = active.clone();
+                    cx.update(move |cx| activate_or_open_launcher(entries.clone(), active.clone(), cx))
+                        .ok();
                 }
                 Some(daemon::Command::Kill) => {
                     cx.update(|cx| cx.quit()).ok();
                     break;
                 }
-                None => {}
+                None => {
+                    cx.background_spawn(async {
+                        std::thread::sleep(Duration::from_millis(5));
+                    })
+                    .await;
+                }
             }
         }
     })
@@ -189,11 +212,13 @@ pub fn run() {
     let entries = Arc::new(PreloadedEntries::load());
 
     Application::new().run(move |cx: &mut App| {
+        let active: Rc<RefCell<Option<WindowHandle<LauncherView>>>> = Rc::new(RefCell::new(None));
+
         open_keepalive_window(cx);
-        spawn_command_poll(entries.clone(), rx, cx);
+        spawn_command_poll(entries.clone(), active.clone(), rx, cx);
 
         if show_immediately {
-            open_launcher(entries.clone(), cx);
+            activate_or_open_launcher(entries.clone(), active.clone(), cx);
         }
     });
 
