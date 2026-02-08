@@ -1,4 +1,4 @@
-.PHONY: build release run dev test check clean
+.PHONY: build release run dev test check clean contracts
 
 build:
 	cargo build
@@ -31,3 +31,6 @@ check:
 
 clean:
 	cargo clean
+
+contracts:
+	python3 scripts/validate_first_party_plugin_contracts.py --plugins-root ../qol-tools
