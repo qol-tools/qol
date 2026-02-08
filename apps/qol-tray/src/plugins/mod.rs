@@ -140,30 +140,29 @@ pub(crate) fn resolve_plugin_command_path(plugin_dir: &Path, command: &str) -> O
     }
 
     let canonical_plugin_dir = std::fs::canonicalize(plugin_dir).ok()?;
+    let is_allowed_candidate = |path: &Path| -> bool {
+        if !path.is_file() {
+            return false;
+        }
+        std::fs::canonicalize(path)
+            .ok()
+            .is_some_and(|resolved| resolved.starts_with(&canonical_plugin_dir))
+    };
 
-    let candidates = vec![plugin_dir.join(command_path.as_os_str())];
-
-    #[cfg(windows)]
-    {
-        let with_exe: Vec<PathBuf> = candidates
-            .iter()
-            .filter(|path| path.extension().is_none())
-            .map(|path| path.with_extension("exe"))
-            .collect();
-        candidates.extend(with_exe);
+    let primary = plugin_dir.join(command_path.as_os_str());
+    if is_allowed_candidate(&primary) {
+        return Some(primary);
     }
 
-    candidates.into_iter().find_map(|path| {
-        if !path.is_file() {
-            return None;
+    #[cfg(windows)]
+    if primary.extension().is_none() {
+        let exe_candidate = primary.with_extension("exe");
+        if is_allowed_candidate(&exe_candidate) {
+            return Some(exe_candidate);
         }
-        let canonical_candidate = std::fs::canonicalize(&path).ok()?;
-        if canonical_candidate.starts_with(&canonical_plugin_dir) {
-            Some(path)
-        } else {
-            None
-        }
-    })
+    }
+
+    None
 }
 
 #[derive(Debug)]
