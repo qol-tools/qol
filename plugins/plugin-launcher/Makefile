@@ -1,4 +1,4 @@
-.PHONY: test list release
+.PHONY: test list dev release
 
 test:
 	cargo test --tests
@@ -20,6 +20,9 @@ example-%:
 		exit 1; \
 	fi; \
 	cargo run --example "$$BIN"
+
+dev:
+	cargo build
 
 release:
 	@cargo test --tests && \

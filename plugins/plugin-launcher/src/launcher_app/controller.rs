@@ -34,6 +34,7 @@ impl LauncherView {
                 cx.notify();
             }
             InputEffect::Launch => self.launch_selected(window),
+            InputEffect::Dismiss => window.remove_window(),
         }
     }
 

@@ -7,6 +7,7 @@ pub enum InputEffect {
     Navigate,
     QueryChanged,
     Launch,
+    Dismiss,
 }
 
 impl LauncherState {
@@ -17,6 +18,7 @@ impl LauncherState {
         let shift = modifiers.shift;
 
         match key.as_str() {
+            "escape" | "esc" => InputEffect::Dismiss,
             "up" if ctrl => {
                 if self.decrease_fuzziness() { InputEffect::QueryChanged } else { InputEffect::Navigate }
             }

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::providers::{apps, files};
 
 use super::search::{self, ResultItem, Scored};
@@ -11,14 +13,14 @@ struct FilterKey {
 }
 
 pub(super) struct EntryStore {
-    app_entries: Vec<apps::AppEntry>,
-    file_entries: Vec<files::FileEntry>,
+    app_entries: Arc<Vec<apps::AppEntry>>,
+    file_entries: Arc<Vec<files::FileEntry>>,
     cache: Vec<Scored>,
     cache_key: Option<FilterKey>,
 }
 
 impl EntryStore {
-    pub fn new(app_entries: Vec<apps::AppEntry>, file_entries: Vec<files::FileEntry>) -> Self {
+    pub fn new(app_entries: Arc<Vec<apps::AppEntry>>, file_entries: Arc<Vec<files::FileEntry>>) -> Self {
         Self {
             app_entries,
             file_entries,
