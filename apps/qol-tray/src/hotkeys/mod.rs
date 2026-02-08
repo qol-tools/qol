@@ -7,7 +7,7 @@ use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -60,13 +60,27 @@ impl HotkeyManager {
         Ok(())
     }
 
-    pub fn register_hotkeys(&mut self, config: &HotkeyConfig) -> Result<()> {
+    pub fn register_hotkeys(
+        &mut self,
+        config: &HotkeyConfig,
+        available_actions: &HashMap<String, HashSet<String>>,
+    ) -> Result<()> {
         self.unregister_all();
 
         let new_manager = GlobalHotKeyManager::new()?;
 
         for binding in &config.hotkeys {
             if !binding.enabled {
+                continue;
+            }
+
+            if !is_binding_available(available_actions, &binding.plugin_id, &binding.action) {
+                log::warn!(
+                    "Skipping hotkey {} -> {}::{} (plugin/action unavailable)",
+                    binding.key,
+                    binding.plugin_id,
+                    binding.action
+                );
                 continue;
             }
 
@@ -163,14 +177,21 @@ pub fn start_hotkey_listener(plugin_manager: Arc<Mutex<PluginManager>>) -> Resul
         };
 
         if let Ok(config) = manager.load_config() {
-            if let Err(e) = manager.register_hotkeys(&config) {
+            let available_actions = match available_actions(&plugin_manager) {
+                Ok(actions) => actions,
+                Err(e) => {
+                    log::error!("Failed to resolve available plugin actions: {}", e);
+                    HashMap::new()
+                }
+            };
+            if let Err(e) = manager.register_hotkeys(&config, &available_actions) {
                 log::error!("Failed to register hotkeys: {}", e);
             }
         }
 
         let hotkey_receiver = GlobalHotKeyEvent::receiver();
         loop {
-            try_reload_hotkeys(&reload_rx, &mut manager);
+            try_reload_hotkeys(&reload_rx, &mut manager, &plugin_manager);
             try_handle_hotkey(hotkey_receiver, &manager, &plugin_manager);
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
@@ -179,7 +200,11 @@ pub fn start_hotkey_listener(plugin_manager: Arc<Mutex<PluginManager>>) -> Resul
     Ok(())
 }
 
-fn try_reload_hotkeys(reload_rx: &mpsc::Receiver<()>, manager: &mut HotkeyManager) {
+fn try_reload_hotkeys(
+    reload_rx: &mpsc::Receiver<()>,
+    manager: &mut HotkeyManager,
+    plugin_manager: &Arc<Mutex<PluginManager>>,
+) {
     if reload_rx.try_recv().is_err() {
         return;
     }
@@ -193,10 +218,58 @@ fn try_reload_hotkeys(reload_rx: &mpsc::Receiver<()>, manager: &mut HotkeyManage
         }
     };
 
-    match manager.register_hotkeys(&config) {
+    let available_actions = match available_actions(plugin_manager) {
+        Ok(actions) => actions,
+        Err(e) => {
+            log::error!("Failed to resolve available plugin actions: {}", e);
+            return;
+        }
+    };
+
+    match manager.register_hotkeys(&config, &available_actions) {
         Ok(()) => log::info!("Hotkeys reloaded successfully"),
         Err(e) => log::error!("Failed to register hotkeys: {}", e),
     }
+}
+
+fn available_actions(plugin_manager: &Arc<Mutex<PluginManager>>) -> Result<HashMap<String, HashSet<String>>> {
+    let manager = plugin_manager
+        .lock()
+        .map_err(|_| anyhow::anyhow!("plugin manager lock failed"))?;
+
+    let mut actions_by_plugin = HashMap::new();
+    for plugin in manager.plugins() {
+        let mut action_ids = HashSet::new();
+        collect_action_ids(&plugin.manifest.menu.items, &mut action_ids);
+        actions_by_plugin.insert(plugin.id.clone(), action_ids);
+    }
+
+    Ok(actions_by_plugin)
+}
+
+fn collect_action_ids(items: &[crate::plugins::MenuItem], action_ids: &mut HashSet<String>) {
+    for item in items {
+        match item {
+            crate::plugins::MenuItem::Action { id, .. }
+            | crate::plugins::MenuItem::Checkbox { id, .. } => {
+                action_ids.insert(id.clone());
+            }
+            crate::plugins::MenuItem::Submenu { items, .. } => {
+                collect_action_ids(items, action_ids);
+            }
+            crate::plugins::MenuItem::Separator => {}
+        }
+    }
+}
+
+fn is_binding_available(
+    available_actions: &HashMap<String, HashSet<String>>,
+    plugin_id: &str,
+    action_id: &str,
+) -> bool {
+    available_actions
+        .get(plugin_id)
+        .is_some_and(|actions| actions.contains(action_id))
 }
 
 fn try_handle_hotkey(

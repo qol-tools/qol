@@ -6,6 +6,26 @@ use std::path::{Path, PathBuf};
 
 pub struct PluginLoader;
 
+#[derive(Debug)]
+struct MissingBinaryContractError {
+    plugin_id: String,
+    plugin_path: PathBuf,
+    command_field: &'static str,
+    command: String,
+}
+
+impl std::fmt::Display for MissingBinaryContractError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} {:?} binary not found for plugin {} in {:?}",
+            self.command_field, self.command, self.plugin_id, self.plugin_path
+        )
+    }
+}
+
+impl std::error::Error for MissingBinaryContractError {}
+
 impl PluginLoader {
     pub fn default_plugin_dir() -> Result<PathBuf> {
         paths::plugins_dir()
@@ -44,8 +64,13 @@ impl PluginLoader {
         let mut plugins = Vec::new();
         let mut skipped_platform = 0usize;
         let mut invalid_manifest = 0usize;
+        let mut missing_binaries = 0usize;
 
         for path in &paths {
+            let plugin_dir_name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("<unknown>");
             match Self::load_plugin(path) {
                 Ok(plugin) => {
                     if !plugin.manifest.plugin.supports_current_platform() {
@@ -65,18 +90,28 @@ impl PluginLoader {
                     plugins.push(plugin);
                 }
                 Err(e) => {
-                    invalid_manifest += 1;
-                    log::warn!("Failed to load plugin from {:?}: {}", path, e);
+                    if let Some(missing) = e.downcast_ref::<MissingBinaryContractError>() {
+                        missing_binaries += 1;
+                        log::warn!(
+                            "Skipping plugin {} (missing binary): {}",
+                            plugin_dir_name,
+                            missing
+                        );
+                    } else {
+                        invalid_manifest += 1;
+                        log::warn!("Failed to load plugin from {:?}: {:#}", path, e);
+                    }
                 }
             }
         }
 
         log::info!(
-            "Plugin diagnostics: discovered={}, loaded={}, unsupported_platform={}, invalid={}",
+            "Plugin diagnostics: discovered={}, loaded={}, unsupported_platform={}, invalid={}, missing_binaries={}",
             paths.len(),
             plugins.len(),
             skipped_platform,
-            invalid_manifest
+            invalid_manifest,
+            missing_binaries
         );
         Ok(plugins)
     }
@@ -103,8 +138,60 @@ impl PluginLoader {
             .context("Invalid plugin directory name")?
             .to_string();
 
+        if manifest.plugin.supports_current_platform() {
+            validate_plugin_execution_contract(&id, &manifest, path)?;
+        }
+
         Ok(Plugin::new(id, manifest, path.to_path_buf()))
     }
+}
+
+fn validate_plugin_execution_contract(
+    plugin_id: &str,
+    manifest: &PluginManifest,
+    plugin_path: &Path,
+) -> Result<()> {
+    ensure_command_binary_exists(
+        plugin_id,
+        plugin_path,
+        "runtime.command",
+        manifest.runtime.as_ref().map(|runtime| runtime.command.as_str()),
+    )?;
+    ensure_command_binary_exists(
+        plugin_id,
+        plugin_path,
+        "daemon.command",
+        manifest
+            .daemon
+            .as_ref()
+            .filter(|daemon| daemon.enabled)
+            .map(|daemon| daemon.command.as_str()),
+    )?;
+
+    Ok(())
+}
+
+fn ensure_command_binary_exists(
+    plugin_id: &str,
+    plugin_path: &Path,
+    command_field: &'static str,
+    command: Option<&str>,
+) -> Result<()> {
+    let Some(command) = command else {
+        return Ok(());
+    };
+
+    if super::resolve_plugin_command_path(plugin_path, command).is_some() {
+        return Ok(());
+    }
+
+    Err(MissingBinaryContractError {
+        plugin_id: plugin_id.to_string(),
+        plugin_path: plugin_path.to_path_buf(),
+        command_field,
+        command: command.to_string(),
+    }
+    .into())
 }
 
 #[cfg(test)]
@@ -122,6 +209,50 @@ version = "1.0.0"
 [menu]
 label = "Test"
 items = []
+"#;
+
+    const RUNTIME_MANIFEST: &str = r#"
+[plugin]
+name = "Runtime Plugin"
+description = "A runtime plugin"
+version = "1.0.0"
+
+[menu]
+label = "Runtime"
+items = []
+
+[runtime]
+command = "runtime-plugin"
+"#;
+
+    const DAEMON_MANIFEST: &str = r#"
+[plugin]
+name = "Daemon Plugin"
+description = "A daemon plugin"
+version = "1.0.0"
+
+[menu]
+label = "Daemon"
+items = []
+
+[daemon]
+enabled = true
+command = "daemon-plugin"
+"#;
+
+    const DISABLED_DAEMON_MANIFEST: &str = r#"
+[plugin]
+name = "Disabled Daemon Plugin"
+description = "A daemon plugin"
+version = "1.0.0"
+
+[menu]
+label = "Daemon"
+items = []
+
+[daemon]
+enabled = false
+command = "daemon-plugin"
 "#;
 
     #[test]
@@ -276,5 +407,72 @@ items = []
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].id, "symlinked-plugin");
+    }
+
+    #[test]
+    fn load_plugin_rejects_missing_runtime_binary() {
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(temp_dir.path().join("plugin.toml"), RUNTIME_MANIFEST).unwrap();
+
+        let error = PluginLoader::load_plugin(temp_dir.path()).unwrap_err();
+        assert!(error.to_string().contains("runtime.command"));
+    }
+
+    #[test]
+    fn load_plugin_accepts_runtime_binary_when_present() {
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(temp_dir.path().join("plugin.toml"), RUNTIME_MANIFEST).unwrap();
+        fs::write(temp_dir.path().join("runtime-plugin"), b"binary").unwrap();
+
+        let plugin = PluginLoader::load_plugin(temp_dir.path()).unwrap();
+        assert_eq!(plugin.id, temp_dir.path().file_name().unwrap().to_str().unwrap());
+    }
+
+    #[test]
+    fn load_plugin_rejects_missing_daemon_binary_when_enabled() {
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(temp_dir.path().join("plugin.toml"), DAEMON_MANIFEST).unwrap();
+
+        let error = PluginLoader::load_plugin(temp_dir.path()).unwrap_err();
+        assert!(error.to_string().contains("daemon.command"));
+    }
+
+    #[test]
+    fn load_plugin_allows_missing_daemon_binary_when_disabled() {
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(temp_dir.path().join("plugin.toml"), DISABLED_DAEMON_MANIFEST).unwrap();
+
+        let plugin = PluginLoader::load_plugin(temp_dir.path()).unwrap();
+        assert_eq!(plugin.id, temp_dir.path().file_name().unwrap().to_str().unwrap());
+    }
+
+    #[test]
+    fn load_plugin_skips_binary_check_for_unsupported_platform() {
+        let temp_dir = TempDir::new().unwrap();
+        let unsupported_platform = if cfg!(target_os = "linux") {
+            "windows"
+        } else {
+            "linux"
+        };
+        let manifest = format!(
+            r#"
+[plugin]
+name = "Unsupported"
+description = ""
+version = "1.0.0"
+platforms = ["{unsupported_platform}"]
+
+[menu]
+label = "Unsupported"
+items = []
+
+[runtime]
+command = "runtime-plugin"
+"#
+        );
+        fs::write(temp_dir.path().join("plugin.toml"), manifest).unwrap();
+
+        let plugin = PluginLoader::load_plugin(temp_dir.path()).unwrap();
+        assert!(!plugin.manifest.plugin.supports_current_platform());
     }
 }
