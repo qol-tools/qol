@@ -2,7 +2,6 @@ use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc::Sender;
-use std::time::Duration;
 
 const SOCKET_PATH: &str = "/tmp/qol-launcher.sock";
 
@@ -28,20 +27,16 @@ pub fn start_listener(tx: Sender<Command>) -> bool {
     let Ok(listener) = UnixListener::bind(SOCKET_PATH) else {
         return false;
     };
-    listener.set_nonblocking(true).ok();
 
     std::thread::spawn(move || {
-        loop {
-            match listener.accept() {
-                Ok((mut stream, _)) => {
+        for stream in listener.incoming() {
+            match stream {
+                Ok(mut stream) => {
                     if let Some(cmd) = read_command(&mut stream) {
                         if tx.send(cmd).is_err() {
                             break;
                         }
                     }
-                }
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(50));
                 }
                 Err(_) => break,
             }

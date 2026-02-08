@@ -16,8 +16,16 @@ impl Render for LauncherView {
             self.blur_sub = Some(cx.on_blur(
                 &self.focus_handle,
                 window,
-                |_this, window, _cx| {
-                    window.remove_window();
+                |_this, window, cx| {
+                    #[cfg(target_os = "macos")]
+                    {
+                        let _ = window;
+                        cx.hide();
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        window.minimize_window();
+                    }
                 },
             ));
         }
@@ -36,7 +44,17 @@ impl Render for LauncherView {
             .bg(view::bg_color())
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
-                    "escape" | "esc" => window.remove_window(),
+                    "escape" | "esc" => {
+                        #[cfg(target_os = "macos")]
+                        {
+                            let _ = window;
+                            cx.hide();
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            window.minimize_window();
+                        }
+                    }
                     _ => this.handle_key(event, window, cx),
                 }
             }))
