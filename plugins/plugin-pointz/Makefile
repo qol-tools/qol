@@ -1,16 +1,20 @@
 .PHONY: dev build release run check test clean
 
 BINARY=pointzerver
+OUTPUT=./$(BINARY)
+STAGED=./$(BINARY).new
 
 dev:
 	cargo build
-	cp target/debug/$(BINARY) ./$(BINARY)
+	install -m 755 target/debug/$(BINARY) $(STAGED)
+	mv -f $(STAGED) $(OUTPUT)
 
 build: dev
 
 release:
 	cargo build --release
-	cp target/release/$(BINARY) ./$(BINARY)
+	install -m 755 target/release/$(BINARY) $(STAGED)
+	mv -f $(STAGED) $(OUTPUT)
 
 run:
 	RUST_LOG=info cargo run
@@ -23,4 +27,4 @@ test:
 
 clean:
 	cargo clean
-	rm -f ./$(BINARY)
+	rm -f $(OUTPUT) $(STAGED)
