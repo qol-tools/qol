@@ -30,7 +30,11 @@ release:
 	MAJOR=$$(echo $$OLD | cut -d. -f1); \
 	MINOR=$$(echo $$OLD | cut -d. -f2); \
 	PATCH=$$(echo $$OLD | cut -d. -f3); \
-	NEW="$$MAJOR.$$MINOR.$$((PATCH + 1))"; \
+	if [ -n "$(RELEASE_VERSION)" ]; then \
+		NEW="$(RELEASE_VERSION)"; \
+	else \
+		NEW="$$MAJOR.$$MINOR.$$((PATCH + 1))"; \
+	fi; \
 	sed -i "s/^version = \"$$OLD\"/version = \"$$NEW\"/" Cargo.toml && \
 	cargo build --release && \
 	cp target/release/launcher target/release/launcher-linux-x86_64 && \

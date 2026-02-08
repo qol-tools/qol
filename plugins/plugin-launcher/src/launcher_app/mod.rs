@@ -142,7 +142,7 @@ fn try_activate_existing_launcher(
     active: Rc<RefCell<Option<WindowHandle<LauncherView>>>>,
     cx: &mut App,
 ) -> bool {
-    let Some(existing) = active.borrow().as_ref() else {
+    let Some(existing) = active.borrow().as_ref().cloned() else {
         return false;
     };
 
