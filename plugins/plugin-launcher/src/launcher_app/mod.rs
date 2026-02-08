@@ -7,6 +7,7 @@ mod render;
 mod search;
 mod state;
 mod view;
+mod window_ops;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -23,6 +24,7 @@ use crate::providers::{apps, files};
 use entry_store::EntryStore;
 use layout::{HEADER_HEIGHT, WINDOW_WIDTH};
 use state::LauncherState;
+use window_ops::hide_in_app;
 
 pub use input::key_to_input_char;
 
@@ -82,18 +84,6 @@ impl LauncherView {
     }
 }
 
-fn hide_window(window: &mut Window, cx: &mut App) {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = window;
-        cx.hide();
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        window.minimize_window();
-    }
-}
-
 fn open_keepalive_window(cx: &mut App) {
     let bounds = Bounds::centered(None, size(px(1.), px(1.)), cx);
     let options = WindowOptions {
@@ -108,7 +98,7 @@ fn open_keepalive_window(cx: &mut App) {
     let _ = cx
         .open_window(options, |_window, cx| cx.new(KeepAliveView::new))
         .map(|w| {
-            w.update(cx, |_, window, cx| hide_window(window, cx)).ok();
+            w.update(cx, |_, window, cx| hide_in_app(window, cx)).ok();
         });
 }
 
