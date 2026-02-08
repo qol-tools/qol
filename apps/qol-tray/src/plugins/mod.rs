@@ -5,7 +5,7 @@ pub mod config;
 pub mod action_executor;
 pub mod action_transport;
 
-pub use manifest::{PluginManifest, MenuItem, ActionType, RuntimeConfig};
+pub use manifest::{ActionType, MenuItem, PluginManifest};
 pub use loader::PluginLoader;
 pub use manager::PluginManager;
 pub use config::PluginConfigManager;
@@ -139,7 +139,9 @@ pub(crate) fn resolve_plugin_command_path(plugin_dir: &Path, command: &str) -> O
         return None;
     }
 
-    let mut candidates = vec![plugin_dir.join(command_path.as_os_str())];
+    let canonical_plugin_dir = std::fs::canonicalize(plugin_dir).ok()?;
+
+    let candidates = vec![plugin_dir.join(command_path.as_os_str())];
 
     #[cfg(windows)]
     {
@@ -151,7 +153,17 @@ pub(crate) fn resolve_plugin_command_path(plugin_dir: &Path, command: &str) -> O
         candidates.extend(with_exe);
     }
 
-    candidates.into_iter().find(|path| path.is_file())
+    candidates.into_iter().find_map(|path| {
+        if !path.is_file() {
+            return None;
+        }
+        let canonical_candidate = std::fs::canonicalize(&path).ok()?;
+        if canonical_candidate.starts_with(&canonical_plugin_dir) {
+            Some(path)
+        } else {
+            None
+        }
+    })
 }
 
 #[derive(Debug)]
@@ -217,4 +229,59 @@ fn ensure_command_binary_exists(
         command: command.to_string(),
     }
     .into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_plugin_command_path;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn resolve_plugin_command_path_rejects_nested_command() {
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(temp_dir.path().join("binary"), "").unwrap();
+
+        let resolved = resolve_plugin_command_path(temp_dir.path(), "nested/binary");
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn resolve_plugin_command_path_resolves_regular_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let binary = temp_dir.path().join("binary");
+        fs::write(&binary, "").unwrap();
+
+        let resolved = resolve_plugin_command_path(temp_dir.path(), "binary");
+        assert_eq!(resolved, Some(binary));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_plugin_command_path_rejects_symlink_escape() {
+        let temp_dir = TempDir::new().unwrap();
+        let outside_dir = TempDir::new().unwrap();
+        let outside_binary = outside_dir.path().join("outside-binary");
+        fs::write(&outside_binary, "").unwrap();
+
+        let escaped = temp_dir.path().join("binary");
+        std::os::unix::fs::symlink(&outside_binary, &escaped).unwrap();
+
+        let resolved = resolve_plugin_command_path(temp_dir.path(), "binary");
+        assert!(resolved.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_plugin_command_path_allows_internal_symlink() {
+        let temp_dir = TempDir::new().unwrap();
+        let real_binary = temp_dir.path().join("real-binary");
+        fs::write(&real_binary, "").unwrap();
+
+        let linked_binary = temp_dir.path().join("binary");
+        std::os::unix::fs::symlink(&real_binary, &linked_binary).unwrap();
+
+        let resolved = resolve_plugin_command_path(temp_dir.path(), "binary");
+        assert_eq!(resolved, Some(linked_binary));
+    }
 }

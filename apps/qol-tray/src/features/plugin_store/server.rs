@@ -17,7 +17,9 @@ use anyhow::Result;
 use rust_embed::Embed;
 
 use crate::plugins::{PluginConfigManager, PluginLoader, PluginManager};
-use crate::daemon::{Daemon, DaemonEvent};
+use crate::daemon::Daemon;
+#[cfg(feature = "dev")]
+use crate::daemon::DaemonEvent;
 #[cfg(feature = "dev")]
 use crate::daemon::{BuildResultInfo, DiscoveryStatus};
 use crate::hotkeys::trigger_reload;
