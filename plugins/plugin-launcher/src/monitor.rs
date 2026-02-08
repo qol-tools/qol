@@ -94,6 +94,7 @@ fn x11_focus_listener(cached: Arc<Mutex<Option<ActiveMonitor>>>, monitors: Vec<B
 
     let update = |conn: &x11rb::rust_connection::RustConnection| {
         let result = resolve_focused_window(conn, root, atom, wm_pid, own_pid, &monitors);
+        #[cfg(debug_assertions)]
         eprintln!("[monitor] resolve: {:?}, monitors: {:?}", result.as_ref().map(|m| &m.bounds), monitors);
         let Some(active_monitor) = result else { return };
         if let Ok(mut guard) = cached.lock() {
@@ -110,10 +111,12 @@ fn x11_focus_listener(cached: Arc<Mutex<Option<ActiveMonitor>>>, monitors: Vec<B
     .ok();
     conn.flush().ok();
 
+    #[cfg(debug_assertions)]
     eprintln!("[monitor] listener started");
 
     loop {
         let Ok(event) = conn.wait_for_event() else {
+            #[cfg(debug_assertions)]
             eprintln!("[monitor] event loop broke");
             break;
         };
@@ -123,6 +126,7 @@ fn x11_focus_listener(cached: Arc<Mutex<Option<ActiveMonitor>>>, monitors: Vec<B
             continue;
         }
 
+        #[cfg(debug_assertions)]
         eprintln!("[monitor] focus changed");
         update(&conn);
     }

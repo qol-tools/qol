@@ -201,6 +201,7 @@ fn activate_or_open_launcher(
         Bounds::centered(None, win_size, cx)
     };
 
+    #[cfg(debug_assertions)]
     eprintln!("[launcher] opening at {:?}", bounds);
 
     let options = WindowOptions {
