@@ -12,6 +12,13 @@ use crate::features::discovery::discovery_service::DiscoveryService;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if let Some(action) = parse_action() {
+        if ipc::execute_action(&action) {
+            return Ok(());
+        }
+        anyhow::bail!("Unknown action: {}", action);
+    }
+
     env_logger::init();
 
     log::info!("Starting PointZerver (headless mode)...");
@@ -42,6 +49,15 @@ async fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Task join error: {}", e))??;
 
     Ok(())
+}
+
+fn parse_action() -> Option<String> {
+    let mut args = std::env::args().skip(1);
+    let first = args.next()?;
+    if first == "--action" {
+        return args.next();
+    }
+    Some(first)
 }
 
 fn spawn_discovery_service(discovery_service: DiscoveryService) {

@@ -5,8 +5,8 @@ version = "1.1.0"
 author = "KMRH47"
 
 [runtime]
-command = "run.sh"
-actions = { settings = ["settings"] }
+command = "pointzerver"
+actions = { settings = ["--action", "settings"] }
 
 [menu]
 label = "PointZ"
@@ -16,6 +16,11 @@ items = [
 
 [daemon]
 enabled = true
-command = "run.sh"
+command = "pointzerver"
 socket = "/tmp/qol-pointz.sock"
 restart_on_crash = true
+
+[[dependencies.binaries]]
+name = "pointzerver"
+repo = "qol-tools/pointzerver"
+pattern = "pointzerver-{os}-{arch}"

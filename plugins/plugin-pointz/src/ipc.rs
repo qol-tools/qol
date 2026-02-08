@@ -45,7 +45,7 @@ pub async fn run() -> Result<()> {
 
             let response = match action {
                 "settings" => {
-                    if open_settings() {
+                    if execute_action("settings") {
                         b"ok\n".as_slice()
                     } else {
                         b"fallback\n".as_slice()
@@ -75,6 +75,13 @@ fn is_valid_action_id(action: &str) -> bool {
         && action
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+pub fn execute_action(action: &str) -> bool {
+    match action {
+        "settings" => open_settings(),
+        _ => false,
+    }
 }
 
 fn open_settings() -> bool {
