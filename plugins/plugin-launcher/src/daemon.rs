@@ -15,6 +15,7 @@ pub enum Command {
 enum ReadResult {
     Command(Command),
     Fallback,
+    Error(&'static str),
     Ignore,
 }
 
@@ -42,13 +43,16 @@ pub fn start_listener(tx: Sender<Command>, focus_cache: FocusCache) -> bool {
             match stream {
                 Ok(mut stream) => match read_command(&mut stream, &focus_cache) {
                     ReadResult::Command(cmd) => {
-                        let _ = stream.write_all(b"ok\n");
+                        let _ = stream.write_all(b"handled\n");
                         if tx.send(cmd).is_err() {
                             break;
                         }
                     }
                     ReadResult::Fallback => {
                         let _ = stream.write_all(b"fallback\n");
+                    }
+                    ReadResult::Error(message) => {
+                        let _ = stream.write_all(format!("error {}\n", message).as_bytes());
                     }
                     ReadResult::Ignore => {}
                 },
@@ -91,12 +95,12 @@ fn read_command(stream: &mut UnixStream, focus_cache: &FocusCache) -> ReadResult
 
     let raw = match std::str::from_utf8(&buf[..n]) {
         Ok(value) => value.trim(),
-        Err(_) => return ReadResult::Fallback,
+        Err(_) => return ReadResult::Error("invalid utf8"),
     };
     let command = match raw.strip_prefix("action:") {
         Some(action_id) => {
             if !is_valid_action_id(action_id) {
-                return ReadResult::Fallback;
+                return ReadResult::Error("invalid action id");
             }
             action_id
         }
