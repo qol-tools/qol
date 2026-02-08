@@ -153,3 +153,68 @@ pub(crate) fn resolve_plugin_command_path(plugin_dir: &Path, command: &str) -> O
 
     candidates.into_iter().find(|path| path.is_file())
 }
+
+#[derive(Debug)]
+pub(crate) struct MissingBinaryContractError {
+    plugin_id: String,
+    plugin_path: PathBuf,
+    command_field: &'static str,
+    command: String,
+}
+
+impl std::fmt::Display for MissingBinaryContractError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} {:?} binary not found for plugin {} in {:?}",
+            self.command_field, self.command, self.plugin_id, self.plugin_path
+        )
+    }
+}
+
+impl std::error::Error for MissingBinaryContractError {}
+
+pub(crate) fn validate_execution_contract(
+    plugin_id: &str,
+    manifest: &PluginManifest,
+    plugin_path: &Path,
+) -> Result<()> {
+    ensure_command_binary_exists(
+        plugin_id,
+        plugin_path,
+        "runtime.command",
+        manifest.runtime.as_ref().map(|runtime| runtime.command.as_str()),
+    )?;
+    ensure_command_binary_exists(
+        plugin_id,
+        plugin_path,
+        "daemon.command",
+        manifest
+            .daemon
+            .as_ref()
+            .filter(|daemon| daemon.enabled)
+            .map(|daemon| daemon.command.as_str()),
+    )?;
+    Ok(())
+}
+
+fn ensure_command_binary_exists(
+    plugin_id: &str,
+    plugin_path: &Path,
+    command_field: &'static str,
+    command: Option<&str>,
+) -> Result<()> {
+    let Some(command) = command else {
+        return Ok(());
+    };
+    if resolve_plugin_command_path(plugin_path, command).is_some() {
+        return Ok(());
+    }
+    Err(MissingBinaryContractError {
+        plugin_id: plugin_id.to_string(),
+        plugin_path: plugin_path.to_path_buf(),
+        command_field,
+        command: command.to_string(),
+    }
+    .into())
+}

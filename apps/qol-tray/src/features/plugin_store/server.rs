@@ -289,7 +289,7 @@ async fn install_plugin(
 
     installer.install(&repo_url, &id).await.map_err(|e| {
         log::error!("Failed to install plugin {}: {}", id, e);
-        (StatusCode::INTERNAL_SERVER_ERROR, "Installation failed".to_string())
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("Installation failed: {:#}", e))
     })?;
 
     reload_manager_and_notify(&state);
@@ -326,7 +326,7 @@ async fn update_plugin(
         log::error!("Failed to update plugin {}: {}", id, e);
         return Json(UninstallResult {
             success: false,
-            message: "Update failed".to_string(),
+            message: format!("Update failed: {:#}", e),
         });
     }
 

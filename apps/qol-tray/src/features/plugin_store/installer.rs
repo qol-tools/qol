@@ -41,28 +41,36 @@ impl PluginInstaller {
             anyhow::bail!("Git clone failed: {}", stderr);
         }
 
-        self.install_dependencies(&target_dir).await?;
+        self.install_dependencies(&target_dir, plugin_id).await?;
 
         log::info!("Plugin {} installed successfully", plugin_id);
         Ok(())
     }
 
-    async fn install_dependencies(&self, plugin_dir: &Path) -> Result<()> {
+    async fn install_dependencies(&self, plugin_dir: &Path, plugin_id: &str) -> Result<()> {
         let manifest_path = plugin_dir.join("plugin.toml");
         if !manifest_path.exists() {
-            return Ok(());
+            anyhow::bail!("Missing plugin.toml in {:?}", plugin_dir);
         }
 
-        let content = tokio::fs::read_to_string(&manifest_path).await?;
-        let manifest: crate::plugins::PluginManifest = toml::from_str(&content)?;
-        manifest.validate()?;
+        let content = tokio::fs::read_to_string(&manifest_path)
+            .await
+            .with_context(|| format!("Failed to read {:?}", manifest_path))?;
+        let manifest: crate::plugins::PluginManifest = toml::from_str(&content)
+            .context("Failed to parse plugin.toml")?;
+        manifest
+            .validate()
+            .context("Invalid plugin.toml contract")?;
 
-        let Some(deps) = manifest.dependencies else {
-            return Ok(());
-        };
+        if let Some(deps) = manifest.dependencies.as_ref() {
+            for binary in &deps.binaries {
+                self.install_binary(plugin_dir, binary).await?;
+            }
+        }
 
-        for binary in deps.binaries {
-            self.install_binary(plugin_dir, &binary).await?;
+        if manifest.plugin.supports_current_platform() {
+            crate::plugins::validate_execution_contract(plugin_id, &manifest, plugin_dir)
+                .context("Plugin binary contract preflight failed")?;
         }
 
         Ok(())
@@ -138,7 +146,7 @@ impl PluginInstaller {
             anyhow::bail!("Git reset failed: {}", stderr);
         }
 
-        self.install_dependencies(&plugin_dir).await?;
+        self.install_dependencies(&plugin_dir, plugin_id).await?;
 
         log::info!("Plugin {} updated successfully", plugin_id);
         Ok(())
