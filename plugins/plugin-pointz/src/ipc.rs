@@ -28,14 +28,14 @@ pub async fn run() -> Result<()> {
             let raw = match std::str::from_utf8(&buf[..n]) {
                 Ok(value) => value.trim(),
                 Err(_) => {
-                    let _ = stream.write_all(b"fallback\n").await;
+                    let _ = stream.write_all(b"error invalid utf8\n").await;
                     return;
                 }
             };
             let action = match raw.strip_prefix("action:") {
                 Some(action_id) => {
                     if !is_valid_action_id(action_id) {
-                        let _ = stream.write_all(b"fallback\n").await;
+                        let _ = stream.write_all(b"error invalid action id\n").await;
                         return;
                     }
                     action_id
@@ -44,16 +44,13 @@ pub async fn run() -> Result<()> {
             };
 
             let response = match action {
-                "settings" => {
-                    if execute_action("settings") {
-                        b"ok\n".as_slice()
-                    } else {
-                        b"fallback\n".as_slice()
-                    }
-                }
-                _ => b"fallback\n".as_slice(),
+                "settings" => match execute_action("settings") {
+                    Ok(()) => b"handled\n".to_vec(),
+                    Err(message) => format!("error {}\n", message).into_bytes(),
+                },
+                _ => b"fallback\n".to_vec(),
             };
-            let _ = stream.write_all(response).await;
+            let _ = stream.write_all(&response).await;
         });
     }
 }
@@ -77,14 +74,14 @@ fn is_valid_action_id(action: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-pub fn execute_action(action: &str) -> bool {
+pub fn execute_action(action: &str) -> Result<(), &'static str> {
     match action {
         "settings" => open_settings(),
-        _ => false,
+        _ => Err("unknown action"),
     }
 }
 
-fn open_settings() -> bool {
+fn open_settings() -> Result<(), &'static str> {
     #[cfg(target_os = "linux")]
     {
         return std::process::Command::new("xdg-open")
@@ -92,7 +89,8 @@ fn open_settings() -> bool {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .is_ok();
+            .map(|_| ())
+            .map_err(|_| "failed to open settings url");
     }
 
     #[cfg(target_os = "macos")]
@@ -102,7 +100,8 @@ fn open_settings() -> bool {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .is_ok();
+            .map(|_| ())
+            .map_err(|_| "failed to open settings url");
     }
 
     #[cfg(target_os = "windows")]
@@ -112,11 +111,12 @@ fn open_settings() -> bool {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .is_ok();
+            .map(|_| ())
+            .map_err(|_| "failed to open settings url");
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
-        false
+        Err("unsupported platform")
     }
 }

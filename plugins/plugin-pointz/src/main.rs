@@ -13,10 +13,7 @@ use crate::features::discovery::discovery_service::DiscoveryService;
 #[tokio::main]
 async fn main() -> Result<()> {
     if let Some(action) = parse_action() {
-        if ipc::execute_action(&action) {
-            return Ok(());
-        }
-        anyhow::bail!("Unknown action: {}", action);
+        return ipc::execute_action(&action).map_err(|e| anyhow::anyhow!("{}", e));
     }
 
     env_logger::init();
