@@ -66,6 +66,7 @@ fn read_command(stream: &mut UnixStream, focus_cache: &FocusCache) -> Option<Com
     match &buf[..n] {
         b"show" => {
             let snap = focus_cache.snapshot();
+            #[cfg(debug_assertions)]
             eprintln!("[daemon] show snapshot: {:?}", snap.as_ref().map(|m| m.bounds()));
             Some(Command::Show(snap))
         }
