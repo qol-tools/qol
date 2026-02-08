@@ -1,4 +1,4 @@
-import { updateSelection as updateSel, navigate as nav } from '../utils.js';
+import { updateSelection as updateSel, navigateGrid } from '../utils.js';
 import { subscribe } from '../events.js';
 import * as installing from '../installing.js';
 
@@ -45,7 +45,7 @@ export function render(containerEl) {
                 <input type="text" id="store-search" placeholder="Search plugins...">
             </div>
             <div id="token-banner"></div>
-            <div id="store-list" class="plugins-grid">
+            <div id="store-list" class="plugins-grid grid-cards grid-cards--zoom">
                 <div class="loading">Loading plugins...</div>
             </div>
             <footer class="help">
@@ -286,18 +286,28 @@ function installSelected() {
 }
 
 const keyHandlers = {
-    ArrowUp: () => navigate(-1),
-    ArrowDown: () => navigate(1),
-    ArrowLeft: () => navigate(-1),
-    ArrowRight: () => navigate(1),
+    ArrowUp: () => navigateVertical(-1),
+    ArrowDown: () => navigateVertical(1),
+    ArrowLeft: () => navigateHorizontal(-1),
+    ArrowRight: () => navigateHorizontal(1),
     Enter: installSelected
 };
 
-function navigate(delta) {
-    const total = document.querySelectorAll('.plugin-card').length;
-    if (nav(state, 'selectedIndex', total, delta)) {
-        updateSelection();
-    }
+function navigateVertical(rowDelta) {
+    const direction = rowDelta < 0 ? 'up' : 'down';
+    navigateInGrid(direction);
+}
+
+function navigateHorizontal(colDelta) {
+    const direction = colDelta < 0 ? 'left' : 'right';
+    navigateInGrid(direction);
+}
+
+function navigateInGrid(direction) {
+    const nextIndex = navigateGrid('#store-list .plugin-card', state.selectedIndex, direction);
+    if (nextIndex === state.selectedIndex) return;
+    state.selectedIndex = nextIndex;
+    updateSelection();
 }
 
 function getFilteredPlugins() {
