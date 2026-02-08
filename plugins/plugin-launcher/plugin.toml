@@ -4,6 +4,10 @@ description = "Universal search with action modifiers"
 version = "0.1.2"
 author = "KMRH47"
 
+[runtime]
+command = "run.sh"
+actions = { open = ["open"] }
+
 [daemon]
 enabled = true
 command = "launcher"
