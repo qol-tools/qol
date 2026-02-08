@@ -5,6 +5,10 @@ version = "1.0.0"
 author = ""
 # platforms = ["linux", "windows", "macos"]  # Omit for all platforms
 
+[runtime]
+command = "run.sh"
+actions = { run = ["run"] }
+
 [menu]
 label = "My Plugin"
 items = [
