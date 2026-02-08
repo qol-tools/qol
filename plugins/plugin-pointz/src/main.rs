@@ -1,13 +1,14 @@
 mod domain;
 mod features;
 mod input;
-mod utils;
+mod ipc;
 mod status_server;
+mod utils;
 
 use anyhow::Result;
 
-use crate::features::discovery::discovery_service::DiscoveryService;
 use crate::features::command::command_service::CommandService;
+use crate::features::discovery::discovery_service::DiscoveryService;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -32,6 +33,7 @@ async fn main() -> Result<()> {
 
     spawn_discovery_service(discovery_service);
     spawn_status_server();
+    spawn_ipc_server();
 
     log::info!("PointZerver ready - discovery and command services running");
 
@@ -54,6 +56,14 @@ fn spawn_status_server() {
     tokio::spawn(async move {
         if let Err(e) = status_server::run().await {
             log::error!("Status server error: {}", e);
+        }
+    });
+}
+
+fn spawn_ipc_server() {
+    tokio::spawn(async move {
+        if let Err(e) = ipc::run().await {
+            log::error!("IPC server error: {}", e);
         }
     });
 }

@@ -17,4 +17,5 @@ items = [
 [daemon]
 enabled = true
 command = "run.sh"
+socket = "/tmp/qol-pointz.sock"
 restart_on_crash = true
