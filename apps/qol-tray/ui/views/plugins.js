@@ -17,7 +17,9 @@ const state = {
     contextMenuOpen: false,
     confirmModalOpen: false,
     pendingUninstallId: null,
-    updating: new Set()
+    updating: new Set(),
+    refreshToken: 0,
+    restoredSelection: false
 };
 
 let container = null;
@@ -53,20 +55,8 @@ async function loadPlugins() {
     clickHandler = handleClick;
     container.addEventListener('click', clickHandler);
 
-    try {
-        const response = await fetch('/api/installed');
-        if (!response.ok) throw new Error('Failed to fetch plugins');
-        
-        state.plugins = await response.json();
-        state.plugins.sort((a, b) => a.name.localeCompare(b.name));
-        restoreSelection();
-        renderGrid();
-        updateSelection();
-        
-        checkForUpdates();
-    } catch (error) {
-        gridEl.innerHTML = `<div class="error">Error loading plugins: ${error.message}</div>`;
-    }
+    await refreshPlugins({ showErrorInGrid: true, restoreSavedSelection: true });
+    checkForUpdates();
 }
 
 async function checkForUpdates() {
@@ -273,11 +263,7 @@ async function confirmUninstall() {
         const result = await response.json();
         
         if (!result.success) throw new Error(result.message);
-        
-        state.plugins = state.plugins.filter(p => p.id !== pluginId);
-        state.selectedIndex = Math.min(state.selectedIndex, Math.max(0, state.plugins.length - 1));
-        renderGrid();
-        updateSelection();
+        await refreshPlugins();
     } catch (error) {
         console.error(`Failed to uninstall plugin: ${error.message}`);
     }
@@ -303,16 +289,39 @@ async function updatePlugin(pluginId) {
     }
 }
 
-async function refreshPlugins() {
+async function refreshPlugins(options = {}) {
+    const { showErrorInGrid = false, restoreSavedSelection = false } = options;
+    const gridEl = document.getElementById('plugins-grid');
+    if (!gridEl) return;
+
+    const token = ++state.refreshToken;
+
     try {
         const response = await fetch('/api/installed');
         if (!response.ok) throw new Error('Failed to fetch plugins');
-        
-        state.plugins = await response.json();
+
+        const plugins = await response.json();
+        if (token !== state.refreshToken) {
+            return;
+        }
+
+        state.plugins = plugins;
         state.plugins.sort((a, b) => a.name.localeCompare(b.name));
+        if (restoreSavedSelection && !state.restoredSelection) {
+            restoreSelection();
+            state.restoredSelection = true;
+        }
+        state.selectedIndex = Math.min(state.selectedIndex, Math.max(0, state.plugins.length - 1));
         renderGrid();
         updateSelection();
     } catch (error) {
+        if (token !== state.refreshToken) {
+            return;
+        }
+        if (showErrorInGrid) {
+            gridEl.innerHTML = `<div class="error">Error loading plugins: ${error.message}</div>`;
+            return;
+        }
         console.error(`Failed to refresh plugins: ${error.message}`);
     }
 }

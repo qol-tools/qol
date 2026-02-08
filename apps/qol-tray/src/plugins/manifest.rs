@@ -1,8 +1,15 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::{Component, Path};
+
+use anyhow::{bail, Result};
+
+pub const CURRENT_MANIFEST_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PluginManifest {
+    #[serde(default = "default_manifest_version")]
+    pub manifest_version: u32,
     pub plugin: PluginInfo,
     pub menu: MenuConfig,
     #[serde(default)]
@@ -18,6 +25,103 @@ pub struct RuntimeConfig {
     pub command: String,
     #[serde(default)]
     pub actions: Option<HashMap<String, Vec<String>>>,
+}
+
+pub fn default_manifest_version() -> u32 {
+    CURRENT_MANIFEST_VERSION
+}
+
+pub fn is_valid_action_id(action: &str) -> bool {
+    !action.is_empty()
+        && action.len() <= 64
+        && !action.starts_with('-')
+        && action
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+impl PluginManifest {
+    pub fn validate(&self) -> Result<()> {
+        if self.manifest_version != CURRENT_MANIFEST_VERSION {
+            bail!(
+                "Unsupported manifest_version {} (expected {})",
+                self.manifest_version,
+                CURRENT_MANIFEST_VERSION
+            );
+        }
+
+        if let Some(runtime) = &self.runtime {
+            runtime.validate()?;
+        }
+
+        Ok(())
+    }
+}
+
+impl RuntimeConfig {
+    pub fn validate(&self) -> Result<()> {
+        validate_runtime_command(&self.command)?;
+        if let Some(actions) = &self.actions {
+            validate_runtime_actions(actions)?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_runtime_command(command: &str) -> Result<()> {
+    if command.trim().is_empty() {
+        bail!("runtime.command cannot be empty");
+    }
+
+    if command.trim() != command {
+        bail!("runtime.command cannot have leading or trailing whitespace");
+    }
+
+    if command.contains('\0') {
+        bail!("runtime.command cannot contain null bytes");
+    }
+
+    let path = Path::new(command);
+    if path.is_absolute() {
+        bail!("runtime.command must be a relative path");
+    }
+
+    let mut has_normal_component = false;
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir | Component::ParentDir => {
+                bail!("runtime.command cannot escape the plugin directory");
+            }
+            Component::Normal(_) => has_normal_component = true,
+            Component::CurDir => {}
+        }
+    }
+
+    if !has_normal_component {
+        bail!("runtime.command must reference an executable path");
+    }
+
+    Ok(())
+}
+
+fn validate_runtime_actions(actions: &HashMap<String, Vec<String>>) -> Result<()> {
+    if actions.is_empty() {
+        bail!("runtime.actions cannot be empty when present");
+    }
+
+    for (action_id, args) in actions {
+        if !is_valid_action_id(action_id) {
+            bail!("runtime.actions contains invalid action id {:?}", action_id);
+        }
+
+        for arg in args {
+            if arg.contains('\0') {
+                bail!("runtime.actions for {:?} contains null bytes", action_id);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -138,7 +242,12 @@ mod tests {
 
         for (platforms, expected) in cases {
             let info = make_plugin_info(platforms.clone());
-            assert_eq!(info.supports_current_platform(), *expected, "platforms: {:?}", platforms);
+            assert_eq!(
+                info.supports_current_platform(),
+                *expected,
+                "platforms: {:?}",
+                platforms
+            );
         }
     }
 
@@ -152,7 +261,12 @@ mod tests {
         "#;
         let item: MenuItem = toml::from_str(toml).unwrap();
         match item {
-            MenuItem::Action { id, label, action, config_key } => {
+            MenuItem::Action {
+                id,
+                label,
+                action,
+                config_key,
+            } => {
                 assert_eq!(id, "run");
                 assert_eq!(label, "Run Script");
                 assert_eq!(action, ActionType::Run);
@@ -174,7 +288,13 @@ mod tests {
         "#;
         let item: MenuItem = toml::from_str(toml).unwrap();
         match item {
-            MenuItem::Checkbox { id, label, checked, action, config_key } => {
+            MenuItem::Checkbox {
+                id,
+                label,
+                checked,
+                action,
+                config_key,
+            } => {
                 assert_eq!(id, "enabled");
                 assert_eq!(label, "Enable Feature");
                 assert!(checked);
@@ -225,7 +345,9 @@ mod tests {
         for (input, expected) in cases {
             let toml = format!(r#"action = "{}""#, input);
             #[derive(Deserialize)]
-            struct Wrapper { action: ActionType }
+            struct Wrapper {
+                action: ActionType,
+            }
             let w: Wrapper = toml::from_str(&toml).unwrap();
             assert_eq!(w.action, expected, "input: {}", input);
         }
@@ -257,7 +379,10 @@ mod tests {
         assert_eq!(manifest.plugin.name, "Test Plugin");
         assert_eq!(manifest.plugin.version, "1.2.3");
         assert_eq!(manifest.plugin.author, Some("Test Author".to_string()));
-        assert_eq!(manifest.plugin.platforms, Some(vec!["linux".to_string(), "windows".to_string()]));
+        assert_eq!(
+            manifest.plugin.platforms,
+            Some(vec!["linux".to_string(), "windows".to_string()])
+        );
         assert_eq!(manifest.menu.label, "Test Menu");
         assert_eq!(manifest.menu.icon, Some("test.png".to_string()));
         assert_eq!(manifest.menu.items.len(), 1);
@@ -350,6 +475,83 @@ mod tests {
 
         let manifest: PluginManifest = toml::from_str(toml).unwrap();
         assert!(manifest.runtime.is_none());
+    }
+
+    #[test]
+    fn manifest_version_defaults_to_current() {
+        let toml = r#"
+            [plugin]
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+        "#;
+
+        let manifest: PluginManifest = toml::from_str(toml).unwrap();
+        assert_eq!(manifest.manifest_version, CURRENT_MANIFEST_VERSION);
+    }
+
+    #[test]
+    fn validate_rejects_unsupported_manifest_version() {
+        let toml = r#"
+            manifest_version = 2
+
+            [plugin]
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+        "#;
+
+        let manifest: PluginManifest = toml::from_str(toml).unwrap();
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_absolute_runtime_command() {
+        let toml = r#"
+            [plugin]
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [runtime]
+            command = "/bin/sh"
+        "#;
+
+        let manifest: PluginManifest = toml::from_str(toml).unwrap();
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_invalid_action_id_in_runtime_map() {
+        let toml = r#"
+            [plugin]
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [runtime]
+            command = "run.sh"
+            actions = { "--bad" = ["show"] }
+        "#;
+
+        let manifest: PluginManifest = toml::from_str(toml).unwrap();
+        assert!(manifest.validate().is_err());
     }
 
     #[test]
