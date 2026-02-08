@@ -88,6 +88,8 @@ pub fn kill_plugin_processes(plugin_id: &str) {
 }
 
 pub fn kill_all_plugin_processes() {
+    reap_zombie_children();
+
     let mut processes = match get_action_processes().lock() {
         Ok(p) => p,
         Err(e) => {
@@ -101,12 +103,18 @@ pub fn kill_all_plugin_processes() {
             kill_process(pid, &plugin_id);
         }
     }
+
+    reap_zombie_children();
 }
 
 #[cfg(unix)]
 fn kill_process(pid: u32, plugin_id: &str) {
     unsafe {
         let pid = pid as i32;
+        let mut status = 0;
+        if libc::waitpid(pid, &mut status, libc::WNOHANG) == pid {
+            return;
+        }
         if libc::kill(pid, 0) == 0 {
             log::info!("Killing action process {} for plugin {}", pid, plugin_id);
             libc::kill(pid, libc::SIGTERM);
@@ -121,6 +129,22 @@ fn kill_process(pid: u32, plugin_id: &str) {
 #[cfg(not(unix))]
 fn kill_process(_pid: u32, _plugin_id: &str) {}
 
+#[cfg(unix)]
+fn reap_zombie_children() {
+    unsafe {
+        loop {
+            let mut status = 0;
+            let reaped = libc::waitpid(-1, &mut status, libc::WNOHANG);
+            if reaped <= 0 {
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn reap_zombie_children() {}
+
 fn track_action_process(plugin_id: &str, pid: u32) {
     let mut processes = match get_action_processes().lock() {
         Ok(p) => p,
@@ -130,6 +154,22 @@ fn track_action_process(plugin_id: &str, pid: u32) {
         .entry(plugin_id.to_string())
         .or_default()
         .push(pid);
+}
+
+fn untrack_action_process(plugin_id: &str, pid: u32) {
+    let mut processes = match get_action_processes().lock() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    let remove_entry = if let Some(pids) = processes.get_mut(plugin_id) {
+        pids.retain(|tracked| *tracked != pid);
+        pids.is_empty()
+    } else {
+        false
+    };
+    if remove_entry {
+        processes.remove(plugin_id);
+    }
 }
 
 pub fn execute_action(plugin_manager: &Arc<Mutex<PluginManager>>, plugin_id: &str, action_id: &str) {
@@ -267,7 +307,7 @@ fn execute_resolved_action(resolved: &ResolvedAction) -> Result<(), ActionExecut
         command_path,
         resolved.args
     );
-    let child = std::process::Command::new(command_path)
+    let mut child = std::process::Command::new(command_path)
         .args(&resolved.args)
         .current_dir(&resolved.plugin_dir)
         .stdout(std::process::Stdio::null())
@@ -277,6 +317,11 @@ fn execute_resolved_action(resolved: &ResolvedAction) -> Result<(), ActionExecut
 
     let pid = child.id();
     track_action_process(&resolved.plugin_id, pid);
+    let plugin_id = resolved.plugin_id.clone();
+    std::thread::spawn(move || {
+        let _ = child.wait();
+        untrack_action_process(&plugin_id, pid);
+    });
     log::info!("Plugin fallback action started (pid: {})", pid);
     Ok(())
 }
