@@ -2,6 +2,7 @@ use gpui::*;
 
 use super::layout::{resize_for_visible_rows, MAX_VISIBLE, ROW_HEIGHT};
 use super::view;
+use super::window_ops::hide_in_context;
 use super::LauncherView;
 
 impl Focusable for LauncherView {
@@ -17,15 +18,7 @@ impl Render for LauncherView {
                 &self.focus_handle,
                 window,
                 |_this, window, cx| {
-                    #[cfg(target_os = "macos")]
-                    {
-                        let _ = window;
-                        cx.hide();
-                    }
-                    #[cfg(not(target_os = "macos"))]
-                    {
-                        window.minimize_window();
-                    }
+                    hide_in_context(window, cx);
                 },
             ));
         }
@@ -44,17 +37,7 @@ impl Render for LauncherView {
             .bg(view::bg_color())
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
-                    "escape" | "esc" => {
-                        #[cfg(target_os = "macos")]
-                        {
-                            let _ = window;
-                            cx.hide();
-                        }
-                        #[cfg(not(target_os = "macos"))]
-                        {
-                            window.minimize_window();
-                        }
-                    }
+                    "escape" | "esc" => hide_in_context(window, cx),
                     _ => this.handle_key(event, window, cx),
                 }
             }))

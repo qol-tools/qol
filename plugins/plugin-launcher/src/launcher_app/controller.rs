@@ -2,6 +2,7 @@ use gpui::{ClipboardItem, Context, KeyDownEvent};
 
 use super::actions;
 use super::input::InputEffect;
+use super::window_ops::hide_in_context;
 use super::LauncherView;
 
 enum ClipboardShortcut {
@@ -34,17 +35,7 @@ impl LauncherView {
                 cx.notify();
             }
             InputEffect::Launch => self.launch_selected(window),
-            InputEffect::Dismiss => {
-                #[cfg(target_os = "macos")]
-                {
-                    let _ = window;
-                    cx.hide();
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    window.minimize_window();
-                }
-            }
+            InputEffect::Dismiss => hide_in_context(window, cx),
         }
     }
 
