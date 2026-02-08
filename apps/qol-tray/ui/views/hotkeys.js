@@ -14,6 +14,13 @@ const state = {
 
 let container = null;
 
+function parseInstalledPluginsResponse(payload) {
+    if (Array.isArray(payload)) {
+        return payload;
+    }
+    return Array.isArray(payload?.plugins) ? payload.plugins : [];
+}
+
 export function render(containerEl) {
     container = containerEl;
     container.innerHTML = `
@@ -50,7 +57,7 @@ async function loadData() {
         }
         
         if (pluginsRes.ok) {
-            state.plugins = await pluginsRes.json();
+            state.plugins = parseInstalledPluginsResponse(await pluginsRes.json());
         }
         
         renderList();
