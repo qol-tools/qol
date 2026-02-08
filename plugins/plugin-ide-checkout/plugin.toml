@@ -1,12 +1,12 @@
 [plugin]
 name = "Task Runner"
 description = "Generic HTTP API for browser extensions to execute local tasks (git checkout, open apps, run scripts)"
-version = "1.0.0"
+version = "1.1.0"
 author = "kaho"
 platforms = ["macos", "linux"]
 
 [runtime]
-command = "run.sh"
+command = "task-runner"
 actions = { status = ["status"] }
 
 [menu]
@@ -17,4 +17,9 @@ items = [
 
 [daemon]
 enabled = true
-command = "daemon.sh"
+command = "task-runner"
+
+[[dependencies.binaries]]
+name = "task-runner"
+repo = "qol-tools/plugin-ide-checkout"
+pattern = "task-runner-{os}-{arch}"

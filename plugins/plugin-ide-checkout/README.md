@@ -1,38 +1,33 @@
 # Task Runner
 
-A qol-tray plugin that provides a generic HTTP API for browser extensions to execute local tasks.
+A `qol-tray` plugin that exposes a local HTTP API for browser extensions to execute local tasks.
 
-## Features
+## Build
 
-- **Action Discovery**: Extensions call `GET /actions` to learn available actions
-- **Multi-IDE Support**: Configure any app with fallback paths (idea, vscode, cursor, zed)
-- **Chained Execution**: Run multiple actions in sequence with result interpolation
-- **Script Registration**: Register custom scripts in config.json
+- `make dev` builds `task-runner` and copies it to the plugin root
+- `make release` builds an optimized `task-runner` and copies it to the plugin root
 
-## API
+## Runtime Contract
 
-See [API.md](API.md) for the full API documentation.
+- Runtime command: `task-runner status`
+- Daemon command: `task-runner` (defaults to daemon mode)
+- Daemon implementation: `server.py` executed via `python3`
 
 ### Quick Examples
 
 ```bash
-# Health check
 curl http://127.0.0.1:42710/health
 
-# List available actions
 curl http://127.0.0.1:42710/actions
 
-# List available apps
 curl -X POST http://127.0.0.1:42710/execute \
   -H "Content-Type: application/json" \
   -d '{"action": "list-apps", "params": {}}'
 
-# Open a project in VS Code
 curl -X POST http://127.0.0.1:42710/execute \
   -H "Content-Type: application/json" \
   -d '{"action": "open-app", "params": {"app": "vscode", "path": "/path/to/project"}}'
 
-# Checkout branch and open in IDE
 curl -X POST http://127.0.0.1:42710/execute \
   -H "Content-Type: application/json" \
   -d '{
@@ -45,32 +40,13 @@ curl -X POST http://127.0.0.1:42710/execute \
 
 ## Configuration
 
-Edit `config.json` to add custom apps or scripts:
-
-```json
-{
-  "apps": {
-    "myide": {
-      "name": "My IDE",
-      "paths": ["/usr/bin/myide", "~/.local/bin/myide"]
-    }
-  },
-  "scripts": {
-    "build": {
-      "name": "Build Project",
-      "command": "make build",
-      "cwd": "{{params.path}}",
-      "timeout": 300
-    }
-  },
-  "tempDir": "/tmp/task-runner"
-}
-```
+Edit `config.json` to add custom apps or scripts.
 
 ## Dependencies
 
-- Python 3.6+
-- Git (for git-checkout action)
+- Rust toolchain (for building `task-runner`)
+- Python 3.6+ (for daemon runtime)
+- Git (for `git-checkout` action)
 
 ## License
 
