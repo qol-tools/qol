@@ -107,23 +107,8 @@ fn activate_or_open_launcher(
     active: Rc<RefCell<Option<WindowHandle<LauncherView>>>>,
     cx: &mut App,
 ) {
-    if let Some(existing) = active.borrow().as_ref() {
-        if existing
-            .update(cx, |view, window, cx| {
-                view.state.query.clear();
-                view.state.cursor = 0;
-                view.state.selected = 0;
-                view.state.clear_selection();
-                view.store.ensure_filtered(&view.state);
-                window.activate_window();
-                cx.notify();
-            })
-            .is_ok()
-        {
-            cx.activate(true);
-            return;
-        }
-        active.borrow_mut().take();
+    if try_activate_existing_launcher(active.clone(), cx) {
+        return;
     }
 
     let win_size = size(px(WINDOW_WIDTH), px(HEADER_HEIGHT));
@@ -151,6 +136,35 @@ fn activate_or_open_launcher(
         *active.borrow_mut() = Some(handle);
     }
     cx.activate(true);
+}
+
+fn try_activate_existing_launcher(
+    active: Rc<RefCell<Option<WindowHandle<LauncherView>>>>,
+    cx: &mut App,
+) -> bool {
+    let Some(existing) = active.borrow().as_ref() else {
+        return false;
+    };
+
+    let activated = existing
+        .update(cx, |view, window, cx| {
+            view.state.query.clear();
+            view.state.cursor = 0;
+            view.state.selected = 0;
+            view.state.clear_selection();
+            view.store.ensure_filtered(&view.state);
+            window.activate_window();
+            cx.notify();
+        })
+        .is_ok();
+
+    if !activated {
+        active.borrow_mut().take();
+        return false;
+    }
+
+    cx.activate(true);
+    true
 }
 
 fn spawn_command_poll(
