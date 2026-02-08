@@ -17,7 +17,8 @@ impl Render for LauncherView {
             self.blur_sub = Some(cx.on_blur(
                 &self.focus_handle,
                 window,
-                |_this, window, cx| {
+                |this, window, cx| {
+                    this.is_showing = false;
                     hide_in_context(window, cx);
                 },
             ));

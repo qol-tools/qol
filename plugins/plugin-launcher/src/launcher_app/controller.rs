@@ -35,7 +35,10 @@ impl LauncherView {
                 cx.notify();
             }
             InputEffect::Launch => self.launch_selected(window),
-            InputEffect::Dismiss => hide_in_context(window, cx),
+            InputEffect::Dismiss => {
+                self.is_showing = false;
+                hide_in_context(window, cx);
+            }
         }
     }
 
@@ -102,6 +105,7 @@ impl LauncherView {
             return;
         };
         if actions::launch_item(&item) {
+            self.is_showing = false;
             #[cfg(target_os = "macos")]
             {
                 window.remove_window();

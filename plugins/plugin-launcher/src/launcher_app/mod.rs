@@ -72,6 +72,7 @@ struct LauncherView {
     pub(super) store: EntryStore,
     pub(super) focus_handle: FocusHandle,
     blur_sub: Option<Subscription>,
+    is_showing: bool,
 }
 
 impl LauncherView {
@@ -81,11 +82,15 @@ impl LauncherView {
             store: EntryStore::new(entries.app_entries.clone(), entries.file_entries.clone()),
             focus_handle: cx.focus_handle(),
             blur_sub: None,
+            is_showing: true,
         }
     }
 
-    fn reset_for_show(&mut self) {
+    fn reset_for_show(&mut self) -> bool {
+        let should_resize = (self.state.window_height - HEADER_HEIGHT).abs() > f32::EPSILON;
         self.state = LauncherState::new();
+        self.is_showing = true;
+        should_resize
     }
 }
 
@@ -150,7 +155,13 @@ impl ActiveLaunchers {
 
         let mut dead = Vec::new();
         for (key, handle) in handles {
-            if handle.update(cx, |_, window, _| window.minimize_window()).is_err() {
+            if handle
+                .update(cx, |view, window, _| {
+                    view.is_showing = false;
+                    window.minimize_window();
+                })
+                .is_err()
+            {
                 dead.push(key);
             }
         }
@@ -184,6 +195,10 @@ fn activate_or_open_launcher(
     monitor_snapshot: Option<monitor::ActiveMonitor>,
     cx: &mut App,
 ) {
+    if try_activate_visible_launcher(active.clone(), cx) {
+        return;
+    }
+
     let target = LauncherTarget::from_snapshot(monitor_snapshot.as_ref());
     active.borrow_mut().hide_non_target(target, cx);
 
@@ -221,6 +236,49 @@ fn activate_or_open_launcher(
     cx.activate(true);
 }
 
+fn try_activate_visible_launcher(
+    active: Rc<RefCell<ActiveLaunchers>>,
+    cx: &mut App,
+) -> bool {
+    let handles: Vec<(LauncherTarget, WindowHandle<LauncherView>)> = active
+        .borrow()
+        .windows
+        .iter()
+        .map(|(target, handle)| (*target, *handle))
+        .collect();
+
+    let mut visible = None;
+    let mut dead = Vec::new();
+    for (target, handle) in handles {
+        match handle.update(cx, |view, _, _| view.is_showing) {
+            Ok(true) => {
+                visible = Some((target, handle));
+                break;
+            }
+            Ok(false) => {}
+            Err(_) => dead.push(target),
+        }
+    }
+
+    if !dead.is_empty() {
+        let mut guard = active.borrow_mut();
+        for target in dead {
+            guard.remove(target);
+        }
+    }
+
+    let Some((target, handle)) = visible else {
+        return false;
+    };
+
+    if activate_launcher_handle(handle, false, cx) {
+        return true;
+    }
+
+    active.borrow_mut().remove(target);
+    false
+}
+
 fn try_activate_existing_launcher(
     active: Rc<RefCell<ActiveLaunchers>>,
     target: LauncherTarget,
@@ -231,24 +289,37 @@ fn try_activate_existing_launcher(
         return false;
     };
 
-    let activated = existing
+    if !activate_launcher_handle(existing, true, cx) {
+        active.borrow_mut().remove(target);
+        return false;
+    }
+
+    true
+}
+
+fn activate_launcher_handle(
+    handle: WindowHandle<LauncherView>,
+    resize_to_header: bool,
+    cx: &mut App,
+) -> bool {
+    let activated = handle
         .update(cx, |view, window, cx| {
-            view.reset_for_show();
+            let should_resize = view.reset_for_show();
             view.store.ensure_filtered(&view.state);
-            window.resize(size(px(WINDOW_WIDTH), px(window_height_for_rows(0))));
+            if resize_to_header && should_resize {
+                window.resize(size(px(WINDOW_WIDTH), px(window_height_for_rows(0))));
+            }
             window.focus(&view.focus_handle(cx));
             window.activate_window();
             cx.notify();
         })
         .is_ok();
 
-    if !activated {
-        active.borrow_mut().remove(target);
-        return false;
+    if activated {
+        cx.activate(true);
     }
 
-    cx.activate(true);
-    true
+    activated
 }
 
 fn spawn_command_poll(
