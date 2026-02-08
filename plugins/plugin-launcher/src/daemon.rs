@@ -3,10 +3,12 @@ use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc::Sender;
 
+use crate::monitor::{ActiveMonitor, FocusCache};
+
 const SOCKET_PATH: &str = "/tmp/qol-launcher.sock";
 
 pub enum Command {
-    Show,
+    Show(Option<ActiveMonitor>),
     Kill,
 }
 
@@ -18,7 +20,7 @@ pub fn send_kill() -> bool {
     send_raw(b"kill")
 }
 
-pub fn start_listener(tx: Sender<Command>) -> bool {
+pub fn start_listener(tx: Sender<Command>, focus_cache: FocusCache) -> bool {
     if send_show() {
         return false;
     }
@@ -32,7 +34,7 @@ pub fn start_listener(tx: Sender<Command>) -> bool {
         for stream in listener.incoming() {
             match stream {
                 Ok(mut stream) => {
-                    if let Some(cmd) = read_command(&mut stream) {
+                    if let Some(cmd) = read_command(&mut stream, &focus_cache) {
                         if tx.send(cmd).is_err() {
                             break;
                         }
@@ -58,11 +60,15 @@ fn send_raw(msg: &[u8]) -> bool {
     stream.write_all(msg).is_ok()
 }
 
-fn read_command(stream: &mut UnixStream) -> Option<Command> {
+fn read_command(stream: &mut UnixStream, focus_cache: &FocusCache) -> Option<Command> {
     let mut buf = [0u8; 16];
     let n = stream.read(&mut buf).ok()?;
     match &buf[..n] {
-        b"show" => Some(Command::Show),
+        b"show" => {
+            let snap = focus_cache.snapshot();
+            eprintln!("[daemon] show snapshot: {:?}", snap.as_ref().map(|m| m.bounds()));
+            Some(Command::Show(snap))
+        }
         b"kill" => Some(Command::Kill),
         _ => None,
     }

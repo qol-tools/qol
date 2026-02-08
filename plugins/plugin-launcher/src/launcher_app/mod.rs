@@ -9,6 +9,7 @@ mod state;
 mod view;
 mod window_ops;
 
+use std::collections::HashMap;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{mpsc, Arc, Mutex};
@@ -16,7 +17,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use gpui::*;
 
 use crate::daemon;
-use crate::monitor;
+use crate::monitor::{self, FocusCache};
 use crate::open_window_with_focus;
 use crate::platform;
 use crate::providers::{apps, files};
@@ -82,6 +83,81 @@ impl LauncherView {
             blur_sub: None,
         }
     }
+
+    fn reset_for_show(&mut self) {
+        self.state = LauncherState::new();
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct MonitorKey {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
+
+impl MonitorKey {
+    fn from_bounds(bounds: &Bounds<Pixels>) -> Self {
+        Self {
+            x: bounds.origin.x.to_f64().round() as i32,
+            y: bounds.origin.y.to_f64().round() as i32,
+            width: bounds.size.width.to_f64().round() as i32,
+            height: bounds.size.height.to_f64().round() as i32,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum LauncherTarget {
+    Default,
+    Monitor(MonitorKey),
+}
+
+impl LauncherTarget {
+    fn from_snapshot(snapshot: Option<&monitor::ActiveMonitor>) -> Self {
+        snapshot
+            .map(|m| Self::Monitor(MonitorKey::from_bounds(m.bounds())))
+            .unwrap_or(Self::Default)
+    }
+}
+
+#[derive(Default)]
+struct ActiveLaunchers {
+    windows: HashMap<LauncherTarget, WindowHandle<LauncherView>>,
+}
+
+impl ActiveLaunchers {
+    fn existing(&self, target: LauncherTarget) -> Option<WindowHandle<LauncherView>> {
+        self.windows.get(&target).cloned()
+    }
+
+    fn insert(&mut self, target: LauncherTarget, handle: WindowHandle<LauncherView>) {
+        self.windows.insert(target, handle);
+    }
+
+    fn remove(&mut self, target: LauncherTarget) {
+        self.windows.remove(&target);
+    }
+
+    fn hide_non_target(&mut self, target: LauncherTarget, cx: &mut App) {
+        let handles: Vec<(LauncherTarget, WindowHandle<LauncherView>)> = self
+            .windows
+            .iter()
+            .filter(|(key, _)| **key != target)
+            .map(|(key, handle)| (*key, handle.clone()))
+            .collect();
+
+        let mut dead = Vec::new();
+        for (key, handle) in handles {
+            if handle.update(cx, |_, window, _| window.minimize_window()).is_err() {
+                dead.push(key);
+            }
+        }
+        for key in dead {
+            self.windows.remove(&key);
+        }
+    }
 }
 
 fn open_keepalive_window(cx: &mut App) {
@@ -104,22 +180,28 @@ fn open_keepalive_window(cx: &mut App) {
 
 fn activate_or_open_launcher(
     entries: Arc<PreloadedEntries>,
-    active: Rc<RefCell<Option<WindowHandle<LauncherView>>>>,
+    active: Rc<RefCell<ActiveLaunchers>>,
+    monitor_snapshot: Option<monitor::ActiveMonitor>,
     cx: &mut App,
 ) {
-    if try_activate_existing_launcher(active.clone(), cx) {
+    let target = LauncherTarget::from_snapshot(monitor_snapshot.as_ref());
+    active.borrow_mut().hide_non_target(target, cx);
+
+    if try_activate_existing_launcher(active.clone(), target, cx) {
         return;
     }
 
     let win_size = size(px(WINDOW_WIDTH), px(HEADER_HEIGHT));
     let caps = platform::current_capabilities();
     let bounds = if caps.can_window_positioning {
-        monitor::active(cx)
+        monitor_snapshot.as_ref()
             .map(|m| m.centered_bounds(win_size))
             .unwrap_or_else(|| Bounds::centered(None, win_size, cx))
     } else {
         Bounds::centered(None, win_size, cx)
     };
+
+    eprintln!("[launcher] opening at {:?}", bounds);
 
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -133,33 +215,33 @@ fn activate_or_open_launcher(
     if let Ok(handle) = open_window_with_focus(cx, options, move |_window, cx| {
         LauncherView::new(entries.clone(), cx)
     }) {
-        *active.borrow_mut() = Some(handle);
+        active.borrow_mut().insert(target, handle);
     }
     cx.activate(true);
 }
 
 fn try_activate_existing_launcher(
-    active: Rc<RefCell<Option<WindowHandle<LauncherView>>>>,
+    active: Rc<RefCell<ActiveLaunchers>>,
+    target: LauncherTarget,
     cx: &mut App,
 ) -> bool {
-    let Some(existing) = active.borrow().as_ref().cloned() else {
+    let existing = active.borrow().existing(target);
+    let Some(existing) = existing else {
         return false;
     };
 
     let activated = existing
         .update(cx, |view, window, cx| {
-            view.state.query.clear();
-            view.state.cursor = 0;
-            view.state.selected = 0;
-            view.state.clear_selection();
+            view.reset_for_show();
             view.store.ensure_filtered(&view.state);
+            window.focus(&view.focus_handle(cx));
             window.activate_window();
             cx.notify();
         })
         .is_ok();
 
     if !activated {
-        active.borrow_mut().take();
+        active.borrow_mut().remove(target);
         return false;
     }
 
@@ -169,7 +251,7 @@ fn try_activate_existing_launcher(
 
 fn spawn_command_poll(
     entries: Arc<PreloadedEntries>,
-    active: Rc<RefCell<Option<WindowHandle<LauncherView>>>>,
+    active: Rc<RefCell<ActiveLaunchers>>,
     rx: mpsc::Receiver<daemon::Command>,
     cx: &mut App,
 ) {
@@ -187,10 +269,10 @@ fn spawn_command_poll(
                 .await;
 
             match next_command {
-                Some(daemon::Command::Show) => {
+                Some(daemon::Command::Show(snapshot)) => {
                     let entries = entries.clone();
                     let active = active.clone();
-                    cx.update(move |cx| activate_or_open_launcher(entries.clone(), active.clone(), cx))
+                    cx.update(move |cx| activate_or_open_launcher(entries.clone(), active.clone(), snapshot, cx))
                         .ok();
                 }
                 Some(daemon::Command::Kill) => {
@@ -212,22 +294,25 @@ pub fn run() {
         return;
     }
 
-    let (tx, rx) = mpsc::channel();
-
-    if !daemon::start_listener(tx) {
-        return;
-    }
-
     let entries = Arc::new(PreloadedEntries::load());
 
     Application::new().run(move |cx: &mut App| {
-        let active: Rc<RefCell<Option<WindowHandle<LauncherView>>>> = Rc::new(RefCell::new(None));
+        let focus_cache = FocusCache::start(cx);
+
+        let (tx, rx) = mpsc::channel();
+        if !daemon::start_listener(tx, focus_cache.clone()) {
+            cx.quit();
+            return;
+        }
+
+        let active: Rc<RefCell<ActiveLaunchers>> = Rc::new(RefCell::new(ActiveLaunchers::default()));
 
         open_keepalive_window(cx);
         spawn_command_poll(entries.clone(), active.clone(), rx, cx);
 
         if show_immediately {
-            activate_or_open_launcher(entries.clone(), active.clone(), cx);
+            let snapshot = focus_cache.snapshot();
+            activate_or_open_launcher(entries.clone(), active.clone(), snapshot, cx);
         }
     });
 

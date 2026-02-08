@@ -1,11 +1,9 @@
 use gpui::*;
-use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug)]
 pub struct ActiveMonitor {
     bounds: Bounds<Pixels>,
-    cursor: Option<Point<Pixels>>,
 }
 
 impl ActiveMonitor {
@@ -15,36 +13,169 @@ impl ActiveMonitor {
         Bounds::new(point(x, y), win_size)
     }
 
-    pub fn cursor_centered_bounds(&self, win_size: Size<Pixels>) -> Bounds<Pixels> {
-        let x = match self.cursor {
-            Some(pt) => (pt.x - win_size.width / 2.0).max(self.bounds.origin.x),
-            None => self.bounds.origin.x + (self.bounds.size.width - win_size.width) / 2.0,
-        };
-        let y = self.bounds.origin.y + (self.bounds.size.height - win_size.height) / 3.0;
-        Bounds::new(point(x, y), win_size)
-    }
-
     pub fn bounds(&self) -> &Bounds<Pixels> {
         &self.bounds
     }
 }
 
-pub fn active(cx: &App) -> Option<ActiveMonitor> {
-    let monitors = physical_monitors(cx);
-    if monitors.is_empty() {
+#[derive(Clone)]
+pub struct FocusCache {
+    cached: Arc<Mutex<Option<ActiveMonitor>>>,
+    monitors: Vec<Bounds<Pixels>>,
+}
+
+impl FocusCache {
+    pub fn start(cx: &App) -> Self {
+        let monitors = physical_monitors(cx);
+        let cached: Arc<Mutex<Option<ActiveMonitor>>> = Arc::new(Mutex::new(None));
+
+        #[cfg(target_os = "linux")]
+        {
+            if !is_wayland() {
+                let shared = cached.clone();
+                let monitors_clone = monitors.clone();
+                std::thread::spawn(move || {
+                    x11_focus_listener(shared, monitors_clone);
+                });
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let initial = poll_focus_once()
+                .as_ref()
+                .and_then(|snap| monitor_for_bounds(&monitors, &snap.bounds))
+                .map(|bounds| ActiveMonitor { bounds });
+            *cached.lock().unwrap() = initial;
+        }
+
+        Self { cached, monitors }
+    }
+
+    pub fn snapshot(&self) -> Option<ActiveMonitor> {
+        if self.monitors.is_empty() {
+            return None;
+        }
+        if self.monitors.len() == 1 {
+            return Some(ActiveMonitor { bounds: self.monitors[0] });
+        }
+
+        self.cached
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+            .or_else(|| Some(ActiveMonitor { bounds: self.monitors[0] }))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn x11_focus_listener(cached: Arc<Mutex<Option<ActiveMonitor>>>, monitors: Vec<Bounds<Pixels>>) {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::*;
+
+    let Ok((conn, screen_num)) = x11rb::connect(None) else { return };
+    let screen = &conn.setup().roots[screen_num];
+    let root = screen.root;
+
+    let net_active_window = conn
+        .intern_atom(false, b"_NET_ACTIVE_WINDOW")
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .map(|reply| reply.atom);
+
+    let wm_pid = conn
+        .intern_atom(false, b"_NET_WM_PID")
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .map(|reply| reply.atom);
+
+    let Some(atom) = net_active_window else { return };
+    let own_pid = std::process::id();
+
+    let update = |conn: &x11rb::rust_connection::RustConnection| {
+        let result = resolve_focused_window(conn, root, atom, wm_pid, own_pid, &monitors);
+        eprintln!("[monitor] resolve: {:?}, monitors: {:?}", result.as_ref().map(|m| &m.bounds), monitors);
+        let Some(active_monitor) = result else { return };
+        if let Ok(mut guard) = cached.lock() {
+            *guard = Some(active_monitor);
+        }
+    };
+
+    update(&conn);
+
+    conn.change_window_attributes(
+        root,
+        &ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE),
+    )
+    .ok();
+    conn.flush().ok();
+
+    eprintln!("[monitor] listener started");
+
+    loop {
+        let Ok(event) = conn.wait_for_event() else {
+            eprintln!("[monitor] event loop broke");
+            break;
+        };
+
+        let x11rb::protocol::Event::PropertyNotify(ev) = event else { continue };
+        if ev.atom != atom {
+            continue;
+        }
+
+        eprintln!("[monitor] focus changed");
+        update(&conn);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn resolve_focused_window(
+    conn: &impl x11rb::connection::Connection,
+    root: u32,
+    active_window_atom: u32,
+    wm_pid_atom: Option<u32>,
+    own_pid: u32,
+    monitors: &[Bounds<Pixels>],
+) -> Option<ActiveMonitor> {
+    use x11rb::protocol::xproto::*;
+
+    let prop = conn
+        .get_property(false, root, active_window_atom, AtomEnum::WINDOW, 0, 1)
+        .ok()?
+        .reply()
+        .ok()?;
+
+    let window_id = prop.value32()?.next()?;
+    if window_id == 0 {
         return None;
     }
-    if monitors.len() == 1 {
-        return Some(ActiveMonitor { bounds: monitors[0], cursor: None });
+
+    if let Some(pid_atom) = wm_pid_atom {
+        let pid_prop = conn
+            .get_property(false, window_id, pid_atom, AtomEnum::CARDINAL, 0, 1)
+            .ok()
+            .and_then(|c| c.reply().ok());
+        if let Some(pp) = pid_prop {
+            if pp.value32().and_then(|mut v| v.next()) == Some(own_pid) {
+                return None;
+            }
+        }
     }
 
-    let focus = poll_focus_once();
-    let monitor_bounds = focus
-        .as_ref()
-        .and_then(|snap| monitor_for_bounds(&monitors, &snap.bounds))
-        .unwrap_or(monitors[0]);
+    let geom = conn.get_geometry(window_id).ok()?.reply().ok()?;
+    let coords = conn
+        .translate_coordinates(window_id, root, 0, 0)
+        .ok()?
+        .reply()
+        .ok()?;
 
-    Some(ActiveMonitor { bounds: monitor_bounds, cursor: None })
+    let bounds = Bounds::new(
+        point(px(coords.dst_x as f32), px(coords.dst_y as f32)),
+        size(px(geom.width as f32), px(geom.height as f32)),
+    );
+
+    let monitor_bounds = monitor_for_bounds(monitors, &bounds).unwrap_or(monitors[0]);
+    Some(ActiveMonitor { bounds: monitor_bounds })
 }
 
 fn physical_monitors(cx: &App) -> Vec<Bounds<Pixels>> {
@@ -83,10 +214,6 @@ fn monitor_for_bounds(monitors: &[Bounds<Pixels>], window: &Bounds<Pixels>) -> O
         .map(|(m, _)| m)
 }
 
-fn monitor_for_point(monitors: &[Bounds<Pixels>], pt: Point<Pixels>) -> Option<Bounds<Pixels>> {
-    monitors.iter().find(|m| m.contains(&pt)).copied()
-}
-
 fn intersection_area(a: &Bounds<Pixels>, b: &Bounds<Pixels>) -> f64 {
     let inter = a.intersect(b);
     if inter.size.width <= px(0.) || inter.size.height <= px(0.) {
@@ -95,201 +222,42 @@ fn intersection_area(a: &Bounds<Pixels>, b: &Bounds<Pixels>) -> f64 {
     inter.size.width.to_f64() * inter.size.height.to_f64()
 }
 
-pub struct Tracker {
-    rx: mpsc::Receiver<PollResult>,
-    monitors: Vec<Bounds<Pixels>>,
-    last_focus: Option<FocusSnapshot>,
-    last_focus_at: Option<Instant>,
-    last_click: Option<ClickInfo>,
-    last_click_at: Option<Instant>,
-}
+#[cfg(target_os = "linux")]
+fn xrandr_monitors() -> Vec<Bounds<Pixels>> {
+    use std::process::Command;
 
-impl Tracker {
-    pub fn start(cx: &App) -> Self {
-        let (tx, rx) = mpsc::channel();
+    let out = match Command::new("xrandr").arg("--current").output() {
+        Ok(o) if o.status.success() => o,
+        _ => return Vec::new(),
+    };
 
-        std::thread::spawn(move || {
-            let mut state = PollState::default();
-            loop {
-                let (result, new_state) = poll_once(state);
-                state = new_state;
-                if tx.send(result).is_err() {
-                    break;
-                }
-            }
-        });
-
-        Self {
-            rx,
-            monitors: physical_monitors(cx),
-            last_focus: None,
-            last_focus_at: None,
-            last_click: None,
-            last_click_at: None,
-        }
-    }
-
-    pub fn poll(&mut self) {
-        while let Ok(result) = self.rx.try_recv() {
-            self.update_focus(result.focus_snapshot);
-            self.update_click(result.click_point);
-        }
-    }
-
-    fn update_focus(&mut self, snap: Option<FocusSnapshot>) {
-        let Some(snap) = snap else { return };
-        let is_new = self
-            .last_focus
-            .as_ref()
-            .map(|prev| prev.signature() != snap.signature())
-            .unwrap_or(true);
-        if is_new {
-            self.last_focus_at = Some(Instant::now());
-        }
-        self.last_focus = Some(snap);
-    }
-
-    fn update_click(&mut self, point: Option<Point<Pixels>>) {
-        let Some(point) = point else { return };
-        self.last_click = Some(ClickInfo {
-            global: point,
-            monitor: monitor_for_point(&self.monitors, point),
-        });
-        self.last_click_at = Some(Instant::now());
-    }
-
-    pub fn active(&self) -> Option<ActiveMonitor> {
-        if self.monitors.is_empty() {
-            return None;
-        }
-
-        let focus_monitor = self
-            .last_focus
-            .as_ref()
-            .and_then(|snap| monitor_for_bounds(&self.monitors, &snap.bounds));
-
-        let click_monitor = self.last_click.as_ref().and_then(|c| c.monitor);
-
-        let (active, cursor) = match resolve(
-            focus_monitor,
-            self.last_focus_at,
-            click_monitor,
-            self.last_click_at,
-        ) {
-            Some((m, ActiveSource::Click)) => {
-                let pt = self.last_click.as_ref().map(|c| c.global);
-                (Some(m), pt)
-            }
-            Some((m, ActiveSource::Focus)) => (Some(m), None),
-            None => (None, None),
-        };
-
-        let bounds = active.unwrap_or(self.monitors[0]);
-        Some(ActiveMonitor { bounds, cursor })
-    }
-}
-
-#[derive(Clone)]
-struct ClickInfo {
-    global: Point<Pixels>,
-    monitor: Option<Bounds<Pixels>>,
-}
-
-#[derive(Clone)]
-struct FocusSnapshot {
-    window_id: Option<u64>,
-    bounds: Bounds<Pixels>,
-}
-
-impl FocusSnapshot {
-    fn signature(&self) -> (Option<u64>, Bounds<Pixels>) {
-        (self.window_id, self.bounds)
-    }
-}
-
-#[derive(Clone, Copy)]
-enum ActiveSource {
-    Focus,
-    Click,
-}
-
-struct PollResult {
-    focus_snapshot: Option<FocusSnapshot>,
-    click_point: Option<Point<Pixels>>,
-}
-
-#[derive(Default)]
-struct PollState {
-    #[cfg(target_os = "linux")]
-    xinput_device: Option<String>,
-    #[cfg(target_os = "linux")]
-    button_down: bool,
-}
-
-const POLL_INTERVAL_MS: u64 = 100;
-
-fn resolve(
-    focus: Option<Bounds<Pixels>>,
-    focus_time: Option<Instant>,
-    click: Option<Bounds<Pixels>>,
-    click_time: Option<Instant>,
-) -> Option<(Bounds<Pixels>, ActiveSource)> {
-    match (focus.zip(focus_time), click.zip(click_time)) {
-        (Some((fb, ft)), Some((cb, ct))) => {
-            if ft >= ct {
-                Some((fb, ActiveSource::Focus))
-            } else {
-                Some((cb, ActiveSource::Click))
-            }
-        }
-        (Some((fb, _)), None) => Some((fb, ActiveSource::Focus)),
-        (None, Some((cb, _))) => Some((cb, ActiveSource::Click)),
-        _ => None,
-    }
-}
-
-fn poll_once(mut state: PollState) -> (PollResult, PollState) {
-    let focus_snapshot = poll_focus_once();
-    let click_point = poll_click_once(&mut state);
-    std::thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
-    (PollResult { focus_snapshot, click_point }, state)
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(parse_xrandr_line)
+        .collect()
 }
 
 #[cfg(target_os = "linux")]
-fn poll_focus_once() -> Option<FocusSnapshot> {
-    use std::process::Command;
-
-    if is_wayland() {
+fn parse_xrandr_line(line: &str) -> Option<Bounds<Pixels>> {
+    if !line.contains(" connected") {
         return None;
     }
 
-    let out = Command::new("xdotool")
-        .args(["getactivewindow", "getwindowgeometry", "--shell"])
-        .output()
-        .ok()?;
+    let geom = line.split_whitespace().find(|s| s.contains('+') && s.contains('x'))?;
+    let (res, offsets) = geom.split_once('+')?;
+    let (w, h) = res.split_once('x')?;
+    let (ox, oy) = offsets.split_once('+')?;
 
-    if !out.status.success() {
-        return None;
-    }
+    Some(Bounds::new(
+        point(px(ox.parse::<f32>().ok()?), px(oy.parse::<f32>().ok()?)),
+        size(px(w.parse::<f32>().ok()?), px(h.parse::<f32>().ok()?)),
+    ))
+}
 
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let window_id = parse_shell_var::<u64>(&stdout, "WINDOW");
-    let x = parse_shell_var::<i32>(&stdout, "X")?;
-    let y = parse_shell_var::<i32>(&stdout, "Y")?;
-    let w = parse_shell_var::<i32>(&stdout, "WIDTH")?;
-    let h = parse_shell_var::<i32>(&stdout, "HEIGHT")?;
-
-    if w <= 0 || h <= 0 {
-        return None;
-    }
-
-    Some(FocusSnapshot {
-        window_id,
-        bounds: Bounds::new(
-            point(px(x as f32), px(y as f32)),
-            size(px(w as f32), px(h as f32)),
-        ),
-    })
+#[cfg(target_os = "linux")]
+fn is_wayland() -> bool {
+    std::env::var("XDG_SESSION_TYPE").map(|v| v == "wayland").unwrap_or(false)
+        || std::env::var_os("WAYLAND_DISPLAY").is_some()
 }
 
 #[cfg(target_os = "macos")]
@@ -326,7 +294,6 @@ fn poll_focus_once() -> Option<FocusSnapshot> {
     }
 
     Some(FocusSnapshot {
-        window_id: None,
         bounds: Bounds::new(
             point(px(parts[0] as f32), px(parts[1] as f32)),
             size(px(parts[2] as f32), px(parts[3] as f32)),
@@ -334,151 +301,9 @@ fn poll_focus_once() -> Option<FocusSnapshot> {
     })
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn poll_focus_once() -> Option<FocusSnapshot> {
-    None
-}
-
-#[cfg(target_os = "linux")]
-fn poll_click_once(state: &mut PollState) -> Option<Point<Pixels>> {
-    use std::process::Command;
-
-    if is_wayland() {
-        return None;
-    }
-
-    let device_id = match state.xinput_device.clone() {
-        Some(id) => id,
-        None => {
-            let id = detect_xinput_device()?;
-            state.xinput_device = Some(id.clone());
-            id
-        }
-    };
-
-    let out = Command::new("xinput")
-        .args(["--query-state", &device_id])
-        .output()
-        .ok()?;
-
-    if !out.status.success() {
-        state.xinput_device = None;
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let button_down = stdout.lines().any(|l| l.contains("button[") && l.contains("]=down"));
-
-    let click = if button_down && !state.button_down {
-        query_mouse_location()
-    } else {
-        None
-    };
-
-    state.button_down = button_down;
-    click
-}
-
-#[cfg(not(target_os = "linux"))]
-fn poll_click_once(_state: &mut PollState) -> Option<Point<Pixels>> {
-    None
-}
-
-#[cfg(target_os = "linux")]
-fn xrandr_monitors() -> Vec<Bounds<Pixels>> {
-    use std::process::Command;
-
-    let out = match Command::new("xrandr").arg("--current").output() {
-        Ok(o) if o.status.success() => o,
-        _ => return Vec::new(),
-    };
-
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter_map(parse_xrandr_line)
-        .collect()
-}
-
-#[cfg(target_os = "linux")]
-fn parse_xrandr_line(line: &str) -> Option<Bounds<Pixels>> {
-    if !line.contains(" connected") {
-        return None;
-    }
-
-    let geom = line.split_whitespace().find(|s| s.contains('+') && s.contains('x'))?;
-    let (res, offsets) = geom.split_once('+')?;
-    let (w, h) = res.split_once('x')?;
-    let (ox, oy) = offsets.split_once('+')?;
-
-    Some(Bounds::new(
-        point(px(ox.parse::<f32>().ok()?), px(oy.parse::<f32>().ok()?)),
-        size(px(w.parse::<f32>().ok()?), px(h.parse::<f32>().ok()?)),
-    ))
-}
-
-#[cfg(target_os = "linux")]
-fn detect_xinput_device() -> Option<String> {
-    use std::process::Command;
-
-    let out = Command::new("xinput").args(["list", "--short"]).output().ok()?;
-    if !out.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&out.stdout);
-
-    let preferred = |line: &str| {
-        let lower = line.to_lowercase();
-        line.contains("slave  pointer")
-            && !line.contains("XTEST")
-            && (lower.contains("mouse") || lower.contains("logitech") || lower.contains("razer"))
-    };
-
-    let fallback = |line: &str| {
-        line.contains("slave  pointer")
-            && !line.contains("XTEST")
-            && !line.contains("Consumer")
-            && !line.contains("Keyboard")
-    };
-
-    stdout
-        .lines()
-        .find(|l| preferred(l))
-        .or_else(|| stdout.lines().find(|l| fallback(l)))
-        .and_then(|line| {
-            line.split("id=").nth(1)?.split_whitespace().next().map(String::from)
-        })
-}
-
-#[cfg(target_os = "linux")]
-fn query_mouse_location() -> Option<Point<Pixels>> {
-    use std::process::Command;
-
-    let out = Command::new("xdotool")
-        .args(["getmouselocation", "--shell"])
-        .output()
-        .ok()?;
-
-    if !out.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let x = parse_shell_var::<i32>(&stdout, "X")?;
-    let y = parse_shell_var::<i32>(&stdout, "Y")?;
-    Some(point(px(x as f32), px(y as f32)))
-}
-
-fn parse_shell_var<T: std::str::FromStr>(output: &str, key: &str) -> Option<T> {
-    output
-        .lines()
-        .find_map(|line| line.strip_prefix(key)?.strip_prefix('=')?.trim().parse().ok())
-}
-
-#[cfg(target_os = "linux")]
-fn is_wayland() -> bool {
-    std::env::var("XDG_SESSION_TYPE").map(|v| v == "wayland").unwrap_or(false)
-        || std::env::var_os("WAYLAND_DISPLAY").is_some()
+#[cfg(target_os = "macos")]
+struct FocusSnapshot {
+    bounds: Bounds<Pixels>,
 }
 
 #[cfg(target_os = "macos")]
