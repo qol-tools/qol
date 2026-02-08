@@ -32,3 +32,57 @@ jobs:
 
       - name: Test
         run: cargo test
+
+  plugin-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone first-party plugin repos
+        run: |
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import subprocess
+          import urllib.request
+
+          org = "qol-tools"
+          dest = pathlib.Path("/tmp/qol-tools")
+          dest.mkdir(parents=True, exist_ok=True)
+
+          repos = []
+          page = 1
+          while True:
+            url = f"https://api.github.com/orgs/{org}/repos?per_page=100&page={page}"
+            with urllib.request.urlopen(url) as response:
+              data = json.load(response)
+            if not data:
+              break
+            repos.extend(
+              repo["name"]
+              for repo in data
+              if repo.get("name", "").startswith("plugin-")
+            )
+            page += 1
+
+          repos = sorted(set(repos))
+          if not repos:
+            raise SystemExit("No plugin-* repositories discovered from GitHub API")
+
+          for repo in repos:
+            subprocess.run(
+              [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                f"https://github.com/{org}/{repo}.git",
+                str(dest / repo),
+              ],
+              check=True,
+            )
+          print(f"cloned {len(repos)} plugin repositories")
+          PY
+
+      - name: Validate first-party plugin contracts
+        run: python3 scripts/validate_first_party_plugin_contracts.py --plugins-root /tmp/qol-tools
