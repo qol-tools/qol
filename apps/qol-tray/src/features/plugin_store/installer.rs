@@ -23,7 +23,8 @@ impl PluginInstaller {
 
         log::info!("Cloning plugin from {} to {:?}", repo_url, target_dir);
 
-        let target_str = target_dir.to_str()
+        let target_str = target_dir
+            .to_str()
             .ok_or_else(|| anyhow::anyhow!("Plugin path contains invalid UTF-8"))?;
 
         let output = tokio::time::timeout(
@@ -54,6 +55,7 @@ impl PluginInstaller {
 
         let content = tokio::fs::read_to_string(&manifest_path).await?;
         let manifest: crate::plugins::PluginManifest = toml::from_str(&content)?;
+        manifest.validate()?;
 
         let Some(deps) = manifest.dependencies else {
             return Ok(());
@@ -192,10 +194,7 @@ fn resolve_asset_pattern(pattern: &str) -> String {
     let arch = get_arch_name();
     let ext = if cfg!(windows) { ".exe" } else { "" };
 
-    pattern
-        .replace("{os}", os)
-        .replace("{arch}", arch)
-        + ext
+    pattern.replace("{os}", os).replace("{arch}", arch) + ext
 }
 
 fn get_os_name() -> &'static str {

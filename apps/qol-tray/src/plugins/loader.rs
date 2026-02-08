@@ -13,7 +13,9 @@ impl PluginLoader {
 
     pub fn ensure_plugin_dir() -> Result<PathBuf> {
         let dir = Self::default_plugin_dir()?;
-        if dir.exists() { return Ok(dir); }
+        if dir.exists() {
+            return Ok(dir);
+        }
 
         fs::create_dir_all(&dir).context("Failed to create plugins directory")?;
         log::info!("Created plugins directory: {:?}", dir);
@@ -39,34 +41,44 @@ impl PluginLoader {
             .filter(|p| !p.extension().is_some_and(|ext| ext == "backup"))
             .collect();
 
-        let plugins: Vec<Plugin> = paths
-            .iter()
-            .filter_map(|path| Self::try_load_plugin(path))
-            .collect();
+        let mut plugins = Vec::new();
+        let mut skipped_platform = 0usize;
+        let mut invalid_manifest = 0usize;
 
-        log::info!("Loaded {} plugin(s)", plugins.len());
-        Ok(plugins)
-    }
-
-    fn try_load_plugin(path: &Path) -> Option<Plugin> {
-        match Self::load_plugin(path) {
-            Ok(plugin) => {
-                if !plugin.manifest.plugin.supports_current_platform() {
+        for path in &paths {
+            match Self::load_plugin(path) {
+                Ok(plugin) => {
+                    if !plugin.manifest.plugin.supports_current_platform() {
+                        skipped_platform += 1;
+                        log::info!(
+                            "Skipping plugin {} (unsupported platform: {})",
+                            plugin.id,
+                            std::env::consts::OS
+                        );
+                        continue;
+                    }
                     log::info!(
-                        "Skipping plugin {} (unsupported platform: {})",
-                        plugin.id,
-                        std::env::consts::OS
+                        "Loaded plugin: {} ({})",
+                        plugin.manifest.plugin.name,
+                        plugin.id
                     );
-                    return None;
+                    plugins.push(plugin);
                 }
-                log::info!("Loaded plugin: {} ({})", plugin.manifest.plugin.name, plugin.id);
-                Some(plugin)
-            }
-            Err(e) => {
-                log::warn!("Failed to load plugin from {:?}: {}", path, e);
-                None
+                Err(e) => {
+                    invalid_manifest += 1;
+                    log::warn!("Failed to load plugin from {:?}: {}", path, e);
+                }
             }
         }
+
+        log::info!(
+            "Plugin diagnostics: discovered={}, loaded={}, unsupported_platform={}, invalid={}",
+            paths.len(),
+            plugins.len(),
+            skipped_platform,
+            invalid_manifest
+        );
+        Ok(plugins)
     }
 
     pub fn load_plugin(path: &Path) -> Result<Plugin> {
@@ -76,13 +88,17 @@ impl PluginLoader {
             anyhow::bail!("No plugin.toml found in {:?}", path);
         }
 
-        let manifest_content = fs::read_to_string(&manifest_path)
-            .context("Failed to read plugin.toml")?;
+        let manifest_content =
+            fs::read_to_string(&manifest_path).context("Failed to read plugin.toml")?;
 
-        let manifest: PluginManifest = toml::from_str(&manifest_content)
-            .context("Failed to parse plugin.toml")?;
+        let manifest: PluginManifest =
+            toml::from_str(&manifest_content).context("Failed to parse plugin.toml")?;
+        manifest
+            .validate()
+            .context("Invalid plugin.toml contract")?;
 
-        let id = path.file_name()
+        let id = path
+            .file_name()
             .and_then(|n| n.to_str())
             .context("Invalid plugin directory name")?
             .to_string();
@@ -94,8 +110,8 @@ impl PluginLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::fs;
+    use tempfile::TempDir;
 
     const VALID_MANIFEST: &str = r#"
 [plugin]
@@ -119,19 +135,27 @@ items = []
         let temp_dir = TempDir::new().unwrap();
 
         // Empty dir
-        assert!(PluginLoader::load_from_dir(temp_dir.path()).unwrap().is_empty());
+        assert!(PluginLoader::load_from_dir(temp_dir.path())
+            .unwrap()
+            .is_empty());
 
         // File instead of dir
         fs::write(temp_dir.path().join("file.txt"), "content").unwrap();
-        assert!(PluginLoader::load_from_dir(temp_dir.path()).unwrap().is_empty());
+        assert!(PluginLoader::load_from_dir(temp_dir.path())
+            .unwrap()
+            .is_empty());
 
         // Dir without manifest
         fs::create_dir(temp_dir.path().join("no-manifest")).unwrap();
-        assert!(PluginLoader::load_from_dir(temp_dir.path()).unwrap().is_empty());
+        assert!(PluginLoader::load_from_dir(temp_dir.path())
+            .unwrap()
+            .is_empty());
 
         // Nonexistent dir
         let nonexistent = PathBuf::from("/nonexistent/path");
-        assert!(PluginLoader::load_from_dir(&nonexistent).unwrap().is_empty());
+        assert!(PluginLoader::load_from_dir(&nonexistent)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

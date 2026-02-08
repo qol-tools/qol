@@ -93,12 +93,18 @@ pub fn cache_age_secs() -> Option<u64> {
 }
 
 pub fn update_cached_version(plugin_id: &str, version: &str) {
-    let Some(mut cache) = read_cache() else { return };
-    let Some(plugin) = cache.plugins.iter_mut().find(|p| p.id == plugin_id) else { return };
+    let Some(mut cache) = read_cache() else {
+        return;
+    };
+    let Some(plugin) = cache.plugins.iter_mut().find(|p| p.id == plugin_id) else {
+        return;
+    };
     let Some(path) = cache_path() else { return };
 
     plugin.version = version.to_string();
-    let Ok(content) = serde_json::to_string(&cache) else { return };
+    let Ok(content) = serde_json::to_string(&cache) else {
+        return;
+    };
     let _ = std::fs::write(path, content);
     log::info!("Updated cache version for {}: {}", plugin_id, version);
 }
@@ -106,13 +112,19 @@ pub fn update_cached_version(plugin_id: &str, version: &str) {
 fn get_valid_cache() -> Option<Vec<PluginMetadata>> {
     let cache = read_cache()?;
     let age = current_timestamp() - cache.timestamp;
-    
+
     if age >= CACHE_TTL_SECS {
         return None;
     }
-    
+
     log::info!("Using cached plugin data ({} seconds old)", age);
-    Some(cache.plugins.into_iter().map(PluginMetadata::from).collect())
+    Some(
+        cache
+            .plugins
+            .into_iter()
+            .map(PluginMetadata::from)
+            .collect(),
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,7 +132,6 @@ struct GitHubRepo {
     name: String,
     html_url: String,
 }
-
 
 pub struct GitHubClient {
     org: String,
@@ -181,23 +192,19 @@ impl GitHubClient {
     }
 
     fn build_request(&self, url: &str) -> reqwest::RequestBuilder {
-        let mut req = self.client
-            .get(url)
-            .header("User-Agent", "qol-tray");
-        
+        let mut req = self.client.get(url).header("User-Agent", "qol-tray");
+
         if let Some(token) = &self.token {
             req = req.header("Authorization", format!("Bearer {}", token));
         }
-        
+
         req
     }
 
     pub async fn list_plugins(&self) -> Result<Vec<PluginMetadata>> {
         let url = format!("https://api.github.com/orgs/{}/repos", self.org);
 
-        let response = self.build_request(&url)
-            .send()
-            .await?;
+        let response = self.build_request(&url).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -219,7 +226,10 @@ impl GitHubClient {
         Ok(plugins)
     }
 
-    async fn fetch_plugin_manifest(&self, repo_name: &str) -> Result<crate::plugins::PluginManifest> {
+    async fn fetch_plugin_manifest(
+        &self,
+        repo_name: &str,
+    ) -> Result<crate::plugins::PluginManifest> {
         for branch in ["main", "master"] {
             let url = format!(
                 "https://raw.githubusercontent.com/{}/{}/{}/plugin.toml",
@@ -230,6 +240,7 @@ impl GitHubClient {
             if response.status().is_success() {
                 let content = response.text().await?;
                 let manifest: crate::plugins::PluginManifest = toml::from_str(&content)?;
+                manifest.validate()?;
                 return Ok(manifest);
             }
         }
@@ -246,11 +257,11 @@ impl GitHubClient {
 
         log::info!("Fetching fresh plugin data from GitHub");
         let plugins = self.list_plugins().await?;
-        
+
         if let Err(e) = write_cache(&plugins) {
             log::warn!("Failed to write plugin cache: {}", e);
         }
-        
+
         Ok(plugins)
     }
 }
@@ -263,7 +274,10 @@ fn filter_plugin_repos(repos: &[GitHubRepo]) -> Vec<&GitHubRepo> {
     repos.iter().filter(|r| is_plugin_repo(&r.name)).collect()
 }
 
-fn build_plugin_metadata(repo: &GitHubRepo, manifest: crate::plugins::PluginManifest) -> PluginMetadata {
+fn build_plugin_metadata(
+    repo: &GitHubRepo,
+    manifest: crate::plugins::PluginManifest,
+) -> PluginMetadata {
     PluginMetadata {
         id: repo.name.clone(),
         name: manifest.plugin.name,
@@ -293,7 +307,7 @@ impl PluginMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugins::manifest::{PluginManifest, PluginInfo, MenuConfig};
+    use crate::plugins::manifest::{MenuConfig, PluginInfo, PluginManifest};
 
     fn make_repo(name: &str) -> GitHubRepo {
         GitHubRepo {
@@ -304,6 +318,7 @@ mod tests {
 
     fn make_manifest(name: &str, version: &str) -> PluginManifest {
         PluginManifest {
+            manifest_version: crate::plugins::manifest::CURRENT_MANIFEST_VERSION,
             plugin: PluginInfo {
                 name: name.to_string(),
                 description: "Test plugin".to_string(),
@@ -318,6 +333,7 @@ mod tests {
             },
             daemon: None,
             dependencies: None,
+            runtime: None,
         }
     }
 
@@ -355,10 +371,7 @@ mod tests {
                 vec!["plugin-recorder", "some-tool", "plugin-notes", "pluginish"],
                 vec!["plugin-recorder", "plugin-notes"],
             ),
-            (
-                vec!["tool-one", "tool-two"],
-                vec![],
-            ),
+            (vec!["tool-one", "tool-two"], vec![]),
         ];
 
         for (input_names, expected_names) in cases {
@@ -416,7 +429,12 @@ mod tests {
 
         for (platforms, expected) in cases {
             let metadata = make_metadata(platforms.clone());
-            assert_eq!(metadata.supports_current_platform(), *expected, "platforms: {:?}", platforms);
+            assert_eq!(
+                metadata.supports_current_platform(),
+                *expected,
+                "platforms: {:?}",
+                platforms
+            );
         }
     }
 

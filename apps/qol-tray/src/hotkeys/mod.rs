@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 
-pub use types::{HotkeyAction, HotkeyConfig};
 use types::KEY_CODE_MAP;
+pub use types::{HotkeyAction, HotkeyConfig};
 
 static RELOAD_SENDER: OnceLock<Sender<()>> = OnceLock::new();
 static ACTION_PROCESSES: OnceLock<Mutex<HashMap<String, Vec<u32>>>> = OnceLock::new();
@@ -78,7 +78,10 @@ fn track_action_process(plugin_id: &str, pid: u32) {
         Ok(p) => p,
         Err(_) => return,
     };
-    processes.entry(plugin_id.to_string()).or_default().push(pid);
+    processes
+        .entry(plugin_id.to_string())
+        .or_default()
+        .push(pid);
 }
 
 pub fn trigger_reload() {
@@ -308,15 +311,8 @@ fn try_handle_hotkey(
     execute_plugin_action(&resolved);
 }
 
-fn is_safe_action_id(action: &str) -> bool {
-    !action.is_empty()
-        && action.len() <= 64
-        && !action.starts_with('-')
-        && action.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-}
-
 fn resolve_action(plugin: &Plugin, action: &str) -> Option<ResolvedAction> {
-    if !is_safe_action_id(action) {
+    if !crate::plugins::manifest::is_valid_action_id(action) {
         log::warn!("Invalid action ID: {:?}", action);
         return None;
     }
@@ -328,7 +324,9 @@ fn resolve_action(plugin: &Plugin, action: &str) -> Option<ResolvedAction> {
 
     let command = std::path::Path::new(&runtime.command);
     let has_traversal = command.is_absolute()
-        || command.components().any(|c| c == std::path::Component::ParentDir);
+        || command
+            .components()
+            .any(|c| c == std::path::Component::ParentDir);
     if has_traversal {
         log::warn!(
             "Plugin {} runtime command escapes plugin directory: {:?}",
@@ -425,7 +423,9 @@ mod tests {
             assert_eq!(parse_key_code(input), Some(expected), "input: {}", input);
         }
 
-        let invalid = ["unknown", "", "ctrl", "shift", "f0", "f13", "key", " ", "aa"];
+        let invalid = [
+            "unknown", "", "ctrl", "shift", "f0", "f13", "key", " ", "aa",
+        ];
         for input in invalid {
             assert_eq!(parse_key_code(input), None, "input: {:?}", input);
         }
@@ -448,12 +448,32 @@ mod tests {
             ("Win+R", Code::KeyR, Modifiers::SUPER),
             ("Meta+R", Code::KeyR, Modifiers::SUPER),
             ("Cmd+R", Code::KeyR, Modifiers::SUPER),
-            ("Ctrl+Shift+R", Code::KeyR, Modifiers::CONTROL | Modifiers::SHIFT),
-            ("Ctrl+Alt+R", Code::KeyR, Modifiers::CONTROL | Modifiers::ALT),
-            ("Ctrl+Shift+Alt+R", Code::KeyR, Modifiers::CONTROL | Modifiers::SHIFT | Modifiers::ALT),
-            ("Ctrl+Shift+Alt+Super+R", Code::KeyR, Modifiers::CONTROL | Modifiers::SHIFT | Modifiers::ALT | Modifiers::SUPER),
+            (
+                "Ctrl+Shift+R",
+                Code::KeyR,
+                Modifiers::CONTROL | Modifiers::SHIFT,
+            ),
+            (
+                "Ctrl+Alt+R",
+                Code::KeyR,
+                Modifiers::CONTROL | Modifiers::ALT,
+            ),
+            (
+                "Ctrl+Shift+Alt+R",
+                Code::KeyR,
+                Modifiers::CONTROL | Modifiers::SHIFT | Modifiers::ALT,
+            ),
+            (
+                "Ctrl+Shift+Alt+Super+R",
+                Code::KeyR,
+                Modifiers::CONTROL | Modifiers::SHIFT | Modifiers::ALT | Modifiers::SUPER,
+            ),
             ("  Ctrl  +  R  ", Code::KeyR, Modifiers::CONTROL),
-            ("Ctrl + Shift + R", Code::KeyR, Modifiers::CONTROL | Modifiers::SHIFT),
+            (
+                "Ctrl + Shift + R",
+                Code::KeyR,
+                Modifiers::CONTROL | Modifiers::SHIFT,
+            ),
             ("+R", Code::KeyR, Modifiers::empty()),
             ("Ctrl++R", Code::KeyR, Modifiers::CONTROL),
             ("Ctrl+F12", Code::F12, Modifiers::CONTROL),
@@ -490,12 +510,16 @@ mod tests {
         ];
 
         for input in cases {
-            assert!(parse_hotkey(input).is_none(), "input: {:?} should not parse", input);
+            assert!(
+                parse_hotkey(input).is_none(),
+                "input: {:?} should not parse",
+                input
+            );
         }
     }
 
     #[test]
-    fn is_safe_action_id_cases() {
+    fn is_valid_action_id_cases() {
         let cases = [
             ("run", true),
             ("toggle-feature", true),
@@ -533,7 +557,12 @@ mod tests {
         ];
 
         for (input, expected) in cases {
-            assert_eq!(is_safe_action_id(input), expected, "input: {:?}", input);
+            assert_eq!(
+                crate::plugins::manifest::is_valid_action_id(input),
+                expected,
+                "input: {:?}",
+                input
+            );
         }
     }
 }

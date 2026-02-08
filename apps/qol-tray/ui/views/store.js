@@ -11,7 +11,8 @@ const state = {
     hasToken: false,
     showTokenInput: false,
     cacheAgeSecs: null,
-    loading: false
+    loading: false,
+    loadToken: 0
 };
 
 let container = null;
@@ -151,6 +152,8 @@ async function saveToken() {
 async function loadPlugins(forceRefresh = false) {
     const listEl = document.getElementById('store-list');
     if (!listEl) return;
+
+    const token = ++state.loadToken;
     
     state.loading = true;
     updateRefreshButton();
@@ -161,6 +164,9 @@ async function loadPlugins(forceRefresh = false) {
         if (!response.ok) throw new Error('Failed to fetch plugins');
         
         const data = await response.json();
+        if (token !== state.loadToken) {
+            return;
+        }
         state.plugins = data.plugins;
         state.cacheAgeSecs = data.cache_age_secs;
         
@@ -169,16 +175,23 @@ async function loadPlugins(forceRefresh = false) {
         }
         
         state.plugins.sort((a, b) => a.name.localeCompare(b.name));
-        renderPlugins(state.plugins);
+        const filtered = getFilteredPlugins();
+        state.selectedIndex = Math.min(state.selectedIndex, Math.max(0, filtered.length - 1));
+        renderPlugins(filtered);
         updateSelection();
         updateCacheAge();
     } catch (error) {
+        if (token !== state.loadToken) {
+            return;
+        }
         if (listEl) {
             listEl.innerHTML = `<div class="error">Error loading plugins: ${error.message}</div>`;
         }
     } finally {
-        state.loading = false;
-        updateRefreshButton();
+        if (token === state.loadToken) {
+            state.loading = false;
+            updateRefreshButton();
+        }
     }
 }
 
@@ -329,16 +342,11 @@ async function installPlugin(id) {
     try {
         const response = await fetch(`/api/install/${id}`, { method: 'POST' });
         if (!response.ok) throw new Error('Installation failed');
-
-        if (plugin) {
-            plugin.installed = true;
-        }
     } catch (error) {
         console.error(`Failed to install plugin: ${error.message}`);
     } finally {
         installing.remove(id);
-        renderPlugins(getFilteredPlugins());
-        updateSelection();
+        await loadPlugins();
     }
 }
 
