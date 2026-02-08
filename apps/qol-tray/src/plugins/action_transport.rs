@@ -1,8 +1,10 @@
 use std::path::Path;
 
 pub enum DaemonActionDispatch {
+    #[cfg(unix)]
     Handled,
     Fallback,
+    #[cfg(unix)]
     Error(String),
     Unavailable,
 }
