@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use tokio::sync::broadcast;
 
 use super::DaemonEvent;
@@ -6,16 +8,30 @@ const CHANNEL_CAPACITY: usize = 64;
 
 pub struct EventBus {
     tx: broadcast::Sender<DaemonEvent>,
+    plugins_revision: AtomicU64,
 }
 
 impl EventBus {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(CHANNEL_CAPACITY);
-        Self { tx }
+        Self {
+            tx,
+            plugins_revision: AtomicU64::new(0),
+        }
     }
 
     pub fn send(&self, event: DaemonEvent) {
         let _ = self.tx.send(event);
+    }
+
+    pub fn plugins_revision(&self) -> u64 {
+        self.plugins_revision.load(Ordering::SeqCst)
+    }
+
+    pub fn send_plugins_changed(&self) -> u64 {
+        let revision = self.plugins_revision.fetch_add(1, Ordering::SeqCst) + 1;
+        self.send(DaemonEvent::PluginsChanged { revision });
+        revision
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<DaemonEvent> {
@@ -38,10 +54,10 @@ mod tests {
         let bus = EventBus::new();
         let mut rx = bus.subscribe();
 
-        bus.send(DaemonEvent::PluginsChanged);
+        bus.send_plugins_changed();
 
         let event = rx.recv().await.unwrap();
-        assert!(matches!(event, DaemonEvent::PluginsChanged));
+        assert!(matches!(event, DaemonEvent::PluginsChanged { revision: 1 }));
     }
 
     #[tokio::test]
@@ -51,11 +67,11 @@ mod tests {
         let mut rx2 = bus.subscribe();
         let mut rx3 = bus.subscribe();
 
-        bus.send(DaemonEvent::PluginsChanged);
+        bus.send_plugins_changed();
 
         for rx in [&mut rx1, &mut rx2, &mut rx3] {
             let event = rx.recv().await.unwrap();
-            assert!(matches!(event, DaemonEvent::PluginsChanged));
+            assert!(matches!(event, DaemonEvent::PluginsChanged { revision: 1 }));
         }
     }
 
@@ -63,19 +79,28 @@ mod tests {
     async fn late_subscriber_misses_earlier_events() {
         let bus = EventBus::new();
 
-        bus.send(DaemonEvent::PluginsChanged);
+        bus.send_plugins_changed();
 
         let mut rx = bus.subscribe();
-        bus.send(DaemonEvent::PluginsChanged);
+        bus.send_plugins_changed();
 
         let event = rx.recv().await.unwrap();
-        assert!(matches!(event, DaemonEvent::PluginsChanged));
+        assert!(matches!(event, DaemonEvent::PluginsChanged { revision: 2 }));
     }
 
     #[test]
     fn send_without_subscribers_does_not_panic() {
         let bus = EventBus::new();
-        bus.send(DaemonEvent::PluginsChanged);
+        bus.send_plugins_changed();
+    }
+
+    #[test]
+    fn plugins_changed_increments_revision() {
+        let bus = EventBus::new();
+        assert_eq!(bus.plugins_revision(), 0);
+        assert_eq!(bus.send_plugins_changed(), 1);
+        assert_eq!(bus.send_plugins_changed(), 2);
+        assert_eq!(bus.plugins_revision(), 2);
     }
 }
 
@@ -90,10 +115,19 @@ mod dev_tests {
 
         bus.send(DaemonEvent::DiscoveryStarted);
         bus.send(DaemonEvent::DiscoveryComplete { plugins: vec![] });
-        bus.send(DaemonEvent::PluginsChanged);
+        bus.send_plugins_changed();
 
-        assert!(matches!(rx.recv().await.unwrap(), DaemonEvent::DiscoveryStarted));
-        assert!(matches!(rx.recv().await.unwrap(), DaemonEvent::DiscoveryComplete { .. }));
-        assert!(matches!(rx.recv().await.unwrap(), DaemonEvent::PluginsChanged));
+        assert!(matches!(
+            rx.recv().await.unwrap(),
+            DaemonEvent::DiscoveryStarted
+        ));
+        assert!(matches!(
+            rx.recv().await.unwrap(),
+            DaemonEvent::DiscoveryComplete { .. }
+        ));
+        assert!(matches!(
+            rx.recv().await.unwrap(),
+            DaemonEvent::PluginsChanged { revision: 1 }
+        ));
     }
 }

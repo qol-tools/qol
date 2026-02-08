@@ -29,7 +29,7 @@ pub struct BuildResultInfo {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DaemonEvent {
-    PluginsChanged,
+    PluginsChanged { revision: u64 },
     #[cfg(feature = "dev")]
     DiscoveryStarted,
     #[cfg(feature = "dev")]
@@ -45,11 +45,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plugins_changed_serializes_with_type_only() {
-        let event = DaemonEvent::PluginsChanged;
+    fn plugins_changed_serializes_with_revision() {
+        let event = DaemonEvent::PluginsChanged { revision: 7 };
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "plugins_changed");
-        assert_eq!(json.as_object().unwrap().len(), 1);
+        assert_eq!(json["revision"], 7);
     }
 }
 

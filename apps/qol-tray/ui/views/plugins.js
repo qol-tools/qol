@@ -19,7 +19,8 @@ const state = {
     pendingUninstallId: null,
     updating: new Set(),
     refreshToken: 0,
-    restoredSelection: false
+    restoredSelection: false,
+    latestRevision: 0
 };
 
 let container = null;
@@ -43,9 +44,22 @@ export function render(containerEl) {
 
     loadPlugins();
     unsubscribe = subscribe((event) => {
-        if (event.type === 'plugins_changed') refreshPlugins();
+        if (event.type !== 'plugins_changed') return;
+        const revision = Number.isInteger(event.revision) ? event.revision : state.latestRevision;
+        state.latestRevision = Math.max(state.latestRevision, revision);
+        refreshPlugins({ minRevision: revision });
     });
     unsubscribeInstalling = installing.subscribe(() => renderGrid());
+}
+
+function parseInstalledResponse(payload) {
+    if (Array.isArray(payload)) {
+        return { revision: 0, plugins: payload };
+    }
+    return {
+        revision: Number.isInteger(payload?.revision) ? payload.revision : 0,
+        plugins: Array.isArray(payload?.plugins) ? payload.plugins : []
+    };
 }
 
 async function loadPlugins() {
@@ -290,7 +304,7 @@ async function updatePlugin(pluginId) {
 }
 
 async function refreshPlugins(options = {}) {
-    const { showErrorInGrid = false, restoreSavedSelection = false } = options;
+    const { showErrorInGrid = false, restoreSavedSelection = false, minRevision = 0 } = options;
     const gridEl = document.getElementById('plugins-grid');
     if (!gridEl) return;
 
@@ -300,12 +314,16 @@ async function refreshPlugins(options = {}) {
         const response = await fetch('/api/installed');
         if (!response.ok) throw new Error('Failed to fetch plugins');
 
-        const plugins = await response.json();
+        const payload = parseInstalledResponse(await response.json());
         if (token !== state.refreshToken) {
             return;
         }
+        if (payload.revision < minRevision || payload.revision < state.latestRevision) {
+            return;
+        }
 
-        state.plugins = plugins;
+        state.latestRevision = payload.revision;
+        state.plugins = payload.plugins;
         state.plugins.sort((a, b) => a.name.localeCompare(b.name));
         if (restoreSavedSelection && !state.restoredSelection) {
             restoreSelection();

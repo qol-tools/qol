@@ -81,6 +81,12 @@ struct InstalledPlugin {
     actions: Vec<PluginAction>,
 }
 
+#[derive(Serialize)]
+struct InstalledPluginsResponse {
+    revision: u64,
+    plugins: Vec<InstalledPlugin>,
+}
+
 #[derive(Deserialize)]
 struct TokenRequest {
     token: String,
@@ -348,7 +354,7 @@ fn reload_manager_and_notify(state: &AppState) {
     if let Err(e) = manager.reload_plugins() {
         log::error!("Failed to reload plugins: {}", e);
     }
-    state.daemon.events.send(DaemonEvent::PluginsChanged);
+    state.daemon.events.send_plugins_changed();
 }
 
 async fn sse_handler(
@@ -406,9 +412,11 @@ async fn uninstall_plugin(
 
 async fn list_installed(
     State(state): State<AppState>,
-) -> Result<Json<Vec<InstalledPlugin>>, StatusCode> {
+) -> Result<Json<InstalledPluginsResponse>, StatusCode> {
     use super::github::read_cache;
     use std::collections::HashMap;
+
+    let revision = state.daemon.events.plugins_revision();
 
     let manager = state.plugin_manager.lock().map_err(|e| {
         log::error!("Plugin manager mutex poisoned: {}", e);
@@ -445,7 +453,7 @@ async fn list_installed(
         })
         .collect();
 
-    Ok(Json(plugins))
+    Ok(Json(InstalledPluginsResponse { revision, plugins }))
 }
 
 async fn dev_enabled() -> Json<bool> {
