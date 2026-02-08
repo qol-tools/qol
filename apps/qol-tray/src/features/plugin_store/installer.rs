@@ -138,6 +138,8 @@ impl PluginInstaller {
             anyhow::bail!("Git reset failed: {}", stderr);
         }
 
+        self.install_dependencies(&plugin_dir).await?;
+
         log::info!("Plugin {} updated successfully", plugin_id);
         Ok(())
     }

@@ -21,6 +21,7 @@ pub enum ActionExecutionError {
     PluginNotFound(String),
     InvalidActionId(String),
     RuntimeCommandEscapesPluginDir { plugin_id: String, command: String },
+    RuntimeCommandNotFound { plugin_id: String, command: String },
     MissingActionMapping { plugin_id: String, action_id: String },
     NoExecutionTarget { plugin_id: String, action_id: String },
     SpawnFailed(String),
@@ -35,6 +36,11 @@ impl Display for ActionExecutionError {
             Self::RuntimeCommandEscapesPluginDir { plugin_id, command } => write!(
                 f,
                 "runtime command escapes plugin dir for {}: {}",
+                plugin_id, command
+            ),
+            Self::RuntimeCommandNotFound { plugin_id, command } => write!(
+                f,
+                "runtime command not found for {}: {}",
                 plugin_id, command
             ),
             Self::MissingActionMapping {
@@ -183,7 +189,11 @@ fn resolve_action(plugin: &Plugin, action_id: &str) -> Result<ResolvedAction, Ac
                 });
             }
 
-            let command_path = plugin.path.join(command);
+            let command_path = super::resolve_plugin_command_path(&plugin.path, &runtime.command)
+                .ok_or_else(|| ActionExecutionError::RuntimeCommandNotFound {
+                    plugin_id: plugin.id.clone(),
+                    command: runtime.command.clone(),
+                })?;
             let args = match &runtime.actions {
                 Some(map) => map.get(action_id).cloned().ok_or_else(|| {
                     ActionExecutionError::MissingActionMapping {
