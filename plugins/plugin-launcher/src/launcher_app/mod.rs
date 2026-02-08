@@ -23,7 +23,7 @@ use crate::platform;
 use crate::providers::{apps, files};
 
 use entry_store::EntryStore;
-use layout::{HEADER_HEIGHT, WINDOW_WIDTH};
+use layout::{window_height_for_rows, HEADER_HEIGHT, WINDOW_WIDTH};
 use state::LauncherState;
 use window_ops::hide_in_app;
 
@@ -234,6 +234,7 @@ fn try_activate_existing_launcher(
         .update(cx, |view, window, cx| {
             view.reset_for_show();
             view.store.ensure_filtered(&view.state);
+            window.resize(size(px(WINDOW_WIDTH), px(window_height_for_rows(0))));
             window.focus(&view.focus_handle(cx));
             window.activate_window();
             cx.notify();
