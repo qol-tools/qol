@@ -1,3 +1,5 @@
 config.json
 *.log
 .DS_Store
+target/
+plugin-template
