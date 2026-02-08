@@ -34,7 +34,12 @@ impl Render for LauncherView {
             .flex()
             .flex_col()
             .bg(view::bg_color())
-            .on_key_down(cx.listener(Self::handle_key))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                match event.keystroke.key.as_str() {
+                    "escape" | "esc" => window.remove_window(),
+                    _ => this.handle_key(event, window, cx),
+                }
+            }))
             .child(view::search_bar(
                 self.state.mode.label(),
                 self.state.fuzziness.label(),

@@ -8,7 +8,7 @@ mod search;
 mod state;
 mod view;
 
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use gpui::*;
@@ -17,6 +17,7 @@ use crate::daemon;
 use crate::monitor;
 use crate::open_window_with_focus;
 use crate::platform;
+use crate::providers::{apps, files};
 
 use entry_store::EntryStore;
 use layout::{HEADER_HEIGHT, WINDOW_WIDTH};
@@ -24,7 +25,43 @@ use state::LauncherState;
 
 pub use input::key_to_input_char;
 
-actions!(launcher, [Dismiss]);
+struct PreloadedEntries {
+    app_entries: Arc<Vec<apps::AppEntry>>,
+    file_entries: Arc<Vec<files::FileEntry>>,
+}
+
+impl PreloadedEntries {
+    fn load() -> Self {
+        Self {
+            app_entries: Arc::new(crate::providers::apps::default_provider().load_entries()),
+            file_entries: Arc::new(crate::providers::files::default_provider().load_entries()),
+        }
+    }
+}
+
+struct KeepAliveView {
+    focus_handle: FocusHandle,
+}
+
+impl KeepAliveView {
+    fn new(cx: &mut Context<Self>) -> Self {
+        Self {
+            focus_handle: cx.focus_handle(),
+        }
+    }
+}
+
+impl Focusable for KeepAliveView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for KeepAliveView {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().size_full()
+    }
+}
 
 struct LauncherView {
     pub(super) state: LauncherState,
@@ -34,20 +71,54 @@ struct LauncherView {
 }
 
 impl LauncherView {
-    fn new(cx: &mut Context<Self>) -> Self {
+    fn new(entries: Arc<PreloadedEntries>, cx: &mut Context<Self>) -> Self {
         Self {
             state: LauncherState::new(),
-            store: EntryStore::new(
-                crate::providers::apps::default_provider().load_entries(),
-                crate::providers::files::default_provider().load_entries(),
-            ),
+            store: EntryStore::new(entries.app_entries.clone(), entries.file_entries.clone()),
             focus_handle: cx.focus_handle(),
             blur_sub: None,
         }
     }
 }
 
-fn open_launcher(cx: &mut App) {
+fn open_keepalive_window(cx: &mut App) {
+    let bounds = Bounds::centered(None, size(px(1.), px(1.)), cx);
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        titlebar: None,
+        window_decorations: Some(WindowDecorations::Client),
+        kind: WindowKind::PopUp,
+        focus: false,
+        ..Default::default()
+    };
+
+    let _ = cx
+        .open_window(options, |_window, cx| cx.new(KeepAliveView::new))
+        .map(|w| {
+            w.update(cx, |_, window, cx| {
+                #[cfg(target_os = "macos")]
+                {
+                    let _ = window;
+                    cx.hide();
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    window.minimize_window();
+                }
+            })
+            .ok();
+        });
+}
+
+fn close_active_window(cx: &mut App) {
+    if let Some(active) = cx.active_window() {
+        let _ = active.update(cx, |_, window, _cx| window.remove_window());
+    }
+}
+
+fn open_launcher(entries: Arc<PreloadedEntries>, cx: &mut App) {
+    close_active_window(cx);
+
     let win_size = size(px(WINDOW_WIDTH), px(HEADER_HEIGHT));
     let caps = platform::current_capabilities();
     let bounds = if caps.can_window_positioning {
@@ -67,11 +138,17 @@ fn open_launcher(cx: &mut App) {
         ..Default::default()
     };
 
-    let _ = open_window_with_focus(cx, options, |_window, cx| LauncherView::new(cx));
+    let _ = open_window_with_focus(cx, options, move |_window, cx| {
+        LauncherView::new(entries.clone(), cx)
+    });
     cx.activate(true);
 }
 
-fn spawn_command_poll(rx: mpsc::Receiver<daemon::Command>, cx: &mut App) {
+fn spawn_command_poll(
+    entries: Arc<PreloadedEntries>,
+    rx: mpsc::Receiver<daemon::Command>,
+    cx: &mut App,
+) {
     cx.spawn(async move |cx: &mut AsyncApp| {
         loop {
             cx.background_spawn(async {
@@ -81,7 +158,8 @@ fn spawn_command_poll(rx: mpsc::Receiver<daemon::Command>, cx: &mut App) {
 
             match rx.try_recv().ok() {
                 Some(daemon::Command::Show) => {
-                    cx.update(|cx| open_launcher(cx)).ok();
+                    let entries = entries.clone();
+                    cx.update(move |cx| open_launcher(entries.clone(), cx)).ok();
                 }
                 Some(daemon::Command::Kill) => {
                     cx.update(|cx| cx.quit()).ok();
@@ -108,17 +186,14 @@ pub fn run() {
         return;
     }
 
-    Application::new().run(move |cx: &mut App| {
-        cx.bind_keys([KeyBinding::new("escape", Dismiss, None)]);
-        cx.on_action(|_: &Dismiss, cx: &mut App| {
-            cx.active_window()
-                .map(|w| w.update(cx, |_, window, _cx| window.remove_window()).ok());
-        });
+    let entries = Arc::new(PreloadedEntries::load());
 
-        spawn_command_poll(rx, cx);
+    Application::new().run(move |cx: &mut App| {
+        open_keepalive_window(cx);
+        spawn_command_poll(entries.clone(), rx, cx);
 
         if show_immediately {
-            open_launcher(cx);
+            open_launcher(entries.clone(), cx);
         }
     });
 
