@@ -47,6 +47,10 @@ impl PluginManager {
         self.load_plugins()
     }
 
+    pub fn get(&self, plugin_id: &str) -> Option<&Plugin> {
+        self.plugins.get(plugin_id)
+    }
+
     pub fn plugins(&self) -> impl Iterator<Item = &Plugin> {
         self.plugins.values()
     }

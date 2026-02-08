@@ -1,18 +1,19 @@
 mod types;
 
 use crate::paths;
+use crate::plugins::{Plugin, PluginManager};
 use anyhow::Result;
 use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
 };
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 pub use types::{HotkeyAction, HotkeyConfig};
-use types::{ScriptInfo, KEY_CODE_MAP, SCRIPT_RUNNERS};
+use types::KEY_CODE_MAP;
 
 static RELOAD_SENDER: OnceLock<Sender<()>> = OnceLock::new();
 static ACTION_PROCESSES: OnceLock<Mutex<HashMap<String, Vec<u32>>>> = OnceLock::new();
@@ -212,7 +213,7 @@ fn parse_key_code(s: &str) -> Option<Code> {
     KEY_CODE_MAP.get(s.to_lowercase().as_str()).copied()
 }
 
-pub fn start_hotkey_listener(plugins_dir: PathBuf) -> Result<()> {
+pub fn start_hotkey_listener(plugin_manager: Arc<Mutex<PluginManager>>) -> Result<()> {
     let (reload_tx, reload_rx) = mpsc::channel::<()>();
     let _ = RELOAD_SENDER.set(reload_tx);
 
@@ -234,7 +235,7 @@ pub fn start_hotkey_listener(plugins_dir: PathBuf) -> Result<()> {
         let hotkey_receiver = GlobalHotKeyEvent::receiver();
         loop {
             try_reload_hotkeys(&reload_rx, &mut manager);
-            try_handle_hotkey(hotkey_receiver, &manager, &plugins_dir);
+            try_handle_hotkey(hotkey_receiver, &manager, &plugin_manager);
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
     });
@@ -262,10 +263,17 @@ fn try_reload_hotkeys(reload_rx: &mpsc::Receiver<()>, manager: &mut HotkeyManage
     }
 }
 
+struct ResolvedAction {
+    plugin_id: String,
+    plugin_dir: PathBuf,
+    command_path: PathBuf,
+    args: Vec<String>,
+}
+
 fn try_handle_hotkey(
     receiver: &global_hotkey::GlobalHotKeyEventReceiver,
     manager: &HotkeyManager,
-    plugins_dir: &Path,
+    plugin_manager: &Arc<Mutex<PluginManager>>,
 ) {
     let event = match receiver.try_recv() {
         Ok(e) if e.state == HotKeyState::Pressed => e,
@@ -276,7 +284,28 @@ fn try_handle_hotkey(
         return;
     };
     log::info!("Hotkey triggered: {}::{}", action.plugin_id, action.action);
-    execute_plugin_action(plugins_dir, &action.plugin_id, &action.action);
+
+    let resolved = {
+        let plugins = match plugin_manager.lock() {
+            Ok(p) => p,
+            Err(e) => {
+                log::error!("Failed to lock plugin manager: {}", e);
+                return;
+            }
+        };
+
+        let Some(plugin) = plugins.get(&action.plugin_id) else {
+            log::warn!("Plugin not found: {}", action.plugin_id);
+            return;
+        };
+
+        match resolve_action(plugin, &action.action) {
+            Some(r) => r,
+            None => return,
+        }
+    };
+
+    execute_plugin_action(&resolved);
 }
 
 fn is_safe_action_id(action: &str) -> bool {
@@ -286,27 +315,58 @@ fn is_safe_action_id(action: &str) -> bool {
         && action.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-fn execute_plugin_action(plugins_dir: &Path, plugin_id: &str, action: &str) {
+fn resolve_action(plugin: &Plugin, action: &str) -> Option<ResolvedAction> {
     if !is_safe_action_id(action) {
         log::warn!("Invalid action ID: {:?}", action);
-        return;
+        return None;
     }
 
-    let plugin_dir = plugins_dir.join(plugin_id);
-    let Some(script) = find_plugin_script(&plugin_dir) else {
-        log::warn!("No plugin script found in {:?}", plugin_dir);
-        return;
+    let runtime = plugin.manifest.runtime.as_ref().or_else(|| {
+        log::warn!("Plugin {} has no runtime config", plugin.id);
+        None
+    })?;
+
+    let command = std::path::Path::new(&runtime.command);
+    let has_traversal = command.is_absolute()
+        || command.components().any(|c| c == std::path::Component::ParentDir);
+    if has_traversal {
+        log::warn!(
+            "Plugin {} runtime command escapes plugin directory: {:?}",
+            plugin.id,
+            runtime.command
+        );
+        return None;
+    }
+    let command_path = plugin.path.join(command);
+
+    let args = match &runtime.actions {
+        Some(map) => match map.get(action) {
+            Some(args) => args.clone(),
+            None => {
+                log::warn!(
+                    "Plugin {} has no action mapping for {:?}",
+                    plugin.id,
+                    action
+                );
+                return None;
+            }
+        },
+        None => vec![action.to_string()],
     };
 
-    log::info!("Executing: {:?} {}", script.path, action);
-    let mut cmd = std::process::Command::new(script.shell);
-    if let Some(flag) = script.flag {
-        cmd.arg(flag);
-    }
-    let result = cmd
-        .arg(&script.path)
-        .arg(action)
-        .current_dir(&plugin_dir)
+    Some(ResolvedAction {
+        plugin_id: plugin.id.clone(),
+        plugin_dir: plugin.path.clone(),
+        command_path,
+        args,
+    })
+}
+
+fn execute_plugin_action(resolved: &ResolvedAction) {
+    log::info!("Executing: {:?} {:?}", resolved.command_path, resolved.args);
+    let result = std::process::Command::new(&resolved.command_path)
+        .args(&resolved.args)
+        .current_dir(&resolved.plugin_dir)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
@@ -314,22 +374,11 @@ fn execute_plugin_action(plugins_dir: &Path, plugin_id: &str, action: &str) {
     match result {
         Ok(child) => {
             let pid = child.id();
-            track_action_process(plugin_id, pid);
+            track_action_process(&resolved.plugin_id, pid);
             log::info!("Plugin action started (pid: {})", pid);
         }
         Err(e) => log::error!("Failed to execute plugin action: {}", e),
     }
-}
-
-fn find_plugin_script(plugin_dir: &std::path::Path) -> Option<ScriptInfo> {
-    SCRIPT_RUNNERS.iter().find_map(|(file, shell, flag)| {
-        let path = plugin_dir.join(file);
-        path.exists().then_some(ScriptInfo {
-            shell,
-            flag: *flag,
-            path,
-        })
-    })
 }
 
 #[cfg(test)]
