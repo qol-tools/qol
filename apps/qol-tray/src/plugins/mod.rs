@@ -11,7 +11,7 @@ pub use manager::PluginManager;
 pub use config::PluginConfigManager;
 
 use anyhow::Result;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 #[derive(Debug)]
@@ -41,10 +41,14 @@ impl Plugin {
             return Ok(());
         }
 
-        let daemon_path = self.path.join(&daemon_config.command);
-        if !daemon_path.exists() {
-            anyhow::bail!("Daemon executable not found: {:?}", daemon_path);
-        }
+        let daemon_path = resolve_plugin_command_path(&self.path, &daemon_config.command)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Daemon executable not found for command {:?} in {:?}",
+                    daemon_config.command,
+                    self.path
+                )
+            })?;
 
         log::info!("Starting daemon for plugin: {}", self.id);
         let mut cmd = Command::new(&daemon_path);
@@ -127,4 +131,27 @@ impl Drop for Plugin {
     fn drop(&mut self) {
         let _ = self.stop_daemon();
     }
+}
+
+pub(crate) fn resolve_plugin_command_path(plugin_dir: &Path, command: &str) -> Option<PathBuf> {
+    let command_path = Path::new(command);
+    let mut candidates = vec![plugin_dir.join(command_path)];
+
+    if command_path.components().count() == 1 {
+        let command_name = command_path.as_os_str();
+        candidates.push(plugin_dir.join("target").join("release").join(command_name));
+        candidates.push(plugin_dir.join("target").join("debug").join(command_name));
+    }
+
+    #[cfg(windows)]
+    {
+        let with_exe: Vec<PathBuf> = candidates
+            .iter()
+            .filter(|path| path.extension().is_none())
+            .map(|path| path.with_extension("exe"))
+            .collect();
+        candidates.extend(with_exe);
+    }
+
+    candidates.into_iter().find(|path| path.is_file())
 }
