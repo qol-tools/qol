@@ -80,7 +80,7 @@ fn socket_path() -> std::path::PathBuf {
 }
 
 fn read_command(stream: &mut UnixStream, focus_cache: &FocusCache) -> ReadResult {
-    let mut buf = [0u8; 16];
+    let mut buf = [0u8; 128];
     let n = match stream.read(&mut buf) {
         Ok(n) => n,
         Err(_) => return ReadResult::Ignore,
@@ -93,7 +93,15 @@ fn read_command(stream: &mut UnixStream, focus_cache: &FocusCache) -> ReadResult
         Ok(value) => value.trim(),
         Err(_) => return ReadResult::Fallback,
     };
-    let command = raw.strip_prefix("action:").unwrap_or(raw);
+    let command = match raw.strip_prefix("action:") {
+        Some(action_id) => {
+            if !is_valid_action_id(action_id) {
+                return ReadResult::Fallback;
+            }
+            action_id
+        }
+        None => raw,
+    };
 
     match command {
         "show" | "open" => {
@@ -108,4 +116,13 @@ fn read_command(stream: &mut UnixStream, focus_cache: &FocusCache) -> ReadResult
         "kill" => ReadResult::Command(Command::Kill),
         _ => ReadResult::Fallback,
     }
+}
+
+fn is_valid_action_id(action: &str) -> bool {
+    !action.is_empty()
+        && action.len() <= 64
+        && !action.starts_with('-')
+        && action
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
