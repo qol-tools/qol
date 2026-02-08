@@ -135,13 +135,11 @@ impl Drop for Plugin {
 
 pub(crate) fn resolve_plugin_command_path(plugin_dir: &Path, command: &str) -> Option<PathBuf> {
     let command_path = Path::new(command);
-    let mut candidates = vec![plugin_dir.join(command_path)];
-
-    if command_path.components().count() == 1 {
-        let command_name = command_path.as_os_str();
-        candidates.push(plugin_dir.join("target").join("release").join(command_name));
-        candidates.push(plugin_dir.join("target").join("debug").join(command_name));
+    if command_path.components().count() != 1 {
+        return None;
     }
+
+    let mut candidates = vec![plugin_dir.join(command_path.as_os_str())];
 
     #[cfg(windows)]
     {

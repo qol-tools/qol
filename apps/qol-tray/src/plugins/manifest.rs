@@ -72,7 +72,7 @@ impl RuntimeConfig {
 }
 
 fn validate_runtime_command(command: &str) -> Result<()> {
-    validate_relative_path("runtime.command", command)
+    validate_command_name("runtime.command", command)
 }
 
 fn validate_runtime_actions(actions: &HashMap<String, Vec<String>>) -> Result<()> {
@@ -97,7 +97,7 @@ fn validate_runtime_actions(actions: &HashMap<String, Vec<String>>) -> Result<()
 
 impl DaemonConfig {
     pub fn validate(&self) -> Result<()> {
-        validate_relative_path("daemon.command", &self.command)?;
+        validate_command_name("daemon.command", &self.command)?;
         if let Some(socket) = &self.socket {
             validate_absolute_socket_path(socket)?;
         }
@@ -105,7 +105,7 @@ impl DaemonConfig {
     }
 }
 
-fn validate_relative_path(field: &str, value: &str) -> Result<()> {
+fn validate_command_name(field: &str, value: &str) -> Result<()> {
     if value.trim().is_empty() {
         bail!("{field} cannot be empty");
     }
@@ -118,24 +118,19 @@ fn validate_relative_path(field: &str, value: &str) -> Result<()> {
         bail!("{field} cannot contain null bytes");
     }
 
-    let path = Path::new(value);
-    if path.is_absolute() {
-        bail!("{field} must be a relative path");
+    if value.starts_with('-') {
+        bail!("{field} cannot start with '-'");
     }
 
-    let mut has_normal_component = false;
-    for component in path.components() {
-        match component {
-            Component::Prefix(_) | Component::RootDir | Component::ParentDir => {
-                bail!("{field} cannot escape the plugin directory");
-            }
-            Component::Normal(_) => has_normal_component = true,
-            Component::CurDir => {}
-        }
+    if value.len() > 64 {
+        bail!("{field} is too long");
     }
 
-    if !has_normal_component {
-        bail!("{field} must reference an executable path");
+    if !value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        bail!("{field} must contain only [A-Za-z0-9_-]");
     }
 
     Ok(())
@@ -427,7 +422,7 @@ mod tests {
 
             [daemon]
             enabled = true
-            command = "daemon.sh"
+            command = "daemon"
         "#;
 
         let manifest: PluginManifest = toml::from_str(toml).unwrap();
@@ -444,7 +439,7 @@ mod tests {
         assert!(manifest.daemon.is_some());
         let daemon = manifest.daemon.unwrap();
         assert!(daemon.enabled);
-        assert_eq!(daemon.command, "daemon.sh");
+        assert_eq!(daemon.command, "daemon");
         assert!(daemon.socket.is_none());
     }
 
@@ -482,13 +477,13 @@ mod tests {
             items = []
 
             [runtime]
-            command = "run.sh"
+            command = "launcher"
             actions = { run = ["show"], settings = ["config"] }
         "#;
 
         let manifest: PluginManifest = toml::from_str(toml).unwrap();
         let runtime = manifest.runtime.unwrap();
-        assert_eq!(runtime.command, "run.sh");
+        assert_eq!(runtime.command, "launcher");
         let actions = runtime.actions.unwrap();
         assert_eq!(actions["run"], vec!["show"]);
         assert_eq!(actions["settings"], vec!["config"]);
@@ -507,12 +502,12 @@ mod tests {
             items = []
 
             [runtime]
-            command = "run.sh"
+            command = "launcher"
         "#;
 
         let manifest: PluginManifest = toml::from_str(toml).unwrap();
         let runtime = manifest.runtime.unwrap();
-        assert_eq!(runtime.command, "run.sh");
+        assert_eq!(runtime.command, "launcher");
         assert!(runtime.actions.is_none());
     }
 
@@ -530,7 +525,7 @@ mod tests {
 
             [daemon]
             enabled = true
-            command = "daemon.sh"
+            command = "daemon"
             socket = "/tmp/qol-p.sock"
         "#;
 
@@ -625,7 +620,7 @@ mod tests {
             items = []
 
             [runtime]
-            command = "run.sh"
+            command = "launcher"
             actions = { "--bad" = ["show"] }
         "#;
 
@@ -647,12 +642,56 @@ mod tests {
 
             [daemon]
             enabled = true
-            command = "daemon.sh"
+            command = "daemon"
             socket = "qol-p.sock"
         "#;
 
         let manifest: PluginManifest = toml::from_str(toml).unwrap();
         assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_script_runtime_command() {
+        let toml = r#"
+            [plugin]
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [runtime]
+            command = "run.sh"
+        "#;
+
+        let manifest: PluginManifest = toml::from_str(toml).unwrap();
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn validate_accepts_binary_command_names() {
+        let toml = r#"
+            [plugin]
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [runtime]
+            command = "window_actions_2"
+
+            [daemon]
+            enabled = true
+            command = "pointzerver"
+        "#;
+
+        let manifest: PluginManifest = toml::from_str(toml).unwrap();
+        assert!(manifest.validate().is_ok());
     }
 
     #[test]
