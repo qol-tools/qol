@@ -2,6 +2,7 @@ pub mod manifest;
 pub mod loader;
 pub mod manager;
 pub mod config;
+pub mod action_executor;
 pub mod action_transport;
 
 pub use manifest::{PluginManifest, MenuItem, ActionType, RuntimeConfig};

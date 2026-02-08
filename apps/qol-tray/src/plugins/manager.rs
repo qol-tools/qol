@@ -1,5 +1,4 @@
-use super::{Plugin, PluginLoader};
-use crate::hotkeys::kill_all_plugin_processes;
+use super::{action_executor::kill_all_plugin_processes, Plugin, PluginLoader};
 use crate::paths;
 use anyhow::Result;
 use std::collections::HashMap;
