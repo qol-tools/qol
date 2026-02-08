@@ -23,6 +23,12 @@ Install via qol-tray Plugin Store, or manually:
 git clone https://github.com/qol-tools/plugin-pointz ~/.config/qol-tray/plugins/plugin-pointz
 ```
 
+For linked dev setups, run:
+
+```bash
+make dev
+```
+
 ## Usage
 
 1. The daemon starts automatically with qol-tray
