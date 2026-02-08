@@ -11,6 +11,7 @@ actions = { open = ["open"] }
 [daemon]
 enabled = true
 command = "launcher"
+socket = "/tmp/qol-launcher.sock"
 
 [menu]
 label = "Launcher"
