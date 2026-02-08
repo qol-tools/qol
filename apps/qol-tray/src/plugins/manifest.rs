@@ -53,6 +53,9 @@ impl PluginManifest {
         if let Some(runtime) = &self.runtime {
             runtime.validate()?;
         }
+        if let Some(daemon) = &self.daemon {
+            daemon.validate()?;
+        }
 
         Ok(())
     }
@@ -69,39 +72,7 @@ impl RuntimeConfig {
 }
 
 fn validate_runtime_command(command: &str) -> Result<()> {
-    if command.trim().is_empty() {
-        bail!("runtime.command cannot be empty");
-    }
-
-    if command.trim() != command {
-        bail!("runtime.command cannot have leading or trailing whitespace");
-    }
-
-    if command.contains('\0') {
-        bail!("runtime.command cannot contain null bytes");
-    }
-
-    let path = Path::new(command);
-    if path.is_absolute() {
-        bail!("runtime.command must be a relative path");
-    }
-
-    let mut has_normal_component = false;
-    for component in path.components() {
-        match component {
-            Component::Prefix(_) | Component::RootDir | Component::ParentDir => {
-                bail!("runtime.command cannot escape the plugin directory");
-            }
-            Component::Normal(_) => has_normal_component = true,
-            Component::CurDir => {}
-        }
-    }
-
-    if !has_normal_component {
-        bail!("runtime.command must reference an executable path");
-    }
-
-    Ok(())
+    validate_relative_path("runtime.command", command)
 }
 
 fn validate_runtime_actions(actions: &HashMap<String, Vec<String>>) -> Result<()> {
@@ -119,6 +90,88 @@ fn validate_runtime_actions(actions: &HashMap<String, Vec<String>>) -> Result<()
                 bail!("runtime.actions for {:?} contains null bytes", action_id);
             }
         }
+    }
+
+    Ok(())
+}
+
+impl DaemonConfig {
+    pub fn validate(&self) -> Result<()> {
+        validate_relative_path("daemon.command", &self.command)?;
+        if let Some(socket) = &self.socket {
+            validate_absolute_socket_path(socket)?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_relative_path(field: &str, value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        bail!("{field} cannot be empty");
+    }
+
+    if value.trim() != value {
+        bail!("{field} cannot have leading or trailing whitespace");
+    }
+
+    if value.contains('\0') {
+        bail!("{field} cannot contain null bytes");
+    }
+
+    let path = Path::new(value);
+    if path.is_absolute() {
+        bail!("{field} must be a relative path");
+    }
+
+    let mut has_normal_component = false;
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir | Component::ParentDir => {
+                bail!("{field} cannot escape the plugin directory");
+            }
+            Component::Normal(_) => has_normal_component = true,
+            Component::CurDir => {}
+        }
+    }
+
+    if !has_normal_component {
+        bail!("{field} must reference an executable path");
+    }
+
+    Ok(())
+}
+
+fn validate_absolute_socket_path(path_value: &str) -> Result<()> {
+    if path_value.trim().is_empty() {
+        bail!("daemon.socket cannot be empty");
+    }
+
+    if path_value.trim() != path_value {
+        bail!("daemon.socket cannot have leading or trailing whitespace");
+    }
+
+    if path_value.contains('\0') {
+        bail!("daemon.socket cannot contain null bytes");
+    }
+
+    let path = Path::new(path_value);
+    if !path.is_absolute() {
+        bail!("daemon.socket must be an absolute path");
+    }
+
+    let mut has_normal_component = false;
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                bail!("daemon.socket cannot contain parent directory traversal")
+            }
+            Component::Normal(_) => has_normal_component = true,
+            Component::Prefix(_) | Component::RootDir | Component::CurDir => {}
+        }
+    }
+
+    if !has_normal_component {
+        bail!("daemon.socket must reference a socket file path");
     }
 
     Ok(())
@@ -209,6 +262,8 @@ pub enum ActionType {
 pub struct DaemonConfig {
     pub enabled: bool,
     pub command: String,
+    #[serde(default)]
+    pub socket: Option<String>,
 }
 
 #[cfg(test)]
@@ -390,6 +445,7 @@ mod tests {
         let daemon = manifest.daemon.unwrap();
         assert!(daemon.enabled);
         assert_eq!(daemon.command, "daemon.sh");
+        assert!(daemon.socket.is_none());
     }
 
     #[test]
@@ -458,6 +514,29 @@ mod tests {
         let runtime = manifest.runtime.unwrap();
         assert_eq!(runtime.command, "run.sh");
         assert!(runtime.actions.is_none());
+    }
+
+    #[test]
+    fn parse_daemon_socket_config() {
+        let toml = r#"
+            [plugin]
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [daemon]
+            enabled = true
+            command = "daemon.sh"
+            socket = "/tmp/qol-p.sock"
+        "#;
+
+        let manifest: PluginManifest = toml::from_str(toml).unwrap();
+        let daemon = manifest.daemon.unwrap();
+        assert_eq!(daemon.socket, Some("/tmp/qol-p.sock".to_string()));
     }
 
     #[test]
@@ -548,6 +627,28 @@ mod tests {
             [runtime]
             command = "run.sh"
             actions = { "--bad" = ["show"] }
+        "#;
+
+        let manifest: PluginManifest = toml::from_str(toml).unwrap();
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_relative_daemon_socket() {
+        let toml = r#"
+            [plugin]
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [daemon]
+            enabled = true
+            command = "daemon.sh"
+            socket = "qol-p.sock"
         "#;
 
         let manifest: PluginManifest = toml::from_str(toml).unwrap();

@@ -2,6 +2,7 @@ pub mod manifest;
 pub mod loader;
 pub mod manager;
 pub mod config;
+pub mod action_transport;
 
 pub use manifest::{PluginManifest, MenuItem, ActionType, RuntimeConfig};
 pub use loader::PluginLoader;
@@ -50,6 +51,10 @@ impl Plugin {
             .stdin(Stdio::null())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit());
+
+        if let Some(socket) = daemon_config.socket.as_deref() {
+            cmd.env("QOL_TRAY_DAEMON_SOCKET", socket);
+        }
 
         #[cfg(feature = "dev")]
         cmd.env("RUST_LOG", "debug");

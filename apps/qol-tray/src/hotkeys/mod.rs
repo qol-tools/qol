@@ -268,8 +268,10 @@ fn try_reload_hotkeys(reload_rx: &mpsc::Receiver<()>, manager: &mut HotkeyManage
 
 struct ResolvedAction {
     plugin_id: String,
+    action_id: String,
     plugin_dir: PathBuf,
-    command_path: PathBuf,
+    daemon_socket: Option<PathBuf>,
+    command_path: Option<PathBuf>,
     args: Vec<String>,
 }
 
@@ -317,52 +319,112 @@ fn resolve_action(plugin: &Plugin, action: &str) -> Option<ResolvedAction> {
         return None;
     }
 
-    let runtime = plugin.manifest.runtime.as_ref().or_else(|| {
-        log::warn!("Plugin {} has no runtime config", plugin.id);
-        None
-    })?;
+    let daemon_socket = plugin
+        .manifest
+        .daemon
+        .as_ref()
+        .and_then(|d| if d.enabled { d.socket.as_ref() } else { None })
+        .map(PathBuf::from);
 
-    let command = std::path::Path::new(&runtime.command);
-    let has_traversal = command.is_absolute()
-        || command
-            .components()
-            .any(|c| c == std::path::Component::ParentDir);
-    if has_traversal {
-        log::warn!(
-            "Plugin {} runtime command escapes plugin directory: {:?}",
-            plugin.id,
-            runtime.command
-        );
-        return None;
-    }
-    let command_path = plugin.path.join(command);
-
-    let args = match &runtime.actions {
-        Some(map) => match map.get(action) {
-            Some(args) => args.clone(),
-            None => {
+    let (command_path, args) = match plugin.manifest.runtime.as_ref() {
+        Some(runtime) => {
+            let command = std::path::Path::new(&runtime.command);
+            let has_traversal = command.is_absolute()
+                || command
+                    .components()
+                    .any(|c| c == std::path::Component::ParentDir);
+            if has_traversal {
                 log::warn!(
-                    "Plugin {} has no action mapping for {:?}",
+                    "Plugin {} runtime command escapes plugin directory: {:?}",
                     plugin.id,
-                    action
+                    runtime.command
                 );
                 return None;
             }
-        },
-        None => vec![action.to_string()],
+            let command_path = plugin.path.join(command);
+            let args = match &runtime.actions {
+                Some(map) => match map.get(action) {
+                    Some(args) => args.clone(),
+                    None => {
+                        log::warn!(
+                            "Plugin {} has no action mapping for {:?}",
+                            plugin.id,
+                            action
+                        );
+                        return None;
+                    }
+                },
+                None => vec![action.to_string()],
+            };
+            (Some(command_path), args)
+        }
+        None => (None, vec![]),
     };
+
+    if daemon_socket.is_none() && command_path.is_none() {
+        log::warn!(
+            "Plugin {} has neither daemon socket nor runtime config",
+            plugin.id
+        );
+        return None;
+    }
 
     Some(ResolvedAction {
         plugin_id: plugin.id.clone(),
+        action_id: action.to_string(),
         plugin_dir: plugin.path.clone(),
+        daemon_socket,
         command_path,
         args,
     })
 }
 
 fn execute_plugin_action(resolved: &ResolvedAction) {
-    log::info!("Executing: {:?} {:?}", resolved.command_path, resolved.args);
-    let result = std::process::Command::new(&resolved.command_path)
+    if let Some(socket_path) = &resolved.daemon_socket {
+        match crate::plugins::action_transport::dispatch_daemon_action(
+            socket_path,
+            &resolved.action_id,
+        ) {
+            crate::plugins::action_transport::DaemonActionDispatch::Handled => {
+                log::info!(
+                    "Plugin action handled via daemon socket: {}::{}",
+                    resolved.plugin_id,
+                    resolved.action_id
+                );
+                return;
+            }
+            crate::plugins::action_transport::DaemonActionDispatch::Fallback => {
+                log::info!(
+                    "Daemon requested runtime fallback for {}::{}",
+                    resolved.plugin_id,
+                    resolved.action_id
+                );
+            }
+            crate::plugins::action_transport::DaemonActionDispatch::Unavailable => {
+                log::debug!(
+                    "Daemon socket unavailable for {}::{}",
+                    resolved.plugin_id,
+                    resolved.action_id
+                );
+            }
+        }
+    }
+
+    let Some(command_path) = &resolved.command_path else {
+        log::warn!(
+            "No runtime fallback configured for {}::{}",
+            resolved.plugin_id,
+            resolved.action_id
+        );
+        return;
+    };
+
+    log::info!(
+        "Executing runtime fallback: {:?} {:?}",
+        command_path,
+        resolved.args
+    );
+    let result = std::process::Command::new(command_path)
         .args(&resolved.args)
         .current_dir(&resolved.plugin_dir)
         .stdout(std::process::Stdio::null())
@@ -373,7 +435,7 @@ fn execute_plugin_action(resolved: &ResolvedAction) {
         Ok(child) => {
             let pid = child.id();
             track_action_process(&resolved.plugin_id, pid);
-            log::info!("Plugin action started (pid: {})", pid);
+            log::info!("Plugin fallback action started (pid: {})", pid);
         }
         Err(e) => log::error!("Failed to execute plugin action: {}", e),
     }
