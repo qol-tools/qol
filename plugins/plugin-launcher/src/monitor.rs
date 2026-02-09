@@ -248,18 +248,10 @@ fn x11_focus_listener(state: Arc<Mutex<InputState>>, monitors: Vec<Bounds<Pixels
         let key_mask = xinput::XIEventMask::RAW_KEY_PRESS | xinput::XIEventMask::RAW_KEY_RELEASE;
         let click_mask = xinput::XIEventMask::RAW_BUTTON_PRESS;
         let input_mask = key_mask | click_mask;
-        let masks = [
-            xinput::EventMask {
-                // XIAllMasterDevices
-                deviceid: 1,
-                mask: vec![input_mask],
-            },
-            xinput::EventMask {
-                // XIAllDevices
-                deviceid: 0,
-                mask: vec![input_mask],
-            },
-        ];
+        let masks = [xinput::EventMask {
+            deviceid: 1, // XIAllMasterDevices
+            mask: vec![input_mask],
+        }];
         xinput::xi_select_events(&conn, root, &masks).ok();
         #[cfg(debug_assertions)]
         eprintln!("[monitor] xinput2 initialized");
@@ -286,6 +278,7 @@ fn x11_focus_listener(state: Arc<Mutex<InputState>>, monitors: Vec<Bounds<Pixels
                         post_launcher_started_at = Some(now);
                         post_launcher_guard_until =
                             Some(now + Duration::from_millis(POST_LAUNCHER_FOCUS_GUARD_MS));
+                        last_alt_tab_at = None;
                         #[cfg(debug_assertions)]
                         eprintln!("[monitor] launcher active; focus guard enabled");
                         continue;
@@ -294,6 +287,7 @@ fn x11_focus_listener(state: Arc<Mutex<InputState>>, monitors: Vec<Bounds<Pixels
                     if post_launcher_guard_until.is_some_and(|until| now >= until) {
                         post_launcher_started_at = None;
                         post_launcher_guard_until = None;
+                        last_alt_tab_at = None;
                     }
 
                     let alt_tab_recent = last_alt_tab_at.is_some_and(|at| {
