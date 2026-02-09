@@ -74,7 +74,19 @@ fn send_raw(msg: &[u8]) -> bool {
     let Ok(mut stream) = UnixStream::connect(&socket_path) else {
         return false;
     };
-    stream.write_all(msg).is_ok()
+    let timeout = std::time::Duration::from_millis(500);
+    let _ = stream.set_write_timeout(Some(timeout));
+    let _ = stream.set_read_timeout(Some(timeout));
+    if stream.write_all(msg).is_err() {
+        return false;
+    }
+    let mut buf = [0u8; 128];
+    match stream.read(&mut buf) {
+        Ok(n) if n > 0 => std::str::from_utf8(&buf[..n])
+            .ok()
+            .is_some_and(|s| s.trim().starts_with("handled")),
+        _ => false,
+    }
 }
 
 fn socket_path() -> std::path::PathBuf {
