@@ -26,18 +26,16 @@ impl Daemon {
         let events = Arc::clone(&self.events);
 
         {
-            let guard = state.discovery.read().unwrap();
+            let mut guard = state.discovery.write().unwrap();
             if guard.status == DiscoveryStatus::Discovering {
                 return;
             }
+            guard.status = DiscoveryStatus::Discovering;
         }
 
+        events.send(DaemonEvent::DiscoveryStarted);
+
         std::thread::spawn(move || {
-            {
-                let mut guard = state.discovery.write().unwrap();
-                guard.status = DiscoveryStatus::Discovering;
-            }
-            events.send(DaemonEvent::DiscoveryStarted);
 
             let config = crate::dev::DevConfig::load().unwrap_or_default();
             let discovered = crate::dev::discover_plugins(&config, &plugins_dir);
