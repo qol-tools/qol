@@ -15,6 +15,9 @@ pub struct DiscoveredPlugin {
 }
 
 pub fn discover_plugins(config: &DevConfig, plugins_dir: &Path) -> Vec<DiscoveredPlugin> {
+    let dev_links = crate::dev::linking::load_dev_links(
+        plugins_dir.parent().unwrap_or(plugins_dir),
+    );
     let search_paths = config.effective_search_paths();
     let plugin_dirs = find_plugin_dirs(&search_paths);
 
@@ -32,7 +35,7 @@ pub fn discover_plugins(config: &DevConfig, plugins_dir: &Path) -> Vec<Discovere
         }
 
         if let Some(mut p) = try_parse_plugin_dir(&dir) {
-            let (linked, installed) = check_install_status(plugins_dir, &p.id, &p.path);
+            let (linked, installed) = check_install_status(plugins_dir, &dev_links, &p.id, &p.path);
             p.already_linked = linked;
             p.installed_not_linked = installed;
             if !p.already_linked {
@@ -133,26 +136,25 @@ fn read_plugin_name(toml_path: &Path) -> Option<String> {
     None
 }
 
-fn check_install_status(plugins_dir: &Path, id: &str, target: &str) -> (bool, bool) {
-    let link_path = plugins_dir.join(id);
+fn check_install_status(
+    plugins_dir: &Path,
+    dev_links: &std::collections::HashMap<String, PathBuf>,
+    id: &str,
+    target: &str,
+) -> (bool, bool) {
+    if let Some(linked_path) = dev_links.get(id) {
+        let target_path = Path::new(target);
+        let is_same = linked_path == target_path
+            || linked_path.canonicalize().ok() == target_path.canonicalize().ok();
+        return (is_same, false);
+    }
 
-    let Ok(meta) = std::fs::symlink_metadata(&link_path) else {
-        return (false, false);
-    };
-
-    if !meta.file_type().is_symlink() {
+    let install_path = plugins_dir.join(id);
+    if install_path.exists() {
         return (false, true);
     }
 
-    let Ok(resolved) = std::fs::read_link(&link_path) else {
-        return (false, true);
-    };
-
-    let target_path = Path::new(target);
-    let is_linked_to_target = resolved == target_path
-        || resolved.canonicalize().ok() == target_path.canonicalize().ok();
-
-    (is_linked_to_target, !is_linked_to_target)
+    (false, false)
 }
 
 #[cfg(test)]

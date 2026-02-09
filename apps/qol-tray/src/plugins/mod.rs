@@ -4,6 +4,7 @@ pub mod manager;
 pub mod config;
 pub mod action_executor;
 pub mod action_transport;
+pub mod resolver;
 
 pub use manifest::{ActionType, MenuItem, PluginManifest};
 pub use loader::PluginLoader;
@@ -69,20 +70,20 @@ impl Plugin {
 
         let mut child = cmd.spawn()?;
 
-        std::thread::sleep(std::time::Duration::from_millis(100));
-
-        match child.try_wait()? {
-            Some(status) if !status.success() => {
-                let stderr = child.stderr.take()
-                    .map(|mut s| {
-                        let mut buf = String::new();
-                        std::io::Read::read_to_string(&mut s, &mut buf).ok();
-                        buf
-                    })
-                    .unwrap_or_default();
-                anyhow::bail!("Daemon exited immediately with {}: {}", status, stderr.trim());
+        if let Some(socket) = daemon_config.socket.as_deref() {
+            if !wait_for_socket(socket, &mut child) {
+                let _ = child.kill();
+                let _ = child.wait();
+                anyhow::bail!("Daemon for {} failed to bind socket within timeout", self.id);
             }
-            _ => {}
+        } else {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            match child.try_wait()? {
+                Some(status) if !status.success() => {
+                    anyhow::bail!("Daemon for {} exited immediately with {}", self.id, status);
+                }
+                _ => {}
+            }
         }
 
         self.daemon_process = Some(child);
@@ -131,6 +132,26 @@ impl Drop for Plugin {
     fn drop(&mut self) {
         let _ = self.stop_daemon();
     }
+}
+
+fn wait_for_socket(socket_path: &str, child: &mut Child) -> bool {
+    let path = Path::new(socket_path);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let poll_interval = std::time::Duration::from_millis(50);
+
+    while std::time::Instant::now() < deadline {
+        if let Ok(Some(status)) = child.try_wait() {
+            log::error!("Daemon exited early with {}", status);
+            return false;
+        }
+        if path.exists() {
+            if std::os::unix::net::UnixStream::connect(path).is_ok() {
+                return true;
+            }
+        }
+        std::thread::sleep(poll_interval);
+    }
+    false
 }
 
 pub(crate) fn resolve_plugin_command_path(plugin_dir: &Path, command: &str) -> Option<PathBuf> {

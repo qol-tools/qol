@@ -548,7 +548,8 @@ async fn reload_plugins(State(state): State<AppState>) -> impl IntoResponse {
 
     state.daemon.events.send(DaemonEvent::BuildStarted);
 
-    let build_results = dev::build_linked_plugins(&state.plugins_dir);
+    let dev_links = config_dir_then(|d| dev::load_dev_links(d));
+    let build_results = dev::build_linked_plugins(&dev_links);
     let results: Vec<BuildResultInfo> = build_results
         .into_iter()
         .map(|r| BuildResultInfo {
@@ -775,10 +776,28 @@ async fn set_hotkeys(body: axum::body::Bytes) -> impl IntoResponse {
 }
 
 #[cfg(feature = "dev")]
+fn config_dir_then<T>(f: impl FnOnce(&std::path::Path) -> T) -> T
+where
+    T: Default,
+{
+    match crate::paths::config_dir() {
+        Ok(dir) => f(&dir),
+        Err(e) => {
+            log::error!("Failed to determine config directory: {}", e);
+            T::default()
+        }
+    }
+}
+
+#[cfg(feature = "dev")]
 async fn list_linked_plugins(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
 ) -> Result<Json<Vec<dev::LinkedPlugin>>, StatusCode> {
-    dev::list_linked_plugins(&state.plugins_dir)
+    let config_dir = crate::paths::config_dir().map_err(|e| {
+        log::error!("Failed to determine config directory: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    dev::list_linked_plugins(&config_dir)
         .map(Json)
         .map_err(|e| {
             log::error!("Failed to list linked plugins: {}", e);
@@ -791,12 +810,19 @@ async fn create_link(
     State(state): State<AppState>,
     Json(req): Json<dev::LinkRequest>,
 ) -> impl IntoResponse {
+    let config_dir = match crate::paths::config_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            log::error!("Failed to determine config directory: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Config dir unavailable".to_string()).into_response();
+        }
+    };
     let source = std::path::Path::new(&req.path);
 
-    match dev::create_link(source, &state.plugins_dir) {
+    match dev::create_link(source, &config_dir) {
         Ok(_) => {
             state.daemon.start_discovery(state.plugins_dir.clone());
-            (StatusCode::OK, "Link created").into_response()
+            (StatusCode::OK, "Link created".to_string()).into_response()
         }
         Err(e) if e.contains("Already linked") => (StatusCode::CONFLICT, e).into_response(),
         Err(e) if e.contains("does not exist") || e.contains("No plugin.toml") => {
@@ -818,7 +844,15 @@ async fn delete_link(
         return (StatusCode::BAD_REQUEST, "Invalid plugin ID".to_string()).into_response();
     }
 
-    match dev::remove_link(&id, &state.plugins_dir) {
+    let config_dir = match crate::paths::config_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            log::error!("Failed to determine config directory: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Config dir unavailable".to_string()).into_response();
+        }
+    };
+
+    match dev::remove_link(&id, &config_dir) {
         Ok(()) => {
             state.daemon.start_discovery(state.plugins_dir.clone());
             (StatusCode::OK, "Unlinked".to_string()).into_response()
