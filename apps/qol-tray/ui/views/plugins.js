@@ -126,10 +126,10 @@ function renderGrid() {
                 <div class="plugin-name">${plugin.name}</div>
                 ${plugin.update_available ? `
                     <button class="plugin-update ${isUpdating ? 'updating' : ''}" aria-label="Update plugin" ${isUpdating ? 'disabled' : ''}>
-                        ${isUpdating ? '↻' : '↑'} ${plugin.available_version}
+                        ${isUpdating ? '<span class="refresh-btn spinning"></span>' : `↑ ${plugin.available_version}`}
                     </button>
                 ` : ''}
-                <button class="plugin-cog" aria-label="Plugin options">⚙</button>
+                <button class="plugin-cog" aria-label="Plugin options"><svg width="4" height="16" viewBox="0 0 4 16" fill="currentColor"><circle cx="2" cy="2" r="2"/><circle cx="2" cy="8" r="2"/><circle cx="2" cy="14" r="2"/></svg></button>
                 <div class="plugin-context-menu">
                     ${plugin.update_available ? '<button class="context-update">Update</button>' : ''}
                     <button class="context-delete">Delete</button>
@@ -436,6 +436,8 @@ export function onFocus() {
 }
 
 export function onBlur() {
+    closeAllContextMenus();
+    closeConfirmModal();
     unsubscribe?.();
     unsubscribe = null;
     unsubscribeInstalling?.();
