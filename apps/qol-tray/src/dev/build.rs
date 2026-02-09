@@ -1,5 +1,6 @@
 use serde::Serialize;
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug, Clone, Serialize)]
@@ -9,39 +10,12 @@ pub struct BuildResult {
     pub output: String,
 }
 
-pub fn build_linked_plugins(plugins_dir: &Path) -> Vec<BuildResult> {
-    let mut results = Vec::new();
-
-    let Ok(entries) = std::fs::read_dir(plugins_dir) else {
-        return results;
-    };
-
-    for entry in entries.filter_map(|e| e.ok()) {
-        let path = entry.path();
-        let plugin_id = entry.file_name().to_string_lossy().to_string();
-
-        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
-            continue;
-        };
-
-        if !metadata.file_type().is_symlink() {
-            continue;
-        }
-
-        let target = match std::fs::read_link(&path) {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
-
-        if !target.join("Makefile").exists() {
-            continue;
-        }
-
-        let result = build_plugin(&plugin_id, &target);
-        results.push(result);
-    }
-
-    results
+pub fn build_linked_plugins(dev_links: &HashMap<String, PathBuf>) -> Vec<BuildResult> {
+    dev_links
+        .iter()
+        .filter(|(_, path)| path.join("Makefile").exists())
+        .map(|(id, path)| build_plugin(id, path))
+        .collect()
 }
 
 fn build_plugin(plugin_id: &str, path: &Path) -> BuildResult {

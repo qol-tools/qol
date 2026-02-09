@@ -15,6 +15,8 @@ impl PluginInstaller {
     }
 
     pub async fn install(&self, repo_url: &str, plugin_id: &str) -> Result<()> {
+        Self::check_dev_link_conflict(plugin_id)?;
+
         let target_dir = self.plugins_dir.join(plugin_id);
 
         if target_dir.exists() {
@@ -199,6 +201,8 @@ impl PluginInstaller {
     }
 
     pub async fn update(&self, plugin_id: &str) -> Result<()> {
+        Self::check_dev_link_conflict(plugin_id)?;
+
         let plugin_dir = self.plugins_dir.join(plugin_id);
 
         if !plugin_dir.exists() {
@@ -309,6 +313,24 @@ impl PluginInstaller {
         }
 
         Ok("master".to_string())
+    }
+
+    #[cfg(feature = "dev")]
+    fn check_dev_link_conflict(plugin_id: &str) -> Result<()> {
+        let config_dir = crate::paths::config_dir()?;
+        let dev_links = crate::dev::load_dev_links(&config_dir);
+        if dev_links.contains_key(plugin_id) {
+            anyhow::bail!(
+                "Cannot proceed — {} is dev-linked. Unlink first.",
+                plugin_id
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "dev"))]
+    fn check_dev_link_conflict(_plugin_id: &str) -> Result<()> {
+        Ok(())
     }
 
     pub async fn uninstall(&self, plugin_id: &str) -> Result<()> {

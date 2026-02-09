@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LinkedPlugin {
     pub id: String,
     pub name: String,
-    pub is_symlink: bool,
-    pub target: Option<String>,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -14,57 +14,45 @@ pub struct LinkRequest {
     pub path: String,
 }
 
-pub fn list_linked_plugins(plugins_dir: &Path) -> Result<Vec<LinkedPlugin>, String> {
-    if !plugins_dir.exists() {
-        return Ok(vec![]);
-    }
+pub fn load_dev_links(config_dir: &Path) -> HashMap<String, PathBuf> {
+    let path = config_dir.join("dev-links.json");
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return HashMap::new();
+    };
+    serde_json::from_str(&content).unwrap_or_default()
+}
 
-    let entries = std::fs::read_dir(plugins_dir)
-        .map_err(|e| format!("Failed to read plugins dir: {}", e))?;
+fn save_dev_links(config_dir: &Path, links: &HashMap<String, PathBuf>) -> Result<(), String> {
+    let path = config_dir.join("dev-links.json");
+    let tmp_path = config_dir.join(".dev-links.json.tmp");
+    let content = serde_json::to_string_pretty(links)
+        .map_err(|e| format!("Failed to serialize dev-links: {}", e))?;
+    std::fs::write(&tmp_path, &content)
+        .map_err(|e| format!("Failed to write dev-links temp file: {}", e))?;
+    std::fs::rename(&tmp_path, &path)
+        .map_err(|e| format!("Failed to finalize dev-links.json: {}", e))
+}
 
-    let mut plugins = Vec::new();
-    for entry in entries.filter_map(|e| e.ok()) {
-        let path = entry.path();
+pub fn list_linked_plugins(config_dir: &Path) -> Result<Vec<LinkedPlugin>, String> {
+    let links = load_dev_links(config_dir);
 
-        if path.extension().is_some_and(|ext| ext == "backup") {
-            continue;
-        }
-
-        let id = entry.file_name().to_string_lossy().to_string();
-
-        let metadata = match std::fs::symlink_metadata(&path) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-
-        let is_symlink = metadata.file_type().is_symlink();
-        let target = if is_symlink {
-            std::fs::read_link(&path)
-                .ok()
-                .map(|p| p.to_string_lossy().to_string())
-        } else {
-            None
-        };
-
-        let name = std::fs::read_to_string(path.join("plugin.toml"))
-            .ok()
-            .and_then(|s| toml::from_str::<crate::plugins::PluginManifest>(&s).ok())
-            .map(|m| m.plugin.name)
-            .unwrap_or_else(|| id.clone());
-
-        plugins.push(LinkedPlugin {
-            id,
-            name,
-            is_symlink,
-            target,
-        });
-    }
+    let mut plugins: Vec<LinkedPlugin> = links
+        .iter()
+        .map(|(id, path)| {
+            let name = read_plugin_name(&path.join("plugin.toml")).unwrap_or_else(|| id.clone());
+            LinkedPlugin {
+                id: id.clone(),
+                name,
+                source: path.to_string_lossy().to_string(),
+            }
+        })
+        .collect();
 
     plugins.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(plugins)
 }
 
-pub fn create_link(source: &Path, plugins_dir: &Path) -> Result<String, String> {
+pub fn create_link(source: &Path, config_dir: &Path) -> Result<String, String> {
     if !source.exists() {
         return Err("Source path does not exist".to_string());
     }
@@ -79,75 +67,137 @@ pub fn create_link(source: &Path, plugins_dir: &Path) -> Result<String, String> 
         .to_string_lossy()
         .to_string();
 
-    let link_path = plugins_dir.join(&plugin_id);
+    let mut links = load_dev_links(config_dir);
 
-    backup_existing_if_not_symlink(&link_path)?;
-    create_symlink(source, &link_path)
-        .map_err(|e| format!("Failed to create symlink: {}", e))?;
-
-    log::info!("Created plugin link: {} -> {:?}", plugin_id, source);
-    Ok(plugin_id)
-}
-
-pub fn remove_link(id: &str, plugins_dir: &Path) -> Result<(), String> {
-    let link_path = plugins_dir.join(id);
-
-    remove_symlink(&link_path)?;
-
-    if let Err(e) = restore_from_backup(&link_path) {
-        log::warn!("No backup to restore for {}: {}", id, e);
-    }
-
-    log::info!("Unlinked plugin: {}", id);
-    Ok(())
-}
-
-fn backup_existing_if_not_symlink(path: &Path) -> Result<(), String> {
-    let Ok(metadata) = std::fs::symlink_metadata(path) else {
-        return Ok(());
-    };
-
-    if metadata.file_type().is_symlink() {
+    if links.contains_key(&plugin_id) {
         return Err("Already linked".to_string());
     }
 
-    let backup_path = path.with_extension("backup");
-    if backup_path.exists() {
-        std::fs::remove_dir_all(&backup_path)
-            .map_err(|e| format!("Failed to remove old backup: {}", e))?;
-    }
+    links.insert(plugin_id.clone(), source.to_path_buf());
+    save_dev_links(config_dir, &links)?;
 
-    std::fs::rename(path, &backup_path).map_err(|e| format!("Failed to backup existing: {}", e))
+    log::info!("Created dev-link: {} -> {:?}", plugin_id, source);
+    Ok(plugin_id)
 }
 
-fn create_symlink(source: &Path, link: &Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(source, link)
+pub fn remove_link(id: &str, config_dir: &Path) -> Result<(), String> {
+    let mut links = load_dev_links(config_dir);
+
+    if links.remove(id).is_none() {
+        return Err("Plugin not dev-linked".to_string());
     }
-    #[cfg(windows)]
-    {
-        std::os::windows::fs::symlink_dir(source, link)
-    }
+
+    save_dev_links(config_dir, &links)?;
+    log::info!("Removed dev-link: {}", id);
+    Ok(())
 }
 
-fn remove_symlink(path: &Path) -> Result<(), String> {
-    let Ok(metadata) = std::fs::symlink_metadata(path) else {
-        return Err("Plugin not found".to_string());
-    };
-
-    if !metadata.file_type().is_symlink() {
-        return Err("Not a symlink - use uninstall instead".to_string());
-    }
-
-    std::fs::remove_file(path).map_err(|e| format!("Failed to remove link: {}", e))
+fn read_plugin_name(toml_path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(toml_path).ok()?;
+    let manifest: crate::plugins::PluginManifest = toml::from_str(&content).ok()?;
+    Some(manifest.plugin.name)
 }
 
-fn restore_from_backup(path: &Path) -> Result<(), String> {
-    let backup_path = path.with_extension("backup");
-    if !backup_path.exists() {
-        return Err("No backup exists".to_string());
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn write_plugin_toml(dir: &Path, name: &str) {
+        fs::write(
+            dir.join("plugin.toml"),
+            format!(
+                "[plugin]\nname = \"{}\"\ndescription = \"\"\nversion = \"1.0.0\"\n\n[menu]\nlabel = \"Test\"\nitems = []\n",
+                name
+            ),
+        )
+        .unwrap();
     }
 
-    std::fs::rename(&backup_path, path).map_err(|e| format!("Failed to restore backup: {}", e))
+    #[test]
+    fn load_dev_links_returns_empty_when_no_file() {
+        let tmp = TempDir::new().unwrap();
+        assert!(load_dev_links(tmp.path()).is_empty());
+    }
+
+    #[test]
+    fn create_and_load_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let source = tmp.path().join("my-plugin");
+        fs::create_dir(&source).unwrap();
+        write_plugin_toml(&source, "My Plugin");
+
+        let id = create_link(&source, tmp.path()).unwrap();
+        assert_eq!(id, "my-plugin");
+
+        let links = load_dev_links(tmp.path());
+        assert_eq!(links.len(), 1);
+        assert_eq!(links["my-plugin"], source);
+    }
+
+    #[test]
+    fn create_link_rejects_duplicate() {
+        let tmp = TempDir::new().unwrap();
+        let source = tmp.path().join("foo");
+        fs::create_dir(&source).unwrap();
+        write_plugin_toml(&source, "Foo");
+
+        create_link(&source, tmp.path()).unwrap();
+        let err = create_link(&source, tmp.path()).unwrap_err();
+        assert!(err.contains("Already linked"));
+    }
+
+    #[test]
+    fn create_link_rejects_missing_source() {
+        let tmp = TempDir::new().unwrap();
+        let err = create_link(Path::new("/nonexistent"), tmp.path()).unwrap_err();
+        assert!(err.contains("does not exist"));
+    }
+
+    #[test]
+    fn create_link_rejects_missing_toml() {
+        let tmp = TempDir::new().unwrap();
+        let source = tmp.path().join("no-toml");
+        fs::create_dir(&source).unwrap();
+
+        let err = create_link(&source, tmp.path()).unwrap_err();
+        assert!(err.contains("No plugin.toml"));
+    }
+
+    #[test]
+    fn remove_link_removes_entry() {
+        let tmp = TempDir::new().unwrap();
+        let source = tmp.path().join("foo");
+        fs::create_dir(&source).unwrap();
+        write_plugin_toml(&source, "Foo");
+
+        create_link(&source, tmp.path()).unwrap();
+        remove_link("foo", tmp.path()).unwrap();
+
+        assert!(load_dev_links(tmp.path()).is_empty());
+    }
+
+    #[test]
+    fn remove_link_rejects_unknown_id() {
+        let tmp = TempDir::new().unwrap();
+        let err = remove_link("nonexistent", tmp.path()).unwrap_err();
+        assert!(err.contains("not dev-linked"));
+    }
+
+    #[test]
+    fn list_linked_plugins_enriches_with_name() {
+        let tmp = TempDir::new().unwrap();
+        let source = tmp.path().join("foo");
+        fs::create_dir(&source).unwrap();
+        write_plugin_toml(&source, "Fancy Plugin");
+
+        create_link(&source, tmp.path()).unwrap();
+        let listed = list_linked_plugins(tmp.path()).unwrap();
+
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "foo");
+        assert_eq!(listed[0].name, "Fancy Plugin");
+        assert_eq!(listed[0].source, source.to_string_lossy());
+    }
 }

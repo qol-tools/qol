@@ -17,7 +17,22 @@ impl PluginManager {
     pub fn load_plugins(&mut self) -> Result<()> {
         kill_orphan_daemons();
 
-        let plugins = PluginLoader::load_all()?;
+        let plugins_dir = PluginLoader::ensure_plugin_dir()?;
+
+        #[cfg(feature = "dev")]
+        migrate_symlinks_to_registry(&plugins_dir);
+
+        let dev_links = load_dev_links_if_dev();
+        let resolved = super::resolver::resolve_all(&plugins_dir, &dev_links);
+
+        for r in &resolved {
+            log::info!("Resolved plugin: {} ({:?}) from {:?}", r.id, r.source, r.path);
+        }
+
+        let plugins = PluginLoader::load_resolved(&resolved)?;
+
+        clean_stale_sockets(&plugins);
+
         let mut pids = Vec::new();
 
         for mut plugin in plugins {
@@ -61,6 +76,19 @@ impl Default for PluginManager {
     }
 }
 
+#[cfg(feature = "dev")]
+fn load_dev_links_if_dev() -> HashMap<String, std::path::PathBuf> {
+    let Ok(config_dir) = paths::config_dir() else {
+        return HashMap::new();
+    };
+    crate::dev::load_dev_links(&config_dir)
+}
+
+#[cfg(not(feature = "dev"))]
+fn load_dev_links_if_dev() -> HashMap<String, std::path::PathBuf> {
+    HashMap::new()
+}
+
 fn daemon_pids_path() -> Option<std::path::PathBuf> {
     paths::config_dir().ok().map(|p| p.join(".daemon-pids"))
 }
@@ -89,6 +117,102 @@ fn kill_orphan_daemons() {
 
 #[cfg(not(unix))]
 fn kill_orphan_daemons() {}
+
+fn clean_stale_sockets(plugins: &[Plugin]) {
+    for plugin in plugins {
+        let Some(daemon) = &plugin.manifest.daemon else { continue };
+        if !daemon.enabled {
+            continue;
+        }
+        let Some(socket) = daemon.socket.as_deref() else { continue };
+        let path = std::path::Path::new(socket);
+        if !path.exists() {
+            continue;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::net::UnixStream;
+            if UnixStream::connect(path).is_ok() {
+                log::info!("Stale socket {} has a live listener, skipping", socket);
+                continue;
+            }
+        }
+        log::info!("Removing stale socket: {}", socket);
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+#[cfg(feature = "dev")]
+fn migrate_symlinks_to_registry(plugins_dir: &std::path::Path) {
+    let config_dir = match plugins_dir.parent() {
+        Some(d) => d,
+        None => return,
+    };
+
+    let dev_links_path = config_dir.join("dev-links.json");
+    if dev_links_path.exists() {
+        return;
+    }
+
+    let Ok(entries) = std::fs::read_dir(plugins_dir) else {
+        return;
+    };
+
+    let mut migrated = std::collections::HashMap::new();
+
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !meta.file_type().is_symlink() {
+            continue;
+        }
+        let Ok(target) = std::fs::read_link(&path) else {
+            continue;
+        };
+        let abs_target = if target.is_relative() {
+            match plugins_dir.join(&target).canonicalize() {
+                Ok(p) => p,
+                Err(_) => target,
+            }
+        } else {
+            target
+        };
+        let id = entry.file_name().to_string_lossy().to_string();
+        log::info!("Migrating symlink to dev-link: {} -> {:?}", id, abs_target);
+        migrated.insert(id, abs_target);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    if migrated.is_empty() {
+        return;
+    }
+
+    if let Ok(content) = serde_json::to_string_pretty(&migrated) {
+        let _ = std::fs::write(&dev_links_path, content);
+        log::info!("Migrated {} symlinks to dev-links.json", migrated.len());
+    }
+
+    for entry in std::fs::read_dir(plugins_dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "backup") {
+            let restored_name = path.with_extension("");
+            if !restored_name.exists() {
+                log::info!("Restoring backup: {:?}", path);
+                let _ = std::fs::rename(&path, &restored_name);
+            } else {
+                log::info!("Removing orphan backup: {:?}", path);
+                let _ = std::fs::remove_dir_all(&path);
+            }
+        }
+    }
+}
 
 fn save_daemon_pids(pids: &[u32]) {
     let Some(path) = daemon_pids_path() else { return };

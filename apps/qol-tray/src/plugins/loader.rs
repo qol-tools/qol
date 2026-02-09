@@ -22,11 +22,7 @@ impl PluginLoader {
         Ok(dir)
     }
 
-    pub fn load_all() -> Result<Vec<Plugin>> {
-        let plugin_dir = Self::ensure_plugin_dir()?;
-        Self::load_from_dir(&plugin_dir)
-    }
-
+    #[cfg(test)]
     pub fn load_from_dir(dir: &Path) -> Result<Vec<Plugin>> {
         if !dir.exists() {
             log::warn!("Plugin directory does not exist: {:?}", dir);
@@ -41,17 +37,34 @@ impl PluginLoader {
             .filter(|p| !p.extension().is_some_and(|ext| ext == "backup"))
             .collect();
 
+        let items: Vec<(String, PathBuf)> = paths
+            .into_iter()
+            .filter_map(|p| {
+                let id = p.file_name()?.to_str()?.to_string();
+                Some((id, p))
+            })
+            .collect();
+
+        Self::load_items(&items)
+    }
+
+    pub fn load_resolved(resolved: &[super::resolver::ResolvedPlugin]) -> Result<Vec<Plugin>> {
+        let items: Vec<(String, PathBuf)> = resolved
+            .iter()
+            .map(|r| (r.id.clone(), r.path.clone()))
+            .collect();
+
+        Self::load_items(&items)
+    }
+
+    fn load_items(items: &[(String, PathBuf)]) -> Result<Vec<Plugin>> {
         let mut plugins = Vec::new();
         let mut skipped_platform = 0usize;
         let mut invalid_manifest = 0usize;
         let mut missing_binaries = 0usize;
 
-        for path in &paths {
-            let plugin_dir_name = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("<unknown>");
-            match Self::load_plugin(path) {
+        for (id, path) in items {
+            match Self::load_plugin_with_id(id, path) {
                 Ok(plugin) => {
                     if !plugin.manifest.plugin.supports_current_platform() {
                         skipped_platform += 1;
@@ -74,7 +87,7 @@ impl PluginLoader {
                         missing_binaries += 1;
                         log::warn!(
                             "Skipping plugin {} (missing binary): {}",
-                            plugin_dir_name,
+                            id,
                             missing
                         );
                     } else {
@@ -87,7 +100,7 @@ impl PluginLoader {
 
         log::info!(
             "Plugin diagnostics: discovered={}, loaded={}, unsupported_platform={}, invalid={}, missing_binaries={}",
-            paths.len(),
+            items.len(),
             plugins.len(),
             skipped_platform,
             invalid_manifest,
@@ -96,7 +109,18 @@ impl PluginLoader {
         Ok(plugins)
     }
 
+    #[cfg(test)]
     pub fn load_plugin(path: &Path) -> Result<Plugin> {
+        let id = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .context("Invalid plugin directory name")?
+            .to_string();
+
+        Self::load_plugin_with_id(&id, path)
+    }
+
+    pub fn load_plugin_with_id(id: &str, path: &Path) -> Result<Plugin> {
         let manifest_path = path.join("plugin.toml");
 
         if !manifest_path.exists() {
@@ -112,17 +136,11 @@ impl PluginLoader {
             .validate()
             .context("Invalid plugin.toml contract")?;
 
-        let id = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .context("Invalid plugin directory name")?
-            .to_string();
-
         if manifest.plugin.supports_current_platform() {
-            super::validate_execution_contract(&id, &manifest, path)?;
+            super::validate_execution_contract(id, &manifest, path)?;
         }
 
-        Ok(Plugin::new(id, manifest, path.to_path_buf()))
+        Ok(Plugin::new(id.to_string(), manifest, path.to_path_buf()))
     }
 }
 
@@ -320,25 +338,6 @@ command = "daemon-plugin"
             let plugin = PluginLoader::load_plugin(&plugin_dir).unwrap();
             assert_eq!(plugin.id, name, "plugin name: {}", name);
         }
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn load_from_dir_follows_symlinks() {
-        use std::os::unix::fs::symlink;
-
-        let temp_dir = TempDir::new().unwrap();
-        let source_dir = TempDir::new().unwrap();
-
-        fs::write(source_dir.path().join("plugin.toml"), VALID_MANIFEST).unwrap();
-
-        let link_path = temp_dir.path().join("symlinked-plugin");
-        symlink(source_dir.path(), &link_path).unwrap();
-
-        let result = PluginLoader::load_from_dir(temp_dir.path()).unwrap();
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].id, "symlinked-plugin");
     }
 
     #[test]
