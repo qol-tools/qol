@@ -107,30 +107,16 @@ function updateView() {
 
     for (const p of state.plugins) {
         const existing = unified.get(p.id);
-        if (p.is_symlink) {
-            if (existing) {
-                existing.status = 'linked';
-                existing.path = p.target || existing.path;
-            } else {
-                unified.set(p.id, {
-                    id: p.id,
-                    name: p.name,
-                    path: p.target,
-                    status: 'linked'
-                });
-            }
+        if (existing) {
+            existing.status = 'linked';
+            existing.path = p.source || existing.path;
         } else {
-            if (existing) {
-                existing.status = 'local';
-                existing.hasStoreInstall = true;
-            } else {
-                unified.set(p.id, {
-                    id: p.id,
-                    name: p.name,
-                    path: null,
-                    status: 'installed'
-                });
-            }
+            unified.set(p.id, {
+                id: p.id,
+                name: p.name,
+                path: p.source,
+                status: 'linked'
+            });
         }
     }
 
