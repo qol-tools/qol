@@ -3,6 +3,7 @@ pub mod features;
 #[cfg(feature = "dev")]
 pub mod dev;
 pub mod hotkeys;
+pub mod installer;
 pub mod menu;
 pub mod paths;
 pub mod plugins;

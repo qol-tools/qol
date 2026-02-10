@@ -7,8 +7,11 @@ A pluggable system tray daemon. One tray icon, infinite possibilities.
 ```bash
 git clone https://github.com/qol-tools/qol-tray
 cd qol-tray
-make install
+cargo run --release --bin qol-tray-install
 ```
+
+On Linux and macOS, `make install` runs the same installer command.
+On Windows, run `cargo run --release --bin qol-tray-install` from PowerShell or Command Prompt.
 
 ## Usage
 
