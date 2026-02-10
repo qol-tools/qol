@@ -229,8 +229,11 @@ impl GitHubClient {
         let mut plugins = Vec::new();
 
         for repo in plugin_repos {
-            if let Ok(manifest) = self.fetch_plugin_manifest(&repo.name).await {
-                plugins.push(build_plugin_metadata(repo, manifest));
+            match self.fetch_plugin_manifest(&repo.name).await {
+                Ok(manifest) => plugins.push(build_plugin_metadata(repo, manifest)),
+                Err(error) => {
+                    log::warn!("Skipping {}: {}", repo.name, error);
+                }
             }
         }
 
@@ -248,15 +251,30 @@ impl GitHubClient {
             );
 
             let response = self.build_request(&url).send().await?;
-            if response.status().is_success() {
+            let status = response.status();
+
+            if status.is_success() {
                 let content = response.text().await?;
                 let manifest: crate::plugins::PluginManifest = toml::from_str(&content)?;
                 manifest.validate()?;
                 return Ok(manifest);
             }
+
+            if status == reqwest::StatusCode::NOT_FOUND {
+                continue;
+            }
+
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "Failed to fetch plugin.toml for {} on {}: {} {}",
+                repo_name,
+                branch,
+                status,
+                body
+            );
         }
 
-        anyhow::bail!("plugin.toml not found on main or master branch")
+        anyhow::bail!("plugin.toml not found for {} on main or master branch", repo_name)
     }
 
     pub async fn list_plugins_cached(&self, force_refresh: bool) -> Result<Vec<PluginMetadata>> {

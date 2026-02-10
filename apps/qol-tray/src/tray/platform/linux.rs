@@ -26,16 +26,18 @@ pub fn create_tray(
     icon: Icon,
     update_available: bool,
 ) -> Result<()> {
+    let (startup_tx, startup_rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
+
     std::thread::spawn(move || {
         if gtk::init().is_err() {
-            log::error!("Failed to initialize GTK");
+            let _ = startup_tx.send(Err("Failed to initialize GTK".to_string()));
             return;
         }
 
         let (menu, router) = match crate::menu::builder::build_menu(feature_registry, update_available) {
             Ok(result) => result,
             Err(e) => {
-                log::error!("Failed to build menu: {}", e);
+                let _ = startup_tx.send(Err(format!("Failed to build menu: {}", e)));
                 return;
             }
         };
@@ -49,17 +51,22 @@ pub fn create_tray(
         let tray_icon = match tray_icon {
             Ok(icon) => icon,
             Err(e) => {
-                log::error!("Failed to create tray icon: {}", e);
+                let _ = startup_tx.send(Err(format!("Failed to create tray icon: {}", e)));
                 return;
             }
         };
 
         setup_event_loop(router, shutdown_tx);
+        let _ = startup_tx.send(Ok(()));
         std::mem::forget(tray_icon);
         gtk::main();
     });
 
-    Ok(())
+    match startup_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(message)) => anyhow::bail!(message),
+        Err(_) => anyhow::bail!("Timed out while initializing Linux tray"),
+    }
 }
 
 fn setup_event_loop(router: crate::menu::router::EventRouter, shutdown_tx: broadcast::Sender<()>) {

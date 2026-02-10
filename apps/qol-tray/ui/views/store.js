@@ -69,11 +69,15 @@ export function render(containerEl) {
     
     document.getElementById('refresh-btn')?.addEventListener('click', () => refreshPlugins());
     
-    checkTokenStatus();
-    loadPlugins();
+    initializeStoreState();
     unsubscribe = subscribe((event) => {
         if (event.type === 'plugins_changed') loadPlugins();
     });
+}
+
+async function initializeStoreState() {
+    await checkTokenStatus();
+    await loadPlugins();
 }
 
 function escapeHtml(value) {
@@ -113,6 +117,10 @@ function clearFeedback() {
 async function checkTokenStatus() {
     try {
         const response = await fetch('/api/github-token');
+        if (!response.ok) {
+            state.hasToken = false;
+            return;
+        }
         const data = await response.json();
         state.hasToken = data.has_token;
     } catch (e) {
@@ -161,12 +169,22 @@ function renderRateLimitMessage(banner) {
     });
 }
 
+function clearTokenBanner() {
+    const banner = document.getElementById('token-banner');
+    if (!banner) return;
+    banner.innerHTML = '';
+}
+
 async function saveToken() {
     const input = document.getElementById('github-token-input');
     const token = input?.value?.trim();
     
-    if (!token) return;
+    if (!token) {
+        setFeedback('error', 'Token cannot be empty');
+        return;
+    }
     
+    clearFeedback();
     try {
         const response = await fetch('/api/github-token', {
             method: 'POST',
@@ -174,14 +192,17 @@ async function saveToken() {
             body: JSON.stringify({ token })
         });
         
-        if (response.ok) {
-            state.hasToken = true;
-            state.showTokenInput = false;
-            document.getElementById('token-banner').innerHTML = '';
-            loadPlugins();
+        if (!response.ok) {
+            const message = (await response.text()) || 'Failed to save token';
+            throw new Error(message);
         }
+        state.hasToken = true;
+        state.showTokenInput = false;
+        clearTokenBanner();
+        setFeedback('success', 'GitHub token saved');
+        loadPlugins();
     } catch (e) {
-        console.error('Failed to save token:', e);
+        setFeedback('error', `Failed to save token: ${e.message}`);
     }
 }
 
@@ -197,7 +218,10 @@ async function loadPlugins(forceRefresh = false) {
     try {
         const url = forceRefresh ? '/api/plugins?refresh=true' : '/api/plugins';
         const response = await fetch(url);
-        if (!response.ok) throw new Error('Failed to fetch plugins');
+        if (!response.ok) {
+            const message = (await response.text()) || 'Failed to fetch plugins';
+            throw new Error(message);
+        }
         
         const data = await response.json();
         if (token !== state.loadToken) {
@@ -208,6 +232,9 @@ async function loadPlugins(forceRefresh = false) {
         
         if (state.plugins.length === 0 && !state.hasToken) {
             showRateLimitBanner();
+        } else {
+            state.showTokenInput = false;
+            clearTokenBanner();
         }
         
         state.plugins.sort((a, b) => a.name.localeCompare(b.name));

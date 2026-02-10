@@ -19,15 +19,10 @@ async fn serve_plugin_index(
     AxumPath(plugin_id): AxumPath<String>,
     axum::extract::State(plugins_dir): axum::extract::State<PathBuf>,
 ) -> Response {
-    if !is_safe_path_component(&plugin_id) {
-        return (StatusCode::FORBIDDEN, "Access denied").into_response();
-    }
-
-    let ui_path = plugins_dir.join(&plugin_id).join("ui").join("index.html");
-
-    if !ui_path.exists() {
-        return (StatusCode::NOT_FOUND, "File not found").into_response();
-    }
+    let ui_path = match resolve_safe_ui_file(&plugins_dir, &plugin_id, "index.html").await {
+        Ok(path) => path,
+        Err(response) => return response,
+    };
 
     let contents = match tokio::fs::read_to_string(&ui_path).await {
         Ok(c) => c,
@@ -120,38 +115,11 @@ async fn serve_plugin_file(
 }
 
 async fn serve_file(plugins_dir: &Path, plugin_id: &str, file_path: &str) -> Response {
-    if !is_safe_path_component(plugin_id) || !is_safe_subpath(file_path) {
-        log::warn!("Unsafe path: plugin_id={}, file_path={}", plugin_id, file_path);
-        return (StatusCode::FORBIDDEN, "Access denied").into_response();
-    }
-
-    let ui_path = plugins_dir.join(plugin_id).join("ui").join(file_path);
+    let ui_path = match resolve_safe_ui_file(plugins_dir, plugin_id, file_path).await {
+        Ok(path) => path,
+        Err(response) => return response,
+    };
     log::debug!("Serving plugin file: {:?}", ui_path);
-
-    let metadata = match tokio::fs::symlink_metadata(&ui_path).await {
-        Ok(m) => m,
-        Err(_) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
-    };
-
-    if metadata.file_type().is_symlink() {
-        log::warn!("Symlink rejected: {:?}", ui_path);
-        return (StatusCode::FORBIDDEN, "Access denied").into_response();
-    }
-
-    let canonical = match ui_path.canonicalize() {
-        Ok(p) => p,
-        Err(_) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
-    };
-
-    let base_dir = match plugins_dir.join(plugin_id).join("ui").canonicalize() {
-        Ok(p) => p,
-        Err(_) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
-    };
-
-    if !canonical.starts_with(&base_dir) {
-        log::warn!("Path traversal attempt: {:?} escapes {:?}", canonical, base_dir);
-        return (StatusCode::FORBIDDEN, "Access denied").into_response();
-    }
 
     let contents = match tokio::fs::read(&ui_path).await {
         Ok(contents) => contents,
@@ -167,6 +135,76 @@ async fn serve_file(plugins_dir: &Path, plugin_id: &str, file_path: &str) -> Res
 }
 
 use crate::paths::is_safe_path_component;
+
+async fn resolve_safe_ui_file(plugins_dir: &Path, plugin_id: &str, file_path: &str) -> Result<PathBuf, Response> {
+    if !is_safe_path_component(plugin_id) || !is_safe_subpath(file_path) {
+        log::warn!("Unsafe path: plugin_id={}, file_path={}", plugin_id, file_path);
+        return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
+    }
+
+    let plugin_root = plugins_dir.join(plugin_id);
+    let ui_root = plugin_root.join("ui");
+    let ui_path = ui_root.join(file_path);
+
+    let plugin_meta = match tokio::fs::symlink_metadata(&plugin_root).await {
+        Ok(meta) => meta,
+        Err(_) => return Err((StatusCode::NOT_FOUND, "File not found").into_response()),
+    };
+    if plugin_meta.file_type().is_symlink() || !plugin_meta.is_dir() {
+        return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
+    }
+
+    let ui_meta = match tokio::fs::symlink_metadata(&ui_root).await {
+        Ok(meta) => meta,
+        Err(_) => return Err((StatusCode::NOT_FOUND, "File not found").into_response()),
+    };
+    if ui_meta.file_type().is_symlink() || !ui_meta.is_dir() {
+        return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
+    }
+
+    let file_meta = match tokio::fs::symlink_metadata(&ui_path).await {
+        Ok(meta) => meta,
+        Err(_) => return Err((StatusCode::NOT_FOUND, "File not found").into_response()),
+    };
+    if file_meta.file_type().is_symlink() {
+        log::warn!("Symlink rejected: {:?}", ui_path);
+        return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
+    }
+    if !file_meta.is_file() {
+        return Err((StatusCode::NOT_FOUND, "File not found").into_response());
+    }
+
+    let canonical_plugins_dir = match tokio::fs::canonicalize(plugins_dir).await {
+        Ok(path) => path,
+        Err(_) => return Err((StatusCode::NOT_FOUND, "File not found").into_response()),
+    };
+    let canonical_plugin_root = match tokio::fs::canonicalize(&plugin_root).await {
+        Ok(path) => path,
+        Err(_) => return Err((StatusCode::NOT_FOUND, "File not found").into_response()),
+    };
+    if !canonical_plugin_root.starts_with(&canonical_plugins_dir) {
+        return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
+    }
+
+    let canonical_ui_root = match tokio::fs::canonicalize(&ui_root).await {
+        Ok(path) => path,
+        Err(_) => return Err((StatusCode::NOT_FOUND, "File not found").into_response()),
+    };
+    if !canonical_ui_root.starts_with(&canonical_plugin_root) {
+        return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
+    }
+
+    let canonical_ui_path = match tokio::fs::canonicalize(&ui_path).await {
+        Ok(path) => path,
+        Err(_) => return Err((StatusCode::NOT_FOUND, "File not found").into_response()),
+    };
+    if !canonical_ui_path.starts_with(&canonical_ui_root) {
+        log::warn!("Path traversal attempt: {:?} escapes {:?}", canonical_ui_path, canonical_ui_root);
+        return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
+    }
+
+    Ok(canonical_ui_path)
+}
 
 fn is_safe_subpath(path: &str) -> bool {
     !path.contains("..")
@@ -275,4 +313,3 @@ mod tests {
         }
     }
 }
-
