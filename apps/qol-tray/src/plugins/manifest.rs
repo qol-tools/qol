@@ -40,6 +40,15 @@ pub fn is_valid_action_id(action: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+pub fn walk_menu_items(items: &[MenuItem], visit: &mut dyn FnMut(&MenuItem)) {
+    for item in items {
+        match item {
+            MenuItem::Submenu { items, .. } => walk_menu_items(items, visit),
+            _ => visit(item),
+        }
+    }
+}
+
 impl PluginManifest {
     pub fn validate(&self) -> Result<()> {
         if self.manifest_version != CURRENT_MANIFEST_VERSION {
@@ -58,6 +67,9 @@ impl PluginManifest {
         }
         if let Some(daemon) = &self.daemon {
             daemon.validate()?;
+        }
+        if let Some(dependencies) = &self.dependencies {
+            dependencies.validate()?;
         }
 
         Ok(())
@@ -169,6 +181,21 @@ impl DaemonConfig {
             validate_absolute_socket_path(socket)?;
         }
         Ok(())
+    }
+}
+
+impl Dependencies {
+    pub fn validate(&self) -> Result<()> {
+        for binary in &self.binaries {
+            binary.validate()?;
+        }
+        Ok(())
+    }
+}
+
+impl BinaryDependency {
+    pub fn validate(&self) -> Result<()> {
+        validate_command_name("dependencies.binaries.name", &self.name)
     }
 }
 

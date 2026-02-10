@@ -22,15 +22,9 @@ pub async fn check_for_updates() -> Result<bool> {
         GITHUB_REPO
     );
 
-    let client = reqwest::Client::builder()
-        .user_agent("qol-tray")
-        .build()?;
-
-    let response = client.get(&url).send().await?;
-
-    if !response.status().is_success() {
-        return Ok(false);
-    }
+    let client = reqwest::Client::new();
+    let request = crate::features::plugin_store::github::build_github_request(&client, &url, None);
+    let response = crate::features::plugin_store::github::send_checked(request).await?;
 
     let release: GitHubRelease = response.json().await?;
     let latest = release.tag_name.trim_start_matches('v');
@@ -72,12 +66,9 @@ async fn download_deb(version: &str) -> Result<std::path::PathBuf> {
 
     log::info!("Downloading update from {}", url);
 
-    let client = reqwest::Client::builder().user_agent("qol-tray").build()?;
-    let response = client.get(&url).send().await?;
-
-    if !response.status().is_success() {
-        anyhow::bail!("Failed to download update: {}", response.status());
-    }
+    let client = reqwest::Client::new();
+    let request = crate::features::plugin_store::github::build_github_request(&client, &url, None);
+    let response = crate::features::plugin_store::github::send_checked(request).await?;
 
     let bytes = response.bytes().await?;
     std::fs::write(&path, &bytes)?;

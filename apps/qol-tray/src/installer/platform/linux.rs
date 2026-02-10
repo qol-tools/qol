@@ -1,11 +1,9 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 pub fn install_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("Could not determine home directory")?;
-    Ok(home.join(".local").join("bin"))
+    super::unix_common::install_dir()
 }
 
 pub fn autostart_path() -> Result<PathBuf> {
@@ -35,25 +33,13 @@ pub fn start_now(binary_path: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let is_running = Command::new("pgrep")
-        .arg("-x")
-        .arg("qol-tray")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false);
-
-    if is_running {
+    if super::unix_common::is_running("qol-tray") {
         return Ok(());
     }
 
-    Command::new(binary_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .with_context(|| format!("Failed to start {}", binary_path.display()))?;
+    super::unix_common::start_now(binary_path)
+}
 
-    Ok(())
+pub fn stop_running() -> Result<()> {
+    super::unix_common::stop_running("qol-tray")
 }

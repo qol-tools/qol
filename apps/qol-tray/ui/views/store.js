@@ -12,7 +12,8 @@ const state = {
     showTokenInput: false,
     cacheAgeSecs: null,
     loading: false,
-    loadToken: 0
+    loadToken: 0,
+    feedback: null
 };
 
 let container = null;
@@ -46,6 +47,7 @@ export function render(containerEl) {
                 <input type="text" id="store-search" placeholder="Search plugins...">
             </div>
             <div id="token-banner"></div>
+            <div id="store-feedback"></div>
             <div id="store-list" class="plugins-grid grid-cards grid-cards--zoom">
                 <div class="loading">Loading plugins...</div>
             </div>
@@ -72,6 +74,40 @@ export function render(containerEl) {
     unsubscribe = subscribe((event) => {
         if (event.type === 'plugins_changed') loadPlugins();
     });
+}
+
+function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (char) => (
+        {
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;'
+        }[char]
+    ));
+}
+
+function renderFeedback() {
+    const el = document.getElementById('store-feedback');
+    if (!el) return;
+    if (!state.feedback) {
+        el.innerHTML = '';
+        return;
+    }
+    const message = escapeHtml(state.feedback.message);
+    el.innerHTML = `<div class="view-feedback ${state.feedback.type}">${message}</div>`;
+}
+
+function setFeedback(type, message) {
+    state.feedback = { type, message };
+    renderFeedback();
+}
+
+function clearFeedback() {
+    if (!state.feedback) return;
+    state.feedback = null;
+    renderFeedback();
 }
 
 async function checkTokenStatus() {
@@ -184,6 +220,7 @@ async function loadPlugins(forceRefresh = false) {
         if (token !== state.loadToken) {
             return;
         }
+        setFeedback('error', `Failed to load plugins: ${error.message}`);
         if (listEl) {
             listEl.innerHTML = `<div class="error">Error loading plugins: ${error.message}</div>`;
         }
@@ -335,15 +372,20 @@ async function installPlugin(id) {
     if (installing.has(id)) return;
 
     const plugin = state.plugins.find(p => p.id === id);
+    clearFeedback();
     installing.add(id, plugin?.name || id);
     renderPlugins(getFilteredPlugins());
     updateSelection();
 
     try {
         const response = await fetch(`/api/install/${id}`, { method: 'POST' });
-        if (!response.ok) throw new Error('Installation failed');
+        if (!response.ok) {
+            const message = (await response.text()) || 'Installation failed';
+            throw new Error(message);
+        }
+        setFeedback('success', `Installed ${plugin?.name || id}`);
     } catch (error) {
-        console.error(`Failed to install plugin: ${error.message}`);
+        setFeedback('error', `Failed to install ${plugin?.name || id}: ${error.message}`);
     } finally {
         installing.remove(id);
         await loadPlugins();

@@ -42,3 +42,12 @@ pub fn start_now(binary_path: &Path) -> Result<()> {
         .with_context(|| format!("Failed to start {}", binary_path.display()))?;
     Ok(())
 }
+
+pub fn stop_running() -> Result<()> {
+    let _ = Command::new("taskkill")
+        .args(["/F", "/IM", "qol-tray.exe"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    Ok(())
+}

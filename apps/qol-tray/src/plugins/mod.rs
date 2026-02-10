@@ -145,7 +145,14 @@ fn wait_for_socket(socket_path: &str, child: &mut Child) -> bool {
             return false;
         }
         if path.exists() {
-            if std::os::unix::net::UnixStream::connect(path).is_ok() {
+            #[cfg(unix)]
+            {
+                if std::os::unix::net::UnixStream::connect(path).is_ok() {
+                    return true;
+                }
+            }
+            #[cfg(not(unix))]
+            {
                 return true;
             }
         }

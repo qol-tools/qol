@@ -6,20 +6,25 @@ use std::path::PathBuf;
 const APP_NAME: &str = "qol-tray";
 const INSTALL_ID_ENV: &str = "QOL_TRAY_INSTALL_ID";
 const INSTALL_ID_FILE: &str = "qol-tray.install-id";
+const ACTIVE_INSTALL_ID_FILE: &str = "active-install-id";
 
 pub fn is_safe_path_component(s: &str) -> bool {
     !s.is_empty()
-        && !s.contains('/')
-        && !s.contains('\\')
-        && !s.contains('\0')
-        && s != ".."
-        && s != "."
+        && s.len() <= 64
+        && !s.starts_with('-')
+        && s
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 fn legacy_config_dir() -> Result<PathBuf> {
     dirs::config_dir()
         .context("Could not determine config directory")
         .map(|p| p.join(APP_NAME))
+}
+
+fn shared_config_dir() -> Result<PathBuf> {
+    legacy_config_dir()
 }
 
 fn base_data_dir() -> Result<PathBuf> {
@@ -29,7 +34,7 @@ fn base_data_dir() -> Result<PathBuf> {
         .map(|p| p.join(APP_NAME))
 }
 
-fn installs_dir() -> Result<PathBuf> {
+pub fn installs_dir() -> Result<PathBuf> {
     base_data_dir().map(|p| p.join("installs"))
 }
 
@@ -64,6 +69,21 @@ fn install_id_from_marker_file() -> Option<String> {
     }
 }
 
+fn active_install_id_path() -> Result<PathBuf> {
+    base_data_dir().map(|p| p.join(ACTIVE_INSTALL_ID_FILE))
+}
+
+fn install_id_from_active_file() -> Option<String> {
+    let path = active_install_id_path().ok()?;
+    let content = fs::read_to_string(path).ok()?;
+    let trimmed = content.trim();
+    if valid_install_id(trimmed) {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
 pub fn config_dir_for_install_id(install_id: &str) -> Result<PathBuf> {
     if !valid_install_id(install_id) {
         return Err(anyhow!("invalid install id"));
@@ -72,10 +92,26 @@ pub fn config_dir_for_install_id(install_id: &str) -> Result<PathBuf> {
 }
 
 pub fn config_dir() -> Result<PathBuf> {
-    if let Some(install_id) = install_id_from_env().or_else(install_id_from_marker_file) {
+    if let Some(install_id) = install_id_from_env()
+        .or_else(install_id_from_marker_file)
+        .or_else(install_id_from_active_file)
+    {
         return config_dir_for_install_id(&install_id);
     }
     legacy_config_dir()
+}
+
+pub fn set_active_install_id(install_id: &str) -> Result<()> {
+    if !valid_install_id(install_id) {
+        return Err(anyhow!("invalid install id"));
+    }
+    let path = active_install_id_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory {}", parent.display()))?;
+    }
+    fs::write(&path, format!("{}\n", install_id))
+        .with_context(|| format!("Failed to write active install marker {}", path.display()))
 }
 
 pub fn plugins_dir() -> Result<PathBuf> {
@@ -83,7 +119,7 @@ pub fn plugins_dir() -> Result<PathBuf> {
 }
 
 pub fn hotkeys_path() -> Result<PathBuf> {
-    config_dir().map(|p| p.join("hotkeys.json"))
+    shared_config_dir().map(|p| p.join("hotkeys.json"))
 }
 
 pub fn plugin_configs_path() -> Result<PathBuf> {
@@ -115,17 +151,26 @@ mod tests {
     #[test]
     fn paths_have_correct_suffixes() {
         let cases: Vec<(Result<PathBuf>, &str)> = vec![
-            (config_dir(), "qol-tray"),
-            (plugins_dir(), "qol-tray/plugins"),
+            (plugins_dir(), "plugins"),
             (hotkeys_path(), "hotkeys.json"),
             (plugin_configs_path(), "plugin-configs.json"),
             (github_token_path(), ".github-token"),
             (plugin_cache_path(), ".plugin-cache.json"),
         ];
 
+        let config_path = config_dir().unwrap();
+        assert!(
+            config_path.to_string_lossy().contains("qol-tray"),
+            "config path {:?} should contain qol-tray",
+            config_path
+        );
+
         for (result, expected_suffix) in cases {
             let path = result.unwrap();
             assert!(path.ends_with(expected_suffix), "path {:?} should end with {}", path, expected_suffix);
+            if expected_suffix == "plugins" {
+                assert!(path.to_string_lossy().contains("qol-tray"));
+            }
         }
     }
 
@@ -137,10 +182,6 @@ mod tests {
             "plugin123",
             "UPPERCASE",
             "a",
-            " ",
-            ".hidden",
-            "..hidden",
-            "plugin..name",
             "MixedCase123",
         ];
 
@@ -163,6 +204,12 @@ mod tests {
             "a/b/c",
             "../..",
             "foo/../bar",
+            " ",
+            ".hidden",
+            "..hidden",
+            "plugin..name",
+            "plugin.name",
+            "-plugin",
         ];
 
         for s in invalid {

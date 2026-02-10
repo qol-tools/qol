@@ -5,6 +5,7 @@ mod features;
 mod hotkeys;
 mod menu;
 mod paths;
+mod process_utils;
 mod plugins;
 mod tray;
 mod updates;

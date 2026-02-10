@@ -139,6 +139,30 @@ pub struct GitHubClient {
     token: Option<String>,
 }
 
+pub(crate) fn build_github_request(
+    client: &reqwest::Client,
+    url: &str,
+    token: Option<&str>,
+) -> reqwest::RequestBuilder {
+    let mut req = client.get(url).header("User-Agent", "qol-tray");
+    if let Some(token) = token {
+        req = req.header("Authorization", format!("Bearer {}", token));
+    }
+    req
+}
+
+pub(crate) async fn send_checked(
+    request: reqwest::RequestBuilder,
+) -> Result<reqwest::Response> {
+    let response = request.send().await?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("GitHub API returned {}: {}", status, body);
+    }
+    Ok(response)
+}
+
 pub fn get_stored_token() -> Option<String> {
     let path = token_path()?;
 
@@ -192,26 +216,13 @@ impl GitHubClient {
     }
 
     fn build_request(&self, url: &str) -> reqwest::RequestBuilder {
-        let mut req = self.client.get(url).header("User-Agent", "qol-tray");
-
-        if let Some(token) = &self.token {
-            req = req.header("Authorization", format!("Bearer {}", token));
-        }
-
-        req
+        build_github_request(&self.client, url, self.token.as_deref())
     }
 
     pub async fn list_plugins(&self) -> Result<Vec<PluginMetadata>> {
         let url = format!("https://api.github.com/orgs/{}/repos", self.org);
 
-        let response = self.build_request(&url).send().await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("GitHub API returned {}: {}", status, body);
-        }
-
+        let response = send_checked(self.build_request(&url)).await?;
         let repos: Vec<GitHubRepo> = response.json().await?;
 
         let plugin_repos = filter_plugin_repos(&repos);
@@ -267,7 +278,18 @@ impl GitHubClient {
 }
 
 fn is_plugin_repo(name: &str) -> bool {
-    name.starts_with(PLUGIN_PREFIX) && name != "plugin-template"
+    if name.trim() != name || name == "plugin-template" {
+        return false;
+    }
+    let Some(suffix) = name.strip_prefix(PLUGIN_PREFIX) else {
+        return false;
+    };
+    !suffix.is_empty()
+        && !suffix.starts_with('-')
+        && !suffix.ends_with('-')
+        && suffix
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 fn filter_plugin_repos(repos: &[GitHubRepo]) -> Vec<&GitHubRepo> {
@@ -344,19 +366,19 @@ mod tests {
             ("plugin-notes", true),
             ("plugin-a", true),
             ("plugin-123", true),
-            ("plugin-CAPS", true),
+            ("plugin-caps", true),
             ("screen-recorder", false),
             ("my-plugin", false),
             ("pluginstore", false),
             ("plugin-template", false),
             ("", false),
-            ("plugin-", true),
+            ("plugin-", false),
             ("plugin", false),
             ("PLUGIN-foo", false),
             ("Plugin-foo", false),
             (" plugin-foo", false),
-            ("plugin-foo ", true),
-            ("plugin--double", true),
+            ("plugin-foo ", false),
+            ("plugin--double", false),
         ];
 
         for (name, expected) in cases {

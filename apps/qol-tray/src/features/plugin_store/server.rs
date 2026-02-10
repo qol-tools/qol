@@ -74,6 +74,7 @@ struct ExecuteActionResult {
 struct PluginAction {
     id: String,
     label: String,
+    kind: crate::plugins::ActionType,
 }
 
 #[derive(Serialize)]
@@ -227,7 +228,8 @@ fn read_installed_plugin_dirs(plugins_dir: &std::path::Path) -> Vec<(String, std
         .filter_map(|e| e.ok())
         .filter_map(|entry| {
             let path = entry.path();
-            if !path.is_dir() {
+            let metadata = std::fs::symlink_metadata(&path).ok()?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
                 return None;
             }
             let id = entry.file_name().into_string().ok()?;
@@ -298,10 +300,15 @@ async fn install_plugin(
 
     log::info!("Install requested for plugin: {}", id);
 
-    let plugins_dir = PluginLoader::ensure_plugin_dir().map_err(|e| {
+    if let Err(e) = std::fs::create_dir_all(&state.plugins_dir) {
         log::error!("Failed to get plugins directory: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, "Failed to access plugins directory".to_string())
-    })?;
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to access plugins directory".to_string(),
+        ));
+    }
+
+    let plugins_dir = state.plugins_dir.clone();
 
     let installer = PluginInstaller::new(plugins_dir.clone());
     let repo_url = format!("https://github.com/qol-tools/{}.git", id);
@@ -380,6 +387,7 @@ fn reload_manager_and_notify(state: &AppState) {
     if let Err(e) = manager.reload_plugins() {
         log::error!("Failed to reload plugins: {}", e);
     }
+    trigger_reload();
     state.daemon.events.send_plugins_changed();
 }
 
@@ -661,13 +669,19 @@ async fn reload_plugins(State(state): State<AppState>) -> impl IntoResponse {
 fn extract_actions(items: &[crate::plugins::MenuItem]) -> Vec<PluginAction> {
     use crate::plugins::MenuItem;
 
-    items.iter().flat_map(|item| match item {
-        MenuItem::Action { id, label, .. } => {
-            vec![PluginAction { id: id.clone(), label: label.clone() }]
-        }
-        MenuItem::Submenu { items, .. } => extract_actions(items),
-        MenuItem::Checkbox { .. } | MenuItem::Separator => vec![],
-    }).collect()
+    let mut actions = Vec::new();
+    let mut collect = |item: &MenuItem| match item {
+        MenuItem::Action {
+            id, label, action, ..
+        } => actions.push(PluginAction {
+                id: id.clone(),
+                label: label.clone(),
+                kind: *action,
+            }),
+        MenuItem::Checkbox { .. } | MenuItem::Separator | MenuItem::Submenu { .. } => {}
+    };
+    crate::plugins::manifest::walk_menu_items(items, &mut collect);
+    actions
 }
 
 fn is_newer_version(available: &str, installed: &str) -> bool {
@@ -714,23 +728,58 @@ async fn serve_cover(
         return (StatusCode::BAD_REQUEST, "Invalid plugin ID").into_response();
     }
 
-    let cover_path = state.plugins_dir.join(&plugin_id).join("cover.png");
+    let plugin_root = state.plugins_dir.join(&plugin_id);
+    let plugin_meta = match tokio::fs::symlink_metadata(&plugin_root).await {
+        Ok(meta) => meta,
+        Err(_) => return (StatusCode::NOT_FOUND, "Cover not found").into_response(),
+    };
+    if plugin_meta.file_type().is_symlink() {
+        return (StatusCode::FORBIDDEN, "Invalid cover path").into_response();
+    }
 
-    if !cover_path.exists() {
+    let cover_path = plugin_root.join("cover.png");
+    let cover_meta = match tokio::fs::symlink_metadata(&cover_path).await {
+        Ok(meta) => meta,
+        Err(_) => return (StatusCode::NOT_FOUND, "Cover not found").into_response(),
+    };
+    if cover_meta.file_type().is_symlink() {
+        return (StatusCode::FORBIDDEN, "Invalid cover path").into_response();
+    }
+    if !cover_meta.is_file() {
         return (StatusCode::NOT_FOUND, "Cover not found").into_response();
     }
 
-    let data = match tokio::fs::read(&cover_path).await {
+    let canonical_root = match tokio::fs::canonicalize(&plugin_root).await {
+        Ok(path) => path,
+        Err(_) => return (StatusCode::NOT_FOUND, "Cover not found").into_response(),
+    };
+    let canonical_cover = match tokio::fs::canonicalize(&cover_path).await {
+        Ok(path) => path,
+        Err(_) => return (StatusCode::NOT_FOUND, "Cover not found").into_response(),
+    };
+    if !canonical_cover.starts_with(&canonical_root) {
+        return (StatusCode::FORBIDDEN, "Invalid cover path").into_response();
+    }
+
+    let cover_size = match tokio::fs::metadata(&canonical_cover).await {
+        Ok(meta) => meta.len() as usize,
+        Err(e) => {
+            log::error!("Failed to read cover metadata: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read cover").into_response();
+        }
+    };
+
+    if cover_size > MAX_COVER_SIZE {
+        return (StatusCode::PAYLOAD_TOO_LARGE, "Cover image too large").into_response();
+    }
+
+    let data = match tokio::fs::read(&canonical_cover).await {
         Ok(data) => data,
         Err(e) => {
             log::error!("Failed to read cover image: {}", e);
             return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read cover").into_response();
         }
     };
-
-    if data.len() > MAX_COVER_SIZE {
-        return (StatusCode::PAYLOAD_TOO_LARGE, "Cover image too large").into_response();
-    }
 
     (StatusCode::OK, [(header::CONTENT_TYPE, "image/png")], data).into_response()
 }
@@ -850,6 +899,10 @@ async fn get_hotkeys() -> impl IntoResponse {
 
 async fn set_hotkeys(body: axum::body::Bytes) -> impl IntoResponse {
     use crate::hotkeys::{HotkeyConfig, HotkeyManager};
+
+    if body.len() > MAX_CONFIG_SIZE {
+        return (StatusCode::PAYLOAD_TOO_LARGE, "Config too large").into_response();
+    }
 
     let config: HotkeyConfig = match serde_json::from_slice(&body) {
         Ok(c) => c,
@@ -977,7 +1030,16 @@ struct DiscoveryStateResponse {
 async fn get_discovery_state(
     State(state): State<AppState>,
 ) -> Json<DiscoveryStateResponse> {
-    let guard = state.daemon.state.discovery.read().unwrap();
+    let guard = match state.daemon.state.discovery.read() {
+        Ok(guard) => guard,
+        Err(error) => {
+            log::error!("Discovery state lock poisoned: {}", error);
+            return Json(DiscoveryStateResponse {
+                status: "idle".to_string(),
+                plugins: Vec::new(),
+            });
+        }
+    };
     let status = match guard.status {
         DiscoveryStatus::Idle => "idle",
         DiscoveryStatus::Discovering => "discovering",

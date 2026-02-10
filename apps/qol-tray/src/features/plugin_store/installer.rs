@@ -1,9 +1,15 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(120);
+const CARGO_BUILD_TIMEOUT: Duration = Duration::from_secs(300);
+#[cfg(unix)]
+const LOCKFILE_MAX_AGE: Duration = Duration::from_secs(30);
+#[cfg(not(unix))]
+const LOCKFILE_MAX_AGE: Duration = Duration::from_secs(300);
 
 pub struct PluginInstaller {
     plugins_dir: PathBuf,
@@ -15,6 +21,8 @@ impl PluginInstaller {
     }
 
     pub async fn install(&self, repo_url: &str, plugin_id: &str) -> Result<()> {
+        validate_plugin_id(plugin_id)?;
+        let _operation_lock = self.acquire_operation_lock(plugin_id)?;
         Self::check_dev_link_conflict(plugin_id)?;
 
         let target_dir = self.plugins_dir.join(plugin_id);
@@ -30,19 +38,10 @@ impl PluginInstaller {
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("Plugin path contains invalid UTF-8"))?;
 
-        let output = tokio::time::timeout(
-            GIT_TIMEOUT,
-            tokio::process::Command::new("git")
-                .args(["clone", repo_url, staging_str])
-                .output(),
-        )
-        .await
-        .context("Git clone timed out")??;
-
-        if !output.status.success() {
+        if let Err(error) = run_git_checked(["clone", repo_url, staging_str], None, "clone").await
+        {
             self.cleanup_temp_dir(&staging_dir).await;
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("Git clone failed: {}", stderr);
+            return Err(error);
         }
 
         if let Err(error) = self.install_dependencies(&staging_dir, plugin_id).await {
@@ -158,7 +157,7 @@ impl PluginInstaller {
 
         if let Some(deps) = manifest.dependencies.as_ref() {
             for binary in &deps.binaries {
-                self.install_binary(plugin_dir, binary).await?;
+                self.install_binary(plugin_id, plugin_dir, binary).await?;
             }
         }
 
@@ -172,21 +171,59 @@ impl PluginInstaller {
 
     async fn install_binary(
         &self,
+        plugin_id: &str,
         plugin_dir: &Path,
         dep: &crate::plugins::manifest::BinaryDependency,
     ) -> Result<()> {
+        if !crate::plugins::manifest::is_valid_command_basename(&dep.name) {
+            anyhow::bail!(
+                "Invalid dependency binary name {:?}; expected basename [A-Za-z0-9_-]",
+                dep.name
+            );
+        }
         let asset_name = resolve_asset_pattern(&dep.pattern);
         log::info!("Fetching {} from {}", asset_name, dep.repo);
+        let binary_path = dependency_binary_output_path(plugin_dir, &dep.name);
 
-        let release = fetch_latest_release(&dep.repo).await?;
-        let asset = release
-            .assets
-            .iter()
-            .find(|a| a.name == asset_name)
-            .with_context(|| format!("Asset '{}' not found in release", asset_name))?;
+        let mut downloaded = false;
+        match fetch_latest_release(&dep.repo).await {
+            Ok(release) => {
+                if let Some(asset) = release.assets.iter().find(|a| a.name == asset_name) {
+                    download_asset(&asset.browser_download_url, &binary_path).await?;
+                    downloaded = true;
+                } else {
+                    log::warn!(
+                        "Release asset '{}' missing for {}",
+                        asset_name,
+                        dep.repo
+                    );
+                }
+            }
+            Err(error) => {
+                log::warn!(
+                    "Failed to fetch release asset {} from {}: {:#}",
+                    asset_name,
+                    dep.repo,
+                    error
+                );
+            }
+        }
 
-        let binary_path = plugin_dir.join(&dep.name);
-        download_asset(&asset.browser_download_url, &binary_path).await?;
+        if !downloaded {
+            if !can_build_from_source_fallback(plugin_id, &dep.repo, plugin_dir) {
+                anyhow::bail!(
+                    "Asset '{}' not available for {} and source-build fallback is unavailable",
+                    asset_name,
+                    dep.repo
+                );
+            }
+            log::warn!(
+                "Falling back to local source build for dependency {} in {:?}",
+                dep.name,
+                plugin_dir
+            );
+            build_binary_from_source(plugin_dir, &dep.name).await?;
+        }
 
         #[cfg(unix)]
         {
@@ -201,6 +238,8 @@ impl PluginInstaller {
     }
 
     pub async fn update(&self, plugin_id: &str) -> Result<()> {
+        validate_plugin_id(plugin_id)?;
+        let _operation_lock = self.acquire_operation_lock(plugin_id)?;
         Self::check_dev_link_conflict(plugin_id)?;
 
         let plugin_dir = self.plugins_dir.join(plugin_id);
@@ -221,35 +260,18 @@ impl PluginInstaller {
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("Plugin path contains invalid UTF-8"))?;
 
-        let clone_output = tokio::time::timeout(
-            GIT_TIMEOUT,
-            tokio::process::Command::new("git")
-                .args(["clone", plugin_dir_str, staging_str])
-                .output(),
-        )
-        .await
-        .context("Git clone timed out")??;
-
-        if !clone_output.status.success() {
+        if let Err(error) =
+            run_git_checked(["clone", plugin_dir_str, staging_str], None, "clone").await
+        {
             self.cleanup_temp_dir(&staging_dir).await;
-            let stderr = String::from_utf8_lossy(&clone_output.stderr);
-            anyhow::bail!("Git clone failed: {}", stderr);
+            return Err(error);
         }
 
-        let output = tokio::time::timeout(
-            GIT_TIMEOUT,
-            tokio::process::Command::new("git")
-                .args(["fetch", "origin"])
-                .current_dir(&staging_dir)
-                .output(),
-        )
-        .await
-        .context("Git fetch timed out")??;
-
-        if !output.status.success() {
+        if let Err(error) =
+            run_git_checked(["fetch", "origin"], Some(&staging_dir), "fetch").await
+        {
             self.cleanup_temp_dir(&staging_dir).await;
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("Git fetch failed: {}", stderr);
+            return Err(error);
         }
 
         let branch = match self.get_default_branch(&staging_dir).await {
@@ -259,20 +281,9 @@ impl PluginInstaller {
                 return Err(error);
             }
         };
-        let output = tokio::time::timeout(
-            GIT_TIMEOUT,
-            tokio::process::Command::new("git")
-                .args(["reset", "--hard", &format!("origin/{}", branch)])
-                .current_dir(&staging_dir)
-                .output(),
-        )
-        .await
-        .context("Git reset timed out")??;
-
-        if !output.status.success() {
+        if let Err(error) = self.reset_to_origin_head(&staging_dir, &branch).await {
             self.cleanup_temp_dir(&staging_dir).await;
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("Git reset failed: {}", stderr);
+            return Err(error);
         }
 
         if let Err(error) = self.install_dependencies(&staging_dir, plugin_id).await {
@@ -293,15 +304,13 @@ impl PluginInstaller {
     }
 
     async fn get_default_branch(&self, plugin_dir: &Path) -> Result<String> {
-        let output = tokio::time::timeout(
+        let output = run_git(
+            ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"],
+            Some(plugin_dir),
             Duration::from_secs(10),
-            tokio::process::Command::new("git")
-                .args(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
-                .current_dir(plugin_dir)
-                .output(),
+            "symbolic-ref",
         )
-        .await
-        .context("Git symbolic-ref timed out")??;
+        .await?;
 
         if output.status.success() {
             let branch = String::from_utf8_lossy(&output.stdout);
@@ -312,7 +321,42 @@ impl PluginInstaller {
             log::warn!("Invalid branch name from git: {:?}", branch);
         }
 
-        Ok("master".to_string())
+        Ok("main".to_string())
+    }
+
+    async fn reset_to_origin_head(&self, plugin_dir: &Path, branch: &str) -> Result<()> {
+        let mut candidates = vec![branch.to_string()];
+        if branch != "main" {
+            candidates.push("main".to_string());
+        }
+        if branch != "master" {
+            candidates.push("master".to_string());
+        }
+        let mut last_error = String::new();
+
+        for candidate in candidates {
+            let reset_target = format!("origin/{}", candidate);
+            let output = run_git(
+                ["reset", "--hard", reset_target.as_str()],
+                Some(plugin_dir),
+                GIT_TIMEOUT,
+                "reset",
+            )
+            .await?;
+
+            if output.status.success() {
+                return Ok(());
+            }
+            last_error = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        }
+
+        if last_error.is_empty() {
+            anyhow::bail!("Git reset failed for origin/main and origin/master");
+        }
+        anyhow::bail!(
+            "Git reset failed for origin/main and origin/master: {}",
+            last_error
+        )
     }
 
     #[cfg(feature = "dev")]
@@ -334,6 +378,8 @@ impl PluginInstaller {
     }
 
     pub async fn uninstall(&self, plugin_id: &str) -> Result<()> {
+        validate_plugin_id(plugin_id)?;
+        let _operation_lock = self.acquire_operation_lock(plugin_id)?;
         let plugin_dir = self.plugins_dir.join(plugin_id);
 
         if !plugin_dir.exists() {
@@ -345,6 +391,149 @@ impl PluginInstaller {
         log::info!("Plugin {} uninstalled successfully", plugin_id);
         Ok(())
     }
+
+    fn acquire_operation_lock(&self, plugin_id: &str) -> Result<PluginOperationLock> {
+        std::fs::create_dir_all(&self.plugins_dir)
+            .with_context(|| format!("Failed to create plugins directory {}", self.plugins_dir.display()))?;
+        let path = self.plugins_dir.join(format!(".{}.lock", plugin_id));
+
+        match open_lock_file(&path) {
+            Ok(mut file) => {
+                let _ = writeln!(file, "{} {}", std::process::id(), plugin_id);
+                Ok(PluginOperationLock { path })
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if stale_lockfile(&path) {
+                    let _ = std::fs::remove_file(&path);
+                    let mut file = open_lock_file(&path).with_context(|| {
+                        format!(
+                            "Failed to reacquire stale plugin operation lock {}",
+                            path.display()
+                        )
+                    })?;
+                    let _ = writeln!(file, "{} {}", std::process::id(), plugin_id);
+                    return Ok(PluginOperationLock { path });
+                }
+                anyhow::bail!("Plugin operation already in progress: {}", plugin_id)
+            }
+            Err(error) => Err(error)
+                .with_context(|| format!("Failed to acquire plugin operation lock {}", path.display())),
+        }
+    }
+}
+
+struct PluginOperationLock {
+    path: PathBuf,
+}
+
+impl Drop for PluginOperationLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(path)
+}
+
+fn stale_lockfile(path: &Path) -> bool {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return lockfile_too_old(path, LOCKFILE_MAX_AGE);
+    };
+    let Some(raw_pid) = content.split_whitespace().next() else {
+        return lockfile_too_old(path, LOCKFILE_MAX_AGE);
+    };
+    let Ok(pid) = raw_pid.parse::<u32>() else {
+        return lockfile_too_old(path, LOCKFILE_MAX_AGE);
+    };
+
+    #[cfg(unix)]
+    {
+        return !is_pid_alive(pid);
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        lockfile_too_old(path, LOCKFILE_MAX_AGE)
+    }
+}
+
+fn lockfile_too_old(path: &Path, max_age: Duration) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    let Ok(modified) = meta.modified() else {
+        return false;
+    };
+    modified.elapsed().is_ok_and(|age| age > max_age)
+}
+
+#[cfg(unix)]
+fn is_pid_alive(pid: u32) -> bool {
+    crate::process_utils::is_pid_alive(pid as i32)
+}
+
+fn validate_plugin_id(plugin_id: &str) -> Result<()> {
+    if !crate::paths::is_safe_path_component(plugin_id) {
+        anyhow::bail!("Invalid plugin ID: {}", plugin_id);
+    }
+    Ok(())
+}
+
+async fn run_git<I, S>(
+    args: I,
+    current_dir: Option<&Path>,
+    timeout: Duration,
+    operation: &str,
+) -> Result<std::process::Output>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let mut command = tokio::process::Command::new("git");
+    command.args(args);
+    if let Some(current_dir) = current_dir {
+        command.current_dir(current_dir);
+    }
+    tokio::time::timeout(timeout, command.output())
+        .await
+        .with_context(|| format!("Git {} timed out", operation))?
+        .with_context(|| format!("Failed to run git {}", operation))
+}
+
+async fn run_git_checked<I, S>(
+    args: I,
+    current_dir: Option<&Path>,
+    operation: &str,
+) -> Result<std::process::Output>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let output = run_git(args, current_dir, GIT_TIMEOUT, operation).await?;
+    if output.status.success() {
+        return Ok(output);
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    anyhow::bail!("Git {} failed: {}", operation, stderr)
+}
+
+async fn run_cargo_build(manifest_path: &Path, plugin_dir: &Path) -> Result<std::process::Output> {
+    let mut command = tokio::process::Command::new("cargo");
+    command
+        .arg("build")
+        .arg("--release")
+        .arg("--manifest-path")
+        .arg(manifest_path)
+        .current_dir(plugin_dir);
+    tokio::time::timeout(CARGO_BUILD_TIMEOUT, command.output())
+        .await
+        .context("Cargo build timed out")?
+        .context("Failed to run cargo build")
 }
 
 fn is_safe_branch_name(s: &str) -> bool {
@@ -387,6 +576,89 @@ fn get_arch_name() -> &'static str {
     }
 }
 
+fn can_build_from_source_fallback(plugin_id: &str, repo: &str, plugin_dir: &Path) -> bool {
+    if !plugin_dir.join("Cargo.toml").is_file() {
+        return false;
+    }
+
+    let expected_repo = format!("qol-tools/{}", plugin_id);
+    repo.eq_ignore_ascii_case(&expected_repo)
+}
+
+fn dependency_binary_output_path(plugin_dir: &Path, binary_name: &str) -> PathBuf {
+    #[cfg(windows)]
+    {
+        if std::path::Path::new(binary_name).extension().is_none() {
+            return plugin_dir.join(format!("{}.exe", binary_name));
+        }
+    }
+    plugin_dir.join(binary_name)
+}
+
+fn built_binary_candidates(plugin_dir: &Path, binary_name: &str) -> Vec<PathBuf> {
+    let release_dir = plugin_dir.join("target").join("release");
+    #[cfg(windows)]
+    {
+        let mut candidates = vec![release_dir.join(binary_name)];
+        if std::path::Path::new(binary_name).extension().is_none() {
+            candidates.push(release_dir.join(format!("{}.exe", binary_name)));
+        }
+        candidates
+    }
+
+    #[cfg(not(windows))]
+    {
+        vec![release_dir.join(binary_name)]
+    }
+}
+
+async fn install_built_binary(source_path: &Path, output_path: &Path) -> Result<()> {
+    let staged_path = output_path.with_extension("new");
+    let _ = tokio::fs::remove_file(&staged_path).await;
+    tokio::fs::copy(source_path, &staged_path).await.with_context(|| {
+        format!(
+            "Failed to stage built binary {} -> {}",
+            source_path.display(),
+            staged_path.display()
+        )
+    })?;
+    tokio::fs::rename(&staged_path, output_path).await.with_context(|| {
+        format!(
+            "Failed to install built binary {} -> {}",
+            staged_path.display(),
+            output_path.display()
+        )
+    })?;
+    Ok(())
+}
+
+async fn build_binary_from_source(plugin_dir: &Path, binary_name: &str) -> Result<()> {
+    let manifest_path = plugin_dir.join("Cargo.toml");
+    if !manifest_path.is_file() {
+        anyhow::bail!("Cargo.toml not found at {}", manifest_path.display());
+    }
+
+    let output = run_cargo_build(&manifest_path, plugin_dir).await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Cargo build failed: {}", stderr.trim());
+    }
+
+    let source_path = built_binary_candidates(plugin_dir, binary_name)
+        .into_iter()
+        .find(|path| path.is_file())
+        .with_context(|| {
+            format!(
+                "Built binary not found for {} in {}",
+                binary_name,
+                plugin_dir.join("target").join("release").display()
+            )
+        })?;
+    let output_path = dependency_binary_output_path(plugin_dir, binary_name);
+    install_built_binary(&source_path, &output_path).await?;
+    Ok(())
+}
+
 #[derive(Deserialize)]
 struct GitHubRelease {
     assets: Vec<GitHubAsset>,
@@ -400,30 +672,24 @@ struct GitHubAsset {
 
 async fn fetch_latest_release(repo: &str) -> Result<GitHubRelease> {
     let url = format!("https://api.github.com/repos/{}/releases/latest", repo);
-    let client = reqwest::Client::new();
-
-    let release: GitHubRelease = client
-        .get(&url)
-        .header("User-Agent", "qol-tray")
-        .send()
-        .await?
-        .json()
-        .await?;
+    let release: GitHubRelease = github_request(&url).await?.json().await?;
 
     Ok(release)
 }
 
 async fn download_asset(url: &str, dest: &PathBuf) -> Result<()> {
-    let client = reqwest::Client::new();
-    let response = client
-        .get(url)
-        .header("User-Agent", "qol-tray")
-        .send()
-        .await?;
+    let response = github_request(url).await?;
 
     let bytes = response.bytes().await?;
     tokio::fs::write(dest, &bytes).await?;
     Ok(())
+}
+
+async fn github_request(url: &str) -> Result<reqwest::Response> {
+    let client = reqwest::Client::new();
+    let token = super::github::get_stored_token();
+    let request = super::github::build_github_request(&client, url, token.as_deref());
+    super::github::send_checked(request).await
 }
 
 #[cfg(test)]

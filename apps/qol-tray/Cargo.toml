@@ -80,6 +80,9 @@ libc = "0.2"
 [dev-dependencies]
 tempfile = "3.8"
 
+[profile.release]
+incremental = true
+
 [package.metadata.deb]
 maintainer = "KMRH47"
 copyright = "2025, KMRH47"

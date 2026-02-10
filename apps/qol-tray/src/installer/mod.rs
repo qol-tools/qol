@@ -16,12 +16,14 @@ pub fn run() -> Result<()> {
     println!("Installing QoL Tray...");
 
     let repo_root = env::current_dir().context("Failed to determine current directory")?;
-    build_release_binary(&repo_root)?;
-
     let source_binary = repo_root
         .join("target")
         .join("release")
         .join(platform::binary_filename());
+
+    if !source_binary.is_file() {
+        build_release_binary(&repo_root)?;
+    }
 
     if !source_binary.is_file() {
         return Err(anyhow!("Built binary not found at {}", source_binary.display()));
@@ -32,13 +34,8 @@ pub fn run() -> Result<()> {
         .with_context(|| format!("Failed to create install directory {}", install_dir.display()))?;
 
     let installed_binary = install_dir.join(platform::binary_filename());
-    fs::copy(&source_binary, &installed_binary).with_context(|| {
-        format!(
-            "Failed to copy {} to {}",
-            source_binary.display(),
-            installed_binary.display()
-        )
-    })?;
+    platform::stop_running()?;
+    install_binary_atomically(&source_binary, &installed_binary)?;
 
     #[cfg(unix)]
     {
@@ -53,6 +50,7 @@ pub fn run() -> Result<()> {
 
     let install_id = create_install_id();
     write_install_id_marker(&installed_binary, &install_id)?;
+    crate::paths::set_active_install_id(&install_id)?;
     let plugins_dir = ensure_plugin_dir(&install_id)?;
     seed_example_plugin(&repo_root, &plugins_dir)?;
     platform::write_autostart_entry(&installed_binary)?;
@@ -67,6 +65,52 @@ pub fn run() -> Result<()> {
     if !is_in_path(&install_dir) {
         println!("{} is not in PATH. Add it to run qol-tray directly.", install_dir.display());
     }
+
+    Ok(())
+}
+
+fn install_binary_atomically(source_binary: &Path, installed_binary: &Path) -> Result<()> {
+    let staged_binary = installed_binary.with_extension("new");
+    if staged_binary.exists() {
+        let _ = fs::remove_file(&staged_binary);
+    }
+
+    fs::copy(source_binary, &staged_binary).with_context(|| {
+        format!(
+            "Failed to copy {} to {}",
+            source_binary.display(),
+            staged_binary.display()
+        )
+    })?;
+
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(&staged_binary)
+            .with_context(|| format!("Failed to read metadata for {}", staged_binary.display()))?
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&staged_binary, permissions).with_context(|| {
+            format!("Failed to set executable permissions on {}", staged_binary.display())
+        })?;
+    }
+
+    #[cfg(windows)]
+    if installed_binary.exists() {
+        fs::remove_file(installed_binary).with_context(|| {
+            format!(
+                "Failed to remove existing installed binary {}",
+                installed_binary.display()
+            )
+        })?;
+    }
+
+    fs::rename(&staged_binary, installed_binary).with_context(|| {
+        format!(
+            "Failed to finalize install by moving {} to {}",
+            staged_binary.display(),
+            installed_binary.display()
+        )
+    })?;
 
     Ok(())
 }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
@@ -19,11 +19,19 @@ pub fn resolve_all(
     dev_links: &HashMap<String, PathBuf>,
 ) -> Vec<ResolvedPlugin> {
     let mut resolved: HashMap<String, ResolvedPlugin> = HashMap::new();
+    let dev_link_targets: HashSet<PathBuf> = dev_links
+        .values()
+        .map(|path| canonical_or_original(path))
+        .collect();
 
     if let Ok(entries) = std::fs::read_dir(plugins_dir) {
         for entry in entries.filter_map(|e| e.ok()) {
             let path = entry.path();
             let id = entry.file_name().to_string_lossy().to_string();
+
+            if dev_link_targets.contains(&canonical_or_original(&path)) {
+                continue;
+            }
 
             if id.starts_with('.') {
                 continue;
@@ -74,6 +82,10 @@ pub fn resolve_all(
     let mut result: Vec<_> = resolved.into_values().collect();
     result.sort_by(|a, b| a.id.cmp(&b.id));
     result
+}
+
+fn canonical_or_original(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 #[cfg(test)]
