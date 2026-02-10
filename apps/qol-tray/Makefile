@@ -1,4 +1,4 @@
-.PHONY: build release run dev test check clean contracts
+.PHONY: build release run dev test check clean contracts install
 
 build:
 	cargo build
@@ -34,3 +34,6 @@ clean:
 
 contracts:
 	python3 scripts/validate_first_party_plugin_contracts.py --plugins-root ../qol-tools
+
+install:
+	cargo run --release --bin qol-tray-install

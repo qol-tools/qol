@@ -10,6 +10,10 @@ authors = ["KMRH47"]
 name = "qol-tray"
 path = "src/main.rs"
 
+[[bin]]
+name = "qol-tray-install"
+path = "src/bin/qol_tray_install.rs"
+
 [lib]
 name = "qol_tray"
 path = "src/lib.rs"
