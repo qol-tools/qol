@@ -165,7 +165,7 @@ function renderApiUsage() {
             <button class="btn-copy" data-action="copy">Copy</button>
         </div>
         <div class="api-usage-content">
-            <code>POST http://127.0.0.1:42700/api/task-runner/execute</code>
+            <code>POST ${API_BASE}/execute</code>
             <pre id="api-example">${escapeHtml(example)}</pre>
         </div>
     `;

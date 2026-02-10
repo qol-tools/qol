@@ -103,7 +103,7 @@ fn daemon_pids_path() -> Option<std::path::PathBuf> {
     paths::config_dir().ok().map(|p| p.join(".daemon-pids"))
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn kill_orphan_daemons() {
     kill_orphan_plugin_binaries();
     let installs_root = paths::installs_dir().ok();
@@ -125,10 +125,10 @@ fn kill_orphan_daemons() {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(target_os = "linux"))]
 fn kill_orphan_daemons() {}
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn kill_orphan_plugin_binaries() {
     let Some(installs_root) = paths::installs_dir().ok() else {
         return;
@@ -161,7 +161,7 @@ fn kill_orphan_plugin_binaries() {
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn is_installed_plugin_binary_path(target: &std::path::Path, installs_root: &std::path::Path) -> bool {
     let resolved_target = std::fs::canonicalize(target).unwrap_or_else(|_| target.to_path_buf());
     let resolved_installs_root =
@@ -176,27 +176,18 @@ fn is_installed_plugin_binary_path(target: &std::path::Path, installs_root: &std
         .any(|component| component.as_os_str() == std::ffi::OsStr::new("plugins"))
 }
 
+#[cfg(target_os = "linux")]
 fn is_pid_from_installed_plugin(pid: i32, installs_root: &std::path::Path) -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        let exe_path = std::path::Path::new("/proc")
-            .join(pid.to_string())
-            .join("exe");
-        let Ok(target) = std::fs::read_link(exe_path) else {
-            return false;
-        };
-        return is_installed_plugin_binary_path(&target, installs_root);
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = pid;
-        let _ = installs_root;
-        false
-    }
+    let exe_path = std::path::Path::new("/proc")
+        .join(pid.to_string())
+        .join("exe");
+    let Ok(target) = std::fs::read_link(exe_path) else {
+        return false;
+    };
+    is_installed_plugin_binary_path(&target, installs_root)
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn daemon_pid_files() -> Vec<std::path::PathBuf> {
     let mut files = Vec::new();
 
