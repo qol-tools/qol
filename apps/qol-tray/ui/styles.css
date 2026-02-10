@@ -399,8 +399,13 @@ header p { color: var(--text-muted); font-size: 1.1rem; }
     min-height: 160px;
 }
 
-.plugin-grid .plugin-card.no-ui { opacity: 0.5; }
-.plugin-grid .plugin-card.no-ui.selected { opacity: 0.7; }
+.plugin-grid .plugin-card.no-ui {
+    border-color: var(--border-default);
+}
+
+.plugin-grid .plugin-card.no-ui img {
+    opacity: 0.45;
+}
 .plugin-grid .plugin-card.not-loaded { border-color: #f59e0b; }
 .plugin-grid .plugin-card.not-loaded.selected { box-shadow: 0 0 10px rgba(245, 158, 11, 0.25); }
 
@@ -502,15 +507,15 @@ header p { color: var(--text-muted); font-size: 1.1rem; }
     position: absolute;
     top: 0.5rem;
     right: 0.5rem;
-    width: 1.5rem;
-    height: 1.5rem;
-    border: none;
-    border-radius: 4px;
-    background: none;
-    color: var(--text-muted);
+    width: 2.1rem;
+    height: 2.1rem;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.45);
+    color: var(--text-secondary);
     cursor: pointer;
-    opacity: 0;
-    transition: opacity var(--transition), color var(--transition);
+    opacity: 0.92;
+    transition: color var(--transition), background var(--transition), border-color var(--transition);
     z-index: 20;
     display: flex;
     align-items: center;
@@ -518,14 +523,21 @@ header p { color: var(--text-muted); font-size: 1.1rem; }
     padding: 0;
 }
 
-.plugin-grid .plugin-card:hover .plugin-cog,
-.plugin-grid .plugin-card.selected .plugin-cog { opacity: 1; }
+.plugin-cog-icon {
+    display: block;
+    width: 0.95rem;
+    height: 1.45rem;
+}
 
-.plugin-cog:hover { color: var(--text-primary); }
+.plugin-cog:hover {
+    color: var(--text-primary);
+    background: rgba(0, 0, 0, 0.62);
+    border-color: rgba(255, 255, 255, 0.22);
+}
 
 .plugin-context-menu {
     position: absolute;
-    top: 2.5rem;
+    top: 2.8rem;
     right: 0.5rem;
     background: var(--bg-surface);
     border: 1px solid var(--border-default);
@@ -559,6 +571,8 @@ header p { color: var(--text-muted); font-size: 1.1rem; }
     text-align: left;
     cursor: pointer;
     transition: background var(--transition);
+    opacity: 1;
+    font-weight: 600;
 }
 
 .context-update { color: var(--success); }
