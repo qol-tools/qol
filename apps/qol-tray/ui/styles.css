@@ -357,6 +357,8 @@ header p { color: var(--text-muted); font-size: 1.1rem; }
 
 .plugin-grid .plugin-card.no-ui { opacity: 0.5; }
 .plugin-grid .plugin-card.no-ui.selected { opacity: 0.7; }
+.plugin-grid .plugin-card.not-loaded { border-color: #f59e0b; }
+.plugin-grid .plugin-card.not-loaded.selected { box-shadow: 0 0 10px rgba(245, 158, 11, 0.25); }
 
 .plugin-grid .plugin-card img {
     width: 100%;
@@ -375,6 +377,20 @@ header p { color: var(--text-muted); font-size: 1.1rem; }
     color: var(--text-primary);
     font-weight: 500;
     font-size: 1rem;
+}
+
+.plugin-load-state {
+    position: absolute;
+    top: 0.5rem;
+    right: 2.5rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: var(--radius-sm);
+    background: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    font-size: 0.75rem;
+    font-weight: 600;
+    z-index: 20;
 }
 
 .plugins-grid .plugin-card {

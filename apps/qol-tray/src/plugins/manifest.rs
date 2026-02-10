@@ -173,34 +173,22 @@ impl DaemonConfig {
 }
 
 fn validate_command_name(field: &str, value: &str) -> Result<()> {
-    if value.trim().is_empty() {
-        bail!("{field} cannot be empty");
-    }
-
-    if value.trim() != value {
-        bail!("{field} cannot have leading or trailing whitespace");
-    }
-
-    if value.contains('\0') {
-        bail!("{field} cannot contain null bytes");
-    }
-
-    if value.starts_with('-') {
-        bail!("{field} cannot start with '-'");
-    }
-
-    if value.len() > 64 {
-        bail!("{field} is too long");
-    }
-
-    if !value
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
+    if !is_valid_command_basename(value) {
         bail!("{field} must contain only [A-Za-z0-9_-]");
     }
 
     Ok(())
+}
+
+pub fn is_valid_command_basename(value: &str) -> bool {
+    !value.trim().is_empty()
+        && value.trim() == value
+        && !value.contains('\0')
+        && !value.starts_with('-')
+        && value.len() <= 64
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 fn validate_absolute_socket_path(path_value: &str) -> Result<()> {

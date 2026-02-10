@@ -5,10 +5,12 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 mod platform;
 
 const APP_NAME: &str = "qol-tray";
+const INSTALL_ID_FILE: &str = "qol-tray.install-id";
 
 pub fn run() -> Result<()> {
     println!("Installing QoL Tray...");
@@ -49,13 +51,16 @@ pub fn run() -> Result<()> {
         })?;
     }
 
-    let plugins_dir = ensure_plugin_dir()?;
+    let install_id = create_install_id();
+    write_install_id_marker(&installed_binary, &install_id)?;
+    let plugins_dir = ensure_plugin_dir(&install_id)?;
     seed_example_plugin(&repo_root, &plugins_dir)?;
     platform::write_autostart_entry(&installed_binary)?;
     platform::start_now(&installed_binary)?;
 
     println!("Installation complete.");
     println!("Installed binary: {}", installed_binary.display());
+    println!("Install ID: {}", install_id);
     println!("Autostart entry: {}", platform::autostart_path()?.display());
     println!("Plugins directory: {}", plugins_dir.display());
 
@@ -89,14 +94,29 @@ fn build_release_binary(repo_root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn ensure_plugin_dir() -> Result<PathBuf> {
-    let config_dir = dirs::config_dir()
-        .context("Could not determine config directory")?
-        .join(APP_NAME);
+fn ensure_plugin_dir(install_id: &str) -> Result<PathBuf> {
+    let config_dir = crate::paths::config_dir_for_install_id(install_id)?;
     let plugins_dir = config_dir.join("plugins");
     fs::create_dir_all(&plugins_dir)
         .with_context(|| format!("Failed to create plugins directory {}", plugins_dir.display()))?;
     Ok(plugins_dir)
+}
+
+fn write_install_id_marker(installed_binary: &Path, install_id: &str) -> Result<()> {
+    let parent = installed_binary
+        .parent()
+        .context("Installed binary has no parent directory")?;
+    let marker_path = parent.join(INSTALL_ID_FILE);
+    fs::write(&marker_path, format!("{}\n", install_id))
+        .with_context(|| format!("Failed to write install marker {}", marker_path.display()))
+}
+
+fn create_install_id() -> String {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("install-{}-{}", ts, std::process::id())
 }
 
 fn seed_example_plugin(repo_root: &Path, plugins_dir: &Path) -> Result<()> {
