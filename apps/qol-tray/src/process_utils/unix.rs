@@ -1,16 +1,9 @@
 use std::time::Duration;
 
-#[cfg(unix)]
 pub fn is_pid_alive(pid: i32) -> bool {
     unsafe { libc::kill(pid, 0) == 0 }
 }
 
-#[cfg(not(unix))]
-pub fn is_pid_alive(_pid: i32) -> bool {
-    true
-}
-
-#[cfg(unix)]
 pub fn terminate_pid(pid: i32, grace: Duration) {
     if !is_pid_alive(pid) {
         return;
@@ -26,10 +19,6 @@ pub fn terminate_pid(pid: i32, grace: Duration) {
     }
 }
 
-#[cfg(not(unix))]
-pub fn terminate_pid(_pid: i32, _grace: Duration) {}
-
-#[cfg(unix)]
 pub fn reap_children_nonblocking() {
     unsafe {
         loop {
@@ -41,6 +30,3 @@ pub fn reap_children_nonblocking() {
         }
     }
 }
-
-#[cfg(not(unix))]
-pub fn reap_children_nonblocking() {}
