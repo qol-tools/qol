@@ -1,26 +1,15 @@
-mod daemon;
-#[cfg(feature = "dev")]
-mod dev;
-mod features;
-mod hotkeys;
-mod menu;
-mod paths;
-mod process_utils;
-mod plugins;
-mod tray;
-mod updates;
-mod version;
-
 use anyhow::Result;
-use daemon::Daemon;
-use features::FeatureRegistry;
+use qol_tray::daemon::Daemon;
+use qol_tray::features::{self, FeatureRegistry};
+use qol_tray::hotkeys;
 #[cfg(feature = "dev")]
-use plugins::PluginLoader;
-use plugins::PluginManager;
+use qol_tray::plugins::PluginLoader;
+use qol_tray::plugins::PluginManager;
+use qol_tray::tray::{self, TrayManager};
+use qol_tray::updates;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
-use tray::TrayManager;
 
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -36,7 +25,6 @@ fn app_init() -> Result<(TrayManager, Arc<Mutex<PluginManager>>)> {
     let (shutdown_tx, shutdown_rx, update_available, plugin_manager, feature_registry) =
         rt.block_on(async_init())?;
 
-    // Keep tokio runtime alive in background
     std::thread::spawn(move || {
         rt.block_on(std::future::pending::<()>());
     });
