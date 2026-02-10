@@ -8,9 +8,15 @@ use crate::features::MenuProvider;
 use crate::plugins::{MenuItem as PluginMenuItem, PluginManager};
 use anyhow::Result;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU16, Ordering};
 
-const SERVER_PORT: u16 = 42700;
+const DEFAULT_SERVER_PORT: u16 = 42700;
 const MENU_ITEM_ID: &str = "plugins";
+static ACTIVE_SERVER_PORT: AtomicU16 = AtomicU16::new(DEFAULT_SERVER_PORT);
+
+fn server_port() -> u16 {
+    ACTIVE_SERVER_PORT.load(Ordering::Relaxed)
+}
 
 pub struct Plugins;
 
@@ -24,8 +30,9 @@ impl Plugins {
         daemon: &Daemon,
     ) -> Result<()> {
         log::info!("Starting plugin server with embedded UI");
-        server::start_ui_server(plugin_manager, daemon).await?;
-        log::info!("Plugin server started at http://127.0.0.1:{}", SERVER_PORT);
+        let port = server::start_ui_server(plugin_manager, daemon).await?;
+        ACTIVE_SERVER_PORT.store(port, Ordering::Relaxed);
+        log::info!("Plugin server started at http://127.0.0.1:{}", port);
         Ok(())
     }
 }
@@ -45,7 +52,7 @@ impl MenuProvider for Plugins {
     fn handle_event(&self, event_id: &str) -> Result<()> {
         log::info!("Plugins feature received event: {}", event_id);
         if event_id.ends_with(&format!("::{}", MENU_ITEM_ID)) {
-            crate::paths::open_url(&format!("http://127.0.0.1:{}", SERVER_PORT))?;
+            crate::paths::open_url(&format!("http://127.0.0.1:{}", server_port()))?;
         }
         Ok(())
     }

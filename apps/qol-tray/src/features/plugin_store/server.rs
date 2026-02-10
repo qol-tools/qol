@@ -26,6 +26,9 @@ use crate::hotkeys::trigger_reload;
 #[cfg(feature = "dev")]
 use crate::dev;
 
+const DEFAULT_UI_SERVER_PORT: u16 = 42700;
+const MAX_UI_SERVER_PORT_ATTEMPTS: u16 = 20;
+
 #[derive(Clone)]
 struct AppState {
     plugins_dir: PathBuf,
@@ -144,7 +147,7 @@ fn serve_embedded_file(path: &str) -> impl IntoResponse {
 pub async fn start_ui_server(
     plugin_manager: Arc<Mutex<PluginManager>>,
     daemon: &Daemon,
-) -> Result<()> {
+) -> Result<u16> {
     let plugins_dir = PluginLoader::default_plugin_dir()?;
 
     let app_state = AppState {
@@ -198,7 +201,7 @@ pub async fn start_ui_server(
         .route("/{*path}", get(serve_embedded))
         .layer(no_cache);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:42700").await?;
+    let (listener, port) = bind_listener().await?;
 
     tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, app).await {
@@ -206,7 +209,26 @@ pub async fn start_ui_server(
         }
     });
 
-    Ok(())
+    Ok(port)
+}
+
+async fn bind_listener() -> Result<(tokio::net::TcpListener, u16)> {
+    for offset in 0..=MAX_UI_SERVER_PORT_ATTEMPTS {
+        let port = DEFAULT_UI_SERVER_PORT + offset;
+        let address = format!("127.0.0.1:{}", port);
+        match tokio::net::TcpListener::bind(&address).await {
+            Ok(listener) => return Ok((listener, port)),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::AddrInUse
+                    && offset < MAX_UI_SERVER_PORT_ATTEMPTS =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+
+    unreachable!()
 }
 
 fn get_installed_plugin_ids(plugins_dir: &std::path::Path) -> std::collections::HashSet<String> {
@@ -243,7 +265,7 @@ fn read_installed_plugin_dirs(plugins_dir: &std::path::Path) -> Vec<(String, std
 
 async fn list_plugins(
     axum::extract::Query(query): axum::extract::Query<PluginsQuery>,
-) -> Json<PluginsResponse> {
+) -> Result<Json<PluginsResponse>, (StatusCode, String)> {
     use super::github::{GitHubClient, cache_age_secs};
 
     log::info!("API /plugins called (refresh={})", query.refresh);
@@ -253,7 +275,10 @@ async fn list_plugins(
         Ok(dir) => dir,
         Err(e) => {
             log::error!("Failed to determine config directory: {}", e);
-            return Json(PluginsResponse { plugins: vec![], cache_age_secs: None });
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to determine plugin directory".to_string(),
+            ));
         }
     };
 
@@ -261,31 +286,30 @@ async fn list_plugins(
 
     let cache_age = cache_age_secs();
 
-    let plugins = match client.list_plugins_cached(query.refresh).await {
-        Ok(metadata_list) => {
-            log::info!("Got {} plugins", metadata_list.len());
-            metadata_list
-                .into_iter()
-                .filter(|m| m.supports_current_platform())
-                .map(|m| PluginInfo {
-                    id: m.id.clone(),
-                    name: m.name,
-                    description: m.description,
-                    version: m.version,
-                    installed: installed_plugins.contains(&m.id),
-                })
-                .collect()
-        }
-        Err(e) => {
-            log::error!("Failed to fetch plugins: {}", e);
-            vec![]
-        }
-    };
+    let metadata_list = client.list_plugins_cached(query.refresh).await.map_err(|e| {
+        log::error!("Failed to fetch plugins: {}", e);
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("Failed to fetch plugins: {:#}", e),
+        )
+    })?;
+    log::info!("Got {} plugins", metadata_list.len());
+    let plugins = metadata_list
+        .into_iter()
+        .filter(|m| m.supports_current_platform())
+        .map(|m| PluginInfo {
+            id: m.id.clone(),
+            name: m.name,
+            description: m.description,
+            version: m.version,
+            installed: installed_plugins.contains(&m.id),
+        })
+        .collect();
     
-    Json(PluginsResponse {
+    Ok(Json(PluginsResponse {
         plugins,
         cache_age_secs: cache_age,
-    })
+    }))
 }
 
 async fn install_plugin(

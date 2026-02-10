@@ -2,13 +2,22 @@ use super::DaemonActionDispatch;
 use std::path::Path;
 
 pub(super) fn dispatch_action(endpoint: &Path, action_id: &str) -> DaemonActionDispatch {
+    let mut fallback_seen = false;
+
     for payload in super::payload_candidates(action_id) {
-        let dispatch = send_payload(endpoint, &payload);
-        if !matches!(dispatch, DaemonActionDispatch::Unavailable) {
-            return dispatch;
+        match send_payload(endpoint, &payload) {
+            DaemonActionDispatch::Handled => return DaemonActionDispatch::Handled,
+            DaemonActionDispatch::Error(message) => return DaemonActionDispatch::Error(message),
+            DaemonActionDispatch::Fallback => fallback_seen = true,
+            DaemonActionDispatch::Unavailable => {}
         }
     }
-    DaemonActionDispatch::Unavailable
+
+    if fallback_seen {
+        DaemonActionDispatch::Fallback
+    } else {
+        DaemonActionDispatch::Unavailable
+    }
 }
 
 fn send_payload(endpoint: &Path, payload: &str) -> DaemonActionDispatch {
