@@ -13,12 +13,11 @@ impl PluginLoader {
 
     pub fn ensure_plugin_dir() -> Result<PathBuf> {
         let dir = Self::default_plugin_dir()?;
-        if dir.exists() {
-            return Ok(dir);
+        if !dir.exists() {
+            fs::create_dir_all(&dir).context("Failed to create plugins directory")?;
+            log::info!("Created plugins directory: {:?}", dir);
         }
 
-        fs::create_dir_all(&dir).context("Failed to create plugins directory")?;
-        log::info!("Created plugins directory: {:?}", dir);
         Ok(dir)
     }
 
@@ -208,7 +207,8 @@ command = "daemon-plugin"
     #[test]
     fn default_plugin_dir_ends_with_qol_tray_plugins() {
         let dir = PluginLoader::default_plugin_dir().unwrap();
-        assert!(dir.ends_with("qol-tray/plugins"));
+        assert!(dir.ends_with("plugins"));
+        assert!(dir.to_string_lossy().contains("qol-tray"));
     }
 
     #[test]

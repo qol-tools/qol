@@ -6,6 +6,7 @@ pub mod hotkeys;
 pub mod installer;
 pub mod menu;
 pub mod paths;
+pub mod process_utils;
 pub mod plugins;
 pub mod tray;
 pub mod updates;

@@ -36,4 +36,5 @@ contracts:
 	python3 scripts/validate_first_party_plugin_contracts.py --plugins-root ../qol-tools
 
 install:
-	cargo run --release --bin qol-tray-install
+	cargo build --release --bins
+	target/release/qol-tray-install

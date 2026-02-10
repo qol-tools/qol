@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod unix_common;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -35,6 +37,10 @@ mod imp {
     pub fn start_now(_: &Path) -> Result<()> {
         Ok(())
     }
+
+    pub fn stop_running() -> Result<()> {
+        Ok(())
+    }
 }
 
 pub fn binary_filename() -> String {
@@ -59,4 +65,8 @@ pub fn write_autostart_entry(binary_path: &Path) -> Result<()> {
 
 pub fn start_now(binary_path: &Path) -> Result<()> {
     imp::start_now(binary_path)
+}
+
+pub fn stop_running() -> Result<()> {
+    imp::stop_running()
 }

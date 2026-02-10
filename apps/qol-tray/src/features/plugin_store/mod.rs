@@ -1,5 +1,5 @@
 mod server;
-mod github;
+pub(crate) mod github;
 mod installer;
 mod plugin_ui;
 

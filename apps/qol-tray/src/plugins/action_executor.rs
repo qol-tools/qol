@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
 static ACTION_PROCESSES: OnceLock<Mutex<HashMap<String, Vec<u32>>>> = OnceLock::new();
+static RUNNING_ACTIONS: OnceLock<Mutex<HashMap<String, u32>>> = OnceLock::new();
 
 struct ResolvedAction {
     plugin_id: String,
@@ -70,25 +71,16 @@ fn get_action_processes() -> &'static Mutex<HashMap<String, Vec<u32>>> {
     ACTION_PROCESSES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-#[allow(dead_code)]
-pub fn kill_plugin_processes(plugin_id: &str) {
-    let mut processes = match get_action_processes().lock() {
-        Ok(p) => p,
-        Err(e) => {
-            log::error!("Failed to lock action processes: {}", e);
-            return;
-        }
-    };
+fn get_running_actions() -> &'static Mutex<HashMap<String, u32>> {
+    RUNNING_ACTIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
-    if let Some(pids) = processes.remove(plugin_id) {
-        for pid in pids {
-            kill_process(pid, plugin_id);
-        }
-    }
+fn action_key(plugin_id: &str, action_id: &str) -> String {
+    format!("{plugin_id}::{action_id}")
 }
 
 pub fn kill_all_plugin_processes() {
-    reap_zombie_children();
+    crate::process_utils::reap_children_nonblocking();
 
     let mut processes = match get_action_processes().lock() {
         Ok(p) => p,
@@ -103,49 +95,64 @@ pub fn kill_all_plugin_processes() {
             kill_process(pid, &plugin_id);
         }
     }
+    if let Ok(mut running) = get_running_actions().lock() {
+        running.clear();
+    }
 
-    reap_zombie_children();
+    crate::process_utils::reap_children_nonblocking();
 }
 
-#[cfg(unix)]
 fn kill_process(pid: u32, plugin_id: &str) {
-    unsafe {
-        let pid = pid as i32;
-        let mut status = 0;
-        if libc::waitpid(pid, &mut status, libc::WNOHANG) == pid {
-            return;
-        }
-        if libc::kill(pid, 0) == 0 {
-            log::info!("Killing action process {} for plugin {}", pid, plugin_id);
-            libc::kill(pid, libc::SIGTERM);
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            if libc::kill(pid, 0) == 0 {
-                libc::kill(pid, libc::SIGKILL);
-            }
+    let pid = pid as i32;
+    if crate::process_utils::is_pid_alive(pid) {
+        log::info!("Killing action process {} for plugin {}", pid, plugin_id);
+        crate::process_utils::terminate_pid(pid, std::time::Duration::from_millis(100));
+    }
+}
+
+fn reserve_runtime_spawn(plugin_id: &str, action_id: &str) -> bool {
+    let key = action_key(plugin_id, action_id);
+    let mut running = match get_running_actions().lock() {
+        Ok(guard) => guard,
+        Err(_) => return false,
+    };
+
+    let Some(existing_pid) = running.get(&key).copied() else {
+        running.insert(key, 0);
+        return true;
+    };
+    if existing_pid == 0 {
+        log::info!(
+            "Plugin action spawn already in progress, skipping: {}::{}",
+            plugin_id,
+            action_id
+        );
+        return false;
+    }
+    if crate::process_utils::is_pid_alive(existing_pid as i32) {
+        log::info!(
+            "Plugin action already running, skipping spawn: {}::{} (pid: {})",
+            plugin_id,
+            action_id,
+            existing_pid
+        );
+        return false;
+    }
+
+    running.insert(key, 0);
+    true
+}
+
+fn clear_runtime_spawn_reservation(plugin_id: &str, action_id: &str) {
+    let key = action_key(plugin_id, action_id);
+    if let Ok(mut running) = get_running_actions().lock() {
+        if running.get(&key).copied() == Some(0) {
+            running.remove(&key);
         }
     }
 }
 
-#[cfg(not(unix))]
-fn kill_process(_pid: u32, _plugin_id: &str) {}
-
-#[cfg(unix)]
-fn reap_zombie_children() {
-    unsafe {
-        loop {
-            let mut status = 0;
-            let reaped = libc::waitpid(-1, &mut status, libc::WNOHANG);
-            if reaped <= 0 {
-                break;
-            }
-        }
-    }
-}
-
-#[cfg(not(unix))]
-fn reap_zombie_children() {}
-
-fn track_action_process(plugin_id: &str, pid: u32) {
+fn track_action_process(plugin_id: &str, action_id: &str, pid: u32) {
     let mut processes = match get_action_processes().lock() {
         Ok(p) => p,
         Err(_) => return,
@@ -154,9 +161,13 @@ fn track_action_process(plugin_id: &str, pid: u32) {
         .entry(plugin_id.to_string())
         .or_default()
         .push(pid);
+
+    if let Ok(mut running) = get_running_actions().lock() {
+        running.insert(action_key(plugin_id, action_id), pid);
+    }
 }
 
-fn untrack_action_process(plugin_id: &str, pid: u32) {
+fn untrack_action_process(plugin_id: &str, action_id: &str, pid: u32) {
     let mut processes = match get_action_processes().lock() {
         Ok(p) => p,
         Err(_) => return,
@@ -169,6 +180,13 @@ fn untrack_action_process(plugin_id: &str, pid: u32) {
     };
     if remove_entry {
         processes.remove(plugin_id);
+    }
+
+    let key = action_key(plugin_id, action_id);
+    if let Ok(mut running) = get_running_actions().lock() {
+        if running.get(&key).copied() == Some(pid) {
+            running.remove(&key);
+        }
     }
 }
 
@@ -287,7 +305,6 @@ fn execute_via_daemon(
     socket_path: &std::path::Path,
 ) -> Result<(), ActionExecutionError> {
     match super::action_transport::dispatch_daemon_action(socket_path, &resolved.action_id) {
-        #[cfg(unix)]
         super::action_transport::DaemonActionDispatch::Handled => {
             log::info!(
                 "Plugin action handled via daemon: {}::{}",
@@ -302,7 +319,13 @@ fn execute_via_daemon(
                 resolved.plugin_id,
                 resolved.action_id
             );
-            Ok(())
+            if resolved.command_path.is_some() {
+                return execute_via_runtime(resolved);
+            }
+            Err(ActionExecutionError::SpawnFailed(format!(
+                "daemon rejected action {}::{}",
+                resolved.plugin_id, resolved.action_id
+            )))
         }
         super::action_transport::DaemonActionDispatch::Unavailable => {
             log::warn!(
@@ -310,9 +333,14 @@ fn execute_via_daemon(
                 resolved.plugin_id,
                 resolved.action_id
             );
-            Ok(())
+            if resolved.command_path.is_some() {
+                return execute_via_runtime(resolved);
+            }
+            Err(ActionExecutionError::SpawnFailed(format!(
+                "daemon unavailable for {}::{}",
+                resolved.plugin_id, resolved.action_id
+            )))
         }
-        #[cfg(unix)]
         super::action_transport::DaemonActionDispatch::Error(message) => {
             log::warn!(
                 "Daemon error for {}::{}: {}",
@@ -320,7 +348,13 @@ fn execute_via_daemon(
                 resolved.action_id,
                 message
             );
-            Ok(())
+            if resolved.command_path.is_some() {
+                return execute_via_runtime(resolved);
+            }
+            Err(ActionExecutionError::SpawnFailed(format!(
+                "daemon error for {}::{}: {}",
+                resolved.plugin_id, resolved.action_id, message
+            )))
         }
     }
 }
@@ -335,25 +369,36 @@ fn execute_via_runtime(resolved: &ResolvedAction) -> Result<(), ActionExecutionE
                 action_id: resolved.action_id.clone(),
             })?;
 
+    if !reserve_runtime_spawn(&resolved.plugin_id, &resolved.action_id) {
+        return Ok(());
+    }
+
     log::info!(
         "Executing runtime action: {:?} {:?}",
         command_path,
         resolved.args
     );
-    let mut child = std::process::Command::new(command_path)
+    let mut command = std::process::Command::new(command_path);
+    command
         .args(&resolved.args)
         .current_dir(&resolved.plugin_dir)
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| ActionExecutionError::SpawnFailed(e.to_string()))?;
+        .stderr(std::process::Stdio::null());
+    if let Some(socket_path) = &resolved.daemon_socket {
+        command.env("QOL_TRAY_DAEMON_SOCKET", socket_path);
+    }
+    let mut child = command.spawn().map_err(|e| {
+        clear_runtime_spawn_reservation(&resolved.plugin_id, &resolved.action_id);
+        ActionExecutionError::SpawnFailed(e.to_string())
+    })?;
 
     let pid = child.id();
-    track_action_process(&resolved.plugin_id, pid);
+    track_action_process(&resolved.plugin_id, &resolved.action_id, pid);
     let plugin_id = resolved.plugin_id.clone();
+    let action_id = resolved.action_id.clone();
     std::thread::spawn(move || {
         let _ = child.wait();
-        untrack_action_process(&plugin_id, pid);
+        untrack_action_process(&plugin_id, &action_id, pid);
     });
     log::info!("Runtime action started (pid: {})", pid);
     Ok(())
@@ -384,10 +429,15 @@ mod tests {
 
     fn clear_tracked_processes() {
         get_action_processes().lock().unwrap().clear();
+        get_running_actions().lock().unwrap().clear();
     }
 
     fn tracked_processes() -> HashMap<String, Vec<u32>> {
         get_action_processes().lock().unwrap().clone()
+    }
+
+    fn tracked_running_actions() -> HashMap<String, u32> {
+        get_running_actions().lock().unwrap().clone()
     }
 
     fn make_plugin(
@@ -556,19 +606,30 @@ mod tests {
     #[test]
     fn process_tracking_adds_and_removes_entries() {
         with_process_tracking_lock(|| {
-            track_action_process("plugin-a", 101);
-            track_action_process("plugin-a", 102);
-            track_action_process("plugin-b", 201);
+            track_action_process("plugin-a", "open", 101);
+            track_action_process("plugin-a", "close", 102);
+            track_action_process("plugin-b", "open", 201);
 
             let tracked = tracked_processes();
             assert_eq!(tracked.get("plugin-a"), Some(&vec![101, 102]));
             assert_eq!(tracked.get("plugin-b"), Some(&vec![201]));
+            let tracked_running = tracked_running_actions();
+            assert_eq!(
+                tracked_running.get("plugin-a::open"),
+                Some(&101)
+            );
+            assert_eq!(
+                tracked_running.get("plugin-a::close"),
+                Some(&102)
+            );
 
-            untrack_action_process("plugin-a", 101);
+            untrack_action_process("plugin-a", "open", 101);
             let tracked = tracked_processes();
             assert_eq!(tracked.get("plugin-a"), Some(&vec![102]));
+            let tracked_running = tracked_running_actions();
+            assert!(!tracked_running.contains_key("plugin-a::open"));
 
-            untrack_action_process("plugin-a", 102);
+            untrack_action_process("plugin-a", "close", 102);
             let tracked = tracked_processes();
             assert!(!tracked.contains_key("plugin-a"));
             assert_eq!(tracked.get("plugin-b"), Some(&vec![201]));
@@ -578,12 +639,14 @@ mod tests {
     #[test]
     fn kill_all_plugin_processes_clears_tracking_map() {
         with_process_tracking_lock(|| {
-            track_action_process("plugin-a", 999_001);
-            track_action_process("plugin-b", 999_002);
+            track_action_process("plugin-a", "open", 999_001);
+            track_action_process("plugin-b", "open", 999_002);
             kill_all_plugin_processes();
 
             let tracked = tracked_processes();
             assert!(tracked.is_empty());
+            let tracked_running = tracked_running_actions();
+            assert!(tracked_running.is_empty());
         });
     }
 }

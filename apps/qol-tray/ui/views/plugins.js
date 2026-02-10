@@ -20,7 +20,8 @@ const state = {
     updating: new Set(),
     refreshToken: 0,
     restoredSelection: false,
-    latestRevision: 0
+    latestRevision: 0,
+    feedback: null
 };
 
 let container = null;
@@ -35,9 +36,10 @@ export function render(containerEl) {
             <header>
                 <h1>Plugins</h1>
             </header>
+            <div id="plugins-feedback"></div>
             <div id="plugins-grid" class="plugin-grid grid-cards grid-cards--zoom"></div>
             <footer class="help">
-                ←↑↓→ navigate • Enter open/run • u update • d delete
+                ←↑↓→ navigate • Enter settings • u update • d delete
             </footer>
         </div>
     `;
@@ -50,6 +52,40 @@ export function render(containerEl) {
         refreshPlugins({ minRevision: revision });
     });
     unsubscribeInstalling = installing.subscribe(() => renderGrid());
+}
+
+function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (char) => (
+        {
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;'
+        }[char]
+    ));
+}
+
+function renderFeedback() {
+    const el = document.getElementById('plugins-feedback');
+    if (!el) return;
+    if (!state.feedback) {
+        el.innerHTML = '';
+        return;
+    }
+    const message = escapeHtml(state.feedback.message);
+    el.innerHTML = `<div class="view-feedback ${state.feedback.type}">${message}</div>`;
+}
+
+function setFeedback(type, message) {
+    state.feedback = { type, message };
+    renderFeedback();
+}
+
+function clearFeedback() {
+    if (!state.feedback) return;
+    state.feedback = null;
+    renderFeedback();
 }
 
 function parseInstalledResponse(payload) {
@@ -274,20 +310,23 @@ async function confirmUninstall() {
     
     if (!pluginId) return;
     
+    clearFeedback();
     try {
         const response = await fetch(`/api/uninstall/${pluginId}`, { method: 'POST' });
         const result = await response.json();
         
         if (!result.success) throw new Error(result.message);
+        setFeedback('success', `Uninstalled ${pluginId}`);
         await refreshPlugins();
     } catch (error) {
-        console.error(`Failed to uninstall plugin: ${error.message}`);
+        setFeedback('error', `Failed to uninstall ${pluginId}: ${error.message}`);
     }
 }
 
 async function updatePlugin(pluginId) {
     if (state.updating.has(pluginId)) return;
     
+    clearFeedback();
     state.updating.add(pluginId);
     renderGrid();
     updateSelection();
@@ -297,8 +336,9 @@ async function updatePlugin(pluginId) {
         const result = await response.json();
         
         if (!result.success) throw new Error(result.message);
+        setFeedback('success', `Updated ${pluginId}`);
     } catch (error) {
-        console.error(`Failed to update plugin: ${error.message}`);
+        setFeedback('error', `Failed to update ${pluginId}: ${error.message}`);
     } finally {
         state.updating.delete(pluginId);
         await refreshPlugins();
@@ -342,7 +382,7 @@ async function refreshPlugins(options = {}) {
             gridEl.innerHTML = `<div class="error">Error loading plugins: ${error.message}</div>`;
             return;
         }
-        console.error(`Failed to refresh plugins: ${error.message}`);
+        setFeedback('error', `Failed to refresh plugins: ${error.message}`);
     }
 }
 
@@ -429,7 +469,7 @@ function openSelected() {
     if (!plugin) return;
 
     if (plugin.loaded === false) {
-        console.warn(`Plugin ${plugin.id} is not loaded: ${plugin.load_error || 'unknown reason'}`);
+        setFeedback('error', `Plugin ${plugin.name} is not loaded${plugin.load_error ? `: ${plugin.load_error}` : ''}`);
         return;
     }
 
@@ -439,32 +479,7 @@ function openSelected() {
         return;
     }
 
-    if (plugin.loaded && Array.isArray(plugin.actions) && plugin.actions.length > 0) {
-        const primaryAction = plugin.actions[0];
-        void executeAction(plugin.id, primaryAction.id);
-    }
-}
-
-async function executeAction(pluginId, actionId) {
-    try {
-        const response = await fetch(
-            `/api/plugins/${encodeURIComponent(pluginId)}/actions/${encodeURIComponent(actionId)}`,
-            { method: 'POST' }
-        );
-
-        if (!response.ok) {
-            let message = 'Action execution failed';
-            try {
-                const payload = await response.json();
-                if (payload && typeof payload.message === 'string' && payload.message.length > 0) {
-                    message = payload.message;
-                }
-            } catch {}
-            throw new Error(message);
-        }
-    } catch (error) {
-        console.error(`Failed to execute action ${pluginId}::${actionId}: ${error.message}`);
-    }
+    setFeedback('info', `No settings UI available for ${plugin.name}`);
 }
 
 export function onFocus() {

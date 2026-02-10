@@ -24,11 +24,9 @@ pub enum PlatformTray {
     #[cfg(target_os = "linux")]
     Linux,
     #[cfg(target_os = "macos")]
-    #[allow(dead_code)]
-    MacOS(TrayIcon),
+    MacOS { _tray_icon: TrayIcon },
     #[cfg(target_os = "windows")]
-    #[allow(dead_code)]
-    Windows(TrayIcon),
+    Windows { _tray_icon: TrayIcon },
 }
 
 pub fn create_tray(
@@ -50,7 +48,9 @@ pub fn create_tray(
         let _ = shutdown_rx;
         let tray_icon =
             macos::create_tray(feature_registry, shutdown_tx, icon, update_available)?;
-        Ok(PlatformTray::MacOS(tray_icon))
+        Ok(PlatformTray::MacOS {
+            _tray_icon: tray_icon,
+        })
     }
 
     #[cfg(target_os = "windows")]
@@ -58,7 +58,9 @@ pub fn create_tray(
         let _ = shutdown_rx;
         let tray_icon =
             windows::create_tray(feature_registry, shutdown_tx, icon, update_available)?;
-        Ok(PlatformTray::Windows(tray_icon))
+        Ok(PlatformTray::Windows {
+            _tray_icon: tray_icon,
+        })
     }
 }
 
@@ -78,9 +80,21 @@ where
     #[cfg(target_os = "windows")]
     windows::run_event_loop();
 
+    shutdown_plugins(&plugin_manager);
     drop(plugin_manager);
     log::info!("Shutdown signal received, exiting...");
     Ok(())
+}
+
+fn shutdown_plugins(plugin_manager: &Arc<Mutex<PluginManager>>) {
+    let mut manager = match plugin_manager.lock() {
+        Ok(guard) => guard,
+        Err(error) => {
+            log::error!("Plugin manager lock poisoned during shutdown: {}", error);
+            return;
+        }
+    };
+    manager.shutdown();
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]

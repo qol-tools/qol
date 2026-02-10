@@ -31,6 +31,14 @@ From there you can:
 | macOS | Supported |
 | Windows | Planned |
 
+## Roadmap Notes
+
+- Cross-platform daemon IPC abstraction:
+  - Unix: Unix domain sockets (current)
+  - Windows: named pipes (planned)
+  - Keep plugin action dispatch daemon-first where daemon is configured.
+  - Keep manifest contract platform-agnostic; platform transport selected by host.
+
 ## License
 
 MIT

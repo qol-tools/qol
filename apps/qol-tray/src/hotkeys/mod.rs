@@ -248,18 +248,14 @@ fn available_actions(plugin_manager: &Arc<Mutex<PluginManager>>) -> Result<HashM
 }
 
 fn collect_action_ids(items: &[crate::plugins::MenuItem], action_ids: &mut HashSet<String>) {
-    for item in items {
-        match item {
-            crate::plugins::MenuItem::Action { id, .. }
-            | crate::plugins::MenuItem::Checkbox { id, .. } => {
-                action_ids.insert(id.clone());
-            }
-            crate::plugins::MenuItem::Submenu { items, .. } => {
-                collect_action_ids(items, action_ids);
-            }
-            crate::plugins::MenuItem::Separator => {}
+    let mut collect = |item: &crate::plugins::MenuItem| match item {
+        crate::plugins::MenuItem::Action { id, .. }
+        | crate::plugins::MenuItem::Checkbox { id, .. } => {
+            action_ids.insert(id.clone());
         }
-    }
+        crate::plugins::MenuItem::Separator | crate::plugins::MenuItem::Submenu { .. } => {}
+    };
+    crate::plugins::manifest::walk_menu_items(items, &mut collect);
 }
 
 fn is_binding_available(
