@@ -14,6 +14,7 @@ struct ResolvedAction {
     daemon_socket: Option<PathBuf>,
     command_path: Option<PathBuf>,
     args: Vec<String>,
+    runtime_fallback_allowed: bool,
 }
 
 #[derive(Debug)]
@@ -234,6 +235,7 @@ fn resolve_action(plugin: &Plugin, action_id: &str) -> Result<ResolvedAction, Ac
         .map(PathBuf::from);
 
     let (command_path, args) = resolve_runtime_target(plugin, action_id)?;
+    let runtime_fallback_allowed = allow_runtime_fallback(plugin, daemon_socket.as_ref(), command_path.as_ref());
 
     if daemon_socket.is_none() && command_path.is_none() {
         return Err(ActionExecutionError::NoExecutionTarget {
@@ -249,7 +251,36 @@ fn resolve_action(plugin: &Plugin, action_id: &str) -> Result<ResolvedAction, Ac
         daemon_socket,
         command_path,
         args,
+        runtime_fallback_allowed,
     })
+}
+
+fn allow_runtime_fallback(
+    plugin: &Plugin,
+    daemon_socket: Option<&PathBuf>,
+    runtime_command_path: Option<&PathBuf>,
+) -> bool {
+    if daemon_socket.is_none() {
+        return runtime_command_path.is_some();
+    }
+
+    let Some(runtime_command_path) = runtime_command_path else {
+        return false;
+    };
+    let Some(daemon) = plugin.manifest.daemon.as_ref().filter(|daemon| daemon.enabled) else {
+        return true;
+    };
+    let Some(daemon_command_path) = super::resolve_plugin_command_path(&plugin.path, &daemon.command) else {
+        return true;
+    };
+
+    !paths_match(runtime_command_path, &daemon_command_path)
+}
+
+fn paths_match(left: &std::path::Path, right: &std::path::Path) -> bool {
+    let left = std::fs::canonicalize(left).unwrap_or_else(|_| left.to_path_buf());
+    let right = std::fs::canonicalize(right).unwrap_or_else(|_| right.to_path_buf());
+    left == right
 }
 
 fn resolve_runtime_target(
@@ -319,7 +350,7 @@ fn execute_via_daemon(
                 resolved.plugin_id,
                 resolved.action_id
             );
-            if resolved.command_path.is_some() {
+            if resolved.runtime_fallback_allowed {
                 return execute_via_runtime(resolved);
             }
             Err(ActionExecutionError::SpawnFailed(format!(
@@ -333,7 +364,7 @@ fn execute_via_daemon(
                 resolved.plugin_id,
                 resolved.action_id
             );
-            if resolved.command_path.is_some() {
+            if resolved.runtime_fallback_allowed {
                 return execute_via_runtime(resolved);
             }
             Err(ActionExecutionError::SpawnFailed(format!(
@@ -348,7 +379,7 @@ fn execute_via_daemon(
                 resolved.action_id,
                 message
             );
-            if resolved.command_path.is_some() {
+            if resolved.runtime_fallback_allowed {
                 return execute_via_runtime(resolved);
             }
             Err(ActionExecutionError::SpawnFailed(format!(
@@ -593,6 +624,53 @@ mod tests {
             Some(PathBuf::from("/tmp/qol-test.sock"))
         );
         assert!(resolved.args.is_empty());
+    }
+
+    #[test]
+    fn resolve_action_disables_runtime_fallback_when_daemon_and_runtime_share_binary() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("launcher"), "").unwrap();
+
+        let plugin = make_plugin(
+            &dir,
+            "open",
+            Some(RuntimeConfig {
+                command: "launcher".to_string(),
+                actions: None,
+            }),
+            Some(DaemonConfig {
+                enabled: true,
+                command: "launcher".to_string(),
+                socket: Some("/tmp/qol-test.sock".to_string()),
+            }),
+        );
+
+        let resolved = resolve_action(&plugin, "open").unwrap();
+        assert!(!resolved.runtime_fallback_allowed);
+    }
+
+    #[test]
+    fn resolve_action_keeps_runtime_fallback_when_daemon_and_runtime_differ() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("launcher"), "").unwrap();
+        fs::write(dir.path().join("launcher-cli"), "").unwrap();
+
+        let plugin = make_plugin(
+            &dir,
+            "open",
+            Some(RuntimeConfig {
+                command: "launcher-cli".to_string(),
+                actions: None,
+            }),
+            Some(DaemonConfig {
+                enabled: true,
+                command: "launcher".to_string(),
+                socket: Some("/tmp/qol-test.sock".to_string()),
+            }),
+        );
+
+        let resolved = resolve_action(&plugin, "open").unwrap();
+        assert!(resolved.runtime_fallback_allowed);
     }
 
     #[test]
