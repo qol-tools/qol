@@ -167,7 +167,13 @@ function renderGrid() {
                         ${isUpdating ? '<span class="refresh-btn spinning"></span>' : `↑ ${plugin.available_version}`}
                     </button>
                 ` : ''}
-                <button class="plugin-cog" aria-label="Plugin options"><svg width="4" height="16" viewBox="0 0 4 16" fill="currentColor"><circle cx="2" cy="2" r="2"/><circle cx="2" cy="8" r="2"/><circle cx="2" cy="14" r="2"/></svg></button>
+                <button class="plugin-cog" aria-label="Plugin options">
+                    <svg class="plugin-cog-icon" viewBox="0 0 12 20" fill="currentColor" aria-hidden="true" focusable="false">
+                        <circle cx="6" cy="3.5" r="1.8"></circle>
+                        <circle cx="6" cy="10" r="1.8"></circle>
+                        <circle cx="6" cy="16.5" r="1.8"></circle>
+                    </svg>
+                </button>
                 <div class="plugin-context-menu">
                     ${plugin.update_available ? '<button class="context-update">Update</button>' : ''}
                     <button class="context-delete">Delete</button>
