@@ -82,6 +82,8 @@ struct InstalledPlugin {
     name: String,
     description: String,
     version: String,
+    loaded: bool,
+    load_error: Option<String>,
     has_cover: bool,
     has_ui: bool,
     available_version: Option<String>,
@@ -207,19 +209,34 @@ pub async fn start_ui_server(
 }
 
 fn get_installed_plugin_ids(plugins_dir: &std::path::Path) -> std::collections::HashSet<String> {
+    read_installed_plugin_dirs(plugins_dir)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect()
+}
+
+fn read_installed_plugin_dirs(plugins_dir: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
     if !plugins_dir.exists() {
-        return std::collections::HashSet::new();
+        return Vec::new();
     }
 
     std::fs::read_dir(plugins_dir)
         .ok()
-        .map(|entries| {
-            entries
-                .filter_map(|e| e.ok())
-                .filter_map(|e| e.file_name().into_string().ok())
-                .collect()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            if !path.is_dir() {
+                return None;
+            }
+            let id = entry.file_name().into_string().ok()?;
+            if id.starts_with('.') || id.ends_with(".backup") || !is_safe_path_component(&id) {
+                return None;
+            }
+            Some((id, path))
         })
-        .unwrap_or_default()
+        .collect()
 }
 
 async fn list_plugins(
@@ -505,7 +522,7 @@ async fn list_installed(
         .map(|c| c.plugins.into_iter().map(|p| (p.id, p.version)).collect())
         .unwrap_or_default();
 
-    let plugins: Vec<InstalledPlugin> = manager.plugins()
+    let mut plugins_by_id: HashMap<String, InstalledPlugin> = manager.plugins()
         .map(|plugin| {
             let cover_path = plugin.path.join("cover.png");
             let ui_path = plugin.path.join("ui").join("index.html");
@@ -517,19 +534,75 @@ async fn list_installed(
 
             let actions = extract_actions(&plugin.manifest.menu.items);
 
+            (
+                plugin.id.clone(),
+                InstalledPlugin {
+                    id: plugin.id.clone(),
+                    name: plugin.manifest.plugin.name.clone(),
+                    description: plugin.manifest.plugin.description.clone(),
+                    version: plugin.manifest.plugin.version.clone(),
+                    loaded: true,
+                    load_error: None,
+                    has_cover: cover_path.exists(),
+                    has_ui: ui_path.exists(),
+                    available_version,
+                    update_available,
+                    actions,
+                },
+            )
+        })
+        .collect();
+
+    drop(manager);
+
+    for (id, plugin_dir) in read_installed_plugin_dirs(&state.plugins_dir) {
+        if plugins_by_id.contains_key(&id) {
+            continue;
+        }
+
+        let manifest = read_manifest_without_validation(&plugin_dir);
+        let (name, description, version, actions) = match manifest.as_ref() {
+            Some(m) => (
+                m.plugin.name.clone(),
+                m.plugin.description.clone(),
+                m.plugin.version.clone(),
+                extract_actions(&m.menu.items),
+            ),
+            None => (
+                id.clone(),
+                "Plugin manifest could not be parsed".to_string(),
+                "unknown".to_string(),
+                Vec::new(),
+            ),
+        };
+
+        let available_version = cached_versions.get(&id).cloned();
+        let update_available = available_version
+            .as_ref()
+            .map(|av| version != "unknown" && is_newer_version(av, &version))
+            .unwrap_or(false);
+
+        let load_error = infer_load_error(&id, &plugin_dir, manifest.as_ref());
+
+        plugins_by_id.insert(
+            id.clone(),
             InstalledPlugin {
-                id: plugin.id.clone(),
-                name: plugin.manifest.plugin.name.clone(),
-                description: plugin.manifest.plugin.description.clone(),
-                version: plugin.manifest.plugin.version.clone(),
-                has_cover: cover_path.exists(),
-                has_ui: ui_path.exists(),
+                id,
+                name,
+                description,
+                version,
+                loaded: false,
+                load_error,
+                has_cover: plugin_dir.join("cover.png").exists(),
+                has_ui: plugin_dir.join("ui").join("index.html").exists(),
                 available_version,
                 update_available,
                 actions,
-            }
-        })
-        .collect();
+            },
+        );
+    }
+
+    let plugins: Vec<InstalledPlugin> = plugins_by_id.into_values().collect();
 
     Ok(Json(InstalledPluginsResponse { revision, plugins }))
 }
@@ -600,6 +673,35 @@ fn extract_actions(items: &[crate::plugins::MenuItem]) -> Vec<PluginAction> {
 fn is_newer_version(available: &str, installed: &str) -> bool {
     use crate::version::Version;
     Version::parse(available).is_newer_than(&Version::parse(installed))
+}
+
+fn read_manifest_without_validation(
+    plugin_dir: &std::path::Path,
+) -> Option<crate::plugins::PluginManifest> {
+    let manifest_path = plugin_dir.join("plugin.toml");
+    let content = std::fs::read_to_string(manifest_path).ok()?;
+    toml::from_str(&content).ok()
+}
+
+fn infer_load_error(
+    plugin_id: &str,
+    plugin_dir: &std::path::Path,
+    manifest: Option<&crate::plugins::PluginManifest>,
+) -> Option<String> {
+    let Some(manifest) = manifest else {
+        return Some("Invalid plugin.toml".to_string());
+    };
+
+    if !manifest.plugin.supports_current_platform() {
+        return Some(format!(
+            "Unsupported platform: current platform is {}",
+            std::env::consts::OS
+        ));
+    }
+
+    crate::plugins::PluginLoader::load_plugin_with_id(plugin_id, plugin_dir)
+        .err()
+        .map(|e| format!("{:#}", e))
 }
 
 const MAX_COVER_SIZE: usize = 5 * 1024 * 1024;

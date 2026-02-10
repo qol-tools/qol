@@ -37,7 +37,7 @@ export function render(containerEl) {
             </header>
             <div id="plugins-grid" class="plugin-grid grid-cards grid-cards--zoom"></div>
             <footer class="help">
-                ←↑↓→ navigate • Enter open • u update • d delete
+                ←↑↓→ navigate • Enter open/run • u update • d delete
             </footer>
         </div>
     `;
@@ -118,12 +118,14 @@ function renderGrid() {
         const coverUrl = plugin.has_cover ? `/api/cover/${plugin.id}` : PLACEHOLDER_SVG;
         const noUiClass = plugin.has_ui ? '' : 'no-ui';
         const updateClass = plugin.update_available ? 'has-update' : '';
+        const loadClass = plugin.loaded === false ? 'not-loaded' : '';
         const isUpdating = state.updating.has(plugin.id);
 
         return `
-            <div class="plugin-card ${noUiClass} ${updateClass}" data-index="${index}" data-plugin-id="${plugin.id}">
+            <div class="plugin-card ${noUiClass} ${updateClass} ${loadClass}" data-index="${index}" data-plugin-id="${plugin.id}">
                 <img src="${coverUrl}" alt="${plugin.name}" onerror="this.src='${PLACEHOLDER_SVG}'">
                 <div class="plugin-name">${plugin.name}</div>
+                ${plugin.loaded === false ? '<div class="plugin-load-state">Not loaded</div>' : ''}
                 ${plugin.update_available ? `
                     <button class="plugin-update ${isUpdating ? 'updating' : ''}" aria-label="Update plugin" ${isUpdating ? 'disabled' : ''}>
                         ${isUpdating ? '<span class="refresh-btn spinning"></span>' : `↑ ${plugin.available_version}`}
@@ -424,9 +426,44 @@ function openSelected() {
     if (state.plugins.length === 0) return;
     
     const plugin = state.plugins[state.selectedIndex];
+    if (!plugin) return;
+
+    if (plugin.loaded === false) {
+        console.warn(`Plugin ${plugin.id} is not loaded: ${plugin.load_error || 'unknown reason'}`);
+        return;
+    }
+
     if (plugin.has_ui) {
         saveSelection();
         window.location.href = `/plugins/${plugin.id}/`;
+        return;
+    }
+
+    if (plugin.loaded && Array.isArray(plugin.actions) && plugin.actions.length > 0) {
+        const primaryAction = plugin.actions[0];
+        void executeAction(plugin.id, primaryAction.id);
+    }
+}
+
+async function executeAction(pluginId, actionId) {
+    try {
+        const response = await fetch(
+            `/api/plugins/${encodeURIComponent(pluginId)}/actions/${encodeURIComponent(actionId)}`,
+            { method: 'POST' }
+        );
+
+        if (!response.ok) {
+            let message = 'Action execution failed';
+            try {
+                const payload = await response.json();
+                if (payload && typeof payload.message === 'string' && payload.message.length > 0) {
+                    message = payload.message;
+                }
+            } catch {}
+            throw new Error(message);
+        }
+    } catch (error) {
+        console.error(`Failed to execute action ${pluginId}::${actionId}: ${error.message}`);
     }
 }
 
