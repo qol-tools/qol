@@ -43,7 +43,7 @@ export function render(containerEl) {
                     </div>
                 </div>
             </header>
-            <div class="search-bar">
+            <div class="search-bar store-search-bar">
                 <input type="text" id="store-search" placeholder="Search plugins...">
             </div>
             <div id="token-banner"></div>

@@ -215,9 +215,16 @@ header p { color: var(--text-muted); font-size: 1.1rem; }
     margin-top: 0.5rem;
 }
 
-#store-feedback,
 #plugins-feedback {
     margin-bottom: 1rem;
+}
+
+#store-feedback {
+    margin-bottom: 1rem;
+}
+
+#store-feedback:empty {
+    margin-bottom: 0;
 }
 
 .view-feedback {
@@ -368,6 +375,8 @@ header p { color: var(--text-muted); font-size: 1.1rem; }
 }
 
 .search-bar { margin-bottom: 2rem; }
+
+.store-search-bar { margin-bottom: 1rem; }
 
 .search-bar input {
     width: 100%;
