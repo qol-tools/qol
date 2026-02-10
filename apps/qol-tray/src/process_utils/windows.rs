@@ -1,14 +1,14 @@
 use std::time::Duration;
 
-use windows_sys::Win32::Foundation::CloseHandle;
+use windows_sys::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Threading::{
     OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_TERMINATE, SYNCHRONIZE, WAIT_TIMEOUT,
+    PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
 };
 
-const QUERY_AND_WAIT_ACCESS: u32 = PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE;
+const QUERY_AND_WAIT_ACCESS: u32 = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE;
 const TERMINATE_AND_WAIT_ACCESS: u32 =
-    PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE;
+    PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE;
 
 pub fn is_pid_alive(pid: i32) -> bool {
     if pid <= 0 {
@@ -17,7 +17,7 @@ pub fn is_pid_alive(pid: i32) -> bool {
 
     unsafe {
         let handle = OpenProcess(QUERY_AND_WAIT_ACCESS, 0, pid as u32);
-        if handle == 0 {
+        if handle.is_null() {
             return false;
         }
         let wait_result = WaitForSingleObject(handle, 0);
@@ -33,7 +33,7 @@ pub fn terminate_pid(pid: i32, grace: Duration) {
 
     unsafe {
         let handle = OpenProcess(TERMINATE_AND_WAIT_ACCESS, 0, pid as u32);
-        if handle == 0 {
+        if handle.is_null() {
             return;
         }
 
