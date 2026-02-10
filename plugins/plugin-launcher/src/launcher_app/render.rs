@@ -18,6 +18,9 @@ impl Render for LauncherView {
                 &self.focus_handle,
                 window,
                 |this, window, cx| {
+                    if std::time::Instant::now() < this.blur_guard_until {
+                        return;
+                    }
                     this.is_showing = false;
                     hide_in_context(window, cx);
                 },

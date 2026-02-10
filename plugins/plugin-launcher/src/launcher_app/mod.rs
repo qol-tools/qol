@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{mpsc, Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use gpui::*;
 
@@ -28,6 +29,8 @@ use state::LauncherState;
 use window_ops::hide_in_app;
 
 pub use input::key_to_input_char;
+
+const BLUR_GUARD_MS: u64 = 180;
 
 struct PreloadedEntries {
     app_entries: Arc<Vec<apps::AppEntry>>,
@@ -73,6 +76,7 @@ struct LauncherView {
     pub(super) focus_handle: FocusHandle,
     blur_sub: Option<Subscription>,
     is_showing: bool,
+    blur_guard_until: Instant,
 }
 
 impl LauncherView {
@@ -83,6 +87,7 @@ impl LauncherView {
             focus_handle: cx.focus_handle(),
             blur_sub: None,
             is_showing: true,
+            blur_guard_until: Instant::now() + Duration::from_millis(BLUR_GUARD_MS),
         }
     }
 
@@ -90,6 +95,7 @@ impl LauncherView {
         let should_resize = (self.state.window_height - HEADER_HEIGHT).abs() > f32::EPSILON;
         self.state = LauncherState::new();
         self.is_showing = true;
+        self.blur_guard_until = Instant::now() + Duration::from_millis(BLUR_GUARD_MS);
         should_resize
     }
 }
