@@ -1,5 +1,6 @@
 use std::path::Path;
 
+#[cfg(any(unix, test))]
 mod protocol;
 
 #[cfg(unix)]
@@ -31,6 +32,7 @@ pub fn dispatch_daemon_action(endpoint: &Path, action_id: &str) -> DaemonActionD
     platform::dispatch_action(endpoint, action_id)
 }
 
+#[cfg(any(unix, test))]
 fn payload_candidates(action_id: &str) -> Vec<String> {
     let mut payloads = vec![format!("action:{action_id}\n"), format!("{action_id}\n")];
     if action_id == "open" {
