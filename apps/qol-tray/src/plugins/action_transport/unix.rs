@@ -4,7 +4,7 @@ use std::path::Path;
 pub(super) fn dispatch_action(endpoint: &Path, action_id: &str) -> DaemonActionDispatch {
     let mut fallback_seen = false;
 
-    for payload in super::payload_candidates(action_id) {
+    for payload in payload_attempts(action_id) {
         match send_payload(endpoint, &payload) {
             DaemonActionDispatch::Handled => return DaemonActionDispatch::Handled,
             DaemonActionDispatch::Error(message) => return DaemonActionDispatch::Error(message),
@@ -52,4 +52,12 @@ fn send_payload(endpoint: &Path, payload: &str) -> DaemonActionDispatch {
         }
         Err(_) => DaemonActionDispatch::Unavailable,
     }
+}
+
+fn payload_attempts(action_id: &str) -> Vec<String> {
+    let mut payloads = vec![format!("action:{action_id}\n"), format!("{action_id}\n")];
+    if action_id == "open" {
+        payloads.push("show".to_string());
+    }
+    payloads
 }
