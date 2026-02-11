@@ -375,10 +375,39 @@ fn reveal_taskbar() -> Result<(), String> {
     let x = x.ok_or_else(|| "Missing mouse X coordinate".to_string())?;
     let y = y.ok_or_else(|| "Missing mouse Y coordinate".to_string())?;
 
-    run_status("xdotool", &["mousemove", "--sync", "3200", "1439"])?;
+    let (edge_x, edge_y) = display_edge_point()?;
+
+    run_status(
+        "xdotool",
+        &["mousemove", "--sync", &edge_x.to_string(), &edge_y.to_string()],
+    )?;
     thread::sleep(Duration::from_millis(100));
     run_status("xdotool", &["mousemove", &x.to_string(), &y.to_string()])?;
     Ok(())
+}
+
+fn display_edge_point() -> Result<(i32, i32), String> {
+    let output = Command::new("xdotool")
+        .arg("getdisplaygeometry")
+        .output()
+        .map_err(|e| format!("Failed to run xdotool: {e}"))?;
+
+    if !output.status.success() {
+        return Err("Failed to read display geometry".to_string());
+    }
+
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let mut parts = raw.split_whitespace();
+    let width = parts
+        .next()
+        .and_then(|value| value.parse::<i32>().ok())
+        .ok_or_else(|| "Missing display width".to_string())?;
+    let height = parts
+        .next()
+        .and_then(|value| value.parse::<i32>().ok())
+        .ok_or_else(|| "Missing display height".to_string())?;
+
+    Ok((width.saturating_sub(1), height.saturating_sub(1)))
 }
 
 fn is_window_id(id: &str) -> bool {
@@ -428,9 +457,10 @@ fn launcher_process_name_matches(pid: u32) -> bool {
 }
 
 fn launcher_window_metadata_matches(window_id: &str) -> Result<bool, String> {
-    let class = run_output("xprop", &["-id", window_id, "WM_CLASS"])?;
-    let name = run_output("xprop", &["-id", window_id, "_NET_WM_NAME"])?;
-    let haystack = format!("{class}\n{name}");
+    let class = run_output_optional("xprop", &["-id", window_id, "WM_CLASS"]);
+    let name = run_output_optional("xprop", &["-id", window_id, "_NET_WM_NAME"]);
+    let app_id = run_output_optional("xprop", &["-id", window_id, "_GTK_APPLICATION_ID"]);
+    let haystack = format!("{class}\n{name}\n{app_id}");
     Ok(launcher_text_matches(&haystack))
 }
 
@@ -524,7 +554,13 @@ fn write_last_minimized_window_record(record: &MinimizedWindowRecord) {
 
 fn read_last_minimized_window_record() -> Result<Option<MinimizedWindowRecord>, String> {
     match fs::read_to_string(LAST_MINIMIZED_WINDOW_FILE) {
-        Ok(value) => Ok(parse_minimized_window_record(&value)),
+        Ok(value) => {
+            let parsed = parse_minimized_window_record(&value);
+            if parsed.is_none() && !value.trim().is_empty() {
+                clear_last_minimized_window_id();
+            }
+            Ok(parsed)
+        }
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
         Err(error) => Err(format!("Failed to read minimized window state: {error}")),
     }
@@ -607,6 +643,10 @@ fn run_output(command: &str, args: &[&str]) -> Result<String, String> {
     } else {
         Err(format!("{command} failed: {stderr}"))
     }
+}
+
+fn run_output_optional(command: &str, args: &[&str]) -> String {
+    run_output(command, args).unwrap_or_default()
 }
 
 fn run_status(command: &str, args: &[&str]) -> Result<(), String> {
