@@ -7,6 +7,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const LAST_MINIMIZED_WINDOW_FILE: &str = "/tmp/qol-window-actions-last-minimized";
 const LAST_MINIMIZED_MAX_AGE_SECS: u64 = 60 * 60 * 8;
+const LAUNCHER_MATCH_MARKERS: [&str; 4] = [
+    "qol-tray-launcher",
+    "plugin-launcher",
+    "qol-launcher",
+    "qol launcher",
+];
 
 struct MinimizedWindowRecord {
     window_id: String,
@@ -320,20 +326,20 @@ fn try_restore_window(window_id: &str) -> Result<bool, String> {
     if !is_window_id(window_id) {
         return Ok(false);
     }
-    if window_query_or_false(is_desktop_window(window_id)) {
+    if window_query_or(is_desktop_window(window_id), false) {
         return Ok(false);
     }
-    if window_query_or_false(is_launcher_window(window_id)) {
+    if window_query_or(is_launcher_window(window_id), true) {
         return Ok(false);
     }
-    if !window_query_or_false(is_hidden_window(window_id)) {
+    if !window_query_or(is_hidden_window(window_id), false) {
         return Ok(false);
     }
     activate_window(window_id)
 }
 
-fn window_query_or_false(value: Result<bool, String>) -> bool {
-    value.unwrap_or(false)
+fn window_query_or(value: Result<bool, String>, fallback: bool) -> bool {
+    value.unwrap_or(fallback)
 }
 
 fn move_monitor(script: &str) -> Result<(), String> {
@@ -418,7 +424,7 @@ fn launcher_process_name_matches(pid: u32) -> bool {
         return false;
     };
 
-    name.eq_ignore_ascii_case("launcher")
+    launcher_text_matches(&name)
 }
 
 fn launcher_window_metadata_matches(window_id: &str) -> Result<bool, String> {
@@ -430,11 +436,7 @@ fn launcher_window_metadata_matches(window_id: &str) -> Result<bool, String> {
 
 fn launcher_text_matches(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
-    lower == "launcher"
-        || lower.ends_with("/launcher")
-        || lower.contains("\"launcher\"")
-        || lower.contains("qol-launcher")
-        || lower.contains("qol launcher")
+    LAUNCHER_MATCH_MARKERS.iter().any(|marker| lower.contains(marker))
 }
 
 fn window_pid(window_id: &str) -> Result<Option<u32>, String> {
