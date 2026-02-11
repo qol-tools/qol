@@ -26,7 +26,6 @@ use crate::providers::{apps, files};
 use entry_store::EntryStore;
 use layout::{window_height_for_rows, HEADER_HEIGHT, WINDOW_WIDTH};
 use state::LauncherState;
-use window_ops::hide_in_app;
 
 pub use input::key_to_input_char;
 
@@ -181,14 +180,11 @@ fn open_keepalive_window(cx: &mut App) {
         window_decorations: Some(WindowDecorations::Client),
         kind: WindowKind::PopUp,
         focus: false,
+        show: false,
         ..Default::default()
     };
 
-    let _ = cx
-        .open_window(options, |_window, cx| cx.new(KeepAliveView::new))
-        .map(|w| {
-            w.update(cx, |_, window, cx| hide_in_app(window, cx)).ok();
-        });
+    let _ = cx.open_window(options, |_window, cx| cx.new(KeepAliveView::new));
 }
 
 fn activate_or_open_launcher(
