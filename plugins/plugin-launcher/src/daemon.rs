@@ -86,8 +86,11 @@ fn send_raw(msg: &[u8]) -> bool {
             Ok(response) => !response.trim().starts_with("error"),
             Err(_) => true,
         },
-        Ok(_) => true,
-        Err(_) => true,
+        Ok(_) => false,
+        Err(error) => matches!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        ),
     }
 }
 
