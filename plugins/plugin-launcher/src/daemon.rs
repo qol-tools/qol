@@ -83,8 +83,11 @@ fn send_raw(msg: &[u8]) -> bool {
     let mut buf = [0u8; 128];
     match stream.read(&mut buf) {
         Ok(n) if n > 0 => match std::str::from_utf8(&buf[..n]) {
-            Ok(response) => !response.trim().starts_with("error"),
-            Err(_) => true,
+            Ok(response) => {
+                let response = response.trim();
+                response.starts_with("handled") || response.starts_with("fallback")
+            }
+            Err(_) => false,
         },
         Ok(_) => false,
         Err(error) => matches!(
