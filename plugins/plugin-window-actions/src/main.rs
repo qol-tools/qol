@@ -1,11 +1,12 @@
 use std::env;
 use std::fs;
 use std::io::ErrorKind;
+use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const LAST_MINIMIZED_WINDOW_FILE: &str = "/tmp/qol-window-actions-last-minimized";
+const LAST_MINIMIZED_WINDOW_FILE_NAME: &str = "qol-window-actions-last-minimized";
 const LAST_MINIMIZED_MAX_AGE_SECS: u64 = 60 * 60 * 8;
 const LAUNCHER_MATCH_MARKERS: [&str; 4] = [
     "qol-tray-launcher",
@@ -650,11 +651,11 @@ fn write_last_minimized_window_record(record: &MinimizedWindowRecord) {
         "{}|{}|{}|{}\n",
         record.window_id, record.pid, record.process_start_ticks, record.saved_at_unix_secs
     );
-    let _ = fs::write(LAST_MINIMIZED_WINDOW_FILE, line.as_bytes());
+    let _ = fs::write(last_minimized_window_file(), line.as_bytes());
 }
 
 fn read_last_minimized_window_record() -> Result<Option<MinimizedWindowRecord>, String> {
-    match fs::read_to_string(LAST_MINIMIZED_WINDOW_FILE) {
+    match fs::read_to_string(last_minimized_window_file()) {
         Ok(value) => {
             let parsed = parse_minimized_window_record(&value);
             if parsed.is_none() && !value.trim().is_empty() {
@@ -717,7 +718,14 @@ fn current_unix_secs() -> u64 {
 }
 
 fn clear_last_minimized_window_id() {
-    let _ = fs::remove_file(LAST_MINIMIZED_WINDOW_FILE);
+    let _ = fs::remove_file(last_minimized_window_file());
+}
+
+fn last_minimized_window_file() -> PathBuf {
+    let base = env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    base.join(LAST_MINIMIZED_WINDOW_FILE_NAME)
 }
 
 fn activate_window(window_id: &str) -> Result<bool, String> {
