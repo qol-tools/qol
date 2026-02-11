@@ -34,7 +34,7 @@ impl LauncherView {
                 self.state.selected = 0;
                 cx.notify();
             }
-            InputEffect::Launch => self.launch_selected(window),
+            InputEffect::Launch => self.launch_selected(window, cx),
             InputEffect::Dismiss => {
                 self.is_showing = false;
                 hide_in_context(window, cx);
@@ -96,7 +96,7 @@ impl LauncherView {
         }
     }
 
-    fn launch_selected(&mut self, window: &mut gpui::Window) {
+    fn launch_selected(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
         self.store.ensure_filtered(&self.state);
         let Some(scored) = self.store.get(self.state.selected) else {
             return;
@@ -106,7 +106,7 @@ impl LauncherView {
         };
         if actions::launch_item(&item) {
             self.is_showing = false;
-            window.remove_window();
+            hide_in_context(window, cx);
         }
     }
 }

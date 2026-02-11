@@ -8,6 +8,6 @@ pub fn hide_in_context<T>(window: &mut Window, _cx: &mut Context<T>) {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        window.remove_window();
+        window.minimize_window();
     }
 }
