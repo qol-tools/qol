@@ -375,7 +375,7 @@ fn reveal_taskbar() -> Result<(), String> {
     let x = x.ok_or_else(|| "Missing mouse X coordinate".to_string())?;
     let y = y.ok_or_else(|| "Missing mouse Y coordinate".to_string())?;
 
-    let (edge_x, edge_y) = display_edge_point()?;
+    let (edge_x, edge_y) = display_edge_point(x, y)?;
 
     run_status(
         "xdotool",
@@ -386,7 +386,20 @@ fn reveal_taskbar() -> Result<(), String> {
     Ok(())
 }
 
-fn display_edge_point() -> Result<(i32, i32), String> {
+fn display_edge_point(pointer_x: i32, pointer_y: i32) -> Result<(i32, i32), String> {
+    if let Some(bounds) = xrandr_monitor_bounds()
+        .into_iter()
+        .find(|bounds| bounds.contains(pointer_x, pointer_y))
+    {
+        let edge_x = pointer_x.clamp(bounds.left(), bounds.right());
+        let edge_y = bounds.bottom();
+        return Ok((edge_x, edge_y));
+    }
+
+    display_edge_point_from_root_geometry()
+}
+
+fn display_edge_point_from_root_geometry() -> Result<(i32, i32), String> {
     let output = Command::new("xdotool")
         .arg("getdisplaygeometry")
         .output()
@@ -408,6 +421,78 @@ fn display_edge_point() -> Result<(i32, i32), String> {
         .ok_or_else(|| "Missing display height".to_string())?;
 
     Ok((width.saturating_sub(1), height.saturating_sub(1)))
+}
+
+#[derive(Clone, Copy)]
+struct MonitorBounds {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
+
+impl MonitorBounds {
+    fn left(self) -> i32 {
+        self.x
+    }
+
+    fn right(self) -> i32 {
+        self.x.saturating_add(self.width).saturating_sub(1)
+    }
+
+    fn bottom(self) -> i32 {
+        self.y.saturating_add(self.height).saturating_sub(1)
+    }
+
+    fn contains(self, px: i32, py: i32) -> bool {
+        px >= self.x
+            && px < self.x.saturating_add(self.width)
+            && py >= self.y
+            && py < self.y.saturating_add(self.height)
+    }
+}
+
+fn xrandr_monitor_bounds() -> Vec<MonitorBounds> {
+    let output = match Command::new("xrandr").arg("--current").output() {
+        Ok(output) if output.status.success() => output,
+        _ => return Vec::new(),
+    };
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| line.contains(" connected"))
+        .filter_map(parse_monitor_bounds_from_xrandr_line)
+        .collect()
+}
+
+fn parse_monitor_bounds_from_xrandr_line(line: &str) -> Option<MonitorBounds> {
+    line.split_whitespace().find_map(parse_xrandr_geometry_token)
+}
+
+fn parse_xrandr_geometry_token(token: &str) -> Option<MonitorBounds> {
+    let (width_raw, rest) = token.split_once('x')?;
+    let width = width_raw.parse::<i32>().ok()?;
+
+    let x_offset_start = rest.find(|ch| ch == '+' || ch == '-')?;
+    let height = rest.get(..x_offset_start)?.parse::<i32>().ok()?;
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+
+    let offsets = rest.get(x_offset_start..)?;
+    let y_offset_start = offsets
+        .char_indices()
+        .skip(1)
+        .find_map(|(idx, ch)| ((ch == '+') || (ch == '-')).then_some(idx))?;
+    let x_offset = offsets.get(..y_offset_start)?.parse::<i32>().ok()?;
+    let y_offset = offsets.get(y_offset_start..)?.parse::<i32>().ok()?;
+
+    Some(MonitorBounds {
+        x: x_offset,
+        y: y_offset,
+        width,
+        height,
+    })
 }
 
 fn is_window_id(id: &str) -> bool {
