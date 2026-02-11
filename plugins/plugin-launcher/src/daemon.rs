@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc::Sender;
@@ -34,9 +34,19 @@ pub fn start_listener(tx: Sender<Command>, focus_cache: FocusCache) -> bool {
     }
 
     let socket_path = socket_path();
-    remove_socket_file(&socket_path);
-    let Ok(listener) = UnixListener::bind(&socket_path) else {
-        return false;
+    let listener = match UnixListener::bind(&socket_path) {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == ErrorKind::AddrInUse => {
+            if send_show() {
+                return false;
+            }
+            remove_socket_file(&socket_path);
+            let Ok(listener) = UnixListener::bind(&socket_path) else {
+                return false;
+            };
+            listener
+        }
+        Err(_) => return false,
     };
 
     std::thread::spawn(move || {
@@ -75,7 +85,7 @@ fn send_raw(msg: &[u8]) -> bool {
     let Ok(mut stream) = UnixStream::connect(&socket_path) else {
         return false;
     };
-    let timeout = std::time::Duration::from_millis(500);
+    let timeout = std::time::Duration::from_millis(250);
     let _ = stream.set_write_timeout(Some(timeout));
     let _ = stream.set_read_timeout(Some(timeout));
     if stream.write_all(msg).is_err() {
@@ -86,7 +96,7 @@ fn send_raw(msg: &[u8]) -> bool {
         Ok(n) if n > 0 => match std::str::from_utf8(&buf[..n]) {
             Ok(response) => {
                 let response = response.trim();
-                response.starts_with("handled") || response.starts_with("fallback")
+                response.starts_with("handled")
             }
             Err(_) => false,
         },
