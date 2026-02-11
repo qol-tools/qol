@@ -51,13 +51,9 @@ impl WindowSystem for X11WindowSystem {
         }
 
         let raw = String::from_utf8_lossy(&output.stdout);
-        let Some(list) = raw.split('#').nth(1) else {
-            return Ok(Vec::new());
-        };
-
-        let mut window_ids: Vec<String> = list
-            .split(',')
-            .map(|id| id.trim().to_string())
+        let mut window_ids: Vec<String> = raw
+            .split_whitespace()
+            .map(|token| token.trim_matches(|c| c == ',' || c == '#').to_string())
             .filter(|id| self.is_window_id(id))
             .collect();
         window_ids.reverse();
@@ -178,7 +174,7 @@ fn run_output_optional(command: &str, args: &[&str]) -> String {
 }
 
 fn is_window_id(id: &str) -> bool {
-    id.starts_with("0x") && id.chars().skip(2).all(|c| c.is_ascii_hexdigit())
+    id.starts_with("0x") && id.len() > 2 && id.chars().skip(2).all(|c| c.is_ascii_hexdigit())
 }
 
 fn normalize_window_id(window_id: &str) -> Option<String> {

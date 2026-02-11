@@ -86,5 +86,5 @@ fn normalize_window_id(window_id: &str) -> Option<String> {
 }
 
 fn is_window_id(id: &str) -> bool {
-    id.starts_with("0x") && id.chars().skip(2).all(|c| c.is_ascii_hexdigit())
+    id.starts_with("0x") && id.len() > 2 && id.chars().skip(2).all(|c| c.is_ascii_hexdigit())
 }
