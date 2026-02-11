@@ -6,7 +6,7 @@ const SOCKET_IO_TIMEOUT_MS: u64 = 80;
 pub(super) fn dispatch_action(endpoint: &Path, action_id: &str) -> DaemonActionDispatch {
     let mut fallback_seen = false;
 
-    for payload in payload_attempts(action_id) {
+    for payload in payload_attempts(endpoint, action_id) {
         match send_payload(endpoint, &payload) {
             DaemonActionDispatch::Handled => return DaemonActionDispatch::Handled,
             DaemonActionDispatch::Error(message) => return DaemonActionDispatch::Error(message),
@@ -57,10 +57,15 @@ fn send_payload(endpoint: &Path, payload: &str) -> DaemonActionDispatch {
     }
 }
 
-fn payload_attempts(action_id: &str) -> Vec<String> {
+fn payload_attempts(endpoint: &Path, action_id: &str) -> Vec<String> {
     let mut payloads = vec![format!("action:{action_id}\n"), format!("{action_id}\n")];
-    if action_id == "open" {
+    if action_id == "open" && looks_like_launcher_socket(endpoint) {
         payloads.insert(0, "show".to_string());
     }
     payloads
+}
+
+fn looks_like_launcher_socket(endpoint: &Path) -> bool {
+    let lower = endpoint.to_string_lossy().to_ascii_lowercase();
+    lower.contains("qol-launcher") || lower.contains("launcher.sock")
 }
