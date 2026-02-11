@@ -3,9 +3,17 @@ use std::fs;
 use std::io::ErrorKind;
 use std::process::{Command, ExitCode};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const LAST_MINIMIZED_WINDOW_FILE: &str = "/tmp/qol-window-actions-last-minimized";
+const LAST_MINIMIZED_MAX_AGE_SECS: u64 = 60 * 60 * 8;
+
+struct MinimizedWindowRecord {
+    window_id: String,
+    pid: u32,
+    process_start_ticks: u64,
+    saved_at_unix_secs: u64,
+}
 
 const SNAP_LEFT_SCRIPT: &str = r#"
     const win = global.display.focus_window;
@@ -238,9 +246,7 @@ fn minimize_window() -> Result<(), String> {
         .map_err(|e| format!("Failed to run xdotool: {e}"))?;
 
     if status.success() {
-        if let Some(normalized) = normalize_window_id(&window_id) {
-            write_last_minimized_window_id(&normalized);
-        }
+        track_last_minimized_window(&window_id);
         Ok(())
     } else {
         Err("Failed to minimize window".to_string())
@@ -256,16 +262,21 @@ fn restore_window() -> Result<(), String> {
 }
 
 fn restore_last_minimized_window() -> Result<bool, String> {
-    let Some(window_id) = read_last_minimized_window_id()? else {
+    let Some(record) = read_last_minimized_window_record()? else {
         return Ok(false);
     };
 
-    let Some(window_id) = normalize_window_id(&window_id) else {
+    if is_record_expired(&record) {
         clear_last_minimized_window_id();
         return Ok(false);
-    };
+    }
 
-    if try_restore_window(&window_id)? {
+    if !is_record_current(&record)? {
+        clear_last_minimized_window_id();
+        return Ok(false);
+    }
+
+    if try_restore_window(&record.window_id)? {
         clear_last_minimized_window_id();
         return Ok(true);
     }
@@ -309,16 +320,20 @@ fn try_restore_window(window_id: &str) -> Result<bool, String> {
     if !is_window_id(window_id) {
         return Ok(false);
     }
-    if is_desktop_window(window_id)? {
+    if window_query_or_false(is_desktop_window(window_id)) {
         return Ok(false);
     }
-    if is_launcher_window(window_id)? {
+    if window_query_or_false(is_launcher_window(window_id)) {
         return Ok(false);
     }
-    if !is_hidden_window(window_id)? {
+    if !window_query_or_false(is_hidden_window(window_id)) {
         return Ok(false);
     }
     activate_window(window_id)
+}
+
+fn window_query_or_false(value: Result<bool, String>) -> bool {
+    value.unwrap_or(false)
 }
 
 fn move_monitor(script: &str) -> Result<(), String> {
@@ -375,22 +390,51 @@ fn is_hidden_window(window_id: &str) -> Result<bool, String> {
 }
 
 fn is_launcher_window(window_id: &str) -> Result<bool, String> {
-    if let Some(pid) = window_pid(window_id)? {
-        if let Some(process_name) = process_name(pid) {
-            if process_name.eq_ignore_ascii_case("launcher") {
-                return Ok(true);
-            }
-        }
+    if launcher_pid_matches(window_pid(window_id)?) {
+        return Ok(true);
     }
 
+    launcher_window_metadata_matches(window_id)
+}
+
+fn launcher_pid_matches(pid: Option<u32>) -> bool {
+    let Some(pid) = pid else {
+        return false;
+    };
+
+    launcher_process_cmdline_matches(pid) || launcher_process_name_matches(pid)
+}
+
+fn launcher_process_cmdline_matches(pid: u32) -> bool {
+    let Some(cmdline) = process_cmdline(pid) else {
+        return false;
+    };
+
+    launcher_text_matches(&cmdline)
+}
+
+fn launcher_process_name_matches(pid: u32) -> bool {
+    let Some(name) = process_name(pid) else {
+        return false;
+    };
+
+    name.eq_ignore_ascii_case("launcher")
+}
+
+fn launcher_window_metadata_matches(window_id: &str) -> Result<bool, String> {
     let class = run_output("xprop", &["-id", window_id, "WM_CLASS"])?;
     let name = run_output("xprop", &["-id", window_id, "_NET_WM_NAME"])?;
-    let haystack = format!("{class}\n{name}").to_ascii_lowercase();
-    Ok(
-        haystack.contains("\"launcher\"")
-            || haystack.contains("qol-launcher")
-            || haystack.contains("qol launcher"),
-    )
+    let haystack = format!("{class}\n{name}");
+    Ok(launcher_text_matches(&haystack))
+}
+
+fn launcher_text_matches(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower == "launcher"
+        || lower.ends_with("/launcher")
+        || lower.contains("\"launcher\"")
+        || lower.contains("qol-launcher")
+        || lower.contains("qol launcher")
 }
 
 fn window_pid(window_id: &str) -> Result<Option<u32>, String> {
@@ -409,6 +453,30 @@ fn process_name(pid: u32) -> Option<String> {
     fs::read_to_string(path).ok().map(|value| value.trim().to_string())
 }
 
+fn process_cmdline(pid: u32) -> Option<String> {
+    let path = format!("/proc/{pid}/cmdline");
+    let data = fs::read(path).ok()?;
+    if data.is_empty() {
+        return None;
+    }
+
+    Some(
+        data.split(|byte| *byte == 0)
+            .filter(|part| !part.is_empty())
+            .map(|part| String::from_utf8_lossy(part).into_owned())
+            .collect::<Vec<String>>()
+            .join(" "),
+    )
+}
+
+fn process_start_ticks(pid: u32) -> Option<u64> {
+    let path = format!("/proc/{pid}/stat");
+    let stat = fs::read_to_string(path).ok()?;
+    let (_, rest) = stat.split_once(") ")?;
+    let fields: Vec<&str> = rest.split_whitespace().collect();
+    fields.get(19)?.parse::<u64>().ok()
+}
+
 fn normalize_window_id(window_id: &str) -> Option<String> {
     if is_window_id(window_id) {
         return Some(window_id.to_ascii_lowercase());
@@ -418,23 +486,95 @@ fn normalize_window_id(window_id: &str) -> Option<String> {
     Some(format!("0x{numeric:x}"))
 }
 
-fn write_last_minimized_window_id(window_id: &str) {
-    let _ = fs::write(LAST_MINIMIZED_WINDOW_FILE, window_id.as_bytes());
+fn track_last_minimized_window(window_id: &str) {
+    let Some(window_id) = normalize_window_id(window_id) else {
+        clear_last_minimized_window_id();
+        return;
+    };
+
+    let Some(pid) = window_pid(&window_id).ok().flatten() else {
+        clear_last_minimized_window_id();
+        return;
+    };
+
+    let Some(process_start_ticks) = process_start_ticks(pid) else {
+        clear_last_minimized_window_id();
+        return;
+    };
+
+    let record = MinimizedWindowRecord {
+        window_id,
+        pid,
+        process_start_ticks,
+        saved_at_unix_secs: current_unix_secs(),
+    };
+
+    write_last_minimized_window_record(&record);
 }
 
-fn read_last_minimized_window_id() -> Result<Option<String>, String> {
+fn write_last_minimized_window_record(record: &MinimizedWindowRecord) {
+    let line = format!(
+        "{}|{}|{}|{}\n",
+        record.window_id, record.pid, record.process_start_ticks, record.saved_at_unix_secs
+    );
+    let _ = fs::write(LAST_MINIMIZED_WINDOW_FILE, line.as_bytes());
+}
+
+fn read_last_minimized_window_record() -> Result<Option<MinimizedWindowRecord>, String> {
     match fs::read_to_string(LAST_MINIMIZED_WINDOW_FILE) {
-        Ok(value) => {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(trimmed.to_string()))
-            }
-        }
+        Ok(value) => Ok(parse_minimized_window_record(&value)),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
         Err(error) => Err(format!("Failed to read minimized window state: {error}")),
     }
+}
+
+fn parse_minimized_window_record(raw: &str) -> Option<MinimizedWindowRecord> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut parts = trimmed.split('|');
+    let window_id = normalize_window_id(parts.next()?.trim())?;
+    let pid = parts.next()?.trim().parse::<u32>().ok()?;
+    let process_start_ticks = parts.next()?.trim().parse::<u64>().ok()?;
+    let saved_at_unix_secs = parts.next()?.trim().parse::<u64>().ok()?;
+
+    if parts.next().is_some() {
+        return None;
+    }
+
+    Some(MinimizedWindowRecord {
+        window_id,
+        pid,
+        process_start_ticks,
+        saved_at_unix_secs,
+    })
+}
+
+fn is_record_expired(record: &MinimizedWindowRecord) -> bool {
+    current_unix_secs().saturating_sub(record.saved_at_unix_secs) > LAST_MINIMIZED_MAX_AGE_SECS
+}
+
+fn is_record_current(record: &MinimizedWindowRecord) -> Result<bool, String> {
+    let Some(pid) = window_pid(&record.window_id)? else {
+        return Ok(false);
+    };
+    if pid != record.pid {
+        return Ok(false);
+    }
+
+    let Some(start_ticks) = process_start_ticks(pid) else {
+        return Ok(false);
+    };
+    Ok(start_ticks == record.process_start_ticks)
+}
+
+fn current_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
 }
 
 fn clear_last_minimized_window_id() {
@@ -454,7 +594,17 @@ fn run_output(command: &str, args: &[&str]) -> Result<String, String> {
         .args(args)
         .output()
         .map_err(|e| format!("Failed to run {command}: {e}"))?;
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if stderr.is_empty() {
+        Err(format!("{command} exited with status {}", output.status))
+    } else {
+        Err(format!("{command} failed: {stderr}"))
+    }
 }
 
 fn run_status(command: &str, args: &[&str]) -> Result<(), String> {
