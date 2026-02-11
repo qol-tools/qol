@@ -4,17 +4,16 @@ use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc::Sender;
 
-use crate::monitor::{ActiveMonitor, FocusCache};
-
 const DEFAULT_SOCKET_PATH: &str = "/tmp/qol-launcher.sock";
 
 pub enum Command {
-    Show(Option<ActiveMonitor>),
+    Show,
     Kill,
 }
 
 enum ReadResult {
     Command(Command),
+    Handled,
     Fallback,
     Error(&'static str),
     Ignore,
@@ -28,8 +27,20 @@ pub fn send_kill() -> bool {
     send_raw(b"kill")
 }
 
-pub fn start_listener(tx: Sender<Command>, focus_cache: FocusCache) -> bool {
-    if send_show() {
+fn send_ping() -> bool {
+    send_raw(b"ping")
+}
+
+fn forward_show_to_existing_daemon() -> bool {
+    if !send_ping() {
+        return false;
+    }
+    let _ = send_show();
+    true
+}
+
+pub fn start_listener(tx: Sender<Command>) -> bool {
+    if forward_show_to_existing_daemon() {
         return false;
     }
 
@@ -37,7 +48,7 @@ pub fn start_listener(tx: Sender<Command>, focus_cache: FocusCache) -> bool {
     let listener = match UnixListener::bind(&socket_path) {
         Ok(listener) => listener,
         Err(error) if error.kind() == ErrorKind::AddrInUse => {
-            if send_show() {
+            if forward_show_to_existing_daemon() {
                 return false;
             }
             remove_socket_file(&socket_path);
@@ -52,12 +63,15 @@ pub fn start_listener(tx: Sender<Command>, focus_cache: FocusCache) -> bool {
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             match stream {
-                Ok(mut stream) => match read_command(&mut stream, &focus_cache) {
+                Ok(mut stream) => match read_command(&mut stream) {
                     ReadResult::Command(cmd) => {
                         let _ = stream.write_all(b"handled\n");
                         if tx.send(cmd).is_err() {
                             break;
                         }
+                    }
+                    ReadResult::Handled => {
+                        let _ = stream.write_all(b"handled\n");
                     }
                     ReadResult::Fallback => {
                         let _ = stream.write_all(b"fallback\n");
@@ -121,7 +135,7 @@ fn remove_socket_file(path: impl AsRef<std::path::Path>) {
     }
 }
 
-fn read_command(stream: &mut UnixStream, focus_cache: &FocusCache) -> ReadResult {
+fn read_command(stream: &mut UnixStream) -> ReadResult {
     let mut buf = [0u8; 128];
     let n = match stream.read(&mut buf) {
         Ok(n) => n,
@@ -146,15 +160,8 @@ fn read_command(stream: &mut UnixStream, focus_cache: &FocusCache) -> ReadResult
     };
 
     match command {
-        "show" | "open" => {
-            let snap = focus_cache.snapshot();
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "[daemon] show snapshot: {:?}",
-                snap.as_ref().map(|m| m.bounds())
-            );
-            ReadResult::Command(Command::Show(snap))
-        }
+        "ping" => ReadResult::Handled,
+        "show" | "open" => ReadResult::Command(Command::Show),
         "kill" => ReadResult::Command(Command::Kill),
         _ => ReadResult::Fallback,
     }

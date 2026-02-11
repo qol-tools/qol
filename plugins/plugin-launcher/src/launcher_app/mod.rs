@@ -327,6 +327,7 @@ fn spawn_command_poll(
     entries: Arc<PreloadedEntries>,
     active: Rc<RefCell<ActiveLaunchers>>,
     rx: mpsc::Receiver<daemon::Command>,
+    focus_cache: FocusCache,
     cx: &mut App,
 ) {
     let rx = Arc::new(Mutex::new(rx));
@@ -343,9 +344,10 @@ fn spawn_command_poll(
                 .await;
 
             match next_command {
-                Some(daemon::Command::Show(snapshot)) => {
+                Some(daemon::Command::Show) => {
                     let entries = entries.clone();
                     let active = active.clone();
+                    let snapshot = focus_cache.snapshot();
                     cx.update(move |cx| activate_or_open_launcher(entries.clone(), active.clone(), snapshot, cx))
                         .ok();
                 }
@@ -374,7 +376,7 @@ pub fn run() {
         let focus_cache = FocusCache::start(cx);
 
         let (tx, rx) = mpsc::channel();
-        if !daemon::start_listener(tx, focus_cache.clone()) {
+        if !daemon::start_listener(tx) {
             cx.quit();
             return;
         }
@@ -382,7 +384,7 @@ pub fn run() {
         let active: Rc<RefCell<ActiveLaunchers>> = Rc::new(RefCell::new(ActiveLaunchers::default()));
 
         open_keepalive_window(cx);
-        spawn_command_poll(entries.clone(), active.clone(), rx, cx);
+        spawn_command_poll(entries.clone(), active.clone(), rx, focus_cache.clone(), cx);
 
         if show_immediately {
             let snapshot = focus_cache.snapshot();
