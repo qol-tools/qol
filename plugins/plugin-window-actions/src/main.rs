@@ -327,7 +327,7 @@ fn try_restore_window(window_id: &str) -> Result<bool, String> {
     if !is_window_id(window_id) {
         return Ok(false);
     }
-    if window_query_or(is_desktop_window(window_id), false) {
+    if window_query_or(is_excluded_window_type(window_id), false) {
         return Ok(false);
     }
     if is_launcher_window(window_id) {
@@ -516,9 +516,12 @@ fn is_window_id(id: &str) -> bool {
     id.starts_with("0x") && id.chars().skip(2).all(|c| c.is_ascii_hexdigit())
 }
 
-fn is_desktop_window(window_id: &str) -> Result<bool, String> {
+fn is_excluded_window_type(window_id: &str) -> Result<bool, String> {
     let output = run_output("xprop", &["-id", window_id, "_NET_WM_WINDOW_TYPE"])?;
-    Ok(output.contains("_NET_WM_WINDOW_TYPE_DESKTOP"))
+    Ok(
+        output.contains("_NET_WM_WINDOW_TYPE_DESKTOP")
+            || output.contains("_NET_WM_WINDOW_TYPE_DOCK"),
+    )
 }
 
 fn is_hidden_window(window_id: &str) -> Result<bool, String> {
