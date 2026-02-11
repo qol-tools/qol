@@ -283,7 +283,7 @@ fn restore_last_minimized_window() -> Result<bool, String> {
         return Ok(false);
     }
 
-    if try_restore_window(&record.window_id)? {
+    if matches!(try_restore_window(&record.window_id), Ok(true)) {
         clear_last_minimized_window_id();
         return Ok(true);
     }
@@ -315,7 +315,7 @@ fn restore_hidden_window_from_stacking() -> Result<(), String> {
     window_ids.reverse();
 
     for window_id in window_ids {
-        if try_restore_window(&window_id)? {
+        if matches!(try_restore_window(&window_id), Ok(true)) {
             break;
         }
     }
