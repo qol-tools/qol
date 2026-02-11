@@ -106,14 +106,7 @@ impl LauncherView {
         };
         if actions::launch_item(&item) {
             self.is_showing = false;
-            #[cfg(target_os = "macos")]
-            {
-                window.remove_window();
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                window.minimize_window();
-            }
+            window.remove_window();
         }
     }
 }

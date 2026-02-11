@@ -41,7 +41,10 @@ impl Render for LauncherView {
             .bg(view::bg_color())
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
-                    "escape" | "esc" => hide_in_context(window, cx),
+                    "escape" | "esc" => {
+                        this.is_showing = false;
+                        hide_in_context(window, cx);
+                    }
                     _ => this.handle_key(event, window, cx),
                 }
             }))
