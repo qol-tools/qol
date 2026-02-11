@@ -1,7 +1,11 @@
 use std::env;
+use std::fs;
+use std::io::ErrorKind;
 use std::process::{Command, ExitCode};
 use std::thread;
 use std::time::Duration;
+
+const LAST_MINIMIZED_WINDOW_FILE: &str = "/tmp/qol-window-actions-last-minimized";
 
 const SNAP_LEFT_SCRIPT: &str = r#"
     const win = global.display.focus_window;
@@ -234,6 +238,9 @@ fn minimize_window() -> Result<(), String> {
         .map_err(|e| format!("Failed to run xdotool: {e}"))?;
 
     if status.success() {
+        if let Some(normalized) = normalize_window_id(&window_id) {
+            write_last_minimized_window_id(&normalized);
+        }
         Ok(())
     } else {
         Err("Failed to minimize window".to_string())
@@ -241,6 +248,33 @@ fn minimize_window() -> Result<(), String> {
 }
 
 fn restore_window() -> Result<(), String> {
+    if restore_last_minimized_window()? {
+        return Ok(());
+    }
+
+    restore_hidden_window_from_stacking()
+}
+
+fn restore_last_minimized_window() -> Result<bool, String> {
+    let Some(window_id) = read_last_minimized_window_id()? else {
+        return Ok(false);
+    };
+
+    let Some(window_id) = normalize_window_id(&window_id) else {
+        clear_last_minimized_window_id();
+        return Ok(false);
+    };
+
+    if try_restore_window(&window_id)? {
+        clear_last_minimized_window_id();
+        return Ok(true);
+    }
+
+    clear_last_minimized_window_id();
+    Ok(false)
+}
+
+fn restore_hidden_window_from_stacking() -> Result<(), String> {
     let output = Command::new("xprop")
         .args(["-root", "_NET_CLIENT_LIST_STACKING"])
         .output()
@@ -263,15 +297,28 @@ fn restore_window() -> Result<(), String> {
     window_ids.reverse();
 
     for window_id in window_ids {
-        if is_desktop_window(&window_id)? {
-            continue;
-        }
-        if is_hidden_window(&window_id)? && activate_window(&window_id)? {
+        if try_restore_window(&window_id)? {
             break;
         }
     }
 
     Ok(())
+}
+
+fn try_restore_window(window_id: &str) -> Result<bool, String> {
+    if !is_window_id(window_id) {
+        return Ok(false);
+    }
+    if is_desktop_window(window_id)? {
+        return Ok(false);
+    }
+    if is_launcher_window(window_id)? {
+        return Ok(false);
+    }
+    if !is_hidden_window(window_id)? {
+        return Ok(false);
+    }
+    activate_window(window_id)
 }
 
 fn move_monitor(script: &str) -> Result<(), String> {
@@ -325,6 +372,73 @@ fn is_desktop_window(window_id: &str) -> Result<bool, String> {
 fn is_hidden_window(window_id: &str) -> Result<bool, String> {
     let output = run_output("xprop", &["-id", window_id, "_NET_WM_STATE"])?;
     Ok(output.contains("_NET_WM_STATE_HIDDEN"))
+}
+
+fn is_launcher_window(window_id: &str) -> Result<bool, String> {
+    if let Some(pid) = window_pid(window_id)? {
+        if let Some(process_name) = process_name(pid) {
+            if process_name.eq_ignore_ascii_case("launcher") {
+                return Ok(true);
+            }
+        }
+    }
+
+    let class = run_output("xprop", &["-id", window_id, "WM_CLASS"])?;
+    let name = run_output("xprop", &["-id", window_id, "_NET_WM_NAME"])?;
+    let haystack = format!("{class}\n{name}").to_ascii_lowercase();
+    Ok(
+        haystack.contains("\"launcher\"")
+            || haystack.contains("qol-launcher")
+            || haystack.contains("qol launcher"),
+    )
+}
+
+fn window_pid(window_id: &str) -> Result<Option<u32>, String> {
+    let output = run_output("xprop", &["-id", window_id, "_NET_WM_PID"])?;
+    let pid = output
+        .split('=')
+        .nth(1)
+        .map(str::trim)
+        .and_then(|value| value.split_whitespace().next())
+        .and_then(|value| value.parse::<u32>().ok());
+    Ok(pid)
+}
+
+fn process_name(pid: u32) -> Option<String> {
+    let path = format!("/proc/{pid}/comm");
+    fs::read_to_string(path).ok().map(|value| value.trim().to_string())
+}
+
+fn normalize_window_id(window_id: &str) -> Option<String> {
+    if is_window_id(window_id) {
+        return Some(window_id.to_ascii_lowercase());
+    }
+
+    let numeric = window_id.trim().parse::<u64>().ok()?;
+    Some(format!("0x{numeric:x}"))
+}
+
+fn write_last_minimized_window_id(window_id: &str) {
+    let _ = fs::write(LAST_MINIMIZED_WINDOW_FILE, window_id.as_bytes());
+}
+
+fn read_last_minimized_window_id() -> Result<Option<String>, String> {
+    match fs::read_to_string(LAST_MINIMIZED_WINDOW_FILE) {
+        Ok(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(trimmed.to_string()))
+            }
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("Failed to read minimized window state: {error}")),
+    }
+}
+
+fn clear_last_minimized_window_id() {
+    let _ = fs::remove_file(LAST_MINIMIZED_WINDOW_FILE);
 }
 
 fn activate_window(window_id: &str) -> Result<bool, String> {
