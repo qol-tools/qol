@@ -16,6 +16,7 @@ use types::KEY_CODE_MAP;
 pub use types::{HotkeyAction, HotkeyConfig};
 
 static RELOAD_SENDER: OnceLock<Sender<()>> = OnceLock::new();
+const HOTKEY_LOOP_SLEEP_MS: u64 = 10;
 
 pub fn trigger_reload() {
     if let Some(sender) = RELOAD_SENDER.get() {
@@ -193,7 +194,7 @@ pub fn start_hotkey_listener(plugin_manager: Arc<Mutex<PluginManager>>) -> Resul
         loop {
             try_reload_hotkeys(&reload_rx, &mut manager, &plugin_manager);
             try_handle_hotkey(hotkey_receiver, &manager, &plugin_manager);
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::thread::sleep(std::time::Duration::from_millis(HOTKEY_LOOP_SLEEP_MS));
         }
     });
 
@@ -273,21 +274,22 @@ fn try_handle_hotkey(
     manager: &HotkeyManager,
     plugin_manager: &Arc<Mutex<PluginManager>>,
 ) {
-    let event = match receiver.try_recv() {
-        Ok(e) if e.state == HotKeyState::Pressed => e,
-        _ => return,
-    };
+    while let Ok(event) = receiver.try_recv() {
+        if event.state != HotKeyState::Pressed {
+            continue;
+        }
 
-    let Some(action) = manager.get_action(&event) else {
-        return;
-    };
-    log::info!("Hotkey triggered: {}::{}", action.plugin_id, action.action);
+        let Some(action) = manager.get_action(&event) else {
+            continue;
+        };
+        log::info!("Hotkey triggered: {}::{}", action.plugin_id, action.action);
 
-    crate::plugins::action_executor::execute_action(
-        plugin_manager,
-        &action.plugin_id,
-        &action.action,
-    );
+        crate::plugins::action_executor::execute_action(
+            plugin_manager,
+            &action.plugin_id,
+            &action.action,
+        );
+    }
 }
 
 #[cfg(test)]
