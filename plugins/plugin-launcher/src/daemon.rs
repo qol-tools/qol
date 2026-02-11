@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::{Read, Write};
+use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc::Sender;
 
@@ -33,7 +34,7 @@ pub fn start_listener(tx: Sender<Command>, focus_cache: FocusCache) -> bool {
     }
 
     let socket_path = socket_path();
-    let _ = fs::remove_file(&socket_path);
+    remove_socket_file(&socket_path);
     let Ok(listener) = UnixListener::bind(&socket_path) else {
         return false;
     };
@@ -59,14 +60,14 @@ pub fn start_listener(tx: Sender<Command>, focus_cache: FocusCache) -> bool {
                 Err(_) => break,
             }
         }
-        let _ = fs::remove_file(&socket_path);
+        remove_socket_file(&socket_path);
     });
 
     true
 }
 
 pub fn cleanup() {
-    let _ = fs::remove_file(socket_path());
+    remove_socket_file(socket_path());
 }
 
 fn send_raw(msg: &[u8]) -> bool {
@@ -101,6 +102,16 @@ fn socket_path() -> std::path::PathBuf {
     std::env::var("QOL_TRAY_DAEMON_SOCKET")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::path::PathBuf::from(DEFAULT_SOCKET_PATH))
+}
+
+fn remove_socket_file(path: impl AsRef<std::path::Path>) {
+    let path = path.as_ref();
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return;
+    };
+    if metadata.file_type().is_socket() {
+        let _ = fs::remove_file(path);
+    }
 }
 
 fn read_command(stream: &mut UnixStream, focus_cache: &FocusCache) -> ReadResult {
