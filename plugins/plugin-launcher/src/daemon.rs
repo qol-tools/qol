@@ -1,10 +1,12 @@
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
 use std::os::unix::fs::FileTypeExt;
+use std::net::Shutdown;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc::Sender;
 
 const DEFAULT_SOCKET_PATH: &str = "/tmp/qol-launcher.sock";
+const ACK_TIMEOUT_MS: u64 = 80;
 
 pub enum Command {
     Show,
@@ -20,15 +22,15 @@ enum ReadResult {
 }
 
 pub fn send_show() -> bool {
-    send_raw(b"show")
+    send_raw(b"show", false)
 }
 
 pub fn send_kill() -> bool {
-    send_raw(b"kill")
+    send_raw(b"kill", true)
 }
 
 fn send_ping() -> bool {
-    send_raw(b"ping")
+    send_raw(b"ping", true)
 }
 
 pub fn start_listener(tx: Sender<Command>) -> bool {
@@ -82,17 +84,21 @@ pub fn cleanup() {
     remove_socket_file(socket_path());
 }
 
-fn send_raw(msg: &[u8]) -> bool {
+fn send_raw(msg: &[u8], expect_handled_reply: bool) -> bool {
     let socket_path = socket_path();
     let Ok(mut stream) = UnixStream::connect(&socket_path) else {
         return false;
     };
-    let timeout = std::time::Duration::from_millis(250);
+    let timeout = std::time::Duration::from_millis(ACK_TIMEOUT_MS);
     let _ = stream.set_write_timeout(Some(timeout));
-    let _ = stream.set_read_timeout(Some(timeout));
     if stream.write_all(msg).is_err() {
         return false;
     }
+    if !expect_handled_reply {
+        return true;
+    }
+    let _ = stream.shutdown(Shutdown::Write);
+    let _ = stream.set_read_timeout(Some(timeout));
     let mut buf = [0u8; 128];
     match stream.read(&mut buf) {
         Ok(n) if n > 0 => match std::str::from_utf8(&buf[..n]) {
