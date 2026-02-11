@@ -30,6 +30,7 @@ use state::LauncherState;
 pub use input::key_to_input_char;
 
 const BLUR_GUARD_MS: u64 = 180;
+const LAUNCHER_APP_ID: &str = "qol-tray-launcher";
 
 struct PreloadedEntries {
     app_entries: Arc<Vec<apps::AppEntry>>,
@@ -181,6 +182,7 @@ fn open_keepalive_window(cx: &mut App) {
         kind: WindowKind::PopUp,
         focus: false,
         show: false,
+        app_id: Some(LAUNCHER_APP_ID.to_string()),
         ..Default::default()
     };
 
@@ -223,6 +225,7 @@ fn activate_or_open_launcher(
         window_decorations: Some(WindowDecorations::Client),
         kind: WindowKind::PopUp,
         focus: true,
+        app_id: Some(LAUNCHER_APP_ID.to_string()),
         ..Default::default()
     };
 
