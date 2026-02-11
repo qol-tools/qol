@@ -151,13 +151,6 @@ impl FocusCache {
 
         let mut guard = self.state.lock().ok()?;
         let now = Instant::now();
-
-        #[cfg(target_os = "linux")]
-        if !is_wayland() {
-            if let Some(pointer_monitor) = query_pointer_monitor_once(&self.monitors) {
-                track_cursor_monitor(&mut guard, pointer_monitor, now);
-            }
-        }
         promote_pending_cursor(&mut guard, now);
 
         let result = pick_active_monitor(&guard, self.monitors[0]);
@@ -405,17 +398,6 @@ fn query_pointer_monitor(
 
     let pointer = conn.query_pointer(root).ok()?.reply().ok()?;
     monitor_for_point(monitors, pointer.root_x as f32, pointer.root_y as f32)
-}
-
-#[cfg(target_os = "linux")]
-fn query_pointer_monitor_once(monitors: &[Bounds<Pixels>]) -> Option<Bounds<Pixels>> {
-    use x11rb::connection::Connection;
-
-    let Ok((conn, screen_num)) = x11rb::connect(None) else {
-        return None;
-    };
-    let root = conn.setup().roots.get(screen_num)?.root;
-    query_pointer_monitor(&conn, root, monitors)
 }
 
 #[cfg(target_os = "linux")]
