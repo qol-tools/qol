@@ -131,7 +131,9 @@ impl FocusCache {
                     monitor: ActiveMonitor { bounds },
                     at: Instant::now(),
                 });
-            state.lock().unwrap().focus = initial;
+            if let Ok(mut guard) = state.lock() {
+                guard.focus = initial;
+            }
         }
 
         Self { state, monitors }
