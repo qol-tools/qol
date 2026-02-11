@@ -159,19 +159,15 @@ impl ActiveLaunchers {
             .map(|(key, handle)| (*key, handle.clone()))
             .collect();
 
-        let mut dead = Vec::new();
+        let mut removed = Vec::new();
         for (key, handle) in handles {
-            if handle
-                .update(cx, |view, window, _| {
-                    view.is_showing = false;
-                    window.minimize_window();
-                })
-                .is_err()
-            {
-                dead.push(key);
-            }
+            let _ = handle.update(cx, |view, window, _| {
+                view.is_showing = false;
+                window.remove_window();
+            });
+            removed.push(key);
         }
-        for key in dead {
+        for key in removed {
             self.windows.remove(&key);
         }
     }
