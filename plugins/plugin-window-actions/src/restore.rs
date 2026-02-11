@@ -57,6 +57,11 @@ pub fn restore_window<S: WindowSystem, T: MinimizedStateStore>(
     restore_hidden_window_from_stacking(system)
 }
 
+enum RestoreAttempt {
+    Restored,
+    Skipped,
+}
+
 fn restore_last_minimized_window<S: WindowSystem, T: MinimizedStateStore>(
     system: &S,
     store: &T,
@@ -75,9 +80,12 @@ fn restore_last_minimized_window<S: WindowSystem, T: MinimizedStateStore>(
         return Ok(false);
     }
 
-    if matches!(try_restore_window(system, &record.window_id), Ok(true)) {
-        store.clear();
-        return Ok(true);
+    match try_restore_window(system, &record.window_id)? {
+        RestoreAttempt::Restored => {
+            store.clear();
+            return Ok(true);
+        }
+        RestoreAttempt::Skipped => {}
     }
 
     store.clear();
@@ -88,28 +96,36 @@ fn restore_hidden_window_from_stacking<S: WindowSystem>(system: &S) -> Result<()
     let window_ids = system.stacking_window_ids()?;
 
     for window_id in window_ids {
-        if matches!(try_restore_window(system, &window_id), Ok(true)) {
-            break;
+        match try_restore_window(system, &window_id)? {
+            RestoreAttempt::Restored => break,
+            RestoreAttempt::Skipped => {}
         }
     }
 
     Ok(())
 }
 
-fn try_restore_window<S: WindowSystem>(system: &S, window_id: &str) -> Result<bool, String> {
+fn try_restore_window<S: WindowSystem>(
+    system: &S,
+    window_id: &str,
+) -> Result<RestoreAttempt, String> {
     if !system.is_window_id(window_id) {
-        return Ok(false);
+        return Ok(RestoreAttempt::Skipped);
     }
     if query_or(system.is_excluded_window_type(window_id), false) {
-        return Ok(false);
+        return Ok(RestoreAttempt::Skipped);
     }
     if system.is_launcher_window(window_id) {
-        return Ok(false);
+        return Ok(RestoreAttempt::Skipped);
     }
     if !query_or(system.is_hidden_window(window_id), false) {
-        return Ok(false);
+        return Ok(RestoreAttempt::Skipped);
     }
-    system.activate_window(window_id)
+    if system.activate_window(window_id)? {
+        Ok(RestoreAttempt::Restored)
+    } else {
+        Ok(RestoreAttempt::Skipped)
+    }
 }
 
 fn query_or(value: Result<bool, String>, fallback: bool) -> bool {
