@@ -329,7 +329,7 @@ fn try_restore_window(window_id: &str) -> Result<bool, String> {
     if window_query_or(is_desktop_window(window_id), false) {
         return Ok(false);
     }
-    if window_query_or(is_launcher_window(window_id), true) {
+    if is_launcher_window(window_id) {
         return Ok(false);
     }
     if !window_query_or(is_hidden_window(window_id), false) {
@@ -424,9 +424,9 @@ fn is_hidden_window(window_id: &str) -> Result<bool, String> {
     Ok(output.contains("_NET_WM_STATE_HIDDEN"))
 }
 
-fn is_launcher_window(window_id: &str) -> Result<bool, String> {
-    if launcher_pid_matches(window_pid(window_id)?) {
-        return Ok(true);
+fn is_launcher_window(window_id: &str) -> bool {
+    if launcher_pid_matches(window_pid(window_id).ok().flatten()) {
+        return true;
     }
 
     launcher_window_metadata_matches(window_id)
@@ -456,12 +456,12 @@ fn launcher_process_name_matches(pid: u32) -> bool {
     launcher_text_matches(&name)
 }
 
-fn launcher_window_metadata_matches(window_id: &str) -> Result<bool, String> {
+fn launcher_window_metadata_matches(window_id: &str) -> bool {
     let class = run_output_optional("xprop", &["-id", window_id, "WM_CLASS"]);
     let name = run_output_optional("xprop", &["-id", window_id, "_NET_WM_NAME"]);
     let app_id = run_output_optional("xprop", &["-id", window_id, "_GTK_APPLICATION_ID"]);
     let haystack = format!("{class}\n{name}\n{app_id}");
-    Ok(launcher_text_matches(&haystack))
+    launcher_text_matches(&haystack)
 }
 
 fn launcher_text_matches(value: &str) -> bool {
