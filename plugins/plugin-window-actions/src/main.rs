@@ -344,10 +344,26 @@ fn window_query_or(value: Result<bool, String>, fallback: bool) -> bool {
 
 fn move_monitor(script: &str) -> Result<(), String> {
     let output = run_cinnamon_eval(script)?;
-    if output.contains("to 1 |") && !output.contains("fullscreen=true") {
+    if monitor_changed(&output) && !output.contains("fullscreen=true") {
         reveal_taskbar()?;
     }
     Ok(())
+}
+
+fn monitor_changed(output: &str) -> bool {
+    let Some((from, to)) = parse_monitor_move(output) else {
+        return false;
+    };
+    from != to
+}
+
+fn parse_monitor_move(output: &str) -> Option<(i32, i32)> {
+    let section = output.split("Moved from monitor ").nth(1)?;
+    let (from_raw, tail) = section.split_once(" to ")?;
+    let (to_raw, _) = tail.split_once(" |")?;
+    let from = from_raw.trim().parse::<i32>().ok()?;
+    let to = to_raw.trim().parse::<i32>().ok()?;
+    Some((from, to))
 }
 
 fn reveal_taskbar() -> Result<(), String> {
