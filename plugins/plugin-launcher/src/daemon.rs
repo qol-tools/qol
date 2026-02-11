@@ -31,24 +31,12 @@ fn send_ping() -> bool {
     send_raw(b"ping")
 }
 
-fn forward_show_to_existing_daemon() -> bool {
-    if !send_ping() {
-        return false;
-    }
-    let _ = send_show();
-    true
-}
-
 pub fn start_listener(tx: Sender<Command>) -> bool {
-    if forward_show_to_existing_daemon() {
-        return false;
-    }
-
     let socket_path = socket_path();
     let listener = match UnixListener::bind(&socket_path) {
         Ok(listener) => listener,
         Err(error) if error.kind() == ErrorKind::AddrInUse => {
-            if forward_show_to_existing_daemon() {
+            if send_ping() {
                 return false;
             }
             remove_socket_file(&socket_path);

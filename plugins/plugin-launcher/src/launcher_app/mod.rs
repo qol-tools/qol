@@ -370,7 +370,9 @@ pub fn run() {
         return;
     }
 
-    let entries = Arc::new(PreloadedEntries::load());
+    if show_immediately && daemon::send_show() {
+        return;
+    }
 
     Application::new().run(move |cx: &mut App| {
         let focus_cache = FocusCache::start(cx);
@@ -381,6 +383,7 @@ pub fn run() {
             return;
         }
 
+        let entries = Arc::new(PreloadedEntries::load());
         let active: Rc<RefCell<ActiveLaunchers>> = Rc::new(RefCell::new(ActiveLaunchers::default()));
 
         open_keepalive_window(cx);
