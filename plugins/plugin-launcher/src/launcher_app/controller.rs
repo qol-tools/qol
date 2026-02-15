@@ -108,9 +108,14 @@ impl LauncherView {
             eprintln!("[controller] launch_selected: failed to resolve item");
             return;
         };
+        let is_app = matches!(scored.source, super::search::ResultSource::App);
+        let name = self.store.name(scored).to_string();
         eprintln!("[controller] launching item...");
         if actions::launch_item(&item) {
             eprintln!("[controller] launch succeeded, hiding window");
+            if is_app {
+                self.store.record_launch(&name);
+            }
             self.is_showing = false;
             hide_in_context(window, cx);
         } else {
