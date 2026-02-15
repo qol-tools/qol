@@ -41,9 +41,7 @@ async fn main() -> Result<()> {
 
     log::info!("PointZerver ready - discovery and command services running");
 
-    tokio::task::spawn_blocking(move || command_service.run_blocking())
-        .await
-        .map_err(|e| anyhow::anyhow!("Task join error: {}", e))??;
+    command_service.run().await?;
 
     Ok(())
 }
