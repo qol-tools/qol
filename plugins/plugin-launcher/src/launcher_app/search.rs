@@ -1,3 +1,4 @@
+use crate::frecency::FrequencyData;
 use crate::providers::apps::AppEntry;
 use crate::providers::files::FileEntry;
 use crate::{fuzzy_match, FuzzyMatch};
@@ -29,6 +30,7 @@ pub fn filtered(
     query: &str,
     mode: SearchMode,
     fuzziness: Fuzziness,
+    frecency: Option<&FrecencyConfig>,
 ) -> Vec<Scored> {
     if query.trim().is_empty() {
         return Vec::new();
@@ -39,7 +41,10 @@ pub fn filtered(
         SearchMode::Apps => app_entries
             .iter()
             .enumerate()
-            .filter_map(|(index, entry)| score_app(index, &entry.name, query))
+            .filter_map(|(index, entry)| {
+                let bonus = frecency_bonus_for(&entry.name, frecency);
+                score_app(index, &entry.name, query, bonus)
+            })
             .collect(),
         SearchMode::Files => file_entries
             .iter()
@@ -57,6 +62,7 @@ pub fn filtered_from_candidates(
     query: &str,
     mode: SearchMode,
     fuzziness: Fuzziness,
+    frecency: Option<&FrecencyConfig>,
 ) -> Vec<Scored> {
     if query.trim().is_empty() {
         return Vec::new();
@@ -69,7 +75,8 @@ pub fn filtered_from_candidates(
             .filter(|candidate| matches!(candidate.source, ResultSource::App))
             .filter_map(|candidate| {
                 let entry = app_entries.get(candidate.index)?;
-                score_app(candidate.index, &entry.name, query)
+                let bonus = frecency_bonus_for(&entry.name, frecency);
+                score_app(candidate.index, &entry.name, query, bonus)
             })
             .collect(),
         SearchMode::Files => candidates
@@ -84,11 +91,26 @@ pub fn filtered_from_candidates(
     sort_by_score(results)
 }
 
-fn score_app(index: usize, name: &str, query: &str) -> Option<Scored> {
+pub struct FrecencyConfig<'a> {
+    pub data: &'a FrequencyData,
+    pub now: u64,
+    pub half_life_days: f64,
+    pub bonus_weight: i32,
+}
+
+fn frecency_bonus_for(name: &str, config: Option<&FrecencyConfig>) -> i32 {
+    let Some(cfg) = config else { return 0 };
+    let key = name.to_lowercase();
+    crate::frecency::frequency_bonus(&key, cfg.data, cfg.now, cfg.half_life_days, cfg.bonus_weight)
+}
+
+fn score_app(index: usize, name: &str, query: &str, frecency_bonus: i32) -> Option<Scored> {
+    let mut m = fuzzy_match(query, name)?;
+    m.score -= frecency_bonus;
     Some(Scored {
         source: ResultSource::App,
         index,
-        m: fuzzy_match(query, name)?,
+        m,
     })
 }
 
@@ -179,7 +201,7 @@ mod tests {
                 FileEntry { name: "gamma".to_string(), path: PathBuf::from("/tmp/gamma") },
             ];
             let query = format!("{query_stem}.{ext}");
-            let results = filtered(&apps, &files, &query, SearchMode::Files, Fuzziness::Strict);
+            let results = filtered(&apps, &files, &query, SearchMode::Files, Fuzziness::Strict, None);
 
             for result in results {
                 prop_assert!(

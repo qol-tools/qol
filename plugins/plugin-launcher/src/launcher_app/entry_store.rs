@@ -1,9 +1,16 @@
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::frecency::{self, FrequencyData};
+use crate::frecency_store;
 use crate::providers::{apps, files};
 
-use super::search::{self, ResultItem, Scored};
+use super::search::{self, FrecencyConfig, ResultItem, Scored};
 use super::state::{Fuzziness, LauncherState, SearchMode};
+
+const HALF_LIFE_DAYS: f64 = 7.0;
+const FREQUENCY_BONUS: i32 = 500;
 
 #[derive(Clone, PartialEq, Eq)]
 struct FilterKey {
@@ -17,15 +24,21 @@ pub(super) struct EntryStore {
     file_entries: Arc<Vec<files::FileEntry>>,
     cache: Vec<Scored>,
     cache_key: Option<FilterKey>,
+    frecency: FrequencyData,
+    frecency_path: PathBuf,
 }
 
 impl EntryStore {
     pub fn new(app_entries: Arc<Vec<apps::AppEntry>>, file_entries: Arc<Vec<files::FileEntry>>) -> Self {
+        let frecency_path = frecency_store::default_path();
+        let frecency = frecency_store::load(&frecency_path);
         Self {
             app_entries,
             file_entries,
             cache: Vec::new(),
             cache_key: None,
+            frecency,
+            frecency_path,
         }
     }
 
@@ -85,11 +98,30 @@ impl EntryStore {
             && next.query.starts_with(&previous.query)
     }
 
+    pub fn record_launch(&mut self, name: &str) {
+        let key = name.to_lowercase();
+        let now = now_secs();
+        frecency::record(&mut self.frecency, key, now);
+        frecency::prune(&mut self.frecency, now, HALF_LIFE_DAYS);
+        frecency_store::save(&self.frecency_path, &self.frecency);
+    }
+
+    fn frecency_config(&self) -> FrecencyConfig<'_> {
+        FrecencyConfig {
+            data: &self.frecency,
+            now: now_secs(),
+            half_life_days: HALF_LIFE_DAYS,
+            bonus_weight: FREQUENCY_BONUS,
+        }
+    }
+
     fn filtered_full(&self, query: &str, mode: SearchMode, fuzziness: Fuzziness) -> Vec<Scored> {
-        search::filtered(&self.app_entries, &self.file_entries, query, mode, fuzziness)
+        let frecency = self.frecency_config();
+        search::filtered(&self.app_entries, &self.file_entries, query, mode, fuzziness, Some(&frecency))
     }
 
     fn filtered_incremental(&self, query: &str, mode: SearchMode, fuzziness: Fuzziness) -> Vec<Scored> {
+        let frecency = self.frecency_config();
         search::filtered_from_candidates(
             &self.app_entries,
             &self.file_entries,
@@ -97,6 +129,14 @@ impl EntryStore {
             query,
             mode,
             fuzziness,
+            Some(&frecency),
         )
     }
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
