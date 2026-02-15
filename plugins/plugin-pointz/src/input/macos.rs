@@ -69,6 +69,8 @@ impl InputHandlerTrait for InputHandlerImpl {
     async fn mouse_move(&self, x: f64, y: f64) -> Result<()> {
         let start = std::time::Instant::now();
 
+        log::debug!("[SERVER] Received: x={:.2} y={:.2}", x, y);
+
         let (new_x, new_y, button) = {
             let mut pos_opt = self
                 .current_pos
@@ -92,6 +94,8 @@ impl InputHandlerTrait for InputHandlerImpl {
             *pos_opt = Some((new_x, new_y));
             (new_x, new_y, button)
         };
+
+        log::debug!("[SERVER] Sending to OS: new_x={:.2} new_y={:.2}", new_x, new_y);
 
         if button.is_some() {
             self.queue_drag_event(x, y, new_x, new_y, button).await?;
