@@ -11,6 +11,7 @@ dev:
 
 release:
 	@cargo test --tests && \
+	git fetch --tags && \
 	OLD=$$(grep '^version' plugin.toml | head -1 | sed 's/.*"\(.*\)"/\1/'); \
 	MAJOR=$$(echo $$OLD | cut -d. -f1); \
 	MINOR=$$(echo $$OLD | cut -d. -f2); \
@@ -18,7 +19,11 @@ release:
 	if [ -n "$(RELEASE_VERSION)" ]; then \
 		NEW="$(RELEASE_VERSION)"; \
 	else \
-		NEW="$$MAJOR.$$MINOR.$$((PATCH + 1))"; \
+		NEW_PATCH=$$((PATCH + 1)); \
+		while git tag -l "v$$MAJOR.$$MINOR.$$NEW_PATCH" | grep -q .; do \
+			NEW_PATCH=$$((NEW_PATCH + 1)); \
+		done; \
+		NEW="$$MAJOR.$$MINOR.$$NEW_PATCH"; \
 	fi; \
 	sed -i '' "s/^version = \"$$OLD\"/version = \"$$NEW\"/" plugin.toml && \
 	sed -i '' "s/^version = \"[^\"]*\"/version = \"$$NEW\"/" Cargo.toml && \
