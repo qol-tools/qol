@@ -11,7 +11,7 @@ dev:
 
 release:
 	@cargo test --tests && \
-	OLD=$$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/'); \
+	OLD=$$(grep '^version' plugin.toml | head -1 | sed 's/.*"\(.*\)"/\1/'); \
 	MAJOR=$$(echo $$OLD | cut -d. -f1); \
 	MINOR=$$(echo $$OLD | cut -d. -f2); \
 	PATCH=$$(echo $$OLD | cut -d. -f3); \
@@ -20,9 +20,9 @@ release:
 	else \
 		NEW="$$MAJOR.$$MINOR.$$((PATCH + 1))"; \
 	fi; \
-	sed -i'' -e "s/^version = \"$$OLD\"/version = \"$$NEW\"/" Cargo.toml && \
-	sed -i'' -e "s/^version = \"[^\"]*\"/version = \"$$NEW\"/" plugin.toml && \
-	git add Cargo.toml plugin.toml && git commit -m "chore(release): v$$NEW" && \
+	sed -i '' "s/^version = \"$$OLD\"/version = \"$$NEW\"/" plugin.toml && \
+	sed -i '' "s/^version = \"[^\"]*\"/version = \"$$NEW\"/" Cargo.toml && \
+	git add plugin.toml Cargo.toml && git commit -m "chore(release): v$$NEW" && \
 	git tag "v$$NEW" && git push && git push --tags
 
 test:
