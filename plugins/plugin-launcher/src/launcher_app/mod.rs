@@ -12,6 +12,7 @@ mod window_ops;
 use std::collections::HashMap;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -76,25 +77,33 @@ struct LauncherView {
     pub(super) focus_handle: FocusHandle,
     blur_sub: Option<Subscription>,
     is_showing: bool,
+    any_visible: Arc<AtomicBool>,
     blur_guard_until: Instant,
 }
 
 impl LauncherView {
-    fn new(entries: Arc<PreloadedEntries>, cx: &mut Context<Self>) -> Self {
+    fn new(entries: Arc<PreloadedEntries>, any_visible: Arc<AtomicBool>, cx: &mut Context<Self>) -> Self {
+        any_visible.store(true, Ordering::Release);
         Self {
             state: LauncherState::new(),
             store: EntryStore::new(entries.app_entries.clone(), entries.file_entries.clone()),
             focus_handle: cx.focus_handle(),
             blur_sub: None,
             is_showing: true,
+            any_visible,
             blur_guard_until: Instant::now() + Duration::from_millis(BLUR_GUARD_MS),
         }
+    }
+
+    fn set_showing(&mut self, showing: bool) {
+        self.is_showing = showing;
+        self.any_visible.store(showing, Ordering::Release);
     }
 
     fn reset_for_show(&mut self) -> bool {
         let should_resize = (self.state.window_height - HEADER_HEIGHT).abs() > f32::EPSILON;
         self.state = LauncherState::new();
-        self.is_showing = true;
+        self.set_showing(true);
         self.blur_guard_until = Instant::now() + Duration::from_millis(BLUR_GUARD_MS);
         should_resize
     }
@@ -162,7 +171,7 @@ impl ActiveLaunchers {
         let mut removed = Vec::new();
         for (key, handle) in handles {
             let _ = handle.update(cx, |view, window, _| {
-                view.is_showing = false;
+                view.set_showing(false);
                 window.remove_window();
             });
             removed.push(key);
@@ -192,17 +201,27 @@ fn open_keepalive_window(cx: &mut App) {
 fn activate_or_open_launcher(
     entries: Arc<PreloadedEntries>,
     active: Rc<RefCell<ActiveLaunchers>>,
+    any_visible: Arc<AtomicBool>,
     monitor_snapshot: Option<monitor::ActiveMonitor>,
     cx: &mut App,
 ) {
+    #[cfg(debug_assertions)]
+    eprintln!("[launcher] activate_or_open: snapshot={:?}", monitor_snapshot.as_ref().map(|m| m.bounds()));
+
     if try_activate_visible_launcher(active.clone(), cx) {
+        #[cfg(debug_assertions)]
+        eprintln!("[launcher] reused visible launcher (skipped snapshot)");
         return;
     }
 
     let target = LauncherTarget::from_snapshot(monitor_snapshot.as_ref());
+    #[cfg(debug_assertions)]
+    eprintln!("[launcher] target={:?}, cached_windows={}", target, active.borrow().windows.len());
     active.borrow_mut().hide_non_target(target, cx);
 
     if try_activate_existing_launcher(active.clone(), target, cx) {
+        #[cfg(debug_assertions)]
+        eprintln!("[launcher] reused existing launcher for target");
         return;
     }
 
@@ -224,13 +243,14 @@ fn activate_or_open_launcher(
         titlebar: None,
         window_decorations: Some(WindowDecorations::Client),
         kind: WindowKind::PopUp,
+        is_movable: false,
         focus: true,
         app_id: Some(LAUNCHER_APP_ID.to_string()),
         ..Default::default()
     };
 
     if let Ok(handle) = open_window_with_focus(cx, options, move |_window, cx| {
-        LauncherView::new(entries.clone(), cx)
+        LauncherView::new(entries.clone(), any_visible, cx)
     }) {
         active.borrow_mut().insert(target, handle);
     }
@@ -326,6 +346,7 @@ fn activate_launcher_handle(
 fn spawn_command_poll(
     entries: Arc<PreloadedEntries>,
     active: Rc<RefCell<ActiveLaunchers>>,
+    any_visible: Arc<AtomicBool>,
     rx: mpsc::Receiver<daemon::Command>,
     focus_cache: FocusCache,
     cx: &mut App,
@@ -343,13 +364,34 @@ fn spawn_command_poll(
                 })
                 .await;
 
+            #[cfg(debug_assertions)]
+            eprintln!("[launcher] command_poll: next_command={}", match &next_command {
+                Some(daemon::Command::Show) => "Show",
+                Some(daemon::Command::Kill) => "Kill",
+                None => "None",
+            });
             match next_command {
                 Some(daemon::Command::Show) => {
+                    if any_visible.load(Ordering::Acquire) {
+                        #[cfg(debug_assertions)]
+                        eprintln!("[launcher] command_poll: already visible, activating only");
+                        cx.update(|cx| cx.activate(true)).ok();
+                        continue;
+                    }
+
+                    let focus_cache = focus_cache.clone();
+                    let snapshot = cx
+                        .background_spawn(async move { focus_cache.snapshot() })
+                        .await;
+                    #[cfg(debug_assertions)]
+                    eprintln!("[launcher] command_poll: snapshot={:?}", snapshot.as_ref().map(|m| m.bounds()));
                     let entries = entries.clone();
                     let active = active.clone();
-                    let snapshot = focus_cache.snapshot();
-                    cx.update(move |cx| activate_or_open_launcher(entries.clone(), active.clone(), snapshot, cx))
-                        .ok();
+                    let vis = any_visible.clone();
+                    if let Err(e) = cx.update(move |cx| activate_or_open_launcher(entries.clone(), active.clone(), vis, snapshot, cx)) {
+                        #[cfg(debug_assertions)]
+                        eprintln!("[launcher] command_poll: cx.update failed: {:?}", e);
+                    }
                 }
                 Some(daemon::Command::Kill) => {
                     cx.update(|cx| cx.quit()).ok();
@@ -360,6 +402,30 @@ fn spawn_command_poll(
         }
     })
     .detach();
+}
+
+#[cfg(target_os = "macos")]
+fn set_macos_accessory_policy() {
+    use std::ffi::c_void;
+
+    #[link(name = "objc")]
+    extern "C" {
+        fn objc_getClass(name: *const u8) -> *mut c_void;
+        fn sel_registerName(name: *const u8) -> *mut c_void;
+        fn objc_msgSend(receiver: *mut c_void, sel: *mut c_void, ...) -> *mut c_void;
+    }
+
+    const NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY: i64 = 1;
+
+    unsafe {
+        let cls = objc_getClass(b"NSApplication\0".as_ptr());
+        let shared_app_sel = sel_registerName(b"sharedApplication\0".as_ptr());
+        let app = objc_msgSend(cls, shared_app_sel);
+        if !app.is_null() {
+            let set_policy_sel = sel_registerName(b"setActivationPolicy:\0".as_ptr());
+            objc_msgSend(app, set_policy_sel, NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY);
+        }
+    }
 }
 
 pub fn run() {
@@ -375,23 +441,34 @@ pub fn run() {
     }
 
     Application::new().run(move |cx: &mut App| {
+        #[cfg(debug_assertions)]
+        eprintln!("[launcher] run: pid={}", std::process::id());
+
+        #[cfg(target_os = "macos")]
+        set_macos_accessory_policy();
+
         let focus_cache = FocusCache::start(cx);
 
         let (tx, rx) = mpsc::channel();
         if !daemon::start_listener(tx) {
+            #[cfg(debug_assertions)]
+            eprintln!("[launcher] daemon listener failed, quitting");
             cx.quit();
             return;
         }
 
         let entries = Arc::new(PreloadedEntries::load());
         let active: Rc<RefCell<ActiveLaunchers>> = Rc::new(RefCell::new(ActiveLaunchers::default()));
+        let any_visible = Arc::new(AtomicBool::new(false));
 
         open_keepalive_window(cx);
-        spawn_command_poll(entries.clone(), active.clone(), rx, focus_cache.clone(), cx);
+        spawn_command_poll(entries.clone(), active.clone(), any_visible.clone(), rx, focus_cache.clone(), cx);
 
         if show_immediately {
+            #[cfg(debug_assertions)]
+            eprintln!("[launcher] show_immediately");
             let snapshot = focus_cache.snapshot();
-            activate_or_open_launcher(entries.clone(), active.clone(), snapshot, cx);
+            activate_or_open_launcher(entries.clone(), active.clone(), any_visible.clone(), snapshot, cx);
         }
     });
 

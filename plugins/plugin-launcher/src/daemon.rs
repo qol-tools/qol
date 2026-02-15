@@ -35,38 +35,68 @@ fn send_ping() -> bool {
 
 pub fn start_listener(tx: Sender<Command>) -> bool {
     let socket_path = socket_path();
+    #[cfg(debug_assertions)]
+    eprintln!("[daemon] binding to {:?}", socket_path);
     let listener = match UnixListener::bind(&socket_path) {
-        Ok(listener) => listener,
+        Ok(listener) => {
+            #[cfg(debug_assertions)]
+            eprintln!("[daemon] bound successfully");
+            listener
+        }
         Err(error) if error.kind() == ErrorKind::AddrInUse => {
+            #[cfg(debug_assertions)]
+            eprintln!("[daemon] socket in use, pinging existing");
             if send_ping() {
+                #[cfg(debug_assertions)]
+                eprintln!("[daemon] existing instance alive, exiting");
                 return false;
             }
+            #[cfg(debug_assertions)]
+            eprintln!("[daemon] no response, removing stale socket");
             remove_socket_file(&socket_path);
             let Ok(listener) = UnixListener::bind(&socket_path) else {
+                #[cfg(debug_assertions)]
+                eprintln!("[daemon] rebind failed");
                 return false;
             };
             listener
         }
-        Err(_) => return false,
+        Err(e) => {
+            #[cfg(debug_assertions)]
+            eprintln!("[daemon] bind error: {}", e);
+            return false;
+        }
     };
 
     std::thread::spawn(move || {
+        #[cfg(debug_assertions)]
+        eprintln!("[daemon] listener thread started");
         for stream in listener.incoming() {
             match stream {
                 Ok(mut stream) => match read_command(&mut stream) {
                     ReadResult::Command(cmd) => {
+                        #[cfg(debug_assertions)]
+                        eprintln!("[daemon] received command: {}", match &cmd { Command::Show => "show", Command::Kill => "kill" });
                         let _ = stream.write_all(b"handled\n");
                         if tx.send(cmd).is_err() {
+                            #[cfg(debug_assertions)]
+                            eprintln!("[daemon] channel closed, exiting listener");
                             break;
                         }
                     }
                     ReadResult::Handled => {
+                        #[cfg(debug_assertions)]
+                        eprintln!("[daemon] received ping");
                         let _ = stream.write_all(b"handled\n");
                     }
                     ReadResult::Fallback => {
+                        #[cfg(debug_assertions)]
+                        eprintln!("[daemon] received unknown command");
                         let _ = stream.write_all(b"fallback\n");
                     }
                     ReadResult::Error(message) => {
+                        #[cfg(debug_assertions)]
+                        eprintln!("[daemon] read error: {}", message);
                         let _ = stream.write_all(format!("error {}\n", message).as_bytes());
                     }
                     ReadResult::Ignore => {}
