@@ -17,11 +17,11 @@ release:
 	gh release create "v$$NEW" target/debian/*.deb --title "v$$NEW" --generate-notes
 
 run:
-	cargo run
+	cargo run --bin qol-tray
 
 dev:
 	-pkill -f 'qol-tray'
-	cargo run --features dev
+	cargo run --bin qol-tray --features dev
 
 test:
 	cargo test

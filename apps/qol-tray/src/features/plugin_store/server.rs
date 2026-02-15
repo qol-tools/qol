@@ -872,6 +872,21 @@ async fn get_token_status() -> Json<TokenStatus> {
 }
 
 async fn set_github_token(Json(payload): Json<TokenRequest>) -> impl IntoResponse {
+    use super::github::TokenValidationError;
+
+    if let Err(e) = super::github::validate_token(&payload.token).await {
+        let (status, label) = match &e {
+            TokenValidationError::Empty | TokenValidationError::Invalid(_) => {
+                (StatusCode::BAD_REQUEST, "Rejected")
+            }
+            TokenValidationError::Upstream(_) => {
+                (StatusCode::BAD_GATEWAY, "Upstream failure")
+            }
+        };
+        log::warn!("{} GitHub token: {}", label, e);
+        return (status, e.to_string()).into_response();
+    }
+
     if let Err(e) = super::github::store_token(&payload.token) {
         log::error!("Failed to store GitHub token: {}", e);
         return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to store token".to_string()).into_response();
