@@ -47,6 +47,7 @@ struct PluginInfo {
     description: String,
     version: String,
     installed: bool,
+    installed_version: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -231,12 +232,6 @@ async fn bind_listener() -> Result<(tokio::net::TcpListener, u16)> {
     unreachable!()
 }
 
-fn get_installed_plugin_ids(plugins_dir: &std::path::Path) -> std::collections::HashSet<String> {
-    read_installed_plugin_dirs(plugins_dir)
-        .into_iter()
-        .map(|(id, _)| id)
-        .collect()
-}
 
 fn read_installed_plugin_dirs(plugins_dir: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
     if !plugins_dir.exists() {
@@ -282,7 +277,14 @@ async fn list_plugins(
         }
     };
 
-    let installed_plugins = get_installed_plugin_ids(&plugins_dir);
+    let installed_versions: std::collections::HashMap<String, String> =
+        read_installed_plugin_dirs(&plugins_dir)
+            .into_iter()
+            .filter_map(|(id, path)| {
+                let version = read_plugin_version(&path).ok()?;
+                Some((id, version))
+            })
+            .collect();
 
     let cache_age = cache_age_secs();
 
@@ -297,12 +299,16 @@ async fn list_plugins(
     let plugins = metadata_list
         .into_iter()
         .filter(|m| m.supports_current_platform())
-        .map(|m| PluginInfo {
-            id: m.id.clone(),
-            name: m.name,
-            description: m.description,
-            version: m.version,
-            installed: installed_plugins.contains(&m.id),
+        .map(|m| {
+            let installed_version = installed_versions.get(&m.id).cloned();
+            PluginInfo {
+                id: m.id.clone(),
+                name: m.name,
+                description: m.description,
+                version: m.version,
+                installed: installed_version.is_some(),
+                installed_version,
+            }
         })
         .collect();
     
@@ -350,6 +356,7 @@ async fn install_plugin(
         id: id.clone(),
         name: id.clone(),
         description: "Installed successfully".to_string(),
+        installed_version: Some(version.clone()),
         version,
         installed: true,
     }))
@@ -371,8 +378,9 @@ async fn update_plugin(
     log::info!("Update requested for plugin: {}", id);
 
     let installer = PluginInstaller::new(state.plugins_dir.clone());
+    let repo_url = format!("https://github.com/qol-tools/{}.git", id);
 
-    if let Err(e) = installer.update(&id).await {
+    if let Err(e) = installer.update(&repo_url, &id).await {
         log::error!("Failed to update plugin {}: {}", id, e);
         return Json(UninstallResult {
             success: false,
