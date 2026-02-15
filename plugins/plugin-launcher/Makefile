@@ -20,11 +20,10 @@ release:
 	else \
 		NEW="$$MAJOR.$$MINOR.$$((PATCH + 1))"; \
 	fi; \
-	sed -i "s/^version = \"$$OLD\"/version = \"$$NEW\"/" Cargo.toml && \
-	cargo build --release && \
-	cp target/release/$(BINARY) target/release/$(BINARY)-linux-x86_64 && \
-	git add Cargo.toml && git commit -m "chore(release): v$$NEW" && git push && \
-	gh release create "v$$NEW" target/release/$(BINARY)-linux-x86_64 --title "v$$NEW" --generate-notes
+	sed -i'' -e "s/^version = \"$$OLD\"/version = \"$$NEW\"/" Cargo.toml && \
+	sed -i'' -e "s/^version = \"[^\"]*\"/version = \"$$NEW\"/" plugin.toml && \
+	git add Cargo.toml plugin.toml && git commit -m "chore(release): v$$NEW" && \
+	git tag "v$$NEW" && git push && git push --tags
 
 test:
 	cargo test --tests
