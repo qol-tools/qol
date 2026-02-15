@@ -3,7 +3,7 @@ name = "Launcher"
 description = "Universal search with action modifiers"
 version = "0.1.2"
 author = "KMRH47"
-platforms = ["linux"]
+platforms = ["linux", "macos"]
 
 [runtime]
 command = "launcher"

@@ -4,11 +4,31 @@ use super::search;
 
 pub fn launch_item(item: &search::ResultItem<'_>) -> bool {
     match item {
-        search::ResultItem::App(entry) => spawn_detached(&entry.exec),
-        search::ResultItem::File(entry) => open_path_detached(&entry.path),
+        search::ResultItem::App(entry) => {
+            eprintln!("[launch] app name={:?} path={:?} exec={:?}", entry.name, entry.path, entry.exec);
+            launch_app(entry)
+        }
+        search::ResultItem::File(entry) => {
+            eprintln!("[launch] file name={:?} path={:?}", entry.name, entry.path);
+            open_path_detached(&entry.path)
+        }
     }
 }
 
+fn launch_app(entry: &crate::providers::apps::AppEntry) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let result = open_path_detached(&entry.path);
+        eprintln!("[launch] open_path_detached result={}", result);
+        return result;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        spawn_detached(&entry.exec)
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn spawn_detached(exec: &str) -> bool {
     let mut parts = exec.split_whitespace();
     let Some(cmd) = parts.next() else { return false };
@@ -18,6 +38,8 @@ fn spawn_detached(exec: &str) -> bool {
 }
 
 fn open_path_detached(path: &std::path::Path) -> bool {
+    eprintln!("[launch] open_path_detached path={:?}", path);
+
     #[cfg(target_os = "linux")]
     {
         if try_spawn_detached("xdg-open", &[path.as_os_str()]) {
@@ -37,13 +59,17 @@ fn open_path_detached(path: &std::path::Path) -> bool {
 
     #[cfg(target_os = "macos")]
     {
-        return Command::new("open")
+        let result = Command::new("open")
             .arg(path)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .spawn()
-            .is_ok();
+            .spawn();
+        match &result {
+            Ok(child) => eprintln!("[launch] spawned open pid={}", child.id()),
+            Err(e) => eprintln!("[launch] failed to spawn open: {}", e),
+        }
+        return result.is_ok();
     }
 
     #[cfg(target_os = "windows")]
@@ -63,6 +89,7 @@ fn open_path_detached(path: &std::path::Path) -> bool {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn try_spawn_detached(cmd: &str, args: &[&std::ffi::OsStr]) -> bool {
     if Command::new("setsid")
         .arg("-f")

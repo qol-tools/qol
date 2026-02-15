@@ -1,4 +1,30 @@
-.PHONY: test list dev release
+.PHONY: dev release test list
+
+BINARY=launcher
+OUTPUT=./$(BINARY)
+STAGED=./$(BINARY).new
+
+dev:
+	cargo build
+	install -m 755 target/debug/$(BINARY) $(STAGED)
+	mv -f $(STAGED) $(OUTPUT)
+
+release:
+	@cargo test --tests && \
+	OLD=$$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/'); \
+	MAJOR=$$(echo $$OLD | cut -d. -f1); \
+	MINOR=$$(echo $$OLD | cut -d. -f2); \
+	PATCH=$$(echo $$OLD | cut -d. -f3); \
+	if [ -n "$(RELEASE_VERSION)" ]; then \
+		NEW="$(RELEASE_VERSION)"; \
+	else \
+		NEW="$$MAJOR.$$MINOR.$$((PATCH + 1))"; \
+	fi; \
+	sed -i "s/^version = \"$$OLD\"/version = \"$$NEW\"/" Cargo.toml && \
+	cargo build --release && \
+	cp target/release/$(BINARY) target/release/$(BINARY)-linux-x86_64 && \
+	git add Cargo.toml && git commit -m "chore(release): v$$NEW" && git push && \
+	gh release create "v$$NEW" target/release/$(BINARY)-linux-x86_64 --title "v$$NEW" --generate-notes
 
 test:
 	cargo test --tests
@@ -20,23 +46,3 @@ example-%:
 		exit 1; \
 	fi; \
 	cargo run --example "$$BIN"
-
-dev:
-	cargo build
-
-release:
-	@cargo test --tests && \
-	OLD=$$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/'); \
-	MAJOR=$$(echo $$OLD | cut -d. -f1); \
-	MINOR=$$(echo $$OLD | cut -d. -f2); \
-	PATCH=$$(echo $$OLD | cut -d. -f3); \
-	if [ -n "$(RELEASE_VERSION)" ]; then \
-		NEW="$(RELEASE_VERSION)"; \
-	else \
-		NEW="$$MAJOR.$$MINOR.$$((PATCH + 1))"; \
-	fi; \
-	sed -i "s/^version = \"$$OLD\"/version = \"$$NEW\"/" Cargo.toml && \
-	cargo build --release && \
-	cp target/release/launcher target/release/launcher-linux-x86_64 && \
-	git add Cargo.toml && git commit -m "chore(release): v$$NEW" && git push && \
-	gh release create "v$$NEW" target/release/launcher-linux-x86_64 --title "v$$NEW" --generate-notes

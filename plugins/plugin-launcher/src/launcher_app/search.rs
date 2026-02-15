@@ -10,7 +10,7 @@ pub enum ResultItem<'a> {
     File(&'a FileEntry),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum ResultSource {
     App,
     File,
