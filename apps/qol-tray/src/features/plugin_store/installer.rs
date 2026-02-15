@@ -237,7 +237,7 @@ impl PluginInstaller {
         Ok(())
     }
 
-    pub async fn update(&self, plugin_id: &str) -> Result<()> {
+    pub async fn update(&self, repo_url: &str, plugin_id: &str) -> Result<()> {
         validate_plugin_id(plugin_id)?;
         let _operation_lock = self.acquire_operation_lock(plugin_id)?;
         Self::check_dev_link_conflict(plugin_id)?;
@@ -251,24 +251,14 @@ impl PluginInstaller {
         let staging_dir = self.update_staging_dir(plugin_id);
         let backup_dir = self.update_backup_dir(plugin_id);
 
-        log::info!("Updating plugin: {}", plugin_id);
+        log::info!("Updating plugin {} from {}", plugin_id, repo_url);
 
-        let plugin_dir_str = plugin_dir
-            .to_str()
-            .ok_or_else(|| anyhow::anyhow!("Plugin path contains invalid UTF-8"))?;
         let staging_str = staging_dir
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("Plugin path contains invalid UTF-8"))?;
 
         if let Err(error) =
-            run_git_checked(["clone", plugin_dir_str, staging_str], None, "clone").await
-        {
-            self.cleanup_temp_dir(&staging_dir).await;
-            return Err(error);
-        }
-
-        if let Err(error) =
-            run_git_checked(["fetch", "origin"], Some(&staging_dir), "fetch").await
+            run_git_checked(["clone", repo_url, staging_str], None, "clone").await
         {
             self.cleanup_temp_dir(&staging_dir).await;
             return Err(error);

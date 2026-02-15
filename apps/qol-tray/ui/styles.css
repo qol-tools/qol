@@ -453,6 +453,7 @@ header p { color: var(--text-muted); font-size: 1.1rem; }
 
 .plugins-grid .plugin-card h3 { color: var(--text-primary); }
 .plugins-grid .plugin-card .version { color: var(--text-muted); font-size: 0.9rem; }
+.plugins-grid .plugin-card .version.has-update { color: var(--accent); }
 .plugins-grid .plugin-card .description {
     color: var(--text-secondary);
     display: -webkit-box;

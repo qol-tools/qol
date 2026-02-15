@@ -340,14 +340,18 @@ function renderPlugins(plugins) {
 
     listEl.innerHTML = plugins.map((plugin, index) => {
         const isInstalling = installing.has(plugin.id);
+        const hasUpdate = plugin.installed && plugin.installed_version && plugin.installed_version !== plugin.version;
+        const versionDisplay = hasUpdate
+            ? `v${plugin.installed_version} → v${plugin.version}`
+            : `v${plugin.version}`;
         return `
             <div class="plugin-card ${plugin.installed ? 'installed' : ''} ${isInstalling ? 'installing' : ''}" data-index="${index}" data-plugin-id="${plugin.id}" data-installed="${plugin.installed}">
                 <h3>${plugin.name}</h3>
-                <div class="version">v${plugin.version}</div>
+                <div class="version${hasUpdate ? ' has-update' : ''}">${versionDisplay}</div>
                 <div class="description">${plugin.description}</div>
                 <div class="button-group">
                     ${plugin.installed ? `
-                        <span class="installed-badge">Installed</span>
+                        <span class="installed-badge">${hasUpdate ? 'Update Available' : 'Installed'}</span>
                     ` : isInstalling ? `
                         <button class="refresh-btn spinning" disabled></button>
                     ` : `
