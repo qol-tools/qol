@@ -195,6 +195,54 @@ pub fn store_token(token: &str) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
+pub enum TokenValidationError {
+    Empty,
+    Invalid(String),
+    Upstream(String),
+}
+
+impl std::fmt::Display for TokenValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => write!(f, "Token cannot be empty"),
+            Self::Invalid(detail) => write!(f, "Invalid token: {}", detail),
+            Self::Upstream(detail) => write!(f, "GitHub unavailable: {}", detail),
+        }
+    }
+}
+
+impl std::error::Error for TokenValidationError {}
+
+pub async fn validate_token(token: &str) -> std::result::Result<(), TokenValidationError> {
+    let trimmed = token.trim();
+    if trimmed.is_empty() {
+        return Err(TokenValidationError::Empty);
+    }
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get("https://api.github.com/user")
+        .header("User-Agent", "qol-tray")
+        .header("Authorization", format!("Bearer {}", trimmed))
+        .send()
+        .await
+        .map_err(|e| TokenValidationError::Upstream(e.to_string()))?;
+
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+
+    let body = response.text().await.unwrap_or_default();
+
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return Err(TokenValidationError::Invalid(format!("{}: {}", status, body)));
+    }
+
+    Err(TokenValidationError::Upstream(format!("{}: {}", status, body)))
+}
+
 pub fn delete_token() -> Result<()> {
     let Some(path) = token_path() else {
         return Ok(());

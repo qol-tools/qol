@@ -10,6 +10,7 @@ const state = {
     searchQuery: '',
     hasToken: false,
     showTokenInput: false,
+    rateLimited: false,
     cacheAgeSecs: null,
     loading: false,
     loadToken: 0,
@@ -39,6 +40,7 @@ export function render(containerEl) {
                     </div>
                     <div class="header-actions">
                         <span id="cache-age" class="cache-age"></span>
+                        <button id="manage-token-btn" class="btn btn-ghost btn-sm" title="Manage GitHub token">Token</button>
                         <button id="refresh-btn" class="refresh-btn" title="Refresh (r)">↻</button>
                     </div>
                 </div>
@@ -68,6 +70,11 @@ export function render(containerEl) {
     }
     
     document.getElementById('refresh-btn')?.addEventListener('click', () => refreshPlugins());
+    document.getElementById('manage-token-btn')?.addEventListener('click', () => {
+        state.showTokenInput = true;
+        renderTokenBanner();
+        document.getElementById('github-token-input')?.focus();
+    });
     
     initializeStoreState();
     unsubscribe = subscribe((event) => {
@@ -128,18 +135,30 @@ async function checkTokenStatus() {
     }
 }
 
-function showRateLimitBanner() {
+// --- Token banner: single declarative render from state ---
+
+function renderTokenBanner() {
     const banner = document.getElementById('token-banner');
     if (!banner) return;
 
-    state.showTokenInput ? renderTokenInput(banner) : renderRateLimitMessage(banner);
+    if (state.showTokenInput) {
+        renderTokenInput(banner);
+    } else if (state.rateLimited && !state.hasToken) {
+        renderRateLimitMessage(banner);
+    } else {
+        banner.innerHTML = '';
+    }
 }
 
 function renderTokenInput(banner) {
+    const removeButton = state.hasToken
+        ? '<button id="remove-token-btn" class="btn btn-ghost">Remove Token</button>'
+        : '';
     banner.innerHTML = `
         <div class="token-input-container">
             <input type="password" id="github-token-input" placeholder="Paste GitHub token (no scopes needed)">
             <button id="save-token-btn" class="btn btn-primary">Save</button>
+            ${removeButton}
             <button id="cancel-token-btn" class="btn btn-ghost">Cancel</button>
         </div>
         <p class="token-help">
@@ -148,9 +167,10 @@ function renderTokenInput(banner) {
     `;
 
     document.getElementById('save-token-btn')?.addEventListener('click', saveToken);
+    document.getElementById('remove-token-btn')?.addEventListener('click', deleteToken);
     document.getElementById('cancel-token-btn')?.addEventListener('click', () => {
         state.showTokenInput = false;
-        showRateLimitBanner();
+        renderTokenBanner();
     });
 }
 
@@ -164,16 +184,12 @@ function renderRateLimitMessage(banner) {
 
     document.getElementById('add-token-btn')?.addEventListener('click', () => {
         state.showTokenInput = true;
-        showRateLimitBanner();
+        renderTokenBanner();
         document.getElementById('github-token-input')?.focus();
     });
 }
 
-function clearTokenBanner() {
-    const banner = document.getElementById('token-banner');
-    if (!banner) return;
-    banner.innerHTML = '';
-}
+// --- Token actions: mutate state, then re-render ---
 
 async function saveToken() {
     const input = document.getElementById('github-token-input');
@@ -198,12 +214,45 @@ async function saveToken() {
         }
         state.hasToken = true;
         state.showTokenInput = false;
-        clearTokenBanner();
+        state.rateLimited = false;
+        renderTokenBanner();
         setFeedback('success', 'GitHub token saved');
         loadPlugins();
     } catch (e) {
         setFeedback('error', `Failed to save token: ${e.message}`);
+        input?.focus();
+        input?.select();
     }
+}
+
+async function deleteToken() {
+    clearFeedback();
+    try {
+        const response = await fetch('/api/github-token', { method: 'DELETE' });
+        if (!response.ok) {
+            const message = (await response.text()) || 'Failed to delete token';
+            throw new Error(message);
+        }
+        state.hasToken = false;
+        state.showTokenInput = false;
+        renderTokenBanner();
+        setFeedback('success', 'GitHub token removed');
+    } catch (e) {
+        setFeedback('error', `Failed to delete token: ${e.message}`);
+    }
+}
+
+// --- Plugin loading ---
+
+function looksLikeGithubAuthFailure(message) {
+    const normalized = String(message || '').toLowerCase();
+    return (
+        normalized.includes('401') ||
+        normalized.includes('403') ||
+        normalized.includes('bad credentials') ||
+        normalized.includes('requires authentication') ||
+        normalized.includes('invalid token')
+    );
 }
 
 async function loadPlugins(forceRefresh = false) {
@@ -229,13 +278,9 @@ async function loadPlugins(forceRefresh = false) {
         }
         state.plugins = data.plugins;
         state.cacheAgeSecs = data.cache_age_secs;
-        
-        if (state.plugins.length === 0 && !state.hasToken) {
-            showRateLimitBanner();
-        } else {
-            state.showTokenInput = false;
-            clearTokenBanner();
-        }
+        state.rateLimited = state.plugins.length === 0 && !state.hasToken;
+        state.showTokenInput = state.showTokenInput && state.rateLimited;
+        renderTokenBanner();
         
         state.plugins.sort((a, b) => a.name.localeCompare(b.name));
         const filtered = getFilteredPlugins();
@@ -246,6 +291,11 @@ async function loadPlugins(forceRefresh = false) {
     } catch (error) {
         if (token !== state.loadToken) {
             return;
+        }
+        if (looksLikeGithubAuthFailure(error?.message)) {
+            state.rateLimited = true;
+            state.showTokenInput = true;
+            renderTokenBanner();
         }
         setFeedback('error', `Failed to load plugins: ${error.message}`);
         if (listEl) {
