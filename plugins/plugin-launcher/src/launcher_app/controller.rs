@@ -36,7 +36,7 @@ impl LauncherView {
             }
             InputEffect::Launch => self.launch_selected(window, cx),
             InputEffect::Dismiss => {
-                self.is_showing = false;
+                self.set_showing(false);
                 hide_in_context(window, cx);
             }
         }
@@ -116,7 +116,7 @@ impl LauncherView {
             if is_app {
                 self.store.record_launch(&name);
             }
-            self.is_showing = false;
+            self.set_showing(false);
             hide_in_context(window, cx);
         } else {
             eprintln!("[controller] launch returned false");

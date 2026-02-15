@@ -118,30 +118,45 @@ impl FocusCache {
     }
 
     pub fn snapshot(&self) -> Option<ActiveMonitor> {
+        #[cfg(debug_assertions)]
+        eprintln!("[monitor] snapshot: {} monitors cached", self.monitors.len());
         if self.monitors.is_empty() {
             return None;
         }
         if self.monitors.len() == 1 {
+            #[cfg(debug_assertions)]
+            eprintln!("[monitor] snapshot: single monitor early-return {:?}", self.monitors[0]);
             return Some(ActiveMonitor {
                 bounds: self.monitors[0],
             });
         }
 
-        let mut guard = self.state.lock().ok()?;
-        let now = Instant::now();
-        promote_pending_cursor(&mut guard, now);
+        #[cfg(target_os = "macos")]
+        {
+            let result = macos::poll_active_monitor(&self.monitors);
+            #[cfg(debug_assertions)]
+            eprintln!("[monitor] snapshot (macos on-demand): {:?}", result.as_ref().map(|m| m.bounds()));
+            return result.or_else(|| Some(ActiveMonitor { bounds: self.monitors[0] }));
+        }
 
-        let result = pick_active_monitor(&guard, self.monitors[0]);
+        #[cfg(not(target_os = "macos"))]
+        {
+            let mut guard = self.state.lock().ok()?;
+            let now = Instant::now();
+            promote_pending_cursor(&mut guard, now);
 
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[monitor] snapshot: cursor={:?}, pending={:?}, focus={:?}",
-            guard.cursor.as_ref().map(|c| &c.monitor.bounds),
-            guard.pending_cursor.as_ref().map(|p| &p.monitor.bounds),
-            guard.focus.as_ref().map(|f| &f.monitor.bounds),
-        );
+            let result = pick_active_monitor(&guard, self.monitors[0]);
 
-        Some(result)
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "[monitor] snapshot: cursor={:?}, pending={:?}, focus={:?}",
+                guard.cursor.as_ref().map(|c| &c.monitor.bounds),
+                guard.pending_cursor.as_ref().map(|p| &p.monitor.bounds),
+                guard.focus.as_ref().map(|f| &f.monitor.bounds),
+            );
+
+            Some(result)
+        }
     }
 }
 
@@ -149,12 +164,16 @@ fn physical_monitors(cx: &App) -> Vec<Bounds<Pixels>> {
     #[cfg(target_os = "macos")]
     {
         let cg = macos::display_bounds();
+        #[cfg(debug_assertions)]
+        eprintln!("[monitor] physical_monitors: cg={} displays", cg.len());
         if cg.len() > 1 {
             return cg;
         }
     }
 
     let gpui_displays = cx.displays();
+    #[cfg(debug_assertions)]
+    eprintln!("[monitor] physical_monitors: gpui={} displays", gpui_displays.len());
     if gpui_displays.len() > 1 {
         return gpui_displays.iter().map(|d| d.bounds()).collect();
     }
@@ -162,12 +181,17 @@ fn physical_monitors(cx: &App) -> Vec<Bounds<Pixels>> {
     #[cfg(target_os = "linux")]
     {
         let xrandr = linux::xrandr_monitors();
+        #[cfg(debug_assertions)]
+        eprintln!("[monitor] physical_monitors: xrandr={} displays", xrandr.len());
         if xrandr.len() > 1 {
             return xrandr;
         }
     }
 
-    gpui_displays.iter().map(|d| d.bounds()).collect()
+    let result: Vec<_> = gpui_displays.iter().map(|d| d.bounds()).collect();
+    #[cfg(debug_assertions)]
+    eprintln!("[monitor] physical_monitors: fallback result={:?}", result);
+    result
 }
 
 pub(crate) fn monitor_for_bounds(

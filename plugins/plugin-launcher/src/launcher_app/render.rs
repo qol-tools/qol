@@ -21,7 +21,7 @@ impl Render for LauncherView {
                     if std::time::Instant::now() < this.blur_guard_until {
                         return;
                     }
-                    this.is_showing = false;
+                    this.set_showing(false);
                     hide_in_context(window, cx);
                 },
             ));
@@ -42,8 +42,8 @@ impl Render for LauncherView {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
                     "escape" | "esc" => {
-                        this.is_showing = false;
-                        hide_in_context(window, cx);
+                    this.set_showing(false);
+                    hide_in_context(window, cx);
                     }
                     _ => this.handle_key(event, window, cx),
                 }
