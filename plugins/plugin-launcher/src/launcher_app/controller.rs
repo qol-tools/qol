@@ -99,14 +99,22 @@ impl LauncherView {
     fn launch_selected(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
         self.store.ensure_filtered(&self.state);
         let Some(scored) = self.store.get(self.state.selected) else {
+            eprintln!("[controller] launch_selected: no scored item at index {}", self.state.selected);
             return;
         };
+        eprintln!("[controller] launch_selected: index={} source={:?} name={:?}",
+            self.state.selected, scored.source, self.store.name(scored));
         let Some(item) = self.store.item(scored) else {
+            eprintln!("[controller] launch_selected: failed to resolve item");
             return;
         };
+        eprintln!("[controller] launching item...");
         if actions::launch_item(&item) {
+            eprintln!("[controller] launch succeeded, hiding window");
             self.is_showing = false;
             hide_in_context(window, cx);
+        } else {
+            eprintln!("[controller] launch returned false");
         }
     }
 }

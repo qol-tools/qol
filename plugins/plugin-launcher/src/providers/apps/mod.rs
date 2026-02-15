@@ -1,6 +1,8 @@
 mod fallback;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
 
 use crate::desktop_entry::DesktopEntry;
 
@@ -15,7 +17,11 @@ pub fn default_provider() -> Box<dyn AppsProvider> {
     {
         Box::new(linux::LinuxAppsProvider)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        Box::new(macos::MacosAppsProvider)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         Box::new(fallback::FallbackAppsProvider)
     }
