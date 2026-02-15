@@ -1,26 +1,35 @@
 # plugin-launcher
 
-GPUI launcher plugin for qol-tray.
+A [qol-tray](https://github.com/qol-tools/qol-tray) plugin that provides a fast, keyboard-driven application and file launcher. Built with [GPUI](https://github.com/zed-industries/zed).
 
-## Commands
+## Features
 
-```bash
-make dev              # build debug launcher
-make test             # run tests
-make list             # list example binaries
-make example-01       # run example by number
-make example-minimal  # run example by name
-make release          # release workflow
-```
+- **App search** — finds installed applications (`.desktop` entries on Linux, `.app` bundles on macOS)
+- **File search** — indexes common directories with fuzzy matching
+- **Adjustable fuzziness** — strict, balanced, or loose matching
+- **Daemon mode** — stays resident for instant popup via hotkey
+
+## Platforms
+
+Linux, macOS
 
 ## Controls
 
-- Type: fuzzy search
-- Tab / Shift+Tab: switch mode
-- Ctrl+Up / Ctrl+Down: adjust fuzziness
-- Up / Down: navigate results
-- Enter: launch selected
-- Esc: close launcher
+| Key | Action |
+|-----|--------|
+| Type | Fuzzy search |
+| Tab / Shift+Tab | Switch mode (Apps / Files) |
+| Ctrl+Up / Ctrl+Down | Adjust fuzziness |
+| Up / Down | Navigate results |
+| Enter | Launch selected |
+| Esc | Dismiss |
+
+## Development
+
+```bash
+make dev      # build and install binary to plugin root
+make test     # run tests
+```
 
 ## License
 
