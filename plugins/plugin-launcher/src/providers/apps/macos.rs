@@ -28,6 +28,7 @@ fn app_dirs() -> Vec<PathBuf> {
         dirs.push(PathBuf::from(format!("{home}/Applications")));
     }
     dirs.push(PathBuf::from("/System/Applications"));
+    dirs.push(PathBuf::from("/System/Library/PreferencePanes"));
     dirs
 }
 
@@ -43,11 +44,10 @@ fn collect_apps(dir: &Path, depth: usize, out: &mut Vec<AppEntry>) {
         if !path.is_dir() {
             continue;
         }
-        if path.extension().is_some_and(|ext| ext == "app") {
+        if path.extension().is_some_and(|ext| ext == "app" || ext == "prefPane") {
             if let Some(app_entry) = parse_app_bundle(&path) {
                 out.push(app_entry);
             }
-            // Never descend into .app bundles
             continue;
         }
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
