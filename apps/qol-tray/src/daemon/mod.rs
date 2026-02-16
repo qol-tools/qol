@@ -38,6 +38,9 @@ pub enum DaemonEvent {
     BuildStarted,
     #[cfg(feature = "dev")]
     BuildComplete { results: Vec<BuildResultInfo> },
+    UpdateProgress { percent: u8 },
+    UpdateComplete,
+    UpdateFailed { message: String },
 }
 
 #[cfg(test)]
