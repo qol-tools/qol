@@ -173,7 +173,8 @@ pub async fn start_ui_server(
         .route("/hotkeys", get(get_hotkeys))
         .route("/hotkeys", axum::routing::put(set_hotkeys))
         .route("/dev/enabled", get(dev_enabled))
-        .route("/version", get(get_version));
+        .route("/version", get(get_version))
+        .route("/check-update", get(check_update));
 
     #[cfg(feature = "dev")]
     let api = api
@@ -639,6 +640,12 @@ async fn dev_enabled() -> Json<bool> {
 
 async fn get_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+async fn check_update() -> Json<serde_json::Value> {
+    let available = crate::updates::check_for_updates().await.unwrap_or(false);
+    let latest = crate::updates::latest_version().map(String::from);
+    Json(serde_json::json!({ "available": available, "latest": latest }))
 }
 
 #[cfg(feature = "dev")]
