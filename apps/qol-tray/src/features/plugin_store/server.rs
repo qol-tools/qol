@@ -174,7 +174,8 @@ pub async fn start_ui_server(
         .route("/hotkeys", axum::routing::put(set_hotkeys))
         .route("/dev/enabled", get(dev_enabled))
         .route("/version", get(get_version))
-        .route("/check-update", get(check_update));
+        .route("/check-update", get(check_update))
+        .route("/self-update", post(self_update));
 
     #[cfg(feature = "dev")]
     let api = api
@@ -646,6 +647,15 @@ async fn check_update() -> Json<serde_json::Value> {
     let available = crate::updates::check_for_updates().await.unwrap_or(false);
     let latest = crate::updates::latest_version().map(String::from);
     Json(serde_json::json!({ "available": available, "latest": latest }))
+}
+
+async fn self_update() -> impl IntoResponse {
+    tokio::spawn(async {
+        if let Err(e) = crate::updates::download_and_install().await {
+            log::error!("Self-update failed: {}", e);
+        }
+    });
+    StatusCode::ACCEPTED
 }
 
 #[cfg(feature = "dev")]
