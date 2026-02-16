@@ -27,7 +27,6 @@ use crate::hotkeys::trigger_reload;
 use crate::dev;
 
 const DEFAULT_UI_SERVER_PORT: u16 = 42700;
-const MAX_UI_SERVER_PORT_ATTEMPTS: u16 = 20;
 
 #[derive(Clone)]
 struct AppState {
@@ -214,22 +213,9 @@ pub async fn start_ui_server(
 }
 
 async fn bind_listener() -> Result<(tokio::net::TcpListener, u16)> {
-    for offset in 0..=MAX_UI_SERVER_PORT_ATTEMPTS {
-        let port = DEFAULT_UI_SERVER_PORT + offset;
-        let address = format!("127.0.0.1:{}", port);
-        match tokio::net::TcpListener::bind(&address).await {
-            Ok(listener) => return Ok((listener, port)),
-            Err(error)
-                if error.kind() == std::io::ErrorKind::AddrInUse
-                    && offset < MAX_UI_SERVER_PORT_ATTEMPTS =>
-            {
-                continue;
-            }
-            Err(error) => return Err(error.into()),
-        }
-    }
-
-    unreachable!()
+    let address = format!("127.0.0.1:{}", DEFAULT_UI_SERVER_PORT);
+    let listener = tokio::net::TcpListener::bind(&address).await?;
+    Ok((listener, DEFAULT_UI_SERVER_PORT))
 }
 
 
