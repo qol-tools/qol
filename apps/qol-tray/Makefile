@@ -19,7 +19,11 @@ release:
 		done; \
 		NEW="$$MAJOR.$$MINOR.$$NEW_PATCH"; \
 	fi; \
-	sed -i '' "s/^version = \"$$OLD\"/version = \"$$NEW\"/" Cargo.toml && \
+	if [ "$$(uname)" = "Darwin" ]; then \
+		sed -i '' "s/^version = \"$$OLD\"/version = \"$$NEW\"/" Cargo.toml; \
+	else \
+		sed -i "s/^version = \"$$OLD\"/version = \"$$NEW\"/" Cargo.toml; \
+	fi && \
 	git add Cargo.toml && git commit -m "chore(release): v$$NEW" && \
 	git tag "v$$NEW" && git push && git push --tags
 
