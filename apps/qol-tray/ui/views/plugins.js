@@ -145,7 +145,7 @@ function renderGrid() {
 
     const ghostCards = ghostPlugins.map(plugin => `
         <div class="plugin-card ghost">
-            <span class="ghost-spinner">↻</span>
+            <span class="refresh-btn spinning"></span>
             <div class="plugin-name">${plugin.name}</div>
         </div>
     `).join('');
@@ -164,7 +164,7 @@ function renderGrid() {
                 ${plugin.loaded === false ? '<div class="plugin-load-state">Not loaded</div>' : ''}
                 ${plugin.update_available ? `
                     <button class="plugin-update ${isUpdating ? 'updating' : ''}" aria-label="Update plugin" ${isUpdating ? 'disabled' : ''}>
-                        ${isUpdating ? '<span class="refresh-btn spinning"></span>' : `↑ ${plugin.available_version}`}
+                        ${isUpdating ? '<span class="refresh-btn spinning update-spinner"></span>' : `↑ ${plugin.available_version}`}
                     </button>
                 ` : ''}
                 <button class="plugin-cog" aria-label="Plugin options">
