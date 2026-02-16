@@ -184,7 +184,9 @@ pub async fn start_ui_server(
         .route("/dev/links", post(create_link))
         .route("/dev/links/{id}", axum::routing::delete(delete_link))
         .route("/dev/discover", post(trigger_discovery))
-        .route("/dev/discovery-state", get(get_discovery_state));
+        .route("/dev/discovery-state", get(get_discovery_state))
+        .route("/dev/mock-check-update", get(mock_check_update))
+        .route("/dev/mock-self-update", post(mock_self_update));
 
     let api = api.with_state(app_state);
 
@@ -1110,4 +1112,22 @@ async fn trigger_discovery(State(state): State<AppState>) -> impl IntoResponse {
     log::info!("Discovery refresh requested");
     state.daemon.start_discovery(state.plugins_dir.clone());
     StatusCode::OK
+}
+
+#[cfg(feature = "dev")]
+async fn mock_check_update() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "available": true, "latest": "99.0.0" }))
+}
+
+#[cfg(feature = "dev")]
+async fn mock_self_update(State(state): State<AppState>) -> impl IntoResponse {
+    let events = state.daemon.events.clone();
+    tokio::spawn(async move {
+        for i in 0..=100 {
+            events.send(DaemonEvent::UpdateProgress { percent: i });
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+        events.send(DaemonEvent::UpdateComplete);
+    });
+    StatusCode::ACCEPTED
 }
