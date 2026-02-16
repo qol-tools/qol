@@ -3,6 +3,9 @@ use gpui::*;
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex};
 
+type CGDisplayReconfigurationCallBack =
+    unsafe extern "C" fn(CGDirectDisplayID, u32, *mut c_void);
+
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct CGRect {
@@ -32,6 +35,10 @@ extern "C" {
     fn CGGetActiveDisplayList(max: u32, displays: *mut CGDirectDisplayID, count: *mut u32) -> i32;
     fn CGDisplayBounds(display: CGDirectDisplayID) -> CGRect;
     fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> CFArrayRef;
+    fn CGDisplayRegisterReconfigurationCallback(
+        callback: CGDisplayReconfigurationCallBack,
+        user_info: *mut c_void,
+    ) -> i32;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -92,9 +99,39 @@ fn dict_get_f64(dict: CFDictionaryRef, key: CFStringRef) -> Option<f64> {
     }
 }
 
-pub(super) fn start_focus_tracking(_state: Arc<Mutex<InputState>>, _monitors: Vec<Bounds<Pixels>>) {
+const K_CG_DISPLAY_BEGIN_CONFIGURATION_FLAG: u32 = 1;
+
+unsafe extern "C" fn display_reconfig_callback(
+    _display: CGDirectDisplayID,
+    flags: u32,
+    user_info: *mut c_void,
+) {
+    if flags & K_CG_DISPLAY_BEGIN_CONFIGURATION_FLAG != 0 {
+        return;
+    }
+    let monitors = &*(user_info as *const Mutex<Vec<Bounds<Pixels>>>);
+    if let Ok(mut guard) = monitors.lock() {
+        let updated = display_bounds();
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[monitor/macos] display reconfigured: {} -> {} displays",
+            guard.len(),
+            updated.len()
+        );
+        *guard = updated;
+    }
+}
+
+pub(super) fn start_focus_tracking(
+    _state: Arc<Mutex<InputState>>,
+    monitors: Arc<Mutex<Vec<Bounds<Pixels>>>>,
+) {
     #[cfg(debug_assertions)]
-    eprintln!("[monitor/macos] focus tracking uses on-demand polling (no background thread)");
+    eprintln!("[monitor/macos] registering display reconfiguration callback");
+    let ptr = Arc::into_raw(monitors) as *mut c_void;
+    unsafe {
+        CGDisplayRegisterReconfigurationCallback(display_reconfig_callback, ptr);
+    }
 }
 
 pub(super) fn poll_active_monitor(monitors: &[Bounds<Pixels>]) -> Option<ActiveMonitor> {

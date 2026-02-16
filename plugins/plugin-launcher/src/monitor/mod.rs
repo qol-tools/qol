@@ -100,12 +100,12 @@ fn pick_active_monitor(state: &InputState, fallback: Bounds<Pixels>) -> ActiveMo
 #[derive(Clone)]
 pub struct FocusCache {
     state: Arc<Mutex<InputState>>,
-    monitors: Vec<Bounds<Pixels>>,
+    monitors: Arc<Mutex<Vec<Bounds<Pixels>>>>,
 }
 
 impl FocusCache {
     pub fn start(cx: &App) -> Self {
-        let monitors = physical_monitors(cx);
+        let monitors = Arc::new(Mutex::new(physical_monitors(cx)));
         let state = Arc::new(Mutex::new(InputState::default()));
 
         #[cfg(target_os = "linux")]
@@ -118,25 +118,26 @@ impl FocusCache {
     }
 
     pub fn snapshot(&self) -> Option<ActiveMonitor> {
+        let monitors = self.monitors.lock().ok()?.clone();
         #[cfg(debug_assertions)]
-        eprintln!("[monitor] snapshot: {} monitors cached", self.monitors.len());
-        if self.monitors.is_empty() {
+        eprintln!("[monitor] snapshot: {} monitors cached", monitors.len());
+        if monitors.is_empty() {
             return None;
         }
-        if self.monitors.len() == 1 {
+        if monitors.len() == 1 {
             #[cfg(debug_assertions)]
-            eprintln!("[monitor] snapshot: single monitor early-return {:?}", self.monitors[0]);
+            eprintln!("[monitor] snapshot: single monitor early-return {:?}", monitors[0]);
             return Some(ActiveMonitor {
-                bounds: self.monitors[0],
+                bounds: monitors[0],
             });
         }
 
         #[cfg(target_os = "macos")]
         {
-            let result = macos::poll_active_monitor(&self.monitors);
+            let result = macos::poll_active_monitor(&monitors);
             #[cfg(debug_assertions)]
             eprintln!("[monitor] snapshot (macos on-demand): {:?}", result.as_ref().map(|m| m.bounds()));
-            return result.or_else(|| Some(ActiveMonitor { bounds: self.monitors[0] }));
+            return result.or_else(|| Some(ActiveMonitor { bounds: monitors[0] }));
         }
 
         #[cfg(not(target_os = "macos"))]
@@ -145,7 +146,7 @@ impl FocusCache {
             let now = Instant::now();
             promote_pending_cursor(&mut guard, now);
 
-            let result = pick_active_monitor(&guard, self.monitors[0]);
+            let result = pick_active_monitor(&guard, monitors[0]);
 
             #[cfg(debug_assertions)]
             eprintln!(
