@@ -54,7 +54,7 @@ axum = { version = "0.8.7", features = ["ws", "macros"] }
 tower-http = { version = "0.6", features = ["fs", "trace", "set-header"] }
 
 # HTTP client for GitHub API
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 
 # Global hotkeys
 global-hotkey = { version = "0.7", features = ["serde"] }
