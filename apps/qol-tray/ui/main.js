@@ -53,7 +53,15 @@ async function init() {
 function handleUpdateEvent(event) {
     if (event.type === 'update_progress') {
         updateState = { status: 'downloading', percent: event.percent };
-        updateSidebar();
+        const fill = document.querySelector('.progress-fill');
+        const sub = document.querySelector('.is-downloading .version-sub');
+        if (fill && sub) {
+            fill.style.width = `${event.percent}%`;
+            sub.textContent = event.percent > 0 ? `Downloading ${event.percent}%` : 'Downloading...';
+        } else {
+            updateSidebar();
+        }
+        return;
     } else if (event.type === 'update_complete') {
         updateState = { status: 'done' };
         updateSidebar();
