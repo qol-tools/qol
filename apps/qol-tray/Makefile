@@ -5,16 +5,23 @@ build:
 
 release:
 	@cargo test && \
+	git fetch --tags && \
 	OLD=$$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/'); \
 	MAJOR=$$(echo $$OLD | cut -d. -f1); \
 	MINOR=$$(echo $$OLD | cut -d. -f2); \
 	PATCH=$$(echo $$OLD | cut -d. -f3); \
-	NEW="$$MAJOR.$$MINOR.$$((PATCH + 1))"; \
-	sed -i "s/^version = \"$$OLD\"/version = \"$$NEW\"/" Cargo.toml && \
-	cargo build --release && \
-	cargo deb --no-build && \
-	git add Cargo.toml && git commit -m "chore(release): v$$NEW" && git push && \
-	gh release create "v$$NEW" target/debian/*.deb --title "v$$NEW" --generate-notes
+	if [ -n "$(RELEASE_VERSION)" ]; then \
+		NEW="$(RELEASE_VERSION)"; \
+	else \
+		NEW_PATCH=$$((PATCH + 1)); \
+		while git tag -l "v$$MAJOR.$$MINOR.$$NEW_PATCH" | grep -q .; do \
+			NEW_PATCH=$$((NEW_PATCH + 1)); \
+		done; \
+		NEW="$$MAJOR.$$MINOR.$$NEW_PATCH"; \
+	fi; \
+	sed -i '' "s/^version = \"$$OLD\"/version = \"$$NEW\"/" Cargo.toml && \
+	git add Cargo.toml && git commit -m "chore(release): v$$NEW" && \
+	git tag "v$$NEW" && git push && git push --tags
 
 run:
 	cargo run --bin qol-tray
