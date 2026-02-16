@@ -49,34 +49,57 @@ fn is_newer_version(latest: &str, current: &str) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-pub async fn download_and_install() -> Result<()> {
-    let version = latest_version().ok_or_else(|| anyhow::anyhow!("No update version available"))?;
-    let deb_path = download_deb(version).await?;
-    install_deb(&deb_path)?;
-    restart_with_cleanup();
-}
-
-#[cfg(target_os = "linux")]
-async fn download_deb(version: &str) -> Result<std::path::PathBuf> {
-    let url = format!(
-        "https://github.com/{}/releases/download/v{}/qol-tray_{}-1_amd64.deb",
-        GITHUB_REPO, version, version
-    );
-    let path = std::env::temp_dir().join(format!("qol-tray_{}-1_amd64.deb", version));
-
-    log::info!("Downloading update from {}", url);
+async fn download_asset(
+    url: &str,
+    dest: &std::path::Path,
+    events: &crate::daemon::EventBus,
+) -> Result<()> {
+    use futures_util::StreamExt;
+    use std::io::Write;
 
     let client = reqwest::Client::new();
-    let request = crate::features::plugin_store::github::build_github_request(&client, &url, None);
+    let request = crate::features::plugin_store::github::build_github_request(&client, url, None);
     let response = crate::features::plugin_store::github::send_checked(request).await?;
 
-    let bytes = response.bytes().await?;
-    std::fs::write(&path, &bytes)?;
-    Ok(path)
+    let total = response.content_length();
+    let mut stream = response.bytes_stream();
+    let mut file = std::fs::File::create(dest)?;
+    let mut downloaded: u64 = 0;
+    let mut last_percent: u8 = 0;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        file.write_all(&chunk)?;
+        downloaded += chunk.len() as u64;
+
+        let percent = total
+            .map(|t| ((downloaded * 100) / t).min(100) as u8)
+            .unwrap_or(0);
+
+        if percent != last_percent {
+            events.send(crate::daemon::DaemonEvent::UpdateProgress { percent });
+            last_percent = percent;
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
-fn install_deb(path: &std::path::Path) -> Result<()> {
+fn asset_url(version: &str) -> String {
+    format!(
+        "https://github.com/{}/releases/download/v{}/qol-tray_{}-1_amd64.deb",
+        GITHUB_REPO, version, version
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn asset_filename(version: &str) -> String {
+    format!("qol-tray_{}-1_amd64.deb", version)
+}
+
+#[cfg(target_os = "linux")]
+fn install_asset(path: &std::path::Path) -> Result<()> {
     log::info!("Installing update...");
 
     let status = std::process::Command::new("pkexec")
@@ -93,21 +116,35 @@ fn install_deb(path: &std::path::Path) -> Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-fn restart_with_cleanup() -> ! {
+fn restart() -> ! {
     log::info!("Update installed, restarting...");
     let _ = std::process::Command::new("qol-tray").spawn();
     std::process::exit(0);
 }
 
+#[cfg(target_os = "linux")]
+pub async fn download_and_install(events: std::sync::Arc<crate::daemon::EventBus>) -> Result<()> {
+    let version = latest_version().ok_or_else(|| anyhow::anyhow!("No update version available"))?;
+    let url = asset_url(version);
+    let dest = std::env::temp_dir().join(asset_filename(version));
+
+    log::info!("Downloading update from {}", url);
+    download_asset(&url, &dest, &events).await?;
+    events.send(crate::daemon::DaemonEvent::UpdateComplete);
+
+    install_asset(&dest)?;
+    restart();
+}
+
 #[cfg(target_os = "macos")]
-pub async fn download_and_install() -> Result<()> {
+pub async fn download_and_install(_events: std::sync::Arc<crate::daemon::EventBus>) -> Result<()> {
     let url = format!("https://github.com/{}/releases/latest", GITHUB_REPO);
     crate::paths::open_url(&url)?;
     Ok(())
 }
 
 #[cfg(target_os = "windows")]
-pub async fn download_and_install() -> Result<()> {
+pub async fn download_and_install(_events: std::sync::Arc<crate::daemon::EventBus>) -> Result<()> {
     let url = format!("https://github.com/{}/releases/latest", GITHUB_REPO);
     crate::paths::open_url(&url)?;
     Ok(())
