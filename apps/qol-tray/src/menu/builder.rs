@@ -105,7 +105,8 @@ fn spawn_update_task() {
             Ok(rt) => rt,
             Err(e) => { log::error!("Failed to create runtime for update: {}", e); return; }
         };
-        if let Err(e) = rt.block_on(updates::download_and_install()) {
+        let events = std::sync::Arc::new(crate::daemon::EventBus::new());
+        if let Err(e) = rt.block_on(updates::download_and_install(events)) {
             log::error!("Update failed: {}", e);
         }
     });

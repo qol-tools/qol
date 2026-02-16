@@ -1,4 +1,5 @@
 import { render as renderSidebar } from './components/sidebar.js';
+import { subscribe } from './events.js';
 import * as pluginsView from './views/plugins.js';
 import * as storeView from './views/store.js';
 import * as hotkeysView from './views/hotkeys.js';
@@ -44,8 +45,22 @@ async function init() {
     switchView('plugins');
     checkForUpdate();
 
+    subscribe(handleUpdateEvent);
     document.addEventListener('keydown', handleKeydown);
     sidebarEl.addEventListener('click', handleSidebarClick);
+}
+
+function handleUpdateEvent(event) {
+    if (event.type === 'update_progress') {
+        updateState = { status: 'downloading', percent: event.percent };
+        updateSidebar();
+    } else if (event.type === 'update_complete') {
+        updateState = { status: 'done' };
+        updateSidebar();
+    } else if (event.type === 'update_failed') {
+        updateState = { status: 'error' };
+        updateSidebar();
+    }
 }
 
 function updateSidebar() {
@@ -134,11 +149,6 @@ async function checkForUpdate() {
         result = null;
     }
     await minDelay;
-    // MOCK: force update available — remove this block
-    updateState = { status: 'available', latest: '1.5.0' };
-    updateSidebar();
-    return;
-    // END MOCK
     updateState = result
         ? (result.available ? { status: 'available', latest: result.latest } : { status: 'up-to-date' })
         : { status: 'error' };
@@ -151,16 +161,10 @@ async function triggerSelfUpdate() {
         item.classList.add('update-burst');
         await new Promise(r => setTimeout(r, 400));
     }
-    updateState = { status: 'downloading' };
+    updateState = { status: 'downloading', percent: 0 };
     updateSidebar();
     try {
         await fetch('/api/self-update', { method: 'POST' });
-        // MOCK: simulate download completing — remove this block
-        await new Promise(r => setTimeout(r, 3000));
-        updateState = { status: 'done' };
-        updateSidebar();
-        return;
-        // END MOCK
     } catch {
         updateState = { status: 'error' };
         updateSidebar();

@@ -34,9 +34,12 @@ function renderVersionFooter(version, state) {
                 </div>`;
     }
     if (state && state.status === 'downloading') {
+        const percent = state.percent || 0;
+        const label = percent > 0 ? `Downloading ${percent}%` : 'Downloading...';
         return `<div class="version-item is-downloading">
+                    <div class="progress-fill" style="width: ${percent}%"></div>
                     <span class="version-main">v${version}</span>
-                    <span class="version-sub">Updating</span>
+                    <span class="version-sub">${label}</span>
                 </div>`;
     }
     if (state && state.status === 'available') {
