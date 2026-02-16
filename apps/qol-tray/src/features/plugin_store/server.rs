@@ -649,10 +649,14 @@ async fn check_update() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "available": available, "latest": latest }))
 }
 
-async fn self_update() -> impl IntoResponse {
-    tokio::spawn(async {
-        if let Err(e) = crate::updates::download_and_install().await {
+async fn self_update(State(state): State<AppState>) -> impl IntoResponse {
+    let events = state.daemon.events.clone();
+    tokio::spawn(async move {
+        if let Err(e) = crate::updates::download_and_install(events.clone()).await {
             log::error!("Self-update failed: {}", e);
+            events.send(crate::daemon::DaemonEvent::UpdateFailed {
+                message: e.to_string(),
+            });
         }
     });
     StatusCode::ACCEPTED
