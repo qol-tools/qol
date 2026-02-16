@@ -191,16 +191,13 @@ body {
     z-index: 1;
 }
 
-.version-item.is-downloading::before {
-    content: '';
+.version-item.is-downloading .progress-fill {
     position: absolute;
     top: 0;
     left: 0;
     bottom: 0;
-    right: 0;
-    background: linear-gradient(90deg, rgba(74, 158, 255, 0.25) 0%, rgba(74, 158, 255, 0.1) 100%);
-    transform-origin: left;
-    animation: progress-fill 8s ease-out forwards;
+    background: linear-gradient(90deg, rgba(74, 158, 255, 0.25) 0%, rgba(74, 158, 255, 0.12) 100%);
+    transition: width 0.3s ease;
     pointer-events: none;
 }
 
@@ -213,14 +210,6 @@ body {
     background: linear-gradient(90deg, transparent 0%, rgba(74, 158, 255, 0.2) 40%, rgba(255, 255, 255, 0.08) 50%, rgba(74, 158, 255, 0.2) 60%, transparent 100%);
     animation: progress-shimmer 2s ease-in-out infinite;
     pointer-events: none;
-}
-
-@keyframes progress-fill {
-    0% { transform: scaleX(0); }
-    30% { transform: scaleX(0.5); }
-    60% { transform: scaleX(0.75); }
-    80% { transform: scaleX(0.85); }
-    100% { transform: scaleX(0.92); }
 }
 
 @keyframes progress-shimmer {
