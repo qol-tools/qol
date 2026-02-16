@@ -20,6 +20,7 @@ let devEnabled = false;
 let activeViewId = 'plugins';
 let activeView = null;
 let appVersion = null;
+let updateState = { status: 'checking' };
 
 async function init() {
     const sidebarEl = document.getElementById('sidebar');
@@ -41,6 +42,7 @@ async function init() {
 
     updateSidebar();
     switchView('plugins');
+    checkForUpdate();
 
     document.addEventListener('keydown', handleKeydown);
     sidebarEl.addEventListener('click', handleSidebarClick);
@@ -48,7 +50,7 @@ async function init() {
 
 function updateSidebar() {
     const sidebarEl = document.getElementById('sidebar');
-    sidebarEl.innerHTML = renderSidebar(activeViewId, VIEW_ORDER, appVersion);
+    sidebarEl.innerHTML = renderSidebar(activeViewId, VIEW_ORDER, appVersion, updateState);
 }
 
 function switchView(viewId) {
@@ -102,12 +104,47 @@ function handleKeydown(e) {
 }
 
 function handleSidebarClick(e) {
+    const updateBtn = e.target.closest('[data-action]');
+    if (updateBtn) {
+        const action = updateBtn.dataset.action;
+        if (action === 'check-update') checkForUpdate();
+        if (action === 'self-update') triggerSelfUpdate();
+        return;
+    }
+
     const item = e.target.closest('.sidebar-item');
     if (!item) return;
     
     const viewId = item.dataset.view;
     if (viewId) {
         switchView(viewId);
+    }
+}
+
+async function checkForUpdate() {
+    updateState = { status: 'checking' };
+    updateSidebar();
+    try {
+        const res = await fetch('/api/check-update');
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        updateState = data.available
+            ? { status: 'available', latest: data.latest }
+            : { status: 'up-to-date' };
+    } catch {
+        updateState = { status: 'error' };
+    }
+    updateSidebar();
+}
+
+async function triggerSelfUpdate() {
+    updateState = { status: 'downloading' };
+    updateSidebar();
+    try {
+        await fetch('/api/self-update', { method: 'POST' });
+    } catch {
+        updateState = { status: 'error' };
+        updateSidebar();
     }
 }
 
