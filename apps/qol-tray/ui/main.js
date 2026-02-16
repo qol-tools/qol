@@ -124,24 +124,43 @@ function handleSidebarClick(e) {
 async function checkForUpdate() {
     updateState = { status: 'checking' };
     updateSidebar();
+    const minDelay = new Promise(r => setTimeout(r, 800));
+    let result;
     try {
         const res = await fetch('/api/check-update');
         if (!res.ok) throw new Error();
-        const data = await res.json();
-        updateState = data.available
-            ? { status: 'available', latest: data.latest }
-            : { status: 'up-to-date' };
+        result = await res.json();
     } catch {
-        updateState = { status: 'error' };
+        result = null;
     }
+    await minDelay;
+    // MOCK: force update available — remove this block
+    updateState = { status: 'available', latest: '1.5.0' };
+    updateSidebar();
+    return;
+    // END MOCK
+    updateState = result
+        ? (result.available ? { status: 'available', latest: result.latest } : { status: 'up-to-date' })
+        : { status: 'error' };
     updateSidebar();
 }
 
 async function triggerSelfUpdate() {
+    const item = document.querySelector('.version-item');
+    if (item) {
+        item.classList.add('update-burst');
+        await new Promise(r => setTimeout(r, 400));
+    }
     updateState = { status: 'downloading' };
     updateSidebar();
     try {
         await fetch('/api/self-update', { method: 'POST' });
+        // MOCK: simulate download completing — remove this block
+        await new Promise(r => setTimeout(r, 3000));
+        updateState = { status: 'done' };
+        updateSidebar();
+        return;
+        // END MOCK
     } catch {
         updateState = { status: 'error' };
         updateSidebar();

@@ -13,28 +13,41 @@ export function render(activeViewId, viewOrder = ['plugins', 'store', 'hotkeys']
         </div>
     `).join('');
 
-    const versionHtml = version ? `
-        <div class="sidebar-version">
-            <span class="version-label">v${version}</span>
-            ${renderUpdateControl(updateState)}
-        </div>
-    ` : '';
+    const versionHtml = version
+        ? `<div class="sidebar-version">${renderVersionFooter(version, updateState)}</div>`
+        : '';
 
     return `<div class="sidebar-nav">${items}</div>${versionHtml}`;
 }
 
-function renderUpdateControl(state) {
-    if (!state || state.status === 'idle') {
-        return '';
+function renderVersionFooter(version, state) {
+    if (state && state.status === 'done') {
+        return `<div class="version-item update-done">
+                    <span class="version-main">Restarting...</span>
+                    <span class="version-sub">v${version} installed</span>
+                </div>`;
     }
-    if (state.status === 'checking' || state.status === 'downloading') {
-        return '<button class="refresh-btn spinning update-btn" disabled></button>';
+    if (state && state.status === 'checking') {
+        return `<div class="version-item">
+                    <span class="version-main">v${version}</span>
+                    <span class="version-sub">Checking for updates...</span>
+                </div>`;
     }
-    if (state.status === 'available') {
-        return `<button class="refresh-btn update-btn update-download" data-action="self-update" title="Update (${state.latest})">⬇</button>
-                <span class="update-text">Update (${state.latest})</span>`;
+    if (state && state.status === 'downloading') {
+        return `<div class="version-item is-downloading">
+                    <span class="version-main">v${version}</span>
+                    <span class="version-sub">Updating</span>
+                </div>`;
     }
-    return `<button class="refresh-btn update-btn" data-action="check-update" title="Check for updates">↻</button>
-            <span class="update-text">Check for updates</span>`;
+    if (state && state.status === 'available') {
+        return `<div class="version-item has-update" data-action="self-update">
+                    <span class="version-main">v${state.latest} available</span>
+                    <span class="version-sub">Click to update from v${version}</span>
+                </div>`;
+    }
+    return `<div class="version-item" data-action="check-update">
+                <span class="version-main">v${version}</span>
+                <span class="version-sub">Check for updates</span>
+            </div>`;
 }
 
