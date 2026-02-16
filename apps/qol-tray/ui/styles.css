@@ -120,6 +120,32 @@ body {
     padding: 0.75rem 1.5rem;
     color: var(--text-disabled);
     font-size: 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.sidebar-version .update-btn {
+    width: 1.5rem;
+    height: 1.5rem;
+    font-size: 0.7rem;
+    border-width: 1.5px;
+    transition: color 0.3s, border-color 0.3s, background 0.3s;
+}
+
+.sidebar-version .update-download {
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
+.sidebar-version .update-download:hover:not(:disabled) {
+    background: var(--accent);
+    color: var(--bg-base);
+}
+
+.sidebar-version .update-text {
+    color: var(--text-muted);
 }
 
 .sidebar-item {
