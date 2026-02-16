@@ -11,10 +11,43 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
 
+const DEFAULT_PORT: u16 = 42700;
+
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
+    if is_already_running() {
+        eprintln!("qol-tray is already running on port {}", DEFAULT_PORT);
+        show_already_running_notification();
+        return Ok(());
+    }
+
     log::info!("Starting QoL Tray daemon...");
     tray::platform::run_app(app_init)
+}
+
+fn is_already_running() -> bool {
+    use std::net::{SocketAddr, TcpStream};
+    let addr: SocketAddr = ([127, 0, 0, 1], DEFAULT_PORT).into();
+    TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
+}
+
+fn show_already_running_notification() {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("osascript")
+            .args([
+                "-e",
+                "display notification \"Another instance is already running\" with title \"QoL Tray\"",
+            ])
+            .status();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("notify-send")
+            .args(["QoL Tray", "Another instance is already running"])
+            .status();
+    }
 }
 
 fn app_init() -> Result<(TrayManager, Arc<Mutex<PluginManager>>)> {
