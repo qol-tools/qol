@@ -12,8 +12,12 @@ const ALT_TAB_GRACE_MS: u64 = 700;
 const POST_LAUNCHER_FOCUS_GUARD_MS: u64 = 1200;
 const EVENT_LOOP_IDLE_MS: u64 = 10;
 
-pub(super) fn start_focus_tracking(state: Arc<Mutex<InputState>>, monitors: Vec<Bounds<Pixels>>) {
+pub(super) fn start_focus_tracking(
+    state: Arc<Mutex<InputState>>,
+    monitors: Arc<Mutex<Vec<Bounds<Pixels>>>>,
+) {
     if !is_wayland() {
+        let monitors = monitors.lock().map(|g| g.clone()).unwrap_or_default();
         std::thread::spawn(move || {
             x11_focus_listener(state, monitors);
         });
