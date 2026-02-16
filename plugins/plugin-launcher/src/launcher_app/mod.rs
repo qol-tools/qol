@@ -254,6 +254,7 @@ fn activate_or_open_launcher(
     }) {
         active.borrow_mut().insert(target, handle);
     }
+    #[cfg(not(target_os = "macos"))]
     cx.activate(true);
 }
 
@@ -336,6 +337,7 @@ fn activate_launcher_handle(
         })
         .is_ok();
 
+    #[cfg(not(target_os = "macos"))]
     if activated {
         cx.activate(true);
     }
@@ -375,6 +377,7 @@ fn spawn_command_poll(
                     if any_visible.load(Ordering::Acquire) {
                         #[cfg(debug_assertions)]
                         eprintln!("[launcher] command_poll: already visible, activating only");
+                        #[cfg(not(target_os = "macos"))]
                         cx.update(|cx| cx.activate(true)).ok();
                         continue;
                     }
