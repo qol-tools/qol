@@ -25,8 +25,13 @@ release:
 		done; \
 		NEW="$$MAJOR.$$MINOR.$$NEW_PATCH"; \
 	fi; \
-	sed -i '' "s/^version = \"$$OLD\"/version = \"$$NEW\"/" plugin.toml && \
-	sed -i '' "s/^version = \"[^\"]*\"/version = \"$$NEW\"/" Cargo.toml && \
+	if [ "$$(uname)" = "Darwin" ]; then \
+		sed -i '' "s/^version = \"$$OLD\"/version = \"$$NEW\"/" plugin.toml; \
+		sed -i '' "s/^version = \"[^\"]*\"/version = \"$$NEW\"/" Cargo.toml; \
+	else \
+		sed -i "s/^version = \"$$OLD\"/version = \"$$NEW\"/" plugin.toml; \
+		sed -i "s/^version = \"[^\"]*\"/version = \"$$NEW\"/" Cargo.toml; \
+	fi && \
 	git add plugin.toml Cargo.toml && git commit -m "chore(release): v$$NEW" && \
 	git tag "v$$NEW" && git push && git push --tags
 
