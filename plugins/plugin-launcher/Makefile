@@ -11,8 +11,8 @@ dev:
 
 release:
 	@set -e; \
-	cargo test --tests && \
-	git fetch --tags && \
+	cargo test --tests; \
+	git fetch --tags --force; \
 	OLD=$$(grep '^[[:space:]]*version[[:space:]]*=' plugin.toml | head -1 | sed 's/^[^"]*"\([^"]*\)".*/\1/'); \
 	if [ -z "$$OLD" ]; then \
 		echo "Failed to parse version from plugin.toml"; \
@@ -36,9 +36,12 @@ release:
 	else \
 		sed -i "s/version = \"$$OLD\"/version = \"$$NEW\"/" plugin.toml; \
 		sed -i "s/^version = \"[^\"]*\"/version = \"$$NEW\"/" Cargo.toml; \
-	fi && \
-	git add plugin.toml Cargo.toml && git commit -m "chore(release): v$$NEW" && \
-	git tag "v$$NEW" && git push && git push --tags
+	fi; \
+	git add plugin.toml Cargo.toml; \
+	git commit -m "chore(release): v$$NEW"; \
+	git tag "v$$NEW"; \
+	git push; \
+	git push --tags
 
 test:
 	cargo test --tests
