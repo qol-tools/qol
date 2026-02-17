@@ -10,9 +10,14 @@ dev:
 	mv -f $(STAGED) $(OUTPUT)
 
 release:
-	@cargo test --tests && \
+	@set -e; \
+	cargo test --tests && \
 	git fetch --tags && \
-	OLD=$$(grep '^version' plugin.toml | head -1 | sed 's/.*"\(.*\)"/\1/'); \
+	OLD=$$(grep '^[[:space:]]*version[[:space:]]*=' plugin.toml | head -1 | sed 's/^[^"]*"\([^"]*\)".*/\1/'); \
+	if [ -z "$$OLD" ]; then \
+		echo "Failed to parse version from plugin.toml"; \
+		exit 1; \
+	fi; \
 	MAJOR=$$(echo $$OLD | cut -d. -f1); \
 	MINOR=$$(echo $$OLD | cut -d. -f2); \
 	PATCH=$$(echo $$OLD | cut -d. -f3); \
@@ -26,10 +31,10 @@ release:
 		NEW="$$MAJOR.$$MINOR.$$NEW_PATCH"; \
 	fi; \
 	if [ "$$(uname)" = "Darwin" ]; then \
-		sed -i '' "s/^version = \"$$OLD\"/version = \"$$NEW\"/" plugin.toml; \
+		sed -i '' "s/version = \"$$OLD\"/version = \"$$NEW\"/" plugin.toml; \
 		sed -i '' "s/^version = \"[^\"]*\"/version = \"$$NEW\"/" Cargo.toml; \
 	else \
-		sed -i "s/^version = \"$$OLD\"/version = \"$$NEW\"/" plugin.toml; \
+		sed -i "s/version = \"$$OLD\"/version = \"$$NEW\"/" plugin.toml; \
 		sed -i "s/^version = \"[^\"]*\"/version = \"$$NEW\"/" Cargo.toml; \
 	fi && \
 	git add plugin.toml Cargo.toml && git commit -m "chore(release): v$$NEW" && \

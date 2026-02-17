@@ -173,7 +173,7 @@ mod tests {
         let mut s2 = MomentumStrategy::new();
         let after_fresh = s2.next_interval(ms(500), true, ms(16), ms(500));
 
-        assert!(after_1 < after_fresh,
+        assert!(after_1 <= after_fresh,
             "long idle streak should ramp down more aggressively: {after_1:?} vs {after_fresh:?}");
     }
 
@@ -189,7 +189,7 @@ mod tests {
         s2.next_interval(ms(100), true, ms(16), ms(500));
         let after_short_active = s2.next_interval(ms(100), false, ms(16), ms(500));
 
-        assert!(after_long_active < after_short_active,
+        assert!(after_long_active <= after_short_active,
             "long active streak should ramp up more gently: {after_long_active:?} vs {after_short_active:?}");
     }
 

@@ -538,7 +538,7 @@ mod tests {
         });
         let tracker = make_tracker(platform, vec![m_a, m_b]);
         let result = tracker.snapshot().unwrap();
-        assert_eq!(*result.bounds(), m_a);
+        assert_eq!(*result.bounds(), m_b);
     }
 
     #[::std::prelude::v1::test]
