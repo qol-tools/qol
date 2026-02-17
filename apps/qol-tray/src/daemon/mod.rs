@@ -38,6 +38,12 @@ pub enum DaemonEvent {
     BuildStarted,
     #[cfg(feature = "dev")]
     BuildComplete { results: Vec<BuildResultInfo> },
+    #[cfg(feature = "dev")]
+    SelfRecompileProgress { percent: u8, phase: String },
+    #[cfg(feature = "dev")]
+    SelfRecompileComplete,
+    #[cfg(feature = "dev")]
+    SelfRecompileFailed { message: String },
     UpdateProgress { percent: u8 },
     UpdateComplete,
     UpdateFailed { message: String },

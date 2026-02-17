@@ -6,7 +6,13 @@ const LABELS = {
     dev: 'Developer'
 };
 
-export function render(activeViewId, viewOrder = ['plugins', 'store', 'hotkeys'], version = null, updateState = null) {
+export function render(
+    activeViewId,
+    viewOrder = ['plugins', 'store', 'hotkeys'],
+    version = null,
+    updateState = null,
+    isDevMode = false
+) {
     const items = viewOrder.map(id => `
         <div class="sidebar-item ${id === activeViewId ? 'active' : ''}" data-view="${id}">
             ${LABELS[id] || id}
@@ -14,13 +20,43 @@ export function render(activeViewId, viewOrder = ['plugins', 'store', 'hotkeys']
     `).join('');
 
     const versionHtml = version
-        ? `<div class="sidebar-version">${renderVersionFooter(version, updateState)}</div>`
+        ? `<div class="sidebar-version">${renderVersionFooter(version, updateState, isDevMode)}</div>`
         : '';
 
     return `<div class="sidebar-nav">${items}</div>${versionHtml}`;
 }
 
-function renderVersionFooter(version, state) {
+function renderVersionFooter(version, state, isDevMode) {
+    if (isDevMode) {
+        if (state && state.status === 'compiling') {
+            const percent = state.percent || 0;
+            const phase = state.phase || 'Recompiling QoL Tray';
+            const label = percent > 0 ? `${phase} ${percent}%` : `${phase}...`;
+            return `<div class="version-item is-dev is-downloading compiling">
+                        <div class="progress-fill" style="width: ${percent}%"></div>
+                        <span class="version-main">v${version}<span class="version-tag">DEV</span></span>
+                        <span class="version-sub">${label}</span>
+                    </div>`;
+        }
+        if (state && state.status === 'done') {
+            return `<div class="version-item is-dev update-done">
+                        <span class="version-main">v${version}<span class="version-tag">DEV</span></span>
+                        <span class="version-sub">Recompile complete</span>
+                    </div>`;
+        }
+        if (state && state.status === 'error') {
+            const detail = state.message ? `: ${state.message}` : '';
+            return `<div class="version-item is-dev" data-action="dev-recompile">
+                        <span class="version-main">v${version}<span class="version-tag">DEV</span></span>
+                        <span class="version-sub">Recompile failed${detail}. Click to retry</span>
+                    </div>`;
+        }
+        return `<div class="version-item is-dev" data-action="dev-recompile">
+                    <span class="version-main">v${version}<span class="version-tag">DEV</span></span>
+                    <span class="version-sub">Recompile QoL Tray</span>
+                </div>`;
+    }
+
     if (state && state.status === 'done') {
         return `<div class="version-item update-done">
                     <span class="version-main">Restarting...</span>
@@ -53,4 +89,3 @@ function renderVersionFooter(version, state) {
                 <span class="version-sub">Check for updates</span>
             </div>`;
 }
-
