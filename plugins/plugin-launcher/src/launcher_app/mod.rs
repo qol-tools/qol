@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use gpui::*;
 
 use crate::daemon;
-use crate::monitor::{self, FocusCache};
+use crate::monitor::{self, MonitorTracker};
 use crate::open_window_with_focus;
 use crate::platform;
 use crate::providers::{apps, files};
@@ -350,7 +350,7 @@ fn spawn_command_poll(
     active: Rc<RefCell<ActiveLaunchers>>,
     any_visible: Arc<AtomicBool>,
     rx: mpsc::Receiver<daemon::Command>,
-    focus_cache: FocusCache,
+    focus_cache: MonitorTracker,
     cx: &mut App,
 ) {
     let rx = Arc::new(Mutex::new(rx));
@@ -374,14 +374,6 @@ fn spawn_command_poll(
             });
             match next_command {
                 Some(daemon::Command::Show) => {
-                    if any_visible.load(Ordering::Acquire) {
-                        #[cfg(debug_assertions)]
-                        eprintln!("[launcher] command_poll: already visible, activating only");
-                        #[cfg(not(target_os = "macos"))]
-                        cx.update(|cx| cx.activate(true)).ok();
-                        continue;
-                    }
-
                     let focus_cache = focus_cache.clone();
                     let snapshot = cx
                         .background_spawn(async move { focus_cache.snapshot() })
@@ -450,7 +442,7 @@ pub fn run() {
         #[cfg(target_os = "macos")]
         set_macos_accessory_policy();
 
-        let focus_cache = FocusCache::start(cx);
+        let focus_cache = MonitorTracker::start(cx);
 
         let (tx, rx) = mpsc::channel();
         if !daemon::start_listener(tx) {
