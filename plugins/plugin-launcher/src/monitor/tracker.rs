@@ -488,7 +488,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[::std::prelude::v1::test]
     fn snapshot_returns_none_when_no_monitors() {
         let platform = Arc::new(FakePlatform {
             cursor: StdMutex::new(None),
@@ -499,7 +499,7 @@ mod tests {
         assert!(tracker.snapshot().is_none());
     }
 
-    #[test]
+    #[::std::prelude::v1::test]
     fn snapshot_returns_single_monitor() {
         let m = mon(0.0, 0.0, 1920.0, 1080.0);
         let platform = Arc::new(FakePlatform {
@@ -512,7 +512,7 @@ mod tests {
         assert_eq!(*result.bounds(), m);
     }
 
-    #[test]
+    #[::std::prelude::v1::test]
     fn snapshot_uses_fresh_cursor_query() {
         let m_a = mon(0.0, 0.0, 1920.0, 1080.0);
         let m_b = mon(1920.0, 0.0, 2560.0, 1440.0);
@@ -526,7 +526,7 @@ mod tests {
         assert_eq!(*result.bounds(), m_b);
     }
 
-    #[test]
+    #[::std::prelude::v1::test]
     fn snapshot_prefers_most_recent_signal() {
         let m_a = mon(0.0, 0.0, 1920.0, 1080.0);
         let m_b = mon(1920.0, 0.0, 2560.0, 1440.0);
@@ -541,7 +541,7 @@ mod tests {
         assert_eq!(*result.bounds(), m_a);
     }
 
-    #[test]
+    #[::std::prelude::v1::test]
     fn snapshot_falls_back_to_first_monitor() {
         let m_a = mon(0.0, 0.0, 1920.0, 1080.0);
         let m_b = mon(1920.0, 0.0, 2560.0, 1440.0);

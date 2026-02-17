@@ -135,7 +135,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[::std::prelude::v1::test]
     fn monitor_for_point_finds_correct_monitor() {
         let monitors = vec![
             mon(0.0, 0.0, 1920.0, 1080.0),
@@ -157,7 +157,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[::std::prelude::v1::test]
     fn monitor_for_point_at_origin() {
         let monitors = vec![
             mon(0.0, 0.0, 1920.0, 1080.0),
@@ -170,7 +170,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[::std::prelude::v1::test]
     fn pick_prefers_newer_cursor_over_focus() {
         let m_focus = mon(0.0, 0.0, 1920.0, 1080.0);
         let m_cursor = mon(1920.0, 0.0, 2560.0, 1440.0);
@@ -183,7 +183,7 @@ mod tests {
         assert_eq!(result.bounds, m_cursor);
     }
 
-    #[test]
+    #[::std::prelude::v1::test]
     fn pick_prefers_newer_focus_over_cursor() {
         let m_focus = mon(0.0, 0.0, 1920.0, 1080.0);
         let m_cursor = mon(1920.0, 0.0, 2560.0, 1440.0);
@@ -196,7 +196,7 @@ mod tests {
         assert_eq!(result.bounds, m_focus);
     }
 
-    #[test]
+    #[::std::prelude::v1::test]
     fn pick_returns_fallback_with_no_signals() {
         let fallback = mon(0.0, 0.0, 1920.0, 1080.0);
         let state = InputState::default();
@@ -204,7 +204,7 @@ mod tests {
         assert_eq!(result.bounds, fallback);
     }
 
-    #[test]
+    #[::std::prelude::v1::test]
     fn update_cursor_only_commits_when_flagged() {
         let m = mon(0.0, 0.0, 1920.0, 1080.0);
         let mut state = InputState::default();
@@ -216,7 +216,7 @@ mod tests {
         assert_eq!(state.cursor.as_ref().unwrap().monitor.bounds, m);
     }
 
-    #[test]
+    #[::std::prelude::v1::test]
     fn update_cursor_skips_same_monitor() {
         let m = mon(0.0, 0.0, 1920.0, 1080.0);
         let mut state = InputState::default();
@@ -231,7 +231,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[::std::prelude::v1::test]
     fn update_focus_always_commits() {
         let m = mon(0.0, 0.0, 1920.0, 1080.0);
         let mut state = InputState::default();
