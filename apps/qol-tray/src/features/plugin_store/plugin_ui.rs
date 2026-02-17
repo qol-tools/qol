@@ -1,3 +1,5 @@
+#[cfg(feature = "dev")]
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use axum::{
     Router,
@@ -142,7 +144,7 @@ async fn resolve_safe_ui_file(plugins_dir: &Path, plugin_id: &str, file_path: &s
         return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
     }
 
-    let plugin_root = plugins_dir.join(plugin_id);
+    let plugin_root = resolve_plugin_root(plugins_dir, plugin_id);
     let ui_root = plugin_root.join("ui");
     let ui_path = ui_root.join(file_path);
 
@@ -182,7 +184,14 @@ async fn resolve_safe_ui_file(plugins_dir: &Path, plugin_id: &str, file_path: &s
         Ok(path) => path,
         Err(_) => return Err((StatusCode::NOT_FOUND, "File not found").into_response()),
     };
-    if !canonical_plugin_root.starts_with(&canonical_plugins_dir) {
+
+    let under_installed_root = canonical_plugin_root.starts_with(&canonical_plugins_dir);
+    #[cfg(feature = "dev")]
+    let under_dev_link_root = is_dev_link_target(plugin_id, &canonical_plugin_root);
+    #[cfg(not(feature = "dev"))]
+    let under_dev_link_root = false;
+
+    if !under_installed_root && !under_dev_link_root {
         return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
     }
 
@@ -204,6 +213,40 @@ async fn resolve_safe_ui_file(plugins_dir: &Path, plugin_id: &str, file_path: &s
     }
 
     Ok(canonical_ui_path)
+}
+
+fn resolve_plugin_root(plugins_dir: &Path, plugin_id: &str) -> PathBuf {
+    #[cfg(feature = "dev")]
+    if let Some(dev_path) = resolve_dev_link_path(plugin_id) {
+        return dev_path;
+    }
+
+    let installed_root = plugins_dir.join(plugin_id);
+    if installed_root.exists() {
+        return installed_root;
+    }
+
+    installed_root
+}
+
+#[cfg(feature = "dev")]
+fn resolve_dev_link_path(plugin_id: &str) -> Option<PathBuf> {
+    let config_dir = crate::paths::config_dir().ok()?;
+    let dev_links_path = config_dir.join("dev-links.json");
+    let content = std::fs::read_to_string(dev_links_path).ok()?;
+    let links: HashMap<String, PathBuf> = serde_json::from_str(&content).ok()?;
+    links.get(plugin_id).cloned()
+}
+
+#[cfg(feature = "dev")]
+fn is_dev_link_target(plugin_id: &str, candidate: &Path) -> bool {
+    let Some(dev_path) = resolve_dev_link_path(plugin_id) else {
+        return false;
+    };
+    let Ok(canonical_dev_path) = std::fs::canonicalize(dev_path) else {
+        return false;
+    };
+    candidate == canonical_dev_path
 }
 
 fn is_safe_subpath(path: &str) -> bool {
