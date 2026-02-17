@@ -135,7 +135,9 @@ body {
 }
 
 .version-item .version-main {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
     color: var(--text-secondary);
     font-size: 0.85rem;
 }
@@ -145,6 +147,35 @@ body {
     color: var(--text-disabled);
     font-size: 0.7rem;
     margin-top: 0.1rem;
+}
+
+.version-item .version-tag {
+    font-size: 0.62rem;
+    line-height: 1;
+    padding: 0.18rem 0.34rem;
+    border-radius: 999px;
+    border: 1px solid rgba(74, 158, 255, 0.45);
+    background: rgba(74, 158, 255, 0.15);
+    color: var(--accent);
+    letter-spacing: 0.03em;
+    font-weight: 600;
+}
+
+.version-item.is-dev {
+    border-left: 3px solid var(--accent);
+    padding-left: calc(1.5rem - 3px);
+}
+
+.version-item.is-dev .version-main {
+    color: var(--accent);
+}
+
+.version-item.is-dev .version-sub {
+    color: var(--text-muted);
+}
+
+.version-item.is-dev.compiling {
+    pointer-events: none;
 }
 
 .version-item.has-update {

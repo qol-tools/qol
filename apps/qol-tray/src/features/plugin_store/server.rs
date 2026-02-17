@@ -180,6 +180,7 @@ pub async fn start_ui_server(
     #[cfg(feature = "dev")]
     let api = api
         .route("/dev/reload", post(reload_plugins))
+        .route("/dev/recompile-self", post(recompile_self))
         .route("/dev/links", get(list_linked_plugins))
         .route("/dev/links", post(create_link))
         .route("/dev/links/{id}", axum::routing::delete(delete_link))
@@ -705,6 +706,50 @@ async fn reload_plugins(State(state): State<AppState>) -> impl IntoResponse {
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed: {}", e)).into_response()
         }
     }
+}
+
+#[cfg(feature = "dev")]
+async fn recompile_self(State(state): State<AppState>) -> impl IntoResponse {
+    log::info!("Developer self recompile requested");
+
+    let events = state.daemon.events.clone();
+    tokio::spawn(async move {
+        let progress_events = events.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            dev::build_qol_tray_self_with_progress(|percent, phase| {
+                progress_events.send(DaemonEvent::SelfRecompileProgress { percent, phase });
+            })
+        })
+        .await;
+
+        match result {
+            Ok(build) if build.success => {
+                events.send(DaemonEvent::SelfRecompileComplete);
+            }
+            Ok(build) => {
+                let message = build_failure_message(&build.output);
+                log::error!("Self recompile failed: {}", message);
+                events.send(DaemonEvent::SelfRecompileFailed { message });
+            }
+            Err(e) => {
+                let message = format!("Self recompile worker failed: {}", e);
+                log::error!("{}", message);
+                events.send(DaemonEvent::SelfRecompileFailed { message });
+            }
+        }
+    });
+
+    StatusCode::ACCEPTED
+}
+
+#[cfg(feature = "dev")]
+fn build_failure_message(output: &str) -> String {
+    output
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| "Self recompile failed".to_string())
 }
 
 fn extract_actions(items: &[crate::plugins::MenuItem]) -> Vec<PluginAction> {

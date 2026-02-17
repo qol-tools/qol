@@ -39,11 +39,14 @@ async function init() {
     if (devEnabled) {
         VIEWS = { ...BASE_VIEWS, dev: devView };
         VIEW_ORDER = [...BASE_VIEW_ORDER, 'dev'];
+        updateState = { status: 'idle' };
     }
 
     updateSidebar();
     switchView('plugins');
-    checkForUpdate();
+    if (!devEnabled) {
+        checkForUpdate();
+    }
 
     subscribe(handleUpdateEvent);
     document.addEventListener('keydown', handleKeydown);
@@ -51,6 +54,41 @@ async function init() {
 }
 
 function handleUpdateEvent(event) {
+    if (devEnabled) {
+        if (event.type === 'self_recompile_progress') {
+            const percent = Number.isFinite(event.percent) ? event.percent : 0;
+            const phase = typeof event.phase === 'string' && event.phase.trim()
+                ? event.phase
+                : 'Recompiling QoL Tray';
+            const label = percent > 0 ? `${phase} ${percent}%` : `${phase}...`;
+            updateState = { status: 'compiling', percent, phase };
+            const fill = document.querySelector('.progress-fill');
+            const sub = document.querySelector('.is-downloading .version-sub');
+            if (fill && sub) {
+                fill.style.width = `${percent}%`;
+                sub.textContent = label;
+            } else {
+                updateSidebar();
+            }
+            return;
+        }
+        if (event.type === 'self_recompile_complete') {
+            updateState = { status: 'done' };
+            updateSidebar();
+            setTimeout(() => {
+                updateState = { status: 'idle' };
+                updateSidebar();
+            }, 1800);
+            return;
+        }
+        if (event.type === 'self_recompile_failed') {
+            updateState = { status: 'error', message: event.message };
+            updateSidebar();
+            return;
+        }
+        return;
+    }
+
     if (event.type === 'update_progress') {
         updateState = { status: 'downloading', percent: event.percent };
         const fill = document.querySelector('.progress-fill');
@@ -73,7 +111,7 @@ function handleUpdateEvent(event) {
 
 function updateSidebar() {
     const sidebarEl = document.getElementById('sidebar');
-    sidebarEl.innerHTML = renderSidebar(activeViewId, VIEW_ORDER, appVersion, updateState);
+    sidebarEl.innerHTML = renderSidebar(activeViewId, VIEW_ORDER, appVersion, updateState, devEnabled);
 }
 
 function switchView(viewId) {
@@ -132,6 +170,7 @@ function handleSidebarClick(e) {
         const action = updateBtn.dataset.action;
         if (action === 'check-update') checkForUpdate();
         if (action === 'self-update') triggerSelfUpdate();
+        if (action === 'dev-recompile') recompileDev();
         return;
     }
 
@@ -179,5 +218,28 @@ async function triggerSelfUpdate() {
     }
 }
 
-init();
+async function recompileDev() {
+    if (!devEnabled || updateState.status === 'compiling') {
+        return;
+    }
 
+    const item = document.querySelector('.version-item');
+    if (item) {
+        item.classList.add('update-burst');
+        await new Promise(r => setTimeout(r, 400));
+    }
+    updateState = { status: 'compiling', percent: 0, phase: 'Preparing build' };
+    updateSidebar();
+
+    try {
+        const response = await fetch('/api/dev/recompile-self', { method: 'POST' });
+        if (!response.ok) {
+            throw new Error();
+        }
+    } catch {
+        updateState = { status: 'error', message: 'Could not start recompile' };
+        updateSidebar();
+    }
+}
+
+init();
