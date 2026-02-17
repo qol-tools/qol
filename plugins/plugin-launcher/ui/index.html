@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Launcher Settings</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Launcher</h1>
+            <p class="subtitle">Tune monitor tracking behavior</p>
+        </header>
+
+        <section class="settings-section">
+            <h2>Monitor Tracking</h2>
+
+            <div class="setting-row">
+                <label for="poll-min-ms">Poll Min (ms)</label>
+                <input type="number" id="poll-min-ms" min="8" max="100" step="1">
+                <span class="hint">Lower values react faster but use more CPU.</span>
+            </div>
+
+            <div class="setting-row">
+                <label for="poll-max-ms">Poll Max (ms)</label>
+                <input type="number" id="poll-max-ms" min="200" max="2000" step="1">
+                <span class="hint">Upper bound for idle polling backoff.</span>
+            </div>
+
+            <div class="setting-row">
+                <label for="commit-threshold-ms">Commit Threshold (ms)</label>
+                <div class="range-container">
+                    <input type="range" id="commit-threshold-ms" min="50" max="500" step="1">
+                    <span id="commit-threshold-value">128</span>
+                </div>
+                <span class="hint">Cursor movement updates become committed once polling reaches this interval.</span>
+            </div>
+
+            <div class="setting-row">
+                <label for="strategy">Strategy</label>
+                <select id="strategy"></select>
+                <span class="hint" id="strategy-hint"></span>
+            </div>
+        </section>
+
+        <div class="actions">
+            <button id="save-btn" class="primary">Save Settings</button>
+            <span id="save-status"></span>
+        </div>
+
+        <footer class="help">
+            <p>Saved to <code>~/.config/qol-tray/plugins/&lt;plugin-id&gt;/config.json</code></p>
+            <p>Changes apply within about one second while launcher is running.</p>
+        </footer>
+    </div>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>
