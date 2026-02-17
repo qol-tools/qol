@@ -1,7 +1,7 @@
 [plugin]
 name = "Launcher"
 description = "Universal search with action modifiers"
-version = "0.1.34"
+version = "0.2.0"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
