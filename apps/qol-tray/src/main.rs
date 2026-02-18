@@ -55,14 +55,14 @@ fn app_init() -> Result<(TrayManager, Arc<Mutex<PluginManager>>)> {
         .enable_all()
         .build()?;
 
-    let (shutdown_tx, shutdown_rx, update_available, plugin_manager, feature_registry) =
+    let (shutdown_tx, shutdown_rx, update_available, plugin_manager, feature_registry, events) =
         rt.block_on(async_init())?;
 
     std::thread::spawn(move || {
         rt.block_on(std::future::pending::<()>());
     });
 
-    let tray = TrayManager::new(feature_registry, shutdown_tx, shutdown_rx, update_available)?;
+    let tray = TrayManager::new(feature_registry, shutdown_tx, shutdown_rx, update_available, events)?;
 
     log::info!("QoL Tray daemon started successfully");
     Ok((tray, plugin_manager))
@@ -74,6 +74,7 @@ async fn async_init() -> Result<(
     bool,
     Arc<Mutex<PluginManager>>,
     Arc<FeatureRegistry>,
+    Arc<qol_tray::daemon::EventBus>,
 )> {
     let update_available = check_for_updates().await;
 
@@ -106,6 +107,7 @@ async fn async_init() -> Result<(
         update_available,
         plugin_manager,
         feature_registry,
+        daemon.events.clone(),
     ))
 }
 

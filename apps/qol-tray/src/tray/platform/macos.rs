@@ -1,3 +1,4 @@
+use crate::daemon::EventBus;
 use crate::features::FeatureRegistry;
 use anyhow::Result;
 use std::sync::Arc;
@@ -9,8 +10,9 @@ pub fn create_tray(
     shutdown_tx: broadcast::Sender<()>,
     icon: Icon,
     update_available: bool,
+    events: Arc<EventBus>,
 ) -> Result<TrayIcon> {
-    let (menu, router) = crate::menu::builder::build_menu(feature_registry, update_available)?;
+    let (menu, router) = crate::menu::builder::build_menu(feature_registry, update_available, events)?;
 
     let tray_icon = TrayIconBuilder::new()
         .with_menu(Box::new(menu))

@@ -1,3 +1,4 @@
+use crate::daemon::EventBus;
 use crate::features::FeatureRegistry;
 use anyhow::Result;
 use gtk::{self, glib};
@@ -25,6 +26,7 @@ pub fn create_tray(
     shutdown_tx: broadcast::Sender<()>,
     icon: Icon,
     update_available: bool,
+    events: Arc<EventBus>,
 ) -> Result<()> {
     let (startup_tx, startup_rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
 
@@ -34,7 +36,7 @@ pub fn create_tray(
             return;
         }
 
-        let (menu, router) = match crate::menu::builder::build_menu(feature_registry, update_available) {
+        let (menu, router) = match crate::menu::builder::build_menu(feature_registry, update_available, events) {
             Ok(result) => result,
             Err(e) => {
                 let _ = startup_tx.send(Err(format!("Failed to build menu: {}", e)));

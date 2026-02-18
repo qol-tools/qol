@@ -1,3 +1,4 @@
+use crate::daemon::EventBus;
 use crate::features::FeatureRegistry;
 use anyhow::Result;
 use once_cell::sync::OnceCell;
@@ -13,11 +14,12 @@ pub fn create_tray(
     shutdown_tx: broadcast::Sender<()>,
     icon: Icon,
     update_available: bool,
+    events: Arc<EventBus>,
 ) -> Result<TrayIcon> {
     QUIT_SIGNAL.get_or_init(std::sync::Condvar::new);
     QUIT_MUTEX.get_or_init(|| std::sync::Mutex::new(false));
 
-    let (menu, router) = crate::menu::builder::build_menu(feature_registry, update_available)?;
+    let (menu, router) = crate::menu::builder::build_menu(feature_registry, update_available, events)?;
 
     let tray_icon = TrayIconBuilder::new()
         .with_menu(Box::new(menu))

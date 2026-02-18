@@ -1,6 +1,7 @@
 pub mod platform;
 pub mod icon;
 
+use crate::daemon::EventBus;
 use crate::features::FeatureRegistry;
 use anyhow::Result;
 use std::sync::Arc;
@@ -16,6 +17,7 @@ impl TrayManager {
         shutdown_tx: broadcast::Sender<()>,
         shutdown_rx: broadcast::Receiver<()>,
         update_available: bool,
+        events: Arc<EventBus>,
     ) -> Result<Self> {
         let icon = if update_available {
             icon::create_icon_with_dot()
@@ -28,6 +30,7 @@ impl TrayManager {
             shutdown_rx,
             icon,
             update_available,
+            events,
         )?;
         Ok(Self { _tray: tray })
     }

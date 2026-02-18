@@ -5,6 +5,7 @@ mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
 
+use crate::daemon::EventBus;
 use crate::features::FeatureRegistry;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use crate::menu::router::EventRouter;
@@ -35,11 +36,12 @@ pub fn create_tray(
     shutdown_rx: broadcast::Receiver<()>,
     icon: Icon,
     update_available: bool,
+    events: Arc<EventBus>,
 ) -> Result<PlatformTray> {
     #[cfg(target_os = "linux")]
     {
         linux::store_shutdown_rx(shutdown_rx);
-        linux::create_tray(feature_registry, shutdown_tx, icon, update_available)?;
+        linux::create_tray(feature_registry, shutdown_tx, icon, update_available, events)?;
         Ok(PlatformTray::Linux)
     }
 
@@ -47,7 +49,7 @@ pub fn create_tray(
     {
         let _ = shutdown_rx;
         let tray_icon =
-            macos::create_tray(feature_registry, shutdown_tx, icon, update_available)?;
+            macos::create_tray(feature_registry, shutdown_tx, icon, update_available, events)?;
         Ok(PlatformTray::MacOS {
             _tray_icon: tray_icon,
         })
@@ -57,7 +59,7 @@ pub fn create_tray(
     {
         let _ = shutdown_rx;
         let tray_icon =
-            windows::create_tray(feature_registry, shutdown_tx, icon, update_available)?;
+            windows::create_tray(feature_registry, shutdown_tx, icon, update_available, events)?;
         Ok(PlatformTray::Windows {
             _tray_icon: tray_icon,
         })
