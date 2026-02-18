@@ -99,6 +99,18 @@ fn asset_filename(version: &str) -> String {
 }
 
 #[cfg(target_os = "linux")]
+fn resolve_update_url() -> Result<(String, std::path::PathBuf)> {
+    #[cfg(feature = "dev")]
+    if let Ok(url) = std::env::var("QOL_TRAY_DEV_UPDATE_URL") {
+        let filename = url.split('/').last().unwrap_or("dev-update.deb").to_string();
+        return Ok((url, std::env::temp_dir().join(filename)));
+    }
+
+    let version = latest_version().ok_or_else(|| anyhow::anyhow!("No update version available"))?;
+    Ok((asset_url(version), std::env::temp_dir().join(asset_filename(version))))
+}
+
+#[cfg(target_os = "linux")]
 fn install_asset(path: &std::path::Path) -> Result<()> {
     log::info!("Installing update...");
 
@@ -116,24 +128,20 @@ fn install_asset(path: &std::path::Path) -> Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-fn restart() -> ! {
-    log::info!("Update installed, restarting...");
-    let _ = std::process::Command::new("qol-tray").spawn();
-    std::process::exit(0);
-}
-
-#[cfg(target_os = "linux")]
 pub async fn download_and_install(events: std::sync::Arc<crate::daemon::EventBus>) -> Result<()> {
-    let version = latest_version().ok_or_else(|| anyhow::anyhow!("No update version available"))?;
-    let url = asset_url(version);
-    let dest = std::env::temp_dir().join(asset_filename(version));
+    let (url, dest) = resolve_update_url()?;
 
     log::info!("Downloading update from {}", url);
     download_asset(&url, &dest, &events).await?;
     events.send(crate::daemon::DaemonEvent::UpdateComplete);
 
     install_asset(&dest)?;
-    restart();
+
+    log::info!("Update installed, restarting...");
+    std::process::Command::new("qol-tray")
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("Failed to spawn qol-tray for restart: {}", e))?;
+    std::process::exit(0);
 }
 
 #[cfg(target_os = "macos")]
