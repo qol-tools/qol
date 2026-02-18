@@ -3,6 +3,9 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
+
+static LAST_ARTIFACT_COUNT: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BuildResult {
@@ -37,100 +40,91 @@ where
     log::info!("Building qol-tray from {}", repo_root.display());
     on_progress(2, "Preparing build".to_string());
 
-    let child_result = Command::new("cargo")
-        .arg("build")
-        .arg("--bin")
-        .arg("qol-tray")
-        .arg("--features")
-        .arg("dev")
-        .arg("--manifest-path")
-        .arg(manifest_path)
+    let mut child = match Command::new("cargo")
+        .args([
+            "build",
+            "--bin",
+            "qol-tray",
+            "--features",
+            "dev",
+            "--message-format",
+            "json",
+            "--manifest-path",
+        ])
+        .arg(&manifest_path)
         .current_dir(&repo_root)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn();
-
-    let mut child = match child_result {
-        Ok(child) => child,
+        .spawn()
+    {
+        Ok(c) => c,
         Err(e) => {
-            let error = format!("Failed to run cargo build: {}", e);
-            log::error!("{}", error);
             return BuildResult {
                 plugin_id: "qol-tray".to_string(),
                 success: false,
-                output: error,
-            };
+                output: format!("Failed to run cargo build: {}", e),
+            }
         }
     };
 
-    let stdout = match child.stdout.take() {
-        Some(stdout) => stdout,
-        None => {
-            return BuildResult {
-                plugin_id: "qol-tray".to_string(),
-                success: false,
-                output: "Failed to capture cargo stdout".to_string(),
-            };
-        }
-    };
-    let stderr = match child.stderr.take() {
-        Some(stderr) => stderr,
-        None => {
-            return BuildResult {
-                plugin_id: "qol-tray".to_string(),
-                success: false,
-                output: "Failed to capture cargo stderr".to_string(),
-            };
-        }
-    };
+    let stdout = child.stdout.take().expect("stdout piped");
+    let stderr = child.stderr.take().expect("stderr piped");
 
-    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let (artifact_tx, artifact_rx) = std::sync::mpsc::channel::<(u32, String)>();
+    let stdout_handle = std::thread::spawn(move || {
+        let mut done = 0u32;
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&line) {
+                if msg["reason"].as_str() == Some("compiler-artifact") {
+                    done += 1;
+                    let name = msg["target"]["name"]
+                        .as_str()
+                        .unwrap_or("crate")
+                        .to_string();
+                    let _ = artifact_tx.send((done, name));
+                }
+            }
+        }
+        done
+    });
 
-    let stdout_tx = tx.clone();
-    let stdout_thread = std::thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines().map_while(Result::ok) {
-            let _ = stdout_tx.send(line);
+    let (text_tx, text_rx) = std::sync::mpsc::channel::<String>();
+    let stderr_handle = std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            let _ = text_tx.send(line);
         }
     });
 
-    let stderr_tx = tx.clone();
-    let stderr_thread = std::thread::spawn(move || {
-        let reader = BufReader::new(stderr);
-        for line in reader.lines().map_while(Result::ok) {
-            let _ = stderr_tx.send(line);
+    let last_count = LAST_ARTIFACT_COUNT.load(Ordering::Relaxed);
+    let mut predicted = if last_count == 0 { 50u32 } else { last_count };
+    let mut last_percent = 2u8;
+
+    for (done, name) in artifact_rx {
+        if done > predicted {
+            predicted = done + done / 4 + 1;
         }
-    });
-
-    drop(tx);
-
-    let mut combined = String::new();
-    let mut progress = SelfBuildProgress::default();
-
-    for line in rx {
-        combined.push_str(&line);
-        combined.push('\n');
-
-        if let Some((percent, phase)) = progress.observe(&line) {
-            on_progress(percent, phase);
+        let percent = ((done as f32 / predicted as f32) * 93.0) as u8 + 2;
+        let percent = percent.min(95);
+        if percent > last_percent {
+            on_progress(percent, format!("Compiling {}", name));
+            last_percent = percent;
         }
     }
 
-    let _ = stdout_thread.join();
-    let _ = stderr_thread.join();
+    let actual_done = stdout_handle.join().unwrap_or(0);
+    let _ = stderr_handle.join();
+    let combined = text_rx.into_iter().collect::<Vec<_>>().join("\n");
 
     match child.wait() {
         Ok(status) => {
             let success = status.success();
             if success {
-                if let Some((percent, phase)) = progress.finish_success() {
-                    on_progress(percent, phase);
-                }
-                log::info!("qol-tray build succeeded");
+                LAST_ARTIFACT_COUNT.store(actual_done, Ordering::Relaxed);
+                on_progress(100, "Build complete".to_string());
+                log::info!("qol-tray build succeeded ({} artifacts)", actual_done);
             } else {
                 log::error!("qol-tray build failed\n{}", combined);
             }
-
             BuildResult {
                 plugin_id: "qol-tray".to_string(),
                 success,
@@ -140,53 +134,12 @@ where
         Err(e) => {
             let error = format!("Failed while waiting for cargo build: {}", e);
             log::error!("{}", error);
-
             BuildResult {
                 plugin_id: "qol-tray".to_string(),
                 success: false,
                 output: error,
             }
         }
-    }
-}
-
-#[derive(Default)]
-struct SelfBuildProgress {
-    percent: u8,
-    compile_hits: u32,
-}
-
-impl SelfBuildProgress {
-    fn observe(&mut self, line: &str) -> Option<(u8, String)> {
-        if line.contains("Finished ") {
-            return self.update(98, "Finalizing build".to_string());
-        }
-
-        if line.contains("Compiling ")
-            || line.contains("Checking ")
-            || line.contains("Building ")
-            || line.contains("Linking ")
-        {
-            self.compile_hits = self.compile_hits.saturating_add(1);
-            let step = self.compile_hits.min(40) as u8;
-            let next = 8u8.saturating_add(step.saturating_mul(2));
-            return self.update(next, "Compiling crates".to_string());
-        }
-
-        None
-    }
-
-    fn finish_success(&mut self) -> Option<(u8, String)> {
-        self.update(100, "Build complete".to_string())
-    }
-
-    fn update(&mut self, percent: u8, phase: String) -> Option<(u8, String)> {
-        let capped = percent.min(100);
-        if capped <= self.percent {
-            return None;
-        }
-        self.percent = capped;
-        Some((capped, phase))
     }
 }
 
