@@ -1,24 +1,18 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const EXEC_FIELD_CODES: &[&str] = &["%u", "%U", "%f", "%F", "%i", "%c", "%k"];
+const EXEC_FIELD_CODES: &[&str] = &[
+    "%u", "%U", "%f", "%F", "%i", "%c", "%k",
+    "%d", "%D", "%n", "%N", "%v", "%m",
+];
 
 #[derive(Debug, Clone)]
 pub struct DesktopEntry {
     pub name: String,
-    pub exec: String,
+    pub exec: Vec<String>,
     pub path: PathBuf,
 }
 
-pub fn default_dirs() -> Vec<PathBuf> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    vec![
-        PathBuf::from("/usr/share/applications"),
-        PathBuf::from("/usr/local/share/applications"),
-        PathBuf::from(format!("{}/.local/share/applications", home)),
-        PathBuf::from("/var/lib/flatpak/exports/share/applications"),
-    ]
-}
 
 pub fn scan(dirs: &[PathBuf]) -> Vec<DesktopEntry> {
     let mut entries: Vec<DesktopEntry> = dirs
@@ -50,16 +44,16 @@ fn parse(path: &Path) -> Option<DesktopEntry> {
         return None;
     }
 
+    let exec_raw = field("Exec=")?;
+    let exec = shell_words::split(&exec_raw)
+        .ok()?
+        .into_iter()
+        .filter(|token| !EXEC_FIELD_CODES.contains(&token.as_str()))
+        .collect();
+
     Some(DesktopEntry {
         name: field("Name=")?,
-        exec: strip_field_codes(&field("Exec=")?),
+        exec,
         path: path.to_path_buf(),
     })
-}
-
-fn strip_field_codes(exec: &str) -> String {
-    exec.split_whitespace()
-        .filter(|token| !EXEC_FIELD_CODES.contains(token))
-        .collect::<Vec<_>>()
-        .join(" ")
 }

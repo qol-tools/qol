@@ -64,13 +64,9 @@ fn parse_app_bundle(path: &Path) -> Option<AppEntry> {
         .and_then(|s| s.to_str())?
         .to_string();
 
-    // exec is unused on macOS (launch goes through open_path_detached),
-    // but the field is required by the shared AppEntry struct.
-    let exec = format!("open {}", path.display());
-
     Some(AppEntry {
         name,
-        exec,
+        exec: vec!["open".into(), path.display().to_string()],
         path: path.to_path_buf(),
     })
 }
