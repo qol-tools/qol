@@ -1,6 +1,7 @@
 use super::router::{EventRouter, EventRoute, EventPattern, EventHandler, HandlerResult};
 use crate::plugins::MenuItem as PluginMenuItem;
 use crate::features::FeatureRegistry;
+use crate::daemon::EventBus;
 use crate::updates;
 use anyhow::Result;
 use std::sync::Arc;
@@ -9,6 +10,7 @@ use tray_icon::menu::{Menu, MenuItem, CheckMenuItem, Submenu, PredefinedMenuItem
 pub fn build_menu(
     feature_registry: Arc<FeatureRegistry>,
     update_available: bool,
+    events: Arc<EventBus>,
 ) -> Result<(Menu, EventRouter)> {
     let menu = Menu::new();
     let mut all_routes = Vec::new();
@@ -27,7 +29,7 @@ pub fn build_menu(
     let _ = menu.append(&PredefinedMenuItem::separator());
 
     if update_available {
-        all_routes.push(create_update_route(&menu));
+        all_routes.push(create_update_route(&menu, events));
     }
 
     all_routes.push(create_quit_route(&menu));
@@ -83,7 +85,7 @@ fn create_feature_route(
     }
 }
 
-fn create_update_route(menu: &Menu) -> EventRoute {
+fn create_update_route(menu: &Menu, events: Arc<EventBus>) -> EventRoute {
     let version_label = updates::latest_version()
         .map(|v| format!("⬆ Update to v{}", v))
         .unwrap_or_else(|| "⬆ Update Available".to_string());
@@ -91,23 +93,23 @@ fn create_update_route(menu: &Menu) -> EventRoute {
 
     EventRoute {
         pattern: EventPattern::Exact("__update__".to_string()),
-        handler: EventHandler::Sync(Box::new(|_| {
+        handler: EventHandler::Sync(Box::new(move |_| {
             log::info!("Starting update download and install");
-            spawn_update_task();
+            spawn_update_task(events.clone());
             Ok(HandlerResult::Continue)
         })),
     }
 }
 
-fn spawn_update_task() {
-    std::thread::spawn(|| {
+fn spawn_update_task(events: Arc<EventBus>) {
+    std::thread::spawn(move || {
         let rt = match tokio::runtime::Runtime::new() {
             Ok(rt) => rt,
             Err(e) => { log::error!("Failed to create runtime for update: {}", e); return; }
         };
-        let events = std::sync::Arc::new(crate::daemon::EventBus::new());
-        if let Err(e) = rt.block_on(updates::download_and_install(events)) {
+        if let Err(e) = rt.block_on(updates::download_and_install(events.clone())) {
             log::error!("Update failed: {}", e);
+            events.send(crate::daemon::DaemonEvent::UpdateFailed { message: e.to_string() });
         }
     });
 }
