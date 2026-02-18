@@ -27,6 +27,22 @@ export function render(
 }
 
 function renderVersionFooter(version, state, isDevMode) {
+    if (state && state.status === 'downloading') {
+        const percent = state.percent || 0;
+        const label = percent > 0 ? `Downloading ${percent}%` : 'Downloading...';
+        return `<div class="version-item is-downloading">
+                    <div class="progress-fill" style="width: ${percent}%"></div>
+                    <span class="version-main">v${version}</span>
+                    <span class="version-sub">${label}</span>
+                </div>`;
+    }
+    if (state && state.status === 'done') {
+        return `<div class="version-item update-done">
+                    <span class="version-main">Restarting...</span>
+                    <span class="version-sub">v${version} installed</span>
+                </div>`;
+    }
+
     if (isDevMode) {
         if (state && state.status === 'compiling') {
             const percent = state.percent || 0;
@@ -38,7 +54,7 @@ function renderVersionFooter(version, state, isDevMode) {
                         <span class="version-sub">${label}</span>
                     </div>`;
         }
-        if (state && state.status === 'done') {
+        if (state && state.status === 'recompile_done') {
             return `<div class="version-item is-dev update-done">
                         <span class="version-main">v${version}<span class="version-tag">DEV</span></span>
                         <span class="version-sub">Recompile complete</span>
@@ -57,25 +73,10 @@ function renderVersionFooter(version, state, isDevMode) {
                 </div>`;
     }
 
-    if (state && state.status === 'done') {
-        return `<div class="version-item update-done">
-                    <span class="version-main">Restarting...</span>
-                    <span class="version-sub">v${version} installed</span>
-                </div>`;
-    }
     if (state && state.status === 'checking') {
         return `<div class="version-item">
                     <span class="version-main">v${version}</span>
                     <span class="version-sub">Checking for updates...</span>
-                </div>`;
-    }
-    if (state && state.status === 'downloading') {
-        const percent = state.percent || 0;
-        const label = percent > 0 ? `Downloading ${percent}%` : 'Downloading...';
-        return `<div class="version-item is-downloading">
-                    <div class="progress-fill" style="width: ${percent}%"></div>
-                    <span class="version-main">v${version}</span>
-                    <span class="version-sub">${label}</span>
                 </div>`;
     }
     if (state && state.status === 'available') {

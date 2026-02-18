@@ -1,5 +1,5 @@
 import { render as renderSidebar } from './components/sidebar.js';
-import { subscribe } from './events.js';
+import { subscribe, onReconnect } from './events.js';
 import * as pluginsView from './views/plugins.js';
 import * as storeView from './views/store.js';
 import * as hotkeysView from './views/hotkeys.js';
@@ -49,6 +49,9 @@ async function init() {
     }
 
     subscribe(handleUpdateEvent);
+    onReconnect(() => {
+        if (updateState.status === 'done') checkForUpdate();
+    });
     document.addEventListener('keydown', handleKeydown);
     sidebarEl.addEventListener('click', handleSidebarClick);
 }
@@ -73,7 +76,7 @@ function handleUpdateEvent(event) {
             return;
         }
         if (event.type === 'self_recompile_complete') {
-            updateState = { status: 'done' };
+            updateState = { status: 'recompile_done' };
             updateSidebar();
             setTimeout(() => {
                 updateState = { status: 'idle' };
@@ -86,7 +89,6 @@ function handleUpdateEvent(event) {
             updateSidebar();
             return;
         }
-        return;
     }
 
     if (event.type === 'update_progress') {
@@ -103,6 +105,16 @@ function handleUpdateEvent(event) {
     } else if (event.type === 'update_complete') {
         updateState = { status: 'done' };
         updateSidebar();
+        if (devEnabled) {
+            setTimeout(() => {
+                updateState = { status: 'idle' };
+                updateSidebar();
+            }, 2000);
+        } else {
+            setTimeout(() => {
+                if (updateState.status === 'done') checkForUpdate();
+            }, 30000);
+        }
     } else if (event.type === 'update_failed') {
         updateState = { status: 'error' };
         updateSidebar();
