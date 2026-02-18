@@ -209,6 +209,12 @@ function updateView() {
                     </div>
                     <div class="dev-card-hint"><kbd>Ctrl+r</kbd></div>
                 </div>
+                <div class="dev-card" data-action="mock-update">
+                    <div class="dev-card-content">
+                        <h3>Test update flow</h3>
+                        <p>Streams download progress then triggers the restarting state.</p>
+                    </div>
+                </div>
             </section>
 
             <footer class="help">
@@ -232,6 +238,7 @@ function handleClick(e) {
     const id = e.target.closest('[data-id]')?.dataset.id;
     const path = e.target.closest('[data-path]')?.dataset.path;
 
+    if (action === 'mock-update') fetch('/api/dev/mock-self-update', { method: 'POST' });
     if (action === 'reload') reloadPlugins();
     if (action === 'refresh-discovery') triggerDiscovery();
     if (action === 'add-link') showLinkInput();
