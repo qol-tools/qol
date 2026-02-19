@@ -4,11 +4,6 @@ on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version tag (e.g., v1.4.7)'
-        required: true
 
 permissions:
   contents: write
@@ -66,7 +61,7 @@ jobs:
           if-no-files-found: error
 
   build_macos:
-    name: Build macOS binary (${{ matrix.name_suffix }})
+    name: Build macOS bundle (${{ matrix.name_suffix }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -98,20 +93,34 @@ jobs:
           cache-targets: true
           cache-all-crates: true
 
-      - name: Build macOS binary
-        run: cargo build --release --target ${{ matrix.target }} --bin qol-tray
+      - name: Build macOS binaries
+        run: cargo build --release --target ${{ matrix.target }} --bin qol-tray --bin qol-tray-install
 
       - name: Prepare artifact
         shell: bash
         run: |
-          cp target/${{ matrix.target }}/release/qol-tray ${{ matrix.artifact_name }}
-          chmod +x ${{ matrix.artifact_name }}
+          BUNDLE="${{ matrix.artifact_name }}"
+          mkdir -p "$BUNDLE"
+          cp target/${{ matrix.target }}/release/qol-tray "$BUNDLE/qol-tray"
+          cp target/${{ matrix.target }}/release/qol-tray-install "$BUNDLE/qol-tray-install"
+          chmod +x "$BUNDLE/qol-tray" "$BUNDLE/qol-tray-install"
+          cat > "$BUNDLE/install.sh" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          DIR="$(cd "$(dirname "$0")" && pwd)"
+          "$DIR/qol-tray-install" --source "$DIR/qol-tray"
+          EOF
+          chmod +x "$BUNDLE/install.sh"
+          cat > "$BUNDLE/README.txt" <<'EOF'
+          Run ./install.sh from this folder.
+          EOF
+          tar -czf "${BUNDLE}.tar.gz" "$BUNDLE"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}.tar.gz
           if-no-files-found: error
 
   release:
@@ -131,11 +140,7 @@ jobs:
         id: version
         shell: bash
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
-            VERSION="${GITHUB_REF#refs/tags/}"
-          fi
+          VERSION="${GITHUB_REF#refs/tags/}"
           if [[ ! "$VERSION" =~ ^v ]]; then
             VERSION="v$VERSION"
           fi
