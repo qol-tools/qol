@@ -123,6 +123,12 @@ impl MacQueries {
 }
 
 impl PlatformQueries for MacQueries {
+    fn poll_focused_window(&self) -> bool {
+        // CGWindowListCopyWindowInfo deadlocks when called from a background
+        // thread while AppKit is rendering on the main thread.
+        false
+    }
+
     fn cursor_position(&self) -> Option<(f32, f32)> {
         unsafe {
             let event = CGEventCreate(std::ptr::null());
