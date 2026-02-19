@@ -53,6 +53,13 @@ impl InputState {
     }
 
     pub(crate) fn update_focus(&mut self, monitor: Bounds<Pixels>, at: Instant) {
+        let same = self
+            .focus
+            .as_ref()
+            .is_some_and(|f| f.monitor.bounds == monitor);
+        if same {
+            return;
+        }
         self.focus = Some(Stamped {
             monitor: ActiveMonitor::new(monitor),
             at,
@@ -232,10 +239,25 @@ mod tests {
     }
 
     #[::std::prelude::v1::test]
-    fn update_focus_always_commits() {
+    fn update_focus_commits_new_monitor() {
         let m = mon(0.0, 0.0, 1920.0, 1080.0);
         let mut state = InputState::default();
         state.update_focus(m, Instant::now());
         assert_eq!(state.focus.as_ref().unwrap().monitor.bounds, m);
+    }
+
+    #[::std::prelude::v1::test]
+    fn update_focus_skips_same_monitor() {
+        let m = mon(0.0, 0.0, 1920.0, 1080.0);
+        let mut state = InputState::default();
+        let t1 = Instant::now();
+        state.update_focus(m, t1);
+        let t2 = Instant::now();
+        state.update_focus(m, t2);
+        assert_eq!(
+            state.focus.as_ref().unwrap().at,
+            t1,
+            "should not update timestamp for same monitor"
+        );
     }
 }

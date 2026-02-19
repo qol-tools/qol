@@ -205,18 +205,18 @@ fn activate_or_open_launcher(
     monitor_snapshot: Option<monitor::ActiveMonitor>,
     cx: &mut App,
 ) {
+    let target = LauncherTarget::from_snapshot(monitor_snapshot.as_ref());
     #[cfg(debug_assertions)]
-    eprintln!("[launcher] activate_or_open: snapshot={:?}", monitor_snapshot.as_ref().map(|m| m.bounds()));
+    eprintln!("[launcher] activate_or_open: snapshot={:?}, target={:?}", monitor_snapshot.as_ref().map(|m| m.bounds()), target);
 
-    if try_activate_visible_launcher(active.clone(), cx) {
+    if try_activate_visible_launcher(active.clone(), target, cx) {
         #[cfg(debug_assertions)]
-        eprintln!("[launcher] reused visible launcher (skipped snapshot)");
+        eprintln!("[launcher] reused visible launcher on same target");
         return;
     }
 
-    let target = LauncherTarget::from_snapshot(monitor_snapshot.as_ref());
     #[cfg(debug_assertions)]
-    eprintln!("[launcher] target={:?}, cached_windows={}", target, active.borrow().windows.len());
+    eprintln!("[launcher] cached_windows={}", active.borrow().windows.len());
     active.borrow_mut().hide_non_target(target, cx);
 
     if try_activate_existing_launcher(active.clone(), target, cx) {
@@ -260,6 +260,7 @@ fn activate_or_open_launcher(
 
 fn try_activate_visible_launcher(
     active: Rc<RefCell<ActiveLaunchers>>,
+    expected_target: LauncherTarget,
     cx: &mut App,
 ) -> bool {
     let handles: Vec<(LauncherTarget, WindowHandle<LauncherView>)> = active
@@ -289,15 +290,20 @@ fn try_activate_visible_launcher(
         }
     }
 
-    let Some((target, handle)) = visible else {
+    let Some((visible_target, handle)) = visible else {
         return false;
     };
+
+    // Cursor moved to a different monitor — let the caller re-target.
+    if visible_target != expected_target {
+        return false;
+    }
 
     if activate_launcher_handle(handle, false, cx) {
         return true;
     }
 
-    active.borrow_mut().remove(target);
+    active.borrow_mut().remove(visible_target);
     false
 }
 
@@ -442,7 +448,8 @@ pub fn run() {
         #[cfg(target_os = "macos")]
         set_macos_accessory_policy();
 
-        let focus_cache = MonitorTracker::start(cx);
+        let any_visible = Arc::new(AtomicBool::new(false));
+        let focus_cache = MonitorTracker::start(cx, any_visible.clone());
 
         let (tx, rx) = mpsc::channel();
         if !daemon::start_listener(tx) {
@@ -454,7 +461,6 @@ pub fn run() {
 
         let entries = Arc::new(PreloadedEntries::load());
         let active: Rc<RefCell<ActiveLaunchers>> = Rc::new(RefCell::new(ActiveLaunchers::default()));
-        let any_visible = Arc::new(AtomicBool::new(false));
 
         open_keepalive_window(cx);
         spawn_command_poll(entries.clone(), active.clone(), any_visible.clone(), rx, focus_cache.clone(), cx);
