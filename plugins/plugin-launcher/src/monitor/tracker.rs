@@ -2,6 +2,7 @@ use gpui::*;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -229,14 +230,15 @@ pub struct MonitorTracker {
     state: Arc<Mutex<InputState>>,
     platform: Arc<dyn PlatformQueries>,
     monitors: Arc<Mutex<Vec<Bounds<Pixels>>>>,
+    any_visible: Arc<AtomicBool>,
 }
 
 impl MonitorTracker {
-    pub fn start(cx: &App) -> Self {
-        Self::start_with_config(cx, MonitorConfig::load())
+    pub fn start(cx: &App, any_visible: Arc<AtomicBool>) -> Self {
+        Self::start_with_config(cx, MonitorConfig::load(), any_visible)
     }
 
-    pub fn start_with_config(cx: &App, config: MonitorConfig) -> Self {
+    pub fn start_with_config(cx: &App, config: MonitorConfig, any_visible: Arc<AtomicBool>) -> Self {
         let platform: Arc<dyn PlatformQueries> = Arc::new(platform::create());
         let monitors = resolve_monitors(&*platform, cx);
         #[cfg(debug_assertions)]
@@ -255,9 +257,10 @@ impl MonitorTracker {
             state: state.clone(),
             platform: platform.clone(),
             monitors: monitors.clone(),
+            any_visible: any_visible.clone(),
         };
 
-        std::thread::spawn(move || poll_loop(platform, state, monitors, config));
+        std::thread::spawn(move || poll_loop(platform, state, monitors, config, any_visible));
 
         tracker
     }
@@ -274,6 +277,9 @@ impl MonitorTracker {
         let now = Instant::now();
         let mut state = self.state.lock().ok()?.clone();
 
+        // Freshen cursor — CGEventCreate is always safe from any thread.
+        // update_cursor skips same-monitor, so the timestamp reflects the
+        // real transition, not an artificial "now".
         let cursor_pos = self.platform.cursor_position();
         if let Some((x, y)) = cursor_pos {
             if let Some(monitor) = monitor_for_point(&monitors, x, y) {
@@ -281,19 +287,18 @@ impl MonitorTracker {
             }
         }
 
-        let focus_bounds = self.platform.focused_window_bounds();
-        if let Some(ref window_bounds) = focus_bounds {
-            if let Some(monitor) = monitor_for_bounds(&monitors, window_bounds) {
-                state.update_focus(monitor, now);
-            }
+        let launcher_visible = self.any_visible.load(Ordering::Acquire);
+        if launcher_visible {
+            state.focus = None;
         }
 
         let result = pick_active_monitor(&state, monitors[0]);
         #[cfg(debug_assertions)]
         eprintln!(
-            "[monitor] snapshot: cursor={:?} focus={:?} → {:?}",
+            "[monitor] snapshot: cursor={:?} focus={:?} any_visible={} → {:?}",
             cursor_pos.map(|(x, y)| format!("({x:.0}, {y:.0})")),
             state.focus.as_ref().map(|f| f.monitor.bounds().origin),
+            launcher_visible,
             result.bounds().origin,
         );
         Some(result)
@@ -335,6 +340,7 @@ fn poll_tick(
     state: &Mutex<InputState>,
     monitors: &[Bounds<Pixels>],
     committed: bool,
+    poll_focus: bool,
     now: Instant,
     last_cursor_pos: &mut Option<(f32, f32)>,
 ) -> TickResult {
@@ -350,9 +356,13 @@ fn poll_tick(
 
     let cursor_monitor = cursor_pos.and_then(|(x, y)| monitor_for_point(monitors, x, y));
 
-    let focus_monitor = platform
-        .focused_window_bounds()
-        .and_then(|wb| monitor_for_bounds(monitors, &wb));
+    let focus_monitor = if poll_focus {
+        platform
+            .focused_window_bounds()
+            .and_then(|wb| monitor_for_bounds(monitors, &wb))
+    } else {
+        None
+    };
 
     let Ok(mut guard) = state.lock() else {
         return TickResult { activity: false, signal_changed: false };
@@ -384,6 +394,7 @@ fn poll_loop(
     state: Arc<Mutex<InputState>>,
     monitors: Arc<Mutex<Vec<Bounds<Pixels>>>>,
     config: MonitorConfig,
+    any_visible: Arc<AtomicBool>,
 ) {
     let mut active_config = config.normalized();
     let strategy = strategy_from_name(&active_config.strategy);
@@ -431,7 +442,13 @@ fn poll_loop(
 
         let now = Instant::now();
         let committed = poller.current() >= commit_threshold;
-        let tick = poll_tick(&*platform, &state, &monitors_snapshot, committed, now, &mut last_cursor_pos);
+        // On platforms where focused_window_bounds() can deadlock from a
+        // background thread (macOS), only poll focus when no windows are
+        // rendering. poll_focused_window() returns true on platforms where
+        // it is always safe (Linux).
+        let poll_focus = platform.poll_focused_window()
+            || !any_visible.load(Ordering::Acquire);
+        let tick = poll_tick(&*platform, &state, &monitors_snapshot, committed, poll_focus, now, &mut last_cursor_pos);
         let interval = poller.tick(tick.activity);
 
         #[cfg(debug_assertions)]
@@ -480,11 +497,13 @@ mod tests {
     fn make_tracker(
         platform: Arc<dyn PlatformQueries>,
         monitors: Vec<Bounds<Pixels>>,
+        any_visible: bool,
     ) -> MonitorTracker {
         MonitorTracker {
             state: Arc::new(StdMutex::new(InputState::default())),
             platform,
             monitors: Arc::new(StdMutex::new(monitors)),
+            any_visible: Arc::new(AtomicBool::new(any_visible)),
         }
     }
 
@@ -495,7 +514,7 @@ mod tests {
             focus: StdMutex::new(None),
             monitors: vec![],
         });
-        let tracker = make_tracker(platform, vec![]);
+        let tracker = make_tracker(platform, vec![], false);
         assert!(tracker.snapshot().is_none());
     }
 
@@ -507,7 +526,7 @@ mod tests {
             focus: StdMutex::new(None),
             monitors: vec![m],
         });
-        let tracker = make_tracker(platform, vec![m]);
+        let tracker = make_tracker(platform, vec![m], false);
         let result = tracker.snapshot().unwrap();
         assert_eq!(*result.bounds(), m);
     }
@@ -521,13 +540,17 @@ mod tests {
             focus: StdMutex::new(None),
             monitors: vec![m_a, m_b],
         });
-        let tracker = make_tracker(platform, vec![m_a, m_b]);
+        let tracker = make_tracker(platform, vec![m_a, m_b], false);
         let result = tracker.snapshot().unwrap();
         assert_eq!(*result.bounds(), m_b);
     }
 
     #[::std::prelude::v1::test]
-    fn snapshot_prefers_most_recent_signal() {
+    fn snapshot_ignores_platform_focus_query() {
+        // snapshot() should NOT call focused_window_bounds() on-demand.
+        // Focus is only tracked via the background poller (stored in state).
+        // Here the platform reports a focused window on m_a, but since
+        // snapshot doesn't query it, cursor on m_b should win.
         let m_a = mon(0.0, 0.0, 1920.0, 1080.0);
         let m_b = mon(1920.0, 0.0, 2560.0, 1440.0);
         let window_on_a = Bounds::new(point(px(100.0), px(100.0)), size(px(800.0), px(600.0)));
@@ -536,7 +559,86 @@ mod tests {
             focus: StdMutex::new(Some(window_on_a)),
             monitors: vec![m_a, m_b],
         });
-        let tracker = make_tracker(platform, vec![m_a, m_b]);
+        let tracker = make_tracker(platform, vec![m_a, m_b], false);
+        let result = tracker.snapshot().unwrap();
+        assert_eq!(*result.bounds(), m_b);
+    }
+
+    #[::std::prelude::v1::test]
+    fn snapshot_uses_background_polled_focus() {
+        // If the background poller has tracked a focus change to m_a
+        // (with a newer timestamp than cursor on m_b), snapshot should
+        // respect that — it reads from the shared state, not the platform.
+        let m_a = mon(0.0, 0.0, 1920.0, 1080.0);
+        let m_b = mon(1920.0, 0.0, 2560.0, 1440.0);
+        let platform = Arc::new(FakePlatform {
+            cursor: StdMutex::new(Some((2000.0, 500.0))),
+            focus: StdMutex::new(None),
+            monitors: vec![m_a, m_b],
+        });
+        let tracker = make_tracker(platform, vec![m_a, m_b], false);
+
+        // Simulate background poller having set cursor on m_b first,
+        // then focus on m_a more recently.
+        {
+            let mut state = tracker.state.lock().unwrap();
+            let t_old = Instant::now() - Duration::from_secs(2);
+            state.update_cursor(m_b, t_old, true);
+            let t_new = Instant::now() - Duration::from_secs(1);
+            state.update_focus(m_a, t_new);
+        }
+
+        let result = tracker.snapshot().unwrap();
+        // Cursor is still on m_b (freshened by snapshot), but same monitor
+        // so timestamp is preserved from t_old. Focus on m_a is newer → wins.
+        assert_eq!(*result.bounds(), m_a);
+    }
+
+    #[::std::prelude::v1::test]
+    fn snapshot_cursor_move_overrides_stale_focus() {
+        // User scenario: focus was tracked on m_a, cursor moves to m_b.
+        // snapshot should return m_b because cursor transition is newer.
+        let m_a = mon(0.0, 0.0, 1920.0, 1080.0);
+        let m_b = mon(1920.0, 0.0, 2560.0, 1440.0);
+        let platform = Arc::new(FakePlatform {
+            cursor: StdMutex::new(Some((2000.0, 500.0))),
+            focus: StdMutex::new(None),
+            monitors: vec![m_a, m_b],
+        });
+        let tracker = make_tracker(platform, vec![m_a, m_b], false);
+
+        // Background poller tracked focus on m_a a while ago.
+        {
+            let mut state = tracker.state.lock().unwrap();
+            let t_old = Instant::now() - Duration::from_secs(5);
+            state.update_focus(m_a, t_old);
+        }
+
+        // snapshot freshens cursor to m_b — this is a new transition, gets
+        // timestamp `now`, which is newer than focus → cursor wins.
+        let result = tracker.snapshot().unwrap();
+        assert_eq!(*result.bounds(), m_b);
+    }
+
+    #[::std::prelude::v1::test]
+    fn snapshot_prefers_cursor_when_launcher_is_visible() {
+        let m_a = mon(0.0, 0.0, 1920.0, 1080.0);
+        let m_b = mon(1920.0, 0.0, 2560.0, 1440.0);
+        let platform = Arc::new(FakePlatform {
+            cursor: StdMutex::new(Some((2000.0, 500.0))),
+            focus: StdMutex::new(None),
+            monitors: vec![m_a, m_b],
+        });
+        let tracker = make_tracker(platform, vec![m_a, m_b], true);
+
+        {
+            let mut state = tracker.state.lock().unwrap();
+            let t_old = Instant::now() - Duration::from_secs(5);
+            state.update_cursor(m_b, t_old, true);
+            let t_new = Instant::now() - Duration::from_secs(1);
+            state.update_focus(m_a, t_new);
+        }
+
         let result = tracker.snapshot().unwrap();
         assert_eq!(*result.bounds(), m_b);
     }
@@ -550,7 +652,7 @@ mod tests {
             focus: StdMutex::new(None),
             monitors: vec![m_a, m_b],
         });
-        let tracker = make_tracker(platform, vec![m_a, m_b]);
+        let tracker = make_tracker(platform, vec![m_a, m_b], false);
         let result = tracker.snapshot().unwrap();
         assert_eq!(*result.bounds(), m_a);
     }
