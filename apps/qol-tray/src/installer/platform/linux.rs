@@ -43,3 +43,10 @@ pub fn start_now(binary_path: &Path) -> Result<()> {
 pub fn stop_running() -> Result<()> {
     super::unix_common::stop_running("qol-tray")
 }
+
+pub fn bundled_binary_candidates(installer_path: &Path) -> Vec<PathBuf> {
+    installer_path
+        .parent()
+        .map(|dir| vec![dir.join(super::binary_filename())])
+        .unwrap_or_default()
+}

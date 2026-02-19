@@ -41,6 +41,10 @@ mod imp {
     pub fn stop_running() -> Result<()> {
         Ok(())
     }
+
+    pub fn bundled_binary_candidates(_: &Path) -> Vec<PathBuf> {
+        Vec::new()
+    }
 }
 
 pub fn binary_filename() -> String {
@@ -69,4 +73,8 @@ pub fn start_now(binary_path: &Path) -> Result<()> {
 
 pub fn stop_running() -> Result<()> {
     imp::stop_running()
+}
+
+pub fn bundled_binary_candidates(installer_path: &Path) -> Vec<PathBuf> {
+    imp::bundled_binary_candidates(installer_path)
 }
