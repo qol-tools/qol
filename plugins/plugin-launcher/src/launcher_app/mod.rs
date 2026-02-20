@@ -31,6 +31,7 @@ use state::LauncherState;
 pub use input::key_to_input_char;
 
 const BLUR_GUARD_MS: u64 = 180;
+const TRAIL_DECAY_TICK: Duration = Duration::from_millis(20);
 const LAUNCHER_APP_ID: &str = "qol-tray-launcher";
 
 struct PreloadedEntries {
@@ -76,6 +77,7 @@ struct LauncherView {
     pub(super) store: EntryStore,
     pub(super) focus_handle: FocusHandle,
     blur_sub: Option<Subscription>,
+    trail_decay_task_running: bool,
     is_showing: bool,
     any_visible: Arc<AtomicBool>,
     blur_guard_until: Instant,
@@ -89,6 +91,7 @@ impl LauncherView {
             store: EntryStore::new(entries.app_entries.clone(), entries.file_entries.clone()),
             focus_handle: cx.focus_handle(),
             blur_sub: None,
+            trail_decay_task_running: false,
             is_showing: true,
             any_visible,
             blur_guard_until: Instant::now() + Duration::from_millis(BLUR_GUARD_MS),
@@ -103,9 +106,64 @@ impl LauncherView {
     fn reset_for_show(&mut self) -> bool {
         let should_resize = (self.state.window_height - HEADER_HEIGHT).abs() > f32::EPSILON;
         self.state = LauncherState::new();
+        self.trail_decay_task_running = false;
         self.set_showing(true);
         self.blur_guard_until = Instant::now() + Duration::from_millis(BLUR_GUARD_MS);
         should_resize
+    }
+
+    fn ensure_trail_decay_tick(&mut self, cx: &mut Context<Self>) {
+        if self.trail_decay_task_running || self.state.decayed_momentum() == 0 {
+            return;
+        }
+
+        self.trail_decay_task_running = true;
+        cx.spawn(|this: WeakEntity<LauncherView>, cx: &mut AsyncApp| {
+            let async_cx = cx.clone();
+            async move {
+                Self::trail_decay_loop(this, async_cx).await;
+            }
+        })
+        .detach();
+    }
+
+    async fn trail_decay_loop(this: WeakEntity<Self>, mut async_cx: AsyncApp) {
+        let mut last_level = u8::MAX;
+
+        loop {
+            async_cx.background_executor().timer(TRAIL_DECAY_TICK).await;
+            if !Self::run_trail_decay_step(&this, &mut async_cx, &mut last_level) {
+                break;
+            }
+        }
+    }
+
+    fn run_trail_decay_step(
+        this: &WeakEntity<Self>,
+        async_cx: &mut AsyncApp,
+        last_level: &mut u8,
+    ) -> bool {
+        this.update(async_cx, |view, cx| view.apply_trail_decay_update(last_level, cx))
+            .unwrap_or(false)
+    }
+
+    fn apply_trail_decay_update(&mut self, last_level: &mut u8, cx: &mut Context<Self>) -> bool {
+        let level = self.state.decayed_momentum();
+        if level == 0 {
+            self.state.previous_selected = None;
+            self.state.nav_direction = None;
+            self.trail_decay_task_running = false;
+            cx.notify();
+            return false;
+        }
+
+        if level == *last_level {
+            return true;
+        }
+
+        *last_level = level;
+        cx.notify();
+        true
     }
 }
 
