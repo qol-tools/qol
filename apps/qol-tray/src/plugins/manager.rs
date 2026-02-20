@@ -88,7 +88,7 @@ impl Default for PluginManager {
 
 #[cfg(feature = "dev")]
 fn load_dev_links_if_dev() -> HashMap<String, std::path::PathBuf> {
-    let Ok(config_dir) = paths::config_dir() else {
+    let Ok(config_dir) = paths::shared_config_dir() else {
         return HashMap::new();
     };
     crate::dev::load_dev_links(&config_dir)
@@ -107,13 +107,13 @@ fn daemon_pids_path() -> Option<std::path::PathBuf> {
 fn kill_orphan_daemons() {
     kill_orphan_plugin_binaries();
     let installs_root = paths::installs_dir().ok();
+    let shared_plugins_root = paths::plugins_dir().ok();
 
     for path in daemon_pid_files() {
         let Ok(content) = std::fs::read_to_string(&path) else { continue };
         for line in content.lines() {
             let Ok(pid) = line.trim().parse::<i32>() else { continue };
-            let Some(installs_root) = installs_root.as_ref() else { continue };
-            if !is_pid_from_installed_plugin(pid, installs_root) {
+            if !is_pid_from_managed_plugin(pid, installs_root.as_deref(), shared_plugins_root.as_deref()) {
                 continue;
             }
             if crate::process_utils::is_pid_alive(pid) {
@@ -130,10 +130,9 @@ fn kill_orphan_daemons() {}
 
 #[cfg(target_os = "linux")]
 fn kill_orphan_plugin_binaries() {
-    let Some(installs_root) = paths::installs_dir().ok() else {
-        return;
-    };
-    if !installs_root.exists() {
+    let installs_root = paths::installs_dir().ok().filter(|root| root.exists());
+    let shared_plugins_root = paths::plugins_dir().ok().filter(|root| root.exists());
+    if installs_root.is_none() && shared_plugins_root.is_none() {
         return;
     }
 
@@ -151,7 +150,7 @@ fn kill_orphan_plugin_binaries() {
         let Ok(target) = std::fs::read_link(exe_path) else {
             continue;
         };
-        if !is_installed_plugin_binary_path(&target, &installs_root) {
+        if !is_managed_plugin_binary_path(&target, installs_root.as_deref(), shared_plugins_root.as_deref()) {
             continue;
         }
 
@@ -162,29 +161,47 @@ fn kill_orphan_plugin_binaries() {
 }
 
 #[cfg(target_os = "linux")]
-fn is_installed_plugin_binary_path(target: &std::path::Path, installs_root: &std::path::Path) -> bool {
+fn is_managed_plugin_binary_path(
+    target: &std::path::Path,
+    installs_root: Option<&std::path::Path>,
+    shared_plugins_root: Option<&std::path::Path>,
+) -> bool {
     let resolved_target = std::fs::canonicalize(target).unwrap_or_else(|_| target.to_path_buf());
+
+    if let Some(shared_plugins_root) = shared_plugins_root {
+        let resolved_shared_root = std::fs::canonicalize(shared_plugins_root)
+            .unwrap_or_else(|_| shared_plugins_root.to_path_buf());
+        if resolved_target.starts_with(&resolved_shared_root) {
+            return true;
+        }
+    }
+
+    let Some(installs_root) = installs_root else {
+        return false;
+    };
     let resolved_installs_root =
         std::fs::canonicalize(installs_root).unwrap_or_else(|_| installs_root.to_path_buf());
-
     if !resolved_target.starts_with(&resolved_installs_root) {
         return false;
     }
-
     resolved_target
         .components()
         .any(|component| component.as_os_str() == std::ffi::OsStr::new("plugins"))
 }
 
 #[cfg(target_os = "linux")]
-fn is_pid_from_installed_plugin(pid: i32, installs_root: &std::path::Path) -> bool {
+fn is_pid_from_managed_plugin(
+    pid: i32,
+    installs_root: Option<&std::path::Path>,
+    shared_plugins_root: Option<&std::path::Path>,
+) -> bool {
     let exe_path = std::path::Path::new("/proc")
         .join(pid.to_string())
         .join("exe");
     let Ok(target) = std::fs::read_link(exe_path) else {
         return false;
     };
-    is_installed_plugin_binary_path(&target, installs_root)
+    is_managed_plugin_binary_path(&target, installs_root, shared_plugins_root)
 }
 
 #[cfg(target_os = "linux")]

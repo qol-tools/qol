@@ -351,7 +351,7 @@ impl PluginInstaller {
 
     #[cfg(feature = "dev")]
     fn check_dev_link_conflict(plugin_id: &str) -> Result<()> {
-        let config_dir = crate::paths::config_dir()?;
+        let config_dir = crate::paths::shared_config_dir()?;
         let dev_links = crate::dev::load_dev_links(&config_dir);
         if dev_links.contains_key(plugin_id) {
             anyhow::bail!(

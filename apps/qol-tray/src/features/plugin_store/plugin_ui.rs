@@ -231,7 +231,7 @@ fn resolve_plugin_root(plugins_dir: &Path, plugin_id: &str) -> PathBuf {
 
 #[cfg(feature = "dev")]
 fn resolve_dev_link_path(plugin_id: &str) -> Option<PathBuf> {
-    let config_dir = crate::paths::config_dir().ok()?;
+    let config_dir = crate::paths::shared_config_dir().ok()?;
     let dev_links_path = config_dir.join("dev-links.json");
     let content = std::fs::read_to_string(dev_links_path).ok()?;
     let links: HashMap<String, PathBuf> = serde_json::from_str(&content).ok()?;
