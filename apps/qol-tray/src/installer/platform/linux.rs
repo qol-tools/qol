@@ -40,8 +40,24 @@ pub fn start_now(binary_path: &Path) -> Result<()> {
     super::unix_common::start_now(binary_path)
 }
 
-pub fn stop_running() -> Result<()> {
-    super::unix_common::stop_running("qol-tray")
+pub fn stop_running(binary_path: &Path) -> Result<()> {
+    super::unix_common::stop_running(binary_path, "qol-tray")
+}
+
+pub fn set_executable_permissions(path: &Path) -> Result<()> {
+    super::unix_common::set_executable_permissions(path)
+}
+
+pub fn prepare_atomic_replace(_: &Path) -> Result<()> {
+    Ok(())
+}
+
+pub fn copy_symlink(source: &Path, target: &Path) -> Result<()> {
+    super::unix_common::copy_symlink(source, target)
+}
+
+pub fn on_file_copied(source: &Path, target: &Path) -> Result<()> {
+    super::unix_common::on_file_copied(source, target)
 }
 
 pub fn bundled_binary_candidates(installer_path: &Path) -> Vec<PathBuf> {

@@ -18,34 +18,7 @@ use macos as imp;
 use windows as imp;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-mod imp {
-    use anyhow::{anyhow, Result};
-    use std::path::{Path, PathBuf};
-
-    pub fn install_dir() -> Result<PathBuf> {
-        Err(anyhow!("Unsupported platform"))
-    }
-
-    pub fn autostart_path() -> Result<PathBuf> {
-        Err(anyhow!("Unsupported platform"))
-    }
-
-    pub fn write_autostart_entry(_: &Path) -> Result<()> {
-        Err(anyhow!("Unsupported platform"))
-    }
-
-    pub fn start_now(_: &Path) -> Result<()> {
-        Ok(())
-    }
-
-    pub fn stop_running() -> Result<()> {
-        Ok(())
-    }
-
-    pub fn bundled_binary_candidates(_: &Path) -> Vec<PathBuf> {
-        Vec::new()
-    }
-}
+compile_error!("installer platform implementation is required for this target OS");
 
 pub fn binary_filename() -> String {
     if cfg!(target_os = "windows") {
@@ -71,8 +44,24 @@ pub fn start_now(binary_path: &Path) -> Result<()> {
     imp::start_now(binary_path)
 }
 
-pub fn stop_running() -> Result<()> {
-    imp::stop_running()
+pub fn stop_running(binary_path: &Path) -> Result<()> {
+    imp::stop_running(binary_path)
+}
+
+pub fn set_executable_permissions(path: &Path) -> Result<()> {
+    imp::set_executable_permissions(path)
+}
+
+pub fn prepare_atomic_replace(installed_binary: &Path) -> Result<()> {
+    imp::prepare_atomic_replace(installed_binary)
+}
+
+pub fn copy_symlink(source: &Path, target: &Path) -> Result<()> {
+    imp::copy_symlink(source, target)
+}
+
+pub fn on_file_copied(source: &Path, target: &Path) -> Result<()> {
+    imp::on_file_copied(source, target)
 }
 
 pub fn bundled_binary_candidates(installer_path: &Path) -> Vec<PathBuf> {
