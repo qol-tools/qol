@@ -1,6 +1,6 @@
 use gpui::KeyDownEvent;
 
-use super::state::LauncherState;
+use super::state::{EdgeHit, LauncherState, NavDirection};
 
 pub enum InputEffect {
     Ignore,
@@ -61,14 +61,36 @@ impl LauncherState {
     }
 
     fn move_up(&mut self) {
-        self.selected = self.selected.saturating_sub(1);
+        if self.selected == 0 {
+            self.previous_selected = None;
+            self.register_nav(NavDirection::Up);
+            self.edge_hit = Some(EdgeHit::Top);
+            return;
+        }
+
+        self.previous_selected = Some(self.selected);
+        self.selected -= 1;
+        self.register_nav(NavDirection::Up);
+        self.edge_hit = None;
     }
 
     fn move_down(&mut self, result_count: usize) {
-        let max = result_count.saturating_sub(1);
-        if self.selected < max {
-            self.selected += 1;
+        if result_count == 0 {
+            return;
         }
+
+        let max = result_count.saturating_sub(1);
+        if self.selected >= max {
+            self.previous_selected = None;
+            self.register_nav(NavDirection::Down);
+            self.edge_hit = Some(EdgeHit::Bottom);
+            return;
+        }
+
+        self.previous_selected = Some(self.selected);
+        self.selected += 1;
+        self.register_nav(NavDirection::Down);
+        self.edge_hit = None;
     }
 
     fn update_selection_anchor(&mut self, selecting: bool, old_cursor: usize) {

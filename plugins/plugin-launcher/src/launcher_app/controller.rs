@@ -29,9 +29,12 @@ impl LauncherView {
         let result_count = self.store.result_count();
         match self.state.apply_key(event, result_count) {
             InputEffect::Ignore => {}
-            InputEffect::Navigate => cx.notify(),
+            InputEffect::Navigate => {
+                self.state.sync_result_window(result_count);
+                cx.notify();
+            }
             InputEffect::QueryChanged => {
-                self.state.selected = 0;
+                self.state.reset_results_position();
                 cx.notify();
             }
             InputEffect::Launch => self.launch_selected(window, cx),
@@ -82,7 +85,7 @@ impl LauncherView {
             return;
         };
         cx.write_to_clipboard(ClipboardItem::new_string(text));
-        self.state.selected = 0;
+        self.state.reset_results_position();
         cx.notify();
     }
 
@@ -91,7 +94,7 @@ impl LauncherView {
             return;
         };
         if self.state.paste_text(&text) {
-            self.state.selected = 0;
+            self.state.reset_results_position();
             cx.notify();
         }
     }
