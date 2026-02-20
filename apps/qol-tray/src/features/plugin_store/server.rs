@@ -671,7 +671,7 @@ async fn reload_plugins(State(state): State<AppState>) -> impl IntoResponse {
 
     state.daemon.events.send(DaemonEvent::BuildStarted);
 
-    let dev_links = config_dir_then(|d| dev::load_dev_links(d));
+    let dev_links = shared_config_dir_then(|d| dev::load_dev_links(d));
     let build_results = dev::build_linked_plugins(&dev_links);
     let results: Vec<BuildResultInfo> = build_results
         .into_iter()
@@ -1032,11 +1032,11 @@ async fn set_hotkeys(body: axum::body::Bytes) -> impl IntoResponse {
 }
 
 #[cfg(feature = "dev")]
-fn config_dir_then<T>(f: impl FnOnce(&std::path::Path) -> T) -> T
+fn shared_config_dir_then<T>(f: impl FnOnce(&std::path::Path) -> T) -> T
 where
     T: Default,
 {
-    match crate::paths::config_dir() {
+    match crate::paths::shared_config_dir() {
         Ok(dir) => f(&dir),
         Err(e) => {
             log::error!("Failed to determine config directory: {}", e);
@@ -1049,7 +1049,7 @@ where
 async fn list_linked_plugins(
     State(_state): State<AppState>,
 ) -> Result<Json<Vec<dev::LinkedPlugin>>, StatusCode> {
-    let config_dir = crate::paths::config_dir().map_err(|e| {
+    let config_dir = crate::paths::shared_config_dir().map_err(|e| {
         log::error!("Failed to determine config directory: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -1066,7 +1066,7 @@ async fn create_link(
     State(state): State<AppState>,
     Json(req): Json<dev::LinkRequest>,
 ) -> impl IntoResponse {
-    let config_dir = match crate::paths::config_dir() {
+    let config_dir = match crate::paths::shared_config_dir() {
         Ok(d) => d,
         Err(e) => {
             log::error!("Failed to determine config directory: {}", e);
@@ -1100,7 +1100,7 @@ async fn delete_link(
         return (StatusCode::BAD_REQUEST, "Invalid plugin ID".to_string()).into_response();
     }
 
-    let config_dir = match crate::paths::config_dir() {
+    let config_dir = match crate::paths::shared_config_dir() {
         Ok(d) => d,
         Err(e) => {
             log::error!("Failed to determine config directory: {}", e);

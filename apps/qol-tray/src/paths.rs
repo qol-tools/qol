@@ -23,7 +23,7 @@ fn legacy_config_dir() -> Result<PathBuf> {
         .map(|p| p.join(APP_NAME))
 }
 
-fn shared_config_dir() -> Result<PathBuf> {
+pub fn shared_config_dir() -> Result<PathBuf> {
     legacy_config_dir()
 }
 
@@ -115,7 +115,7 @@ pub fn set_active_install_id(install_id: &str) -> Result<()> {
 }
 
 pub fn plugins_dir() -> Result<PathBuf> {
-    config_dir().map(|p| p.join("plugins"))
+    shared_config_dir().map(|p| p.join("plugins"))
 }
 
 pub fn hotkeys_path() -> Result<PathBuf> {
@@ -123,20 +123,24 @@ pub fn hotkeys_path() -> Result<PathBuf> {
 }
 
 pub fn plugin_configs_path() -> Result<PathBuf> {
-    config_dir().map(|p| p.join("plugin-configs.json"))
+    shared_config_dir().map(|p| p.join("plugin-configs.json"))
 }
 
 pub fn github_token_path() -> Result<PathBuf> {
-    config_dir().map(|p| p.join(".github-token"))
+    shared_config_dir().map(|p| p.join(".github-token"))
 }
 
 pub fn plugin_cache_path() -> Result<PathBuf> {
-    config_dir().map(|p| p.join(".plugin-cache.json"))
+    shared_config_dir().map(|p| p.join(".plugin-cache.json"))
+}
+
+pub fn task_runner_config_path() -> Result<PathBuf> {
+    shared_config_dir().map(|p| p.join("task-runner.json"))
 }
 
 #[cfg(feature = "dev")]
 pub fn dev_config_path() -> Result<PathBuf> {
-    config_dir().map(|p| p.join("dev.json"))
+    shared_config_dir().map(|p| p.join("dev.json"))
 }
 
 pub fn open_url(url: &str) -> Result<()> {
