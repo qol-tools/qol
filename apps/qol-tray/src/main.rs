@@ -22,6 +22,17 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    let startup_doctor = qol_tray::doctor::auto_fix_startup();
+    println!(
+        "[doctor] startup summary: attempted={}, applied={}, failures={}, ok={}, warn={}, error={}",
+        startup_doctor.attempted,
+        startup_doctor.applied,
+        startup_doctor.failures.len(),
+        startup_doctor.after.count_ok(),
+        startup_doctor.after.count_warn(),
+        startup_doctor.after.count_error()
+    );
+
     log::info!("Starting QoL Tray daemon...");
     tray::platform::run_app(app_init)
 }

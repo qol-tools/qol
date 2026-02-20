@@ -1,4 +1,5 @@
 pub mod daemon;
+pub mod doctor;
 pub mod features;
 #[cfg(feature = "dev")]
 pub mod dev;

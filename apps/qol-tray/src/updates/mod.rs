@@ -138,9 +138,11 @@ pub async fn download_and_install(events: std::sync::Arc<crate::daemon::EventBus
     install_asset(&dest)?;
 
     log::info!("Update installed, restarting...");
-    std::process::Command::new("qol-tray")
+    let restart_binary = std::env::current_exe()
+        .map_err(|e| anyhow::anyhow!("Failed to resolve current executable for restart: {}", e))?;
+    std::process::Command::new(&restart_binary)
         .spawn()
-        .map_err(|e| anyhow::anyhow!("Failed to spawn qol-tray for restart: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to spawn {} for restart: {}", restart_binary.display(), e))?;
     std::process::exit(0);
 }
 
