@@ -9,9 +9,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
-use tokio::process::Command;
 use tokio::sync::RwLock;
 use regex::Regex;
+
+mod platform;
 
 const CONFIG_FILENAME: &str = "task-runner.json";
 
@@ -77,10 +78,12 @@ struct ErrorResponse {
 }
 
 pub fn router() -> Router {
-    let config_path = dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("qol-tray")
-        .join(CONFIG_FILENAME);
+    let config_path = crate::paths::task_runner_config_path().unwrap_or_else(|_| {
+        dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("qol-tray")
+            .join(CONFIG_FILENAME)
+    });
 
     let config = load_config(&config_path).unwrap_or_default();
 
@@ -140,8 +143,7 @@ async fn execute_action(
 
     log::info!("[task-runner] {}: {}", req.action, command);
 
-    let mut cmd = Command::new("sh");
-    cmd.arg("-c").arg(&command);
+    let mut cmd = platform::shell_command(&command);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
