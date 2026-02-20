@@ -43,12 +43,48 @@ pub fn start_now(binary_path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn stop_running() -> Result<()> {
+pub fn stop_running(_: &Path) -> Result<()> {
     let _ = Command::new("taskkill")
         .args(["/F", "/IM", "qol-tray.exe"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
+    Ok(())
+}
+
+pub fn set_executable_permissions(_: &Path) -> Result<()> {
+    Ok(())
+}
+
+pub fn prepare_atomic_replace(installed_binary: &Path) -> Result<()> {
+    if installed_binary.exists() {
+        fs::remove_file(installed_binary).with_context(|| {
+            format!(
+                "Failed to remove existing installed binary {}",
+                installed_binary.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+pub fn copy_symlink(source: &Path, target: &Path) -> Result<()> {
+    let link_target = fs::read_link(source)
+        .with_context(|| format!("Failed to read symlink {}", source.display()))?;
+    let resolved = source
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve symlink {}", source.display()))?;
+    if resolved.is_dir() {
+        std::os::windows::fs::symlink_dir(&link_target, target)
+            .with_context(|| format!("Failed to create directory symlink {}", target.display()))?;
+    } else {
+        std::os::windows::fs::symlink_file(&link_target, target)
+            .with_context(|| format!("Failed to create file symlink {}", target.display()))?;
+    }
+    Ok(())
+}
+
+pub fn on_file_copied(_: &Path, _: &Path) -> Result<()> {
     Ok(())
 }
 
