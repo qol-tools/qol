@@ -63,11 +63,12 @@ pub fn fuzzy_match(query: &str, candidate: &str) -> Option<FuzzyMatch> {
 
     let greedy = score_pass(&q, &c_orig, &c_lower, false);
     let boundary = score_pass(&q, &c_orig, &c_lower, true);
+    let contiguous = score_contiguous_pass(&q, &c_orig, &c_lower);
 
-    match (greedy, boundary) {
-        (Some(g), Some(b)) => Some(if g.score <= b.score { g } else { b }),
-        (g, b) => g.or(b),
-    }
+    [greedy, boundary, contiguous]
+        .into_iter()
+        .flatten()
+        .min_by_key(|m| m.score)
 }
 
 fn score_pass(
@@ -99,6 +100,40 @@ fn score_pass(
         score: compute_score(&positions, candidate, query.len()),
         positions,
     })
+}
+
+fn score_contiguous_pass(
+    query: &[char],
+    candidate: &[char],
+    candidate_lower: &[char],
+) -> Option<FuzzyMatch> {
+    if query.len() > candidate_lower.len() {
+        return None;
+    }
+
+    let mut best: Option<FuzzyMatch> = None;
+    for start in 0..=candidate_lower.len() - query.len() {
+        if !query
+            .iter()
+            .zip(candidate_lower[start..start + query.len()].iter())
+            .all(|(q, c)| q == c)
+        {
+            continue;
+        }
+
+        let positions: Vec<usize> = (start..start + query.len()).collect();
+        let m = FuzzyMatch {
+            score: compute_score(&positions, candidate, query.len()),
+            positions,
+        };
+
+        best = match best {
+            Some(current) if current.score <= m.score => Some(current),
+            _ => Some(m),
+        };
+    }
+
+    best
 }
 
 fn find_first_match(query_char: char, candidate_lower: &[char], start: usize) -> Option<usize> {

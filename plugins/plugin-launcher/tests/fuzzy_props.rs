@@ -193,3 +193,22 @@ fn contiguous_word_match_beats_scattered_early_match() {
         scattered_score
     );
 }
+
+#[test]
+fn contiguous_substring_beats_scattered_early_path_for_cord() {
+    let query = "cord";
+    let contiguous = "SimpleScreenRecorder";
+    let scattered = "Color selection dialog";
+
+    let contiguous_score = fuzzy_match(query, contiguous).unwrap().score;
+    let scattered_score = fuzzy_match(query, scattered).unwrap().score;
+
+    assert!(
+        contiguous_score < scattered_score,
+        "Contiguous '{}' scored {} >= scattered '{}' scored {}",
+        contiguous,
+        contiguous_score,
+        scattered,
+        scattered_score
+    );
+}
