@@ -17,10 +17,19 @@ pub enum ResultSource {
     File,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MatchKind {
+    Prefix,
+    Contains,
+    Fuzzy,
+}
+
 pub struct Scored {
     pub source: ResultSource,
     pub index: usize,
     pub m: FuzzyMatch,
+    pub match_kind: MatchKind,
+    pub frecency_bonus: i32,
 }
 
 
@@ -42,7 +51,7 @@ pub fn filtered(
             .iter()
             .enumerate()
             .filter_map(|(index, entry)| {
-                let bonus = frecency_bonus_for(&entry.name, frecency);
+                let bonus = frecency_bonus_for(&entry.name, query, frecency);
                 score_app(index, &entry.name, query, bonus)
             })
             .collect(),
@@ -75,7 +84,7 @@ pub fn filtered_from_candidates(
             .filter(|candidate| matches!(candidate.source, ResultSource::App))
             .filter_map(|candidate| {
                 let entry = app_entries.get(candidate.index)?;
-                let bonus = frecency_bonus_for(&entry.name, frecency);
+                let bonus = frecency_bonus_for(&entry.name, query, frecency);
                 score_app(candidate.index, &entry.name, query, bonus)
             })
             .collect(),
@@ -98,19 +107,23 @@ pub struct FrecencyConfig<'a> {
     pub bonus_weight: i32,
 }
 
-fn frecency_bonus_for(name: &str, config: Option<&FrecencyConfig>) -> i32 {
+fn frecency_bonus_for(name: &str, query: &str, config: Option<&FrecencyConfig>) -> i32 {
     let Some(cfg) = config else { return 0 };
     let key = name.to_lowercase();
-    crate::frecency::frequency_bonus(&key, cfg.data, cfg.now, cfg.half_life_days, cfg.bonus_weight)
+    let raw = crate::frecency::frequency_bonus(&key, cfg.data, cfg.now, cfg.half_life_days, cfg.bonus_weight);
+    cap_frecency_bonus(raw, name, query)
 }
 
 fn score_app(index: usize, name: &str, query: &str, frecency_bonus: i32) -> Option<Scored> {
     let mut m = fuzzy_match(query, name)?;
+    let match_kind = classify_match(name, query);
     m.score -= frecency_bonus;
     Some(Scored {
         source: ResultSource::App,
         index,
         m,
+        match_kind,
+        frecency_bonus,
     })
 }
 
@@ -122,11 +135,14 @@ fn score_file(
     fuzziness: Fuzziness,
 ) -> Option<Scored> {
     let mut m = fuzzy_match(query, name)?;
+    let match_kind = classify_match(name, query);
     apply_extension_rule(name, hint, fuzziness, &mut m)?;
     Some(Scored {
         source: ResultSource::File,
         index,
         m,
+        match_kind,
+        frecency_bonus: 0,
     })
 }
 
@@ -157,6 +173,43 @@ fn apply_extension_rule(
 fn sort_by_score(mut results: Vec<Scored>) -> Vec<Scored> {
     results.sort_by_key(|s| s.m.score);
     results
+}
+
+fn cap_frecency_bonus(raw_bonus: i32, name: &str, query: &str) -> i32 {
+    if raw_bonus <= 0 {
+        return 0;
+    }
+
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return 0;
+    }
+
+    let name = name.to_lowercase();
+    let base_cap = (query.chars().count() as i32 * 20).clamp(40, 180);
+    let cap = if name.starts_with(&query) {
+        base_cap
+    } else if name.contains(&query) {
+        base_cap / 2
+    } else {
+        base_cap / 3
+    };
+
+    raw_bonus.min(cap.max(0))
+}
+
+fn classify_match(name: &str, query: &str) -> MatchKind {
+    let q = query.trim().to_lowercase();
+    let n = name.to_lowercase();
+
+    if n.starts_with(&q) {
+        return MatchKind::Prefix;
+    }
+    if n.contains(&q) {
+        return MatchKind::Contains;
+    }
+
+    MatchKind::Fuzzy
 }
 
 fn extension_hint(query: &str) -> Option<&str> {
@@ -217,5 +270,17 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn frecency_bonus_is_strongly_capped_for_non_contiguous_matches() {
+        let capped = cap_frecency_bonus(2000, "Update Manager", "ter");
+        assert_eq!(capped, 20);
+    }
+
+    #[test]
+    fn frecency_bonus_allows_more_for_prefix_matches() {
+        let capped = cap_frecency_bonus(2000, "Terminal", "ter");
+        assert_eq!(capped, 60);
     }
 }
