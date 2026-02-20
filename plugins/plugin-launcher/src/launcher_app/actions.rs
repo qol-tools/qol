@@ -1,4 +1,5 @@
 use std::ffi::OsStr;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use super::search;
@@ -35,13 +36,22 @@ fn spawn_detached(exec: &[String]) -> bool {
 }
 
 fn spawn_null(cmd: &str, args: &[&OsStr]) -> bool {
-    Command::new(cmd)
+    let mut command = Command::new(cmd);
+    command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn()
-        .is_ok()
+        .env_remove("QOL_TRAY_DAEMON_SOCKET")
+        .env_remove("QOL_TRAY_INSTALL_ID");
+    if let Some(dir) = launch_working_dir() {
+        command.current_dir(dir);
+    }
+    command.spawn().is_ok()
+}
+
+fn launch_working_dir() -> Option<PathBuf> {
+    dirs::home_dir().or_else(|| std::env::current_dir().ok())
 }
 
 fn open_path_detached(path: &std::path::Path) -> bool {
