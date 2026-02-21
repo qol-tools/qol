@@ -1,30 +1,30 @@
 use super::plugin_ui;
 
 use crate::paths::is_safe_path_component;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use anyhow::Result;
+use axum::http::HeaderValue;
 use axum::{
     extract::{Path, State},
+    http::{header, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
-    http::{StatusCode, header},
 };
-use serde::{Deserialize, Serialize};
-use tower_http::set_header::SetResponseHeaderLayer;
-use axum::http::HeaderValue;
-use anyhow::Result;
 use rust_embed::Embed;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use tower_http::set_header::SetResponseHeaderLayer;
 
-use crate::plugins::{PluginConfigManager, PluginLoader, PluginManager};
 use crate::daemon::Daemon;
 #[cfg(feature = "dev")]
 use crate::daemon::DaemonEvent;
 #[cfg(feature = "dev")]
 use crate::daemon::{BuildResultInfo, DiscoveryStatus};
-use crate::hotkeys::trigger_reload;
 #[cfg(feature = "dev")]
 use crate::dev;
+use crate::hotkeys::trigger_reload;
+use crate::plugins::{PluginConfigManager, PluginLoader, PluginManager};
 
 const DEFAULT_UI_SERVER_PORT: u16 = 42700;
 
@@ -139,7 +139,8 @@ fn serve_embedded_file(path: &str) -> impl IntoResponse {
             StatusCode::OK,
             [(header::CONTENT_TYPE, mime)],
             content.data.into_owned(),
-        ).into_response(),
+        )
+            .into_response(),
         None => (StatusCode::NOT_FOUND, "Not found").into_response(),
     }
 }
@@ -161,12 +162,18 @@ pub async fn start_ui_server(
         .route("/installed", get(list_installed))
         .route("/events", get(sse_handler))
         .route("/cover/{id}", get(serve_cover))
-        .route("/plugins/{id}/actions/{action}", post(execute_plugin_action))
+        .route(
+            "/plugins/{id}/actions/{action}",
+            post(execute_plugin_action),
+        )
         .route("/install/{id}", post(install_plugin))
         .route("/update/{id}", post(update_plugin))
         .route("/uninstall/{id}", post(uninstall_plugin))
         .route("/plugins/{id}/config", get(get_plugin_config))
-        .route("/plugins/{id}/config", axum::routing::put(set_plugin_config))
+        .route(
+            "/plugins/{id}/config",
+            axum::routing::put(set_plugin_config),
+        )
         .route("/github-token", get(get_token_status))
         .route("/github-token", post(set_github_token))
         .route("/github-token", axum::routing::delete(delete_github_token))
@@ -223,7 +230,6 @@ async fn bind_listener() -> Result<(tokio::net::TcpListener, u16)> {
     Ok((listener, DEFAULT_UI_SERVER_PORT))
 }
 
-
 fn read_installed_plugin_dirs(plugins_dir: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
     if !plugins_dir.exists() {
         return Vec::new();
@@ -252,7 +258,7 @@ fn read_installed_plugin_dirs(plugins_dir: &std::path::Path) -> Vec<(String, std
 async fn list_plugins(
     axum::extract::Query(query): axum::extract::Query<PluginsQuery>,
 ) -> Result<Json<PluginsResponse>, (StatusCode, String)> {
-    use super::github::{GitHubClient, cache_age_secs};
+    use super::github::{cache_age_secs, GitHubClient};
 
     log::info!("API /plugins called (refresh={})", query.refresh);
 
@@ -279,13 +285,16 @@ async fn list_plugins(
 
     let cache_age = cache_age_secs();
 
-    let metadata_list = client.list_plugins_cached(query.refresh).await.map_err(|e| {
-        log::error!("Failed to fetch plugins: {}", e);
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            format!("Failed to fetch plugins: {:#}", e),
-        )
-    })?;
+    let metadata_list = client
+        .list_plugins_cached(query.refresh)
+        .await
+        .map_err(|e| {
+            log::error!("Failed to fetch plugins: {}", e);
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("Failed to fetch plugins: {:#}", e),
+            )
+        })?;
     log::info!("Got {} plugins", metadata_list.len());
     let plugins = metadata_list
         .into_iter()
@@ -302,7 +311,7 @@ async fn list_plugins(
             }
         })
         .collect();
-    
+
     Ok(Json(PluginsResponse {
         plugins,
         cache_age_secs: cache_age,
@@ -336,7 +345,10 @@ async fn install_plugin(
 
     installer.install(&repo_url, &id).await.map_err(|e| {
         log::error!("Failed to install plugin {}: {}", id, e);
-        (StatusCode::INTERNAL_SERVER_ERROR, format!("Installation failed: {:#}", e))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Installation failed: {:#}", e),
+        )
     })?;
 
     reload_manager_and_notify(&state);
@@ -414,9 +426,7 @@ fn reload_manager_and_notify(state: &AppState) {
     state.daemon.events.send_plugins_changed();
 }
 
-async fn sse_handler(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn sse_handler(State(state): State<AppState>) -> impl IntoResponse {
     use axum::response::sse::{Event, KeepAlive, Sse};
     use tokio_stream::wrappers::BroadcastStream;
     use tokio_stream::StreamExt;
@@ -553,7 +563,8 @@ async fn list_installed(
         .map(|c| c.plugins.into_iter().map(|p| (p.id, p.version)).collect())
         .unwrap_or_default();
 
-    let mut plugins_by_id: HashMap<String, InstalledPlugin> = manager.plugins()
+    let mut plugins_by_id: HashMap<String, InstalledPlugin> = manager
+        .plugins()
         .map(|plugin| {
             let cover_path = plugin.path.join("cover.png");
             let ui_path = plugin.path.join("ui").join("index.html");
@@ -666,46 +677,67 @@ async fn self_update(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 #[cfg(feature = "dev")]
+static BUILD_IN_PROGRESS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(feature = "dev")]
 async fn reload_plugins(State(state): State<AppState>) -> impl IntoResponse {
+    use std::sync::atomic::Ordering;
+
+    if BUILD_IN_PROGRESS.swap(true, Ordering::SeqCst) {
+        log::warn!("Developer reload requested, but a build is already in progress");
+        return (StatusCode::CONFLICT, "Build already in progress").into_response();
+    }
+
     log::info!("Developer reload requested");
 
     state.daemon.events.send(DaemonEvent::BuildStarted);
 
-    let dev_links = shared_config_dir_then(|d| dev::load_dev_links(d));
-    let build_results = dev::build_linked_plugins(&dev_links);
-    let results: Vec<BuildResultInfo> = build_results
-        .into_iter()
-        .map(|r| BuildResultInfo {
-            plugin_id: r.plugin_id,
-            success: r.success,
-            output: r.output,
-        })
-        .collect();
+    let plugin_manager = state.plugin_manager.clone();
+    let events = state.daemon.events.clone();
 
-    let all_succeeded = results.is_empty() || results.iter().all(|r| r.success);
-    state.daemon.events.send(DaemonEvent::BuildComplete { results });
-
-    if !all_succeeded {
-        return (StatusCode::OK, "Build completed with errors").into_response();
-    }
-
-    let mut manager = match state.plugin_manager.lock() {
-        Ok(m) => m,
-        Err(e) => {
-            log::error!("Plugin manager mutex poisoned: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Plugin manager lock failed").into_response();
+    // Process the blocking builds asynchronously so we don't freeze the axum worker pool
+    tokio::task::spawn_blocking(move || {
+        struct BuildGuard;
+        impl Drop for BuildGuard {
+            fn drop(&mut self) {
+                BUILD_IN_PROGRESS.store(false, Ordering::SeqCst);
+            }
         }
-    };
-    match manager.reload_plugins() {
-        Ok(_) => {
-            log::info!("Plugins reloaded successfully");
-            (StatusCode::OK, "Plugins reloaded").into_response()
+        let _guard = BuildGuard;
+
+        let dev_links = shared_config_dir_then(|d| dev::load_dev_links(d));
+        let build_results = dev::build_linked_plugins(&dev_links);
+        let results: Vec<BuildResultInfo> = build_results
+            .into_iter()
+            .map(|r| BuildResultInfo {
+                plugin_id: r.plugin_id,
+                success: r.success,
+                output: r.output,
+            })
+            .collect();
+
+        let all_succeeded = results.is_empty() || results.iter().all(|r| r.success);
+        events.send(DaemonEvent::BuildComplete { results });
+
+        if !all_succeeded {
+            return;
         }
-        Err(e) => {
+
+        let mut manager = match plugin_manager.lock() {
+            Ok(m) => m,
+            Err(e) => {
+                log::error!("Plugin manager mutex poisoned: {}", e);
+                return;
+            }
+        };
+        if let Err(e) = manager.reload_plugins() {
             log::error!("Failed to reload plugins: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed: {}", e)).into_response()
+        } else {
+            log::info!("Plugins reloaded successfully");
         }
-    }
+    });
+
+    (StatusCode::OK, "Reload queued").into_response()
 }
 
 #[cfg(feature = "dev")]
@@ -760,10 +792,10 @@ fn extract_actions(items: &[crate::plugins::MenuItem]) -> Vec<PluginAction> {
         MenuItem::Action {
             id, label, action, ..
         } => actions.push(PluginAction {
-                id: id.clone(),
-                label: label.clone(),
-                kind: *action,
-            }),
+            id: id.clone(),
+            label: label.clone(),
+            kind: *action,
+        }),
         MenuItem::Checkbox { .. } | MenuItem::Separator | MenuItem::Submenu { .. } => {}
     };
     crate::plugins::manifest::walk_menu_items(items, &mut collect);
@@ -887,10 +919,19 @@ async fn get_plugin_config(Path(plugin_id): Path<String>) -> impl IntoResponse {
     };
 
     match serde_json::to_vec(&config) {
-        Ok(data) => (StatusCode::OK, [(header::CONTENT_TYPE, "application/json")], data).into_response(),
+        Ok(data) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            data,
+        )
+            .into_response(),
         Err(e) => {
             log::error!("Failed to serialize config: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to serialize config").into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to serialize config",
+            )
+                .into_response()
         }
     }
 }
@@ -941,9 +982,7 @@ async fn set_github_token(Json(payload): Json<TokenRequest>) -> impl IntoRespons
             TokenValidationError::Empty | TokenValidationError::Invalid(_) => {
                 (StatusCode::BAD_REQUEST, "Rejected")
             }
-            TokenValidationError::Upstream(_) => {
-                (StatusCode::BAD_GATEWAY, "Upstream failure")
-            }
+            TokenValidationError::Upstream(_) => (StatusCode::BAD_GATEWAY, "Upstream failure"),
         };
         log::warn!("{} GitHub token: {}", label, e);
         return (status, e.to_string()).into_response();
@@ -951,7 +990,11 @@ async fn set_github_token(Json(payload): Json<TokenRequest>) -> impl IntoRespons
 
     if let Err(e) = super::github::store_token(&payload.token) {
         log::error!("Failed to store GitHub token: {}", e);
-        return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to store token".to_string()).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to store token".to_string(),
+        )
+            .into_response();
     }
 
     log::info!("GitHub token stored successfully");
@@ -961,7 +1004,11 @@ async fn set_github_token(Json(payload): Json<TokenRequest>) -> impl IntoRespons
 async fn delete_github_token() -> impl IntoResponse {
     if let Err(e) = super::github::delete_token() {
         log::error!("Failed to delete GitHub token: {}", e);
-        return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to delete token".to_string()).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to delete token".to_string(),
+        )
+            .into_response();
     }
 
     log::info!("GitHub token deleted");
@@ -991,11 +1038,20 @@ async fn get_hotkeys() -> impl IntoResponse {
         Ok(j) => j,
         Err(e) => {
             log::error!("Failed to serialize hotkey config: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to serialize hotkeys").into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to serialize hotkeys",
+            )
+                .into_response();
         }
     };
 
-    (StatusCode::OK, [(header::CONTENT_TYPE, "application/json")], json).into_response()
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        json,
+    )
+        .into_response()
 }
 
 async fn set_hotkeys(body: axum::body::Bytes) -> impl IntoResponse {
@@ -1070,7 +1126,11 @@ async fn create_link(
         Ok(d) => d,
         Err(e) => {
             log::error!("Failed to determine config directory: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Config dir unavailable".to_string()).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Config dir unavailable".to_string(),
+            )
+                .into_response();
         }
     };
     let source = std::path::Path::new(&req.path);
@@ -1092,10 +1152,7 @@ async fn create_link(
 }
 
 #[cfg(feature = "dev")]
-async fn delete_link(
-    Path(id): Path<String>,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn delete_link(Path(id): Path<String>, State(state): State<AppState>) -> impl IntoResponse {
     if !is_safe_path_component(&id) {
         return (StatusCode::BAD_REQUEST, "Invalid plugin ID".to_string()).into_response();
     }
@@ -1104,7 +1161,11 @@ async fn delete_link(
         Ok(d) => d,
         Err(e) => {
             log::error!("Failed to determine config directory: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Config dir unavailable".to_string()).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Config dir unavailable".to_string(),
+            )
+                .into_response();
         }
     };
 
@@ -1128,9 +1189,7 @@ struct DiscoveryStateResponse {
 }
 
 #[cfg(feature = "dev")]
-async fn get_discovery_state(
-    State(state): State<AppState>,
-) -> Json<DiscoveryStateResponse> {
+async fn get_discovery_state(State(state): State<AppState>) -> Json<DiscoveryStateResponse> {
     let guard = match state.daemon.state.discovery.read() {
         Ok(guard) => guard,
         Err(error) => {

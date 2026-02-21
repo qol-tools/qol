@@ -1,15 +1,15 @@
-pub mod manifest;
-pub mod loader;
-pub mod manager;
-pub mod config;
 pub mod action_executor;
 pub mod action_transport;
+pub mod config;
+pub mod loader;
+pub mod manager;
+pub mod manifest;
 pub mod resolver;
 
-pub use manifest::{ActionType, MenuItem, PluginManifest};
+pub use config::PluginConfigManager;
 pub use loader::PluginLoader;
 pub use manager::PluginManager;
-pub use config::PluginConfigManager;
+pub use manifest::{ActionType, MenuItem, PluginManifest};
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -74,7 +74,10 @@ impl Plugin {
             if !wait_for_socket(socket, &mut child) {
                 let _ = child.kill();
                 let _ = child.wait();
-                anyhow::bail!("Daemon for {} failed to bind socket within timeout", self.id);
+                anyhow::bail!(
+                    "Daemon for {} failed to bind socket within timeout",
+                    self.id
+                );
             }
         } else {
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -117,7 +120,10 @@ impl Plugin {
             match child.try_wait()? {
                 Some(_) => return Ok(()),
                 None if start.elapsed() >= timeout => {
-                    log::warn!("Daemon for {} didn't exit gracefully, forcing kill", self.id);
+                    log::warn!(
+                        "Daemon for {} didn't exit gracefully, forcing kill",
+                        self.id
+                    );
                     child.kill()?;
                     child.wait()?;
                     return Ok(());
@@ -182,6 +188,24 @@ pub(crate) fn resolve_plugin_command_path(plugin_dir: &Path, command: &str) -> O
         return Some(primary);
     }
 
+    #[cfg(feature = "dev")]
+    {
+        let debug_target = plugin_dir
+            .join("target")
+            .join("debug")
+            .join(command_path.as_os_str());
+        if is_allowed_candidate(&debug_target) {
+            return Some(debug_target);
+        }
+        let release_target = plugin_dir
+            .join("target")
+            .join("release")
+            .join(command_path.as_os_str());
+        if is_allowed_candidate(&release_target) {
+            return Some(release_target);
+        }
+    }
+
     #[cfg(windows)]
     if primary.extension().is_none() {
         let exe_candidate = primary.with_extension("exe");
@@ -222,7 +246,10 @@ pub(crate) fn validate_execution_contract(
         plugin_id,
         plugin_path,
         "runtime.command",
-        manifest.runtime.as_ref().map(|runtime| runtime.command.as_str()),
+        manifest
+            .runtime
+            .as_ref()
+            .map(|runtime| runtime.command.as_str()),
     )?;
     ensure_command_binary_exists(
         plugin_id,
