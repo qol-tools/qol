@@ -237,18 +237,18 @@ function updateView() {
 
         return `
             <div class="plugin-row status-${p.status} ${isSelected ? 'selected' : ''}" data-index="${i}">
-                <div class="plugin-info">
-                    <div class="plugin-header">
+                <div class="plugin-main">
+                    <div class="plugin-info">
                         <span class="plugin-name">${p.name}</span>
-                        <div class="plugin-status-badges">
-                            ${statusBadge}
-                            ${buildBadge}
-                            ${p.hasStoreInstall ? '<span class="badge badge-installed-dim">+Store</span>' : ''}
-                        </div>
+                        <span class="plugin-path">${p.path || ''}</span>
+                        ${renderPluginBuildMeta(p)}
+                        ${renderPluginBuildProgress(p)}
                     </div>
-                    <span class="plugin-path">${p.path || ''}</span>
-                    ${renderPluginBuildMeta(p)}
-                    ${renderPluginBuildProgress(p)}
+                    <div class="plugin-status-badges">
+                        ${statusBadge}
+                        ${buildBadge}
+                        ${p.hasStoreInstall ? '<span class="badge badge-installed-dim">+Store</span>' : ''}
+                    </div>
                 </div>
                 <div class="plugin-actions">
                     ${actionBtn}

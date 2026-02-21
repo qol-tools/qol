@@ -1078,7 +1078,7 @@ kbd {
 
 .plugin-row {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 1.5rem;
     padding: 0.875rem 1.25rem;
     min-height: 64px;
@@ -1096,8 +1096,18 @@ kbd {
 .plugin-row.status-local { border-left-color: #f59e0b; }
 .plugin-row.status-installed { border-left-color: var(--accent); }
 
+.plugin-row .plugin-main {
+    flex: 0 1 auto;
+    width: auto;
+    display: grid;
+    grid-template-columns: clamp(240px, 38vw, 460px) auto;
+    gap: 1rem;
+    align-items: start;
+    justify-content: start;
+}
+
 .plugin-row .plugin-info {
-    flex: 1;
+    width: 100%;
     min-width: 0;
     display: flex;
     flex-direction: column;
@@ -1105,18 +1115,13 @@ kbd {
     justify-content: center;
 }
 
-.plugin-row .plugin-header {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    flex-wrap: wrap;
-}
-
 .plugin-row .plugin-actions {
     flex-shrink: 0;
     min-width: 80px;
     display: flex;
     justify-content: flex-end;
+    align-self: center;
+    margin-left: auto;
 }
 
 .plugin-row .plugin-actions .btn {
@@ -1235,8 +1240,16 @@ kbd {
 
 .plugin-row .plugin-status-badges {
     display: flex;
-    align-items: center;
-    gap: 0.5rem;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.35rem;
+    min-width: 120px;
+    padding-top: 0.08rem;
+}
+
+.plugin-row .plugin-status-badges .badge {
+    justify-content: flex-start;
+    white-space: nowrap;
 }
 
 /* Badges */
