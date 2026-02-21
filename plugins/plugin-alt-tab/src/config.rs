@@ -2,9 +2,17 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct DisplayConfig {}
+pub struct DisplayConfig {
+    pub max_columns: usize,
+}
+
+impl Default for DisplayConfig {
+    fn default() -> Self {
+        Self { max_columns: 6 }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]

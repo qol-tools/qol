@@ -12,18 +12,21 @@ pub const PREVIEW_MAX_HEIGHT: usize = GRID_PREVIEW_HEIGHT as usize;
 pub const GRID_RENDER_PADDING_X_TOTAL: f32 = 40.0;
 pub const GRID_RENDER_GAP_X: f32 = 12.0;
 
-pub fn preferred_column_count(window_count: usize) -> usize {
+pub fn preferred_column_count(window_count: usize, max_columns: usize) -> usize {
     let count = window_count.max(1);
     if count == 1 {
         return 1;
     }
-    let base = (count as f32).sqrt().ceil() as usize;
-    base.clamp(2, 6).min(count)
+    // Respect the user's max_columns preference.
+    // If they want a thin rectangle, this bounds the width.
+    let max_cols = max_columns.max(2);
+    let cols = count.min(max_cols);
+    cols
 }
 
-pub fn picker_dimensions(window_count: usize) -> (f32, f32) {
+pub fn picker_dimensions(window_count: usize, max_columns: usize) -> (f32, f32) {
     let count = window_count.max(1);
-    let cols = preferred_column_count(count);
+    let cols = preferred_column_count(count, max_columns);
     let width = GRID_PADDING * 2.0
         + cols as f32 * GRID_CARD_WIDTH
         + cols.saturating_sub(1) as f32 * GRID_GAP

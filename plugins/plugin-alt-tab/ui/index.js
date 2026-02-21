@@ -3,7 +3,8 @@ const CONFIG_URL = `/api/plugins/${PLUGIN_ID}/config`;
 
 const DEFAULT_CONFIG = {
     display: {
-        preview_mode: 'below_list'
+        preview_mode: 'below_list',
+        max_columns: 6
     },
     action_mode: 'sticky'
 };
@@ -27,10 +28,12 @@ function selectedActionModeInput() {
 
 function normalizeConfig(raw) {
     const previewMode = raw?.display?.preview_mode;
+    const maxColumns = parseInt(raw?.display?.max_columns, 10) || DEFAULT_CONFIG.display.max_columns;
     const actionMode = raw?.action_mode;
     return {
         display: {
-            preview_mode: PREVIEW_MODES.has(previewMode) ? previewMode : DEFAULT_CONFIG.display.preview_mode
+            preview_mode: PREVIEW_MODES.has(previewMode) ? previewMode : DEFAULT_CONFIG.display.preview_mode,
+            max_columns: Math.max(2, Math.min(12, maxColumns))
         },
         action_mode: ACTION_MODES.has(actionMode) ? actionMode : DEFAULT_CONFIG.action_mode
     };
@@ -44,6 +47,13 @@ function applyConfigToUI(config) {
     }
     elements.layoutMock.dataset.mode = previewMode;
 
+    const maxColumns = config.display.max_columns;
+    const maxColumnsInput = document.getElementById('max-columns');
+    if (maxColumnsInput) {
+        maxColumnsInput.value = maxColumns;
+    }
+    updateGridVisualizer();
+
     const actionMode = config.action_mode;
     const actionInput = document.querySelector(`input[name="action-mode"][value="${actionMode}"]`);
     if (actionInput) {
@@ -53,10 +63,12 @@ function applyConfigToUI(config) {
 
 function collectConfigFromUI() {
     const previewSelected = selectedModeInput()?.value;
+    const maxColumnsSelected = parseInt(document.getElementById('max-columns')?.value, 10);
     const actionSelected = selectedActionModeInput()?.value;
     return normalizeConfig({
         display: {
-            preview_mode: previewSelected
+            preview_mode: previewSelected,
+            max_columns: maxColumnsSelected || 6
         },
         action_mode: actionSelected
     });
@@ -115,6 +127,40 @@ document.querySelectorAll('input[name="preview-mode"]').forEach((input) => {
         elements.layoutMock.dataset.mode = input.value;
     });
 });
+
+function updateGridVisualizer() {
+    const maxColsInput = document.getElementById('max-columns');
+    const simWinsInput = document.getElementById('sim-windows');
+    
+    if (!maxColsInput || !simWinsInput) return;
+
+    const maxCols = parseInt(maxColsInput.value, 10);
+    const simWins = parseInt(simWinsInput.value, 10);
+    
+    // Update labels
+    document.getElementById('max-columns-value').textContent = maxCols;
+    document.getElementById('sim-windows-value').textContent = simWins;
+    
+    // Logic matching preferred_column_count
+    const count = Math.max(1, simWins);
+    let cols = 1;
+    if (count > 1) {
+        cols = Math.min(count, Math.max(2, maxCols));
+    }
+    
+    const visualizer = document.getElementById('grid-visualizer');
+    visualizer.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+    
+    visualizer.innerHTML = '';
+    for (let i = 0; i < count; i++) {
+        const item = document.createElement('div');
+        item.className = 'grid-vis-item';
+        visualizer.appendChild(item);
+    }
+}
+
+document.getElementById('max-columns')?.addEventListener('input', updateGridVisualizer);
+document.getElementById('sim-windows')?.addEventListener('input', updateGridVisualizer);
 
 elements.saveBtn.addEventListener('click', saveConfig);
 

@@ -750,7 +750,7 @@ fn open_picker(
     let existing_handle = current.borrow().clone();
     if let Some(handle) = existing_handle {
         let target_count = display_windows.len().max(1);
-        let (target_w, target_h) = picker_dimensions(target_count);
+        let (target_w, target_h) = picker_dimensions(target_count, config.display.max_columns);
         let target_size = size(px(target_w), px(target_h));
         let target_bounds = if let Some(active) = tracker.snapshot() {
             active.centered_bounds(target_size)
@@ -828,7 +828,7 @@ fn open_picker(
     let estimated_count = target_count
         .max(last_window_count.load(Ordering::Relaxed))
         .max(1);
-    let (win_w, win_h) = picker_dimensions(estimated_count);
+    let (win_w, win_h) = picker_dimensions(estimated_count, config.display.max_columns);
     let win_size = size(px(win_w), px(win_h));
 
     let bounds = if let Some(active) = tracker.snapshot() {

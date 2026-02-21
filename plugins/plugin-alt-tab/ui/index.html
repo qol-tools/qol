@@ -1,11 +1,19 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
     <title>Alt Tab Settings</title>
-    <link rel="stylesheet" href="style.css">
+    <link
+        rel="stylesheet"
+        href="style.css"
+    >
 </head>
+
 <body>
     <main class="panel">
         <header class="hero">
@@ -17,7 +25,11 @@
             <h2>Preview Layout</h2>
 
             <label class="mode-option">
-                <input type="radio" name="preview-mode" value="below_list">
+                <input
+                    type="radio"
+                    name="preview-mode"
+                    value="below_list"
+                >
                 <span class="mode-copy">
                     <strong>Previews Below List</strong>
                     <small>Keep the classic window list and show preview thumbnails beneath each row.</small>
@@ -25,14 +37,22 @@
             </label>
 
             <label class="mode-option">
-                <input type="radio" name="preview-mode" value="preview_only">
+                <input
+                    type="radio"
+                    name="preview-mode"
+                    value="preview_only"
+                >
                 <span class="mode-copy">
                     <strong>Preview-First Layout</strong>
                     <small>Use larger previews as the primary content and treat labels as secondary.</small>
                 </span>
             </label>
 
-            <div class="mock" id="layout-mock" data-mode="below_list">
+            <div
+                class="mock"
+                id="layout-mock"
+                data-mode="below_list"
+            >
                 <div class="mock-row mock-row--below">
                     <div class="mock-title">Firefox</div>
                     <div class="mock-preview"></div>
@@ -45,10 +65,63 @@
         </section>
 
         <section class="card">
+            <h2>Grid Structure (WYSIWYG)</h2>
+
+            <div class="slider-group">
+                <label
+                    for="max-columns"
+                    class="mode-copy"
+                >
+                    <strong>Max Columns</strong>
+                    <small>Configure how wide the grid can grow before wrapping to a new row.</small>
+                </label>
+                <div class="slider-control">
+                    <input
+                        type="range"
+                        id="max-columns"
+                        name="max-columns"
+                        min="2"
+                        max="12"
+                        value="6"
+                    >
+                    <span id="max-columns-value">6</span>
+                </div>
+            </div>
+
+            <div class="visualizer-container">
+                <div class="visualizer-controls">
+                    <label class="mode-copy">
+                        <small>Simulate active windows:</small>
+                    </label>
+                    <div class="slider-control slider-control--small">
+                        <input
+                            type="range"
+                            id="sim-windows"
+                            min="1"
+                            max="24"
+                            value="8"
+                        >
+                        <span id="sim-windows-value">8</span>
+                    </div>
+                </div>
+                <div
+                    class="mock"
+                    id="grid-visualizer"
+                >
+                    <!-- interactive visualizer will be drawn here -->
+                </div>
+            </div>
+        </section>
+
+        <section class="card">
             <h2>Action Mode</h2>
 
             <label class="mode-option">
-                <input type="radio" name="action-mode" value="sticky">
+                <input
+                    type="radio"
+                    name="action-mode"
+                    value="sticky"
+                >
                 <span class="mode-copy">
                     <strong>Sticky Mode</strong>
                     <small>The UI stays open until you press Enter or Escape.</small>
@@ -56,7 +129,11 @@
             </label>
 
             <label class="mode-option">
-                <input type="radio" name="action-mode" value="hold_to_switch">
+                <input
+                    type="radio"
+                    name="action-mode"
+                    value="hold_to_switch"
+                >
                 <span class="mode-copy">
                     <strong>Hold-to-Switch Mode</strong>
                     <small>Hold Alt to keep the UI open, release to activate the selected window.</small>
@@ -70,11 +147,18 @@
         </section>
 
         <footer class="actions">
-            <button id="save-btn" class="save">Save Settings</button>
+            <button
+                id="save-btn"
+                class="save"
+            >Save Settings</button>
             <span id="save-status"></span>
         </footer>
     </main>
 
-    <script type="module" src="index.js"></script>
+    <script
+        type="module"
+        src="index.js"
+    ></script>
 </body>
+
 </html>

@@ -10,7 +10,7 @@ body {
         radial-gradient(circle at 85% 90%, #1a2937 0%, transparent 30%),
         linear-gradient(150deg, #0b1018 0%, #121a27 45%, #0f141f 100%);
     color: #e8eef9;
-    font-family: 'Segoe UI', 'SF Pro Text', sans-serif;
+    font-family: "Segoe UI", "SF Pro Text", sans-serif;
 }
 
 .panel {
@@ -123,6 +123,67 @@ body {
 
 .mock-preview--large {
     height: 106px;
+}
+
+.slider-group {
+    margin: 1rem 0;
+    padding: 1rem;
+    border: 1px solid rgba(107, 129, 176, 0.3);
+    border-radius: 10px;
+    background: rgba(8, 14, 24, 0.6);
+}
+
+.slider-control {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 0.8rem;
+}
+
+.slider-control input[type="range"] {
+    flex-grow: 1;
+    accent-color: #7db3ff;
+}
+
+.slider-control span {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    color: #b8cff9;
+    min-width: 1.5rem;
+    text-align: right;
+}
+
+.visualizer-container {
+    margin-top: 1.2rem;
+    padding-top: 1rem;
+    border-top: 1px dashed rgba(123, 151, 199, 0.28);
+}
+
+.visualizer-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.slider-control--small {
+    margin-top: 0;
+    width: 160px;
+}
+
+#grid-visualizer {
+    display: grid;
+    gap: 8px;
+    justify-content: center;
+    background: rgba(4, 8, 14, 0.8);
+    transition: all 0.2s ease-out;
+}
+
+.grid-vis-item {
+    background: rgba(71, 98, 153, 0.6);
+    border: 1px solid rgba(149, 171, 212, 0.4);
+    border-radius: 4px;
+    height: 36px;
+    transition: all 0.2s;
 }
 
 .actions {
