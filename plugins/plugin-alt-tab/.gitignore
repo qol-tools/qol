@@ -1,7 +1,5 @@
 /target
 Cargo.lock
 alt-tab
-alt-tab.exe
-*.db
-/.idea
+alt-tab.new
 /.vscode

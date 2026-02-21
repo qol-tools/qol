@@ -11,6 +11,7 @@ actions = { open = ["--show"] }
 
 [daemon]
 enabled = false
+command = "alt-tab"
 
 [menu]
 label = "Alt Tab"
