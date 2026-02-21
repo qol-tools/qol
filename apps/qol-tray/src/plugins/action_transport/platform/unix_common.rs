@@ -1,4 +1,4 @@
-use super::DaemonActionDispatch;
+use super::super::DaemonActionDispatch;
 use std::path::Path;
 
 const SOCKET_IO_TIMEOUT_MS: u64 = 80;
@@ -46,13 +46,11 @@ fn send_payload(endpoint: &Path, payload: &str) -> DaemonActionDispatch {
     let read_result = stream.read(&mut buffer);
     match read_result {
         Ok(0) => DaemonActionDispatch::Unavailable,
-        Ok(n) => super::protocol::parse_response(&buffer[..n]),
+        Ok(n) => super::super::protocol::parse_response(&buffer[..n]),
         Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
             DaemonActionDispatch::Unavailable
         }
-        Err(err) if err.kind() == std::io::ErrorKind::TimedOut => {
-            DaemonActionDispatch::Unavailable
-        }
+        Err(err) if err.kind() == std::io::ErrorKind::TimedOut => DaemonActionDispatch::Unavailable,
         Err(_) => DaemonActionDispatch::Unavailable,
     }
 }

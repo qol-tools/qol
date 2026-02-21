@@ -3,19 +3,7 @@ use std::path::Path;
 #[cfg(any(unix, test))]
 mod protocol;
 
-#[cfg(unix)]
-mod unix;
-#[cfg(not(any(unix, windows)))]
-mod unsupported;
-#[cfg(windows)]
-mod windows;
-
-#[cfg(unix)]
-use unix as platform;
-#[cfg(not(any(unix, windows)))]
-use unsupported as platform;
-#[cfg(windows)]
-use windows as platform;
+mod platform;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DaemonActionDispatch {

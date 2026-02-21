@@ -10,11 +10,12 @@ const QUERY_AND_WAIT_ACCESS: u32 = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_S
 const TERMINATE_AND_WAIT_ACCESS: u32 =
     PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE;
 
-pub fn is_pid_alive(pid: i32) -> bool {
+pub(super) fn is_pid_alive(pid: i32) -> bool {
     if pid <= 0 {
         return false;
     }
 
+    // SAFETY: OpenProcess/WaitForSingleObject/CloseHandle are called with validated handles.
     unsafe {
         let handle = OpenProcess(QUERY_AND_WAIT_ACCESS, 0, pid as u32);
         if handle.is_null() {
@@ -26,11 +27,12 @@ pub fn is_pid_alive(pid: i32) -> bool {
     }
 }
 
-pub fn terminate_pid(pid: i32, grace: Duration) {
+pub(super) fn terminate_pid(pid: i32, grace: Duration) {
     if pid <= 0 {
         return;
     }
 
+    // SAFETY: Uses process handle APIs with null-handle checks and always closes handle.
     unsafe {
         let handle = OpenProcess(TERMINATE_AND_WAIT_ACCESS, 0, pid as u32);
         if handle.is_null() {
@@ -44,4 +46,4 @@ pub fn terminate_pid(pid: i32, grace: Duration) {
     }
 }
 
-pub fn reap_children_nonblocking() {}
+pub(super) fn reap_children_nonblocking() {}

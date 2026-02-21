@@ -1,5 +1,3 @@
-use tokio::process::Command;
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod unix_common;
 
@@ -21,6 +19,9 @@ use unsupported as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 
-pub fn shell_command(script: &str) -> Command {
-    imp::shell_command(script)
+use super::DaemonActionDispatch;
+use std::path::Path;
+
+pub(super) fn dispatch_action(endpoint: &Path, action_id: &str) -> DaemonActionDispatch {
+    imp::dispatch_action(endpoint, action_id)
 }
