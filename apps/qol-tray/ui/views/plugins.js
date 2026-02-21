@@ -1,6 +1,9 @@
 import { updateSelection as updateSel, navigateGrid } from '../utils.js';
 import { subscribe } from '../events.js';
 import * as installing from '../installing.js';
+import { apiJson } from '../api/client.js';
+import { renderFeedback as renderFeedbackComponent } from '../components/feedback.js';
+import { parseInstalledPayload } from '../utils/plugins.js';
 
 const PLACEHOLDER_SVG = 'data:image/svg+xml,' + encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">' +
@@ -54,27 +57,9 @@ export function render(containerEl) {
     unsubscribeInstalling = installing.subscribe(() => renderGrid());
 }
 
-function escapeHtml(value) {
-    return String(value).replace(/[&<>"']/g, (char) => (
-        {
-            '&': '&amp;',
-            '<': '&lt;',
-            '>': '&gt;',
-            '"': '&quot;',
-            "'": '&#39;'
-        }[char]
-    ));
-}
-
 function renderFeedback() {
     const el = document.getElementById('plugins-feedback');
-    if (!el) return;
-    if (!state.feedback) {
-        el.innerHTML = '';
-        return;
-    }
-    const message = escapeHtml(state.feedback.message);
-    el.innerHTML = `<div class="view-feedback ${state.feedback.type}">${message}</div>`;
+    renderFeedbackComponent(el, state.feedback);
 }
 
 function setFeedback(type, message) {
@@ -86,16 +71,6 @@ function clearFeedback() {
     if (!state.feedback) return;
     state.feedback = null;
     renderFeedback();
-}
-
-function parseInstalledResponse(payload) {
-    if (Array.isArray(payload)) {
-        return { revision: 0, plugins: payload };
-    }
-    return {
-        revision: Number.isInteger(payload?.revision) ? payload.revision : 0,
-        plugins: Array.isArray(payload?.plugins) ? payload.plugins : []
-    };
 }
 
 async function loadPlugins() {
@@ -318,9 +293,7 @@ async function confirmUninstall() {
     
     clearFeedback();
     try {
-        const response = await fetch(`/api/uninstall/${pluginId}`, { method: 'POST' });
-        const result = await response.json();
-        
+        const result = await apiJson(`/api/uninstall/${pluginId}`, { method: 'POST' });
         if (!result.success) throw new Error(result.message);
         setFeedback('success', `Uninstalled ${pluginId}`);
         await refreshPlugins();
@@ -338,9 +311,7 @@ async function updatePlugin(pluginId) {
     updateSelection();
     
     try {
-        const response = await fetch(`/api/update/${pluginId}`, { method: 'POST' });
-        const result = await response.json();
-        
+        const result = await apiJson(`/api/update/${pluginId}`, { method: 'POST' });
         if (!result.success) throw new Error(result.message);
         setFeedback('success', `Updated ${pluginId}`);
     } catch (error) {
@@ -359,10 +330,7 @@ async function refreshPlugins(options = {}) {
     const token = ++state.refreshToken;
 
     try {
-        const response = await fetch('/api/installed');
-        if (!response.ok) throw new Error('Failed to fetch plugins');
-
-        const payload = parseInstalledResponse(await response.json());
+        const payload = parseInstalledPayload(await apiJson('/api/installed'));
         if (token !== state.refreshToken) {
             return;
         }
