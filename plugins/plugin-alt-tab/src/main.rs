@@ -440,7 +440,7 @@ impl AltTabApp {
     fn start_alt_poll(&mut self, window_handle: gpui::AnyWindowHandle, cx: &mut gpui::Context<Self>) {
         let list = self.list_state.clone();
         self.alt_was_held = true;
-        self._alt_poll_task = Some(cx.spawn(move |_this, cx: &mut gpui::AsyncApp| {
+        self._alt_poll_task = Some(cx.spawn(move |this: gpui::WeakEntity<AltTabApp>, cx: &mut gpui::AsyncApp| {
             let mut cx = cx.clone();
             async move {
                 eprintln!("[alt-tab/hold] X11 modifier poll task started");
@@ -460,6 +460,16 @@ impl AltTabApp {
                         break;
                     }
                 }
+                
+                // Clear the task reference so subsequent Show requests know we're fully closed
+                let _ = cx.update(|cx| {
+                    if let Some(entity) = this.upgrade() {
+                        let _ = entity.update(cx, |app: &mut AltTabApp, _cx| {
+                            app._alt_poll_task = None;
+                        });
+                    }
+                });
+                
                 eprintln!("[alt-tab/hold] X11 modifier poll task ended");
             }
         }));
@@ -749,9 +759,18 @@ fn open_picker(
         };
         if handle
             .update(cx, |view, window: &mut Window, cx| {
-                // Because we are reusing the window, we also need to ensure the alt key is tracked
-                // if they are in hold to switch mode.
-                
+                // In HoldToSwitch mode, if the poll task is still running, the window
+                // is already visible. Treat subsequent Show commands as "select next".
+                if view.action_mode == ActionMode::HoldToSwitch && view._alt_poll_task.is_some() {
+                    #[cfg(debug_assertions)]
+                    eprintln!("[alt-tab/hold] window already visible — cycling to next");
+                    view.list_state.update(cx, |s, _cx| {
+                        s.delegate_mut().select_next();
+                    });
+                    cx.notify();
+                    return;
+                }
+
                 let current_bounds = window.window_bounds().get_bounds();
                 let dx = (current_bounds.origin.x.to_f64() - target_bounds.origin.x.to_f64()).abs();
                 let dy = (current_bounds.origin.y.to_f64() - target_bounds.origin.y.to_f64()).abs();
