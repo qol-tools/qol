@@ -21,6 +21,18 @@ pub fn activate_window(window_id: u32) {
         .ok();
 }
 
+pub fn move_app_window(title: &str, x: i32, y: i32) {
+    std::process::Command::new("xdotool")
+        .arg("search")
+        .arg("--name")
+        .arg(title)
+        .arg("windowmove")
+        .arg(x.to_string())
+        .arg(y.to_string())
+        .status()
+        .ok();
+}
+
 pub fn get_open_windows() -> Vec<WindowInfo> {
     let mut windows = Vec::new();
 

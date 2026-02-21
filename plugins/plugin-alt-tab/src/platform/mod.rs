@@ -44,6 +44,8 @@ mod unsupported {
     }
 
     pub fn activate_window(_window_id: u32) {}
+
+    pub fn move_app_window(_title: &str, _x: i32, _y: i32) {}
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -71,4 +73,8 @@ pub fn capture_previews_batch(
 
 pub fn activate_window(window_id: u32) {
     imp::activate_window(window_id)
+}
+
+pub fn move_app_window(title: &str, x: i32, y: i32) {
+    imp::move_app_window(title, x, y)
 }

@@ -6,10 +6,19 @@ use std::path::PathBuf;
 #[serde(default)]
 pub struct DisplayConfig {}
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionMode {
+    #[default]
+    Sticky,
+    HoldToSwitch,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct AltTabConfig {
     pub display: DisplayConfig,
+    pub action_mode: ActionMode,
 }
 
 pub fn load_alt_tab_config() -> AltTabConfig {

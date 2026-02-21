@@ -307,6 +307,22 @@ impl MonitorTracker {
         );
         Some(result)
     }
+
+    /// Immediately query the platform for the focused window and update our
+    /// internal state.  Call this right after `activate_window()` so the next
+    /// `snapshot()` reflects the newly-focused monitor without waiting for the
+    /// background poll.
+    pub fn force_focus_update(&self) {
+        let monitors = match self.monitors.lock() {
+            Ok(m) => m.clone(),
+            Err(_) => return,
+        };
+        let focus_bounds = self.platform.focused_window_bounds();
+        let focus_monitor = focus_bounds.and_then(|wb| monitor_for_bounds(&monitors, &wb));
+        if let Ok(mut guard) = self.state.lock() {
+            guard.update_focus(focus_monitor, Instant::now());
+        }
+    }
 }
 
 fn resolve_monitors(platform: &dyn PlatformQueries, cx: &App) -> Vec<Bounds<Pixels>> {
@@ -384,11 +400,9 @@ fn poll_tick(
         }
     }
 
-    if let Some(monitor) = focus_monitor {
-        let was = guard.focus.as_ref().map(|f| *f.monitor.bounds());
-        guard.update_focus(monitor, now);
-        signal_changed |= was != guard.focus.as_ref().map(|f| *f.monitor.bounds());
-    }
+    let was = guard.focus.as_ref().map(|f| *f.monitor.bounds());
+    guard.update_focus(focus_monitor, now);
+    signal_changed |= was != guard.focus.as_ref().map(|f| *f.monitor.bounds());
 
     TickResult {
         activity: cursor_moved || signal_changed,
@@ -599,7 +613,7 @@ mod tests {
             let t_old = Instant::now() - Duration::from_secs(2);
             state.update_cursor(m_b, t_old, true);
             let t_new = Instant::now() - Duration::from_secs(1);
-            state.update_focus(m_a, t_new);
+            state.update_focus(Some(m_a), t_new);
         }
 
         let result = tracker.snapshot().unwrap();
@@ -625,7 +639,7 @@ mod tests {
         {
             let mut state = tracker.state.lock().unwrap();
             let t_old = Instant::now() - Duration::from_secs(5);
-            state.update_focus(m_a, t_old);
+            state.update_focus(Some(m_a), t_old);
         }
 
         // snapshot freshens cursor to m_b — this is a new transition, gets
@@ -650,7 +664,7 @@ mod tests {
             let t_old = Instant::now() - Duration::from_secs(5);
             state.update_cursor(m_b, t_old, true);
             let t_new = Instant::now() - Duration::from_secs(1);
-            state.update_focus(m_a, t_new);
+            state.update_focus(Some(m_a), t_new);
         }
 
         let result = tracker.snapshot().unwrap();

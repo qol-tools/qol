@@ -5,7 +5,7 @@ mod monitor;
 mod platform;
 mod window_source;
 
-use crate::config::{load_alt_tab_config, AltTabConfig};
+use crate::config::{load_alt_tab_config, ActionMode, AltTabConfig};
 use crate::layout::*;
 use crate::platform::WindowInfo;
 use crate::window_source::{load_windows_with_previews, preview_tile};
@@ -24,6 +24,27 @@ const SETTINGS_URL: &str = "http://127.0.0.1:42700/plugins/plugin-alt-tab/";
 const DEFAULT_ESTIMATED_WINDOW_COUNT: usize = 8;
 const PREWARM_REFRESH_INTERVAL_MS: u64 = 1200;
 const REUSE_ORIGIN_TOLERANCE_PX: f64 = 6.0;
+
+/// Query X11 keyboard state to check if Alt is currently held.
+/// This bypasses GPUI's event system which doesn't receive modifier events
+/// when a global hotkey grab is active.
+fn is_alt_held_x11() -> bool {
+    use x11rb::protocol::xproto::ConnectionExt as _;
+    let Ok((conn, _)) = x11rb::connect(None) else {
+        return false;
+    };
+    let Ok(reply) = conn.query_keymap() else {
+        return false;
+    };
+    let Ok(keymap) = reply.reply() else {
+        return false;
+    };
+    // Alt_L is keycode 64, Alt_R is keycode 108 on standard X11 keymaps
+    // Keymap is a 32-byte bitmap, bit N = keycode N
+    let alt_l_held = keymap.keys[64 / 8] & (1 << (64 % 8)) != 0;
+    let alt_r_held = keymap.keys[108 / 8] & (1 << (108 % 8)) != 0;
+    alt_l_held || alt_r_held
+}
 
 // ─── List delegate ────────────────────────────────────────────────────────────
 
@@ -124,15 +145,20 @@ impl ListDelegate for WindowDelegate {
         window: &mut Window,
         _cx: &mut Context<ListState<Self>>,
     ) {
-        self.activate_selected(window);
+        self.activate_selected(window, None);
     }
 }
 
 impl WindowDelegate {
-    fn activate_selected(&self, window: &mut Window) {
+    fn activate_selected(&self, window: &mut Window, tracker: Option<&MonitorTracker>) {
         if let Some(ix) = self.selected_index {
             let win = &self.windows[ix.row];
             platform::activate_window(win.id);
+            // Immediately update the monitor focus so the next snapshot
+            // reflects the newly-focused monitor without waiting for poll.
+            if let Some(tracker) = tracker {
+                tracker.force_focus_update();
+            }
             window.minimize_window();
         }
     }
@@ -249,7 +275,9 @@ enum GridDirection {
 struct AltTabApp {
     list_state: Entity<ListState<WindowDelegate>>,
     focus_handle: FocusHandle,
-    _focus_out_subscription: Subscription,
+    action_mode: ActionMode,
+    alt_was_held: bool,
+    _alt_poll_task: Option<gpui::Task<()>>,
 }
 
 impl AltTabApp {
@@ -258,27 +286,29 @@ impl AltTabApp {
         cx: &mut Context<Self>,
         last_window_count: Arc<AtomicUsize>,
         window_cache: Arc<std::sync::Mutex<Vec<WindowInfo>>>,
+        action_mode: ActionMode,
+        initial_windows: Vec<WindowInfo>,
     ) -> Self {
-        let cached_windows = window_cache
-            .lock()
-            .map(|cache| cache.clone())
-            .unwrap_or_default();
-        if !cached_windows.is_empty() {
-            last_window_count.store(cached_windows.len().max(1), Ordering::Relaxed);
-        }
-        let has_cached_windows = !cached_windows.is_empty();
-        let delegate = WindowDelegate::new(cached_windows);
-
+        let has_cached_windows = !initial_windows.is_empty();
+        let delegate = WindowDelegate::new(initial_windows.clone());
         let list_state = cx.new(|cx| ListState::new(delegate, window, cx));
+
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle);
         let mut async_window = window.to_async(cx);
+        let gpui_window_handle = async_window.window_handle();
+
+        // Register the focus out subscription. We need this to exist for Sticky mode. 
+        // We evaluate action_mode dynamically inside the callback, so if the config
+        // changes to HoldToSwitch during reuse, it stops auto-minimizing.
         let focus_handle_for_sub = focus_handle.clone();
-        let focus_out_subscription = cx.on_focus_out(
+        let _focus_out_subscription = cx.on_focus_out(
             &focus_handle_for_sub,
             window,
-            |_this, _event, window, _cx| {
-                window.minimize_window();
+            |this, _event, window, _cx| {
+                if this.action_mode != ActionMode::HoldToSwitch {
+                    window.minimize_window();
+                }
             },
         );
 
@@ -379,11 +409,22 @@ impl AltTabApp {
         )
         .detach();
 
-        Self {
+        #[cfg(debug_assertions)]
+        eprintln!("[alt-tab/hold] AltTabApp::new: action_mode={:?}, alt_was_held=true (assumed)", action_mode);
+
+        let mut app = Self {
             list_state,
             focus_handle,
-            _focus_out_subscription: focus_out_subscription,
+            action_mode: action_mode.clone(),
+            alt_was_held: true,
+            _alt_poll_task: None,
+        };
+
+        if action_mode == ActionMode::HoldToSwitch {
+            app.start_alt_poll(gpui_window_handle, cx);
         }
+
+        app
     }
 
     fn apply_cached_windows(&mut self, windows: Vec<WindowInfo>, cx: &mut Context<Self>) {
@@ -392,6 +433,36 @@ impl AltTabApp {
             cx.notify();
         });
         cx.notify();
+    }
+
+    /// Start a new X11 Alt-key polling task for HoldToSwitch mode.
+    /// Drops any previous task (which auto-cancels it).
+    fn start_alt_poll(&mut self, window_handle: gpui::AnyWindowHandle, cx: &mut gpui::Context<Self>) {
+        let list = self.list_state.clone();
+        self.alt_was_held = true;
+        self._alt_poll_task = Some(cx.spawn(move |_this, cx: &mut gpui::AsyncApp| {
+            let mut cx = cx.clone();
+            async move {
+                eprintln!("[alt-tab/hold] X11 modifier poll task started");
+                cx.background_executor().timer(std::time::Duration::from_millis(50)).await;
+                loop {
+                    cx.background_executor().timer(std::time::Duration::from_millis(16)).await;
+                    let alt_held = is_alt_held_x11();
+
+                    if !alt_held {
+                        eprintln!("[alt-tab/hold] X11 poll: Alt released — activating selected");
+                        let list = list.clone();
+                        let _ = cx.update_window(window_handle, |_root, window, cx| {
+                            list.update(cx, |s, _cx| {
+                                s.delegate_mut().activate_selected(window, None);
+                            });
+                        });
+                        break;
+                    }
+                }
+                eprintln!("[alt-tab/hold] X11 modifier poll task ended");
+            }
+        }));
     }
 }
 
@@ -405,6 +476,8 @@ impl Render for AltTabApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let list_state = self.list_state.clone();
 
+        eprintln!("[alt-tab/render] action_mode={:?} alt_was_held={}", self.action_mode, self.alt_was_held);
+
         div()
             .track_focus(&self.focus_handle)
             .flex()
@@ -412,6 +485,8 @@ impl Render for AltTabApp {
             .bg(rgb(0x0f111a))
             .w_full()
             .h_full()
+            // HoldToSwitch modifier detection is handled by the X11 poll task,
+            // not by GPUI events (which don't fire due to global hotkey grab).
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
                     "escape" | "esc" => window.minimize_window(),
@@ -430,9 +505,10 @@ impl Render for AltTabApp {
                                         .get(ix.row)
                                         .map(|w| w.id)
                                 });
-                        if let Some(id) = win_id {
-                            platform::activate_window(id);
-                            window.minimize_window();
+                        if let Some(_id) = win_id {
+                            this.list_state.update(cx, |s, _cx| {
+                                s.delegate_mut().activate_selected(window, None);
+                            });
                         }
                     }
                     // Navigate — do NOT call s.focus() after, that would steal focus
@@ -481,6 +557,7 @@ impl Render for AltTabApp {
                     }
                     _ => {}
                 }
+
             }))
             .child(
                 // ── Header bar ────────────────────────────────────────────────
@@ -563,9 +640,14 @@ impl Render for AltTabApp {
                                         })
                                         .ok()
                                         .flatten();
-                                    if let Some(id) = window_id {
-                                        platform::activate_window(id);
-                                        window.minimize_window();
+                                    if let Some(_id) = window_id {
+                                        entity_for_click
+                                            .update(cx, |this, cx| {
+                                                this.list_state.update(cx, |s, _cx| {
+                                                    s.delegate_mut().activate_selected(window, None);
+                                                });
+                                            })
+                                            .ok();
                                     }
                                 })
                                 .when(is_selected, |s| {
@@ -629,7 +711,7 @@ impl Render for KeepAlive {
 }
 
 fn open_picker(
-    _config: &AltTabConfig,
+    config: &AltTabConfig,
     current: &std::rc::Rc<std::cell::RefCell<Option<WindowHandle<AltTabApp>>>>,
     tracker: &MonitorTracker,
     last_window_count: Arc<AtomicUsize>,
@@ -638,16 +720,26 @@ fn open_picker(
 ) {
     #[cfg(debug_assertions)]
     eprintln!("[alt-tab/open] show request");
-    let mut reopen_bounds: Option<Bounds<Pixels>> = None;
+
+    // Immediately map fresh window order to cached previews for instant display
+    let raw_windows = platform::get_open_windows();
+    let mut display_windows = raw_windows;
+    if let Ok(cache) = window_cache.lock() {
+        for win in &mut display_windows {
+            if let Some(cached) = cache.iter().find(|c| c.id == win.id) {
+                win.preview_path = cached.preview_path.clone();
+            }
+        }
+    }
+    // Update the cache centrally so background processes see the current layout
+    if let Ok(mut cache) = window_cache.lock() {
+        *cache = display_windows.clone();
+    }
 
     // Fast path: reuse existing picker window instead of recreating it.
     let existing_handle = current.borrow().clone();
     if let Some(handle) = existing_handle {
-        let cached_windows = window_cache
-            .lock()
-            .map(|cache| cache.clone())
-            .unwrap_or_default();
-        let target_count = cached_windows.len().max(1);
+        let target_count = display_windows.len().max(1);
         let (target_w, target_h) = picker_dimensions(target_count);
         let target_size = size(px(target_w), px(target_h));
         let target_bounds = if let Some(active) = tracker.snapshot() {
@@ -655,9 +747,11 @@ fn open_picker(
         } else {
             Bounds::centered(None, target_size, cx)
         };
-        let needs_reopen = std::cell::Cell::new(false);
         if handle
             .update(cx, |view, window: &mut Window, cx| {
+                // Because we are reusing the window, we also need to ensure the alt key is tracked
+                // if they are in hold to switch mode.
+                
                 let current_bounds = window.window_bounds().get_bounds();
                 let dx = (current_bounds.origin.x.to_f64() - target_bounds.origin.x.to_f64()).abs();
                 let dy = (current_bounds.origin.y.to_f64() - target_bounds.origin.y.to_f64()).abs();
@@ -665,14 +759,30 @@ fn open_picker(
                 {
                     #[cfg(debug_assertions)]
                     eprintln!(
-                        "[alt-tab/open] reopen required for monitor switch: current_origin={:?} target_origin={:?} dx={:.1} dy={:.1}",
+                        "[alt-tab/open] moving window natively via X11: current_origin={:?} target_origin={:?} dx={:.1} dy={:.1}",
                         current_bounds.origin, target_bounds.origin, dx, dy
                     );
-                    needs_reopen.set(true);
-                    return;
+                    let x = target_bounds.origin.x.to_f64() as i32;
+                    let y = target_bounds.origin.y.to_f64() as i32;
+                    platform::move_app_window("qol-alt-tab-picker", x, y);
                 }
 
-                view.apply_cached_windows(cached_windows.clone(), cx);
+                #[cfg(debug_assertions)]
+                eprintln!("[alt-tab/hold] open_picker reusing window: setting action_mode={:?}", config.action_mode);
+                
+                // Explicitly update the action_mode and assume alt is currently held
+                view.action_mode = config.action_mode.clone();
+                view.alt_was_held = true;
+
+                // Start a new X11 modifier polling task for HoldToSwitch
+                if config.action_mode == ActionMode::HoldToSwitch {
+                    let wh = window.window_handle();
+                    view.start_alt_poll(wh, cx);
+                } else {
+                    view._alt_poll_task = None; // Cancel any existing poll
+                }
+
+                view.apply_cached_windows(display_windows.clone(), cx);
 
                 let current_size = current_bounds.size;
                 let next_size = target_size;
@@ -685,7 +795,6 @@ fn open_picker(
                 window.activate_window();
             })
             .is_ok()
-            && !needs_reopen.get()
         {
             #[cfg(debug_assertions)]
             eprintln!("[alt-tab/open] reused existing picker window");
@@ -693,29 +802,21 @@ fn open_picker(
             return;
         }
 
-        if needs_reopen.get() {
-            reopen_bounds = Some(target_bounds);
-            let _ = handle.update(cx, |_view, window: &mut Window, _cx| {
-                window.remove_window();
-            });
-        }
         *current.borrow_mut() = None;
     }
 
-    let cached_count = window_cache.lock().map(|cache| cache.len()).unwrap_or(0);
-    let estimated_count = cached_count
+    let target_count = display_windows.len().max(1);
+    let estimated_count = target_count
         .max(last_window_count.load(Ordering::Relaxed))
         .max(1);
     let (win_w, win_h) = picker_dimensions(estimated_count);
     let win_size = size(px(win_w), px(win_h));
 
-    let bounds = reopen_bounds.unwrap_or_else(|| {
-        if let Some(active) = tracker.snapshot() {
-            active.centered_bounds(win_size)
-        } else {
-            Bounds::centered(None, win_size, cx)
-        }
-    });
+    let bounds = if let Some(active) = tracker.snapshot() {
+        active.centered_bounds(win_size)
+    } else {
+        Bounds::centered(None, win_size, cx)
+    };
 
     println!(
         "[alt-tab] opening at {:?} with size {:?}",
@@ -734,12 +835,15 @@ fn open_picker(
             ..Default::default()
         },
         move |window, cx| {
+            window.set_window_title("qol-alt-tab-picker");
             let view = cx.new(|cx| {
                 AltTabApp::new(
                     window,
                     cx,
                     last_window_count2.clone(),
                     window_cache2.clone(),
+                    config.action_mode.clone(),
+                    display_windows.clone(),
                 )
             });
             window.focus(&view.focus_handle(cx));
@@ -829,8 +933,9 @@ fn run_app(config: AltTabConfig, rx: mpsc::Receiver<daemon::Command>, show_on_st
                     let last_window_count2 = last_window_count.clone();
                     let window_cache2 = window_cache.clone();
                     let _ = cx.update(|app_cx| {
+                        let reloaded_config = crate::config::load_alt_tab_config();
                         open_picker(
-                            &config,
+                            &reloaded_config,
                             &current2,
                             &tracker2,
                             last_window_count2,

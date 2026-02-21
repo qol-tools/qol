@@ -4,10 +4,12 @@ const CONFIG_URL = `/api/plugins/${PLUGIN_ID}/config`;
 const DEFAULT_CONFIG = {
     display: {
         preview_mode: 'below_list'
-    }
+    },
+    action_mode: 'sticky'
 };
 
-const MODES = new Set(['below_list', 'preview_only']);
+const PREVIEW_MODES = new Set(['below_list', 'preview_only']);
+const ACTION_MODES = new Set(['sticky', 'hold_to_switch']);
 
 const elements = {
     saveBtn: document.getElementById('save-btn'),
@@ -19,30 +21,44 @@ function selectedModeInput() {
     return document.querySelector('input[name="preview-mode"]:checked');
 }
 
+function selectedActionModeInput() {
+    return document.querySelector('input[name="action-mode"]:checked');
+}
+
 function normalizeConfig(raw) {
-    const mode = raw?.display?.preview_mode;
+    const previewMode = raw?.display?.preview_mode;
+    const actionMode = raw?.action_mode;
     return {
         display: {
-            preview_mode: MODES.has(mode) ? mode : DEFAULT_CONFIG.display.preview_mode
-        }
+            preview_mode: PREVIEW_MODES.has(previewMode) ? previewMode : DEFAULT_CONFIG.display.preview_mode
+        },
+        action_mode: ACTION_MODES.has(actionMode) ? actionMode : DEFAULT_CONFIG.action_mode
     };
 }
 
 function applyConfigToUI(config) {
-    const mode = config.display.preview_mode;
-    const input = document.querySelector(`input[name="preview-mode"][value="${mode}"]`);
-    if (input) {
-        input.checked = true;
+    const previewMode = config.display.preview_mode;
+    const previewInput = document.querySelector(`input[name="preview-mode"][value="${previewMode}"]`);
+    if (previewInput) {
+        previewInput.checked = true;
     }
-    elements.layoutMock.dataset.mode = mode;
+    elements.layoutMock.dataset.mode = previewMode;
+
+    const actionMode = config.action_mode;
+    const actionInput = document.querySelector(`input[name="action-mode"][value="${actionMode}"]`);
+    if (actionInput) {
+        actionInput.checked = true;
+    }
 }
 
 function collectConfigFromUI() {
-    const selected = selectedModeInput()?.value;
+    const previewSelected = selectedModeInput()?.value;
+    const actionSelected = selectedActionModeInput()?.value;
     return normalizeConfig({
         display: {
-            preview_mode: selected
-        }
+            preview_mode: previewSelected
+        },
+        action_mode: actionSelected
     });
 }
 

@@ -99,6 +99,20 @@ impl PlatformQueries for LinuxQueries {
             }
         }
 
+        let name_prop = conn
+            .get_property(false, window_id, AtomEnum::WM_NAME, AtomEnum::ANY, 0, 1024)
+            .ok()
+            .and_then(|c| c.reply().ok());
+
+        let mut title = String::new();
+        if let Some(reply) = name_prop {
+            title = String::from_utf8_lossy(&reply.value).into_owned();
+        }
+
+        if title == "Desktop" || title == "qol-alt-tab-picker" {
+            return None;
+        }
+
         let geom = conn.get_geometry(window_id).ok()?.reply().ok()?;
         let coords = conn
             .translate_coordinates(window_id, self.root, 0, 0)
