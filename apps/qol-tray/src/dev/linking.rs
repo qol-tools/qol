@@ -7,6 +7,11 @@ pub struct LinkedPlugin {
     pub id: String,
     pub name: String,
     pub source: String,
+    pub has_cargo: bool,
+    pub needs_rebuild: bool,
+    pub rebuild_reason: String,
+    pub fingerprint: Option<String>,
+    pub last_built_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -35,15 +40,29 @@ fn save_dev_links(config_dir: &Path, links: &HashMap<String, PathBuf>) -> Result
 
 pub fn list_linked_plugins(config_dir: &Path) -> Result<Vec<LinkedPlugin>, String> {
     let links = load_dev_links(config_dir);
+    let known_fingerprints = super::build::load_build_fingerprints(config_dir);
+    let plans = super::build::plan_linked_plugin_builds(&links, &known_fingerprints);
+    let mut plans_by_id = HashMap::new();
+    for plan in plans {
+        plans_by_id.insert(plan.plugin_id.clone(), plan);
+    }
 
     let mut plugins: Vec<LinkedPlugin> = links
         .iter()
         .map(|(id, path)| {
             let name = read_plugin_name(&path.join("plugin.toml")).unwrap_or_else(|| id.clone());
+            let plan = plans_by_id.get(id);
             LinkedPlugin {
                 id: id.clone(),
                 name,
                 source: path.to_string_lossy().to_string(),
+                has_cargo: plan.map(|p| p.has_cargo).unwrap_or(false),
+                needs_rebuild: plan.map(|p| p.needs_rebuild).unwrap_or(false),
+                rebuild_reason: plan
+                    .map(|p| p.reason.clone())
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                fingerprint: plan.and_then(|p| p.current_fingerprint.clone()),
+                last_built_fingerprint: plan.and_then(|p| p.last_built_fingerprint.clone()),
             }
         })
         .collect();
@@ -199,5 +218,7 @@ mod tests {
         assert_eq!(listed[0].id, "foo");
         assert_eq!(listed[0].name, "Fancy Plugin");
         assert_eq!(listed[0].source, source.to_string_lossy());
+        assert!(!listed[0].has_cargo);
+        assert_eq!(listed[0].rebuild_reason, "Cargo.toml missing");
     }
 }
