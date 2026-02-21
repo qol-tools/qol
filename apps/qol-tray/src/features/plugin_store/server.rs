@@ -1,4 +1,5 @@
 use super::plugin_ui;
+mod assets;
 mod types;
 
 use crate::paths::is_safe_path_component;
@@ -11,7 +12,6 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use rust_embed::Embed;
 #[cfg(feature = "dev")]
 use std::collections::HashMap;
 #[cfg(feature = "dev")]
@@ -29,44 +29,6 @@ use crate::dev;
 use crate::hotkeys::trigger_reload;
 use crate::plugins::{PluginConfigManager, PluginLoader, PluginManager};
 use types::*;
-
-#[derive(Embed)]
-#[folder = "ui/"]
-struct UiAssets;
-
-async fn serve_embedded(Path(path): Path<String>) -> impl IntoResponse {
-    serve_embedded_file(&path)
-}
-
-async fn serve_embedded_index() -> impl IntoResponse {
-    serve_embedded_file("index.html")
-}
-
-fn serve_embedded_file(path: &str) -> impl IntoResponse {
-    let mime = if path.ends_with(".html") {
-        "text/html"
-    } else if path.ends_with(".css") {
-        "text/css"
-    } else if path.ends_with(".js") {
-        "application/javascript"
-    } else if path.ends_with(".png") {
-        "image/png"
-    } else if path.ends_with(".svg") {
-        "image/svg+xml"
-    } else {
-        "application/octet-stream"
-    };
-
-    match UiAssets::get(path) {
-        Some(content) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, mime)],
-            content.data.into_owned(),
-        )
-            .into_response(),
-        None => (StatusCode::NOT_FOUND, "Not found").into_response(),
-    }
-}
 
 pub async fn start_ui_server(
     plugin_manager: Arc<Mutex<PluginManager>>,
@@ -144,8 +106,8 @@ pub async fn start_ui_server(
         .nest("/api", api)
         .nest("/api/task-runner", task_runner)
         .nest("/plugins", plugin_ui::router(plugins_dir))
-        .route("/", get(serve_embedded_index))
-        .route("/{*path}", get(serve_embedded))
+        .route("/", get(assets::serve_embedded_index))
+        .route("/{*path}", get(assets::serve_embedded))
         .layer(no_cache);
 
     let (listener, port) = bind_listener().await?;
