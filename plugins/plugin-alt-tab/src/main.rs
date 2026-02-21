@@ -1,3 +1,5 @@
+mod daemon;
+mod monitor;
 #[cfg(target_os = "linux")]
 mod x11_utils;
 
@@ -13,42 +15,47 @@ mod x11_utils {
     pub fn get_open_windows() -> Vec<WindowInfo> {
         Vec::new()
     }
+
+    pub fn estimate_window_count() -> usize {
+        0
+    }
+
+    pub fn capture_preview(_window_id: u32, _max_w: usize, _max_h: usize) -> Option<String> {
+        None
+    }
 }
 
+use crate::x11_utils::WindowInfo;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::{
-    list::{List, ListDelegate, ListItem, ListState},
+    list::{ListDelegate, ListItem, ListState},
     IndexPath,
 };
+use monitor::MonitorTracker;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use x11_utils::WindowInfo;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc};
 
 const SETTINGS_URL: &str = "http://127.0.0.1:42700/plugins/plugin-alt-tab/";
+const DEFAULT_ESTIMATED_WINDOW_COUNT: usize = 8;
+const GRID_GAP: f32 = 14.0;
+const GRID_PADDING: f32 = 22.0;
+const GRID_CARD_WIDTH: f32 = 220.0;
+const GRID_CARD_HEIGHT: f32 = 156.0;
+const GRID_PREVIEW_WIDTH: f32 = 204.0;
+const GRID_PREVIEW_HEIGHT: f32 = 114.0;
+const HEADER_HEIGHT: f32 = 42.0;
+const PREVIEW_MAX_WIDTH: usize = GRID_PREVIEW_WIDTH as usize;
+const PREVIEW_MAX_HEIGHT: usize = GRID_PREVIEW_HEIGHT as usize;
+const GRID_RENDER_PADDING_X_TOTAL: f32 = 40.0;
+const GRID_RENDER_GAP_X: f32 = 12.0;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-enum PreviewMode {
-    #[default]
-    BelowList,
-    PreviewOnly,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
-struct DisplayConfig {
-    preview_mode: PreviewMode,
-}
-
-impl Default for DisplayConfig {
-    fn default() -> Self {
-        Self {
-            preview_mode: PreviewMode::BelowList,
-        }
-    }
-}
+struct DisplayConfig {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -61,7 +68,6 @@ fn load_alt_tab_config() -> AltTabConfig {
         let Ok(contents) = fs::read_to_string(&path) else {
             continue;
         };
-
         match serde_json::from_str::<AltTabConfig>(&contents) {
             Ok(config) => {
                 println!("Loaded config from {}: {:?}", path.display(), config);
@@ -72,7 +78,6 @@ fn load_alt_tab_config() -> AltTabConfig {
             }
         }
     }
-
     println!("Using default config");
     AltTabConfig::default()
 }
@@ -104,7 +109,6 @@ fn config_paths() -> Vec<PathBuf> {
             roots.push(PathBuf::from(xdg_config_home));
         }
     }
-
     if let Ok(home) = std::env::var("HOME") {
         if !home.trim().is_empty() {
             roots.push(PathBuf::from(home).join(".config"));
@@ -128,21 +132,18 @@ fn install_config_roots() -> Vec<PathBuf> {
     let Some(base_data_dir) = base_data_dir() else {
         return roots;
     };
-
     if let Some(install_id) = install_id_from_env() {
         let candidate = base_data_dir.join("installs").join(install_id);
         if !roots.contains(&candidate) {
             roots.push(candidate);
         }
     }
-
     if let Some(install_id) = install_id_from_active_file(&base_data_dir) {
         let candidate = base_data_dir.join("installs").join(install_id);
         if !roots.contains(&candidate) {
             roots.push(candidate);
         }
     }
-
     roots
 }
 
@@ -180,41 +181,105 @@ fn valid_install_id(value: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+fn preferred_column_count(window_count: usize) -> usize {
+    let count = window_count.max(1);
+    if count == 1 {
+        return 1;
+    }
+    let base = (count as f32).sqrt().ceil() as usize;
+    base.clamp(2, 6).min(count)
+}
+
+fn picker_dimensions(window_count: usize) -> (f32, f32) {
+    let count = window_count.max(1);
+    let cols = preferred_column_count(count);
+    let width = GRID_PADDING * 2.0
+        + cols as f32 * GRID_CARD_WIDTH
+        + cols.saturating_sub(1) as f32 * GRID_GAP
+        + 24.0;
+    let height = picker_height_for(count, cols);
+
+    (width.clamp(720.0, 1820.0), height.clamp(320.0, 980.0))
+}
+
+fn picker_height_for(window_count: usize, columns: usize) -> f32 {
+    let count = window_count.max(1);
+    let cols = columns.max(1);
+    let rows = (count + cols - 1) / cols;
+    HEADER_HEIGHT
+        + GRID_PADDING * 2.0
+        + rows as f32 * GRID_CARD_HEIGHT
+        + rows.saturating_sub(1) as f32 * GRID_GAP
+}
+
+fn rendered_column_count(window: &Window, total_items: usize) -> usize {
+    if total_items <= 1 {
+        return total_items.max(1);
+    }
+
+    let bounds = window.window_bounds().get_bounds();
+    let width = bounds.size.width.to_f64() as f32;
+    let usable = (width - GRID_RENDER_PADDING_X_TOTAL).max(GRID_CARD_WIDTH);
+    let cols = ((usable + GRID_RENDER_GAP_X) / (GRID_CARD_WIDTH + GRID_RENDER_GAP_X)).floor();
+    (cols as usize).max(1).min(total_items)
+}
+
+// ─── Preview tile ─────────────────────────────────────────────────────────────
+
 fn preview_tile(preview_path: &Option<String>, width: f32, height: f32) -> AnyElement {
     if let Some(path) = preview_path {
-        img(path.clone())
+        img(std::path::PathBuf::from(path))
             .w(px(width))
             .h(px(height))
+            .rounded_md()
             .into_any_element()
     } else {
         div()
             .w(px(width))
             .h(px(height))
-            .bg(rgb(0x22262f))
+            .bg(rgb(0x1e2130))
+            .rounded_md()
             .border_1()
             .border_color(rgb(0x3a4252))
+            .flex()
             .items_center()
             .justify_center()
             .text_xs()
-            .text_color(rgb(0x7b8495))
-            .child("No Preview")
+            .text_color(rgb(0x4a5268))
+            .child("…")
             .into_any_element()
     }
 }
 
+// ─── List delegate ────────────────────────────────────────────────────────────
+
 struct WindowDelegate {
     windows: Vec<WindowInfo>,
     selected_index: Option<IndexPath>,
-    preview_mode: PreviewMode,
 }
 
 impl WindowDelegate {
-    fn new(windows: Vec<WindowInfo>, preview_mode: PreviewMode) -> Self {
+    fn new(windows: Vec<WindowInfo>) -> Self {
+        let selected_index = if windows.is_empty() {
+            None
+        } else {
+            Some(IndexPath::new(0))
+        };
         Self {
             windows,
-            selected_index: Some(IndexPath::new(0)),
-            preview_mode,
+            selected_index,
         }
+    }
+
+    fn set_windows(&mut self, windows: Vec<WindowInfo>) {
+        self.windows = windows;
+        if self.windows.is_empty() {
+            self.selected_index = None;
+            return;
+        }
+
+        let selected_row = self.selected_index.map(|ix| ix.row).unwrap_or(0);
+        self.selected_index = Some(IndexPath::new(selected_row.min(self.windows.len() - 1)));
     }
 }
 
@@ -234,36 +299,40 @@ impl ListDelegate for WindowDelegate {
         let is_selected = self.selected_index == Some(ix);
         let win = &self.windows[ix.row];
 
-        let row = match self.preview_mode {
-            PreviewMode::BelowList => div()
+        let item = div().flex().px_1().py_2().child(
+            div()
                 .flex()
-                .w_full()
+                .flex_col()
                 .items_center()
-                .h(px(64.0))
-                .px_4()
-                .gap_3()
-                .when(is_selected, |style: Div| style.bg(rgb(0x2d3342)))
-                .child(preview_tile(&win.preview_path, 86.0, 48.0))
+                .w(px(GRID_CARD_WIDTH))
+                .p_2()
+                .rounded_xl()
+                .when(is_selected, |s| {
+                    s.bg(rgb(0x233050)).border_1().border_color(rgb(0x4a6fa5))
+                })
+                .when(!is_selected, |s| s.bg(rgb(0x161a25)))
+                .child(div().rounded_md().overflow_hidden().child(preview_tile(
+                    &win.preview_path,
+                    GRID_PREVIEW_WIDTH,
+                    GRID_PREVIEW_HEIGHT,
+                )))
                 .child(
                     div()
-                        .flex_1()
-                        .text_color(rgb(0xf2f5fb))
-                        .text_sm()
+                        .mt_2()
+                        .w_full()
+                        .text_color(if is_selected {
+                            rgb(0xffffff)
+                        } else {
+                            rgb(0x6b7890)
+                        })
+                        .text_xs()
+                        .text_center()
                         .text_ellipsis()
                         .child(win.title.clone()),
                 ),
-            PreviewMode::PreviewOnly => div()
-                .flex()
-                .justify_center()
-                .items_center()
-                .w_full()
-                .h(px(240.0))
-                .p_4()
-                .when(is_selected, |style: Div| style.bg(rgb(0x2d3342)))
-                .child(preview_tile(&win.preview_path, 384.0, 216.0)),
-        };
+        );
 
-        Some(ListItem::new(("window", ix.row)).child(row))
+        Some(ListItem::new(("window", ix.row)).child(item))
     }
 
     fn set_selected_index(
@@ -278,41 +347,234 @@ impl ListDelegate for WindowDelegate {
     fn confirm(
         &mut self,
         _secondary: bool,
-        _window: &mut Window,
+        window: &mut Window,
         _cx: &mut Context<ListState<Self>>,
     ) {
-        if let Some(ix) = self.selected_index {
-            println!("Selected window ID: {}", self.windows[ix.row].id);
-        }
+        self.activate_selected(window);
     }
 }
+
+impl WindowDelegate {
+    fn activate_selected(&self, window: &mut Window) {
+        if let Some(ix) = self.selected_index {
+            let win = &self.windows[ix.row];
+            std::process::Command::new("xdotool")
+                .arg("windowactivate")
+                .arg(win.id.to_string())
+                .status()
+                .ok();
+            window.remove_window();
+        }
+    }
+
+    fn select_next(&mut self) {
+        if self.windows.is_empty() {
+            return;
+        }
+        let current = self.selected_index.map(|ix| ix.row).unwrap_or(0);
+        let next = (current + 1) % self.windows.len();
+        self.selected_index = Some(IndexPath::new(next));
+    }
+
+    fn select_prev(&mut self) {
+        if self.windows.is_empty() {
+            return;
+        }
+        let current = self.selected_index.map(|ix| ix.row).unwrap_or(0);
+        let prev = if current == 0 {
+            self.windows.len() - 1
+        } else {
+            current - 1
+        };
+        self.selected_index = Some(IndexPath::new(prev));
+    }
+
+    fn select_left(&mut self, columns: usize) {
+        self.move_in_grid(GridDirection::Left, columns);
+    }
+
+    fn select_right(&mut self, columns: usize) {
+        self.move_in_grid(GridDirection::Right, columns);
+    }
+
+    fn select_up(&mut self, columns: usize) {
+        self.move_in_grid(GridDirection::Up, columns);
+    }
+
+    fn select_down(&mut self, columns: usize) {
+        self.move_in_grid(GridDirection::Down, columns);
+    }
+
+    fn move_in_grid(&mut self, direction: GridDirection, columns: usize) {
+        let total = self.windows.len();
+        if total == 0 {
+            return;
+        }
+
+        let cols = columns.max(1).min(total);
+        let rows = (total + cols - 1) / cols;
+        let current = self
+            .selected_index
+            .map(|ix| ix.row)
+            .unwrap_or(0)
+            .min(total.saturating_sub(1));
+
+        let row = current / cols;
+        let col = current % cols;
+
+        let row_bounds = |r: usize| {
+            let start = r * cols;
+            let end = ((r + 1) * cols).min(total);
+            (start, end)
+        };
+
+        let next = match direction {
+            GridDirection::Left => {
+                let (row_start, _) = row_bounds(row);
+                if current > row_start {
+                    current - 1
+                } else {
+                    current
+                }
+            }
+            GridDirection::Right => {
+                let (_, row_end) = row_bounds(row);
+                if current + 1 < row_end {
+                    current + 1
+                } else {
+                    current
+                }
+            }
+            GridDirection::Up => {
+                if row == 0 {
+                    current
+                } else {
+                    let (target_start, target_end) = row_bounds(row - 1);
+                    target_start + col.min(target_end - target_start - 1)
+                }
+            }
+            GridDirection::Down => {
+                if row + 1 >= rows {
+                    current
+                } else {
+                    let (target_start, target_end) = row_bounds(row + 1);
+                    target_start + col.min(target_end - target_start - 1)
+                }
+            }
+        };
+
+        self.selected_index = Some(IndexPath::new(next));
+    }
+}
+
+enum GridDirection {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+// ─── App view ─────────────────────────────────────────────────────────────────
 
 struct AltTabApp {
     list_state: Entity<ListState<WindowDelegate>>,
     focus_handle: FocusHandle,
-    preview_mode: PreviewMode,
 }
 
 impl AltTabApp {
-    fn new(window: &mut Window, cx: &mut Context<Self>, config: AltTabConfig) -> Self {
-        let preview_mode = config.display.preview_mode;
-        let windows = x11_utils::get_open_windows();
-        let delegate = WindowDelegate::new(windows, preview_mode.clone());
+    fn new(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        last_window_count: Arc<AtomicUsize>,
+    ) -> Self {
+        let delegate = WindowDelegate::new(Vec::new());
 
         let list_state = cx.new(|cx| ListState::new(delegate, window, cx));
         let focus_handle = cx.focus_handle();
+        window.focus(&focus_handle);
+        let mut async_window = window.to_async(cx);
+
+        let list_state_clone = list_state.clone();
+        cx.spawn(
+            move |this: gpui::WeakEntity<AltTabApp>, cx: &mut gpui::AsyncApp| {
+                let cx = cx.clone();
+                async move {
+                    let executor = cx.background_executor().clone();
+                    let windows = executor
+                        .spawn(async move { x11_utils::get_open_windows() })
+                        .await;
+                    let ids: Vec<u32> = windows.iter().map(|w| w.id).collect();
+                    last_window_count.store(ids.len().max(1), Ordering::Relaxed);
+
+                    let _ = cx.update(|app_cx| {
+                        let _ = list_state_clone.update(app_cx, |state, cx| {
+                            state.delegate_mut().set_windows(windows);
+                            cx.notify();
+                        });
+                        let _ = this.update(app_cx, |_, cx: &mut gpui::Context<AltTabApp>| {
+                            cx.notify();
+                        });
+                    });
+                    let total = ids.len().max(1);
+                    let _ = async_window.update(|window, _app_cx| {
+                        let cols = rendered_column_count(window, total);
+                        let next_height = picker_height_for(total, cols).clamp(320.0, 980.0);
+                        let current = window.window_bounds().get_bounds().size;
+                        if (current.height.to_f64() - next_height as f64).abs() >= 1.0 {
+                            window.resize(size(current.width, px(next_height)));
+                        }
+                    });
+
+                    let (tx, rx) = mpsc::channel::<(usize, Option<String>)>();
+                    for (i, id) in ids.into_iter().enumerate() {
+                        let tx = tx.clone();
+                        executor
+                            .spawn(async move {
+                                let path = x11_utils::capture_preview(
+                                    id,
+                                    PREVIEW_MAX_WIDTH,
+                                    PREVIEW_MAX_HEIGHT,
+                                );
+                                let _ = tx.send((i, path));
+                            })
+                            .detach();
+                    }
+                    drop(tx);
+
+                    let rx = Arc::new(std::sync::Mutex::new(rx));
+                    loop {
+                        let rx = rx.clone();
+                        let next = executor
+                            .spawn(async move { rx.lock().ok()?.recv().ok() })
+                            .await;
+
+                        let Some((i, path_opt)) = next else {
+                            break;
+                        };
+
+                        if let Some(path) = path_opt {
+                            let _ = cx.update(|app_cx| {
+                                let _ = list_state_clone.update(app_cx, |state, cx| {
+                                    if i < state.delegate().windows.len() {
+                                        state.delegate_mut().windows[i].preview_path = Some(path);
+                                        cx.notify();
+                                    }
+                                });
+                                let _ =
+                                    this.update(app_cx, |_, cx: &mut gpui::Context<AltTabApp>| {
+                                        cx.notify();
+                                    });
+                            });
+                        }
+                    }
+                }
+            },
+        )
+        .detach();
 
         Self {
             list_state,
             focus_handle,
-            preview_mode,
-        }
-    }
-
-    fn mode_label(&self) -> &'static str {
-        match self.preview_mode {
-            PreviewMode::BelowList => "Previews Below List",
-            PreviewMode::PreviewOnly => "Preview-First Layout",
         }
     }
 }
@@ -324,49 +586,342 @@ impl Focusable for AltTabApp {
 }
 
 impl Render for AltTabApp {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let list_state = self.list_state.clone();
+
         div()
+            .track_focus(&self.focus_handle)
             .flex()
             .flex_col()
-            .bg(rgb(0x131722))
+            .bg(rgb(0x0f111a))
             .w_full()
             .h_full()
-            .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                match event.keystroke.key.as_str() {
+                    "escape" => window.remove_window(),
+                    "enter" => {
+                        // Activate selected and close
+                        let win_id =
+                            this.list_state
+                                .read(cx)
+                                .delegate()
+                                .selected_index
+                                .and_then(|ix| {
+                                    this.list_state
+                                        .read(cx)
+                                        .delegate()
+                                        .windows
+                                        .get(ix.row)
+                                        .map(|w| w.id)
+                                });
+                        if let Some(id) = win_id {
+                            std::process::Command::new("xdotool")
+                                .arg("windowactivate")
+                                .arg(id.to_string())
+                                .status()
+                                .ok();
+                            window.remove_window();
+                        }
+                    }
+                    // Navigate — do NOT call s.focus() after, that would steal focus
+                    // from our root div and break further key events.
+                    "tab" => {
+                        this.list_state.update(cx, |s, _cx| {
+                            if event.keystroke.modifiers.shift {
+                                s.delegate_mut().select_prev();
+                            } else {
+                                s.delegate_mut().select_next();
+                            }
+                        });
+                        cx.notify();
+                    }
+                    "right" => {
+                        let total = this.list_state.read(cx).delegate().windows.len();
+                        let cols = rendered_column_count(window, total);
+                        this.list_state.update(cx, |s, _cx| {
+                            s.delegate_mut().select_right(cols);
+                        });
+                        cx.notify();
+                    }
+                    "left" => {
+                        let total = this.list_state.read(cx).delegate().windows.len();
+                        let cols = rendered_column_count(window, total);
+                        this.list_state.update(cx, |s, _cx| {
+                            s.delegate_mut().select_left(cols);
+                        });
+                        cx.notify();
+                    }
+                    "down" => {
+                        let total = this.list_state.read(cx).delegate().windows.len();
+                        let cols = rendered_column_count(window, total);
+                        this.list_state.update(cx, |s, _cx| {
+                            s.delegate_mut().select_down(cols);
+                        });
+                        cx.notify();
+                    }
+                    "up" => {
+                        let total = this.list_state.read(cx).delegate().windows.len();
+                        let cols = rendered_column_count(window, total);
+                        this.list_state.update(cx, |s, _cx| {
+                            s.delegate_mut().select_up(cols);
+                        });
+                        cx.notify();
+                    }
+                    _ => {}
+                }
+            }))
             .child(
+                // ── Header bar ────────────────────────────────────────────────
                 div()
-                    .p_2()
+                    .px_4()
+                    .py_2()
                     .border_b_1()
-                    .border_color(rgb(0x303748))
-                    .child(format!("Alt Tab • {}", self.mode_label())),
+                    .border_color(rgb(0x1e2333))
+                    .bg(rgb(0x13151f))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_color(rgb(0x5e6a84))
+                            .text_xs()
+                            .child("Alt Tab  ·  Live Window Grid"),
+                    )
+                    .child(
+                        div()
+                            .text_color(rgb(0x3a4252))
+                            .text_xs()
+                            .child("↑↓←→ navigate  ·  ⏎ switch  ·  esc close"),
+                    ),
             )
-            .child(List::new(&self.list_state).flex_1().w_full())
+            .child(
+                // ── Content ───────────────────────────────────────────────────
+                div().flex_1().w_full().min_h_0().child({
+                    let delegate = list_state.read(cx).delegate();
+                    let windows = delegate.windows.clone();
+                    let selected_index = delegate.selected_index;
+                    let _ = delegate;
+
+                    let entity = cx.weak_entity();
+                    div()
+                        .id("preview-grid")
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .content_start()
+                        .w_full()
+                        .h_full()
+                        .overflow_y_scroll()
+                        .px_5()
+                        .py_4()
+                        .gap_3()
+                        .when(windows.is_empty(), |s| {
+                            s.items_center().justify_center().child(
+                                div()
+                                    .text_sm()
+                                    .text_color(rgb(0x5e6a84))
+                                    .child("Scanning windows..."),
+                            )
+                        })
+                        .children(windows.into_iter().enumerate().map(|(i, win)| {
+                            let is_selected = selected_index == Some(IndexPath::new(i));
+                            let entity_for_click = entity.clone();
+                            div()
+                                .id(ElementId::Integer(i as u64))
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .w(px(GRID_CARD_WIDTH))
+                                .p_2()
+                                .rounded_xl()
+                                .cursor_pointer()
+                                .on_click(move |_ev: &gpui::ClickEvent, window, cx| {
+                                    let window_id = entity_for_click
+                                        .update(cx, |this, cx| {
+                                            this.list_state.update(cx, |s, _cx| {
+                                                s.delegate_mut().selected_index =
+                                                    Some(IndexPath::new(i));
+                                            });
+                                            this.list_state
+                                                .read(cx)
+                                                .delegate()
+                                                .windows
+                                                .get(i)
+                                                .map(|w| w.id)
+                                        })
+                                        .ok()
+                                        .flatten();
+                                    if let Some(id) = window_id {
+                                        std::process::Command::new("xdotool")
+                                            .arg("windowactivate")
+                                            .arg(id.to_string())
+                                            .status()
+                                            .ok();
+                                        window.remove_window();
+                                    }
+                                })
+                                .when(is_selected, |s| {
+                                    s.bg(rgb(0x233050)).border_1().border_color(rgb(0x4a6fa5))
+                                })
+                                .when(!is_selected, |s| {
+                                    s.bg(rgb(0x1a1e2a)).hover(|mut h| {
+                                        h.background = Some(rgb(0x1e2640).into());
+                                        h
+                                    })
+                                })
+                                .child(div().rounded_md().overflow_hidden().child(preview_tile(
+                                    &win.preview_path,
+                                    GRID_PREVIEW_WIDTH,
+                                    GRID_PREVIEW_HEIGHT,
+                                )))
+                                .child(
+                                    div()
+                                        .mt_2()
+                                        .w_full()
+                                        .text_color(if is_selected {
+                                            rgb(0xffffff)
+                                        } else {
+                                            rgb(0x7a849e)
+                                        })
+                                        .text_xs()
+                                        .text_center()
+                                        .text_ellipsis()
+                                        .overflow_hidden()
+                                        .child(win.title.clone()),
+                                )
+                        }))
+                }),
+            )
     }
 }
 
-fn run_app(config: AltTabConfig) {
+// ─── Run / daemon ─────────────────────────────────────────────────────────────
+
+fn open_keepalive(cx: &mut App) {
+    let bounds = Bounds::centered(None, size(px(1.0), px(1.0)), cx);
+    let _ = cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            titlebar: None,
+            window_decorations: Some(WindowDecorations::Client),
+            kind: WindowKind::PopUp,
+            focus: false,
+            show: false,
+            ..Default::default()
+        },
+        |_window, cx| cx.new(|_cx| KeepAlive),
+    );
+}
+
+struct KeepAlive;
+impl Render for KeepAlive {
+    fn render(&mut self, _w: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
+
+fn open_picker(
+    _config: &AltTabConfig,
+    current: &std::rc::Rc<std::cell::RefCell<Option<WindowHandle<AltTabApp>>>>,
+    tracker: &MonitorTracker,
+    last_window_count: Arc<AtomicUsize>,
+    cx: &mut App,
+) {
+    // Close any existing picker first
+    if let Some(handle) = current.borrow().as_ref() {
+        let _ = handle.update(cx, |_view, window: &mut Window, _cx| {
+            window.remove_window();
+        });
+    }
+    *current.borrow_mut() = None;
+
+    let estimated_count = x11_utils::estimate_window_count()
+        .max(last_window_count.load(Ordering::Relaxed))
+        .max(1);
+    let (win_w, win_h) = picker_dimensions(estimated_count);
+    let win_size = size(px(win_w), px(win_h));
+
+    let bounds = if let Some(active) = tracker.snapshot() {
+        active.centered_bounds(win_size)
+    } else {
+        Bounds::centered(None, win_size, cx)
+    };
+
+    println!(
+        "[alt-tab] opening at {:?} with size {:?}",
+        bounds.origin, bounds.size
+    );
+
+    let last_window_count2 = last_window_count.clone();
+    let handle = cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            titlebar: None,
+            window_decorations: Some(WindowDecorations::Client),
+            kind: WindowKind::PopUp,
+            focus: true,
+            ..Default::default()
+        },
+        move |window, cx| {
+            let view = cx.new(|cx| AltTabApp::new(window, cx, last_window_count2.clone()));
+            window.focus(&view.focus_handle(cx));
+            window.activate_window();
+            view
+        },
+    );
+    if let Ok(h) = handle {
+        *current.borrow_mut() = Some(h);
+    }
+    cx.activate(true);
+}
+
+fn run_app(config: AltTabConfig, rx: mpsc::Receiver<daemon::Command>) {
     let app = Application::new();
 
     app.run(move |cx: &mut App| {
         gpui_component::init(cx);
-        let config = config.clone();
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-                    None,
-                    size(px(600.0), px(440.0)),
-                    cx,
-                ))),
-                titlebar: None,
-                focus: true,
-                ..Default::default()
-            },
-            move |window, cx| {
-                let view = cx.new(|cx| AltTabApp::new(window, cx, config.clone()));
-                window.focus(&view.focus_handle(cx));
-                view
-            },
-        )
-        .unwrap();
+
+        let any_visible = Arc::new(AtomicBool::new(false));
+        let tracker = MonitorTracker::start(cx, any_visible);
+
+        // Keepalive: prevents GPUI from quitting when the picker window is removed
+        open_keepalive(cx);
+
+        // Track the single picker window; shared with the daemon poll loop
+        let current: std::rc::Rc<std::cell::RefCell<Option<WindowHandle<AltTabApp>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let last_window_count = Arc::new(AtomicUsize::new(DEFAULT_ESTIMATED_WINDOW_COUNT));
+
+        // Show the picker immediately on first launch
+        open_picker(&config, &current, &tracker, last_window_count.clone(), cx);
+
+        // Poll the daemon channel for Show/Kill commands
+        let rx = std::sync::Arc::new(std::sync::Mutex::new(rx));
+        let tracker_clone = tracker.clone();
+        cx.spawn(async move |cx: &mut AsyncApp| loop {
+            let rx2 = rx.clone();
+            let cmd = cx
+                .background_executor()
+                .spawn(async move { rx2.lock().ok()?.recv().ok() })
+                .await;
+
+            match cmd {
+                Some(daemon::Command::Show) => {
+                    let config2 = config.clone();
+                    let current2 = current.clone();
+                    let tracker2 = tracker_clone.clone();
+                    let last_window_count2 = last_window_count.clone();
+                    let _ = cx.update(|app_cx| {
+                        open_picker(&config2, &current2, &tracker2, last_window_count2, app_cx);
+                    });
+                }
+                Some(daemon::Command::Kill) | None => {
+                    cx.update(|cx| cx.quit()).ok();
+                    break;
+                }
+            }
+        })
+        .detach();
     });
 }
 
@@ -374,11 +929,9 @@ fn maybe_open_settings(args: &[String]) -> bool {
     if !args.iter().any(|arg| arg == "--settings") {
         return false;
     }
-
     if let Err(error) = open::that(SETTINGS_URL) {
         eprintln!("Failed to open settings page: {}", error);
     }
-
     true
 }
 
@@ -389,8 +942,33 @@ fn main() {
         return;
     }
 
+    let is_show = args.iter().any(|a| a == "--show");
+    let is_kill = args.iter().any(|a| a == "--kill");
+
+    if is_kill {
+        daemon::send_kill();
+        return;
+    }
+
+    // If --show and daemon is alive, forward show and exit
+    if is_show && daemon::send_show() {
+        return;
+    }
+
+    // Otherwise start as daemon
     let config = load_alt_tab_config();
-    run_app(config);
+    let (tx, rx) = mpsc::channel();
+
+    if !daemon::start_listener(tx) {
+        // Another instance is alive; just signal it if needed
+        if is_show {
+            daemon::send_show();
+        }
+        return;
+    }
+
+    run_app(config, rx);
+    daemon::cleanup();
 }
 
 #[cfg(test)]
