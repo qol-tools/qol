@@ -1,6 +1,8 @@
 import { subscribe } from '../events.js';
 import { jsonRequest, readResponseText } from '../api/client.js';
 import { clampPercent, formatBuildOverlayDetail, normalizePercent } from '../utils/progress.js';
+import { mergePlugins, renderBuildResults, renderPluginBuildMeta } from './dev/plugin-model.js';
+import { renderDevView } from './dev/template.js';
 
 export const id = 'dev';
 
@@ -143,47 +145,6 @@ async function loadPlugins(skipUpdate = false) {
 
 function totalItems() {
     return state.mergedCount || 0;
-}
-
-function renderBuildResults() {
-    if (!state.buildResults) return '';
-
-    const failed = state.buildResults.filter(r => !r.success);
-    const skipped = state.buildResults.filter(r => r.skipped);
-    if (state.buildResults.length === 0 || skipped.length === state.buildResults.length) {
-        return `<span class="build-success">All linked plugins are up to date</span>`;
-    }
-    const allSuccess = failed.length === 0;
-    if (allSuccess) {
-        const skippedText = skipped.length ? ` (${skipped.length} skipped)` : '';
-        return `<span class="build-success">Build succeeded${skippedText}</span>`;
-    }
-
-    return `<span class="build-error">Build failed: ${failed.map(r => r.plugin_id).join(', ')}</span>`;
-}
-
-function shortFingerprint(value) {
-    if (!value) return '';
-    return value.slice(0, 8);
-}
-
-function renderPluginBuildMeta(plugin) {
-    if (plugin.status !== 'linked') {
-        return '<span class="plugin-build-meta plugin-build-meta-placeholder" aria-hidden="true">_</span>';
-    }
-
-    if (!plugin.has_cargo) {
-        return `<span class="plugin-build-meta muted">Not buildable: Cargo.toml missing</span>`;
-    }
-
-    const current = shortFingerprint(plugin.fingerprint);
-    const last = shortFingerprint(plugin.last_built_fingerprint);
-    const reason = plugin.rebuild_reason || (plugin.needs_rebuild ? 'Source changed' : 'Up to date');
-    const parts = [];
-    if (plugin.needs_rebuild && reason) parts.push(reason);
-    if (current) parts.push(`fp ${current}`);
-    if (last) parts.push(`last ${last}`);
-    return `<span class="plugin-build-meta">${parts.join(' • ')}</span>`;
 }
 
 function getActivePluginBuildState(plugin) {
@@ -352,48 +313,7 @@ function syncPluginBuildRow(pluginId) {
 }
 
 function updateView() {
-    const unified = new Map();
-
-    for (const d of state.discovered) {
-        unified.set(d.id, {
-            id: d.id,
-            name: d.name,
-            path: d.path,
-            status: 'local',
-            has_cargo: false,
-            needs_rebuild: false,
-            rebuild_reason: '',
-            fingerprint: null,
-            last_built_fingerprint: null
-        });
-    }
-
-    for (const p of state.plugins) {
-        const existing = unified.get(p.id);
-        if (existing) {
-            existing.status = 'linked';
-            existing.path = p.source || existing.path;
-            existing.has_cargo = !!p.has_cargo;
-            existing.needs_rebuild = !!p.needs_rebuild;
-            existing.rebuild_reason = p.rebuild_reason || '';
-            existing.fingerprint = p.fingerprint || null;
-            existing.last_built_fingerprint = p.last_built_fingerprint || null;
-        } else {
-            unified.set(p.id, {
-                id: p.id,
-                name: p.name,
-                path: p.source,
-                status: 'linked',
-                has_cargo: !!p.has_cargo,
-                needs_rebuild: !!p.needs_rebuild,
-                rebuild_reason: p.rebuild_reason || '',
-                fingerprint: p.fingerprint || null,
-                last_built_fingerprint: p.last_built_fingerprint || null
-            });
-        }
-    }
-
-    const mergedList = Array.from(unified.values()).sort((a, b) => a.name.localeCompare(b.name));
+    const mergedList = mergePlugins(state.discovered, state.plugins);
     state.mergedCount = mergedList.length;
     state.mergedList = mergedList;
     state.selectedIndex = Math.max(0, Math.min(state.selectedIndex, mergedList.length - 1));
@@ -405,115 +325,13 @@ function updateView() {
         }
     }
 
-    const pluginRows = mergedList.map((p, i) => {
-        const isSelected = state.selectedIndex === i;
-        const statusBadge = {
-            linked: '<span class="badge badge-linked">Linked</span>',
-            installed: '<span class="badge badge-installed">Installed</span>',
-            local: '<span class="badge badge-local">Local Clone</span>'
-        }[p.status];
-        let buildBadge = '';
-        if (p.status === 'linked') {
-            if (!p.has_cargo) {
-                buildBadge = '<span class="badge badge-build-skip">No Cargo</span>';
-            } else if (p.needs_rebuild) {
-                buildBadge = '<span class="badge badge-build-pending">Will Rebuild</span>';
-            }
-        }
-        const buildState = getActivePluginBuildState(p);
-        const isRowBuilding = !!buildState;
-        const isLinking = state.linkingId === p.id;
-        const actionDisabled = isRowBuilding || !!state.linkingId;
-        const statusBadges = `
-            <div class="plugin-status-badges">
-                ${statusBadge}
-                ${buildBadge}
-                ${p.hasStoreInstall ? '<span class="badge badge-installed-dim">+Store</span>' : ''}
-            </div>
-        `;
-
-        return `
-            <div class="plugin-row status-${p.status} ${isSelected ? 'selected' : ''} ${isRowBuilding ? 'is-building' : ''} ${isLinking ? 'is-linking' : ''}" data-index="${i}" data-plugin-id="${p.id}">
-                <div class="plugin-main">
-                    <div class="plugin-info">
-                        <div class="plugin-copy">
-                            <div class="plugin-title-row">
-                                <span class="plugin-name">${p.name}</span>
-                            </div>
-                            <span class="plugin-path">${p.path || ''}</span>
-                            ${renderPluginBuildMeta(p)}
-                        </div>
-                        ${statusBadges}
-                    </div>
-                    <div class="plugin-action-zone ${actionDisabled ? 'is-disabled' : ''}" data-action="toggle-link" data-id="${p.id}" aria-label="${p.status === 'linked' ? 'Unlink' : 'Link'} ${p.name}">
-                    </div>
-                </div>
-                <div class="plugin-build-overlay-host"></div>
-            </div>
-        `;
-    }).join('');
-
-    container.innerHTML = `
-        <div class="view-container">
-            <header>
-                <h1>Developer</h1>
-                <p>Link local plugins for development</p>
-            </header>
-
-            <section class="dev-section">
-                <div class="section-header">
-                    <h2>Plugins</h2>
-                    <div class="section-actions">
-                        <button class="refresh-btn ${state.discovering ? 'spinning' : ''}" data-action="refresh-discovery" title="Rescan">↻</button>
-                        <button class="btn btn-sm btn-ghost" data-action="add-link">+ Link Path</button>
-                    </div>
-                </div>
-
-                <div class="plugin-list-container">
-                    ${mergedList.length ? `
-                        <div class="plugin-list">${pluginRows}</div>
-                    ` : '<p class="empty-state">No plugins found</p>'}
-                </div>
-
-                ${state.showLinkInput ? `
-                    <div class="link-input-row">
-                        <input type="text" id="link-path" placeholder="/path/to/plugin" value="${state.linkPath}" autofocus>
-                        <button class="btn btn-sm btn-primary" data-action="confirm-link">Link</button>
-                        <button class="btn btn-sm btn-ghost" data-action="cancel-link">Cancel</button>
-                    </div>
-                    ${state.linkError ? `<p class="error-msg">${state.linkError}</p>` : ''}
-                ` : ''}
-            </section>
-
-            <section class="dev-section">
-                <h2>Actions</h2>
-                <div class="dev-card" data-action="reload">
-                    <button class="refresh-btn ${state.building || state.reloading ? 'spinning' : ''}" tabindex="-1">↻</button>
-                    <div class="dev-card-content">
-                        <h3>${state.building ? 'Building...' : 'Reload All Plugins'}</h3>
-                        <p>${state.building ? 'Compiling linked plugins' : 'Build linked plugins and restart daemons.'}</p>
-                        ${renderBuildResults()}
-                        ${state.lastReload ? `<span class="last-action">Last: ${state.lastReload}</span>` : ''}
-                        ${state.error ? `<span class="error-msg">${state.error}</span>` : ''}
-                    </div>
-                    <div class="dev-card-hint"><kbd>Ctrl+r</kbd></div>
-                </div>
-                <div class="dev-card" data-action="mock-update">
-                    ${state.mockTesting ? '<button class="refresh-btn spinning" tabindex="-1">↻</button>' : ''}
-                    <div class="dev-card-content">
-                        <h3>${state.mockTesting ? 'Stop testing mock flows' : 'Test mock flows'}</h3>
-                        <p>${state.mockTesting
-                            ? 'Mock progress simulation is running. Click to stop.'
-                            : 'Runs all registered mock progress targets without real recompiles.'}</p>
-                    </div>
-                </div>
-            </section>
-
-            <footer class="help">
-                ↑/↓ navigate &nbsp; Enter/Space action &nbsp; r rescan &nbsp; Ctrl+r reload
-            </footer>
-        </div>
-    `;
+    container.innerHTML = renderDevView({
+        state,
+        mergedList,
+        getActivePluginBuildState,
+        renderPluginBuildMeta,
+        renderBuildResults
+    });
 
     const input = container.querySelector('#link-path');
     if (input) {
