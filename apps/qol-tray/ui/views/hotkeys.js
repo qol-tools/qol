@@ -1,4 +1,5 @@
 import { updateSelection as updateSel, navigate as nav } from '../utils.js';
+import { parseInstalledPlugins } from '../utils/plugins.js';
 
 export const id = 'hotkeys';
 
@@ -13,13 +14,6 @@ const state = {
 };
 
 let container = null;
-
-function parseInstalledPluginsResponse(payload) {
-    if (Array.isArray(payload)) {
-        return payload;
-    }
-    return Array.isArray(payload?.plugins) ? payload.plugins : [];
-}
 
 export function render(containerEl) {
     container = containerEl;
@@ -57,7 +51,7 @@ async function loadData() {
         }
         
         if (pluginsRes.ok) {
-            state.plugins = parseInstalledPluginsResponse(await pluginsRes.json());
+            state.plugins = parseInstalledPlugins(await pluginsRes.json());
         }
         
         renderList();

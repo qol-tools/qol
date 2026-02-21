@@ -1,6 +1,7 @@
 import { updateSelection as updateSel, navigateGrid } from '../utils.js';
 import { subscribe } from '../events.js';
 import * as installing from '../installing.js';
+import { renderFeedback as renderFeedbackComponent } from '../components/feedback.js';
 
 export const id = 'store';
 
@@ -87,27 +88,9 @@ async function initializeStoreState() {
     await loadPlugins();
 }
 
-function escapeHtml(value) {
-    return String(value).replace(/[&<>"']/g, (char) => (
-        {
-            '&': '&amp;',
-            '<': '&lt;',
-            '>': '&gt;',
-            '"': '&quot;',
-            "'": '&#39;'
-        }[char]
-    ));
-}
-
 function renderFeedback() {
     const el = document.getElementById('store-feedback');
-    if (!el) return;
-    if (!state.feedback) {
-        el.innerHTML = '';
-        return;
-    }
-    const message = escapeHtml(state.feedback.message);
-    el.innerHTML = `<div class="view-feedback ${state.feedback.type}">${message}</div>`;
+    renderFeedbackComponent(el, state.feedback);
 }
 
 function setFeedback(type, message) {

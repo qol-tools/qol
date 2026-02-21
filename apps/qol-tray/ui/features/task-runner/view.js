@@ -1,3 +1,5 @@
+import { escapeHtml } from '../../components/feedback.js';
+
 export const id = 'task-runner';
 
 const API_BASE = '/api/task-runner';
@@ -229,11 +231,6 @@ function handleListClick(e) {
 function extractParams(command) {
     const matches = command.match(/\{\{(\w+)\}\}/g) || [];
     return [...new Set(matches.map(m => m.slice(2, -2)))];
-}
-
-function escapeHtml(str) {
-    if (!str) return '';
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function openTestPanel(actionId) {
