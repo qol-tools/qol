@@ -1,4 +1,5 @@
 use super::plugin_ui;
+mod types;
 
 use crate::paths::is_safe_path_component;
 use anyhow::Result;
@@ -11,8 +12,10 @@ use axum::{
     Json, Router,
 };
 use rust_embed::Embed;
-use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+#[cfg(feature = "dev")]
+use std::collections::HashMap;
+#[cfg(feature = "dev")]
+use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
 use tower_http::set_header::SetResponseHeaderLayer;
 
@@ -25,91 +28,11 @@ use crate::daemon::{BuildResultInfo, DiscoveryStatus};
 use crate::dev;
 use crate::hotkeys::trigger_reload;
 use crate::plugins::{PluginConfigManager, PluginLoader, PluginManager};
-
-const DEFAULT_UI_SERVER_PORT: u16 = 42700;
-
-#[derive(Clone)]
-struct AppState {
-    plugins_dir: PathBuf,
-    plugin_manager: Arc<Mutex<PluginManager>>,
-    daemon: Daemon,
-}
+use types::*;
 
 #[derive(Embed)]
 #[folder = "ui/"]
 struct UiAssets;
-
-#[derive(Serialize)]
-struct PluginInfo {
-    id: String,
-    name: String,
-    description: String,
-    version: String,
-    installed: bool,
-    installed_version: Option<String>,
-}
-
-#[derive(Serialize)]
-struct PluginsResponse {
-    plugins: Vec<PluginInfo>,
-    cache_age_secs: Option<u64>,
-}
-
-#[derive(Deserialize, Default)]
-struct PluginsQuery {
-    #[serde(default)]
-    refresh: bool,
-}
-
-#[derive(Serialize)]
-struct UninstallResult {
-    success: bool,
-    message: String,
-}
-
-#[derive(Serialize)]
-struct ExecuteActionResult {
-    success: bool,
-    message: String,
-}
-
-#[derive(Serialize)]
-struct PluginAction {
-    id: String,
-    label: String,
-    kind: crate::plugins::ActionType,
-}
-
-#[derive(Serialize)]
-struct InstalledPlugin {
-    id: String,
-    name: String,
-    description: String,
-    version: String,
-    loaded: bool,
-    load_error: Option<String>,
-    has_cover: bool,
-    has_ui: bool,
-    available_version: Option<String>,
-    update_available: bool,
-    actions: Vec<PluginAction>,
-}
-
-#[derive(Serialize)]
-struct InstalledPluginsResponse {
-    revision: u64,
-    plugins: Vec<InstalledPlugin>,
-}
-
-#[derive(Deserialize)]
-struct TokenRequest {
-    token: String,
-}
-
-#[derive(Serialize)]
-struct TokenStatus {
-    has_token: bool,
-}
 
 async fn serve_embedded(Path(path): Path<String>) -> impl IntoResponse {
     serve_embedded_file(&path)
@@ -193,8 +116,20 @@ pub async fn start_ui_server(
         .route("/dev/links/{id}", axum::routing::delete(delete_link))
         .route("/dev/discover", post(trigger_discovery))
         .route("/dev/discovery-state", get(get_discovery_state))
+        .route("/dev/build-state", get(get_build_state))
         .route("/dev/mock-check-update", get(mock_check_update))
-        .route("/dev/mock-self-update", post(mock_self_update));
+        .route("/dev/mock-targets", get(list_mock_targets))
+        .route("/dev/mock-targets/start", post(start_mock_targets))
+        .route("/dev/mock-targets/stop", post(stop_mock_targets))
+        .route("/dev/mock-plugin-build", post(mock_plugin_build))
+        .route("/dev/mock-plugin-build/stop", post(stop_mock_plugin_build))
+        .route("/dev/mock-self-recompile", post(mock_self_recompile))
+        .route(
+            "/dev/mock-self-recompile/stop",
+            post(stop_mock_self_recompile),
+        )
+        .route("/dev/mock-self-update", post(mock_self_update))
+        .route("/dev/mock-self-update/stop", post(stop_mock_self_update));
 
     let api = api.with_state(app_state);
 
@@ -678,6 +613,115 @@ async fn self_update(State(state): State<AppState>) -> impl IntoResponse {
 
 #[cfg(feature = "dev")]
 static BUILD_IN_PROGRESS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "dev")]
+static MOCK_BUILD_IN_PROGRESS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "dev")]
+static MOCK_BUILD_CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "dev")]
+static MOCK_UPDATE_IN_PROGRESS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "dev")]
+static MOCK_UPDATE_CANCEL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "dev")]
+static MOCK_RECOMPILE_IN_PROGRESS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "dev")]
+static MOCK_RECOMPILE_CANCEL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(feature = "dev")]
+#[derive(Debug, Default)]
+struct BuildStateStore {
+    building: bool,
+    progress: HashMap<String, BuildProgressSnapshot>,
+}
+
+#[cfg(feature = "dev")]
+static BUILD_STATE_STORE: LazyLock<Mutex<BuildStateStore>> =
+    LazyLock::new(|| Mutex::new(BuildStateStore::default()));
+
+#[cfg(feature = "dev")]
+fn mark_build_state_started() {
+    let mut store = match BUILD_STATE_STORE.lock() {
+        Ok(guard) => guard,
+        Err(error) => {
+            log::error!("Build state lock poisoned while marking start: {}", error);
+            return;
+        }
+    };
+    store.building = true;
+    store.progress.clear();
+}
+
+#[cfg(feature = "dev")]
+fn mark_build_state_progress(plugin_id: &str, status: &str, percent: u8, phase: &str) {
+    let mut store = match BUILD_STATE_STORE.lock() {
+        Ok(guard) => guard,
+        Err(error) => {
+            log::error!(
+                "Build state lock poisoned while updating progress: {}",
+                error
+            );
+            return;
+        }
+    };
+
+    if !store.building {
+        store.building = true;
+    }
+    store.progress.insert(
+        plugin_id.to_string(),
+        BuildProgressSnapshot {
+            status: status.to_string(),
+            percent,
+            phase: phase.to_string(),
+        },
+    );
+}
+
+#[cfg(feature = "dev")]
+fn mark_build_state_finished() {
+    let mut store = match BUILD_STATE_STORE.lock() {
+        Ok(guard) => guard,
+        Err(error) => {
+            log::error!("Build state lock poisoned while marking finish: {}", error);
+            return;
+        }
+    };
+    store.building = false;
+    store.progress.clear();
+}
+
+#[cfg(feature = "dev")]
+fn read_build_state_snapshot() -> BuildStateResponse {
+    use std::sync::atomic::Ordering;
+
+    let atomic_building = BUILD_IN_PROGRESS.load(Ordering::SeqCst);
+
+    let store = match BUILD_STATE_STORE.lock() {
+        Ok(guard) => guard,
+        Err(error) => {
+            log::error!(
+                "Build state lock poisoned while reading snapshot: {}",
+                error
+            );
+            return BuildStateResponse {
+                building: atomic_building,
+                progress: HashMap::new(),
+            };
+        }
+    };
+
+    let building = atomic_building || store.building;
+    let progress = if building {
+        store.progress.clone()
+    } else {
+        HashMap::new()
+    };
+    BuildStateResponse { building, progress }
+}
 
 #[cfg(feature = "dev")]
 async fn reload_plugins(State(state): State<AppState>) -> impl IntoResponse {
@@ -690,6 +734,7 @@ async fn reload_plugins(State(state): State<AppState>) -> impl IntoResponse {
 
     log::info!("Developer reload requested");
 
+    mark_build_state_started();
     state.daemon.events.send(DaemonEvent::BuildStarted);
 
     let plugin_manager = state.plugin_manager.clone();
@@ -702,6 +747,7 @@ async fn reload_plugins(State(state): State<AppState>) -> impl IntoResponse {
         impl Drop for BuildGuard {
             fn drop(&mut self) {
                 BUILD_IN_PROGRESS.store(false, Ordering::SeqCst);
+                mark_build_state_finished();
             }
         }
         let _guard = BuildGuard;
@@ -717,6 +763,12 @@ async fn reload_plugins(State(state): State<AppState>) -> impl IntoResponse {
 
         let build_run =
             dev::build_linked_plugins_with_progress(&dev_links, &known_fingerprints, |progress| {
+                mark_build_state_progress(
+                    &progress.plugin_id,
+                    &progress.status,
+                    progress.percent,
+                    &progress.phase,
+                );
                 events.send(DaemonEvent::BuildPluginProgress {
                     plugin_id: progress.plugin_id,
                     status: progress.status,
@@ -743,6 +795,7 @@ async fn reload_plugins(State(state): State<AppState>) -> impl IntoResponse {
             .collect();
 
         let all_succeeded = results.is_empty() || results.iter().all(|r| r.success);
+        mark_build_state_finished();
         events.send(DaemonEvent::BuildComplete { results });
 
         if !all_succeeded {
@@ -862,8 +915,6 @@ fn infer_load_error(
         .map(|e| format!("{:#}", e))
 }
 
-const MAX_COVER_SIZE: usize = 5 * 1024 * 1024;
-
 async fn serve_cover(
     Path(plugin_id): Path<String>,
     State(state): State<AppState>,
@@ -927,8 +978,6 @@ async fn serve_cover(
 
     (StatusCode::OK, [(header::CONTENT_TYPE, "image/png")], data).into_response()
 }
-
-const MAX_CONFIG_SIZE: usize = 1024 * 1024;
 
 async fn get_plugin_config(Path(plugin_id): Path<String>) -> impl IntoResponse {
     if !is_safe_path_component(&plugin_id) {
@@ -1199,13 +1248,6 @@ async fn delete_link(Path(id): Path<String>, State(state): State<AppState>) -> i
 }
 
 #[cfg(feature = "dev")]
-#[derive(Serialize)]
-struct DiscoveryStateResponse {
-    status: String,
-    plugins: Vec<crate::daemon::DiscoveredPluginInfo>,
-}
-
-#[cfg(feature = "dev")]
 async fn get_discovery_state(State(state): State<AppState>) -> Json<DiscoveryStateResponse> {
     let guard = match state.daemon.state.discovery.read() {
         Ok(guard) => guard,
@@ -1229,6 +1271,11 @@ async fn get_discovery_state(State(state): State<AppState>) -> Json<DiscoverySta
 }
 
 #[cfg(feature = "dev")]
+async fn get_build_state() -> Json<BuildStateResponse> {
+    Json(read_build_state_snapshot())
+}
+
+#[cfg(feature = "dev")]
 async fn trigger_discovery(State(state): State<AppState>) -> impl IntoResponse {
     log::info!("Discovery refresh requested");
     state.daemon.start_discovery(state.plugins_dir.clone());
@@ -1241,14 +1288,372 @@ async fn mock_check_update() -> Json<serde_json::Value> {
 }
 
 #[cfg(feature = "dev")]
-async fn mock_self_update(State(state): State<AppState>) -> impl IntoResponse {
-    let events = state.daemon.events.clone();
+fn mock_target_infos() -> Vec<MockTargetInfo> {
+    use std::sync::atomic::Ordering;
+
+    vec![
+        MockTargetInfo {
+            id: MOCK_TARGET_SELF_UPDATE,
+            label: "Self Update",
+            running: MOCK_UPDATE_IN_PROGRESS.load(Ordering::SeqCst),
+            supports_stop: true,
+        },
+        MockTargetInfo {
+            id: MOCK_TARGET_SELF_RECOMPILE,
+            label: "Self Recompile",
+            running: MOCK_RECOMPILE_IN_PROGRESS.load(Ordering::SeqCst),
+            supports_stop: true,
+        },
+        MockTargetInfo {
+            id: MOCK_TARGET_PLUGIN_BUILD,
+            label: "Plugin Build",
+            running: MOCK_BUILD_IN_PROGRESS.load(Ordering::SeqCst),
+            supports_stop: true,
+        },
+    ]
+}
+
+#[cfg(feature = "dev")]
+fn any_mock_target_running() -> bool {
+    use std::sync::atomic::Ordering;
+
+    MOCK_UPDATE_IN_PROGRESS.load(Ordering::SeqCst)
+        || MOCK_RECOMPILE_IN_PROGRESS.load(Ordering::SeqCst)
+        || MOCK_BUILD_IN_PROGRESS.load(Ordering::SeqCst)
+}
+
+#[cfg(feature = "dev")]
+fn start_mock_self_update(events: Arc<crate::daemon::EventBus>) -> Result<(), &'static str> {
+    use std::sync::atomic::Ordering;
+
+    if MOCK_UPDATE_IN_PROGRESS.swap(true, Ordering::SeqCst) {
+        return Err("Mock self-update already in progress");
+    }
+    MOCK_UPDATE_CANCEL.store(false, Ordering::SeqCst);
+
     tokio::spawn(async move {
-        for i in 0..=100 {
-            events.send(DaemonEvent::UpdateProgress { percent: i });
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        struct MockUpdateGuard;
+        impl Drop for MockUpdateGuard {
+            fn drop(&mut self) {
+                MOCK_UPDATE_IN_PROGRESS.store(false, Ordering::SeqCst);
+                MOCK_UPDATE_CANCEL.store(false, Ordering::SeqCst);
+            }
         }
+        let _guard = MockUpdateGuard;
+
+        for i in 0..=100u8 {
+            if MOCK_UPDATE_CANCEL.load(Ordering::SeqCst) {
+                break;
+            }
+            events.send(DaemonEvent::UpdateProgress { percent: i });
+            tokio::time::sleep(tokio::time::Duration::from_millis(45)).await;
+        }
+
         events.send(DaemonEvent::UpdateComplete);
     });
-    StatusCode::ACCEPTED
+
+    Ok(())
+}
+
+#[cfg(feature = "dev")]
+fn stop_mock_self_update_internal() -> bool {
+    use std::sync::atomic::Ordering;
+
+    if !MOCK_UPDATE_IN_PROGRESS.load(Ordering::SeqCst) {
+        return false;
+    }
+    MOCK_UPDATE_CANCEL.store(true, Ordering::SeqCst);
+    true
+}
+
+#[cfg(feature = "dev")]
+fn mock_recompile_phase(percent: u8) -> &'static str {
+    match percent {
+        0..=10 => "Preparing build",
+        11..=35 => "Resolving dependencies",
+        36..=95 => "Compiling crates",
+        _ => "Finalizing build",
+    }
+}
+
+#[cfg(feature = "dev")]
+fn start_mock_self_recompile(events: Arc<crate::daemon::EventBus>) -> Result<(), &'static str> {
+    use std::sync::atomic::Ordering;
+
+    if MOCK_RECOMPILE_IN_PROGRESS.swap(true, Ordering::SeqCst) {
+        return Err("Mock self-recompile already in progress");
+    }
+    MOCK_RECOMPILE_CANCEL.store(false, Ordering::SeqCst);
+
+    tokio::spawn(async move {
+        struct MockRecompileGuard;
+        impl Drop for MockRecompileGuard {
+            fn drop(&mut self) {
+                MOCK_RECOMPILE_IN_PROGRESS.store(false, Ordering::SeqCst);
+                MOCK_RECOMPILE_CANCEL.store(false, Ordering::SeqCst);
+            }
+        }
+        let _guard = MockRecompileGuard;
+
+        for i in 0..=100u8 {
+            if MOCK_RECOMPILE_CANCEL.load(Ordering::SeqCst) {
+                break;
+            }
+            events.send(DaemonEvent::SelfRecompileProgress {
+                percent: i,
+                phase: mock_recompile_phase(i).to_string(),
+            });
+            tokio::time::sleep(tokio::time::Duration::from_millis(45)).await;
+        }
+
+        events.send(DaemonEvent::SelfRecompileComplete);
+    });
+
+    Ok(())
+}
+
+#[cfg(feature = "dev")]
+fn stop_mock_self_recompile_internal() -> bool {
+    use std::sync::atomic::Ordering;
+
+    if !MOCK_RECOMPILE_IN_PROGRESS.load(Ordering::SeqCst) {
+        return false;
+    }
+    MOCK_RECOMPILE_CANCEL.store(true, Ordering::SeqCst);
+    true
+}
+
+#[cfg(feature = "dev")]
+fn start_mock_plugin_build(
+    events: Arc<crate::daemon::EventBus>,
+    config_dir: Option<std::path::PathBuf>,
+) -> Result<(), &'static str> {
+    use std::sync::atomic::Ordering;
+
+    if MOCK_BUILD_IN_PROGRESS.swap(true, Ordering::SeqCst) {
+        return Err("Mock plugin build already in progress");
+    }
+    MOCK_BUILD_CANCEL.store(false, Ordering::SeqCst);
+
+    tokio::spawn(async move {
+        struct MockBuildGuard;
+        impl Drop for MockBuildGuard {
+            fn drop(&mut self) {
+                MOCK_BUILD_IN_PROGRESS.store(false, Ordering::SeqCst);
+                MOCK_BUILD_CANCEL.store(false, Ordering::SeqCst);
+                mark_build_state_finished();
+            }
+        }
+        let _guard = MockBuildGuard;
+
+        let mut plugin_ids: Vec<String> = config_dir
+            .as_deref()
+            .map(dev::load_dev_links)
+            .unwrap_or_default()
+            .into_keys()
+            .collect();
+        plugin_ids.sort();
+
+        if MOCK_BUILD_CANCEL.load(Ordering::SeqCst) {
+            mark_build_state_finished();
+            events.send(DaemonEvent::BuildComplete { results: vec![] });
+            return;
+        }
+
+        mark_build_state_started();
+        events.send(DaemonEvent::BuildStarted);
+        if plugin_ids.is_empty() {
+            mark_build_state_finished();
+            events.send(DaemonEvent::BuildComplete { results: vec![] });
+            return;
+        }
+
+        for plugin_id in &plugin_ids {
+            mark_build_state_progress(plugin_id, "queued", 0, "Queued");
+            events.send(DaemonEvent::BuildPluginProgress {
+                plugin_id: plugin_id.clone(),
+                status: "queued".to_string(),
+                percent: 0,
+                phase: "Queued".to_string(),
+            });
+        }
+
+        for plugin_id in &plugin_ids {
+            if MOCK_BUILD_CANCEL.load(Ordering::SeqCst) {
+                mark_build_state_finished();
+                events.send(DaemonEvent::BuildComplete { results: vec![] });
+                return;
+            }
+
+            mark_build_state_progress(plugin_id, "building", 0, "0/24 preparing");
+            events.send(DaemonEvent::BuildPluginProgress {
+                plugin_id: plugin_id.clone(),
+                status: "building".to_string(),
+                percent: 0,
+                phase: "0/24 preparing".to_string(),
+            });
+            tokio::time::sleep(tokio::time::Duration::from_millis(120)).await;
+
+            for done in 1..=24 {
+                if MOCK_BUILD_CANCEL.load(Ordering::SeqCst) {
+                    mark_build_state_finished();
+                    events.send(DaemonEvent::BuildComplete { results: vec![] });
+                    return;
+                }
+
+                let percent = ((done * 100) / 24) as u8;
+                let phase = format!("{}/24 compiling", done);
+                mark_build_state_progress(plugin_id, "building", percent, &phase);
+                events.send(DaemonEvent::BuildPluginProgress {
+                    plugin_id: plugin_id.clone(),
+                    status: "building".to_string(),
+                    percent,
+                    phase,
+                });
+                tokio::time::sleep(tokio::time::Duration::from_millis(55)).await;
+            }
+        }
+
+        let results = plugin_ids
+            .into_iter()
+            .map(|plugin_id| BuildResultInfo {
+                plugin_id,
+                success: true,
+                output: "Mock build completed".to_string(),
+                skipped: false,
+            })
+            .collect();
+        mark_build_state_finished();
+        events.send(DaemonEvent::BuildComplete { results });
+    });
+
+    Ok(())
+}
+
+#[cfg(feature = "dev")]
+fn stop_mock_plugin_build_internal() -> bool {
+    use std::sync::atomic::Ordering;
+
+    if !MOCK_BUILD_IN_PROGRESS.load(Ordering::SeqCst) {
+        return false;
+    }
+    MOCK_BUILD_CANCEL.store(true, Ordering::SeqCst);
+    true
+}
+
+#[cfg(feature = "dev")]
+async fn list_mock_targets() -> Json<Vec<MockTargetInfo>> {
+    Json(mock_target_infos())
+}
+
+#[cfg(feature = "dev")]
+async fn start_mock_targets(State(state): State<AppState>) -> impl IntoResponse {
+    if any_mock_target_running() {
+        return (StatusCode::CONFLICT, "Mock target already in progress").into_response();
+    }
+
+    let events = state.daemon.events.clone();
+    let config_dir = crate::paths::shared_config_dir().ok();
+    let mut started = Vec::new();
+
+    if start_mock_self_update(events.clone()).is_ok() {
+        started.push(MOCK_TARGET_SELF_UPDATE);
+    }
+    if start_mock_self_recompile(events.clone()).is_ok() {
+        started.push(MOCK_TARGET_SELF_RECOMPILE);
+    }
+    if start_mock_plugin_build(events, config_dir).is_ok() {
+        started.push(MOCK_TARGET_PLUGIN_BUILD);
+    }
+
+    if started.is_empty() {
+        return (StatusCode::CONFLICT, "No mock targets were started").into_response();
+    }
+
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({ "started": started, "targets": mock_target_infos() })),
+    )
+        .into_response()
+}
+
+#[cfg(feature = "dev")]
+async fn stop_mock_targets() -> impl IntoResponse {
+    let mut stopped = Vec::new();
+
+    if stop_mock_self_update_internal() {
+        stopped.push(MOCK_TARGET_SELF_UPDATE);
+    }
+    if stop_mock_self_recompile_internal() {
+        stopped.push(MOCK_TARGET_SELF_RECOMPILE);
+    }
+    if stop_mock_plugin_build_internal() {
+        stopped.push(MOCK_TARGET_PLUGIN_BUILD);
+    }
+
+    let status = if stopped.is_empty() {
+        StatusCode::OK
+    } else {
+        StatusCode::ACCEPTED
+    };
+
+    (
+        status,
+        Json(serde_json::json!({ "stopped": stopped, "targets": mock_target_infos() })),
+    )
+        .into_response()
+}
+
+#[cfg(feature = "dev")]
+async fn mock_self_update(State(state): State<AppState>) -> impl IntoResponse {
+    match start_mock_self_update(state.daemon.events.clone()) {
+        Ok(()) => (StatusCode::ACCEPTED, "Mock update queued").into_response(),
+        Err(msg) => (StatusCode::CONFLICT, msg).into_response(),
+    }
+}
+
+#[cfg(feature = "dev")]
+async fn stop_mock_self_update() -> impl IntoResponse {
+    if stop_mock_self_update_internal() {
+        (StatusCode::ACCEPTED, "Stopping mock update").into_response()
+    } else {
+        (StatusCode::OK, "No mock update in progress").into_response()
+    }
+}
+
+#[cfg(feature = "dev")]
+async fn mock_self_recompile(State(state): State<AppState>) -> impl IntoResponse {
+    match start_mock_self_recompile(state.daemon.events.clone()) {
+        Ok(()) => (StatusCode::ACCEPTED, "Mock recompile queued").into_response(),
+        Err(msg) => (StatusCode::CONFLICT, msg).into_response(),
+    }
+}
+
+#[cfg(feature = "dev")]
+async fn stop_mock_self_recompile() -> impl IntoResponse {
+    if stop_mock_self_recompile_internal() {
+        (StatusCode::ACCEPTED, "Stopping mock recompile").into_response()
+    } else {
+        (StatusCode::OK, "No mock recompile in progress").into_response()
+    }
+}
+
+#[cfg(feature = "dev")]
+async fn stop_mock_plugin_build() -> impl IntoResponse {
+    if stop_mock_plugin_build_internal() {
+        (StatusCode::ACCEPTED, "Stopping mock build").into_response()
+    } else {
+        (StatusCode::OK, "No mock build in progress").into_response()
+    }
+}
+
+#[cfg(feature = "dev")]
+async fn mock_plugin_build(State(state): State<AppState>) -> impl IntoResponse {
+    let events = state.daemon.events.clone();
+    let config_dir = crate::paths::shared_config_dir().ok();
+
+    match start_mock_plugin_build(events, config_dir) {
+        Ok(()) => (StatusCode::ACCEPTED, "Mock build queued").into_response(),
+        Err(msg) => (StatusCode::CONFLICT, msg).into_response(),
+    }
 }
