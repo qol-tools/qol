@@ -3,6 +3,7 @@ import { jsonRequest, readResponseText } from '../api/client.js';
 import { clampPercent, formatBuildOverlayDetail, normalizePercent } from '../utils/progress.js';
 import { mergePlugins, renderBuildResults, renderPluginBuildMeta } from './dev/plugin-model.js';
 import { renderDevView } from './dev/template.js';
+import { createPluginBuildOverlayController } from './dev/build-overlay.js';
 
 export const id = 'dev';
 
@@ -28,12 +29,16 @@ const state = {
 
 let container = null;
 let unsubscribe = null;
-let rowRefs = new Map();
-const pendingBuildRows = new Set();
-let buildSyncFrame = null;
 let activeMockRunId = 0;
 let mockBuildSource = null;
 const activeMockTargets = new Set();
+const buildOverlayController = createPluginBuildOverlayController({
+    getContainer: () => container,
+    getPluginById: getMergedPluginById,
+    getBuildState: getActivePluginBuildState,
+    formatDetail: formatBuildOverlayDetail,
+    normalizePercent
+});
 
 export function render(containerEl) {
     container = containerEl;
@@ -172,144 +177,11 @@ function getMergedPluginById(pluginId) {
 }
 
 function clearQueuedBuildRowSync() {
-    pendingBuildRows.clear();
-    if (buildSyncFrame !== null) {
-        cancelAnimationFrame(buildSyncFrame);
-        buildSyncFrame = null;
-    }
+    buildOverlayController.clearQueued();
 }
 
 function queueBuildRowSync(pluginId) {
-    if (!pluginId) return;
-    pendingBuildRows.add(pluginId);
-    if (buildSyncFrame !== null) return;
-
-    buildSyncFrame = requestAnimationFrame(() => {
-        buildSyncFrame = null;
-        let needsFullRender = false;
-        for (const queuedId of pendingBuildRows) {
-            if (!syncPluginBuildRow(queuedId)) {
-                needsFullRender = true;
-                break;
-            }
-        }
-        pendingBuildRows.clear();
-        if (needsFullRender) {
-            updateView();
-        }
-    });
-}
-
-function cachePluginRowRefs() {
-    rowRefs = new Map();
-    if (!container) return;
-
-    const rows = container.querySelectorAll('.plugin-row[data-plugin-id]');
-    for (const row of rows) {
-        const pluginId = row.dataset.pluginId;
-        if (!pluginId) continue;
-        rowRefs.set(pluginId, {
-            row,
-            overlayHost: row.querySelector('.plugin-build-overlay-host'),
-            overlay: null,
-            fill: null,
-            main: null,
-            sub: null,
-            lastScale: -1,
-            lastMain: '',
-            lastSub: ''
-        });
-    }
-}
-
-function ensureBuildOverlayNodes(rowRef) {
-    if (!rowRef.overlayHost) return false;
-    if (rowRef.overlay && rowRef.overlay.isConnected) return true;
-
-    const overlay = document.createElement('div');
-    overlay.className = 'plugin-build-overlay is-downloading compiling';
-    overlay.setAttribute('aria-hidden', 'true');
-
-    const fill = document.createElement('div');
-    fill.className = 'progress-fill';
-    overlay.appendChild(fill);
-
-    const copy = document.createElement('div');
-    copy.className = 'plugin-build-overlay-copy';
-
-    const main = document.createElement('span');
-    main.className = 'plugin-build-overlay-main';
-    copy.appendChild(main);
-
-    const sub = document.createElement('span');
-    sub.className = 'plugin-build-overlay-sub';
-    copy.appendChild(sub);
-
-    overlay.appendChild(copy);
-    rowRef.overlayHost.replaceChildren(overlay);
-
-    rowRef.overlay = overlay;
-    rowRef.fill = fill;
-    rowRef.main = main;
-    rowRef.sub = sub;
-    rowRef.lastScale = -1;
-    rowRef.lastMain = '';
-    rowRef.lastSub = '';
-    return true;
-}
-
-function clearBuildOverlayNodes(rowRef) {
-    if (rowRef.overlayHost && rowRef.overlayHost.childElementCount > 0) {
-        rowRef.overlayHost.replaceChildren();
-    }
-    rowRef.overlay = null;
-    rowRef.fill = null;
-    rowRef.main = null;
-    rowRef.sub = null;
-    rowRef.lastScale = -1;
-    rowRef.lastMain = '';
-    rowRef.lastSub = '';
-}
-
-function syncPluginBuildRow(pluginId) {
-    if (!container) return false;
-    const rowRef = rowRefs.get(pluginId);
-    if (!rowRef) return false;
-
-    const plugin = getMergedPluginById(pluginId);
-    if (!plugin) return false;
-
-    const buildState = getActivePluginBuildState(plugin);
-    const isBuilding = !!buildState;
-    rowRef.row.classList.toggle('is-building', isBuilding);
-
-    if (!isBuilding) {
-        clearBuildOverlayNodes(rowRef);
-        return true;
-    }
-
-    if (!ensureBuildOverlayNodes(rowRef)) {
-        return false;
-    }
-
-    const label = buildState.status === 'queued' ? 'Queued' : 'Compiling';
-    const detail = formatBuildOverlayDetail(buildState.phase, buildState.percent);
-    const scale = normalizePercent(buildState.percent) / 100;
-
-    if (rowRef.lastScale !== scale && rowRef.fill) {
-        rowRef.fill.style.transform = `scaleX(${scale})`;
-        rowRef.lastScale = scale;
-    }
-    if (rowRef.lastMain !== label && rowRef.main) {
-        rowRef.main.textContent = label;
-        rowRef.lastMain = label;
-    }
-    if (rowRef.lastSub !== detail && rowRef.sub) {
-        rowRef.sub.textContent = detail;
-        rowRef.lastSub = detail;
-    }
-
-    return true;
+    buildOverlayController.queue(pluginId, updateView);
 }
 
 function updateView() {
@@ -342,11 +214,9 @@ function updateView() {
         });
     }
 
-    cachePluginRowRefs();
+    buildOverlayController.cacheRows();
     if (state.building) {
-        for (const pluginId of Object.keys(state.buildProgress)) {
-            syncPluginBuildRow(pluginId);
-        }
+        buildOverlayController.syncAll(Object.keys(state.buildProgress), updateView);
     }
 }
 
