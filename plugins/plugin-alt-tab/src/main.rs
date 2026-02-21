@@ -16,10 +16,6 @@ mod x11_utils {
         Vec::new()
     }
 
-    pub fn estimate_window_count() -> usize {
-        0
-    }
-
     pub fn capture_preview(_window_id: u32, _max_w: usize, _max_h: usize) -> Option<String> {
         None
     }
@@ -486,8 +482,16 @@ impl AltTabApp {
         window: &mut Window,
         cx: &mut Context<Self>,
         last_window_count: Arc<AtomicUsize>,
+        window_cache: Arc<std::sync::Mutex<Vec<WindowInfo>>>,
     ) -> Self {
-        let delegate = WindowDelegate::new(Vec::new());
+        let cached_windows = window_cache
+            .lock()
+            .map(|cache| cache.clone())
+            .unwrap_or_default();
+        if !cached_windows.is_empty() {
+            last_window_count.store(cached_windows.len().max(1), Ordering::Relaxed);
+        }
+        let delegate = WindowDelegate::new(cached_windows);
 
         let list_state = cx.new(|cx| ListState::new(delegate, window, cx));
         let focus_handle = cx.focus_handle();
@@ -503,6 +507,9 @@ impl AltTabApp {
                     let windows = executor
                         .spawn(async move { x11_utils::get_open_windows() })
                         .await;
+                    if let Ok(mut cache) = window_cache.lock() {
+                        *cache = windows.clone();
+                    }
                     let ids: Vec<u32> = windows.iter().map(|w| w.id).collect();
                     last_window_count.store(ids.len().max(1), Ordering::Relaxed);
 
@@ -553,6 +560,11 @@ impl AltTabApp {
                         };
 
                         if let Some(path) = path_opt {
+                            if let Ok(mut cache) = window_cache.lock() {
+                                if i < cache.len() {
+                                    cache[i].preview_path = Some(path.clone());
+                                }
+                            }
                             let _ = cx.update(|app_cx| {
                                 let _ = list_state_clone.update(app_cx, |state, cx| {
                                     if i < state.delegate().windows.len() {
@@ -825,6 +837,7 @@ fn open_picker(
     current: &std::rc::Rc<std::cell::RefCell<Option<WindowHandle<AltTabApp>>>>,
     tracker: &MonitorTracker,
     last_window_count: Arc<AtomicUsize>,
+    window_cache: Arc<std::sync::Mutex<Vec<WindowInfo>>>,
     cx: &mut App,
 ) {
     // Close any existing picker first
@@ -835,7 +848,8 @@ fn open_picker(
     }
     *current.borrow_mut() = None;
 
-    let estimated_count = x11_utils::estimate_window_count()
+    let cached_count = window_cache.lock().map(|cache| cache.len()).unwrap_or(0);
+    let estimated_count = cached_count
         .max(last_window_count.load(Ordering::Relaxed))
         .max(1);
     let (win_w, win_h) = picker_dimensions(estimated_count);
@@ -853,6 +867,7 @@ fn open_picker(
     );
 
     let last_window_count2 = last_window_count.clone();
+    let window_cache2 = window_cache.clone();
     let handle = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -863,7 +878,14 @@ fn open_picker(
             ..Default::default()
         },
         move |window, cx| {
-            let view = cx.new(|cx| AltTabApp::new(window, cx, last_window_count2.clone()));
+            let view = cx.new(|cx| {
+                AltTabApp::new(
+                    window,
+                    cx,
+                    last_window_count2.clone(),
+                    window_cache2.clone(),
+                )
+            });
             window.focus(&view.focus_handle(cx));
             window.activate_window();
             view
@@ -891,9 +913,18 @@ fn run_app(config: AltTabConfig, rx: mpsc::Receiver<daemon::Command>) {
         let current: std::rc::Rc<std::cell::RefCell<Option<WindowHandle<AltTabApp>>>> =
             std::rc::Rc::new(std::cell::RefCell::new(None));
         let last_window_count = Arc::new(AtomicUsize::new(DEFAULT_ESTIMATED_WINDOW_COUNT));
+        let window_cache: Arc<std::sync::Mutex<Vec<WindowInfo>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
 
         // Show the picker immediately on first launch
-        open_picker(&config, &current, &tracker, last_window_count.clone(), cx);
+        open_picker(
+            &config,
+            &current,
+            &tracker,
+            last_window_count.clone(),
+            window_cache.clone(),
+            cx,
+        );
 
         // Poll the daemon channel for Show/Kill commands
         let rx = std::sync::Arc::new(std::sync::Mutex::new(rx));
@@ -911,8 +942,16 @@ fn run_app(config: AltTabConfig, rx: mpsc::Receiver<daemon::Command>) {
                     let current2 = current.clone();
                     let tracker2 = tracker_clone.clone();
                     let last_window_count2 = last_window_count.clone();
+                    let window_cache2 = window_cache.clone();
                     let _ = cx.update(|app_cx| {
-                        open_picker(&config2, &current2, &tracker2, last_window_count2, app_cx);
+                        open_picker(
+                            &config2,
+                            &current2,
+                            &tracker2,
+                            last_window_count2,
+                            window_cache2,
+                            app_cx,
+                        );
                     });
                 }
                 Some(daemon::Command::Kill) | None => {

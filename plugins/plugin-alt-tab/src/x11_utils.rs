@@ -8,40 +8,6 @@ pub struct WindowInfo {
     pub preview_path: Option<String>,
 }
 
-pub fn estimate_window_count() -> usize {
-    let Ok((conn, screen_num)) = x11rb::connect(None) else {
-        return 0;
-    };
-    let root = conn.setup().roots[screen_num].root;
-
-    let stacking_atom = conn
-        .intern_atom(false, b"_NET_CLIENT_LIST_STACKING")
-        .ok()
-        .and_then(|cookie| cookie.reply().ok())
-        .map(|reply| reply.atom)
-        .unwrap_or(0);
-    let fallback_atom = conn
-        .intern_atom(false, b"_NET_CLIENT_LIST")
-        .ok()
-        .and_then(|cookie| cookie.reply().ok())
-        .map(|reply| reply.atom)
-        .unwrap_or(0);
-    let list_atom = if stacking_atom != 0 {
-        stacking_atom
-    } else {
-        fallback_atom
-    };
-    if list_atom == 0 {
-        return 0;
-    }
-
-    conn.get_property(false, root, list_atom, AtomEnum::WINDOW, 0, 2048)
-        .ok()
-        .and_then(|cookie| cookie.reply().ok())
-        .and_then(|prop| prop.value32().map(|values| values.count()))
-        .unwrap_or(0)
-}
-
 pub fn get_open_windows() -> Vec<WindowInfo> {
     let mut windows = Vec::new();
 
