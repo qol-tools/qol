@@ -10,7 +10,6 @@ use walkdir::WalkDir;
 
 static LAST_ARTIFACT_COUNT: AtomicU32 = AtomicU32::new(0);
 const DEV_BUILD_STATE_FILE: &str = "dev-build-fingerprints.json";
-const DEFAULT_PLUGIN_ARTIFACT_COUNT: u32 = 18;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BuildResult {
@@ -392,10 +391,13 @@ where
     F: FnMut(u8, String),
 {
     log::info!("Building linked plugin via cargo: {}", plugin_id);
-    on_progress(5, "Preparing build".to_string());
+    on_progress(0, "Preparing build".to_string());
 
     let mut child = match Command::new("cargo")
-        .args(["build", "--message-format", "json"])
+        .args(["build"])
+        .env("CARGO_TERM_PROGRESS_WHEN", "always")
+        .env("CARGO_TERM_PROGRESS_WIDTH", "80")
+        .env("CARGO_TERM_COLOR", "never")
         .current_dir(path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -417,60 +419,55 @@ where
     let stdout = child.stdout.take().expect("stdout piped");
     let stderr = child.stderr.take().expect("stderr piped");
 
-    let (artifact_tx, artifact_rx) = std::sync::mpsc::channel::<(u32, String)>();
     let (stdout_text_tx, stdout_text_rx) = std::sync::mpsc::channel::<String>();
     let stdout_handle = std::thread::spawn(move || {
-        let mut done = 0u32;
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&line) {
-                match msg["reason"].as_str() {
-                    Some("compiler-artifact") => {
-                        done += 1;
-                        let name = msg["target"]["name"]
-                            .as_str()
-                            .unwrap_or("crate")
-                            .to_string();
-                        let _ = artifact_tx.send((done, name));
-                    }
-                    Some("compiler-message") => {
-                        if let Some(rendered) = msg["message"]["rendered"].as_str() {
-                            let _ = stdout_text_tx.send(rendered.trim_end().to_string());
-                        }
-                    }
-                    _ => {}
-                }
-            } else if !line.trim().is_empty() {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
                 let _ = stdout_text_tx.send(line);
             }
         }
-        done
     });
 
+    let (progress_tx, progress_rx) = std::sync::mpsc::channel::<(u8, String)>();
     let (stderr_tx, stderr_rx) = std::sync::mpsc::channel::<String>();
     let stderr_handle = std::thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            let _ = stderr_tx.send(line);
+        let mut reader = BufReader::new(stderr);
+        let mut buf = [0u8; 4096];
+        let mut pending = String::new();
+
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    pending.push_str(&String::from_utf8_lossy(&buf[..n]));
+                    drain_console_segments(&mut pending, |raw_segment| {
+                        handle_cargo_console_segment(raw_segment, &progress_tx, &stderr_tx);
+                    });
+                }
+                Err(_) => break,
+            }
+        }
+
+        if !pending.is_empty() {
+            handle_cargo_console_segment(&pending, &progress_tx, &stderr_tx);
         }
     });
 
-    let mut predicted = DEFAULT_PLUGIN_ARTIFACT_COUNT;
-    let mut last_percent = 5u8;
+    let mut last_percent = 0u8;
 
-    for (done, name) in artifact_rx {
-        if done > predicted {
-            predicted = done + done / 3 + 1;
-        }
-        let percent = ((done as f32 / predicted as f32) * 85.0) as u8 + 10;
-        let percent = percent.min(95);
-        if percent > last_percent {
-            on_progress(percent, format!("Compiling {}", name));
-            last_percent = percent;
+    for (percent, phase) in progress_rx {
+        let next_percent = percent.max(last_percent);
+        if next_percent > last_percent {
+            on_progress(next_percent, phase);
+            last_percent = next_percent;
+        } else if !phase.is_empty() {
+            on_progress(last_percent, phase);
         }
     }
 
     let _ = stdout_handle.join();
     let _ = stderr_handle.join();
-
     let mut lines: Vec<String> = stdout_text_rx.into_iter().collect();
     lines.extend(stderr_rx.into_iter());
     let combined = lines.join("\n");
@@ -502,6 +499,97 @@ where
             }
         }
     }
+}
+
+fn drain_console_segments(pending: &mut String, mut on_segment: impl FnMut(&str)) {
+    while let Some(idx) = pending.find(|c| c == '\n' || c == '\r') {
+        let segment = pending[..idx].to_string();
+        pending.drain(..=idx);
+        on_segment(&segment);
+    }
+}
+
+fn handle_cargo_console_segment(
+    raw_segment: &str,
+    progress_tx: &std::sync::mpsc::Sender<(u8, String)>,
+    text_tx: &std::sync::mpsc::Sender<String>,
+) {
+    let line = sanitize_console_line(raw_segment);
+    if line.is_empty() {
+        return;
+    }
+
+    if let Some((done, total, phase)) = parse_cargo_progress_line(&line) {
+        let percent = ((done.saturating_mul(100)) / total).min(99) as u8;
+        let phase_text = if phase.is_empty() {
+            format!("{}/{}", done, total)
+        } else {
+            format!("{}/{} {}", done, total, phase)
+        };
+        let _ = progress_tx.send((percent, phase_text));
+    }
+
+    let _ = text_tx.send(line);
+}
+
+fn sanitize_console_line(raw: &str) -> String {
+    let mut sanitized = String::with_capacity(raw.len());
+    #[derive(Copy, Clone)]
+    enum AnsiState {
+        None,
+        Escape,
+        Csi,
+    }
+    let mut state = AnsiState::None;
+
+    for ch in raw.chars() {
+        match state {
+            AnsiState::None => {
+                if ch == '\u{1b}' {
+                    state = AnsiState::Escape;
+                } else if !ch.is_control() {
+                    sanitized.push(ch);
+                }
+            }
+            AnsiState::Escape => {
+                if ch == '[' {
+                    state = AnsiState::Csi;
+                } else if ('@'..='~').contains(&ch) {
+                    state = AnsiState::None;
+                }
+            }
+            AnsiState::Csi => {
+                if ('@'..='~').contains(&ch) {
+                    state = AnsiState::None;
+                }
+            }
+        }
+    }
+
+    sanitized.trim().to_string()
+}
+
+fn parse_cargo_progress_line(line: &str) -> Option<(u32, u32, String)> {
+    if !line.contains("Building [") {
+        return None;
+    }
+
+    let bar_end = line.rfind(']')?;
+    let tail = line.get(bar_end + 1..)?.trim();
+
+    let mut tail_parts = tail.splitn(2, ':');
+    let ratio = tail_parts.next()?.trim();
+    let phase = tail_parts.next().unwrap_or("").trim().to_string();
+
+    let mut ratio_parts = ratio.split('/');
+    let done = ratio_parts.next()?.trim().parse::<u32>().ok()?;
+    let total = ratio_parts.next()?.trim().parse::<u32>().ok()?;
+
+    if total == 0 || done > total {
+        return None;
+    }
+
+    Some((done, total, phase))
 }
 
 fn fingerprint_plugin(path: &Path) -> Result<String, String> {
@@ -682,5 +770,31 @@ mod tests {
         let loaded = load_build_fingerprints(tmp.path());
 
         assert_eq!(loaded, data);
+    }
+
+    #[test]
+    fn parse_cargo_progress_line_reads_done_total_and_phase() {
+        let parsed =
+            parse_cargo_progress_line("Building [=============>      ] 91/236: plugin-alt-tab")
+                .expect("progress should parse");
+
+        assert_eq!(parsed.0, 91);
+        assert_eq!(parsed.1, 236);
+        assert_eq!(parsed.2, "plugin-alt-tab");
+    }
+
+    #[test]
+    fn parse_cargo_progress_line_rejects_non_progress_text() {
+        assert!(parse_cargo_progress_line("Compiling serde v1.0.228").is_none());
+        assert!(parse_cargo_progress_line("Finished dev [unoptimized]").is_none());
+    }
+
+    #[test]
+    fn sanitize_console_line_removes_ansi_sequences() {
+        let raw = "\u{1b}[32mBuilding [====] 3/10: plugin-a\u{1b}[0m";
+        assert_eq!(
+            sanitize_console_line(raw),
+            "Building [====] 3/10: plugin-a"
+        );
     }
 }
