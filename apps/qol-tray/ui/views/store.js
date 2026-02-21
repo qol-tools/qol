@@ -1,6 +1,7 @@
 import { updateSelection as updateSel, navigateGrid } from '../utils.js';
 import { subscribe } from '../events.js';
 import * as installing from '../installing.js';
+import { apiJson, apiResponse, jsonRequest, readResponseText } from '../api/client.js';
 import { renderFeedback as renderFeedbackComponent } from '../components/feedback.js';
 
 export const id = 'store';
@@ -106,12 +107,7 @@ function clearFeedback() {
 
 async function checkTokenStatus() {
     try {
-        const response = await fetch('/api/github-token');
-        if (!response.ok) {
-            state.hasToken = false;
-            return;
-        }
-        const data = await response.json();
+        const data = await apiJson('/api/github-token');
         state.hasToken = data.has_token;
     } catch (e) {
         state.hasToken = false;
@@ -185,14 +181,9 @@ async function saveToken() {
     
     clearFeedback();
     try {
-        const response = await fetch('/api/github-token', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token })
-        });
-        
+        const response = await apiResponse('/api/github-token', jsonRequest('POST', { token }));
         if (!response.ok) {
-            const message = (await response.text()) || 'Failed to save token';
+            const message = (await readResponseText(response)) || 'Failed to save token';
             throw new Error(message);
         }
         state.hasToken = true;
@@ -211,9 +202,9 @@ async function saveToken() {
 async function deleteToken() {
     clearFeedback();
     try {
-        const response = await fetch('/api/github-token', { method: 'DELETE' });
+        const response = await apiResponse('/api/github-token', { method: 'DELETE' });
         if (!response.ok) {
-            const message = (await response.text()) || 'Failed to delete token';
+            const message = (await readResponseText(response)) || 'Failed to delete token';
             throw new Error(message);
         }
         state.hasToken = false;
@@ -249,13 +240,7 @@ async function loadPlugins(forceRefresh = false) {
     
     try {
         const url = forceRefresh ? '/api/plugins?refresh=true' : '/api/plugins';
-        const response = await fetch(url);
-        if (!response.ok) {
-            const message = (await response.text()) || 'Failed to fetch plugins';
-            throw new Error(message);
-        }
-        
-        const data = await response.json();
+        const data = await apiJson(url);
         if (token !== state.loadToken) {
             return;
         }
@@ -442,9 +427,9 @@ async function installPlugin(id) {
     updateSelection();
 
     try {
-        const response = await fetch(`/api/install/${id}`, { method: 'POST' });
+        const response = await apiResponse(`/api/install/${id}`, { method: 'POST' });
         if (!response.ok) {
-            const message = (await response.text()) || 'Installation failed';
+            const message = (await readResponseText(response)) || 'Installation failed';
             throw new Error(message);
         }
         setFeedback('success', `Installed ${plugin?.name || id}`);
