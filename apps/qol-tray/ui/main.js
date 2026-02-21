@@ -5,6 +5,7 @@ import * as storeView from './views/store.js';
 import * as hotkeysView from './views/hotkeys.js';
 import * as taskRunnerView from './features/task-runner/view.js';
 import * as devView from './views/dev.js';
+import { readResponseText } from './api/client.js';
 import { clampPercent, formatDownloadingProgress, formatPhaseProgress } from './utils/progress.js';
 
 const BASE_VIEWS = {
@@ -479,7 +480,7 @@ async function recompileDev() {
     try {
         const response = await fetch('/api/dev/recompile-self', { method: 'POST' });
         if (!response.ok) {
-            const body = await response.text().catch(() => '');
+            const body = await readResponseText(response);
             if (response.status === 404) {
                 throw new Error('Connected daemon is older than this UI. Stop it and launch the current checkout.');
             }

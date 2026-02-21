@@ -13,6 +13,24 @@ async function readErrorMessage(response) {
     return `Request failed (${response.status})`;
 }
 
+export async function readResponseText(response) {
+    try {
+        return (await response.text())?.trim() || '';
+    } catch {
+        return '';
+    }
+}
+
+export function jsonRequest(method, payload, options = {}) {
+    const baseHeaders = options.headers || {};
+    const headers = { ...baseHeaders, 'Content-Type': 'application/json' };
+    const request = { ...options, method, headers };
+    if (payload !== undefined) {
+        request.body = JSON.stringify(payload);
+    }
+    return request;
+}
+
 export async function apiJson(url, options) {
     const response = await fetch(url, options);
     if (!response.ok) {
