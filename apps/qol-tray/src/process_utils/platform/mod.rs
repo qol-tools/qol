@@ -1,4 +1,4 @@
-use tokio::process::Command;
+use std::time::Duration;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod unix_common;
@@ -21,6 +21,14 @@ use unsupported as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 
-pub fn shell_command(script: &str) -> Command {
-    imp::shell_command(script)
+pub(super) fn is_pid_alive(pid: i32) -> bool {
+    imp::is_pid_alive(pid)
+}
+
+pub(super) fn terminate_pid(pid: i32, grace: Duration) {
+    imp::terminate_pid(pid, grace);
+}
+
+pub(super) fn reap_children_nonblocking() {
+    imp::reap_children_nonblocking();
 }
