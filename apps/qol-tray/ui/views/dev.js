@@ -1,4 +1,5 @@
 import { subscribe } from '../events.js';
+import { jsonRequest, readResponseText } from '../api/client.js';
 import { clampPercent, formatBuildOverlayDetail, normalizePercent } from '../utils/progress.js';
 
 export const id = 'dev';
@@ -608,12 +609,10 @@ async function quickLink(path, id) {
 
     try {
         const res = await fetch('/api/dev/links', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path, id })
+            ...jsonRequest('POST', { path, id })
         });
         if (!res.ok) {
-            console.error('Failed to link:', await res.text());
+            console.error('Failed to link:', await readResponseText(res));
             return;
         }
         await triggerReload();
@@ -648,13 +647,11 @@ async function confirmLink() {
 
     try {
         const res = await fetch('/api/dev/links', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: state.linkPath })
+            ...jsonRequest('POST', { path: state.linkPath })
         });
 
         if (!res.ok) {
-            state.linkError = await res.text();
+            state.linkError = await readResponseText(res);
             updateView();
             return;
         }
@@ -679,7 +676,7 @@ async function deleteLink(id) {
     try {
         const res = await fetch(`/api/dev/links/${id}`, { method: 'DELETE' });
         if (!res.ok) {
-            console.error('Failed to delete link:', await res.text());
+            console.error('Failed to delete link:', await readResponseText(res));
             return;
         }
         await triggerReload();
@@ -710,7 +707,7 @@ async function refreshDiscoveryState() {
 async function triggerReload() {
     const res = await fetch('/api/dev/reload', { method: 'POST' });
     if (!res.ok && res.status !== 409) {
-        const message = await res.text();
+        const message = await readResponseText(res);
         throw new Error(message || 'Failed to queue reload');
     }
     return res;
@@ -895,7 +892,7 @@ async function triggerMockFlows() {
         }
 
         if (startRes.status !== 404) {
-            const message = await startRes.text().catch(() => '');
+            const message = await readResponseText(startRes);
             state.error = message || 'Failed to trigger mock targets';
             state.mockTesting = false;
             mockBuildSource = null;
@@ -960,15 +957,15 @@ async function triggerMockFlows() {
     if (updateFailed || recompileFailed || buildFailed) {
         const messages = [];
         if (updateFailed) {
-            const updateText = updateRes ? await updateRes.text().catch(() => '') : '';
+            const updateText = updateRes ? await readResponseText(updateRes) : '';
             messages.push(updateText || 'Failed to trigger mock update flow');
         }
         if (recompileFailed) {
-            const recompileText = recompileRes ? await recompileRes.text().catch(() => '') : '';
+            const recompileText = recompileRes ? await readResponseText(recompileRes) : '';
             messages.push(recompileText || 'Failed to trigger mock recompile flow');
         }
         if (buildFailed) {
-            const buildText = await buildRes.text().catch(() => '');
+            const buildText = await readResponseText(buildRes);
             messages.push(buildText || 'Failed to trigger mock plugin build flow');
         }
         state.error = messages.join(' • ');
@@ -1008,8 +1005,8 @@ async function reloadPlugins() {
             ]);
         } else {
             const [reloadText, discoverText] = await Promise.all([
-                reloadRes.text().catch(() => ''),
-                discoverRes.text().catch(() => '')
+                readResponseText(reloadRes),
+                readResponseText(discoverRes)
             ]);
             state.error = reloadText || discoverText || 'Reload or discovery trigger failed';
         }
