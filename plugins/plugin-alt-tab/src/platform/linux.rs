@@ -1,14 +1,8 @@
+use super::WindowInfo;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{ExtendedColorType, ImageEncoder};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::*;
-
-#[derive(Debug, Clone)]
-pub struct WindowInfo {
-    pub id: u32,
-    pub title: String,
-    pub preview_path: Option<String>,
-}
 
 pub fn cached_preview_path(window_id: u32) -> Option<String> {
     let cache_dir = preview_cache_dir()?;
@@ -17,6 +11,14 @@ pub fn cached_preview_path(window_id: u32) -> Option<String> {
         return None;
     }
     Some(path.to_string_lossy().to_string())
+}
+
+pub fn activate_window(window_id: u32) {
+    std::process::Command::new("xdotool")
+        .arg("windowactivate")
+        .arg(window_id.to_string())
+        .status()
+        .ok();
 }
 
 pub fn get_open_windows() -> Vec<WindowInfo> {

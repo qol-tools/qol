@@ -10,8 +10,9 @@ command = "alt-tab"
 actions = { open = ["--show"], settings = ["--settings"] }
 
 [daemon]
-enabled = false
+enabled = true
 command = "alt-tab"
+socket = "/tmp/qol-alt-tab.sock"
 
 [menu]
 label = "Alt Tab"

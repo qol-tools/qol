@@ -1,39 +1,14 @@
+mod config;
 mod daemon;
+mod layout;
 mod monitor;
-#[cfg(target_os = "linux")]
-mod x11_utils;
+mod platform;
+mod window_source;
 
-#[cfg(not(target_os = "linux"))]
-mod x11_utils {
-    #[derive(Debug, Clone)]
-    pub struct WindowInfo {
-        pub id: u32,
-        pub title: String,
-        pub preview_path: Option<String>,
-    }
-
-    pub fn get_open_windows() -> Vec<WindowInfo> {
-        Vec::new()
-    }
-
-    pub fn cached_preview_path(_window_id: u32) -> Option<String> {
-        None
-    }
-
-    pub fn capture_previews_batch(
-        _targets: &[(usize, u32)],
-        _max_w: usize,
-        _max_h: usize,
-    ) -> Vec<(usize, Option<String>)> {
-        Vec::new()
-    }
-
-    pub fn capture_preview(_window_id: u32, _max_w: usize, _max_h: usize) -> Option<String> {
-        None
-    }
-}
-
-use crate::x11_utils::WindowInfo;
+use crate::config::{load_alt_tab_config, AltTabConfig};
+use crate::layout::*;
+use crate::platform::WindowInfo;
+use crate::window_source::{load_windows_with_previews, preview_tile};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::{
@@ -41,10 +16,6 @@ use gpui_component::{
     IndexPath,
 };
 use monitor::MonitorTracker;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
@@ -52,272 +23,7 @@ use std::time::Duration;
 const SETTINGS_URL: &str = "http://127.0.0.1:42700/plugins/plugin-alt-tab/";
 const DEFAULT_ESTIMATED_WINDOW_COUNT: usize = 8;
 const PREWARM_REFRESH_INTERVAL_MS: u64 = 1200;
-const GRID_GAP: f32 = 14.0;
-const GRID_PADDING: f32 = 22.0;
-const GRID_CARD_WIDTH: f32 = 220.0;
-const GRID_CARD_HEIGHT: f32 = 156.0;
-const GRID_PREVIEW_WIDTH: f32 = 204.0;
-const GRID_PREVIEW_HEIGHT: f32 = 114.0;
-const HEADER_HEIGHT: f32 = 42.0;
-const PREVIEW_MAX_WIDTH: usize = GRID_PREVIEW_WIDTH as usize;
-const PREVIEW_MAX_HEIGHT: usize = GRID_PREVIEW_HEIGHT as usize;
-const GRID_RENDER_PADDING_X_TOTAL: f32 = 40.0;
-const GRID_RENDER_GAP_X: f32 = 12.0;
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-struct DisplayConfig {}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-struct AltTabConfig {
-    display: DisplayConfig,
-}
-
-fn load_alt_tab_config() -> AltTabConfig {
-    for path in config_paths() {
-        let Ok(contents) = fs::read_to_string(&path) else {
-            continue;
-        };
-        match serde_json::from_str::<AltTabConfig>(&contents) {
-            Ok(config) => {
-                println!("Loaded config from {}: {:?}", path.display(), config);
-                return config;
-            }
-            Err(e) => {
-                println!("Failed to parse config at {}: {}", path.display(), e);
-            }
-        }
-    }
-    println!("Using default config");
-    AltTabConfig::default()
-}
-
-fn config_paths() -> Vec<PathBuf> {
-    const INSTALL_RELATIVE_CONFIG_PATHS: [&str; 2] = [
-        "plugins/plugin-alt-tab/config.json",
-        "plugins/alt-tab/config.json",
-    ];
-    const LEGACY_RELATIVE_CONFIG_PATHS: [&str; 2] = [
-        "qol-tray/plugins/plugin-alt-tab/config.json",
-        "qol-tray/plugins/alt-tab/config.json",
-    ];
-
-    let mut paths = Vec::new();
-
-    for root in install_config_roots() {
-        for relative in INSTALL_RELATIVE_CONFIG_PATHS {
-            let candidate = root.join(relative);
-            if !paths.contains(&candidate) {
-                paths.push(candidate);
-            }
-        }
-    }
-
-    let mut roots = Vec::new();
-    if let Ok(xdg_config_home) = std::env::var("XDG_CONFIG_HOME") {
-        if !xdg_config_home.trim().is_empty() {
-            roots.push(PathBuf::from(xdg_config_home));
-        }
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.trim().is_empty() {
-            roots.push(PathBuf::from(home).join(".config"));
-        }
-    }
-
-    for root in roots {
-        for relative in LEGACY_RELATIVE_CONFIG_PATHS {
-            let candidate = root.join(relative);
-            if !paths.contains(&candidate) {
-                paths.push(candidate);
-            }
-        }
-    }
-
-    paths
-}
-
-fn install_config_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    let Some(base_data_dir) = base_data_dir() else {
-        return roots;
-    };
-    if let Some(install_id) = install_id_from_env() {
-        let candidate = base_data_dir.join("installs").join(install_id);
-        if !roots.contains(&candidate) {
-            roots.push(candidate);
-        }
-    }
-    if let Some(install_id) = install_id_from_active_file(&base_data_dir) {
-        let candidate = base_data_dir.join("installs").join(install_id);
-        if !roots.contains(&candidate) {
-            roots.push(candidate);
-        }
-    }
-    roots
-}
-
-fn base_data_dir() -> Option<PathBuf> {
-    dirs::data_local_dir()
-        .or_else(dirs::data_dir)
-        .map(|path| path.join("qol-tray"))
-}
-
-fn install_id_from_env() -> Option<String> {
-    let value = std::env::var("QOL_TRAY_INSTALL_ID").ok()?;
-    let trimmed = value.trim();
-    if valid_install_id(trimmed) {
-        Some(trimmed.to_string())
-    } else {
-        None
-    }
-}
-
-fn install_id_from_active_file(base_data_dir: &std::path::Path) -> Option<String> {
-    let content = fs::read_to_string(base_data_dir.join("active-install-id")).ok()?;
-    let trimmed = content.trim();
-    if valid_install_id(trimmed) {
-        Some(trimmed.to_string())
-    } else {
-        None
-    }
-}
-
-fn valid_install_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 64
-        && value
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-}
-
-fn preferred_column_count(window_count: usize) -> usize {
-    let count = window_count.max(1);
-    if count == 1 {
-        return 1;
-    }
-    let base = (count as f32).sqrt().ceil() as usize;
-    base.clamp(2, 6).min(count)
-}
-
-fn picker_dimensions(window_count: usize) -> (f32, f32) {
-    let count = window_count.max(1);
-    let cols = preferred_column_count(count);
-    let width = GRID_PADDING * 2.0
-        + cols as f32 * GRID_CARD_WIDTH
-        + cols.saturating_sub(1) as f32 * GRID_GAP
-        + 24.0;
-    let height = picker_height_for(count, cols);
-
-    (width.clamp(720.0, 1820.0), height.clamp(320.0, 980.0))
-}
-
-fn picker_height_for(window_count: usize, columns: usize) -> f32 {
-    let count = window_count.max(1);
-    let cols = columns.max(1);
-    let rows = (count + cols - 1) / cols;
-    HEADER_HEIGHT
-        + GRID_PADDING * 2.0
-        + rows as f32 * GRID_CARD_HEIGHT
-        + rows.saturating_sub(1) as f32 * GRID_GAP
-}
-
-fn rendered_column_count(window: &Window, total_items: usize) -> usize {
-    if total_items <= 1 {
-        return total_items.max(1);
-    }
-
-    let bounds = window.window_bounds().get_bounds();
-    let width = bounds.size.width.to_f64() as f32;
-    let usable = (width - GRID_RENDER_PADDING_X_TOTAL).max(GRID_CARD_WIDTH);
-    let cols = ((usable + GRID_RENDER_GAP_X) / (GRID_CARD_WIDTH + GRID_RENDER_GAP_X)).floor();
-    (cols as usize).max(1).min(total_items)
-}
-
-async fn load_windows_with_previews(
-    executor: &BackgroundExecutor,
-    cached_windows: Vec<WindowInfo>,
-    refresh_all_previews: bool,
-) -> Vec<WindowInfo> {
-    let mut windows = executor
-        .spawn(async move { x11_utils::get_open_windows() })
-        .await;
-    if windows.is_empty() {
-        return windows;
-    }
-
-    let mut cached_paths = HashMap::new();
-    for win in cached_windows {
-        if let Some(path) = win.preview_path {
-            cached_paths.insert(win.id, path);
-        }
-    }
-
-    for win in &mut windows {
-        if let Some(path) = cached_paths.get(&win.id) {
-            win.preview_path = Some(path.clone());
-            continue;
-        }
-        if let Some(path) = x11_utils::cached_preview_path(win.id) {
-            win.preview_path = Some(path);
-        }
-    }
-
-    let capture_targets: Vec<(usize, u32)> = windows
-        .iter()
-        .enumerate()
-        .filter(|(_, win)| refresh_all_previews || win.preview_path.is_none())
-        .map(|(i, win)| (i, win.id))
-        .collect();
-    if capture_targets.is_empty() {
-        return windows;
-    }
-
-    let targets = capture_targets.clone();
-    let captured = executor
-        .spawn(async move {
-            x11_utils::capture_previews_batch(&targets, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT)
-        })
-        .await;
-
-    for (i, path_opt) in captured {
-        if let Some(path) = path_opt {
-            if i < windows.len() {
-                windows[i].preview_path = Some(path);
-            }
-        }
-    }
-
-    windows
-}
-
-// ─── Preview tile ─────────────────────────────────────────────────────────────
-
-fn preview_tile(preview_path: &Option<String>, width: f32, height: f32) -> AnyElement {
-    if let Some(path) = preview_path {
-        img(std::path::PathBuf::from(path))
-            .w(px(width))
-            .h(px(height))
-            .rounded_md()
-            .into_any_element()
-    } else {
-        div()
-            .w(px(width))
-            .h(px(height))
-            .bg(rgb(0x1e2130))
-            .rounded_md()
-            .border_1()
-            .border_color(rgb(0x3a4252))
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_xs()
-            .text_color(rgb(0x4a5268))
-            .child("…")
-            .into_any_element()
-    }
-}
+const REUSE_ORIGIN_TOLERANCE_PX: f64 = 6.0;
 
 // ─── List delegate ────────────────────────────────────────────────────────────
 
@@ -426,11 +132,7 @@ impl WindowDelegate {
     fn activate_selected(&self, window: &mut Window) {
         if let Some(ix) = self.selected_index {
             let win = &self.windows[ix.row];
-            std::process::Command::new("xdotool")
-                .arg("windowactivate")
-                .arg(win.id.to_string())
-                .status()
-                .ok();
+            platform::activate_window(win.id);
             window.minimize_window();
         }
     }
@@ -547,6 +249,7 @@ enum GridDirection {
 struct AltTabApp {
     list_state: Entity<ListState<WindowDelegate>>,
     focus_handle: FocusHandle,
+    _focus_out_subscription: Subscription,
 }
 
 impl AltTabApp {
@@ -570,6 +273,14 @@ impl AltTabApp {
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle);
         let mut async_window = window.to_async(cx);
+        let focus_handle_for_sub = focus_handle.clone();
+        let focus_out_subscription = cx.on_focus_out(
+            &focus_handle_for_sub,
+            window,
+            |_this, _event, window, _cx| {
+                window.minimize_window();
+            },
+        );
 
         let list_state_clone = list_state.clone();
         cx.spawn(
@@ -621,7 +332,7 @@ impl AltTabApp {
                         let tx = tx.clone();
                         executor
                             .spawn(async move {
-                                let path = x11_utils::capture_preview(
+                                let path = platform::capture_preview(
                                     id,
                                     PREVIEW_MAX_WIDTH,
                                     PREVIEW_MAX_HEIGHT,
@@ -671,6 +382,7 @@ impl AltTabApp {
         Self {
             list_state,
             focus_handle,
+            _focus_out_subscription: focus_out_subscription,
         }
     }
 
@@ -702,7 +414,7 @@ impl Render for AltTabApp {
             .h_full()
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
-                    "escape" => window.minimize_window(),
+                    "escape" | "esc" => window.minimize_window(),
                     "enter" => {
                         // Activate selected and close
                         let win_id =
@@ -719,11 +431,7 @@ impl Render for AltTabApp {
                                         .map(|w| w.id)
                                 });
                         if let Some(id) = win_id {
-                            std::process::Command::new("xdotool")
-                                .arg("windowactivate")
-                                .arg(id.to_string())
-                                .status()
-                                .ok();
+                            platform::activate_window(id);
                             window.minimize_window();
                         }
                     }
@@ -739,7 +447,7 @@ impl Render for AltTabApp {
                         });
                         cx.notify();
                     }
-                    "right" => {
+                    "right" | "arrowright" => {
                         let total = this.list_state.read(cx).delegate().windows.len();
                         let cols = rendered_column_count(window, total);
                         this.list_state.update(cx, |s, _cx| {
@@ -747,7 +455,7 @@ impl Render for AltTabApp {
                         });
                         cx.notify();
                     }
-                    "left" => {
+                    "left" | "arrowleft" => {
                         let total = this.list_state.read(cx).delegate().windows.len();
                         let cols = rendered_column_count(window, total);
                         this.list_state.update(cx, |s, _cx| {
@@ -755,7 +463,7 @@ impl Render for AltTabApp {
                         });
                         cx.notify();
                     }
-                    "down" => {
+                    "down" | "arrowdown" => {
                         let total = this.list_state.read(cx).delegate().windows.len();
                         let cols = rendered_column_count(window, total);
                         this.list_state.update(cx, |s, _cx| {
@@ -763,7 +471,7 @@ impl Render for AltTabApp {
                         });
                         cx.notify();
                     }
-                    "up" => {
+                    "up" | "arrowup" => {
                         let total = this.list_state.read(cx).delegate().windows.len();
                         let cols = rendered_column_count(window, total);
                         this.list_state.update(cx, |s, _cx| {
@@ -856,11 +564,7 @@ impl Render for AltTabApp {
                                         .ok()
                                         .flatten();
                                     if let Some(id) = window_id {
-                                        std::process::Command::new("xdotool")
-                                            .arg("windowactivate")
-                                            .arg(id.to_string())
-                                            .status()
-                                            .ok();
+                                        platform::activate_window(id);
                                         window.minimize_window();
                                     }
                                 })
@@ -932,20 +636,46 @@ fn open_picker(
     window_cache: Arc<std::sync::Mutex<Vec<WindowInfo>>>,
     cx: &mut App,
 ) {
+    #[cfg(debug_assertions)]
+    eprintln!("[alt-tab/open] show request");
+    let mut reopen_bounds: Option<Bounds<Pixels>> = None;
+
     // Fast path: reuse existing picker window instead of recreating it.
-    if let Some(handle) = current.borrow().as_ref() {
+    let existing_handle = current.borrow().clone();
+    if let Some(handle) = existing_handle {
         let cached_windows = window_cache
             .lock()
             .map(|cache| cache.clone())
             .unwrap_or_default();
         let target_count = cached_windows.len().max(1);
         let (target_w, target_h) = picker_dimensions(target_count);
+        let target_size = size(px(target_w), px(target_h));
+        let target_bounds = if let Some(active) = tracker.snapshot() {
+            active.centered_bounds(target_size)
+        } else {
+            Bounds::centered(None, target_size, cx)
+        };
+        let needs_reopen = std::cell::Cell::new(false);
         if handle
             .update(cx, |view, window: &mut Window, cx| {
+                let current_bounds = window.window_bounds().get_bounds();
+                let dx = (current_bounds.origin.x.to_f64() - target_bounds.origin.x.to_f64()).abs();
+                let dy = (current_bounds.origin.y.to_f64() - target_bounds.origin.y.to_f64()).abs();
+                if dx > REUSE_ORIGIN_TOLERANCE_PX || dy > REUSE_ORIGIN_TOLERANCE_PX
+                {
+                    #[cfg(debug_assertions)]
+                    eprintln!(
+                        "[alt-tab/open] reopen required for monitor switch: current_origin={:?} target_origin={:?} dx={:.1} dy={:.1}",
+                        current_bounds.origin, target_bounds.origin, dx, dy
+                    );
+                    needs_reopen.set(true);
+                    return;
+                }
+
                 view.apply_cached_windows(cached_windows.clone(), cx);
 
-                let current_size = window.window_bounds().get_bounds().size;
-                let next_size = size(px(target_w), px(target_h));
+                let current_size = current_bounds.size;
+                let next_size = target_size;
                 if (current_size.width.to_f64() - target_w as f64).abs() >= 1.0
                     || (current_size.height.to_f64() - target_h as f64).abs() >= 1.0
                 {
@@ -955,14 +685,20 @@ fn open_picker(
                 window.activate_window();
             })
             .is_ok()
+            && !needs_reopen.get()
         {
+            #[cfg(debug_assertions)]
+            eprintln!("[alt-tab/open] reused existing picker window");
             cx.activate(true);
             return;
         }
 
-        let _ = handle.update(cx, |_view, window: &mut Window, _cx| {
-            window.minimize_window();
-        });
+        if needs_reopen.get() {
+            reopen_bounds = Some(target_bounds);
+            let _ = handle.update(cx, |_view, window: &mut Window, _cx| {
+                window.remove_window();
+            });
+        }
         *current.borrow_mut() = None;
     }
 
@@ -973,11 +709,13 @@ fn open_picker(
     let (win_w, win_h) = picker_dimensions(estimated_count);
     let win_size = size(px(win_w), px(win_h));
 
-    let bounds = if let Some(active) = tracker.snapshot() {
-        active.centered_bounds(win_size)
-    } else {
-        Bounds::centered(None, win_size, cx)
-    };
+    let bounds = reopen_bounds.unwrap_or_else(|| {
+        if let Some(active) = tracker.snapshot() {
+            active.centered_bounds(win_size)
+        } else {
+            Bounds::centered(None, win_size, cx)
+        }
+    });
 
     println!(
         "[alt-tab] opening at {:?} with size {:?}",
@@ -1010,7 +748,12 @@ fn open_picker(
         },
     );
     if let Ok(h) = handle {
+        #[cfg(debug_assertions)]
+        eprintln!("[alt-tab/open] opened new picker window");
         *current.borrow_mut() = Some(h);
+    } else {
+        #[cfg(debug_assertions)]
+        eprintln!("[alt-tab/open] failed to open picker window");
     }
     cx.activate(true);
 }
@@ -1079,6 +822,8 @@ fn run_app(config: AltTabConfig, rx: mpsc::Receiver<daemon::Command>, show_on_st
 
             match cmd {
                 Some(daemon::Command::Show) => {
+                    #[cfg(debug_assertions)]
+                    eprintln!("[alt-tab/daemon] received Show");
                     let current2 = current.clone();
                     let tracker2 = tracker_clone.clone();
                     let last_window_count2 = last_window_count.clone();
@@ -1095,6 +840,8 @@ fn run_app(config: AltTabConfig, rx: mpsc::Receiver<daemon::Command>, show_on_st
                     });
                 }
                 Some(daemon::Command::Kill) | None => {
+                    #[cfg(debug_assertions)]
+                    eprintln!("[alt-tab/daemon] shutting down");
                     cx.update(|cx| cx.quit()).ok();
                     break;
                 }
