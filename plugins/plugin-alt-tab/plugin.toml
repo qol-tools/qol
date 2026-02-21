@@ -1,0 +1,24 @@
+[plugin]
+name = "Alt Tab"
+description = "Better alt-tab experience with window previews"
+version = "0.1.0"
+author = "KMRH47"
+platforms = ["linux", "macos"]
+
+[runtime]
+command = "alt-tab"
+actions = { open = ["--show"] }
+
+[daemon]
+enabled = false
+
+[menu]
+label = "Alt Tab"
+items = [
+  { type = "action", id = "open", label = "Open Alt Tab", action = "run" },
+]
+
+[[dependencies.binaries]]
+name = "alt-tab"
+repo = "qol-tools/plugin-alt-tab"
+pattern = "alt-tab-{os}-{arch}"

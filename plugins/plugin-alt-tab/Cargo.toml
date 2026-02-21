@@ -1,0 +1,21 @@
+[package]
+name = "alt-tab"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dirs = "5.0"
+shell-words = "1.1"
+gpui = { version = "0.2" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", features = ["allow-unsafe-code", "xinput"] }
+
+# macOS only: fix zed-font-kit core-graphics version mismatch
+[patch.crates-io]
+core-text = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
+core-graphics = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
+core-foundation = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
+core-foundation-sys = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }

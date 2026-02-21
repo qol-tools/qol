@@ -1,0 +1,7 @@
+/target
+Cargo.lock
+alt-tab
+alt-tab.exe
+*.db
+/.idea
+/.vscode
