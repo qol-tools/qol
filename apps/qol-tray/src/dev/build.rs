@@ -1,55 +1,16 @@
-use serde::{Deserialize, Serialize};
+mod cargo_build;
+mod fingerprint;
+mod progress;
+mod types;
+
 use std::collections::HashMap;
-use std::ffi::OsStr;
-use std::hash::Hasher;
-use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU32, Ordering};
-use walkdir::WalkDir;
 
-static LAST_ARTIFACT_COUNT: AtomicU32 = AtomicU32::new(0);
-const DEV_BUILD_STATE_FILE: &str = "dev-build-fingerprints.json";
-
-#[derive(Debug, Clone, Serialize)]
-pub struct BuildResult {
-    pub plugin_id: String,
-    pub success: bool,
-    pub output: String,
-    pub skipped: bool,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct BuildFingerprintState {
-    #[serde(default)]
-    fingerprints: HashMap<String, String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PluginBuildPlan {
-    pub plugin_id: String,
-    pub path: PathBuf,
-    pub has_cargo: bool,
-    pub needs_rebuild: bool,
-    pub current_fingerprint: Option<String>,
-    pub last_built_fingerprint: Option<String>,
-    pub reason: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct BuildRun {
-    pub plans: Vec<PluginBuildPlan>,
-    pub results: Vec<BuildResult>,
-    pub fingerprints: HashMap<String, String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PluginBuildProgress {
-    pub plugin_id: String,
-    pub status: String,
-    pub percent: u8,
-    pub phase: String,
-}
+use cargo_build::build_cargo_plugin_with_progress;
+pub use cargo_build::build_qol_tray_self_with_progress;
+use fingerprint::fingerprint_plugin;
+use types::{BuildFingerprintState, DEV_BUILD_STATE_FILE};
+pub use types::{BuildResult, BuildRun, PluginBuildPlan, PluginBuildProgress};
 
 pub fn load_build_fingerprints(config_dir: &Path) -> HashMap<String, String> {
     let state_path = config_dir.join(DEV_BUILD_STATE_FILE);
@@ -165,6 +126,9 @@ where
     let mut results = Vec::new();
 
     for plan in &plans {
+        if !(plan.has_cargo && plan.needs_rebuild) {
+            continue;
+        }
         on_progress(PluginBuildProgress {
             plugin_id: plan.plugin_id.clone(),
             status: "queued".to_string(),
@@ -257,450 +221,11 @@ pub fn build_linked_plugins(dev_links: &HashMap<String, PathBuf>) -> Vec<BuildRe
     build_linked_plugins_with_progress(dev_links, &HashMap::new(), |_| {}).results
 }
 
-pub fn build_qol_tray_self_with_progress<F>(mut on_progress: F) -> BuildResult
-where
-    F: FnMut(u8, String),
-{
-    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let manifest_path = repo_root.join("Cargo.toml");
-
-    if !manifest_path.is_file() {
-        return BuildResult {
-            plugin_id: "qol-tray".to_string(),
-            success: false,
-            output: format!("Cargo.toml not found at {}", manifest_path.display()),
-            skipped: false,
-        };
-    }
-
-    log::info!("Building qol-tray from {}", repo_root.display());
-    on_progress(2, "Preparing build".to_string());
-
-    let mut child = match Command::new("cargo")
-        .args([
-            "build",
-            "--bin",
-            "qol-tray",
-            "--features",
-            "dev",
-            "--message-format",
-            "json",
-            "--manifest-path",
-        ])
-        .arg(&manifest_path)
-        .current_dir(&repo_root)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            return BuildResult {
-                plugin_id: "qol-tray".to_string(),
-                success: false,
-                output: format!("Failed to run cargo build: {}", e),
-                skipped: false,
-            }
-        }
-    };
-
-    let stdout = child.stdout.take().expect("stdout piped");
-    let stderr = child.stderr.take().expect("stderr piped");
-
-    let (artifact_tx, artifact_rx) = std::sync::mpsc::channel::<(u32, String)>();
-    let stdout_handle = std::thread::spawn(move || {
-        let mut done = 0u32;
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&line) {
-                if msg["reason"].as_str() == Some("compiler-artifact") {
-                    done += 1;
-                    let name = msg["target"]["name"]
-                        .as_str()
-                        .unwrap_or("crate")
-                        .to_string();
-                    let _ = artifact_tx.send((done, name));
-                }
-            }
-        }
-        done
-    });
-
-    let (text_tx, text_rx) = std::sync::mpsc::channel::<String>();
-    let stderr_handle = std::thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            let _ = text_tx.send(line);
-        }
-    });
-
-    let last_count = LAST_ARTIFACT_COUNT.load(Ordering::Relaxed);
-    let mut predicted = if last_count == 0 { 50u32 } else { last_count };
-    let mut last_percent = 2u8;
-
-    for (done, name) in artifact_rx {
-        if done > predicted {
-            predicted = done + done / 4 + 1;
-        }
-        let percent = ((done as f32 / predicted as f32) * 93.0) as u8 + 2;
-        let percent = percent.min(95);
-        if percent > last_percent {
-            on_progress(percent, format!("Compiling {}", name));
-            last_percent = percent;
-        }
-    }
-
-    let actual_done = stdout_handle.join().unwrap_or(0);
-    let _ = stderr_handle.join();
-    let combined = text_rx.into_iter().collect::<Vec<_>>().join("\n");
-
-    match child.wait() {
-        Ok(status) => {
-            let success = status.success();
-            if success {
-                LAST_ARTIFACT_COUNT.store(actual_done, Ordering::Relaxed);
-                on_progress(100, "Build complete".to_string());
-                log::info!("qol-tray build succeeded ({} artifacts)", actual_done);
-            } else {
-                log::error!("qol-tray build failed\n{}", combined);
-            }
-            BuildResult {
-                plugin_id: "qol-tray".to_string(),
-                success,
-                output: combined,
-                skipped: false,
-            }
-        }
-        Err(e) => {
-            let error = format!("Failed while waiting for cargo build: {}", e);
-            log::error!("{}", error);
-            BuildResult {
-                plugin_id: "qol-tray".to_string(),
-                success: false,
-                output: error,
-                skipped: false,
-            }
-        }
-    }
-}
-
-fn build_cargo_plugin_with_progress<F>(
-    plugin_id: &str,
-    path: &Path,
-    mut on_progress: F,
-) -> BuildResult
-where
-    F: FnMut(u8, String),
-{
-    log::info!("Building linked plugin via cargo: {}", plugin_id);
-    on_progress(0, "Preparing build".to_string());
-
-    let mut child = match Command::new("cargo")
-        .args(["build"])
-        .env("CARGO_TERM_PROGRESS_WHEN", "always")
-        .env("CARGO_TERM_PROGRESS_WIDTH", "80")
-        .env("CARGO_TERM_COLOR", "never")
-        .current_dir(path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(e) => {
-            let error = format!("Failed to run cargo build: {}", e);
-            log::error!("Build error for {}: {}", plugin_id, error);
-            return BuildResult {
-                plugin_id: plugin_id.to_string(),
-                success: false,
-                output: error,
-                skipped: false,
-            };
-        }
-    };
-
-    let stdout = child.stdout.take().expect("stdout piped");
-    let stderr = child.stderr.take().expect("stderr piped");
-
-    let (stdout_text_tx, stdout_text_rx) = std::sync::mpsc::channel::<String>();
-    let stdout_handle = std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            let trimmed = line.trim();
-            if !trimmed.is_empty() {
-                let _ = stdout_text_tx.send(line);
-            }
-        }
-    });
-
-    let (progress_tx, progress_rx) = std::sync::mpsc::channel::<(u8, String)>();
-    let (stderr_tx, stderr_rx) = std::sync::mpsc::channel::<String>();
-    let stderr_handle = std::thread::spawn(move || {
-        let mut reader = BufReader::new(stderr);
-        let mut buf = [0u8; 4096];
-        let mut pending = String::new();
-
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    pending.push_str(&String::from_utf8_lossy(&buf[..n]));
-                    drain_console_segments(&mut pending, |raw_segment| {
-                        handle_cargo_console_segment(raw_segment, &progress_tx, &stderr_tx);
-                    });
-                }
-                Err(_) => break,
-            }
-        }
-
-        if !pending.is_empty() {
-            handle_cargo_console_segment(&pending, &progress_tx, &stderr_tx);
-        }
-    });
-
-    let mut last_percent = 0u8;
-
-    for (percent, phase) in progress_rx {
-        let next_percent = percent.max(last_percent);
-        if next_percent > last_percent {
-            on_progress(next_percent, phase);
-            last_percent = next_percent;
-        } else if !phase.is_empty() {
-            on_progress(last_percent, phase);
-        }
-    }
-
-    let _ = stdout_handle.join();
-    let _ = stderr_handle.join();
-    let mut lines: Vec<String> = stdout_text_rx.into_iter().collect();
-    lines.extend(stderr_rx.into_iter());
-    let combined = lines.join("\n");
-
-    match child.wait() {
-        Ok(status) => {
-            let success = status.success();
-            if success {
-                on_progress(100, "Build complete".to_string());
-                log::info!("Cargo build succeeded for {}", plugin_id);
-            } else {
-                log::error!("Cargo build failed for {}:\n{}", plugin_id, combined);
-            }
-            BuildResult {
-                plugin_id: plugin_id.to_string(),
-                success,
-                output: combined,
-                skipped: false,
-            }
-        }
-        Err(e) => {
-            let error = format!("Failed while waiting for cargo build: {}", e);
-            log::error!("Build error for {}: {}", plugin_id, error);
-            BuildResult {
-                plugin_id: plugin_id.to_string(),
-                success: false,
-                output: error,
-                skipped: false,
-            }
-        }
-    }
-}
-
-fn drain_console_segments(pending: &mut String, mut on_segment: impl FnMut(&str)) {
-    while let Some(idx) = pending.find(|c| c == '\n' || c == '\r') {
-        let segment = pending[..idx].to_string();
-        pending.drain(..=idx);
-        on_segment(&segment);
-    }
-}
-
-fn handle_cargo_console_segment(
-    raw_segment: &str,
-    progress_tx: &std::sync::mpsc::Sender<(u8, String)>,
-    text_tx: &std::sync::mpsc::Sender<String>,
-) {
-    let line = sanitize_console_line(raw_segment);
-    if line.is_empty() {
-        return;
-    }
-
-    if let Some((done, total, phase)) = parse_cargo_progress_line(&line) {
-        let percent = ((done.saturating_mul(100)) / total).min(99) as u8;
-        let phase_text = if phase.is_empty() {
-            format!("{}/{}", done, total)
-        } else {
-            format!("{}/{} {}", done, total, phase)
-        };
-        let _ = progress_tx.send((percent, phase_text));
-    }
-
-    let _ = text_tx.send(line);
-}
-
-fn sanitize_console_line(raw: &str) -> String {
-    let mut sanitized = String::with_capacity(raw.len());
-    #[derive(Copy, Clone)]
-    enum AnsiState {
-        None,
-        Escape,
-        Csi,
-    }
-    let mut state = AnsiState::None;
-
-    for ch in raw.chars() {
-        match state {
-            AnsiState::None => {
-                if ch == '\u{1b}' {
-                    state = AnsiState::Escape;
-                } else if !ch.is_control() {
-                    sanitized.push(ch);
-                }
-            }
-            AnsiState::Escape => {
-                if ch == '[' {
-                    state = AnsiState::Csi;
-                } else if ('@'..='~').contains(&ch) {
-                    state = AnsiState::None;
-                }
-            }
-            AnsiState::Csi => {
-                if ('@'..='~').contains(&ch) {
-                    state = AnsiState::None;
-                }
-            }
-        }
-    }
-
-    sanitized.trim().to_string()
-}
-
-fn parse_cargo_progress_line(line: &str) -> Option<(u32, u32, String)> {
-    if !line.contains("Building [") {
-        return None;
-    }
-
-    let bar_end = line.rfind(']')?;
-    let tail = line.get(bar_end + 1..)?.trim();
-
-    let mut tail_parts = tail.splitn(2, ':');
-    let ratio = tail_parts.next()?.trim();
-    let phase = tail_parts.next().unwrap_or("").trim().to_string();
-
-    let mut ratio_parts = ratio.split('/');
-    let done = ratio_parts.next()?.trim().parse::<u32>().ok()?;
-    let total = ratio_parts.next()?.trim().parse::<u32>().ok()?;
-
-    if total == 0 || done > total {
-        return None;
-    }
-
-    Some((done, total, phase))
-}
-
-fn fingerprint_plugin(path: &Path) -> Result<String, String> {
-    let mut hasher = Fnv1a64::default();
-    let mut inputs = Vec::new();
-
-    let walker = WalkDir::new(path)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|entry| {
-            if entry.depth() == 0 {
-                return true;
-            }
-            !(entry.file_type().is_dir() && should_skip_dir(entry.file_name()))
-        });
-
-    for entry in walker {
-        let entry = entry.map_err(|e| format!("Walk error: {}", e))?;
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let relative_path = entry
-            .path()
-            .strip_prefix(path)
-            .map_err(|e| format!("Failed to relativize path: {}", e))?;
-
-        if !is_fingerprint_input(relative_path) {
-            continue;
-        }
-        inputs.push((relative_path.to_path_buf(), entry.path().to_path_buf()));
-    }
-
-    if inputs.is_empty() {
-        return Err("No Rust build inputs found".to_string());
-    }
-
-    inputs.sort_by(|(left, _), (right, _)| left.cmp(right));
-
-    for (relative_path, absolute_path) in inputs {
-        hasher.write(relative_path.to_string_lossy().as_bytes());
-        hasher.write_u8(0);
-
-        let mut file = std::fs::File::open(&absolute_path)
-            .map_err(|e| format!("Failed to open {}: {}", absolute_path.display(), e))?;
-        let mut buf = [0u8; 8192];
-        loop {
-            let read = file
-                .read(&mut buf)
-                .map_err(|e| format!("Failed to read {}: {}", absolute_path.display(), e))?;
-            if read == 0 {
-                break;
-            }
-            hasher.write(&buf[..read]);
-        }
-        hasher.write_u8(0xff);
-    }
-
-    Ok(format!("{:016x}", hasher.finish()))
-}
-
-fn should_skip_dir(name: &OsStr) -> bool {
-    matches!(name.to_str(), Some("target" | ".git" | ".hg" | ".svn"))
-}
-
-fn is_fingerprint_input(relative_path: &Path) -> bool {
-    let Some(file_name) = relative_path.file_name().and_then(OsStr::to_str) else {
-        return false;
-    };
-
-    if matches!(
-        file_name,
-        "Cargo.toml" | "Cargo.lock" | "build.rs" | "rust-toolchain" | "rust-toolchain.toml"
-    ) {
-        return true;
-    }
-
-    if relative_path
-        .components()
-        .any(|component| component.as_os_str() == OsStr::new(".cargo"))
-    {
-        return true;
-    }
-
-    relative_path
-        .extension()
-        .and_then(OsStr::to_str)
-        .map(|ext| ext.eq_ignore_ascii_case("rs"))
-        .unwrap_or(false)
-}
-
-#[derive(Default)]
-struct Fnv1a64(u64);
-
-impl Hasher for Fnv1a64 {
-    fn finish(&self) -> u64 {
-        self.0
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        if self.0 == 0 {
-            self.0 = 0xcbf29ce484222325;
-        }
-        for byte in bytes {
-            self.0 ^= *byte as u64;
-            self.0 = self.0.wrapping_mul(0x100000001b3);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::progress::{
+        parse_cargo_progress_line, sanitize_console_line, CargoProgressEstimator,
+    };
     use super::*;
     use std::fs;
     use tempfile::TempDir;
@@ -773,6 +298,39 @@ mod tests {
     }
 
     #[test]
+    fn build_progress_does_not_queue_plugins_that_will_be_skipped() {
+        let tmp = TempDir::new().unwrap();
+        let plugin_a = tmp.path().join("plugin-a");
+        let plugin_b = tmp.path().join("plugin-b");
+        write_basic_plugin(&plugin_a);
+        fs::create_dir_all(&plugin_b).unwrap();
+
+        let links = HashMap::from([
+            ("plugin-a".to_string(), plugin_a.clone()),
+            ("plugin-b".to_string(), plugin_b),
+        ]);
+        let known = HashMap::from([(
+            "plugin-a".to_string(),
+            fingerprint_plugin(&plugin_a).expect("fingerprint"),
+        )]);
+
+        let mut events: Vec<(String, String)> = Vec::new();
+        let run = build_linked_plugins_with_progress(&links, &known, |progress| {
+            events.push((progress.plugin_id, progress.status));
+        });
+
+        assert!(!events
+            .iter()
+            .any(|(plugin_id, status)| plugin_id == "plugin-a" && status == "queued"));
+        assert!(!events
+            .iter()
+            .any(|(plugin_id, status)| plugin_id == "plugin-b" && status == "queued"));
+
+        assert_eq!(run.results.len(), 2);
+        assert!(run.results.iter().all(|result| result.skipped));
+    }
+
+    #[test]
     fn parse_cargo_progress_line_reads_done_total_and_phase() {
         let parsed =
             parse_cargo_progress_line("Building [=============>      ] 91/236: plugin-alt-tab")
@@ -792,9 +350,55 @@ mod tests {
     #[test]
     fn sanitize_console_line_removes_ansi_sequences() {
         let raw = "\u{1b}[32mBuilding [====] 3/10: plugin-a\u{1b}[0m";
-        assert_eq!(
-            sanitize_console_line(raw),
-            "Building [====] 3/10: plugin-a"
-        );
+        assert_eq!(sanitize_console_line(raw), "Building [====] 3/10: plugin-a");
+    }
+
+    #[test]
+    fn cargo_progress_estimator_rebases_initial_done_units() {
+        let mut estimator = CargoProgressEstimator::default();
+
+        let (p0, d0, t0) = estimator.update(91, 236, 0.20);
+        assert_eq!(d0, 1);
+        assert_eq!(t0, 146);
+        assert!(p0 <= 2);
+
+        let (p1, d1, t1) = estimator.update(92, 236, 0.45);
+        assert_eq!(d1, 2);
+        assert_eq!(t1, 146);
+        assert!(p1 >= p0);
+    }
+
+    #[test]
+    fn cargo_progress_estimator_stays_monotonic_with_slow_tail() {
+        let mut estimator = CargoProgressEstimator::default();
+        let samples = [
+            (0, 10, 0.2),
+            (5, 10, 1.5),
+            (7, 10, 3.5),
+            (8, 10, 8.5),
+            (9, 10, 14.0),
+        ];
+
+        let mut last = 0;
+        for (done, total, elapsed) in samples {
+            let (percent, _, _) = estimator.update(done, total, elapsed);
+            assert!(percent >= last);
+            last = percent;
+        }
+    }
+
+    #[test]
+    fn cargo_progress_estimator_rebases_after_zero_bootstrap_snapshot() {
+        let mut estimator = CargoProgressEstimator::default();
+
+        let (p0, d0, t0) = estimator.update(0, 575, 0.05);
+        assert_eq!(p0, 0);
+        assert_eq!(d0, 0);
+        assert_eq!(t0, 575);
+
+        let (p1, d1, t1) = estimator.update(560, 575, 0.20);
+        assert_eq!(d1, 1);
+        assert_eq!(t1, 16);
+        assert!(p1 < 20);
     }
 }
