@@ -17,7 +17,8 @@ const state = {
     linkError: null,
     mergedList: [],
     mergedCount: 0,
-    linkingId: null
+    linkingId: null,
+    buildProgress: {}
 };
 
 let container = null;
@@ -32,7 +33,9 @@ export function render(containerEl) {
 }
 
 function handleEvent(event) {
-    if (state.linkingId) return;
+    if (state.linkingId && (event.type === 'discovery_started' || event.type === 'discovery_complete' || event.type === 'plugins_changed')) {
+        return;
+    }
     if (event.type === 'discovery_started') {
         state.discovering = true;
         updateView();
@@ -45,11 +48,20 @@ function handleEvent(event) {
     } else if (event.type === 'build_started') {
         state.building = true;
         state.buildResults = null;
+        state.buildProgress = {};
+        updateView();
+    } else if (event.type === 'build_plugin_progress') {
+        state.buildProgress[event.plugin_id] = {
+            status: event.status || 'building',
+            percent: Number.isFinite(event.percent) ? event.percent : 0,
+            phase: event.phase || ''
+        };
         updateView();
     } else if (event.type === 'build_complete') {
         state.building = false;
         state.buildResults = event.results || [];
         updateView();
+        loadLinkedPlugins();
     }
 }
 
@@ -82,15 +94,61 @@ function totalItems() {
 }
 
 function renderBuildResults() {
-    if (!state.buildResults || state.buildResults.length === 0) return '';
-
-    const allSuccess = state.buildResults.every(r => r.success);
-    if (allSuccess) {
-        return `<span class="build-success">Build succeeded</span>`;
-    }
+    if (!state.buildResults) return '';
 
     const failed = state.buildResults.filter(r => !r.success);
+    const skipped = state.buildResults.filter(r => r.skipped);
+    if (state.buildResults.length === 0 || skipped.length === state.buildResults.length) {
+        return `<span class="build-success">All linked plugins are up to date</span>`;
+    }
+    const allSuccess = failed.length === 0;
+    if (allSuccess) {
+        const skippedText = skipped.length ? ` (${skipped.length} skipped)` : '';
+        return `<span class="build-success">Build succeeded${skippedText}</span>`;
+    }
+
     return `<span class="build-error">Build failed: ${failed.map(r => r.plugin_id).join(', ')}</span>`;
+}
+
+function shortFingerprint(value) {
+    if (!value) return '';
+    return value.slice(0, 8);
+}
+
+function renderPluginBuildMeta(plugin) {
+    if (plugin.status !== 'linked') return '';
+
+    if (!plugin.has_cargo) {
+        return `<span class="plugin-build-meta muted">Not buildable: Cargo.toml missing</span>`;
+    }
+
+    const current = shortFingerprint(plugin.fingerprint);
+    const last = shortFingerprint(plugin.last_built_fingerprint);
+    const reason = plugin.rebuild_reason || (plugin.needs_rebuild ? 'Source changed' : 'Up to date');
+    const parts = [reason];
+    if (current) parts.push(`fp ${current}`);
+    if (last) parts.push(`last ${last}`);
+    return `<span class="plugin-build-meta">${parts.join(' • ')}</span>`;
+}
+
+function renderPluginBuildProgress(plugin) {
+    const progress = state.buildProgress[plugin.id];
+    if (!progress || plugin.status !== 'linked') return '';
+
+    const percent = Math.max(0, Math.min(100, progress.percent || 0));
+    const status = progress.status || 'building';
+    const phase = progress.phase || '';
+
+    return `
+        <div class="plugin-progress-row status-${status}">
+            <span class="plugin-progress-status">${status}</span>
+            <span class="plugin-progress-phase">${phase}</span>
+            <span class="plugin-progress-percent">${percent}%</span>
+        </div>
+        <div class="plugin-progress-track status-${status}">
+            <div class="plugin-progress-fill" style="width:${percent}%"></div>
+        </div>
+    `;
 }
 
 function updateView() {
@@ -101,7 +159,12 @@ function updateView() {
             id: d.id,
             name: d.name,
             path: d.path,
-            status: 'local'
+            status: 'local',
+            has_cargo: false,
+            needs_rebuild: false,
+            rebuild_reason: '',
+            fingerprint: null,
+            last_built_fingerprint: null
         });
     }
 
@@ -110,12 +173,22 @@ function updateView() {
         if (existing) {
             existing.status = 'linked';
             existing.path = p.source || existing.path;
+            existing.has_cargo = !!p.has_cargo;
+            existing.needs_rebuild = !!p.needs_rebuild;
+            existing.rebuild_reason = p.rebuild_reason || '';
+            existing.fingerprint = p.fingerprint || null;
+            existing.last_built_fingerprint = p.last_built_fingerprint || null;
         } else {
             unified.set(p.id, {
                 id: p.id,
                 name: p.name,
                 path: p.source,
-                status: 'linked'
+                status: 'linked',
+                has_cargo: !!p.has_cargo,
+                needs_rebuild: !!p.needs_rebuild,
+                rebuild_reason: p.rebuild_reason || '',
+                fingerprint: p.fingerprint || null,
+                last_built_fingerprint: p.last_built_fingerprint || null
             });
         }
     }
@@ -125,6 +198,13 @@ function updateView() {
     state.mergedList = mergedList;
     state.selectedIndex = Math.max(0, Math.min(state.selectedIndex, mergedList.length - 1));
 
+    const visibleIds = new Set(mergedList.map(plugin => plugin.id));
+    for (const pluginId of Object.keys(state.buildProgress)) {
+        if (!visibleIds.has(pluginId)) {
+            delete state.buildProgress[pluginId];
+        }
+    }
+
     const pluginRows = mergedList.map((p, i) => {
         const isSelected = state.selectedIndex === i;
         const statusBadge = {
@@ -132,6 +212,16 @@ function updateView() {
             installed: '<span class="badge badge-installed">Installed</span>',
             local: '<span class="badge badge-local">Local Clone</span>'
         }[p.status];
+        let buildBadge = '';
+        if (p.status === 'linked') {
+            if (!p.has_cargo) {
+                buildBadge = '<span class="badge badge-build-skip">No Cargo</span>';
+            } else if (p.needs_rebuild) {
+                buildBadge = '<span class="badge badge-build-pending">Will Rebuild</span>';
+            } else {
+                buildBadge = '<span class="badge badge-build-ready">Up To Date</span>';
+            }
+        }
 
         const isLinking = state.linkingId === p.id;
         let actionBtn = '';
@@ -152,10 +242,13 @@ function updateView() {
                         <span class="plugin-name">${p.name}</span>
                         <div class="plugin-status-badges">
                             ${statusBadge}
+                            ${buildBadge}
                             ${p.hasStoreInstall ? '<span class="badge badge-installed-dim">+Store</span>' : ''}
                         </div>
                     </div>
                     <span class="plugin-path">${p.path || ''}</span>
+                    ${renderPluginBuildMeta(p)}
+                    ${renderPluginBuildProgress(p)}
                 </div>
                 <div class="plugin-actions">
                     ${actionBtn}
@@ -377,7 +470,12 @@ async function refreshDiscoveryState() {
 }
 
 async function triggerReload() {
-    await fetch('/api/dev/reload', { method: 'POST' });
+    const res = await fetch('/api/dev/reload', { method: 'POST' });
+    if (!res.ok && res.status !== 409) {
+        const message = await res.text();
+        throw new Error(message || 'Failed to queue reload');
+    }
+    return res;
 }
 
 async function triggerDiscovery() {
@@ -402,8 +500,14 @@ async function reloadPlugins() {
         if (reloadRes.ok && discoverRes.ok) {
             state.lastReload = new Date().toLocaleTimeString();
             await loadPlugins();
+        } else if (reloadRes.status === 409) {
+            state.error = 'Build already in progress';
         } else {
-            state.error = 'Reload or discovery trigger failed';
+            const [reloadText, discoverText] = await Promise.all([
+                reloadRes.text().catch(() => ''),
+                discoverRes.text().catch(() => '')
+            ]);
+            state.error = reloadText || discoverText || 'Reload or discovery trigger failed';
         }
     } catch (err) {
         state.error = err.message;

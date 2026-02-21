@@ -694,6 +694,7 @@ async fn reload_plugins(State(state): State<AppState>) -> impl IntoResponse {
 
     let plugin_manager = state.plugin_manager.clone();
     let events = state.daemon.events.clone();
+    let config_dir = crate::paths::shared_config_dir().ok();
 
     // Process the blocking builds asynchronously so we don't freeze the axum worker pool
     tokio::task::spawn_blocking(move || {
@@ -705,14 +706,39 @@ async fn reload_plugins(State(state): State<AppState>) -> impl IntoResponse {
         }
         let _guard = BuildGuard;
 
-        let dev_links = shared_config_dir_then(|d| dev::load_dev_links(d));
-        let build_results = dev::build_linked_plugins(&dev_links);
-        let results: Vec<BuildResultInfo> = build_results
+        let dev_links = config_dir
+            .as_deref()
+            .map(dev::load_dev_links)
+            .unwrap_or_default();
+        let known_fingerprints = config_dir
+            .as_deref()
+            .map(dev::load_build_fingerprints)
+            .unwrap_or_default();
+
+        let build_run =
+            dev::build_linked_plugins_with_progress(&dev_links, &known_fingerprints, |progress| {
+                events.send(DaemonEvent::BuildPluginProgress {
+                    plugin_id: progress.plugin_id,
+                    status: progress.status,
+                    percent: progress.percent,
+                    phase: progress.phase,
+                });
+            });
+
+        if let Some(config_dir) = config_dir.as_deref() {
+            if let Err(e) = dev::save_build_fingerprints(config_dir, &build_run.fingerprints) {
+                log::error!("Failed to persist build fingerprints: {}", e);
+            }
+        }
+
+        let results: Vec<BuildResultInfo> = build_run
+            .results
             .into_iter()
             .map(|r| BuildResultInfo {
                 plugin_id: r.plugin_id,
                 success: r.success,
                 output: r.output,
+                skipped: r.skipped,
             })
             .collect();
 
@@ -1088,20 +1114,6 @@ async fn set_hotkeys(body: axum::body::Bytes) -> impl IntoResponse {
 }
 
 #[cfg(feature = "dev")]
-fn shared_config_dir_then<T>(f: impl FnOnce(&std::path::Path) -> T) -> T
-where
-    T: Default,
-{
-    match crate::paths::shared_config_dir() {
-        Ok(dir) => f(&dir),
-        Err(e) => {
-            log::error!("Failed to determine config directory: {}", e);
-            T::default()
-        }
-    }
-}
-
-#[cfg(feature = "dev")]
 async fn list_linked_plugins(
     State(_state): State<AppState>,
 ) -> Result<Json<Vec<dev::LinkedPlugin>>, StatusCode> {
@@ -1109,7 +1121,12 @@ async fn list_linked_plugins(
         log::error!("Failed to determine config directory: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    dev::list_linked_plugins(&config_dir)
+    tokio::task::spawn_blocking(move || dev::list_linked_plugins(&config_dir))
+        .await
+        .map_err(|e| {
+            log::error!("Linked plugin listing worker failed: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
         .map(Json)
         .map_err(|e| {
             log::error!("Failed to list linked plugins: {}", e);
