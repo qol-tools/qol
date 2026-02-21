@@ -3,6 +3,7 @@ import { subscribe } from '../events.js';
 import * as installing from '../installing.js';
 import { apiJson } from '../api/client.js';
 import { renderFeedback as renderFeedbackComponent } from '../components/feedback.js';
+import { closeModal, matchModalAction, openModal } from '../components/modal.js';
 import { parseInstalledPayload } from '../utils/plugins.js';
 
 const PLACEHOLDER_SVG = 'data:image/svg+xml,' + encodeURIComponent(
@@ -250,9 +251,9 @@ function showConfirmModal(pluginId) {
     const plugin = state.plugins.find(p => p.id === pluginId);
     const pluginName = plugin ? plugin.name : pluginId;
     
-    const modal = document.createElement('div');
-    modal.className = 'confirm-modal';
-    modal.innerHTML = `
+    openModal(container, {
+        className: 'confirm-modal',
+        html: `
         <div class="confirm-modal-content">
             <h3>Delete "${pluginName}"?</h3>
             <p>This will uninstall the plugin and remove all its data.</p>
@@ -261,26 +262,22 @@ function showConfirmModal(pluginId) {
                 <button class="btn btn-danger confirm-delete">Delete (Enter)</button>
             </div>
         </div>
-    `;
-    
-    container.appendChild(modal);
+    `
+    });
 }
 
 function handleModalClick(e) {
-    if (e.target.closest('.confirm-cancel') || e.target.classList.contains('confirm-modal')) {
-        closeConfirmModal();
-        return;
-    }
-    
-    if (e.target.closest('.confirm-delete')) {
-        confirmUninstall();
-        return;
-    }
+    const action = matchModalAction(e, {
+        backdropClass: 'confirm-modal',
+        cancelSelectors: ['.confirm-cancel'],
+        confirmSelectors: ['.confirm-delete']
+    });
+    if (action === 'cancel') closeConfirmModal();
+    if (action === 'confirm') confirmUninstall();
 }
 
 function closeConfirmModal() {
-    const modal = container.querySelector('.confirm-modal');
-    if (modal) modal.remove();
+    closeModal(container, '.confirm-modal');
     state.confirmModalOpen = false;
     state.pendingUninstallId = null;
 }

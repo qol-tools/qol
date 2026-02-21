@@ -1,5 +1,6 @@
 import { updateSelection as updateSel, navigate as nav } from '../utils.js';
 import { parseInstalledPlugins } from '../utils/plugins.js';
+import { closeModal, matchModalAction, openModal } from '../components/modal.js';
 
 export const id = 'hotkeys';
 
@@ -128,21 +129,20 @@ function handleClick(e) {
 }
 
 function handleModalClick(e) {
-    if (e.target.classList.contains('edit-modal')) {
+    const action = matchModalAction(e, {
+        backdropClass: 'edit-modal',
+        cancelSelectors: ['.modal-cancel'],
+        confirmSelectors: ['.modal-save']
+    });
+    if (action === 'cancel') {
         closeEditModal();
         return;
     }
-    
-    if (e.target.closest('.modal-cancel')) {
-        closeEditModal();
-        return;
-    }
-    
-    if (e.target.closest('.modal-save')) {
+    if (action === 'confirm') {
         saveHotkey();
         return;
     }
-    
+
     if (e.target.closest('#hotkey-key')) {
         startKeyRecording();
         return;
@@ -162,9 +162,9 @@ function openEditModal(hotkey = null, keepPlugin = null) {
         `<option value="${p.id}" ${selectedPluginId === p.id ? 'selected' : ''}>${p.name}</option>`
     ).join('');
     
-    const modal = document.createElement('div');
-    modal.className = 'edit-modal';
-    modal.innerHTML = `
+    const modal = openModal(container, {
+        className: 'edit-modal',
+        html: `
         <div class="edit-modal-content">
             <h3>${title}</h3>
             
@@ -195,9 +195,8 @@ function openEditModal(hotkey = null, keepPlugin = null) {
                 <button class="btn btn-primary modal-save" tabindex="5">Save <kbd>Ctrl+Enter</kbd></button>
             </div>
         </div>
-    `;
-    
-    container.appendChild(modal);
+    `
+    });
     
     modal.addEventListener('click', handleModalClick);
     
@@ -264,8 +263,7 @@ function updateActionOptions(pluginId, selectedAction = null) {
 }
 
 function closeEditModal() {
-    const modal = container.querySelector('.edit-modal');
-    if (modal) modal.remove();
+    closeModal(container, '.edit-modal');
     state.editModalOpen = false;
     state.editingHotkey = null;
     state.recordingKey = false;

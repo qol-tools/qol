@@ -1,4 +1,5 @@
 import { escapeHtml } from '../../components/feedback.js';
+import { closeModal, matchModalAction, openModal } from '../../components/modal.js';
 
 export const id = 'task-runner';
 
@@ -291,9 +292,9 @@ function openEditModal(actionId = null) {
     const isNew = !actionId;
     const title = isNew ? 'New Action' : 'Edit Action';
 
-    const modal = document.createElement('div');
-    modal.className = 'edit-modal';
-    modal.innerHTML = `
+    const modal = openModal(container, {
+        className: 'edit-modal',
+        html: `
         <div class="edit-modal-content">
             <h3>${title}</h3>
 
@@ -331,9 +332,8 @@ function openEditModal(actionId = null) {
                 <button class="modal-save">Save</button>
             </div>
         </div>
-    `;
-
-    container.appendChild(modal);
+    `
+    });
     modal.addEventListener('click', handleModalClick);
 
     const firstInput = isNew
@@ -343,23 +343,17 @@ function openEditModal(actionId = null) {
 }
 
 function handleModalClick(e) {
-    if (e.target.classList.contains('edit-modal')) {
-        closeEditModal();
-        return;
-    }
-    if (e.target.closest('.modal-cancel')) {
-        closeEditModal();
-        return;
-    }
-    if (e.target.closest('.modal-save')) {
-        saveAction();
-        return;
-    }
+    const action = matchModalAction(e, {
+        backdropClass: 'edit-modal',
+        cancelSelectors: ['.modal-cancel'],
+        confirmSelectors: ['.modal-save']
+    });
+    if (action === 'cancel') closeEditModal();
+    if (action === 'confirm') saveAction();
 }
 
 function closeEditModal() {
-    const modal = container.querySelector('.edit-modal');
-    if (modal) modal.remove();
+    closeModal(container, '.edit-modal');
     state.editModalOpen = false;
     state.editingActionId = null;
 }
