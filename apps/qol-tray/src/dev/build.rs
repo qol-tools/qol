@@ -17,8 +17,8 @@ pub struct BuildResult {
 pub fn build_linked_plugins(dev_links: &HashMap<String, PathBuf>) -> Vec<BuildResult> {
     dev_links
         .iter()
-        .filter(|(_, path)| path.join("Makefile").exists())
-        .map(|(id, path)| build_plugin(id, path))
+        .filter(|(_, path)| path.join("Cargo.toml").exists())
+        .map(|(id, path)| build_cargo_plugin(id, path))
         .collect()
 }
 
@@ -143,50 +143,11 @@ where
     }
 }
 
-fn build_plugin(plugin_id: &str, path: &Path) -> BuildResult {
-    log::info!("Building linked plugin: {}", plugin_id);
+fn build_cargo_plugin(plugin_id: &str, path: &Path) -> BuildResult {
+    log::info!("Building linked plugin via cargo: {}", plugin_id);
 
-    let target = select_make_target(path);
-    run_make(plugin_id, path, target)
-}
-
-fn select_make_target(path: &Path) -> &'static str {
-    let makefile_path = path.join("Makefile");
-    let Ok(content) = std::fs::read_to_string(makefile_path) else {
-        return "dev";
-    };
-
-    if has_target(&content, "dev") {
-        return "dev";
-    }
-    if has_target(&content, "build") {
-        return "build";
-    }
-    if has_target(&content, "run") {
-        return "run";
-    }
-    if has_target(&content, "all") {
-        return "all";
-    }
-
-    "dev"
-}
-
-fn has_target(content: &str, target: &str) -> bool {
-    let prefix_colon = format!("{}:", target);
-    let prefix_space = format!("{} ", target);
-
-    content
-        .lines()
-        .map(str::trim_start)
-        .any(|line| line.starts_with(&prefix_colon) || line.starts_with(&prefix_space))
-}
-
-fn run_make(plugin_id: &str, path: &Path, target: &str) -> BuildResult {
-    log::info!("Running make {} for {}", target, plugin_id);
-
-    let output = Command::new("make")
-        .arg(target)
+    let output = Command::new("cargo")
+        .args(["build"])
         .current_dir(path)
         .output();
 
@@ -198,9 +159,9 @@ fn run_make(plugin_id: &str, path: &Path, target: &str) -> BuildResult {
             let combined = format!("{}{}", stdout, stderr);
 
             if success {
-                log::info!("Build succeeded: {}", plugin_id);
+                log::info!("Cargo build succeeded for {}", plugin_id);
             } else {
-                log::error!("Build failed: {}\n{}", plugin_id, combined);
+                log::error!("Cargo build failed for {}:\n{}", plugin_id, combined);
             }
 
             BuildResult {
@@ -210,7 +171,7 @@ fn run_make(plugin_id: &str, path: &Path, target: &str) -> BuildResult {
             }
         }
         Err(e) => {
-            let error = format!("Failed to run make: {}", e);
+            let error = format!("Failed to run cargo build: {}", e);
             log::error!("Build error for {}: {}", plugin_id, error);
 
             BuildResult {
