@@ -62,11 +62,18 @@ fn load_alt_tab_config() -> AltTabConfig {
             continue;
         };
 
-        if let Ok(config) = serde_json::from_str::<AltTabConfig>(&contents) {
-            return config;
+        match serde_json::from_str::<AltTabConfig>(&contents) {
+            Ok(config) => {
+                println!("Loaded config from {}: {:?}", path.display(), config);
+                return config;
+            }
+            Err(e) => {
+                println!("Failed to parse config at {}: {}", path.display(), e);
+            }
         }
     }
 
+    println!("Using default config");
     AltTabConfig::default()
 }
 
@@ -227,42 +234,33 @@ impl ListDelegate for WindowDelegate {
         let is_selected = self.selected_index == Some(ix);
         let win = &self.windows[ix.row];
 
-        let title = div()
-            .text_color(rgb(0xf2f5fb))
-            .text_sm()
-            .text_ellipsis()
-            .child(win.title.clone())
-            .into_any_element();
-
         let row = match self.preview_mode {
             PreviewMode::BelowList => div()
                 .flex()
-                .flex_col()
                 .w_full()
-                .h(px(126.0))
+                .items_center()
+                .h(px(64.0))
                 .px_4()
-                .py_2()
-                .gap_2()
+                .gap_3()
                 .when(is_selected, |style: Div| style.bg(rgb(0x2d3342)))
-                .child(title)
-                .child(preview_tile(&win.preview_path, 228.0, 84.0)),
-            PreviewMode::PreviewOnly => div()
-                .flex()
-                .flex_col()
-                .w_full()
-                .h(px(158.0))
-                .px_4()
-                .py_2()
-                .gap_2()
-                .when(is_selected, |style: Div| style.bg(rgb(0x2d3342)))
-                .child(preview_tile(&win.preview_path, 228.0, 112.0))
+                .child(preview_tile(&win.preview_path, 86.0, 48.0))
                 .child(
                     div()
-                        .text_color(rgb(0xc4cad8))
-                        .text_xs()
+                        .flex_1()
+                        .text_color(rgb(0xf2f5fb))
+                        .text_sm()
                         .text_ellipsis()
                         .child(win.title.clone()),
                 ),
+            PreviewMode::PreviewOnly => div()
+                .flex()
+                .justify_center()
+                .items_center()
+                .w_full()
+                .h(px(240.0))
+                .p_4()
+                .when(is_selected, |style: Div| style.bg(rgb(0x2d3342)))
+                .child(preview_tile(&win.preview_path, 384.0, 216.0)),
         };
 
         Some(ListItem::new(("window", ix.row)).child(row))
