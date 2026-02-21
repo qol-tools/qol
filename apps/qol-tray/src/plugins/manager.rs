@@ -3,6 +3,8 @@ use crate::paths;
 use anyhow::Result;
 use std::collections::HashMap;
 
+const DEV_DAEMON_AUTOSTART_MARKER: &str = ".qol-tray-dev-autostart";
+
 pub struct PluginManager {
     plugins: HashMap<String, Plugin>,
 }
@@ -24,6 +26,10 @@ impl PluginManager {
 
         let dev_links = load_dev_links_if_dev();
         let resolved = super::resolver::resolve_all(&plugins_dir, &dev_links);
+        let resolved_sources: HashMap<String, super::resolver::PluginSource> = resolved
+            .iter()
+            .map(|resolved| (resolved.id.clone(), resolved.source.clone()))
+            .collect();
 
         for r in &resolved {
             log::info!("Resolved plugin: {} ({:?}) from {:?}", r.id, r.source, r.path);
@@ -36,6 +42,17 @@ impl PluginManager {
         let mut pids = Vec::new();
 
         for mut plugin in plugins {
+            let daemon_enabled = plugin
+                .manifest
+                .daemon
+                .as_ref()
+                .is_some_and(|daemon| daemon.enabled);
+            let source = resolved_sources.get(&plugin.id);
+            if !should_autostart_daemon_for_source(&plugin.id, &plugin.path, daemon_enabled, source) {
+                self.plugins.insert(plugin.id.clone(), plugin);
+                continue;
+            }
+
             if let Err(e) = plugin.start_daemon() {
                 log::error!("Failed to start daemon for plugin {}: {}", plugin.id, e);
             }
@@ -97,6 +114,34 @@ fn load_dev_links_if_dev() -> HashMap<String, std::path::PathBuf> {
 #[cfg(not(feature = "dev"))]
 fn load_dev_links_if_dev() -> HashMap<String, std::path::PathBuf> {
     HashMap::new()
+}
+
+fn should_autostart_daemon_for_source(
+    plugin_id: &str,
+    plugin_path: &std::path::Path,
+    daemon_enabled: bool,
+    source: Option<&super::resolver::PluginSource>,
+) -> bool {
+    if !daemon_enabled {
+        return true;
+    }
+
+    if !matches!(source, Some(super::resolver::PluginSource::DevLinked)) {
+        return true;
+    }
+
+    let marker_path = plugin_path.join(DEV_DAEMON_AUTOSTART_MARKER);
+    if marker_path.is_file() {
+        return true;
+    }
+
+    log::warn!(
+        "Daemon autostart blocked for dev-linked plugin {} at {}. Create {} to opt in.",
+        plugin_id,
+        plugin_path.display(),
+        marker_path.display()
+    );
+    false
 }
 
 fn daemon_pids_path() -> Option<std::path::PathBuf> {
@@ -362,4 +407,56 @@ fn save_daemon_pids(pids: &[u32]) {
     let Some(path) = daemon_pids_path() else { return };
     let content = pids.iter().map(|p| p.to_string()).collect::<Vec<_>>().join("\n");
     let _ = std::fs::write(&path, content);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{should_autostart_daemon_for_source, DEV_DAEMON_AUTOSTART_MARKER};
+    use crate::plugins::resolver::PluginSource;
+
+    #[test]
+    fn allows_installed_plugin_daemon_autostart() {
+        let temp = tempfile::TempDir::new().unwrap();
+        assert!(should_autostart_daemon_for_source(
+            "plugin",
+            temp.path(),
+            true,
+            Some(&PluginSource::Installed),
+        ));
+    }
+
+    #[test]
+    fn allows_dev_linked_plugin_when_daemon_disabled() {
+        let temp = tempfile::TempDir::new().unwrap();
+        assert!(should_autostart_daemon_for_source(
+            "plugin",
+            temp.path(),
+            false,
+            Some(&PluginSource::DevLinked),
+        ));
+    }
+
+    #[test]
+    fn blocks_dev_linked_plugin_daemon_autostart_without_marker() {
+        let temp = tempfile::TempDir::new().unwrap();
+        assert!(!should_autostart_daemon_for_source(
+            "plugin",
+            temp.path(),
+            true,
+            Some(&PluginSource::DevLinked),
+        ));
+    }
+
+    #[test]
+    fn allows_dev_linked_plugin_daemon_autostart_with_marker() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::write(temp.path().join(DEV_DAEMON_AUTOSTART_MARKER), "").unwrap();
+
+        assert!(should_autostart_daemon_for_source(
+            "plugin",
+            temp.path(),
+            true,
+            Some(&PluginSource::DevLinked),
+        ));
+    }
 }
