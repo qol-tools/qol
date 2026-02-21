@@ -1,4 +1,5 @@
 import { updateSelection as updateSel, navigate as nav } from '../utils.js';
+import { apiJson, apiResponse, jsonRequest } from '../api/client.js';
 import { parseInstalledPlugins } from '../utils/plugins.js';
 import { closeModal, matchModalAction, openModal } from '../components/modal.js';
 
@@ -41,19 +42,13 @@ async function loadData() {
     listEl.addEventListener('click', handleClick);
     
     try {
-        const [hotkeysRes, pluginsRes] = await Promise.all([
-            fetch('/api/hotkeys'),
-            fetch('/api/installed')
+        const [hotkeysConfig, installedPluginsPayload] = await Promise.all([
+            apiJson('/api/hotkeys'),
+            apiJson('/api/installed')
         ]);
-        
-        if (hotkeysRes.ok) {
-            const config = await hotkeysRes.json();
-            state.hotkeys = config.hotkeys || [];
-        }
-        
-        if (pluginsRes.ok) {
-            state.plugins = parseInstalledPlugins(await pluginsRes.json());
-        }
+
+        state.hotkeys = hotkeysConfig.hotkeys || [];
+        state.plugins = parseInstalledPlugins(installedPluginsPayload);
         
         renderList();
         if (state.hotkeys.length > 0) {
@@ -404,11 +399,7 @@ async function deleteSelected() {
 
 async function persistHotkeys() {
     try {
-        await fetch('/api/hotkeys', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ hotkeys: state.hotkeys })
-        });
+        await apiResponse('/api/hotkeys', jsonRequest('PUT', { hotkeys: state.hotkeys }));
     } catch (error) {
         console.error('Failed to save hotkeys:', error);
     }
