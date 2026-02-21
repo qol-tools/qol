@@ -16,6 +16,10 @@ mod x11_utils {
         Vec::new()
     }
 
+    pub fn cached_preview_path(_window_id: u32) -> Option<String> {
+        None
+    }
+
     pub fn capture_preview(_window_id: u32, _max_w: usize, _max_h: usize) -> Option<String> {
         None
     }
@@ -30,13 +34,16 @@ use gpui_component::{
 };
 use monitor::MonitorTracker;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
+use std::time::Duration;
 
 const SETTINGS_URL: &str = "http://127.0.0.1:42700/plugins/plugin-alt-tab/";
 const DEFAULT_ESTIMATED_WINDOW_COUNT: usize = 8;
+const PREWARM_REFRESH_INTERVAL_MS: u64 = 4000;
 const GRID_GAP: f32 = 14.0;
 const GRID_PADDING: f32 = 22.0;
 const GRID_CARD_WIDTH: f32 = 220.0;
@@ -218,6 +225,78 @@ fn rendered_column_count(window: &Window, total_items: usize) -> usize {
     let usable = (width - GRID_RENDER_PADDING_X_TOTAL).max(GRID_CARD_WIDTH);
     let cols = ((usable + GRID_RENDER_GAP_X) / (GRID_CARD_WIDTH + GRID_RENDER_GAP_X)).floor();
     (cols as usize).max(1).min(total_items)
+}
+
+async fn load_windows_with_previews(
+    executor: &BackgroundExecutor,
+    cached_windows: Vec<WindowInfo>,
+    refresh_all_previews: bool,
+) -> Vec<WindowInfo> {
+    let mut windows = executor
+        .spawn(async move { x11_utils::get_open_windows() })
+        .await;
+    if windows.is_empty() {
+        return windows;
+    }
+
+    let mut cached_paths = HashMap::new();
+    for win in cached_windows {
+        if let Some(path) = win.preview_path {
+            cached_paths.insert(win.id, path);
+        }
+    }
+
+    for win in &mut windows {
+        if let Some(path) = cached_paths.get(&win.id) {
+            win.preview_path = Some(path.clone());
+            continue;
+        }
+        if let Some(path) = x11_utils::cached_preview_path(win.id) {
+            win.preview_path = Some(path);
+        }
+    }
+
+    let capture_targets: Vec<(usize, u32)> = windows
+        .iter()
+        .enumerate()
+        .filter(|(_, win)| refresh_all_previews || win.preview_path.is_none())
+        .map(|(i, win)| (i, win.id))
+        .collect();
+    if capture_targets.is_empty() {
+        return windows;
+    }
+
+    let (tx, rx) = mpsc::channel::<(usize, Option<String>)>();
+    for (i, id) in &capture_targets {
+        let tx = tx.clone();
+        let i = *i;
+        let id = *id;
+        executor
+            .spawn(async move {
+                let path = x11_utils::capture_preview(id, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT);
+                let _ = tx.send((i, path));
+            })
+            .detach();
+    }
+    drop(tx);
+
+    let rx = Arc::new(std::sync::Mutex::new(rx));
+    for _ in 0..capture_targets.len() {
+        let rx = rx.clone();
+        let next = executor
+            .spawn(async move { rx.lock().ok()?.recv().ok() })
+            .await;
+        let Some((i, path_opt)) = next else {
+            break;
+        };
+        if let Some(path) = path_opt {
+            if i < windows.len() {
+                windows[i].preview_path = Some(path);
+            }
+        }
+    }
+
+    windows
 }
 
 // ─── Preview tile ─────────────────────────────────────────────────────────────
@@ -504,18 +583,26 @@ impl AltTabApp {
                 let cx = cx.clone();
                 async move {
                     let executor = cx.background_executor().clone();
-                    let windows = executor
-                        .spawn(async move { x11_utils::get_open_windows() })
-                        .await;
+                    let cached = window_cache
+                        .lock()
+                        .map(|cache| cache.clone())
+                        .unwrap_or_default();
+                    let windows = load_windows_with_previews(&executor, cached, false).await;
                     if let Ok(mut cache) = window_cache.lock() {
                         *cache = windows.clone();
                     }
+                    let missing_targets: Vec<(usize, u32)> = windows
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, win)| win.preview_path.is_none())
+                        .map(|(i, win)| (i, win.id))
+                        .collect();
                     let ids: Vec<u32> = windows.iter().map(|w| w.id).collect();
                     last_window_count.store(ids.len().max(1), Ordering::Relaxed);
 
                     let _ = cx.update(|app_cx| {
                         let _ = list_state_clone.update(app_cx, |state, cx| {
-                            state.delegate_mut().set_windows(windows);
+                            state.delegate_mut().set_windows(windows.clone());
                             cx.notify();
                         });
                         let _ = this.update(app_cx, |_, cx: &mut gpui::Context<AltTabApp>| {
@@ -533,7 +620,7 @@ impl AltTabApp {
                     });
 
                     let (tx, rx) = mpsc::channel::<(usize, Option<String>)>();
-                    for (i, id) in ids.into_iter().enumerate() {
+                    for (i, id) in missing_targets {
                         let tx = tx.clone();
                         executor
                             .spawn(async move {
@@ -897,7 +984,7 @@ fn open_picker(
     cx.activate(true);
 }
 
-fn run_app(config: AltTabConfig, rx: mpsc::Receiver<daemon::Command>) {
+fn run_app(config: AltTabConfig, rx: mpsc::Receiver<daemon::Command>, show_on_start: bool) {
     let app = Application::new();
 
     app.run(move |cx: &mut App| {
@@ -916,15 +1003,38 @@ fn run_app(config: AltTabConfig, rx: mpsc::Receiver<daemon::Command>) {
         let window_cache: Arc<std::sync::Mutex<Vec<WindowInfo>>> =
             Arc::new(std::sync::Mutex::new(Vec::new()));
 
-        // Show the picker immediately on first launch
-        open_picker(
-            &config,
-            &current,
-            &tracker,
-            last_window_count.clone(),
-            window_cache.clone(),
-            cx,
-        );
+        // Prewarm window + preview cache while daemon is alive so first user open is hot.
+        let warm_cache = window_cache.clone();
+        let warm_count = last_window_count.clone();
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            let executor = cx.background_executor().clone();
+            loop {
+                let cached = warm_cache
+                    .lock()
+                    .map(|cache| cache.clone())
+                    .unwrap_or_default();
+                let refreshed = load_windows_with_previews(&executor, cached, true).await;
+                warm_count.store(refreshed.len().max(1), Ordering::Relaxed);
+                if let Ok(mut cache) = warm_cache.lock() {
+                    *cache = refreshed;
+                }
+                executor
+                    .timer(Duration::from_millis(PREWARM_REFRESH_INTERVAL_MS))
+                    .await;
+            }
+        })
+        .detach();
+
+        if show_on_start {
+            open_picker(
+                &config,
+                &current,
+                &tracker,
+                last_window_count.clone(),
+                window_cache.clone(),
+                cx,
+            );
+        }
 
         // Poll the daemon channel for Show/Kill commands
         let rx = std::sync::Arc::new(std::sync::Mutex::new(rx));
@@ -938,14 +1048,13 @@ fn run_app(config: AltTabConfig, rx: mpsc::Receiver<daemon::Command>) {
 
             match cmd {
                 Some(daemon::Command::Show) => {
-                    let config2 = config.clone();
                     let current2 = current.clone();
                     let tracker2 = tracker_clone.clone();
                     let last_window_count2 = last_window_count.clone();
                     let window_cache2 = window_cache.clone();
                     let _ = cx.update(|app_cx| {
                         open_picker(
-                            &config2,
+                            &config,
                             &current2,
                             &tracker2,
                             last_window_count2,
@@ -1006,7 +1115,7 @@ fn main() {
         return;
     }
 
-    run_app(config, rx);
+    run_app(config, rx, is_show);
     daemon::cleanup();
 }
 

@@ -8,6 +8,15 @@ pub struct WindowInfo {
     pub preview_path: Option<String>,
 }
 
+pub fn cached_preview_path(window_id: u32) -> Option<String> {
+    let cache_dir = preview_cache_dir()?;
+    let path = cache_dir.join(format!("{}.png", window_id));
+    if !path.is_file() {
+        return None;
+    }
+    Some(path.to_string_lossy().to_string())
+}
+
 pub fn get_open_windows() -> Vec<WindowInfo> {
     let mut windows = Vec::new();
 
