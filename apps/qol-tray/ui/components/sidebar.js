@@ -1,3 +1,5 @@
+import { clampPercent, formatDownloadingProgress, formatPhaseProgress } from '../utils/progress.js';
+
 const LABELS = {
     plugins: 'Plugins',
     store: 'Store',
@@ -26,67 +28,103 @@ export function render(
     return `<div class="sidebar-nav">${items}</div>${versionHtml}`;
 }
 
-function renderVersionFooter(version, state, isDevMode) {
-    if (state && state.status === 'downloading') {
-        const percent = state.percent || 0;
-        const label = percent > 0 ? `Downloading ${percent}%` : 'Downloading...';
-        return `<div class="version-item is-downloading">
-                    <div class="progress-fill" style="width: ${percent}%"></div>
-                    <span class="version-main">v${version}</span>
-                    <span class="version-sub">${label}</span>
-                </div>`;
-    }
-    if (state && state.status === 'done') {
-        return `<div class="version-item update-done">
-                    <span class="version-main">Restarting...</span>
-                    <span class="version-sub">v${version} installed</span>
-                </div>`;
-    }
+function renderDevProgress(version, label, percent, extraClass = '') {
+    const classes = ['version-item', 'is-dev', 'is-downloading'];
+    if (extraClass) classes.push(extraClass);
+    return `<div class="${classes.join(' ')}">
+                <div class="progress-fill" style="width: ${percent}%"></div>
+                <span class="version-main">v${version}<span class="version-tag">DEV</span></span>
+                <span class="version-sub">${label}</span>
+            </div>`;
+}
 
-    if (isDevMode) {
-        if (state && state.status === 'compiling') {
-            const percent = state.percent || 0;
-            const phase = state.phase || 'Recompiling QoL Tray';
-            const label = percent > 0 ? `${phase} ${percent}%` : `${phase}...`;
-            return `<div class="version-item is-dev is-downloading compiling">
-                        <div class="progress-fill" style="width: ${percent}%"></div>
-                        <span class="version-main">v${version}<span class="version-tag">DEV</span></span>
-                        <span class="version-sub">${label}</span>
-                    </div>`;
-        }
-        if (state && state.status === 'recompile_done') {
-            return `<div class="version-item is-dev update-done">
-                        <span class="version-main">v${version}<span class="version-tag">DEV</span></span>
-                        <span class="version-sub">Recompile complete</span>
-                    </div>`;
-        }
-        if (state && state.status === 'error') {
-            const detail = state.message ? `: ${state.message}` : '';
-            return `<div class="version-item is-dev" data-action="dev-recompile">
-                        <span class="version-main">v${version}<span class="version-tag">DEV</span></span>
-                        <span class="version-sub">Recompile failed${detail}. Click to retry</span>
-                    </div>`;
-        }
+const DEV_FOOTER_RENDERERS = {
+    compiling(version, state) {
+        const percent = clampPercent(state?.percent);
+        const label = formatPhaseProgress(state?.phase, percent, 'Recompiling QoL Tray');
+        return renderDevProgress(version, label, percent, 'compiling');
+    },
+    downloading(version, state) {
+        const percent = clampPercent(state?.percent);
+        const label = formatDownloadingProgress(percent);
+        return renderDevProgress(version, label, percent);
+    },
+    recompile_done(version) {
+        return `<div class="version-item is-dev update-done">
+                    <span class="version-main">v${version}<span class="version-tag">DEV</span></span>
+                    <span class="version-sub">Recompile complete</span>
+                </div>`;
+    },
+    done(version) {
+        return `<div class="version-item is-dev update-done">
+                    <span class="version-main">v${version}<span class="version-tag">DEV</span></span>
+                    <span class="version-sub">Update complete</span>
+                </div>`;
+    },
+    error(version, state) {
+        const detail = state?.message ? `: ${state.message}` : '';
+        return `<div class="version-item is-dev" data-action="dev-recompile">
+                    <span class="version-main">v${version}<span class="version-tag">DEV</span></span>
+                    <span class="version-sub">Action failed${detail}. Click to retry</span>
+                </div>`;
+    },
+    idle(version) {
         return `<div class="version-item is-dev" data-action="dev-recompile">
                     <span class="version-main">v${version}<span class="version-tag">DEV</span></span>
                     <span class="version-sub">Recompile QoL Tray</span>
                 </div>`;
     }
+};
 
-    if (state && state.status === 'checking') {
+const STABLE_FOOTER_RENDERERS = {
+    downloading(version, state) {
+        const percent = clampPercent(state?.percent);
+        const label = formatDownloadingProgress(percent);
+        return `<div class="version-item is-downloading">
+                    <div class="progress-fill" style="width: ${percent}%"></div>
+                    <span class="version-main">v${version}</span>
+                    <span class="version-sub">${label}</span>
+                </div>`;
+    },
+    done(version) {
+        return `<div class="version-item update-done">
+                    <span class="version-main">Restarting...</span>
+                    <span class="version-sub">v${version} installed</span>
+                </div>`;
+    },
+    checking(version) {
         return `<div class="version-item">
                     <span class="version-main">v${version}</span>
                     <span class="version-sub">Checking for updates...</span>
                 </div>`;
-    }
-    if (state && state.status === 'available') {
+    },
+    available(version, state) {
         return `<div class="version-item has-update" data-action="self-update">
-                    <span class="version-main">v${state.latest} available</span>
+                    <span class="version-main">v${state?.latest} available</span>
                     <span class="version-sub">Click to update from v${version}</span>
                 </div>`;
+    },
+    error(version) {
+        return `<div class="version-item" data-action="check-update">
+                    <span class="version-main">v${version}</span>
+                    <span class="version-sub">Update failed. Click to retry</span>
+                </div>`;
+    },
+    idle(version) {
+        return `<div class="version-item" data-action="check-update">
+                    <span class="version-main">v${version}</span>
+                    <span class="version-sub">Check for updates</span>
+                </div>`;
     }
-    return `<div class="version-item" data-action="check-update">
-                <span class="version-main">v${version}</span>
-                <span class="version-sub">Check for updates</span>
-            </div>`;
+};
+
+export function renderVersionFooter(version, state, isDevMode) {
+    const status = state?.status || 'idle';
+    if (isDevMode) {
+        const renderer = DEV_FOOTER_RENDERERS[status] || DEV_FOOTER_RENDERERS.idle;
+        return renderer(version, state);
+    }
+
+    const renderer = STABLE_FOOTER_RENDERERS[status] || STABLE_FOOTER_RENDERERS.idle;
+    return renderer(version, state);
 }
