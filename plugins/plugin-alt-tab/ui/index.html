@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alt Tab Settings</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main class="panel">
+        <header class="hero">
+            <h1>Alt Tab Settings</h1>
+            <p>Choose how live window previews should be rendered.</p>
+        </header>
+
+        <section class="card">
+            <h2>Preview Layout</h2>
+
+            <label class="mode-option">
+                <input type="radio" name="preview-mode" value="below_list">
+                <span class="mode-copy">
+                    <strong>Previews Below List</strong>
+                    <small>Keep the classic window list and show preview thumbnails beneath each row.</small>
+                </span>
+            </label>
+
+            <label class="mode-option">
+                <input type="radio" name="preview-mode" value="preview_only">
+                <span class="mode-copy">
+                    <strong>Preview-First Layout</strong>
+                    <small>Use larger previews as the primary content and treat labels as secondary.</small>
+                </span>
+            </label>
+
+            <div class="mock" id="layout-mock" data-mode="below_list">
+                <div class="mock-row mock-row--below">
+                    <div class="mock-title">Firefox</div>
+                    <div class="mock-preview"></div>
+                </div>
+                <div class="mock-row mock-row--preview">
+                    <div class="mock-preview mock-preview--large"></div>
+                    <div class="mock-title mock-title--subtle">Terminal</div>
+                </div>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Quick Note</h2>
+            <p>Save changes, then trigger Alt Tab again to apply the updated layout.</p>
+        </section>
+
+        <footer class="actions">
+            <button id="save-btn" class="save">Save Settings</button>
+            <span id="save-status"></span>
+        </footer>
+    </main>
+
+    <script type="module" src="index.js"></script>
+</body>
+</html>
