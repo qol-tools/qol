@@ -431,7 +431,7 @@ impl WindowDelegate {
                 .arg(win.id.to_string())
                 .status()
                 .ok();
-            window.remove_window();
+            window.minimize_window();
         }
     }
 
@@ -547,7 +547,6 @@ enum GridDirection {
 struct AltTabApp {
     list_state: Entity<ListState<WindowDelegate>>,
     focus_handle: FocusHandle,
-    _focus_out_subscription: Subscription,
 }
 
 impl AltTabApp {
@@ -571,14 +570,6 @@ impl AltTabApp {
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle);
         let mut async_window = window.to_async(cx);
-        let focus_handle_for_sub = focus_handle.clone();
-        let focus_out_subscription = cx.on_focus_out(
-            &focus_handle_for_sub,
-            window,
-            |_this, _event, window, _cx| {
-                window.remove_window();
-            },
-        );
 
         let list_state_clone = list_state.clone();
         cx.spawn(
@@ -680,7 +671,6 @@ impl AltTabApp {
         Self {
             list_state,
             focus_handle,
-            _focus_out_subscription: focus_out_subscription,
         }
     }
 
@@ -712,7 +702,7 @@ impl Render for AltTabApp {
             .h_full()
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
-                    "escape" => window.remove_window(),
+                    "escape" => window.minimize_window(),
                     "enter" => {
                         // Activate selected and close
                         let win_id =
@@ -734,7 +724,7 @@ impl Render for AltTabApp {
                                 .arg(id.to_string())
                                 .status()
                                 .ok();
-                            window.remove_window();
+                            window.minimize_window();
                         }
                     }
                     // Navigate — do NOT call s.focus() after, that would steal focus
@@ -871,7 +861,7 @@ impl Render for AltTabApp {
                                             .arg(id.to_string())
                                             .status()
                                             .ok();
-                                        window.remove_window();
+                                        window.minimize_window();
                                     }
                                 })
                                 .when(is_selected, |s| {
@@ -971,7 +961,7 @@ fn open_picker(
         }
 
         let _ = handle.update(cx, |_view, window: &mut Window, _cx| {
-            window.remove_window();
+            window.minimize_window();
         });
         *current.borrow_mut() = None;
     }
@@ -1080,48 +1070,34 @@ fn run_app(config: AltTabConfig, rx: mpsc::Receiver<daemon::Command>, show_on_st
         // Poll the daemon channel for Show/Kill commands
         let rx = std::sync::Arc::new(std::sync::Mutex::new(rx));
         let tracker_clone = tracker.clone();
-        cx.spawn(async move |cx: &mut AsyncApp| {
-            let executor = cx.background_executor().clone();
-            loop {
-                let cmd = {
-                    match rx.lock() {
-                        Ok(rx_guard) => {
-                            use std::sync::mpsc::TryRecvError;
-                            match rx_guard.try_recv() {
-                                Ok(cmd) => Some(cmd),
-                                Err(TryRecvError::Empty) => None,
-                                Err(TryRecvError::Disconnected) => Some(daemon::Command::Kill),
-                            }
-                        }
-                        Err(_) => Some(daemon::Command::Kill),
-                    }
-                };
+        cx.spawn(async move |cx: &mut AsyncApp| loop {
+            let rx2 = rx.clone();
+            let cmd = cx
+                .background_executor()
+                .spawn(async move { rx2.lock().ok()?.recv().ok() })
+                .await;
 
-                match cmd {
-                    Some(daemon::Command::Show) => {
-                        let current2 = current.clone();
-                        let tracker2 = tracker_clone.clone();
-                        let last_window_count2 = last_window_count.clone();
-                        let window_cache2 = window_cache.clone();
-                        let _ = cx.update(|app_cx| {
-                            open_picker(
-                                &config,
-                                &current2,
-                                &tracker2,
-                                last_window_count2,
-                                window_cache2,
-                                app_cx,
-                            );
-                        });
-                    }
-                    Some(daemon::Command::Kill) => {
-                        cx.update(|cx| cx.quit()).ok();
-                        break;
-                    }
-                    None => {}
+            match cmd {
+                Some(daemon::Command::Show) => {
+                    let current2 = current.clone();
+                    let tracker2 = tracker_clone.clone();
+                    let last_window_count2 = last_window_count.clone();
+                    let window_cache2 = window_cache.clone();
+                    let _ = cx.update(|app_cx| {
+                        open_picker(
+                            &config,
+                            &current2,
+                            &tracker2,
+                            last_window_count2,
+                            window_cache2,
+                            app_cx,
+                        );
+                    });
                 }
-
-                executor.timer(Duration::from_millis(8)).await;
+                Some(daemon::Command::Kill) | None => {
+                    cx.update(|cx| cx.quit()).ok();
+                    break;
+                }
             }
         })
         .detach();
