@@ -20,6 +20,14 @@ mod x11_utils {
         None
     }
 
+    pub fn capture_previews_batch(
+        _targets: &[(usize, u32)],
+        _max_w: usize,
+        _max_h: usize,
+    ) -> Vec<(usize, Option<String>)> {
+        Vec::new()
+    }
+
     pub fn capture_preview(_window_id: u32, _max_w: usize, _max_h: usize) -> Option<String> {
         None
     }
@@ -43,7 +51,7 @@ use std::time::Duration;
 
 const SETTINGS_URL: &str = "http://127.0.0.1:42700/plugins/plugin-alt-tab/";
 const DEFAULT_ESTIMATED_WINDOW_COUNT: usize = 8;
-const PREWARM_REFRESH_INTERVAL_MS: u64 = 4000;
+const PREWARM_REFRESH_INTERVAL_MS: u64 = 1200;
 const GRID_GAP: f32 = 14.0;
 const GRID_PADDING: f32 = 22.0;
 const GRID_CARD_WIDTH: f32 = 220.0;
@@ -266,29 +274,14 @@ async fn load_windows_with_previews(
         return windows;
     }
 
-    let (tx, rx) = mpsc::channel::<(usize, Option<String>)>();
-    for (i, id) in &capture_targets {
-        let tx = tx.clone();
-        let i = *i;
-        let id = *id;
-        executor
-            .spawn(async move {
-                let path = x11_utils::capture_preview(id, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT);
-                let _ = tx.send((i, path));
-            })
-            .detach();
-    }
-    drop(tx);
+    let targets = capture_targets.clone();
+    let captured = executor
+        .spawn(async move {
+            x11_utils::capture_previews_batch(&targets, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT)
+        })
+        .await;
 
-    let rx = Arc::new(std::sync::Mutex::new(rx));
-    for _ in 0..capture_targets.len() {
-        let rx = rx.clone();
-        let next = executor
-            .spawn(async move { rx.lock().ok()?.recv().ok() })
-            .await;
-        let Some((i, path_opt)) = next else {
-            break;
-        };
+    for (i, path_opt) in captured {
         if let Some(path) = path_opt {
             if i < windows.len() {
                 windows[i].preview_path = Some(path);
@@ -438,7 +431,7 @@ impl WindowDelegate {
                 .arg(win.id.to_string())
                 .status()
                 .ok();
-            window.remove_window();
+            window.minimize_window();
         }
     }
 
@@ -570,6 +563,7 @@ impl AltTabApp {
         if !cached_windows.is_empty() {
             last_window_count.store(cached_windows.len().max(1), Ordering::Relaxed);
         }
+        let has_cached_windows = !cached_windows.is_empty();
         let delegate = WindowDelegate::new(cached_windows);
 
         let list_state = cx.new(|cx| ListState::new(delegate, window, cx));
@@ -583,6 +577,9 @@ impl AltTabApp {
                 let cx = cx.clone();
                 async move {
                     let executor = cx.background_executor().clone();
+                    if has_cached_windows {
+                        return;
+                    }
                     let cached = window_cache
                         .lock()
                         .map(|cache| cache.clone())
@@ -676,6 +673,14 @@ impl AltTabApp {
             focus_handle,
         }
     }
+
+    fn apply_cached_windows(&mut self, windows: Vec<WindowInfo>, cx: &mut Context<Self>) {
+        self.list_state.update(cx, |state, cx| {
+            state.delegate_mut().set_windows(windows);
+            cx.notify();
+        });
+        cx.notify();
+    }
 }
 
 impl Focusable for AltTabApp {
@@ -697,7 +702,7 @@ impl Render for AltTabApp {
             .h_full()
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
-                    "escape" => window.remove_window(),
+                    "escape" => window.minimize_window(),
                     "enter" => {
                         // Activate selected and close
                         let win_id =
@@ -719,7 +724,7 @@ impl Render for AltTabApp {
                                 .arg(id.to_string())
                                 .status()
                                 .ok();
-                            window.remove_window();
+                            window.minimize_window();
                         }
                     }
                     // Navigate — do NOT call s.focus() after, that would steal focus
@@ -856,7 +861,7 @@ impl Render for AltTabApp {
                                             .arg(id.to_string())
                                             .status()
                                             .ok();
-                                        window.remove_window();
+                                        window.minimize_window();
                                     }
                                 })
                                 .when(is_selected, |s| {
@@ -927,13 +932,39 @@ fn open_picker(
     window_cache: Arc<std::sync::Mutex<Vec<WindowInfo>>>,
     cx: &mut App,
 ) {
-    // Close any existing picker first
+    // Fast path: reuse existing picker window instead of recreating it.
     if let Some(handle) = current.borrow().as_ref() {
+        let cached_windows = window_cache
+            .lock()
+            .map(|cache| cache.clone())
+            .unwrap_or_default();
+        let target_count = cached_windows.len().max(1);
+        let (target_w, target_h) = picker_dimensions(target_count);
+        if handle
+            .update(cx, |view, window: &mut Window, cx| {
+                view.apply_cached_windows(cached_windows.clone(), cx);
+
+                let current_size = window.window_bounds().get_bounds().size;
+                let next_size = size(px(target_w), px(target_h));
+                if (current_size.width.to_f64() - target_w as f64).abs() >= 1.0
+                    || (current_size.height.to_f64() - target_h as f64).abs() >= 1.0
+                {
+                    window.resize(next_size);
+                }
+                window.focus(&view.focus_handle(cx));
+                window.activate_window();
+            })
+            .is_ok()
+        {
+            cx.activate(true);
+            return;
+        }
+
         let _ = handle.update(cx, |_view, window: &mut Window, _cx| {
-            window.remove_window();
+            window.minimize_window();
         });
+        *current.borrow_mut() = None;
     }
-    *current.borrow_mut() = None;
 
     let cached_count = window_cache.lock().map(|cache| cache.len()).unwrap_or(0);
     let estimated_count = cached_count
@@ -1013,7 +1044,7 @@ fn run_app(config: AltTabConfig, rx: mpsc::Receiver<daemon::Command>, show_on_st
                     .lock()
                     .map(|cache| cache.clone())
                     .unwrap_or_default();
-                let refreshed = load_windows_with_previews(&executor, cached, true).await;
+                let refreshed = load_windows_with_previews(&executor, cached, false).await;
                 warm_count.store(refreshed.len().max(1), Ordering::Relaxed);
                 if let Ok(mut cache) = warm_cache.lock() {
                     *cache = refreshed;
