@@ -69,6 +69,20 @@ impl EntryStore {
         self.cache.len()
     }
 
+    pub fn replace_entries(
+        &mut self,
+        app_entries: Arc<Vec<apps::AppEntry>>,
+        file_entries: Arc<Vec<files::FileEntry>>,
+    ) {
+        if Arc::ptr_eq(&self.app_entries, &app_entries) && Arc::ptr_eq(&self.file_entries, &file_entries) {
+            return;
+        }
+        self.app_entries = app_entries;
+        self.file_entries = file_entries;
+        self.cache.clear();
+        self.cache_key = None;
+    }
+
     pub fn name(&self, scored: &Scored) -> &str {
         match scored.source {
             search::ResultSource::App => &self.app_entries[scored.index].name,
