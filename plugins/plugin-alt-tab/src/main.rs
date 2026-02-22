@@ -51,10 +51,11 @@ fn is_alt_held_x11() -> bool {
 struct WindowDelegate {
     windows: Vec<WindowInfo>,
     selected_index: Option<IndexPath>,
+    label_config: crate::config::LabelConfig,
 }
 
 impl WindowDelegate {
-    fn new(windows: Vec<WindowInfo>) -> Self {
+    fn new(windows: Vec<WindowInfo>, label_config: crate::config::LabelConfig) -> Self {
         let selected_index = if windows.is_empty() {
             None
         } else {
@@ -63,6 +64,7 @@ impl WindowDelegate {
         Self {
             windows,
             selected_index,
+            label_config,
         }
     }
 
@@ -146,7 +148,22 @@ impl ListDelegate for WindowDelegate {
                         .text_xs()
                         .text_center()
                         .text_ellipsis()
-                        .child(win.title.clone()),
+                        .child({
+                            let show_app =
+                                self.label_config.show_app_name && !win.app_name.is_empty();
+                            let show_title =
+                                self.label_config.show_window_title && !win.title.is_empty();
+
+                            if show_app && show_title {
+                                format!("{} - {}", win.app_name, win.title)
+                            } else if show_app {
+                                win.app_name.clone()
+                            } else if show_title {
+                                win.title.clone()
+                            } else {
+                                String::new()
+                            }
+                        }),
                 ),
         );
 
@@ -311,9 +328,10 @@ impl AltTabApp {
         window_cache: Arc<std::sync::Mutex<Vec<WindowInfo>>>,
         action_mode: ActionMode,
         initial_windows: Vec<WindowInfo>,
+        label_config: crate::config::LabelConfig,
     ) -> Self {
         let has_cached_windows = !initial_windows.is_empty();
-        let delegate = WindowDelegate::new(initial_windows.clone());
+        let delegate = WindowDelegate::new(initial_windows.clone(), label_config);
         let list_state = cx.new(|cx| ListState::new(delegate, window, cx));
 
         let focus_handle = cx.focus_handle();
@@ -855,9 +873,13 @@ fn open_picker(
                 #[cfg(debug_assertions)]
                 eprintln!("[alt-tab/hold] open_picker reusing window: setting action_mode={:?}", config.action_mode);
 
-                // Explicitly update the action_mode and assume alt is currently held
                 view.action_mode = config.action_mode.clone();
                 view.alt_was_held = true;
+
+                // Update label config in delegate
+                view.list_state.update(cx, |s, _cx| {
+                    s.delegate_mut().label_config = config.label.clone();
+                });
 
                 // Start a new X11 modifier polling task for HoldToSwitch
                 if config.action_mode == ActionMode::HoldToSwitch {
@@ -908,8 +930,12 @@ fn open_picker(
         bounds.origin, bounds.size
     );
 
-    let last_window_count2 = last_window_count.clone();
-    let window_cache2 = window_cache.clone();
+    let last_window_count_for_init = last_window_count.clone();
+    let window_cache_for_init = window_cache.clone();
+    let action_mode_for_init = config.action_mode.clone();
+    let display_windows_for_init = display_windows.clone();
+    let config_for_init = config.clone();
+
     let handle = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -921,14 +947,16 @@ fn open_picker(
         },
         move |window, cx| {
             window.set_window_title("qol-alt-tab-picker");
+            let label_config = config_for_init.label.clone();
             let view = cx.new(|cx| {
                 AltTabApp::new(
                     window,
                     cx,
-                    last_window_count2.clone(),
-                    window_cache2.clone(),
-                    config.action_mode.clone(),
-                    display_windows.clone(),
+                    last_window_count_for_init,
+                    window_cache_for_init,
+                    action_mode_for_init,
+                    display_windows_for_init,
+                    label_config,
                 )
             });
             window.focus(&view.focus_handle(cx));

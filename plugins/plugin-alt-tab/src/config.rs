@@ -14,6 +14,22 @@ impl Default for DisplayConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LabelConfig {
+    pub show_app_name: bool,
+    pub show_window_title: bool,
+}
+
+impl Default for LabelConfig {
+    fn default() -> Self {
+        Self {
+            show_app_name: true,
+            show_window_title: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionMode {
@@ -29,6 +45,8 @@ pub struct AltTabConfig {
     pub action_mode: ActionMode,
     #[serde(default = "default_reset_selection_on_open")]
     pub reset_selection_on_open: bool,
+    #[serde(default)]
+    pub label: LabelConfig,
 }
 
 impl Default for AltTabConfig {
@@ -37,6 +55,7 @@ impl Default for AltTabConfig {
             display: DisplayConfig::default(),
             action_mode: ActionMode::default(),
             reset_selection_on_open: default_reset_selection_on_open(),
+            label: LabelConfig::default(),
         }
     }
 }

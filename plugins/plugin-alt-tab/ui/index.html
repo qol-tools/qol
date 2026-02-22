@@ -113,8 +113,43 @@
         </section>
 
         <section class="card">
-            <h2>Action Mode</h2>
+            <h2>Window Labels</h2>
+            <p>Configure how information is displayed inside the window previews.</p>
 
+            <div class="label-settings">
+                <label class="mode-option">
+                    <input type="checkbox" id="show-app-name" checked>
+                    <span class="mode-copy">
+                        <strong>Show App Name</strong>
+                        <small>Display the generic name of the application (e.g. "Firefox").</small>
+                    </span>
+                </label>
+
+                <label class="mode-option">
+                    <input type="checkbox" id="show-window-title" checked>
+                    <span class="mode-copy">
+                        <strong>Show Window Title</strong>
+                        <small>Display the specific title of the window (e.g. "Search - Google").</small>
+                    </span>
+                </label>
+            </div>
+
+            <div class="visualizer-container">
+                <label class="mode-copy">
+                    <small>Live Visualizer:</small>
+                </label>
+                <div class="label-preview-box">
+                    <div class="mock-window-preview">
+                        <div class="mock-image-placeholder">
+                            <div class="mock-icon"></div>
+                        </div>
+                        <div class="mock-label-container">
+                            <span id="label-visualizer-text" class="mock-label-text">App Name - Window Title</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
             <label class="mode-option">
                 <input
                     type="radio"

@@ -2,6 +2,7 @@
 pub struct WindowInfo {
     pub id: u32,
     pub title: String,
+    pub app_name: String,
     pub preview_path: Option<String>,
 }
 

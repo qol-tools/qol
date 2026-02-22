@@ -52,6 +52,7 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
         "_NET_WM_WINDOW_TYPE_NORMAL",
         "_NET_WM_STATE",
         "_NET_WM_STATE_HIDDEN",
+        "WM_CLASS",
     ];
 
     let mut cookies = Vec::new();
@@ -141,6 +142,9 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
     let net_name_atom = atom_map.get("_NET_WM_NAME").copied();
     let mut net_name_cookies = Vec::new();
     let mut wm_name_cookies = Vec::new();
+    let mut wm_class_cookies = Vec::new();
+
+    let wm_class_atom = atom_map.get("WM_CLASS").copied().unwrap_or(0);
 
     for &id in &filtered_ids {
         if let Some(na) = net_name_atom {
@@ -153,6 +157,10 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
         }
         wm_name_cookies.push(
             conn.get_property(false, id, AtomEnum::WM_NAME, AtomEnum::ANY, 0, 1024)
+                .ok(),
+        );
+        wm_class_cookies.push(
+            conn.get_property(false, id, wm_class_atom, AtomEnum::STRING, 0, 1024)
                 .ok(),
         );
     }
@@ -172,6 +180,22 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
             }
         }
 
+        let mut app_name = String::new();
+        if let Some(reply) = wm_class_cookies[i].take().and_then(|c| c.reply().ok()) {
+            // WM_CLASS is a null-separated string: "instance\0class\0"
+            // We want the class part (the second one) if it exists, otherwise the first.
+            let parts: Vec<&str> = std::str::from_utf8(&reply.value)
+                .unwrap_or("")
+                .split('\0')
+                .filter(|s| !s.is_empty())
+                .collect();
+            if parts.len() >= 2 {
+                app_name = parts[1].to_string();
+            } else if !parts.is_empty() {
+                app_name = parts[0].to_string();
+            }
+        }
+
         if !title.is_empty() {
             if title == "Desktop" {
                 continue;
@@ -179,6 +203,7 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
             windows.push(WindowInfo {
                 id,
                 title,
+                app_name,
                 preview_path: None,
             });
         }

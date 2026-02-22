@@ -7,7 +7,11 @@ const DEFAULT_CONFIG = {
         max_columns: 6
     },
     action_mode: 'sticky',
-    reset_selection_on_open: true
+    reset_selection_on_open: true,
+    label: {
+        show_app_name: true,
+        show_window_title: true
+    }
 };
 
 const PREVIEW_MODES = new Set(['below_list', 'preview_only']);
@@ -34,13 +38,18 @@ function normalizeConfig(raw) {
     const resetSelectionOnOpen = typeof raw?.reset_selection_on_open === 'boolean'
         ? raw.reset_selection_on_open
         : DEFAULT_CONFIG.reset_selection_on_open;
+    
     return {
         display: {
             preview_mode: PREVIEW_MODES.has(previewMode) ? previewMode : DEFAULT_CONFIG.display.preview_mode,
             max_columns: Math.max(2, Math.min(12, maxColumns))
         },
         action_mode: ACTION_MODES.has(actionMode) ? actionMode : DEFAULT_CONFIG.action_mode,
-        reset_selection_on_open: resetSelectionOnOpen
+        reset_selection_on_open: resetSelectionOnOpen,
+        label: {
+            show_app_name: typeof raw?.label?.show_app_name === 'boolean' ? raw.label.show_app_name : DEFAULT_CONFIG.label.show_app_name,
+            show_window_title: typeof raw?.label?.show_window_title === 'boolean' ? raw.label.show_window_title : DEFAULT_CONFIG.label.show_window_title,
+        }
     };
 }
 
@@ -69,6 +78,16 @@ function applyConfigToUI(config) {
     if (resetSelectionOnOpenInput) {
         resetSelectionOnOpenInput.checked = !!config.reset_selection_on_open;
     }
+
+    const showAppNameInput = document.getElementById('show-app-name');
+    if (showAppNameInput) {
+        showAppNameInput.checked = !!config.label.show_app_name;
+    }
+    const showWindowTitleInput = document.getElementById('show-window-title');
+    if (showWindowTitleInput) {
+        showWindowTitleInput.checked = !!config.label.show_window_title;
+    }
+    updateLabelVisualizer();
 }
 
 function collectConfigFromUI() {
@@ -76,13 +95,20 @@ function collectConfigFromUI() {
     const maxColumnsSelected = parseInt(document.getElementById('max-columns')?.value, 10);
     const actionSelected = selectedActionModeInput()?.value;
     const resetSelectionOnOpenSelected = document.getElementById('reset-selection-on-open')?.checked;
+    const showAppNameSelected = document.getElementById('show-app-name')?.checked;
+    const showWindowTitleSelected = document.getElementById('show-window-title')?.checked;
+
     return normalizeConfig({
         display: {
             preview_mode: previewSelected,
             max_columns: maxColumnsSelected || 6
         },
         action_mode: actionSelected,
-        reset_selection_on_open: resetSelectionOnOpenSelected
+        reset_selection_on_open: resetSelectionOnOpenSelected,
+        label: {
+            show_app_name: showAppNameSelected,
+            show_window_title: showWindowTitleSelected
+        }
     });
 }
 
@@ -171,6 +197,27 @@ function updateGridVisualizer() {
 
 document.getElementById('max-columns')?.addEventListener('input', updateGridVisualizer);
 document.getElementById('sim-windows')?.addEventListener('input', updateGridVisualizer);
+
+function updateLabelVisualizer() {
+    const showApp = document.getElementById('show-app-name')?.checked;
+    const showTitle = document.getElementById('show-window-title')?.checked;
+    const visualizer = document.getElementById('label-visualizer-text');
+    
+    if (!visualizer) return;
+
+    if (showApp && showTitle) {
+        visualizer.textContent = 'Firefox - Search - Google';
+    } else if (showApp) {
+        visualizer.textContent = 'Firefox';
+    } else if (showTitle) {
+        visualizer.textContent = 'Search - Google';
+    } else {
+        visualizer.textContent = '';
+    }
+}
+
+document.getElementById('show-app-name')?.addEventListener('change', updateLabelVisualizer);
+document.getElementById('show-window-title')?.addEventListener('change', updateLabelVisualizer);
 
 elements.saveBtn.addEventListener('click', saveConfig);
 
