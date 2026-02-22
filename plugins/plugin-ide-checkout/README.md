@@ -2,10 +2,15 @@
 
 A `qol-tray` plugin that exposes a local HTTP API for browser extensions to execute local tasks.
 
-## Build
+## Development
 
-- `make dev` builds `task-runner` and copies it to the plugin root
-- `make release` builds an optimized `task-runner` and copies it to the plugin root
+```bash
+# Run contract validation tests
+cargo test
+
+# Run in development mode (as a tray plugin)
+# qol-tray will automatically resolve the binary from target/debug
+```
 
 ## Runtime Contract
 
