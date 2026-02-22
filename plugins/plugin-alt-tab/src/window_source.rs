@@ -1,8 +1,10 @@
 use crate::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
 use crate::platform;
-use crate::platform::WindowInfo;
+use crate::platform::{PreviewFrame, WindowInfo};
 use gpui::*;
+use image::{Frame, RgbaImage};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub async fn load_windows_with_previews(
     executor: &BackgroundExecutor,
@@ -62,9 +64,17 @@ pub async fn load_windows_with_previews(
     windows
 }
 
-pub fn preview_tile(preview_path: &Option<String>, width: f32, height: f32) -> AnyElement {
-    if let Some(path) = preview_path {
-        img(std::path::PathBuf::from(path))
+fn frame_to_render_image(frame: &PreviewFrame) -> Arc<RenderImage> {
+    let rgba_image = RgbaImage::from_raw(frame.width, frame.height, (*frame.rgba).clone())
+        .unwrap_or_else(|| RgbaImage::new(1, 1));
+    let img_frame = Frame::new(rgba_image);
+    Arc::new(RenderImage::new(smallvec::smallvec![img_frame]))
+}
+
+pub fn preview_tile(frame: &Option<PreviewFrame>, width: f32, height: f32) -> AnyElement {
+    if let Some(f) = frame {
+        let render_image = frame_to_render_image(f);
+        img(ImageSource::Render(render_image))
             .w(px(width))
             .h(px(height))
             .rounded_md()
@@ -82,7 +92,7 @@ pub fn preview_tile(preview_path: &Option<String>, width: f32, height: f32) -> A
             .justify_center()
             .text_xs()
             .text_color(rgb(0x4a5268))
-            .child("…")
+            .child("...")
             .into_any_element()
     }
 }

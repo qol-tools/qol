@@ -1,9 +1,19 @@
+use std::sync::Arc;
+
+#[derive(Debug, Clone)]
+pub struct PreviewFrame {
+    pub rgba: Arc<Vec<u8>>,
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(Debug, Clone)]
 pub struct WindowInfo {
     pub id: u32,
     pub title: String,
     pub app_name: String,
     pub preview_path: Option<String>,
+    pub preview_frame: Option<PreviewFrame>,
 }
 
 #[cfg(target_os = "linux")]
@@ -44,6 +54,18 @@ mod unsupported {
         Vec::new()
     }
 
+    pub fn capture_preview_frame(_window_id: u32, _max_w: usize, _max_h: usize) -> Option<super::PreviewFrame> {
+        None
+    }
+
+    pub fn capture_frames_batch(
+        _targets: &[(usize, u32)],
+        _max_w: usize,
+        _max_h: usize,
+    ) -> Vec<(usize, Option<super::PreviewFrame>)> {
+        Vec::new()
+    }
+
     pub fn activate_window(_window_id: u32) {}
 
     pub fn move_app_window(_title: &str, _x: i32, _y: i32) {}
@@ -78,4 +100,16 @@ pub fn activate_window(window_id: u32) {
 
 pub fn move_app_window(title: &str, x: i32, y: i32) {
     imp::move_app_window(title, x, y)
+}
+
+pub fn capture_preview_frame(window_id: u32, max_w: usize, max_h: usize) -> Option<PreviewFrame> {
+    imp::capture_preview_frame(window_id, max_w, max_h)
+}
+
+pub fn capture_frames_batch(
+    targets: &[(usize, u32)],
+    max_w: usize,
+    max_h: usize,
+) -> Vec<(usize, Option<PreviewFrame>)> {
+    imp::capture_frames_batch(targets, max_w, max_h)
 }

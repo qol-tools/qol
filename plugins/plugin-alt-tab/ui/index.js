@@ -4,7 +4,8 @@ const CONFIG_URL = `/api/plugins/${PLUGIN_ID}/config`;
 const DEFAULT_CONFIG = {
     display: {
         preview_mode: 'below_list',
-        max_columns: 6
+        max_columns: 6,
+        preview_fps: 10
     },
     action_mode: 'sticky',
     reset_selection_on_open: true,
@@ -34,6 +35,8 @@ function selectedActionModeInput() {
 function normalizeConfig(raw) {
     const previewMode = raw?.display?.preview_mode;
     const maxColumns = parseInt(raw?.display?.max_columns, 10) || DEFAULT_CONFIG.display.max_columns;
+    const previewFps = parseInt(raw?.display?.preview_fps, 10);
+    const normalizedFps = isNaN(previewFps) ? DEFAULT_CONFIG.display.preview_fps : Math.max(0, Math.min(60, previewFps));
     const actionMode = raw?.action_mode;
     const resetSelectionOnOpen = typeof raw?.reset_selection_on_open === 'boolean'
         ? raw.reset_selection_on_open
@@ -42,7 +45,8 @@ function normalizeConfig(raw) {
     return {
         display: {
             preview_mode: PREVIEW_MODES.has(previewMode) ? previewMode : DEFAULT_CONFIG.display.preview_mode,
-            max_columns: Math.max(2, Math.min(12, maxColumns))
+            max_columns: Math.max(2, Math.min(12, maxColumns)),
+            preview_fps: normalizedFps
         },
         action_mode: ACTION_MODES.has(actionMode) ? actionMode : DEFAULT_CONFIG.action_mode,
         reset_selection_on_open: resetSelectionOnOpen,
@@ -67,6 +71,13 @@ function applyConfigToUI(config) {
         maxColumnsInput.value = maxColumns;
     }
     updateGridVisualizer();
+
+    const previewFps = config.display.preview_fps;
+    const previewFpsInput = document.getElementById('preview-fps');
+    if (previewFpsInput) {
+        previewFpsInput.value = previewFps;
+        document.getElementById('preview-fps-value').textContent = previewFps;
+    }
 
     const actionMode = config.action_mode;
     const actionInput = document.querySelector(`input[name="action-mode"][value="${actionMode}"]`);
@@ -101,7 +112,8 @@ function collectConfigFromUI() {
     return normalizeConfig({
         display: {
             preview_mode: previewSelected,
-            max_columns: maxColumnsSelected || 6
+            max_columns: maxColumnsSelected || 6,
+            preview_fps: parseInt(document.getElementById('preview-fps')?.value, 10) || 10
         },
         action_mode: actionSelected,
         reset_selection_on_open: resetSelectionOnOpenSelected,
@@ -197,6 +209,11 @@ function updateGridVisualizer() {
 
 document.getElementById('max-columns')?.addEventListener('input', updateGridVisualizer);
 document.getElementById('sim-windows')?.addEventListener('input', updateGridVisualizer);
+
+document.getElementById('preview-fps')?.addEventListener('input', () => {
+    document.getElementById('preview-fps-value').textContent =
+        document.getElementById('preview-fps').value;
+});
 
 function updateLabelVisualizer() {
     const showApp = document.getElementById('show-app-name')?.checked;

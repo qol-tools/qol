@@ -150,6 +150,26 @@
                 </div>
             </div>
         </section>
+
+        <section class="card">
+            <h2>Preview Refresh Rate</h2>
+
+            <div class="slider-group">
+                <label for="preview-fps" class="mode-copy">
+                    <strong>Live Preview FPS</strong>
+                    <small>How often window previews refresh while the picker is open. 0 = static snapshots.</small>
+                </label>
+                <div class="slider-control">
+                    <input type="range" id="preview-fps" name="preview-fps" min="0" max="60" value="10">
+                    <span id="preview-fps-value">10</span>
+                </div>
+                <div class="slider-labels" style="display:flex;justify-content:space-between;margin-top:0.3rem;">
+                    <small style="color:#9fb1cf;">Static</small>
+                    <small style="color:#9fb1cf;">60 FPS</small>
+                </div>
+            </div>
+        </section>
+
             <label class="mode-option">
                 <input
                     type="radio"

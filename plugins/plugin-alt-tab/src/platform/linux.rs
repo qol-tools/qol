@@ -1,6 +1,7 @@
 use super::WindowInfo;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{ExtendedColorType, ImageEncoder};
+use std::sync::Arc;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::*;
 
@@ -205,6 +206,7 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
                 title,
                 app_name,
                 preview_path: None,
+                preview_frame: None,
             });
         }
     }
@@ -287,6 +289,92 @@ pub fn capture_previews_batch(
             max_h,
         );
         out.push((list_index, path));
+    }
+
+    out
+}
+
+pub fn capture_preview_frame(window_id: u32, max_w: usize, max_h: usize) -> Option<super::PreviewFrame> {
+    let (data, width, height) = capture_preview_raw(window_id)?;
+    let rgba = to_rgba(&data, width, height)?;
+    let (thumb, thumb_w, thumb_h) = downscale_rgba_keep_aspect(&rgba, width, height, max_w, max_h);
+    Some(super::PreviewFrame {
+        rgba: Arc::new(thumb),
+        width: thumb_w as u32,
+        height: thumb_h as u32,
+    })
+}
+
+pub fn capture_frames_batch(
+    targets: &[(usize, u32)],
+    max_w: usize,
+    max_h: usize,
+) -> Vec<(usize, Option<super::PreviewFrame>)> {
+    if targets.is_empty() {
+        return Vec::new();
+    }
+
+    let Ok((conn, _)) = x11rb::connect(None) else {
+        return targets.iter().map(|(i, _)| (*i, None)).collect();
+    };
+
+    let window_ids: Vec<u32> = targets.iter().map(|(_, id)| *id).collect();
+
+    let geometry_cookies: Vec<_> = window_ids
+        .iter()
+        .map(|&id| conn.get_geometry(id).ok())
+        .collect();
+    let geometries: Vec<_> = geometry_cookies
+        .into_iter()
+        .map(|cookie| cookie.and_then(|cookie| cookie.reply().ok()))
+        .collect();
+
+    let mut image_cookies: Vec<_> = window_ids
+        .iter()
+        .enumerate()
+        .map(|(pos, &id)| {
+            let geo = geometries[pos].as_ref()?;
+            if geo.width == 0 || geo.height == 0 {
+                return None;
+            }
+            conn.get_image(
+                ImageFormat::Z_PIXMAP,
+                id,
+                0,
+                0,
+                geo.width,
+                geo.height,
+                u32::MAX,
+            )
+            .ok()
+        })
+        .collect();
+
+    let mut out = Vec::with_capacity(targets.len());
+    for (pos, (list_index, _)) in targets.iter().copied().enumerate() {
+        let Some(geo) = geometries[pos].as_ref() else {
+            out.push((list_index, None));
+            continue;
+        };
+        let Some(reply) = image_cookies[pos]
+            .take()
+            .and_then(|cookie| cookie.reply().ok())
+        else {
+            out.push((list_index, None));
+            continue;
+        };
+
+        let width = geo.width as usize;
+        let height = geo.height as usize;
+        let frame = to_rgba(&reply.data, width, height).and_then(|rgba| {
+            let (thumb, tw, th) = downscale_rgba_keep_aspect(&rgba, width, height, max_w, max_h);
+            Some(super::PreviewFrame {
+                rgba: Arc::new(thumb),
+                width: tw as u32,
+                height: th as u32,
+            })
+        });
+        out.push((list_index, frame));
     }
 
     out

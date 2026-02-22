@@ -20,4 +20,16 @@ pub fn capture_previews_batch(
     Vec::new()
 }
 
+pub fn capture_preview_frame(_window_id: u32, _max_w: usize, _max_h: usize) -> Option<super::PreviewFrame> {
+    None
+}
+
+pub fn capture_frames_batch(
+    _targets: &[(usize, u32)],
+    _max_w: usize,
+    _max_h: usize,
+) -> Vec<(usize, Option<super::PreviewFrame>)> {
+    Vec::new()
+}
+
 pub fn activate_window(_window_id: u32) {}
