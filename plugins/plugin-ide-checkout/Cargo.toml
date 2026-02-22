@@ -7,3 +7,7 @@ edition = "2021"
 strip = true
 lto = true
 codegen-units = 1
+
+[dev-dependencies]
+qol-tray = { path = "../../qol-tray" }
+toml = "0.9"
