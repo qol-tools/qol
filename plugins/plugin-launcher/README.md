@@ -1,28 +1,31 @@
-# plugin-launcher
+# Launcher Plugin for QoL Tray
 
-A [qol-tray](https://github.com/qol-tools/qol-tray) plugin that provides a fast, keyboard-driven application and file launcher. Built with [GPUI](https://github.com/zed-industries/zed).
+A high-performance, keyboard-driven application and file launcher for [QoL Tray](https://github.com/qol-tools/qol-tray). Built with the GPUI framework for fluid transitions and sub-millisecond responsiveness.
 
-## Features
+## Key Features
 
-- **App search** — finds installed applications (`.desktop` entries on Linux, `.app` bundles on macOS)
-- **File search** — indexes common directories with fuzzy matching
-- **Adjustable fuzziness** — strict, balanced, or loose matching
-- **Daemon mode** — stays resident for instant popup via hotkey
-
-## Platforms
-
-Linux, macOS
+- **Blazing Fast Search**: Uses a multi-pass fuzzy matching algorithm (Boundary, Contiguous, and Greedy passes) to find what you're looking for with minimal keystrokes.
+- **Frecency-based Ranking**: Automatically learns your habits. Search results are ranked by a combination of frequency and recency, ensuring your most-used items are always at the top.
+- **Intelligent Indexing**:
+  - **Applications**: Scans standard desktop entries (XDG), Flatpaks, and Snaps on Linux; standard `.app` bundles on macOS.
+  - **Files**: Automatically indexes `Desktop`, `Documents`, `Downloads`, `Projects`, and `.config` directories.
+- **Action Modifiers**: perform different actions on a result without leaving the keyboard:
+  - `Enter`: Launch/Open.
+  - `Ctrl + Enter`: Open in Terminal.
+  - `Shift + Enter`: Open containing folder.
+  - `Alt + Enter`: Copy absolute path to clipboard.
+- **Monitor-Aware**: Intelligent positioning that follows your active focus across multi-monitor setups.
+- **Daemon Architecture**: Stays resident in memory via Unix sockets for near-instant popup via global hotkeys.
 
 ## Controls
 
 | Key | Action |
 |-----|--------|
-| Type | Fuzzy search |
-| Tab / Shift+Tab | Switch mode (Apps / Files) |
-| Ctrl+Up / Ctrl+Down | Adjust fuzziness |
-| Up / Down | Navigate results |
-| Enter | Launch selected |
-| Esc | Dismiss |
+| **Character Keys** | Continuous fuzzy search |
+| **Tab / Shift+Tab** | Toggle between **Apps** and **Files** modes |
+| **Up / Down** | Navigate through search results |
+| **Enter** | Launch/Open the selection |
+| **Esc** | Dismiss the launcher |
 
 ## Development
 
@@ -34,6 +37,12 @@ cargo test
 # qol-tray will automatically resolve the binary from target/debug
 ```
 
-## License
+## Internal Architecture
 
-MIT
+- **Providers**: Pluggable indexing system for different OS backends.
+- **Fuzzy Matching**: Custom scoring weights for boundary matches and contiguous segments.
+- **Frecency**: Exponential decay scoring to balance long-term usage with recent activity.
+- **Rendering**: Hardware-accelerated 2D rendering via GPUI.
+
+License: MIT
+
