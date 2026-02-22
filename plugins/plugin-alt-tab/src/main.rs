@@ -155,9 +155,9 @@ impl ListDelegate for WindowDelegate {
                                 self.label_config.show_window_title && !win.title.is_empty();
 
                             if show_app && show_title {
-                                format!("{} - {}", win.app_name, win.title)
+                                format!("{} - {}", capitalize_first(&win.app_name), win.title)
                             } else if show_app {
-                                win.app_name.clone()
+                                capitalize_first(&win.app_name)
                             } else if show_title {
                                 win.title.clone()
                             } else {
@@ -167,7 +167,13 @@ impl ListDelegate for WindowDelegate {
                 ),
         );
 
-        Some(ListItem::new(("window", ix.row)).child(item))
+        Some(
+            ListItem::new(gpui::SharedString::from(format!(
+                "window-{}-{}-{}",
+                ix.row, self.label_config.show_app_name, self.label_config.show_window_title
+            )))
+            .child(item),
+        )
     }
 
     fn set_selected_index(
@@ -308,6 +314,14 @@ enum GridDirection {
     Right,
     Up,
     Down,
+}
+
+fn capitalize_first(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        None => String::new(),
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+    }
 }
 
 // ─── App view ─────────────────────────────────────────────────────────────────
