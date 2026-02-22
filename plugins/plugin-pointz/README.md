@@ -23,10 +23,14 @@ Install via qol-tray Plugin Store, or manually:
 git clone https://github.com/qol-tools/plugin-pointz ~/.config/qol-tray/plugins/plugin-pointz
 ```
 
-For linked dev setups, run:
+## Development
 
 ```bash
-make dev
+# Run contract validation tests
+cargo test
+
+# Run in development mode (as a tray plugin)
+# qol-tray will automatically resolve the binary from target/debug
 ```
 
 ## Usage
