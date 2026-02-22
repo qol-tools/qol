@@ -412,6 +412,8 @@ fn output_file_path(format: &str) -> Result<PathBuf> {
 
 fn start_recording(rect: Rect, config: &Config, output_file: &Path) -> Result<()> {
     let mut args = vec![
+        "-thread_queue_size".to_string(),
+        "512".to_string(),
         "-f".to_string(),
         "x11grab".to_string(),
         "-video_size".to_string(),
@@ -427,10 +429,14 @@ fn start_recording(rect: Rect, config: &Config, output_file: &Path) -> Result<()
         let has_system = config.audio.inputs.iter().any(|input| input == "system");
         if has_mic && has_system {
             args.extend_from_slice(&[
+                "-thread_queue_size".to_string(),
+                "128".to_string(),
                 "-f".to_string(),
                 "pulse".to_string(),
                 "-i".to_string(),
                 config.audio.mic_device.clone(),
+                "-thread_queue_size".to_string(),
+                "128".to_string(),
                 "-f".to_string(),
                 "pulse".to_string(),
                 "-i".to_string(),
@@ -448,6 +454,8 @@ fn start_recording(rect: Rect, config: &Config, output_file: &Path) -> Result<()
             ]);
         } else if has_mic {
             args.extend_from_slice(&[
+                "-thread_queue_size".to_string(),
+                "128".to_string(),
                 "-f".to_string(),
                 "pulse".to_string(),
                 "-i".to_string(),
@@ -459,6 +467,8 @@ fn start_recording(rect: Rect, config: &Config, output_file: &Path) -> Result<()
             ]);
         } else if has_system {
             args.extend_from_slice(&[
+                "-thread_queue_size".to_string(),
+                "128".to_string(),
                 "-f".to_string(),
                 "pulse".to_string(),
                 "-i".to_string(),
@@ -474,6 +484,8 @@ fn start_recording(rect: Rect, config: &Config, output_file: &Path) -> Result<()
     args.extend_from_slice(&[
         "-c:v".to_string(),
         "libx264".to_string(),
+        "-r".to_string(),
+        config.video.framerate.to_string(),
         "-crf".to_string(),
         config.video.crf.to_string(),
         "-preset".to_string(),
