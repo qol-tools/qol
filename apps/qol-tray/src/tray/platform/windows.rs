@@ -19,7 +19,8 @@ pub fn create_tray(
     QUIT_SIGNAL.get_or_init(std::sync::Condvar::new);
     QUIT_MUTEX.get_or_init(|| std::sync::Mutex::new(false));
 
-    let (menu, router) = crate::menu::builder::build_menu(feature_registry, update_available, events)?;
+    let (menu, router) =
+        crate::menu::builder::build_menu(feature_registry, update_available, events)?;
 
     let tray_icon = TrayIconBuilder::new()
         .with_menu(Box::new(menu))

@@ -233,7 +233,9 @@ fn try_reload_hotkeys(
     }
 }
 
-fn available_actions(plugin_manager: &Arc<Mutex<PluginManager>>) -> Result<HashMap<String, HashSet<String>>> {
+fn available_actions(
+    plugin_manager: &Arc<Mutex<PluginManager>>,
+) -> Result<HashMap<String, HashSet<String>>> {
     let manager = plugin_manager
         .lock()
         .map_err(|_| anyhow::anyhow!("plugin manager lock failed"))?;

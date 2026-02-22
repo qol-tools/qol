@@ -461,9 +461,21 @@ mod tests {
     fn interpolate_shell_escapes_special_values() {
         let cases = [
             ("echo {{missing}}", &[][..], "echo ''"),
-            ("echo {{msg}}", &[("msg", "hello world")][..], "echo 'hello world'"),
-            ("echo {{url}}", &[("url", "https://example.com?q=1&x=2")][..], "echo 'https://example.com?q=1&x=2'"),
-            ("echo {{raw}}", &[("raw", "safe_value-123")][..], "echo safe_value-123"),
+            (
+                "echo {{msg}}",
+                &[("msg", "hello world")][..],
+                "echo 'hello world'",
+            ),
+            (
+                "echo {{url}}",
+                &[("url", "https://example.com?q=1&x=2")][..],
+                "echo 'https://example.com?q=1&x=2'",
+            ),
+            (
+                "echo {{raw}}",
+                &[("raw", "safe_value-123")][..],
+                "echo safe_value-123",
+            ),
             ("echo {{q}}", &[("q", "a'b")][..], "echo 'a'\"'\"'b'"),
         ];
 

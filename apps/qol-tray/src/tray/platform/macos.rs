@@ -12,7 +12,8 @@ pub fn create_tray(
     update_available: bool,
     events: Arc<EventBus>,
 ) -> Result<TrayIcon> {
-    let (menu, router) = crate::menu::builder::build_menu(feature_registry, update_available, events)?;
+    let (menu, router) =
+        crate::menu::builder::build_menu(feature_registry, update_available, events)?;
 
     let tray_icon = TrayIconBuilder::new()
         .with_menu(Box::new(menu))

@@ -155,8 +155,14 @@ mod tests {
 
         // Assert
         assert_eq!(result.configs.len(), 2);
-        assert_eq!(result.configs.get("plugin1").unwrap(), &json!({"enabled": true}));
-        assert_eq!(result.configs.get("plugin2").unwrap(), &json!({"value": 42}));
+        assert_eq!(
+            result.configs.get("plugin1").unwrap(),
+            &json!({"enabled": true})
+        );
+        assert_eq!(
+            result.configs.get("plugin2").unwrap(),
+            &json!({"value": 42})
+        );
     }
 
     #[test]
@@ -178,7 +184,9 @@ mod tests {
         // Arrange
         let (manager, _temp_base, _temp_plugins) = setup_test_env();
         let mut configs = PluginConfigs::default();
-        configs.configs.insert("test".to_string(), json!({"key": "value"}));
+        configs
+            .configs
+            .insert("test".to_string(), json!({"key": "value"}));
 
         // Act
         manager.save_configs(&configs).unwrap();
@@ -196,10 +204,14 @@ mod tests {
         // Arrange
         let (manager, _temp_base, _temp_plugins) = setup_test_env();
         let mut configs1 = PluginConfigs::default();
-        configs1.configs.insert("old".to_string(), json!({"data": 1}));
+        configs1
+            .configs
+            .insert("old".to_string(), json!({"data": 1}));
         manager.save_configs(&configs1).unwrap();
         let mut configs2 = PluginConfigs::default();
-        configs2.configs.insert("new".to_string(), json!({"data": 2}));
+        configs2
+            .configs
+            .insert("new".to_string(), json!({"data": 2}));
 
         // Act
         manager.save_configs(&configs2).unwrap();
@@ -229,7 +241,9 @@ mod tests {
         let (manager, _temp_base, _temp_plugins) = setup_test_env();
         let mut configs = PluginConfigs::default();
         let expected_config = json!({"restored": true, "value": 123});
-        configs.configs.insert("test-plugin".to_string(), expected_config.clone());
+        configs
+            .configs
+            .insert("test-plugin".to_string(), expected_config.clone());
         manager.save_configs(&configs).unwrap();
 
         // Act
@@ -251,12 +265,20 @@ mod tests {
     fn plugin_config_path_cases() {
         let valid = ["plugin-test", "my_plugin", "a"];
         for id in valid {
-            assert!(PluginConfigManager::plugin_config_path(id).is_ok(), "should work: {:?}", id);
+            assert!(
+                PluginConfigManager::plugin_config_path(id).is_ok(),
+                "should work: {:?}",
+                id
+            );
         }
 
         let invalid = ["../etc", "foo/bar", "..", ".", "", "a\0b"];
         for id in invalid {
-            assert!(PluginConfigManager::plugin_config_path(id).is_err(), "should fail: {:?}", id);
+            assert!(
+                PluginConfigManager::plugin_config_path(id).is_err(),
+                "should fail: {:?}",
+                id
+            );
         }
     }
 }

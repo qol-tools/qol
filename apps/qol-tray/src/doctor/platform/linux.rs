@@ -29,8 +29,5 @@ fn parse_exec_line(value: &str) -> Option<PathBuf> {
         let end = rest.find('"')?;
         return Some(PathBuf::from(&rest[..end]));
     }
-    trimmed
-        .split_whitespace()
-        .next()
-        .map(PathBuf::from)
+    trimmed.split_whitespace().next().map(PathBuf::from)
 }

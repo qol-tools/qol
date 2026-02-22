@@ -75,9 +75,16 @@ struct Diagnosis {
 
 enum FixAction {
     SetActiveInstallId(String),
-    WriteInstallMarker { marker_path: PathBuf, install_id: String },
-    WriteAutostartEntry { binary_path: PathBuf },
-    EnsurePluginsDir { path: PathBuf },
+    WriteInstallMarker {
+        marker_path: PathBuf,
+        install_id: String,
+    },
+    WriteAutostartEntry {
+        binary_path: PathBuf,
+    },
+    EnsurePluginsDir {
+        path: PathBuf,
+    },
 }
 
 pub fn check() -> Report {
@@ -177,7 +184,12 @@ fn check_install_identity() -> Diagnosis {
 
     let active_path = match active_install_id_path() {
         Ok(path) => path,
-        Err(e) => return error_outcome(id, format!("failed to resolve active install id path: {}", e)),
+        Err(e) => {
+            return error_outcome(
+                id,
+                format!("failed to resolve active install id path: {}", e),
+            )
+        }
     };
     let active_id = read_install_id_file(&active_path);
 
@@ -237,7 +249,11 @@ fn check_autostart_target() -> Diagnosis {
         Err(e) => {
             return error_outcome(
                 id,
-                format!("failed to read autostart target from {}: {}", autostart_path.display(), e),
+                format!(
+                    "failed to read autostart target from {}: {}",
+                    autostart_path.display(),
+                    e
+                ),
             )
         }
     };
@@ -256,7 +272,10 @@ fn check_autostart_target() -> Diagnosis {
             if expected == actual {
                 return ok_outcome(
                     id,
-                    format!("autostart target matches current binary ({})", actual.display()),
+                    format!(
+                        "autostart target matches current binary ({})",
+                        actual.display()
+                    ),
                 );
             }
             warn_outcome(
@@ -307,7 +326,9 @@ fn check_plugins_dir() -> Diagnosis {
 
 fn apply_fix(action: &FixAction) -> Result<()> {
     match action {
-        FixAction::SetActiveInstallId(install_id) => crate::paths::set_active_install_id(install_id),
+        FixAction::SetActiveInstallId(install_id) => {
+            crate::paths::set_active_install_id(install_id)
+        }
         FixAction::WriteInstallMarker {
             marker_path,
             install_id,

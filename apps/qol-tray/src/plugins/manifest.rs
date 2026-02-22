@@ -63,7 +63,10 @@ impl PluginManifest {
 
         if let Some(runtime) = &self.runtime {
             runtime.validate()?;
-            validate_runtime_action_coverage(runtime.actions.as_ref(), &menu_action_ids.executable)?;
+            validate_runtime_action_coverage(
+                runtime.actions.as_ref(),
+                &menu_action_ids.executable,
+            )?;
         }
         if let Some(daemon) = &self.daemon {
             daemon.validate()?;
@@ -143,7 +146,10 @@ fn validate_runtime_action_coverage(
 
     for action_id in menu_action_ids {
         if !actions.contains_key(action_id) {
-            bail!("runtime.actions missing mapping for menu action {:?}", action_id);
+            bail!(
+                "runtime.actions missing mapping for menu action {:?}",
+                action_id
+            );
         }
     }
 

@@ -13,7 +13,9 @@ pub fn autostart_path() -> Result<PathBuf> {
 
 pub fn write_autostart_entry(binary_path: &Path) -> Result<()> {
     let path = autostart_path()?;
-    let parent = path.parent().context("Autostart path has no parent directory")?;
+    let parent = path
+        .parent()
+        .context("Autostart path has no parent directory")?;
     fs::create_dir_all(parent)
         .with_context(|| format!("Failed to create directory {}", parent.display()))?;
 

@@ -47,8 +47,15 @@ fn print_report(title: &str, report: &Report) {
             OutcomeStatus::Warn => "WARN",
             OutcomeStatus::Error => "ERR",
         };
-        let fix_suffix = if outcome.fix_available { " (fix available)" } else { "" };
-        println!("[{}] {}: {}{}", status, outcome.id, outcome.message, fix_suffix);
+        let fix_suffix = if outcome.fix_available {
+            " (fix available)"
+        } else {
+            ""
+        };
+        println!(
+            "[{}] {}: {}{}",
+            status, outcome.id, outcome.message, fix_suffix
+        );
     }
     println!(
         "Summary: ok={}, warn={}, error={}",

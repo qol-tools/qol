@@ -78,10 +78,7 @@ impl SupportedArch {
         } else if arch == Self::Aarch64.token() {
             Ok(Self::Aarch64)
         } else {
-            anyhow::bail!(
-                "unsupported CPU architecture for release assets: {}",
-                arch
-            )
+            anyhow::bail!("unsupported CPU architecture for release assets: {}", arch)
         }
     }
 

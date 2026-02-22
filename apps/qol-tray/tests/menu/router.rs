@@ -45,15 +45,13 @@ fn router_routes_to_first_matching_handler() {
     let call_count = Arc::new(Mutex::new(0));
     let call_count_clone = call_count.clone();
 
-    let routes = vec![
-        EventRoute {
-            pattern: EventPattern::Prefix("plugin::".to_string()),
-            handler: EventHandler::Sync(Box::new(move |_| {
-                *call_count_clone.lock().unwrap() += 1;
-                Ok(HandlerResult::Continue)
-            })),
-        },
-    ];
+    let routes = vec![EventRoute {
+        pattern: EventPattern::Prefix("plugin::".to_string()),
+        handler: EventHandler::Sync(Box::new(move |_| {
+            *call_count_clone.lock().unwrap() += 1;
+            Ok(HandlerResult::Continue)
+        })),
+    }];
     let router = EventRouter::new(routes);
 
     // Act
@@ -66,12 +64,10 @@ fn router_routes_to_first_matching_handler() {
 #[test]
 fn router_returns_quit_handler_result() {
     // Arrange
-    let routes = vec![
-        EventRoute {
-            pattern: EventPattern::Exact("quit".to_string()),
-            handler: EventHandler::Sync(Box::new(|_| Ok(HandlerResult::Quit))),
-        },
-    ];
+    let routes = vec![EventRoute {
+        pattern: EventPattern::Exact("quit".to_string()),
+        handler: EventHandler::Sync(Box::new(|_| Ok(HandlerResult::Quit))),
+    }];
     let router = EventRouter::new(routes);
 
     // Act
@@ -79,7 +75,7 @@ fn router_returns_quit_handler_result() {
 
     // Assert
     match result {
-        HandlerResult::Quit => {},
+        HandlerResult::Quit => {}
         _ => panic!("Expected Quit result"),
     }
 }
@@ -87,12 +83,10 @@ fn router_returns_quit_handler_result() {
 #[test]
 fn router_returns_continue_for_unmatched_events() {
     // Arrange
-    let routes = vec![
-        EventRoute {
-            pattern: EventPattern::Exact("quit".to_string()),
-            handler: EventHandler::Sync(Box::new(|_| Ok(HandlerResult::Quit))),
-        },
-    ];
+    let routes = vec![EventRoute {
+        pattern: EventPattern::Exact("quit".to_string()),
+        handler: EventHandler::Sync(Box::new(|_| Ok(HandlerResult::Quit))),
+    }];
     let router = EventRouter::new(routes);
 
     // Act
@@ -100,7 +94,7 @@ fn router_returns_continue_for_unmatched_events() {
 
     // Assert
     match result {
-        HandlerResult::Continue => {},
+        HandlerResult::Continue => {}
         _ => panic!("Expected Continue result for unmatched event"),
     }
 }
@@ -111,15 +105,13 @@ fn router_passes_event_id_to_handler() {
     let received_id = Arc::new(Mutex::new(String::new()));
     let received_id_clone = received_id.clone();
 
-    let routes = vec![
-        EventRoute {
-            pattern: EventPattern::Prefix("plugin::".to_string()),
-            handler: EventHandler::Sync(Box::new(move |event_id| {
-                *received_id_clone.lock().unwrap() = event_id.to_string();
-                Ok(HandlerResult::Continue)
-            })),
-        },
-    ];
+    let routes = vec![EventRoute {
+        pattern: EventPattern::Prefix("plugin::".to_string()),
+        handler: EventHandler::Sync(Box::new(move |event_id| {
+            *received_id_clone.lock().unwrap() = event_id.to_string();
+            Ok(HandlerResult::Continue)
+        })),
+    }];
     let router = EventRouter::new(routes);
 
     // Act

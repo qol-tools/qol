@@ -31,11 +31,7 @@ pub async fn check_for_updates() -> Result<bool> {
 
     if is_newer_version(latest, CURRENT_VERSION) {
         let _ = LATEST_VERSION.set(latest.to_string());
-        log::info!(
-            "Update available: {} -> {}",
-            CURRENT_VERSION,
-            latest
-        );
+        log::info!("Update available: {} -> {}", CURRENT_VERSION, latest);
         return Ok(true);
     }
 
@@ -102,12 +98,19 @@ fn asset_filename(version: &str) -> String {
 fn resolve_update_url() -> Result<(String, std::path::PathBuf)> {
     #[cfg(feature = "dev")]
     if let Ok(url) = std::env::var("QOL_TRAY_DEV_UPDATE_URL") {
-        let filename = url.split('/').last().unwrap_or("dev-update.deb").to_string();
+        let filename = url
+            .split('/')
+            .last()
+            .unwrap_or("dev-update.deb")
+            .to_string();
         return Ok((url, std::env::temp_dir().join(filename)));
     }
 
     let version = latest_version().ok_or_else(|| anyhow::anyhow!("No update version available"))?;
-    Ok((asset_url(version), std::env::temp_dir().join(asset_filename(version))))
+    Ok((
+        asset_url(version),
+        std::env::temp_dir().join(asset_filename(version)),
+    ))
 }
 
 #[cfg(target_os = "linux")]
@@ -142,7 +145,13 @@ pub async fn download_and_install(events: std::sync::Arc<crate::daemon::EventBus
         .map_err(|e| anyhow::anyhow!("Failed to resolve current executable for restart: {}", e))?;
     std::process::Command::new(&restart_binary)
         .spawn()
-        .map_err(|e| anyhow::anyhow!("Failed to spawn {} for restart: {}", restart_binary.display(), e))?;
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to spawn {} for restart: {}",
+                restart_binary.display(),
+                e
+            )
+        })?;
     std::process::exit(0);
 }
 

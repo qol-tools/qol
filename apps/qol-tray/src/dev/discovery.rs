@@ -15,9 +15,8 @@ pub struct DiscoveredPlugin {
 }
 
 pub fn discover_plugins(config: &DevConfig, plugins_dir: &Path) -> Vec<DiscoveredPlugin> {
-    let dev_links = crate::dev::linking::load_dev_links(
-        plugins_dir.parent().unwrap_or(plugins_dir),
-    );
+    let dev_links =
+        crate::dev::linking::load_dev_links(plugins_dir.parent().unwrap_or(plugins_dir));
     let search_paths = config.effective_search_paths();
     let plugin_dirs = find_plugin_dirs(&search_paths);
 
@@ -254,7 +253,14 @@ items = []
     #[test]
     fn respects_max_depth() {
         let tmp = TempDir::new().unwrap();
-        let deep = tmp.path().join("a").join("b").join("c").join("d").join("e").join("f");
+        let deep = tmp
+            .path()
+            .join("a")
+            .join("b")
+            .join("c")
+            .join("d")
+            .join("e")
+            .join("f");
         fs::create_dir_all(&deep).unwrap();
         create_plugin_toml(&deep);
 
@@ -265,7 +271,11 @@ items = []
     #[test]
     fn finds_plugin_at_depth_3() {
         let tmp = TempDir::new().unwrap();
-        let plugin_dir = tmp.path().join("private").join("pointZ").join("PointZerver");
+        let plugin_dir = tmp
+            .path()
+            .join("private")
+            .join("pointZ")
+            .join("PointZerver");
         fs::create_dir_all(&plugin_dir).unwrap();
         create_plugin_toml(&plugin_dir);
 
@@ -277,7 +287,13 @@ items = []
     #[test]
     fn finds_plugin_at_depth_5() {
         let tmp = TempDir::new().unwrap();
-        let plugin_dir = tmp.path().join("a").join("b").join("c").join("d").join("plugin");
+        let plugin_dir = tmp
+            .path()
+            .join("a")
+            .join("b")
+            .join("c")
+            .join("d")
+            .join("plugin");
         fs::create_dir_all(&plugin_dir).unwrap();
         create_plugin_toml(&plugin_dir);
 
@@ -293,14 +309,15 @@ items = []
         create_plugin_toml(&plugin_dir);
 
         let config = DevConfig {
-            search_paths: vec![
-                tmp.path().to_path_buf(),
-                tmp.path().join("sub"),
-            ],
+            search_paths: vec![tmp.path().to_path_buf(), tmp.path().join("sub")],
         };
 
         let discovered = discover_plugins(&config, tmp.path());
-        assert_eq!(discovered.len(), 1, "Should deduplicate plugin found from multiple search roots");
+        assert_eq!(
+            discovered.len(),
+            1,
+            "Should deduplicate plugin found from multiple search roots"
+        );
     }
 
     #[test]
@@ -323,7 +340,11 @@ version = "0.1.0"
         };
 
         let discovered = discover_plugins(&config, tmp.path());
-        assert_eq!(discovered.len(), 1, "Should find it even if TOML is minimal");
+        assert_eq!(
+            discovered.len(),
+            1,
+            "Should find it even if TOML is minimal"
+        );
         assert_eq!(discovered[0].name, "Minimal");
     }
 }

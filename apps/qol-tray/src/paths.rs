@@ -12,8 +12,7 @@ pub fn is_safe_path_component(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 64
         && !s.starts_with('-')
-        && s
-            .chars()
+        && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
@@ -171,7 +170,12 @@ mod tests {
 
         for (result, expected_suffix) in cases {
             let path = result.unwrap();
-            assert!(path.ends_with(expected_suffix), "path {:?} should end with {}", path, expected_suffix);
+            assert!(
+                path.ends_with(expected_suffix),
+                "path {:?} should end with {}",
+                path,
+                expected_suffix
+            );
             if expected_suffix == "plugins" {
                 assert!(path.to_string_lossy().contains("qol-tray"));
             }

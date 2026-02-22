@@ -25,8 +25,12 @@ pub fn run() -> Result<()> {
     let source_binary = source::resolve_source_binary(&repo_root)?;
 
     let install_dir = platform::install_dir()?;
-    fs::create_dir_all(&install_dir)
-        .with_context(|| format!("Failed to create install directory {}", install_dir.display()))?;
+    fs::create_dir_all(&install_dir).with_context(|| {
+        format!(
+            "Failed to create install directory {}",
+            install_dir.display()
+        )
+    })?;
 
     let installed_binary = install_dir.join(platform::binary_filename());
     platform::stop_running(&installed_binary)?;
@@ -50,7 +54,10 @@ pub fn run() -> Result<()> {
     println!("Plugins directory: {}", plugins_dir.display());
 
     if !is_in_path(&install_dir) {
-        println!("{} is not in PATH. Add it to run qol-tray directly.", install_dir.display());
+        println!(
+            "{} is not in PATH. Add it to run qol-tray directly.",
+            install_dir.display()
+        );
     }
 
     Ok(())

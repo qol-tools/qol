@@ -1,4 +1,4 @@
-use super::release_assets::{PlatformTarget, resolve_asset_pattern};
+use super::release_assets::{resolve_asset_pattern, PlatformTarget};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::io::Write;
@@ -40,8 +40,7 @@ impl PluginInstaller {
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("Plugin path contains invalid UTF-8"))?;
 
-        if let Err(error) = run_git_checked(["clone", repo_url, staging_str], None, "clone").await
-        {
+        if let Err(error) = run_git_checked(["clone", repo_url, staging_str], None, "clone").await {
             self.cleanup_temp_dir(&staging_dir).await;
             return Err(error);
         }
@@ -111,12 +110,14 @@ impl PluginInstaller {
         staging_dir: &Path,
         backup_dir: &Path,
     ) -> Result<()> {
-        tokio::fs::rename(live_dir, backup_dir).await.with_context(|| {
-            format!(
-                "Failed to move plugin directory {:?} to backup {:?}",
-                live_dir, backup_dir
-            )
-        })?;
+        tokio::fs::rename(live_dir, backup_dir)
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to move plugin directory {:?} to backup {:?}",
+                    live_dir, backup_dir
+                )
+            })?;
 
         match tokio::fs::rename(staging_dir, live_dir).await {
             Ok(()) => {
@@ -151,8 +152,8 @@ impl PluginInstaller {
         let content = tokio::fs::read_to_string(&manifest_path)
             .await
             .with_context(|| format!("Failed to read {:?}", manifest_path))?;
-        let manifest: crate::plugins::PluginManifest = toml::from_str(&content)
-            .context("Failed to parse plugin.toml")?;
+        let manifest: crate::plugins::PluginManifest =
+            toml::from_str(&content).context("Failed to parse plugin.toml")?;
         manifest
             .validate()
             .context("Invalid plugin.toml contract")?;
@@ -194,11 +195,7 @@ impl PluginInstaller {
                     download_asset(&asset.browser_download_url, &binary_path).await?;
                     downloaded = true;
                 } else {
-                    log::warn!(
-                        "Release asset '{}' missing for {}",
-                        asset_name,
-                        dep.repo
-                    );
+                    log::warn!("Release asset '{}' missing for {}", asset_name, dep.repo);
                 }
             }
             Err(error) => {
@@ -259,9 +256,7 @@ impl PluginInstaller {
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("Plugin path contains invalid UTF-8"))?;
 
-        if let Err(error) =
-            run_git_checked(["clone", repo_url, staging_str], None, "clone").await
-        {
+        if let Err(error) = run_git_checked(["clone", repo_url, staging_str], None, "clone").await {
             self.cleanup_temp_dir(&staging_dir).await;
             return Err(error);
         }
@@ -385,8 +380,12 @@ impl PluginInstaller {
     }
 
     fn acquire_operation_lock(&self, plugin_id: &str) -> Result<PluginOperationLock> {
-        std::fs::create_dir_all(&self.plugins_dir)
-            .with_context(|| format!("Failed to create plugins directory {}", self.plugins_dir.display()))?;
+        std::fs::create_dir_all(&self.plugins_dir).with_context(|| {
+            format!(
+                "Failed to create plugins directory {}",
+                self.plugins_dir.display()
+            )
+        })?;
         let path = self.plugins_dir.join(format!(".{}.lock", plugin_id));
 
         match open_lock_file(&path) {
@@ -408,8 +407,9 @@ impl PluginInstaller {
                 }
                 anyhow::bail!("Plugin operation already in progress: {}", plugin_id)
             }
-            Err(error) => Err(error)
-                .with_context(|| format!("Failed to acquire plugin operation lock {}", path.display())),
+            Err(error) => Err(error).with_context(|| {
+                format!("Failed to acquire plugin operation lock {}", path.display())
+            }),
         }
     }
 }
@@ -629,20 +629,24 @@ fn built_binary_candidates(plugin_dir: &Path, binary_name: &str) -> Vec<PathBuf>
 async fn install_built_binary(source_path: &Path, output_path: &Path) -> Result<()> {
     let staged_path = output_path.with_extension("new");
     let _ = tokio::fs::remove_file(&staged_path).await;
-    tokio::fs::copy(source_path, &staged_path).await.with_context(|| {
-        format!(
-            "Failed to stage built binary {} -> {}",
-            source_path.display(),
-            staged_path.display()
-        )
-    })?;
-    tokio::fs::rename(&staged_path, output_path).await.with_context(|| {
-        format!(
-            "Failed to install built binary {} -> {}",
-            staged_path.display(),
-            output_path.display()
-        )
-    })?;
+    tokio::fs::copy(source_path, &staged_path)
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to stage built binary {} -> {}",
+                source_path.display(),
+                staged_path.display()
+            )
+        })?;
+    tokio::fs::rename(&staged_path, output_path)
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to install built binary {} -> {}",
+                staged_path.display(),
+                output_path.display()
+            )
+        })?;
     Ok(())
 }
 
@@ -779,7 +783,9 @@ mod tests {
         let root = TempDir::new().unwrap();
         let installer = PluginInstaller::new(root.path().to_path_buf());
         let install_dir = root.path().join(".plugin-test.installing.1");
-        tokio::fs::create_dir_all(install_dir.join("nested")).await.unwrap();
+        tokio::fs::create_dir_all(install_dir.join("nested"))
+            .await
+            .unwrap();
         tokio::fs::write(install_dir.join("nested").join("file.txt"), b"x")
             .await
             .unwrap();
@@ -798,8 +804,12 @@ mod tests {
 
         tokio::fs::create_dir_all(&live).await.unwrap();
         tokio::fs::create_dir_all(&staging).await.unwrap();
-        tokio::fs::write(live.join("old.txt"), b"old").await.unwrap();
-        tokio::fs::write(staging.join("new.txt"), b"new").await.unwrap();
+        tokio::fs::write(live.join("old.txt"), b"old")
+            .await
+            .unwrap();
+        tokio::fs::write(staging.join("new.txt"), b"new")
+            .await
+            .unwrap();
 
         installer
             .swap_plugin_dirs(&live, &staging, &backup)
@@ -820,14 +830,14 @@ mod tests {
         let backup = root.path().join(".plugin-test.backup.1");
 
         tokio::fs::create_dir_all(&live).await.unwrap();
-        tokio::fs::write(live.join("old.txt"), b"old").await.unwrap();
+        tokio::fs::write(live.join("old.txt"), b"old")
+            .await
+            .unwrap();
 
-        assert!(
-            installer
-                .swap_plugin_dirs(&live, &staging, &backup)
-                .await
-                .is_err()
-        );
+        assert!(installer
+            .swap_plugin_dirs(&live, &staging, &backup)
+            .await
+            .is_err());
         assert!(tokio::fs::metadata(live.join("old.txt")).await.is_ok());
         assert!(tokio::fs::metadata(&backup).await.is_err());
     }

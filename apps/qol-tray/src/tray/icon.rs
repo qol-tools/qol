@@ -11,15 +11,13 @@ const _: () = assert!(
 );
 
 pub fn create_icon() -> Icon {
-    Icon::from_rgba(ICON_DATA.to_vec(), ICON_SIZE, ICON_SIZE)
-        .expect("embedded icon.rgba is valid")
+    Icon::from_rgba(ICON_DATA.to_vec(), ICON_SIZE, ICON_SIZE).expect("embedded icon.rgba is valid")
 }
 
 pub fn create_icon_with_dot() -> Icon {
     let mut data = ICON_DATA.to_vec();
     add_notification_dot(&mut data, ICON_SIZE);
-    Icon::from_rgba(data, ICON_SIZE, ICON_SIZE)
-        .expect("embedded icon.rgba is valid")
+    Icon::from_rgba(data, ICON_SIZE, ICON_SIZE).expect("embedded icon.rgba is valid")
 }
 
 fn add_notification_dot(data: &mut [u8], size: u32) {
@@ -28,7 +26,8 @@ fn add_notification_dot(data: &mut [u8], size: u32) {
     let radius_sq = DOT_RADIUS * DOT_RADIUS;
 
     let pixels = (0..size as i32).flat_map(|y| (0..size as i32).map(move |x| (x, y)));
-    pixels.filter(|&(x, y)| is_within_dot(x, y, center_x, center_y, radius_sq))
+    pixels
+        .filter(|&(x, y)| is_within_dot(x, y, center_x, center_y, radius_sq))
         .for_each(|(x, y)| set_pixel(data, x, y, size, DOT_COLOR));
 }
 
