@@ -25,10 +25,14 @@ sudo pacman -S slop ffmpeg xorg-xrandr libnotify
 git clone https://github.com/qol-tools/plugin-screen-recorder ~/.config/qol-tray/plugins/plugin-screen-recorder
 ```
 
-For linked dev setups, run:
+## Development
 
 ```bash
-make dev
+# Run contract validation tests
+cargo test
+
+# Run in development mode (as a tray plugin)
+# qol-tray will automatically resolve the binary from target/debug
 ```
 
 ## Usage
