@@ -73,6 +73,7 @@ impl Plugin {
         if let Some(socket) = daemon_config.socket.as_deref() {
             cmd.env("QOL_TRAY_DAEMON_SOCKET", socket);
         }
+        cmd.env("QOL_TRAY_DAEMON_REPLACE_EXISTING", "1");
 
         #[cfg(feature = "dev")]
         cmd.env("RUST_LOG", "debug");

@@ -11,6 +11,10 @@ use crate::daemon::DaemonEvent;
 use crate::dev;
 use crate::dev::state::{BuildResultInfo, DiscoveryStatus};
 use crate::paths::is_safe_path_component;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use super::dev_runtime::*;
 use super::types::{
@@ -18,9 +22,11 @@ use super::types::{
     UpsertPluginLogControlRequest,
 };
 
-pub(super) async fn reload_plugins(State(state): State<AppState>) -> impl IntoResponse {
-    use std::sync::atomic::Ordering;
+static SELF_RECOMPILE_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+static SELF_RESTART_PENDING: AtomicBool = AtomicBool::new(false);
+const RESTART_IDLE_POLL_MS: u64 = 250;
 
+pub(super) async fn reload_plugins(State(state): State<AppState>) -> impl IntoResponse {
     if BUILD_IN_PROGRESS.swap(true, Ordering::SeqCst) {
         log::warn!("Developer reload requested, but a build is already in progress");
         return (StatusCode::CONFLICT, "Build already in progress").into_response();
@@ -116,10 +122,23 @@ pub(super) async fn reload_plugins(State(state): State<AppState>) -> impl IntoRe
 }
 
 pub(super) async fn recompile_self(State(state): State<AppState>) -> impl IntoResponse {
+    if SELF_RECOMPILE_IN_PROGRESS.swap(true, Ordering::SeqCst) {
+        return (StatusCode::CONFLICT, "Self recompile already in progress").into_response();
+    }
+
     log::info!("Developer self recompile requested");
 
     let events = state.daemon.events.clone();
+    let plugin_manager = state.plugin_manager.clone();
     tokio::spawn(async move {
+        struct RecompileGuard;
+        impl Drop for RecompileGuard {
+            fn drop(&mut self) {
+                SELF_RECOMPILE_IN_PROGRESS.store(false, Ordering::SeqCst);
+            }
+        }
+        let _guard = RecompileGuard;
+
         let progress_events = events.clone();
         let result = tokio::task::spawn_blocking(move || {
             dev::build_qol_tray_self_with_progress(|percent, phase| {
@@ -131,6 +150,7 @@ pub(super) async fn recompile_self(State(state): State<AppState>) -> impl IntoRe
         match result {
             Ok(build) if build.success => {
                 events.send(DaemonEvent::SelfRecompileComplete);
+                schedule_self_restart_after_idle(plugin_manager);
             }
             Ok(build) => {
                 let message = build_failure_message(&build.output);
@@ -145,7 +165,119 @@ pub(super) async fn recompile_self(State(state): State<AppState>) -> impl IntoRe
         }
     });
 
-    StatusCode::ACCEPTED
+    StatusCode::ACCEPTED.into_response()
+}
+
+fn schedule_self_restart_after_idle(plugin_manager: Arc<Mutex<crate::plugins::PluginManager>>) {
+    if SELF_RESTART_PENDING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    tokio::spawn(async move {
+        loop {
+            let idle = !BUILD_IN_PROGRESS.load(Ordering::SeqCst)
+                && !any_mock_target_running()
+                && !SELF_RECOMPILE_IN_PROGRESS.load(Ordering::SeqCst);
+            if idle {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(RESTART_IDLE_POLL_MS)).await;
+        }
+
+        let restart_binary = match resolve_restart_binary() {
+            Some(path) => path,
+            None => {
+                log::error!("Self recompile completed but restart binary could not be resolved");
+                SELF_RESTART_PENDING.store(false, Ordering::SeqCst);
+                return;
+            }
+        };
+
+        if let Err(error) = spawn_delayed_restart(&restart_binary) {
+            log::error!(
+                "Self recompile completed but restart spawn failed for {}: {}",
+                restart_binary.display(),
+                error
+            );
+            SELF_RESTART_PENDING.store(false, Ordering::SeqCst);
+            return;
+        }
+
+        match plugin_manager.lock() {
+            Ok(mut manager) => manager.shutdown(),
+            Err(error) => {
+                log::error!("Plugin manager lock poisoned during self restart: {}", error);
+            }
+        }
+
+        std::process::exit(0);
+    });
+}
+
+fn resolve_restart_binary() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Ok(current) = std::env::current_exe() {
+        candidates.push(current.clone());
+        if let Some(stripped) = strip_deleted_suffix(&current) {
+            candidates.push(stripped);
+        }
+    }
+
+    let debug_binary = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join("debug")
+        .join(if cfg!(windows) {
+            "qol-tray.exe"
+        } else {
+            "qol-tray"
+        });
+    candidates.push(debug_binary);
+
+    for candidate in candidates {
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
+fn strip_deleted_suffix(path: &std::path::Path) -> Option<PathBuf> {
+    let raw = path.to_string_lossy();
+    let stripped = raw.strip_suffix(" (deleted)")?;
+    if stripped.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(stripped))
+}
+
+fn spawn_delayed_restart(binary: &std::path::Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 0.35; exec \"$1\"")
+            .arg("qol-tray-restart")
+            .arg(binary)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    #[cfg(windows)]
+    {
+        std::process::Command::new(binary)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = binary;
+        Err("unsupported platform for delayed restart".to_string())
+    }
 }
 
 fn build_failure_message(output: &str) -> String {
