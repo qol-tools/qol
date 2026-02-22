@@ -52,7 +52,13 @@ pub fn load_alt_tab_config() -> AltTabConfig {
         };
         match serde_json::from_str::<AltTabConfig>(&contents) {
             Ok(config) => {
-                println!("Loaded config from {}: {:?}", path.display(), config);
+                println!(
+                    "Loaded config from {}: action_mode={:?} max_columns={} reset_selection_on_open={}",
+                    path.display(),
+                    config.action_mode,
+                    config.display.max_columns,
+                    config.reset_selection_on_open
+                );
                 return config;
             }
             Err(e) => {

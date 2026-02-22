@@ -67,19 +67,41 @@ impl WindowDelegate {
     }
 
     fn set_windows(&mut self, windows: Vec<WindowInfo>, reset_selection: bool) {
+        let previous_row = self.selected_index.map(|ix| ix.row);
         self.windows = windows;
         if self.windows.is_empty() {
             self.selected_index = None;
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "[alt-tab/select] set_windows reset={} prev={:?} next=None total=0",
+                reset_selection,
+                previous_row
+            );
             return;
         }
 
         if reset_selection {
             self.selected_index = Some(IndexPath::new(0));
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "[alt-tab/select] set_windows reset={} prev={:?} next=Some(0) total={}",
+                reset_selection,
+                previous_row,
+                self.windows.len()
+            );
             return;
         }
 
         let selected_row = self.selected_index.map(|ix| ix.row).unwrap_or(0);
         self.selected_index = Some(IndexPath::new(selected_row.min(self.windows.len() - 1)));
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[alt-tab/select] set_windows reset={} prev={:?} next={:?} total={}",
+            reset_selection,
+            previous_row,
+            self.selected_index.map(|ix| ix.row),
+            self.windows.len()
+        );
     }
 }
 
@@ -766,15 +788,26 @@ fn open_picker(
             .update(cx, |view, window: &mut Window, cx| {
                 // In HoldToSwitch mode, if the poll task is still running, the window
                 // is already visible. Treat subsequent Show commands as "select next".
-                if view.action_mode == ActionMode::HoldToSwitch && view._alt_poll_task.is_some() {
+                let alt_held = is_alt_held_x11();
+                if view.action_mode == ActionMode::HoldToSwitch && view._alt_poll_task.is_some() && alt_held {
                     #[cfg(debug_assertions)]
-                    eprintln!("[alt-tab/hold] window already visible — cycling to next");
+                    eprintln!(
+                        "[alt-tab/hold] window already visible (alt_held={}) — cycling to next",
+                        alt_held
+                    );
                     view.list_state.update(cx, |s, _cx| {
                         s.delegate_mut().select_next();
                     });
                     cx.notify();
                     return;
                 }
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "[alt-tab/hold] reuse path (alt_held={} poll_task={}) — applying config reset={}",
+                    alt_held,
+                    view._alt_poll_task.is_some(),
+                    config.reset_selection_on_open
+                );
 
                 let current_bounds = window.window_bounds().get_bounds();
                 let dx = (current_bounds.origin.x.to_f64() - target_bounds.origin.x.to_f64()).abs();
