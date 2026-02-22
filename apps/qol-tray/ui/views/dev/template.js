@@ -17,8 +17,6 @@ export function renderDevView({
         if (plugin.status === 'linked') {
             if (!plugin.has_cargo) {
                 buildBadge = '<span class="badge badge-build-skip">No Cargo</span>';
-            } else if (plugin.needs_rebuild) {
-                buildBadge = '<span class="badge badge-build-pending">Will Rebuild</span>';
             }
         }
 
@@ -26,6 +24,20 @@ export function renderDevView({
         const isRowBuilding = !!buildState;
         const isLinking = state.linkingId === plugin.id;
         const actionDisabled = isRowBuilding || !!state.linkingId;
+        const rebuildActive = plugin.status === 'linked' && plugin.has_cargo && plugin.needs_rebuild;
+        const filterCount = Array.isArray(plugin.suppressed_log_patterns)
+            ? plugin.suppressed_log_patterns.length
+            : 0;
+        const logControls = `
+            <div class="plugin-log-controls">
+                <button type="button" class="badge ${plugin.logs_muted ? 'badge-installed-dim' : 'badge-linked'} badge-button" data-action="toggle-plugin-logs" data-id="${plugin.id}" aria-label="${plugin.logs_muted ? 'Unmute logs' : 'Mute logs'} for ${plugin.name}">
+                    ${plugin.logs_muted ? 'Muted' : 'Logs'}
+                </button>
+                <button type="button" class="badge ${filterCount > 0 ? 'badge-local' : 'badge-build-skip'} badge-button" data-action="edit-plugin-log-filters" data-id="${plugin.id}" aria-label="Edit log filters for ${plugin.name}">
+                    ${filterCount > 0 ? `Filter ${filterCount}` : 'Filter'}
+                </button>
+            </div>
+        `;
         const statusBadges = `
             <div class="plugin-status-badges">
                 ${statusBadge}
@@ -47,8 +59,12 @@ export function renderDevView({
                         </div>
                         ${statusBadges}
                     </div>
-                    <div class="plugin-action-zone ${actionDisabled ? 'is-disabled' : ''}" data-action="toggle-link" data-id="${plugin.id}" aria-label="${plugin.status === 'linked' ? 'Unlink' : 'Link'} ${plugin.name}">
+                    <div class="plugin-filter-zone">
+                        ${logControls}
                     </div>
+                    <button type="button" class="plugin-action-zone ${actionDisabled ? 'is-disabled' : ''} ${rebuildActive ? 'has-rebuild' : 'rebuild-idle'}" data-action="toggle-link" data-id="${plugin.id}" aria-label="${plugin.status === 'linked' ? 'Unlink' : 'Link'} ${plugin.name}" ${actionDisabled ? 'disabled' : ''}>
+                        <img class="plugin-action-rebuild-icon" src="assets/qol-tray.png?v=1" alt="" aria-hidden="true">
+                    </button>
                 </div>
                 <div class="plugin-build-overlay-host"></div>
             </div>
@@ -66,7 +82,7 @@ export function renderDevView({
                 <div class="section-header">
                     <h2>Plugins</h2>
                     <div class="section-actions">
-                        <button class="refresh-btn ${state.discovering ? 'spinning' : ''}" data-action="refresh-discovery" title="Rescan">↻</button>
+                        <button class="refresh-btn ${state.discovering ? 'spinning' : ''}" data-action="refresh-discovery" title="Rescan" aria-label="Rescan"></button>
                         <button class="btn btn-sm btn-ghost" data-action="add-link">+ Link Path</button>
                     </div>
                 </div>
@@ -90,7 +106,7 @@ export function renderDevView({
             <section class="dev-section">
                 <h2>Actions</h2>
                 <div class="dev-card" data-action="reload">
-                    <button class="refresh-btn ${state.building || state.reloading ? 'spinning' : ''}" tabindex="-1">↻</button>
+                    <button class="refresh-btn ${state.building || state.reloading ? 'spinning' : ''}" tabindex="-1" aria-hidden="true"></button>
                     <div class="dev-card-content">
                         <h3>${state.building ? 'Building...' : 'Reload All Plugins'}</h3>
                         <p>${state.building ? 'Compiling linked plugins' : 'Build linked plugins and restart daemons.'}</p>
@@ -101,7 +117,7 @@ export function renderDevView({
                     <div class="dev-card-hint"><kbd>Ctrl+r</kbd></div>
                 </div>
                 <div class="dev-card" data-action="mock-update">
-                    ${state.mockTesting ? '<button class="refresh-btn spinning" tabindex="-1">↻</button>' : ''}
+                    ${state.mockTesting ? '<button class="refresh-btn spinning" tabindex="-1" aria-hidden="true"></button>' : ''}
                     <div class="dev-card-content">
                         <h3>${state.mockTesting ? 'Stop testing mock flows' : 'Test mock flows'}</h3>
                         <p>${state.mockTesting

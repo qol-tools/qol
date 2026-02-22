@@ -22,6 +22,7 @@ const state = {
     linkError: null,
     mergedList: [],
     mergedCount: 0,
+    logControls: {},
     linkingId: null,
     buildProgress: {},
     mockTesting: false
@@ -47,6 +48,7 @@ export function render(containerEl) {
     void Promise.all([
         loadPlugins(true),
         fetchDiscoveryState(true),
+        loadLogControls(true),
         hydrateBuildState(true)
     ]).finally(() => {
         if (!state.linkingId) updateView();
@@ -95,6 +97,18 @@ function handleEvent(event) {
 
 async function fetchDiscoveryState(skipUpdate = false) {
     await refreshDiscoveryState();
+    if (!skipUpdate && !state.linkingId) updateView();
+}
+
+async function loadLogControls(skipUpdate = false) {
+    try {
+        const res = await fetch('/api/dev/log-controls');
+        if (res.ok) {
+            const payload = await res.json();
+            state.logControls = payload && typeof payload === 'object' ? payload : {};
+        }
+    } catch (e) {}
+
     if (!skipUpdate && !state.linkingId) updateView();
 }
 
@@ -185,7 +199,7 @@ function queueBuildRowSync(pluginId) {
 }
 
 function updateView() {
-    const mergedList = mergePlugins(state.discovered, state.plugins);
+    const mergedList = mergePlugins(state.discovered, state.plugins, state.logControls);
     state.mergedCount = mergedList.length;
     state.mergedList = mergedList;
     state.selectedIndex = Math.max(0, Math.min(state.selectedIndex, mergedList.length - 1));
@@ -227,6 +241,18 @@ function handleClick(e) {
     if (action === 'mock-update') {
         void triggerMockFlows();
     }
+    if (action === 'toggle-plugin-logs' && actionId) {
+        e.preventDefault();
+        e.stopPropagation();
+        void togglePluginLogs(actionId);
+        return;
+    }
+    if (action === 'edit-plugin-log-filters' && actionId) {
+        e.preventDefault();
+        e.stopPropagation();
+        void editPluginLogFilters(actionId);
+        return;
+    }
     if (action === 'toggle-link' && actionId) {
         if (state.linkingId) return;
         const row = e.target.closest('.plugin-row');
@@ -243,11 +269,6 @@ function handleClick(e) {
     if (action === 'confirm-link') confirmLink();
     if (action === 'cancel-link') cancelLink();
 
-    const row = e.target.closest('.plugin-row');
-    if (row) {
-        state.selectedIndex = parseInt(row.dataset.index);
-        updateView();
-    }
 }
 
 function handleItemActivation() {
@@ -376,6 +397,82 @@ async function deleteLink(id) {
         console.error('Failed to delete link:', e);
     } finally {
         state.linkingId = null;
+        updateView();
+    }
+}
+
+function getCurrentLinkedPlugin(pluginId) {
+    return state.plugins.find(plugin => plugin.id === pluginId) || null;
+}
+
+function normalizePatternsInput(raw) {
+    if (!raw) return [];
+    return raw
+        .split(',')
+        .map(value => value.trim())
+        .filter(Boolean);
+}
+
+async function savePluginLogControl(pluginId, control) {
+    const res = await fetch(`/api/dev/log-controls/${encodeURIComponent(pluginId)}`, {
+        ...jsonRequest('PUT', control)
+    });
+    if (!res.ok) {
+        const message = await readResponseText(res);
+        throw new Error(message || 'Failed to update plugin log control');
+    }
+}
+
+async function togglePluginLogs(pluginId) {
+    const plugin = getCurrentLinkedPlugin(pluginId) || getMergedPluginById(pluginId);
+    if (!plugin) return;
+
+    try {
+        await savePluginLogControl(pluginId, {
+            muted: !plugin.logs_muted,
+            suppress_patterns: Array.isArray(plugin.suppressed_log_patterns)
+                ? plugin.suppressed_log_patterns
+                : []
+        });
+        await Promise.all([
+            loadPlugins(true),
+            loadLogControls(true)
+        ]);
+        updateView();
+    } catch (error) {
+        state.error = error?.message || 'Failed to toggle plugin logs';
+        updateView();
+    }
+}
+
+async function editPluginLogFilters(pluginId) {
+    const plugin = getCurrentLinkedPlugin(pluginId) || getMergedPluginById(pluginId);
+    if (!plugin) return;
+
+    const current = Array.isArray(plugin.suppressed_log_patterns)
+        ? plugin.suppressed_log_patterns
+        : [];
+    const initial = current.join(', ');
+    const value = window.prompt(
+        'Mute log lines containing these comma-separated substrings (leave empty to clear):',
+        initial
+    );
+    if (value === null) return;
+
+    const suppress_patterns = normalizePatternsInput(value);
+
+    try {
+        await savePluginLogControl(pluginId, {
+            muted: !!plugin.logs_muted,
+            suppress_patterns
+        });
+        await Promise.all([
+            loadPlugins(true),
+            loadLogControls(true)
+        ]);
+        updateView();
+    } catch (error) {
+        state.error = error?.message || 'Failed to update plugin log filters';
         updateView();
     }
 }
@@ -747,6 +844,7 @@ export function onFocus() {
         void Promise.all([
             loadPlugins(true),
             fetchDiscoveryState(true),
+            loadLogControls(true),
             hydrateBuildState(true)
         ]).finally(() => {
             updateView();

@@ -32,7 +32,12 @@ impl PluginManager {
             .collect();
 
         for r in &resolved {
-            log::info!("Resolved plugin: {} ({:?}) from {:?}", r.id, r.source, r.path);
+            log::info!(
+                "Resolved plugin: {} ({:?}) from {:?}",
+                r.id,
+                r.source,
+                r.path
+            );
         }
 
         let plugins = PluginLoader::load_resolved(&resolved)?;
@@ -48,7 +53,8 @@ impl PluginManager {
                 .as_ref()
                 .is_some_and(|daemon| daemon.enabled);
             let source = resolved_sources.get(&plugin.id);
-            if !should_autostart_daemon_for_source(&plugin.id, &plugin.path, daemon_enabled, source) {
+            if !should_autostart_daemon_for_source(&plugin.id, &plugin.path, daemon_enabled, source)
+            {
                 self.plugins.insert(plugin.id.clone(), plugin);
                 continue;
             }
@@ -83,6 +89,20 @@ impl PluginManager {
 
     pub fn plugins(&self) -> impl Iterator<Item = &Plugin> {
         self.plugins.values()
+    }
+
+    pub fn restart_running_plugin_daemon(&mut self, plugin_id: &str) -> Result<()> {
+        let Some(plugin) = self.plugins.get_mut(plugin_id) else {
+            anyhow::bail!("plugin not found: {}", plugin_id);
+        };
+
+        if plugin.daemon_pid().is_none() {
+            return Ok(());
+        }
+
+        plugin.stop_daemon()?;
+        plugin.start_daemon()?;
+        Ok(())
     }
 
     fn stop_all_plugins(&mut self) {
@@ -155,10 +175,18 @@ fn kill_orphan_daemons() {
     let shared_plugins_root = paths::plugins_dir().ok();
 
     for path in daemon_pid_files() {
-        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
         for line in content.lines() {
-            let Ok(pid) = line.trim().parse::<i32>() else { continue };
-            if !is_pid_from_managed_plugin(pid, installs_root.as_deref(), shared_plugins_root.as_deref()) {
+            let Ok(pid) = line.trim().parse::<i32>() else {
+                continue;
+            };
+            if !is_pid_from_managed_plugin(
+                pid,
+                installs_root.as_deref(),
+                shared_plugins_root.as_deref(),
+            ) {
                 continue;
             }
             if crate::process_utils::is_pid_alive(pid) {
@@ -181,7 +209,9 @@ fn kill_orphan_plugin_binaries() {
         return;
     }
 
-    let Ok(entries) = std::fs::read_dir("/proc") else { return };
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return;
+    };
 
     for entry in entries.filter_map(|e| e.ok()) {
         let pid = match entry.file_name().to_string_lossy().parse::<i32>() {
@@ -195,7 +225,11 @@ fn kill_orphan_plugin_binaries() {
         let Ok(target) = std::fs::read_link(exe_path) else {
             continue;
         };
-        if !is_managed_plugin_binary_path(&target, installs_root.as_deref(), shared_plugins_root.as_deref()) {
+        if !is_managed_plugin_binary_path(
+            &target,
+            installs_root.as_deref(),
+            shared_plugins_root.as_deref(),
+        ) {
             continue;
         }
 
@@ -277,11 +311,15 @@ fn daemon_pid_files() -> Vec<std::path::PathBuf> {
 #[cfg(unix)]
 fn clean_stale_sockets(plugins: &[Plugin]) {
     for plugin in plugins {
-        let Some(daemon) = &plugin.manifest.daemon else { continue };
+        let Some(daemon) = &plugin.manifest.daemon else {
+            continue;
+        };
         if !daemon.enabled {
             continue;
         }
-        let Some(socket) = daemon.socket.as_deref() else { continue };
+        let Some(socket) = daemon.socket.as_deref() else {
+            continue;
+        };
         let path = std::path::Path::new(socket);
         if !path.exists() {
             continue;
@@ -404,8 +442,14 @@ fn migrate_symlinks_to_registry(plugins_dir: &std::path::Path) {
 }
 
 fn save_daemon_pids(pids: &[u32]) {
-    let Some(path) = daemon_pids_path() else { return };
-    let content = pids.iter().map(|p| p.to_string()).collect::<Vec<_>>().join("\n");
+    let Some(path) = daemon_pids_path() else {
+        return;
+    };
+    let content = pids
+        .iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
     let _ = std::fs::write(&path, content);
 }
 

@@ -85,25 +85,47 @@
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .refresh-btn {
+    --refresh-icon-default: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2399a3b5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12a9 9 0 1 1-2.64-6.36'/%3E%3Cpath d='M21 3v6h-6'/%3E%3C/svg%3E");
+    --refresh-icon-hover: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23eef4ff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12a9 9 0 1 1-2.64-6.36'/%3E%3Cpath d='M21 3v6h-6'/%3E%3C/svg%3E");
     position: relative;
     width: 2.5rem;
     height: 2.5rem;
-    border: 2px solid var(--border-default);
+    border: 2px solid transparent;
     border-radius: 50%;
-    background: var(--bg-surface);
+    background: transparent;
     color: var(--text-secondary);
-    font-size: 1.2rem;
+    font-size: 0;
+    line-height: 0;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    transition: background var(--transition), color var(--transition), border-color var(--transition);
+    overflow: hidden;
+    text-indent: -9999px;
+    white-space: nowrap;
+    transition: color var(--transition), border-color var(--transition), background var(--transition);
+}
+
+.refresh-btn::before {
+    content: '';
+    width: 1.42rem;
+    height: 1.42rem;
+    background-image: var(--refresh-icon-default);
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: contain;
+    opacity: 1;
+    transition: transform var(--transition), opacity var(--transition);
 }
 
 .refresh-btn:hover:not(:disabled) {
-    background: var(--bg-hover);
     color: var(--text-primary);
-    border-color: var(--border-hover);
+    border-color: transparent;
+    background: transparent;
+}
+
+.refresh-btn:hover:not(:disabled)::before {
+    background-image: var(--refresh-icon-hover);
 }
 
 .refresh-btn:disabled {
@@ -115,7 +137,59 @@
     color: transparent;
     border-color: var(--border-subtle);
     border-top-color: var(--accent);
+    background: transparent;
     animation: spin 0.8s linear infinite;
+}
+
+.refresh-btn.spinning::before {
+    opacity: 0;
+    animation: none;
+}
+
+/* Reusable badges (Dev + Store variants) */
+.badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.14rem 0.44rem;
+    border: 1px solid transparent;
+    border-radius: 2px;
+    font-size: 0.69rem;
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.badge-linked {
+    color: #4ade80;
+    background: rgba(74, 222, 128, 0.14);
+    border-color: rgba(74, 222, 128, 0.3);
+}
+
+.badge-local {
+    color: #f59e0b;
+    background: rgba(245, 158, 11, 0.14);
+    border-color: rgba(245, 158, 11, 0.32);
+}
+
+.badge-installed {
+    color: var(--accent);
+    background: rgba(74, 158, 255, 0.14);
+    border-color: rgba(74, 158, 255, 0.32);
+}
+
+.badge-installed-dim {
+    color: var(--text-muted);
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.14);
+}
+
+.badge-build-skip {
+    color: var(--text-faint);
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.12);
 }
 
 .search-bar { margin-bottom: 2rem; }
@@ -576,4 +650,3 @@ kbd {
     font-family: var(--font-mono);
     font-size: 0.85em;
 }
-
