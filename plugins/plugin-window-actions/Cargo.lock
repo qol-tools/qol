@@ -1599,7 +1599,8 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "1.6.0"
+version = "2.0.0"
+source = "git+https://github.com/qol-tools/qol-tray#d7a4a6b1516fd84ebf26e93e64b4cf2eb012a0f7"
 dependencies = [
  "anyhow",
  "axum",

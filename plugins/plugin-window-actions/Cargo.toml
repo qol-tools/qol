@@ -6,5 +6,5 @@ edition = "2021"
 [dependencies]
 
 [dev-dependencies]
-qol-tray = { path = "../../qol-tray" }
+qol-tray = { git = "https://github.com/qol-tools/qol-tray" }
 toml = "0.9.8"
