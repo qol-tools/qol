@@ -171,7 +171,11 @@ fn run_record_action() -> Result<()> {
     }
 
     if rect.w <= 0 || rect.h <= 0 {
-        show_notification("Recording failed", &format!("Invalid area: {}x{}", rect.w, rect.h), 1200);
+        show_notification(
+            "Recording failed",
+            &format!("Invalid area: {}x{}", rect.w, rect.h),
+            1200,
+        );
         return Err(anyhow!("invalid recording area {}x{}", rect.w, rect.h));
     }
 
@@ -238,7 +242,14 @@ fn remove_pidfile() {
 
 fn select_region() -> Result<Option<Rect>> {
     let output = Command::new("slop")
-        .args(["--highlight", "--color=1,0,0,0.65", "-b", "0", "-f", "%x,%y,%w,%h"])
+        .args([
+            "--highlight",
+            "--color=1,0,0,0.65",
+            "-b",
+            "0",
+            "-f",
+            "%x,%y,%w,%h",
+        ])
         .output()
         .context("failed to run slop")?;
 
@@ -262,7 +273,10 @@ fn parse_selection_geometry(raw: &str) -> Result<Rect> {
         .collect::<std::result::Result<Vec<_>, _>>()
         .context("invalid selection geometry")?;
     if values.len() != 4 {
-        return Err(anyhow!("expected 4 values in geometry, got {}", values.len()));
+        return Err(anyhow!(
+            "expected 4 values in geometry, got {}",
+            values.len()
+        ));
     }
     Ok(Rect {
         x: values[0],
@@ -276,14 +290,12 @@ fn monitor_for_selection(rect: Rect) -> Option<Monitor> {
     let center_x = rect.x + rect.w / 2;
     let center_y = rect.y + rect.h / 2;
     let monitors = xrandr_monitors().ok()?;
-    monitors
-        .into_iter()
-        .find(|monitor| {
-            center_x >= monitor.x
-                && center_x < monitor.x + monitor.w
-                && center_y >= monitor.y
-                && center_y < monitor.y + monitor.h
-        })
+    monitors.into_iter().find(|monitor| {
+        center_x >= monitor.x
+            && center_x < monitor.x + monitor.w
+            && center_y >= monitor.y
+            && center_y < monitor.y + monitor.h
+    })
 }
 
 fn xrandr_monitors() -> Result<Vec<Monitor>> {
@@ -346,11 +358,14 @@ fn full_screen_monitor() -> Result<Monitor> {
             if !line.contains("dimensions:") {
                 return None;
             }
-            line.split_whitespace()
-                .find(|token| token.contains('x') && token.chars().all(|c| c.is_ascii_digit() || c == 'x'))
+            line.split_whitespace().find(|token| {
+                token.contains('x') && token.chars().all(|c| c.is_ascii_digit() || c == 'x')
+            })
         })
         .ok_or_else(|| anyhow!("could not read dimensions from xdpyinfo"))?;
-    let split = dimensions.find('x').ok_or_else(|| anyhow!("invalid dimensions"))?;
+    let split = dimensions
+        .find('x')
+        .ok_or_else(|| anyhow!("invalid dimensions"))?;
     let w = dimensions[..split]
         .parse::<i32>()
         .context("invalid width from xdpyinfo")?;
@@ -496,6 +511,27 @@ fn start_recording(rect: Rect, config: &Config, output_file: &Path) -> Result<()
 
 fn show_notification(title: &str, message: &str, timeout_ms: u32) {
     let _ = Command::new("notify-send")
-        .args(["-u", "normal", "-t", &timeout_ms.to_string(), title, message])
+        .args([
+            "-u",
+            "normal",
+            "-t",
+            &timeout_ms.to_string(),
+            title,
+            message,
+        ])
         .status();
+}
+
+#[cfg(test)]
+mod tests {
+    use qol_tray::plugins::manifest::PluginManifest;
+
+    #[test]
+    fn validate_plugin_contract() {
+        let manifest_str =
+            std::fs::read_to_string("plugin.toml").expect("Failed to read plugin.toml");
+        let manifest: PluginManifest =
+            toml::from_str(&manifest_str).expect("Failed to parse plugin.toml");
+        manifest.validate().expect("Manifest validation failed");
+    }
 }
