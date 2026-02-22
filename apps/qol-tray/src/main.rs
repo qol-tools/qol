@@ -12,8 +12,23 @@ use tokio::sync::broadcast;
 
 const DEFAULT_PORT: u16 = 42700;
 
+enum ExecutionMode {
+    Tray,
+    Install,
+    Doctor,
+}
+
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
+    match execution_mode() {
+        ExecutionMode::Install => return qol_tray::installer::run(),
+        ExecutionMode::Doctor => {
+            let code = qol_tray::doctor::run_cli_from_env()?;
+            std::process::exit(code);
+        }
+        ExecutionMode::Tray => {}
+    }
 
     if is_already_running() {
         eprintln!("qol-tray is already running on port {}", DEFAULT_PORT);
@@ -34,6 +49,25 @@ fn main() -> Result<()> {
 
     log::info!("Starting QoL Tray daemon...");
     tray::platform::run_app(app_init)
+}
+
+fn execution_mode() -> ExecutionMode {
+    let Some(argv0) = std::env::args().next() else {
+        return ExecutionMode::Tray;
+    };
+
+    let Some(stem) = std::path::Path::new(&argv0)
+        .file_stem()
+        .and_then(|value| value.to_str())
+    else {
+        return ExecutionMode::Tray;
+    };
+
+    match stem {
+        "qol-tray-install" => ExecutionMode::Install,
+        "qol-tray-doctor" => ExecutionMode::Doctor,
+        _ => ExecutionMode::Tray,
+    }
 }
 
 fn is_already_running() -> bool {
