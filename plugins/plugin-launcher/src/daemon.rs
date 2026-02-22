@@ -7,6 +7,7 @@ use std::sync::mpsc::Sender;
 
 const DEFAULT_SOCKET_PATH: &str = "/tmp/qol-launcher.sock";
 const ACK_TIMEOUT_MS: u64 = 80;
+const REPLACE_EXISTING_ENV: &str = "QOL_TRAY_DAEMON_REPLACE_EXISTING";
 
 pub enum Command {
     Show,
@@ -22,7 +23,7 @@ enum ReadResult {
 }
 
 pub fn send_show() -> bool {
-    send_raw(b"show", false)
+    send_raw(b"show", true)
 }
 
 pub fn send_kill() -> bool {
@@ -47,9 +48,13 @@ pub fn start_listener(tx: Sender<Command>) -> bool {
             #[cfg(debug_assertions)]
             eprintln!("[daemon] socket in use, pinging existing");
             if send_ping() {
+                if !replace_existing_enabled() {
+                    #[cfg(debug_assertions)]
+                    eprintln!("[daemon] existing instance alive, exiting");
+                    return false;
+                }
                 #[cfg(debug_assertions)]
-                eprintln!("[daemon] existing instance alive, exiting");
-                return false;
+                eprintln!("[daemon] replacing existing socket owner");
             }
             #[cfg(debug_assertions)]
             eprintln!("[daemon] no response, removing stale socket");
@@ -69,20 +74,31 @@ pub fn start_listener(tx: Sender<Command>) -> bool {
     };
 
     std::thread::spawn(move || {
+        eprintln!("[launcher] daemon listener ready at {}", socket_path.display());
         #[cfg(debug_assertions)]
         eprintln!("[daemon] listener thread started");
         for stream in listener.incoming() {
             match stream {
                 Ok(mut stream) => match read_command(&mut stream) {
                     ReadResult::Command(cmd) => {
+                        eprintln!(
+                            "[launcher] daemon command received: {}",
+                            match &cmd {
+                                Command::Show => "show",
+                                Command::Kill => "kill",
+                            }
+                        );
                         #[cfg(debug_assertions)]
                         eprintln!("[daemon] received command: {}", match &cmd { Command::Show => "show", Command::Kill => "kill" });
-                        let _ = stream.write_all(b"handled\n");
                         if tx.send(cmd).is_err() {
+                            let _ = stream.write_all(b"fallback\n");
+                            eprintln!("[launcher] daemon queue failed: receiver closed");
                             #[cfg(debug_assertions)]
                             eprintln!("[daemon] channel closed, exiting listener");
                             break;
                         }
+                        eprintln!("[launcher] daemon command queued");
+                        let _ = stream.write_all(b"handled\n");
                     }
                     ReadResult::Handled => {
                         #[cfg(debug_assertions)]
@@ -147,6 +163,17 @@ fn socket_path() -> std::path::PathBuf {
     std::env::var("QOL_TRAY_DAEMON_SOCKET")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::path::PathBuf::from(DEFAULT_SOCKET_PATH))
+}
+
+fn replace_existing_enabled() -> bool {
+    std::env::var(REPLACE_EXISTING_ENV)
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
 }
 
 fn remove_socket_file(path: impl AsRef<std::path::Path>) {

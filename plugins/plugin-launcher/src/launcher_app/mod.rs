@@ -30,9 +30,10 @@ use state::LauncherState;
 
 pub use input::key_to_input_char;
 
-const BLUR_GUARD_MS: u64 = 180;
+const BLUR_GUARD_MS: u64 = 400;
 const TRAIL_DECAY_TICK: Duration = Duration::from_millis(20);
 const LAUNCHER_APP_ID: &str = "qol-tray-launcher";
+type SharedEntries = Arc<Mutex<Arc<PreloadedEntries>>>;
 
 struct PreloadedEntries {
     app_entries: Arc<Vec<apps::AppEntry>>,
@@ -40,6 +41,13 @@ struct PreloadedEntries {
 }
 
 impl PreloadedEntries {
+    fn empty() -> Self {
+        Self {
+            app_entries: Arc::new(Vec::new()),
+            file_entries: Arc::new(Vec::new()),
+        }
+    }
+
     fn load() -> Self {
         Self {
             app_entries: Arc::new(crate::providers::apps::default_provider().load_entries()),
@@ -257,17 +265,23 @@ fn open_keepalive_window(cx: &mut App) {
 }
 
 fn activate_or_open_launcher(
-    entries: Arc<PreloadedEntries>,
+    entries: SharedEntries,
     active: Rc<RefCell<ActiveLaunchers>>,
     any_visible: Arc<AtomicBool>,
     monitor_snapshot: Option<monitor::ActiveMonitor>,
     cx: &mut App,
 ) {
     let target = LauncherTarget::from_snapshot(monitor_snapshot.as_ref());
+    let current_entries = snapshot_entries(&entries);
+    eprintln!(
+        "[launcher] activate_or_open target={target:?} cached_windows={}",
+        active.borrow().windows.len()
+    );
     #[cfg(debug_assertions)]
     eprintln!("[launcher] activate_or_open: snapshot={:?}, target={:?}", monitor_snapshot.as_ref().map(|m| m.bounds()), target);
 
-    if try_activate_visible_launcher(active.clone(), target, cx) {
+    if try_activate_visible_launcher(active.clone(), current_entries.clone(), target, cx) {
+        eprintln!("[launcher] activate_or_open reused visible launcher");
         #[cfg(debug_assertions)]
         eprintln!("[launcher] reused visible launcher on same target");
         return;
@@ -277,7 +291,8 @@ fn activate_or_open_launcher(
     eprintln!("[launcher] cached_windows={}", active.borrow().windows.len());
     active.borrow_mut().hide_non_target(target, cx);
 
-    if try_activate_existing_launcher(active.clone(), target, cx) {
+    if try_activate_existing_launcher(active.clone(), current_entries.clone(), target, cx) {
+        eprintln!("[launcher] activate_or_open reused existing launcher");
         #[cfg(debug_assertions)]
         eprintln!("[launcher] reused existing launcher for target");
         return;
@@ -301,23 +316,79 @@ fn activate_or_open_launcher(
         titlebar: None,
         window_decorations: Some(WindowDecorations::Client),
         kind: WindowKind::PopUp,
-        is_movable: false,
         focus: true,
         app_id: Some(LAUNCHER_APP_ID.to_string()),
         ..Default::default()
     };
 
-    if let Ok(handle) = open_window_with_focus(cx, options, move |_window, cx| {
-        LauncherView::new(entries.clone(), any_visible, cx)
-    }) {
+    if let Some(handle) = open_launcher_window(
+        cx,
+        options,
+        current_entries.clone(),
+        any_visible.clone(),
+        target,
+    ) {
         active.borrow_mut().insert(target, handle);
+        eprintln!("[launcher] activate_or_open opened new launcher window");
+    } else {
+        eprintln!("[launcher] open failed: target={target:?}");
     }
     #[cfg(not(target_os = "macos"))]
     cx.activate(true);
 }
 
+fn open_launcher_window(
+    cx: &mut App,
+    options: WindowOptions,
+    entries: Arc<PreloadedEntries>,
+    any_visible: Arc<AtomicBool>,
+    target: LauncherTarget,
+) -> Option<WindowHandle<LauncherView>> {
+    match open_window_with_focus(cx, options, {
+        let entries = entries.clone();
+        let any_visible = any_visible.clone();
+        move |_window, cx| LauncherView::new(entries.clone(), any_visible, cx)
+    }) {
+        Ok(handle) => {
+            eprintln!("[launcher] popup open succeeded");
+            Some(handle)
+        }
+        Err(error) => {
+            eprintln!(
+                "[launcher] popup open failed for target={target:?}: {:?}",
+                error
+            );
+            let fallback_size = size(px(WINDOW_WIDTH), px(HEADER_HEIGHT));
+            let fallback_bounds = Bounds::centered(None, fallback_size, cx);
+            let fallback_options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(fallback_bounds)),
+                titlebar: None,
+                window_decorations: Some(WindowDecorations::Client),
+                kind: WindowKind::Normal,
+                focus: true,
+                app_id: Some(LAUNCHER_APP_ID.to_string()),
+                ..Default::default()
+            };
+
+            match open_window_with_focus(cx, fallback_options, move |_window, cx| {
+                LauncherView::new(entries.clone(), any_visible, cx)
+            }) {
+                Ok(handle) => {
+                    eprintln!("[launcher] fallback open succeeded");
+                    Some(handle)
+                }
+                Err(fallback_error) => {
+                    eprintln!("[launcher] fallback open failed: {:?}", fallback_error);
+                    None
+                }
+            }
+        }
+    }
+}
+
 fn try_activate_visible_launcher(
     active: Rc<RefCell<ActiveLaunchers>>,
+    entries: Arc<PreloadedEntries>,
     expected_target: LauncherTarget,
     cx: &mut App,
 ) -> bool {
@@ -357,7 +428,7 @@ fn try_activate_visible_launcher(
         return false;
     }
 
-    if activate_launcher_handle(handle, false, cx) {
+    if activate_launcher_handle(handle, false, entries, cx) {
         return true;
     }
 
@@ -367,6 +438,7 @@ fn try_activate_visible_launcher(
 
 fn try_activate_existing_launcher(
     active: Rc<RefCell<ActiveLaunchers>>,
+    entries: Arc<PreloadedEntries>,
     target: LauncherTarget,
     cx: &mut App,
 ) -> bool {
@@ -375,7 +447,7 @@ fn try_activate_existing_launcher(
         return false;
     };
 
-    if !activate_launcher_handle(existing, true, cx) {
+    if !activate_launcher_handle(existing, true, entries, cx) {
         active.borrow_mut().remove(target);
         return false;
     }
@@ -386,10 +458,12 @@ fn try_activate_existing_launcher(
 fn activate_launcher_handle(
     handle: WindowHandle<LauncherView>,
     resize_to_header: bool,
+    entries: Arc<PreloadedEntries>,
     cx: &mut App,
 ) -> bool {
     let activated = handle
         .update(cx, |view, window, cx| {
+            view.store.replace_entries(entries.app_entries.clone(), entries.file_entries.clone());
             let should_resize = view.reset_for_show();
             view.store.ensure_filtered(&view.state);
             if resize_to_header && should_resize {
@@ -409,8 +483,15 @@ fn activate_launcher_handle(
     activated
 }
 
+fn snapshot_entries(entries: &SharedEntries) -> Arc<PreloadedEntries> {
+    entries
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_else(|_| Arc::new(PreloadedEntries::empty()))
+}
+
 fn spawn_command_poll(
-    entries: Arc<PreloadedEntries>,
+    entries: SharedEntries,
     active: Rc<RefCell<ActiveLaunchers>>,
     any_visible: Arc<AtomicBool>,
     rx: mpsc::Receiver<daemon::Command>,
@@ -438,18 +519,26 @@ fn spawn_command_poll(
             });
             match next_command {
                 Some(daemon::Command::Show) => {
+                    eprintln!("[launcher] command: show");
                     let focus_cache = focus_cache.clone();
+                    eprintln!("[launcher] snapshot start");
                     let snapshot = cx
                         .background_spawn(async move { focus_cache.snapshot() })
                         .await;
+                    eprintln!(
+                        "[launcher] snapshot done: {}",
+                        if snapshot.is_some() { "some" } else { "none" }
+                    );
                     #[cfg(debug_assertions)]
                     eprintln!("[launcher] command_poll: snapshot={:?}", snapshot.as_ref().map(|m| m.bounds()));
                     let entries = entries.clone();
                     let active = active.clone();
                     let vis = any_visible.clone();
+                    eprintln!("[launcher] cx.update start");
                     if let Err(e) = cx.update(move |cx| activate_or_open_launcher(entries.clone(), active.clone(), vis, snapshot, cx)) {
-                        #[cfg(debug_assertions)]
                         eprintln!("[launcher] command_poll: cx.update failed: {:?}", e);
+                    } else {
+                        eprintln!("[launcher] cx.update done");
                     }
                 }
                 Some(daemon::Command::Kill) => {
@@ -489,6 +578,7 @@ fn set_macos_accessory_policy() {
 
 pub fn run() {
     let show_immediately = std::env::args().any(|a| a == "--show");
+    eprintln!("[launcher] run start show_immediately={show_immediately}");
 
     if std::env::args().any(|a| a == "--kill") {
         daemon::send_kill();
@@ -516,12 +606,43 @@ pub fn run() {
             cx.quit();
             return;
         }
+        eprintln!("[launcher] daemon listener started");
 
-        let entries = Arc::new(PreloadedEntries::load());
+        let entries: SharedEntries = Arc::new(Mutex::new(Arc::new(PreloadedEntries::empty())));
         let active: Rc<RefCell<ActiveLaunchers>> = Rc::new(RefCell::new(ActiveLaunchers::default()));
 
         open_keepalive_window(cx);
         spawn_command_poll(entries.clone(), active.clone(), any_visible.clone(), rx, focus_cache.clone(), cx);
+        cx.spawn({
+            let entries = entries.clone();
+            let active = active.clone();
+            async move |cx: &mut AsyncApp| {
+                eprintln!("[launcher] preload start");
+                let loaded = cx
+                    .background_spawn(async move { Arc::new(PreloadedEntries::load()) })
+                    .await;
+                eprintln!("[launcher] preload done");
+                if let Ok(mut guard) = entries.lock() {
+                    *guard = loaded.clone();
+                }
+                let _ = cx.update(move |cx| {
+                    let handles: Vec<WindowHandle<LauncherView>> =
+                        active.borrow().windows.values().cloned().collect();
+                    for handle in handles {
+                        let loaded_entries = loaded.clone();
+                        let _ = handle.update(cx, |view, _window, cx| {
+                            view.store.replace_entries(
+                                loaded_entries.app_entries.clone(),
+                                loaded_entries.file_entries.clone(),
+                            );
+                            view.store.ensure_filtered(&view.state);
+                            cx.notify();
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
 
         if show_immediately {
             #[cfg(debug_assertions)]
