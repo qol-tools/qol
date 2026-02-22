@@ -2,17 +2,152 @@ name: Build and Release
 
 on:
   push:
+    branches:
+      - "main"
+      - "master"
     tags:
       - "v*"
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  auto_version:
+    name: Auto Version Bump
+    if: ${{ startsWith(github.ref, 'refs/heads/') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          head_subject="$(git log -1 --pretty=%s)"
+          if [[ "${head_subject}" =~ ^chore\(release\):\ v([0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?)$ ]]; then
+            released_version="${BASH_REMATCH[1]}"
+            if git rev-parse -q --verify "refs/tags/v${released_version}" >/dev/null; then
+              echo "should_release=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "version=${released_version}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch --tags --force
+
+          cargo_version="$(awk -F'"' '/^version = "/ {print $2; exit}' Cargo.toml)"
+          plugin_version="$(awk -F'"' '/^version = "/ {print $2; exit}' plugin.toml)"
+          if [[ -z "${cargo_version}" || -z "${plugin_version}" ]]; then
+            echo "Failed to parse version from Cargo.toml or plugin.toml"
+            exit 1
+          fi
+
+          if [[ "${cargo_version}" != "${plugin_version}" ]]; then
+            echo "Cargo.toml version (${cargo_version}) and plugin.toml version (${plugin_version}) must match"
+            exit 1
+          fi
+
+          last_tag="$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)"
+          if [[ -n "${last_tag}" ]]; then
+            commits_since="$(git rev-list "${last_tag}"..HEAD --count)"
+            if [[ "${commits_since}" == "0" ]]; then
+              echo "should_release=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            range="${last_tag}..HEAD"
+            base_version="${last_tag#v}"
+          else
+            range="HEAD"
+            base_version="${cargo_version}"
+          fi
+
+          if [[ ! "${base_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Base version '${base_version}' is not plain semver"
+            exit 1
+          fi
+
+          IFS='.' read -r major minor patch <<< "${base_version}"
+
+          if git log --format='%s%n%b' "${range}" | grep -Eiq '(^[a-z0-9_-]+(\([^)]+\))?!:|BREAKING CHANGE:)'; then
+            bump="major"
+          elif git log --format='%s' "${range}" | grep -Eiq '^feat(\([^)]+\))?:'; then
+            bump="minor"
+          else
+            bump="patch"
+          fi
+
+          case "${bump}" in
+            major)
+              major=$((major + 1))
+              minor=0
+              patch=0
+              ;;
+            minor)
+              minor=$((minor + 1))
+              patch=0
+              ;;
+            patch)
+              patch=$((patch + 1))
+              ;;
+          esac
+
+          next_version="${major}.${minor}.${patch}"
+          while git rev-parse -q --verify "refs/tags/v${next_version}" >/dev/null; do
+            patch=$((patch + 1))
+            next_version="${major}.${minor}.${patch}"
+          done
+
+          echo "should_release=true" >> "$GITHUB_OUTPUT"
+          echo "version=${next_version}" >> "$GITHUB_OUTPUT"
+
+      - name: Update manifest versions
+        if: steps.version.outputs.should_release == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
+          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" plugin.toml
+
+      - name: Commit and tag release
+        if: steps.version.outputs.should_release == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml plugin.toml
+          if git diff --cached --quiet; then
+            if git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
+              exit 0
+            fi
+            git tag "v${VERSION}"
+            git push origin "v${VERSION}"
+            exit 0
+          fi
+          git commit -m "chore(release): v${VERSION}"
+          git tag "v${VERSION}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "v${VERSION}"
+
   build:
     name: Build - ${{ matrix.name_suffix }}
-    if: ${{ github.event.created == true }}
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && github.event.created == true }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -73,7 +208,7 @@ jobs:
 
   release:
     name: Create Release
-    if: ${{ github.event.created == true }}
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && github.event.created == true }}
     needs: [build]
     runs-on: ubuntu-latest
     permissions:
