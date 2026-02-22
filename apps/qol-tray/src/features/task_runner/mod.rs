@@ -1,16 +1,16 @@
 use axum::{
     extract::State,
+    http::StatusCode,
     routing::{get, post},
     Json, Router,
-    http::StatusCode,
 };
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use regex::Regex;
 
 mod platform;
 
@@ -105,9 +105,7 @@ fn load_config(path: &PathBuf) -> Option<TaskRunnerConfig> {
     serde_json::from_str(&content).ok()
 }
 
-async fn list_actions(
-    State(state): State<TaskRunnerState>,
-) -> Json<ActionsResponse> {
+async fn list_actions(State(state): State<TaskRunnerState>) -> Json<ActionsResponse> {
     let config = state.config.read().await;
     let actions = config
         .actions
@@ -151,11 +149,7 @@ async fn execute_action(
         cmd.current_dir(dir);
     }
 
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(timeout),
-        cmd.output(),
-    )
-    .await;
+    let result = tokio::time::timeout(std::time::Duration::from_secs(timeout), cmd.output()).await;
 
     match result {
         Ok(Ok(output)) => {
@@ -192,14 +186,25 @@ fn interpolate(template: &str, params: &HashMap<String, String>) -> String {
     let re = Regex::new(r"\{\{(\w+)\}\}").unwrap();
     re.replace_all(template, |caps: &regex::Captures| {
         let key = &caps[1];
-        params.get(key).cloned().unwrap_or_default()
+        let val = params.get(key).map(|s| s.as_str()).unwrap_or("");
+        shell_escape(val)
     })
     .to_string()
 }
 
-async fn get_config(
-    State(state): State<TaskRunnerState>,
-) -> Json<TaskRunnerConfig> {
+fn shell_escape(s: &str) -> String {
+    if s.is_empty() {
+        return "''".to_string();
+    }
+    if s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || "-_@%+/=:,.".contains(c))
+    {
+        return s.to_string();
+    }
+    format!("'{}'", s.replace('\'', "'\"'\"'"))
+}
+
+async fn get_config(State(state): State<TaskRunnerState>) -> Json<TaskRunnerConfig> {
     let config = state.config.read().await;
     Json(config.clone())
 }
@@ -259,8 +264,16 @@ mod tests {
         ];
 
         for (template, params, expected) in cases {
-            let map: HashMap<String, String> = params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-            assert_eq!(interpolate(template, &map), expected, "template: {:?}", template);
+            let map: HashMap<String, String> = params
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            assert_eq!(
+                interpolate(template, &map),
+                expected,
+                "template: {:?}",
+                template
+            );
         }
     }
 
@@ -268,14 +281,30 @@ mod tests {
     fn interpolate_multiple_params() {
         let cases: &[(&str, &[(&str, &str)], &str)] = &[
             ("{{a}} {{b}}", &[("a", "x"), ("b", "y")], "x y"),
-            ("{{x}}{{y}}{{z}}", &[("x", "1"), ("y", "2"), ("z", "3")], "123"),
-            ("git checkout {{branch}} && cd {{dir}}", &[("branch", "main"), ("dir", "/a/b")], "git checkout main && cd /a/b"),
+            (
+                "{{x}}{{y}}{{z}}",
+                &[("x", "1"), ("y", "2"), ("z", "3")],
+                "123",
+            ),
+            (
+                "git checkout {{branch}} && cd {{dir}}",
+                &[("branch", "main"), ("dir", "/a/b")],
+                "git checkout main && cd /a/b",
+            ),
             ("{{a}}-{{b}}-{{a}}", &[("a", "X"), ("b", "Y")], "X-Y-X"),
         ];
 
         for (template, params, expected) in cases {
-            let map: HashMap<String, String> = params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-            assert_eq!(interpolate(template, &map), *expected, "template: {:?}", template);
+            let map: HashMap<String, String> = params
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            assert_eq!(
+                interpolate(template, &map),
+                *expected,
+                "template: {:?}",
+                template
+            );
         }
     }
 
@@ -289,8 +318,16 @@ mod tests {
         ];
 
         for (template, params, expected) in cases {
-            let map: HashMap<String, String> = params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-            assert_eq!(interpolate(template, &map), *expected, "template: {:?}", template);
+            let map: HashMap<String, String> = params
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            assert_eq!(
+                interpolate(template, &map),
+                *expected,
+                "template: {:?}",
+                template
+            );
         }
     }
 
@@ -308,7 +345,12 @@ mod tests {
 
         let empty: HashMap<String, String> = HashMap::new();
         for (template, expected) in cases {
-            assert_eq!(interpolate(template, &empty), expected, "template: {:?}", template);
+            assert_eq!(
+                interpolate(template, &empty),
+                expected,
+                "template: {:?}",
+                template
+            );
         }
     }
 
@@ -316,8 +358,16 @@ mod tests {
     fn interpolate_special_values() {
         let cases = [
             ("{{path}}", &[("path", "/a/b/c")], "/a/b/c"),
-            ("{{url}}", &[("url", "https://example.com?q=1&x=2")], "https://example.com?q=1&x=2"),
-            ("{{json}}", &[("json", r#"{"key": "value"}"#)], r#"{"key": "value"}"#),
+            (
+                "{{url}}",
+                &[("url", "https://example.com?q=1&x=2")],
+                "https://example.com?q=1&x=2",
+            ),
+            (
+                "{{json}}",
+                &[("json", r#"{"key": "value"}"#)],
+                r#"{"key": "value"}"#,
+            ),
             ("{{empty}}", &[("empty", "")], ""),
             ("{{spaces}}", &[("spaces", "  a b c  ")], "  a b c  "),
             ("{{unicode}}", &[("unicode", "日本語")], "日本語"),
@@ -327,8 +377,16 @@ mod tests {
         ];
 
         for (template, params, expected) in cases {
-            let map: HashMap<String, String> = params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-            assert_eq!(interpolate(template, &map), expected, "template: {:?}", template);
+            let map: HashMap<String, String> = params
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            assert_eq!(
+                interpolate(template, &map),
+                expected,
+                "template: {:?}",
+                template
+            );
         }
     }
 
@@ -346,11 +404,11 @@ mod tests {
             "{{123starts_with_num}}",
         ];
 
-        let params: HashMap<String, String> = [
-            ("spaces", "x"),
-            ("with-dash", "x"),
-            ("with.dot", "x"),
-        ].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let params: HashMap<String, String> =
+            [("spaces", "x"), ("with-dash", "x"), ("with.dot", "x")]
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
 
         for template in cases {
             let result = interpolate(template, &params);
@@ -378,8 +436,15 @@ mod tests {
         ];
 
         for (template, key) in cases {
-            let map: HashMap<String, String> = [(key.to_string(), "REPLACED".to_string())].into_iter().collect();
-            assert_eq!(interpolate(template, &map), "REPLACED", "key {:?} should be valid", key);
+            let map: HashMap<String, String> = [(key.to_string(), "REPLACED".to_string())]
+                .into_iter()
+                .collect();
+            assert_eq!(
+                interpolate(template, &map),
+                "REPLACED",
+                "key {:?} should be valid",
+                key
+            );
         }
     }
 

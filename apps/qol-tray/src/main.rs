@@ -2,8 +2,7 @@ use anyhow::Result;
 use qol_tray::daemon::Daemon;
 use qol_tray::features::{self, FeatureRegistry};
 use qol_tray::hotkeys;
-#[cfg(feature = "dev")]
-use qol_tray::plugins::PluginLoader;
+
 use qol_tray::plugins::PluginManager;
 use qol_tray::tray::{self, TrayManager};
 use qol_tray::updates;
@@ -73,7 +72,13 @@ fn app_init() -> Result<(TrayManager, Arc<Mutex<PluginManager>>)> {
         rt.block_on(std::future::pending::<()>());
     });
 
-    let tray = TrayManager::new(feature_registry, shutdown_tx, shutdown_rx, update_available, events)?;
+    let tray = TrayManager::new(
+        feature_registry,
+        shutdown_tx,
+        shutdown_rx,
+        update_available,
+        events,
+    )?;
 
     log::info!("QoL Tray daemon started successfully");
     Ok((tray, plugin_manager))
@@ -105,11 +110,6 @@ async fn async_init() -> Result<(
 
     if let Err(e) = hotkeys::start_hotkey_listener(plugin_manager.clone()) {
         log::warn!("Failed to start hotkey listener: {}", e);
-    }
-
-    #[cfg(feature = "dev")]
-    if let Ok(plugins_dir) = PluginLoader::default_plugin_dir() {
-        daemon.start_discovery(plugins_dir);
     }
 
     Ok((

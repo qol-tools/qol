@@ -35,7 +35,16 @@ pub async fn start_ui_server(
         plugins_dir: plugins_dir.clone(),
         plugin_manager,
         daemon: daemon.clone(),
+        #[cfg(feature = "dev")]
+        dev_state: Arc::new(crate::dev::state::DevState::new()),
     };
+
+    #[cfg(feature = "dev")]
+    crate::dev::state::start_discovery(
+        &app_state.dev_state,
+        &app_state.daemon.events,
+        app_state.plugins_dir.clone(),
+    );
 
     let api = Router::new()
         .route("/plugins", get(plugin_handlers::list_plugins))

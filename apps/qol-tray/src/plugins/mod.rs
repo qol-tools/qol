@@ -1,6 +1,7 @@
 pub mod action_executor;
 pub mod action_transport;
 pub mod config;
+pub mod daemon_tracker;
 pub mod loader;
 pub mod log_control;
 pub mod manager;
@@ -16,6 +17,7 @@ use anyhow::Result;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct Plugin {
@@ -148,23 +150,29 @@ impl Plugin {
 }
 
 fn attach_filtered_log_relay(plugin_id: &str, child: &mut Child, suppress_patterns: Vec<String>) {
+    let active_patterns: Vec<String> = suppress_patterns
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .map(|p| regex::escape(&p))
+        .collect();
+
+    let regex_set = if active_patterns.is_empty() {
+        None
+    } else {
+        regex::RegexSet::new(&active_patterns).ok().map(Arc::new)
+    };
+
     if let Some(stdout) = child.stdout.take() {
         spawn_log_relay(
             plugin_id.to_string(),
             "stdout",
             stdout,
-            suppress_patterns.clone(),
+            regex_set.clone(),
             false,
         );
     }
     if let Some(stderr) = child.stderr.take() {
-        spawn_log_relay(
-            plugin_id.to_string(),
-            "stderr",
-            stderr,
-            suppress_patterns,
-            true,
-        );
+        spawn_log_relay(plugin_id.to_string(), "stderr", stderr, regex_set, true);
     }
 }
 
@@ -172,7 +180,7 @@ fn spawn_log_relay<R>(
     plugin_id: String,
     stream_name: &'static str,
     reader: R,
-    suppress_patterns: Vec<String>,
+    regex_set: Option<Arc<regex::RegexSet>>,
     to_stderr: bool,
 ) where
     R: std::io::Read + Send + 'static,
@@ -199,8 +207,10 @@ fn spawn_log_relay<R>(
                 break;
             }
 
-            if should_suppress_log_line(line.trim_end(), &suppress_patterns) {
-                continue;
+            if let Some(ref set) = regex_set {
+                if set.is_match(line.trim_end()) {
+                    continue;
+                }
             }
 
             if to_stderr {
@@ -210,15 +220,6 @@ fn spawn_log_relay<R>(
             }
         }
     });
-}
-
-fn should_suppress_log_line(line: &str, suppress_patterns: &[String]) -> bool {
-    if line.is_empty() {
-        return false;
-    }
-    suppress_patterns
-        .iter()
-        .any(|pattern| !pattern.is_empty() && line.contains(pattern))
 }
 
 impl Drop for Plugin {

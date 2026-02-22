@@ -7,8 +7,9 @@ use axum::{
     Json,
 };
 
-use crate::daemon::{BuildResultInfo, DaemonEvent, DiscoveryStatus};
+use crate::daemon::DaemonEvent;
 use crate::dev;
+use crate::dev::state::{BuildResultInfo, DiscoveryStatus};
 use crate::paths::is_safe_path_component;
 
 use super::dev_runtime::*;
@@ -193,7 +194,11 @@ pub(super) async fn create_link(
 
     match dev::create_link(source, &config_dir) {
         Ok(_) => {
-            state.daemon.start_discovery(state.plugins_dir.clone());
+            crate::dev::state::start_discovery(
+                &state.dev_state,
+                &state.daemon.events,
+                state.plugins_dir.clone(),
+            );
             (StatusCode::OK, "Link created".to_string()).into_response()
         }
         Err(e) if e.contains("Already linked") => (StatusCode::CONFLICT, e).into_response(),
@@ -229,7 +234,11 @@ pub(super) async fn delete_link(
 
     match dev::remove_link(&id, &config_dir) {
         Ok(()) => {
-            state.daemon.start_discovery(state.plugins_dir.clone());
+            crate::dev::state::start_discovery(
+                &state.dev_state,
+                &state.daemon.events,
+                state.plugins_dir.clone(),
+            );
             (StatusCode::OK, "Unlinked".to_string()).into_response()
         }
         Err(e) => {
@@ -288,7 +297,7 @@ pub(super) async fn upsert_plugin_log_control(
 pub(super) async fn get_discovery_state(
     State(state): State<AppState>,
 ) -> Json<DiscoveryStateResponse> {
-    let guard = match state.daemon.state.discovery.read() {
+    let guard = match state.dev_state.discovery.read() {
         Ok(guard) => guard,
         Err(error) => {
             log::error!("Discovery state lock poisoned: {}", error);
@@ -313,7 +322,8 @@ pub(super) async fn get_build_state() -> Json<BuildStateResponse> {
     Json(read_build_state_snapshot())
 }
 
-pub(super) async fn get_log_controls() -> Json<std::collections::HashMap<String, crate::plugins::log_control::PluginLogControl>> {
+pub(super) async fn get_log_controls(
+) -> Json<std::collections::HashMap<String, crate::plugins::log_control::PluginLogControl>> {
     let controls = crate::paths::shared_config_dir()
         .ok()
         .map(|dir| crate::plugins::log_control::load_all_controls(&dir))
@@ -323,7 +333,11 @@ pub(super) async fn get_log_controls() -> Json<std::collections::HashMap<String,
 
 pub(super) async fn trigger_discovery(State(state): State<AppState>) -> impl IntoResponse {
     log::info!("Discovery refresh requested");
-    state.daemon.start_discovery(state.plugins_dir.clone());
+    crate::dev::state::start_discovery(
+        &state.dev_state,
+        &state.daemon.events,
+        state.plugins_dir.clone(),
+    );
     StatusCode::OK
 }
 

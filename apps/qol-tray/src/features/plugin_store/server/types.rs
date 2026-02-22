@@ -1,6 +1,6 @@
 use crate::daemon::Daemon;
 #[cfg(feature = "dev")]
-use crate::daemon::DiscoveredPluginInfo;
+use crate::dev::state::DiscoveredPluginInfo;
 use crate::plugins::{ActionType, PluginManager};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "dev")]
@@ -24,6 +24,8 @@ pub(super) struct AppState {
     pub(super) plugins_dir: PathBuf,
     pub(super) plugin_manager: Arc<Mutex<PluginManager>>,
     pub(super) daemon: Daemon,
+    #[cfg(feature = "dev")]
+    pub(super) dev_state: Arc<crate::dev::state::DevState>,
 }
 
 #[derive(Serialize)]

@@ -2,6 +2,8 @@ mod build;
 mod config;
 mod discovery;
 mod linking;
+#[cfg(feature = "dev")]
+pub mod state;
 
 pub use build::build_linked_plugins;
 pub use build::build_linked_plugins_with_progress;
