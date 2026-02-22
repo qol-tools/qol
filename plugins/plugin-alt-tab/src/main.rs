@@ -58,7 +58,7 @@ impl WindowDelegate {
         let selected_index = if windows.is_empty() {
             None
         } else {
-            Some(IndexPath::new(if windows.len() > 1 { 1 } else { 0 }))
+            Some(IndexPath::new(0))
         };
         Self {
             windows,
@@ -67,27 +67,23 @@ impl WindowDelegate {
     }
 
     fn set_windows(&mut self, windows: Vec<WindowInfo>, reset_selection: bool) {
-        let previous_row = self.selected_index.map(|ix| ix.row);
         self.windows = windows;
         if self.windows.is_empty() {
             self.selected_index = None;
             #[cfg(debug_assertions)]
             eprintln!(
-                "[alt-tab/select] set_windows reset={} prev={:?} next=None total=0",
-                reset_selection, previous_row
+                "[alt-tab/select] set_windows reset={} next=None total=0",
+                reset_selection
             );
             return;
         }
 
         if reset_selection {
-            let next_ix = if self.windows.len() > 1 { 1 } else { 0 };
-            self.selected_index = Some(IndexPath::new(next_ix));
+            self.selected_index = Some(IndexPath::new(0));
             #[cfg(debug_assertions)]
             eprintln!(
-                "[alt-tab/select] set_windows reset={} prev={:?} next=Some({}) total={}",
+                "[alt-tab/select] set_windows reset={} next=Some(0) total={}",
                 reset_selection,
-                previous_row,
-                next_ix,
                 self.windows.len()
             );
             return;
@@ -97,9 +93,8 @@ impl WindowDelegate {
         self.selected_index = Some(IndexPath::new(selected_row.min(self.windows.len() - 1)));
         #[cfg(debug_assertions)]
         eprintln!(
-            "[alt-tab/select] set_windows reset={} prev={:?} next={:?} total={}",
+            "[alt-tab/select] set_windows reset={} next={:?} total={}",
             reset_selection,
-            previous_row,
             self.selected_index.map(|ix| ix.row),
             self.windows.len()
         );
@@ -534,6 +529,7 @@ impl Render for AltTabApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let list_state = self.list_state.clone();
 
+        #[cfg(debug_assertions)]
         eprintln!(
             "[alt-tab/render] action_mode={:?} alt_was_held={}",
             self.action_mode, self.alt_was_held
@@ -738,7 +734,16 @@ impl Render for AltTabApp {
                                         .text_center()
                                         .text_ellipsis()
                                         .overflow_hidden()
-                                        .child(win.title.clone()),
+                                        .child({
+                                            #[cfg(debug_assertions)]
+                                            {
+                                                format!("[{}] {}", i, win.title)
+                                            }
+                                            #[cfg(not(debug_assertions))]
+                                            {
+                                                win.title.clone()
+                                            }
+                                        }),
                                 )
                         }))
                 }),
@@ -782,7 +787,6 @@ fn open_picker(
     #[cfg(debug_assertions)]
     eprintln!("[alt-tab/open] show request");
 
-    // Immediately map fresh window order to cached previews for instant display
     let raw_windows = platform::get_open_windows();
     let mut display_windows = raw_windows;
     if let Ok(cache) = window_cache.lock() {
@@ -850,7 +854,7 @@ fn open_picker(
 
                 #[cfg(debug_assertions)]
                 eprintln!("[alt-tab/hold] open_picker reusing window: setting action_mode={:?}", config.action_mode);
-                
+
                 // Explicitly update the action_mode and assume alt is currently held
                 view.action_mode = config.action_mode.clone();
                 view.alt_was_held = true;
