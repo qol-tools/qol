@@ -22,11 +22,27 @@ pub enum ActionMode {
     HoldToSwitch,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AltTabConfig {
     pub display: DisplayConfig,
     pub action_mode: ActionMode,
+    #[serde(default = "default_reset_selection_on_open")]
+    pub reset_selection_on_open: bool,
+}
+
+impl Default for AltTabConfig {
+    fn default() -> Self {
+        Self {
+            display: DisplayConfig::default(),
+            action_mode: ActionMode::default(),
+            reset_selection_on_open: default_reset_selection_on_open(),
+        }
+    }
+}
+
+fn default_reset_selection_on_open() -> bool {
+    true
 }
 
 pub fn load_alt_tab_config() -> AltTabConfig {

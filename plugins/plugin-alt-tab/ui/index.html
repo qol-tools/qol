@@ -108,7 +108,6 @@
                     class="mock"
                     id="grid-visualizer"
                 >
-                    <!-- interactive visualizer will be drawn here -->
                 </div>
             </div>
         </section>
@@ -137,6 +136,17 @@
                 <span class="mode-copy">
                     <strong>Hold-to-Switch Mode</strong>
                     <small>Hold Alt to keep the UI open, release to activate the selected window.</small>
+                </span>
+            </label>
+
+            <label class="mode-option">
+                <input
+                    type="checkbox"
+                    id="reset-selection-on-open"
+                >
+                <span class="mode-copy">
+                    <strong>Reset Selection On Open</strong>
+                    <small>Start from the first window each time Alt Tab opens instead of remembering the previous index.</small>
                 </span>
             </label>
         </section>

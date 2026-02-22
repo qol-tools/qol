@@ -62,7 +62,8 @@ body {
     margin-bottom: 0;
 }
 
-.mode-option input[type="radio"] {
+.mode-option input[type="radio"],
+.mode-option input[type="checkbox"] {
     margin-top: 0.2rem;
     accent-color: #7db3ff;
 }

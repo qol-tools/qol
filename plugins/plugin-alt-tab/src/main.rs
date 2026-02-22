@@ -66,10 +66,15 @@ impl WindowDelegate {
         }
     }
 
-    fn set_windows(&mut self, windows: Vec<WindowInfo>) {
+    fn set_windows(&mut self, windows: Vec<WindowInfo>, reset_selection: bool) {
         self.windows = windows;
         if self.windows.is_empty() {
             self.selected_index = None;
+            return;
+        }
+
+        if reset_selection {
+            self.selected_index = Some(IndexPath::new(0));
             return;
         }
 
@@ -340,7 +345,7 @@ impl AltTabApp {
 
                     let _ = cx.update(|app_cx| {
                         let _ = list_state_clone.update(app_cx, |state, cx| {
-                            state.delegate_mut().set_windows(windows.clone());
+                            state.delegate_mut().set_windows(windows.clone(), false);
                             cx.notify();
                         });
                         let _ = this.update(app_cx, |_, cx: &mut gpui::Context<AltTabApp>| {
@@ -427,9 +432,9 @@ impl AltTabApp {
         app
     }
 
-    fn apply_cached_windows(&mut self, windows: Vec<WindowInfo>, cx: &mut Context<Self>) {
+    fn apply_cached_windows(&mut self, windows: Vec<WindowInfo>, reset_selection: bool, cx: &mut Context<Self>) {
         self.list_state.update(cx, |state, cx| {
-            state.delegate_mut().set_windows(windows);
+            state.delegate_mut().set_windows(windows, reset_selection);
             cx.notify();
         });
         cx.notify();
@@ -801,7 +806,7 @@ fn open_picker(
                     view._alt_poll_task = None; // Cancel any existing poll
                 }
 
-                view.apply_cached_windows(display_windows.clone(), cx);
+                view.apply_cached_windows(display_windows.clone(), config.reset_selection_on_open, cx);
 
                 let current_size = current_bounds.size;
                 let next_size = target_size;

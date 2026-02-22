@@ -6,7 +6,8 @@ const DEFAULT_CONFIG = {
         preview_mode: 'below_list',
         max_columns: 6
     },
-    action_mode: 'sticky'
+    action_mode: 'sticky',
+    reset_selection_on_open: true
 };
 
 const PREVIEW_MODES = new Set(['below_list', 'preview_only']);
@@ -30,12 +31,16 @@ function normalizeConfig(raw) {
     const previewMode = raw?.display?.preview_mode;
     const maxColumns = parseInt(raw?.display?.max_columns, 10) || DEFAULT_CONFIG.display.max_columns;
     const actionMode = raw?.action_mode;
+    const resetSelectionOnOpen = typeof raw?.reset_selection_on_open === 'boolean'
+        ? raw.reset_selection_on_open
+        : DEFAULT_CONFIG.reset_selection_on_open;
     return {
         display: {
             preview_mode: PREVIEW_MODES.has(previewMode) ? previewMode : DEFAULT_CONFIG.display.preview_mode,
             max_columns: Math.max(2, Math.min(12, maxColumns))
         },
-        action_mode: ACTION_MODES.has(actionMode) ? actionMode : DEFAULT_CONFIG.action_mode
+        action_mode: ACTION_MODES.has(actionMode) ? actionMode : DEFAULT_CONFIG.action_mode,
+        reset_selection_on_open: resetSelectionOnOpen
     };
 }
 
@@ -59,18 +64,25 @@ function applyConfigToUI(config) {
     if (actionInput) {
         actionInput.checked = true;
     }
+
+    const resetSelectionOnOpenInput = document.getElementById('reset-selection-on-open');
+    if (resetSelectionOnOpenInput) {
+        resetSelectionOnOpenInput.checked = !!config.reset_selection_on_open;
+    }
 }
 
 function collectConfigFromUI() {
     const previewSelected = selectedModeInput()?.value;
     const maxColumnsSelected = parseInt(document.getElementById('max-columns')?.value, 10);
     const actionSelected = selectedActionModeInput()?.value;
+    const resetSelectionOnOpenSelected = document.getElementById('reset-selection-on-open')?.checked;
     return normalizeConfig({
         display: {
             preview_mode: previewSelected,
             max_columns: maxColumnsSelected || 6
         },
-        action_mode: actionSelected
+        action_mode: actionSelected,
+        reset_selection_on_open: resetSelectionOnOpenSelected
     });
 }
 
@@ -131,26 +143,24 @@ document.querySelectorAll('input[name="preview-mode"]').forEach((input) => {
 function updateGridVisualizer() {
     const maxColsInput = document.getElementById('max-columns');
     const simWinsInput = document.getElementById('sim-windows');
-    
+
     if (!maxColsInput || !simWinsInput) return;
 
     const maxCols = parseInt(maxColsInput.value, 10);
     const simWins = parseInt(simWinsInput.value, 10);
-    
-    // Update labels
+
     document.getElementById('max-columns-value').textContent = maxCols;
     document.getElementById('sim-windows-value').textContent = simWins;
-    
-    // Logic matching preferred_column_count
+
     const count = Math.max(1, simWins);
     let cols = 1;
     if (count > 1) {
         cols = Math.min(count, Math.max(2, maxCols));
     }
-    
+
     const visualizer = document.getElementById('grid-visualizer');
     visualizer.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
-    
+
     visualizer.innerHTML = '';
     for (let i = 0; i < count; i++) {
         const item = document.createElement('div');
