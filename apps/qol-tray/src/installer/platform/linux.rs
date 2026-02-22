@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const DESKTOP_TEMPLATE: &str =
-    include_str!("../../../../scripts/installer/platform/linux/desktop/qol-tray.desktop");
+    include_str!("../../../scripts/installer/platform/linux/desktop/qol-tray.desktop");
 
 pub fn install_dir() -> Result<PathBuf> {
     super::unix_common::install_dir()
