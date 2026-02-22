@@ -272,11 +272,6 @@ pub(crate) fn resolve_plugin_command_path(plugin_dir: &Path, command: &str) -> O
             .is_some_and(|resolved| resolved.starts_with(&canonical_plugin_dir))
     };
 
-    let primary = plugin_dir.join(command_path.as_os_str());
-    if is_allowed_candidate(&primary) {
-        return Some(primary);
-    }
-
     #[cfg(feature = "dev")]
     {
         let debug_target = plugin_dir
@@ -293,6 +288,11 @@ pub(crate) fn resolve_plugin_command_path(plugin_dir: &Path, command: &str) -> O
         if is_allowed_candidate(&release_target) {
             return Some(release_target);
         }
+    }
+
+    let primary = plugin_dir.join(command_path.as_os_str());
+    if is_allowed_candidate(&primary) {
+        return Some(primary);
     }
 
     #[cfg(windows)]
