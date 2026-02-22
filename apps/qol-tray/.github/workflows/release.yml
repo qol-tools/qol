@@ -3,7 +3,7 @@ name: Build and Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 permissions:
   contents: write
@@ -15,7 +15,6 @@ concurrency:
 jobs:
   build_linux_deb:
     name: Build Linux .deb
-    if: ${{ github.event.created == true }}
     runs-on: ubuntu-latest
 
     steps:
@@ -63,7 +62,6 @@ jobs:
 
   build_macos:
     name: Build macOS bundle (${{ matrix.name_suffix }})
-    if: ${{ github.event.created == true }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -127,7 +125,6 @@ jobs:
 
   release:
     name: Create GitHub Release
-    if: ${{ github.event.created == true }}
     needs: [build_linux_deb, build_macos]
     runs-on: ubuntu-latest
     permissions:
