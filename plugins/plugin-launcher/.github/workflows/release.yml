@@ -3,7 +3,7 @@ name: Build and Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -34,16 +34,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Prepare local qol-tray dependency path
-        shell: bash
-        run: |
-          set -euo pipefail
-          DEP_TARGET="$(cd "$GITHUB_WORKSPACE/../.." && pwd)/qol-tray"
-          rm -rf "$DEP_TARGET"
-          git clone --depth 1 https://github.com/qol-tools/qol-tray "$DEP_TARGET"
-          test -f "$DEP_TARGET/Cargo.toml"
-          echo "Prepared local dependency at $DEP_TARGET"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
