@@ -58,7 +58,7 @@ impl WindowDelegate {
         let selected_index = if windows.is_empty() {
             None
         } else {
-            Some(IndexPath::new(0))
+            Some(IndexPath::new(if windows.len() > 1 { 1 } else { 0 }))
         };
         Self {
             windows,
@@ -74,19 +74,20 @@ impl WindowDelegate {
             #[cfg(debug_assertions)]
             eprintln!(
                 "[alt-tab/select] set_windows reset={} prev={:?} next=None total=0",
-                reset_selection,
-                previous_row
+                reset_selection, previous_row
             );
             return;
         }
 
         if reset_selection {
-            self.selected_index = Some(IndexPath::new(0));
+            let next_ix = if self.windows.len() > 1 { 1 } else { 0 };
+            self.selected_index = Some(IndexPath::new(next_ix));
             #[cfg(debug_assertions)]
             eprintln!(
-                "[alt-tab/select] set_windows reset={} prev={:?} next=Some(0) total={}",
+                "[alt-tab/select] set_windows reset={} prev={:?} next=Some({}) total={}",
                 reset_selection,
                 previous_row,
+                next_ix,
                 self.windows.len()
             );
             return;
@@ -325,7 +326,7 @@ impl AltTabApp {
         let mut async_window = window.to_async(cx);
         let gpui_window_handle = async_window.window_handle();
 
-        // Register the focus out subscription. We need this to exist for Sticky mode. 
+        // Register the focus out subscription. We need this to exist for Sticky mode.
         // We evaluate action_mode dynamically inside the callback, so if the config
         // changes to HoldToSwitch during reuse, it stops auto-minimizing.
         let focus_handle_for_sub = focus_handle.clone();
@@ -437,7 +438,10 @@ impl AltTabApp {
         .detach();
 
         #[cfg(debug_assertions)]
-        eprintln!("[alt-tab/hold] AltTabApp::new: action_mode={:?}, alt_was_held=true (assumed)", action_mode);
+        eprintln!(
+            "[alt-tab/hold] AltTabApp::new: action_mode={:?}, alt_was_held=true (assumed)",
+            action_mode
+        );
 
         let mut app = Self {
             list_state,
@@ -454,7 +458,12 @@ impl AltTabApp {
         app
     }
 
-    fn apply_cached_windows(&mut self, windows: Vec<WindowInfo>, reset_selection: bool, cx: &mut Context<Self>) {
+    fn apply_cached_windows(
+        &mut self,
+        windows: Vec<WindowInfo>,
+        reset_selection: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.list_state.update(cx, |state, cx| {
             state.delegate_mut().set_windows(windows, reset_selection);
             cx.notify();
@@ -464,42 +473,54 @@ impl AltTabApp {
 
     /// Start a new X11 Alt-key polling task for HoldToSwitch mode.
     /// Drops any previous task (which auto-cancels it).
-    fn start_alt_poll(&mut self, window_handle: gpui::AnyWindowHandle, cx: &mut gpui::Context<Self>) {
+    fn start_alt_poll(
+        &mut self,
+        window_handle: gpui::AnyWindowHandle,
+        cx: &mut gpui::Context<Self>,
+    ) {
         let list = self.list_state.clone();
         self.alt_was_held = true;
-        self._alt_poll_task = Some(cx.spawn(move |this: gpui::WeakEntity<AltTabApp>, cx: &mut gpui::AsyncApp| {
-            let mut cx = cx.clone();
-            async move {
-                eprintln!("[alt-tab/hold] X11 modifier poll task started");
-                cx.background_executor().timer(std::time::Duration::from_millis(50)).await;
-                loop {
-                    cx.background_executor().timer(std::time::Duration::from_millis(16)).await;
-                    let alt_held = is_alt_held_x11();
+        self._alt_poll_task = Some(cx.spawn(
+            move |this: gpui::WeakEntity<AltTabApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    eprintln!("[alt-tab/hold] X11 modifier poll task started");
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(50))
+                        .await;
+                    loop {
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_millis(16))
+                            .await;
+                        let alt_held = is_alt_held_x11();
 
-                    if !alt_held {
-                        eprintln!("[alt-tab/hold] X11 poll: Alt released — activating selected");
-                        let list = list.clone();
-                        let _ = cx.update_window(window_handle, |_root, window, cx| {
-                            list.update(cx, |s, _cx| {
-                                s.delegate_mut().activate_selected(window, None);
+                        if !alt_held {
+                            eprintln!(
+                                "[alt-tab/hold] X11 poll: Alt released — activating selected"
+                            );
+                            let list = list.clone();
+                            let _ = cx.update_window(window_handle, |_root, window, cx| {
+                                list.update(cx, |s, _cx| {
+                                    s.delegate_mut().activate_selected(window, None);
+                                });
                             });
-                        });
-                        break;
+                            break;
+                        }
                     }
+
+                    // Clear the task reference so subsequent Show requests know we're fully closed
+                    let _ = cx.update(|cx| {
+                        if let Some(entity) = this.upgrade() {
+                            let _ = entity.update(cx, |app: &mut AltTabApp, _cx| {
+                                app._alt_poll_task = None;
+                            });
+                        }
+                    });
+
+                    eprintln!("[alt-tab/hold] X11 modifier poll task ended");
                 }
-                
-                // Clear the task reference so subsequent Show requests know we're fully closed
-                let _ = cx.update(|cx| {
-                    if let Some(entity) = this.upgrade() {
-                        let _ = entity.update(cx, |app: &mut AltTabApp, _cx| {
-                            app._alt_poll_task = None;
-                        });
-                    }
-                });
-                
-                eprintln!("[alt-tab/hold] X11 modifier poll task ended");
-            }
-        }));
+            },
+        ));
     }
 }
 
@@ -513,7 +534,10 @@ impl Render for AltTabApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let list_state = self.list_state.clone();
 
-        eprintln!("[alt-tab/render] action_mode={:?} alt_was_held={}", self.action_mode, self.alt_was_held);
+        eprintln!(
+            "[alt-tab/render] action_mode={:?} alt_was_held={}",
+            self.action_mode, self.alt_was_held
+        );
 
         div()
             .track_focus(&self.focus_handle)
@@ -594,7 +618,6 @@ impl Render for AltTabApp {
                     }
                     _ => {}
                 }
-
             }))
             .child(
                 // ── Header bar ────────────────────────────────────────────────
@@ -681,7 +704,8 @@ impl Render for AltTabApp {
                                         entity_for_click
                                             .update(cx, |this, cx| {
                                                 this.list_state.update(cx, |s, _cx| {
-                                                    s.delegate_mut().activate_selected(window, None);
+                                                    s.delegate_mut()
+                                                        .activate_selected(window, None);
                                                 });
                                             })
                                             .ok();
