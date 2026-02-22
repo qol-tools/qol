@@ -4,6 +4,33 @@ use image::{ExtendedColorType, ImageEncoder};
 use std::sync::Arc;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::*;
+use x11rb::rust_connection::RustConnection;
+
+#[derive(Clone, Copy)]
+struct ChannelOrder {
+    red: usize,
+    green: usize,
+    blue: usize,
+}
+
+impl Default for ChannelOrder {
+    fn default() -> Self {
+        Self {
+            red: 2,
+            green: 1,
+            blue: 0,
+        }
+    }
+}
+
+struct LiveCaptureSession {
+    conn: RustConnection,
+    channel_order: ChannelOrder,
+}
+
+std::thread_local! {
+    static LIVE_CAPTURE_SESSION: std::cell::RefCell<Option<LiveCaptureSession>> = std::cell::RefCell::new(None);
+}
 
 pub fn cached_preview_path(window_id: u32) -> Option<String> {
     let cache_dir = preview_cache_dir()?;
@@ -217,8 +244,36 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
     windows
 }
 pub fn capture_preview(window_id: u32, max_w: usize, max_h: usize) -> Option<String> {
-    let (data, width, height) = capture_preview_raw(window_id)?;
-    process_and_save_preview(window_id, data, width, height, max_w, max_h)
+    let Ok((conn, screen_num)) = x11rb::connect(None) else {
+        return None;
+    };
+    let geometry = conn.get_geometry(window_id).ok()?.reply().ok()?;
+    if geometry.width == 0 || geometry.height == 0 {
+        return None;
+    }
+    let image = conn
+        .get_image(
+            ImageFormat::Z_PIXMAP,
+            window_id,
+            0,
+            0,
+            geometry.width,
+            geometry.height,
+            u32::MAX,
+        )
+        .ok()?
+        .reply()
+        .ok()?;
+    let channel_order = detect_channel_order(&conn, screen_num);
+    process_and_save_preview_with_order(
+        window_id,
+        image.data.to_vec(),
+        geometry.width as usize,
+        geometry.height as usize,
+        max_w,
+        max_h,
+        channel_order,
+    )
 }
 
 pub fn capture_previews_batch(
@@ -230,9 +285,10 @@ pub fn capture_previews_batch(
         return Vec::new();
     }
 
-    let Ok((conn, _)) = x11rb::connect(None) else {
+    let Ok((conn, screen_num)) = x11rb::connect(None) else {
         return targets.iter().map(|(i, _)| (*i, None)).collect();
     };
+    let channel_order = detect_channel_order(&conn, screen_num);
 
     let window_ids: Vec<u32> = targets.iter().map(|(_, id)| *id).collect();
 
@@ -280,13 +336,14 @@ pub fn capture_previews_batch(
             continue;
         };
 
-        let path = process_and_save_preview(
+        let path = process_and_save_preview_with_order(
             window_id,
             reply.data.to_vec(),
             geo.width as usize,
             geo.height as usize,
             max_w,
             max_h,
+            channel_order,
         );
         out.push((list_index, path));
     }
@@ -295,9 +352,40 @@ pub fn capture_previews_batch(
 }
 
 pub fn capture_preview_frame(window_id: u32, max_w: usize, max_h: usize) -> Option<super::PreviewFrame> {
-    let (data, width, height) = capture_preview_raw(window_id)?;
-    let rgba = to_rgba(&data, width, height)?;
-    let (thumb, thumb_w, thumb_h) = downscale_rgba_keep_aspect(&rgba, width, height, max_w, max_h);
+    let Ok((conn, screen_num)) = x11rb::connect(None) else {
+        return None;
+    };
+    let geometry = conn.get_geometry(window_id).ok()?.reply().ok()?;
+    if geometry.width == 0 || geometry.height == 0 {
+        return None;
+    }
+    let image = conn
+        .get_image(
+            ImageFormat::Z_PIXMAP,
+            window_id,
+            0,
+            0,
+            geometry.width,
+            geometry.height,
+            u32::MAX,
+        )
+        .ok()?
+        .reply()
+        .ok()?;
+    let channel_order = detect_channel_order(&conn, screen_num);
+    let rgba = to_bgra_with_order(
+        &image.data,
+        geometry.width as usize,
+        geometry.height as usize,
+        channel_order,
+    )?;
+    let (thumb, thumb_w, thumb_h) = downscale_rgba_keep_aspect(
+        &rgba,
+        geometry.width as usize,
+        geometry.height as usize,
+        max_w,
+        max_h,
+    );
     Some(super::PreviewFrame {
         rgba: Arc::new(thumb),
         width: thumb_w as u32,
@@ -314,10 +402,78 @@ pub fn capture_frames_batch(
         return Vec::new();
     }
 
-    let Ok((conn, _)) = x11rb::connect(None) else {
-        return targets.iter().map(|(i, _)| (*i, None)).collect();
+    LIVE_CAPTURE_SESSION.with(|cell| {
+        let mut session_slot = cell.borrow_mut();
+        if session_slot.is_none() {
+            *session_slot = connect_live_capture_session();
+        }
+
+        let mut frames = if let Some(session) = session_slot.as_ref() {
+            capture_frames_with_connection(
+                &session.conn,
+                targets,
+                max_w,
+                max_h,
+                session.channel_order,
+            )
+        } else {
+            targets.iter().map(|(i, _)| (*i, None)).collect()
+        };
+
+        let should_retry = frames.iter().all(|(_, frame)| frame.is_none());
+        if should_retry {
+            *session_slot = connect_live_capture_session();
+            if let Some(session) = session_slot.as_ref() {
+                frames = capture_frames_with_connection(
+                    &session.conn,
+                    targets,
+                    max_w,
+                    max_h,
+                    session.channel_order,
+                );
+            }
+        }
+
+        frames
+    })
+}
+
+fn connect_live_capture_session() -> Option<LiveCaptureSession> {
+    let (conn, screen_num) = x11rb::connect(None).ok()?;
+    let channel_order = detect_channel_order(&conn, screen_num);
+    Some(LiveCaptureSession { conn, channel_order })
+}
+
+fn detect_channel_order<C: Connection>(conn: &C, screen_num: usize) -> ChannelOrder {
+    let Some(screen) = conn.setup().roots.get(screen_num) else {
+        return ChannelOrder::default();
+    };
+    let Some(visual) = screen
+        .allowed_depths
+        .iter()
+        .flat_map(|depth| depth.visuals.iter())
+        .find(|visual| visual.visual_id == screen.root_visual)
+    else {
+        return ChannelOrder::default();
     };
 
+    let red = (visual.red_mask.trailing_zeros() / 8) as usize;
+    let green = (visual.green_mask.trailing_zeros() / 8) as usize;
+    let blue = (visual.blue_mask.trailing_zeros() / 8) as usize;
+    if red > 3 || green > 3 || blue > 3 {
+        return ChannelOrder::default();
+    }
+
+    ChannelOrder { red, green, blue }
+}
+
+fn capture_frames_with_connection<C: Connection>(
+    conn: &C,
+    targets: &[(usize, u32)],
+    max_w: usize,
+    max_h: usize,
+    channel_order: ChannelOrder,
+) -> Vec<(usize, Option<super::PreviewFrame>)> {
     let window_ids: Vec<u32> = targets.iter().map(|(_, id)| *id).collect();
 
     let geometry_cookies: Vec<_> = window_ids
@@ -366,7 +522,7 @@ pub fn capture_frames_batch(
 
         let width = geo.width as usize;
         let height = geo.height as usize;
-        let frame = to_rgba(&reply.data, width, height).and_then(|rgba| {
+        let frame = to_bgra_with_order(&reply.data, width, height, channel_order).and_then(|rgba| {
             let (thumb, tw, th) = downscale_rgba_keep_aspect(&rgba, width, height, max_w, max_h);
             Some(super::PreviewFrame {
                 rgba: Arc::new(thumb),
@@ -421,7 +577,27 @@ pub fn process_and_save_preview(
     max_w: usize,
     max_h: usize,
 ) -> Option<String> {
-    let rgba = to_rgba(&data, width, height)?;
+    process_and_save_preview_with_order(
+        window_id,
+        data,
+        width,
+        height,
+        max_w,
+        max_h,
+        ChannelOrder::default(),
+    )
+}
+
+fn process_and_save_preview_with_order(
+    window_id: u32,
+    data: Vec<u8>,
+    width: usize,
+    height: usize,
+    max_w: usize,
+    max_h: usize,
+    channel_order: ChannelOrder,
+) -> Option<String> {
+    let rgba = to_rgba_with_order(&data, width, height, channel_order)?;
     let (thumb, thumb_w, thumb_h) = downscale_rgba_keep_aspect(&rgba, width, height, max_w, max_h);
 
     let cache_dir = preview_cache_dir()?;
@@ -450,7 +626,12 @@ fn preview_cache_dir() -> Option<std::path::PathBuf> {
     Some(path)
 }
 
-fn to_rgba(data: &[u8], width: usize, height: usize) -> Option<Vec<u8>> {
+fn to_rgba_with_order(
+    data: &[u8],
+    width: usize,
+    height: usize,
+    channel_order: ChannelOrder,
+) -> Option<Vec<u8>> {
     let pixels = width.checked_mul(height)?;
     if pixels == 0 {
         return None;
@@ -459,18 +640,64 @@ fn to_rgba(data: &[u8], width: usize, height: usize) -> Option<Vec<u8>> {
     if bytes_per_pixel < 3 {
         return None;
     }
+    if channel_order.red >= bytes_per_pixel
+        || channel_order.green >= bytes_per_pixel
+        || channel_order.blue >= bytes_per_pixel
+    {
+        return None;
+    }
 
     let mut out = Vec::with_capacity(pixels * 4);
     for i in 0..pixels {
         let base = i * bytes_per_pixel;
-        if base + 2 >= data.len() {
+        let r_idx = base + channel_order.red;
+        let g_idx = base + channel_order.green;
+        let b_idx = base + channel_order.blue;
+        if r_idx >= data.len() || g_idx >= data.len() || b_idx >= data.len() {
             return None;
         }
-        // Common X11 little-endian format: B, G, R, [unused]
-        let b = data[base];
-        let g = data[base + 1];
-        let r = data[base + 2];
+        let r = data[r_idx];
+        let g = data[g_idx];
+        let b = data[b_idx];
         out.extend_from_slice(&[r, g, b, 255]);
+    }
+    Some(out)
+}
+
+fn to_bgra_with_order(
+    data: &[u8],
+    width: usize,
+    height: usize,
+    channel_order: ChannelOrder,
+) -> Option<Vec<u8>> {
+    let pixels = width.checked_mul(height)?;
+    if pixels == 0 {
+        return None;
+    }
+    let bytes_per_pixel = data.len() / pixels;
+    if bytes_per_pixel < 3 {
+        return None;
+    }
+    if channel_order.red >= bytes_per_pixel
+        || channel_order.green >= bytes_per_pixel
+        || channel_order.blue >= bytes_per_pixel
+    {
+        return None;
+    }
+
+    let mut out = Vec::with_capacity(pixels * 4);
+    for i in 0..pixels {
+        let base = i * bytes_per_pixel;
+        let r_idx = base + channel_order.red;
+        let g_idx = base + channel_order.green;
+        let b_idx = base + channel_order.blue;
+        if r_idx >= data.len() || g_idx >= data.len() || b_idx >= data.len() {
+            return None;
+        }
+        let r = data[r_idx];
+        let g = data[g_idx];
+        let b = data[b_idx];
+        out.extend_from_slice(&[b, g, r, 255]);
     }
     Some(out)
 }
