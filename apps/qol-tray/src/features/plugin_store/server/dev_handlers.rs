@@ -107,6 +107,8 @@ pub(super) async fn reload_plugins(State(state): State<AppState>) -> impl IntoRe
             log::error!("Failed to reload plugins: {}", e);
         } else {
             log::info!("Plugins reloaded successfully");
+            crate::hotkeys::trigger_reload();
+            events.send_plugins_changed();
         }
     });
 
@@ -356,6 +358,18 @@ pub(super) async fn start_mock_targets(State(state): State<AppState>) -> impl In
 
     let events = state.daemon.events.clone();
     let config_dir = crate::paths::shared_config_dir().ok();
+    let fallback_plugin_ids = state
+        .dev_state
+        .discovery
+        .read()
+        .map(|discovery| {
+            discovery
+                .plugins
+                .iter()
+                .map(|plugin| plugin.id.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let mut started = Vec::new();
 
     if start_mock_self_update(events.clone()).is_ok() {
@@ -364,7 +378,7 @@ pub(super) async fn start_mock_targets(State(state): State<AppState>) -> impl In
     if start_mock_self_recompile(events.clone()).is_ok() {
         started.push(super::types::MOCK_TARGET_SELF_RECOMPILE);
     }
-    if start_mock_plugin_build(events, config_dir).is_ok() {
+    if start_mock_plugin_build(events, config_dir, fallback_plugin_ids).is_ok() {
         started.push(super::types::MOCK_TARGET_PLUGIN_BUILD);
     }
 
@@ -446,8 +460,20 @@ pub(super) async fn stop_mock_plugin_build() -> impl IntoResponse {
 pub(super) async fn mock_plugin_build(State(state): State<AppState>) -> impl IntoResponse {
     let events = state.daemon.events.clone();
     let config_dir = crate::paths::shared_config_dir().ok();
+    let fallback_plugin_ids = state
+        .dev_state
+        .discovery
+        .read()
+        .map(|discovery| {
+            discovery
+                .plugins
+                .iter()
+                .map(|plugin| plugin.id.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
 
-    match start_mock_plugin_build(events, config_dir) {
+    match start_mock_plugin_build(events, config_dir, fallback_plugin_ids) {
         Ok(()) => (StatusCode::ACCEPTED, "Mock build queued").into_response(),
         Err(msg) => (StatusCode::CONFLICT, msg).into_response(),
     }
