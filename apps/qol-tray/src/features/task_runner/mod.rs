@@ -135,7 +135,7 @@ async fn execute_action(
         )
     })?;
 
-    let command = interpolate(&action.command, &req.params);
+    let command = interpolate_shell(&action.command, &req.params);
     let cwd = action.cwd.as_ref().map(|c| interpolate(c, &req.params));
     let timeout = action.timeout;
 
@@ -183,6 +183,15 @@ async fn execute_action(
 }
 
 fn interpolate(template: &str, params: &HashMap<String, String>) -> String {
+    let re = Regex::new(r"\{\{(\w+)\}\}").unwrap();
+    re.replace_all(template, |caps: &regex::Captures| {
+        let key = &caps[1];
+        params.get(key).cloned().unwrap_or_default()
+    })
+    .to_string()
+}
+
+fn interpolate_shell(template: &str, params: &HashMap<String, String>) -> String {
     let re = Regex::new(r"\{\{(\w+)\}\}").unwrap();
     re.replace_all(template, |caps: &regex::Captures| {
         let key = &caps[1];
@@ -444,6 +453,30 @@ mod tests {
                 "REPLACED",
                 "key {:?} should be valid",
                 key
+            );
+        }
+    }
+
+    #[test]
+    fn interpolate_shell_escapes_special_values() {
+        let cases = [
+            ("echo {{missing}}", &[][..], "echo ''"),
+            ("echo {{msg}}", &[("msg", "hello world")][..], "echo 'hello world'"),
+            ("echo {{url}}", &[("url", "https://example.com?q=1&x=2")][..], "echo 'https://example.com?q=1&x=2'"),
+            ("echo {{raw}}", &[("raw", "safe_value-123")][..], "echo safe_value-123"),
+            ("echo {{q}}", &[("q", "a'b")][..], "echo 'a'\"'\"'b'"),
+        ];
+
+        for (template, params, expected) in cases {
+            let map: HashMap<String, String> = params
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            assert_eq!(
+                interpolate_shell(template, &map),
+                expected,
+                "template: {:?}",
+                template
             );
         }
     }
