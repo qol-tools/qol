@@ -87,6 +87,7 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_
 libc = "0.2"
 
 [dev-dependencies]
+proptest = "1.6"
 tempfile = "3.8"
 
 [profile.release]
