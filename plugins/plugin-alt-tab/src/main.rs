@@ -938,6 +938,7 @@ fn open_picker(
         for win in &mut display_windows {
             if let Some(cached) = cache.iter().find(|c| c.id == win.id) {
                 win.preview_path = cached.preview_path.clone();
+                win.preview_frame = cached.preview_frame.clone();
             }
         }
     }
@@ -1136,7 +1137,28 @@ fn run_app(config: AltTabConfig, rx: mpsc::Receiver<daemon::Command>, show_on_st
                     .lock()
                     .map(|cache| cache.clone())
                     .unwrap_or_default();
-                let refreshed = load_windows_with_previews(&executor, cached, false).await;
+                let mut refreshed = load_windows_with_previews(&executor, cached, false).await;
+                let frame_targets: Vec<(usize, u32)> = refreshed
+                    .iter()
+                    .enumerate()
+                    .map(|(i, w)| (i, w.id))
+                    .collect();
+                let frames = executor
+                    .spawn(async move {
+                        platform::capture_frames_batch(
+                            &frame_targets,
+                            PREVIEW_MAX_WIDTH as usize,
+                            PREVIEW_MAX_HEIGHT as usize,
+                        )
+                    })
+                    .await;
+                for (i, frame_opt) in frames {
+                    if let Some(frame) = frame_opt {
+                        if i < refreshed.len() {
+                            refreshed[i].preview_frame = Some(frame);
+                        }
+                    }
+                }
                 warm_count.store(refreshed.len().max(1), Ordering::Relaxed);
                 if let Ok(mut cache) = warm_cache.lock() {
                     *cache = refreshed;
