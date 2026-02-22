@@ -4,8 +4,9 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
-use crate::daemon::{BuildResultInfo, DaemonEvent, EventBus};
+use crate::daemon::{DaemonEvent, EventBus};
 use crate::dev;
+use crate::dev::state::BuildResultInfo;
 
 use super::types::{
     BuildProgressSnapshot, BuildStateResponse, MockTargetInfo, MOCK_TARGET_PLUGIN_BUILD,

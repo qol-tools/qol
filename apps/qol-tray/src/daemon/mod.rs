@@ -1,31 +1,10 @@
 mod events;
 mod init;
-#[cfg(feature = "dev")]
-mod state;
 
 pub use events::EventBus;
 pub use init::Daemon;
-#[cfg(feature = "dev")]
-pub use state::{DaemonState, DiscoveryStatus};
 
 use serde::Serialize;
-
-#[cfg(feature = "dev")]
-#[derive(Debug, Clone, Serialize)]
-pub struct DiscoveredPluginInfo {
-    pub id: String,
-    pub name: String,
-    pub path: String,
-}
-
-#[cfg(feature = "dev")]
-#[derive(Debug, Clone, Serialize)]
-pub struct BuildResultInfo {
-    pub plugin_id: String,
-    pub success: bool,
-    pub output: String,
-    pub skipped: bool,
-}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -37,7 +16,7 @@ pub enum DaemonEvent {
     DiscoveryStarted,
     #[cfg(feature = "dev")]
     DiscoveryComplete {
-        plugins: Vec<DiscoveredPluginInfo>,
+        plugins: Vec<crate::dev::state::DiscoveredPluginInfo>,
     },
     #[cfg(feature = "dev")]
     BuildStarted,
@@ -50,7 +29,7 @@ pub enum DaemonEvent {
     },
     #[cfg(feature = "dev")]
     BuildComplete {
-        results: Vec<BuildResultInfo>,
+        results: Vec<crate::dev::state::BuildResultInfo>,
     },
     #[cfg(feature = "dev")]
     SelfRecompileProgress {
@@ -107,6 +86,7 @@ mod dev_tests {
 
     #[test]
     fn discovery_complete_serializes_plugin_data() {
+        use crate::dev::state::DiscoveredPluginInfo;
         let cases: Vec<(Vec<DiscoveredPluginInfo>, usize)> = vec![
             (vec![], 0),
             (
@@ -153,6 +133,7 @@ mod dev_tests {
 
     #[test]
     fn plugin_info_fields_serialize_correctly() {
+        use crate::dev::state::DiscoveredPluginInfo;
         let cases: Vec<(&str, &str, &str)> = vec![
             ("simple-id", "Simple Name", "/simple/path"),
             (

@@ -22,10 +22,22 @@ pub enum ActionExecutionError {
     PluginManagerPoisoned,
     PluginNotFound(String),
     InvalidActionId(String),
-    RuntimeCommandEscapesPluginDir { plugin_id: String, command: String },
-    RuntimeCommandNotFound { plugin_id: String, command: String },
-    MissingActionMapping { plugin_id: String, action_id: String },
-    NoExecutionTarget { plugin_id: String, action_id: String },
+    RuntimeCommandEscapesPluginDir {
+        plugin_id: String,
+        command: String,
+    },
+    RuntimeCommandNotFound {
+        plugin_id: String,
+        command: String,
+    },
+    MissingActionMapping {
+        plugin_id: String,
+        action_id: String,
+    },
+    NoExecutionTarget {
+        plugin_id: String,
+        action_id: String,
+    },
     SpawnFailed(String),
 }
 
@@ -49,11 +61,7 @@ impl Display for ActionExecutionError {
                 plugin_id,
                 action_id,
             } => {
-                write!(
-                    f,
-                    "missing action mapping for {}::{}",
-                    plugin_id, action_id
-                )
+                write!(f, "missing action mapping for {}::{}", plugin_id, action_id)
             }
             Self::NoExecutionTarget {
                 plugin_id,
@@ -191,7 +199,11 @@ fn untrack_action_process(plugin_id: &str, action_id: &str, pid: u32) {
     }
 }
 
-pub fn execute_action(plugin_manager: &Arc<Mutex<PluginManager>>, plugin_id: &str, action_id: &str) {
+pub fn execute_action(
+    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_id: &str,
+    action_id: &str,
+) {
     if let Err(error) = try_execute_action(plugin_manager, plugin_id, action_id) {
         log::warn!(
             "Plugin action execution failed for {}::{}: {}",
@@ -199,6 +211,13 @@ pub fn execute_action(plugin_manager: &Arc<Mutex<PluginManager>>, plugin_id: &st
             action_id,
             error
         );
+        #[cfg(feature = "dev")]
+        {
+            eprintln!(
+                "[\x1b[31mACTION ERROR\x1b[0m] {}::{} failed: {}",
+                plugin_id, action_id, error
+            );
+        }
     }
 }
 
@@ -222,7 +241,10 @@ pub fn try_execute_action(
     execute_resolved_action(&resolved)
 }
 
-fn resolve_action(plugin: &Plugin, action_id: &str) -> Result<ResolvedAction, ActionExecutionError> {
+fn resolve_action(
+    plugin: &Plugin,
+    action_id: &str,
+) -> Result<ResolvedAction, ActionExecutionError> {
     if !crate::plugins::manifest::is_valid_action_id(action_id) {
         return Err(ActionExecutionError::InvalidActionId(action_id.to_string()));
     }
@@ -235,7 +257,8 @@ fn resolve_action(plugin: &Plugin, action_id: &str) -> Result<ResolvedAction, Ac
         .map(PathBuf::from);
 
     let (command_path, args) = resolve_runtime_target(plugin, action_id)?;
-    let runtime_fallback_allowed = allow_runtime_fallback(plugin, daemon_socket.as_ref(), command_path.as_ref());
+    let runtime_fallback_allowed =
+        allow_runtime_fallback(plugin, daemon_socket.as_ref(), command_path.as_ref());
 
     if daemon_socket.is_none() && command_path.is_none() {
         return Err(ActionExecutionError::NoExecutionTarget {
@@ -267,10 +290,17 @@ fn allow_runtime_fallback(
     let Some(runtime_command_path) = runtime_command_path else {
         return false;
     };
-    let Some(daemon) = plugin.manifest.daemon.as_ref().filter(|daemon| daemon.enabled) else {
+    let Some(daemon) = plugin
+        .manifest
+        .daemon
+        .as_ref()
+        .filter(|daemon| daemon.enabled)
+    else {
         return true;
     };
-    let Some(daemon_command_path) = super::resolve_plugin_command_path(&plugin.path, &daemon.command) else {
+    let Some(daemon_command_path) =
+        super::resolve_plugin_command_path(&plugin.path, &daemon.command)
+    else {
         return true;
     };
 
@@ -324,13 +354,12 @@ fn resolve_runtime_target(
         })?;
 
     let args = match &runtime.actions {
-        Some(map) => map
-            .get(action_id)
-            .cloned()
-            .ok_or_else(|| ActionExecutionError::MissingActionMapping {
+        Some(map) => map.get(action_id).cloned().ok_or_else(|| {
+            ActionExecutionError::MissingActionMapping {
                 plugin_id: plugin.id.clone(),
                 action_id: action_id.to_string(),
-            })?,
+            }
+        })?,
         None => vec![action_id.to_string()],
     };
 
@@ -450,8 +479,7 @@ fn execute_via_runtime(resolved: &ResolvedAction) -> Result<(), ActionExecutionE
 mod tests {
     use super::*;
     use crate::plugins::manifest::{
-        ActionType, DaemonConfig, MenuConfig, MenuItem, PluginInfo, PluginManifest,
-        RuntimeConfig,
+        ActionType, DaemonConfig, MenuConfig, MenuItem, PluginInfo, PluginManifest, RuntimeConfig,
         CURRENT_MANIFEST_VERSION,
     };
     use std::collections::HashMap;
@@ -638,7 +666,8 @@ mod tests {
     }
 
     #[test]
-    fn resolve_action_allows_runtime_fallback_when_daemon_and_runtime_share_binary_but_socket_unreachable() {
+    fn resolve_action_allows_runtime_fallback_when_daemon_and_runtime_share_binary_but_socket_unreachable(
+    ) {
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("launcher"), "").unwrap();
 
@@ -662,7 +691,8 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn resolve_action_disables_runtime_fallback_when_daemon_and_runtime_share_binary_and_socket_reachable() {
+    fn resolve_action_disables_runtime_fallback_when_daemon_and_runtime_share_binary_and_socket_reachable(
+    ) {
         use std::os::unix::net::UnixListener;
 
         let dir = TempDir::new().unwrap();
@@ -715,7 +745,9 @@ mod tests {
     #[test]
     fn try_execute_action_returns_plugin_not_found() {
         let manager = Arc::new(Mutex::new(PluginManager::new()));
-        let err = try_execute_action(&manager, "missing", "open").err().unwrap();
+        let err = try_execute_action(&manager, "missing", "open")
+            .err()
+            .unwrap();
 
         assert!(matches!(err, ActionExecutionError::PluginNotFound(_)));
     }
@@ -731,14 +763,8 @@ mod tests {
             assert_eq!(tracked.get("plugin-a"), Some(&vec![101, 102]));
             assert_eq!(tracked.get("plugin-b"), Some(&vec![201]));
             let tracked_running = tracked_running_actions();
-            assert_eq!(
-                tracked_running.get("plugin-a::open"),
-                Some(&101)
-            );
-            assert_eq!(
-                tracked_running.get("plugin-a::close"),
-                Some(&102)
-            );
+            assert_eq!(tracked_running.get("plugin-a::open"), Some(&101));
+            assert_eq!(tracked_running.get("plugin-a::close"), Some(&102));
 
             untrack_action_process("plugin-a", "open", 101);
             let tracked = tracked_processes();
