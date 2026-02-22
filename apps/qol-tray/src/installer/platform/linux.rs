@@ -2,6 +2,9 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const DESKTOP_TEMPLATE: &str =
+    include_str!("../../../../scripts/installer/platform/linux/desktop/qol-tray.desktop");
+
 pub fn install_dir() -> Result<PathBuf> {
     super::unix_common::install_dir()
 }
@@ -19,14 +22,28 @@ pub fn write_autostart_entry(binary_path: &Path) -> Result<()> {
     fs::create_dir_all(parent)
         .with_context(|| format!("Failed to create directory {}", parent.display()))?;
 
-    let desktop = format!(
-        "[Desktop Entry]\nType=Application\nName=QoL Tray\nComment=Quality of Life Tray daemon for utility scripts\nExec={}\nIcon=applications-utilities\nTerminal=false\nCategories=Utility;\nStartupNotify=false\nX-GNOME-Autostart-enabled=true\n",
-        binary_path.display()
-    );
+    let desktop = render_desktop_entry(binary_path);
 
     fs::write(&path, desktop)
         .with_context(|| format!("Failed to write autostart file {}", path.display()))?;
     Ok(())
+}
+
+fn render_desktop_entry(binary_path: &Path) -> String {
+    let exec_line = format!("Exec={}", binary_path.display());
+    let mut rendered = DESKTOP_TEMPLATE
+        .lines()
+        .map(|line| {
+            if line.starts_with("Exec=") {
+                exec_line.as_str()
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    rendered.push('\n');
+    rendered
 }
 
 pub fn start_now(binary_path: &Path) -> Result<()> {
