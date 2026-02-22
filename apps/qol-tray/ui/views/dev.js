@@ -167,7 +167,8 @@ function totalItems() {
 }
 
 function getActivePluginBuildState(plugin) {
-    if (!state.building || plugin.status !== 'linked') return null;
+    if (!state.building) return null;
+    if (!state.mockTesting && plugin.status !== 'linked') return null;
     const progress = state.buildProgress[plugin.id];
     if (!progress) return null;
 
@@ -544,7 +545,7 @@ function stopLocalMockBuildUi() {
 async function runLocalMockPluginBuild(runId) {
     if (!isCurrentMockRun(runId)) return false;
 
-    const pluginIds = state.plugins
+    const pluginIds = state.mergedList
         .map(plugin => plugin.id)
         .filter(Boolean)
         .sort((a, b) => a.localeCompare(b));

@@ -225,6 +225,7 @@ pub(super) fn stop_mock_self_recompile_internal() -> bool {
 pub(super) fn start_mock_plugin_build(
     events: Arc<EventBus>,
     config_dir: Option<std::path::PathBuf>,
+    fallback_plugin_ids: Vec<String>,
 ) -> Result<(), &'static str> {
     if MOCK_BUILD_IN_PROGRESS.swap(true, Ordering::SeqCst) {
         return Err("Mock plugin build already in progress");
@@ -248,7 +249,11 @@ pub(super) fn start_mock_plugin_build(
             .unwrap_or_default()
             .into_keys()
             .collect();
+        if plugin_ids.is_empty() {
+            plugin_ids = fallback_plugin_ids;
+        }
         plugin_ids.sort();
+        plugin_ids.dedup();
 
         if MOCK_BUILD_CANCEL.load(Ordering::SeqCst) {
             mark_build_state_finished();

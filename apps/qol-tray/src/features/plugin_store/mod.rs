@@ -42,7 +42,7 @@ impl MenuProvider for Plugins {
         vec![
             PluginMenuItem::Action {
                 id: MENU_ITEM_ID.to_string(),
-                label: "🔌 Plugins".to_string(),
+                label: "🌐 Open Dashboard".to_string(),
                 action: crate::plugins::ActionType::Run,
                 config_key: None,
             },
