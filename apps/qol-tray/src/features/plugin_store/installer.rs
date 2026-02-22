@@ -6,6 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(120);
 const CARGO_BUILD_TIMEOUT: Duration = Duration::from_secs(300);
+const DEFAULT_CARGO_BUILD_JOBS: usize = 4;
 #[cfg(unix)]
 const LOCKFILE_MAX_AGE: Duration = Duration::from_secs(30);
 #[cfg(not(unix))]
@@ -513,10 +514,13 @@ where
 }
 
 async fn run_cargo_build(manifest_path: &Path, plugin_dir: &Path) -> Result<std::process::Output> {
+    let jobs = cargo_build_jobs();
     let mut command = tokio::process::Command::new("cargo");
     command
         .arg("build")
         .arg("--release")
+        .arg("--jobs")
+        .arg(jobs.to_string())
         .arg("--manifest-path")
         .arg(manifest_path)
         .current_dir(plugin_dir);
@@ -524,6 +528,55 @@ async fn run_cargo_build(manifest_path: &Path, plugin_dir: &Path) -> Result<std:
         .await
         .context("Cargo build timed out")?
         .context("Failed to run cargo build")
+}
+
+fn cargo_build_jobs() -> usize {
+    if let Ok(raw) = std::env::var("QOL_TRAY_CARGO_BUILD_JOBS") {
+        if let Ok(parsed) = raw.parse::<usize>() {
+            if parsed > 0 {
+                return parsed;
+            }
+        }
+    }
+
+    std::thread::available_parallelism()
+        .map(|n| n.get().min(DEFAULT_CARGO_BUILD_JOBS))
+        .unwrap_or(DEFAULT_CARGO_BUILD_JOBS)
+        .max(1)
+}
+
+fn strip_dev_dependencies_for_release_build(manifest_path: &Path) -> Result<()> {
+    let content = std::fs::read_to_string(manifest_path)
+        .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
+    let mut value: toml::Value = toml::from_str(&content)
+        .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
+    let Some(root) = value.as_table_mut() else {
+        return Ok(());
+    };
+
+    let mut changed = root.remove("dev-dependencies").is_some();
+    if let Some(target) = root.get_mut("target").and_then(|v| v.as_table_mut()) {
+        for (_, target_entry) in target.iter_mut() {
+            if let Some(target_table) = target_entry.as_table_mut() {
+                if target_table.remove("dev-dependencies").is_some() {
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    if changed {
+        let rendered = toml::to_string(&value)
+            .with_context(|| format!("Failed to render {}", manifest_path.display()))?;
+        std::fs::write(manifest_path, rendered)
+            .with_context(|| format!("Failed to write {}", manifest_path.display()))?;
+        log::info!(
+            "Stripped dev-dependencies from {} for install build",
+            manifest_path.display()
+        );
+    }
+
+    Ok(())
 }
 
 fn is_safe_branch_name(s: &str) -> bool {
@@ -627,6 +680,8 @@ async fn build_binary_from_source(plugin_dir: &Path, binary_name: &str) -> Resul
     if !manifest_path.is_file() {
         anyhow::bail!("Cargo.toml not found at {}", manifest_path.display());
     }
+
+    strip_dev_dependencies_for_release_build(&manifest_path)?;
 
     let output = run_cargo_build(&manifest_path, plugin_dir).await?;
     if !output.status.success() {
@@ -804,5 +859,37 @@ mod tests {
         );
         assert!(tokio::fs::metadata(live.join("old.txt")).await.is_ok());
         assert!(tokio::fs::metadata(&backup).await.is_err());
+    }
+
+    #[test]
+    fn strip_dev_dependencies_for_release_build_removes_top_level_and_target_sections() {
+        let temp = TempDir::new().unwrap();
+        let manifest_path = temp.path().join("Cargo.toml");
+        std::fs::write(
+            &manifest_path,
+            r#"
+[package]
+name = "sample"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = "1"
+
+[dev-dependencies]
+qol-tray = { path = "../../qol-tray" }
+toml = "0.9"
+
+[target.'cfg(unix)'.dev-dependencies]
+tempfile = "3"
+"#,
+        )
+        .unwrap();
+
+        strip_dev_dependencies_for_release_build(&manifest_path).unwrap();
+
+        let after = std::fs::read_to_string(&manifest_path).unwrap();
+        assert!(!after.contains("dev-dependencies"));
+        assert!(after.contains("serde"));
     }
 }
