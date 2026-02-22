@@ -132,7 +132,7 @@ impl ListDelegate for WindowDelegate {
                 })
                 .when(!is_selected, |s| s.bg(rgb(0x161a25)))
                 .child(div().rounded_md().overflow_hidden().child(preview_tile(
-                    &win.preview_frame,
+                    &win.preview_path,
                     GRID_PREVIEW_WIDTH,
                     GRID_PREVIEW_HEIGHT,
                 )))
@@ -332,7 +332,6 @@ struct AltTabApp {
     action_mode: ActionMode,
     alt_was_held: bool,
     _alt_poll_task: Option<gpui::Task<()>>,
-    _preview_refresh_task: Option<gpui::Task<()>>,
 }
 
 impl AltTabApp {
@@ -413,34 +412,6 @@ impl AltTabApp {
                         }
                     });
 
-                    let frame_targets: Vec<(usize, u32)> = windows
-                        .iter()
-                        .enumerate()
-                        .map(|(i, w)| (i, w.id))
-                        .collect();
-                    let frames = executor
-                        .spawn(async move {
-                            platform::capture_frames_batch(
-                                &frame_targets,
-                                PREVIEW_MAX_WIDTH as usize,
-                                PREVIEW_MAX_HEIGHT as usize,
-                            )
-                        })
-                        .await;
-                    let _ = cx.update(|app_cx| {
-                        let _ = list_state_clone.update(app_cx, |state, cx| {
-                            let delegate_windows = &mut state.delegate_mut().windows;
-                            for (i, frame_opt) in frames {
-                                if let Some(frame) = frame_opt {
-                                    if i < delegate_windows.len() {
-                                        delegate_windows[i].preview_frame = Some(frame);
-                                    }
-                                }
-                            }
-                            cx.notify();
-                        });
-                    });
-
                     let (tx, rx) = mpsc::channel::<(usize, Option<String>)>();
                     for (i, id) in missing_targets {
                         let tx = tx.clone();
@@ -505,7 +476,6 @@ impl AltTabApp {
             action_mode: action_mode.clone(),
             alt_was_held: true,
             _alt_poll_task: None,
-            _preview_refresh_task: None,
         };
 
         if action_mode == ActionMode::HoldToSwitch {
@@ -580,88 +550,6 @@ impl AltTabApp {
         ));
     }
 
-    fn start_preview_refresh(
-        &mut self,
-        preview_fps: u8,
-        cx: &mut Context<Self>,
-    ) {
-        if preview_fps == 0 {
-            self._preview_refresh_task = None;
-            return;
-        }
-
-        let interval_ms = (1000 / preview_fps as u64).max(16);
-        let list_state = self.list_state.clone();
-
-        self._preview_refresh_task = Some(cx.spawn(
-            move |this: gpui::WeakEntity<AltTabApp>, cx: &mut gpui::AsyncApp| {
-                let mut cx = cx.clone();
-                async move {
-                    let executor = cx.background_executor().clone();
-                    loop {
-                        executor
-                            .timer(std::time::Duration::from_millis(interval_ms))
-                            .await;
-
-                        let targets: Vec<(usize, u32)> = cx
-                            .update(|app_cx| {
-                                list_state
-                                    .read(app_cx)
-                                    .delegate()
-                                    .windows
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(i, w)| (i, w.id))
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-
-                        if targets.is_empty() {
-                            continue;
-                        }
-
-                        let frames = executor
-                            .spawn(async move {
-                                platform::capture_frames_batch(
-                                    &targets,
-                                    PREVIEW_MAX_WIDTH as usize,
-                                    PREVIEW_MAX_HEIGHT as usize,
-                                )
-                            })
-                            .await;
-
-                        let should_break = cx
-                            .update(|app_cx| {
-                                list_state
-                                    .update(app_cx, |state, cx| {
-                                        let windows = &mut state.delegate_mut().windows;
-                                        let mut changed = false;
-                                        for (i, frame_opt) in frames {
-                                            if let Some(frame) = frame_opt {
-                                                if i < windows.len() {
-                                                    windows[i].preview_frame = Some(frame);
-                                                    changed = true;
-                                                }
-                                            }
-                                        }
-                                        if changed {
-                                            cx.notify();
-                                        }
-                                    });
-                                let _ = this.update(app_cx, |_, cx: &mut Context<AltTabApp>| {
-                                    cx.notify();
-                                });
-                            })
-                            .is_err();
-
-                        if should_break {
-                            break;
-                        }
-                    }
-                }
-            },
-        ));
-    }
 }
 
 impl Focusable for AltTabApp {
@@ -862,7 +750,7 @@ impl Render for AltTabApp {
                                     })
                                 })
                                 .child(div().rounded_md().overflow_hidden().child(preview_tile(
-                                    &win.preview_frame,
+                                    &win.preview_path,
                                     GRID_PREVIEW_WIDTH,
                                     GRID_PREVIEW_HEIGHT,
                                 )))
@@ -938,7 +826,6 @@ fn open_picker(
         for win in &mut display_windows {
             if let Some(cached) = cache.iter().find(|c| c.id == win.id) {
                 win.preview_path = cached.preview_path.clone();
-                win.preview_frame = cached.preview_frame.clone();
             }
         }
     }
@@ -1018,7 +905,6 @@ fn open_picker(
                 }
 
                 view.apply_cached_windows(display_windows.clone(), config.reset_selection_on_open, cx);
-                view.start_preview_refresh(config.display.preview_fps, cx);
 
                 let current_size = current_bounds.size;
                 let next_size = target_size;
@@ -1096,10 +982,6 @@ fn open_picker(
     if let Ok(h) = handle {
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/open] opened new picker window");
-        let fps = config.display.preview_fps;
-        let _ = h.update(cx, |view, _window, cx| {
-            view.start_preview_refresh(fps, cx);
-        });
         *current.borrow_mut() = Some(h);
     } else {
         #[cfg(debug_assertions)]
@@ -1137,28 +1019,7 @@ fn run_app(config: AltTabConfig, rx: mpsc::Receiver<daemon::Command>, show_on_st
                     .lock()
                     .map(|cache| cache.clone())
                     .unwrap_or_default();
-                let mut refreshed = load_windows_with_previews(&executor, cached, false).await;
-                let frame_targets: Vec<(usize, u32)> = refreshed
-                    .iter()
-                    .enumerate()
-                    .map(|(i, w)| (i, w.id))
-                    .collect();
-                let frames = executor
-                    .spawn(async move {
-                        platform::capture_frames_batch(
-                            &frame_targets,
-                            PREVIEW_MAX_WIDTH as usize,
-                            PREVIEW_MAX_HEIGHT as usize,
-                        )
-                    })
-                    .await;
-                for (i, frame_opt) in frames {
-                    if let Some(frame) = frame_opt {
-                        if i < refreshed.len() {
-                            refreshed[i].preview_frame = Some(frame);
-                        }
-                    }
-                }
+                let refreshed = load_windows_with_previews(&executor, cached, false).await;
                 warm_count.store(refreshed.len().max(1), Ordering::Relaxed);
                 if let Ok(mut cache) = warm_cache.lock() {
                     *cache = refreshed;
