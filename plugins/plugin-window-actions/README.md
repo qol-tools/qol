@@ -32,10 +32,14 @@ Install via qol-tray plugin browser or manually:
 git clone https://github.com/qol-tools/plugin-window-actions.git ~/.config/qol-tray/plugins/plugin-window-actions
 ```
 
-For linked dev setups, run:
+## Development
 
 ```bash
-make dev
+# Run contract validation tests
+cargo test
+
+# Run in development mode (as a tray plugin)
+# qol-tray will automatically resolve the binary from target/debug
 ```
 
 ## Usage
