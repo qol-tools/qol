@@ -25,5 +25,5 @@ core-foundation-sys = { git = "https://github.com/servo/core-foundation-rs", tag
 
 [dev-dependencies]
 proptest = "1.10.0"
-qol-tray = { path = "../../qol-tray" }
+qol-tray = { git = "https://github.com/qol-tools/qol-tray" }
 toml = "0.9.8"
