@@ -8,3 +8,5 @@ scratch.rs
 print_config.rs
 src/test_spawn.rs
 test_launch.sh
+
+.idea/
