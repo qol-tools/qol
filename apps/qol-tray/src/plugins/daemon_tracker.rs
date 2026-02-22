@@ -84,25 +84,43 @@ fn is_managed_plugin_binary_path(
 ) -> bool {
     let resolved_target = std::fs::canonicalize(target).unwrap_or_else(|_| target.to_path_buf());
 
-    if let Some(shared_plugins_root) = shared_plugins_root {
-        let resolved_shared_root = std::fs::canonicalize(shared_plugins_root)
-            .unwrap_or_else(|_| shared_plugins_root.to_path_buf());
-        if resolved_target.starts_with(&resolved_shared_root) {
+    let mut potential_roots = Vec::new();
+    if let Some(shared) = shared_plugins_root {
+        potential_roots.push(shared.to_path_buf());
+        if let Ok(entries) = std::fs::read_dir(shared) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                potential_roots.push(entry.path());
+            }
+        }
+    }
+
+    if let Some(installs) = installs_root {
+        potential_roots.push(installs.to_path_buf());
+        if let Ok(entries) = std::fs::read_dir(installs) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                potential_roots.push(entry.path().join("plugins"));
+            }
+        }
+    }
+
+    for root in potential_roots {
+        let resolved_root = std::fs::canonicalize(&root).unwrap_or(root);
+        if resolved_target.starts_with(&resolved_root) {
+            // Further verification for installs root to ensure it's in a plugins folder
+            if let Some(installs) = installs_root {
+                let resolved_installs =
+                    std::fs::canonicalize(installs).unwrap_or_else(|_| installs.to_path_buf());
+                if resolved_target.starts_with(&resolved_installs) {
+                    return resolved_target
+                        .components()
+                        .any(|c| c.as_os_str() == "plugins");
+                }
+            }
             return true;
         }
     }
 
-    let Some(installs_root) = installs_root else {
-        return false;
-    };
-    let resolved_installs_root =
-        std::fs::canonicalize(installs_root).unwrap_or_else(|_| installs_root.to_path_buf());
-    if !resolved_target.starts_with(&resolved_installs_root) {
-        return false;
-    }
-    resolved_target
-        .components()
-        .any(|component| component.as_os_str() == std::ffi::OsStr::new("plugins"))
+    false
 }
 
 #[cfg(target_os = "linux")]
