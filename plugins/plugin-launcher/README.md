@@ -27,8 +27,11 @@ Linux, macOS
 ## Development
 
 ```bash
-make dev      # build and install binary to plugin root
-make test     # run tests
+# Run contract validation tests
+cargo test
+
+# Run in development mode (as a tray plugin)
+# qol-tray will automatically resolve the binary from target/debug
 ```
 
 ## License
