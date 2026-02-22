@@ -36,7 +36,10 @@ pub(super) fn resolve_source_binary(repo_root: &Path) -> Result<PathBuf> {
         }
     }
 
-    Err(anyhow!("Built binary not found at {}", source_binary.display()))
+    Err(anyhow!(
+        "Built binary not found at {}",
+        source_binary.display()
+    ))
 }
 
 fn source_binary_from_args() -> Result<Option<PathBuf>> {
@@ -61,9 +64,7 @@ fn source_binary_from_args() -> Result<Option<PathBuf>> {
 }
 
 fn source_binary_from_env() -> Option<PathBuf> {
-    env::var("QOL_TRAY_INSTALL_SOURCE")
-        .ok()
-        .map(PathBuf::from)
+    env::var("QOL_TRAY_INSTALL_SOURCE").ok().map(PathBuf::from)
 }
 
 fn source_binary_from_platform_candidates() -> Result<Option<PathBuf>> {
@@ -86,7 +87,10 @@ fn ensure_existing_source(path: PathBuf) -> Result<PathBuf> {
 fn build_release_binary(repo_root: &Path) -> Result<()> {
     let manifest_path = repo_root.join("Cargo.toml");
     if !manifest_path.is_file() {
-        return Err(anyhow!("Cargo.toml not found at {}", manifest_path.display()));
+        return Err(anyhow!(
+            "Cargo.toml not found at {}",
+            manifest_path.display()
+        ));
     }
 
     let status = Command::new("cargo")

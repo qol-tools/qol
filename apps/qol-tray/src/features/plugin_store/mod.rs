@@ -1,15 +1,15 @@
-mod server;
 pub(crate) mod github;
 mod installer;
 mod plugin_ui;
 mod release_assets;
+mod server;
 
 use crate::daemon::Daemon;
 use crate::features::MenuProvider;
 use crate::plugins::{MenuItem as PluginMenuItem, PluginManager};
 use anyhow::Result;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::{Arc, Mutex};
 
 const DEFAULT_SERVER_PORT: u16 = 42700;
 const MENU_ITEM_ID: &str = "plugins";
@@ -40,14 +40,12 @@ impl Plugins {
 
 impl MenuProvider for Plugins {
     fn menu_items(&self) -> Vec<PluginMenuItem> {
-        vec![
-            PluginMenuItem::Action {
-                id: MENU_ITEM_ID.to_string(),
-                label: "🌐 Open Dashboard".to_string(),
-                action: crate::plugins::ActionType::Run,
-                config_key: None,
-            },
-        ]
+        vec![PluginMenuItem::Action {
+            id: MENU_ITEM_ID.to_string(),
+            label: "🌐 Open Dashboard".to_string(),
+            action: crate::plugins::ActionType::Run,
+            config_key: None,
+        }]
     }
 
     fn handle_event(&self, event_id: &str) -> Result<()> {

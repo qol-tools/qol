@@ -25,8 +25,12 @@ impl Version {
         });
 
         for cmp in pairs {
-            if cmp == Ordering::Greater { return true; }
-            if cmp == Ordering::Less { return false; }
+            if cmp == Ordering::Greater {
+                return true;
+            }
+            if cmp == Ordering::Less {
+                return false;
+            }
         }
         false
     }
@@ -46,7 +50,9 @@ pub fn normalize_semver_tag(tag: &str) -> Option<String> {
         return None;
     }
 
-    semver::Version::parse(without_prefix).ok().map(|v| v.to_string())
+    semver::Version::parse(without_prefix)
+        .ok()
+        .map(|v| v.to_string())
 }
 
 #[cfg(test)]

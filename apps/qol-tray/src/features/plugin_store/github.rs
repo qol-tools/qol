@@ -1,4 +1,4 @@
-use super::release_assets::{PlatformTarget, resolve_asset_pattern};
+use super::release_assets::{resolve_asset_pattern, PlatformTarget};
 use crate::{paths, version::normalize_semver_tag};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -177,9 +177,7 @@ pub(crate) fn build_github_request(
     req
 }
 
-pub(crate) async fn send_checked(
-    request: reqwest::RequestBuilder,
-) -> Result<reqwest::Response> {
+pub(crate) async fn send_checked(request: reqwest::RequestBuilder) -> Result<reqwest::Response> {
     let response = request.send().await?;
     if !response.status().is_success() {
         let status = response.status();
@@ -263,10 +261,16 @@ pub async fn validate_token(token: &str) -> std::result::Result<(), TokenValidat
     let body = response.text().await.unwrap_or_default();
 
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        return Err(TokenValidationError::Invalid(format!("{}: {}", status, body)));
+        return Err(TokenValidationError::Invalid(format!(
+            "{}: {}",
+            status, body
+        )));
     }
 
-    Err(TokenValidationError::Upstream(format!("{}: {}", status, body)))
+    Err(TokenValidationError::Upstream(format!(
+        "{}: {}",
+        status, body
+    )))
 }
 
 pub fn delete_token() -> Result<()> {
@@ -357,7 +361,10 @@ impl GitHubClient {
             );
         }
 
-        anyhow::bail!("plugin.toml not found for {} on main or master branch", repo_name)
+        anyhow::bail!(
+            "plugin.toml not found for {} on main or master branch",
+            repo_name
+        )
     }
 
     async fn fetch_release_version(
@@ -368,8 +375,7 @@ impl GitHubClient {
         let target = PlatformTarget::current()?;
         let plugin_repo = format!("{}/{}", self.org, repo_name);
         let plugin_release = self.fetch_latest_release(&plugin_repo).await?;
-        self
-            .verify_platform_binary_support(manifest, target, &plugin_repo, &plugin_release)
+        self.verify_platform_binary_support(manifest, target, &plugin_repo, &plugin_release)
             .await?;
         normalize_semver_tag(&plugin_release.tag_name).ok_or_else(|| {
             anyhow::anyhow!(
@@ -489,16 +495,14 @@ fn required_release_assets(
         anyhow::bail!("manifest has empty dependencies.binaries");
     }
 
-    Ok(
-        dependencies
-            .binaries
-            .iter()
-            .map(|binary| RequiredReleaseAsset {
-                repo: binary.repo.clone(),
-                name: resolve_asset_pattern(&binary.pattern, target),
-            })
-            .collect(),
-    )
+    Ok(dependencies
+        .binaries
+        .iter()
+        .map(|binary| RequiredReleaseAsset {
+            repo: binary.repo.clone(),
+            name: resolve_asset_pattern(&binary.pattern, target),
+        })
+        .collect())
 }
 
 #[derive(Debug, Clone, PartialEq)]

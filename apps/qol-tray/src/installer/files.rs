@@ -4,8 +4,12 @@ use std::path::{Path, PathBuf};
 
 pub(super) fn ensure_plugin_dir() -> Result<PathBuf> {
     let plugins_dir = crate::paths::plugins_dir()?;
-    fs::create_dir_all(&plugins_dir)
-        .with_context(|| format!("Failed to create plugins directory {}", plugins_dir.display()))?;
+    fs::create_dir_all(&plugins_dir).with_context(|| {
+        format!(
+            "Failed to create plugins directory {}",
+            plugins_dir.display()
+        )
+    })?;
     Ok(plugins_dir)
 }
 
@@ -16,7 +20,8 @@ pub(super) fn copy_dir_recursive(source: &Path, target: &Path) -> Result<()> {
     for entry in fs::read_dir(source)
         .with_context(|| format!("Failed to read directory {}", source.display()))?
     {
-        let entry = entry.with_context(|| format!("Failed to read entry in {}", source.display()))?;
+        let entry =
+            entry.with_context(|| format!("Failed to read entry in {}", source.display()))?;
         let source_path = entry.path();
         let target_path = target.join(entry.file_name());
         copy_entry(&source_path, &target_path)?;

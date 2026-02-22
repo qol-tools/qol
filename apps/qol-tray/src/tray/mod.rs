@@ -1,5 +1,5 @@
-pub mod platform;
 pub mod icon;
+pub mod platform;
 
 use crate::daemon::EventBus;
 use crate::features::FeatureRegistry;

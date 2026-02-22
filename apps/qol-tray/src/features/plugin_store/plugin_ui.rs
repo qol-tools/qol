@@ -1,13 +1,13 @@
-#[cfg(feature = "dev")]
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use axum::{
-    Router,
     extract::Path as AxumPath,
     http::{header, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
+    Router,
 };
+#[cfg(feature = "dev")]
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 pub fn router(plugins_dir: PathBuf) -> Router {
     Router::new()
@@ -35,7 +35,11 @@ async fn serve_plugin_index(
     };
 
     let injected = inject_plugin_wrapper(&contents);
-    ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], injected).into_response()
+    (
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        injected,
+    )
+        .into_response()
 }
 
 fn inject_plugin_wrapper(html: &str) -> String {
@@ -55,7 +59,9 @@ Esc back
 
 fn inject_after_body_tag(html: &str, content: &str) -> String {
     let insert_pos = find_body_tag_end(html);
-    let Some(pos) = insert_pos else { return html.to_string() };
+    let Some(pos) = insert_pos else {
+        return html.to_string();
+    };
     format!("{}{}{}", &html[..pos], content, &html[pos..])
 }
 
@@ -105,7 +111,9 @@ fn is_inside_comment(html: &str, pos: usize) -> bool {
 }
 
 fn inject_before_closing_body(html: &str, content: &str) -> String {
-    let Some(pos) = html.rfind("</body>") else { return html.to_string() };
+    let Some(pos) = html.rfind("</body>") else {
+        return html.to_string();
+    };
     format!("{}{}{}", &html[..pos], content, &html[pos..])
 }
 
@@ -138,9 +146,17 @@ async fn serve_file(plugins_dir: &Path, plugin_id: &str, file_path: &str) -> Res
 
 use crate::paths::is_safe_path_component;
 
-async fn resolve_safe_ui_file(plugins_dir: &Path, plugin_id: &str, file_path: &str) -> Result<PathBuf, Response> {
+async fn resolve_safe_ui_file(
+    plugins_dir: &Path,
+    plugin_id: &str,
+    file_path: &str,
+) -> Result<PathBuf, Response> {
     if !is_safe_path_component(plugin_id) || !is_safe_subpath(file_path) {
-        log::warn!("Unsafe path: plugin_id={}, file_path={}", plugin_id, file_path);
+        log::warn!(
+            "Unsafe path: plugin_id={}, file_path={}",
+            plugin_id,
+            file_path
+        );
         return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
     }
 
@@ -208,7 +224,11 @@ async fn resolve_safe_ui_file(plugins_dir: &Path, plugin_id: &str, file_path: &s
         Err(_) => return Err((StatusCode::NOT_FOUND, "File not found").into_response()),
     };
     if !canonical_ui_path.starts_with(&canonical_ui_root) {
-        log::warn!("Path traversal attempt: {:?} escapes {:?}", canonical_ui_path, canonical_ui_root);
+        log::warn!(
+            "Path traversal attempt: {:?} escapes {:?}",
+            canonical_ui_path,
+            canonical_ui_root
+        );
         return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
     }
 
@@ -352,7 +372,13 @@ mod tests {
         ];
 
         for (html, pos, expected) in cases {
-            assert_eq!(is_inside_comment(html, pos), expected, "html: {:?}, pos: {}", html, pos);
+            assert_eq!(
+                is_inside_comment(html, pos),
+                expected,
+                "html: {:?}, pos: {}",
+                html,
+                pos
+            );
         }
     }
 }

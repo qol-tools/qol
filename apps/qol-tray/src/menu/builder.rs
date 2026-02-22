@@ -1,11 +1,11 @@
-use super::router::{EventRouter, EventRoute, EventPattern, EventHandler, HandlerResult};
-use crate::plugins::MenuItem as PluginMenuItem;
-use crate::features::FeatureRegistry;
+use super::router::{EventHandler, EventPattern, EventRoute, EventRouter, HandlerResult};
 use crate::daemon::EventBus;
+use crate::features::FeatureRegistry;
+use crate::plugins::MenuItem as PluginMenuItem;
 use crate::updates;
 use anyhow::Result;
 use std::sync::Arc;
-use tray_icon::menu::{Menu, MenuItem, CheckMenuItem, Submenu, PredefinedMenuItem};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 
 pub fn build_menu(
     feature_registry: Arc<FeatureRegistry>,
@@ -17,7 +17,9 @@ pub fn build_menu(
 
     for (idx, feature) in feature_registry.features().iter().enumerate() {
         let items = feature.menu_items();
-        if items.is_empty() { continue; }
+        if items.is_empty() {
+            continue;
+        }
 
         let feature_id = format!("feature_{}", idx);
         append_feature_items(&menu, &items, &feature_id);
@@ -46,7 +48,11 @@ fn append_feature_items(menu: &Menu, items: &[PluginMenuItem], feature_id: &str)
 
 fn append_menu_item_to_menu(menu: &Menu, item: &PluginMenuItem, feature_id: &str) {
     match item {
-        PluginMenuItem::Submenu { id, label, items: sub_items } => {
+        PluginMenuItem::Submenu {
+            id,
+            label,
+            items: sub_items,
+        } => {
             let full_id = format!("{}::{}", feature_id, id);
             log::debug!("Creating submenu with ID: {}", full_id);
             let submenu = Submenu::with_id(&full_id, label, true);
@@ -59,9 +65,13 @@ fn append_menu_item_to_menu(menu: &Menu, item: &PluginMenuItem, feature_id: &str
             let full_id = format!("{}::{}", feature_id, id);
             let _ = menu.append(&MenuItem::with_id(&full_id, label, true, None));
         }
-        PluginMenuItem::Checkbox { id, label, checked, .. } => {
+        PluginMenuItem::Checkbox {
+            id, label, checked, ..
+        } => {
             let full_id = format!("{}::{}", feature_id, id);
-            let _ = menu.append(&CheckMenuItem::with_id(&full_id, label, true, *checked, None));
+            let _ = menu.append(&CheckMenuItem::with_id(
+                &full_id, label, true, *checked, None,
+            ));
         }
         PluginMenuItem::Separator => {
             let _ = menu.append(&PredefinedMenuItem::separator());
@@ -105,11 +115,16 @@ fn spawn_update_task(events: Arc<EventBus>) {
     std::thread::spawn(move || {
         let rt = match tokio::runtime::Runtime::new() {
             Ok(rt) => rt,
-            Err(e) => { log::error!("Failed to create runtime for update: {}", e); return; }
+            Err(e) => {
+                log::error!("Failed to create runtime for update: {}", e);
+                return;
+            }
         };
         if let Err(e) = rt.block_on(updates::download_and_install(events.clone())) {
             log::error!("Update failed: {}", e);
-            events.send(crate::daemon::DaemonEvent::UpdateFailed { message: e.to_string() });
+            events.send(crate::daemon::DaemonEvent::UpdateFailed {
+                message: e.to_string(),
+            });
         }
     });
 }
@@ -132,9 +147,13 @@ fn add_menu_item(parent: &Submenu, item: &PluginMenuItem, prefix_id: &str) {
             let full_id = format!("{}::{}", prefix_id, id);
             let _ = parent.append(&MenuItem::with_id(&full_id, label, true, None));
         }
-        PluginMenuItem::Checkbox { id, label, checked, .. } => {
+        PluginMenuItem::Checkbox {
+            id, label, checked, ..
+        } => {
             let full_id = format!("{}::{}", prefix_id, id);
-            let _ = parent.append(&CheckMenuItem::with_id(&full_id, label, true, *checked, None));
+            let _ = parent.append(&CheckMenuItem::with_id(
+                &full_id, label, true, *checked, None,
+            ));
         }
         PluginMenuItem::Separator => {
             let _ = parent.append(&PredefinedMenuItem::separator());

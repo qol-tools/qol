@@ -41,15 +41,26 @@ pub fn create_tray(
     #[cfg(target_os = "linux")]
     {
         linux::store_shutdown_rx(shutdown_rx);
-        linux::create_tray(feature_registry, shutdown_tx, icon, update_available, events)?;
+        linux::create_tray(
+            feature_registry,
+            shutdown_tx,
+            icon,
+            update_available,
+            events,
+        )?;
         Ok(PlatformTray::Linux)
     }
 
     #[cfg(target_os = "macos")]
     {
         let _ = shutdown_rx;
-        let tray_icon =
-            macos::create_tray(feature_registry, shutdown_tx, icon, update_available, events)?;
+        let tray_icon = macos::create_tray(
+            feature_registry,
+            shutdown_tx,
+            icon,
+            update_available,
+            events,
+        )?;
         Ok(PlatformTray::MacOS {
             _tray_icon: tray_icon,
         })
@@ -58,8 +69,13 @@ pub fn create_tray(
     #[cfg(target_os = "windows")]
     {
         let _ = shutdown_rx;
-        let tray_icon =
-            windows::create_tray(feature_registry, shutdown_tx, icon, update_available, events)?;
+        let tray_icon = windows::create_tray(
+            feature_registry,
+            shutdown_tx,
+            icon,
+            update_available,
+            events,
+        )?;
         Ok(PlatformTray::Windows {
             _tray_icon: tray_icon,
         })

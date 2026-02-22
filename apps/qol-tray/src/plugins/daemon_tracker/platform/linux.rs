@@ -1,11 +1,6 @@
-use super::Plugin;
 use crate::paths;
+use crate::plugins::Plugin;
 
-fn daemon_pids_path() -> Option<std::path::PathBuf> {
-    paths::config_dir().ok().map(|p| p.join(".daemon-pids"))
-}
-
-#[cfg(target_os = "linux")]
 pub fn kill_orphan_daemons() {
     kill_orphan_plugin_binaries();
     let installs_root = paths::installs_dir().ok();
@@ -35,10 +30,6 @@ pub fn kill_orphan_daemons() {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
-pub fn kill_orphan_daemons() {}
-
-#[cfg(target_os = "linux")]
 fn kill_orphan_plugin_binaries() {
     let installs_root = paths::installs_dir().ok().filter(|root| root.exists());
     let shared_plugins_root = paths::plugins_dir().ok().filter(|root| root.exists());
@@ -76,46 +67,26 @@ fn kill_orphan_plugin_binaries() {
     }
 }
 
-#[cfg(target_os = "linux")]
-fn is_managed_plugin_binary_path(
-    target: &std::path::Path,
-    installs_root: Option<&std::path::Path>,
-    shared_plugins_root: Option<&std::path::Path>,
-) -> bool {
-    let resolved_target = std::fs::canonicalize(target).unwrap_or_else(|_| target.to_path_buf());
+fn resolve_path(p: &std::path::Path) -> std::path::PathBuf {
+    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+}
 
-    let mut potential_roots = Vec::new();
-    if let Some(shared) = shared_plugins_root {
-        potential_roots.push(shared.to_path_buf());
-        if let Ok(entries) = std::fs::read_dir(shared) {
-            for entry in entries.filter_map(|e| e.ok()) {
-                potential_roots.push(entry.path());
-            }
-        }
+fn is_in_plugin_root(target: &std::path::Path, plugins_root: Option<&std::path::Path>) -> bool {
+    let Some(root) = plugins_root else {
+        return false;
+    };
+
+    let resolved_root = resolve_path(root);
+    if target.starts_with(&resolved_root) {
+        return true;
     }
 
-    if let Some(installs) = installs_root {
-        potential_roots.push(installs.to_path_buf());
-        if let Ok(entries) = std::fs::read_dir(installs) {
-            for entry in entries.filter_map(|e| e.ok()) {
-                potential_roots.push(entry.path().join("plugins"));
-            }
-        }
-    }
-
-    for root in potential_roots {
-        let resolved_root = std::fs::canonicalize(&root).unwrap_or(root);
-        if resolved_target.starts_with(&resolved_root) {
-            // Further verification for installs root to ensure it's in a plugins folder
-            if let Some(installs) = installs_root {
-                let resolved_installs =
-                    std::fs::canonicalize(installs).unwrap_or_else(|_| installs.to_path_buf());
-                if resolved_target.starts_with(&resolved_installs) {
-                    return resolved_target
-                        .components()
-                        .any(|c| c.as_os_str() == "plugins");
-                }
-            }
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return false;
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let resolved_plugin = resolve_path(&entry.path());
+        if target.starts_with(&resolved_plugin) {
             return true;
         }
     }
@@ -123,7 +94,55 @@ fn is_managed_plugin_binary_path(
     false
 }
 
-#[cfg(target_os = "linux")]
+fn is_in_install_plugins_root(
+    target: &std::path::Path,
+    installs_root: Option<&std::path::Path>,
+) -> bool {
+    let Some(root) = installs_root else {
+        return false;
+    };
+
+    if !target.components().any(|c| c.as_os_str() == "plugins") {
+        return false;
+    }
+
+    let resolved_root = resolve_path(root);
+    if target.starts_with(&resolved_root) {
+        return true;
+    }
+
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return false;
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let plugins_dir = entry.path().join("plugins");
+        let resolved_plugins = resolve_path(&plugins_dir);
+        if target.starts_with(&resolved_plugins) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn is_managed_plugin_binary_path(
+    target: &std::path::Path,
+    installs_root: Option<&std::path::Path>,
+    shared_plugins_root: Option<&std::path::Path>,
+) -> bool {
+    let target = resolve_path(target);
+
+    if is_in_plugin_root(&target, shared_plugins_root) {
+        return true;
+    }
+
+    if is_in_install_plugins_root(&target, installs_root) {
+        return true;
+    }
+
+    false
+}
+
 fn is_pid_from_managed_plugin(
     pid: i32,
     installs_root: Option<&std::path::Path>,
@@ -138,11 +157,10 @@ fn is_pid_from_managed_plugin(
     is_managed_plugin_binary_path(&target, installs_root, shared_plugins_root)
 }
 
-#[cfg(target_os = "linux")]
 fn daemon_pid_files() -> Vec<std::path::PathBuf> {
     let mut files = Vec::new();
 
-    if let Some(current) = daemon_pids_path() {
+    if let Some(current) = crate::plugins::daemon_tracker::daemon_pids_path() {
         files.push(current);
     }
 
@@ -163,7 +181,6 @@ fn daemon_pid_files() -> Vec<std::path::PathBuf> {
     files
 }
 
-#[cfg(unix)]
 pub fn clean_stale_sockets(plugins: &[Plugin]) {
     for plugin in plugins {
         let Some(daemon) = &plugin.manifest.daemon else {
@@ -205,7 +222,6 @@ pub fn clean_stale_sockets(plugins: &[Plugin]) {
     }
 }
 
-#[cfg(unix)]
 fn is_managed_daemon_socket_path(path: &std::path::Path) -> bool {
     let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
@@ -219,19 +235,4 @@ fn is_managed_daemon_socket_path(path: &std::path::Path) -> bool {
     std::env::var_os("XDG_RUNTIME_DIR")
         .map(std::path::PathBuf::from)
         .is_some_and(|runtime_dir| path.starts_with(runtime_dir))
-}
-
-#[cfg(not(unix))]
-pub fn clean_stale_sockets(_plugins: &[Plugin]) {}
-
-pub fn save_daemon_pids(pids: &[u32]) {
-    let Some(path) = daemon_pids_path() else {
-        return;
-    };
-    let content = pids
-        .iter()
-        .map(|p| p.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let _ = std::fs::write(&path, content);
 }

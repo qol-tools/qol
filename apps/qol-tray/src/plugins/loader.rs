@@ -84,11 +84,7 @@ impl PluginLoader {
                 Err(e) => {
                     if let Some(missing) = e.downcast_ref::<super::MissingBinaryContractError>() {
                         missing_binaries += 1;
-                        log::warn!(
-                            "Skipping plugin {} (missing binary): {}",
-                            id,
-                            missing
-                        );
+                        log::warn!("Skipping plugin {} (missing binary): {}", id, missing);
                     } else {
                         invalid_manifest += 1;
                         log::warn!("Failed to load plugin from {:?}: {:#}", path, e);
@@ -356,7 +352,10 @@ command = "daemon-plugin"
         fs::write(temp_dir.path().join("runtime-plugin"), b"binary").unwrap();
 
         let plugin = PluginLoader::load_plugin(temp_dir.path()).unwrap();
-        assert_eq!(plugin.id, temp_dir.path().file_name().unwrap().to_str().unwrap());
+        assert_eq!(
+            plugin.id,
+            temp_dir.path().file_name().unwrap().to_str().unwrap()
+        );
     }
 
     #[test]
@@ -371,10 +370,17 @@ command = "daemon-plugin"
     #[test]
     fn load_plugin_allows_missing_daemon_binary_when_disabled() {
         let temp_dir = TempDir::new().unwrap();
-        fs::write(temp_dir.path().join("plugin.toml"), DISABLED_DAEMON_MANIFEST).unwrap();
+        fs::write(
+            temp_dir.path().join("plugin.toml"),
+            DISABLED_DAEMON_MANIFEST,
+        )
+        .unwrap();
 
         let plugin = PluginLoader::load_plugin(temp_dir.path()).unwrap();
-        assert_eq!(plugin.id, temp_dir.path().file_name().unwrap().to_str().unwrap());
+        assert_eq!(
+            plugin.id,
+            temp_dir.path().file_name().unwrap().to_str().unwrap()
+        );
     }
 
     #[test]

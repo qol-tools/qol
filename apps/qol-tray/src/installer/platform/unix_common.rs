@@ -108,7 +108,10 @@ fn stop_running_linux(binary_path: &Path) {
     }
 
     for _ in 0..30 {
-        if pids.iter().all(|pid| !crate::process_utils::is_pid_alive(*pid)) {
+        if pids
+            .iter()
+            .all(|pid| !crate::process_utils::is_pid_alive(*pid))
+        {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(100));

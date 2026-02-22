@@ -206,7 +206,10 @@ fn schedule_self_restart_after_idle(plugin_manager: Arc<Mutex<crate::plugins::Pl
         match plugin_manager.lock() {
             Ok(mut manager) => manager.shutdown(),
             Err(error) => {
-                log::error!("Plugin manager lock poisoned during self restart: {}", error);
+                log::error!(
+                    "Plugin manager lock poisoned during self restart: {}",
+                    error
+                );
             }
         }
 

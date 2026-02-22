@@ -36,13 +36,14 @@ pub fn create_tray(
             return;
         }
 
-        let (menu, router) = match crate::menu::builder::build_menu(feature_registry, update_available, events) {
-            Ok(result) => result,
-            Err(e) => {
-                let _ = startup_tx.send(Err(format!("Failed to build menu: {}", e)));
-                return;
-            }
-        };
+        let (menu, router) =
+            match crate::menu::builder::build_menu(feature_registry, update_available, events) {
+                Ok(result) => result,
+                Err(e) => {
+                    let _ = startup_tx.send(Err(format!("Failed to build menu: {}", e)));
+                    return;
+                }
+            };
 
         let tray_icon = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
@@ -109,7 +110,9 @@ fn handle_menu_event(
     }
 
     let should_quit = matches!(result, Ok(crate::menu::router::HandlerResult::Quit));
-    if !should_quit { return false; }
+    if !should_quit {
+        return false;
+    }
 
     log::info!("Quitting application");
     gtk::main_quit();
