@@ -32,6 +32,23 @@ impl Version {
     }
 }
 
+pub fn normalize_semver_tag(tag: &str) -> Option<String> {
+    let trimmed = tag.trim();
+    let without_prefix = if let Some(stripped) = trimmed.strip_prefix('v') {
+        stripped
+    } else if let Some(stripped) = trimmed.strip_prefix('V') {
+        stripped
+    } else {
+        trimmed
+    };
+
+    if without_prefix.is_empty() {
+        return None;
+    }
+
+    semver::Version::parse(without_prefix).ok().map(|v| v.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

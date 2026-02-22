@@ -69,6 +69,7 @@ rust-embed = "8.0"
 
 # Regex for template interpolation
 regex = "1"
+semver = "1"
 
 # Filesystem traversal for dev plugin discovery
 walkdir = "2"

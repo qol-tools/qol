@@ -1,3 +1,4 @@
+use super::release_assets::{PlatformTarget, resolve_asset_pattern};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::io::Write;
@@ -182,7 +183,7 @@ impl PluginInstaller {
                 dep.name
             );
         }
-        let asset_name = resolve_asset_pattern(&dep.pattern);
+        let asset_name = resolve_asset_pattern(&dep.pattern, PlatformTarget::current()?);
         log::info!("Fetching {} from {}", asset_name, dep.repo);
         let binary_path = dependency_binary_output_path(plugin_dir, &dep.name);
 
@@ -587,36 +588,6 @@ fn is_safe_branch_name(s: &str) -> bool {
         && !s.starts_with('-')
         && !s.starts_with('.')
         && !s.contains("..")
-}
-
-fn resolve_asset_pattern(pattern: &str) -> String {
-    let os = get_os_name();
-    let arch = get_arch_name();
-    let ext = if cfg!(windows) { ".exe" } else { "" };
-
-    pattern.replace("{os}", os).replace("{arch}", arch) + ext
-}
-
-fn get_os_name() -> &'static str {
-    if cfg!(target_os = "linux") {
-        "linux"
-    } else if cfg!(target_os = "macos") {
-        "macos"
-    } else if cfg!(target_os = "windows") {
-        "windows"
-    } else {
-        "unknown"
-    }
-}
-
-fn get_arch_name() -> &'static str {
-    if cfg!(target_arch = "x86_64") {
-        "x86_64"
-    } else if cfg!(target_arch = "aarch64") {
-        "aarch64"
-    } else {
-        "unknown"
-    }
 }
 
 fn can_build_from_source_fallback(plugin_id: &str, repo: &str, plugin_dir: &Path) -> bool {

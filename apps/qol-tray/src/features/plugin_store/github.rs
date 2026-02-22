@@ -1,11 +1,14 @@
-use crate::paths;
+use super::release_assets::{PlatformTarget, resolve_asset_pattern};
+use crate::{paths, version::normalize_semver_tag};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const PLUGIN_PREFIX: &str = "plugin-";
 const CACHE_TTL_SECS: u64 = 3600;
+const CACHE_FORMAT_VERSION: u32 = 2;
 
 fn token_path() -> Option<PathBuf> {
     paths::github_token_path().ok()
@@ -17,6 +20,8 @@ fn cache_path() -> Option<PathBuf> {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PluginCache {
+    #[serde(default)]
+    pub format_version: u32,
     pub timestamp: u64,
     pub plugins: Vec<CachedPlugin>,
 }
@@ -79,6 +84,7 @@ pub fn write_cache(plugins: &[PluginMetadata]) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let cache = PluginCache {
+        format_version: CACHE_FORMAT_VERSION,
         timestamp: current_timestamp(),
         plugins: plugins.iter().cloned().map(CachedPlugin::from).collect(),
     };
@@ -111,6 +117,9 @@ pub fn update_cached_version(plugin_id: &str, version: &str) {
 
 fn get_valid_cache() -> Option<Vec<PluginMetadata>> {
     let cache = read_cache()?;
+    if cache.format_version != CACHE_FORMAT_VERSION {
+        return None;
+    }
     let age = current_timestamp() - cache.timestamp;
 
     if age >= CACHE_TTL_SECS {
@@ -131,6 +140,23 @@ fn get_valid_cache() -> Option<Vec<PluginMetadata>> {
 struct GitHubRepo {
     name: String,
     html_url: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    assets: Vec<GitHubAsset>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GitHubAsset {
+    name: String,
+}
+
+#[derive(Debug, Clone)]
+struct RequiredReleaseAsset {
+    repo: String,
+    name: String,
 }
 
 pub struct GitHubClient {
@@ -278,7 +304,16 @@ impl GitHubClient {
 
         for repo in plugin_repos {
             match self.fetch_plugin_manifest(&repo.name).await {
-                Ok(manifest) => plugins.push(build_plugin_metadata(repo, manifest)),
+                Ok(manifest) => match self.fetch_release_version(&repo.name, &manifest).await {
+                    Ok(version) => plugins.push(build_plugin_metadata(repo, manifest, version)),
+                    Err(error) => {
+                        log::warn!(
+                            "Skipping {}: release/binary requirements not met: {}",
+                            repo.name,
+                            error
+                        );
+                    }
+                },
                 Err(error) => {
                     log::warn!("Skipping {}: {}", repo.name, error);
                 }
@@ -325,6 +360,70 @@ impl GitHubClient {
         anyhow::bail!("plugin.toml not found for {} on main or master branch", repo_name)
     }
 
+    async fn fetch_release_version(
+        &self,
+        repo_name: &str,
+        manifest: &crate::plugins::PluginManifest,
+    ) -> Result<String> {
+        let target = PlatformTarget::current()?;
+        let plugin_repo = format!("{}/{}", self.org, repo_name);
+        let plugin_release = self.fetch_latest_release(&plugin_repo).await?;
+        self
+            .verify_platform_binary_support(manifest, target, &plugin_repo, &plugin_release)
+            .await?;
+        normalize_semver_tag(&plugin_release.tag_name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "latest release tag '{}' is not valid semver",
+                plugin_release.tag_name
+            )
+        })
+    }
+
+    async fn verify_platform_binary_support(
+        &self,
+        manifest: &crate::plugins::PluginManifest,
+        target: PlatformTarget,
+        plugin_repo: &str,
+        plugin_release: &GitHubRelease,
+    ) -> Result<()> {
+        let required_assets = required_release_assets(manifest, target)?;
+        let mut release_cache = HashMap::from([(plugin_repo.to_string(), plugin_release.clone())]);
+
+        for required_asset in required_assets {
+            if !release_cache.contains_key(&required_asset.repo) {
+                let release = self.fetch_latest_release(&required_asset.repo).await?;
+                release_cache.insert(required_asset.repo.clone(), release);
+            }
+
+            let has_asset = release_cache
+                .get(&required_asset.repo)
+                .map(|release| {
+                    release
+                        .assets
+                        .iter()
+                        .any(|asset| asset.name == required_asset.name)
+                })
+                .unwrap_or(false);
+
+            if !has_asset {
+                anyhow::bail!(
+                    "missing asset '{}' in latest release of {}",
+                    required_asset.name,
+                    required_asset.repo
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn fetch_latest_release(&self, repo: &str) -> Result<GitHubRelease> {
+        let url = format!("https://api.github.com/repos/{}/releases/latest", repo);
+        let response = send_checked(self.build_request(&url)).await?;
+        let release: GitHubRelease = response.json().await?;
+        Ok(release)
+    }
+
     pub async fn list_plugins_cached(&self, force_refresh: bool) -> Result<Vec<PluginMetadata>> {
         if !force_refresh {
             if let Some(plugins) = get_valid_cache() {
@@ -365,15 +464,41 @@ fn filter_plugin_repos(repos: &[GitHubRepo]) -> Vec<&GitHubRepo> {
 fn build_plugin_metadata(
     repo: &GitHubRepo,
     manifest: crate::plugins::PluginManifest,
+    version: String,
 ) -> PluginMetadata {
     PluginMetadata {
         id: repo.name.clone(),
         name: manifest.plugin.name,
         description: manifest.plugin.description,
-        version: manifest.plugin.version,
+        version,
         repo_url: repo.html_url.clone(),
         platforms: manifest.plugin.platforms,
     }
+}
+
+fn required_release_assets(
+    manifest: &crate::plugins::PluginManifest,
+    target: PlatformTarget,
+) -> Result<Vec<RequiredReleaseAsset>> {
+    let dependencies = manifest
+        .dependencies
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("manifest is missing dependencies.binaries"))?;
+
+    if dependencies.binaries.is_empty() {
+        anyhow::bail!("manifest has empty dependencies.binaries");
+    }
+
+    Ok(
+        dependencies
+            .binaries
+            .iter()
+            .map(|binary| RequiredReleaseAsset {
+                repo: binary.repo.clone(),
+                name: resolve_asset_pattern(&binary.pattern, target),
+            })
+            .collect(),
+    )
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -471,10 +596,10 @@ mod tests {
     }
 
     #[test]
-    fn build_plugin_metadata_uses_manifest_version() {
+    fn build_plugin_metadata_uses_provided_version() {
         let repo = make_repo("plugin-test");
         let manifest = make_manifest("Test", "1.0.0");
-        let metadata = build_plugin_metadata(&repo, manifest);
+        let metadata = build_plugin_metadata(&repo, manifest, "1.0.0".to_string());
         assert_eq!(metadata.version, "1.0.0");
     }
 
@@ -482,12 +607,12 @@ mod tests {
     fn build_plugin_metadata_extracts_all_fields() {
         let repo = make_repo("plugin-example");
         let manifest = make_manifest("Example Plugin", "2.5.0");
-        let metadata = build_plugin_metadata(&repo, manifest);
+        let metadata = build_plugin_metadata(&repo, manifest, "3.0.0".to_string());
 
         assert_eq!(metadata.id, "plugin-example");
         assert_eq!(metadata.name, "Example Plugin");
         assert_eq!(metadata.description, "Test plugin");
-        assert_eq!(metadata.version, "2.5.0");
+        assert_eq!(metadata.version, "3.0.0");
         assert_eq!(metadata.repo_url, "https://github.com/test/plugin-example");
     }
 
