@@ -38,6 +38,8 @@ pub fn stop_running(binary_path: &Path, process_name: &str) -> Result<()> {
             return Ok(());
         }
     }
+    #[cfg(not(target_os = "linux"))]
+    let _ = binary_path;
 
     let _ = Command::new("pkill")
         .arg("-TERM")
