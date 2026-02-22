@@ -43,7 +43,7 @@ export function render(containerEl) {
                     <div class="header-actions">
                         <span id="cache-age" class="cache-age"></span>
                         <button id="manage-token-btn" class="btn btn-ghost btn-sm" title="Manage GitHub token">Token</button>
-                        <button id="refresh-btn" class="refresh-btn" title="Refresh (r)">↻</button>
+                        <button id="refresh-btn" class="refresh-btn" title="Refresh (r)" aria-label="Refresh"></button>
                     </div>
                 </div>
             </header>

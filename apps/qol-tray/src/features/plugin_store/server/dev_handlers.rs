@@ -12,7 +12,10 @@ use crate::dev;
 use crate::paths::is_safe_path_component;
 
 use super::dev_runtime::*;
-use super::types::{AppState, BuildStateResponse, DiscoveryStateResponse, MockTargetInfo};
+use super::types::{
+    AppState, BuildStateResponse, DiscoveryStateResponse, MockTargetInfo,
+    UpsertPluginLogControlRequest,
+};
 
 pub(super) async fn reload_plugins(State(state): State<AppState>) -> impl IntoResponse {
     use std::sync::atomic::Ordering;
@@ -236,6 +239,52 @@ pub(super) async fn delete_link(
     }
 }
 
+pub(super) async fn upsert_plugin_log_control(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+    Json(req): Json<UpsertPluginLogControlRequest>,
+) -> impl IntoResponse {
+    if !is_safe_path_component(&id) {
+        return (StatusCode::BAD_REQUEST, "Invalid plugin ID".to_string()).into_response();
+    }
+
+    let config_dir = match crate::paths::shared_config_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            log::error!("Failed to determine config directory: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Config dir unavailable".to_string(),
+            )
+                .into_response();
+        }
+    };
+
+    let control = crate::plugins::log_control::PluginLogControl {
+        muted: req.muted,
+        suppress_patterns: req.suppress_patterns,
+    };
+
+    match crate::plugins::log_control::upsert_control(&config_dir, &id, control) {
+        Ok(()) => {
+            if let Ok(mut manager) = state.plugin_manager.lock() {
+                if let Err(error) = manager.restart_running_plugin_daemon(&id) {
+                    log::warn!(
+                        "Updated log control for {}, but failed to restart running daemon: {}",
+                        id,
+                        error
+                    );
+                }
+            }
+            (StatusCode::OK, "Updated".to_string()).into_response()
+        }
+        Err(e) => {
+            log::error!("Failed to upsert log control for {}: {}", id, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, e).into_response()
+        }
+    }
+}
+
 pub(super) async fn get_discovery_state(
     State(state): State<AppState>,
 ) -> Json<DiscoveryStateResponse> {
@@ -262,6 +311,14 @@ pub(super) async fn get_discovery_state(
 
 pub(super) async fn get_build_state() -> Json<BuildStateResponse> {
     Json(read_build_state_snapshot())
+}
+
+pub(super) async fn get_log_controls() -> Json<std::collections::HashMap<String, crate::plugins::log_control::PluginLogControl>> {
+    let controls = crate::paths::shared_config_dir()
+        .ok()
+        .map(|dir| crate::plugins::log_control::load_all_controls(&dir))
+        .unwrap_or_default();
+    Json(controls)
 }
 
 pub(super) async fn trigger_discovery(State(state): State<AppState>) -> impl IntoResponse {

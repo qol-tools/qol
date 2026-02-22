@@ -83,6 +83,11 @@ pub async fn start_ui_server(
             "/dev/links/{id}",
             axum::routing::delete(dev_handlers::delete_link),
         )
+        .route(
+            "/dev/log-controls/{id}",
+            axum::routing::put(dev_handlers::upsert_plugin_log_control),
+        )
+        .route("/dev/log-controls", get(dev_handlers::get_log_controls))
         .route("/dev/discover", post(dev_handlers::trigger_discovery))
         .route(
             "/dev/discovery-state",

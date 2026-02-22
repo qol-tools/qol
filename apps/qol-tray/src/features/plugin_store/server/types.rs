@@ -129,3 +129,12 @@ pub(super) struct MockTargetInfo {
     pub(super) running: bool,
     pub(super) supports_stop: bool,
 }
+
+#[cfg(feature = "dev")]
+#[derive(Debug, Clone, Deserialize)]
+pub(super) struct UpsertPluginLogControlRequest {
+    #[serde(default)]
+    pub(super) muted: bool,
+    #[serde(default)]
+    pub(super) suppress_patterns: Vec<String>,
+}

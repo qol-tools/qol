@@ -12,6 +12,8 @@ pub struct LinkedPlugin {
     pub rebuild_reason: String,
     pub fingerprint: Option<String>,
     pub last_built_fingerprint: Option<String>,
+    pub logs_muted: bool,
+    pub suppressed_log_patterns: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -41,6 +43,7 @@ fn save_dev_links(config_dir: &Path, links: &HashMap<String, PathBuf>) -> Result
 pub fn list_linked_plugins(config_dir: &Path) -> Result<Vec<LinkedPlugin>, String> {
     let links = load_dev_links(config_dir);
     let known_fingerprints = super::build::load_build_fingerprints(config_dir);
+    let log_controls = crate::plugins::log_control::load_all_controls(config_dir);
     let plans = super::build::plan_linked_plugin_builds(&links, &known_fingerprints);
     let mut plans_by_id = HashMap::new();
     for plan in plans {
@@ -52,6 +55,7 @@ pub fn list_linked_plugins(config_dir: &Path) -> Result<Vec<LinkedPlugin>, Strin
         .map(|(id, path)| {
             let name = read_plugin_name(&path.join("plugin.toml")).unwrap_or_else(|| id.clone());
             let plan = plans_by_id.get(id);
+            let log_control = log_controls.get(id).cloned().unwrap_or_default();
             LinkedPlugin {
                 id: id.clone(),
                 name,
@@ -63,6 +67,8 @@ pub fn list_linked_plugins(config_dir: &Path) -> Result<Vec<LinkedPlugin>, Strin
                     .unwrap_or_else(|| "Unknown".to_string()),
                 fingerprint: plan.and_then(|p| p.current_fingerprint.clone()),
                 last_built_fingerprint: plan.and_then(|p| p.last_built_fingerprint.clone()),
+                logs_muted: log_control.muted,
+                suppressed_log_patterns: log_control.suppress_patterns,
             }
         })
         .collect();

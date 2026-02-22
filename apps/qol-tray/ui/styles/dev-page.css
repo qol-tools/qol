@@ -35,7 +35,7 @@
 .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
 .section-header h2 { margin-bottom: 0; }
 .section-actions { display: flex; align-items: center; gap: 0.75rem; }
-.section-actions .refresh-btn { width: 2rem; height: 2rem; font-size: 1rem; border-width: 1px; }
+.section-actions .refresh-btn { width: 2rem; height: 2rem; border-width: 1px; }
 .section-desc { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem; }
 
 .plugin-list-container {
@@ -56,7 +56,7 @@
 .plugin-row {
     display: flex;
     align-items: center;
-    gap: 1rem;
+    gap: 0;
     padding: 0;
     min-height: 64px;
     border-bottom: 1px solid var(--border-subtle);
@@ -68,7 +68,6 @@
 }
 
 .plugin-row:last-child { border-bottom: none; }
-.plugin-row:hover { background: var(--bg-surface); }
 .plugin-row.selected { background: var(--bg-selected); }
 
 .plugin-row.status-linked { border-left-color: var(--success); }
@@ -79,7 +78,7 @@
     flex: 1 1 auto;
     min-width: 0;
     display: grid;
-    grid-template-columns: minmax(0, 85%) minmax(0, 15%);
+    grid-template-columns: minmax(0, 1fr) 104px 96px;
     gap: 0;
     align-items: stretch;
 }
@@ -89,9 +88,11 @@
     min-width: 0;
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    column-gap: 0.4rem;
+    column-gap: 0.5rem;
     align-items: start;
-    padding: 0.875rem 1rem;
+    padding: 0.9rem 1rem;
+    user-select: text;
+    cursor: text;
 }
 
 .plugin-row .plugin-copy {
@@ -107,18 +108,61 @@
     min-height: 1.35rem;
 }
 
-.plugin-row .plugin-action-zone {
+.plugin-row .plugin-filter-zone {
     width: 100%;
     align-self: stretch;
     display: flex;
-    justify-content: flex-end;
-    align-items: flex-end;
+    justify-content: flex-start;
+    align-items: flex-start;
+    padding: 0.62rem 0.52rem;
+    border-left: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.018);
+}
+
+.plugin-row .plugin-action-zone {
+    -webkit-appearance: none;
+    appearance: none;
+    border: none;
+    font: inherit;
+    width: 100%;
+    align-self: stretch;
+    display: flex;
+    justify-content: center;
+    align-items: center;
     cursor: pointer;
     padding: 0;
     border-left: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.028);
+    background: rgba(255, 255, 255, 0.032);
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03), inset 0 -1px 0 rgba(0, 0, 0, 0.18);
     transition: background var(--transition), box-shadow var(--transition), border-color var(--transition);
+}
+
+.plugin-row .plugin-action-rebuild-icon {
+    width: 1.52rem;
+    height: 1.52rem;
+    object-fit: cover;
+    border-radius: 999px;
+    clip-path: circle(50% at 50% 50%);
+    opacity: 0.24;
+    filter: grayscale(1) brightness(0.9);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1);
+    pointer-events: none;
+    transition: opacity var(--transition), transform var(--transition), filter var(--transition);
+}
+
+.plugin-row .plugin-action-zone.has-rebuild .plugin-action-rebuild-icon {
+    opacity: 0.9;
+    filter: none;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.16), 0 0 10px rgba(74, 158, 255, 0.18);
+}
+
+.plugin-row:hover .plugin-action-zone.has-rebuild:not(.is-disabled) .plugin-action-rebuild-icon {
+    opacity: 0.92;
+    transform: scale(1.04);
+}
+
+.plugin-row:hover .plugin-action-zone.rebuild-idle:not(.is-disabled) .plugin-action-rebuild-icon {
+    opacity: 0.3;
 }
 
 .plugin-row:hover .plugin-action-zone:not(.is-disabled) {
@@ -171,6 +215,16 @@
     font-size: 0.72rem;
     line-height: 1.2;
     min-height: 1.2em;
+}
+
+.plugin-row .plugin-log-controls {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 0.3rem;
+    width: 100%;
+    max-width: none;
 }
 
 .plugin-row .plugin-build-meta.muted {
@@ -269,7 +323,7 @@
     align-items: center;
     justify-content: flex-end;
     flex-wrap: wrap;
-    column-gap: 0.18rem;
+    column-gap: 0.22rem;
     row-gap: 0.16rem;
     width: max-content;
     max-width: 100%;
@@ -284,12 +338,13 @@
 
 @media (max-width: 860px) {
     .plugin-row .plugin-main {
-        grid-template-columns: 1fr;
+        grid-template-columns: minmax(0, 1fr) auto auto;
         gap: 0.45rem;
     }
 
+    .plugin-row .plugin-filter-zone,
     .plugin-row .plugin-action-zone {
-        justify-content: flex-end;
+        justify-content: center;
         padding: 0;
         background: none;
         border-left: none;
@@ -306,36 +361,37 @@
         justify-content: flex-start;
         padding: 0.16rem 0 0;
     }
+    .plugin-row .plugin-log-controls {
+        max-width: none;
+    }
 }
 
-.plugin-row .plugin-status-badges .badge {
-    justify-content: flex-start;
+.plugin-row .plugin-status-badges .badge,
+.plugin-row .plugin-log-controls .badge {
+    justify-content: center;
     white-space: nowrap;
     border-radius: 2px;
-    padding: 0.15rem 0.42rem;
+    padding: 0.14rem 0.44rem;
     letter-spacing: 0.03em;
     box-sizing: border-box;
 }
 
-/* Badges */
-.badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 0.15rem 0.5rem;
-    border-radius: 12px;
-    font-size: 0.65rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+.plugin-row .badge-button {
+    -webkit-appearance: none;
+    appearance: none;
+    font: inherit;
+    line-height: inherit;
+    font-size: inherit;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+    cursor: pointer;
+    user-select: none;
 }
 
-.badge-linked { background: rgba(74, 222, 128, 0.1); color: var(--success); border: 1px solid rgba(74, 222, 128, 0.2); }
-.badge-installed { background: rgba(74, 158, 255, 0.1); color: var(--accent); border: 1px solid rgba(74, 158, 255, 0.2); }
-.badge-local { background: rgba(245, 158, 11, 0.1); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.2); }
-.badge-installed-dim { background: rgba(255, 255, 255, 0.05); color: var(--text-muted); border: 1px solid rgba(255, 255, 255, 0.1); }
-.badge-build-ready { background: rgba(74, 158, 255, 0.12); color: var(--accent); border: 1px solid rgba(74, 158, 255, 0.25); }
-.badge-build-pending { background: rgba(255, 193, 7, 0.14); color: var(--warning); border: 1px solid rgba(255, 193, 7, 0.25); }
-.badge-build-skip { background: rgba(255, 255, 255, 0.07); color: var(--text-faint); border: 1px solid rgba(255, 255, 255, 0.12); }
+.plugin-row .badge-button:hover {
+    filter: brightness(1.12);
+}
 
 /* Link input row */
 .link-input-row {

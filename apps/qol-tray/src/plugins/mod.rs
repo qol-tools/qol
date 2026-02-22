@@ -2,6 +2,7 @@ pub mod action_executor;
 pub mod action_transport;
 pub mod config;
 pub mod loader;
+pub mod log_control;
 pub mod manager;
 pub mod manifest;
 pub mod resolver;
@@ -12,6 +13,7 @@ pub use manager::PluginManager;
 pub use manifest::{ActionType, MenuItem, PluginManifest};
 
 use anyhow::Result;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
@@ -53,10 +55,18 @@ impl Plugin {
 
         log::info!("Starting daemon for plugin: {}", self.id);
         let mut cmd = Command::new(&daemon_path);
-        cmd.current_dir(&self.path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit());
+        cmd.current_dir(&self.path).stdin(Stdio::null());
+
+        let log_control = crate::plugins::log_control::load_control_from_shared_config(&self.id);
+        let mut relay_patterns = Vec::new();
+        if log_control.muted {
+            cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        } else if log_control.suppress_patterns.is_empty() {
+            cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+        } else {
+            relay_patterns = log_control.suppress_patterns;
+            cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        }
 
         if let Some(socket) = daemon_config.socket.as_deref() {
             cmd.env("QOL_TRAY_DAEMON_SOCKET", socket);
@@ -69,6 +79,9 @@ impl Plugin {
         cmd.env("RUST_LOG", "warn");
 
         let mut child = cmd.spawn()?;
+        if !relay_patterns.is_empty() {
+            attach_filtered_log_relay(&self.id, &mut child, relay_patterns);
+        }
 
         if let Some(socket) = daemon_config.socket.as_deref() {
             if !wait_for_socket(socket, &mut child) {
@@ -132,6 +145,80 @@ impl Plugin {
             }
         }
     }
+}
+
+fn attach_filtered_log_relay(plugin_id: &str, child: &mut Child, suppress_patterns: Vec<String>) {
+    if let Some(stdout) = child.stdout.take() {
+        spawn_log_relay(
+            plugin_id.to_string(),
+            "stdout",
+            stdout,
+            suppress_patterns.clone(),
+            false,
+        );
+    }
+    if let Some(stderr) = child.stderr.take() {
+        spawn_log_relay(
+            plugin_id.to_string(),
+            "stderr",
+            stderr,
+            suppress_patterns,
+            true,
+        );
+    }
+}
+
+fn spawn_log_relay<R>(
+    plugin_id: String,
+    stream_name: &'static str,
+    reader: R,
+    suppress_patterns: Vec<String>,
+    to_stderr: bool,
+) where
+    R: std::io::Read + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(reader);
+        let mut line = String::new();
+
+        loop {
+            line.clear();
+            let read = match reader.read_line(&mut line) {
+                Ok(read) => read,
+                Err(error) => {
+                    log::debug!(
+                        "Plugin daemon log relay failed for {} ({}): {}",
+                        plugin_id,
+                        stream_name,
+                        error
+                    );
+                    break;
+                }
+            };
+            if read == 0 {
+                break;
+            }
+
+            if should_suppress_log_line(line.trim_end(), &suppress_patterns) {
+                continue;
+            }
+
+            if to_stderr {
+                eprint!("{}", line);
+            } else {
+                print!("{}", line);
+            }
+        }
+    });
+}
+
+fn should_suppress_log_line(line: &str, suppress_patterns: &[String]) -> bool {
+    if line.is_empty() {
+        return false;
+    }
+    suppress_patterns
+        .iter()
+        .any(|pattern| !pattern.is_empty() && line.contains(pattern))
 }
 
 impl Drop for Plugin {
