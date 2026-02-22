@@ -7,289 +7,29 @@ use axum::{
     Json,
 };
 
-use crate::daemon::DaemonEvent;
 use crate::dev;
-use crate::dev::state::{BuildResultInfo, DiscoveryStatus};
+use crate::dev::state::DiscoveryStatus;
 use crate::paths::is_safe_path_component;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
-use super::dev_runtime::*;
+use super::dev_services;
 use super::types::{
     AppState, BuildStateResponse, DiscoveryStateResponse, MockTargetInfo,
     UpsertPluginLogControlRequest,
 };
 
-static SELF_RECOMPILE_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
-static SELF_RESTART_PENDING: AtomicBool = AtomicBool::new(false);
-const RESTART_IDLE_POLL_MS: u64 = 250;
-
 pub(super) async fn reload_plugins(State(state): State<AppState>) -> impl IntoResponse {
-    if BUILD_IN_PROGRESS.swap(true, Ordering::SeqCst) {
+    if let Err(message) = dev_services::queue_reload(&state) {
         log::warn!("Developer reload requested, but a build is already in progress");
-        return (StatusCode::CONFLICT, "Build already in progress").into_response();
+        return (StatusCode::CONFLICT, message).into_response();
     }
-
-    log::info!("Developer reload requested");
-
-    mark_build_state_started();
-    state.daemon.events.send(DaemonEvent::BuildStarted);
-
-    let plugin_manager = state.plugin_manager.clone();
-    let events = state.daemon.events.clone();
-    let config_dir = crate::paths::shared_config_dir().ok();
-
-    // Process the blocking builds asynchronously so we don't freeze the axum worker pool
-    tokio::task::spawn_blocking(move || {
-        struct BuildGuard;
-        impl Drop for BuildGuard {
-            fn drop(&mut self) {
-                BUILD_IN_PROGRESS.store(false, Ordering::SeqCst);
-                mark_build_state_finished();
-            }
-        }
-        let _guard = BuildGuard;
-
-        let dev_links = config_dir
-            .as_deref()
-            .map(dev::load_dev_links)
-            .unwrap_or_default();
-        let known_fingerprints = config_dir
-            .as_deref()
-            .map(dev::load_build_fingerprints)
-            .unwrap_or_default();
-
-        let build_run =
-            dev::build_linked_plugins_with_progress(&dev_links, &known_fingerprints, |progress| {
-                mark_build_state_progress(
-                    &progress.plugin_id,
-                    &progress.status,
-                    progress.percent,
-                    &progress.phase,
-                );
-                events.send(DaemonEvent::BuildPluginProgress {
-                    plugin_id: progress.plugin_id,
-                    status: progress.status,
-                    percent: progress.percent,
-                    phase: progress.phase,
-                });
-            });
-
-        if let Some(config_dir) = config_dir.as_deref() {
-            if let Err(e) = dev::save_build_fingerprints(config_dir, &build_run.fingerprints) {
-                log::error!("Failed to persist build fingerprints: {}", e);
-            }
-        }
-
-        let results: Vec<BuildResultInfo> = build_run
-            .results
-            .into_iter()
-            .map(|r| BuildResultInfo {
-                plugin_id: r.plugin_id,
-                success: r.success,
-                output: r.output,
-                skipped: r.skipped,
-            })
-            .collect();
-
-        let all_succeeded = results.is_empty() || results.iter().all(|r| r.success);
-        mark_build_state_finished();
-        events.send(DaemonEvent::BuildComplete { results });
-
-        if !all_succeeded {
-            return;
-        }
-
-        let mut manager = match plugin_manager.lock() {
-            Ok(m) => m,
-            Err(e) => {
-                log::error!("Plugin manager mutex poisoned: {}", e);
-                return;
-            }
-        };
-        if let Err(e) = manager.reload_plugins() {
-            log::error!("Failed to reload plugins: {}", e);
-        } else {
-            log::info!("Plugins reloaded successfully");
-            crate::hotkeys::trigger_reload();
-            events.send_plugins_changed();
-        }
-    });
-
     (StatusCode::OK, "Reload queued").into_response()
 }
 
 pub(super) async fn recompile_self(State(state): State<AppState>) -> impl IntoResponse {
-    if SELF_RECOMPILE_IN_PROGRESS.swap(true, Ordering::SeqCst) {
-        return (StatusCode::CONFLICT, "Self recompile already in progress").into_response();
+    if let Err(message) = dev_services::queue_self_recompile(&state) {
+        return (StatusCode::CONFLICT, message).into_response();
     }
-
-    log::info!("Developer self recompile requested");
-
-    let events = state.daemon.events.clone();
-    let plugin_manager = state.plugin_manager.clone();
-    tokio::spawn(async move {
-        struct RecompileGuard;
-        impl Drop for RecompileGuard {
-            fn drop(&mut self) {
-                SELF_RECOMPILE_IN_PROGRESS.store(false, Ordering::SeqCst);
-            }
-        }
-        let _guard = RecompileGuard;
-
-        let progress_events = events.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            dev::build_qol_tray_self_with_progress(|percent, phase| {
-                progress_events.send(DaemonEvent::SelfRecompileProgress { percent, phase });
-            })
-        })
-        .await;
-
-        match result {
-            Ok(build) if build.success => {
-                events.send(DaemonEvent::SelfRecompileComplete);
-                schedule_self_restart_after_idle(plugin_manager);
-            }
-            Ok(build) => {
-                let message = build_failure_message(&build.output);
-                log::error!("Self recompile failed: {}", message);
-                events.send(DaemonEvent::SelfRecompileFailed { message });
-            }
-            Err(e) => {
-                let message = format!("Self recompile worker failed: {}", e);
-                log::error!("{}", message);
-                events.send(DaemonEvent::SelfRecompileFailed { message });
-            }
-        }
-    });
-
     StatusCode::ACCEPTED.into_response()
-}
-
-fn schedule_self_restart_after_idle(plugin_manager: Arc<Mutex<crate::plugins::PluginManager>>) {
-    if SELF_RESTART_PENDING.swap(true, Ordering::SeqCst) {
-        return;
-    }
-
-    tokio::spawn(async move {
-        loop {
-            let idle = !BUILD_IN_PROGRESS.load(Ordering::SeqCst)
-                && !any_mock_target_running()
-                && !SELF_RECOMPILE_IN_PROGRESS.load(Ordering::SeqCst);
-            if idle {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(RESTART_IDLE_POLL_MS)).await;
-        }
-
-        let restart_binary = match resolve_restart_binary() {
-            Some(path) => path,
-            None => {
-                log::error!("Self recompile completed but restart binary could not be resolved");
-                SELF_RESTART_PENDING.store(false, Ordering::SeqCst);
-                return;
-            }
-        };
-
-        if let Err(error) = spawn_delayed_restart(&restart_binary) {
-            log::error!(
-                "Self recompile completed but restart spawn failed for {}: {}",
-                restart_binary.display(),
-                error
-            );
-            SELF_RESTART_PENDING.store(false, Ordering::SeqCst);
-            return;
-        }
-
-        match plugin_manager.lock() {
-            Ok(mut manager) => manager.shutdown(),
-            Err(error) => {
-                log::error!(
-                    "Plugin manager lock poisoned during self restart: {}",
-                    error
-                );
-            }
-        }
-
-        std::process::exit(0);
-    });
-}
-
-fn resolve_restart_binary() -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-
-    if let Ok(current) = std::env::current_exe() {
-        candidates.push(current.clone());
-        if let Some(stripped) = strip_deleted_suffix(&current) {
-            candidates.push(stripped);
-        }
-    }
-
-    let debug_binary = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("target")
-        .join("debug")
-        .join(if cfg!(windows) {
-            "qol-tray.exe"
-        } else {
-            "qol-tray"
-        });
-    candidates.push(debug_binary);
-
-    for candidate in candidates {
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-
-    None
-}
-
-fn strip_deleted_suffix(path: &std::path::Path) -> Option<PathBuf> {
-    let raw = path.to_string_lossy();
-    let stripped = raw.strip_suffix(" (deleted)")?;
-    if stripped.is_empty() {
-        return None;
-    }
-    Some(PathBuf::from(stripped))
-}
-
-fn spawn_delayed_restart(binary: &std::path::Path) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        std::process::Command::new("sh")
-            .arg("-c")
-            .arg("sleep 0.35; exec \"$1\"")
-            .arg("qol-tray-restart")
-            .arg(binary)
-            .spawn()
-            .map_err(|error| error.to_string())?;
-        return Ok(());
-    }
-
-    #[cfg(windows)]
-    {
-        std::process::Command::new(binary)
-            .spawn()
-            .map_err(|error| error.to_string())?;
-        return Ok(());
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = binary;
-        Err("unsupported platform for delayed restart".to_string())
-    }
-}
-
-fn build_failure_message(output: &str) -> String {
-    output
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| "Self recompile failed".to_string())
 }
 
 pub(super) async fn list_linked_plugins(
@@ -455,8 +195,8 @@ pub(super) async fn get_discovery_state(
     })
 }
 
-pub(super) async fn get_build_state() -> Json<BuildStateResponse> {
-    Json(read_build_state_snapshot())
+pub(super) async fn get_build_state(State(state): State<AppState>) -> Json<BuildStateResponse> {
+    Json(state.runtime.build_state_snapshot())
 }
 
 pub(super) async fn get_log_controls(
@@ -482,64 +222,25 @@ pub(super) async fn mock_check_update() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "available": true, "latest": "99.0.0" }))
 }
 
-pub(super) async fn list_mock_targets() -> Json<Vec<MockTargetInfo>> {
-    Json(mock_target_infos())
+pub(super) async fn list_mock_targets(State(state): State<AppState>) -> Json<Vec<MockTargetInfo>> {
+    Json(state.runtime.list_mock_targets())
 }
 
 pub(super) async fn start_mock_targets(State(state): State<AppState>) -> impl IntoResponse {
-    if any_mock_target_running() {
-        return (StatusCode::CONFLICT, "Mock target already in progress").into_response();
-    }
-
-    let events = state.daemon.events.clone();
-    let config_dir = crate::paths::shared_config_dir().ok();
-    let fallback_plugin_ids = state
-        .dev_state
-        .discovery
-        .read()
-        .map(|discovery| {
-            discovery
-                .plugins
-                .iter()
-                .map(|plugin| plugin.id.clone())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let mut started = Vec::new();
-
-    if start_mock_self_update(events.clone()).is_ok() {
-        started.push(super::types::MOCK_TARGET_SELF_UPDATE);
-    }
-    if start_mock_self_recompile(events.clone()).is_ok() {
-        started.push(super::types::MOCK_TARGET_SELF_RECOMPILE);
-    }
-    if start_mock_plugin_build(events, config_dir, fallback_plugin_ids).is_ok() {
-        started.push(super::types::MOCK_TARGET_PLUGIN_BUILD);
-    }
-
-    if started.is_empty() {
-        return (StatusCode::CONFLICT, "No mock targets were started").into_response();
-    }
-
-    (
+    let started = match dev_services::start_mock_targets(&state) {
+        Ok(started) => started,
+        Err(message) => return (StatusCode::CONFLICT, message).into_response(),
+    };
+    mock_targets_response(
         StatusCode::ACCEPTED,
-        Json(serde_json::json!({ "started": started, "targets": mock_target_infos() })),
+        "started",
+        started,
+        state.runtime.list_mock_targets(),
     )
-        .into_response()
 }
 
-pub(super) async fn stop_mock_targets() -> impl IntoResponse {
-    let mut stopped = Vec::new();
-
-    if stop_mock_self_update_internal() {
-        stopped.push(super::types::MOCK_TARGET_SELF_UPDATE);
-    }
-    if stop_mock_self_recompile_internal() {
-        stopped.push(super::types::MOCK_TARGET_SELF_RECOMPILE);
-    }
-    if stop_mock_plugin_build_internal() {
-        stopped.push(super::types::MOCK_TARGET_PLUGIN_BUILD);
-    }
+pub(super) async fn stop_mock_targets(State(state): State<AppState>) -> impl IntoResponse {
+    let stopped = dev_services::stop_mock_targets(&state);
 
     let status = if stopped.is_empty() {
         StatusCode::OK
@@ -547,55 +248,62 @@ pub(super) async fn stop_mock_targets() -> impl IntoResponse {
         StatusCode::ACCEPTED
     };
 
-    (
-        status,
-        Json(serde_json::json!({ "stopped": stopped, "targets": mock_target_infos() })),
-    )
-        .into_response()
+    mock_targets_response(status, "stopped", stopped, state.runtime.list_mock_targets())
 }
 
 pub(super) async fn mock_self_update(State(state): State<AppState>) -> impl IntoResponse {
-    match start_mock_self_update(state.daemon.events.clone()) {
-        Ok(()) => (StatusCode::ACCEPTED, "Mock update queued").into_response(),
-        Err(msg) => (StatusCode::CONFLICT, msg).into_response(),
-    }
+    mock_start_response(
+        state.runtime.start_mock_self_update(state.daemon.events.clone()),
+        "Mock update queued",
+    )
 }
 
-pub(super) async fn stop_mock_self_update() -> impl IntoResponse {
-    if stop_mock_self_update_internal() {
-        (StatusCode::ACCEPTED, "Stopping mock update").into_response()
-    } else {
-        (StatusCode::OK, "No mock update in progress").into_response()
-    }
+pub(super) async fn stop_mock_self_update(State(state): State<AppState>) -> impl IntoResponse {
+    mock_stop_response(
+        state.runtime.stop_mock_self_update(),
+        "Stopping mock update",
+        "No mock update in progress",
+    )
 }
 
 pub(super) async fn mock_self_recompile(State(state): State<AppState>) -> impl IntoResponse {
-    match start_mock_self_recompile(state.daemon.events.clone()) {
-        Ok(()) => (StatusCode::ACCEPTED, "Mock recompile queued").into_response(),
-        Err(msg) => (StatusCode::CONFLICT, msg).into_response(),
-    }
+    mock_start_response(
+        state
+            .runtime
+            .start_mock_self_recompile(state.daemon.events.clone()),
+        "Mock recompile queued",
+    )
 }
 
-pub(super) async fn stop_mock_self_recompile() -> impl IntoResponse {
-    if stop_mock_self_recompile_internal() {
-        (StatusCode::ACCEPTED, "Stopping mock recompile").into_response()
-    } else {
-        (StatusCode::OK, "No mock recompile in progress").into_response()
-    }
+pub(super) async fn stop_mock_self_recompile(State(state): State<AppState>) -> impl IntoResponse {
+    mock_stop_response(
+        state.runtime.stop_mock_self_recompile(),
+        "Stopping mock recompile",
+        "No mock recompile in progress",
+    )
 }
 
-pub(super) async fn stop_mock_plugin_build() -> impl IntoResponse {
-    if stop_mock_plugin_build_internal() {
-        (StatusCode::ACCEPTED, "Stopping mock build").into_response()
-    } else {
-        (StatusCode::OK, "No mock build in progress").into_response()
-    }
+pub(super) async fn stop_mock_plugin_build(State(state): State<AppState>) -> impl IntoResponse {
+    mock_stop_response(
+        state.runtime.stop_mock_plugin_build(),
+        "Stopping mock build",
+        "No mock build in progress",
+    )
 }
 
 pub(super) async fn mock_plugin_build(State(state): State<AppState>) -> impl IntoResponse {
     let events = state.daemon.events.clone();
     let config_dir = crate::paths::shared_config_dir().ok();
-    let fallback_plugin_ids = state
+    mock_start_response(
+        state
+            .runtime
+            .start_mock_plugin_build(events, config_dir, fallback_plugin_ids(&state)),
+        "Mock build queued",
+    )
+}
+
+fn fallback_plugin_ids(state: &AppState) -> Vec<String> {
+    state
         .dev_state
         .discovery
         .read()
@@ -606,10 +314,28 @@ pub(super) async fn mock_plugin_build(State(state): State<AppState>) -> impl Int
                 .map(|plugin| plugin.id.clone())
                 .collect::<Vec<_>>()
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
 
-    match start_mock_plugin_build(events, config_dir, fallback_plugin_ids) {
-        Ok(()) => (StatusCode::ACCEPTED, "Mock build queued").into_response(),
-        Err(msg) => (StatusCode::CONFLICT, msg).into_response(),
+fn mock_start_response(result: Result<(), &'static str>, queued_message: &'static str) -> axum::response::Response {
+    match result {
+        Ok(()) => (StatusCode::ACCEPTED, queued_message).into_response(),
+        Err(message) => (StatusCode::CONFLICT, message).into_response(),
     }
+}
+
+fn mock_stop_response(stopped: bool, stopping_message: &'static str, idle_message: &'static str) -> axum::response::Response {
+    if stopped {
+        return (StatusCode::ACCEPTED, stopping_message).into_response();
+    }
+    (StatusCode::OK, idle_message).into_response()
+}
+
+fn mock_targets_response(
+    status: StatusCode,
+    key: &'static str,
+    ids: Vec<&'static str>,
+    targets: Vec<MockTargetInfo>,
+) -> axum::response::Response {
+    (status, Json(serde_json::json!({ key: ids, "targets": targets }))).into_response()
 }

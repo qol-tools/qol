@@ -1,38 +1,35 @@
 import { updateSelection as updateSel, navigateGrid } from '../utils.js';
 import { subscribe } from '../events.js';
 import * as installing from '../installing.js';
-import { apiJson, apiResponse, jsonRequest, readResponseText } from '../api/client.js';
 import { renderFeedback as renderFeedbackComponent } from '../components/feedback.js';
+import {
+    createStoreState,
+    formatCacheAge,
+    normalizeSearchQuery,
+    getFilteredPlugins as filterPlugins,
+    clampSelectedIndex,
+    sortPluginsByName,
+    isRateLimitedWithoutToken,
+    looksLikeGithubAuthFailure,
+    isStoreUpdateAvailable
+} from './store/reducer.js';
+import {
+    fetchTokenStatus,
+    saveTokenRequest,
+    deleteTokenRequest,
+    fetchPluginsRequest,
+    installPluginRequest
+} from './store/effects.js';
 
 export const id = 'store';
 
-const state = {
-    plugins: [],
-    selectedIndex: 0,
-    searchQuery: '',
-    hasToken: false,
-    showTokenInput: false,
-    rateLimited: false,
-    cacheAgeSecs: null,
-    loading: false,
-    loadToken: 0,
-    feedback: null
-};
+const state = createStoreState();
 
-let container = null;
 let searchInput = null;
 let unsubscribe = null;
 
-function formatCacheAge(secs) {
-    if (secs === null || secs === undefined) return '';
-    if (secs < 60) return 'just now';
-    if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
-    return `${Math.floor(secs / 3600)}h ago`;
-}
-
 export function render(containerEl) {
-    container = containerEl;
-    container.innerHTML = `
+    containerEl.innerHTML = `
         <div class="view-container">
             <header>
                 <div class="header-row">
@@ -106,15 +103,8 @@ function clearFeedback() {
 }
 
 async function checkTokenStatus() {
-    try {
-        const data = await apiJson('/api/github-token');
-        state.hasToken = data.has_token;
-    } catch (e) {
-        state.hasToken = false;
-    }
+    state.hasToken = await fetchTokenStatus();
 }
-
-// --- Token banner: single declarative render from state ---
 
 function renderTokenBanner() {
     const banner = document.getElementById('token-banner');
@@ -168,8 +158,6 @@ function renderRateLimitMessage(banner) {
     });
 }
 
-// --- Token actions: mutate state, then re-render ---
-
 async function saveToken() {
     const input = document.getElementById('github-token-input');
     const token = input?.value?.trim();
@@ -181,11 +169,7 @@ async function saveToken() {
     
     clearFeedback();
     try {
-        const response = await apiResponse('/api/github-token', jsonRequest('POST', { token }));
-        if (!response.ok) {
-            const message = (await readResponseText(response)) || 'Failed to save token';
-            throw new Error(message);
-        }
+        await saveTokenRequest(token);
         state.hasToken = true;
         state.showTokenInput = false;
         state.rateLimited = false;
@@ -202,11 +186,7 @@ async function saveToken() {
 async function deleteToken() {
     clearFeedback();
     try {
-        const response = await apiResponse('/api/github-token', { method: 'DELETE' });
-        if (!response.ok) {
-            const message = (await readResponseText(response)) || 'Failed to delete token';
-            throw new Error(message);
-        }
+        await deleteTokenRequest();
         state.hasToken = false;
         state.showTokenInput = false;
         renderTokenBanner();
@@ -214,19 +194,6 @@ async function deleteToken() {
     } catch (e) {
         setFeedback('error', `Failed to delete token: ${e.message}`);
     }
-}
-
-// --- Plugin loading ---
-
-function looksLikeGithubAuthFailure(message) {
-    const normalized = String(message || '').toLowerCase();
-    return (
-        normalized.includes('401') ||
-        normalized.includes('403') ||
-        normalized.includes('bad credentials') ||
-        normalized.includes('requires authentication') ||
-        normalized.includes('invalid token')
-    );
 }
 
 async function loadPlugins(forceRefresh = false) {
@@ -239,20 +206,18 @@ async function loadPlugins(forceRefresh = false) {
     updateRefreshButton();
     
     try {
-        const url = forceRefresh ? '/api/plugins?refresh=true' : '/api/plugins';
-        const data = await apiJson(url);
+        const data = await fetchPluginsRequest(forceRefresh);
         if (token !== state.loadToken) {
             return;
         }
-        state.plugins = data.plugins;
-        state.cacheAgeSecs = data.cache_age_secs;
-        state.rateLimited = state.plugins.length === 0 && !state.hasToken;
+        state.plugins = sortPluginsByName(data.plugins || []);
+        state.cacheAgeSecs = data.cache_age_secs ?? null;
+        state.rateLimited = isRateLimitedWithoutToken(state.plugins, state.hasToken);
         state.showTokenInput = state.showTokenInput && state.rateLimited;
         renderTokenBanner();
         
-        state.plugins.sort((a, b) => a.name.localeCompare(b.name));
-        const filtered = getFilteredPlugins();
-        state.selectedIndex = Math.min(state.selectedIndex, Math.max(0, filtered.length - 1));
+        const filtered = getVisiblePlugins();
+        state.selectedIndex = clampSelectedIndex(state.selectedIndex, filtered.length);
         renderPlugins(filtered);
         updateSelection();
         updateCacheAge();
@@ -308,7 +273,7 @@ function renderPlugins(plugins) {
 
     listEl.innerHTML = plugins.map((plugin, index) => {
         const isInstalling = installing.has(plugin.id);
-        const hasUpdate = plugin.installed && plugin.installed_version && plugin.installed_version !== plugin.version;
+        const hasUpdate = isStoreUpdateAvailable(plugin);
         const versionDisplay = hasUpdate
             ? `v${plugin.installed_version} → v${plugin.version}`
             : `v${plugin.version}`;
@@ -330,7 +295,6 @@ function renderPlugins(plugins) {
         `;
     }).join('');
 }
-
 function handleListClick(e) {
     const card = e.target.closest('.plugin-card');
     if (!card) return;
@@ -349,9 +313,9 @@ function handleListClick(e) {
 }
 
 function handleSearch(e) {
-    state.searchQuery = e.target.value.toLowerCase();
-    const filtered = getFilteredPlugins();
-    state.selectedIndex = Math.min(state.selectedIndex, Math.max(0, filtered.length - 1));
+    state.searchQuery = normalizeSearchQuery(e.target.value);
+    const filtered = getVisiblePlugins();
+    state.selectedIndex = clampSelectedIndex(state.selectedIndex, filtered.length);
     renderPlugins(filtered);
     updateSelection();
 }
@@ -409,12 +373,8 @@ function navigateInGrid(direction) {
     updateSelection();
 }
 
-function getFilteredPlugins() {
-    if (!state.searchQuery) return state.plugins;
-    return state.plugins.filter(p =>
-        p.name.toLowerCase().includes(state.searchQuery) ||
-        p.description.toLowerCase().includes(state.searchQuery)
-    );
+function getVisiblePlugins() {
+    return filterPlugins(state.plugins, state.searchQuery);
 }
 
 async function installPlugin(id) {
@@ -423,15 +383,11 @@ async function installPlugin(id) {
     const plugin = state.plugins.find(p => p.id === id);
     clearFeedback();
     installing.add(id, plugin?.name || id);
-    renderPlugins(getFilteredPlugins());
+    renderPlugins(getVisiblePlugins());
     updateSelection();
 
     try {
-        const response = await apiResponse(`/api/install/${id}`, { method: 'POST' });
-        if (!response.ok) {
-            const message = (await readResponseText(response)) || 'Installation failed';
-            throw new Error(message);
-        }
+        await installPluginRequest(id);
         setFeedback('success', `Installed ${plugin?.name || id}`);
     } catch (error) {
         setFeedback('error', `Failed to install ${plugin?.name || id}: ${error.message}`);

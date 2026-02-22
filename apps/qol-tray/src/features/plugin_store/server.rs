@@ -4,8 +4,15 @@ mod assets;
 mod dev_handlers;
 #[cfg(feature = "dev")]
 mod dev_runtime;
+#[cfg(feature = "dev")]
+mod dev_runtime_state;
+#[cfg(feature = "dev")]
+mod dev_services;
+#[cfg(feature = "dev")]
+mod restart;
 mod helpers;
 mod plugin_handlers;
+mod plugin_services;
 mod settings_handlers;
 mod types;
 
@@ -37,6 +44,10 @@ pub async fn start_ui_server(
         daemon: daemon.clone(),
         #[cfg(feature = "dev")]
         dev_state: Arc::new(crate::dev::state::DevState::new()),
+        #[cfg(feature = "dev")]
+        runtime: dev_runtime::new_dev_runtime(),
+        #[cfg(feature = "dev")]
+        restart: restart::default_restart_port(),
     };
 
     #[cfg(feature = "dev")]

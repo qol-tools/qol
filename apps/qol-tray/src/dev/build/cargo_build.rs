@@ -4,13 +4,27 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
-use super::progress::{
-    drain_console_segments, handle_cargo_console_segment, CargoProgressEstimator,
-    CargoProgressSnapshot,
-};
+use crate::dev::adapters::traits::CargoPluginBuilder;
 use super::types::BuildResult;
+use crate::dev::core::progress_estimator::CargoProgressEstimator;
+use crate::dev::core::progress_parser::{
+    drain_console_segments, parse_console_segment, CargoProgressSnapshot,
+};
 
 static LAST_ARTIFACT_COUNT: AtomicU32 = AtomicU32::new(0);
+
+pub(crate) struct CargoCommandPluginBuilder;
+
+impl CargoPluginBuilder for CargoCommandPluginBuilder {
+    fn build_plugin_with_progress(
+        &self,
+        plugin_id: &str,
+        path: &Path,
+        on_progress: &mut dyn FnMut(u8, String),
+    ) -> BuildResult {
+        build_cargo_plugin_with_progress(plugin_id, path, on_progress)
+    }
+}
 
 pub fn build_qol_tray_self_with_progress<F>(mut on_progress: F) -> BuildResult
 where
@@ -197,7 +211,12 @@ where
                 Ok(n) => {
                     pending.push_str(&String::from_utf8_lossy(&buf[..n]));
                     drain_console_segments(&mut pending, |raw_segment| {
-                        handle_cargo_console_segment(raw_segment, &progress_tx, &stderr_tx);
+                        if let Some(parsed) = parse_console_segment(raw_segment) {
+                            if let Some(snapshot) = parsed.snapshot {
+                                let _ = progress_tx.send(snapshot);
+                            }
+                            let _ = stderr_tx.send(parsed.line);
+                        }
                     });
                 }
                 Err(_) => break,
@@ -205,7 +224,12 @@ where
         }
 
         if !pending.is_empty() {
-            handle_cargo_console_segment(&pending, &progress_tx, &stderr_tx);
+            if let Some(parsed) = parse_console_segment(&pending) {
+                if let Some(snapshot) = parsed.snapshot {
+                    let _ = progress_tx.send(snapshot);
+                }
+                let _ = stderr_tx.send(parsed.line);
+            }
         }
     });
 
