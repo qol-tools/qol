@@ -3,7 +3,7 @@ use gpui::*;
 use super::layout::{resize_for_visible_rows, MAX_VISIBLE, ROW_HEIGHT};
 use super::state::{EdgeHit, NavDirection};
 use super::view;
-use super::window_ops::hide_in_context;
+use super::window_ops::hide;
 use super::LauncherView;
 
 impl Focusable for LauncherView {
@@ -23,7 +23,7 @@ impl Render for LauncherView {
                         return;
                     }
                     this.set_showing(false);
-                    hide_in_context(window, cx);
+                    hide(window);
                 },
             ));
         }
@@ -35,7 +35,7 @@ impl Render for LauncherView {
                         return;
                     }
                     this.set_showing(false);
-                    hide_in_context(window, cx);
+                    hide(window);
                 }
             }));
         }
@@ -91,7 +91,7 @@ impl Render for LauncherView {
                 match event.keystroke.key.as_str() {
                     "escape" | "esc" => {
                     this.set_showing(false);
-                    hide_in_context(window, cx);
+                    hide(window);
                     }
                     _ => this.handle_key(event, window, cx),
                 }

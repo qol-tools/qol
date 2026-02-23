@@ -59,13 +59,6 @@ impl SearchMode {
             Self::Files => Self::Apps,
         }
     }
-
-    pub fn prev(self) -> Self {
-        match self {
-            Self::Apps => Self::Files,
-            Self::Files => Self::Apps,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -130,8 +123,8 @@ impl LauncherState {
         self.query.chars().count()
     }
 
-    pub fn cycle_mode(&mut self, reverse: bool) {
-        self.mode = if reverse { self.mode.prev() } else { self.mode.next() };
+    pub fn cycle_mode(&mut self, _reverse: bool) {
+        self.mode = self.mode.next();
     }
 
     pub fn increase_fuzziness(&mut self) -> bool {

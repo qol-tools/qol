@@ -12,7 +12,6 @@ mod window_ops;
 use std::collections::HashMap;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -88,13 +87,11 @@ struct LauncherView {
     activation_sub: Option<Subscription>,
     trail_decay_task_running: bool,
     is_showing: bool,
-    any_visible: Arc<AtomicBool>,
     blur_guard_until: Instant,
 }
 
 impl LauncherView {
-    fn new(entries: Arc<PreloadedEntries>, any_visible: Arc<AtomicBool>, cx: &mut Context<Self>) -> Self {
-        any_visible.store(true, Ordering::Release);
+    fn new(entries: Arc<PreloadedEntries>, cx: &mut Context<Self>) -> Self {
         Self {
             state: LauncherState::new(),
             store: EntryStore::new(entries.app_entries.clone(), entries.file_entries.clone()),
@@ -103,14 +100,12 @@ impl LauncherView {
             activation_sub: None,
             trail_decay_task_running: false,
             is_showing: true,
-            any_visible,
             blur_guard_until: Instant::now() + Duration::from_millis(BLUR_GUARD_MS),
         }
     }
 
     fn set_showing(&mut self, showing: bool) {
         self.is_showing = showing;
-        self.any_visible.store(showing, Ordering::Release);
     }
 
     fn reset_for_show(&mut self) -> bool {
@@ -269,7 +264,6 @@ fn open_keepalive_window(cx: &mut App) {
 fn activate_or_open_launcher(
     entries: SharedEntries,
     active: Rc<RefCell<ActiveLaunchers>>,
-    any_visible: Arc<AtomicBool>,
     monitor_snapshot: Option<monitor::ActiveMonitor>,
     cx: &mut App,
 ) {
@@ -327,7 +321,6 @@ fn activate_or_open_launcher(
         cx,
         options,
         current_entries.clone(),
-        any_visible.clone(),
         target,
     ) {
         active.borrow_mut().insert(target, handle);
@@ -346,13 +339,11 @@ fn open_launcher_window(
     cx: &mut App,
     options: WindowOptions,
     entries: Arc<PreloadedEntries>,
-    any_visible: Arc<AtomicBool>,
     target: LauncherTarget,
 ) -> Option<WindowHandle<LauncherView>> {
     match open_window_with_focus(cx, options, {
         let entries = entries.clone();
-        let any_visible = any_visible.clone();
-        move |_window, cx| LauncherView::new(entries.clone(), any_visible, cx)
+        move |_window, cx| LauncherView::new(entries.clone(), cx)
     }) {
         Ok(handle) => {
             eprintln!("[launcher] popup open succeeded");
@@ -376,7 +367,7 @@ fn open_launcher_window(
             };
 
             match open_window_with_focus(cx, fallback_options, move |_window, cx| {
-                LauncherView::new(entries.clone(), any_visible, cx)
+                LauncherView::new(entries.clone(), cx)
             }) {
                 Ok(handle) => {
                     eprintln!("[launcher] fallback open succeeded");
@@ -503,7 +494,6 @@ fn snapshot_entries(entries: &SharedEntries) -> Arc<PreloadedEntries> {
 fn spawn_command_poll(
     entries: SharedEntries,
     active: Rc<RefCell<ActiveLaunchers>>,
-    any_visible: Arc<AtomicBool>,
     rx: mpsc::Receiver<daemon::Command>,
     focus_cache: MonitorTracker,
     cx: &mut App,
@@ -543,9 +533,8 @@ fn spawn_command_poll(
                     eprintln!("[launcher] command_poll: snapshot={:?}", snapshot.as_ref().map(|m| m.bounds()));
                     let entries = entries.clone();
                     let active = active.clone();
-                    let vis = any_visible.clone();
                     eprintln!("[launcher] cx.update start");
-                    if let Err(e) = cx.update(move |cx| activate_or_open_launcher(entries.clone(), active.clone(), vis, snapshot, cx)) {
+                    if let Err(e) = cx.update(move |cx| activate_or_open_launcher(entries.clone(), active.clone(), snapshot, cx)) {
                         eprintln!("[launcher] command_poll: cx.update failed: {:?}", e);
                     } else {
                         eprintln!("[launcher] cx.update done");
@@ -589,8 +578,7 @@ pub fn run() {
         #[cfg(debug_assertions)]
         eprintln!("[launcher] run: pid={}", std::process::id());
 
-        let any_visible = Arc::new(AtomicBool::new(false));
-        let focus_cache = MonitorTracker::start(cx, any_visible.clone());
+        let focus_cache = MonitorTracker::start(cx);
 
         let (tx, rx) = mpsc::channel();
         if !daemon::start_listener(tx) {
@@ -609,7 +597,7 @@ pub fn run() {
         #[cfg(target_os = "macos")]
         set_macos_accessory_policy();
 
-        spawn_command_poll(entries.clone(), active.clone(), any_visible.clone(), rx, focus_cache.clone(), cx);
+        spawn_command_poll(entries.clone(), active.clone(), rx, focus_cache.clone(), cx);
         cx.spawn({
             let entries = entries.clone();
             let active = active.clone();
@@ -645,7 +633,7 @@ pub fn run() {
             #[cfg(debug_assertions)]
             eprintln!("[launcher] show_immediately");
             let snapshot = focus_cache.snapshot();
-            activate_or_open_launcher(entries.clone(), active.clone(), any_visible.clone(), snapshot, cx);
+            activate_or_open_launcher(entries.clone(), active.clone(), snapshot, cx);
         }
     });
 

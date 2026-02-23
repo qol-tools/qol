@@ -164,14 +164,12 @@ pub fn result_row(scored: &Scored, name: &str, cues: RowWindowCue, row_height: f
         cues.selected,
         cues.previous_selected,
         cues.trail_depth,
-        cues.distance_from_selected,
     );
     let bg = row_bg_color(
         cues.selected,
         cues.previous_selected,
         cues.trail_depth,
         cues.distance_from_selected,
-        cues.hidden_above > 0 || cues.hidden_below > 0,
     );
 
     let spans: Vec<AnyElement> = name
@@ -434,7 +432,6 @@ fn row_text_color(
     selected: bool,
     previous_selected: bool,
     trail_depth: u8,
-    distance_from_selected: usize,
 ) -> gpui::Rgba {
     if selected {
         rgb(TEXT_SELECTED)
@@ -444,10 +441,6 @@ fn row_text_color(
         rgb(TEXT_MUTED)
     } else if previous_selected {
         rgb(TEXT_MUTED)
-    } else if distance_from_selected <= 1 {
-        rgb(TEXT_FAINT)
-    } else if distance_from_selected <= 3 {
-        rgb(TEXT_FAINT)
     } else {
         rgb(TEXT_FAINT)
     }
@@ -458,7 +451,6 @@ fn row_bg_color(
     previous_selected: bool,
     trail_depth: u8,
     distance_from_selected: usize,
-    has_edge_overflow: bool,
 ) -> gpui::Rgba {
     if selected {
         rgb(BG_SELECTED)
@@ -470,10 +462,6 @@ fn row_bg_color(
         rgb(BG_NEAR)
     } else if distance_from_selected <= 1 {
         rgb(BG_EDGE)
-    } else if distance_from_selected <= 2 {
-        rgb(BG)
-    } else if has_edge_overflow {
-        rgb(BG)
     } else {
         rgb(BG)
     }
