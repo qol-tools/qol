@@ -57,15 +57,17 @@ pub fn fuzzy_match(query: &str, candidate: &str) -> Option<FuzzyMatch> {
         return Some(FuzzyMatch { score: 0, positions: vec![] });
     }
 
+    let q_orig: Vec<char> = query.chars().collect();
     let q: Vec<char> = query.chars().flat_map(|c| c.to_lowercase()).collect();
     let c_orig: Vec<char> = candidate.chars().collect();
     let c_lower: Vec<char> = candidate.to_lowercase().chars().collect();
 
-    let greedy = score_pass(&q, &c_orig, &c_lower, false);
-    let boundary = score_pass(&q, &c_orig, &c_lower, true);
-    let contiguous = score_contiguous_pass(&q, &c_orig, &c_lower);
+    let greedy = score_pass(&q, &q_orig, &c_orig, &c_lower, false);
+    let boundary = score_pass(&q, &q_orig, &c_orig, &c_lower, true);
+    let contiguous = score_contiguous_pass(&q, &q_orig, &c_orig, &c_lower);
+    let word_match = score_word_match_pass(&q, &q_orig, &c_orig, &c_lower);
 
-    [greedy, boundary, contiguous]
+    [greedy, boundary, contiguous, word_match]
         .into_iter()
         .flatten()
         .min_by_key(|m| m.score)
@@ -73,6 +75,7 @@ pub fn fuzzy_match(query: &str, candidate: &str) -> Option<FuzzyMatch> {
 
 fn score_pass(
     query: &[char],
+    query_orig: &[char],
     candidate: &[char],
     candidate_lower: &[char],
     prefer_boundary: bool,
@@ -97,13 +100,14 @@ fn score_pass(
     }
 
     Some(FuzzyMatch {
-        score: compute_score(&positions, candidate, query.len()),
+        score: compute_score(&positions, candidate, query_orig),
         positions,
     })
 }
 
 fn score_contiguous_pass(
     query: &[char],
+    query_orig: &[char],
     candidate: &[char],
     candidate_lower: &[char],
 ) -> Option<FuzzyMatch> {
@@ -123,7 +127,7 @@ fn score_contiguous_pass(
 
         let positions: Vec<usize> = (start..start + query.len()).collect();
         let m = FuzzyMatch {
-            score: compute_score(&positions, candidate, query.len()),
+            score: compute_score(&positions, candidate, query_orig),
             positions,
         };
 
@@ -134,6 +138,54 @@ fn score_contiguous_pass(
     }
 
     best
+}
+
+fn score_word_match_pass(
+    query: &[char],
+    query_orig: &[char],
+    candidate: &[char],
+    candidate_lower: &[char],
+) -> Option<FuzzyMatch> {
+    if query.len() > candidate_lower.len() {
+        return None;
+    }
+
+    let mut best: Option<FuzzyMatch> = None;
+    for start in 0..=candidate_lower.len() - query.len() {
+        if !query
+            .iter()
+            .zip(candidate_lower[start..start + query.len()].iter())
+            .all(|(q, c)| q == c)
+        {
+            continue;
+        }
+
+        let end = start + query.len();
+        let at_word_start = start == 0 || is_separator(candidate[start - 1]);
+        let at_word_end = end == candidate_lower.len() || is_separator(candidate[end]);
+
+        if !at_word_start || !at_word_end {
+            continue;
+        }
+
+        let positions: Vec<usize> = (start..end).collect();
+        let word_bonus = -10 * query.len() as i32;
+        let m = FuzzyMatch {
+            score: compute_score(&positions, candidate, query_orig) + word_bonus,
+            positions,
+        };
+
+        best = match best {
+            Some(current) if current.score <= m.score => Some(current),
+            _ => Some(m),
+        };
+    }
+
+    best
+}
+
+fn is_separator(c: char) -> bool {
+    c == ' ' || c == '-' || c == '_' || c == '/'
 }
 
 fn find_first_match(query_char: char, candidate_lower: &[char], start: usize) -> Option<usize> {
@@ -173,8 +225,9 @@ fn is_boundary(chars: &[char], idx: usize) -> bool {
         || (curr.is_uppercase() && prev.is_lowercase())
 }
 
-fn compute_score(positions: &[usize], candidate: &[char], query_len: usize) -> i32 {
+fn compute_score(positions: &[usize], candidate: &[char], query_orig: &[char]) -> i32 {
     let mut score = 0i32;
+    let query_len = query_orig.len();
 
     for (i, &pos) in positions.iter().enumerate() {
         let gap = if i == 0 {
@@ -196,6 +249,10 @@ fn compute_score(positions: &[usize], candidate: &[char], query_len: usize) -> i
         if pos == 0 {
             score -= 8;
         }
+
+        if i < query_orig.len() && candidate[pos] == query_orig[i] {
+            score -= 2;
+        }
     }
 
     if query_len > 1 && is_fully_contiguous(positions) {
@@ -207,6 +264,44 @@ fn compute_score(positions: &[usize], candidate: &[char], query_len: usize) -> i
 
 fn is_fully_contiguous(positions: &[usize]) -> bool {
     positions.len() > 1 && positions.windows(2).all(|w| w[1] == w[0] + 1)
+}
+
+#[cfg(test)]
+mod fuzzy_tests {
+    use super::fuzzy_match;
+
+    #[test]
+    fn word_match_beats_contiguous_substring() {
+        let vscode = fuzzy_match("code", "Visual Studio Code").unwrap();
+        let xcode = fuzzy_match("code", "Xcode").unwrap();
+        assert!(
+            vscode.score < xcode.score,
+            "Visual Studio Code ({}) should score better than Xcode ({})",
+            vscode.score,
+            xcode.score
+        );
+    }
+
+    #[test]
+    fn word_match_not_triggered_for_substring() {
+        // "code" in "Xcode" is NOT at a word boundary — no word-match bonus
+        let xcode = fuzzy_match("code", "Xcode").unwrap();
+        let vscode = fuzzy_match("code", "Visual Studio Code").unwrap();
+        // Xcode should have a worse (higher) score than VSCode
+        assert!(xcode.score > vscode.score);
+    }
+
+    #[test]
+    fn case_bonus_favors_exact_case() {
+        let exact = fuzzy_match("Code", "Visual Studio Code").unwrap();
+        let lower = fuzzy_match("code", "Visual Studio Code").unwrap();
+        assert!(
+            exact.score < lower.score,
+            "Exact case ({}) should score better than lowercase ({})",
+            exact.score,
+            lower.score
+        );
+    }
 }
 
 pub fn open_window_with_focus<T, F>(

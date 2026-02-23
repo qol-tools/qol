@@ -69,28 +69,22 @@ proptest! {
     }
 
     #[test]
-    fn prop_case_insensitive_score(
+    fn prop_case_insensitive_match(
         query in "[a-z]{1,6}",
         candidate in "[a-zA-Z ]{2,20}"
     ) {
         let lower = fuzzy_match(&query.to_lowercase(), &candidate);
         let upper = fuzzy_match(&query.to_uppercase(), &candidate);
 
-        match (lower, upper) {
-            (Some(l), Some(u)) => {
-                prop_assert_eq!(
-                    l.score, u.score,
-                    "Case mismatch: lower scored {}, upper scored {}", l.score, u.score
-                );
-                prop_assert_eq!(
-                    l.positions, u.positions,
-                    "Case mismatch: different positions"
-                );
-            }
+        // Both query cases must either match or not match.
+        // Positions and scores may differ due to the exact-case bonus
+        // steering the algorithm toward case-matching characters.
+        match (&lower, &upper) {
+            (Some(_), Some(_)) => {}
             (None, None) => {}
-            (l, u) => prop_assert!(
+            _ => prop_assert!(
                 false,
-                "One case matched, other didn't: lower={:?}, upper={:?}", l, u
+                "One case matched, other didn't: lower={:?}, upper={:?}", lower, upper
             ),
         }
     }

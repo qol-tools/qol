@@ -189,6 +189,8 @@ fn cap_frecency_bonus(raw_bonus: i32, name: &str, query: &str) -> i32 {
     let base_cap = (query.chars().count() as i32 * 20).clamp(40, 180);
     let cap = if name.starts_with(&query) {
         base_cap
+    } else if contains_at_word_boundary(&name, &query) {
+        base_cap
     } else if name.contains(&query) {
         base_cap / 2
     } else {
@@ -196,6 +198,31 @@ fn cap_frecency_bonus(raw_bonus: i32, name: &str, query: &str) -> i32 {
     };
 
     raw_bonus.min(cap.max(0))
+}
+
+fn contains_at_word_boundary(name: &str, query: &str) -> bool {
+    let name_chars: Vec<char> = name.chars().collect();
+    let query_chars: Vec<char> = query.chars().collect();
+    if query_chars.len() > name_chars.len() {
+        return false;
+    }
+    for start in 0..=name_chars.len() - query_chars.len() {
+        if !query_chars
+            .iter()
+            .zip(name_chars[start..start + query_chars.len()].iter())
+            .all(|(q, c)| q == c)
+        {
+            continue;
+        }
+        let end = start + query_chars.len();
+        let at_word_start = start == 0 || matches!(name_chars[start - 1], ' ' | '-' | '_' | '/');
+        let at_word_end =
+            end == name_chars.len() || matches!(name_chars[end], ' ' | '-' | '_' | '/');
+        if at_word_start && at_word_end {
+            return true;
+        }
+    }
+    false
 }
 
 fn classify_match(name: &str, query: &str) -> MatchKind {
@@ -282,5 +309,19 @@ mod tests {
     fn frecency_bonus_allows_more_for_prefix_matches() {
         let capped = cap_frecency_bonus(2000, "Terminal", "ter");
         assert_eq!(capped, 60);
+    }
+
+    #[test]
+    fn frecency_cap_word_boundary_gets_full_cap() {
+        let capped = cap_frecency_bonus(2000, "Visual Studio Code", "code");
+        let base_cap = (4 * 20_i32).clamp(40, 180);
+        assert_eq!(capped, base_cap);
+    }
+
+    #[test]
+    fn frecency_cap_mid_word_gets_halved() {
+        let capped = cap_frecency_bonus(2000, "Barcode", "code");
+        let base_cap = (4 * 20_i32).clamp(40, 180);
+        assert_eq!(capped, base_cap / 2);
     }
 }
