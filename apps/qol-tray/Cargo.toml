@@ -74,8 +74,12 @@ semver = "1"
 # Filesystem traversal for dev plugin discovery
 walkdir = "2"
 
+# Platform state shared types
+qol-runtime = { path = "../qol-runtime" }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
+x11rb = { version = "0.13", features = ["allow-unsafe-code"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

@@ -174,6 +174,8 @@ fn track_action_process(plugin_id: &str, action_id: &str, pid: u32) {
     if let Ok(mut running) = get_running_actions().lock() {
         running.insert(action_key(plugin_id, action_id), pid);
     }
+
+    crate::os::display::add_ignore_pid(pid);
 }
 
 fn untrack_action_process(plugin_id: &str, action_id: &str, pid: u32) {
@@ -197,6 +199,8 @@ fn untrack_action_process(plugin_id: &str, action_id: &str, pid: u32) {
             running.remove(&key);
         }
     }
+
+    crate::os::display::remove_ignore_pid(pid);
 }
 
 pub fn execute_action(
@@ -454,7 +458,7 @@ fn execute_via_runtime(resolved: &ResolvedAction) -> Result<(), ActionExecutionE
         .args(&resolved.args)
         .current_dir(&resolved.plugin_dir)
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stderr(std::process::Stdio::inherit());
     if let Some(socket_path) = &resolved.daemon_socket {
         command.env("QOL_TRAY_DAEMON_SOCKET", socket_path);
     }
