@@ -18,7 +18,9 @@ pub fn capture_previews_batch(
 
 pub fn activate_window(_window_id: u32) {}
 
-pub fn move_app_window(_title: &str, _x: i32, _y: i32) {}
+pub fn move_app_window(_title: &str, _x: i32, _y: i32) -> bool {
+    false
+}
 
 pub fn picker_window_kind() -> gpui::WindowKind {
     gpui::WindowKind::PopUp

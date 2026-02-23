@@ -23,7 +23,6 @@ use std::time::Duration;
 const SETTINGS_URL: &str = "http://127.0.0.1:42700/plugins/plugin-alt-tab/";
 const DEFAULT_ESTIMATED_WINDOW_COUNT: usize = 8;
 const PREWARM_REFRESH_INTERVAL_MS: u64 = 1200;
-const REUSE_ORIGIN_TOLERANCE_PX: f64 = 6.0;
 
 // ─── List delegate ────────────────────────────────────────────────────────────
 
@@ -775,7 +774,7 @@ impl Render for KeepAlive {
 
 fn open_picker(
     config: &AltTabConfig,
-    current: &std::rc::Rc<std::cell::RefCell<Option<WindowHandle<AltTabApp>>>>,
+    current: &std::rc::Rc<std::cell::RefCell<Option<(WindowHandle<AltTabApp>, Point<Pixels>)>>>,
     tracker: &MonitorTracker,
     last_window_count: Arc<AtomicUsize>,
     window_cache: Arc<std::sync::Mutex<Vec<WindowInfo>>>,
@@ -805,18 +804,32 @@ fn open_picker(
     }
 
     // Fast path: reuse existing picker window instead of recreating it.
-    let existing_handle = current.borrow().clone();
-    if let Some(handle) = existing_handle {
+    let existing = current.borrow().clone();
+    if let Some((handle, created_on_origin)) = existing {
         let target_count = display_windows.len().max(1);
         let (target_w, target_h) = picker_dimensions(target_count, config.display.max_columns);
         let target_size = size(px(target_w), px(target_h));
-        let target_bounds = if let Some(active) = tracker.snapshot() {
+        let target_monitor = tracker.snapshot();
+        let target_bounds = if let Some(ref active) = target_monitor {
             active.centered_bounds(target_size)
         } else {
             Bounds::centered(None, target_size, cx)
         };
-        if handle
-            .update(cx, |view, window: &mut Window, cx| {
+
+        // Determine if the target monitor differs from the one the window was created on.
+        let target_origin = target_monitor
+            .as_ref()
+            .map(|m| m.bounds().origin)
+            .unwrap_or(point(px(0.0), px(0.0)));
+        const MONITOR_TOLERANCE_PX: f64 = 6.0;
+        let monitor_changed = {
+            let dx = (created_on_origin.x.to_f64() - target_origin.x.to_f64()).abs();
+            let dy = (created_on_origin.y.to_f64() - target_origin.y.to_f64()).abs();
+            dx > MONITOR_TOLERANCE_PX || dy > MONITOR_TOLERANCE_PX
+        };
+
+        let reuse_ok = handle
+            .update(cx, |view, window: &mut Window, cx| -> bool {
                 // In HoldToSwitch mode, if the poll task is still running, the window
                 // is already visible. Treat subsequent Show commands as "select next".
                 let alt_held = platform::is_modifier_held();
@@ -834,29 +847,24 @@ fn open_picker(
                         }
                     });
                     cx.notify();
-                    return;
+                    return true;
                 }
                 #[cfg(debug_assertions)]
                 eprintln!(
-                    "[alt-tab/hold] reuse path (alt_held={} poll_task={}) — applying config reset={}",
+                    "[alt-tab/hold] reuse path (alt_held={} poll_task={}) — applying config reset={} monitor_changed={}",
                     alt_held,
                     view._alt_poll_task.is_some(),
-                    config.reset_selection_on_open
+                    config.reset_selection_on_open,
+                    monitor_changed,
                 );
 
-                let current_bounds = window.window_bounds().get_bounds();
-                let dx = (current_bounds.origin.x.to_f64() - target_bounds.origin.x.to_f64()).abs();
-                let dy = (current_bounds.origin.y.to_f64() - target_bounds.origin.y.to_f64()).abs();
-                if dx > REUSE_ORIGIN_TOLERANCE_PX || dy > REUSE_ORIGIN_TOLERANCE_PX
-                {
-                    #[cfg(debug_assertions)]
-                    eprintln!(
-                        "[alt-tab/open] moving window natively via X11: current_origin={:?} target_origin={:?} dx={:.1} dy={:.1}",
-                        current_bounds.origin, target_bounds.origin, dx, dy
-                    );
+                if monitor_changed {
                     let x = target_bounds.origin.x.to_f64() as i32;
                     let y = target_bounds.origin.y.to_f64() as i32;
-                    platform::move_app_window("qol-alt-tab-picker", x, y);
+                    if !platform::move_app_window("qol-alt-tab-picker", x, y) {
+                        // Can't move — signal caller to close and reopen on correct monitor
+                        return false;
+                    }
                 }
 
                 #[cfg(debug_assertions)]
@@ -880,6 +888,7 @@ fn open_picker(
 
                 view.apply_cached_windows(display_windows.clone(), config.reset_selection_on_open, cx);
 
+                let current_bounds = window.window_bounds().get_bounds();
                 let current_size = current_bounds.size;
                 let next_size = target_size;
                 if (current_size.width.to_f64() - target_w as f64).abs() >= 1.0
@@ -889,15 +898,23 @@ fn open_picker(
                 }
                 window.focus(&view.focus_handle(cx));
                 window.activate_window();
+                true
             })
-            .is_ok()
-        {
+            .unwrap_or(false);
+
+        if reuse_ok {
             #[cfg(debug_assertions)]
             eprintln!("[alt-tab/open] reused existing picker window");
             cx.activate(true);
             return;
         }
 
+        // Close the old window so we don't leak orphaned windows
+        #[cfg(debug_assertions)]
+        eprintln!("[alt-tab/open] closing old window — will recreate on correct monitor");
+        let _ = handle.update(cx, |_view, window, _cx| {
+            window.remove_window();
+        });
         *current.borrow_mut() = None;
     }
 
@@ -908,11 +925,16 @@ fn open_picker(
     let (win_w, win_h) = picker_dimensions(estimated_count, config.display.max_columns);
     let win_size = size(px(win_w), px(win_h));
 
-    let bounds = if let Some(active) = tracker.snapshot() {
+    let create_monitor = tracker.snapshot();
+    let bounds = if let Some(ref active) = create_monitor {
         active.centered_bounds(win_size)
     } else {
         Bounds::centered(None, win_size, cx)
     };
+    let create_origin = create_monitor
+        .as_ref()
+        .map(|m| m.bounds().origin)
+        .unwrap_or(point(px(0.0), px(0.0)));
 
     println!(
         "[alt-tab] opening at {:?} with size {:?}",
@@ -956,7 +978,7 @@ fn open_picker(
     if let Ok(h) = handle {
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/open] opened new picker window");
-        *current.borrow_mut() = Some(h);
+        *current.borrow_mut() = Some((h, create_origin));
     } else {
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/open] failed to open picker window");
@@ -976,8 +998,8 @@ fn run_app(config: AltTabConfig, rx: mpsc::Receiver<daemon::Command>, show_on_st
         // Keepalive: prevents GPUI from quitting when the picker window is removed
         open_keepalive(cx);
 
-        // Track the single picker window; shared with the daemon poll loop
-        let current: std::rc::Rc<std::cell::RefCell<Option<WindowHandle<AltTabApp>>>> =
+        // Track the single picker window + the monitor origin it was placed on
+        let current: std::rc::Rc<std::cell::RefCell<Option<(WindowHandle<AltTabApp>, Point<Pixels>)>>> =
             std::rc::Rc::new(std::cell::RefCell::new(None));
         let last_window_count = Arc::new(AtomicUsize::new(DEFAULT_ESTIMATED_WINDOW_COUNT));
         let window_cache: Arc<std::sync::Mutex<Vec<WindowInfo>>> =

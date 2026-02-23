@@ -68,7 +68,7 @@ pub fn activate_window(window_id: u32) {
         .ok();
 }
 
-pub fn move_app_window(title: &str, x: i32, y: i32) {
+pub fn move_app_window(title: &str, x: i32, y: i32) -> bool {
     std::process::Command::new("xdotool")
         .arg("search")
         .arg("--name")
@@ -77,7 +77,8 @@ pub fn move_app_window(title: &str, x: i32, y: i32) {
         .arg(x.to_string())
         .arg(y.to_string())
         .status()
-        .ok();
+        .ok()
+        .is_some_and(|s| s.success())
 }
 
 pub fn get_open_windows() -> Vec<WindowInfo> {

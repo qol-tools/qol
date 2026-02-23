@@ -347,11 +347,10 @@ pub fn activate_window(window_id: u32) {
     });
 }
 
-pub fn move_app_window(_title: &str, _x: i32, _y: i32) {
-    eprintln!(
-        "[alt-tab/macos] move_app_window({:?}, {}, {}) not implemented",
-        _title, _x, _y
-    );
+pub fn move_app_window(_title: &str, _x: i32, _y: i32) -> bool {
+    // macOS GPUI windows can't be reliably repositioned via AX after creation.
+    // Return false so the caller closes and recreates on the correct monitor.
+    false
 }
 
 pub fn picker_window_kind() -> gpui::WindowKind {

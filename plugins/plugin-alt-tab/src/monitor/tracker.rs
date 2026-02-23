@@ -180,10 +180,9 @@ impl MonitorTracker {
         let mut state = self.state.lock().ok()?.clone();
 
         // Freshen cursor — CGEventCreate is always safe from any thread.
-        // update_cursor skips same-monitor, so the timestamp reflects the
-        // real transition, not an artificial "now".
-        let cursor_pos = self.platform.cursor_position();
-        if let Some((x, y)) = cursor_pos {
+        // update_cursor skips same-monitor, so the timestamp only advances
+        // on a real monitor transition.
+        if let Some((x, y)) = self.platform.cursor_position() {
             if let Some(monitor) = monitor_for_point(&monitors, x, y) {
                 state.update_cursor(monitor, now, true);
             }
@@ -198,7 +197,7 @@ impl MonitorTracker {
         #[cfg(debug_assertions)]
         eprintln!(
             "[alt-tab/monitor] snapshot: cursor={:?} focus={:?} any_visible={} -> {:?}",
-            cursor_pos.map(|(x, y)| format!("({x:.0}, {y:.0})")),
+            state.cursor.as_ref().map(|c| c.monitor.bounds().origin),
             state.focus.as_ref().map(|f| f.monitor.bounds().origin),
             launcher_visible,
             result.bounds().origin,
@@ -217,8 +216,10 @@ impl MonitorTracker {
         };
         let focus_bounds = self.platform.focused_window_bounds();
         let focus_monitor = focus_bounds.and_then(|wb| monitor_for_bounds(&monitors, &wb));
-        if let Ok(mut guard) = self.state.lock() {
-            guard.update_focus(focus_monitor, Instant::now());
+        if let Some(monitor) = focus_monitor {
+            if let Ok(mut guard) = self.state.lock() {
+                guard.update_focus(monitor, Instant::now());
+            }
         }
     }
 }
@@ -298,9 +299,11 @@ fn poll_tick(
         }
     }
 
-    let was = guard.focus.as_ref().map(|f| *f.monitor.bounds());
-    guard.update_focus(focus_monitor, now);
-    signal_changed |= was != guard.focus.as_ref().map(|f| *f.monitor.bounds());
+    if let Some(monitor) = focus_monitor {
+        let was = guard.focus.as_ref().map(|f| *f.monitor.bounds());
+        guard.update_focus(monitor, now);
+        signal_changed |= was != guard.focus.as_ref().map(|f| *f.monitor.bounds());
+    }
 
     TickResult {
         activity: cursor_moved || signal_changed,
@@ -511,7 +514,7 @@ mod tests {
             let t_old = Instant::now() - Duration::from_secs(2);
             state.update_cursor(m_b, t_old, true);
             let t_new = Instant::now() - Duration::from_secs(1);
-            state.update_focus(Some(m_a), t_new);
+            state.update_focus(m_a, t_new);
         }
 
         let result = tracker.snapshot().unwrap();
@@ -523,7 +526,8 @@ mod tests {
     #[::std::prelude::v1::test]
     fn snapshot_cursor_move_overrides_stale_focus() {
         // User scenario: focus was tracked on m_a, cursor moves to m_b.
-        // snapshot should return m_b because cursor transition is newer.
+        // snapshot freshens cursor to m_b — this is a new transition, gets
+        // timestamp `now`, which is newer than focus → cursor wins.
         let m_a = mon(0.0, 0.0, 1920.0, 1080.0);
         let m_b = mon(1920.0, 0.0, 2560.0, 1440.0);
         let platform = Arc::new(FakePlatform {
@@ -537,11 +541,9 @@ mod tests {
         {
             let mut state = tracker.state.lock().unwrap();
             let t_old = Instant::now() - Duration::from_secs(5);
-            state.update_focus(Some(m_a), t_old);
+            state.update_focus(m_a, t_old);
         }
 
-        // snapshot freshens cursor to m_b — this is a new transition, gets
-        // timestamp `now`, which is newer than focus → cursor wins.
         let result = tracker.snapshot().unwrap();
         assert_eq!(*result.bounds(), m_b);
     }
@@ -562,7 +564,7 @@ mod tests {
             let t_old = Instant::now() - Duration::from_secs(5);
             state.update_cursor(m_b, t_old, true);
             let t_new = Instant::now() - Duration::from_secs(1);
-            state.update_focus(Some(m_a), t_new);
+            state.update_focus(m_a, t_new);
         }
 
         let result = tracker.snapshot().unwrap();

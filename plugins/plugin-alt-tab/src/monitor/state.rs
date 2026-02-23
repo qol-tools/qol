@@ -52,19 +52,15 @@ impl InputState {
         });
     }
 
-    pub(crate) fn update_focus(&mut self, monitor: Option<Bounds<Pixels>>, at: Instant) {
-        if let Some(m) = monitor {
-            let same = self.focus.as_ref().is_some_and(|f| f.monitor.bounds == m);
-            if same {
-                return;
-            }
-            self.focus = Some(Stamped {
-                monitor: ActiveMonitor::new(m),
-                at,
-            });
-        } else {
-            self.focus = None;
+    pub(crate) fn update_focus(&mut self, monitor: Bounds<Pixels>, at: Instant) {
+        let same = self.focus.as_ref().is_some_and(|f| f.monitor.bounds == monitor);
+        if same {
+            return;
         }
+        self.focus = Some(Stamped {
+            monitor: ActiveMonitor::new(monitor),
+            at,
+        });
     }
 }
 
@@ -237,7 +233,7 @@ mod tests {
     fn update_focus_commits_new_monitor() {
         let m = mon(0.0, 0.0, 1920.0, 1080.0);
         let mut state = InputState::default();
-        state.update_focus(Some(m), Instant::now());
+        state.update_focus(m,Instant::now());
         assert_eq!(state.focus.as_ref().unwrap().monitor.bounds, m);
     }
 
@@ -246,9 +242,9 @@ mod tests {
         let m = mon(0.0, 0.0, 1920.0, 1080.0);
         let mut state = InputState::default();
         let t1 = Instant::now();
-        state.update_focus(Some(m), t1);
+        state.update_focus(m,t1);
         let t2 = Instant::now();
-        state.update_focus(Some(m), t2);
+        state.update_focus(m,t2);
         assert_eq!(
             state.focus.as_ref().unwrap().at,
             t1,
