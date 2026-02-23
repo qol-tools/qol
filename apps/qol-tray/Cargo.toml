@@ -75,7 +75,7 @@ semver = "1"
 walkdir = "2"
 
 # Platform state shared types
-qol-runtime = { path = "../qol-runtime" }
+qol-runtime = { git = "https://github.com/qol-tools/qol-runtime" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
