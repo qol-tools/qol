@@ -1,41 +1,23 @@
-use crate::paths;
 use crate::plugins::Plugin;
+use std::path::PathBuf;
+
+/// Get the executable path for a given PID by reading `/proc/<pid>/exe`.
+pub fn pid_exe_path(pid: i32) -> Option<PathBuf> {
+    let exe_path = std::path::Path::new("/proc")
+        .join(pid.to_string())
+        .join("exe");
+    std::fs::read_link(exe_path).ok()
+}
 
 pub fn kill_orphan_daemons() {
+    // Pass 1: scan all /proc entries for managed plugin binaries
     kill_orphan_plugin_binaries();
-    let installs_root = paths::installs_dir().ok();
-    let shared_plugins_root = paths::plugins_dir().ok();
-
-    for path in daemon_pid_files() {
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        for line in content.lines() {
-            let Ok(pid) = line.trim().parse::<i32>() else {
-                continue;
-            };
-            if !is_pid_from_managed_plugin(
-                pid,
-                installs_root.as_deref(),
-                shared_plugins_root.as_deref(),
-            ) {
-                continue;
-            }
-            if crate::process_utils::is_pid_alive(pid) {
-                log::info!("Killing orphan daemon process: {}", pid);
-                crate::process_utils::terminate_pid(pid, std::time::Duration::from_millis(100));
-            }
-        }
-        let _ = std::fs::remove_file(&path);
-    }
+    // Pass 2: kill from PID files (shared logic)
+    super::super::kill_from_pid_files();
 }
 
 fn kill_orphan_plugin_binaries() {
-    let installs_root = paths::installs_dir().ok().filter(|root| root.exists());
-    let shared_plugins_root = paths::plugins_dir().ok().filter(|root| root.exists());
-    if installs_root.is_none() && shared_plugins_root.is_none() {
-        return;
-    }
+    let roots = super::super::ManagedRoots::load();
 
     let Ok(entries) = std::fs::read_dir("/proc") else {
         return;
@@ -47,138 +29,22 @@ fn kill_orphan_plugin_binaries() {
             _ => continue,
         };
 
-        let exe_path = std::path::Path::new("/proc")
-            .join(pid.to_string())
-            .join("exe");
-        let Ok(target) = std::fs::read_link(exe_path) else {
+        let Some(target) = pid_exe_path(pid) else {
             continue;
         };
-        if !is_managed_plugin_binary_path(
-            &target,
-            installs_root.as_deref(),
-            shared_plugins_root.as_deref(),
-        ) {
+        if !roots.contains(&target) {
             continue;
         }
 
         if crate::process_utils::is_pid_alive(pid) {
+            log::info!(
+                "Killing orphan plugin process: {} ({})",
+                pid,
+                target.display()
+            );
             crate::process_utils::terminate_pid(pid, std::time::Duration::from_millis(50));
         }
     }
-}
-
-fn resolve_path(p: &std::path::Path) -> std::path::PathBuf {
-    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
-}
-
-fn is_in_plugin_root(target: &std::path::Path, plugins_root: Option<&std::path::Path>) -> bool {
-    let Some(root) = plugins_root else {
-        return false;
-    };
-
-    let resolved_root = resolve_path(root);
-    if target.starts_with(&resolved_root) {
-        return true;
-    }
-
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return false;
-    };
-    for entry in entries.filter_map(|e| e.ok()) {
-        let resolved_plugin = resolve_path(&entry.path());
-        if target.starts_with(&resolved_plugin) {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn is_in_install_plugins_root(
-    target: &std::path::Path,
-    installs_root: Option<&std::path::Path>,
-) -> bool {
-    let Some(root) = installs_root else {
-        return false;
-    };
-
-    if !target.components().any(|c| c.as_os_str() == "plugins") {
-        return false;
-    }
-
-    let resolved_root = resolve_path(root);
-    if target.starts_with(&resolved_root) {
-        return true;
-    }
-
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return false;
-    };
-    for entry in entries.filter_map(|e| e.ok()) {
-        let plugins_dir = entry.path().join("plugins");
-        let resolved_plugins = resolve_path(&plugins_dir);
-        if target.starts_with(&resolved_plugins) {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn is_managed_plugin_binary_path(
-    target: &std::path::Path,
-    installs_root: Option<&std::path::Path>,
-    shared_plugins_root: Option<&std::path::Path>,
-) -> bool {
-    let target = resolve_path(target);
-
-    if is_in_plugin_root(&target, shared_plugins_root) {
-        return true;
-    }
-
-    if is_in_install_plugins_root(&target, installs_root) {
-        return true;
-    }
-
-    false
-}
-
-fn is_pid_from_managed_plugin(
-    pid: i32,
-    installs_root: Option<&std::path::Path>,
-    shared_plugins_root: Option<&std::path::Path>,
-) -> bool {
-    let exe_path = std::path::Path::new("/proc")
-        .join(pid.to_string())
-        .join("exe");
-    let Ok(target) = std::fs::read_link(exe_path) else {
-        return false;
-    };
-    is_managed_plugin_binary_path(&target, installs_root, shared_plugins_root)
-}
-
-fn daemon_pid_files() -> Vec<std::path::PathBuf> {
-    let mut files = Vec::new();
-
-    if let Some(current) = crate::plugins::daemon_tracker::daemon_pids_path() {
-        files.push(current);
-    }
-
-    let Some(installs_dir) = paths::installs_dir().ok() else {
-        return files;
-    };
-    let Ok(entries) = std::fs::read_dir(installs_dir) else {
-        return files;
-    };
-
-    for entry in entries.filter_map(|e| e.ok()) {
-        let path = entry.path().join(".daemon-pids");
-        if path.exists() {
-            files.push(path);
-        }
-    }
-
-    files
 }
 
 pub fn clean_stale_sockets(plugins: &[Plugin]) {

@@ -130,6 +130,10 @@ async fn async_init() -> Result<(
 
     let (shutdown_tx, shutdown_rx) = broadcast::channel::<()>(1);
 
+    // Start platform state server before plugins so the socket is ready
+    // when plugin daemons start and try to connect.
+    let _state_server = qol_tray::runtime::RuntimeServer::start();
+
     let mut plugin_manager = PluginManager::new();
     plugin_manager.load_plugins()?;
     let plugin_manager = Arc::new(Mutex::new(plugin_manager));

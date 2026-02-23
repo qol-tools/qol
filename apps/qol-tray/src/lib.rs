@@ -7,6 +7,8 @@ pub mod hotkeys;
 pub mod installer;
 pub mod menu;
 pub mod paths;
+pub(crate) mod os;
+pub mod runtime;
 pub mod plugins;
 pub mod process_utils;
 pub mod tray;

@@ -79,6 +79,7 @@ impl PluginManager {
         }
 
         super::daemon_tracker::save_daemon_pids(&pids.into_inner().unwrap());
+        self.sync_ignore_pids();
         Ok(())
     }
 
@@ -112,7 +113,17 @@ impl PluginManager {
 
         plugin.stop_daemon()?;
         plugin.start_daemon()?;
+        self.sync_ignore_pids();
         Ok(())
+    }
+
+    fn sync_ignore_pids(&self) {
+        for plugin in self.plugins.values() {
+            if let Some(pid) = plugin.daemon_pid() {
+                log::info!("Ignoring daemon pid {} for plugin {}", pid, plugin.id);
+                crate::os::display::add_ignore_pid(pid);
+            }
+        }
     }
 
     fn stop_all_plugins(&mut self) {
@@ -124,6 +135,7 @@ impl PluginManager {
         }
         self.plugins.clear();
         super::daemon_tracker::save_daemon_pids(&[]);
+        super::daemon_tracker::kill_orphan_daemons();
     }
 }
 

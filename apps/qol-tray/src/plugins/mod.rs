@@ -74,12 +74,25 @@ impl Plugin {
             cmd.env("QOL_TRAY_DAEMON_SOCKET", socket);
         }
         cmd.env("QOL_TRAY_DAEMON_REPLACE_EXISTING", "1");
+        cmd.env("QOL_TRAY_STATE_SOCKET", "/tmp/qol-tray-state.sock");
 
         #[cfg(feature = "dev")]
         cmd.env("RUST_LOG", "debug");
 
         #[cfg(not(feature = "dev"))]
         cmd.env("RUST_LOG", "warn");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // Run daemon in its own process group so stop_daemon() can kill all children.
+            unsafe {
+                cmd.pre_exec(|| {
+                    libc::setsid();
+                    Ok(())
+                });
+            }
+        }
 
         let mut child = cmd.spawn()?;
         if !relay_patterns.is_empty() {
@@ -105,7 +118,10 @@ impl Plugin {
             }
         }
 
+        let pid = child.id();
         self.daemon_process = Some(child);
+        crate::os::display::add_ignore_pid(pid);
+        log::info!("Registered ignore pid {} for plugin {}", pid, self.id);
         Ok(())
     }
 
@@ -122,7 +138,8 @@ impl Plugin {
 
         #[cfg(unix)]
         unsafe {
-            libc::kill(child.id() as i32, libc::SIGTERM);
+            // Kill the entire process group (setsid makes pid == pgid)
+            libc::kill(-(child.id() as i32), libc::SIGTERM);
         }
         #[cfg(not(unix))]
         {
