@@ -337,6 +337,9 @@ fn activate_or_open_launcher(
     }
     #[cfg(not(target_os = "macos"))]
     cx.activate(true);
+
+    #[cfg(target_os = "macos")]
+    set_macos_accessory_policy();
 }
 
 fn open_launcher_window(
@@ -482,6 +485,11 @@ fn activate_launcher_handle(
         cx.activate(true);
     }
 
+    #[cfg(target_os = "macos")]
+    if activated {
+        set_macos_accessory_policy();
+    }
+
     activated
 }
 
@@ -556,26 +564,12 @@ fn spawn_command_poll(
 
 #[cfg(target_os = "macos")]
 fn set_macos_accessory_policy() {
-    use std::ffi::c_void;
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+    use objc2_foundation::MainThreadMarker;
 
-    #[link(name = "objc")]
-    extern "C" {
-        fn objc_getClass(name: *const u8) -> *mut c_void;
-        fn sel_registerName(name: *const u8) -> *mut c_void;
-        fn objc_msgSend(receiver: *mut c_void, sel: *mut c_void, ...) -> *mut c_void;
-    }
-
-    const NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY: i64 = 1;
-
-    unsafe {
-        let cls = objc_getClass(b"NSApplication\0".as_ptr());
-        let shared_app_sel = sel_registerName(b"sharedApplication\0".as_ptr());
-        let app = objc_msgSend(cls, shared_app_sel);
-        if !app.is_null() {
-            let set_policy_sel = sel_registerName(b"setActivationPolicy:\0".as_ptr());
-            objc_msgSend(app, set_policy_sel, NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY);
-        }
-    }
+    let mtm = MainThreadMarker::new().expect("must be on main thread");
+    let app = NSApplication::sharedApplication(mtm);
+    app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 }
 
 pub fn run() {
@@ -595,9 +589,6 @@ pub fn run() {
         #[cfg(debug_assertions)]
         eprintln!("[launcher] run: pid={}", std::process::id());
 
-        #[cfg(target_os = "macos")]
-        set_macos_accessory_policy();
-
         let any_visible = Arc::new(AtomicBool::new(false));
         let focus_cache = MonitorTracker::start(cx, any_visible.clone());
 
@@ -614,6 +605,10 @@ pub fn run() {
         let active: Rc<RefCell<ActiveLaunchers>> = Rc::new(RefCell::new(ActiveLaunchers::default()));
 
         open_keepalive_window(cx);
+
+        #[cfg(target_os = "macos")]
+        set_macos_accessory_policy();
+
         spawn_command_poll(entries.clone(), active.clone(), any_visible.clone(), rx, focus_cache.clone(), cx);
         cx.spawn({
             let entries = entries.clone();
