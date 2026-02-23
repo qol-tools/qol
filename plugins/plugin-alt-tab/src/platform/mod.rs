@@ -3,6 +3,12 @@ mod preview;
 #[cfg(target_os = "macos")]
 pub(crate) mod cg_helpers;
 
+pub struct RgbaImage {
+    pub data: Vec<u8>,
+    pub width: usize,
+    pub height: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct WindowInfo {
     pub id: u32,
@@ -46,6 +52,22 @@ mod unsupported {
         _max_w: usize,
         _max_h: usize,
     ) -> Vec<(usize, Option<String>)> {
+        Vec::new()
+    }
+
+    pub fn capture_preview_rgba(
+        _window_id: u32,
+        _max_w: usize,
+        _max_h: usize,
+    ) -> Option<super::RgbaImage> {
+        None
+    }
+
+    pub fn capture_previews_batch_rgba(
+        _targets: &[(usize, u32)],
+        _max_w: usize,
+        _max_h: usize,
+    ) -> Vec<(usize, Option<super::RgbaImage>)> {
         Vec::new()
     }
 
@@ -93,6 +115,18 @@ pub fn capture_previews_batch(
     max_h: usize,
 ) -> Vec<(usize, Option<String>)> {
     imp::capture_previews_batch(targets, max_w, max_h)
+}
+
+pub fn capture_preview_rgba(window_id: u32, max_w: usize, max_h: usize) -> Option<RgbaImage> {
+    imp::capture_preview_rgba(window_id, max_w, max_h)
+}
+
+pub fn capture_previews_batch_rgba(
+    targets: &[(usize, u32)],
+    max_w: usize,
+    max_h: usize,
+) -> Vec<(usize, Option<RgbaImage>)> {
+    imp::capture_previews_batch_rgba(targets, max_w, max_h)
 }
 
 pub fn activate_window(window_id: u32) {

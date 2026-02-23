@@ -16,6 +16,22 @@ pub fn capture_previews_batch(
     Vec::new()
 }
 
+pub fn capture_preview_rgba(
+    _window_id: u32,
+    _max_w: usize,
+    _max_h: usize,
+) -> Option<super::RgbaImage> {
+    None
+}
+
+pub fn capture_previews_batch_rgba(
+    _targets: &[(usize, u32)],
+    _max_w: usize,
+    _max_h: usize,
+) -> Vec<(usize, Option<super::RgbaImage>)> {
+    Vec::new()
+}
+
 pub fn activate_window(_window_id: u32) {}
 
 pub fn move_app_window(_title: &str, _x: i32, _y: i32) -> bool {

@@ -11,38 +11,37 @@ use crate::platform::WindowInfo;
 use crate::window_source::{load_windows_with_previews, preview_tile};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::{
-    list::{ListDelegate, ListItem, ListState},
-    IndexPath,
-};
 use monitor::MonitorTracker;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
+const LIVE_PREVIEW_INTERVAL_MS: u64 = 500;
+
 const SETTINGS_URL: &str = "http://127.0.0.1:42700/plugins/plugin-alt-tab/";
 const DEFAULT_ESTIMATED_WINDOW_COUNT: usize = 8;
 const PREWARM_REFRESH_INTERVAL_MS: u64 = 1200;
+const ALT_POLL_INTERVAL_MS: u64 = 50;
 
-// ─── List delegate ────────────────────────────────────────────────────────────
+static PICKER_VISIBLE: AtomicBool = AtomicBool::new(false);
+
+// ─── Window delegate ─────────────────────────────────────────────────────────
 
 struct WindowDelegate {
     windows: Vec<WindowInfo>,
-    selected_index: Option<IndexPath>,
+    selected_index: Option<usize>,
     label_config: crate::config::LabelConfig,
+    live_previews: std::collections::HashMap<u32, Arc<gpui::RenderImage>>,
 }
 
 impl WindowDelegate {
     fn new(windows: Vec<WindowInfo>, label_config: crate::config::LabelConfig) -> Self {
-        let selected_index = if windows.is_empty() {
-            None
-        } else {
-            Some(IndexPath::new(0))
-        };
+        let selected_index = if windows.is_empty() { None } else { Some(0) };
         Self {
             windows,
             selected_index,
             label_config,
+            live_previews: std::collections::HashMap::new(),
         }
     }
 
@@ -59,7 +58,7 @@ impl WindowDelegate {
         }
 
         if reset_selection {
-            self.selected_index = Some(IndexPath::new(0));
+            self.selected_index = Some(0);
             #[cfg(debug_assertions)]
             eprintln!(
                 "[alt-tab/select] set_windows reset={} next=Some(0) total={}",
@@ -69,99 +68,22 @@ impl WindowDelegate {
             return;
         }
 
-        let selected_row = self.selected_index.map(|ix| ix.row).unwrap_or(0);
-        self.selected_index = Some(IndexPath::new(selected_row.min(self.windows.len() - 1)));
+        let selected_row = self.selected_index.unwrap_or(0);
+        self.selected_index = Some(selected_row.min(self.windows.len() - 1));
         #[cfg(debug_assertions)]
         eprintln!(
             "[alt-tab/select] set_windows reset={} next={:?} total={}",
             reset_selection,
-            self.selected_index.map(|ix| ix.row),
+            self.selected_index,
             self.windows.len()
         );
-    }
-}
-
-impl ListDelegate for WindowDelegate {
-    type Item = ListItem;
-
-    fn items_count(&self, _section: usize, _cx: &App) -> usize {
-        self.windows.len()
-    }
-
-    fn render_item(
-        &mut self,
-        ix: IndexPath,
-        _window: &mut Window,
-        _cx: &mut Context<ListState<Self>>,
-    ) -> Option<Self::Item> {
-        let is_selected = self.selected_index == Some(ix);
-        let win = &self.windows[ix.row];
-
-        let item = div().flex().px_1().py_2().child(
-            div()
-                .flex()
-                .flex_col()
-                .items_center()
-                .w(px(GRID_CARD_WIDTH))
-                .p_2()
-                .rounded_xl()
-                .when(is_selected, |s| {
-                    s.bg(rgb(0x233050)).border_1().border_color(rgb(0x4a6fa5))
-                })
-                .when(!is_selected, |s| s.bg(rgb(0x161a25)))
-                .child(div().rounded_md().overflow_hidden().child(preview_tile(
-                    &win.preview_path,
-                    GRID_PREVIEW_WIDTH,
-                    GRID_PREVIEW_HEIGHT,
-                )))
-                .child(
-                    div()
-                        .mt_2()
-                        .w_full()
-                        .text_color(if is_selected {
-                            rgb(0xffffff)
-                        } else {
-                            rgb(0x6b7890)
-                        })
-                        .text_xs()
-                        .text_center()
-                        .text_ellipsis()
-                        .child(self.label_config.format(&win.app_name, &win.title)),
-                ),
-        );
-
-        Some(
-            ListItem::new(gpui::SharedString::from(format!(
-                "window-{}-{}-{}",
-                ix.row, self.label_config.show_app_name, self.label_config.show_window_title
-            )))
-            .child(item),
-        )
-    }
-
-    fn set_selected_index(
-        &mut self,
-        ix: Option<IndexPath>,
-        _window: &mut Window,
-        _cx: &mut Context<ListState<Self>>,
-    ) {
-        self.selected_index = ix;
-    }
-
-    fn confirm(
-        &mut self,
-        _secondary: bool,
-        window: &mut Window,
-        _cx: &mut Context<ListState<Self>>,
-    ) {
-        self.activate_selected(window);
     }
 }
 
 impl WindowDelegate {
     fn activate_selected(&self, window: &mut Window) {
         if let Some(ix) = self.selected_index {
-            let win = &self.windows[ix.row];
+            let win = &self.windows[ix];
             platform::activate_window(win.id);
             // Push the activated window's monitor to the runtime so the focus
             // stamp survives the AX "no focused application" gap.
@@ -183,6 +105,7 @@ impl WindowDelegate {
                     client.set_focus(idx);
                 }
             }
+            PICKER_VISIBLE.store(false, Ordering::Relaxed);
             platform::dismiss_picker(window);
         }
     }
@@ -191,22 +114,20 @@ impl WindowDelegate {
         if self.windows.is_empty() {
             return;
         }
-        let current = self.selected_index.map(|ix| ix.row).unwrap_or(0);
-        let next = (current + 1) % self.windows.len();
-        self.selected_index = Some(IndexPath::new(next));
+        let current = self.selected_index.unwrap_or(0);
+        self.selected_index = Some((current + 1) % self.windows.len());
     }
 
     fn select_prev(&mut self) {
         if self.windows.is_empty() {
             return;
         }
-        let current = self.selected_index.map(|ix| ix.row).unwrap_or(0);
-        let prev = if current == 0 {
+        let current = self.selected_index.unwrap_or(0);
+        self.selected_index = Some(if current == 0 {
             self.windows.len() - 1
         } else {
             current - 1
-        };
-        self.selected_index = Some(IndexPath::new(prev));
+        });
     }
 
     fn select_left(&mut self, columns: usize) {
@@ -235,7 +156,6 @@ impl WindowDelegate {
         let rows = (total + cols - 1) / cols;
         let current = self
             .selected_index
-            .map(|ix| ix.row)
             .unwrap_or(0)
             .min(total.saturating_sub(1));
 
@@ -283,7 +203,7 @@ impl WindowDelegate {
             }
         };
 
-        self.selected_index = Some(IndexPath::new(next));
+        self.selected_index = Some(next);
     }
 }
 
@@ -294,14 +214,40 @@ enum GridDirection {
     Down,
 }
 
+/// Sample ~1KB of evenly-spaced pixels for a fast content-change check.
+fn fast_pixel_hash(data: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let stride = (data.len() / 256).max(1);
+    let mut i = 0;
+    while i < data.len() {
+        let end = (i + 4).min(data.len());
+        data[i..end].hash(&mut hasher);
+        i += stride;
+    }
+    hasher.finish()
+}
+
+fn rgba_to_render_image(data: &[u8], w: usize, h: usize) -> Option<Arc<gpui::RenderImage>> {
+    let mut bgra = data.to_vec();
+    // gpui's Metal renderer expects BGRA byte order
+    for pixel in bgra.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+    let buf = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(w as u32, h as u32, bgra)?;
+    let frame = image::Frame::new(buf);
+    Some(Arc::new(gpui::RenderImage::new(smallvec::smallvec![frame])))
+}
+
 // ─── App view ─────────────────────────────────────────────────────────────────
 
 struct AltTabApp {
-    list_state: Entity<ListState<WindowDelegate>>,
+    delegate: Entity<WindowDelegate>,
     focus_handle: FocusHandle,
     action_mode: ActionMode,
     alt_was_held: bool,
     _alt_poll_task: Option<gpui::Task<()>>,
+    _live_preview_task: Option<gpui::Task<()>>,
 }
 
 impl AltTabApp {
@@ -315,8 +261,8 @@ impl AltTabApp {
         label_config: crate::config::LabelConfig,
     ) -> Self {
         let has_cached_windows = !initial_windows.is_empty();
-        let delegate = WindowDelegate::new(initial_windows.clone(), label_config);
-        let list_state = cx.new(|cx| ListState::new(delegate, window, cx));
+        let win_delegate = WindowDelegate::new(initial_windows.clone(), label_config);
+        let delegate = cx.new(|_cx| win_delegate);
 
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle);
@@ -332,12 +278,13 @@ impl AltTabApp {
             window,
             |this, _event, window, _cx| {
                 if this.action_mode != ActionMode::HoldToSwitch {
+                    PICKER_VISIBLE.store(false, Ordering::Relaxed);
                     platform::dismiss_picker(window);
                 }
             },
         );
 
-        let list_state_clone = list_state.clone();
+        let delegate_clone = delegate.clone();
         cx.spawn(
             move |this: gpui::WeakEntity<AltTabApp>, cx: &mut gpui::AsyncApp| {
                 let cx = cx.clone();
@@ -354,18 +301,12 @@ impl AltTabApp {
                     if let Ok(mut cache) = window_cache.lock() {
                         *cache = windows.clone();
                     }
-                    let missing_targets: Vec<(usize, u32)> = windows
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, win)| win.preview_path.is_none())
-                        .map(|(i, win)| (i, win.id))
-                        .collect();
                     let ids: Vec<u32> = windows.iter().map(|w| w.id).collect();
                     last_window_count.store(ids.len().max(1), Ordering::Relaxed);
 
                     let _ = cx.update(|app_cx| {
-                        let _ = list_state_clone.update(app_cx, |state, cx| {
-                            state.delegate_mut().set_windows(windows.clone(), false);
+                        let _ = delegate_clone.update(app_cx, |state, cx| {
+                            state.set_windows(windows.clone(), false);
                             cx.notify();
                         });
                         let _ = this.update(app_cx, |_, cx: &mut gpui::Context<AltTabApp>| {
@@ -382,57 +323,95 @@ impl AltTabApp {
                         }
                     });
 
-                    let (tx, rx) = mpsc::channel::<(usize, Option<String>)>();
-                    for (i, id) in missing_targets {
-                        let tx = tx.clone();
+                    // Live preview task handles ongoing captures — no per-window
+                    // file-based capture loop needed here.
+                }
+            },
+        )
+        .detach();
+
+        // Spawn live preview refresh task
+        let delegate_for_preview = delegate.clone();
+        let live_preview_task = cx.spawn(
+            move |this: gpui::WeakEntity<AltTabApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let executor = cx.background_executor().clone();
+                    // Track pixel data hashes to avoid re-uploading unchanged textures
+                    let mut prev_hashes: std::collections::HashMap<u32, u64> =
+                        std::collections::HashMap::new();
+                    loop {
                         executor
+                            .timer(Duration::from_millis(LIVE_PREVIEW_INTERVAL_MS))
+                            .await;
+                        if !PICKER_VISIBLE.load(Ordering::Relaxed) {
+                            prev_hashes.clear();
+                            continue;
+                        }
+                        // Collect (index, window_id) pairs
+                        let window_ids: Vec<(usize, u32)> = cx
+                            .update(|app_cx| {
+                                delegate_for_preview
+                                    .read(app_cx)
+                                    .windows
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, w)| (i, w.id))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        if window_ids.is_empty() {
+                            continue;
+                        }
+                        let id_map: Vec<(usize, u32)> = window_ids.clone();
+                        let captured = executor
                             .spawn(async move {
-                                let path = platform::capture_preview(
-                                    id,
+                                platform::capture_previews_batch_rgba(
+                                    &window_ids,
                                     PREVIEW_MAX_WIDTH,
                                     PREVIEW_MAX_HEIGHT,
-                                );
-                                let _ = tx.send((i, path));
+                                )
                             })
-                            .detach();
-                    }
-                    drop(tx);
-
-                    let rx = Arc::new(std::sync::Mutex::new(rx));
-                    loop {
-                        let rx = rx.clone();
-                        let next = executor
-                            .spawn(async move { rx.lock().ok()?.recv().ok() })
                             .await;
-
-                        let Some((i, path_opt)) = next else {
-                            break;
-                        };
-
-                        if let Some(path) = path_opt {
-                            if let Ok(mut cache) = window_cache.lock() {
-                                if i < cache.len() {
-                                    cache[i].preview_path = Some(path.clone());
-                                }
+                        let mut changed = false;
+                        let list = delegate_for_preview.clone();
+                        for (idx, rgba_opt) in captured {
+                            let Some(rgba) = rgba_opt else { continue };
+                            let Some(&(_, wid)) = id_map.iter().find(|(i, _)| *i == idx) else {
+                                continue;
+                            };
+                            // Fast hash: sample a few cache lines instead of hashing all pixels
+                            let hash = fast_pixel_hash(&rgba.data);
+                            if prev_hashes.get(&wid) == Some(&hash) {
+                                continue; // unchanged — skip atlas re-upload
                             }
-                            let _ = cx.update(|app_cx| {
-                                let _ = list_state_clone.update(app_cx, |state, cx| {
-                                    if i < state.delegate().windows.len() {
-                                        state.delegate_mut().windows[i].preview_path = Some(path);
-                                        cx.notify();
-                                    }
-                                });
-                                let _ =
-                                    this.update(app_cx, |_, cx: &mut gpui::Context<AltTabApp>| {
+                            prev_hashes.insert(wid, hash);
+                            if let Some(render_img) =
+                                rgba_to_render_image(&rgba.data, rgba.width, rgba.height)
+                            {
+                                let _ = cx.update(|app_cx| {
+                                    let _ = list.update(app_cx, |state, cx| {
+                                        state.live_previews.insert(wid, render_img);
                                         cx.notify();
                                     });
+                                });
+                                changed = true;
+                            }
+                        }
+                        if changed {
+                            let _ = cx.update(|app_cx| {
+                                let _ = this.update(
+                                    app_cx,
+                                    |_, cx: &mut gpui::Context<AltTabApp>| {
+                                        cx.notify();
+                                    },
+                                );
                             });
                         }
                     }
                 }
             },
-        )
-        .detach();
+        );
 
         #[cfg(debug_assertions)]
         eprintln!(
@@ -441,11 +420,12 @@ impl AltTabApp {
         );
 
         let mut app = Self {
-            list_state,
+            delegate,
             focus_handle,
             action_mode: action_mode.clone(),
             alt_was_held: true,
             _alt_poll_task: None,
+            _live_preview_task: Some(live_preview_task),
         };
 
         if action_mode == ActionMode::HoldToSwitch {
@@ -461,8 +441,8 @@ impl AltTabApp {
         reset_selection: bool,
         cx: &mut Context<Self>,
     ) {
-        self.list_state.update(cx, |state, cx| {
-            state.delegate_mut().set_windows(windows, reset_selection);
+        self.delegate.update(cx, |state, cx| {
+            state.set_windows(windows, reset_selection);
             cx.notify();
         });
         cx.notify();
@@ -475,7 +455,7 @@ impl AltTabApp {
         window_handle: gpui::AnyWindowHandle,
         cx: &mut gpui::Context<Self>,
     ) {
-        let list = self.list_state.clone();
+        let list = self.delegate.clone();
         self.alt_was_held = true;
         self._alt_poll_task = Some(cx.spawn(
             move |this: gpui::WeakEntity<AltTabApp>, cx: &mut gpui::AsyncApp| {
@@ -487,7 +467,7 @@ impl AltTabApp {
                         .await;
                     loop {
                         cx.background_executor()
-                            .timer(std::time::Duration::from_millis(16))
+                            .timer(std::time::Duration::from_millis(ALT_POLL_INTERVAL_MS))
                             .await;
                         let alt_held = platform::is_modifier_held();
 
@@ -498,7 +478,7 @@ impl AltTabApp {
                             let list = list.clone();
                             let _ = cx.update_window(window_handle, |_root, window, cx| {
                                 list.update(cx, |s, _cx| {
-                                    s.delegate_mut().activate_selected(window);
+                                    s.activate_selected(window);
                                 });
                             });
                             break;
@@ -530,7 +510,7 @@ impl Focusable for AltTabApp {
 
 impl Render for AltTabApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let list_state = self.list_state.clone();
+        let delegate = self.delegate.clone();
 
         #[cfg(debug_assertions)]
         eprintln!(
@@ -549,75 +529,76 @@ impl Render for AltTabApp {
             // not by GPUI events (which don't fire due to global hotkey grab).
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
-                    "escape" | "esc" => platform::dismiss_picker(window),
+                    "escape" | "esc" => {
+                        PICKER_VISIBLE.store(false, Ordering::Relaxed);
+                        platform::dismiss_picker(window);
+                    }
                     "enter" => {
                         // Activate selected and close
                         let win_id =
-                            this.list_state
+                            this.delegate
                                 .read(cx)
-                                .delegate()
                                 .selected_index
                                 .and_then(|ix| {
-                                    this.list_state
+                                    this.delegate
                                         .read(cx)
-                                        .delegate()
                                         .windows
-                                        .get(ix.row)
+                                        .get(ix)
                                         .map(|w| w.id)
                                 });
                         if let Some(_id) = win_id {
-                            this.list_state.update(cx, |s, _cx| {
-                                s.delegate_mut().activate_selected(window);
+                            this.delegate.update(cx, |s, _cx| {
+                                s.activate_selected(window);
                             });
                         }
                     }
                     // Navigate — do NOT call s.focus() after, that would steal focus
                     // from our root div and break further key events.
                     "tab" => {
-                        this.list_state.update(cx, |s, _cx| {
+                        this.delegate.update(cx, |s, _cx| {
                             if event.keystroke.modifiers.shift {
-                                s.delegate_mut().select_prev();
+                                s.select_prev();
                             } else {
-                                s.delegate_mut().select_next();
+                                s.select_next();
                             }
                         });
                         cx.notify();
                     }
                     "backtab" => {
-                        this.list_state.update(cx, |s, _cx| {
-                            s.delegate_mut().select_prev();
+                        this.delegate.update(cx, |s, _cx| {
+                            s.select_prev();
                         });
                         cx.notify();
                     }
                     "right" | "arrowright" => {
-                        let total = this.list_state.read(cx).delegate().windows.len();
+                        let total = this.delegate.read(cx).windows.len();
                         let cols = rendered_column_count(window, total);
-                        this.list_state.update(cx, |s, _cx| {
-                            s.delegate_mut().select_right(cols);
+                        this.delegate.update(cx, |s, _cx| {
+                            s.select_right(cols);
                         });
                         cx.notify();
                     }
                     "left" | "arrowleft" => {
-                        let total = this.list_state.read(cx).delegate().windows.len();
+                        let total = this.delegate.read(cx).windows.len();
                         let cols = rendered_column_count(window, total);
-                        this.list_state.update(cx, |s, _cx| {
-                            s.delegate_mut().select_left(cols);
+                        this.delegate.update(cx, |s, _cx| {
+                            s.select_left(cols);
                         });
                         cx.notify();
                     }
                     "down" | "arrowdown" => {
-                        let total = this.list_state.read(cx).delegate().windows.len();
+                        let total = this.delegate.read(cx).windows.len();
                         let cols = rendered_column_count(window, total);
-                        this.list_state.update(cx, |s, _cx| {
-                            s.delegate_mut().select_down(cols);
+                        this.delegate.update(cx, |s, _cx| {
+                            s.select_down(cols);
                         });
                         cx.notify();
                     }
                     "up" | "arrowup" => {
-                        let total = this.list_state.read(cx).delegate().windows.len();
+                        let total = this.delegate.read(cx).windows.len();
                         let cols = rendered_column_count(window, total);
-                        this.list_state.update(cx, |s, _cx| {
-                            s.delegate_mut().select_up(cols);
+                        this.delegate.update(cx, |s, _cx| {
+                            s.select_up(cols);
                         });
                         cx.notify();
                     }
@@ -651,11 +632,11 @@ impl Render for AltTabApp {
             .child(
                 // ── Content ───────────────────────────────────────────────────
                 div().flex_1().w_full().min_h_0().child({
-                    let delegate = list_state.read(cx).delegate();
-                    let windows = delegate.windows.clone();
-                    let selected_index = delegate.selected_index;
-                    let label_config = delegate.label_config.clone();
-                    let _ = delegate;
+                    let d = delegate.read(cx);
+                    let windows = d.windows.clone();
+                    let selected_index = d.selected_index;
+                    let label_config = d.label_config.clone();
+                    let live_previews = d.live_previews.clone();
 
                     let entity = cx.weak_entity();
                     div()
@@ -679,7 +660,7 @@ impl Render for AltTabApp {
                             )
                         })
                         .children(windows.into_iter().enumerate().map(|(i, win)| {
-                            let is_selected = selected_index == Some(IndexPath::new(i));
+                            let is_selected = selected_index == Some(i);
                             let entity_for_click = entity.clone();
                             div()
                                 .id(ElementId::Integer(i as u64))
@@ -693,13 +674,11 @@ impl Render for AltTabApp {
                                 .on_click(move |_ev: &gpui::ClickEvent, window, cx| {
                                     let window_id = entity_for_click
                                         .update(cx, |this, cx| {
-                                            this.list_state.update(cx, |s, _cx| {
-                                                s.delegate_mut().selected_index =
-                                                    Some(IndexPath::new(i));
+                                            this.delegate.update(cx, |s, _cx| {
+                                                s.selected_index = Some(i);
                                             });
-                                            this.list_state
+                                            this.delegate
                                                 .read(cx)
-                                                .delegate()
                                                 .windows
                                                 .get(i)
                                                 .map(|w| w.id)
@@ -709,9 +688,8 @@ impl Render for AltTabApp {
                                     if let Some(_id) = window_id {
                                         entity_for_click
                                             .update(cx, |this, cx| {
-                                                this.list_state.update(cx, |s, _cx| {
-                                                    s.delegate_mut()
-                                                        .activate_selected(window);
+                                                this.delegate.update(cx, |s, _cx| {
+                                                    s.activate_selected(window);
                                                 });
                                             })
                                             .ok();
@@ -727,6 +705,7 @@ impl Render for AltTabApp {
                                     })
                                 })
                                 .child(div().rounded_md().overflow_hidden().child(preview_tile(
+                                    live_previews.get(&win.id),
                                     &win.preview_path,
                                     GRID_PREVIEW_WIDTH,
                                     GRID_PREVIEW_HEIGHT,
@@ -855,11 +834,11 @@ fn open_picker(
                         "[alt-tab/hold] window already visible (alt_held={} reverse={}) — cycling",
                         alt_held, reverse
                     );
-                    view.list_state.update(cx, |s, _cx| {
+                    view.delegate.update(cx, |s, _cx| {
                         if reverse {
-                            s.delegate_mut().select_prev();
+                            s.select_prev();
                         } else {
-                            s.delegate_mut().select_next();
+                            s.select_next();
                         }
                     });
                     cx.notify();
@@ -890,9 +869,8 @@ fn open_picker(
                 view.alt_was_held = true;
 
                 // Update label config and cache active monitor from tracker
-                view.list_state.update(cx, |s, _cx| {
-                    let d = s.delegate_mut();
-                    d.label_config = config.label.clone();
+                view.delegate.update(cx, |s, _cx| {
+                    s.label_config = config.label.clone();
                 });
 
                 // Start a new X11 modifier polling task for HoldToSwitch
@@ -1000,6 +978,7 @@ fn open_picker(
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/open] failed to open picker window");
     }
+    PICKER_VISIBLE.store(true, Ordering::Relaxed);
     cx.activate(true);
 
     #[cfg(target_os = "macos")]
@@ -1020,10 +999,7 @@ fn run_app(config: AltTabConfig, rx: mpsc::Receiver<daemon::Command>, show_on_st
     let app = Application::new();
 
     app.run(move |cx: &mut App| {
-        gpui_component::init(cx);
-
-        let any_visible = Arc::new(AtomicBool::new(false));
-        let tracker = MonitorTracker::start(cx, any_visible);
+        let tracker = MonitorTracker::start(cx);
 
         open_keepalive(cx);
 
@@ -1036,13 +1012,17 @@ fn run_app(config: AltTabConfig, rx: mpsc::Receiver<daemon::Command>, show_on_st
         let last_window_count = Arc::new(AtomicUsize::new(DEFAULT_ESTIMATED_WINDOW_COUNT));
         let window_cache: Arc<std::sync::Mutex<Vec<WindowInfo>>> =
             Arc::new(std::sync::Mutex::new(Vec::new()));
-
-        // Prewarm window + preview cache while daemon is alive so first user open is hot.
         let warm_cache = window_cache.clone();
         let warm_count = last_window_count.clone();
         cx.spawn(async move |cx: &mut AsyncApp| {
             let executor = cx.background_executor().clone();
             loop {
+                executor
+                    .timer(Duration::from_millis(PREWARM_REFRESH_INTERVAL_MS))
+                    .await;
+                if PICKER_VISIBLE.load(Ordering::Relaxed) {
+                    continue;
+                }
                 let cached = warm_cache
                     .lock()
                     .map(|cache| cache.clone())
@@ -1052,9 +1032,6 @@ fn run_app(config: AltTabConfig, rx: mpsc::Receiver<daemon::Command>, show_on_st
                 if let Ok(mut cache) = warm_cache.lock() {
                     *cache = refreshed;
                 }
-                executor
-                    .timer(Duration::from_millis(PREWARM_REFRESH_INTERVAL_MS))
-                    .await;
             }
         })
         .detach();

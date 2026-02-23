@@ -1,7 +1,5 @@
 use gpui::*;
 use qol_runtime::{MonitorBounds, PlatformStateClient};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct ActiveMonitor {
@@ -34,14 +32,12 @@ impl ActiveMonitor {
 #[derive(Clone)]
 pub struct MonitorTracker {
     client: PlatformStateClient,
-    any_visible: Arc<AtomicBool>,
 }
 
 impl MonitorTracker {
-    pub fn start(_cx: &App, any_visible: Arc<AtomicBool>) -> Self {
+    pub fn start(_cx: &App) -> Self {
         Self {
             client: PlatformStateClient::from_env(),
-            any_visible,
         }
     }
 

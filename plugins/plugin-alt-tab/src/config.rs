@@ -6,14 +6,12 @@ use std::path::PathBuf;
 #[serde(default)]
 pub struct DisplayConfig {
     pub max_columns: usize,
-    pub preview_fps: u8,
 }
 
 impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
             max_columns: 6,
-            preview_fps: 10,
         }
     }
 }
@@ -97,11 +95,10 @@ pub fn load_alt_tab_config() -> AltTabConfig {
         match serde_json::from_str::<AltTabConfig>(&contents) {
             Ok(config) => {
                 println!(
-                    "Loaded config from {}: action_mode={:?} max_columns={} preview_fps={} reset_selection_on_open={}",
+                    "Loaded config from {}: action_mode={:?} max_columns={} reset_selection_on_open={}",
                     path.display(),
                     config.action_mode,
                     config.display.max_columns,
-                    config.display.preview_fps,
                     config.reset_selection_on_open
                 );
                 return config;

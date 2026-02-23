@@ -47,7 +47,7 @@ pub fn downscale_and_save_preview(
     Some(path.to_string_lossy().to_string())
 }
 
-fn downscale_rgba(
+pub fn downscale_rgba(
     data: &[u8],
     src_w: usize,
     src_h: usize,

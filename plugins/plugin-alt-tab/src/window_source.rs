@@ -3,6 +3,7 @@ use crate::platform;
 use crate::platform::WindowInfo;
 use gpui::*;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub async fn load_windows_with_previews(
     executor: &BackgroundExecutor,
@@ -62,8 +63,19 @@ pub async fn load_windows_with_previews(
     windows
 }
 
-pub fn preview_tile(preview_path: &Option<String>, width: f32, height: f32) -> AnyElement {
-    if let Some(path) = preview_path {
+pub fn preview_tile(
+    live_image: Option<&Arc<RenderImage>>,
+    preview_path: &Option<String>,
+    width: f32,
+    height: f32,
+) -> AnyElement {
+    if let Some(render_image) = live_image {
+        img(render_image.clone())
+            .w(px(width))
+            .h(px(height))
+            .rounded_md()
+            .into_any_element()
+    } else if let Some(path) = preview_path {
         img(std::path::PathBuf::from(path))
             .w(px(width))
             .h(px(height))

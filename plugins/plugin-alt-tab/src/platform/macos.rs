@@ -1,5 +1,6 @@
 use super::cg_helpers;
 use super::preview;
+use super::RgbaImage;
 use super::WindowInfo;
 use objc2::{AnyThread, Message};
 use std::ffi::c_void;
@@ -157,16 +158,78 @@ pub fn capture_previews_batch(
     if !SCK_AVAILABLE.load(Ordering::Relaxed) {
         return targets.iter().map(|&(idx, _)| (idx, None)).collect();
     }
-    targets
-        .iter()
-        .map(|&(idx, wid)| (idx, capture_preview(wid, max_w, max_h)))
-        .collect()
+    std::thread::scope(|s| {
+        let handles: Vec<_> = targets
+            .iter()
+            .map(|&(idx, wid)| {
+                s.spawn(move || {
+                    let path = sck_capture_on_thread(wid, max_w, max_h).and_then(|rgba| {
+                        preview::downscale_and_save_preview(
+                            wid, &rgba.data, rgba.width, rgba.height, max_w, max_h,
+                        )
+                    });
+                    (idx, path)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .filter_map(|h| h.join().ok())
+            .collect()
+    })
 }
 
-struct RgbaImage {
-    data: Vec<u8>,
-    width: usize,
-    height: usize,
+pub fn capture_preview_rgba(window_id: u32, max_w: usize, max_h: usize) -> Option<RgbaImage> {
+    if !SCK_AVAILABLE.load(Ordering::Relaxed) {
+        return None;
+    }
+
+    let (tx, rx) = mpsc::channel::<Option<RgbaImage>>();
+    std::thread::spawn(move || {
+        let result = sck_capture_on_thread(window_id, max_w, max_h);
+        let _ = tx.send(result);
+    });
+
+    match rx.recv_timeout(Duration::from_millis(2000)) {
+        Ok(Some(rgba)) => {
+            let (data, w, h) = preview::downscale_rgba(&rgba.data, rgba.width, rgba.height, max_w, max_h);
+            if w == 0 || h == 0 { None } else { Some(RgbaImage { data, width: w, height: h }) }
+        }
+        Ok(None) => None,
+        Err(_) => {
+            eprintln!("[alt-tab/macos] SCK capture timed out — disabling for this session");
+            SCK_AVAILABLE.store(false, Ordering::Relaxed);
+            None
+        }
+    }
+}
+
+pub fn capture_previews_batch_rgba(
+    targets: &[(usize, u32)],
+    max_w: usize,
+    max_h: usize,
+) -> Vec<(usize, Option<RgbaImage>)> {
+    if !SCK_AVAILABLE.load(Ordering::Relaxed) {
+        return targets.iter().map(|&(idx, _)| (idx, None)).collect();
+    }
+    std::thread::scope(|s| {
+        let handles: Vec<_> = targets
+            .iter()
+            .map(|&(idx, wid)| {
+                s.spawn(move || {
+                    let result = sck_capture_on_thread(wid, max_w, max_h).and_then(|rgba| {
+                        let (data, w, h) = preview::downscale_rgba(&rgba.data, rgba.width, rgba.height, max_w, max_h);
+                        if w == 0 || h == 0 { None } else { Some(RgbaImage { data, width: w, height: h }) }
+                    });
+                    (idx, result)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .filter_map(|h| h.join().ok())
+            .collect()
+    })
 }
 
 fn sck_capture_on_thread(window_id: u32, max_w: usize, max_h: usize) -> Option<RgbaImage> {
@@ -365,9 +428,7 @@ pub fn picker_window_kind() -> gpui::WindowKind {
 }
 
 pub fn dismiss_picker(window: &mut gpui::Window) {
-    // Move offscreen + shrink instead of remove_window() so the handle stays
-    // alive for the reuse fast-path in open_picker().
-    window.resize(gpui::size(gpui::px(1.0), gpui::px(1.0)));
+    window.remove_window();
 }
 
 fn cg_event_flags() -> u64 {
