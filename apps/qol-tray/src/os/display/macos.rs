@@ -30,6 +30,8 @@ type CFTypeRef = *const c_void;
 type CFStringRef = *const c_void;
 
 const K_AX_ERROR_SUCCESS: AXError = 0;
+const K_AX_VALUE_CG_POINT_TYPE: u32 = 1;
+const K_AX_VALUE_CG_SIZE_TYPE: u32 = 2;
 
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
@@ -42,6 +44,13 @@ extern "C" {
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
     fn CFRelease(cf: *const c_void);
+    fn CFStringCreateWithBytes(
+        alloc: *const c_void,
+        bytes: *const u8,
+        num_bytes: isize,
+        encoding: u32,
+        is_external: bool,
+    ) -> CFStringRef;
 }
 
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -56,127 +65,90 @@ extern "C" {
     fn AXUIElementGetPid(element: AXUIElementRef, pid: *mut i32) -> AXError;
 }
 
-// AXValueType constants
-const K_AX_VALUE_CG_POINT_TYPE: u32 = 1;
-const K_AX_VALUE_CG_SIZE_TYPE: u32 = 2;
+struct CfGuard(*const c_void);
 
-fn ax_attr_str(name: &[u8]) -> CFStringRef {
-    extern "C" {
-        fn CFStringCreateWithBytes(
-            alloc: *const c_void,
-            bytes: *const u8,
-            num_bytes: isize,
-            encoding: u32,
-            is_external: bool,
-        ) -> CFStringRef;
+impl CfGuard {
+    fn new(ptr: *const c_void) -> Option<Self> {
+        if ptr.is_null() { None } else { Some(Self(ptr)) }
     }
-    unsafe {
+
+    fn as_ptr(&self) -> *const c_void {
+        self.0
+    }
+}
+
+impl Drop for CfGuard {
+    fn drop(&mut self) {
+        unsafe { CFRelease(self.0) }
+    }
+}
+
+fn ax_attr_str(name: &[u8]) -> CfGuard {
+    let ptr = unsafe {
         CFStringCreateWithBytes(
             std::ptr::null(),
             name.as_ptr(),
             name.len() as isize,
-            0x08000100, // kCFStringEncodingUTF8
+            0x08000100,
             false,
         )
-    }
+    };
+    CfGuard(ptr)
 }
 
-fn ax_get_attr(element: AXUIElementRef, attr: CFStringRef) -> Option<CFTypeRef> {
+fn ax_get_attr(element: *const c_void, attr: &CfGuard) -> Option<CfGuard> {
     let mut value: CFTypeRef = std::ptr::null();
-    let err = unsafe { AXUIElementCopyAttributeValue(element, attr, &mut value) };
-    if err != K_AX_ERROR_SUCCESS || value.is_null() {
+    let err = unsafe { AXUIElementCopyAttributeValue(element, attr.as_ptr(), &mut value) };
+    if err != K_AX_ERROR_SUCCESS {
         return None;
     }
-    Some(value)
+    CfGuard::new(value)
 }
 
-fn ax_get_pid(element: AXUIElementRef) -> Option<i32> {
+fn ax_get_pid(element: *const c_void) -> Option<i32> {
     let mut pid: i32 = 0;
     let err = unsafe { AXUIElementGetPid(element, &mut pid) };
-    if err == K_AX_ERROR_SUCCESS {
-        Some(pid)
-    } else {
-        None
-    }
+    (err == K_AX_ERROR_SUCCESS).then_some(pid)
+}
+
+fn ax_get_point(value: &CfGuard) -> Option<CGPoint> {
+    let mut point = CGPoint { x: 0.0, y: 0.0 };
+    let ok = unsafe {
+        AXValueGetValue(value.as_ptr(), K_AX_VALUE_CG_POINT_TYPE, &mut point as *mut _ as *mut c_void)
+    };
+    ok.then_some(point)
+}
+
+fn ax_get_size(value: &CfGuard) -> Option<CGSize> {
+    let mut size = CGSize { width: 0.0, height: 0.0 };
+    let ok = unsafe {
+        AXValueGetValue(value.as_ptr(), K_AX_VALUE_CG_SIZE_TYPE, &mut size as *mut _ as *mut c_void)
+    };
+    (ok && size.width > 0.0 && size.height > 0.0).then_some(size)
 }
 
 fn focused_window_bounds_ax(own_pid: i32) -> Option<MonitorBounds> {
-    let system = unsafe { AXUIElementCreateSystemWide() };
-    if system.is_null() {
-        eprintln!("[runtime/ax] AXUIElementCreateSystemWide returned null");
-        return None;
-    }
+    let system = CfGuard::new(unsafe { AXUIElementCreateSystemWide() })?;
 
-    let attr_focused_app = ax_attr_str(b"AXFocusedApplication");
-    let focused_app = ax_get_attr(system, attr_focused_app);
-    unsafe {
-        CFRelease(attr_focused_app);
-        CFRelease(system);
-    }
-    let focused_app = match focused_app {
-        Some(app) => app,
-        None => {
-            eprintln!("[runtime/ax] no focused application");
-            return None;
-        }
-    };
+    let focused_app = ax_get_attr(system.as_ptr(), &ax_attr_str(b"AXFocusedApplication"))?;
 
-    let app_pid = ax_get_pid(focused_app);
+    let app_pid = ax_get_pid(focused_app.as_ptr());
     if let Some(pid) = app_pid {
         let ignored = super::is_ignored_pid(pid as u32);
         if pid == own_pid || ignored {
-            unsafe { CFRelease(focused_app); }
             eprintln!("[runtime/ax] SKIP pid={} own={} ignored={}", pid, pid == own_pid, ignored);
             return None;
         }
     }
 
-    let attr_focused_window = ax_attr_str(b"AXFocusedWindow");
-    let focused_window = ax_get_attr(focused_app, attr_focused_window);
-    unsafe {
-        CFRelease(attr_focused_window);
-        CFRelease(focused_app);
-    }
-    let focused_window = match focused_window {
-        Some(w) => w,
-        None => {
+    let focused_window = ax_get_attr(focused_app.as_ptr(), &ax_attr_str(b"AXFocusedWindow"))
+        .or_else(|| {
             eprintln!("[runtime/ax] pid={:?} has no focused window", app_pid);
-            return None;
-        }
-    };
+            None
+        })?;
 
-    let attr_position = ax_attr_str(b"AXPosition");
-    let attr_size = ax_attr_str(b"AXSize");
-    let pos_val = ax_get_attr(focused_window, attr_position);
-    let size_val = ax_get_attr(focused_window, attr_size);
-    unsafe {
-        CFRelease(attr_position);
-        CFRelease(attr_size);
-        CFRelease(focused_window);
-    }
-
-    let pos_val = pos_val?;
-    let size_val = size_val?;
-
-    let mut pos = CGPoint { x: 0.0, y: 0.0 };
-    let mut sz = CGSize { width: 0.0, height: 0.0 };
-
-    let pos_ok = unsafe {
-        AXValueGetValue(pos_val, K_AX_VALUE_CG_POINT_TYPE, &mut pos as *mut CGPoint as *mut c_void)
-    };
-    let size_ok = unsafe {
-        AXValueGetValue(size_val, K_AX_VALUE_CG_SIZE_TYPE, &mut sz as *mut CGSize as *mut c_void)
-    };
-
-    unsafe {
-        CFRelease(pos_val);
-        CFRelease(size_val);
-    }
-
-    if !pos_ok || !size_ok || sz.width <= 0.0 || sz.height <= 0.0 {
-        eprintln!("[runtime/ax] bad geometry: pos_ok={} size_ok={} sz={}x{}", pos_ok, size_ok, sz.width, sz.height);
-        return None;
-    }
+    let pos = ax_get_point(&ax_get_attr(focused_window.as_ptr(), &ax_attr_str(b"AXPosition"))?)?;
+    let sz = ax_get_size(&ax_get_attr(focused_window.as_ptr(), &ax_attr_str(b"AXSize"))?)?;
 
     let result = MonitorBounds {
         x: pos.x as f32,
@@ -205,15 +177,9 @@ impl Platform for MacQueries {
     }
 
     fn cursor_position(&self) -> Option<(f32, f32)> {
-        unsafe {
-            let event = CGEventCreate(std::ptr::null());
-            if event.is_null() {
-                return None;
-            }
-            let loc = CGEventGetLocation(event);
-            CFRelease(event);
-            Some((loc.x as f32, loc.y as f32))
-        }
+        let event = CfGuard::new(unsafe { CGEventCreate(std::ptr::null()) })?;
+        let loc = unsafe { CGEventGetLocation(event.as_ptr()) };
+        Some((loc.x as f32, loc.y as f32))
     }
 
     fn focused_window_bounds(&self) -> Option<MonitorBounds> {
