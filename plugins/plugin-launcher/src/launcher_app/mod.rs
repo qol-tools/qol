@@ -85,6 +85,7 @@ struct LauncherView {
     pub(super) store: EntryStore,
     pub(super) focus_handle: FocusHandle,
     blur_sub: Option<Subscription>,
+    activation_sub: Option<Subscription>,
     trail_decay_task_running: bool,
     is_showing: bool,
     any_visible: Arc<AtomicBool>,
@@ -99,6 +100,7 @@ impl LauncherView {
             store: EntryStore::new(entries.app_entries.clone(), entries.file_entries.clone()),
             focus_handle: cx.focus_handle(),
             blur_sub: None,
+            activation_sub: None,
             trail_decay_task_running: false,
             is_showing: true,
             any_visible,
@@ -203,7 +205,7 @@ enum LauncherTarget {
 impl LauncherTarget {
     fn from_snapshot(snapshot: Option<&monitor::ActiveMonitor>) -> Self {
         snapshot
-            .map(|m| Self::Monitor(MonitorKey::from_bounds(m.bounds())))
+            .map(|m| Self::Monitor(MonitorKey::from_bounds(&m.bounds())))
             .unwrap_or(Self::Default)
     }
 }

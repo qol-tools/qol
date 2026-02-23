@@ -28,6 +28,18 @@ impl Render for LauncherView {
             ));
         }
 
+        if self.activation_sub.is_none() {
+            self.activation_sub = Some(cx.observe_window_activation(window, |this, window, cx| {
+                if !window.is_window_active() {
+                    if std::time::Instant::now() < this.blur_guard_until {
+                        return;
+                    }
+                    this.set_showing(false);
+                    hide_in_context(window, cx);
+                }
+            }));
+        }
+
         self.store.ensure_filtered(&self.state);
         let result_count = self.store.result_count();
         self.state.sync_result_window(result_count);
