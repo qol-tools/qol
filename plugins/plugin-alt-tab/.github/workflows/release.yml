@@ -23,16 +23,14 @@ jobs:
             target: x86_64-unknown-linux-gnu
             artifact_name: alt-tab-linux-x86_64
             name_suffix: Linux (x86_64)
-          # TODO: Uncomment macOS targets when macOS platform support is implemented.
-          # We intend to use this to eventually replace the popular AltTab plugin on macOS.
-          # - os: macos-latest
-          #   target: aarch64-apple-darwin
-          #   artifact_name: alt-tab-macos-aarch64
-          #   name_suffix: macOS (Apple Silicon)
-          # - os: macos-latest
-          #   target: x86_64-apple-darwin
-          #   artifact_name: alt-tab-macos-x86_64
-          #   name_suffix: macOS (Intel)
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: alt-tab-macos-aarch64
+            name_suffix: macOS (Apple Silicon)
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: alt-tab-macos-x86_64
+            name_suffix: macOS (Intel)
 
     steps:
       - name: Checkout code
