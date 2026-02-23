@@ -81,6 +81,39 @@ pub(crate) fn dict_get_f64(dict: CFDictionaryRef, key: CFStringRef) -> Option<f6
     }
 }
 
+pub(crate) fn dict_get_rect(dict: CFDictionaryRef, key: CFStringRef) -> Option<(f64, f64, f64, f64)> {
+    #[repr(C)]
+    struct CGPoint { x: f64, y: f64 }
+    #[repr(C)]
+    struct CGSize { width: f64, height: f64 }
+    #[repr(C)]
+    struct CGRect { origin: CGPoint, size: CGSize }
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGRectMakeWithDictionaryRepresentation(dict: CFDictionaryRef, rect: *mut CGRect) -> bool;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFDictionaryGetValue(dict: CFDictionaryRef, key: *const c_void) -> *const c_void;
+    }
+    unsafe {
+        let val = CFDictionaryGetValue(dict, key as *const c_void);
+        if val.is_null() {
+            return None;
+        }
+        let mut rect = CGRect {
+            origin: CGPoint { x: 0.0, y: 0.0 },
+            size: CGSize { width: 0.0, height: 0.0 },
+        };
+        if CGRectMakeWithDictionaryRepresentation(val as CFDictionaryRef, &mut rect) {
+            Some((rect.origin.x, rect.origin.y, rect.size.width, rect.size.height))
+        } else {
+            None
+        }
+    }
+}
+
 pub(crate) fn dict_get_string(dict: CFDictionaryRef, key: CFStringRef) -> Option<String> {
     #[link(name = "CoreFoundation", kind = "framework")]
     extern "C" {

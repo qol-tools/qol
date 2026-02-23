@@ -164,11 +164,14 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    overflow: hidden;
 }
 
 .slider-control--small {
     margin-top: 0;
     width: 160px;
+    min-width: 0;
+    overflow: hidden;
 }
 
 #grid-visualizer {

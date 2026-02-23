@@ -154,19 +154,34 @@ impl ListDelegate for WindowDelegate {
         window: &mut Window,
         _cx: &mut Context<ListState<Self>>,
     ) {
-        self.activate_selected(window, None);
+        self.activate_selected(window);
     }
 }
 
 impl WindowDelegate {
-    fn activate_selected(&self, window: &mut Window, tracker: Option<&MonitorTracker>) {
+    fn activate_selected(&self, window: &mut Window) {
         if let Some(ix) = self.selected_index {
             let win = &self.windows[ix.row];
             platform::activate_window(win.id);
-            // Immediately update the monitor focus so the next snapshot
-            // reflects the newly-focused monitor without waiting for poll.
-            if let Some(tracker) = tracker {
-                tracker.force_focus_update();
+            // Push the activated window's monitor to the runtime so the focus
+            // stamp survives the AX "no focused application" gap.
+            let client = qol_runtime::PlatformStateClient::from_env();
+            if let Some(state) = client.get_state() {
+                // Find which monitor the activated window overlaps most
+                let win_cx = win.x + win.width / 2.0;
+                let win_cy = win.y + win.height / 2.0;
+                let idx = state.monitors.iter().enumerate()
+                    .find(|(_, m)| {
+                        win_cx >= m.x && win_cx < m.x + m.width &&
+                        win_cy >= m.y && win_cy < m.y + m.height
+                    })
+                    .map(|(i, _)| i);
+                if let Some(idx) = idx {
+                    eprintln!("[alt-tab] SET_FOCUS idx={} (window {}x{} at {},{} → monitor {},{})",
+                        idx, win.width as i32, win.height as i32, win.x as i32, win.y as i32,
+                        state.monitors[idx].x as i32, state.monitors[idx].y as i32);
+                    client.set_focus(idx);
+                }
             }
             platform::dismiss_picker(window);
         }
@@ -483,7 +498,7 @@ impl AltTabApp {
                             let list = list.clone();
                             let _ = cx.update_window(window_handle, |_root, window, cx| {
                                 list.update(cx, |s, _cx| {
-                                    s.delegate_mut().activate_selected(window, None);
+                                    s.delegate_mut().activate_selected(window);
                                 });
                             });
                             break;
@@ -552,7 +567,7 @@ impl Render for AltTabApp {
                                 });
                         if let Some(_id) = win_id {
                             this.list_state.update(cx, |s, _cx| {
-                                s.delegate_mut().activate_selected(window, None);
+                                s.delegate_mut().activate_selected(window);
                             });
                         }
                     }
@@ -696,7 +711,7 @@ impl Render for AltTabApp {
                                             .update(cx, |this, cx| {
                                                 this.list_state.update(cx, |s, _cx| {
                                                     s.delegate_mut()
-                                                        .activate_selected(window, None);
+                                                        .activate_selected(window);
                                                 });
                                             })
                                             .ok();
@@ -807,9 +822,10 @@ fn open_picker(
     let existing = current.borrow().clone();
     if let Some((handle, created_on_origin)) = existing {
         let target_count = display_windows.len().max(1);
-        let (target_w, target_h) = picker_dimensions(target_count, config.display.max_columns);
+        let target_monitor = tracker.snapshot().map(|(m, _)| m);
+        let monitor_size = target_monitor.as_ref().map(|m| m.size());
+        let (target_w, target_h) = picker_dimensions(target_count, config.display.max_columns, monitor_size);
         let target_size = size(px(target_w), px(target_h));
-        let target_monitor = tracker.snapshot();
         let target_bounds = if let Some(ref active) = target_monitor {
             active.centered_bounds(target_size)
         } else {
@@ -873,9 +889,10 @@ fn open_picker(
                 view.action_mode = config.action_mode.clone();
                 view.alt_was_held = true;
 
-                // Update label config in delegate
+                // Update label config and cache active monitor from tracker
                 view.list_state.update(cx, |s, _cx| {
-                    s.delegate_mut().label_config = config.label.clone();
+                    let d = s.delegate_mut();
+                    d.label_config = config.label.clone();
                 });
 
                 // Start a new X11 modifier polling task for HoldToSwitch
@@ -922,10 +939,10 @@ fn open_picker(
     let estimated_count = target_count
         .max(last_window_count.load(Ordering::Relaxed))
         .max(1);
-    let (win_w, win_h) = picker_dimensions(estimated_count, config.display.max_columns);
+    let create_monitor = tracker.snapshot().map(|(m, _)| m);
+    let monitor_size = create_monitor.as_ref().map(|m| m.size());
+    let (win_w, win_h) = picker_dimensions(estimated_count, config.display.max_columns, monitor_size);
     let win_size = size(px(win_w), px(win_h));
-
-    let create_monitor = tracker.snapshot();
     let bounds = if let Some(ref active) = create_monitor {
         active.centered_bounds(win_size)
     } else {
@@ -986,10 +1003,37 @@ fn open_picker(
     cx.activate(true);
 }
 
+#[cfg(target_os = "macos")]
+fn set_macos_accessory_policy() {
+    use std::ffi::c_void;
+
+    #[link(name = "objc")]
+    extern "C" {
+        fn objc_getClass(name: *const u8) -> *mut c_void;
+        fn sel_registerName(name: *const u8) -> *mut c_void;
+        fn objc_msgSend(receiver: *mut c_void, sel: *mut c_void, ...) -> *mut c_void;
+    }
+
+    const NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY: i64 = 1;
+
+    unsafe {
+        let cls = objc_getClass(b"NSApplication\0".as_ptr());
+        let shared_app_sel = sel_registerName(b"sharedApplication\0".as_ptr());
+        let app = objc_msgSend(cls, shared_app_sel);
+        if !app.is_null() {
+            let set_policy_sel = sel_registerName(b"setActivationPolicy:\0".as_ptr());
+            objc_msgSend(app, set_policy_sel, NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY);
+        }
+    }
+}
+
 fn run_app(config: AltTabConfig, rx: mpsc::Receiver<daemon::Command>, show_on_start: bool) {
     let app = Application::new();
 
     app.run(move |cx: &mut App| {
+        #[cfg(target_os = "macos")]
+        set_macos_accessory_policy();
+
         gpui_component::init(cx);
 
         let any_visible = Arc::new(AtomicBool::new(false));

@@ -24,7 +24,7 @@ pub fn preferred_column_count(window_count: usize, max_columns: usize) -> usize 
     cols
 }
 
-pub fn picker_dimensions(window_count: usize, max_columns: usize) -> (f32, f32) {
+pub fn picker_dimensions(window_count: usize, max_columns: usize, monitor_size: Option<(f32, f32)>) -> (f32, f32) {
     let count = window_count.max(1);
     let cols = preferred_column_count(count, max_columns);
     let width = GRID_PADDING * 2.0
@@ -33,7 +33,10 @@ pub fn picker_dimensions(window_count: usize, max_columns: usize) -> (f32, f32) 
         + 24.0;
     let height = picker_height_for(count, cols);
 
-    (width.clamp(720.0, 1820.0), height.clamp(320.0, 980.0))
+    let (max_w, max_h) = monitor_size
+        .map(|(w, h)| (w * 0.9, h * 0.9))
+        .unwrap_or((1820.0, 980.0));
+    (width.clamp(720.0, max_w), height.clamp(320.0, max_h))
 }
 
 pub fn picker_height_for(window_count: usize, columns: usize) -> f32 {

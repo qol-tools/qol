@@ -253,6 +253,10 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
                 title,
                 app_name,
                 preview_path: None,
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 0.0,
             });
         }
     }

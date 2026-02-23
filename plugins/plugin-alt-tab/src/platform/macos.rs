@@ -51,6 +51,7 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
     let key_owner = cg_helpers::cfstr(b"kCGWindowOwnerName");
     let key_name = cg_helpers::cfstr(b"kCGWindowName");
     let key_number = cg_helpers::cfstr(b"kCGWindowNumber");
+    let key_bounds = cg_helpers::cfstr(b"kCGWindowBounds");
 
     let count = unsafe { CFArrayGetCount(list) };
     let mut windows = Vec::with_capacity(count.max(0) as usize);
@@ -91,11 +92,17 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
         } else {
             title
         };
+        let (wx, wy, ww, wh) = cg_helpers::dict_get_rect(dict, key_bounds)
+            .unwrap_or((0.0, 0.0, 0.0, 0.0));
         windows.push(WindowInfo {
             id: id as u32,
             title: display_title,
             app_name,
             preview_path: None,
+            x: wx as f32,
+            y: wy as f32,
+            width: ww as f32,
+            height: wh as f32,
         });
     }
 

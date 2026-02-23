@@ -9,6 +9,10 @@ pub struct WindowInfo {
     pub title: String,
     pub app_name: String,
     pub preview_path: Option<String>,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
 }
 
 #[cfg(target_os = "linux")]
