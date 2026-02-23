@@ -10,3 +10,4 @@ src/test_spawn.rs
 test_launch.sh
 
 .idea/
+.cargo/config.toml

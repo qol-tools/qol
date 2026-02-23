@@ -12,7 +12,7 @@ open = "5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 smallvec = "1.13"
-qol-runtime = { path = "../qol-runtime" }
+qol-runtime = { git = "https://github.com/qol-tools/qol-runtime" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { version = "0.13", features = ["allow-unsafe-code", "xinput"] }

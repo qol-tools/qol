@@ -38,9 +38,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Checkout qol-runtime
-        run: git clone https://x-access-token:${{ secrets.BOT_TOKEN || github.token }}@github.com/qol-tools/qol-runtime.git ../qol-runtime
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
