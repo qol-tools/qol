@@ -5,3 +5,4 @@ launcher.exe
 *.db
 /.idea
 /.worktrees
+.cargo/config.toml

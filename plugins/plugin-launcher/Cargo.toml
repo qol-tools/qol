@@ -9,7 +9,7 @@ shell-words = "1.1"
 gpui = { version = "0.2", features = ["test-support"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-qol-runtime = { path = "../qol-runtime" }
+qol-runtime = { git = "https://github.com/qol-tools/qol-runtime" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-foundation = { version = "0.3", features = ["NSObject"] }
