@@ -25,27 +25,6 @@ const DEFAULT_ESTIMATED_WINDOW_COUNT: usize = 8;
 const PREWARM_REFRESH_INTERVAL_MS: u64 = 1200;
 const REUSE_ORIGIN_TOLERANCE_PX: f64 = 6.0;
 
-/// Query X11 keyboard state to check if Alt is currently held.
-/// This bypasses GPUI's event system which doesn't receive modifier events
-/// when a global hotkey grab is active.
-fn is_alt_held_x11() -> bool {
-    use x11rb::protocol::xproto::ConnectionExt as _;
-    let Ok((conn, _)) = x11rb::connect(None) else {
-        return false;
-    };
-    let Ok(reply) = conn.query_keymap() else {
-        return false;
-    };
-    let Ok(keymap) = reply.reply() else {
-        return false;
-    };
-    // Alt_L is keycode 64, Alt_R is keycode 108 on standard X11 keymaps
-    // Keymap is a 32-byte bitmap, bit N = keycode N
-    let alt_l_held = keymap.keys[64 / 8] & (1 << (64 % 8)) != 0;
-    let alt_r_held = keymap.keys[108 / 8] & (1 << (108 % 8)) != 0;
-    alt_l_held || alt_r_held
-}
-
 // ─── List delegate ────────────────────────────────────────────────────────────
 
 struct WindowDelegate {
@@ -148,22 +127,7 @@ impl ListDelegate for WindowDelegate {
                         .text_xs()
                         .text_center()
                         .text_ellipsis()
-                        .child({
-                            let show_app =
-                                self.label_config.show_app_name && !win.app_name.is_empty();
-                            let show_title =
-                                self.label_config.show_window_title && !win.title.is_empty();
-
-                            if show_app && show_title {
-                                format!("{} - {}", capitalize_first(&win.app_name), win.title)
-                            } else if show_app {
-                                capitalize_first(&win.app_name)
-                            } else if show_title {
-                                win.title.clone()
-                            } else {
-                                String::new()
-                            }
-                        }),
+                        .child(self.label_config.format(&win.app_name, &win.title)),
                 ),
         );
 
@@ -205,7 +169,7 @@ impl WindowDelegate {
             if let Some(tracker) = tracker {
                 tracker.force_focus_update();
             }
-            window.minimize_window();
+            platform::dismiss_picker(window);
         }
     }
 
@@ -316,14 +280,6 @@ enum GridDirection {
     Down,
 }
 
-fn capitalize_first(s: &str) -> String {
-    let mut c = s.chars();
-    match c.next() {
-        None => String::new(),
-        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-    }
-}
-
 // ─── App view ─────────────────────────────────────────────────────────────────
 
 struct AltTabApp {
@@ -362,7 +318,7 @@ impl AltTabApp {
             window,
             |this, _event, window, _cx| {
                 if this.action_mode != ActionMode::HoldToSwitch {
-                    window.minimize_window();
+                    platform::dismiss_picker(window);
                 }
             },
         );
@@ -519,7 +475,7 @@ impl AltTabApp {
                         cx.background_executor()
                             .timer(std::time::Duration::from_millis(16))
                             .await;
-                        let alt_held = is_alt_held_x11();
+                        let alt_held = platform::is_modifier_held();
 
                         if !alt_held {
                             eprintln!(
@@ -579,7 +535,7 @@ impl Render for AltTabApp {
             // not by GPUI events (which don't fire due to global hotkey grab).
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
-                    "escape" | "esc" => window.minimize_window(),
+                    "escape" | "esc" => platform::dismiss_picker(window),
                     "enter" => {
                         // Activate selected and close
                         let win_id =
@@ -610,6 +566,12 @@ impl Render for AltTabApp {
                             } else {
                                 s.delegate_mut().select_next();
                             }
+                        });
+                        cx.notify();
+                    }
+                    "backtab" => {
+                        this.list_state.update(cx, |s, _cx| {
+                            s.delegate_mut().select_prev();
                         });
                         cx.notify();
                     }
@@ -678,6 +640,7 @@ impl Render for AltTabApp {
                     let delegate = list_state.read(cx).delegate();
                     let windows = delegate.windows.clone();
                     let selected_index = delegate.selected_index;
+                    let label_config = delegate.label_config.clone();
                     let _ = delegate;
 
                     let entity = cx.weak_entity();
@@ -768,13 +731,14 @@ impl Render for AltTabApp {
                                         .text_ellipsis()
                                         .overflow_hidden()
                                         .child({
+                                            let label = label_config.format(&win.app_name, &win.title);
                                             #[cfg(debug_assertions)]
                                             {
-                                                format!("[{}] {}", i, win.title)
+                                                format!("[{}] {}", i, label)
                                             }
                                             #[cfg(not(debug_assertions))]
                                             {
-                                                win.title.clone()
+                                                label
                                             }
                                         }),
                                 )
@@ -815,10 +779,16 @@ fn open_picker(
     tracker: &MonitorTracker,
     last_window_count: Arc<AtomicUsize>,
     window_cache: Arc<std::sync::Mutex<Vec<WindowInfo>>>,
+    reverse: bool,
     cx: &mut App,
 ) {
     #[cfg(debug_assertions)]
-    eprintln!("[alt-tab/open] show request");
+    eprintln!("[alt-tab/open] show request (reverse={})", reverse);
+
+    // Reverse only cycles within an already-open picker — never opens one.
+    if reverse && current.borrow().is_none() {
+        return;
+    }
 
     let raw_windows = platform::get_open_windows();
     let mut display_windows = raw_windows;
@@ -849,15 +819,19 @@ fn open_picker(
             .update(cx, |view, window: &mut Window, cx| {
                 // In HoldToSwitch mode, if the poll task is still running, the window
                 // is already visible. Treat subsequent Show commands as "select next".
-                let alt_held = is_alt_held_x11();
+                let alt_held = platform::is_modifier_held();
                 if view.action_mode == ActionMode::HoldToSwitch && view._alt_poll_task.is_some() && alt_held {
                     #[cfg(debug_assertions)]
                     eprintln!(
-                        "[alt-tab/hold] window already visible (alt_held={}) — cycling to next",
-                        alt_held
+                        "[alt-tab/hold] window already visible (alt_held={} reverse={}) — cycling",
+                        alt_held, reverse
                     );
                     view.list_state.update(cx, |s, _cx| {
-                        s.delegate_mut().select_next();
+                        if reverse {
+                            s.delegate_mut().select_prev();
+                        } else {
+                            s.delegate_mut().select_next();
+                        }
                     });
                     cx.notify();
                     return;
@@ -956,7 +930,7 @@ fn open_picker(
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: None,
             window_decorations: Some(WindowDecorations::Client),
-            kind: WindowKind::PopUp,
+            kind: platform::picker_window_kind(),
             focus: true,
             ..Default::default()
         },
@@ -1038,6 +1012,7 @@ fn run_app(config: AltTabConfig, rx: mpsc::Receiver<daemon::Command>, show_on_st
                 &tracker,
                 last_window_count.clone(),
                 window_cache.clone(),
+                false,
                 cx,
             );
         }
@@ -1053,9 +1028,10 @@ fn run_app(config: AltTabConfig, rx: mpsc::Receiver<daemon::Command>, show_on_st
                 .await;
 
             match cmd {
-                Some(daemon::Command::Show) => {
+                Some(daemon::Command::Show) | Some(daemon::Command::ShowReverse) => {
+                    let reverse = matches!(cmd, Some(daemon::Command::ShowReverse));
                     #[cfg(debug_assertions)]
-                    eprintln!("[alt-tab/daemon] received Show");
+                    eprintln!("[alt-tab/daemon] received Show (reverse={})", reverse);
                     let current2 = current.clone();
                     let tracker2 = tracker_clone.clone();
                     let last_window_count2 = last_window_count.clone();
@@ -1068,6 +1044,7 @@ fn run_app(config: AltTabConfig, rx: mpsc::Receiver<daemon::Command>, show_on_st
                             &tracker2,
                             last_window_count2,
                             window_cache2,
+                            reverse,
                             app_cx,
                         );
                     });
@@ -1102,6 +1079,7 @@ fn main() {
     }
 
     let is_show = args.iter().any(|a| a == "--show");
+    let is_show_reverse = args.iter().any(|a| a == "--show-reverse");
     let is_kill = args.iter().any(|a| a == "--kill");
 
     if is_kill {
@@ -1109,7 +1087,10 @@ fn main() {
         return;
     }
 
-    // If --show and daemon is alive, forward show and exit
+    // If daemon is alive, forward command and exit
+    if is_show_reverse && daemon::send_show_reverse() {
+        return;
+    }
     if is_show && daemon::send_show() {
         return;
     }
@@ -1119,14 +1100,15 @@ fn main() {
     let (tx, rx) = mpsc::channel();
 
     if !daemon::start_listener(tx) {
-        // Another instance is alive; just signal it if needed
-        if is_show {
+        if is_show_reverse {
+            daemon::send_show_reverse();
+        } else if is_show {
             daemon::send_show();
         }
         return;
     }
 
-    run_app(config, rx, is_show);
+    run_app(config, rx, is_show || is_show_reverse);
     daemon::cleanup();
 }
 

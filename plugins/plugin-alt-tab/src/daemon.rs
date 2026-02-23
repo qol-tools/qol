@@ -5,16 +5,20 @@ use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc::Sender;
 
-const DEFAULT_SOCKET_PATH: &str = "/tmp/qol-alt-tab.sock";
 const ACK_TIMEOUT_MS: u64 = 80;
 
 pub enum Command {
     Show,
+    ShowReverse,
     Kill,
 }
 
 pub fn send_show() -> bool {
     send_raw(b"show", false)
+}
+
+pub fn send_show_reverse() -> bool {
+    send_raw(b"show-reverse", false)
 }
 
 pub fn send_kill() -> bool {
@@ -102,7 +106,12 @@ fn send_raw(msg: &[u8], expect_reply: bool) -> bool {
 fn socket_path() -> std::path::PathBuf {
     std::env::var("QOL_TRAY_DAEMON_SOCKET")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from(DEFAULT_SOCKET_PATH))
+        .unwrap_or_else(|_| {
+            let dir = std::env::var("TMPDIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+            dir.join("qol-alt-tab.sock")
+        })
 }
 
 fn remove_socket_file(path: impl AsRef<std::path::Path>) {
@@ -143,6 +152,7 @@ fn read_command(stream: &mut UnixStream) -> ReadResult {
     match cmd {
         "ping" => ReadResult::Handled,
         "show" | "open" => ReadResult::Command(Command::Show),
+        "show-reverse" | "open-reverse" => ReadResult::Command(Command::ShowReverse),
         "kill" => ReadResult::Command(Command::Kill),
         _ => ReadResult::Fallback,
     }

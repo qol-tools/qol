@@ -7,7 +7,7 @@ platforms = ["linux", "macos"]
 
 [runtime]
 command = "alt-tab"
-actions = { open = ["--show"], settings = ["--settings"] }
+actions = { open = ["--show"], open-reverse = ["--show-reverse"], settings = ["--settings"] }
 
 [daemon]
 enabled = true
@@ -17,7 +17,8 @@ socket = "/tmp/qol-alt-tab.sock"
 [menu]
 label = "Alt Tab"
 items = [
-  { type = "action", id = "open", label = "Open Alt Tab", action = "run" },
+  { type = "action", id = "open", label = "Alt Tab (Open/Next)", action = "run" },
+  { type = "action", id = "open-reverse", label = "Alt Tab (Previous)", action = "run" },
   { type = "separator" },
   { type = "action", id = "settings", label = "Settings", action = "settings" },
 ]

@@ -13,10 +13,17 @@ open = "5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 smallvec = "1.13"
-x11rb = "0.13"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { version = "0.13", features = ["allow-unsafe-code", "xinput"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSEnumerator", "NSDictionary", "NSRunLoop", "NSError", "NSObject"] }
+objc2-app-kit = { version = "0.3", features = ["NSRunningApplication", "NSWorkspace"] }
+objc2-screen-capture-kit = { version = "0.3", features = ["SCShareableContent", "SCStream", "block2", "objc2-core-graphics"] }
+objc2-core-graphics = { version = "0.3", features = ["CGWindow", "CGImage", "CGDataProvider"] }
 
 # macOS only: fix zed-font-kit core-graphics version mismatch
 [patch.crates-io]

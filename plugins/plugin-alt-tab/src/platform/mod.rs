@@ -1,3 +1,8 @@
+mod preview;
+
+#[cfg(target_os = "macos")]
+pub(crate) mod cg_helpers;
+
 #[derive(Debug, Clone)]
 pub struct WindowInfo {
     pub id: u32,
@@ -24,10 +29,6 @@ use windows as imp;
 mod unsupported {
     use super::WindowInfo;
 
-    pub fn cached_preview_path(_window_id: u32) -> Option<String> {
-        None
-    }
-
     pub fn get_open_windows() -> Vec<WindowInfo> {
         Vec::new()
     }
@@ -47,13 +48,29 @@ mod unsupported {
     pub fn activate_window(_window_id: u32) {}
 
     pub fn move_app_window(_title: &str, _x: i32, _y: i32) {}
+
+    pub fn is_modifier_held() -> bool {
+        false
+    }
+
+    pub fn is_shift_held() -> bool {
+        false
+    }
+
+    pub fn picker_window_kind() -> gpui::WindowKind {
+        gpui::WindowKind::PopUp
+    }
+
+    pub fn dismiss_picker(window: &mut gpui::Window) {
+        window.minimize_window();
+    }
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 use unsupported as imp;
 
 pub fn cached_preview_path(window_id: u32) -> Option<String> {
-    imp::cached_preview_path(window_id)
+    preview::cached_preview_path(window_id)
 }
 
 pub fn get_open_windows() -> Vec<WindowInfo> {
@@ -78,4 +95,20 @@ pub fn activate_window(window_id: u32) {
 
 pub fn move_app_window(title: &str, x: i32, y: i32) {
     imp::move_app_window(title, x, y)
+}
+
+pub fn is_modifier_held() -> bool {
+    imp::is_modifier_held()
+}
+
+pub fn is_shift_held() -> bool {
+    imp::is_shift_held()
+}
+
+pub fn picker_window_kind() -> gpui::WindowKind {
+    imp::picker_window_kind()
+}
+
+pub fn dismiss_picker(window: &mut gpui::Window) {
+    imp::dismiss_picker(window)
 }

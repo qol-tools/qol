@@ -1,7 +1,7 @@
+use super::preview;
 use super::WindowInfo;
-use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-use image::{ExtendedColorType, ImageEncoder};
 use x11rb::connection::Connection;
+use x11rb::protocol::xproto::ConnectionExt as _;
 use x11rb::protocol::xproto::*;
 
 #[derive(Clone, Copy)]
@@ -21,13 +21,43 @@ impl Default for ChannelOrder {
     }
 }
 
-pub fn cached_preview_path(window_id: u32) -> Option<String> {
-    let cache_dir = preview_cache_dir()?;
-    let path = cache_dir.join(format!("{}.png", window_id));
-    if !path.is_file() {
-        return None;
-    }
-    Some(path.to_string_lossy().to_string())
+pub fn picker_window_kind() -> gpui::WindowKind {
+    gpui::WindowKind::PopUp
+}
+
+pub fn dismiss_picker(window: &mut gpui::Window) {
+    window.minimize_window();
+}
+
+pub fn is_modifier_held() -> bool {
+    let Ok((conn, _)) = x11rb::connect(None) else {
+        return false;
+    };
+    let Ok(reply) = conn.query_keymap() else {
+        return false;
+    };
+    let Ok(keymap) = reply.reply() else {
+        return false;
+    };
+    let alt_l_held = keymap.keys[64 / 8] & (1 << (64 % 8)) != 0;
+    let alt_r_held = keymap.keys[108 / 8] & (1 << (108 % 8)) != 0;
+    alt_l_held || alt_r_held
+}
+
+pub fn is_shift_held() -> bool {
+    let Ok((conn, _)) = x11rb::connect(None) else {
+        return false;
+    };
+    let Ok(reply) = conn.query_keymap() else {
+        return false;
+    };
+    let Ok(keymap) = reply.reply() else {
+        return false;
+    };
+    // Shift_L = keycode 50, Shift_R = keycode 62
+    let shift_l = keymap.keys[50 / 8] & (1 << (50 % 8)) != 0;
+    let shift_r = keymap.keys[62 / 8] & (1 << (62 % 8)) != 0;
+    shift_l || shift_r
 }
 
 pub fn activate_window(window_id: u32) {
@@ -253,14 +283,19 @@ pub fn capture_preview(window_id: u32, max_w: usize, max_h: usize) -> Option<Str
         .reply()
         .ok()?;
     let channel_order = detect_channel_order(&conn, screen_num);
-    process_and_save_preview_with_order(
+    let rgba = x11_data_to_rgba(
+        &image.data,
+        geometry.width as usize,
+        geometry.height as usize,
+        channel_order,
+    )?;
+    preview::downscale_and_save_preview(
         window_id,
-        image.data.to_vec(),
+        &rgba,
         geometry.width as usize,
         geometry.height as usize,
         max_w,
         max_h,
-        channel_order,
     )
 }
 
@@ -324,15 +359,22 @@ pub fn capture_previews_batch(
             continue;
         };
 
-        let path = process_and_save_preview_with_order(
-            window_id,
-            reply.data.to_vec(),
+        let rgba = x11_data_to_rgba(
+            &reply.data,
             geo.width as usize,
             geo.height as usize,
-            max_w,
-            max_h,
             channel_order,
         );
+        let path = rgba.and_then(|rgba| {
+            preview::downscale_and_save_preview(
+                window_id,
+                &rgba,
+                geo.width as usize,
+                geo.height as usize,
+                max_w,
+                max_h,
+            )
+        });
         out.push((list_index, path));
     }
 
@@ -362,107 +404,35 @@ fn detect_channel_order<C: Connection>(conn: &C, screen_num: usize) -> ChannelOr
     ChannelOrder { red, green, blue }
 }
 
-
-fn process_and_save_preview_with_order(
-    window_id: u32,
-    data: Vec<u8>,
-    width: usize,
-    height: usize,
-    max_w: usize,
-    max_h: usize,
-    channel_order: ChannelOrder,
-) -> Option<String> {
-    let (thumb, thumb_w, thumb_h) =
-        downscale_raw_with_order(&data, width, height, max_w, max_h, channel_order);
-    if thumb_w == 0 || thumb_h == 0 {
-        return None;
-    }
-
-    let cache_dir = preview_cache_dir()?;
-    let path = cache_dir.join(format!("{}.png", window_id));
-    let file = std::fs::File::create(&path).ok()?;
-    let writer = std::io::BufWriter::new(file);
-    let encoder = PngEncoder::new_with_quality(writer, CompressionType::Fast, FilterType::NoFilter);
-    encoder
-        .write_image(
-            &thumb,
-            thumb_w as u32,
-            thumb_h as u32,
-            ExtendedColorType::Rgba8,
-        )
-        .ok()?;
-    Some(path.to_string_lossy().to_string())
-}
-
-fn preview_cache_dir() -> Option<std::path::PathBuf> {
-    let base = dirs::cache_dir().or_else(|| Some(std::env::temp_dir()))?;
-    let path = base
-        .join("qol-tray")
-        .join("plugin-alt-tab")
-        .join("previews");
-    std::fs::create_dir_all(&path).ok()?;
-    Some(path)
-}
-
-fn downscale_raw_with_order(
+fn x11_data_to_rgba(
     data: &[u8],
     src_w: usize,
     src_h: usize,
-    max_w: usize,
-    max_h: usize,
     channel_order: ChannelOrder,
-) -> (Vec<u8>, usize, usize) {
-    if src_w == 0 || src_h == 0 || max_w == 0 || max_h == 0 {
-        return (Vec::new(), 0, 0);
+) -> Option<Vec<u8>> {
+    if src_w == 0 || src_h == 0 {
+        return None;
     }
-
-    let pixels = match src_w.checked_mul(src_h) {
-        Some(value) if value > 0 => value,
-        _ => return (Vec::new(), 0, 0),
-    };
+    let pixels = src_w.checked_mul(src_h)?;
+    if pixels == 0 {
+        return None;
+    }
     let bytes_per_pixel = data.len() / pixels;
-    if bytes_per_pixel < 3 {
-        return (Vec::new(), 0, 0);
-    }
-    if channel_order.red >= bytes_per_pixel
+    if bytes_per_pixel < 3
+        || channel_order.red >= bytes_per_pixel
         || channel_order.green >= bytes_per_pixel
         || channel_order.blue >= bytes_per_pixel
     {
-        return (Vec::new(), 0, 0);
+        return None;
     }
 
-    let scale_w = max_w as f32 / src_w as f32;
-    let scale_h = max_h as f32 / src_h as f32;
-    let scale = scale_w.min(scale_h).min(1.0);
-
-    let scaled_w = ((src_w as f32 * scale).round() as usize).max(1).min(max_w);
-    let scaled_h = ((src_h as f32 * scale).round() as usize).max(1).min(max_h);
-
-    let mut canvas = vec![0u8; max_w * max_h * 4];
-    let offset_x = (max_w - scaled_w) / 2;
-    let offset_y = (max_h - scaled_h) / 2;
-
-    for y in 0..scaled_h {
-        let src_y = (y * src_h) / scaled_h;
-        for x in 0..scaled_w {
-            let src_x = (x * src_w) / scaled_w;
-            let src_base = (src_y * src_w + src_x) * bytes_per_pixel;
-            let r_idx = src_base + channel_order.red;
-            let g_idx = src_base + channel_order.green;
-            let b_idx = src_base + channel_order.blue;
-            if r_idx >= data.len() || g_idx >= data.len() || b_idx >= data.len() {
-                continue;
-            }
-            let r = data[r_idx];
-            let g = data[g_idx];
-            let b = data[b_idx];
-
-            let dst_x = offset_x + x;
-            let dst_y = offset_y + y;
-            let dst_i = (dst_y * max_w + dst_x) * 4;
-            canvas[dst_i..dst_i + 4].copy_from_slice(&[r, g, b, 255]);
-        }
+    let mut rgba = Vec::with_capacity(pixels * 4);
+    for i in 0..pixels {
+        let src_base = i * bytes_per_pixel;
+        let r = data[src_base + channel_order.red];
+        let g = data[src_base + channel_order.green];
+        let b = data[src_base + channel_order.blue];
+        rgba.extend_from_slice(&[r, g, b, 255]);
     }
-
-    (canvas, max_w, max_h)
+    Some(rgba)
 }
