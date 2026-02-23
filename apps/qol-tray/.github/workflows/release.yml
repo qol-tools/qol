@@ -23,6 +23,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Checkout qol-runtime
+        uses: actions/checkout@v4
+        with:
+          repository: qol-tools/qol-runtime
+          path: ../qol-runtime
+          token: ${{ secrets.BOT_TOKEN || github.token }}
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -81,6 +88,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Checkout qol-runtime
+        uses: actions/checkout@v4
+        with:
+          repository: qol-tools/qol-runtime
+          path: ../qol-runtime
+          token: ${{ secrets.BOT_TOKEN || github.token }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
