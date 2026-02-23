@@ -2,7 +2,7 @@ use gpui::{ClipboardItem, Context, KeyDownEvent};
 
 use super::actions;
 use super::input::InputEffect;
-use super::window_ops::hide_in_context;
+use super::window_ops::hide;
 use super::LauncherView;
 
 enum ClipboardShortcut {
@@ -40,7 +40,7 @@ impl LauncherView {
             InputEffect::Launch => self.launch_selected(window, cx),
             InputEffect::Dismiss => {
                 self.set_showing(false);
-                hide_in_context(window, cx);
+                hide(window);
             }
         }
     }
@@ -120,7 +120,7 @@ impl LauncherView {
                 self.store.record_launch(&name);
             }
             self.set_showing(false);
-            hide_in_context(window, cx);
+            hide(window);
         } else {
             eprintln!("[controller] launch returned false");
         }
