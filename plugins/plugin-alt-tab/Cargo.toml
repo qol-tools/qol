@@ -22,7 +22,7 @@ x11rb = { version = "0.13", features = ["allow-unsafe-code", "xinput"] }
 objc2 = "0.6"
 block2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSEnumerator", "NSDictionary", "NSRunLoop", "NSError", "NSObject"] }
-objc2-app-kit = { version = "0.3", features = ["NSRunningApplication", "NSWorkspace"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSRunningApplication", "NSWorkspace"] }
 objc2-screen-capture-kit = { version = "0.3", features = ["SCShareableContent", "SCStream", "block2", "objc2-core-graphics"] }
 objc2-core-graphics = { version = "0.3", features = ["CGWindow", "CGImage", "CGDataProvider"] }
 

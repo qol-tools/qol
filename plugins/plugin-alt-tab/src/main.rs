@@ -1001,46 +1001,34 @@ fn open_picker(
         eprintln!("[alt-tab/open] failed to open picker window");
     }
     cx.activate(true);
+
+    #[cfg(target_os = "macos")]
+    set_macos_accessory_policy();
 }
 
 #[cfg(target_os = "macos")]
 fn set_macos_accessory_policy() {
-    use std::ffi::c_void;
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+    use objc2_foundation::MainThreadMarker;
 
-    #[link(name = "objc")]
-    extern "C" {
-        fn objc_getClass(name: *const u8) -> *mut c_void;
-        fn sel_registerName(name: *const u8) -> *mut c_void;
-        fn objc_msgSend(receiver: *mut c_void, sel: *mut c_void, ...) -> *mut c_void;
-    }
-
-    const NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY: i64 = 1;
-
-    unsafe {
-        let cls = objc_getClass(b"NSApplication\0".as_ptr());
-        let shared_app_sel = sel_registerName(b"sharedApplication\0".as_ptr());
-        let app = objc_msgSend(cls, shared_app_sel);
-        if !app.is_null() {
-            let set_policy_sel = sel_registerName(b"setActivationPolicy:\0".as_ptr());
-            objc_msgSend(app, set_policy_sel, NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY);
-        }
-    }
+    let mtm = MainThreadMarker::new().expect("must be on main thread");
+    let app = NSApplication::sharedApplication(mtm);
+    app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 }
 
 fn run_app(config: AltTabConfig, rx: mpsc::Receiver<daemon::Command>, show_on_start: bool) {
     let app = Application::new();
 
     app.run(move |cx: &mut App| {
-        #[cfg(target_os = "macos")]
-        set_macos_accessory_policy();
-
         gpui_component::init(cx);
 
         let any_visible = Arc::new(AtomicBool::new(false));
         let tracker = MonitorTracker::start(cx, any_visible);
 
-        // Keepalive: prevents GPUI from quitting when the picker window is removed
         open_keepalive(cx);
+
+        #[cfg(target_os = "macos")]
+        set_macos_accessory_policy();
 
         // Track the single picker window + the monitor origin it was placed on
         let current: std::rc::Rc<std::cell::RefCell<Option<(WindowHandle<AltTabApp>, Point<Pixels>)>>> =
