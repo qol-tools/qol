@@ -26,26 +26,20 @@ pub fn create_tray(
     Ok(tray_icon)
 }
 
-/// Run the macOS event loop on the main thread.
-/// This blocks until `stop_event_loop` is called.
 pub fn run_event_loop() {
-    use objc2::rc::Retained;
-    use objc2::runtime::AnyObject;
-    use objc2::{class, msg_send};
+    use objc2_app_kit::NSApplication;
+    use objc2_foundation::MainThreadMarker;
 
-    unsafe {
-        let app: Retained<AnyObject> = msg_send![class!(NSApplication), sharedApplication];
-        let _: () = msg_send![&app, run];
-    }
+    let mtm = MainThreadMarker::new().expect("must be on main thread");
+    let app = NSApplication::sharedApplication(mtm);
+    app.run();
 }
 
 fn stop_event_loop() {
-    use objc2::rc::Retained;
-    use objc2::runtime::AnyObject;
-    use objc2::{class, msg_send};
+    use objc2_app_kit::NSApplication;
+    use objc2_foundation::MainThreadMarker;
 
-    unsafe {
-        let app: Retained<AnyObject> = msg_send![class!(NSApplication), sharedApplication];
-        let _: () = msg_send![&app, terminate: std::ptr::null::<AnyObject>()];
-    }
+    let mtm = MainThreadMarker::new().expect("must be on main thread");
+    let app = NSApplication::sharedApplication(mtm);
+    app.terminate(None);
 }
