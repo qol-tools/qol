@@ -37,7 +37,7 @@ impl Channel for FocusChannel {
         }
         let fresh = self.platform.focused_window_bounds();
         if fresh.is_some() && fresh != self.bounds {
-            eprintln!("[runtime/focus_ch] CHANGED old={:?} new={:?}",
+            log::debug!("[runtime/focus_ch] CHANGED old={:?} new={:?}",
                 self.bounds.map(|b| (b.x, b.y, b.width, b.height)),
                 fresh.map(|b| (b.x, b.y, b.width, b.height)));
             self.bounds = fresh;

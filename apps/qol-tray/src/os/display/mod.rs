@@ -16,14 +16,14 @@ fn ignore_pids() -> &'static RwLock<HashSet<u32>> {
 pub(crate) fn add_ignore_pid(pid: u32) {
     if let Ok(mut set) = ignore_pids().write() {
         set.insert(pid);
-        eprintln!("[runtime/ignore_pids] ADD {} → set={:?}", pid, *set);
+        log::debug!("[runtime/ignore_pids] ADD {} → set={:?}", pid, *set);
     }
 }
 
 pub(crate) fn remove_ignore_pid(pid: u32) {
     if let Ok(mut set) = ignore_pids().write() {
         set.remove(&pid);
-        eprintln!("[runtime/ignore_pids] REMOVE {} → set={:?}", pid, *set);
+        log::debug!("[runtime/ignore_pids] REMOVE {} → set={:?}", pid, *set);
     }
 }
 

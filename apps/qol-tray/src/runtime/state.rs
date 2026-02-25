@@ -25,7 +25,7 @@ impl InputState {
             self.cursor.as_ref().map_or(true, |c| f.at > c.at)
         );
         if !same_monitor || focus_is_newer {
-            eprintln!("[runtime/state] cursor STAMPED mon=({}, {}) at={:?} reason={}",
+            log::debug!("[runtime/state] cursor STAMPED mon=({}, {}) at={:?} reason={}",
                 monitor.x, monitor.y, at,
                 if !same_monitor { "monitor_change" } else { "reclaim_from_focus" });
             self.cursor = Some(Stamped { monitor, at });
@@ -33,7 +33,7 @@ impl InputState {
     }
 
     pub(crate) fn update_focus(&mut self, monitor: MonitorBounds, at: Instant) {
-        eprintln!("[runtime/state] focus STAMPED mon=({}, {}) at={:?}",
+        log::debug!("[runtime/state] focus STAMPED mon=({}, {}) at={:?}",
             monitor.x, monitor.y, at);
         self.focus = Some(Stamped { monitor, at });
     }
@@ -51,7 +51,7 @@ pub(crate) fn pick_active_monitor(state: &InputState, fallback: MonitorBounds) -
     let result = match (state.cursor.as_ref(), state.focus.as_ref()) {
         (Some(cursor), Some(focus)) => {
             let winner = if cursor.at > focus.at { "cursor" } else { "focus" };
-            eprintln!("[runtime/pick] cursor_mon=({},{}) cursor_at={:?} focus_mon=({},{}) focus_at={:?} → {}",
+            log::debug!("[runtime/pick] cursor_mon=({},{}) cursor_at={:?} focus_mon=({},{}) focus_at={:?} → {}",
                 cursor.monitor.x, cursor.monitor.y, cursor.at,
                 focus.monitor.x, focus.monitor.y, focus.at,
                 winner);
@@ -62,15 +62,15 @@ pub(crate) fn pick_active_monitor(state: &InputState, fallback: MonitorBounds) -
             }
         }
         (Some(cursor), None) => {
-            eprintln!("[runtime/pick] cursor only → ({}, {})", cursor.monitor.x, cursor.monitor.y);
+            log::debug!("[runtime/pick] cursor only → ({}, {})", cursor.monitor.x, cursor.monitor.y);
             cursor.monitor
         }
         (None, Some(focus)) => {
-            eprintln!("[runtime/pick] focus only → ({}, {})", focus.monitor.x, focus.monitor.y);
+            log::debug!("[runtime/pick] focus only → ({}, {})", focus.monitor.x, focus.monitor.y);
             focus.monitor
         }
         (None, None) => {
-            eprintln!("[runtime/pick] fallback");
+            log::debug!("[runtime/pick] fallback");
             fallback
         }
     };
