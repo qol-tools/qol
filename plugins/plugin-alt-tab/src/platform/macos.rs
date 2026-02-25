@@ -1,12 +1,9 @@
 use super::cg_helpers;
-use super::preview;
 use super::RgbaImage;
 use super::WindowInfo;
 use objc2::{AnyThread, Message};
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::mpsc;
-use std::time::Duration;
 
 type CFArrayRef = *const c_void;
 type CFDictionaryRef = *const c_void;
@@ -285,87 +282,6 @@ fn extract_app_icon(pid: i32) -> Option<RgbaImage> {
     })
 }
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
-static SCK_AVAILABLE: AtomicBool = AtomicBool::new(true);
-
-pub fn capture_preview(window_id: u32, max_w: usize, max_h: usize) -> Option<String> {
-    if !SCK_AVAILABLE.load(Ordering::Relaxed) {
-        return None;
-    }
-
-    let (tx, rx) = mpsc::channel::<Option<RgbaImage>>();
-
-    std::thread::spawn(move || {
-        let result = sck_capture_on_thread(window_id, max_w, max_h);
-        let _ = tx.send(result);
-    });
-
-    match rx.recv_timeout(Duration::from_millis(2000)) {
-        Ok(Some(rgba)) => {
-            preview::downscale_and_save_preview(
-                window_id, &rgba.data, rgba.width, rgba.height, max_w, max_h,
-            )
-        }
-        Ok(None) => None,
-        Err(_) => {
-            eprintln!("[alt-tab/macos] SCK capture timed out — disabling for this session");
-            SCK_AVAILABLE.store(false, Ordering::Relaxed);
-            None
-        }
-    }
-}
-
-pub fn capture_previews_batch(
-    targets: &[(usize, u32)],
-    max_w: usize,
-    max_h: usize,
-) -> Vec<(usize, Option<String>)> {
-    if !SCK_AVAILABLE.load(Ordering::Relaxed) {
-        return targets.iter().map(|&(idx, _)| (idx, None)).collect();
-    }
-    std::thread::scope(|s| {
-        let handles: Vec<_> = targets
-            .iter()
-            .map(|&(idx, wid)| {
-                s.spawn(move || {
-                    let path = sck_capture_on_thread(wid, max_w, max_h).and_then(|rgba| {
-                        preview::downscale_and_save_preview(
-                            wid, &rgba.data, rgba.width, rgba.height, max_w, max_h,
-                        )
-                    });
-                    (idx, path)
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .filter_map(|h| h.join().ok())
-            .collect()
-    })
-}
-
-pub fn capture_preview_rgba(window_id: u32, max_w: usize, max_h: usize) -> Option<RgbaImage> {
-    if !SCK_AVAILABLE.load(Ordering::Relaxed) {
-        return None;
-    }
-
-    let (tx, rx) = mpsc::channel::<Option<RgbaImage>>();
-    std::thread::spawn(move || {
-        let result = sck_capture_on_thread(window_id, max_w, max_h);
-        let _ = tx.send(result);
-    });
-
-    match rx.recv_timeout(Duration::from_millis(2000)) {
-        Ok(result) => result,
-        Err(_) => {
-            eprintln!("[alt-tab/macos] SCK capture timed out — disabling for this session");
-            SCK_AVAILABLE.store(false, Ordering::Relaxed);
-            None
-        }
-    }
-}
-
 pub fn capture_previews_cg(
     targets: &[(usize, u32)],
     max_w: usize,
@@ -451,115 +367,6 @@ fn extract_bgra_from_raw_cgimage(img: CGImageRef, max_w: usize, max_h: usize) ->
     unsafe { CFRelease(cf_data) };
     Some(RgbaImage { data: bgra, width: max_w, height: max_h })
 }
-
-pub fn capture_previews_batch_rgba(
-    targets: &[(usize, u32)],
-    max_w: usize,
-    max_h: usize,
-) -> Vec<(usize, Option<RgbaImage>)> {
-    if !SCK_AVAILABLE.load(Ordering::Relaxed) {
-        return targets.iter().map(|&(idx, _)| (idx, None)).collect();
-    }
-    std::thread::scope(|s| {
-        let handles: Vec<_> = targets
-            .iter()
-            .map(|&(idx, wid)| {
-                s.spawn(move || {
-                    let result = sck_capture_on_thread(wid, max_w, max_h);
-                    (idx, result)
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .filter_map(|h| h.join().ok())
-            .collect()
-    })
-}
-
-fn sck_capture_on_thread(window_id: u32, max_w: usize, max_h: usize) -> Option<RgbaImage> {
-    use objc2_screen_capture_kit::{
-        SCContentFilter, SCScreenshotManager, SCShareableContent, SCStreamConfiguration,
-    };
-
-    let (content_tx, content_rx) = mpsc::channel();
-    let content_completion = block2::RcBlock::new(
-        move |content: *mut SCShareableContent, err: *mut objc2_foundation::NSError| {
-            if !err.is_null() {
-                let desc = unsafe { (*err).localizedDescription() };
-                eprintln!("[alt-tab/macos] SCShareableContent error: {}", desc);
-                let _ = content_tx.send(None);
-                return;
-            }
-            if content.is_null() {
-                let _ = content_tx.send(None);
-                return;
-            }
-            let content = unsafe { &*content };
-            let windows = unsafe { content.windows() };
-            let count = windows.count();
-            let mut found = None;
-            for i in 0..count {
-                let w = windows.objectAtIndex(i);
-                if unsafe { w.windowID() } == window_id {
-                    found = Some(w.retain());
-                    break;
-                }
-            }
-            let _ = content_tx.send(found);
-        },
-    );
-
-    unsafe {
-        SCShareableContent::getShareableContentWithCompletionHandler(&content_completion);
-    }
-
-    let sc_window = content_rx.recv_timeout(Duration::from_millis(1500)).ok()??;
-
-    let filter = unsafe {
-        SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &sc_window)
-    };
-
-    let config = unsafe { SCStreamConfiguration::new() };
-    unsafe {
-        config.setWidth(max_w);
-        config.setHeight(max_h);
-        config.setScalesToFit(false);
-    }
-
-    let (img_tx, img_rx) =
-        mpsc::channel::<Option<objc2::rc::Retained<objc2_core_graphics::CGImage>>>();
-    let img_completion = block2::RcBlock::new(
-        move |image: *mut objc2_core_graphics::CGImage, err: *mut objc2_foundation::NSError| {
-            if !err.is_null() {
-                let desc = unsafe { (*err).localizedDescription() };
-                eprintln!("[alt-tab/macos] SCScreenshotManager error: {}", desc);
-                let _ = img_tx.send(None);
-                return;
-            }
-            if image.is_null() {
-                let _ = img_tx.send(None);
-            } else {
-                let retained = unsafe { objc2::rc::Retained::retain(image) };
-                let _ = img_tx.send(retained);
-            }
-        },
-    );
-
-    unsafe {
-        SCScreenshotManager::captureImageWithFilter_configuration_completionHandler(
-            &filter,
-            &config,
-            Some(&img_completion),
-        );
-    }
-
-    let cg_image = img_rx.recv_timeout(Duration::from_millis(1500)).ok()??;
-    let img_ptr = &*cg_image as *const objc2_core_graphics::CGImage as CGImageRef;
-    let result = extract_bgra_from_raw_cgimage(img_ptr, max_w, max_h);
-    result
-}
-
 
 pub fn activate_window(window_id: u32) {
     let opts =

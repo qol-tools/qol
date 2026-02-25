@@ -5,9 +5,8 @@ edition = "2021"
 
 [dependencies]
 dirs = "5.0"
-shell-words = "1.1"
 gpui = "0.2"
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false }
 open = "5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -19,10 +18,8 @@ x11rb = { version = "0.13", features = ["allow-unsafe-code", "xinput"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-block2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSEnumerator", "NSDictionary", "NSRunLoop", "NSError", "NSObject", "NSData"] }
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSRunningApplication", "NSWorkspace", "NSImage", "NSImageRep", "NSGraphicsContext", "objc2-core-graphics"] }
-objc2-screen-capture-kit = { version = "0.3", features = ["SCShareableContent", "SCStream", "block2", "objc2-core-graphics"] }
 objc2-core-graphics = { version = "0.3", features = ["CGWindow", "CGImage", "CGDataProvider"] }
 
 # macOS only: fix zed-font-kit core-graphics version mismatch

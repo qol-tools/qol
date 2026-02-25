@@ -39,21 +39,10 @@ pub(crate) fn open_picker(
         return;
     }
 
-    let raw_windows = platform::get_open_windows();
-    let mut display_windows = raw_windows;
-    if let Ok(cache) = window_cache.lock() {
-        for win in &mut display_windows {
-            if let Some(cached) = cache.iter().find(|c| c.id == win.id) {
-                win.preview_path = cached.preview_path.clone();
-            }
-        }
-    }
+    let display_windows = platform::get_open_windows();
     // Update the cache centrally so background processes see the current layout
     if let Ok(mut cache) = window_cache.lock() {
         *cache = display_windows.clone();
-    }
-    for win in &mut display_windows {
-        win.preview_path = None;
     }
 
     // Fast path: if picker is already visible and alt held, just cycle selection.
@@ -301,8 +290,6 @@ pub(crate) fn open_picker(
         bounds.origin, bounds.size
     );
 
-    let last_window_count_for_init = last_window_count.clone();
-    let window_cache_for_init = window_cache.clone();
     let action_mode_for_init = config.action_mode.clone();
     let display_windows_for_init = display_windows.clone();
     let config_for_init = config.clone();
@@ -325,8 +312,6 @@ pub(crate) fn open_picker(
                 AltTabApp::new(
                     window,
                     cx,
-                    last_window_count_for_init,
-                    window_cache_for_init,
                     action_mode_for_init,
                     display_windows_for_init,
                     label_config,

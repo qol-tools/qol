@@ -5,13 +5,11 @@ mod render;
 
 use crate::config::{ActionMode, LabelConfig};
 use crate::delegate::WindowDelegate;
-use crate::layout::{picker_height_for, rendered_column_count};
 use crate::platform;
 use crate::platform::WindowInfo;
-use crate::window_source::load_windows_with_previews;
 use gpui::*;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 pub(crate) static PICKER_VISIBLE: AtomicBool = AtomicBool::new(false);
@@ -29,8 +27,6 @@ impl AltTabApp {
     pub(crate) fn new(
         window: &mut Window,
         cx: &mut Context<Self>,
-        last_window_count: Arc<AtomicUsize>,
-        window_cache: Arc<std::sync::Mutex<Vec<WindowInfo>>>,
         action_mode: ActionMode,
         initial_windows: Vec<WindowInfo>,
         label_config: LabelConfig,
@@ -38,7 +34,6 @@ impl AltTabApp {
         initial_previews: HashMap<u32, Arc<RenderImage>>,
         icon_cache: HashMap<String, Arc<RenderImage>>,
     ) -> Self {
-        let has_cached_windows = !initial_windows.is_empty();
         let win_delegate =
             WindowDelegate::new_with_previews(initial_windows.clone(), label_config, initial_previews, icon_cache);
         let delegate = cx.new(|_cx| win_delegate);
@@ -49,8 +44,7 @@ impl AltTabApp {
 
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle);
-        let mut async_window = window.to_async(cx);
-        let gpui_window_handle = async_window.window_handle();
+        let gpui_window_handle = window.to_async(cx).window_handle();
 
         // Register the focus out subscription for Sticky mode.
         let focus_handle_for_sub = focus_handle.clone();
@@ -64,49 +58,6 @@ impl AltTabApp {
                 }
             },
         );
-
-        let delegate_clone = delegate.clone();
-        cx.spawn(
-            move |this: WeakEntity<AltTabApp>, cx: &mut AsyncApp| {
-                let cx = cx.clone();
-                async move {
-                    let executor = cx.background_executor().clone();
-                    if has_cached_windows {
-                        return;
-                    }
-                    let cached = window_cache
-                        .lock()
-                        .map(|cache| cache.clone())
-                        .unwrap_or_default();
-                    let windows = load_windows_with_previews(&executor, cached, false).await;
-                    if let Ok(mut cache) = window_cache.lock() {
-                        *cache = windows.clone();
-                    }
-                    let ids: Vec<u32> = windows.iter().map(|w| w.id).collect();
-                    last_window_count.store(ids.len().max(1), Ordering::Relaxed);
-
-                    let _ = cx.update(|app_cx| {
-                        let _ = delegate_clone.update(app_cx, |state, cx| {
-                            state.set_windows(windows.clone(), false);
-                            cx.notify();
-                        });
-                        let _ = this.update(app_cx, |_, cx: &mut Context<AltTabApp>| {
-                            cx.notify();
-                        });
-                    });
-                    let total = ids.len().max(1);
-                    let _ = async_window.update(|window, _app_cx| {
-                        let cols = rendered_column_count(window, total);
-                        let next_height = picker_height_for(total, cols).clamp(320.0, 980.0);
-                        let current = window.window_bounds().get_bounds().size;
-                        if (current.height.to_f64() - next_height as f64).abs() >= 1.0 {
-                            window.resize(size(current.width, px(next_height)));
-                        }
-                    });
-                }
-            },
-        )
-        .detach();
 
         let live_preview_task = live_preview::spawn(delegate.clone(), cx);
 

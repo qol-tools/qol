@@ -1,5 +1,3 @@
-mod preview;
-
 #[cfg(target_os = "macos")]
 pub(crate) mod cg_helpers;
 
@@ -45,34 +43,6 @@ mod unsupported {
         Vec::new()
     }
 
-    pub fn capture_preview(_window_id: u32, _max_w: usize, _max_h: usize) -> Option<String> {
-        None
-    }
-
-    pub fn capture_previews_batch(
-        _targets: &[(usize, u32)],
-        _max_w: usize,
-        _max_h: usize,
-    ) -> Vec<(usize, Option<String>)> {
-        Vec::new()
-    }
-
-    pub fn capture_preview_rgba(
-        _window_id: u32,
-        _max_w: usize,
-        _max_h: usize,
-    ) -> Option<super::RgbaImage> {
-        None
-    }
-
-    pub fn capture_previews_batch_rgba(
-        _targets: &[(usize, u32)],
-        _max_w: usize,
-        _max_h: usize,
-    ) -> Vec<(usize, Option<super::RgbaImage>)> {
-        Vec::new()
-    }
-
     pub fn capture_previews_cg(
         _targets: &[(usize, u32)],
         _max_w: usize,
@@ -111,36 +81,8 @@ mod unsupported {
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 use unsupported as imp;
 
-pub fn cached_preview_path(window_id: u32) -> Option<String> {
-    preview::cached_preview_path(window_id)
-}
-
 pub fn get_open_windows() -> Vec<WindowInfo> {
     imp::get_open_windows()
-}
-
-pub fn capture_preview(window_id: u32, max_w: usize, max_h: usize) -> Option<String> {
-    imp::capture_preview(window_id, max_w, max_h)
-}
-
-pub fn capture_previews_batch(
-    targets: &[(usize, u32)],
-    max_w: usize,
-    max_h: usize,
-) -> Vec<(usize, Option<String>)> {
-    imp::capture_previews_batch(targets, max_w, max_h)
-}
-
-pub fn capture_preview_rgba(window_id: u32, max_w: usize, max_h: usize) -> Option<RgbaImage> {
-    imp::capture_preview_rgba(window_id, max_w, max_h)
-}
-
-pub fn capture_previews_batch_rgba(
-    targets: &[(usize, u32)],
-    max_w: usize,
-    max_h: usize,
-) -> Vec<(usize, Option<RgbaImage>)> {
-    imp::capture_previews_batch_rgba(targets, max_w, max_h)
 }
 
 pub fn capture_previews_cg(targets: &[(usize, u32)], max_w: usize, max_h: usize) -> Vec<(usize, Option<RgbaImage>)> {
