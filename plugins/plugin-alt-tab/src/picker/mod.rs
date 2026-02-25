@@ -2,7 +2,7 @@ pub(crate) mod keepalive;
 pub(crate) mod run;
 
 use crate::app::{AltTabApp, PICKER_VISIBLE};
-use crate::config::{ActionMode, AltTabConfig};
+use crate::config::{parse_hex_color, ActionMode, AltTabConfig, DisplayConfig};
 use crate::icon::build_icon_cache;
 use crate::layout::*;
 use crate::monitor::MonitorTracker;
@@ -168,8 +168,12 @@ pub(crate) fn open_picker(
                 view.action_mode = config.action_mode.clone();
                 view.alt_was_held = true;
 
+                let (card_color, card_opacity) = resolve_card_bg(&config.display);
                 view.delegate.update(cx, |s, _cx| {
                     s.label_config = config.label.clone();
+                    s.transparent_background = config.display.transparent_background;
+                    s.card_bg_color = card_color;
+                    s.card_bg_opacity = card_opacity;
                 });
 
                 if config.action_mode == ActionMode::HoldToSwitch {
@@ -295,19 +299,29 @@ pub(crate) fn open_picker(
     let config_for_init = config.clone();
     let cycle_on_open = config.open_behavior == crate::config::OpenBehavior::CycleOnce;
     let icons_for_init = icons.clone();
+    let transparent_bg = config.display.transparent_background;
+    let (card_color_init, card_opacity_init) = resolve_card_bg(&config.display);
+
+    let window_background = if transparent_bg {
+        WindowBackgroundAppearance::Transparent
+    } else {
+        WindowBackgroundAppearance::Opaque
+    };
 
     let handle = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: None,
-            window_decorations: Some(WindowDecorations::Client),
+            window_decorations: Some(if transparent_bg { WindowDecorations::Server } else { WindowDecorations::Client }),
             kind: platform::picker_window_kind(),
             focus: true,
+            window_background: window_background,
             ..Default::default()
         },
         move |window, cx| {
             window.set_window_title("qol-alt-tab-picker");
             let label_config = config_for_init.label.clone();
+            let transparent_background = config_for_init.display.transparent_background;
             let view = cx.new(|cx| {
                 AltTabApp::new(
                     window,
@@ -315,6 +329,9 @@ pub(crate) fn open_picker(
                     action_mode_for_init,
                     display_windows_for_init,
                     label_config,
+                    transparent_background,
+                    card_color_init,
+                    card_opacity_init,
                     cycle_on_open,
                     initial_previews,
                     icons_for_init,
@@ -337,6 +354,10 @@ pub(crate) fn open_picker(
     };
     PICKER_VISIBLE.store(true, Ordering::Relaxed);
     cx.activate(true);
+
+    if transparent_bg {
+        platform::disable_window_shadow();
+    }
 
     // Spawn background icon fetch for any apps not yet in the cache.
     // This fills icons within ~50ms instead of waiting for the next prewarm cycle.
@@ -384,6 +405,13 @@ pub(crate) fn open_picker(
     set_macos_accessory_policy();
 }
 
+fn resolve_card_bg(display: &DisplayConfig) -> (u32, f32) {
+    let (r, g, b) = parse_hex_color(&display.card_background_color).unwrap_or((0x1a, 0x1e, 0x2a));
+    let color = ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
+    let opacity = display.card_background_opacity.clamp(0.0, 1.0);
+    (color, opacity)
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn set_macos_accessory_policy() {
     use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
@@ -393,3 +421,4 @@ pub(crate) fn set_macos_accessory_policy() {
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 }
+

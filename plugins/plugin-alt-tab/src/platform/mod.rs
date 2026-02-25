@@ -76,6 +76,8 @@ mod unsupported {
     pub fn get_app_icons(_windows: &[WindowInfo]) -> std::collections::HashMap<String, super::RgbaImage> {
         std::collections::HashMap::new()
     }
+
+    pub fn disable_window_shadow() {}
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -115,4 +117,8 @@ pub fn dismiss_picker(window: &mut gpui::Window) {
 
 pub fn get_app_icons(windows: &[WindowInfo]) -> std::collections::HashMap<String, RgbaImage> {
     imp::get_app_icons(windows)
+}
+
+pub fn disable_window_shadow() {
+    imp::disable_window_shadow()
 }

@@ -7,6 +7,13 @@ use gpui::*;
 impl Render for AltTabApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let delegate = self.delegate.clone();
+        let d_ref = delegate.read(cx);
+        let transparent_bg = d_ref.transparent_background;
+        let card_bg_rgba = {
+            let alpha = (d_ref.card_bg_opacity.clamp(0.0, 1.0) * 255.0) as u32;
+            (d_ref.card_bg_color << 8) | alpha
+        };
+        drop(d_ref);
 
         #[cfg(debug_assertions)]
         eprintln!(
@@ -18,36 +25,38 @@ impl Render for AltTabApp {
             .track_focus(&self.focus_handle)
             .flex()
             .flex_col()
-            .bg(rgb(0x0f111a))
+            .when(!transparent_bg, |s| s.bg(rgb(0x0f111a)))
             .w_full()
             .h_full()
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 super::input::handle_key_down(this, event, window, cx);
             }))
-            .child(
-                // ── Header bar ────────────────────────────────────────────────
-                div()
-                    .px_4()
-                    .py_2()
-                    .border_b_1()
-                    .border_color(rgb(0x1e2333))
-                    .bg(rgb(0x13151f))
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_color(rgb(0x5e6a84))
-                            .text_xs()
-                            .child("Alt Tab  ·  Live Window Grid"),
-                    )
-                    .child(
-                        div()
-                            .text_color(rgb(0x3a4252))
-                            .text_xs()
-                            .child("↑↓←→ navigate  ·  ⏎ switch  ·  esc close"),
-                    ),
-            )
+            .when(!transparent_bg, |s| {
+                s.child(
+                    // ── Header bar ────────────────────────────────────────────────
+                    div()
+                        .px_4()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(rgb(0x1e2333))
+                        .bg(rgb(0x13151f))
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_color(rgb(0x5e6a84))
+                                .text_xs()
+                                .child("Alt Tab  ·  Live Window Grid"),
+                        )
+                        .child(
+                            div()
+                                .text_color(rgb(0x3a4252))
+                                .text_xs()
+                                .child("↑↓←→ navigate  ·  ⏎ switch  ·  esc close"),
+                        ),
+                )
+            })
             .child(
                 // ── Content ───────────────────────────────────────────────────
                 div().flex_1().w_full().min_h_0().child({
@@ -115,14 +124,22 @@ impl Render for AltTabApp {
                                             .ok();
                                     }
                                 })
-                                .when(is_selected, |s| {
+                                .when(is_selected && !transparent_bg, |s| {
                                     s.bg(rgb(0x233050)).border_1().border_color(rgb(0x4a6fa5))
                                 })
-                                .when(!is_selected, |s| {
+                                .when(is_selected && transparent_bg, |s| {
+                                    s.bg(rgba(card_bg_rgba))
+                                        .border_1()
+                                        .border_color(rgb(0x4a6fa5))
+                                })
+                                .when(!is_selected && !transparent_bg, |s| {
                                     s.bg(rgb(0x1a1e2a)).hover(|mut h| {
                                         h.background = Some(rgb(0x1e2640).into());
                                         h
                                     })
+                                })
+                                .when(!is_selected && transparent_bg, |s| {
+                                    s.bg(rgba(card_bg_rgba))
                                 })
                                 .child(div().rounded_md().overflow_hidden().child(preview_tile(
                                     live_previews.get(&win.id),

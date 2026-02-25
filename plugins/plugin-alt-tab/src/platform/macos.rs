@@ -450,3 +450,16 @@ pub fn is_shift_held() -> bool {
     const K_CG_EVENT_FLAG_MASK_SHIFT: u64 = 0x0002_0000;
     cg_event_flags() & K_CG_EVENT_FLAG_MASK_SHIFT != 0
 }
+
+pub fn disable_window_shadow() {
+    use objc2_app_kit::{NSApplication, NSColor};
+    use objc2_foundation::MainThreadMarker;
+
+    let mtm = MainThreadMarker::new().expect("must be on main thread");
+    let app = NSApplication::sharedApplication(mtm);
+    let clear = unsafe { NSColor::clearColor() };
+    for window in app.windows().iter() {
+        window.setHasShadow(false);
+        window.setBackgroundColor(Some(&clear));
+    }
+}

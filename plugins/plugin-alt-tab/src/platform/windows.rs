@@ -34,6 +34,8 @@ pub fn is_shift_held() -> bool {
     false
 }
 
+pub fn disable_window_shadow() {}
+
 pub fn get_app_icons(_windows: &[WindowInfo]) -> std::collections::HashMap<String, super::RgbaImage> {
     std::collections::HashMap::new()
 }

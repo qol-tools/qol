@@ -6,14 +6,31 @@ use std::path::PathBuf;
 #[serde(default)]
 pub struct DisplayConfig {
     pub max_columns: usize,
+    pub transparent_background: bool,
+    pub card_background_color: String,
+    pub card_background_opacity: f32,
 }
 
 impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
             max_columns: 6,
+            transparent_background: false,
+            card_background_color: "1a1e2a".to_string(),
+            card_background_opacity: 0.85,
         }
     }
+}
+
+pub fn parse_hex_color(hex: &str) -> Option<(u8, u8, u8)> {
+    let hex = hex.strip_prefix('#').unwrap_or(hex);
+    if hex.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    Some((r, g, b))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -88,6 +88,23 @@
                 </div>
             </div>
 
+            <label class="mode-option">
+                <input type="checkbox" id="transparent-background">
+                <span class="mode-copy">
+                    <strong>Transparent Background</strong>
+                    <small>Remove the window background so only preview cards and labels are visible.</small>
+                </span>
+            </label>
+
+            <div class="slider-control" id="card-bg-group">
+                <label class="mode-copy"><small>Card background color</small></label>
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <input type="color" id="card-bg-color" value="#1a1e2a" style="width:36px;height:28px;border:none;cursor:pointer;">
+                    <input type="range" id="card-bg-opacity" min="0" max="100" value="85" style="flex:1;">
+                    <span id="card-bg-opacity-value">85%</span>
+                </div>
+            </div>
+
             <div class="visualizer-container">
                 <div class="visualizer-controls">
                     <label class="mode-copy">

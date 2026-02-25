@@ -404,6 +404,8 @@ fn x11_data_to_rgba(
     Some(rgba)
 }
 
+pub fn disable_window_shadow() {}
+
 pub fn get_app_icons(windows: &[WindowInfo]) -> std::collections::HashMap<String, RgbaImage> {
     let mut icons = std::collections::HashMap::new();
     for win in windows {

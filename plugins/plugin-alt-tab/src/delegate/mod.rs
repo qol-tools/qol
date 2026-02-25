@@ -12,18 +12,20 @@ pub(crate) struct WindowDelegate {
     pub(crate) windows: Vec<WindowInfo>,
     pub(crate) selected_index: Option<usize>,
     pub(crate) label_config: LabelConfig,
+    pub(crate) transparent_background: bool,
+    pub(crate) card_bg_color: u32,
+    pub(crate) card_bg_opacity: f32,
     pub(crate) live_previews: HashMap<u32, Arc<RenderImage>>,
     pub(crate) icon_cache: HashMap<String, Arc<RenderImage>>,
 }
 
 impl WindowDelegate {
-    pub(crate) fn new(windows: Vec<WindowInfo>, label_config: LabelConfig) -> Self {
-        Self::new_with_previews(windows, label_config, HashMap::new(), HashMap::new())
-    }
-
     pub(crate) fn new_with_previews(
         windows: Vec<WindowInfo>,
         label_config: LabelConfig,
+        transparent_background: bool,
+        card_bg_color: u32,
+        card_bg_opacity: f32,
         live_previews: HashMap<u32, Arc<RenderImage>>,
         icon_cache: HashMap<String, Arc<RenderImage>>,
     ) -> Self {
@@ -32,6 +34,9 @@ impl WindowDelegate {
             windows,
             selected_index,
             label_config,
+            transparent_background,
+            card_bg_color,
+            card_bg_opacity,
             live_previews,
             icon_cache,
         }

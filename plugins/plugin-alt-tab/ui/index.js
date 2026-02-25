@@ -5,7 +5,10 @@ const DEFAULT_CONFIG = {
     display: {
         preview_mode: 'below_list',
         max_columns: 6,
-        preview_fps: 10
+        preview_fps: 10,
+        transparent_background: false,
+        card_background_color: '1a1e2a',
+        card_background_opacity: 0.85
     },
     action_mode: 'sticky',
     reset_selection_on_open: true,
@@ -37,6 +40,15 @@ function normalizeConfig(raw) {
     const maxColumns = parseInt(raw?.display?.max_columns, 10) || DEFAULT_CONFIG.display.max_columns;
     const previewFps = parseInt(raw?.display?.preview_fps, 10);
     const normalizedFps = isNaN(previewFps) ? DEFAULT_CONFIG.display.preview_fps : Math.max(0, Math.min(60, previewFps));
+    const transparentBackground = typeof raw?.display?.transparent_background === 'boolean'
+        ? raw.display.transparent_background
+        : DEFAULT_CONFIG.display.transparent_background;
+    const cardBgColor = (typeof raw?.display?.card_background_color === 'string' && /^[0-9a-fA-F]{6}$/.test(raw.display.card_background_color))
+        ? raw.display.card_background_color
+        : DEFAULT_CONFIG.display.card_background_color;
+    const cardBgOpacity = typeof raw?.display?.card_background_opacity === 'number'
+        ? Math.max(0, Math.min(1, raw.display.card_background_opacity))
+        : DEFAULT_CONFIG.display.card_background_opacity;
     const actionMode = raw?.action_mode;
     const resetSelectionOnOpen = typeof raw?.reset_selection_on_open === 'boolean'
         ? raw.reset_selection_on_open
@@ -46,7 +58,10 @@ function normalizeConfig(raw) {
         display: {
             preview_mode: PREVIEW_MODES.has(previewMode) ? previewMode : DEFAULT_CONFIG.display.preview_mode,
             max_columns: Math.max(2, Math.min(12, maxColumns)),
-            preview_fps: normalizedFps
+            preview_fps: normalizedFps,
+            transparent_background: transparentBackground,
+            card_background_color: cardBgColor,
+            card_background_opacity: cardBgOpacity
         },
         action_mode: ACTION_MODES.has(actionMode) ? actionMode : DEFAULT_CONFIG.action_mode,
         reset_selection_on_open: resetSelectionOnOpen,
@@ -79,6 +94,23 @@ function applyConfigToUI(config) {
         document.getElementById('preview-fps-value').textContent = previewFps;
     }
 
+    const transparentBgInput = document.getElementById('transparent-background');
+    if (transparentBgInput) {
+        transparentBgInput.checked = !!config.display.transparent_background;
+    }
+
+    const cardBgColorInput = document.getElementById('card-bg-color');
+    if (cardBgColorInput) {
+        cardBgColorInput.value = '#' + (config.display.card_background_color || '1a1e2a');
+    }
+    const cardBgOpacityInput = document.getElementById('card-bg-opacity');
+    if (cardBgOpacityInput) {
+        const pct = Math.round((config.display.card_background_opacity ?? 0.85) * 100);
+        cardBgOpacityInput.value = pct;
+        document.getElementById('card-bg-opacity-value').textContent = pct + '%';
+    }
+    updateCardBgVisibility();
+
     const actionMode = config.action_mode;
     const actionInput = document.querySelector(`input[name="action-mode"][value="${actionMode}"]`);
     if (actionInput) {
@@ -106,6 +138,9 @@ function collectConfigFromUI() {
     const maxColumnsSelected = parseInt(document.getElementById('max-columns')?.value, 10);
     const actionSelected = selectedActionModeInput()?.value;
     const resetSelectionOnOpenSelected = document.getElementById('reset-selection-on-open')?.checked;
+    const transparentBgSelected = document.getElementById('transparent-background')?.checked;
+    const cardBgColorRaw = (document.getElementById('card-bg-color')?.value || '#1a1e2a').replace('#', '');
+    const cardBgOpacityRaw = parseInt(document.getElementById('card-bg-opacity')?.value, 10) / 100;
     const showAppNameSelected = document.getElementById('show-app-name')?.checked;
     const showWindowTitleSelected = document.getElementById('show-window-title')?.checked;
 
@@ -113,7 +148,10 @@ function collectConfigFromUI() {
         display: {
             preview_mode: previewSelected,
             max_columns: maxColumnsSelected || 6,
-            preview_fps: parseInt(document.getElementById('preview-fps')?.value, 10) || 10
+            preview_fps: parseInt(document.getElementById('preview-fps')?.value, 10) || 10,
+            transparent_background: !!transparentBgSelected,
+            card_background_color: cardBgColorRaw,
+            card_background_opacity: isNaN(cardBgOpacityRaw) ? 0.85 : cardBgOpacityRaw
         },
         action_mode: actionSelected,
         reset_selection_on_open: resetSelectionOnOpenSelected,
@@ -235,6 +273,19 @@ function updateLabelVisualizer() {
 
 document.getElementById('show-app-name')?.addEventListener('change', updateLabelVisualizer);
 document.getElementById('show-window-title')?.addEventListener('change', updateLabelVisualizer);
+
+function updateCardBgVisibility() {
+    const group = document.getElementById('card-bg-group');
+    const checked = document.getElementById('transparent-background')?.checked;
+    if (group) group.style.display = checked ? '' : 'none';
+}
+
+document.getElementById('transparent-background')?.addEventListener('change', updateCardBgVisibility);
+
+document.getElementById('card-bg-opacity')?.addEventListener('input', () => {
+    document.getElementById('card-bg-opacity-value').textContent =
+        document.getElementById('card-bg-opacity').value + '%';
+});
 
 elements.saveBtn.addEventListener('click', saveConfig);
 
