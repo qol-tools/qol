@@ -84,15 +84,21 @@ const K_CG_WINDOW_LAYER_NORMAL: i32 = 0;
 
 const ICON_SIZE: usize = 32;
 
-pub fn get_open_windows() -> Vec<WindowInfo> {
-    let own_pid = std::process::id() as i32;
-    let opts =
-        K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
-    let list = unsafe { CGWindowListCopyWindowInfo(opts, K_CG_NULL_WINDOW_ID) };
-    if list.is_null() {
-        return Vec::new();
-    }
+/// Parsed CG window entry.
+struct CgWindow {
+    id: u32,
+    pid: i32,
+    app_name: String,
+    title: String,
+    has_title: bool,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
 
+/// Shared helper: parse normal-layer windows from a CG window list.
+fn parse_cg_window_list(list: *const c_void, own_pid: i32) -> Vec<CgWindow> {
     let key_layer = cg_helpers::cfstr(b"kCGWindowLayer");
     let key_pid = cg_helpers::cfstr(b"kCGWindowOwnerPID");
     let key_owner = cg_helpers::cfstr(b"kCGWindowOwnerName");
@@ -101,7 +107,7 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
     let key_bounds = cg_helpers::cfstr(b"kCGWindowBounds");
 
     let count = unsafe { CFArrayGetCount(list) };
-    let mut windows = Vec::with_capacity(count.max(0) as usize);
+    let mut result: Vec<CgWindow> = Vec::with_capacity(count.max(0) as usize);
 
     for i in 0..count {
         let dict = unsafe { CFArrayGetValueAtIndex(list, i) } as CFDictionaryRef;
@@ -134,6 +140,7 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
         if app_name.is_empty() && title.is_empty() {
             continue;
         }
+        let has_title = !title.is_empty();
         let display_title = if title.is_empty() {
             app_name.clone()
         } else {
@@ -141,35 +148,181 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
         };
         let (wx, wy, ww, wh) = cg_helpers::dict_get_rect(dict, key_bounds)
             .unwrap_or((0.0, 0.0, 0.0, 0.0));
-        windows.push(WindowInfo {
-            id: id as u32,
-            title: display_title,
-            app_name,
-            preview_path: None,
-            icon: None,
-            x: wx as f32,
-            y: wy as f32,
-            width: ww as f32,
-            height: wh as f32,
+        result.push(CgWindow {
+            id: id as u32, pid, app_name, title: display_title, has_title,
+            x: wx as f32, y: wy as f32, w: ww as f32, h: wh as f32,
         });
     }
 
     unsafe {
-        CFRelease(list as *const c_void);
         CFRelease(key_layer as *const c_void);
         CFRelease(key_pid as *const c_void);
         CFRelease(key_owner as *const c_void);
         CFRelease(key_name as *const c_void);
         CFRelease(key_number as *const c_void);
+        CFRelease(key_bounds as *const c_void);
+    }
+
+    result
+}
+
+pub fn get_open_windows() -> Vec<WindowInfo> {
+    let own_pid = std::process::id() as i32;
+
+    // Pass 1: on-screen windows (the reliable set — no helper noise)
+    let on_screen_opts =
+        K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
+    let on_screen_list = unsafe { CGWindowListCopyWindowInfo(on_screen_opts, K_CG_NULL_WINDOW_ID) };
+    let mut on_screen_ids = std::collections::HashSet::new();
+    let mut on_screen_pids = std::collections::HashSet::new();
+    let mut windows = Vec::new();
+
+    if !on_screen_list.is_null() {
+        let parsed = parse_cg_window_list(on_screen_list, own_pid);
+        unsafe { CFRelease(on_screen_list as *const c_void) };
+        // Collect all PIDs before dedup (needed for pass 2 filtering)
+        for cw in &parsed {
+            on_screen_pids.insert(cw.pid);
+        }
+        for cw in dedup_by_ax(parsed) {
+            on_screen_ids.insert(cw.id);
+            windows.push(WindowInfo {
+                id: cw.id, title: cw.title, app_name: cw.app_name,
+                preview_path: None, icon: None,
+                x: cw.x, y: cw.y, width: cw.w, height: cw.h,
+                is_minimized: false,
+            });
+        }
+    }
+
+    // Pass 2: all windows — pick up minimized ones not in the on-screen set
+    let all_opts = K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
+    let all_list = unsafe { CGWindowListCopyWindowInfo(all_opts, K_CG_NULL_WINDOW_ID) };
+    if !all_list.is_null() {
+        // Cache which PIDs are regular apps (visible in Dock / Cmd+Tab).
+        // Filters out menu bar apps, background agents, system services.
+        let mut regular_app_cache: HashMap<i32, bool> = HashMap::new();
+
+        for cw in parse_cg_window_list(all_list, own_pid) {
+            if on_screen_ids.contains(&cw.id) {
+                continue; // already included as on-screen
+            }
+            // If this app already has on-screen windows, its off-screen windows
+            // are likely tabs/splits (e.g. Kitty), not truly minimized.
+            if on_screen_pids.contains(&cw.pid) {
+                continue;
+            }
+            // Only include off-screen windows that look like real user windows:
+            // must have a real window title and reasonable dimensions
+            if !cw.has_title {
+                continue;
+            }
+            if cw.w < 1.0 || cw.h < 1.0 {
+                continue;
+            }
+            // Only include windows from regular apps (those that appear in Dock).
+            // This filters out menu bar apps, background agents, etc.
+            let is_regular = *regular_app_cache.entry(cw.pid).or_insert_with(|| {
+                is_regular_app(cw.pid)
+            });
+            if !is_regular {
+                continue;
+            }
+            // Check AX for real window count. Apps like Calendar run in the
+            // background with CG windows but no user-visible windows.
+            if ax_window_count(cw.pid).unwrap_or(1) == 0 {
+                continue;
+            }
+            windows.push(WindowInfo {
+                id: cw.id, title: cw.title, app_name: cw.app_name,
+                preview_path: None, icon: None,
+                x: cw.x, y: cw.y, width: cw.w, height: cw.h,
+                is_minimized: true,
+            });
+        }
+        unsafe { CFRelease(all_list as *const c_void) };
     }
 
     windows
 }
 
+/// Query the Accessibility API for the number of real windows an app has.
+/// Returns None if AX is unavailable (no permission) or the app doesn't respond.
+fn ax_window_count(pid: i32) -> Option<usize> {
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn AXUIElementCreateApplication(pid: i32) -> *const c_void;
+        fn AXUIElementCopyAttributeValue(
+            element: *const c_void,
+            attribute: *const c_void,
+            value: *mut *const c_void,
+        ) -> i32;
+    }
+
+    unsafe {
+        let app = AXUIElementCreateApplication(pid);
+        if app.is_null() {
+            return None;
+        }
+        let attr = cg_helpers::cfstr(b"AXWindows");
+        let mut value: *const c_void = std::ptr::null();
+        let err = AXUIElementCopyAttributeValue(app, attr, &mut value);
+        CFRelease(attr as *const c_void);
+        if err != 0 || value.is_null() {
+            CFRelease(app);
+            return None;
+        }
+        let count = CFArrayGetCount(value as CFArrayRef);
+        CFRelease(value);
+        CFRelease(app);
+        Some(count.max(0) as usize)
+    }
+}
+
+/// Deduplicate CG windows using the Accessibility API.
+/// Apps like Kitty create multiple CG windows per visual window (one per tab).
+/// AX reports the real user-visible window count. For each PID, keep only
+/// that many CG windows (frontmost first, since CG returns front-to-back order).
+fn dedup_by_ax(windows: Vec<CgWindow>) -> Vec<CgWindow> {
+    let mut by_pid: HashMap<i32, Vec<CgWindow>> = HashMap::new();
+    let mut pid_order: Vec<i32> = Vec::new();
+    for cw in windows {
+        if !by_pid.contains_key(&cw.pid) {
+            pid_order.push(cw.pid);
+        }
+        by_pid.entry(cw.pid).or_default().push(cw);
+    }
+
+    let mut result = Vec::new();
+    for pid in pid_order {
+        let wins = by_pid.remove(&pid).unwrap();
+        if wins.len() <= 1 {
+            result.extend(wins);
+            continue;
+        }
+        // Multiple CG windows for this PID — ask AX for real count
+        let keep = ax_window_count(pid).unwrap_or(wins.len());
+        result.extend(wins.into_iter().take(keep.max(1)));
+    }
+    result
+}
+
+/// Check if a PID belongs to a regular app (appears in Dock / Cmd+Tab).
+/// Returns false for menu bar apps, background agents, and system services.
+fn is_regular_app(pid: i32) -> bool {
+    use objc2_app_kit::{NSApplicationActivationPolicy, NSRunningApplication};
+
+    objc2::rc::autoreleasepool(|_pool| {
+        let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) else {
+            return false;
+        };
+        app.activationPolicy() == NSApplicationActivationPolicy::Regular
+    })
+}
+
 pub fn get_app_icons(windows: &[WindowInfo]) -> HashMap<String, RgbaImage> {
     let own_pid = std::process::id() as i32;
-    let opts =
-        K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
+    let opts = K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
     let list = unsafe { CGWindowListCopyWindowInfo(opts, K_CG_NULL_WINDOW_ID) };
     if list.is_null() {
         return HashMap::new();
@@ -369,8 +522,7 @@ fn extract_bgra_from_raw_cgimage(img: CGImageRef, max_w: usize, max_h: usize) ->
 }
 
 pub fn activate_window(window_id: u32) {
-    let opts =
-        K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
+    let opts = K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
     let list = unsafe { CGWindowListCopyWindowInfo(opts, K_CG_NULL_WINDOW_ID) };
     if list.is_null() {
         return;

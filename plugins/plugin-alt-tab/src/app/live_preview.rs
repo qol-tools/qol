@@ -41,6 +41,7 @@ pub(crate) fn spawn(
                                 .windows
                                 .iter()
                                 .enumerate()
+                                .filter(|(_, w)| !w.is_minimized)
                                 .map(|(i, w)| (i, w.id))
                                 .collect()
                         })

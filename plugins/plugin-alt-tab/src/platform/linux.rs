@@ -187,6 +187,18 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
         }
     }
 
+    // Pipelined state requests to detect minimized windows
+    let state_atom = atom_map.get("_NET_WM_STATE").copied();
+    let hidden_atom = atom_map.get("_NET_WM_STATE_HIDDEN").copied().unwrap_or(0);
+    let mut state_cookies: Vec<_> = filtered_ids
+        .iter()
+        .map(|&id| {
+            state_atom.and_then(|sa| {
+                conn.get_property(false, id, sa, AtomEnum::ATOM, 0, 64).ok()
+            })
+        })
+        .collect();
+
     // Pipelined name requests for filtered IDs
     let net_name_atom = atom_map.get("_NET_WM_NAME").copied();
     let mut net_name_cookies = Vec::new();
@@ -258,6 +270,16 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
             .and_then(|c| c.reply().ok())
             .and_then(|reply| extract_x11_icon(&reply));
 
+        let is_minimized = state_cookies[i]
+            .take()
+            .and_then(|c| c.reply().ok())
+            .map(|r| {
+                r.value32()
+                    .map(|atoms| atoms.into_iter().any(|a| a == hidden_atom))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+
         if !title.is_empty() {
             if title == "Desktop" {
                 continue;
@@ -272,6 +294,7 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
                 y: 0.0,
                 width: 0.0,
                 height: 0.0,
+                is_minimized,
             });
         }
     }

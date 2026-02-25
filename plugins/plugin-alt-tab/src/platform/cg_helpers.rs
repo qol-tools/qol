@@ -114,6 +114,22 @@ pub(crate) fn dict_get_rect(dict: CFDictionaryRef, key: CFStringRef) -> Option<(
     }
 }
 
+#[allow(dead_code)]
+pub(crate) fn dict_get_bool(dict: CFDictionaryRef, key: CFStringRef) -> Option<bool> {
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFDictionaryGetValue(dict: CFDictionaryRef, key: *const c_void) -> *const c_void;
+        fn CFBooleanGetValue(boolean: *const c_void) -> bool;
+    }
+    unsafe {
+        let val = CFDictionaryGetValue(dict, key as *const c_void);
+        if val.is_null() {
+            return None;
+        }
+        Some(CFBooleanGetValue(val))
+    }
+}
+
 pub(crate) fn dict_get_string(dict: CFDictionaryRef, key: CFStringRef) -> Option<String> {
     #[link(name = "CoreFoundation", kind = "framework")]
     extern "C" {

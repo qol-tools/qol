@@ -19,6 +19,7 @@ pub struct WindowInfo {
     pub y: f32,
     pub width: f32,
     pub height: f32,
+    pub is_minimized: bool,
 }
 
 #[cfg(target_os = "linux")]

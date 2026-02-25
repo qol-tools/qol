@@ -39,7 +39,14 @@ pub(crate) fn open_picker(
         return;
     }
 
-    let display_windows = platform::get_open_windows();
+    let display_windows: Vec<WindowInfo> = {
+        let all = platform::get_open_windows();
+        if config.display.show_minimized {
+            all
+        } else {
+            all.into_iter().filter(|w| !w.is_minimized).collect()
+        }
+    };
     // Update the cache centrally so background processes see the current layout
     if let Ok(mut cache) = window_cache.lock() {
         *cache = display_windows.clone();
@@ -174,6 +181,7 @@ pub(crate) fn open_picker(
                     s.transparent_background = config.display.transparent_background;
                     s.card_bg_color = card_color;
                     s.card_bg_opacity = card_opacity;
+                    s.show_debug_overlay = config.display.show_debug_overlay;
                 });
 
                 if config.action_mode == ActionMode::HoldToSwitch {
@@ -300,6 +308,7 @@ pub(crate) fn open_picker(
     let cycle_on_open = config.open_behavior == crate::config::OpenBehavior::CycleOnce;
     let icons_for_init = icons.clone();
     let transparent_bg = config.display.transparent_background;
+    let show_debug_overlay = config.display.show_debug_overlay;
     let (card_color_init, card_opacity_init) = resolve_card_bg(&config.display);
 
     let window_background = if transparent_bg {
@@ -332,6 +341,7 @@ pub(crate) fn open_picker(
                     transparent_background,
                     card_color_init,
                     card_opacity_init,
+                    show_debug_overlay,
                     cycle_on_open,
                     initial_previews,
                     icons_for_init,

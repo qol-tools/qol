@@ -9,17 +9,12 @@ impl Render for AltTabApp {
         let delegate = self.delegate.clone();
         let d_ref = delegate.read(cx);
         let transparent_bg = d_ref.transparent_background;
+        let show_debug_overlay = d_ref.show_debug_overlay;
         let card_bg_rgba = {
             let alpha = (d_ref.card_bg_opacity.clamp(0.0, 1.0) * 255.0) as u32;
             (d_ref.card_bg_color << 8) | alpha
         };
         drop(d_ref);
-
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[alt-tab/render] action_mode={:?} alt_was_held={}",
-            self.action_mode, self.alt_was_held
-        );
 
         div()
             .track_focus(&self.focus_handle)
@@ -31,7 +26,7 @@ impl Render for AltTabApp {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 super::input::handle_key_down(this, event, window, cx);
             }))
-            .when(!transparent_bg, |s| {
+            .when(!transparent_bg && show_debug_overlay, |s| {
                 s.child(
                     // ── Header bar ────────────────────────────────────────────────
                     div()
@@ -144,16 +139,16 @@ impl Render for AltTabApp {
                                 .child(div().rounded_md().overflow_hidden().child(preview_tile(
                                     live_previews.get(&win.id),
                                     &win.preview_path,
+                                    if win.is_minimized { icon_cache.get(&win.app_name) } else { None },
                                     GRID_PREVIEW_WIDTH,
                                     GRID_PREVIEW_HEIGHT,
                                 )))
                                 .child({
                                     let label = label_config.format(&win.app_name, &win.title);
-                                    let label_text = {
-                                        #[cfg(debug_assertions)]
-                                        { format!("[{}] {}", i, label) }
-                                        #[cfg(not(debug_assertions))]
-                                        { label }
+                                    let label_text = if show_debug_overlay {
+                                        format!("[{}] {}", i, label)
+                                    } else {
+                                        label
                                     };
                                     let app_icon = icon_cache.get(&win.app_name).cloned();
                                     div()

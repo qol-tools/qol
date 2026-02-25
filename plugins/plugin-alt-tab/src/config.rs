@@ -7,6 +7,8 @@ pub struct DisplayConfig {
     pub transparent_background: bool,
     pub card_background_color: String,
     pub card_background_opacity: f32,
+    pub show_minimized: bool,
+    pub show_debug_overlay: bool,
 }
 
 impl Default for DisplayConfig {
@@ -16,6 +18,8 @@ impl Default for DisplayConfig {
             transparent_background: false,
             card_background_color: "1a1e2a".to_string(),
             card_background_opacity: 0.85,
+            show_minimized: true,
+            show_debug_overlay: false,
         }
     }
 }

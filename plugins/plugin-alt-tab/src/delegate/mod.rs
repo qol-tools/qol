@@ -15,6 +15,7 @@ pub(crate) struct WindowDelegate {
     pub(crate) transparent_background: bool,
     pub(crate) card_bg_color: u32,
     pub(crate) card_bg_opacity: f32,
+    pub(crate) show_debug_overlay: bool,
     pub(crate) live_previews: HashMap<u32, Arc<RenderImage>>,
     pub(crate) icon_cache: HashMap<String, Arc<RenderImage>>,
 }
@@ -26,6 +27,7 @@ impl WindowDelegate {
         transparent_background: bool,
         card_bg_color: u32,
         card_bg_opacity: f32,
+        show_debug_overlay: bool,
         live_previews: HashMap<u32, Arc<RenderImage>>,
         icon_cache: HashMap<String, Arc<RenderImage>>,
     ) -> Self {
@@ -37,6 +39,7 @@ impl WindowDelegate {
             transparent_background,
             card_bg_color,
             card_bg_opacity,
+            show_debug_overlay,
             live_previews,
             icon_cache,
         }
