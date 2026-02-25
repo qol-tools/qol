@@ -152,6 +152,7 @@ pub(crate) fn activate_or_open_launcher(
         window_decorations: Some(WindowDecorations::Client),
         kind: WindowKind::PopUp,
         focus: true,
+        is_movable: false,
         app_id: Some(LAUNCHER_APP_ID.to_string()),
         ..Default::default()
     };
@@ -193,6 +194,7 @@ fn open_launcher_window(
                 window_decorations: Some(WindowDecorations::Client),
                 kind: WindowKind::Normal,
                 focus: true,
+                is_movable: false,
                 app_id: Some(LAUNCHER_APP_ID.to_string()),
                 ..Default::default()
             };
