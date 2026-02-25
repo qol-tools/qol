@@ -106,6 +106,5 @@ jobs:
           generate_release_notes: true
           files: release_files/*
           fail_on_unmatched_files: true
-          allow_updates: false
           draft: false
           prerelease: false
