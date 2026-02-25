@@ -1,0 +1,301 @@
+pub(crate) mod keepalive;
+pub(crate) mod run;
+
+use crate::app::{AltTabApp, PICKER_VISIBLE};
+use crate::config::{ActionMode, AltTabConfig};
+use crate::layout::*;
+use crate::monitor::MonitorTracker;
+use crate::platform;
+use crate::platform::WindowInfo;
+use crate::preview::bgra_to_render_image;
+use gpui::*;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
+const DEFAULT_ESTIMATED_WINDOW_COUNT: usize = 8;
+
+pub(crate) fn default_estimated_window_count() -> usize {
+    DEFAULT_ESTIMATED_WINDOW_COUNT
+}
+
+pub(crate) fn open_picker(
+    config: &AltTabConfig,
+    current: &std::rc::Rc<std::cell::RefCell<Option<(WindowHandle<AltTabApp>, Point<Pixels>)>>>,
+    tracker: &MonitorTracker,
+    last_window_count: Arc<AtomicUsize>,
+    window_cache: Arc<std::sync::Mutex<Vec<WindowInfo>>>,
+    reverse: bool,
+    cx: &mut App,
+) {
+    #[cfg(debug_assertions)]
+    eprintln!("[alt-tab/open] show request (reverse={})", reverse);
+
+    // Reverse only cycles within an already-open picker — never opens one.
+    if reverse && current.borrow().is_none() {
+        return;
+    }
+
+    let raw_windows = platform::get_open_windows();
+    let mut display_windows = raw_windows;
+    if let Ok(cache) = window_cache.lock() {
+        for win in &mut display_windows {
+            if let Some(cached) = cache.iter().find(|c| c.id == win.id) {
+                win.preview_path = cached.preview_path.clone();
+            }
+        }
+    }
+    // Update the cache centrally so background processes see the current layout
+    if let Ok(mut cache) = window_cache.lock() {
+        *cache = display_windows.clone();
+    }
+    for win in &mut display_windows {
+        win.preview_path = None;
+    }
+
+    // Fast path: if picker is already visible and alt held, just cycle selection.
+    let existing = current.borrow().clone();
+    if let Some((ref handle, _)) = existing {
+        let cycled = handle
+            .update(cx, |view, _window: &mut Window, cx| -> bool {
+                let alt_held = platform::is_modifier_held();
+                if view.action_mode == ActionMode::HoldToSwitch
+                    && view._alt_poll_task.is_some()
+                    && alt_held
+                {
+                    #[cfg(debug_assertions)]
+                    eprintln!(
+                        "[alt-tab/hold] window already visible (alt_held={} reverse={}) — cycling",
+                        alt_held, reverse
+                    );
+                    view.delegate.update(cx, |s, _cx| {
+                        if reverse {
+                            s.select_prev();
+                        } else {
+                            s.select_next();
+                        }
+                    });
+                    cx.notify();
+                    return true;
+                }
+                false
+            })
+            .unwrap_or(false);
+        if cycled {
+            cx.activate(true);
+            return;
+        }
+    }
+
+    let targets: Vec<(usize, u32)> = display_windows
+        .iter()
+        .enumerate()
+        .map(|(i, w)| (i, w.id))
+        .collect();
+    let initial_previews: HashMap<u32, Arc<RenderImage>> =
+        platform::capture_previews_cg(&targets, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT)
+            .into_iter()
+            .filter_map(|(idx, rgba)| {
+                let rgba = rgba?;
+                let wid = display_windows.get(idx)?.id;
+                let img = bgra_to_render_image(&rgba.data, rgba.width, rgba.height)?;
+                Some((wid, img))
+            })
+            .collect();
+
+    // Reuse existing picker window if possible (reopen after dismiss).
+    if let Some((handle, created_on_origin)) = existing {
+        let target_count = display_windows.len().max(1);
+        let target_monitor = tracker.snapshot().map(|(m, _)| m);
+        let monitor_size = target_monitor.as_ref().map(|m| m.size());
+        let (target_w, target_h) =
+            picker_dimensions(target_count, config.display.max_columns, monitor_size);
+        let target_size = size(px(target_w), px(target_h));
+        let target_bounds = if let Some(ref active) = target_monitor {
+            active.centered_bounds(target_size)
+        } else {
+            Bounds::centered(None, target_size, cx)
+        };
+
+        // Determine if the target monitor differs from the one the window was created on.
+        let target_origin = target_monitor
+            .as_ref()
+            .map(|m| m.bounds().origin)
+            .unwrap_or(point(px(0.0), px(0.0)));
+        const MONITOR_TOLERANCE_PX: f64 = 6.0;
+        let monitor_changed = {
+            let dx = (created_on_origin.x.to_f64() - target_origin.x.to_f64()).abs();
+            let dy = (created_on_origin.y.to_f64() - target_origin.y.to_f64()).abs();
+            dx > MONITOR_TOLERANCE_PX || dy > MONITOR_TOLERANCE_PX
+        };
+
+        let reuse_ok = handle
+            .update(cx, |view, window: &mut Window, cx| -> bool {
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "[alt-tab/hold] reuse path (poll_task={}) — applying config reset={} monitor_changed={}",
+                    view._alt_poll_task.is_some(),
+                    config.reset_selection_on_open,
+                    monitor_changed,
+                );
+
+                if monitor_changed {
+                    let x = target_bounds.origin.x.to_f64() as i32;
+                    let y = target_bounds.origin.y.to_f64() as i32;
+                    if !platform::move_app_window("qol-alt-tab-picker", x, y) {
+                        return false;
+                    }
+                }
+
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "[alt-tab/hold] open_picker reusing window: setting action_mode={:?}",
+                    config.action_mode
+                );
+
+                view.action_mode = config.action_mode.clone();
+                view.alt_was_held = true;
+
+                view.delegate.update(cx, |s, _cx| {
+                    s.label_config = config.label.clone();
+                });
+
+                if config.action_mode == ActionMode::HoldToSwitch {
+                    let wh = window.window_handle();
+                    view.start_alt_poll(wh, cx);
+                } else {
+                    view._alt_poll_task = None;
+                }
+
+                view.apply_cached_windows(
+                    display_windows.clone(),
+                    config.reset_selection_on_open,
+                    initial_previews.clone(),
+                    cx,
+                );
+
+                let current_bounds = window.window_bounds().get_bounds();
+                let current_size = current_bounds.size;
+                let next_size = target_size;
+                if (current_size.width.to_f64() - target_w as f64).abs() >= 1.0
+                    || (current_size.height.to_f64() - target_h as f64).abs() >= 1.0
+                {
+                    window.resize(next_size);
+                }
+                window.focus(&view.focus_handle(cx));
+                window.activate_window();
+                true
+            })
+            .unwrap_or(false);
+
+        if reuse_ok {
+            #[cfg(debug_assertions)]
+            eprintln!("[alt-tab/open] reused existing picker window");
+            if !initial_previews.is_empty() {
+                let _ = handle.update(cx, |view, _window, cx| {
+                    view.delegate.update(cx, |state, cx| {
+                        for (wid, img) in initial_previews {
+                            state.live_previews.insert(wid, img);
+                        }
+                        cx.notify();
+                    });
+                });
+            }
+            cx.activate(true);
+            return;
+        }
+
+        // Close the old window so we don't leak orphaned windows
+        #[cfg(debug_assertions)]
+        eprintln!("[alt-tab/open] closing old window — will recreate on correct monitor");
+        let _ = handle.update(cx, |_view, window, _cx| {
+            window.remove_window();
+        });
+        *current.borrow_mut() = None;
+    }
+
+    let target_count = display_windows.len().max(1);
+    let estimated_count = target_count
+        .max(last_window_count.load(Ordering::Relaxed))
+        .max(1);
+    let create_monitor = tracker.snapshot().map(|(m, _)| m);
+    let monitor_size = create_monitor.as_ref().map(|m| m.size());
+    let (win_w, win_h) =
+        picker_dimensions(estimated_count, config.display.max_columns, monitor_size);
+    let win_size = size(px(win_w), px(win_h));
+    let bounds = if let Some(ref active) = create_monitor {
+        active.centered_bounds(win_size)
+    } else {
+        Bounds::centered(None, win_size, cx)
+    };
+    let create_origin = create_monitor
+        .as_ref()
+        .map(|m| m.bounds().origin)
+        .unwrap_or(point(px(0.0), px(0.0)));
+
+    println!(
+        "[alt-tab] opening at {:?} with size {:?}",
+        bounds.origin, bounds.size
+    );
+
+    let last_window_count_for_init = last_window_count.clone();
+    let window_cache_for_init = window_cache.clone();
+    let action_mode_for_init = config.action_mode.clone();
+    let display_windows_for_init = display_windows.clone();
+    let config_for_init = config.clone();
+    let cycle_on_open = config.open_behavior == crate::config::OpenBehavior::CycleOnce;
+
+    let handle = cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            titlebar: None,
+            window_decorations: Some(WindowDecorations::Client),
+            kind: platform::picker_window_kind(),
+            focus: true,
+            ..Default::default()
+        },
+        move |window, cx| {
+            window.set_window_title("qol-alt-tab-picker");
+            let label_config = config_for_init.label.clone();
+            let view = cx.new(|cx| {
+                AltTabApp::new(
+                    window,
+                    cx,
+                    last_window_count_for_init,
+                    window_cache_for_init,
+                    action_mode_for_init,
+                    display_windows_for_init,
+                    label_config,
+                    cycle_on_open,
+                    initial_previews,
+                )
+            });
+            window.focus(&view.focus_handle(cx));
+            window.activate_window();
+            view
+        },
+    );
+    if let Ok(h) = handle {
+        #[cfg(debug_assertions)]
+        eprintln!("[alt-tab/open] opened new picker window");
+        *current.borrow_mut() = Some((h, create_origin));
+    } else {
+        #[cfg(debug_assertions)]
+        eprintln!("[alt-tab/open] failed to open picker window");
+    }
+    PICKER_VISIBLE.store(true, Ordering::Relaxed);
+    cx.activate(true);
+
+    #[cfg(target_os = "macos")]
+    set_macos_accessory_policy();
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn set_macos_accessory_policy() {
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+    use objc2_foundation::MainThreadMarker;
+
+    let mtm = MainThreadMarker::new().expect("must be on main thread");
+    let app = NSApplication::sharedApplication(mtm);
+    app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+}

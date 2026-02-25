@@ -21,16 +21,15 @@ pub fn cached_preview_path(window_id: u32) -> Option<String> {
     Some(path.to_string_lossy().to_string())
 }
 
-/// Downscale RGBA pixel data and save as PNG. Input must be RGBA (R=0, G=1, B=2, A=3).
 pub fn downscale_and_save_preview(
     window_id: u32,
-    rgba_data: &[u8],
+    bgra_data: &[u8],
     src_w: usize,
     src_h: usize,
     max_w: usize,
     max_h: usize,
 ) -> Option<String> {
-    let (thumb, thumb_w, thumb_h) = downscale_rgba(rgba_data, src_w, src_h, max_w, max_h);
+    let (rgba, thumb_w, thumb_h) = downscale_inner(bgra_data, src_w, src_h, max_w, max_h, true);
     if thumb_w == 0 || thumb_h == 0 {
         return None;
     }
@@ -42,7 +41,7 @@ pub fn downscale_and_save_preview(
     let encoder =
         PngEncoder::new_with_quality(writer, CompressionType::Fast, FilterType::NoFilter);
     encoder
-        .write_image(&thumb, thumb_w as u32, thumb_h as u32, ExtendedColorType::Rgba8)
+        .write_image(&rgba, thumb_w as u32, thumb_h as u32, ExtendedColorType::Rgba8)
         .ok()?;
     Some(path.to_string_lossy().to_string())
 }
@@ -53,6 +52,17 @@ pub fn downscale_rgba(
     src_h: usize,
     max_w: usize,
     max_h: usize,
+) -> (Vec<u8>, usize, usize) {
+    downscale_inner(data, src_w, src_h, max_w, max_h, false)
+}
+
+fn downscale_inner(
+    data: &[u8],
+    src_w: usize,
+    src_h: usize,
+    max_w: usize,
+    max_h: usize,
+    swap_rb: bool,
 ) -> (Vec<u8>, usize, usize) {
     if src_w == 0 || src_h == 0 || max_w == 0 || max_h == 0 {
         return (Vec::new(), 0, 0);
@@ -86,15 +96,18 @@ pub fn downscale_rgba(
             if src_base + 4 > data.len() {
                 continue;
             }
-            let r = data[src_base];
-            let g = data[src_base + 1];
-            let b = data[src_base + 2];
-            let a = data[src_base + 3];
 
             let dst_x = offset_x + x;
             let dst_y = offset_y + y;
             let dst_i = (dst_y * max_w + dst_x) * 4;
-            canvas[dst_i..dst_i + 4].copy_from_slice(&[r, g, b, a]);
+            if swap_rb {
+                canvas[dst_i] = data[src_base + 2];
+                canvas[dst_i + 1] = data[src_base + 1];
+                canvas[dst_i + 2] = data[src_base];
+                canvas[dst_i + 3] = data[src_base + 3];
+            } else {
+                canvas[dst_i..dst_i + 4].copy_from_slice(&data[src_base..src_base + 4]);
+            }
         }
     }
 

@@ -13,9 +13,44 @@ type CGImageRef = *const c_void;
 type CFDataRef = *const c_void;
 type CGDataProviderRef = *const c_void;
 
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct CGRect {
+    origin: CGPoint,
+    size: CGSize,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct CGPoint {
+    x: f64,
+    y: f64,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct CGSize {
+    width: f64,
+    height: f64,
+}
+
+const CG_RECT_NULL: CGRect = CGRect {
+    origin: CGPoint { x: f64::INFINITY, y: f64::INFINITY },
+    size: CGSize { width: 0.0, height: 0.0 },
+};
+const K_CG_WINDOW_LIST_OPTION_INCLUDING_WINDOW: u32 = 1 << 3;
+const K_CG_WINDOW_IMAGE_BOUNDS_IGNORE_FRAMING: u32 = 1 << 0;
+const K_CG_WINDOW_IMAGE_NOMINAL_RESOLUTION: u32 = 1 << 9;
+
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
     fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> CFArrayRef;
+    fn CGWindowListCreateImage(
+        screen_bounds: CGRect,
+        list_option: u32,
+        window_id: u32,
+        image_option: u32,
+    ) -> CGImageRef;
     fn CGImageGetWidth(image: CGImageRef) -> usize;
     fn CGImageGetHeight(image: CGImageRef) -> usize;
     fn CGImageGetBytesPerRow(image: CGImageRef) -> usize;
@@ -191,17 +226,99 @@ pub fn capture_preview_rgba(window_id: u32, max_w: usize, max_h: usize) -> Optio
     });
 
     match rx.recv_timeout(Duration::from_millis(2000)) {
-        Ok(Some(rgba)) => {
-            let (data, w, h) = preview::downscale_rgba(&rgba.data, rgba.width, rgba.height, max_w, max_h);
-            if w == 0 || h == 0 { None } else { Some(RgbaImage { data, width: w, height: h }) }
-        }
-        Ok(None) => None,
+        Ok(result) => result,
         Err(_) => {
             eprintln!("[alt-tab/macos] SCK capture timed out — disabling for this session");
             SCK_AVAILABLE.store(false, Ordering::Relaxed);
             None
         }
     }
+}
+
+pub fn capture_previews_cg(
+    targets: &[(usize, u32)],
+    max_w: usize,
+    max_h: usize,
+) -> Vec<(usize, Option<RgbaImage>)> {
+    std::thread::scope(|s| {
+        let handles: Vec<_> = targets
+            .iter()
+            .map(|&(idx, wid)| {
+                s.spawn(move || {
+                    let result = cg_capture_window(wid, max_w, max_h);
+                    (idx, result)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .filter_map(|h| h.join().ok())
+            .collect()
+    })
+}
+
+fn cg_capture_window(wid: u32, max_w: usize, max_h: usize) -> Option<RgbaImage> {
+    let img = unsafe {
+        CGWindowListCreateImage(
+            CG_RECT_NULL,
+            K_CG_WINDOW_LIST_OPTION_INCLUDING_WINDOW,
+            wid,
+            K_CG_WINDOW_IMAGE_BOUNDS_IGNORE_FRAMING | K_CG_WINDOW_IMAGE_NOMINAL_RESOLUTION,
+        )
+    };
+    if img.is_null() {
+        return None;
+    }
+    let result = extract_bgra_from_raw_cgimage(img, max_w, max_h);
+    unsafe { CFRelease(img) };
+    result
+}
+
+fn extract_bgra_from_raw_cgimage(img: CGImageRef, max_w: usize, max_h: usize) -> Option<RgbaImage> {
+    let src_w = unsafe { CGImageGetWidth(img) };
+    let src_h = unsafe { CGImageGetHeight(img) };
+    if src_w == 0 || src_h == 0 {
+        return None;
+    }
+
+    let provider = unsafe { CGImageGetDataProvider(img) };
+    if provider.is_null() {
+        return None;
+    }
+
+    let cf_data = unsafe { CGDataProviderCopyData(provider) };
+    if cf_data.is_null() {
+        return None;
+    }
+
+    let ptr = unsafe { CFDataGetBytePtr(cf_data) };
+    let len = unsafe { CFDataGetLength(cf_data) } as usize;
+    let raw = unsafe { std::slice::from_raw_parts(ptr, len) };
+    let bytes_per_row = unsafe { CGImageGetBytesPerRow(img) };
+
+    let scale = (max_w as f32 / src_w as f32).min(max_h as f32 / src_h as f32).min(1.0);
+    let scaled_w = ((src_w as f32 * scale).round() as usize).max(1).min(max_w);
+    let scaled_h = ((src_h as f32 * scale).round() as usize).max(1).min(max_h);
+    let offset_x = (max_w - scaled_w) / 2;
+    let offset_y = (max_h - scaled_h) / 2;
+
+    let mut bgra = vec![0u8; max_w * max_h * 4];
+    for y in 0..scaled_h {
+        let src_y = (y * src_h) / scaled_h;
+        let row_start = src_y * bytes_per_row;
+        for x in 0..scaled_w {
+            let src_x = (x * src_w) / scaled_w;
+            let src_off = row_start + src_x * 4;
+            if src_off + 4 > len {
+                continue;
+            }
+            let dst_off = ((offset_y + y) * max_w + offset_x + x) * 4;
+            bgra[dst_off..dst_off + 4].copy_from_slice(&raw[src_off..src_off + 4]);
+        }
+    }
+
+    unsafe { CFRelease(cf_data) };
+    Some(RgbaImage { data: bgra, width: max_w, height: max_h })
 }
 
 pub fn capture_previews_batch_rgba(
@@ -217,10 +334,7 @@ pub fn capture_previews_batch_rgba(
             .iter()
             .map(|&(idx, wid)| {
                 s.spawn(move || {
-                    let result = sck_capture_on_thread(wid, max_w, max_h).and_then(|rgba| {
-                        let (data, w, h) = preview::downscale_rgba(&rgba.data, rgba.width, rgba.height, max_w, max_h);
-                        if w == 0 || h == 0 { None } else { Some(RgbaImage { data, width: w, height: h }) }
-                    });
+                    let result = sck_capture_on_thread(wid, max_w, max_h);
                     (idx, result)
                 })
             })
@@ -255,7 +369,7 @@ fn sck_capture_on_thread(window_id: u32, max_w: usize, max_h: usize) -> Option<R
             let count = windows.count();
             let mut found = None;
             for i in 0..count {
-                let w = unsafe { windows.objectAtIndex(i) };
+                let w = windows.objectAtIndex(i);
                 if unsafe { w.windowID() } == window_id {
                     found = Some(w.retain());
                     break;
@@ -279,7 +393,7 @@ fn sck_capture_on_thread(window_id: u32, max_w: usize, max_h: usize) -> Option<R
     unsafe {
         config.setWidth(max_w);
         config.setHeight(max_h);
-        config.setScalesToFit(true);
+        config.setScalesToFit(false);
     }
 
     let (img_tx, img_rx) =
@@ -310,64 +424,11 @@ fn sck_capture_on_thread(window_id: u32, max_w: usize, max_h: usize) -> Option<R
     }
 
     let cg_image = img_rx.recv_timeout(Duration::from_millis(1500)).ok()??;
-    extract_rgba_from_cgimage(&cg_image)
+    let img_ptr = &*cg_image as *const objc2_core_graphics::CGImage as CGImageRef;
+    let result = extract_bgra_from_raw_cgimage(img_ptr, max_w, max_h);
+    result
 }
 
-fn extract_rgba_from_cgimage(
-    cg_image: &objc2_core_graphics::CGImage,
-) -> Option<RgbaImage> {
-    let img_ptr = cg_image as *const objc2_core_graphics::CGImage as CGImageRef;
-
-    let width = unsafe { CGImageGetWidth(img_ptr) };
-    let height = unsafe { CGImageGetHeight(img_ptr) };
-    let bytes_per_row = unsafe { CGImageGetBytesPerRow(img_ptr) };
-    let bits_per_pixel = unsafe { CGImageGetBitsPerPixel(img_ptr) };
-
-    if width == 0 || height == 0 {
-        return None;
-    }
-
-    let provider = unsafe { CGImageGetDataProvider(img_ptr) };
-    if provider.is_null() {
-        return None;
-    }
-
-    let cf_data = unsafe { CGDataProviderCopyData(provider) };
-    if cf_data.is_null() {
-        return None;
-    }
-
-    let ptr = unsafe { CFDataGetBytePtr(cf_data) };
-    let len = unsafe { CFDataGetLength(cf_data) } as usize;
-    let raw = unsafe { std::slice::from_raw_parts(ptr, len) };
-
-    let bytes_per_pixel = bits_per_pixel / 8;
-    let mut rgba = Vec::with_capacity(width * height * 4);
-
-    for y in 0..height {
-        let row_start = y * bytes_per_row;
-        for x in 0..width {
-            let offset = row_start + x * bytes_per_pixel;
-            if offset + 4 > raw.len() {
-                rgba.extend_from_slice(&[0, 0, 0, 255]);
-                continue;
-            }
-            let b = raw[offset];
-            let g = raw[offset + 1];
-            let r = raw[offset + 2];
-            let a = raw[offset + 3];
-            rgba.extend_from_slice(&[r, g, b, a]);
-        }
-    }
-
-    unsafe { CFRelease(cf_data) };
-
-    Some(RgbaImage {
-        data: rgba,
-        width,
-        height,
-    })
-}
 
 pub fn activate_window(window_id: u32) {
     let opts =

@@ -73,12 +73,14 @@ pub fn preview_tile(
         img(render_image.clone())
             .w(px(width))
             .h(px(height))
+            .object_fit(ObjectFit::Fill)
             .rounded_md()
             .into_any_element()
     } else if let Some(path) = preview_path {
         img(std::path::PathBuf::from(path))
             .w(px(width))
             .h(px(height))
+            .object_fit(ObjectFit::Fill)
             .rounded_md()
             .into_any_element()
     } else {

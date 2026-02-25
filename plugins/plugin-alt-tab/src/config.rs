@@ -61,6 +61,14 @@ pub enum ActionMode {
     HoldToSwitch,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenBehavior {
+    #[default]
+    CycleOnce,
+    ShowOnly,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AltTabConfig {
@@ -68,6 +76,8 @@ pub struct AltTabConfig {
     pub action_mode: ActionMode,
     #[serde(default = "default_reset_selection_on_open")]
     pub reset_selection_on_open: bool,
+    #[serde(default)]
+    pub open_behavior: OpenBehavior,
     #[serde(default)]
     pub label: LabelConfig,
 }
@@ -78,6 +88,7 @@ impl Default for AltTabConfig {
             display: DisplayConfig::default(),
             action_mode: ActionMode::default(),
             reset_selection_on_open: default_reset_selection_on_open(),
+            open_behavior: OpenBehavior::default(),
             label: LabelConfig::default(),
         }
     }
@@ -95,11 +106,12 @@ pub fn load_alt_tab_config() -> AltTabConfig {
         match serde_json::from_str::<AltTabConfig>(&contents) {
             Ok(config) => {
                 println!(
-                    "Loaded config from {}: action_mode={:?} max_columns={} reset_selection_on_open={}",
+                    "Loaded config from {}: action_mode={:?} max_columns={} reset_selection_on_open={} open_behavior={:?}",
                     path.display(),
                     config.action_mode,
                     config.display.max_columns,
-                    config.reset_selection_on_open
+                    config.reset_selection_on_open,
+                    config.open_behavior
                 );
                 return config;
             }

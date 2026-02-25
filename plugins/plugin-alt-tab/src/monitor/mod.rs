@@ -1,3 +1,3 @@
 mod tracker;
 
-pub use tracker::{ActiveMonitor, MonitorTracker};
+pub(crate) use tracker::MonitorTracker;

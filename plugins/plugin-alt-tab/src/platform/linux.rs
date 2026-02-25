@@ -511,6 +511,14 @@ pub fn capture_previews_batch_rgba(
     out
 }
 
+pub fn capture_previews_cg(
+    targets: &[(usize, u32)],
+    _max_w: usize,
+    _max_h: usize,
+) -> Vec<(usize, Option<RgbaImage>)> {
+    targets.iter().map(|&(idx, _)| (idx, None)).collect()
+}
+
 fn detect_channel_order<C: Connection>(conn: &C, screen_num: usize) -> ChannelOrder {
     let Some(screen) = conn.setup().roots.get(screen_num) else {
         return ChannelOrder::default();
