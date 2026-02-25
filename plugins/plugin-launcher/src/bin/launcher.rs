@@ -1,5 +1,5 @@
 fn main() {
-    launcher::launcher_app::run();
+    launcher::launcher_app::run::run();
 }
 
 #[cfg(test)]
