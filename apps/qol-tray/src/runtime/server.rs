@@ -1,6 +1,6 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use qol_runtime::{CursorPos, MonitorBounds, PlatformState, WindowBounds};
@@ -13,6 +13,12 @@ use super::channels::monitors::MonitorsChannel;
 use super::channel::Channel;
 use super::poller::{AdaptivePoller, BasicStrategy};
 use super::state::{self, InputState};
+
+/// Lock a mutex, recovering the inner value on poison.
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 const POLL_MIN_MS: u64 = 16;
 const POLL_MAX_MS: u64 = 500;
 const COMMIT_THRESHOLD_MS: u64 = 128;
@@ -89,16 +95,11 @@ fn poll_loop(
     // last_focus_bounds is in SharedState now
 
     loop {
-        let mon_list = shared.monitors.lock()
-            .map(|g| g.clone())
-            .unwrap_or_default();
+        let mon_list = lock_or_recover(&shared.monitors).clone();
         if mon_list.is_empty() {
             std::thread::sleep(Duration::from_secs(1));
-            // Try refreshing monitors
             if monitors.poll() {
-                if let Ok(mut guard) = shared.monitors.lock() {
-                    *guard = monitors.monitors().to_vec();
-                }
+                *lock_or_recover(&shared.monitors) = monitors.monitors().to_vec();
             }
             continue;
         }
@@ -106,9 +107,7 @@ fn poll_loop(
         // Periodically refresh monitor list
         if last_monitor_poll.elapsed() >= monitor_interval {
             if monitors.poll() {
-                if let Ok(mut guard) = shared.monitors.lock() {
-                    *guard = monitors.monitors().to_vec();
-                }
+                *lock_or_recover(&shared.monitors) = monitors.monitors().to_vec();
             }
             last_monitor_poll = Instant::now();
         }
@@ -122,9 +121,7 @@ fn poll_loop(
         let cursor_moved = cursor.poll();
         let cursor_pos = cursor.position();
 
-        if let Ok(mut guard) = shared.cursor_pos.lock() {
-            *guard = cursor_pos;
-        }
+        *lock_or_recover(&shared.cursor_pos) = cursor_pos;
 
         let cursor_monitor = cursor_pos
             .and_then(|(x, y)| state::monitor_for_point(&mon_list, x, y));
@@ -133,16 +130,15 @@ fn poll_loop(
         focus.poll();
         let focus_bounds = focus.bounds();
 
-        if let Ok(mut guard) = shared.focused_window.lock() {
-            if focus_bounds.is_some() {
-                *guard = focus_bounds;
-            }
+        if focus_bounds.is_some() {
+            *lock_or_recover(&shared.focused_window) = focus_bounds;
         }
 
         let focus_monitor = focus_bounds
             .and_then(|wb| state::monitor_for_bounds(&mon_list, &wb));
 
-        if let Ok(mut guard) = shared.input.lock() {
+        {
+            let mut guard = lock_or_recover(&shared.input);
             let cursor_before = guard.cursor.as_ref().map(|c| (c.monitor, c.at));
             let focus_before = guard.focus.as_ref().map(|f| (f.monitor, f.at));
 
@@ -155,7 +151,7 @@ fn poll_loop(
                 }
             }
 
-            let mut last_fb = shared.last_focus_bounds.lock().unwrap_or_else(|e| e.into_inner());
+            let mut last_fb = lock_or_recover(&shared.last_focus_bounds);
             let focus_changed = focus_bounds != *last_fb;
             if focus_changed {
                 *last_fb = focus_bounds;
@@ -222,13 +218,12 @@ fn socket_loop(shared: Arc<SharedState>) {
             // SET_FOCUS <monitor_idx> — lets plugins push focus hints
             if let Some(rest) = trimmed.strip_prefix("SET_FOCUS ") {
                 let idx: usize = rest.parse().ok()?;
-                let monitors = shared.monitors.lock().ok()?;
-                let monitor = monitors.get(idx).copied()?;
-                drop(monitors);
-                if let Ok(mut input) = shared.input.lock() {
-                    log::debug!("[runtime/socket] SET_FOCUS idx={} mon=({}, {})", idx, monitor.x, monitor.y);
-                    input.update_focus(monitor, Instant::now());
-                }
+                let monitor = {
+                    let monitors = lock_or_recover(&shared.monitors);
+                    *monitors.get(idx)?
+                };
+                log::debug!("[runtime/socket] SET_FOCUS idx={} mon=({}, {})", idx, monitor.x, monitor.y);
+                lock_or_recover(&shared.input).update_focus(monitor, Instant::now());
                 return Some(());
             }
 
@@ -247,16 +242,12 @@ fn socket_loop(shared: Arc<SharedState>) {
 }
 
 fn build_state(shared: &SharedState) -> PlatformState {
-    let monitors = shared.monitors.lock()
-        .map(|g| g.clone())
-        .unwrap_or_default();
+    let monitors = lock_or_recover(&shared.monitors).clone();
 
-    let cursor_pos = shared.cursor_pos.lock().ok().and_then(|g| *g);
+    let cursor_pos = *lock_or_recover(&shared.cursor_pos);
     let cursor = cursor_pos.map(|(x, y)| CursorPos { x, y });
 
-    let input = shared.input.lock()
-        .map(|g| g.clone())
-        .unwrap_or_default();
+    let input = lock_or_recover(&shared.input).clone();
 
     let cursor_monitor_idx = input.cursor.as_ref()
         .and_then(|c| monitors.iter().position(|m| *m == c.monitor));
@@ -273,8 +264,7 @@ fn build_state(shared: &SharedState) -> PlatformState {
     log::debug!("[runtime/build_state] GET_STATE cursor_idx={:?} focus_idx={:?} active_idx={:?}",
         cursor_monitor_idx, focus_monitor_idx, active_monitor_idx);
 
-    let focused_window = shared.focused_window.lock().ok()
-        .and_then(|g| *g)
+    let focused_window = (*lock_or_recover(&shared.focused_window))
         .map(|wb| WindowBounds {
             x: wb.x,
             y: wb.y,
