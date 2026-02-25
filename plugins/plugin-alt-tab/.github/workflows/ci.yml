@@ -24,8 +24,8 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Build
-        run: cargo build
+      - name: Check
+        run: cargo check
 
       - name: Test
         run: cargo test
