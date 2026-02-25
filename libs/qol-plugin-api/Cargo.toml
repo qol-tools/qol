@@ -6,6 +6,8 @@ edition = "2021"
 [dependencies]
 dirs = "5.0"
 gpui = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 qol-runtime = { git = "https://github.com/qol-tools/qol-runtime" }
 
 # macOS only: fix zed-font-kit core-graphics version mismatch

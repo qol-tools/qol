@@ -1,5 +1,7 @@
 pub mod color;
+pub mod config;
 pub mod daemon;
+pub mod frecency;
 pub mod keepalive;
 pub mod monitor;
 pub mod platform;
