@@ -231,7 +231,14 @@ fn compute_score(positions: &[usize], candidate: &[char], query_orig: &[char]) -
 
     for (i, &pos) in positions.iter().enumerate() {
         let gap = if i == 0 {
-            pos
+            // When the first match lands on a word boundary, the distance
+            // into the string barely matters — cap it so "Microsoft Teams"
+            // isn't punished for having a long prefix before "Teams".
+            if pos > 0 && is_boundary(candidate, pos) {
+                pos.min(1)
+            } else {
+                pos
+            }
         } else {
             pos - positions[i - 1] - 1
         };
@@ -289,6 +296,18 @@ mod fuzzy_tests {
         let vscode = fuzzy_match("code", "Visual Studio Code").unwrap();
         // Xcode should have a worse (higher) score than VSCode
         assert!(xcode.score > vscode.score);
+    }
+
+    #[test]
+    fn word_boundary_match_beats_non_boundary_substring() {
+        let teams = fuzzy_match("team", "Microsoft Teams").unwrap();
+        let steam = fuzzy_match("team", "Steam").unwrap();
+        assert!(
+            teams.score < steam.score,
+            "Microsoft Teams ({}) should score better than Steam ({})",
+            teams.score,
+            steam.score
+        );
     }
 
     #[test]
