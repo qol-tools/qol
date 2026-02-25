@@ -14,7 +14,7 @@ impl WindowDelegate {
 
         // Push the activated window's monitor to the runtime so the focus
         // stamp survives the AX "no focused application" gap.
-        let client = qol_runtime::PlatformStateClient::from_env();
+        let client = qol_plugin_api::PlatformStateClient::from_env();
         if let Some(state) = client.get_state() {
             let win_cx = win.x + win.width / 2.0;
             let win_cy = win.y + win.height / 2.0;

@@ -1,3 +1,1 @@
-mod tracker;
-
-pub(crate) use tracker::MonitorTracker;
+pub(crate) use qol_plugin_api::monitor::{ActiveMonitor, MonitorTracker};
