@@ -25,6 +25,7 @@ pub(crate) fn open_picker(
     tracker: &MonitorTracker,
     last_window_count: Arc<AtomicUsize>,
     window_cache: Arc<std::sync::Mutex<Vec<WindowInfo>>>,
+    preview_cache: Arc<std::sync::Mutex<HashMap<u32, Arc<RenderImage>>>>,
     reverse: bool,
     cx: &mut App,
 ) {
@@ -87,21 +88,36 @@ pub(crate) fn open_picker(
         }
     }
 
-    let targets: Vec<(usize, u32)> = display_windows
-        .iter()
-        .enumerate()
-        .map(|(i, w)| (i, w.id))
-        .collect();
-    let initial_previews: HashMap<u32, Arc<RenderImage>> =
-        platform::capture_previews_cg(&targets, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT)
-            .into_iter()
-            .filter_map(|(idx, rgba)| {
-                let rgba = rgba?;
-                let wid = display_windows.get(idx)?.id;
-                let img = bgra_to_render_image(&rgba.data, rgba.width, rgba.height)?;
-                Some((wid, img))
-            })
+    // Grab pre-warmed previews from cache (instant). Only capture missing windows.
+    let mut initial_previews: HashMap<u32, Arc<RenderImage>> = HashMap::new();
+    let mut missing_targets: Vec<(usize, u32)> = Vec::new();
+    if let Ok(pcache) = preview_cache.lock() {
+        for (i, win) in display_windows.iter().enumerate() {
+            if let Some(img) = pcache.get(&win.id) {
+                initial_previews.insert(win.id, img.clone());
+            } else {
+                missing_targets.push((i, win.id));
+            }
+        }
+    } else {
+        missing_targets = display_windows
+            .iter()
+            .enumerate()
+            .map(|(i, w)| (i, w.id))
             .collect();
+    }
+    // Synchronous CG capture only for windows not yet in the prewarm cache
+    if !missing_targets.is_empty() {
+        for (idx, rgba_opt) in
+            platform::capture_previews_cg(&missing_targets, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT)
+        {
+            let Some(rgba) = rgba_opt else { continue };
+            let Some(win) = display_windows.get(idx) else { continue };
+            if let Some(img) = bgra_to_render_image(&rgba.data, rgba.width, rgba.height) {
+                initial_previews.insert(win.id, img);
+            }
+        }
+    }
 
     // Reuse existing picker window if possible (reopen after dismiss).
     if let Some((handle, created_on_origin)) = existing {

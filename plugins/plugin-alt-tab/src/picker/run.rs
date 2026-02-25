@@ -3,12 +3,15 @@ use super::open_picker;
 use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::config::AltTabConfig;
 use crate::daemon;
+use crate::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
 use crate::monitor::MonitorTracker;
 use crate::platform;
 use crate::platform::WindowInfo;
+use crate::preview::bgra_to_render_image;
 use gpui::*;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 const PREWARM_REFRESH_INTERVAL_MS: u64 = 1200;
@@ -33,12 +36,14 @@ pub(crate) fn run_app(
         > = std::rc::Rc::new(std::cell::RefCell::new(None));
         let last_window_count =
             Arc::new(AtomicUsize::new(super::default_estimated_window_count()));
-        let window_cache: Arc<std::sync::Mutex<Vec<WindowInfo>>> =
-            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let window_cache: Arc<Mutex<Vec<WindowInfo>>> = Arc::new(Mutex::new(Vec::new()));
+        let preview_cache: Arc<Mutex<HashMap<u32, Arc<RenderImage>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
 
-        // Prewarm: poll window list periodically when picker is hidden
+        // Prewarm: poll window list + capture CG previews when picker is hidden
         let warm_cache = window_cache.clone();
         let warm_count = last_window_count.clone();
+        let warm_previews = preview_cache.clone();
         cx.spawn(async move |cx: &mut AsyncApp| {
             let executor = cx.background_executor().clone();
             loop {
@@ -52,6 +57,36 @@ pub(crate) fn run_app(
                     .spawn(async { platform::get_open_windows() })
                     .await;
                 warm_count.store(windows.len().max(1), Ordering::Relaxed);
+
+                // Capture CG previews in background so open_picker can grab them instantly
+                let targets: Vec<(usize, u32)> =
+                    windows.iter().enumerate().map(|(i, w)| (i, w.id)).collect();
+                let captured = executor
+                    .spawn(async move {
+                        platform::capture_previews_cg(
+                            &targets,
+                            PREVIEW_MAX_WIDTH,
+                            PREVIEW_MAX_HEIGHT,
+                        )
+                    })
+                    .await;
+                if let Ok(mut pcache) = warm_previews.lock() {
+                    // Remove stale entries for windows that no longer exist
+                    let live_ids: std::collections::HashSet<u32> =
+                        windows.iter().map(|w| w.id).collect();
+                    pcache.retain(|id, _| live_ids.contains(id));
+
+                    for (idx, rgba_opt) in captured {
+                        let Some(rgba) = rgba_opt else { continue };
+                        let Some(win) = windows.get(idx) else { continue };
+                        if let Some(img) =
+                            bgra_to_render_image(&rgba.data, rgba.width, rgba.height)
+                        {
+                            pcache.insert(win.id, img);
+                        }
+                    }
+                }
+
                 if let Ok(mut cache) = warm_cache.lock() {
                     *cache = windows;
                 }
@@ -66,6 +101,7 @@ pub(crate) fn run_app(
                 &tracker,
                 last_window_count.clone(),
                 window_cache.clone(),
+                preview_cache.clone(),
                 false,
                 cx,
             );
@@ -90,6 +126,7 @@ pub(crate) fn run_app(
                     let tracker2 = tracker_clone.clone();
                     let last_window_count2 = last_window_count.clone();
                     let window_cache2 = window_cache.clone();
+                    let preview_cache2 = preview_cache.clone();
                     let _ = cx.update(|app_cx| {
                         let reloaded_config = crate::config::load_alt_tab_config();
                         open_picker(
@@ -98,6 +135,7 @@ pub(crate) fn run_app(
                             &tracker2,
                             last_window_count2,
                             window_cache2,
+                            preview_cache2,
                             reverse,
                             app_cx,
                         );
