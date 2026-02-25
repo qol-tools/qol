@@ -229,7 +229,7 @@ fn extract_app_icon(pid: i32) -> Option<RgbaImage> {
 
     objc2::rc::autoreleasepool(|_pool| {
         let app = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)?;
-        let ns_image = unsafe { app.icon() }?;
+        let ns_image = app.icon()?;
 
         let cg_image = unsafe {
             ns_image.CGImageForProposedRect_context_hints(

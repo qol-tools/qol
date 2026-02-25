@@ -3,6 +3,7 @@ pub(crate) mod run;
 
 use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::config::{ActionMode, AltTabConfig};
+use crate::icon::build_icon_cache;
 use crate::layout::*;
 use crate::monitor::MonitorTracker;
 use crate::platform;
@@ -224,6 +225,45 @@ pub(crate) fn open_picker(
                     });
                 });
             }
+            // Async-fill missing icons for reuse path too
+            let missing_apps: Vec<String> = display_windows
+                .iter()
+                .map(|w| w.app_name.clone())
+                .filter(|name| !icons.contains_key(name))
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
+            if !missing_apps.is_empty() {
+                let windows_for_icons = display_windows;
+                let icon_cache_for_fill = icon_cache;
+                let handle_for_fill = handle;
+                cx.spawn(async move |cx: &mut AsyncApp| {
+                    let executor = cx.background_executor().clone();
+                    let raw_icons = executor
+                        .spawn(async move { platform::get_app_icons(&windows_for_icons) })
+                        .await;
+                    if raw_icons.is_empty() {
+                        return;
+                    }
+                    let rendered = build_icon_cache(raw_icons);
+                    if let Ok(mut icache) = icon_cache_for_fill.lock() {
+                        for (k, v) in &rendered {
+                            icache.insert(k.clone(), v.clone());
+                        }
+                    }
+                    let _ = cx.update(|cx| {
+                        let _ = handle_for_fill.update(cx, |view, _window, cx| {
+                            view.delegate.update(cx, |state, cx| {
+                                for (name, img) in rendered {
+                                    state.icon_cache.insert(name, img);
+                                }
+                                cx.notify();
+                            });
+                        });
+                    });
+                })
+                .detach();
+            }
             cx.activate(true);
             return;
         }
@@ -267,6 +307,7 @@ pub(crate) fn open_picker(
     let display_windows_for_init = display_windows.clone();
     let config_for_init = config.clone();
     let cycle_on_open = config.open_behavior == crate::config::OpenBehavior::CycleOnce;
+    let icons_for_init = icons.clone();
 
     let handle = cx.open_window(
         WindowOptions {
@@ -291,7 +332,7 @@ pub(crate) fn open_picker(
                     label_config,
                     cycle_on_open,
                     initial_previews,
-                    icons,
+                    icons_for_init,
                 )
             });
             window.focus(&view.focus_handle(cx));
@@ -299,16 +340,60 @@ pub(crate) fn open_picker(
             view
         },
     );
-    if let Ok(h) = handle {
+    let opened_handle = if let Ok(h) = handle {
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/open] opened new picker window");
-        *current.borrow_mut() = Some((h, create_origin));
+        *current.borrow_mut() = Some((h.clone(), create_origin));
+        Some(h)
     } else {
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/open] failed to open picker window");
-    }
+        None
+    };
     PICKER_VISIBLE.store(true, Ordering::Relaxed);
     cx.activate(true);
+
+    // Spawn background icon fetch for any apps not yet in the cache.
+    // This fills icons within ~50ms instead of waiting for the next prewarm cycle.
+    if let Some(wh) = opened_handle {
+        let missing_apps: Vec<String> = display_windows
+            .iter()
+            .map(|w| w.app_name.clone())
+            .filter(|name| !icons.contains_key(name))
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        if !missing_apps.is_empty() {
+            let windows_for_icons = display_windows;
+            let icon_cache_for_fill = icon_cache;
+            cx.spawn(async move |cx: &mut AsyncApp| {
+                let executor = cx.background_executor().clone();
+                let raw_icons = executor
+                    .spawn(async move { platform::get_app_icons(&windows_for_icons) })
+                    .await;
+                if raw_icons.is_empty() {
+                    return;
+                }
+                let rendered = build_icon_cache(raw_icons);
+                if let Ok(mut icache) = icon_cache_for_fill.lock() {
+                    for (k, v) in &rendered {
+                        icache.insert(k.clone(), v.clone());
+                    }
+                }
+                let _ = cx.update(|cx| {
+                    let _ = wh.update(cx, |view, _window, cx| {
+                        view.delegate.update(cx, |state, cx| {
+                            for (name, img) in rendered {
+                                state.icon_cache.insert(name, img);
+                            }
+                            cx.notify();
+                        });
+                    });
+                });
+            })
+            .detach();
+        }
+    }
 
     #[cfg(target_os = "macos")]
     set_macos_accessory_policy();

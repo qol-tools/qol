@@ -145,8 +145,8 @@ impl Render for AltTabApp {
                                         .flex()
                                         .flex_row()
                                         .items_center()
-                                        .justify_center()
                                         .gap_1()
+                                        .px_1()
                                         .text_color(if is_selected {
                                             rgb(0xffffff)
                                         } else {
