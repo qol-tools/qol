@@ -74,7 +74,7 @@ impl Plugin {
             cmd.env("QOL_TRAY_DAEMON_SOCKET", socket);
         }
         cmd.env("QOL_TRAY_DAEMON_REPLACE_EXISTING", "1");
-        cmd.env("QOL_TRAY_STATE_SOCKET", "/tmp/qol-tray-state.sock");
+        cmd.env("QOL_TRAY_STATE_SOCKET", crate::paths::STATE_SOCKET_PATH);
 
         #[cfg(feature = "dev")]
         cmd.env("RUST_LOG", "debug");

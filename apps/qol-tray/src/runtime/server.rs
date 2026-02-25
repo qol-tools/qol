@@ -6,14 +6,13 @@ use std::time::{Duration, Instant};
 use qol_runtime::{CursorPos, MonitorBounds, PlatformState, WindowBounds};
 
 use crate::os::display;
+use crate::paths::STATE_SOCKET_PATH;
 use super::channels::cursor::CursorChannel;
 use super::channels::focus::FocusChannel;
 use super::channels::monitors::MonitorsChannel;
 use super::channel::Channel;
 use super::poller::{AdaptivePoller, BasicStrategy};
 use super::state::{self, InputState};
-
-const SOCKET_PATH: &str = "/tmp/qol-tray-state.sock";
 const POLL_MIN_MS: u64 = 16;
 const POLL_MAX_MS: u64 = 500;
 const COMMIT_THRESHOLD_MS: u64 = 128;
@@ -41,7 +40,7 @@ impl RuntimeServer {
         log::info!(
             "Runtime server starting: {} monitors, socket={}",
             initial_monitors.len(),
-            SOCKET_PATH,
+            STATE_SOCKET_PATH,
         );
 
         let shared = Arc::new(SharedState {
@@ -177,7 +176,7 @@ fn poll_loop(
 
             if cursor_before != cursor_after || focus_before != focus_after {
                 let active = state::pick_active_monitor(&guard, MonitorBounds { x: 0.0, y: 0.0, width: 0.0, height: 0.0 });
-                eprintln!(
+                log::debug!(
                     "[runtime/poll] STATE CHANGE committed={} focus_changed={} focus_bounds={:?} \
                      cursor=({:?}) focus=({:?}) → active=({}, {})",
                     committed,
@@ -197,17 +196,17 @@ fn poll_loop(
 
 fn socket_loop(shared: Arc<SharedState>) {
     // Clean up stale socket
-    let _ = std::fs::remove_file(SOCKET_PATH);
+    let _ = std::fs::remove_file(STATE_SOCKET_PATH);
 
-    let listener = match UnixListener::bind(SOCKET_PATH) {
+    let listener = match UnixListener::bind(STATE_SOCKET_PATH) {
         Ok(l) => l,
         Err(e) => {
-            log::error!("Failed to bind runtime socket at {}: {}", SOCKET_PATH, e);
+            log::error!("Failed to bind runtime socket at {}: {}", STATE_SOCKET_PATH, e);
             return;
         }
     };
 
-    log::info!("Runtime socket listening on {}", SOCKET_PATH);
+    log::info!("Runtime socket listening on {}", STATE_SOCKET_PATH);
 
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
@@ -229,7 +228,7 @@ fn socket_loop(shared: Arc<SharedState>) {
                 let monitor = monitors.get(idx).copied()?;
                 drop(monitors);
                 if let Ok(mut input) = shared.input.lock() {
-                    eprintln!("[runtime/socket] SET_FOCUS idx={} mon=({}, {})", idx, monitor.x, monitor.y);
+                    log::debug!("[runtime/socket] SET_FOCUS idx={} mon=({}, {})", idx, monitor.x, monitor.y);
                     input.update_focus(monitor, Instant::now());
                 }
                 return Some(());
@@ -262,7 +261,7 @@ fn build_state(shared: &SharedState) -> PlatformState {
             *last = fresh;
             if let Some(focus_monitor) = fresh.and_then(|wb| state::monitor_for_bounds(&monitors, &wb)) {
                 if let Ok(mut input) = shared.input.lock() {
-                    eprintln!("[runtime/build_state] FRESH focus poll → mon=({}, {})", focus_monitor.x, focus_monitor.y);
+                    log::debug!("[runtime/build_state] FRESH focus poll → mon=({}, {})", focus_monitor.x, focus_monitor.y);
                     input.update_focus(focus_monitor, std::time::Instant::now());
                 }
             }
@@ -291,7 +290,7 @@ fn build_state(shared: &SharedState) -> PlatformState {
     let active = state::pick_active_monitor(&input, fallback);
     let active_monitor_idx = monitors.iter().position(|m| *m == active);
 
-    eprintln!("[runtime/build_state] GET_STATE cursor_idx={:?} focus_idx={:?} active_idx={:?}",
+    log::debug!("[runtime/build_state] GET_STATE cursor_idx={:?} focus_idx={:?} active_idx={:?}",
         cursor_monitor_idx, focus_monitor_idx, active_monitor_idx);
 
     let focused_window = shared.focused_window.lock().ok()

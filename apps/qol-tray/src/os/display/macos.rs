@@ -136,14 +136,14 @@ fn focused_window_bounds_ax(own_pid: i32) -> Option<MonitorBounds> {
     if let Some(pid) = app_pid {
         let ignored = super::is_ignored_pid(pid as u32);
         if pid == own_pid || ignored {
-            eprintln!("[runtime/ax] SKIP pid={} own={} ignored={}", pid, pid == own_pid, ignored);
+            log::debug!("[runtime/ax] SKIP pid={} own={} ignored={}", pid, pid == own_pid, ignored);
             return None;
         }
     }
 
     let focused_window = ax_get_attr(focused_app.as_ptr(), &ax_attr_str(b"AXFocusedWindow"))
         .or_else(|| {
-            eprintln!("[runtime/ax] pid={:?} has no focused window", app_pid);
+            log::debug!("[runtime/ax] pid={:?} has no focused window", app_pid);
             None
         })?;
 
@@ -156,7 +156,7 @@ fn focused_window_bounds_ax(own_pid: i32) -> Option<MonitorBounds> {
         width: sz.width as f32,
         height: sz.height as f32,
     };
-    eprintln!("[runtime/ax] HIT pid={:?} window=({}, {}, {}x{})",
+    log::debug!("[runtime/ax] HIT pid={:?} window=({}, {}, {}x{})",
         app_pid, result.x, result.y, result.width, result.height);
     Some(result)
 }

@@ -8,6 +8,8 @@ const INSTALL_ID_ENV: &str = "QOL_TRAY_INSTALL_ID";
 const INSTALL_ID_FILE: &str = "qol-tray.install-id";
 const ACTIVE_INSTALL_ID_FILE: &str = "active-install-id";
 
+pub const STATE_SOCKET_PATH: &str = "/tmp/qol-tray-state.sock";
+
 pub fn is_safe_path_component(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 64
