@@ -59,7 +59,7 @@ pub fn run() {
         if show_immediately {
             #[cfg(debug_assertions)]
             eprintln!("[launcher] show_immediately");
-            let snapshot = focus_cache.snapshot();
+            let snapshot = focus_cache.snapshot().map(|(m, _)| m);
             activate_or_open_launcher(entries.clone(), active.clone(), snapshot, cx);
         }
     });
@@ -102,7 +102,7 @@ fn spawn_command_poll(
                     let focus_cache = focus_cache.clone();
                     eprintln!("[launcher] snapshot start");
                     let snapshot = cx
-                        .background_spawn(async move { focus_cache.snapshot() })
+                        .background_spawn(async move { focus_cache.snapshot().map(|(m, _)| m) })
                         .await;
                     eprintln!(
                         "[launcher] snapshot done: {}",
