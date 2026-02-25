@@ -5,7 +5,7 @@ mod input;
 pub(crate) mod keepalive;
 mod layout;
 mod render;
-pub(crate) mod run;
+pub mod run;
 mod search;
 mod state;
 mod view;
