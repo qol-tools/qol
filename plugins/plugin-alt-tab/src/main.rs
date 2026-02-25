@@ -2,6 +2,7 @@ mod app;
 mod config;
 mod daemon;
 mod delegate;
+mod icon;
 mod layout;
 mod monitor;
 mod picker;

@@ -56,6 +56,7 @@ impl Render for AltTabApp {
                     let selected_index = d.selected_index;
                     let label_config = d.label_config.clone();
                     let live_previews = d.live_previews.clone();
+                    let icon_cache = d.icon_cache.clone();
 
                     let entity = cx.weak_entity();
                     div()
@@ -129,31 +130,45 @@ impl Render for AltTabApp {
                                     GRID_PREVIEW_WIDTH,
                                     GRID_PREVIEW_HEIGHT,
                                 )))
-                                .child(
+                                .child({
+                                    let label = label_config.format(&win.app_name, &win.title);
+                                    let label_text = {
+                                        #[cfg(debug_assertions)]
+                                        { format!("[{}] {}", i, label) }
+                                        #[cfg(not(debug_assertions))]
+                                        { label }
+                                    };
+                                    let app_icon = icon_cache.get(&win.app_name).cloned();
                                     div()
                                         .mt_2()
                                         .w_full()
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .justify_center()
+                                        .gap_1()
                                         .text_color(if is_selected {
                                             rgb(0xffffff)
                                         } else {
                                             rgb(0x7a849e)
                                         })
-                                        .text_xs()
-                                        .text_center()
-                                        .text_ellipsis()
-                                        .overflow_hidden()
-                                        .child({
-                                            let label = label_config.format(&win.app_name, &win.title);
-                                            #[cfg(debug_assertions)]
-                                            {
-                                                format!("[{}] {}", i, label)
-                                            }
-                                            #[cfg(not(debug_assertions))]
-                                            {
-                                                label
-                                            }
-                                        }),
-                                )
+                                        .when_some(app_icon, |el, icon| {
+                                            el.child(
+                                                img(icon)
+                                                    .w(px(16.0))
+                                                    .h(px(16.0))
+                                                    .rounded_sm()
+                                                    .flex_shrink_0(),
+                                            )
+                                        })
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_ellipsis()
+                                                .overflow_hidden()
+                                                .child(label_text),
+                                        )
+                                })
                         }))
                 }),
             )

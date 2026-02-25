@@ -26,6 +26,7 @@ pub(crate) fn open_picker(
     last_window_count: Arc<AtomicUsize>,
     window_cache: Arc<std::sync::Mutex<Vec<WindowInfo>>>,
     preview_cache: Arc<std::sync::Mutex<HashMap<u32, Arc<RenderImage>>>>,
+    icon_cache: Arc<std::sync::Mutex<HashMap<String, Arc<RenderImage>>>>,
     reverse: bool,
     cx: &mut App,
 ) {
@@ -119,6 +120,11 @@ pub(crate) fn open_picker(
         }
     }
 
+    let icons = icon_cache
+        .lock()
+        .map(|c| c.clone())
+        .unwrap_or_default();
+
     // Reuse existing picker window if possible (reopen after dismiss).
     if let Some((handle, created_on_origin)) = existing {
         let target_count = display_windows.len().max(1);
@@ -187,6 +193,7 @@ pub(crate) fn open_picker(
                     display_windows.clone(),
                     config.reset_selection_on_open,
                     initial_previews.clone(),
+                    icons.clone(),
                     cx,
                 );
 
@@ -284,6 +291,7 @@ pub(crate) fn open_picker(
                     label_config,
                     cycle_on_open,
                     initial_previews,
+                    icons,
                 )
             });
             window.focus(&view.focus_handle(cx));

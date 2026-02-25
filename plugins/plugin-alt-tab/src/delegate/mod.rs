@@ -13,17 +13,19 @@ pub(crate) struct WindowDelegate {
     pub(crate) selected_index: Option<usize>,
     pub(crate) label_config: LabelConfig,
     pub(crate) live_previews: HashMap<u32, Arc<RenderImage>>,
+    pub(crate) icon_cache: HashMap<String, Arc<RenderImage>>,
 }
 
 impl WindowDelegate {
     pub(crate) fn new(windows: Vec<WindowInfo>, label_config: LabelConfig) -> Self {
-        Self::new_with_previews(windows, label_config, HashMap::new())
+        Self::new_with_previews(windows, label_config, HashMap::new(), HashMap::new())
     }
 
     pub(crate) fn new_with_previews(
         windows: Vec<WindowInfo>,
         label_config: LabelConfig,
         live_previews: HashMap<u32, Arc<RenderImage>>,
+        icon_cache: HashMap<String, Arc<RenderImage>>,
     ) -> Self {
         let selected_index = if windows.is_empty() { None } else { Some(0) };
         Self {
@@ -31,6 +33,7 @@ impl WindowDelegate {
             selected_index,
             label_config,
             live_previews,
+            icon_cache,
         }
     }
 

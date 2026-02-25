@@ -3,6 +3,7 @@ mod preview;
 #[cfg(target_os = "macos")]
 pub(crate) mod cg_helpers;
 
+#[derive(Debug, Clone)]
 pub struct RgbaImage {
     pub data: Vec<u8>,
     pub width: usize,
@@ -15,6 +16,7 @@ pub struct WindowInfo {
     pub title: String,
     pub app_name: String,
     pub preview_path: Option<String>,
+    pub icon: Option<RgbaImage>,
     pub x: f32,
     pub y: f32,
     pub width: f32,
@@ -100,6 +102,10 @@ mod unsupported {
     pub fn dismiss_picker(window: &mut gpui::Window) {
         window.minimize_window();
     }
+
+    pub fn get_app_icons(_windows: &[WindowInfo]) -> std::collections::HashMap<String, super::RgbaImage> {
+        std::collections::HashMap::new()
+    }
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -163,4 +169,8 @@ pub fn picker_window_kind() -> gpui::WindowKind {
 
 pub fn dismiss_picker(window: &mut gpui::Window) {
     imp::dismiss_picker(window)
+}
+
+pub fn get_app_icons(windows: &[WindowInfo]) -> std::collections::HashMap<String, RgbaImage> {
+    imp::get_app_icons(windows)
 }

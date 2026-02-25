@@ -102,6 +102,7 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
         "_NET_WM_STATE",
         "_NET_WM_STATE_HIDDEN",
         "WM_CLASS",
+        "_NET_WM_ICON",
     ];
 
     let mut cookies = Vec::new();
@@ -192,8 +193,10 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
     let mut net_name_cookies = Vec::new();
     let mut wm_name_cookies = Vec::new();
     let mut wm_class_cookies = Vec::new();
+    let mut icon_cookies = Vec::new();
 
     let wm_class_atom = atom_map.get("WM_CLASS").copied().unwrap_or(0);
+    let wm_icon_atom = atom_map.get("_NET_WM_ICON").copied().unwrap_or(0);
 
     for &id in &filtered_ids {
         if let Some(na) = net_name_atom {
@@ -212,6 +215,14 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
             conn.get_property(false, id, wm_class_atom, AtomEnum::STRING, 0, 1024)
                 .ok(),
         );
+        if wm_icon_atom != 0 {
+            icon_cookies.push(
+                conn.get_property(false, id, wm_icon_atom, AtomEnum::CARDINAL, 0, 65536)
+                    .ok(),
+            );
+        } else {
+            icon_cookies.push(None);
+        }
     }
 
     for (i, &id) in filtered_ids.iter().enumerate().rev() {
@@ -231,8 +242,6 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
 
         let mut app_name = String::new();
         if let Some(reply) = wm_class_cookies[i].take().and_then(|c| c.reply().ok()) {
-            // WM_CLASS is a null-separated string: "instance\0class\0"
-            // We want the class part (the second one) if it exists, otherwise the first.
             let parts: Vec<&str> = std::str::from_utf8(&reply.value)
                 .unwrap_or("")
                 .split('\0')
@@ -245,6 +254,11 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
             }
         }
 
+        let icon = icon_cookies[i]
+            .take()
+            .and_then(|c| c.reply().ok())
+            .and_then(|reply| extract_x11_icon(&reply));
+
         if !title.is_empty() {
             if title == "Desktop" {
                 continue;
@@ -254,6 +268,7 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
                 title,
                 app_name,
                 preview_path: None,
+                icon,
                 x: 0.0,
                 y: 0.0,
                 width: 0.0,
@@ -542,6 +557,65 @@ fn detect_channel_order<C: Connection>(conn: &C, screen_num: usize) -> ChannelOr
     ChannelOrder { red, green, blue }
 }
 
+fn extract_x11_icon(reply: &GetPropertyReply) -> Option<RgbaImage> {
+    let values: Vec<u32> = reply.value32()?.collect();
+    if values.len() < 2 {
+        return None;
+    }
+
+    // _NET_WM_ICON: width, height, ARGB pixels...  (may contain multiple sizes)
+    // Pick the first icon ≤ 48px, or the smallest available.
+    let mut offset = 0;
+    let mut best: Option<(usize, usize, usize)> = None; // (offset, w, h)
+    while offset + 2 < values.len() {
+        let w = values[offset] as usize;
+        let h = values[offset + 1] as usize;
+        let pixel_count = w.checked_mul(h).unwrap_or(0);
+        if w == 0 || h == 0 || offset + 2 + pixel_count > values.len() {
+            break;
+        }
+        let data_start = offset + 2;
+        match best {
+            None => best = Some((data_start, w, h)),
+            Some((_, bw, bh)) => {
+                if w <= 48 && h <= 48 && w * h > bw * bh {
+                    best = Some((data_start, w, h));
+                } else if bw > 48 && w < bw {
+                    best = Some((data_start, w, h));
+                }
+            }
+        }
+        offset += 2 + pixel_count;
+    }
+
+    let (data_start, src_w, src_h) = best?;
+    let target = 32usize;
+    let mut rgba = vec![0u8; target * target * 4];
+    for y in 0..target {
+        let src_y = (y * src_h) / target;
+        for x in 0..target {
+            let src_x = (x * src_w) / target;
+            let argb = values[data_start + src_y * src_w + src_x];
+            let a = ((argb >> 24) & 0xff) as u8;
+            let r = ((argb >> 16) & 0xff) as u8;
+            let g = ((argb >> 8) & 0xff) as u8;
+            let b = (argb & 0xff) as u8;
+            let dst = (y * target + x) * 4;
+            // gpui expects BGRA byte order
+            rgba[dst] = b;
+            rgba[dst + 1] = g;
+            rgba[dst + 2] = r;
+            rgba[dst + 3] = a;
+        }
+    }
+
+    Some(RgbaImage {
+        data: rgba,
+        width: target,
+        height: target,
+    })
+}
+
 fn x11_data_to_rgba(
     data: &[u8],
     src_w: usize,
@@ -573,4 +647,17 @@ fn x11_data_to_rgba(
         rgba.extend_from_slice(&[r, g, b, 255]);
     }
     Some(rgba)
+}
+
+pub fn get_app_icons(windows: &[WindowInfo]) -> std::collections::HashMap<String, RgbaImage> {
+    let mut icons = std::collections::HashMap::new();
+    for win in windows {
+        if icons.contains_key(&win.app_name) {
+            continue;
+        }
+        if let Some(ref icon) = win.icon {
+            icons.insert(win.app_name.clone(), icon.clone());
+        }
+    }
+    icons
 }

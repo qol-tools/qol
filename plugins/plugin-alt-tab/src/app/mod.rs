@@ -36,10 +36,11 @@ impl AltTabApp {
         label_config: LabelConfig,
         cycle_on_open: bool,
         initial_previews: HashMap<u32, Arc<RenderImage>>,
+        icon_cache: HashMap<String, Arc<RenderImage>>,
     ) -> Self {
         let has_cached_windows = !initial_windows.is_empty();
         let win_delegate =
-            WindowDelegate::new_with_previews(initial_windows.clone(), label_config, initial_previews);
+            WindowDelegate::new_with_previews(initial_windows.clone(), label_config, initial_previews, icon_cache);
         let delegate = cx.new(|_cx| win_delegate);
 
         if cycle_on_open && initial_windows.len() >= 2 {
@@ -136,12 +137,16 @@ impl AltTabApp {
         windows: Vec<WindowInfo>,
         reset_selection: bool,
         previews: HashMap<u32, Arc<RenderImage>>,
+        icons: HashMap<String, Arc<RenderImage>>,
         cx: &mut Context<Self>,
     ) {
         self.delegate.update(cx, |state, cx| {
             state.set_windows(windows, reset_selection);
             if !previews.is_empty() {
                 state.live_previews = previews;
+            }
+            if !icons.is_empty() {
+                state.icon_cache = icons;
             }
             cx.notify();
         });

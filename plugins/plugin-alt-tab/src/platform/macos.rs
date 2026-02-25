@@ -3,6 +3,7 @@ use super::preview;
 use super::RgbaImage;
 use super::WindowInfo;
 use objc2::{AnyThread, Message};
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -57,6 +58,17 @@ extern "C" {
     fn CGImageGetBitsPerPixel(image: CGImageRef) -> usize;
     fn CGImageGetDataProvider(image: CGImageRef) -> CGDataProviderRef;
     fn CGDataProviderCopyData(provider: CGDataProviderRef) -> CFDataRef;
+    fn CGColorSpaceCreateDeviceRGB() -> *const c_void;
+    fn CGBitmapContextCreate(
+        data: *mut c_void,
+        width: usize,
+        height: usize,
+        bits_per_component: usize,
+        bytes_per_row: usize,
+        space: *const c_void,
+        bitmap_info: u32,
+    ) -> *const c_void;
+    fn CGContextDrawImage(ctx: *const c_void, rect: CGRect, image: CGImageRef);
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -72,6 +84,8 @@ const K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY: u32 = 1;
 const K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS: u32 = 1 << 4;
 const K_CG_NULL_WINDOW_ID: u32 = 0;
 const K_CG_WINDOW_LAYER_NORMAL: i32 = 0;
+
+const ICON_SIZE: usize = 32;
 
 pub fn get_open_windows() -> Vec<WindowInfo> {
     let own_pid = std::process::id() as i32;
@@ -135,6 +149,7 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
             title: display_title,
             app_name,
             preview_path: None,
+            icon: None,
             x: wx as f32,
             y: wy as f32,
             width: ww as f32,
@@ -152,6 +167,122 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
     }
 
     windows
+}
+
+pub fn get_app_icons(windows: &[WindowInfo]) -> HashMap<String, RgbaImage> {
+    let own_pid = std::process::id() as i32;
+    let opts =
+        K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
+    let list = unsafe { CGWindowListCopyWindowInfo(opts, K_CG_NULL_WINDOW_ID) };
+    if list.is_null() {
+        return HashMap::new();
+    }
+
+    let key_pid = cg_helpers::cfstr(b"kCGWindowOwnerPID");
+    let key_owner = cg_helpers::cfstr(b"kCGWindowOwnerName");
+
+    // Build app_name → pid mapping from CG list
+    let mut app_pids: HashMap<String, i32> = HashMap::new();
+    let count = unsafe { CFArrayGetCount(list) };
+    for i in 0..count {
+        let dict = unsafe { CFArrayGetValueAtIndex(list, i) } as CFDictionaryRef;
+        if dict.is_null() {
+            continue;
+        }
+        let Some(pid) = cg_helpers::dict_get_i32(dict, key_pid) else { continue };
+        if pid == own_pid {
+            continue;
+        }
+        let name = cg_helpers::dict_get_string(dict, key_owner)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            app_pids.entry(name).or_insert(pid);
+        }
+    }
+
+    unsafe {
+        CFRelease(list as *const c_void);
+        CFRelease(key_pid as *const c_void);
+        CFRelease(key_owner as *const c_void);
+    }
+
+    // Only extract icons for apps that are in our window list
+    let needed: std::collections::HashSet<&str> =
+        windows.iter().map(|w| w.app_name.as_str()).collect();
+
+    let mut icons = HashMap::new();
+    for (name, pid) in &app_pids {
+        if !needed.contains(name.as_str()) {
+            continue;
+        }
+        if let Some(icon) = extract_app_icon(*pid) {
+            icons.insert(name.clone(), icon);
+        }
+    }
+    icons
+}
+
+fn extract_app_icon(pid: i32) -> Option<RgbaImage> {
+    use objc2_app_kit::NSRunningApplication;
+
+    objc2::rc::autoreleasepool(|_pool| {
+        let app = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)?;
+        let ns_image = unsafe { app.icon() }?;
+
+        let cg_image = unsafe {
+            ns_image.CGImageForProposedRect_context_hints(
+                std::ptr::null_mut(),
+                None,
+                None,
+            )
+        }?;
+
+        let img_ptr = &*cg_image as *const objc2_core_graphics::CGImage as CGImageRef;
+
+        // Draw into a CGBitmapContext with known BGRA format.
+        // This normalises any source pixel format (wide color, different alpha,
+        // varying bpp) into the 32-bit BGRA that gpui expects.
+        let sz = ICON_SIZE;
+        let row_bytes = sz * 4;
+        let mut buf = vec![0u8; sz * row_bytes];
+
+        let color_space = unsafe { CGColorSpaceCreateDeviceRGB() };
+        if color_space.is_null() {
+            return None;
+        }
+
+        // kCGImageAlphaPremultipliedFirst (2) | kCGBitmapByteOrder32Little (2 << 12 = 8192)
+        // = BGRA premultiplied, little-endian 32-bit — matches gpui/CG window captures.
+        let bitmap_info: u32 = 2 | (2 << 12);
+
+        let ctx = unsafe {
+            CGBitmapContextCreate(
+                buf.as_mut_ptr() as *mut c_void,
+                sz,
+                sz,
+                8,
+                row_bytes,
+                color_space,
+                bitmap_info,
+            )
+        };
+        unsafe { CFRelease(color_space) };
+
+        if ctx.is_null() {
+            return None;
+        }
+
+        let draw_rect = CGRect {
+            origin: CGPoint { x: 0.0, y: 0.0 },
+            size: CGSize { width: sz as f64, height: sz as f64 },
+        };
+        unsafe { CGContextDrawImage(ctx, draw_rect, img_ptr) };
+        unsafe { CFRelease(ctx) };
+
+        Some(RgbaImage { data: buf, width: sz, height: sz })
+    })
 }
 
 use std::sync::atomic::{AtomicBool, Ordering};

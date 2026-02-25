@@ -3,6 +3,7 @@ use super::open_picker;
 use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::config::AltTabConfig;
 use crate::daemon;
+use crate::icon::build_icon_cache;
 use crate::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
 use crate::monitor::MonitorTracker;
 use crate::platform;
@@ -39,11 +40,14 @@ pub(crate) fn run_app(
         let window_cache: Arc<Mutex<Vec<WindowInfo>>> = Arc::new(Mutex::new(Vec::new()));
         let preview_cache: Arc<Mutex<HashMap<u32, Arc<RenderImage>>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        let icon_cache: Arc<Mutex<HashMap<String, Arc<RenderImage>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
 
-        // Prewarm: poll window list + capture CG previews when picker is hidden
+        // Prewarm: poll window list + capture CG previews + icons when picker is hidden
         let warm_cache = window_cache.clone();
         let warm_count = last_window_count.clone();
         let warm_previews = preview_cache.clone();
+        let warm_icons = icon_cache.clone();
         cx.spawn(async move |cx: &mut AsyncApp| {
             let executor = cx.background_executor().clone();
             loop {
@@ -87,6 +91,18 @@ pub(crate) fn run_app(
                     }
                 }
 
+                // Extract app icons in background
+                let icon_windows = windows.clone();
+                let raw_icons = executor
+                    .spawn(async move { platform::get_app_icons(&icon_windows) })
+                    .await;
+                if !raw_icons.is_empty() {
+                    let rendered = build_icon_cache(raw_icons);
+                    if let Ok(mut icache) = warm_icons.lock() {
+                        *icache = rendered;
+                    }
+                }
+
                 if let Ok(mut cache) = warm_cache.lock() {
                     *cache = windows;
                 }
@@ -102,6 +118,7 @@ pub(crate) fn run_app(
                 last_window_count.clone(),
                 window_cache.clone(),
                 preview_cache.clone(),
+                icon_cache.clone(),
                 false,
                 cx,
             );
@@ -127,6 +144,7 @@ pub(crate) fn run_app(
                     let last_window_count2 = last_window_count.clone();
                     let window_cache2 = window_cache.clone();
                     let preview_cache2 = preview_cache.clone();
+                    let icon_cache2 = icon_cache.clone();
                     let _ = cx.update(|app_cx| {
                         let reloaded_config = crate::config::load_alt_tab_config();
                         open_picker(
@@ -136,6 +154,7 @@ pub(crate) fn run_app(
                             last_window_count2,
                             window_cache2,
                             preview_cache2,
+                            icon_cache2,
                             reverse,
                             app_cx,
                         );
