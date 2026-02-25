@@ -26,7 +26,6 @@ struct SharedState {
     monitors: Mutex<Vec<MonitorBounds>>,
     cursor_pos: Mutex<Option<(f32, f32)>>,
     focused_window: Mutex<Option<MonitorBounds>>,
-    platform: Arc<dyn display::Platform>,
     last_focus_bounds: Mutex<Option<MonitorBounds>>,
 }
 
@@ -48,7 +47,6 @@ impl RuntimeServer {
             monitors: Mutex::new(initial_monitors),
             cursor_pos: Mutex::new(None),
             focused_window: Mutex::new(None),
-            platform: platform.clone(),
             last_focus_bounds: Mutex::new(None),
         });
 
@@ -252,24 +250,6 @@ fn build_state(shared: &SharedState) -> PlatformState {
     let monitors = shared.monitors.lock()
         .map(|g| g.clone())
         .unwrap_or_default();
-
-    // Fresh focus poll on GET_STATE so plugins get the latest focus
-    if shared.platform.poll_focused_window() {
-        let fresh = shared.platform.focused_window_bounds();
-        let mut last = shared.last_focus_bounds.lock().unwrap_or_else(|e| e.into_inner());
-        if fresh.is_some() && fresh != *last {
-            *last = fresh;
-            if let Some(focus_monitor) = fresh.and_then(|wb| state::monitor_for_bounds(&monitors, &wb)) {
-                if let Ok(mut input) = shared.input.lock() {
-                    log::debug!("[runtime/build_state] FRESH focus poll → mon=({}, {})", focus_monitor.x, focus_monitor.y);
-                    input.update_focus(focus_monitor, std::time::Instant::now());
-                }
-            }
-            if let Ok(mut fw) = shared.focused_window.lock() {
-                *fw = fresh;
-            }
-        }
-    }
 
     let cursor_pos = shared.cursor_pos.lock().ok().and_then(|g| *g);
     let cursor = cursor_pos.map(|(x, y)| CursorPos { x, y });
