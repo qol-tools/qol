@@ -1,0 +1,16 @@
+[package]
+name = "qol-plugin-api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dirs = "5.0"
+gpui = "0.2"
+qol-runtime = { git = "https://github.com/qol-tools/qol-runtime" }
+
+# macOS only: fix zed-font-kit core-graphics version mismatch
+[patch.crates-io]
+core-text = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
+core-graphics = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
+core-foundation = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
+core-foundation-sys = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
