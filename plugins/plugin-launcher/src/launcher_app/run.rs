@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 
 use gpui::*;
 
@@ -54,13 +55,26 @@ pub fn run() {
             focus_cache.clone(),
             cx,
         );
-        spawn_preload(entries.clone(), active.clone(), cx);
+        spawn_prewarm(entries.clone(), active.clone(), cx);
 
         if show_immediately {
             #[cfg(debug_assertions)]
             eprintln!("[launcher] show_immediately");
-            let snapshot = focus_cache.snapshot().map(|(m, _)| m);
-            activate_or_open_launcher(entries.clone(), active.clone(), snapshot, cx);
+            cx.spawn({
+                let entries = entries.clone();
+                let active = active.clone();
+                let focus_cache = focus_cache.clone();
+                async move |cx: &mut AsyncApp| {
+                    wait_for_entries(&entries, cx).await;
+                    let snapshot = cx
+                        .background_spawn(async move { focus_cache.snapshot().map(|(m, _)| m) })
+                        .await;
+                    let _ = cx.update(|cx| {
+                        activate_or_open_launcher(entries, active, snapshot, cx);
+                    });
+                }
+            })
+            .detach();
         }
     });
 
@@ -99,6 +113,7 @@ fn spawn_command_poll(
             match next_command {
                 Some(daemon::Command::Show) => {
                     eprintln!("[launcher] command: show");
+                    wait_for_entries(&entries, cx).await;
                     let focus_cache = focus_cache.clone();
                     eprintln!("[launcher] snapshot start");
                     let snapshot = cx
@@ -135,7 +150,21 @@ fn spawn_command_poll(
     .detach();
 }
 
-fn spawn_preload(
+async fn wait_for_entries(entries: &SharedEntries, cx: &mut AsyncApp) {
+    let executor = cx.background_executor().clone();
+    loop {
+        let ready = entries
+            .lock()
+            .map(|g| !g.app_entries.is_empty())
+            .unwrap_or(false);
+        if ready {
+            break;
+        }
+        executor.timer(Duration::from_millis(50)).await;
+    }
+}
+
+fn spawn_prewarm(
     entries: SharedEntries,
     active: Rc<RefCell<ActiveLaunchers>>,
     cx: &mut App,
@@ -144,29 +173,55 @@ fn spawn_preload(
         let entries = entries.clone();
         let active = active.clone();
         async move |cx: &mut AsyncApp| {
-            eprintln!("[launcher] preload start");
-            let loaded = cx
-                .background_spawn(async move { Arc::new(PreloadedEntries::load()) })
-                .await;
-            eprintln!("[launcher] preload done");
-            if let Ok(mut guard) = entries.lock() {
-                *guard = loaded.clone();
-            }
-            let _ = cx.update(move |cx| {
-                let handles: Vec<WindowHandle<LauncherView>> =
-                    active.borrow().handles();
-                for handle in handles {
-                    let loaded_entries = loaded.clone();
-                    let _ = handle.update(cx, |view, _window, cx| {
-                        view.store.replace_entries(
-                            loaded_entries.app_entries.clone(),
-                            loaded_entries.file_entries.clone(),
-                        );
-                        view.store.ensure_filtered(&view.state);
-                        cx.notify();
-                    });
+            let executor = cx.background_executor().clone();
+            let mut warmed = false;
+            loop {
+                if warmed {
+                    executor.timer(Duration::from_secs(2)).await;
                 }
-            });
+
+                // Skip if a launcher is currently visible
+                let any_visible = cx
+                    .update(|cx| {
+                        active
+                            .borrow()
+                            .handles()
+                            .iter()
+                            .any(|h| h.update(cx, |v, _, _| v.is_showing).unwrap_or(false))
+                    })
+                    .unwrap_or(false);
+                if any_visible {
+                    warmed = true; // ensure timer fires on next iteration, no spin
+                    continue;
+                }
+
+                let fresh = executor
+                    .spawn(async { Arc::new(PreloadedEntries::load()) })
+                    .await;
+
+                if let Ok(mut guard) = entries.lock() {
+                    *guard = fresh.clone();
+                }
+
+                let _ = cx.update(|cx| {
+                    for handle in active.borrow().handles() {
+                        let e = fresh.clone();
+                        let _ = handle.update(cx, |view, _, cx| {
+                            view.store.replace_entries(
+                                e.app_entries.clone(),
+                                e.file_entries.clone(),
+                            );
+                            view.store.ensure_filtered(&view.state);
+                            cx.notify();
+                        });
+                    }
+                });
+
+                if !warmed {
+                    eprintln!("[launcher] prewarm: initial load complete");
+                }
+                warmed = true;
+            }
         }
     })
     .detach();
