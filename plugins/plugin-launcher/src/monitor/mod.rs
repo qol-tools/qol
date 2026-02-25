@@ -1,3 +1,1 @@
-mod tracker;
-
-pub use tracker::{ActiveMonitor, MonitorTracker};
+pub use qol_plugin_api::monitor::{ActiveMonitor, MonitorTracker};
