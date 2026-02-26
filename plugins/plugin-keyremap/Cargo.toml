@@ -7,19 +7,12 @@ edition = "2021"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.9"
 dirs = "5.0"
-qol-plugin-api = { git = "https://github.com/qol-tools/qol-plugin-api" }
+qol-plugin-api = { git = "https://github.com/qol-tools/qol-plugin-api", default-features = false }
 core-graphics = "0.25"
 core-foundation = "0.10"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSObject"] }
 objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication"] }
-
-# macOS only: fix zed-font-kit core-graphics version mismatch (from gpui via qol-plugin-api)
-[patch.crates-io]
-core-text = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
-core-graphics = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
-core-foundation = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
-core-foundation-sys = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
 
 [profile.release]
 strip = true
