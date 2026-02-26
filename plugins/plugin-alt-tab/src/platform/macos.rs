@@ -103,10 +103,341 @@ struct AxWindowMeta {
     is_minimized: bool,
 }
 
-static KNOWN_WINDOW_IDS_BY_PID: OnceLock<Mutex<HashMap<i32, HashSet<u32>>>> = OnceLock::new();
+#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+struct ProcessIdentity {
+    pid: i32,
+    start_time_us: u64,
+}
 
-fn known_window_ids_by_pid() -> &'static Mutex<HashMap<i32, HashSet<u32>>> {
-    KNOWN_WINDOW_IDS_BY_PID.get_or_init(|| Mutex::new(HashMap::new()))
+#[repr(C)]
+struct ProcBsdInfo {
+    pbi_flags: u32,
+    pbi_status: u32,
+    pbi_xstatus: u32,
+    pbi_pid: u32,
+    pbi_ppid: u32,
+    pbi_uid: u32,
+    pbi_ruid: u32,
+    pbi_gid: u32,
+    pbi_rgid: u32,
+    pbi_svuid: u32,
+    pbi_svgid: u32,
+    rfu_1: u32,
+    pbi_comm: [u8; 16],
+    pbi_name: [u8; 32],
+    pbi_nfiles: u32,
+    pbi_pgid: u32,
+    pbi_pjobc: u32,
+    e_tdev: u32,
+    e_tpgid: u32,
+    pbi_nice: i32,
+    pbi_start_tvsec: u64,
+    pbi_start_tvusec: u64,
+}
+
+#[link(name = "proc")]
+extern "C" {
+    fn proc_pidinfo(
+        pid: i32,
+        flavor: i32,
+        arg: u64,
+        buffer: *mut c_void,
+        buffersize: i32,
+    ) -> i32;
+}
+
+const PROC_PIDTBSDINFO: i32 = 3;
+
+static KNOWN_WINDOW_IDS_BY_IDENTITY: OnceLock<Mutex<HashMap<ProcessIdentity, HashSet<u32>>>> =
+    OnceLock::new();
+
+fn known_window_ids_by_identity() -> &'static Mutex<HashMap<ProcessIdentity, HashSet<u32>>> {
+    KNOWN_WINDOW_IDS_BY_IDENTITY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn process_identity(pid: i32) -> Option<ProcessIdentity> {
+    if pid <= 0 {
+        return None;
+    }
+
+    let mut info: ProcBsdInfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<ProcBsdInfo>() as i32;
+    let read = unsafe {
+        proc_pidinfo(
+            pid,
+            PROC_PIDTBSDINFO,
+            0,
+            (&mut info as *mut ProcBsdInfo).cast::<c_void>(),
+            size,
+        )
+    };
+    if read != size {
+        return None;
+    }
+
+    let start_time_us = info
+        .pbi_start_tvsec
+        .saturating_mul(1_000_000)
+        .saturating_add(info.pbi_start_tvusec);
+
+    Some(ProcessIdentity {
+        pid,
+        start_time_us,
+    })
+}
+
+fn cached_process_identity(
+    pid: i32,
+    cache: &mut HashMap<i32, Option<ProcessIdentity>>,
+) -> Option<ProcessIdentity> {
+    if let Some(identity) = cache.get(&pid) {
+        return *identity;
+    }
+    let identity = process_identity(pid);
+    cache.insert(pid, identity);
+    identity
+}
+
+#[derive(Default)]
+struct WindowEnumeration {
+    windows: Vec<WindowInfo>,
+    on_screen_ids: HashSet<u32>,
+    on_screen_pids: HashSet<i32>,
+    on_screen_count_by_pid: HashMap<i32, usize>,
+}
+
+impl WindowEnumeration {
+    fn on_screen_count(&self, pid: i32) -> usize {
+        self.on_screen_count_by_pid.get(&pid).copied().unwrap_or(0)
+    }
+
+    fn register_on_screen_pid(&mut self, pid: i32) {
+        self.on_screen_pids.insert(pid);
+    }
+
+    fn push_on_screen(&mut self, window: CgWindow) {
+        self.on_screen_ids.insert(window.id);
+        *self.on_screen_count_by_pid.entry(window.pid).or_insert(0) += 1;
+        self.windows.push(WindowInfo {
+            id: window.id,
+            title: window.title,
+            app_name: window.app_name,
+            preview_path: None,
+            icon: None,
+            x: window.x,
+            y: window.y,
+            width: window.w,
+            height: window.h,
+            is_minimized: false,
+        });
+    }
+
+    fn push_minimized(&mut self, window: &CgWindow, title: String) {
+        self.windows.push(WindowInfo {
+            id: window.id,
+            title,
+            app_name: window.app_name.clone(),
+            preview_path: None,
+            icon: None,
+            x: window.x,
+            y: window.y,
+            width: window.w,
+            height: window.h,
+            is_minimized: true,
+        });
+    }
+}
+
+struct KnownWindowTracker {
+    snapshot: HashMap<ProcessIdentity, HashSet<u32>>,
+    accepted: HashMap<ProcessIdentity, HashSet<u32>>,
+    seen: HashSet<ProcessIdentity>,
+    identity_cache: HashMap<i32, Option<ProcessIdentity>>,
+}
+
+impl KnownWindowTracker {
+    fn new() -> Self {
+        let snapshot = known_window_ids_by_identity()
+            .lock()
+            .ok()
+            .map(|cache| cache.clone())
+            .unwrap_or_default();
+        Self {
+            snapshot,
+            accepted: HashMap::new(),
+            seen: HashSet::new(),
+            identity_cache: HashMap::new(),
+        }
+    }
+
+    fn identity_for_pid(&mut self, pid: i32) -> Option<ProcessIdentity> {
+        let identity = cached_process_identity(pid, &mut self.identity_cache);
+        if let Some(identity) = identity {
+            self.seen.insert(identity);
+        }
+        identity
+    }
+
+    fn remember_window(&mut self, pid: i32, window_id: u32) {
+        let Some(identity) = self.identity_for_pid(pid) else {
+            return;
+        };
+        self.accepted.entry(identity).or_default().insert(window_id);
+    }
+
+    fn persist(self) {
+        if let Ok(mut known_cache) = known_window_ids_by_identity().lock() {
+            known_cache.retain(|identity, _| self.seen.contains(identity));
+            for (identity, ids) in self.accepted {
+                known_cache.insert(identity, ids);
+            }
+        }
+    }
+}
+
+fn allowed_minimized_count(
+    on_screen_count: usize,
+    identity: Option<ProcessIdentity>,
+    snapshot: &HashMap<ProcessIdentity, HashSet<u32>>,
+    meta_map: &HashMap<u32, AxWindowMeta>,
+) -> usize {
+    if on_screen_count != 0 {
+        return meta_map.values().filter(|window| window.is_minimized).count();
+    }
+
+    if let Some(identity) = identity {
+        if let Some(count) = snapshot
+            .get(&identity)
+            .map(|ids| ids.len())
+            .filter(|count| *count > 0)
+        {
+            return count;
+        }
+    }
+
+    meta_map.values().filter(|window| window.is_minimized).count()
+}
+
+fn collect_on_screen_windows(
+    own_pid: i32,
+    state: &mut WindowEnumeration,
+    tracker: &mut KnownWindowTracker,
+) {
+    let options =
+        K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
+    let list = unsafe { CGWindowListCopyWindowInfo(options, K_CG_NULL_WINDOW_ID) };
+    if list.is_null() {
+        return;
+    }
+
+    let parsed = parse_cg_window_list(list, own_pid);
+    unsafe { CFRelease(list as *const c_void) };
+
+    for window in &parsed {
+        state.register_on_screen_pid(window.pid);
+    }
+
+    for window in dedup_by_ax(parsed) {
+        tracker.remember_window(window.pid, window.id);
+        state.push_on_screen(window);
+    }
+}
+
+fn collect_minimized_windows(
+    own_pid: i32,
+    state: &mut WindowEnumeration,
+    tracker: &mut KnownWindowTracker,
+) {
+    let options = K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
+    let list = unsafe { CGWindowListCopyWindowInfo(options, K_CG_NULL_WINDOW_ID) };
+    if list.is_null() {
+        return;
+    }
+
+    let mut regular_app_cache: HashMap<i32, bool> = HashMap::new();
+    let mut ax_windows_cache: HashMap<i32, Option<HashMap<u32, AxWindowMeta>>> = HashMap::new();
+    let mut minimized_count_by_pid: HashMap<i32, usize> = HashMap::new();
+    let mut seen_minimized_ids = HashSet::new();
+
+    for window in parse_cg_window_list(list, own_pid) {
+        if state.on_screen_ids.contains(&window.id) {
+            continue;
+        }
+        if !seen_minimized_ids.insert(window.id) {
+            continue;
+        }
+        if state.on_screen_pids.contains(&window.pid)
+            && !ax_is_window_minimized(window.pid, window.id, &window.title)
+        {
+            continue;
+        }
+        if !window.has_title || window.w < 1.0 || window.h < 1.0 {
+            continue;
+        }
+        let is_regular = *regular_app_cache
+            .entry(window.pid)
+            .or_insert_with(|| is_regular_app(window.pid));
+        if !is_regular {
+            continue;
+        }
+
+        let on_screen_count = state.on_screen_count(window.pid);
+        let identity = tracker.identity_for_pid(window.pid);
+        let known_ids = if on_screen_count == 0 {
+            identity.and_then(|id| tracker.snapshot.get(&id))
+        } else {
+            None
+        };
+        let known_budget = known_ids
+            .map(|ids| ids.len())
+            .filter(|count| *count > 0);
+
+        let ax_windows = ax_windows_cache
+            .entry(window.pid)
+            .or_insert_with(|| ax_windows(window.pid));
+        let mut title = window.title.clone();
+        let mut allowed_count = known_budget.unwrap_or(usize::MAX);
+        let mut ax_has_window = false;
+        let mut ax_is_minimized = false;
+
+        if let Some(meta_map) = ax_windows.as_ref() {
+            if let Some(meta) = meta_map.get(&window.id) {
+                ax_has_window = true;
+                ax_is_minimized = meta.is_minimized;
+                if !meta.title.is_empty() {
+                    title = meta.title.clone();
+                }
+            }
+            if known_budget.is_none() {
+                allowed_count =
+                    allowed_minimized_count(on_screen_count, identity, &tracker.snapshot, meta_map);
+            }
+        }
+
+        if known_budget.is_none() && ax_has_window && !ax_is_minimized {
+            continue;
+        }
+
+        if let Some(known_ids) = known_ids {
+            if !known_ids.is_empty() && !ax_has_window && !known_ids.contains(&window.id) {
+                continue;
+            }
+        }
+
+        if allowed_count == 0 {
+            continue;
+        }
+        let current_count = minimized_count_by_pid.entry(window.pid).or_insert(0);
+        if *current_count >= allowed_count {
+            continue;
+        }
+        *current_count += 1;
+
+        tracker.remember_window(window.pid, window.id);
+        state.push_minimized(&window, title);
+    }
+
+    unsafe { CFRelease(list as *const c_void) };
 }
 
 /// Shared helper: parse normal-layer windows from a CG window list.
@@ -180,136 +511,14 @@ fn parse_cg_window_list(list: *const c_void, own_pid: i32) -> Vec<CgWindow> {
 
 pub fn get_open_windows() -> Vec<WindowInfo> {
     let own_pid = std::process::id() as i32;
-    let mut accepted_ids_by_pid: HashMap<i32, HashSet<u32>> = HashMap::new();
+    let mut state = WindowEnumeration::default();
+    let mut tracker = KnownWindowTracker::new();
 
-    // Pass 1: on-screen windows (the reliable set — no helper noise)
-    let on_screen_opts =
-        K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
-    let on_screen_list = unsafe { CGWindowListCopyWindowInfo(on_screen_opts, K_CG_NULL_WINDOW_ID) };
-    let mut on_screen_ids = std::collections::HashSet::new();
-    let mut on_screen_pids = std::collections::HashSet::new();
-    let mut on_screen_count_by_pid: HashMap<i32, usize> = HashMap::new();
-    let mut windows = Vec::new();
+    collect_on_screen_windows(own_pid, &mut state, &mut tracker);
+    collect_minimized_windows(own_pid, &mut state, &mut tracker);
+    tracker.persist();
 
-    if !on_screen_list.is_null() {
-        let parsed = parse_cg_window_list(on_screen_list, own_pid);
-        unsafe { CFRelease(on_screen_list as *const c_void) };
-        // Collect all PIDs before dedup (needed for pass 2 filtering)
-        for cw in &parsed {
-            on_screen_pids.insert(cw.pid);
-        }
-        for cw in dedup_by_ax(parsed) {
-            on_screen_ids.insert(cw.id);
-            *on_screen_count_by_pid.entry(cw.pid).or_insert(0) += 1;
-            accepted_ids_by_pid.entry(cw.pid).or_default().insert(cw.id);
-            windows.push(WindowInfo {
-                id: cw.id, title: cw.title, app_name: cw.app_name,
-                preview_path: None, icon: None,
-                x: cw.x, y: cw.y, width: cw.w, height: cw.h,
-                is_minimized: false,
-            });
-        }
-    }
-
-    // Pass 2: all windows — pick up minimized ones not in the on-screen set
-    let all_opts = K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
-    let all_list = unsafe { CGWindowListCopyWindowInfo(all_opts, K_CG_NULL_WINDOW_ID) };
-    if !all_list.is_null() {
-        let mut regular_app_cache: HashMap<i32, bool> = HashMap::new();
-        let mut ax_windows_cache: HashMap<i32, Option<HashMap<u32, AxWindowMeta>>> =
-            HashMap::new();
-        let mut minimized_count_by_pid: HashMap<i32, usize> = HashMap::new();
-        let mut seen_minimized_ids = HashSet::new();
-        let known_ids_snapshot = known_window_ids_by_pid()
-            .lock()
-            .ok()
-            .map(|cache| cache.clone())
-            .unwrap_or_default();
-
-        for cw in parse_cg_window_list(all_list, own_pid) {
-            if on_screen_ids.contains(&cw.id) {
-                continue;
-            }
-            if !seen_minimized_ids.insert(cw.id) {
-                continue;
-            }
-            if on_screen_pids.contains(&cw.pid) {
-                if !ax_is_window_minimized(cw.pid, cw.id, &cw.title) {
-                    continue;
-                }
-            }
-            if !cw.has_title {
-                continue;
-            }
-            if cw.w < 1.0 || cw.h < 1.0 {
-                continue;
-            }
-            let is_regular = *regular_app_cache.entry(cw.pid).or_insert_with(|| {
-                is_regular_app(cw.pid)
-            });
-            if !is_regular {
-                continue;
-            }
-            let on_screen_for_pid = on_screen_count_by_pid.get(&cw.pid).copied().unwrap_or(0);
-            if on_screen_for_pid == 0 {
-                if let Some(known_ids) = known_ids_snapshot.get(&cw.pid) {
-                    if !known_ids.is_empty() && !known_ids.contains(&cw.id) {
-                        continue;
-                    }
-                }
-            }
-            let ax_windows = ax_windows_cache
-                .entry(cw.pid)
-                .or_insert_with(|| ax_windows(cw.pid));
-            let mut title = cw.title.clone();
-            if let Some(meta_map) = ax_windows.as_ref() {
-                let Some(meta) = meta_map.get(&cw.id) else {
-                    continue;
-                };
-                if !meta.title.is_empty() {
-                    title = meta.title.clone();
-                }
-                if !meta.is_minimized {
-                    continue;
-                }
-                let allowed_minimized = if on_screen_for_pid == 0 {
-                    known_ids_snapshot
-                        .get(&cw.pid)
-                        .map(|ids| ids.len())
-                        .filter(|count| *count > 0)
-                        .unwrap_or_else(|| {
-                            meta_map.values().filter(|window| window.is_minimized).count()
-                        })
-                } else {
-                    meta_map.values().filter(|window| window.is_minimized).count()
-                };
-                if allowed_minimized == 0 {
-                    continue;
-                }
-                let current_minimized = minimized_count_by_pid.entry(cw.pid).or_insert(0);
-                if *current_minimized >= allowed_minimized {
-                    continue;
-                }
-                *current_minimized += 1;
-            }
-            accepted_ids_by_pid.entry(cw.pid).or_default().insert(cw.id);
-            windows.push(WindowInfo {
-                id: cw.id, title, app_name: cw.app_name,
-                preview_path: None, icon: None,
-                x: cw.x, y: cw.y, width: cw.w, height: cw.h,
-                is_minimized: true,
-            });
-        }
-        unsafe { CFRelease(all_list as *const c_void) };
-    }
-
-    if let Ok(mut known_cache) = known_window_ids_by_pid().lock() {
-        for (pid, ids) in accepted_ids_by_pid {
-            known_cache.insert(pid, ids);
-        }
-    }
-
-    windows
+    state.windows
 }
 
 /// Query the Accessibility API for the number of real windows an app has.
@@ -327,6 +536,7 @@ fn ax_windows(pid: i32) -> Option<HashMap<u32, AxWindowMeta>> {
     #[link(name = "CoreFoundation", kind = "framework")]
     extern "C" {
         static kCFBooleanTrue: *const c_void;
+        static kCFBooleanFalse: *const c_void;
     }
 
     unsafe {
@@ -384,6 +594,16 @@ fn ax_windows(pid: i32) -> Option<HashMap<u32, AxWindowMeta>> {
             let is_minimized = minimized_err == 0
                 && !minimized_value.is_null()
                 && minimized_value == kCFBooleanTrue;
+            if minimized_err == 0
+                && !minimized_value.is_null()
+                && minimized_value != kCFBooleanTrue
+                && minimized_value != kCFBooleanFalse
+            {
+                CFRelease(minimized_value);
+            }
+            if minimized_err != 0 && !minimized_value.is_null() {
+                CFRelease(minimized_value);
+            }
 
             out.insert(
                 id,
