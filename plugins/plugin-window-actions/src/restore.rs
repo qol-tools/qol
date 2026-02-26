@@ -54,15 +54,7 @@ pub fn restore_window<S: WindowSystem, T: MinimizedStateStore>(
         return Ok(());
     }
 
-    #[cfg(target_os = "linux")]
-    {
-        restore_hidden_window_from_stacking(system)?;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        // macOS: stacking_window_ids doesn't find minimized windows via System Events.
-        // Just try generic restore without stacking scan.
-    }
+    restore_hidden_window_from_stacking(system)?;
     Ok(())
 }
 
