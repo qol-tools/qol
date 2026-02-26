@@ -11,7 +11,7 @@ const DEFAULT_CONFIG = {
         card_background_opacity: 0.85,
         show_hotkey_hints: true
     },
-    action_mode: 'sticky',
+    action_mode: 'hold_to_switch',
     reset_selection_on_open: true,
     label: {
         show_app_name: true,
@@ -21,6 +21,7 @@ const DEFAULT_CONFIG = {
 
 const PREVIEW_MODES = new Set(['below_list', 'preview_only']);
 const ACTION_MODES = new Set(['sticky', 'hold_to_switch']);
+let persistedConfig = null;
 
 const elements = {
     saveBtn: document.getElementById('save-btn'),
@@ -186,7 +187,9 @@ async function loadConfig() {
     try {
         const response = await fetch(CONFIG_URL);
         if (response.ok) {
-            config = normalizeConfig(await response.json());
+            const rawConfig = await response.json();
+            persistedConfig = rawConfig;
+            config = normalizeConfig(rawConfig);
         }
     } catch (error) {
         console.warn('Could not load alt-tab config, using defaults', error);
@@ -196,7 +199,22 @@ async function loadConfig() {
 }
 
 async function saveConfig() {
-    const nextConfig = collectConfigFromUI();
+    const editedConfig = collectConfigFromUI();
+    const baseConfig = persistedConfig && typeof persistedConfig === 'object' ? persistedConfig : {};
+    const baseDisplay = baseConfig.display && typeof baseConfig.display === 'object' ? baseConfig.display : {};
+    const baseLabel = baseConfig.label && typeof baseConfig.label === 'object' ? baseConfig.label : {};
+    const nextConfig = {
+        ...baseConfig,
+        ...editedConfig,
+        display: {
+            ...baseDisplay,
+            ...editedConfig.display
+        },
+        label: {
+            ...baseLabel,
+            ...editedConfig.label
+        }
+    };
 
     elements.saveBtn.disabled = true;
     setStatus('Saving...');
@@ -212,6 +230,7 @@ async function saveConfig() {
             throw new Error(`Save failed with status ${response.status}`);
         }
 
+        persistedConfig = nextConfig;
         setStatus('Saved');
         setTimeout(() => setStatus(''), 2000);
     } catch (error) {

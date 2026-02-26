@@ -82,6 +82,7 @@ pub(crate) fn open_picker(
             })
             .unwrap_or(false);
         if cycled {
+            PICKER_VISIBLE.store(true, Ordering::Relaxed);
             cx.activate(true);
             return;
         }
@@ -282,6 +283,7 @@ pub(crate) fn open_picker(
                 })
                 .detach();
             }
+            PICKER_VISIBLE.store(true, Ordering::Relaxed);
             cx.activate(true);
             return;
         }
@@ -388,8 +390,12 @@ pub(crate) fn open_picker(
         eprintln!("[alt-tab/open] failed to open picker window");
         None
     };
-    PICKER_VISIBLE.store(true, Ordering::Relaxed);
-    cx.activate(true);
+    if opened_handle.is_some() {
+        PICKER_VISIBLE.store(true, Ordering::Relaxed);
+        cx.activate(true);
+    } else {
+        PICKER_VISIBLE.store(false, Ordering::Relaxed);
+    }
 
     if transparent_bg {
         platform::disable_window_shadow();
@@ -457,4 +463,3 @@ pub(crate) fn set_macos_accessory_policy() {
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 }
-

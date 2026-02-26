@@ -62,7 +62,7 @@ fn main() {
         return;
     }
 
-    picker::run::run_app(config, rx, is_show || is_show_reverse);
+    picker::run::run_app(config, rx, is_show);
     daemon::cleanup();
 }
 
