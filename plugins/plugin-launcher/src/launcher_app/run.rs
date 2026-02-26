@@ -11,7 +11,7 @@ use crate::platform;
 
 use super::keepalive;
 use super::windows::{activate_or_open_launcher, ActiveLaunchers};
-use super::{LauncherView, PreloadedEntries, SharedEntries};
+use super::{LauncherView, PreloadedEntries, SharedEntries, SharedEntryState};
 
 pub fn run() {
     let show_immediately = std::env::args().any(|a| a == "--show");
@@ -41,7 +41,7 @@ pub fn run() {
         }
         eprintln!("[launcher] daemon listener started");
 
-        let entries: SharedEntries = Arc::new(Mutex::new(Arc::new(PreloadedEntries::empty())));
+        let entries: SharedEntries = Arc::new(Mutex::new(SharedEntryState::pending()));
         let active: Rc<RefCell<ActiveLaunchers>> =
             Rc::new(RefCell::new(ActiveLaunchers::default()));
 
@@ -155,7 +155,7 @@ async fn wait_for_entries(entries: &SharedEntries, cx: &mut AsyncApp) {
     loop {
         let ready = entries
             .lock()
-            .map(|g| !g.app_entries.is_empty())
+            .map(|g| g.loaded_once)
             .unwrap_or(false);
         if ready {
             break;
@@ -200,7 +200,8 @@ fn spawn_prewarm(
                     .await;
 
                 if let Ok(mut guard) = entries.lock() {
-                    *guard = fresh.clone();
+                    guard.entries = fresh.clone();
+                    guard.loaded_once = true;
                 }
 
                 let _ = cx.update(|cx| {
