@@ -521,42 +521,27 @@ fn extract_bgra_from_raw_cgimage(img: CGImageRef, max_w: usize, max_h: usize) ->
 }
 
 pub fn activate_window(window_id: u32) {
-    let opts = K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
-    let list = unsafe { CGWindowListCopyWindowInfo(opts, K_CG_NULL_WINDOW_ID) };
-    if list.is_null() {
-        return;
-    }
-
-    let key_pid = cg_helpers::cfstr(b"kCGWindowOwnerPID");
-    let key_number = cg_helpers::cfstr(b"kCGWindowNumber");
-
-    let count = unsafe { CFArrayGetCount(list) };
-    let mut target_pid: Option<i32> = None;
-
-    for i in 0..count {
-        let dict = unsafe { CFArrayGetValueAtIndex(list, i) } as CFDictionaryRef;
-        if dict.is_null() {
-            continue;
-        }
-        let Some(num) = cg_helpers::dict_get_i32(dict, key_number) else {
-            continue;
-        };
-        if num as u32 == window_id {
-            target_pid = cg_helpers::dict_get_i32(dict, key_pid);
-            break;
-        }
-    }
-
-    unsafe {
-        CFRelease(list as *const c_void);
-        CFRelease(key_pid as *const c_void);
-        CFRelease(key_number as *const c_void);
-    }
-
-    let Some(pid) = target_pid else {
+    let Some((pid, title)) = cg_window_pid_and_title(window_id) else {
         return;
     };
 
+    // Raise the specific AX window so the correct window comes to front,
+    // not just whichever window macOS picks for the app.
+    let win = unsafe { ax_find_window(pid, window_id, &title) };
+    if !win.is_null() {
+        unsafe {
+            #[link(name = "ApplicationServices", kind = "framework")]
+            extern "C" {
+                fn AXUIElementPerformAction(el: *const c_void, action: *const c_void) -> i32;
+            }
+            let raise = cg_helpers::cfstr(b"AXRaise");
+            let _ = AXUIElementPerformAction(win, raise);
+            CFRelease(raise as *const c_void);
+            CFRelease(win);
+        }
+    }
+
+    // Activate the app so it comes to the foreground.
     objc2::rc::autoreleasepool(|_pool| {
         use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
 
