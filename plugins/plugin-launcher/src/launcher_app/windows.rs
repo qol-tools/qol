@@ -92,7 +92,7 @@ impl ActiveLaunchers {
 fn snapshot_entries(entries: &SharedEntries) -> Arc<PreloadedEntries> {
     entries
         .lock()
-        .map(|guard| guard.clone())
+        .map(|guard| guard.entries.clone())
         .unwrap_or_else(|_| Arc::new(PreloadedEntries::empty()))
 }
 

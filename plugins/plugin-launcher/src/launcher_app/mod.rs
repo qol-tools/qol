@@ -28,7 +28,7 @@ pub use input::key_to_input_char;
 const BLUR_GUARD_MS: u64 = 400;
 const TRAIL_DECAY_TICK: Duration = Duration::from_millis(20);
 const LAUNCHER_APP_ID: &str = "qol-tray-launcher";
-pub(crate) type SharedEntries = Arc<Mutex<Arc<PreloadedEntries>>>;
+pub(crate) type SharedEntries = Arc<Mutex<SharedEntryState>>;
 
 pub(crate) struct PreloadedEntries {
     pub(crate) app_entries: Arc<Vec<apps::AppEntry>>,
@@ -47,6 +47,20 @@ impl PreloadedEntries {
         Self {
             app_entries: Arc::new(crate::providers::apps::default_provider().load_entries()),
             file_entries: Arc::new(crate::providers::files::default_provider().load_entries()),
+        }
+    }
+}
+
+pub(crate) struct SharedEntryState {
+    pub(crate) entries: Arc<PreloadedEntries>,
+    pub(crate) loaded_once: bool,
+}
+
+impl SharedEntryState {
+    pub(crate) fn pending() -> Self {
+        Self {
+            entries: Arc::new(PreloadedEntries::empty()),
+            loaded_once: false,
         }
     }
 }
