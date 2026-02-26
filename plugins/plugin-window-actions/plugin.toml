@@ -3,7 +3,7 @@ name = "Window Actions"
 description = "Window snapping, centering, and multi-monitor management"
 version = "1.2.2"
 author = "KMRH47"
-platforms = ["linux"]
+platforms = ["linux", "macos"]
 
 [runtime]
 command = "window-actions"

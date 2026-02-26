@@ -46,6 +46,11 @@ impl MinimizedStateStore for FileMinimizedStateStore {
 }
 
 pub fn default_state_file_path() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    let base = env::var_os("TMPDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    #[cfg(not(target_os = "macos"))]
     let base = env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/tmp"));
@@ -77,14 +82,16 @@ fn parse_minimized_window_record(raw: &str) -> Option<MinimizedWindowRecord> {
 }
 
 fn normalize_window_id(window_id: &str) -> Option<String> {
-    if is_window_id(window_id) {
+    if window_id.starts_with("pid:") {
+        return Some(window_id.to_string());
+    }
+    if is_x11_window_id(window_id) {
         return Some(window_id.to_ascii_lowercase());
     }
-
     let numeric = window_id.trim().parse::<u64>().ok()?;
     Some(format!("0x{numeric:x}"))
 }
 
-fn is_window_id(id: &str) -> bool {
+fn is_x11_window_id(id: &str) -> bool {
     id.starts_with("0x") && id.len() > 2 && id.chars().skip(2).all(|c| c.is_ascii_hexdigit())
 }
