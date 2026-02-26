@@ -29,9 +29,15 @@ impl TapState {
     pub fn swap_config(&self, new_config: ResolvedConfig) {
         let new_ptr = Box::into_raw(Box::new(new_config));
         let old_ptr = self.config.swap(new_ptr, Ordering::AcqRel);
+        struct OldConfig(*mut ResolvedConfig);
+        unsafe impl Send for OldConfig {}
+        impl OldConfig {
+            unsafe fn free(self) { drop(unsafe { Box::from_raw(self.0) }); }
+        }
+        let old = OldConfig(old_ptr);
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(100));
-            drop(unsafe { Box::from_raw(old_ptr) });
+            unsafe { old.free() };
         });
     }
 
@@ -56,7 +62,30 @@ pub fn start_tap(state: Arc<TapState>) {
         .expect("failed to spawn tap thread");
 }
 
+fn wait_for_accessibility() {
+    extern "C" {
+        fn AXIsProcessTrusted() -> bool;
+    }
+
+    if unsafe { AXIsProcessTrusted() } {
+        return;
+    }
+
+    eprintln!("[keyremap] waiting for Accessibility permission...");
+    eprintln!("[keyremap] grant in System Settings > Privacy & Security > Accessibility");
+
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        if unsafe { AXIsProcessTrusted() } {
+            eprintln!("[keyremap] Accessibility permission granted");
+            return;
+        }
+    }
+}
+
 fn run_tap(state: Arc<TapState>) {
+    wait_for_accessibility();
+
     let events = vec![
         CGEventType::KeyDown,
         CGEventType::KeyUp,
@@ -78,8 +107,7 @@ fn run_tap(state: Arc<TapState>) {
     );
 
     if result.is_err() {
-        eprintln!("[keyremap] failed to create event tap");
-        eprintln!("[keyremap] grant Accessibility permission in System Settings > Privacy & Security > Accessibility");
+        eprintln!("[keyremap] failed to create event tap (even with Accessibility granted)");
         std::process::exit(1);
     }
 }
@@ -101,6 +129,9 @@ fn handle_event(
     }
 
     let config = state.config();
+    if !config.enabled {
+        return CallbackResult::Keep;
+    }
     let bundle_id = state.app_tracker.bundle_id();
 
     match event_type {

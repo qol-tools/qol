@@ -1,58 +1,80 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-const CONFIG_DIR: &str = "plugin-keyremap";
-const CONFIG_FILE: &str = "config.toml";
+const PLUGIN_NAMES: &[&str] = &["plugin-keyremap", "keyremap"];
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct RemapConfig {
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
     pub excluded_apps: Vec<String>,
     pub key_rules: Vec<KeyRule>,
     pub mouse_rules: Vec<MouseRule>,
     pub scroll_rules: Vec<ScrollRule>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct KeyRule {
-    pub from_mods: Vec<String>,
-    pub from_key: String,
-    pub to_mods: Vec<String>,
-    pub to_key: String,
+fn default_enabled() -> bool {
+    true
 }
 
-#[derive(Debug, Clone, Deserialize)]
+fn builtin_defaults() -> RemapConfig {
+    serde_json::from_str(include_str!("../config/default.json"))
+        .expect("embedded default config must parse")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum KeyRule {
+    Batch {
+        from_mods: Vec<String>,
+        to_mods: Vec<String>,
+        keys: Vec<String>,
+    },
+    Single {
+        from_mods: Vec<String>,
+        from_key: String,
+        to_mods: Vec<String>,
+        to_key: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MouseRule {
     pub from_mods: Vec<String>,
     pub button: String,
     pub to_mods: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScrollRule {
     pub from_mods: Vec<String>,
     pub to_mods: Vec<String>,
 }
 
 pub fn load_config() -> RemapConfig {
-    if let Some(path) = config_path() {
-        match std::fs::read_to_string(&path) {
-            Ok(contents) => match toml::from_str(&contents) {
-                Ok(config) => return config,
-                Err(e) => eprintln!("[keyremap] config parse error: {e}"),
-            },
-            Err(e) => eprintln!("[keyremap] config read error: {e}"),
-        }
-    }
-    RemapConfig::default()
-}
+    let paths = qol_plugin_api::config::plugin_config_paths(PLUGIN_NAMES);
+    let has_file = paths.iter().any(|p| p.exists());
 
-fn config_path() -> Option<std::path::PathBuf> {
-    let config_dir = dirs::config_dir()?.join("qol-tray").join("plugins").join(CONFIG_DIR);
-    let path = config_dir.join(CONFIG_FILE);
-    if path.exists() {
-        return Some(path);
-    }
-    None
+    let config = if has_file {
+        qol_plugin_api::config::load_plugin_config(PLUGIN_NAMES)
+    } else {
+        let defaults = builtin_defaults();
+        if let Some(path) = paths.first() {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            match serde_json::to_string_pretty(&defaults) {
+                Ok(json) => {
+                    let _ = std::fs::write(path, json);
+                    eprintln!("[keyremap] wrote default config to {}", path.display());
+                }
+                Err(e) => eprintln!("[keyremap] failed to write default config: {e}"),
+            }
+        }
+        defaults
+    };
+
+    config
 }
 
 #[cfg(test)]
@@ -61,8 +83,9 @@ mod tests {
 
     #[test]
     fn parse_full_config() {
-        let toml = include_str!("../config/default.toml");
-        let config: RemapConfig = toml::from_str(toml).expect("default config should parse");
+        let json = include_str!("../config/default.json");
+        let config: RemapConfig = serde_json::from_str(json).expect("default config should parse");
+        assert!(config.enabled);
         assert!(!config.excluded_apps.is_empty());
         assert!(!config.key_rules.is_empty());
         assert!(!config.mouse_rules.is_empty());
@@ -71,20 +94,65 @@ mod tests {
 
     #[test]
     fn parse_empty_config() {
-        let config: RemapConfig = toml::from_str("").expect("empty config should parse");
+        let config: RemapConfig =
+            serde_json::from_str("{}").expect("empty config should parse");
+        assert!(config.enabled);
         assert!(config.excluded_apps.is_empty());
         assert!(config.key_rules.is_empty());
-        assert!(config.mouse_rules.is_empty());
-        assert!(config.scroll_rules.is_empty());
     }
 
     #[test]
     fn parse_partial_config() {
-        let toml = r#"
-            excluded_apps = ["com.example.app"]
-        "#;
-        let config: RemapConfig = toml::from_str(toml).expect("partial config should parse");
+        let json = r#"{ "excluded_apps": ["com.example.app"] }"#;
+        let config: RemapConfig = serde_json::from_str(json).expect("partial config should parse");
         assert_eq!(config.excluded_apps.len(), 1);
         assert!(config.key_rules.is_empty());
+    }
+
+    #[test]
+    fn builtin_defaults_are_complete() {
+        let config = builtin_defaults();
+        assert!(config.enabled);
+        assert!(!config.key_rules.is_empty());
+        assert!(!config.mouse_rules.is_empty());
+        assert!(!config.scroll_rules.is_empty());
+    }
+
+    #[test]
+    fn parse_batch_rule() {
+        let json = r#"{ "from_mods": ["ctrl"], "to_mods": ["cmd"], "keys": ["c", "v", "x"] }"#;
+        let rule: KeyRule = serde_json::from_str(json).expect("batch rule should parse");
+        match rule {
+            KeyRule::Batch { keys, .. } => assert_eq!(keys.len(), 3),
+            _ => panic!("expected Batch variant"),
+        }
+    }
+
+    #[test]
+    fn parse_single_rule() {
+        let json = r#"{ "from_mods": ["ctrl"], "from_key": "y", "to_mods": ["cmd", "shift"], "to_key": "z" }"#;
+        let rule: KeyRule = serde_json::from_str(json).expect("single rule should parse");
+        match rule {
+            KeyRule::Single { from_key, to_key, .. } => {
+                assert_eq!(from_key, "y");
+                assert_eq!(to_key, "z");
+            }
+            _ => panic!("expected Single variant"),
+        }
+    }
+
+    #[test]
+    fn roundtrip_batch_rule() {
+        let rule = KeyRule::Batch {
+            from_mods: vec!["ctrl".into()],
+            to_mods: vec!["cmd".into()],
+            keys: vec!["c".into(), "v".into()],
+        };
+        let json = serde_json::to_string(&rule).unwrap();
+        let parsed: KeyRule = serde_json::from_str(&json).unwrap();
+        match parsed {
+            KeyRule::Batch { keys, .. } => assert_eq!(keys, vec!["c", "v"]),
+            _ => panic!("expected Batch variant after roundtrip"),
+        }
     }
 }

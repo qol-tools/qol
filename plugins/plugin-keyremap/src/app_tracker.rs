@@ -35,7 +35,7 @@ fn frontmost_bundle_id() -> Option<String> {
     use objc2::rc::autoreleasepool;
     use objc2_app_kit::{NSRunningApplication, NSWorkspace};
 
-    autoreleasepool(|_| unsafe {
+    autoreleasepool(|_| {
         let workspace = NSWorkspace::sharedWorkspace();
         let app: objc2::rc::Retained<NSRunningApplication> =
             workspace.frontmostApplication()?;

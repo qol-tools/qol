@@ -1,0 +1,359 @@
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    background:
+        radial-gradient(circle at 15% 10%, #2f3a51 0%, transparent 34%),
+        radial-gradient(circle at 85% 90%, #1a2937 0%, transparent 30%),
+        linear-gradient(150deg, #0b1018 0%, #121a27 45%, #0f141f 100%);
+    color: #e8eef9;
+    font-family: "Segoe UI", "SF Pro Text", sans-serif;
+}
+
+.panel {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 2rem 1.2rem 2.6rem;
+}
+
+.hero h1 {
+    margin: 0;
+    letter-spacing: 0.02em;
+    font-size: 1.8rem;
+}
+
+.hero p {
+    margin: 0.45rem 0 0;
+    color: #a8b7cf;
+}
+
+.card {
+    margin-top: 1rem;
+    background: rgba(14, 22, 35, 0.74);
+    border: 1px solid rgba(111, 139, 188, 0.25);
+    border-radius: 14px;
+    padding: 1rem;
+    backdrop-filter: blur(2px);
+}
+
+.card h2 {
+    margin: 0 0 0.3rem;
+    color: #b8cff9;
+    font-size: 1rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.card > p {
+    margin: 0 0 0.75rem;
+    color: #9fb1cf;
+    font-size: 0.85rem;
+    line-height: 1.3;
+}
+
+/* Excluded apps list */
+.item-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-bottom: 0.6rem;
+}
+
+.item-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 0.7rem;
+    background: rgba(8, 14, 24, 0.6);
+    border: 1px solid rgba(107, 129, 176, 0.2);
+    border-radius: 8px;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 0.85rem;
+    color: #d7e4ff;
+}
+
+.btn-remove {
+    background: none;
+    border: none;
+    color: #ff8989;
+    cursor: pointer;
+    font-size: 1rem;
+    padding: 0 0.3rem;
+    opacity: 0.6;
+}
+
+.btn-remove:hover {
+    opacity: 1;
+}
+
+.add-row {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.text-input {
+    flex: 1;
+    padding: 0.45rem 0.7rem;
+    background: rgba(8, 14, 24, 0.8);
+    border: 1px solid rgba(107, 129, 176, 0.3);
+    border-radius: 8px;
+    color: #e8eef9;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 0.85rem;
+}
+
+.text-input:focus {
+    outline: none;
+    border-color: #7db3ff;
+}
+
+.text-input::placeholder {
+    color: #5a6a82;
+}
+
+.btn-add {
+    padding: 0.45rem 0.8rem;
+    background: rgba(63, 120, 223, 0.3);
+    border: 1px solid rgba(125, 179, 255, 0.3);
+    border-radius: 8px;
+    color: #7db3ff;
+    cursor: pointer;
+    font-size: 0.85rem;
+    white-space: nowrap;
+}
+
+.btn-add:hover {
+    background: rgba(63, 120, 223, 0.5);
+}
+
+/* Rules list */
+.rules-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-bottom: 0.6rem;
+}
+
+.rule-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.45rem 0.7rem;
+    background: rgba(8, 14, 24, 0.6);
+    border: 1px solid rgba(107, 129, 176, 0.2);
+    border-radius: 8px;
+    flex-wrap: wrap;
+}
+
+.rule-side {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+}
+
+.arrow {
+    color: #7db3ff;
+    font-size: 0.9rem;
+    flex-shrink: 0;
+}
+
+.rule-row .arrow {
+    margin: 0 0.2rem;
+}
+
+.rule-row .btn-remove {
+    margin-left: auto;
+}
+
+/* Modifier chips */
+.mod-chip {
+    display: inline-block;
+    padding: 0.2rem 0.45rem;
+    background: rgba(107, 129, 176, 0.15);
+    border: 1px solid rgba(107, 129, 176, 0.3);
+    border-radius: 5px;
+    color: #9fb1cf;
+    font-size: 0.75rem;
+    font-family: "SF Mono", "Fira Code", monospace;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.15s;
+}
+
+.mod-chip.active,
+.mod-chip[data-active="true"] {
+    background: rgba(63, 120, 223, 0.4);
+    border-color: #7db3ff;
+    color: #d7e4ff;
+}
+
+.mod-chip-static {
+    display: inline-block;
+    padding: 0.2rem 0.45rem;
+    background: rgba(63, 120, 223, 0.3);
+    border: 1px solid rgba(125, 179, 255, 0.3);
+    border-radius: 5px;
+    color: #d7e4ff;
+    font-size: 0.75rem;
+    font-family: "SF Mono", "Fira Code", monospace;
+}
+
+.key-label {
+    color: #e8eef9;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 0.85rem;
+    padding: 0.15rem 0.4rem;
+    background: rgba(107, 129, 176, 0.1);
+    border-radius: 4px;
+}
+
+.key-input {
+    width: 70px;
+    padding: 0.3rem 0.5rem;
+    background: rgba(8, 14, 24, 0.8);
+    border: 1px solid rgba(107, 129, 176, 0.3);
+    border-radius: 6px;
+    color: #e8eef9;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 0.8rem;
+}
+
+.key-input:focus {
+    outline: none;
+    border-color: #7db3ff;
+}
+
+select.key-input {
+    cursor: pointer;
+}
+
+/* Add rule row */
+.add-rule-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 0;
+    border-top: 1px dashed rgba(123, 151, 199, 0.2);
+    margin-top: 0.3rem;
+    flex-wrap: wrap;
+}
+
+.mod-toggles {
+    display: flex;
+    gap: 0.25rem;
+}
+
+/* Footer actions */
+.actions {
+    margin-top: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+}
+
+.save {
+    border: 0;
+    border-radius: 10px;
+    padding: 0.65rem 1.3rem;
+    background: linear-gradient(135deg, #3f78df, #2f57b8);
+    color: #f7fbff;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.save:disabled {
+    opacity: 0.7;
+    cursor: default;
+}
+
+#save-status {
+    color: #86d5a3;
+    min-height: 1em;
+    font-size: 0.92rem;
+}
+
+#save-status.error {
+    color: #ff8989;
+}
+
+/* Key chips (batch rule keys) */
+.key-chip {
+    display: inline-block;
+    padding: 0.15rem 0.4rem;
+    background: rgba(107, 129, 176, 0.15);
+    border: 1px solid rgba(107, 129, 176, 0.25);
+    border-radius: 4px;
+    color: #e8eef9;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 0.8rem;
+}
+
+.key-label-hint {
+    color: #5a6a82;
+    font-size: 0.8rem;
+    font-style: italic;
+}
+
+.batch-rule .rule-side {
+    gap: 0.25rem;
+}
+
+/* Tab switcher for add forms */
+.add-rule-tabs {
+    display: flex;
+    gap: 0.3rem;
+    margin-top: 0.5rem;
+    padding-bottom: 0.3rem;
+}
+
+.tab-btn {
+    padding: 0.3rem 0.65rem;
+    background: rgba(107, 129, 176, 0.1);
+    border: 1px solid rgba(107, 129, 176, 0.2);
+    border-radius: 6px;
+    color: #7a8ea8;
+    cursor: pointer;
+    font-size: 0.78rem;
+    transition: all 0.15s;
+}
+
+.tab-btn.active {
+    background: rgba(63, 120, 223, 0.25);
+    border-color: rgba(125, 179, 255, 0.35);
+    color: #b8cff9;
+}
+
+.keys-input {
+    min-width: 180px;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* Empty state */
+.empty-state {
+    color: #5a6a82;
+    font-size: 0.85rem;
+    font-style: italic;
+    padding: 0.5rem 0;
+}
+
+@media (max-width: 640px) {
+    .panel {
+        padding: 1rem;
+    }
+
+    .hero h1 {
+        font-size: 1.45rem;
+    }
+
+    .add-rule-row {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}

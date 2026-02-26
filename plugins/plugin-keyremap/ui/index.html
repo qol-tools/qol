@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Key Remap Settings</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <main class="panel">
+        <header class="hero">
+            <h1>Key Remap Settings</h1>
+            <p>Configure keyboard, mouse, and scroll remapping rules for a Windows-like experience on macOS.</p>
+        </header>
+
+        <section class="card">
+            <label class="mode-option">
+                <input type="checkbox" id="enabled-toggle" checked>
+                <span class="mode-copy">
+                    <strong>Enable Remapping</strong>
+                    <small>Master switch. When off, all events pass through unmodified.</small>
+                </span>
+            </label>
+        </section>
+
+        <section class="card">
+            <h2>Excluded Apps</h2>
+            <p>Apps that handle Ctrl natively (terminals, IDEs). Remapping is bypassed for these bundle IDs.</p>
+            <div id="excluded-apps-list" class="item-list"></div>
+            <div class="add-row">
+                <input type="text" id="new-app-input" placeholder="com.example.app" class="text-input">
+                <button id="add-app-btn" class="btn-add">+ Add</button>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Key Rules</h2>
+            <p>Remap keyboard shortcuts. First matching rule wins.</p>
+            <div id="key-rules-list" class="rules-list"></div>
+            <div class="add-rule-tabs">
+                <button class="tab-btn active" data-tab="batch">Batch (same key)</button>
+                <button class="tab-btn" data-tab="single">Single (key changes)</button>
+            </div>
+            <div class="add-rule-row" id="add-key-batch" data-tab-content="batch">
+                <div class="rule-side">
+                    <div class="mod-toggles" data-target="new-key-batch-from">
+                        <button class="mod-chip" data-mod="ctrl">ctrl</button>
+                        <button class="mod-chip" data-mod="shift">shift</button>
+                        <button class="mod-chip" data-mod="alt">alt</button>
+                        <button class="mod-chip" data-mod="cmd">cmd</button>
+                    </div>
+                </div>
+                <span class="arrow">&rarr;</span>
+                <div class="rule-side">
+                    <div class="mod-toggles" data-target="new-key-batch-to">
+                        <button class="mod-chip" data-mod="ctrl">ctrl</button>
+                        <button class="mod-chip" data-mod="shift">shift</button>
+                        <button class="mod-chip" data-mod="alt">alt</button>
+                        <button class="mod-chip" data-mod="cmd">cmd</button>
+                    </div>
+                </div>
+                <input type="text" id="new-key-batch-keys" placeholder="keys (comma-separated, e.g. c, v, x)" class="text-input keys-input">
+                <button id="add-key-batch-btn" class="btn-add">+ Add</button>
+            </div>
+            <div class="add-rule-row hidden" id="add-key-single" data-tab-content="single">
+                <div class="rule-side">
+                    <div class="mod-toggles" data-target="new-key-from">
+                        <button class="mod-chip" data-mod="ctrl">ctrl</button>
+                        <button class="mod-chip" data-mod="shift">shift</button>
+                        <button class="mod-chip" data-mod="alt">alt</button>
+                        <button class="mod-chip" data-mod="cmd">cmd</button>
+                    </div>
+                    <input type="text" id="new-key-from-key" placeholder="from key" class="key-input">
+                </div>
+                <span class="arrow">&rarr;</span>
+                <div class="rule-side">
+                    <div class="mod-toggles" data-target="new-key-to">
+                        <button class="mod-chip" data-mod="ctrl">ctrl</button>
+                        <button class="mod-chip" data-mod="shift">shift</button>
+                        <button class="mod-chip" data-mod="alt">alt</button>
+                        <button class="mod-chip" data-mod="cmd">cmd</button>
+                    </div>
+                    <input type="text" id="new-key-to-key" placeholder="to key" class="key-input">
+                </div>
+                <button id="add-key-rule-btn" class="btn-add">+ Add</button>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Mouse Rules</h2>
+            <p>Remap modifier keys for mouse clicks (e.g. Ctrl+click to Cmd+click).</p>
+            <div id="mouse-rules-list" class="rules-list"></div>
+            <div class="add-rule-row">
+                <div class="rule-side">
+                    <div class="mod-toggles" data-target="new-mouse-from">
+                        <button class="mod-chip" data-mod="ctrl">ctrl</button>
+                        <button class="mod-chip" data-mod="shift">shift</button>
+                        <button class="mod-chip" data-mod="alt">alt</button>
+                        <button class="mod-chip" data-mod="cmd">cmd</button>
+                    </div>
+                    <select id="new-mouse-button" class="key-input">
+                        <option value="left">left</option>
+                        <option value="right">right</option>
+                    </select>
+                </div>
+                <span class="arrow">&rarr;</span>
+                <div class="rule-side">
+                    <div class="mod-toggles" data-target="new-mouse-to">
+                        <button class="mod-chip" data-mod="ctrl">ctrl</button>
+                        <button class="mod-chip" data-mod="shift">shift</button>
+                        <button class="mod-chip" data-mod="alt">alt</button>
+                        <button class="mod-chip" data-mod="cmd">cmd</button>
+                    </div>
+                </div>
+                <button id="add-mouse-rule-btn" class="btn-add">+ Add</button>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Scroll Rules</h2>
+            <p>Remap modifier keys for scroll events (e.g. Ctrl+scroll to Cmd+scroll for zoom).</p>
+            <div id="scroll-rules-list" class="rules-list"></div>
+            <div class="add-rule-row">
+                <div class="rule-side">
+                    <div class="mod-toggles" data-target="new-scroll-from">
+                        <button class="mod-chip" data-mod="ctrl">ctrl</button>
+                        <button class="mod-chip" data-mod="shift">shift</button>
+                        <button class="mod-chip" data-mod="alt">alt</button>
+                        <button class="mod-chip" data-mod="cmd">cmd</button>
+                    </div>
+                </div>
+                <span class="arrow">&rarr;</span>
+                <div class="rule-side">
+                    <div class="mod-toggles" data-target="new-scroll-to">
+                        <button class="mod-chip" data-mod="ctrl">ctrl</button>
+                        <button class="mod-chip" data-mod="shift">shift</button>
+                        <button class="mod-chip" data-mod="alt">alt</button>
+                        <button class="mod-chip" data-mod="cmd">cmd</button>
+                    </div>
+                </div>
+                <button id="add-scroll-rule-btn" class="btn-add">+ Add</button>
+            </div>
+        </section>
+
+        <footer class="actions">
+            <button id="save-btn" class="save">Save Settings</button>
+            <span id="save-status"></span>
+        </footer>
+    </main>
+
+    <script type="module" src="app.js"></script>
+</body>
+
+</html>

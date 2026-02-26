@@ -34,6 +34,7 @@ pub enum MouseButton {
 }
 
 pub struct ResolvedConfig {
+    pub enabled: bool,
     pub excluded_apps: HashSet<String>,
     pub key_rules: Vec<ResolvedKeyRule>,
     pub mouse_rules: Vec<ResolvedMouseRule>,
@@ -78,8 +79,9 @@ pub enum ScrollAction {
 
 pub fn resolve(config: &RemapConfig) -> ResolvedConfig {
     ResolvedConfig {
+        enabled: config.enabled,
         excluded_apps: config.excluded_apps.iter().cloned().collect(),
-        key_rules: config.key_rules.iter().filter_map(resolve_key_rule).collect(),
+        key_rules: config.key_rules.iter().flat_map(resolve_key_rule).collect(),
         mouse_rules: config.mouse_rules.iter().filter_map(resolve_mouse_rule).collect(),
         scroll_rules: config.scroll_rules.iter().filter_map(resolve_scroll_rule).collect(),
     }
@@ -152,15 +154,34 @@ fn parse_modifiers(mods: &[String]) -> Modifiers {
     result
 }
 
-fn resolve_key_rule(rule: &KeyRule) -> Option<ResolvedKeyRule> {
-    let from_key = keycode::parse_key(&rule.from_key)?;
-    let to_key = keycode::parse_key(&rule.to_key)?;
-    Some(ResolvedKeyRule {
-        from_mods: parse_modifiers(&rule.from_mods),
-        from_key,
-        to_mods: parse_modifiers(&rule.to_mods),
-        to_key,
-    })
+fn resolve_key_rule(rule: &KeyRule) -> Vec<ResolvedKeyRule> {
+    match rule {
+        KeyRule::Batch { from_mods, to_mods, keys } => {
+            let from = parse_modifiers(from_mods);
+            let to = parse_modifiers(to_mods);
+            keys.iter()
+                .filter_map(|k| {
+                    let code = keycode::parse_key(k)?;
+                    Some(ResolvedKeyRule {
+                        from_mods: from,
+                        from_key: code,
+                        to_mods: to,
+                        to_key: code,
+                    })
+                })
+                .collect()
+        }
+        KeyRule::Single { from_mods, from_key, to_mods, to_key } => {
+            let Some(fk) = keycode::parse_key(from_key) else { return vec![] };
+            let Some(tk) = keycode::parse_key(to_key) else { return vec![] };
+            vec![ResolvedKeyRule {
+                from_mods: parse_modifiers(from_mods),
+                from_key: fk,
+                to_mods: parse_modifiers(to_mods),
+                to_key: tk,
+            }]
+        }
+    }
 }
 
 fn resolve_mouse_rule(rule: &MouseRule) -> Option<ResolvedMouseRule> {
@@ -193,7 +214,7 @@ mod tests {
 
     fn test_config() -> ResolvedConfig {
         let raw: RemapConfig =
-            toml::from_str(include_str!("../config/default.toml")).unwrap();
+            serde_json::from_str(include_str!("../config/default.json")).unwrap();
         resolve(&raw)
     }
 
@@ -256,7 +277,14 @@ mod tests {
             key in arb_keycode(),
             app in arb_bundle_id(),
         ) {
-            let config = resolve(&RemapConfig::default());
+            let empty = RemapConfig {
+                enabled: true,
+                excluded_apps: vec![],
+                key_rules: vec![],
+                mouse_rules: vec![],
+                scroll_rules: vec![],
+            };
+            let config = resolve(&empty);
             prop_assert_eq!(
                 process_key_event(&config, mods, key, &app),
                 KeyAction::Passthrough
@@ -292,15 +320,15 @@ mod tests {
             })
         ) {
             let raw = RemapConfig {
+                enabled: true,
                 excluded_apps: vec![],
                 key_rules: vec![
-                    crate::config::KeyRule {
+                    crate::config::KeyRule::Batch {
                         from_mods: vec!["ctrl".into()],
-                        from_key: "c".into(),
                         to_mods: vec!["cmd".into()],
-                        to_key: "c".into(),
+                        keys: vec!["c".into()],
                     },
-                    crate::config::KeyRule {
+                    crate::config::KeyRule::Single {
                         from_mods: vec!["ctrl".into()],
                         from_key: "c".into(),
                         to_mods: vec!["alt".into()],
