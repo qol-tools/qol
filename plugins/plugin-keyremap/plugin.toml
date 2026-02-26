@@ -1,0 +1,26 @@
+[plugin]
+name = "Key Remap"
+description = "Remap keyboard and mouse shortcuts (Ctrl->Cmd, etc.)"
+version = "0.1.0"
+author = "KMRH47"
+platforms = ["macos"]
+
+[runtime]
+command = "keyremap"
+actions = { reload = ["--reload"] }
+
+[daemon]
+enabled = true
+command = "keyremap"
+socket = "/tmp/qol-keyremap.sock"
+
+[menu]
+label = "Key Remap"
+items = [
+    { type = "action", id = "reload", label = "Reload Config", action = "run" },
+]
+
+[[dependencies.binaries]]
+name = "keyremap"
+repo = "qol-tools/plugin-keyremap"
+pattern = "keyremap-{os}-{arch}"

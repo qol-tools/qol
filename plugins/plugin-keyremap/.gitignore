@@ -1,0 +1,8 @@
+/target
+Cargo.lock
+keyremap
+keyremap.new
+/.vscode
+*.log
+.idea/
+.cargo/config.toml
