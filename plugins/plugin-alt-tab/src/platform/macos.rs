@@ -206,10 +206,12 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
             if on_screen_ids.contains(&cw.id) {
                 continue; // already included as on-screen
             }
-            // If this app already has on-screen windows, its off-screen windows
-            // are likely tabs/splits (e.g. Kitty), not truly minimized.
+            // If this app already has on-screen windows, verify via AX that this
+            // off-screen window is genuinely minimized (not a tab/split artifact).
             if on_screen_pids.contains(&cw.pid) {
-                continue;
+                if !ax_is_window_minimized(cw.pid, cw.id, &cw.title) {
+                    continue;
+                }
             }
             // Only include off-screen windows that look like real user windows:
             // must have a real window title and reasonable dimensions
@@ -276,6 +278,40 @@ fn ax_window_count(pid: i32) -> Option<usize> {
         CFRelease(app);
         Some(count.max(0) as usize)
     }
+}
+
+/// Check if a specific off-screen CG window is truly minimized via AX.
+fn ax_is_window_minimized(pid: i32, cg_window_id: u32, title: &str) -> bool {
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn AXUIElementCopyAttributeValue(
+            el: *const c_void,
+            attr: *const c_void,
+            val: *mut *const c_void,
+        ) -> i32;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        static kCFBooleanTrue: *const c_void;
+    }
+
+    let win = unsafe { ax_find_window(pid, cg_window_id, title) };
+    if win.is_null() {
+        return false;
+    }
+    let minimized_attr = cg_helpers::cfstr(b"AXMinimized");
+    let mut value: *const c_void = std::ptr::null();
+    let result = unsafe {
+        let err = AXUIElementCopyAttributeValue(win, minimized_attr, &mut value);
+        let is_min = err == 0 && !value.is_null() && value == kCFBooleanTrue;
+        if !value.is_null() && err == 0 {
+            // CFBooleans are singletons, don't release them
+        }
+        CFRelease(minimized_attr as *const c_void);
+        CFRelease(win);
+        is_min
+    };
+    result
 }
 
 /// Deduplicate CG windows using the Accessibility API.
@@ -527,13 +563,27 @@ pub fn activate_window(window_id: u32) {
 
     // Raise the specific AX window so the correct window comes to front,
     // not just whichever window macOS picks for the app.
+    // Also unminimize if needed — AXRaise alone won't restore a minimized window.
     let win = unsafe { ax_find_window(pid, window_id, &title) };
     if !win.is_null() {
         unsafe {
             #[link(name = "ApplicationServices", kind = "framework")]
             extern "C" {
                 fn AXUIElementPerformAction(el: *const c_void, action: *const c_void) -> i32;
+                fn AXUIElementSetAttributeValue(
+                    el: *const c_void,
+                    attr: *const c_void,
+                    val: *const c_void,
+                ) -> i32;
             }
+            #[link(name = "CoreFoundation", kind = "framework")]
+            extern "C" {
+                static kCFBooleanFalse: *const c_void;
+            }
+            let minimized_attr = cg_helpers::cfstr(b"AXMinimized");
+            let _ = AXUIElementSetAttributeValue(win, minimized_attr, kCFBooleanFalse);
+            CFRelease(minimized_attr as *const c_void);
+
             let raise = cg_helpers::cfstr(b"AXRaise");
             let _ = AXUIElementPerformAction(win, raise);
             CFRelease(raise as *const c_void);
