@@ -15,34 +15,32 @@ pub struct TapState {
     app_tracker: Arc<AppTracker>,
 }
 
-unsafe impl Send for TapState {}
-unsafe impl Sync for TapState {}
-
 impl TapState {
     pub fn new(config: ResolvedConfig, app_tracker: Arc<AppTracker>) -> Self {
+        let config = Arc::new(config);
         Self {
-            config: AtomicPtr::new(Box::into_raw(Box::new(config))),
+            config: AtomicPtr::new(Arc::into_raw(config) as *mut ResolvedConfig),
             app_tracker,
         }
     }
 
     pub fn swap_config(&self, new_config: ResolvedConfig) {
-        let new_ptr = Box::into_raw(Box::new(new_config));
+        let new_ptr = Arc::into_raw(Arc::new(new_config)) as *mut ResolvedConfig;
         let old_ptr = self.config.swap(new_ptr, Ordering::AcqRel);
-        struct OldConfig(*mut ResolvedConfig);
-        unsafe impl Send for OldConfig {}
-        impl OldConfig {
-            unsafe fn free(self) { drop(unsafe { Box::from_raw(self.0) }); }
+        if !old_ptr.is_null() {
+            unsafe {
+                drop(Arc::from_raw(old_ptr));
+            }
         }
-        let old = OldConfig(old_ptr);
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            unsafe { old.free() };
-        });
     }
 
-    fn config(&self) -> &ResolvedConfig {
-        unsafe { &*self.config.load(Ordering::Acquire) }
+    fn config(&self) -> Arc<ResolvedConfig> {
+        let ptr = self.config.load(Ordering::Acquire);
+        assert!(!ptr.is_null(), "TapState config pointer should never be null");
+        unsafe {
+            Arc::increment_strong_count(ptr);
+            Arc::from_raw(ptr)
+        }
     }
 }
 
@@ -50,7 +48,9 @@ impl Drop for TapState {
     fn drop(&mut self) {
         let ptr = *self.config.get_mut();
         if !ptr.is_null() {
-            drop(unsafe { Box::from_raw(ptr) });
+            unsafe {
+                drop(Arc::from_raw(ptr));
+            }
         }
     }
 }
@@ -136,16 +136,16 @@ fn handle_event(
 
     match event_type {
         CGEventType::KeyDown | CGEventType::KeyUp => {
-            handle_key_event(config, event, &bundle_id)
+            handle_key_event(config.as_ref(), event, &bundle_id)
         }
         CGEventType::LeftMouseDown | CGEventType::LeftMouseUp => {
-            handle_mouse_event(config, event, MouseButton::Left, &bundle_id)
+            handle_mouse_event(config.as_ref(), event, MouseButton::Left, &bundle_id)
         }
         CGEventType::RightMouseDown | CGEventType::RightMouseUp => {
-            handle_mouse_event(config, event, MouseButton::Right, &bundle_id)
+            handle_mouse_event(config.as_ref(), event, MouseButton::Right, &bundle_id)
         }
         CGEventType::ScrollWheel => {
-            handle_scroll_event(config, event, &bundle_id)
+            handle_scroll_event(config.as_ref(), event, &bundle_id)
         }
         _ => CallbackResult::Keep,
     }
