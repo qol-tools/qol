@@ -8,7 +8,8 @@ const DEFAULT_CONFIG = {
         preview_fps: 10,
         transparent_background: false,
         card_background_color: '1a1e2a',
-        card_background_opacity: 0.85
+        card_background_opacity: 0.85,
+        show_hotkey_hints: true
     },
     action_mode: 'sticky',
     reset_selection_on_open: true,
@@ -54,6 +55,10 @@ function normalizeConfig(raw) {
         ? raw.reset_selection_on_open
         : DEFAULT_CONFIG.reset_selection_on_open;
     
+    const showHotkeyHints = typeof raw?.display?.show_hotkey_hints === 'boolean'
+        ? raw.display.show_hotkey_hints
+        : DEFAULT_CONFIG.display.show_hotkey_hints;
+
     return {
         display: {
             preview_mode: PREVIEW_MODES.has(previewMode) ? previewMode : DEFAULT_CONFIG.display.preview_mode,
@@ -61,7 +66,8 @@ function normalizeConfig(raw) {
             preview_fps: normalizedFps,
             transparent_background: transparentBackground,
             card_background_color: cardBgColor,
-            card_background_opacity: cardBgOpacity
+            card_background_opacity: cardBgOpacity,
+            show_hotkey_hints: showHotkeyHints
         },
         action_mode: ACTION_MODES.has(actionMode) ? actionMode : DEFAULT_CONFIG.action_mode,
         reset_selection_on_open: resetSelectionOnOpen,
@@ -92,6 +98,11 @@ function applyConfigToUI(config) {
     if (previewFpsInput) {
         previewFpsInput.value = previewFps;
         document.getElementById('preview-fps-value').textContent = previewFps;
+    }
+
+    const showHotkeyHintsInput = document.getElementById('show-hotkey-hints');
+    if (showHotkeyHintsInput) {
+        showHotkeyHintsInput.checked = config.display.show_hotkey_hints !== false;
     }
 
     const transparentBgInput = document.getElementById('transparent-background');
@@ -138,6 +149,7 @@ function collectConfigFromUI() {
     const maxColumnsSelected = parseInt(document.getElementById('max-columns')?.value, 10);
     const actionSelected = selectedActionModeInput()?.value;
     const resetSelectionOnOpenSelected = document.getElementById('reset-selection-on-open')?.checked;
+    const showHotkeyHintsSelected = document.getElementById('show-hotkey-hints')?.checked;
     const transparentBgSelected = document.getElementById('transparent-background')?.checked;
     const cardBgColorRaw = (document.getElementById('card-bg-color')?.value || '#1a1e2a').replace('#', '');
     const cardBgOpacityRaw = parseInt(document.getElementById('card-bg-opacity')?.value, 10) / 100;
@@ -151,7 +163,8 @@ function collectConfigFromUI() {
             preview_fps: parseInt(document.getElementById('preview-fps')?.value, 10) || 10,
             transparent_background: !!transparentBgSelected,
             card_background_color: cardBgColorRaw,
-            card_background_opacity: isNaN(cardBgOpacityRaw) ? 0.85 : cardBgOpacityRaw
+            card_background_opacity: isNaN(cardBgOpacityRaw) ? 0.85 : cardBgOpacityRaw,
+            show_hotkey_hints: !!showHotkeyHintsSelected
         },
         action_mode: actionSelected,
         reset_selection_on_open: resetSelectionOnOpenSelected,

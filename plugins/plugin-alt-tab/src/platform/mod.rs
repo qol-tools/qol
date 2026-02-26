@@ -79,6 +79,12 @@ mod unsupported {
     }
 
     pub fn disable_window_shadow() {}
+
+    pub fn close_window(_window_id: u32) {}
+
+    pub fn quit_app(_window_id: u32) {}
+
+    pub fn minimize_window_by_id(_window_id: u32) {}
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -122,4 +128,16 @@ pub fn get_app_icons(windows: &[WindowInfo]) -> std::collections::HashMap<String
 
 pub fn disable_window_shadow() {
     imp::disable_window_shadow()
+}
+
+pub fn close_window(window_id: u32) {
+    imp::close_window(window_id)
+}
+
+pub fn quit_app(window_id: u32) {
+    imp::quit_app(window_id)
+}
+
+pub fn minimize_window_by_id(window_id: u32) {
+    imp::minimize_window_by_id(window_id)
 }

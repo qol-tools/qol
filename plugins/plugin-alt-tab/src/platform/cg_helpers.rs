@@ -130,6 +130,63 @@ pub(crate) fn dict_get_bool(dict: CFDictionaryRef, key: CFStringRef) -> Option<b
     }
 }
 
+pub(crate) fn cfstring_to_string(s: *const c_void) -> Option<String> {
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFStringGetLength(s: *const c_void) -> isize;
+        fn CFStringGetMaximumSizeForEncoding(length: isize, encoding: u32) -> isize;
+        fn CFStringGetCString(
+            s: *const c_void,
+            buffer: *mut u8,
+            buffer_size: isize,
+            encoding: u32,
+        ) -> bool;
+    }
+    unsafe {
+        if s.is_null() {
+            return None;
+        }
+        let len = CFStringGetLength(s);
+        if len <= 0 {
+            return Some(String::new());
+        }
+        let max_bytes = CFStringGetMaximumSizeForEncoding(len, 0x08000100);
+        if max_bytes <= 0 {
+            return None;
+        }
+        let mut buf = vec![0u8; (max_bytes + 1) as usize];
+        if !CFStringGetCString(s, buf.as_mut_ptr(), buf.len() as isize, 0x08000100) {
+            return None;
+        }
+        let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        String::from_utf8(buf[..len].to_vec()).ok()
+    }
+}
+
+pub(crate) fn cfnumber_to_u32(num: *const c_void) -> Option<u32> {
+    const K_CF_NUMBER_SINT64_TYPE: isize = 4;
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFNumberGetValue(num: *const c_void, the_type: isize, value_ptr: *mut c_void) -> bool;
+    }
+    unsafe {
+        if num.is_null() {
+            return None;
+        }
+        let mut val: i64 = 0;
+        let ok = CFNumberGetValue(
+            num,
+            K_CF_NUMBER_SINT64_TYPE,
+            &mut val as *mut i64 as *mut c_void,
+        );
+        if ok {
+            Some(val as u32)
+        } else {
+            None
+        }
+    }
+}
+
 pub(crate) fn dict_get_string(dict: CFDictionaryRef, key: CFStringRef) -> Option<String> {
     #[link(name = "CoreFoundation", kind = "framework")]
     extern "C" {

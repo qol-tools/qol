@@ -34,12 +34,13 @@ impl AltTabApp {
         card_bg_color: u32,
         card_bg_opacity: f32,
         show_debug_overlay: bool,
+        show_hotkey_hints: bool,
         cycle_on_open: bool,
         initial_previews: HashMap<u32, Arc<RenderImage>>,
         icon_cache: HashMap<String, Arc<RenderImage>>,
     ) -> Self {
         let win_delegate =
-            WindowDelegate::new_with_previews(initial_windows.clone(), label_config, transparent_background, card_bg_color, card_bg_opacity, show_debug_overlay, initial_previews, icon_cache);
+            WindowDelegate::new_with_previews(initial_windows.clone(), label_config, transparent_background, card_bg_color, card_bg_opacity, show_debug_overlay, show_hotkey_hints, initial_previews, icon_cache);
         let delegate = cx.new(|_cx| win_delegate);
 
         if cycle_on_open && initial_windows.len() >= 2 {

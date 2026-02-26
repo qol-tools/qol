@@ -1,7 +1,6 @@
 use super::cg_helpers;
 use super::RgbaImage;
 use super::WindowInfo;
-use objc2::{AnyThread, Message};
 use std::collections::HashMap;
 use std::ffi::c_void;
 
@@ -568,6 +567,236 @@ pub fn activate_window(window_id: u32) {
     });
 }
 
+pub fn close_window(window_id: u32) {
+    let Some((pid, title)) = cg_window_pid_and_title(window_id) else {
+        return;
+    };
+    let win = unsafe { ax_find_window(pid, window_id, &title) };
+    if win.is_null() {
+        return;
+    }
+    unsafe {
+        ax_press_window_button(win, b"AXCloseButton");
+        CFRelease(win);
+    }
+}
+
+pub fn quit_app(window_id: u32) {
+    let Some((pid, _title)) = cg_window_pid_and_title(window_id) else {
+        return;
+    };
+    objc2::rc::autoreleasepool(|_pool| {
+        use objc2_app_kit::NSRunningApplication;
+        if let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) {
+            let _ = app.terminate();
+        }
+    });
+}
+
+pub fn minimize_window_by_id(window_id: u32) {
+    let Some((pid, title)) = cg_window_pid_and_title(window_id) else {
+        return;
+    };
+    let win = unsafe { ax_find_window(pid, window_id, &title) };
+    if win.is_null() {
+        return;
+    }
+    unsafe {
+        ax_set_minimized(win);
+        CFRelease(win);
+    }
+}
+
+/// Look up a CG window's owning pid and title by its window ID.
+fn cg_window_pid_and_title(window_id: u32) -> Option<(i32, String)> {
+    let opts = K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
+    let list = unsafe { CGWindowListCopyWindowInfo(opts, K_CG_NULL_WINDOW_ID) };
+    if list.is_null() {
+        return None;
+    }
+    let key_pid = cg_helpers::cfstr(b"kCGWindowOwnerPID");
+    let key_number = cg_helpers::cfstr(b"kCGWindowNumber");
+    let key_name = cg_helpers::cfstr(b"kCGWindowName");
+
+    let count = unsafe { CFArrayGetCount(list) };
+    let mut result: Option<(i32, String)> = None;
+
+    for i in 0..count {
+        let dict = unsafe { CFArrayGetValueAtIndex(list, i) } as CFDictionaryRef;
+        if dict.is_null() {
+            continue;
+        }
+        let Some(num) = cg_helpers::dict_get_i32(dict, key_number) else {
+            continue;
+        };
+        if num as u32 == window_id {
+            if let Some(pid) = cg_helpers::dict_get_i32(dict, key_pid) {
+                let title =
+                    cg_helpers::dict_get_string(dict, key_name).unwrap_or_default();
+                result = Some((pid, title));
+            }
+            break;
+        }
+    }
+
+    unsafe {
+        CFRelease(list as *const c_void);
+        CFRelease(key_pid as *const c_void);
+        CFRelease(key_number as *const c_void);
+        CFRelease(key_name as *const c_void);
+    }
+    result
+}
+
+/// Find an AX window element for `pid`.
+/// Tries (in order): `_AXWindowID` match → `AXTitle` match → first window if only one.
+/// Returns a CFRetained pointer; caller must CFRelease it.
+unsafe fn ax_find_window(pid: i32, cg_window_id: u32, title_hint: &str) -> *const c_void {
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn AXUIElementCreateApplication(pid: i32) -> *const c_void;
+        fn AXUIElementCopyAttributeValue(
+            el: *const c_void,
+            attr: *const c_void,
+            val: *mut *const c_void,
+        ) -> i32;
+        fn CFRetain(cf: *const c_void) -> *const c_void;
+    }
+
+    let app_el = AXUIElementCreateApplication(pid);
+    if app_el.is_null() {
+        return std::ptr::null();
+    }
+
+    let windows_attr = cg_helpers::cfstr(b"AXWindows");
+    let mut wins_val: *const c_void = std::ptr::null();
+    let err = AXUIElementCopyAttributeValue(app_el, windows_attr, &mut wins_val);
+    CFRelease(windows_attr as *const c_void);
+    CFRelease(app_el);
+    if err != 0 || wins_val.is_null() {
+        return std::ptr::null();
+    }
+
+    let id_attr = cg_helpers::cfstr(b"_AXWindowID");
+    let title_attr = cg_helpers::cfstr(b"AXTitle");
+    let count = CFArrayGetCount(wins_val as CFArrayRef);
+    #[cfg(debug_assertions)]
+    eprintln!("[alt-tab/ax_find_window] pid={} count={} cg_id={} title_hint={:?}", pid, count, cg_window_id, title_hint);
+
+    let mut id_match: *const c_void = std::ptr::null();
+    let mut title_match: *const c_void = std::ptr::null();
+    let mut first_win: *const c_void = std::ptr::null();
+
+    for i in 0..count {
+        let win_el = CFArrayGetValueAtIndex(wins_val as CFArrayRef, i);
+        if win_el.is_null() {
+            continue;
+        }
+
+        if first_win.is_null() {
+            first_win = CFRetain(win_el);
+        }
+
+        // Try _AXWindowID
+        if id_match.is_null() {
+            let mut id_val: *const c_void = std::ptr::null();
+            let err = AXUIElementCopyAttributeValue(win_el, id_attr, &mut id_val);
+            if err == 0 && !id_val.is_null() {
+                let maybe_id = cg_helpers::cfnumber_to_u32(id_val);
+                CFRelease(id_val);
+                if maybe_id == Some(cg_window_id) {
+                    id_match = CFRetain(win_el);
+                }
+            } else {
+                if !id_val.is_null() { CFRelease(id_val); }
+            }
+        }
+
+        // Try AXTitle fallback
+        if title_match.is_null() && !title_hint.is_empty() {
+            let mut title_val: *const c_void = std::ptr::null();
+            let err = AXUIElementCopyAttributeValue(win_el, title_attr, &mut title_val);
+            if err == 0 && !title_val.is_null() {
+                let ax_title = cg_helpers::cfstring_to_string(title_val).unwrap_or_default();
+                CFRelease(title_val);
+                if ax_title == title_hint {
+                    title_match = CFRetain(win_el);
+                }
+            } else {
+                if !title_val.is_null() { CFRelease(title_val); }
+            }
+        }
+    }
+
+    CFRelease(id_attr as *const c_void);
+    CFRelease(title_attr as *const c_void);
+    CFRelease(wins_val);
+
+    // Pick best match: ID > title > first (only if exactly one window)
+    if !id_match.is_null() {
+        if !title_match.is_null() { CFRelease(title_match); }
+        if !first_win.is_null() { CFRelease(first_win); }
+        return id_match;
+    }
+    if !title_match.is_null() {
+        if !first_win.is_null() { CFRelease(first_win); }
+        return title_match;
+    }
+    if count == 1 && !first_win.is_null() {
+        return first_win;
+    }
+    if !first_win.is_null() { CFRelease(first_win); }
+    std::ptr::null()
+}
+
+/// Press a named button (e.g. `AXCloseButton`) on an AX window element.
+/// `win_el` must be a valid, retained AX element.
+unsafe fn ax_press_window_button(win_el: *const c_void, button_attr_name: &[u8]) {
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn AXUIElementCopyAttributeValue(
+            el: *const c_void,
+            attr: *const c_void,
+            val: *mut *const c_void,
+        ) -> i32;
+        fn AXUIElementPerformAction(el: *const c_void, action: *const c_void) -> i32;
+    }
+
+    let button_attr = cg_helpers::cfstr(button_attr_name);
+    let press_action = cg_helpers::cfstr(b"AXPress");
+
+    let mut button_val: *const c_void = std::ptr::null();
+    let err = AXUIElementCopyAttributeValue(win_el, button_attr, &mut button_val);
+    if err == 0 && !button_val.is_null() {
+        let _ = AXUIElementPerformAction(button_val, press_action);
+        CFRelease(button_val as *const c_void);
+    }
+
+    CFRelease(button_attr as *const c_void);
+    CFRelease(press_action as *const c_void);
+}
+
+/// Set the `AXMinimized` attribute to true on an AX window element.
+/// `win_el` must be a valid, retained AX element.
+unsafe fn ax_set_minimized(win_el: *const c_void) {
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn AXUIElementSetAttributeValue(
+            el: *const c_void,
+            attr: *const c_void,
+            val: *const c_void,
+        ) -> i32;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        static kCFBooleanTrue: *const c_void;
+    }
+
+    let minimized_attr = cg_helpers::cfstr(b"AXMinimized");
+    let _ = AXUIElementSetAttributeValue(win_el, minimized_attr, kCFBooleanTrue);
+    CFRelease(minimized_attr as *const c_void);
+}
+
 pub fn move_app_window(_title: &str, _x: i32, _y: i32) -> bool {
     // macOS GPUI windows can't be reliably repositioned via AX after creation.
     // Return false so the caller closes and recreates on the correct monitor.
@@ -579,7 +808,9 @@ pub fn picker_window_kind() -> gpui::WindowKind {
 }
 
 pub fn dismiss_picker(window: &mut gpui::Window) {
-    window.remove_window();
+    // Shrink instead of remove_window() so the handle stays alive for
+    // the reuse fast-path in open_picker() (avoids ~3s GPU reinit).
+    window.resize(gpui::size(gpui::px(1.0), gpui::px(1.0)));
 }
 
 fn cg_event_flags() -> u64 {

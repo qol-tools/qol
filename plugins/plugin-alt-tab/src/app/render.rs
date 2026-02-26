@@ -10,6 +10,7 @@ impl Render for AltTabApp {
         let d_ref = delegate.read(cx);
         let transparent_bg = d_ref.transparent_background;
         let show_debug_overlay = d_ref.show_debug_overlay;
+        let show_hotkey_hints = d_ref.show_hotkey_hints;
         let card_bg_rgba = {
             let alpha = (d_ref.card_bg_opacity.clamp(0.0, 1.0) * 255.0) as u32;
             (d_ref.card_bg_color << 8) | alpha
@@ -26,9 +27,35 @@ impl Render for AltTabApp {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 super::input::handle_key_down(this, event, window, cx);
             }))
+            .when(show_hotkey_hints, |s| {
+                s.child(
+                    // ── Hotkey hints bar ──────────────────────────────────────────
+                    div()
+                        .px_4()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(rgb(0x1e2333))
+                        .bg(rgb(0x13151f))
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_color(rgb(0x5e6a84))
+                                .text_xs()
+                                .child("Alt Tab"),
+                        )
+                        .child(
+                            div()
+                                .text_color(rgb(0x3a4252))
+                                .text_xs()
+                                .child("W close  ·  Q quit  ·  R minimize  ·  ↑↓←→ navigate  ·  ⏎ switch  ·  esc close"),
+                        ),
+                )
+            })
             .when(!transparent_bg && show_debug_overlay, |s| {
                 s.child(
-                    // ── Header bar ────────────────────────────────────────────────
+                    // ── Debug overlay bar ─────────────────────────────────────────
                     div()
                         .px_4()
                         .py_2()

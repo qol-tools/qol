@@ -39,3 +39,9 @@ pub fn disable_window_shadow() {}
 pub fn get_app_icons(_windows: &[WindowInfo]) -> std::collections::HashMap<String, super::RgbaImage> {
     std::collections::HashMap::new()
 }
+
+pub fn close_window(_window_id: u32) {}
+
+pub fn quit_app(_window_id: u32) {}
+
+pub fn minimize_window_by_id(_window_id: u32) {}

@@ -4,16 +4,64 @@ use crate::platform;
 use gpui::{Context, Window};
 use std::sync::atomic::Ordering;
 
+fn selected_window_id(this: &AltTabApp, cx: &Context<AltTabApp>) -> Option<u32> {
+    this.delegate
+        .read(cx)
+        .selected_index
+        .and_then(|ix| this.delegate.read(cx).windows.get(ix).map(|w| w.id))
+}
+
 pub(crate) fn handle_key_down(
     this: &mut AltTabApp,
     event: &gpui::KeyDownEvent,
     window: &mut Window,
     cx: &mut Context<AltTabApp>,
 ) {
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[alt-tab/input] key_down: key={:?} key_char={:?} alt={} shift={} ctrl={} cmd={}",
+        event.keystroke.key,
+        event.keystroke.key_char,
+        event.keystroke.modifiers.alt,
+        event.keystroke.modifiers.shift,
+        event.keystroke.modifiers.control,
+        event.keystroke.modifiers.platform,
+    );
     match event.keystroke.key.as_str() {
         "escape" | "esc" => {
             PICKER_VISIBLE.store(false, Ordering::Relaxed);
             platform::dismiss_picker(window);
+        }
+        "w" => {
+            if let Some(win_id) = selected_window_id(this, cx) {
+                platform::close_window(win_id);
+                this.delegate.update(cx, |s, _cx| s.remove_window(win_id));
+                cx.notify();
+            }
+        }
+        "q" => {
+            if let Some(win_id) = selected_window_id(this, cx) {
+                let app_name = this
+                    .delegate
+                    .read(cx)
+                    .windows
+                    .iter()
+                    .find(|w| w.id == win_id)
+                    .map(|w| w.app_name.clone());
+                platform::quit_app(win_id);
+                if let Some(app_name) = app_name {
+                    this.delegate
+                        .update(cx, |s, _cx| s.remove_app_windows(&app_name));
+                }
+                cx.notify();
+            }
+        }
+        "r" => {
+            if let Some(win_id) = selected_window_id(this, cx) {
+                platform::minimize_window_by_id(win_id);
+                this.delegate.update(cx, |s, _cx| s.mark_minimized(win_id));
+                cx.notify();
+            }
         }
         "enter" => {
             let win_id = this

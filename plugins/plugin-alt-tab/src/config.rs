@@ -9,6 +9,7 @@ pub struct DisplayConfig {
     pub card_background_opacity: f32,
     pub show_minimized: bool,
     pub show_debug_overlay: bool,
+    pub show_hotkey_hints: bool,
 }
 
 impl Default for DisplayConfig {
@@ -20,6 +21,7 @@ impl Default for DisplayConfig {
             card_background_opacity: 0.85,
             show_minimized: true,
             show_debug_overlay: false,
+            show_hotkey_hints: true,
         }
     }
 }

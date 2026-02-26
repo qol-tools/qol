@@ -52,20 +52,21 @@ pub(crate) fn open_picker(
         *cache = display_windows.clone();
     }
 
-    // Fast path: if picker is already visible and alt held, just cycle selection.
+    // Fast path: if picker is already visible and alt poll is running, just cycle.
+    // We don't check is_modifier_held() here because CGEventSourceFlagsState can
+    // return false during a global hotkey event. _alt_poll_task.is_some() already
+    // proves alt is held — if it were released the poll would have fired.
     let existing = current.borrow().clone();
     if let Some((ref handle, _)) = existing {
         let cycled = handle
             .update(cx, |view, _window: &mut Window, cx| -> bool {
-                let alt_held = platform::is_modifier_held();
                 if view.action_mode == ActionMode::HoldToSwitch
                     && view._alt_poll_task.is_some()
-                    && alt_held
                 {
                     #[cfg(debug_assertions)]
                     eprintln!(
-                        "[alt-tab/hold] window already visible (alt_held={} reverse={}) — cycling",
-                        alt_held, reverse
+                        "[alt-tab/hold] window already visible (reverse={}) — cycling",
+                        reverse
                     );
                     view.delegate.update(cx, |s, _cx| {
                         if reverse {
@@ -182,6 +183,7 @@ pub(crate) fn open_picker(
                     s.card_bg_color = card_color;
                     s.card_bg_opacity = card_opacity;
                     s.show_debug_overlay = config.display.show_debug_overlay;
+                    s.show_hotkey_hints = config.display.show_hotkey_hints;
                 });
 
                 if config.action_mode == ActionMode::HoldToSwitch {
@@ -198,6 +200,14 @@ pub(crate) fn open_picker(
                     icons.clone(),
                     cx,
                 );
+
+                // Mirror the CycleOnce behavior from AltTabApp::new()
+                if config.open_behavior == crate::config::OpenBehavior::CycleOnce
+                    && config.reset_selection_on_open
+                    && display_windows.len() >= 2
+                {
+                    view.delegate.update(cx, |s, _cx| s.select_next());
+                }
 
                 let current_bounds = window.window_bounds().get_bounds();
                 let current_size = current_bounds.size;
@@ -309,6 +319,7 @@ pub(crate) fn open_picker(
     let icons_for_init = icons.clone();
     let transparent_bg = config.display.transparent_background;
     let show_debug_overlay = config.display.show_debug_overlay;
+    let show_hotkey_hints = config.display.show_hotkey_hints;
     let (card_color_init, card_opacity_init) = resolve_card_bg(&config.display);
 
     let window_background = if transparent_bg {
@@ -342,6 +353,7 @@ pub(crate) fn open_picker(
                     card_color_init,
                     card_opacity_init,
                     show_debug_overlay,
+                    show_hotkey_hints,
                     cycle_on_open,
                     initial_previews,
                     icons_for_init,
