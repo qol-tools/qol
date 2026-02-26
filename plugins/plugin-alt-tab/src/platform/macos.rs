@@ -1,8 +1,9 @@
 use super::cg_helpers;
 use super::RgbaImage;
 use super::WindowInfo;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
+use std::sync::{Mutex, OnceLock};
 
 type CFArrayRef = *const c_void;
 type CFDictionaryRef = *const c_void;
@@ -96,6 +97,18 @@ struct CgWindow {
     h: f32,
 }
 
+#[derive(Clone)]
+struct AxWindowMeta {
+    title: String,
+    is_minimized: bool,
+}
+
+static KNOWN_WINDOW_IDS_BY_PID: OnceLock<Mutex<HashMap<i32, HashSet<u32>>>> = OnceLock::new();
+
+fn known_window_ids_by_pid() -> &'static Mutex<HashMap<i32, HashSet<u32>>> {
+    KNOWN_WINDOW_IDS_BY_PID.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 /// Shared helper: parse normal-layer windows from a CG window list.
 fn parse_cg_window_list(list: *const c_void, own_pid: i32) -> Vec<CgWindow> {
     let key_layer = cg_helpers::cfstr(b"kCGWindowLayer");
@@ -167,6 +180,7 @@ fn parse_cg_window_list(list: *const c_void, own_pid: i32) -> Vec<CgWindow> {
 
 pub fn get_open_windows() -> Vec<WindowInfo> {
     let own_pid = std::process::id() as i32;
+    let mut accepted_ids_by_pid: HashMap<i32, HashSet<u32>> = HashMap::new();
 
     // Pass 1: on-screen windows (the reliable set — no helper noise)
     let on_screen_opts =
@@ -174,6 +188,7 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
     let on_screen_list = unsafe { CGWindowListCopyWindowInfo(on_screen_opts, K_CG_NULL_WINDOW_ID) };
     let mut on_screen_ids = std::collections::HashSet::new();
     let mut on_screen_pids = std::collections::HashSet::new();
+    let mut on_screen_count_by_pid: HashMap<i32, usize> = HashMap::new();
     let mut windows = Vec::new();
 
     if !on_screen_list.is_null() {
@@ -185,6 +200,8 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
         }
         for cw in dedup_by_ax(parsed) {
             on_screen_ids.insert(cw.id);
+            *on_screen_count_by_pid.entry(cw.pid).or_insert(0) += 1;
+            accepted_ids_by_pid.entry(cw.pid).or_default().insert(cw.id);
             windows.push(WindowInfo {
                 id: cw.id, title: cw.title, app_name: cw.app_name,
                 preview_path: None, icon: None,
@@ -198,44 +215,86 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
     let all_opts = K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
     let all_list = unsafe { CGWindowListCopyWindowInfo(all_opts, K_CG_NULL_WINDOW_ID) };
     if !all_list.is_null() {
-        // Cache which PIDs are regular apps (visible in Dock / Cmd+Tab).
-        // Filters out menu bar apps, background agents, system services.
         let mut regular_app_cache: HashMap<i32, bool> = HashMap::new();
+        let mut ax_windows_cache: HashMap<i32, Option<HashMap<u32, AxWindowMeta>>> =
+            HashMap::new();
+        let mut minimized_count_by_pid: HashMap<i32, usize> = HashMap::new();
+        let mut seen_minimized_ids = HashSet::new();
+        let known_ids_snapshot = known_window_ids_by_pid()
+            .lock()
+            .ok()
+            .map(|cache| cache.clone())
+            .unwrap_or_default();
 
         for cw in parse_cg_window_list(all_list, own_pid) {
             if on_screen_ids.contains(&cw.id) {
-                continue; // already included as on-screen
+                continue;
             }
-            // If this app already has on-screen windows, verify via AX that this
-            // off-screen window is genuinely minimized (not a tab/split artifact).
+            if !seen_minimized_ids.insert(cw.id) {
+                continue;
+            }
             if on_screen_pids.contains(&cw.pid) {
                 if !ax_is_window_minimized(cw.pid, cw.id, &cw.title) {
                     continue;
                 }
             }
-            // Only include off-screen windows that look like real user windows:
-            // must have a real window title and reasonable dimensions
             if !cw.has_title {
                 continue;
             }
             if cw.w < 1.0 || cw.h < 1.0 {
                 continue;
             }
-            // Only include windows from regular apps (those that appear in Dock).
-            // This filters out menu bar apps, background agents, etc.
             let is_regular = *regular_app_cache.entry(cw.pid).or_insert_with(|| {
                 is_regular_app(cw.pid)
             });
             if !is_regular {
                 continue;
             }
-            // Check AX for real window count. Apps like Calendar run in the
-            // background with CG windows but no user-visible windows.
-            if ax_window_count(cw.pid).unwrap_or(1) == 0 {
-                continue;
+            let on_screen_for_pid = on_screen_count_by_pid.get(&cw.pid).copied().unwrap_or(0);
+            if on_screen_for_pid == 0 {
+                if let Some(known_ids) = known_ids_snapshot.get(&cw.pid) {
+                    if !known_ids.is_empty() && !known_ids.contains(&cw.id) {
+                        continue;
+                    }
+                }
             }
+            let ax_windows = ax_windows_cache
+                .entry(cw.pid)
+                .or_insert_with(|| ax_windows(cw.pid));
+            let mut title = cw.title.clone();
+            if let Some(meta_map) = ax_windows.as_ref() {
+                let Some(meta) = meta_map.get(&cw.id) else {
+                    continue;
+                };
+                if !meta.title.is_empty() {
+                    title = meta.title.clone();
+                }
+                if !meta.is_minimized {
+                    continue;
+                }
+                let allowed_minimized = if on_screen_for_pid == 0 {
+                    known_ids_snapshot
+                        .get(&cw.pid)
+                        .map(|ids| ids.len())
+                        .filter(|count| *count > 0)
+                        .unwrap_or_else(|| {
+                            meta_map.values().filter(|window| window.is_minimized).count()
+                        })
+                } else {
+                    meta_map.values().filter(|window| window.is_minimized).count()
+                };
+                if allowed_minimized == 0 {
+                    continue;
+                }
+                let current_minimized = minimized_count_by_pid.entry(cw.pid).or_insert(0);
+                if *current_minimized >= allowed_minimized {
+                    continue;
+                }
+                *current_minimized += 1;
+            }
+            accepted_ids_by_pid.entry(cw.pid).or_default().insert(cw.id);
             windows.push(WindowInfo {
-                id: cw.id, title: cw.title, app_name: cw.app_name,
+                id: cw.id, title, app_name: cw.app_name,
                 preview_path: None, icon: None,
                 x: cw.x, y: cw.y, width: cw.w, height: cw.h,
                 is_minimized: true,
@@ -244,12 +303,18 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
         unsafe { CFRelease(all_list as *const c_void) };
     }
 
+    if let Ok(mut known_cache) = known_window_ids_by_pid().lock() {
+        for (pid, ids) in accepted_ids_by_pid {
+            known_cache.insert(pid, ids);
+        }
+    }
+
     windows
 }
 
 /// Query the Accessibility API for the number of real windows an app has.
 /// Returns None if AX is unavailable (no permission) or the app doesn't respond.
-fn ax_window_count(pid: i32) -> Option<usize> {
+fn ax_windows(pid: i32) -> Option<HashMap<u32, AxWindowMeta>> {
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
         fn AXUIElementCreateApplication(pid: i32) -> *const c_void;
@@ -259,24 +324,86 @@ fn ax_window_count(pid: i32) -> Option<usize> {
             value: *mut *const c_void,
         ) -> i32;
     }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        static kCFBooleanTrue: *const c_void;
+    }
 
     unsafe {
         let app = AXUIElementCreateApplication(pid);
         if app.is_null() {
             return None;
         }
-        let attr = cg_helpers::cfstr(b"AXWindows");
-        let mut value: *const c_void = std::ptr::null();
-        let err = AXUIElementCopyAttributeValue(app, attr, &mut value);
-        CFRelease(attr as *const c_void);
-        if err != 0 || value.is_null() {
+        let windows_attr = cg_helpers::cfstr(b"AXWindows");
+        let mut windows_value: *const c_void = std::ptr::null();
+        let windows_err =
+            AXUIElementCopyAttributeValue(app, windows_attr, &mut windows_value);
+        CFRelease(windows_attr as *const c_void);
+        if windows_err != 0 || windows_value.is_null() {
             CFRelease(app);
             return None;
         }
-        let count = CFArrayGetCount(value as CFArrayRef);
-        CFRelease(value);
+
+        let id_attr = cg_helpers::cfstr(b"_AXWindowID");
+        let title_attr = cg_helpers::cfstr(b"AXTitle");
+        let minimized_attr = cg_helpers::cfstr(b"AXMinimized");
+        let count = CFArrayGetCount(windows_value as CFArrayRef);
+        let mut out = HashMap::new();
+
+        for i in 0..count {
+            let win = CFArrayGetValueAtIndex(windows_value as CFArrayRef, i);
+            if win.is_null() {
+                continue;
+            }
+
+            let mut id_value: *const c_void = std::ptr::null();
+            let id_err = AXUIElementCopyAttributeValue(win, id_attr, &mut id_value);
+            if id_err != 0 || id_value.is_null() {
+                if !id_value.is_null() {
+                    CFRelease(id_value);
+                }
+                continue;
+            }
+            let Some(id) = cg_helpers::cfnumber_to_u32(id_value) else {
+                CFRelease(id_value);
+                continue;
+            };
+            CFRelease(id_value);
+
+            let mut title = String::new();
+            let mut title_value: *const c_void = std::ptr::null();
+            let title_err = AXUIElementCopyAttributeValue(win, title_attr, &mut title_value);
+            if title_err == 0 && !title_value.is_null() {
+                title = cg_helpers::cfstring_to_string(title_value).unwrap_or_default();
+                CFRelease(title_value);
+            }
+
+            let mut minimized_value: *const c_void = std::ptr::null();
+            let minimized_err =
+                AXUIElementCopyAttributeValue(win, minimized_attr, &mut minimized_value);
+            let is_minimized = minimized_err == 0
+                && !minimized_value.is_null()
+                && minimized_value == kCFBooleanTrue;
+
+            out.insert(
+                id,
+                AxWindowMeta {
+                    title: title.trim().to_string(),
+                    is_minimized,
+                },
+            );
+        }
+
+        CFRelease(id_attr as *const c_void);
+        CFRelease(title_attr as *const c_void);
+        CFRelease(minimized_attr as *const c_void);
+        CFRelease(windows_value);
         CFRelease(app);
-        Some(count.max(0) as usize)
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
     }
 }
 
@@ -335,9 +462,31 @@ fn dedup_by_ax(windows: Vec<CgWindow>) -> Vec<CgWindow> {
             result.extend(wins);
             continue;
         }
-        // Multiple CG windows for this PID — ask AX for real count
-        let keep = ax_window_count(pid).unwrap_or(wins.len());
-        result.extend(wins.into_iter().take(keep.max(1)));
+        if let Some(ax_meta) = ax_windows(pid) {
+            let keep = ax_meta.len().max(1);
+            let ax_ids: HashSet<u32> = ax_meta.keys().copied().collect();
+            let mut matched = Vec::new();
+            let mut unmatched = Vec::new();
+            for mut win in wins {
+                if ax_ids.contains(&win.id) {
+                    if let Some(meta) = ax_meta.get(&win.id) {
+                        if !meta.title.is_empty() {
+                            win.title = meta.title.clone();
+                        }
+                    }
+                    matched.push(win);
+                } else {
+                    unmatched.push(win);
+                }
+            }
+            if !matched.is_empty() {
+                result.extend(matched.into_iter().take(keep));
+                continue;
+            }
+            result.extend(unmatched.into_iter().take(keep));
+            continue;
+        }
+        result.extend(wins);
     }
     result
 }
