@@ -807,10 +807,21 @@ pub fn picker_window_kind() -> gpui::WindowKind {
     gpui::WindowKind::Normal
 }
 
-pub fn dismiss_picker(window: &mut gpui::Window) {
-    // Shrink instead of remove_window() so the handle stays alive for
-    // the reuse fast-path in open_picker() (avoids ~3s GPU reinit).
-    window.resize(gpui::size(gpui::px(1.0), gpui::px(1.0)));
+pub fn dismiss_picker(_window: &mut gpui::Window) {
+    // Hide the NSWindow via orderOut: instead of remove_window() or resize(1x1).
+    // orderOut: hides the window completely (no visible artifact, no shadow dot)
+    // while keeping the GPUI handle alive for the reuse fast-path.
+    // activate_window() -> makeKeyAndOrderFront: will bring it back correctly sized.
+    use objc2_app_kit::NSApplication;
+    use objc2_foundation::MainThreadMarker;
+    let mtm = MainThreadMarker::new().expect("must be on main thread");
+    let app = NSApplication::sharedApplication(mtm);
+    for win in app.windows().iter() {
+        if win.title().to_string() == "qol-alt-tab-picker" {
+            win.orderOut(None);
+            return;
+        }
+    }
 }
 
 fn cg_event_flags() -> u64 {

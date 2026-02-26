@@ -7,6 +7,8 @@ pub const GRID_CARD_HEIGHT: f32 = 156.0;
 pub const GRID_PREVIEW_WIDTH: f32 = 204.0;
 pub const GRID_PREVIEW_HEIGHT: f32 = 114.0;
 pub const HEADER_HEIGHT: f32 = 42.0;
+/// Height of the hotkey hints bar (py_2 + text_xs + border_b_1).
+pub const HOTKEY_HINTS_HEIGHT: f32 = 48.0;
 pub const PREVIEW_MAX_WIDTH: usize = GRID_PREVIEW_WIDTH as usize;
 pub const PREVIEW_MAX_HEIGHT: usize = GRID_PREVIEW_HEIGHT as usize;
 pub const GRID_RENDER_PADDING_X_TOTAL: f32 = 40.0;
@@ -24,14 +26,15 @@ pub fn preferred_column_count(window_count: usize, max_columns: usize) -> usize 
     cols
 }
 
-pub fn picker_dimensions(window_count: usize, max_columns: usize, monitor_size: Option<(f32, f32)>) -> (f32, f32) {
+pub fn picker_dimensions(window_count: usize, max_columns: usize, monitor_size: Option<(f32, f32)>, show_hotkey_hints: bool) -> (f32, f32) {
     let count = window_count.max(1);
     let cols = preferred_column_count(count, max_columns);
     let width = GRID_PADDING * 2.0
         + cols as f32 * GRID_CARD_WIDTH
         + cols.saturating_sub(1) as f32 * GRID_GAP
         + 24.0;
-    let height = picker_height_for(count, cols);
+    let hints_height = if show_hotkey_hints { HOTKEY_HINTS_HEIGHT } else { 0.0 };
+    let height = picker_height_for(count, cols) + hints_height;
 
     let (max_w, max_h) = monitor_size
         .map(|(w, h)| (w * 0.9, h * 0.9))

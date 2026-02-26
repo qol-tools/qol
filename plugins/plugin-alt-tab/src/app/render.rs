@@ -1,5 +1,5 @@
 use super::AltTabApp;
-use crate::layout::{GRID_CARD_WIDTH, GRID_PREVIEW_HEIGHT, GRID_PREVIEW_WIDTH};
+use crate::layout::{GRID_CARD_HEIGHT, GRID_CARD_WIDTH, GRID_PREVIEW_HEIGHT, GRID_PREVIEW_WIDTH};
 use crate::window_source::preview_tile;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -119,6 +119,7 @@ impl Render for AltTabApp {
                                 .flex_col()
                                 .items_center()
                                 .w(px(GRID_CARD_WIDTH))
+                                .h(px(GRID_CARD_HEIGHT))
                                 .p_2()
                                 .rounded_xl()
                                 .cursor_pointer()

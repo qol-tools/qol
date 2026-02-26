@@ -129,7 +129,7 @@ pub(crate) fn open_picker(
         let target_monitor = tracker.snapshot().map(|(m, _)| m);
         let monitor_size = target_monitor.as_ref().map(|m| m.size());
         let (target_w, target_h) =
-            picker_dimensions(target_count, config.display.max_columns, monitor_size);
+            picker_dimensions(target_count, config.display.max_columns, monitor_size, config.display.show_hotkey_hints);
         let target_size = size(px(target_w), px(target_h));
         let target_bounds = if let Some(ref active) = target_monitor {
             active.centered_bounds(target_size)
@@ -212,6 +212,13 @@ pub(crate) fn open_picker(
                 let current_bounds = window.window_bounds().get_bounds();
                 let current_size = current_bounds.size;
                 let next_size = target_size;
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "[alt-tab/reuse] target={}x{} current={}x{} count={} cols={}",
+                    target_w, target_h,
+                    current_size.width.to_f64(), current_size.height.to_f64(),
+                    target_count, preferred_column_count(target_count, config.display.max_columns),
+                );
                 if (current_size.width.to_f64() - target_w as f64).abs() >= 1.0
                     || (current_size.height.to_f64() - target_h as f64).abs() >= 1.0
                 {
@@ -295,7 +302,7 @@ pub(crate) fn open_picker(
     let create_monitor = tracker.snapshot().map(|(m, _)| m);
     let monitor_size = create_monitor.as_ref().map(|m| m.size());
     let (win_w, win_h) =
-        picker_dimensions(estimated_count, config.display.max_columns, monitor_size);
+        picker_dimensions(estimated_count, config.display.max_columns, monitor_size, config.display.show_hotkey_hints);
     let win_size = size(px(win_w), px(win_h));
     let bounds = if let Some(ref active) = create_monitor {
         active.centered_bounds(win_size)
@@ -307,6 +314,13 @@ pub(crate) fn open_picker(
         .map(|m| m.bounds().origin)
         .unwrap_or(point(px(0.0), px(0.0)));
 
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[alt-tab/create] size={}x{} estimated_count={} actual_count={} cols={} hints={}",
+        win_w, win_h, estimated_count, target_count,
+        preferred_column_count(estimated_count, config.display.max_columns),
+        config.display.show_hotkey_hints,
+    );
     println!(
         "[alt-tab] opening at {:?} with size {:?}",
         bounds.origin, bounds.size
