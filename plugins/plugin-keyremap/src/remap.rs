@@ -28,6 +28,17 @@ impl Modifiers {
             && self.cmd == other.cmd
             && (!self.ralt || other.ralt)
     }
+
+    pub fn label(&self) -> String {
+        let mut parts = Vec::new();
+        if self.ctrl { parts.push("ctrl"); }
+        if self.shift { parts.push("shift"); }
+        if self.alt { parts.push("alt"); }
+        if self.cmd { parts.push("cmd"); }
+        if self.ralt { parts.push("ralt"); }
+        if parts.is_empty() { return "(none)".into(); }
+        parts.join("+")
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +63,7 @@ pub struct ResolvedCharRule {
     pub global: bool,
 }
 
+#[derive(Clone)]
 pub struct ResolvedKeyRule {
     pub from_mods: Modifiers,
     pub from_key: u16,
@@ -90,14 +102,61 @@ pub enum ScrollAction {
 }
 
 pub fn resolve(config: &RemapConfig) -> ResolvedConfig {
+    let key_rules: Vec<ResolvedKeyRule> = config.key_rules.iter().flat_map(resolve_key_rule).collect();
+    warn_shadowed_rules(&key_rules);
     ResolvedConfig {
         enabled: config.enabled,
         excluded_apps: config.excluded_apps.iter().cloned().collect(),
         char_rules: config.char_rules.iter().filter_map(resolve_char_rule).collect(),
-        key_rules: config.key_rules.iter().flat_map(resolve_key_rule).collect(),
+        key_rules,
         mouse_rules: config.mouse_rules.iter().filter_map(resolve_mouse_rule).collect(),
         scroll_rules: config.scroll_rules.iter().filter_map(resolve_scroll_rule).collect(),
     }
+}
+
+fn rule_label(mods: &Modifiers, key: u16) -> String {
+    format!("{}+{}", mods.label(), keycode::key_name(key))
+}
+
+fn warn_shadowed_rules(rules: &[ResolvedKeyRule]) {
+    let mut seen: Vec<(Modifiers, u16)> = Vec::new();
+    for rule in rules {
+        let pair = (rule.from_mods, rule.from_key);
+        if seen.contains(&pair) {
+            eprintln!(
+                "[keyremap] warning: shadowed rule — {} appears multiple times, only first match fires",
+                rule_label(&rule.from_mods, rule.from_key),
+            );
+        } else {
+            seen.push(pair);
+        }
+    }
+}
+
+pub fn diff_key_rules(old: &[ResolvedKeyRule], new: &[ResolvedKeyRule]) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for old_rule in old {
+        let new_match = new.iter().find(|r| r.from_mods == old_rule.from_mods && r.from_key == old_rule.from_key);
+        match new_match {
+            Some(new_rule) if new_rule.to_mods != old_rule.to_mods || new_rule.to_key != old_rule.to_key => {
+                warnings.push(format!(
+                    "rule changed — {}: was {}+{}, now {}+{}",
+                    rule_label(&old_rule.from_mods, old_rule.from_key),
+                    old_rule.to_mods.label(), keycode::key_name(old_rule.to_key),
+                    new_rule.to_mods.label(), keycode::key_name(new_rule.to_key),
+                ));
+            }
+            None => {
+                warnings.push(format!(
+                    "rule removed — {} (was {}+{})",
+                    rule_label(&old_rule.from_mods, old_rule.from_key),
+                    old_rule.to_mods.label(), keycode::key_name(old_rule.to_key),
+                ));
+            }
+            _ => {}
+        }
+    }
+    warnings
 }
 
 pub fn process_key_event(

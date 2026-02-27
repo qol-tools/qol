@@ -13,6 +13,7 @@ const DEFAULT_CONFIG = {
 const VALID_MODS = new Set(['ctrl', 'shift', 'alt', 'cmd', 'ralt', 'altgr']);
 
 let config = { ...DEFAULT_CONFIG };
+let pendingWarnings = false;
 
 const elements = {
     saveBtn: document.getElementById('save-btn'),
@@ -206,12 +207,20 @@ document.querySelectorAll('.mod-toggles .mod-chip').forEach(btn => {
     });
 });
 
+function clearSaveWarnings() {
+    pendingWarnings = false;
+    const el = document.getElementById('save-warnings');
+    if (el) el.innerHTML = '';
+}
+
 document.addEventListener('click', (e) => {
     const btn = e.target.closest('.btn-remove');
     if (!btn) return;
 
     const type = btn.dataset.type;
     const index = parseInt(btn.dataset.index, 10);
+
+    clearSaveWarnings();
 
     if (type === 'app') {
         config.excluded_apps.splice(index, 1);
@@ -286,6 +295,7 @@ document.getElementById('add-key-batch-btn').addEventListener('click', () => {
     document.getElementById('new-key-batch-keys').value = '';
     clearModToggles('new-key-batch-from');
     clearModToggles('new-key-batch-to');
+    clearSaveWarnings();
     renderKeyRules();
 });
 
@@ -297,6 +307,7 @@ document.getElementById('add-key-rule-btn').addEventListener('click', () => {
 
     if (!fromKey || !toKey) return;
 
+    clearSaveWarnings();
     config.key_rules.push({ from_mods: fromMods, from_key: fromKey, to_mods: toMods, to_key: toKey });
     document.getElementById('new-key-from-key').value = '';
     document.getElementById('new-key-to-key').value = '';
@@ -349,7 +360,74 @@ function collectConfig() {
     return config;
 }
 
+function modsEqual(a, b) {
+    if (a.length !== b.length) return false;
+    const sa = [...a].sort();
+    const sb = [...b].sort();
+    return sa.every((m, i) => m === sb[i]);
+}
+
+function validateKeyRules(rules) {
+    const warnings = [];
+    const batchRules = rules.filter(r => r.keys);
+
+    for (let i = 0; i < batchRules.length; i++) {
+        for (let j = i + 1; j < batchRules.length; j++) {
+            const a = batchRules[i], b = batchRules[j];
+            if (!modsEqual(a.from_mods, b.from_mods)) continue;
+
+            const overlap = a.keys.filter(k => b.keys.includes(k));
+            if (overlap.length > 0) {
+                warnings.push(
+                    `Keys [${overlap.join(', ')}] appear in two [${a.from_mods.join('+')}] rules with different targets — only the first rule will fire`
+                );
+            }
+
+            if (modsEqual(a.to_mods, b.to_mods)) {
+                warnings.push(
+                    `Two batch rules [${a.from_mods.join('+')}] → [${a.to_mods.join('+')}] could be merged into one`
+                );
+            }
+        }
+    }
+
+    // Check single rules shadowed by batch rules
+    const singleRules = rules.filter(r => r.from_key);
+    for (const single of singleRules) {
+        for (const batch of batchRules) {
+            if (modsEqual(single.from_mods, batch.from_mods) && batch.keys.includes(single.from_key)) {
+                warnings.push(
+                    `Single rule [${single.from_mods.join('+')}]+${single.from_key} is shadowed by an earlier batch rule`
+                );
+            }
+        }
+    }
+
+    return warnings;
+}
+
+function showWarnings(warnings) {
+    const el = document.getElementById('save-warnings');
+    if (warnings.length === 0) {
+        el.innerHTML = '';
+        return;
+    }
+    el.innerHTML = warnings.map(w => `<span class="warning-line">⚠ ${w}</span>`).join('')
+        + '<span class="warning-hint">Click save again to confirm.</span>';
+}
+
 async function saveConfig() {
+    const warnings = validateKeyRules(config.key_rules);
+
+    if (warnings.length > 0 && !pendingWarnings) {
+        showWarnings(warnings);
+        pendingWarnings = true;
+        return;
+    }
+
+    pendingWarnings = false;
+    showWarnings([]);
+
     elements.saveBtn.disabled = true;
     setStatus('Saving...');
 

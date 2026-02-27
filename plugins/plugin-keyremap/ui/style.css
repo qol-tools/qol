@@ -260,8 +260,39 @@ select.key-input {
 .actions {
     margin-top: 1rem;
     display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.actions-row {
+    display: flex;
     align-items: center;
     gap: 0.9rem;
+}
+
+#save-warnings:empty {
+    display: none;
+}
+
+#save-warnings {
+    padding: 0.6rem 0.8rem;
+    border: 1px solid rgba(255, 193, 7, 0.4);
+    border-radius: 8px;
+    background: rgba(255, 193, 7, 0.08);
+    font-size: 0.85rem;
+    color: #ffd54f;
+    line-height: 1.5;
+}
+
+#save-warnings .warning-line {
+    display: block;
+}
+
+#save-warnings .warning-hint {
+    display: block;
+    margin-top: 0.3rem;
+    font-size: 0.8rem;
+    color: #bba836;
 }
 
 .save {
