@@ -49,11 +49,11 @@ pub fn icon_for_bundle_id(bundle_id: &str, size: usize) -> Option<RgbaImage> {
     use objc2_foundation::NSString;
 
     objc2::rc::autoreleasepool(|_pool| {
-        let ws = unsafe { NSWorkspace::sharedWorkspace() };
+        let ws = NSWorkspace::sharedWorkspace();
         let ns_id = NSString::from_str(bundle_id);
-        let url = unsafe { ws.URLForApplicationWithBundleIdentifier(&ns_id) }?;
-        let path = unsafe { url.path() }?;
-        let ns_image = unsafe { ws.iconForFile(&path) };
+        let url = ws.URLForApplicationWithBundleIdentifier(&ns_id)?;
+        let path = url.path()?;
+        let ns_image = ws.iconForFile(&path);
         nsimage_to_rgba(&ns_image, size)
     })
 }
