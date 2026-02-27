@@ -13,26 +13,7 @@ use macos as imp;
 use windows as imp;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-mod unsupported {
-    use std::path::Path;
-
-    pub fn launch_app(_path: &Path, _exec: &[String]) -> bool {
-        false
-    }
-
-    pub fn open_path(_path: &Path) -> bool {
-        false
-    }
-
-    pub fn activate_app(cx: &mut gpui::App) {
-        cx.activate(true);
-    }
-
-    pub fn set_activation_policy() {}
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-use unsupported as imp;
+compile_error!("platform implementation is required for this target OS");
 
 use std::path::Path;
 
