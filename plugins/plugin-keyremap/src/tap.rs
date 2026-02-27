@@ -160,7 +160,22 @@ fn handle_key_event(
     let mods = extract_modifiers(flags);
     let keycode = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
 
-    match remap::process_key_event(config, mods, keycode, bundle_id) {
+    let action = remap::process_key_event(config, mods, keycode, bundle_id);
+
+    #[cfg(debug_assertions)]
+    if mods.alt {
+        eprintln!(
+            "[keyremap:dbg] key=0x{:02X}({}) mods={:?} flags=0x{:X} -> {:?} char_rules={}",
+            keycode,
+            crate::keycode::key_name(keycode),
+            mods,
+            flags.bits(),
+            action,
+            config.char_rules.len(),
+        );
+    }
+
+    match action {
         KeyAction::Passthrough => CallbackResult::Keep,
         KeyAction::Remap { mods: new_mods, key } => {
             let new_flags = build_flags(flags, mods, new_mods);
