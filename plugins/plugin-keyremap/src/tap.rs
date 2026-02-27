@@ -163,15 +163,14 @@ fn handle_key_event(
     let action = remap::process_key_event(config, mods, keycode, bundle_id);
 
     #[cfg(debug_assertions)]
-    if mods.alt {
+    if !matches!(action, KeyAction::Passthrough) || config.excluded_apps.contains(bundle_id) {
         eprintln!(
-            "[keyremap:dbg] key=0x{:02X}({}) mods={:?} flags=0x{:X} -> {:?} char_rules={}",
+            "[keyremap:dbg] app={} key=0x{:02X}({}) mods={:?} -> {:?}",
+            bundle_id,
             keycode,
             crate::keycode::key_name(keycode),
             mods,
-            flags.bits(),
             action,
-            config.char_rules.len(),
         );
     }
 
