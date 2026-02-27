@@ -545,7 +545,7 @@
 
 .hotkey-header {
     display: grid;
-    grid-template-columns: 200px 1fr 120px 80px;
+    grid-template-columns: auto 1fr 1fr;
     gap: 1rem;
     padding: 0.75rem 1rem;
     background: var(--bg-elevated);
@@ -561,7 +561,7 @@
 
 .hotkey-row {
     display: grid;
-    grid-template-columns: 200px 1fr 120px 80px;
+    grid-template-columns: auto 1fr 1fr;
     gap: 1rem;
     padding: 1rem;
     background: var(--bg-surface);
