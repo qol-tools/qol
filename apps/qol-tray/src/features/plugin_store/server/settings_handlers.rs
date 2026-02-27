@@ -75,6 +75,39 @@ pub(super) async fn serve_cover(
     (StatusCode::OK, [(header::CONTENT_TYPE, "image/png")], data).into_response()
 }
 
+pub(super) async fn serve_icon(Path(bundle_id): Path<String>) -> impl IntoResponse {
+    let icon = tokio::task::spawn_blocking(move || {
+        qol_plugin_api::app_icon::icon_for_bundle_id(&bundle_id, 32)
+    })
+    .await
+    .ok()
+    .flatten();
+
+    let Some(icon) = icon else {
+        return (StatusCode::NOT_FOUND, "Icon not found").into_response();
+    };
+
+    let mut rgba = icon.data;
+    for pixel in rgba.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+
+    let mut png_buf = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png_buf, icon.width as u32, icon.height as u32);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let Ok(mut writer) = encoder.write_header() else {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "PNG encode failed").into_response();
+        };
+        if writer.write_image_data(&rgba).is_err() {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "PNG encode failed").into_response();
+        }
+    }
+
+    (StatusCode::OK, [(header::CONTENT_TYPE, "image/png")], png_buf).into_response()
+}
+
 pub(super) async fn get_plugin_config(Path(plugin_id): Path<String>) -> impl IntoResponse {
     if !is_safe_path_component(&plugin_id) {
         return (StatusCode::BAD_REQUEST, "Invalid plugin ID").into_response();
