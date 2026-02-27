@@ -62,6 +62,7 @@ pub async fn start_ui_server(
         .route("/installed", get(plugin_handlers::list_installed))
         .route("/events", get(plugin_handlers::sse_handler))
         .route("/cover/{id}", get(settings_handlers::serve_cover))
+        .route("/icon/{bundle_id}", get(settings_handlers::serve_icon))
         .route(
             "/plugins/{id}/actions/{action}",
             post(plugin_handlers::execute_plugin_action),
