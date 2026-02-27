@@ -23,6 +23,7 @@ let VIEW_ORDER = [...BASE_VIEW_ORDER];
 let devEnabled = false;
 let activeViewId = 'plugins';
 let activeView = null;
+let activePluginId = null;
 let appVersion = null;
 let updateState = { status: 'checking' };
 const devFlows = {
@@ -101,8 +102,19 @@ async function init() {
         updateState = { status: 'idle' };
     }
 
+    pluginsView.setOpenPluginConfig(openPluginConfig);
     updateSidebar();
-    switchView(resolveInitialView());
+
+    const initHash = window.location.hash.replace(/^#/, '').trim();
+    const initPluginMatch = initHash.match(/^plugins\/(.+)$/);
+    if (initPluginMatch) {
+        activeViewId = 'plugins';
+        activeView = VIEWS.plugins;
+        openPluginConfig(initPluginMatch[1]);
+    } else {
+        switchView(resolveInitialView());
+    }
+
     if (!devEnabled) {
         checkForUpdate();
     }
@@ -283,20 +295,19 @@ function handleUpdateEvent(event) {
 
 function updateSidebar() {
     const sidebarEl = document.getElementById('sidebar');
-    sidebarEl.innerHTML = renderSidebar(activeViewId, VIEW_ORDER, appVersion, updateState, devEnabled);
+    sidebarEl.innerHTML = renderSidebar(activeViewId, VIEW_ORDER, appVersion, updateState, devEnabled, !!activePluginId);
+    updateSidebarFooter();
+}
+
+function updateSidebarFooter() {
+    const footerEl = document.getElementById('sidebar-footer');
+    if (!footerEl || !appVersion) return;
+    footerEl.innerHTML = renderVersionFooter(appVersion, updateState, devEnabled);
 }
 
 function updateSidebarVersionOnly() {
     if (!appVersion) return;
-
-    const sidebarEl = document.getElementById('sidebar');
-    const versionRoot = sidebarEl?.querySelector('.sidebar-version');
-    if (!versionRoot) {
-        updateSidebar();
-        return;
-    }
-
-    versionRoot.innerHTML = renderVersionFooter(appVersion, updateState, devEnabled);
+    updateSidebarFooter();
 }
 
 function sidebarProgressText(state) {
@@ -312,7 +323,7 @@ function sidebarProgressText(state) {
 }
 
 function patchSidebarProgressInPlace(state) {
-    const versionItem = document.querySelector('#sidebar .sidebar-version .version-item');
+    const versionItem = document.querySelector('#sidebar-footer .version-item');
     if (!versionItem) return false;
 
     const fill = versionItem.querySelector('.progress-fill');
@@ -353,20 +364,80 @@ function switchView(viewId, options = {}) {
     persistActiveView(viewId, { updateHash: options.updateHash !== false });
 }
 
+function openPluginConfig(pluginId) {
+    if (activeView && activeView.onBlur) {
+        activeView.onBlur();
+    }
+
+    activePluginId = pluginId;
+    const contentEl = document.getElementById('content');
+    contentEl.classList.add('has-plugin-iframe');
+    contentEl.innerHTML = `<iframe src="/plugins/${pluginId}/" class="plugin-iframe"></iframe>`;
+
+    updateSidebar();
+    window.history.replaceState(null, '', `#plugins/${pluginId}`);
+}
+
+function closePluginConfig() {
+    if (!activePluginId) return;
+
+    activePluginId = null;
+    const contentEl = document.getElementById('content');
+    contentEl.classList.remove('has-plugin-iframe');
+    contentEl.innerHTML = '';
+
+    // Force re-render even though activeViewId hasn't changed
+    activeView = null;
+    switchView(activeViewId);
+}
+
 function handleHashChange() {
+    const raw = window.location.hash.replace(/^#/, '').trim();
+    const pluginMatch = raw.match(/^plugins\/(.+)$/);
+    if (pluginMatch) {
+        const pluginId = pluginMatch[1];
+        if (pluginId !== activePluginId) {
+            openPluginConfig(pluginId);
+        }
+        return;
+    }
+
+    if (activePluginId) {
+        closePluginConfig();
+    }
+
     const viewId = parseViewFromHash();
     if (!canUseView(viewId) || viewId === activeViewId) return;
     switchView(viewId, { updateHash: false });
 }
 
 function handleKeydown(e) {
+    if (activePluginId) {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            closePluginConfig();
+            return;
+        }
+        if (e.key === 'Tab') {
+            e.preventDefault();
+            closePluginConfig();
+            const currentIndex = VIEW_ORDER.indexOf(activeViewId);
+            const nextIndex = e.shiftKey
+                ? (currentIndex - 1 + VIEW_ORDER.length) % VIEW_ORDER.length
+                : (currentIndex + 1) % VIEW_ORDER.length;
+            switchView(VIEW_ORDER[nextIndex]);
+            return;
+        }
+        return;
+    }
+
     if (activeView?.isBlocking?.()) {
         if (activeView.handleKey) {
             activeView.handleKey(e);
         }
         return;
     }
-    
+
     if (e.key === 'Tab' && !e.shiftKey) {
         e.preventDefault();
         const currentIndex = VIEW_ORDER.indexOf(activeViewId);
@@ -374,7 +445,7 @@ function handleKeydown(e) {
         switchView(VIEW_ORDER[nextIndex]);
         return;
     }
-    
+
     if (e.key === 'Tab' && e.shiftKey) {
         e.preventDefault();
         const currentIndex = VIEW_ORDER.indexOf(activeViewId);
@@ -382,7 +453,7 @@ function handleKeydown(e) {
         switchView(VIEW_ORDER[prevIndex]);
         return;
     }
-    
+
     if (activeView && activeView.handleKey) {
         activeView.handleKey(e);
     }
@@ -392,6 +463,10 @@ function handleSidebarClick(e) {
     const updateBtn = e.target.closest('[data-action]');
     if (updateBtn) {
         const action = updateBtn.dataset.action;
+        if (action === 'back') {
+            closePluginConfig();
+            return;
+        }
         if (action === 'check-update') checkForUpdate();
         if (action === 'self-update') triggerSelfUpdate();
         if (action === 'dev-recompile') recompileDev();
@@ -400,9 +475,14 @@ function handleSidebarClick(e) {
 
     const item = e.target.closest('.sidebar-item');
     if (!item) return;
-    
+
     const viewId = item.dataset.view;
     if (viewId) {
+        if (activePluginId) {
+            activePluginId = null;
+            activeView = null;
+            document.getElementById('content').classList.remove('has-plugin-iframe');
+        }
         switchView(viewId);
     }
 }

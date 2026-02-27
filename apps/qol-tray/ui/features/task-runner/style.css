@@ -44,10 +44,6 @@
 
 .action-hints kbd {
     margin: 0 0.25rem 0 0.5rem;
-    padding: 0.2rem 0.5rem;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-default);
-    border-radius: 4px;
     font-size: 0.8rem;
 }
 

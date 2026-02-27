@@ -2,6 +2,7 @@ import { updateSelection as updateSel, navigate as nav } from '../utils.js';
 import { apiJson, apiResponse, jsonRequest } from '../api/client.js';
 import { parseInstalledPlugins } from '../utils/plugins.js';
 import { closeModal, matchModalAction, openModal } from '../components/modal.js';
+import { renderShortcutLegend } from '../components/shortcut-legend.js';
 
 export const id = 'hotkeys';
 
@@ -25,12 +26,17 @@ export function render(containerEl) {
                 <h1>Hotkeys</h1>
                 <p>Configure global keyboard shortcuts for plugin actions</p>
             </header>
-            <div id="hotkeys-list" class="hotkeys-list"></div>
-            <footer class="help">
-                ↑↓ navigate • Enter edit • a add • d delete
-            </footer>
+            <div class="view-body">
+                <div id="hotkeys-list" class="hotkeys-list"></div>
+            </div>
         </div>
     `;
+    document.getElementById('content-footer').innerHTML = renderShortcutLegend([
+        { key: '↑↓', label: 'navigate' },
+        { key: 'Enter', label: 'edit' },
+        { key: 'a', label: 'add' },
+        { key: 'd', label: 'delete' }
+    ]);
     
     loadData();
 }
