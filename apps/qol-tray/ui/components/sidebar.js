@@ -13,19 +13,20 @@ export function render(
     viewOrder = ['plugins', 'store', 'hotkeys'],
     version = null,
     updateState = null,
-    isDevMode = false
+    isDevMode = false,
+    pluginOpen = false
 ) {
+    const headerHtml = pluginOpen
+        ? '<div class="sidebar-header"><button class="sidebar-back" data-action="back">\u2190 Back</button></div>'
+        : '<div class="sidebar-header"><span class="sidebar-logo">QoL Tray</span></div>';
+
     const items = viewOrder.map(id => `
         <div class="sidebar-item ${id === activeViewId ? 'active' : ''}" data-view="${id}">
             ${LABELS[id] || id}
         </div>
     `).join('');
 
-    const versionHtml = version
-        ? `<div class="sidebar-version">${renderVersionFooter(version, updateState, isDevMode)}</div>`
-        : '';
-
-    return `<div class="sidebar-nav">${items}</div>${versionHtml}`;
+    return `${headerHtml}<div class="sidebar-nav">${items}</div>`;
 }
 
 function renderDevProgress(version, label, percent, extraClass = '') {

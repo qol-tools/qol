@@ -1,5 +1,6 @@
 import { escapeHtml } from '../../components/feedback.js';
 import { closeModal, matchModalAction, openModal } from '../../components/modal.js';
+import { renderShortcutLegend } from '../../components/shortcut-legend.js';
 
 export const id = 'task-runner';
 
@@ -38,13 +39,20 @@ export function render(containerEl) {
                 <h1>Task Runner</h1>
                 <p>HTTP API for browser extensions to run local commands</p>
             </header>
-            <div id="actions-list" class="actions-list"></div>
-            <div id="api-usage" class="api-usage"></div>
-            <footer class="help">
-                ↑↓ navigate &bull; <kbd>a</kbd> add action
-            </footer>
+            <div class="view-body">
+                <div id="actions-list" class="actions-list"></div>
+                <div id="api-usage" class="api-usage"></div>
+            </div>
         </div>
     `;
+    document.getElementById('content-footer').innerHTML = renderShortcutLegend([
+        { key: '↑↓', label: 'navigate' },
+        { key: 'Enter', label: 'edit' },
+        { key: 't', label: 'test' },
+        { key: 'a', label: 'add' },
+        { key: 'd', label: 'delete' },
+        { key: 'c', label: 'copy API' }
+    ]);
     loadActions();
 }
 
@@ -468,7 +476,9 @@ const keyHandlers = {
     a: () => openEditModal(),
     A: () => openEditModal(),
     d: deleteAction,
-    D: deleteAction
+    D: deleteAction,
+    c: copyApiExample,
+    C: copyApiExample
 };
 
 function navigate(delta) {

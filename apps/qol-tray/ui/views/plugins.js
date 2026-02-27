@@ -5,6 +5,10 @@ import { apiJson } from '../api/client.js';
 import { renderFeedback as renderFeedbackComponent } from '../components/feedback.js';
 import { closeModal, matchModalAction, openModal } from '../components/modal.js';
 import { parseInstalledPayload } from '../utils/plugins.js';
+import { renderShortcutLegend } from '../components/shortcut-legend.js';
+
+let _openPluginConfig = null;
+export function setOpenPluginConfig(fn) { _openPluginConfig = fn; }
 
 const PLACEHOLDER_SVG = 'data:image/svg+xml,' + encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">' +
@@ -40,13 +44,19 @@ export function render(containerEl) {
             <header>
                 <h1>Plugins</h1>
             </header>
-            <div id="plugins-feedback"></div>
-            <div id="plugins-grid" class="plugin-grid grid-cards grid-cards--zoom"></div>
-            <footer class="help">
-                ←↑↓→ navigate • Enter settings • u update • d delete
-            </footer>
+            <div class="view-body">
+                <div id="plugins-feedback"></div>
+                <div id="plugins-grid" class="plugin-grid grid-cards grid-cards--zoom"></div>
+            </div>
         </div>
     `;
+    document.getElementById('content-footer').innerHTML = renderShortcutLegend([
+        { key: '←↑↓→', label: 'navigate' },
+        { key: 'Enter', label: 'settings' },
+        { key: 'u', label: 'update' },
+        { key: 'd', label: 'delete' },
+        { key: 'm', label: 'menu' }
+    ]);
 
     loadPlugins();
     unsubscribe = subscribe((event) => {
@@ -423,7 +433,9 @@ const keyHandlers = {
     d: deleteSelected,
     D: deleteSelected,
     u: updateSelected,
-    U: updateSelected
+    U: updateSelected,
+    m: toggleSelectedContextMenu,
+    M: toggleSelectedContextMenu
 };
 
 function navigateInGrid(direction) {
@@ -431,6 +443,11 @@ function navigateInGrid(direction) {
     if (nextIndex === state.selectedIndex) return;
     state.selectedIndex = nextIndex;
     updateSelection();
+}
+
+function toggleSelectedContextMenu() {
+    const card = document.querySelector('.plugin-card.selected');
+    if (card) toggleContextMenu(card);
 }
 
 function openSelected() {
@@ -446,7 +463,7 @@ function openSelected() {
 
     if (plugin.has_ui) {
         saveSelection();
-        window.location.href = `/plugins/${plugin.id}/`;
+        if (_openPluginConfig) _openPluginConfig(plugin.id);
         return;
     }
 
@@ -456,6 +473,14 @@ function openSelected() {
 export function onFocus() {
     refreshPlugins();
     updateSelection();
+    scrollSelectedIntoView();
+}
+
+function scrollSelectedIntoView() {
+    const selected = document.querySelector('.plugin-card.selected');
+    if (selected) {
+        selected.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
 }
 
 export function onBlur() {

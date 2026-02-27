@@ -584,14 +584,8 @@
 .hotkey-row.disabled { opacity: 0.5; }
 
 .hotkey-row .col-key kbd {
-    display: inline-block;
     padding: 0.3rem 0.6rem;
-    background: var(--bg-base);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-sm);
-    font-family: var(--font-mono);
     font-size: 0.9rem;
-    color: var(--accent);
 }
 
 .hotkey-row .col-status { text-align: center; font-size: 0.8rem; }
@@ -644,9 +638,10 @@
 kbd {
     display: inline-block;
     padding: 0.2rem 0.4rem;
-    background: var(--border-subtle);
-    border: 1px solid var(--border-default);
+    background: rgba(74, 158, 255, 0.08);
+    border: 1px solid rgba(74, 158, 255, 0.25);
     border-radius: 3px;
     font-family: var(--font-mono);
     font-size: 0.85em;
+    color: rgba(74, 158, 255, 0.7);
 }

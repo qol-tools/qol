@@ -20,6 +20,7 @@ import {
     fetchPluginsRequest,
     installPluginRequest
 } from './store/effects.js';
+import { renderShortcutLegend } from '../components/shortcut-legend.js';
 
 export const id = 'store';
 
@@ -44,19 +45,25 @@ export function render(containerEl) {
                     </div>
                 </div>
             </header>
-            <div class="search-bar store-search-bar">
-                <input type="text" id="store-search" placeholder="Search plugins...">
+            <div class="view-body">
+                <div class="search-bar store-search-bar">
+                    <input type="text" id="store-search" placeholder="Search plugins...">
+                </div>
+                <div id="token-banner"></div>
+                <div id="store-feedback"></div>
+                <div id="store-list" class="plugins-grid grid-cards grid-cards--zoom">
+                    <div class="loading">Loading plugins...</div>
+                </div>
             </div>
-            <div id="token-banner"></div>
-            <div id="store-feedback"></div>
-            <div id="store-list" class="plugins-grid grid-cards grid-cards--zoom">
-                <div class="loading">Loading plugins...</div>
-            </div>
-            <footer class="help">
-                ←↑↓→ navigate • Enter install • ⌘/Ctrl+R refresh
-            </footer>
         </div>
     `;
+    document.getElementById('content-footer').innerHTML = renderShortcutLegend([
+        { key: '←↑↓→', label: 'navigate' },
+        { key: 'Enter', label: 'install' },
+        { key: '/', label: 'search' },
+        { key: 't', label: 'token' },
+        { key: '⌘R', label: 'refresh' }
+    ]);
     
     searchInput = document.getElementById('store-search');
     if (searchInput) {
@@ -325,6 +332,27 @@ function updateSelection() {
 }
 
 export function handleKey(e) {
+    if (document.activeElement === searchInput) {
+        if (e.key === 'Escape') {
+            searchInput.blur();
+            e.preventDefault();
+            return;
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key === 'r') {
+            e.preventDefault();
+            refreshPlugins();
+            return;
+        }
+        return;
+    }
+
+    if (state.showTokenInput && e.key === 'Escape') {
+        state.showTokenInput = false;
+        renderTokenBanner();
+        e.preventDefault();
+        return;
+    }
+
     if ((e.ctrlKey || e.metaKey) && e.key === 'r') {
         e.preventDefault();
         refreshPlugins();
@@ -353,7 +381,10 @@ const keyHandlers = {
     ArrowDown: () => navigateVertical(1),
     ArrowLeft: () => navigateHorizontal(-1),
     ArrowRight: () => navigateHorizontal(1),
-    Enter: installSelected
+    Enter: installSelected,
+    '/': () => { searchInput?.focus(); },
+    't': openTokenInput,
+    'T': openTokenInput
 };
 
 function navigateVertical(rowDelta) {
@@ -397,11 +428,14 @@ async function installPlugin(id) {
     }
 }
 
+function openTokenInput() {
+    state.showTokenInput = true;
+    renderTokenBanner();
+    document.getElementById('github-token-input')?.focus();
+}
+
 export function onFocus() {
     updateSelection();
-    if (searchInput) {
-        searchInput.focus();
-    }
 }
 
 export function onBlur() {
