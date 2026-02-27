@@ -8,7 +8,7 @@
   { "from_mods": ["ralt"], "from_key": "9", "to_char": "]", "global": true },
   { "from_mods": ["ralt"], "from_key": "0", "to_char": "}", "global": true },
   { "from_mods": ["ralt"], "from_key": "section", "to_char": "\\", "global": true },
-  { "from_mods": ["ralt"], "from_key": "rightbracket", "to_char": "|", "global": true },
-  { "from_mods": ["ralt"], "from_key": "leftbracket", "to_char": "~", "global": true },
+  { "from_mods": ["ralt"], "from_key": "equal", "to_char": "|", "global": true },
+  { "from_mods": ["ralt"], "from_key": "rightbracket", "to_char": "~", "global": true },
   { "from_mods": ["ralt"], "from_key": "m", "to_char": "\u00b5", "global": true }
 ]
