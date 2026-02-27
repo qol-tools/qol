@@ -1,3 +1,6 @@
+#[cfg(feature = "app-icons")]
+pub mod app_icon;
+
 pub mod color;
 pub mod config;
 pub mod daemon;
