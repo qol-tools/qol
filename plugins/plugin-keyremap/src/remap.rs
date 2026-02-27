@@ -9,6 +9,7 @@ pub struct Modifiers {
     pub shift: bool,
     pub alt: bool,
     pub cmd: bool,
+    pub ralt: bool,
 }
 
 impl Modifiers {
@@ -17,6 +18,7 @@ impl Modifiers {
         shift: false,
         alt: false,
         cmd: false,
+        ralt: false,
     };
 
     fn matches(&self, other: &Self) -> bool {
@@ -24,6 +26,7 @@ impl Modifiers {
             && self.shift == other.shift
             && self.alt == other.alt
             && self.cmd == other.cmd
+            && (!self.ralt || other.ralt)
     }
 }
 
@@ -175,6 +178,10 @@ fn parse_modifiers(mods: &[String]) -> Modifiers {
             "shift" => result.shift = true,
             "alt" | "option" | "opt" => result.alt = true,
             "cmd" | "command" | "super" => result.cmd = true,
+            "ralt" | "altgr" => {
+                result.ralt = true;
+                result.alt = true;
+            }
             other => eprintln!("[keyremap] unknown modifier: {other}"),
         }
     }
@@ -256,12 +263,13 @@ mod tests {
     }
 
     fn arb_modifiers() -> impl Strategy<Value = Modifiers> {
-        (any::<bool>(), any::<bool>(), any::<bool>(), any::<bool>()).prop_map(
-            |(ctrl, shift, alt, cmd)| Modifiers {
+        (any::<bool>(), any::<bool>(), any::<bool>(), any::<bool>(), any::<bool>()).prop_map(
+            |(ctrl, shift, alt, cmd, ralt)| Modifiers {
                 ctrl,
                 shift,
                 alt,
                 cmd,
+                ralt,
             },
         )
     }
@@ -343,10 +351,10 @@ mod tests {
             })
         ) {
             let config = test_config();
-            let ctrl_only = Modifiers { ctrl: true, shift: false, alt: false, cmd: false };
+            let ctrl_only = Modifiers { ctrl: true, shift: false, alt: false, cmd: false, ralt: false };
             let result = process_key_event(&config, ctrl_only, crate::keycode::ANSI_C, &app);
             prop_assert_eq!(result, KeyAction::Remap {
-                mods: Modifiers { ctrl: false, shift: false, alt: false, cmd: true },
+                mods: Modifiers { ctrl: false, shift: false, alt: false, cmd: true, ralt: false },
                 key: crate::keycode::ANSI_C,
             });
         }
@@ -378,10 +386,10 @@ mod tests {
                 scroll_rules: vec![],
             };
             let config = resolve(&raw);
-            let ctrl_only = Modifiers { ctrl: true, shift: false, alt: false, cmd: false };
+            let ctrl_only = Modifiers { ctrl: true, shift: false, alt: false, cmd: false, ralt: false };
             let result = process_key_event(&config, ctrl_only, crate::keycode::ANSI_C, &app);
             prop_assert_eq!(result, KeyAction::Remap {
-                mods: Modifiers { ctrl: false, shift: false, alt: false, cmd: true },
+                mods: Modifiers { ctrl: false, shift: false, alt: false, cmd: true, ralt: false },
                 key: crate::keycode::ANSI_C,
             });
         }

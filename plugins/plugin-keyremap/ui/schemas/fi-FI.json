@@ -1,0 +1,14 @@
+[
+  { "from_mods": ["ralt"], "from_key": "2", "to_char": "@", "global": true },
+  { "from_mods": ["ralt"], "from_key": "3", "to_char": "\u00a3", "global": true },
+  { "from_mods": ["ralt"], "from_key": "4", "to_char": "$", "global": true },
+  { "from_mods": ["ralt"], "from_key": "5", "to_char": "\u20ac", "global": true },
+  { "from_mods": ["ralt"], "from_key": "7", "to_char": "{", "global": true },
+  { "from_mods": ["ralt"], "from_key": "8", "to_char": "[", "global": true },
+  { "from_mods": ["ralt"], "from_key": "9", "to_char": "]", "global": true },
+  { "from_mods": ["ralt"], "from_key": "0", "to_char": "}", "global": true },
+  { "from_mods": ["ralt"], "from_key": "section", "to_char": "\\", "global": true },
+  { "from_mods": ["ralt"], "from_key": "rightbracket", "to_char": "|", "global": true },
+  { "from_mods": ["ralt"], "from_key": "leftbracket", "to_char": "~", "global": true },
+  { "from_mods": ["ralt"], "from_key": "m", "to_char": "\u00b5", "global": true }
+]

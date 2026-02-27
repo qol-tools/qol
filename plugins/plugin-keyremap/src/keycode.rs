@@ -8,6 +8,7 @@ pub const ANSI_Z: u16 = 0x06;
 pub const ANSI_X: u16 = 0x07;
 pub const ANSI_C: u16 = 0x08;
 pub const ANSI_V: u16 = 0x09;
+pub const ISO_SECTION: u16 = 0x0A;
 pub const ANSI_B: u16 = 0x0B;
 pub const ANSI_Q: u16 = 0x0C;
 pub const ANSI_W: u16 = 0x0D;
@@ -152,6 +153,7 @@ pub fn parse_key(name: &str) -> Option<u16> {
         "." | "period" => Some(ANSI_PERIOD),
         "/" | "slash" => Some(ANSI_SLASH),
         "`" | "grave" => Some(ANSI_GRAVE),
+        "section" | "iso" => Some(ISO_SECTION),
         _ => None,
     }
 }
@@ -231,6 +233,7 @@ pub fn key_name(code: u16) -> &'static str {
         ANSI_PERIOD => "period",
         ANSI_SLASH => "slash",
         ANSI_GRAVE => "grave",
+        ISO_SECTION => "section",
         _ => "unknown",
     }
 }

@@ -10,7 +10,7 @@ const DEFAULT_CONFIG = {
     scroll_rules: []
 };
 
-const VALID_MODS = new Set(['ctrl', 'shift', 'alt', 'cmd']);
+const VALID_MODS = new Set(['ctrl', 'shift', 'alt', 'cmd', 'ralt', 'altgr']);
 
 let config = { ...DEFAULT_CONFIG };
 
@@ -383,5 +383,75 @@ document.addEventListener('keydown', (event) => {
         saveConfig();
     }
 });
+
+// --- Schema selector ---
+const SCHEMAS_BASE = 'schemas';
+
+async function loadSchemaManifest() {
+    const select = document.getElementById('schema-select');
+    if (!select) return;
+
+    try {
+        const res = await fetch(`${SCHEMAS_BASE}/manifest.json`);
+        if (!res.ok) return;
+        const manifest = await res.json();
+
+        manifest.forEach(s => {
+            const opt = document.createElement('option');
+            opt.value = s.id;
+            opt.textContent = s.name;
+            select.appendChild(opt);
+        });
+
+        // Auto-detect from browser language
+        const lang = (navigator.language || '').split('-')[0].toLowerCase();
+        const match = manifest.find(s => s.lang.includes(lang));
+        if (match) {
+            select.value = match.id;
+        }
+    } catch (e) {
+        console.warn('Could not load schema manifest', e);
+    }
+}
+
+document.getElementById('apply-schema-btn')?.addEventListener('click', async () => {
+    const select = document.getElementById('schema-select');
+    const schemaId = select?.value;
+    if (!schemaId) return;
+
+    try {
+        const res = await fetch(`${SCHEMAS_BASE}/${schemaId}.json`);
+        if (!res.ok) throw new Error(`Failed to load schema ${schemaId}`);
+        const rules = await res.json();
+
+        let added = 0;
+        for (const rule of rules) {
+            const dup = config.char_rules.some(r =>
+                JSON.stringify(r.from_mods) === JSON.stringify(rule.from_mods) &&
+                r.from_key === rule.from_key
+            );
+            if (!dup) {
+                config.char_rules.push({
+                    from_mods: normalizeMods(rule.from_mods),
+                    from_key: String(rule.from_key),
+                    to_char: String(rule.to_char),
+                    global: !!rule.global,
+                });
+                added++;
+            }
+        }
+
+        renderCharRules();
+        const status = document.getElementById('schema-status');
+        if (status) {
+            status.textContent = added > 0 ? `Added ${added} rules` : 'No new rules (all exist)';
+            setTimeout(() => { status.textContent = ''; }, 2000);
+        }
+    } catch (e) {
+        console.error('Failed to apply schema', e);
+    }
+});
+
+loadSchemaManifest();
 
 loadConfig();

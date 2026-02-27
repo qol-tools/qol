@@ -223,12 +223,16 @@ fn strip_all_modifiers(flags: CGEventFlags) -> CGEventFlags {
     f
 }
 
+/// NX_DEVICERALTKEYMASK — device-dependent bit for Right Alt/Option.
+const NX_DEVICERALTKEYMASK: u64 = 0x40;
+
 fn extract_modifiers(flags: CGEventFlags) -> Modifiers {
     Modifiers {
         ctrl: flags.contains(CGEventFlags::CGEventFlagControl),
         shift: flags.contains(CGEventFlags::CGEventFlagShift),
         alt: flags.contains(CGEventFlags::CGEventFlagAlternate),
         cmd: flags.contains(CGEventFlags::CGEventFlagCommand),
+        ralt: (flags.bits() & NX_DEVICERALTKEYMASK) != 0,
     }
 }
 

@@ -91,6 +91,14 @@
         <section class="card">
             <h2>Char Rules</h2>
             <p>Map key combinations to specific characters. Global rules work even in excluded apps.</p>
+            <div class="schema-row">
+                <label for="schema-select">Locale schema:</label>
+                <select id="schema-select" class="key-input schema-select">
+                    <option value="">-- select --</option>
+                </select>
+                <button id="apply-schema-btn" class="btn-add">Apply</button>
+                <span id="schema-status" class="schema-status"></span>
+            </div>
             <div id="char-rules-list" class="rules-list"></div>
             <div class="add-rule-row">
                 <div class="rule-side">
@@ -98,6 +106,7 @@
                         <button class="mod-chip" data-mod="ctrl">ctrl</button>
                         <button class="mod-chip" data-mod="shift">shift</button>
                         <button class="mod-chip" data-mod="alt">alt</button>
+                        <button class="mod-chip" data-mod="ralt">ralt</button>
                         <button class="mod-chip" data-mod="cmd">cmd</button>
                     </div>
                     <input type="text" id="new-char-from-key" placeholder="from key" class="key-input">
