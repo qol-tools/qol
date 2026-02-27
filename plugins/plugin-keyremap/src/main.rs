@@ -32,7 +32,8 @@ fn main() {
     let resolved = remap::resolve(&raw_config);
 
     eprintln!(
-        "[keyremap] loaded {} key rules, {} mouse rules, {} scroll rules, {} excluded apps",
+        "[keyremap] loaded {} char rules, {} key rules, {} mouse rules, {} scroll rules, {} excluded apps",
+        resolved.char_rules.len(),
         resolved.key_rules.len(),
         resolved.mouse_rules.len(),
         resolved.scroll_rules.len(),
@@ -60,7 +61,8 @@ fn main() {
                 let new_raw = config::load_config();
                 let new_resolved = remap::resolve(&new_raw);
                 eprintln!(
-                    "[keyremap] reloaded {} key rules, {} mouse rules, {} scroll rules",
+                    "[keyremap] reloaded {} char rules, {} key rules, {} mouse rules, {} scroll rules",
+                    new_resolved.char_rules.len(),
                     new_resolved.key_rules.len(),
                     new_resolved.mouse_rules.len(),
                     new_resolved.scroll_rules.len(),

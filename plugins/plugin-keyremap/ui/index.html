@@ -89,6 +89,32 @@
         </section>
 
         <section class="card">
+            <h2>Char Rules</h2>
+            <p>Map key combinations to specific characters. Global rules work even in excluded apps.</p>
+            <div id="char-rules-list" class="rules-list"></div>
+            <div class="add-rule-row">
+                <div class="rule-side">
+                    <div class="mod-toggles" data-target="new-char-from">
+                        <button class="mod-chip" data-mod="ctrl">ctrl</button>
+                        <button class="mod-chip" data-mod="shift">shift</button>
+                        <button class="mod-chip" data-mod="alt">alt</button>
+                        <button class="mod-chip" data-mod="cmd">cmd</button>
+                    </div>
+                    <input type="text" id="new-char-from-key" placeholder="from key" class="key-input">
+                </div>
+                <span class="arrow">&rarr;</span>
+                <div class="rule-side">
+                    <input type="text" id="new-char-to-char" placeholder="output char" class="key-input char-input">
+                </div>
+                <label class="global-toggle">
+                    <input type="checkbox" id="new-char-global">
+                    <span>global</span>
+                </label>
+                <button id="add-char-rule-btn" class="btn-add">+ Add</button>
+            </div>
+        </section>
+
+        <section class="card">
             <h2>Mouse Rules</h2>
             <p>Remap modifier keys for mouse clicks (e.g. Ctrl+click to Cmd+click).</p>
             <div id="mouse-rules-list" class="rules-list"></div>

@@ -15,6 +15,7 @@
     "com.microsoft.VSCode",
     "com.todesktop.230313mzl4w4u92"
   ],
+  "char_rules": [],
   "key_rules": [
     {
       "from_mods": ["ctrl"], "to_mods": ["cmd"],

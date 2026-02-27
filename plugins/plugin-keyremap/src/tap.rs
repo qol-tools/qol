@@ -168,6 +168,12 @@ fn handle_key_event(
             event.set_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE, key as i64);
             CallbackResult::Keep
         }
+        KeyAction::Char { ref text } => {
+            let clean_flags = strip_all_modifiers(flags);
+            event.set_flags(clean_flags);
+            event.set_string(text);
+            CallbackResult::Keep
+        }
     }
 }
 
@@ -206,6 +212,15 @@ fn handle_scroll_event(
             CallbackResult::Keep
         }
     }
+}
+
+fn strip_all_modifiers(flags: CGEventFlags) -> CGEventFlags {
+    let mut f = flags;
+    f.remove(CGEventFlags::CGEventFlagControl);
+    f.remove(CGEventFlags::CGEventFlagShift);
+    f.remove(CGEventFlags::CGEventFlagAlternate);
+    f.remove(CGEventFlags::CGEventFlagCommand);
+    f
 }
 
 fn extract_modifiers(flags: CGEventFlags) -> Modifiers {

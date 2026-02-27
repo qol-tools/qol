@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::config::{KeyRule, MouseRule, RemapConfig, ScrollRule};
+use crate::config::{CharRule, KeyRule, MouseRule, RemapConfig, ScrollRule};
 use crate::keycode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,9 +36,17 @@ pub enum MouseButton {
 pub struct ResolvedConfig {
     pub enabled: bool,
     pub excluded_apps: HashSet<String>,
+    pub char_rules: Vec<ResolvedCharRule>,
     pub key_rules: Vec<ResolvedKeyRule>,
     pub mouse_rules: Vec<ResolvedMouseRule>,
     pub scroll_rules: Vec<ResolvedScrollRule>,
+}
+
+pub struct ResolvedCharRule {
+    pub from_mods: Modifiers,
+    pub from_key: u16,
+    pub to_char: String,
+    pub global: bool,
 }
 
 pub struct ResolvedKeyRule {
@@ -59,10 +67,11 @@ pub struct ResolvedScrollRule {
     pub to_mods: Modifiers,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeyAction {
     Passthrough,
     Remap { mods: Modifiers, key: u16 },
+    Char { text: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +90,7 @@ pub fn resolve(config: &RemapConfig) -> ResolvedConfig {
     ResolvedConfig {
         enabled: config.enabled,
         excluded_apps: config.excluded_apps.iter().cloned().collect(),
+        char_rules: config.char_rules.iter().filter_map(resolve_char_rule).collect(),
         key_rules: config.key_rules.iter().flat_map(resolve_key_rule).collect(),
         mouse_rules: config.mouse_rules.iter().filter_map(resolve_mouse_rule).collect(),
         scroll_rules: config.scroll_rules.iter().filter_map(resolve_scroll_rule).collect(),
@@ -93,9 +103,26 @@ pub fn process_key_event(
     key: u16,
     bundle_id: &str,
 ) -> KeyAction {
+    // Phase 1: global char_rules (bypass excluded apps)
+    for rule in &config.char_rules {
+        if rule.global && rule.from_mods.matches(&mods) && rule.from_key == key {
+            return KeyAction::Char { text: rule.to_char.clone() };
+        }
+    }
+
+    // Phase 2: excluded apps check
     if config.excluded_apps.contains(bundle_id) {
         return KeyAction::Passthrough;
     }
+
+    // Phase 3: non-global char_rules
+    for rule in &config.char_rules {
+        if !rule.global && rule.from_mods.matches(&mods) && rule.from_key == key {
+            return KeyAction::Char { text: rule.to_char.clone() };
+        }
+    }
+
+    // Phase 4: key_rules
     for rule in &config.key_rules {
         if rule.from_mods.matches(&mods) && rule.from_key == key {
             return KeyAction::Remap {
@@ -152,6 +179,16 @@ fn parse_modifiers(mods: &[String]) -> Modifiers {
         }
     }
     result
+}
+
+fn resolve_char_rule(rule: &CharRule) -> Option<ResolvedCharRule> {
+    let from_key = keycode::parse_key(&rule.from_key)?;
+    Some(ResolvedCharRule {
+        from_mods: parse_modifiers(&rule.from_mods),
+        from_key,
+        to_char: rule.to_char.clone(),
+        global: rule.global,
+    })
 }
 
 fn resolve_key_rule(rule: &KeyRule) -> Vec<ResolvedKeyRule> {
@@ -280,6 +317,7 @@ mod tests {
             let empty = RemapConfig {
                 enabled: true,
                 excluded_apps: vec![],
+                char_rules: vec![],
                 key_rules: vec![],
                 mouse_rules: vec![],
                 scroll_rules: vec![],
@@ -335,6 +373,7 @@ mod tests {
                         to_key: "x".into(),
                     },
                 ],
+                char_rules: vec![],
                 mouse_rules: vec![],
                 scroll_rules: vec![],
             };

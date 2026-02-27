@@ -352,6 +352,40 @@ select.key-input {
     padding: 0.5rem 0;
 }
 
+.char-output {
+    color: #86d5a3;
+    font-size: 1rem;
+}
+
+.global-badge {
+    padding: 0.15rem 0.4rem;
+    background: rgba(134, 213, 163, 0.2);
+    border: 1px solid rgba(134, 213, 163, 0.3);
+    border-radius: 4px;
+    color: #86d5a3;
+    font-size: 0.7rem;
+    font-family: "SF Mono", "Fira Code", monospace;
+    text-transform: uppercase;
+}
+
+.global-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    color: #9fb1cf;
+    font-size: 0.8rem;
+    cursor: pointer;
+    user-select: none;
+}
+
+.global-toggle input[type="checkbox"] {
+    accent-color: #86d5a3;
+}
+
+.char-input {
+    width: 60px;
+}
+
 @media (max-width: 640px) {
     .panel {
         padding: 1rem;

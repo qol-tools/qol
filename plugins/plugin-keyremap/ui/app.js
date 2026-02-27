@@ -4,6 +4,7 @@ const CONFIG_URL = `/api/plugins/${PLUGIN_ID}/config`;
 const DEFAULT_CONFIG = {
     enabled: true,
     excluded_apps: [],
+    char_rules: [],
     key_rules: [],
     mouse_rules: [],
     scroll_rules: []
@@ -17,6 +18,7 @@ const elements = {
     saveBtn: document.getElementById('save-btn'),
     saveStatus: document.getElementById('save-status'),
     excludedAppsList: document.getElementById('excluded-apps-list'),
+    charRulesList: document.getElementById('char-rules-list'),
     keyRulesList: document.getElementById('key-rules-list'),
     mouseRulesList: document.getElementById('mouse-rules-list'),
     scrollRulesList: document.getElementById('scroll-rules-list'),
@@ -32,6 +34,15 @@ function normalizeConfig(raw) {
 
     const excludedApps = Array.isArray(raw?.excluded_apps)
         ? raw.excluded_apps.filter(a => typeof a === 'string' && a.length > 0)
+        : [];
+
+    const charRules = Array.isArray(raw?.char_rules)
+        ? raw.char_rules.filter(r => r?.from_key && r?.to_char).map(r => ({
+            from_mods: normalizeMods(r.from_mods),
+            from_key: String(r.from_key),
+            to_char: String(r.to_char),
+            global: !!r.global,
+        }))
         : [];
 
     const keyRules = Array.isArray(raw?.key_rules)
@@ -67,7 +78,7 @@ function normalizeConfig(raw) {
         }))
         : [];
 
-    return { enabled, excluded_apps: excludedApps, key_rules: keyRules, mouse_rules: mouseRules, scroll_rules: scrollRules };
+    return { enabled, excluded_apps: excludedApps, char_rules: charRules, key_rules: keyRules, mouse_rules: mouseRules, scroll_rules: scrollRules };
 }
 
 function renderModChips(mods) {
@@ -91,6 +102,23 @@ function renderExcludedApps() {
 
 function renderKeyChips(keys) {
     return keys.map(k => `<span class="key-chip">${k}</span>`).join(' ');
+}
+
+function renderCharRules() {
+    const list = elements.charRulesList;
+    if (config.char_rules.length === 0) {
+        list.innerHTML = '<div class="empty-state">No char rules defined.</div>';
+        return;
+    }
+    list.innerHTML = config.char_rules.map((rule, i) =>
+        `<div class="rule-row">
+            <div class="rule-side">${renderModChips(rule.from_mods)} <span class="key-label">${rule.from_key}</span></div>
+            <span class="arrow">&rarr;</span>
+            <div class="rule-side"><span class="key-label char-output">${rule.to_char}</span></div>
+            ${rule.global ? '<span class="global-badge">global</span>' : ''}
+            <button class="btn-remove" data-type="char" data-index="${i}">&times;</button>
+        </div>`
+    ).join('');
 }
 
 function renderKeyRules() {
@@ -153,6 +181,7 @@ function renderAll() {
     const toggle = document.getElementById('enabled-toggle');
     if (toggle) toggle.checked = config.enabled;
     renderExcludedApps();
+    renderCharRules();
     renderKeyRules();
     renderMouseRules();
     renderScrollRules();
@@ -187,6 +216,9 @@ document.addEventListener('click', (e) => {
     if (type === 'app') {
         config.excluded_apps.splice(index, 1);
         renderExcludedApps();
+    } else if (type === 'char') {
+        config.char_rules.splice(index, 1);
+        renderCharRules();
     } else if (type === 'key') {
         config.key_rules.splice(index, 1);
         renderKeyRules();
@@ -214,6 +246,22 @@ document.getElementById('new-app-input').addEventListener('keydown', (e) => {
         e.preventDefault();
         document.getElementById('add-app-btn').click();
     }
+});
+
+document.getElementById('add-char-rule-btn').addEventListener('click', () => {
+    const fromMods = getActiveMods('new-char-from');
+    const fromKey = document.getElementById('new-char-from-key').value.trim().toLowerCase();
+    const toChar = document.getElementById('new-char-to-char').value;
+    const global = document.getElementById('new-char-global').checked;
+
+    if (!fromKey || !toChar) return;
+
+    config.char_rules.push({ from_mods: fromMods, from_key: fromKey, to_char: toChar, global });
+    document.getElementById('new-char-from-key').value = '';
+    document.getElementById('new-char-to-char').value = '';
+    document.getElementById('new-char-global').checked = false;
+    clearModToggles('new-char-from');
+    renderCharRules();
 });
 
 document.querySelectorAll('.add-rule-tabs .tab-btn').forEach(btn => {

@@ -8,6 +8,7 @@ pub struct RemapConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     pub excluded_apps: Vec<String>,
+    pub char_rules: Vec<CharRule>,
     pub key_rules: Vec<KeyRule>,
     pub mouse_rules: Vec<MouseRule>,
     pub scroll_rules: Vec<ScrollRule>,
@@ -20,6 +21,15 @@ fn default_enabled() -> bool {
 fn builtin_defaults() -> RemapConfig {
     serde_json::from_str(include_str!("../config/default.json"))
         .expect("embedded default config must parse")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CharRule {
+    pub from_mods: Vec<String>,
+    pub from_key: String,
+    pub to_char: String,
+    #[serde(default)]
+    pub global: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
