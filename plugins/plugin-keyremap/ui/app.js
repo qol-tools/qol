@@ -82,6 +82,7 @@ function renderExcludedApps() {
     }
     list.innerHTML = config.excluded_apps.map((app, i) =>
         `<div class="item-row">
+            <img class="app-icon" src="/api/icon/${encodeURIComponent(app)}" width="20" height="20" onerror="this.style.display='none'">
             <span>${app}</span>
             <button class="btn-remove" data-type="app" data-index="${i}">&times;</button>
         </div>`

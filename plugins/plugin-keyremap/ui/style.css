@@ -65,7 +65,7 @@ body {
 .item-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 0.5rem;
     padding: 0.5rem 0.7rem;
     background: rgba(8, 14, 24, 0.6);
     border: 1px solid rgba(107, 129, 176, 0.2);
@@ -73,6 +73,15 @@ body {
     font-family: "SF Mono", "Fira Code", monospace;
     font-size: 0.85rem;
     color: #d7e4ff;
+}
+
+.app-icon {
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+
+.item-row .btn-remove {
+    margin-left: auto;
 }
 
 .btn-remove {
