@@ -142,6 +142,7 @@ pub(super) async fn get_plugin_config(Path(plugin_id): Path<String>) -> impl Int
 
 pub(super) async fn set_plugin_config(
     Path(plugin_id): Path<String>,
+    State(state): State<AppState>,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
     if !is_safe_path_component(&plugin_id) {
@@ -163,11 +164,41 @@ pub(super) async fn set_plugin_config(
     match PluginConfigManager::new().and_then(|m| m.set_config(&plugin_id, config)) {
         Ok(()) => {
             log::info!("Config saved for plugin: {}", plugin_id);
+            notify_plugin_reload(&state, &plugin_id);
             (StatusCode::OK, "Config saved").into_response()
         }
         Err(e) => {
             log::error!("Failed to save config: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save config").into_response()
+        }
+    }
+}
+
+fn notify_plugin_reload(state: &AppState, plugin_id: &str) {
+    let socket_path = {
+        let manager = state.plugin_manager.lock().unwrap();
+        manager.get(plugin_id).and_then(|p| {
+            p.manifest.daemon.as_ref()?.socket.clone()
+        })
+    };
+
+    let Some(path) = socket_path else { return };
+
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::net::UnixStream;
+
+        match UnixStream::connect(&path) {
+            Ok(mut stream) => {
+                let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(500)));
+                if stream.write_all(b"reload").is_ok() {
+                    log::info!("Sent reload to plugin {} via {}", plugin_id, path);
+                }
+            }
+            Err(e) => {
+                log::debug!("Could not connect to plugin socket {}: {}", path, e);
+            }
         }
     }
 }
