@@ -290,6 +290,7 @@ where
         Ok(status) => {
             let success = status.success();
             if success {
+                codesign_debug_binaries(plugin_id, path);
                 on_progress(100, "Build complete".to_string());
                 log::info!("Cargo build succeeded for {}", plugin_id);
             } else {
@@ -314,3 +315,55 @@ where
         }
     }
 }
+
+#[cfg(target_os = "macos")]
+fn codesign_debug_binaries(plugin_id: &str, plugin_path: &Path) {
+    let identity = match std::env::var("QOL_CODESIGN_IDENTITY") {
+        Ok(id) if !id.is_empty() => id,
+        _ => return,
+    };
+
+    let debug_dir = plugin_path.join("target/debug");
+    let entries = match std::fs::read_dir(&debug_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let meta = match std::fs::metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o111 == 0 {
+            continue;
+        }
+        if path.extension().is_some() {
+            continue;
+        }
+        let status = Command::new("codesign")
+            .args(["-fs", &identity])
+            .arg(&path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .status();
+        match status {
+            Ok(s) if s.success() => {
+                log::debug!("[{}] codesigned {}", plugin_id, path.display());
+            }
+            Ok(_) => {
+                log::warn!("[{}] codesign failed for {}", plugin_id, path.display());
+            }
+            Err(e) => {
+                log::warn!("[{}] codesign exec failed: {}", plugin_id, e);
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn codesign_debug_binaries(_plugin_id: &str, _plugin_path: &Path) {}
