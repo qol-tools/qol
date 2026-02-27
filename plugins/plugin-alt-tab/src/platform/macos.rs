@@ -55,17 +55,6 @@ extern "C" {
     fn CGImageGetBitsPerPixel(image: CGImageRef) -> usize;
     fn CGImageGetDataProvider(image: CGImageRef) -> CGDataProviderRef;
     fn CGDataProviderCopyData(provider: CGDataProviderRef) -> CFDataRef;
-    fn CGColorSpaceCreateDeviceRGB() -> *const c_void;
-    fn CGBitmapContextCreate(
-        data: *mut c_void,
-        width: usize,
-        height: usize,
-        bits_per_component: usize,
-        bytes_per_row: usize,
-        space: *const c_void,
-        bitmap_info: u32,
-    ) -> *const c_void;
-    fn CGContextDrawImage(ctx: *const c_void, rect: CGRect, image: CGImageRef);
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -790,72 +779,11 @@ pub fn get_app_icons(windows: &[WindowInfo]) -> HashMap<String, RgbaImage> {
         if !needed.contains(name.as_str()) {
             continue;
         }
-        if let Some(icon) = extract_app_icon(*pid) {
+        if let Some(icon) = qol_plugin_api::app_icon::icon_for_pid(*pid, ICON_SIZE) {
             icons.insert(name.clone(), icon);
         }
     }
     icons
-}
-
-fn extract_app_icon(pid: i32) -> Option<RgbaImage> {
-    use objc2_app_kit::NSRunningApplication;
-
-    objc2::rc::autoreleasepool(|_pool| {
-        let app = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)?;
-        let ns_image = app.icon()?;
-
-        let cg_image = unsafe {
-            ns_image.CGImageForProposedRect_context_hints(
-                std::ptr::null_mut(),
-                None,
-                None,
-            )
-        }?;
-
-        let img_ptr = &*cg_image as *const objc2_core_graphics::CGImage as CGImageRef;
-
-        // Draw into a CGBitmapContext with known BGRA format.
-        // This normalises any source pixel format (wide color, different alpha,
-        // varying bpp) into the 32-bit BGRA that gpui expects.
-        let sz = ICON_SIZE;
-        let row_bytes = sz * 4;
-        let mut buf = vec![0u8; sz * row_bytes];
-
-        let color_space = unsafe { CGColorSpaceCreateDeviceRGB() };
-        if color_space.is_null() {
-            return None;
-        }
-
-        // kCGImageAlphaPremultipliedFirst (2) | kCGBitmapByteOrder32Little (2 << 12 = 8192)
-        // = BGRA premultiplied, little-endian 32-bit — matches gpui/CG window captures.
-        let bitmap_info: u32 = 2 | (2 << 12);
-
-        let ctx = unsafe {
-            CGBitmapContextCreate(
-                buf.as_mut_ptr() as *mut c_void,
-                sz,
-                sz,
-                8,
-                row_bytes,
-                color_space,
-                bitmap_info,
-            )
-        };
-        unsafe { CFRelease(color_space) };
-
-        if ctx.is_null() {
-            return None;
-        }
-
-        let draw_rect = CGRect {
-            origin: CGPoint { x: 0.0, y: 0.0 },
-            size: CGSize { width: sz as f64, height: sz as f64 },
-        };
-        unsafe { CGContextDrawImage(ctx, draw_rect, img_ptr) };
-        unsafe { CFRelease(ctx) };
-
-        Some(RgbaImage { data: buf, width: sz, height: sz })
-    })
 }
 
 pub fn capture_previews_cg(

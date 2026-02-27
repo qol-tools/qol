@@ -1,12 +1,7 @@
 #[cfg(target_os = "macos")]
 pub(crate) mod cg_helpers;
 
-#[derive(Debug, Clone)]
-pub struct RgbaImage {
-    pub data: Vec<u8>,
-    pub width: usize,
-    pub height: usize,
-}
+pub use qol_plugin_api::app_icon::RgbaImage;
 
 #[derive(Debug, Clone)]
 pub struct WindowInfo {
