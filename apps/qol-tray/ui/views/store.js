@@ -60,7 +60,7 @@ export function render(containerEl) {
     document.getElementById('content-footer').innerHTML = renderShortcutLegend([
         { key: '←↑↓→', label: 'navigate' },
         { key: 'Enter', label: 'install' },
-        { key: '/', label: 'search' },
+        { key: 's', label: 'search' },
         { key: 't', label: 'token' },
         { key: '⌘R', label: 'refresh' }
     ]);
@@ -382,7 +382,7 @@ const keyHandlers = {
     ArrowLeft: () => navigateHorizontal(-1),
     ArrowRight: () => navigateHorizontal(1),
     Enter: installSelected,
-    '/': () => { searchInput?.focus(); },
+    's': () => { searchInput?.focus(); },
     't': openTokenInput,
     'T': openTokenInput
 };
