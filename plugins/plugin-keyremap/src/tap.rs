@@ -171,6 +171,12 @@ fn handle_key_event(
         KeyAction::Char { ref text } => {
             let clean_flags = strip_all_modifiers(flags);
             event.set_flags(clean_flags);
+            // Set keycode to SPACE so dead-key positions (like ´ on Nordic)
+            // don't trigger the input method's dead-key state machine.
+            event.set_integer_value_field(
+                EventField::KEYBOARD_EVENT_KEYCODE,
+                crate::keycode::SPACE as i64,
+            );
             event.set_string(text);
             CallbackResult::Keep
         }
