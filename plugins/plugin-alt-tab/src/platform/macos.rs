@@ -661,53 +661,72 @@ fn ax_is_window_minimized(pid: i32, cg_window_id: u32, title: &str) -> bool {
     result
 }
 
-/// Deduplicate CG windows using the Accessibility API.
+/// Deduplicate CG windows using the Accessibility API while preserving z-order.
 /// Apps like Kitty create multiple CG windows per visual window (one per tab).
 /// AX reports the real user-visible window count. For each PID, keep only
-/// that many CG windows (frontmost first, since CG returns front-to-back order).
+/// that many CG windows, but each kept window stays at its original z-position
+/// so that windows from different apps remain correctly interleaved.
 fn dedup_by_ax(windows: Vec<CgWindow>) -> Vec<CgWindow> {
-    let mut by_pid: HashMap<i32, Vec<CgWindow>> = HashMap::new();
-    let mut pid_order: Vec<i32> = Vec::new();
-    for cw in windows {
-        if !by_pid.contains_key(&cw.pid) {
-            pid_order.push(cw.pid);
-        }
-        by_pid.entry(cw.pid).or_default().push(cw);
+    let mut cg_count_by_pid: HashMap<i32, usize> = HashMap::new();
+    for w in &windows {
+        *cg_count_by_pid.entry(w.pid).or_insert(0) += 1;
     }
 
-    let mut result = Vec::new();
-    for pid in pid_order {
-        let wins = by_pid.remove(&pid).unwrap();
-        if wins.len() <= 1 {
-            result.extend(wins);
-            continue;
-        }
-        if let Some(ax_meta) = ax_windows(pid) {
-            let keep = ax_meta.len().max(1);
-            let ax_ids: HashSet<u32> = ax_meta.keys().copied().collect();
-            let mut matched = Vec::new();
-            let mut unmatched = Vec::new();
-            for mut win in wins {
-                if ax_ids.contains(&win.id) {
-                    if let Some(meta) = ax_meta.get(&win.id) {
-                        if !meta.title.is_empty() {
-                            win.title = meta.title.clone();
-                        }
-                    }
-                    matched.push(win);
-                } else {
-                    unmatched.push(win);
-                }
-            }
-            if !matched.is_empty() {
-                result.extend(matched.into_iter().take(keep));
-                continue;
-            }
-            result.extend(unmatched.into_iter().take(keep));
-            continue;
-        }
-        result.extend(wins);
+    let multi_pids: Vec<i32> = cg_count_by_pid
+        .iter()
+        .filter(|(_, count)| **count > 1)
+        .map(|(pid, _)| *pid)
+        .collect();
+
+    struct PidDedup {
+        ax_ids: HashSet<u32>,
+        ax_meta: HashMap<u32, AxWindowMeta>,
+        budget: usize,
     }
+
+    let mut dedup_info: HashMap<i32, Option<PidDedup>> = HashMap::new();
+    for pid in multi_pids {
+        let info = ax_windows(pid).map(|meta| {
+            let budget = meta.len().max(1);
+            let ax_ids = meta.keys().copied().collect();
+            PidDedup { ax_ids, ax_meta: meta, budget }
+        });
+        dedup_info.insert(pid, info);
+    }
+
+    let mut result = Vec::with_capacity(windows.len());
+    let mut emitted_by_pid: HashMap<i32, usize> = HashMap::new();
+
+    for mut win in windows {
+        let Some(info) = dedup_info.get_mut(&win.pid) else {
+            result.push(win);
+            continue;
+        };
+
+        let Some(dedup) = info.as_mut() else {
+            result.push(win);
+            continue;
+        };
+
+        let emitted = emitted_by_pid.entry(win.pid).or_insert(0);
+        if *emitted >= dedup.budget {
+            continue;
+        }
+
+        if !dedup.ax_ids.is_empty() && !dedup.ax_ids.contains(&win.id) {
+            continue;
+        }
+
+        if let Some(meta) = dedup.ax_meta.get(&win.id) {
+            if !meta.title.is_empty() {
+                win.title = meta.title.clone();
+            }
+        }
+
+        *emitted += 1;
+        result.push(win);
+    }
+
     result
 }
 
