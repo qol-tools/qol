@@ -39,12 +39,16 @@ pub enum KeyRule {
         from_mods: Vec<String>,
         to_mods: Vec<String>,
         keys: Vec<String>,
+        #[serde(default)]
+        global: bool,
     },
     Single {
         from_mods: Vec<String>,
         from_key: String,
         to_mods: Vec<String>,
         to_key: String,
+        #[serde(default)]
+        global: bool,
     },
 }
 
@@ -53,12 +57,16 @@ pub struct MouseRule {
     pub from_mods: Vec<String>,
     pub button: String,
     pub to_mods: Vec<String>,
+    #[serde(default)]
+    pub global: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScrollRule {
     pub from_mods: Vec<String>,
     pub to_mods: Vec<String>,
+    #[serde(default)]
+    pub global: bool,
 }
 
 pub fn load_config() -> RemapConfig {

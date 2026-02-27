@@ -69,17 +69,20 @@ pub struct ResolvedKeyRule {
     pub from_key: u16,
     pub to_mods: Modifiers,
     pub to_key: u16,
+    pub global: bool,
 }
 
 pub struct ResolvedMouseRule {
     pub from_mods: Modifiers,
     pub button: MouseButton,
     pub to_mods: Modifiers,
+    pub global: bool,
 }
 
 pub struct ResolvedScrollRule {
     pub from_mods: Modifiers,
     pub to_mods: Modifiers,
+    pub global: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,21 +175,31 @@ pub fn process_key_event(
         }
     }
 
-    // Phase 2: excluded apps check
+    // Phase 2: global key_rules (bypass excluded apps)
+    for rule in &config.key_rules {
+        if rule.global && rule.from_mods.matches(&mods) && rule.from_key == key {
+            return KeyAction::Remap {
+                mods: rule.to_mods,
+                key: rule.to_key,
+            };
+        }
+    }
+
+    // Phase 3: excluded apps check
     if config.excluded_apps.contains(bundle_id) {
         return KeyAction::Passthrough;
     }
 
-    // Phase 3: non-global char_rules
+    // Phase 4: non-global char_rules
     for rule in &config.char_rules {
         if !rule.global && rule.from_mods.matches(&mods) && rule.from_key == key {
             return KeyAction::Char { text: rule.to_char.clone() };
         }
     }
 
-    // Phase 4: key_rules
+    // Phase 5: non-global key_rules
     for rule in &config.key_rules {
-        if rule.from_mods.matches(&mods) && rule.from_key == key {
+        if !rule.global && rule.from_mods.matches(&mods) && rule.from_key == key {
             return KeyAction::Remap {
                 mods: rule.to_mods,
                 key: rule.to_key,
@@ -202,11 +215,16 @@ pub fn process_mouse_event(
     button: MouseButton,
     bundle_id: &str,
 ) -> MouseAction {
+    for rule in &config.mouse_rules {
+        if rule.global && rule.from_mods.matches(&mods) && rule.button == button {
+            return MouseAction::Remap { mods: rule.to_mods };
+        }
+    }
     if config.excluded_apps.contains(bundle_id) {
         return MouseAction::Passthrough;
     }
     for rule in &config.mouse_rules {
-        if rule.from_mods.matches(&mods) && rule.button == button {
+        if !rule.global && rule.from_mods.matches(&mods) && rule.button == button {
             return MouseAction::Remap { mods: rule.to_mods };
         }
     }
@@ -218,11 +236,16 @@ pub fn process_scroll_event(
     mods: Modifiers,
     bundle_id: &str,
 ) -> ScrollAction {
+    for rule in &config.scroll_rules {
+        if rule.global && rule.from_mods.matches(&mods) {
+            return ScrollAction::Remap { mods: rule.to_mods };
+        }
+    }
     if config.excluded_apps.contains(bundle_id) {
         return ScrollAction::Passthrough;
     }
     for rule in &config.scroll_rules {
-        if rule.from_mods.matches(&mods) {
+        if !rule.global && rule.from_mods.matches(&mods) {
             return ScrollAction::Remap { mods: rule.to_mods };
         }
     }
@@ -259,9 +282,10 @@ fn resolve_char_rule(rule: &CharRule) -> Option<ResolvedCharRule> {
 
 fn resolve_key_rule(rule: &KeyRule) -> Vec<ResolvedKeyRule> {
     match rule {
-        KeyRule::Batch { from_mods, to_mods, keys } => {
+        KeyRule::Batch { from_mods, to_mods, keys, global } => {
             let from = parse_modifiers(from_mods);
             let to = parse_modifiers(to_mods);
+            let global = *global;
             keys.iter()
                 .filter_map(|k| {
                     let code = keycode::parse_key(k)?;
@@ -270,11 +294,12 @@ fn resolve_key_rule(rule: &KeyRule) -> Vec<ResolvedKeyRule> {
                         from_key: code,
                         to_mods: to,
                         to_key: code,
+                        global,
                     })
                 })
                 .collect()
         }
-        KeyRule::Single { from_mods, from_key, to_mods, to_key } => {
+        KeyRule::Single { from_mods, from_key, to_mods, to_key, global } => {
             let Some(fk) = keycode::parse_key(from_key) else { return vec![] };
             let Some(tk) = keycode::parse_key(to_key) else { return vec![] };
             vec![ResolvedKeyRule {
@@ -282,6 +307,7 @@ fn resolve_key_rule(rule: &KeyRule) -> Vec<ResolvedKeyRule> {
                 from_key: fk,
                 to_mods: parse_modifiers(to_mods),
                 to_key: tk,
+                global: *global,
             }]
         }
     }
@@ -300,6 +326,7 @@ fn resolve_mouse_rule(rule: &MouseRule) -> Option<ResolvedMouseRule> {
         from_mods: parse_modifiers(&rule.from_mods),
         button,
         to_mods: parse_modifiers(&rule.to_mods),
+        global: rule.global,
     })
 }
 
@@ -307,6 +334,7 @@ fn resolve_scroll_rule(rule: &ScrollRule) -> Option<ResolvedScrollRule> {
     Some(ResolvedScrollRule {
         from_mods: parse_modifiers(&rule.from_mods),
         to_mods: parse_modifiers(&rule.to_mods),
+        global: rule.global,
     })
 }
 

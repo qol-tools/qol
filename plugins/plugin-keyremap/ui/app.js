@@ -53,6 +53,7 @@ function normalizeConfig(raw) {
                     from_mods: normalizeMods(r.from_mods),
                     to_mods: normalizeMods(r.to_mods),
                     keys: r.keys.filter(k => typeof k === 'string' && k.length > 0),
+                    global: !!r.global,
                 };
             }
             return {
@@ -60,6 +61,7 @@ function normalizeConfig(raw) {
                 from_key: String(r.from_key),
                 to_mods: normalizeMods(r.to_mods),
                 to_key: String(r.to_key),
+                global: !!r.global,
             };
         })
         : [];
@@ -69,6 +71,7 @@ function normalizeConfig(raw) {
             from_mods: normalizeMods(r.from_mods),
             button: String(r.button),
             to_mods: normalizeMods(r.to_mods),
+            global: !!r.global,
         }))
         : [];
 
@@ -76,6 +79,7 @@ function normalizeConfig(raw) {
         ? raw.scroll_rules.map(r => ({
             from_mods: normalizeMods(r?.from_mods),
             to_mods: normalizeMods(r?.to_mods),
+            global: !!r.global,
         }))
         : [];
 
@@ -129,11 +133,13 @@ function renderKeyRules() {
         return;
     }
     list.innerHTML = config.key_rules.map((rule, i) => {
+        const globalBadge = rule.global ? '<span class="global-badge">global</span>' : '';
         if (rule.keys) {
             return `<div class="rule-row batch-rule">
                 <div class="rule-side">${renderModChips(rule.from_mods)} ${renderKeyChips(rule.keys)}</div>
                 <span class="arrow">&rarr;</span>
                 <div class="rule-side">${renderModChips(rule.to_mods)} <span class="key-label-hint">same key</span></div>
+                ${globalBadge}
                 <button class="btn-remove" data-type="key" data-index="${i}">&times;</button>
             </div>`;
         }
@@ -141,6 +147,7 @@ function renderKeyRules() {
             <div class="rule-side">${renderModChips(rule.from_mods)} <span class="key-label">${rule.from_key}</span></div>
             <span class="arrow">&rarr;</span>
             <div class="rule-side">${renderModChips(rule.to_mods)} <span class="key-label">${rule.to_key}</span></div>
+            ${globalBadge}
             <button class="btn-remove" data-type="key" data-index="${i}">&times;</button>
         </div>`;
     }).join('');
@@ -157,6 +164,7 @@ function renderMouseRules() {
             <div class="rule-side">${renderModChips(rule.from_mods)} <span class="key-label">${rule.button} click</span></div>
             <span class="arrow">&rarr;</span>
             <div class="rule-side">${renderModChips(rule.to_mods)}</div>
+            ${rule.global ? '<span class="global-badge">global</span>' : ''}
             <button class="btn-remove" data-type="mouse" data-index="${i}">&times;</button>
         </div>`
     ).join('');
@@ -173,6 +181,7 @@ function renderScrollRules() {
             <div class="rule-side">${renderModChips(rule.from_mods)} <span class="key-label">scroll</span></div>
             <span class="arrow">&rarr;</span>
             <div class="rule-side">${renderModChips(rule.to_mods)} <span class="key-label">scroll</span></div>
+            ${rule.global ? '<span class="global-badge">global</span>' : ''}
             <button class="btn-remove" data-type="scroll" data-index="${i}">&times;</button>
         </div>`
     ).join('');
@@ -291,8 +300,10 @@ document.getElementById('add-key-batch-btn').addEventListener('click', () => {
     const keys = keysInput.split(',').map(k => k.trim().toLowerCase()).filter(k => k.length > 0);
     if (keys.length === 0) return;
 
-    config.key_rules.push({ from_mods: fromMods, to_mods: toMods, keys });
+    const global = document.getElementById('new-key-batch-global').checked;
+    config.key_rules.push({ from_mods: fromMods, to_mods: toMods, keys, global });
     document.getElementById('new-key-batch-keys').value = '';
+    document.getElementById('new-key-batch-global').checked = false;
     clearModToggles('new-key-batch-from');
     clearModToggles('new-key-batch-to');
     clearSaveWarnings();
@@ -307,10 +318,12 @@ document.getElementById('add-key-rule-btn').addEventListener('click', () => {
 
     if (!fromKey || !toKey) return;
 
+    const global = document.getElementById('new-key-single-global').checked;
     clearSaveWarnings();
-    config.key_rules.push({ from_mods: fromMods, from_key: fromKey, to_mods: toMods, to_key: toKey });
+    config.key_rules.push({ from_mods: fromMods, from_key: fromKey, to_mods: toMods, to_key: toKey, global });
     document.getElementById('new-key-from-key').value = '';
     document.getElementById('new-key-to-key').value = '';
+    document.getElementById('new-key-single-global').checked = false;
     clearModToggles('new-key-from');
     clearModToggles('new-key-to');
     renderKeyRules();
@@ -320,8 +333,10 @@ document.getElementById('add-mouse-rule-btn').addEventListener('click', () => {
     const fromMods = getActiveMods('new-mouse-from');
     const button = document.getElementById('new-mouse-button').value;
     const toMods = getActiveMods('new-mouse-to');
+    const global = document.getElementById('new-mouse-global').checked;
 
-    config.mouse_rules.push({ from_mods: fromMods, button, to_mods: toMods });
+    config.mouse_rules.push({ from_mods: fromMods, button, to_mods: toMods, global });
+    document.getElementById('new-mouse-global').checked = false;
     clearModToggles('new-mouse-from');
     clearModToggles('new-mouse-to');
     renderMouseRules();
@@ -330,8 +345,10 @@ document.getElementById('add-mouse-rule-btn').addEventListener('click', () => {
 document.getElementById('add-scroll-rule-btn').addEventListener('click', () => {
     const fromMods = getActiveMods('new-scroll-from');
     const toMods = getActiveMods('new-scroll-to');
+    const global = document.getElementById('new-scroll-global').checked;
 
-    config.scroll_rules.push({ from_mods: fromMods, to_mods: toMods });
+    config.scroll_rules.push({ from_mods: fromMods, to_mods: toMods, global });
+    document.getElementById('new-scroll-global').checked = false;
     clearModToggles('new-scroll-from');
     clearModToggles('new-scroll-to');
     renderScrollRules();
