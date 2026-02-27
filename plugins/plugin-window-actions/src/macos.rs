@@ -412,11 +412,16 @@ mod ax {
 
     fn primary_screen_height() -> f64 {
         unsafe {
-            let main = msg_ptr(cls("NSScreen"), sel("mainScreen"));
-            if main.is_null() {
+            let screens = msg_ptr(cls("NSScreen"), sel("screens"));
+            if screens.is_null() {
                 return 0.0;
             }
-            let frame = msg_rect(main, sel("frame"));
+            let count = msg_usize(screens, sel("count"));
+            if count == 0 {
+                return 0.0;
+            }
+            let primary = msg_ptr_usize(screens, sel("objectAtIndex:"), 0);
+            let frame = msg_rect(primary, sel("frame"));
             frame.size.height
         }
     }
@@ -534,9 +539,11 @@ mod ax {
                     &size as *const _ as *const c_void,
                 );
 
-                // Set position first, then size.
+                // Position → size → position: macOS may adjust position
+                // when resizing across monitors, so we correct it after.
                 let e1 = AXUIElementSetAttributeValue(win, ax_pos, pos_val);
                 let e2 = AXUIElementSetAttributeValue(win, ax_size, size_val);
+                AXUIElementSetAttributeValue(win, ax_pos, pos_val);
 
                 CFRelease(pos_val);
                 CFRelease(size_val);
