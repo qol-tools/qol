@@ -14,7 +14,7 @@ pub enum Command {
 }
 
 pub fn send_reload() -> bool {
-    core_daemon::send_raw(&CONFIG, b"reload", false)
+    core_daemon::send_action(&CONFIG, "reload", false)
 }
 
 pub fn send_kill() -> bool {
