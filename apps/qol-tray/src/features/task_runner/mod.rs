@@ -204,6 +204,7 @@ fn replace_template_vars(template: &str, mut replacer: impl FnMut(&str) -> Strin
 
         let Some(end) = after_open.find("}}") else {
             result.push_str(&rest[start..]);
+            rest = "";
             break;
         };
 
