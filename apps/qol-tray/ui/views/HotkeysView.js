@@ -55,6 +55,12 @@ export function HotkeysView() {
 
     const hotkeysRef = useRef(hotkeys);
     hotkeysRef.current = hotkeys;
+    const selectedIndexRef = useRef(selectedIndex);
+    selectedIndexRef.current = selectedIndex;
+    const editModalRef = useRef(editModal);
+    editModalRef.current = editModal;
+    const modalFieldIndexRef = useRef(modalFieldIndex);
+    modalFieldIndexRef.current = modalFieldIndex;
 
     // Footer shortcuts
     useEffect(() => {
@@ -124,21 +130,22 @@ export function HotkeysView() {
         });
     }, [getAvailableActions]);
 
-    // Save hotkey
+    // Save hotkey — stable via ref
     const saveHotkey = useCallback(() => {
-        if (!editModal?.key || !editModal?.pluginId || !editModal?.action) return;
+        const modal = editModalRef.current;
+        if (!modal?.key || !modal?.pluginId || !modal?.action) return;
         const entry = {
-            id: editModal.hotkey?.id || `hk-${Date.now()}`,
-            key: editModal.key,
-            plugin_id: editModal.pluginId,
-            action: editModal.action,
+            id: modal.hotkey?.id || `hk-${Date.now()}`,
+            key: modal.key,
+            plugin_id: modal.pluginId,
+            action: modal.action,
             enabled: true
         };
-        const isEditing = !!editModal.hotkey;
+        const isEditing = !!modal.hotkey;
         setHotkeys(prev => {
             let next;
             if (isEditing) {
-                next = prev.map(h => h.id === editModal.hotkey.id ? entry : h);
+                next = prev.map(h => h.id === modal.hotkey.id ? entry : h);
             } else {
                 next = [...prev, entry];
                 setSelectedIndex(next.length - 1);
@@ -149,8 +156,7 @@ export function HotkeysView() {
         if (isEditing) {
             setEditModal(null);
         } else {
-            // Reset for next hotkey
-            const available = getAvailableActions(editModal.pluginId, entry.id);
+            const available = getAvailableActions(modal.pluginId, entry.id);
             if (available.length > 0) {
                 setEditModal(prev => ({
                     ...prev, hotkey: null, key: '', action: available[0]?.id || '',
@@ -161,16 +167,18 @@ export function HotkeysView() {
                 setEditModal(null);
             }
         }
-    }, [editModal, persistHotkeys, getAvailableActions]);
+    }, [persistHotkeys, getAvailableActions]);
 
-    // Delete
+    // Delete — stable via refs
     const deleteSelected = useCallback(() => {
-        if (selectedIndex < 0 || selectedIndex >= hotkeys.length) return;
-        const next = hotkeys.filter((_, i) => i !== selectedIndex);
+        const idx = selectedIndexRef.current;
+        const hks = hotkeysRef.current;
+        if (idx < 0 || idx >= hks.length) return;
+        const next = hks.filter((_, i) => i !== idx);
         setHotkeys(next);
-        setSelectedIndex(Math.min(selectedIndex, Math.max(0, next.length - 1)));
+        setSelectedIndex(Math.min(idx, Math.max(0, next.length - 1)));
         persistHotkeys(next);
-    }, [selectedIndex, hotkeys, persistHotkeys]);
+    }, [persistHotkeys]);
 
     // Key recording handler
     const handleRecordingKey = useCallback((e) => {
@@ -194,10 +202,11 @@ export function HotkeysView() {
         }
     }, []);
 
-    // Keyboard handler
+    // Keyboard handler — stable via refs
     const handleKey = useCallback((e) => {
-        if (editModal) {
-            if (editModal.recording) { handleRecordingKey(e); return; }
+        const modal = editModalRef.current;
+        if (modal) {
+            if (modal.recording) { handleRecordingKey(e); return; }
             if (e.key === 'Escape') { e.preventDefault(); setEditModal(null); return; }
             if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); saveHotkey(); return; }
             if (e.key === 'Enter') {
@@ -210,7 +219,6 @@ export function HotkeysView() {
                 } else if (active?.classList.contains('modal-save')) {
                     saveHotkey();
                 } else {
-                    // Focus next field
                     const fields = Array.from(document.querySelectorAll('.edit-modal [tabindex]'));
                     const idx = fields.indexOf(active);
                     if (idx >= 0 && idx + 1 < fields.length) fields[idx + 1].focus();
@@ -222,16 +230,18 @@ export function HotkeysView() {
                 const fields = Array.from(document.querySelectorAll('.edit-modal [tabindex]'));
                 if (fields.length === 0) return;
                 const dir = e.shiftKey ? -1 : 1;
-                const next = (modalFieldIndex + dir + fields.length) % fields.length;
+                const next = (modalFieldIndexRef.current + dir + fields.length) % fields.length;
                 setModalFieldIndex(next);
                 fields[next]?.focus();
             }
             return;
         }
+        const hks = hotkeysRef.current;
+        const idx = selectedIndexRef.current;
         const handlers = {
             ArrowUp: () => setSelectedIndex(i => Math.max(0, i - 1)),
-            ArrowDown: () => setSelectedIndex(i => Math.min(hotkeys.length - 1, i + 1)),
-            Enter: () => { if (hotkeys.length > 0 && selectedIndex >= 0) openEditModal(hotkeys[selectedIndex]); },
+            ArrowDown: () => setSelectedIndex(i => Math.min(hks.length - 1, i + 1)),
+            Enter: () => { if (hks.length > 0 && idx >= 0) openEditModal(hks[idx]); },
             a: () => openEditModal(),
             A: () => openEditModal(),
             d: deleteSelected,
@@ -239,9 +249,9 @@ export function HotkeysView() {
         };
         const handler = handlers[e.key];
         if (handler) { e.preventDefault(); handler(); }
-    }, [editModal, handleRecordingKey, saveHotkey, modalFieldIndex, hotkeys, selectedIndex, openEditModal, deleteSelected]);
+    }, [handleRecordingKey, saveHotkey, openEditModal, deleteSelected]);
 
-    const isBlocking = useCallback(() => editModal !== null, [editModal]);
+    const isBlocking = useCallback(() => editModalRef.current !== null, []);
 
     HotkeysView.handleKey = handleKey;
     HotkeysView.isBlocking = isBlocking;

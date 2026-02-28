@@ -1,8 +1,12 @@
-import { useEffect } from 'preact/hooks';
+import { useEffect, useRef } from 'preact/hooks';
 
 export function useKeyboard(handler) {
+    const handlerRef = useRef(handler);
+    handlerRef.current = handler;
+
     useEffect(() => {
-        document.addEventListener('keydown', handler);
-        return () => document.removeEventListener('keydown', handler);
-    }, [handler]);
+        const listener = (e) => handlerRef.current(e);
+        document.addEventListener('keydown', listener);
+        return () => document.removeEventListener('keydown', listener);
+    }, []);
 }
