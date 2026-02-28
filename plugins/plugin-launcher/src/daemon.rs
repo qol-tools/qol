@@ -14,7 +14,7 @@ pub enum Command {
 }
 
 pub fn send_show() -> bool {
-    core_daemon::send_raw(&CONFIG, b"show", true)
+    core_daemon::send_action(&CONFIG, "show", true)
 }
 
 pub fn send_kill() -> bool {
