@@ -98,6 +98,7 @@ async fn async_init() -> Result<(
 
     // Start platform state server before plugins so the socket is ready
     // when plugin daemons start and try to connect.
+    #[cfg(unix)]
     let _state_server = qol_tray::runtime::RuntimeServer::start();
 
     let mut plugin_manager = PluginManager::new();

@@ -120,6 +120,7 @@ impl Plugin {
 
         let pid = child.id();
         self.daemon_process = Some(child);
+        #[cfg(unix)]
         crate::os::display::add_ignore_pid(pid);
         crate::signal::register_daemon_pid(pid);
         log::info!("Registered ignore pid {} for plugin {}", pid, self.id);
