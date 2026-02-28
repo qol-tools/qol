@@ -36,6 +36,18 @@ export function TaskRunnerView() {
     const [testResult, setTestResult] = useState(null);
     const [testRunning, setTestRunning] = useState(false);
 
+    // Refs for stable callbacks
+    const actionIdsRef = useRef(actionIds);
+    actionIdsRef.current = actionIds;
+    const selectedIndexRef = useRef(selectedIndex);
+    selectedIndexRef.current = selectedIndex;
+    const editModalRef = useRef(editModal);
+    editModalRef.current = editModal;
+    const testingIdRef = useRef(testingId);
+    testingIdRef.current = testingId;
+    const actionsRef = useRef(actions);
+    actionsRef.current = actions;
+
     // Load stylesheet
     useEffect(() => {
         if (document.getElementById(CSS_ID)) return;
@@ -79,18 +91,20 @@ export function TaskRunnerView() {
         } catch {}
     }, []);
 
-    // Delete
+    // Delete — stable via refs
     const deleteAction = useCallback(() => {
-        if (actionIds.length === 0 || selectedIndex < 0) return;
-        const id = actionIds[selectedIndex];
+        const ids = actionIdsRef.current;
+        const idx = selectedIndexRef.current;
+        if (ids.length === 0 || idx < 0) return;
+        const id = ids[idx];
         setActions(prev => { const next = { ...prev }; delete next[id]; persistConfig(next); return next; });
         setActionIds(prev => { const next = prev.filter(a => a !== id); return next; });
-        setSelectedIndex(prev => Math.min(prev, Math.max(0, actionIds.length - 2)));
-    }, [actionIds, selectedIndex, persistConfig]);
+        setSelectedIndex(prev => Math.min(prev, Math.max(0, ids.length - 2)));
+    }, [persistConfig]);
 
-    // Open edit modal
+    // Open edit modal — stable via ref
     const openEditModal = useCallback((actionId = null) => {
-        const action = actionId ? actions[actionId] : null;
+        const action = actionId ? actionsRef.current[actionId] : null;
         setEditModal({
             actionId: actionId || '',
             isNew: !actionId,
@@ -99,7 +113,7 @@ export function TaskRunnerView() {
             command: action?.command || '',
             timeout: action?.timeout || 60
         });
-    }, [actions]);
+    }, []);
 
     // Save action
     const saveAction = useCallback(() => {
@@ -150,31 +164,35 @@ export function TaskRunnerView() {
         setTestRunning(false);
     }, [testingId, testRunning, testParams]);
 
-    // Copy API example
+    // Copy API example — stable via refs
     const copyApiExample = useCallback(() => {
-        const exampleAction = actionIds[0] || 'my-action';
-        const params = actions[exampleAction] ? extractParams(actions[exampleAction].command) : ['param1'];
+        const ids = actionIdsRef.current;
+        const acts = actionsRef.current;
+        const exampleAction = ids[0] || 'my-action';
+        const params = acts[exampleAction] ? extractParams(acts[exampleAction].command) : ['param1'];
         const paramsObj = params.length > 0 ? params.reduce((acc, p) => ({ ...acc, [p]: '...' }), {}) : {};
         navigator.clipboard.writeText(JSON.stringify({ action: exampleAction, params: paramsObj }, null, 2));
-    }, [actionIds, actions]);
+    }, []);
 
-    // Keyboard
+    // Keyboard — stable via refs
     const handleKey = useCallback((e) => {
-        if (editModal) {
+        if (editModalRef.current) {
             if (e.key === 'Escape') { e.preventDefault(); setEditModal(null); return; }
             if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveAction(); }
             return;
         }
-        if (testingId) {
+        if (testingIdRef.current) {
             if (e.key === 'Escape') { e.preventDefault(); closeTestPanel(); }
             return;
         }
+        const ids = actionIdsRef.current;
+        const idx = selectedIndexRef.current;
         const handlers = {
             ArrowUp: () => setSelectedIndex(i => Math.max(0, i - 1)),
-            ArrowDown: () => setSelectedIndex(i => Math.min(actionIds.length - 1, i + 1)),
-            Enter: () => { if (actionIds.length > 0) openEditModal(actionIds[selectedIndex]); },
-            t: () => { if (actionIds.length > 0) openTestPanel(actionIds[selectedIndex]); },
-            T: () => { if (actionIds.length > 0) openTestPanel(actionIds[selectedIndex]); },
+            ArrowDown: () => setSelectedIndex(i => Math.min(ids.length - 1, i + 1)),
+            Enter: () => { if (ids.length > 0) openEditModal(ids[idx]); },
+            t: () => { if (ids.length > 0) openTestPanel(ids[idx]); },
+            T: () => { if (ids.length > 0) openTestPanel(ids[idx]); },
             a: () => openEditModal(),
             A: () => openEditModal(),
             d: deleteAction,
@@ -184,9 +202,9 @@ export function TaskRunnerView() {
         };
         const handler = handlers[e.key];
         if (handler) { e.preventDefault(); handler(); }
-    }, [editModal, saveAction, testingId, closeTestPanel, actionIds, selectedIndex, openEditModal, openTestPanel, deleteAction, copyApiExample]);
+    }, [saveAction, closeTestPanel, openEditModal, openTestPanel, deleteAction, copyApiExample]);
 
-    const isBlocking = useCallback(() => editModal !== null || testingId !== null, [editModal, testingId]);
+    const isBlocking = useCallback(() => editModalRef.current !== null || testingIdRef.current !== null, []);
 
     TaskRunnerView.handleKey = handleKey;
     TaskRunnerView.isBlocking = isBlocking;

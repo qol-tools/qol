@@ -1,5 +1,5 @@
 import { html } from '../lib/html.js';
-import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
 import { useSSE } from '../hooks/useSSE.js';
 import { useInstalling } from '../hooks/useInstalling.js';
 import { useFeedback } from '../hooks/useFeedback.js';
@@ -38,6 +38,18 @@ export function PluginsView({ onOpenPluginConfig }) {
     const latestRevisionRef = useRef(0);
     const restoredRef = useRef(false);
 
+    // Refs for values read inside stable callbacks (avoids callback cascades)
+    const pluginsRef = useRef(plugins);
+    pluginsRef.current = plugins;
+    const selectedIndexRef = useRef(selectedIndex);
+    selectedIndexRef.current = selectedIndex;
+    const confirmPluginIdRef = useRef(confirmPluginId);
+    confirmPluginIdRef.current = confirmPluginId;
+    const contextMenuOpenRef = useRef(contextMenuOpen);
+    contextMenuOpenRef.current = contextMenuOpen;
+    const updatingRef = useRef(updating);
+    updatingRef.current = updating;
+
     // Footer shortcuts
     useEffect(() => {
         const el = document.getElementById('content-footer');
@@ -73,12 +85,17 @@ export function PluginsView({ onOpenPluginConfig }) {
     // Initial load
     useEffect(() => { refreshPlugins({ showErrorFeedback: true, restoreSelection: true }); }, [refreshPlugins]);
 
-    // SSE
+    // SSE — debounce rapid plugins_changed events
+    const sseTimerRef = useRef(null);
     useSSE(useCallback((event) => {
         if (event.type !== 'plugins_changed') return;
         const revision = Number.isInteger(event.revision) ? event.revision : latestRevisionRef.current;
         latestRevisionRef.current = Math.max(latestRevisionRef.current, revision);
-        refreshPlugins({ minRevision: revision });
+        if (sseTimerRef.current) clearTimeout(sseTimerRef.current);
+        sseTimerRef.current = setTimeout(() => {
+            sseTimerRef.current = null;
+            refreshPlugins({ minRevision: revision });
+        }, 100);
     }, [refreshPlugins]));
 
     // Save selection
@@ -90,11 +107,11 @@ export function PluginsView({ onOpenPluginConfig }) {
     useEffect(() => {
         const el = document.querySelector('.plugin-card.selected');
         if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }, [selectedIndex, plugins]);
+    }, [selectedIndex]);
 
-    // Actions
+    // Actions — all use refs so callbacks are stable
     const updatePlugin = useCallback(async (pluginId) => {
-        if (updating.has(pluginId)) return;
+        if (updatingRef.current.has(pluginId)) return;
         clearFeedback();
         setUpdating(prev => new Set(prev).add(pluginId));
         try {
@@ -107,10 +124,10 @@ export function PluginsView({ onOpenPluginConfig }) {
             setUpdating(prev => { const s = new Set(prev); s.delete(pluginId); return s; });
             refreshPlugins();
         }
-    }, [updating, clearFeedback, setFeedback, refreshPlugins]);
+    }, [clearFeedback, setFeedback, refreshPlugins]);
 
     const confirmUninstall = useCallback(async () => {
-        const pluginId = confirmPluginId;
+        const pluginId = confirmPluginIdRef.current;
         setConfirmPluginId(null);
         if (!pluginId) return;
         clearFeedback();
@@ -122,42 +139,43 @@ export function PluginsView({ onOpenPluginConfig }) {
         } catch (error) {
             setFeedback('error', `Failed to uninstall ${pluginId}: ${error.message}`);
         }
-    }, [confirmPluginId, clearFeedback, setFeedback, refreshPlugins]);
+    }, [clearFeedback, setFeedback, refreshPlugins]);
 
     const openSelected = useCallback(() => {
-        const plugin = plugins[selectedIndex];
+        const plugin = pluginsRef.current[selectedIndexRef.current];
         if (!plugin) return;
         if (plugin.loaded === false) {
             setFeedback('error', `Plugin ${plugin.name} is not loaded${plugin.load_error ? `: ${plugin.load_error}` : ''}`);
             return;
         }
         if (plugin.has_ui) {
-            localStorage.setItem('plugins-selected-index', String(selectedIndex));
+            localStorage.setItem('plugins-selected-index', String(selectedIndexRef.current));
             if (onOpenPluginConfig) onOpenPluginConfig(plugin.id);
             return;
         }
         setFeedback('info', `No settings UI available for ${plugin.name}`);
-    }, [plugins, selectedIndex, setFeedback, onOpenPluginConfig]);
+    }, [setFeedback, onOpenPluginConfig]);
 
     const closeAllContextMenus = useCallback(() => setContextMenuOpen(false), []);
 
     const navigateInGrid = useCallback((direction) => {
-        const next = navigateGrid('#plugins-grid .plugin-card:not(.ghost)', selectedIndex, direction);
-        if (next !== selectedIndex) setSelectedIndex(next);
-    }, [selectedIndex]);
+        const current = selectedIndexRef.current;
+        const next = navigateGrid('#plugins-grid .plugin-card:not(.ghost)', current, direction);
+        if (next !== current) setSelectedIndex(next);
+    }, []);
 
-    // Keyboard
+    // Keyboard — stable: reads all mutable state via refs
     const handleKey = useCallback((e) => {
-        if (confirmPluginId !== null) {
+        if (confirmPluginIdRef.current !== null) {
             if (e.key === 'Escape') { e.preventDefault(); setConfirmPluginId(null); }
             else if (e.key === 'Enter') { e.preventDefault(); confirmUninstall(); }
             return;
         }
-        if (contextMenuOpen) {
+        if (contextMenuOpenRef.current) {
             e.preventDefault();
             if (e.key === 'Escape') { closeAllContextMenus(); return; }
             if (e.key === 'Enter') {
-                const plugin = plugins[selectedIndex];
+                const plugin = pluginsRef.current[selectedIndexRef.current];
                 if (plugin) { closeAllContextMenus(); setConfirmPluginId(plugin.id); }
             }
             return;
@@ -168,24 +186,24 @@ export function PluginsView({ onOpenPluginConfig }) {
             ArrowLeft: () => navigateInGrid('left'),
             ArrowRight: () => navigateInGrid('right'),
             Enter: openSelected,
-            d: () => { const p = plugins[selectedIndex]; if (p) setConfirmPluginId(p.id); },
-            D: () => { const p = plugins[selectedIndex]; if (p) setConfirmPluginId(p.id); },
-            u: () => { const p = plugins[selectedIndex]; if (p?.update_available) updatePlugin(p.id); },
-            U: () => { const p = plugins[selectedIndex]; if (p?.update_available) updatePlugin(p.id); },
+            d: () => { const p = pluginsRef.current[selectedIndexRef.current]; if (p) setConfirmPluginId(p.id); },
+            D: () => { const p = pluginsRef.current[selectedIndexRef.current]; if (p) setConfirmPluginId(p.id); },
+            u: () => { const p = pluginsRef.current[selectedIndexRef.current]; if (p?.update_available) updatePlugin(p.id); },
+            U: () => { const p = pluginsRef.current[selectedIndexRef.current]; if (p?.update_available) updatePlugin(p.id); },
             m: () => setContextMenuOpen(prev => !prev),
             M: () => setContextMenuOpen(prev => !prev),
         };
         const handler = handlers[e.key];
         if (handler) { e.preventDefault(); handler(); }
-    }, [confirmPluginId, confirmUninstall, contextMenuOpen, closeAllContextMenus, plugins, selectedIndex, navigateInGrid, openSelected, updatePlugin]);
+    }, [confirmUninstall, closeAllContextMenus, navigateInGrid, openSelected, updatePlugin]);
 
-    const isBlocking = useCallback(() => confirmPluginId !== null || contextMenuOpen, [confirmPluginId, contextMenuOpen]);
+    const isBlocking = useCallback(() => confirmPluginIdRef.current !== null || contextMenuOpenRef.current, []);
 
     // Expose imperative handle for App keyboard routing
     PluginsView.handleKey = handleKey;
     PluginsView.isBlocking = isBlocking;
 
-    // Click handlers
+    // Click handlers — stable via refs
     const handleCardClick = useCallback((e, index, pluginId) => {
         const updateBtn = e.target.closest('.plugin-update:not([disabled])');
         if (updateBtn) { e.stopPropagation(); updatePlugin(pluginId); return; }
@@ -199,9 +217,9 @@ export function PluginsView({ onOpenPluginConfig }) {
         const ctxDelete = e.target.closest('.context-delete');
         if (ctxDelete) { e.stopPropagation(); closeAllContextMenus(); setConfirmPluginId(pluginId); return; }
 
-        if (index !== selectedIndex) setSelectedIndex(index);
+        if (index !== selectedIndexRef.current) setSelectedIndex(index);
         else openSelected();
-    }, [selectedIndex, updatePlugin, closeAllContextMenus, openSelected]);
+    }, [updatePlugin, closeAllContextMenus, openSelected]);
 
     const handleBackdropClick = useCallback(() => {
         if (contextMenuOpen) closeAllContextMenus();

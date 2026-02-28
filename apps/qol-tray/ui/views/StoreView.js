@@ -1,5 +1,5 @@
 import { html } from '../lib/html.js';
-import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
 import { useSSE } from '../hooks/useSSE.js';
 import { useInstalling } from '../hooks/useInstalling.js';
 import { useFeedback } from '../hooks/useFeedback.js';
@@ -40,6 +40,18 @@ export function StoreView() {
     const loadTokenRef = useRef(0);
     const searchRef = useRef(null);
 
+    // Refs for stable callbacks
+    const selectedIndexRef = useRef(selectedIndex);
+    selectedIndexRef.current = selectedIndex;
+    const showTokenInputRef = useRef(showTokenInput);
+    showTokenInputRef.current = showTokenInput;
+    const loadingRef = useRef(loading);
+    loadingRef.current = loading;
+    const pluginsRef = useRef(plugins);
+    pluginsRef.current = plugins;
+    const hasTokenRef = useRef(hasToken);
+    hasTokenRef.current = hasToken;
+
     // Footer shortcuts
     useEffect(() => {
         const el = document.getElementById('content-footer');
@@ -47,10 +59,12 @@ export function StoreView() {
         return () => { if (el) el.innerHTML = ''; };
     }, []);
 
-    // Derived
-    const filtered = getFilteredPlugins(plugins, searchQuery);
+    // Derived — memoized to avoid new array ref every render
+    const filtered = useMemo(() => getFilteredPlugins(plugins, searchQuery), [plugins, searchQuery]);
+    const filteredRef = useRef(filtered);
+    filteredRef.current = filtered;
 
-    // Load plugins
+    // Load plugins — uses ref for hasToken to stay stable
     const loadPlugins = useCallback(async (forceRefresh = false) => {
         const token = ++loadTokenRef.current;
         setLoading(true);
@@ -60,7 +74,7 @@ export function StoreView() {
             const sorted = sortPluginsByName(data.plugins || []);
             setPlugins(sorted);
             setCacheAgeSecs(data.cache_age_secs ?? null);
-            const rl = isRateLimitedWithoutToken(sorted, hasToken);
+            const rl = isRateLimitedWithoutToken(sorted, hasTokenRef.current);
             setRateLimited(rl);
             if (!rl) setShowTokenInput(prev => prev && rl);
         } catch (error) {
@@ -73,7 +87,7 @@ export function StoreView() {
         } finally {
             if (token === loadTokenRef.current) setLoading(false);
         }
-    }, [hasToken, setFeedback]);
+    }, [setFeedback]);
 
     // Init
     useEffect(() => {
@@ -84,9 +98,15 @@ export function StoreView() {
         })();
     }, []);
 
-    // SSE
+    // SSE — debounce rapid plugins_changed events
+    const sseTimerRef = useRef(null);
     useSSE(useCallback((event) => {
-        if (event.type === 'plugins_changed') loadPlugins();
+        if (event.type !== 'plugins_changed') return;
+        if (sseTimerRef.current) clearTimeout(sseTimerRef.current);
+        sseTimerRef.current = setTimeout(() => {
+            sseTimerRef.current = null;
+            loadPlugins();
+        }, 100);
     }, [loadPlugins]));
 
     // Clamp selection when filtered list changes
@@ -98,12 +118,12 @@ export function StoreView() {
     useEffect(() => {
         const el = document.querySelector('#store-list .plugin-card.selected');
         if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }, [selectedIndex, filtered]);
+    }, [selectedIndex]);
 
-    // Refresh
+    // Refresh — stable via ref
     const refreshPlugins = useCallback(() => {
-        if (!loading) loadPlugins(true);
-    }, [loading, loadPlugins]);
+        if (!loadingRef.current) loadPlugins(true);
+    }, [loadPlugins]);
 
     // Token actions
     const saveToken = useCallback(async () => {
@@ -137,10 +157,10 @@ export function StoreView() {
         }
     }, [clearFeedback, setFeedback]);
 
-    // Install
+    // Install — stable via ref for plugins
     const installPlugin = useCallback(async (id) => {
         if (installing.has(id)) return;
-        const plugin = plugins.find(p => p.id === id);
+        const plugin = pluginsRef.current.find(p => p.id === id);
         clearFeedback();
         addInstalling(id, plugin?.name || id);
         try {
@@ -152,15 +172,16 @@ export function StoreView() {
             removeInstalling(id);
             loadPlugins();
         }
-    }, [plugins, clearFeedback, setFeedback, addInstalling, removeInstalling, loadPlugins]);
+    }, [clearFeedback, setFeedback, addInstalling, removeInstalling, loadPlugins]);
 
-    // Grid navigation
+    // Grid navigation — stable via ref
     const navigateInGrid = useCallback((direction) => {
-        const next = navigateGrid('#store-list .plugin-card', selectedIndex, direction);
-        if (next !== selectedIndex) setSelectedIndex(next);
-    }, [selectedIndex]);
+        const current = selectedIndexRef.current;
+        const next = navigateGrid('#store-list .plugin-card', current, direction);
+        if (next !== current) setSelectedIndex(next);
+    }, []);
 
-    // Keyboard
+    // Keyboard — stable: reads mutable state via refs
     const handleKey = useCallback((e) => {
         const inSearch = document.activeElement === searchRef.current;
         if (inSearch) {
@@ -168,7 +189,7 @@ export function StoreView() {
             if ((e.ctrlKey || e.metaKey) && e.key === 'r') { e.preventDefault(); refreshPlugins(); return; }
             return;
         }
-        if (showTokenInput && e.key === 'Escape') {
+        if (showTokenInputRef.current && e.key === 'Escape') {
             e.preventDefault();
             setShowTokenInput(false);
             return;
@@ -181,7 +202,7 @@ export function StoreView() {
             ArrowLeft: () => navigateInGrid('left'),
             ArrowRight: () => navigateInGrid('right'),
             Enter: () => {
-                const plugin = filtered[selectedIndex];
+                const plugin = filteredRef.current[selectedIndexRef.current];
                 if (plugin && !plugin.installed && !installing.has(plugin.id)) installPlugin(plugin.id);
             },
             s: () => searchRef.current?.focus(),
@@ -190,7 +211,7 @@ export function StoreView() {
         };
         const handler = handlers[e.key];
         if (handler) { e.preventDefault(); handler(); }
-    }, [showTokenInput, refreshPlugins, navigateInGrid, filtered, selectedIndex, installPlugin]);
+    }, [refreshPlugins, navigateInGrid, installPlugin]);
 
     // Expose for App keyboard routing
     StoreView.handleKey = handleKey;
