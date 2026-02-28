@@ -10,7 +10,7 @@ use crate::platform;
 use crate::platform::WindowInfo;
 use crate::preview::bgra_to_render_image;
 use gpui::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -75,18 +75,30 @@ pub(crate) fn open_picker(
     }
 
     let display_windows: Vec<WindowInfo> = {
-        // Use get_on_screen_windows (fast CG-only) when minimized windows aren't needed.
-        // This skips collect_minimized_windows which does expensive proc_pidinfo / AX per window.
-        let all = if config.display.show_minimized {
-            platform::get_open_windows()
+        // Always use fast on-screen-only CG query for correct Z-order.
+        // Minimized windows come from the prewarm cache (avoids expensive
+        // proc_pidinfo / AX calls that made every open take 600-1300ms).
+        let on_screen = platform::get_on_screen_windows();
+        if config.display.show_minimized {
+            let on_screen_ids: HashSet<u32> = on_screen.iter().map(|w| w.id).collect();
+            let cached_minimized: Vec<WindowInfo> = window_cache
+                .lock()
+                .ok()
+                .map(|cache| {
+                    cache
+                        .iter()
+                        .filter(|w| w.is_minimized && !on_screen_ids.contains(&w.id))
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mut all = on_screen;
+            all.extend(cached_minimized);
+            all
         } else {
-            platform::get_on_screen_windows()
-        };
-        all.into_iter().filter(|w| !w.is_minimized).collect()
+            on_screen.into_iter().filter(|w| !w.is_minimized).collect()
+        }
     };
-    if let Ok(mut cache) = window_cache.lock() {
-        *cache = display_windows.clone();
-    }
 
     // Grab pre-warmed previews from cache (instant). Only capture missing windows.
     let mut initial_previews: HashMap<u32, Arc<RenderImage>> = HashMap::new();

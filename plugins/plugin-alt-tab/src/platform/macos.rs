@@ -502,8 +502,35 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
     get_open_windows_impl(true)
 }
 
+/// Fast path: CG window list + AX dedup only. Skips KnownWindowTracker
+/// (which calls proc_pidinfo per PID) and minimized window collection.
 pub fn get_on_screen_windows() -> Vec<WindowInfo> {
-    get_open_windows_impl(false)
+    let own_pid = std::process::id() as i32;
+    let options =
+        K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
+    let list = unsafe { CGWindowListCopyWindowInfo(options, K_CG_NULL_WINDOW_ID) };
+    if list.is_null() {
+        return Vec::new();
+    }
+    let parsed = parse_cg_window_list(list, own_pid);
+    unsafe { CFRelease(list as *const c_void) };
+
+    let mut windows = Vec::with_capacity(parsed.len());
+    for window in dedup_by_ax(parsed) {
+        windows.push(WindowInfo {
+            id: window.id,
+            title: window.title,
+            app_name: window.app_name,
+            preview_path: None,
+            icon: None,
+            x: window.x,
+            y: window.y,
+            width: window.w,
+            height: window.h,
+            is_minimized: false,
+        });
+    }
+    windows
 }
 
 fn get_open_windows_impl(include_minimized: bool) -> Vec<WindowInfo> {
