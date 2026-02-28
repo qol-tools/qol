@@ -274,6 +274,22 @@ export function App() {
         if (view?.handleKey) view.handleKey(e);
     }, [activePluginId, activeViewId, viewOrder, switchView, closePluginConfig]));
 
+    // Lazy mount: only mount a view when first visited, then keep it alive (display:none).
+    // This preserves component state across view switches like the old vanilla JS did.
+    const [mounted, setMounted] = useState(() => new Set([activeViewId]));
+    useEffect(() => {
+        setMounted(prev => {
+            if (prev.has(activeViewId)) return prev;
+            const next = new Set(prev);
+            next.add(activeViewId);
+            return next;
+        });
+    }, [activeViewId]);
+
+    const slotStyle = (id) => activeViewId === id && !activePluginId
+        ? 'flex:1;min-height:0;display:flex;flex-direction:column'
+        : 'display:none';
+
     return html`
         <div class="app-container">
             <div class="app-main">
@@ -291,11 +307,11 @@ export function App() {
                 </aside>
                 <main id="content" class=${activePluginId ? 'has-plugin-iframe' : ''}>
                     ${activePluginId && html`<iframe src="/plugins/${activePluginId}/" class="plugin-iframe"></iframe>`}
-                    ${!activePluginId && activeViewId === 'plugins' && html`<${PluginsView} onOpenPluginConfig=${openPluginConfig} />`}
-                    ${!activePluginId && activeViewId === 'store' && html`<${StoreView} />`}
-                    ${!activePluginId && activeViewId === 'hotkeys' && html`<${HotkeysView} />`}
-                    ${!activePluginId && activeViewId === 'task-runner' && html`<${TaskRunnerView} />`}
-                    ${!activePluginId && activeViewId === 'dev' && html`<${DevView} />`}
+                    ${mounted.has('plugins') && html`<div style=${slotStyle('plugins')}><${PluginsView} onOpenPluginConfig=${openPluginConfig} /></div>`}
+                    ${mounted.has('store') && html`<div style=${slotStyle('store')}><${StoreView} /></div>`}
+                    ${mounted.has('hotkeys') && html`<div style=${slotStyle('hotkeys')}><${HotkeysView} /></div>`}
+                    ${mounted.has('task-runner') && html`<div style=${slotStyle('task-runner')}><${TaskRunnerView} /></div>`}
+                    ${mounted.has('dev') && html`<div style=${slotStyle('dev')}><${DevView} /></div>`}
                 </main>
             </div>
             <div class="app-footer">
