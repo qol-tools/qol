@@ -3,7 +3,14 @@ name = "plugin-template"
 version = "1.0.0"
 edition = "2021"
 
+[dependencies]
+anyhow = "1"
+
 [profile.release]
 strip = true
 lto = true
 codegen-units = 1
+
+[dev-dependencies]
+qol-tray = { git = "https://github.com/qol-tools/qol-tray" }
+toml = "0.9"

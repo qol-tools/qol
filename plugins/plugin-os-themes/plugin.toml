@@ -7,12 +7,13 @@ platforms = ["linux", "macos"]
 
 [runtime]
 command = "plugin-template"
-actions = { run = ["run"] }
+actions = { run = ["run"], settings = ["settings"] }
 
 [menu]
 label = "My Plugin"
 items = [
     { type = "action", id = "run", label = "Run", action = "run" },
+    { type = "action", id = "settings", label = "Settings", action = "settings" },
 ]
 
 [[dependencies.binaries]]
