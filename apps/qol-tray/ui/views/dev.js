@@ -1,6 +1,5 @@
 import { subscribe } from '../events.js';
 import { jsonRequest, readResponseText } from '../api/client.js';
-import { renderShortcutLegend } from '../components/shortcut-legend.js';
 import { mergePlugins, renderBuildResults, renderPluginBuildMeta } from './dev/plugin-model.js';
 import { renderDevView } from './dev/template.js';
 import { createBuildController } from './dev/build-controller.js';
@@ -69,17 +68,9 @@ mockController = createMockController({
     }
 });
 
-const DEV_SHORTCUTS = [
-    { key: '↑↓', label: 'navigate' },
-    { key: 'Enter', label: 'toggle' },
-    { key: 'r', label: 'discover' },
-    { key: '⌘R', label: 'reload' }
-];
-
 export function render(containerEl) {
     container = containerEl;
     container.addEventListener('click', handleClick);
-    document.getElementById('content-footer').innerHTML = renderShortcutLegend(DEV_SHORTCUTS);
     unsubscribe = subscribe(handleEvent);
     void Promise.all([
         discoveryController.loadPlugins(true),
