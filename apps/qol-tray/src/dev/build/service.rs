@@ -200,8 +200,11 @@ where
         let result = builder.build_plugin_with_progress(&plan.plugin_id, &plan.path, &mut progress);
 
         if result.success {
-            if let Some(current_fingerprint) = &plan.current_fingerprint {
-                fingerprints.insert(plan.plugin_id.clone(), current_fingerprint.clone());
+            let post_build_fingerprint = super::fingerprint::fingerprint_plugin(&plan.path)
+                .ok()
+                .or_else(|| plan.current_fingerprint.clone());
+            if let Some(fp) = post_build_fingerprint {
+                fingerprints.insert(plan.plugin_id.clone(), fp);
             }
             emit_core_input(
                 &mut core_state,
