@@ -14,10 +14,11 @@ export function renderDevView({
         }[plugin.status];
 
         let buildBadge = '';
-        if (plugin.status === 'linked') {
-            if (!plugin.has_cargo) {
-                buildBadge = '<span class="badge badge-build-skip">No Cargo</span>';
-            }
+        if (plugin.status === 'linked' && !plugin.supports_platform) {
+            buildBadge = '<span class="badge badge-build-skip">Unsupported</span>';
+        }
+        if (plugin.status === 'linked' && plugin.supports_platform && !plugin.has_cargo) {
+            buildBadge = '<span class="badge badge-build-skip">No Cargo</span>';
         }
 
         const buildState = getActivePluginBuildState(plugin);

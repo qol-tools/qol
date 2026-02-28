@@ -8,6 +8,7 @@ pub struct LinkedPlugin {
     pub name: String,
     pub source: String,
     pub has_cargo: bool,
+    pub supports_platform: bool,
     pub needs_rebuild: bool,
     pub rebuild_reason: String,
     pub fingerprint: Option<String>,
@@ -61,6 +62,7 @@ pub fn list_linked_plugins(config_dir: &Path) -> Result<Vec<LinkedPlugin>, Strin
                 name,
                 source: path.to_string_lossy().to_string(),
                 has_cargo: plan.map(|p| p.has_cargo).unwrap_or(false),
+                supports_platform: plan.map(|p| p.supports_platform).unwrap_or(true),
                 needs_rebuild: plan.map(|p| p.needs_rebuild).unwrap_or(false),
                 rebuild_reason: plan
                     .map(|p| p.reason.clone())

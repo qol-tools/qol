@@ -25,6 +25,7 @@ pub struct PluginBuildPlan {
     pub plugin_id: String,
     pub path: PathBuf,
     pub has_cargo: bool,
+    pub supports_platform: bool,
     pub needs_rebuild: bool,
     pub current_fingerprint: Option<String>,
     pub last_built_fingerprint: Option<String>,
