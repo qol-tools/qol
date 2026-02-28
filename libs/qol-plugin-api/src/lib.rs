@@ -3,6 +3,7 @@ pub mod app_icon;
 
 pub mod color;
 pub mod config;
+#[cfg(unix)]
 pub mod daemon;
 pub mod frecency;
 pub mod platform;
