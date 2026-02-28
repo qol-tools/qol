@@ -2,6 +2,8 @@
 name = "launcher"
 version = "1.2.12"
 edition = "2021"
+description = "Application and file launcher plugin for QoL Tray"
+license = "MIT"
 
 [dependencies]
 dirs = "6.0"
