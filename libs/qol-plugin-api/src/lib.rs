@@ -17,6 +17,6 @@ pub mod monitor;
 pub mod window;
 
 pub use qol_runtime::protocol;
-pub use qol_runtime::{
-    CursorPos, MonitorBounds, PlatformState, PlatformStateClient, Subscription, WindowBounds,
-};
+pub use qol_runtime::{CursorPos, MonitorBounds, PlatformState, WindowBounds};
+#[cfg(unix)]
+pub use qol_runtime::{PlatformStateClient, Subscription};
