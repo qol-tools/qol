@@ -51,10 +51,10 @@ pub(crate) fn run_app(
         cx.spawn(async move |cx: &mut AsyncApp| {
             let executor = cx.background_executor().clone();
             loop {
-                executor
-                    .timer(Duration::from_millis(PREWARM_REFRESH_INTERVAL_MS))
-                    .await;
                 if PICKER_VISIBLE.load(Ordering::Relaxed) {
+                    executor
+                        .timer(Duration::from_millis(PREWARM_REFRESH_INTERVAL_MS))
+                        .await;
                     continue;
                 }
                 let windows = executor
@@ -106,6 +106,10 @@ pub(crate) fn run_app(
                 if let Ok(mut cache) = warm_cache.lock() {
                     *cache = windows;
                 }
+
+                executor
+                    .timer(Duration::from_millis(PREWARM_REFRESH_INTERVAL_MS))
+                    .await;
             }
         })
         .detach();
