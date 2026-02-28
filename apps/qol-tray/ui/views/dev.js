@@ -142,6 +142,8 @@ function updateView() {
 
     buildController.pruneInvisibleProgress(new Set(mergedList.map(plugin => plugin.id)));
 
+    const prevScrollTop = container.querySelector('.view-body')?.scrollTop ?? 0;
+
     container.innerHTML = renderDevView({
         state,
         mergedList,
@@ -149,6 +151,9 @@ function updateView() {
         renderPluginBuildMeta,
         renderBuildResults
     });
+
+    const viewBody = container.querySelector('.view-body');
+    if (viewBody) viewBody.scrollTop = prevScrollTop;
 
     const input = container.querySelector('#link-path');
     if (input) {
