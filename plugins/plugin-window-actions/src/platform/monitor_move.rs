@@ -2,7 +2,7 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-use crate::system::{run_cinnamon_eval, run_status};
+use super::system::{run_cinnamon_eval, run_status};
 
 pub fn move_monitor(script: &str) -> Result<(), String> {
     let output = run_cinnamon_eval(script)?;
