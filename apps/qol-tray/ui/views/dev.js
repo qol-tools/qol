@@ -12,6 +12,11 @@ import {
 
 export const id = 'dev';
 
+function readSavedIndex() {
+    const saved = parseInt(localStorage.getItem('dev-selected-index'), 10);
+    return Number.isFinite(saved) && saved >= 0 ? saved : 0;
+}
+
 const state = {
     reloading: false,
     building: false,
@@ -21,7 +26,7 @@ const state = {
     plugins: [],
     discovered: [],
     discovering: false,
-    selectedIndex: 0,
+    selectedIndex: readSavedIndex(),
     showLinkInput: false,
     linkPath: '',
     linkError: null,
@@ -133,6 +138,7 @@ function updateView() {
     state.mergedCount = mergedList.length;
     state.mergedList = mergedList;
     state.selectedIndex = Math.max(0, Math.min(state.selectedIndex, mergedList.length - 1));
+    localStorage.setItem('dev-selected-index', String(state.selectedIndex));
 
     buildController.pruneInvisibleProgress(new Set(mergedList.map(plugin => plugin.id)));
 
