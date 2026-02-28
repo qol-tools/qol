@@ -15,4 +15,7 @@ pub mod monitor;
 #[cfg(feature = "gpui")]
 pub mod window;
 
-pub use qol_runtime::{CursorPos, MonitorBounds, PlatformState, PlatformStateClient, WindowBounds};
+pub use qol_runtime::protocol;
+pub use qol_runtime::{
+    CursorPos, MonitorBounds, PlatformState, PlatformStateClient, Subscription, WindowBounds,
+};
