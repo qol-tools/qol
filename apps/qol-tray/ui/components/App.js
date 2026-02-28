@@ -12,12 +12,13 @@ import { clampPercent } from '../utils/progress.js';
 
 import { PluginsView } from '../views/PluginsView.js';
 import { StoreView } from '../views/StoreView.js';
-import * as hotkeysView from '../views/hotkeys.js';
-import * as taskRunnerView from '../features/task-runner/view.js';
+import { HotkeysView } from '../views/HotkeysView.js';
+import { TaskRunnerView } from '../views/TaskRunnerView.js';
 import * as devView from '../views/dev.js';
 
-const PREACT_VIEWS = new Set(['plugins', 'store']);
-const BRIDGE_VIEWS = { hotkeys: hotkeysView, 'task-runner': taskRunnerView };
+const PREACT_VIEWS = new Set(['plugins', 'store', 'hotkeys', 'task-runner']);
+const PREACT_VIEW_MAP = { plugins: PluginsView, store: StoreView, hotkeys: HotkeysView, 'task-runner': TaskRunnerView };
+const BRIDGE_VIEWS = {};
 const BASE_ORDER = ['plugins', 'store', 'hotkeys', 'task-runner'];
 
 function initDevFlows() {
@@ -304,8 +305,7 @@ export function App() {
         }
 
         // Resolve active view handler (Preact component or bridge module)
-        const preactMap = { plugins: PluginsView, store: StoreView };
-        const view = preactMap[activeViewId] || activeViewRef.current;
+        const view = PREACT_VIEW_MAP[activeViewId] || activeViewRef.current;
 
         if (view?.isBlocking?.()) {
             if (view.handleKey) view.handleKey(e);
@@ -344,6 +344,8 @@ export function App() {
                     ${activePluginId && html`<iframe src="/plugins/${activePluginId}/" class="plugin-iframe"></iframe>`}
                     ${!activePluginId && activeViewId === 'plugins' && html`<${PluginsView} onOpenPluginConfig=${openPluginConfig} />`}
                     ${!activePluginId && activeViewId === 'store' && html`<${StoreView} />`}
+                    ${!activePluginId && activeViewId === 'hotkeys' && html`<${HotkeysView} />`}
+                    ${!activePluginId && activeViewId === 'task-runner' && html`<${TaskRunnerView} />`}
                     ${!activePluginId && !PREACT_VIEWS.has(activeViewId) && html`<div ref=${contentRef}></div>`}
                 </main>
             </div>

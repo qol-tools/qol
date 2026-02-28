@@ -1,0 +1,348 @@
+import { html } from '../lib/html.js';
+import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
+import { Modal } from '../components/ModalPreact.js';
+import { apiJson, apiResponse, jsonRequest } from '../api/client.js';
+import { parseInstalledPlugins } from '../utils/plugins.js';
+import { renderShortcutLegend } from '../components/shortcut-legend.js';
+
+const SHORTCUTS = [
+    { key: '↑↓', label: 'navigate' },
+    { key: 'Enter', label: 'edit' },
+    { key: 'a', label: 'add' },
+    { key: 'd', label: 'delete' }
+];
+
+function getActionLabel(plugin, actionId) {
+    if (!plugin) return actionId;
+    const action = plugin.actions?.find(a => a.id === actionId);
+    return action ? action.label : actionId;
+}
+
+function formatKeyEvent(e) {
+    const parts = [];
+    if (e.ctrlKey) parts.push('Ctrl');
+    if (e.altKey) parts.push('Alt');
+    if (e.shiftKey) parts.push('Shift');
+    if (e.metaKey) parts.push('Super');
+    if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return parts.join('+') || '';
+    const key = getKeyName(e.code);
+    if (key) parts.push(key);
+    return parts.join('+');
+}
+
+function getKeyName(code) {
+    if (code.startsWith('Key')) return code.slice(3);
+    if (code.startsWith('Digit')) return code.slice(5);
+    if (code.startsWith('Numpad')) return code;
+    const map = {
+        Space: 'Space', Enter: 'Enter', Escape: 'Escape', Tab: 'Tab',
+        Backspace: 'Backspace', Delete: 'Delete', Insert: 'Insert',
+        Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
+        ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+        F1: 'F1', F2: 'F2', F3: 'F3', F4: 'F4', F5: 'F5', F6: 'F6',
+        F7: 'F7', F8: 'F8', F9: 'F9', F10: 'F10', F11: 'F11', F12: 'F12',
+        PrintScreen: 'PrintScreen', Pause: 'Pause'
+    };
+    return map[code] || null;
+}
+
+export function HotkeysView() {
+    const [hotkeys, setHotkeys] = useState([]);
+    const [plugins, setPlugins] = useState([]);
+    const [selectedIndex, setSelectedIndex] = useState(-1);
+    const [editModal, setEditModal] = useState(null); // null | { hotkey, pluginId, action, key, recording }
+    const [modalFieldIndex, setModalFieldIndex] = useState(0);
+
+    const hotkeysRef = useRef(hotkeys);
+    hotkeysRef.current = hotkeys;
+
+    // Footer shortcuts
+    useEffect(() => {
+        const el = document.getElementById('content-footer');
+        if (el) el.innerHTML = renderShortcutLegend(SHORTCUTS);
+        return () => { if (el) el.innerHTML = ''; };
+    }, []);
+
+    // Load data
+    useEffect(() => {
+        (async () => {
+            try {
+                const [hotkeysConfig, installedPayload] = await Promise.all([
+                    apiJson('/api/hotkeys'),
+                    apiJson('/api/installed')
+                ]);
+                const hks = hotkeysConfig.hotkeys || [];
+                setHotkeys(hks);
+                setPlugins(parseInstalledPlugins(installedPayload));
+                if (hks.length > 0) setSelectedIndex(0);
+            } catch {}
+        })();
+    }, []);
+
+    // Scroll selected into view
+    useEffect(() => {
+        const el = document.querySelector('.hotkey-row.selected');
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, [selectedIndex]);
+
+    // Persist
+    const persistHotkeys = useCallback(async (hks) => {
+        try { await apiResponse('/api/hotkeys', jsonRequest('PUT', { hotkeys: hks })); } catch {}
+    }, []);
+
+    // Available actions for a plugin (excluding already-assigned ones)
+    const getAvailableActions = useCallback((pluginId, editingId) => {
+        const plugin = plugins.find(p => p.id === pluginId);
+        if (!plugin?.actions?.length) return [{ id: 'run', label: 'Run' }];
+        const assigned = hotkeysRef.current
+            .filter(h => h.plugin_id === pluginId && h.id !== editingId)
+            .map(h => h.action);
+        return plugin.actions.filter(a => !assigned.includes(a.id));
+    }, [plugins]);
+
+    // Modal open
+    const openEditModal = useCallback((hotkey = null, keepPlugin = null) => {
+        const pluginId = keepPlugin || hotkey?.plugin_id || '';
+        const available = pluginId ? getAvailableActions(pluginId, hotkey?.id) : [];
+        setEditModal({
+            hotkey,
+            pluginId,
+            action: hotkey?.action || available[0]?.id || '',
+            key: hotkey?.key || '',
+            recording: false,
+            availableActions: available
+        });
+        setModalFieldIndex(0);
+    }, [getAvailableActions]);
+
+    // Modal plugin change
+    const handlePluginChange = useCallback((pluginId) => {
+        setEditModal(prev => {
+            if (!prev) return prev;
+            const available = getAvailableActions(pluginId, prev.hotkey?.id);
+            return { ...prev, pluginId, action: available[0]?.id || '', availableActions: available };
+        });
+    }, [getAvailableActions]);
+
+    // Save hotkey
+    const saveHotkey = useCallback(() => {
+        if (!editModal?.key || !editModal?.pluginId || !editModal?.action) return;
+        const entry = {
+            id: editModal.hotkey?.id || `hk-${Date.now()}`,
+            key: editModal.key,
+            plugin_id: editModal.pluginId,
+            action: editModal.action,
+            enabled: true
+        };
+        const isEditing = !!editModal.hotkey;
+        setHotkeys(prev => {
+            let next;
+            if (isEditing) {
+                next = prev.map(h => h.id === editModal.hotkey.id ? entry : h);
+            } else {
+                next = [...prev, entry];
+                setSelectedIndex(next.length - 1);
+            }
+            persistHotkeys(next);
+            return next;
+        });
+        if (isEditing) {
+            setEditModal(null);
+        } else {
+            // Reset for next hotkey
+            const available = getAvailableActions(editModal.pluginId, entry.id);
+            if (available.length > 0) {
+                setEditModal(prev => ({
+                    ...prev, hotkey: null, key: '', action: available[0]?.id || '',
+                    recording: false, availableActions: available
+                }));
+                setModalFieldIndex(1);
+            } else {
+                setEditModal(null);
+            }
+        }
+    }, [editModal, persistHotkeys, getAvailableActions]);
+
+    // Delete
+    const deleteSelected = useCallback(() => {
+        if (selectedIndex < 0 || selectedIndex >= hotkeys.length) return;
+        const next = hotkeys.filter((_, i) => i !== selectedIndex);
+        setHotkeys(next);
+        setSelectedIndex(Math.min(selectedIndex, Math.max(0, next.length - 1)));
+        persistHotkeys(next);
+    }, [selectedIndex, hotkeys, persistHotkeys]);
+
+    // Key recording handler
+    const handleRecordingKey = useCallback((e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.key === 'Escape') {
+            setEditModal(prev => prev ? { ...prev, recording: false } : prev);
+            return;
+        }
+        const MODIFIERS = ['Control', 'Alt', 'Shift', 'Meta'];
+        if (MODIFIERS.includes(e.key)) {
+            const current = formatKeyEvent(e);
+            if (current) setEditModal(prev => prev ? { ...prev, key: current } : prev);
+            return;
+        }
+        const key = formatKeyEvent(e);
+        const MOD_NAMES = ['Ctrl', 'Alt', 'Shift', 'Super'];
+        if (key && !MOD_NAMES.includes(key)) {
+            setEditModal(prev => prev ? { ...prev, key, recording: false } : prev);
+            setModalFieldIndex(prev => prev + 1);
+        }
+    }, []);
+
+    // Keyboard handler
+    const handleKey = useCallback((e) => {
+        if (editModal) {
+            if (editModal.recording) { handleRecordingKey(e); return; }
+            if (e.key === 'Escape') { e.preventDefault(); setEditModal(null); return; }
+            if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); saveHotkey(); return; }
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                const active = document.activeElement;
+                if (active?.id === 'hotkey-key') {
+                    setEditModal(prev => prev ? { ...prev, recording: true, key: '' } : prev);
+                } else if (active?.classList.contains('modal-cancel')) {
+                    setEditModal(null);
+                } else if (active?.classList.contains('modal-save')) {
+                    saveHotkey();
+                } else {
+                    // Focus next field
+                    const fields = Array.from(document.querySelectorAll('.edit-modal [tabindex]'));
+                    const idx = fields.indexOf(active);
+                    if (idx >= 0 && idx + 1 < fields.length) fields[idx + 1].focus();
+                }
+                return;
+            }
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                const fields = Array.from(document.querySelectorAll('.edit-modal [tabindex]'));
+                if (fields.length === 0) return;
+                const dir = e.shiftKey ? -1 : 1;
+                const next = (modalFieldIndex + dir + fields.length) % fields.length;
+                setModalFieldIndex(next);
+                fields[next]?.focus();
+            }
+            return;
+        }
+        const handlers = {
+            ArrowUp: () => setSelectedIndex(i => Math.max(0, i - 1)),
+            ArrowDown: () => setSelectedIndex(i => Math.min(hotkeys.length - 1, i + 1)),
+            Enter: () => { if (hotkeys.length > 0 && selectedIndex >= 0) openEditModal(hotkeys[selectedIndex]); },
+            a: () => openEditModal(),
+            A: () => openEditModal(),
+            d: deleteSelected,
+            D: deleteSelected,
+        };
+        const handler = handlers[e.key];
+        if (handler) { e.preventDefault(); handler(); }
+    }, [editModal, handleRecordingKey, saveHotkey, modalFieldIndex, hotkeys, selectedIndex, openEditModal, deleteSelected]);
+
+    const isBlocking = useCallback(() => editModal !== null, [editModal]);
+
+    HotkeysView.handleKey = handleKey;
+    HotkeysView.isBlocking = isBlocking;
+
+    return html`
+        <div class="view-container">
+            <header>
+                <h1>Hotkeys</h1>
+                <p>Configure global keyboard shortcuts for plugin actions</p>
+            </header>
+            <div class="view-body">
+                <div class="hotkeys-list">
+                    ${hotkeys.length === 0 && html`
+                        <div class="empty">No hotkeys configured. Press <kbd>a</kbd> to add one.</div>
+                    `}
+                    ${hotkeys.length > 0 && html`
+                        <div class="hotkey-header">
+                            <span class="col-key">Shortcut</span>
+                            <span class="col-plugin">Plugin</span>
+                            <span class="col-action">Action</span>
+                        </div>
+                    `}
+                    ${hotkeys.map((hk, index) => {
+                        const plugin = plugins.find(p => p.id === hk.plugin_id);
+                        return html`
+                            <div key=${hk.id} class="hotkey-row ${index === selectedIndex ? 'selected' : ''}"
+                                 data-index="${index}"
+                                 onClick=${() => {
+                                     if (index !== selectedIndex) setSelectedIndex(index);
+                                     else openEditModal(hk);
+                                 }}>
+                                <span class="col-key"><kbd>${hk.key}</kbd></span>
+                                <span class="col-plugin">${plugin?.name || hk.plugin_id}</span>
+                                <span class="col-action">${getActionLabel(plugin, hk.action)}</span>
+                            </div>
+                        `;
+                    })}
+                </div>
+            </div>
+            ${editModal && html`
+                <${HotkeyEditModal}
+                    modal=${editModal}
+                    plugins=${plugins}
+                    onPluginChange=${handlePluginChange}
+                    onActionChange=${(action) => setEditModal(prev => prev ? { ...prev, action } : prev)}
+                    onStartRecording=${() => setEditModal(prev => prev ? { ...prev, recording: true, key: '' } : prev)}
+                    onClose=${() => setEditModal(null)}
+                    onSave=${saveHotkey}
+                />
+            `}
+        </div>
+    `;
+}
+
+function HotkeyEditModal({ modal, plugins, onPluginChange, onActionChange, onStartRecording, onClose, onSave }) {
+    const isNew = !modal.hotkey;
+    const title = isNew ? 'Add Hotkey' : 'Edit Hotkey';
+
+    // Auto-focus plugin select on mount
+    useEffect(() => {
+        setTimeout(() => document.getElementById('hotkey-plugin')?.focus(), 0);
+    }, []);
+
+    return html`
+        <${Modal} open=${true} onClose=${onClose} className="edit-modal">
+            <div class="edit-modal-content">
+                <h3>${title}</h3>
+                <div class="form-group">
+                    <label>Plugin</label>
+                    <select id="hotkey-plugin" tabindex="1"
+                            value=${modal.pluginId}
+                            onChange=${(e) => onPluginChange(e.target.value)}>
+                        <option value="">Select plugin...</option>
+                        ${plugins.map(p => html`<option key=${p.id} value=${p.id}>${p.name}</option>`)}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Action</label>
+                    <select id="hotkey-action" tabindex="2"
+                            value=${modal.action}
+                            onChange=${(e) => onActionChange(e.target.value)}>
+                        ${modal.availableActions.length === 0
+                            ? html`<option value="">All actions assigned</option>`
+                            : modal.availableActions.map(a => html`<option key=${a.id} value=${a.id}>${a.label}</option>`)}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Shortcut <span class="hint">(Enter to record)</span></label>
+                    <div class="key-input-row">
+                        <input type="text" id="hotkey-key" tabindex="3"
+                               value=${modal.key} readonly
+                               class=${modal.recording ? 'recording' : ''}
+                               placeholder=${modal.recording ? 'Press keys... (Esc to cancel)' : 'Press Enter to record'}
+                               onClick=${onStartRecording} />
+                    </div>
+                </div>
+                <div class="modal-buttons">
+                    <button class="btn btn-ghost modal-cancel" tabindex="4" onClick=${onClose}>Cancel <kbd>Esc</kbd></button>
+                    <button class="btn btn-primary modal-save" tabindex="5" onClick=${onSave}>Save <kbd>Ctrl+Enter</kbd></button>
+                </div>
+            </div>
+        <//>
+    `;
+}
