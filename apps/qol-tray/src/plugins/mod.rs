@@ -173,13 +173,12 @@ fn attach_filtered_log_relay(plugin_id: &str, child: &mut Child, suppress_patter
     let active_patterns: Vec<String> = suppress_patterns
         .into_iter()
         .filter(|p| !p.is_empty())
-        .map(|p| regex::escape(&p))
         .collect();
 
-    let regex_set = if active_patterns.is_empty() {
+    let patterns = if active_patterns.is_empty() {
         None
     } else {
-        regex::RegexSet::new(&active_patterns).ok().map(Arc::new)
+        Some(Arc::new(active_patterns))
     };
 
     if let Some(stdout) = child.stdout.take() {
@@ -187,12 +186,12 @@ fn attach_filtered_log_relay(plugin_id: &str, child: &mut Child, suppress_patter
             plugin_id.to_string(),
             "stdout",
             stdout,
-            regex_set.clone(),
+            patterns.clone(),
             false,
         );
     }
     if let Some(stderr) = child.stderr.take() {
-        spawn_log_relay(plugin_id.to_string(), "stderr", stderr, regex_set, true);
+        spawn_log_relay(plugin_id.to_string(), "stderr", stderr, patterns, true);
     }
 }
 
@@ -200,7 +199,7 @@ fn spawn_log_relay<R>(
     plugin_id: String,
     stream_name: &'static str,
     reader: R,
-    regex_set: Option<Arc<regex::RegexSet>>,
+    suppress_patterns: Option<Arc<Vec<String>>>,
     to_stderr: bool,
 ) where
     R: std::io::Read + Send + 'static,
@@ -227,8 +226,9 @@ fn spawn_log_relay<R>(
                 break;
             }
 
-            if let Some(ref set) = regex_set {
-                if set.is_match(line.trim_end()) {
+            if let Some(ref patterns) = suppress_patterns {
+                let trimmed = line.trim_end();
+                if patterns.iter().any(|p| trimmed.contains(p.as_str())) {
                     continue;
                 }
             }
