@@ -29,7 +29,11 @@ function escapeHtml(value) {
 export function TaskRunnerView() {
     const [actions, setActions] = useState({});
     const [actionIds, setActionIds] = useState([]);
-    const [selectedIndex, setSelectedIndex] = useState(0);
+    const [selectedIndex, setSelectedIndex] = useState(() => {
+        const saved = parseInt(localStorage.getItem('taskrunner-selected-index') || '0', 10);
+        return saved >= 0 ? saved : 0;
+    });
+    const taskRestoredRef = useRef(false);
     const [editModal, setEditModal] = useState(null); // null | { actionId, name, desc, command, timeout }
     const [testingId, setTestingId] = useState(null);
     const [testParams, setTestParams] = useState({});
@@ -73,12 +77,23 @@ export function TaskRunnerView() {
                 const config = await res.json();
                 const a = config.actions || {};
                 setActions(a);
-                setActionIds(Object.keys(a));
+                const ids = Object.keys(a);
+                setActionIds(ids);
+                setSelectedIndex(prev => {
+                    taskRestoredRef.current = true;
+                    return prev >= 0 && prev < ids.length ? prev : 0;
+                });
             }
         } catch {}
     }, []);
 
     useEffect(() => { loadActions(); }, [loadActions]);
+
+    // Save selection
+    useEffect(() => {
+        if (!taskRestoredRef.current) return;
+        localStorage.setItem('taskrunner-selected-index', String(selectedIndex));
+    }, [selectedIndex]);
 
     // Persist
     const persistConfig = useCallback(async (acts) => {
