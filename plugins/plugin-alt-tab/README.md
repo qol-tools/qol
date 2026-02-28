@@ -1,59 +1,42 @@
 # Alt Tab Plugin for QoL Tray
 
-A high-performance, configurable Alt-Tab switcher built for the [QoL Tray](https://github.com/qol-tools/qol-tray) ecosystem. Features live window previews via CoreGraphics (macOS) and X11 (Linux), app icons, and a hardware-accelerated GPUI grid.
+A window switcher with live previews for [QoL Tray](https://github.com/qol-tools/qol-tray). Shows a grid of open windows with thumbnails and app icons, activated via global hotkey.
 
 ## Features
 
--   **Live Preview Grid**: Window thumbnails captured via CG (macOS) or X11 GetImage (Linux), displayed in a responsive grid layout.
--   **App Icons**: 16px icons rendered inline with window labels for instant visual identification.
--   **Transparent Background Mode**: Optional borderless transparent mode where only preview cards float over the desktop. Card background color and opacity are configurable.
--   **Configurable Layout**: Grid column count, label formatting, and card appearance are all adjustable.
--   **Two Action Modes**:
-    -   `Sticky`: The UI stays open until explicitly dismissed with `Enter` or `Esc`.
-    -   `Hold-to-Switch`: The UI automatically activates the selected window when the `Alt` key is released.
--   **Prewarm Cache**: Background preview capture keeps thumbnails warm between invocations for near-instant picker open.
--   **WYSIWYG Settings**: A built-in web-based configuration page with live grid visualizer.
--   **Daemon Architecture**: Runs as a persistent background process via Unix sockets for near-instantaneous activation.
+- **Live preview grid** with window thumbnails and app icons
+- **Two action modes**: Sticky (stays open until Enter/Esc) or Hold-to-Switch (activates on Alt release)
+- **Transparent background mode** with configurable card color and opacity
+- **Configurable layout**: grid columns, label formatting, card appearance
+- **Background preview cache** keeps thumbnails warm for near-instant activation
+- **Web-based settings** with live grid visualizer
 
-## Keyboard Controls
+## Controls
 
--   **Arrow Keys**: Navigate the visual grid.
--   **Tab / Shift+Tab**: Cycle forward/backward through the window list.
--   **Enter**: Activate the selected window.
--   **Escape**: Dismiss the picker without switching.
--   **Alt Release** (Hold-to-Switch mode): Automatically activates the selected window.
+| Key | Action |
+|-----|--------|
+| Arrow keys | Navigate the grid |
+| Tab / Shift+Tab | Cycle through windows |
+| Enter | Activate selected window |
+| Escape | Dismiss without switching |
+| Alt release | Activate (hold-to-switch mode) |
 
 ## Configuration
 
-The plugin is configured via `config.json` or through the QoL Tray settings UI.
+Configured via `config.json` or the QoL Tray settings UI.
 
-### `display` Settings
--   `max_columns`: Integer (2-12). Controls the grid wrap point.
--   `transparent_background`: Boolean. Removes the window background so only cards are visible.
--   `card_background_color`: Hex string (e.g. `"1a1e2a"`). Card fill color in transparent mode.
--   `card_background_opacity`: Float (0.0-1.0). Card opacity in transparent mode.
+- `display.max_columns` — Grid column count (2-12)
+- `display.transparent_background` — Remove window background, show only cards
+- `display.card_background_color` — Card fill color in transparent mode (hex, e.g. `"1a1e2a"`)
+- `display.card_background_opacity` — Card opacity in transparent mode (0.0-1.0)
+- `action_mode` — `sticky` or `hold_to_switch`
+- `label.show_app_name` / `label.show_window_title` — Toggle label content
 
-### `action_mode` Settings
--   `sticky` | `hold_to_switch`
+## Platform Support
 
-### `label` Settings
--   `show_app_name`: Boolean. Show app name in card label.
--   `show_window_title`: Boolean. Show window title in card label.
-
-## Architecture
-
--   **GPUI Rendering**: Uses the GPUI framework for hardware-accelerated UI.
--   **Cross-Platform**: macOS (CoreGraphics + NSRunningApplication), Linux (X11/x11rb), Windows (stub).
--   **Unix Sockets**: Fast IPC for daemon control (`--show`, `--show-reverse`, `--kill`).
-
-## Development
-
-```bash
-# Run contract validation tests
-cargo test
-
-# Run in development mode (as a tray plugin)
-# qol-tray will automatically resolve the binary from target/debug
-```
+| Platform | Status |
+|----------|--------|
+| macOS | Supported |
+| Linux (X11) | Supported |
 
 License: MIT
