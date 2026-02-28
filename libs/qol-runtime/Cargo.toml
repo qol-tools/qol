@@ -2,6 +2,8 @@
 name = "qol-runtime"
 version = "0.1.0"
 edition = "2021"
+description = "Runtime protocol and client for QoL Tray platform state"
+license = "MIT"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
