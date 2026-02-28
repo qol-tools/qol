@@ -4,7 +4,6 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -183,22 +182,42 @@ async fn execute_action(
 }
 
 fn interpolate(template: &str, params: &HashMap<String, String>) -> String {
-    let re = Regex::new(r"\{\{(\w+)\}\}").unwrap();
-    re.replace_all(template, |caps: &regex::Captures| {
-        let key = &caps[1];
+    replace_template_vars(template, |key| {
         params.get(key).cloned().unwrap_or_default()
     })
-    .to_string()
 }
 
 fn interpolate_shell(template: &str, params: &HashMap<String, String>) -> String {
-    let re = Regex::new(r"\{\{(\w+)\}\}").unwrap();
-    re.replace_all(template, |caps: &regex::Captures| {
-        let key = &caps[1];
+    replace_template_vars(template, |key| {
         let val = params.get(key).map(|s| s.as_str()).unwrap_or("");
         shell_escape(val)
     })
-    .to_string()
+}
+
+fn replace_template_vars(template: &str, mut replacer: impl FnMut(&str) -> String) -> String {
+    let mut result = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(start) = rest.find("{{") {
+        result.push_str(&rest[..start]);
+        let after_open = &rest[start + 2..];
+        if let Some(end) = after_open.find("}}") {
+            let key = &after_open[..end];
+            if !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                result.push_str(&replacer(key));
+            } else {
+                result.push_str("{{");
+                result.push_str(key);
+                result.push_str("}}");
+            }
+            rest = &after_open[end + 2..];
+        } else {
+            result.push_str(&rest[start..]);
+            rest = "";
+            break;
+        }
+    }
+    result.push_str(rest);
+    result
 }
 
 fn shell_escape(s: &str) -> String {

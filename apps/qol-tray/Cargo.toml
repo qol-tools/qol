@@ -28,7 +28,7 @@ dev = []
 
 [dependencies]
 # Core async runtime
-tokio = { version = "1.35", features = ["full"] }
+tokio = { version = "1.35", features = ["rt-multi-thread", "fs", "process", "net", "sync", "time", "macros"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 
 # Serialization
@@ -59,7 +59,6 @@ tower-http = { version = "0.6", features = ["fs", "trace", "set-header"] }
 
 # HTTP client for GitHub API
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
-futures-util = "0.3"
 
 # Global hotkeys
 global-hotkey = { version = "0.7", features = ["serde"] }
@@ -67,8 +66,6 @@ global-hotkey = { version = "0.7", features = ["serde"] }
 # Embed static files
 rust-embed = "8.0"
 
-# Regex for template interpolation
-regex = "1"
 semver = "1"
 
 # Filesystem traversal for dev plugin discovery

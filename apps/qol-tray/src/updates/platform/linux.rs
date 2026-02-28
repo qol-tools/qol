@@ -1,5 +1,5 @@
 use anyhow::Result;
-use futures_util::StreamExt;
+use tokio_stream::StreamExt;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
