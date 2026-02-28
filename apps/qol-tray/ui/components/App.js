@@ -10,17 +10,15 @@ import { useKeyboard } from '../hooks/useKeyboard.js';
 import { readResponseText } from '../api/client.js';
 import { clampPercent } from '../utils/progress.js';
 
-import * as pluginsView from '../views/plugins.js';
-import * as storeView from '../views/store.js';
+import { PluginsView } from '../views/PluginsView.js';
+import { StoreView } from '../views/StoreView.js';
 import * as hotkeysView from '../views/hotkeys.js';
 import * as taskRunnerView from '../features/task-runner/view.js';
 import * as devView from '../views/dev.js';
 
-const BASE_VIEWS = { plugins: pluginsView, store: storeView, hotkeys: hotkeysView, 'task-runner': taskRunnerView };
+const PREACT_VIEWS = new Set(['plugins', 'store']);
+const BRIDGE_VIEWS = { hotkeys: hotkeysView, 'task-runner': taskRunnerView };
 const BASE_ORDER = ['plugins', 'store', 'hotkeys', 'task-runner'];
-
-// Shortcuts will be rendered by App once views are migrated to Preact.
-// During the bridge phase, old views write their own #content-footer innerHTML.
 
 function initDevFlows() {
     return {
@@ -51,8 +49,8 @@ export function App() {
         [devEnabled]
     );
 
-    const viewModules = useMemo(
-        () => devEnabled ? { ...BASE_VIEWS, dev: devView } : { ...BASE_VIEWS },
+    const bridgeModules = useMemo(
+        () => devEnabled ? { ...BRIDGE_VIEWS, dev: devView } : { ...BRIDGE_VIEWS },
         [devEnabled]
     );
 
@@ -80,21 +78,24 @@ export function App() {
         })();
     }, []);
 
-    // Wire plugins view callback
+    // Imperative view bridge (hotkeys, task-runner, dev only)
     useEffect(() => {
-        pluginsView.setOpenPluginConfig(openPluginConfig);
-    }, [openPluginConfig]);
+        if (PREACT_VIEWS.has(activeViewId) || activePluginId) {
+            // Blur previous bridge view if switching away
+            const prev = activeViewRef.current;
+            if (prev?.onBlur) prev.onBlur();
+            activeViewRef.current = null;
+            return;
+        }
 
-    // Imperative view bridge
-    useEffect(() => {
         const el = contentRef.current;
-        if (!el || activePluginId) return;
+        if (!el) return;
 
         const prev = activeViewRef.current;
         if (prev?.onBlur) prev.onBlur();
 
         el.innerHTML = '';
-        const next = viewModules[activeViewId];
+        const next = bridgeModules[activeViewId];
         if (!next) return;
 
         next.render(el);
@@ -105,7 +106,7 @@ export function App() {
             if (next.onBlur) next.onBlur();
             activeViewRef.current = null;
         };
-    }, [activeViewId, activePluginId, viewModules]);
+    }, [activeViewId, activePluginId, bridgeModules]);
 
     // When plugin iframe opens, blur active view
     useEffect(() => {
@@ -302,7 +303,10 @@ export function App() {
             return;
         }
 
-        const view = activeViewRef.current;
+        // Resolve active view handler (Preact component or bridge module)
+        const preactMap = { plugins: PluginsView, store: StoreView };
+        const view = preactMap[activeViewId] || activeViewRef.current;
+
         if (view?.isBlocking?.()) {
             if (view.handleKey) view.handleKey(e);
             return;
@@ -336,9 +340,11 @@ export function App() {
                         onBack=${closePluginConfig}
                     />
                 </aside>
-                <main id="content" ref=${contentRef}
-                      class=${activePluginId ? 'has-plugin-iframe' : ''}>
+                <main id="content" class=${activePluginId ? 'has-plugin-iframe' : ''}>
                     ${activePluginId && html`<iframe src="/plugins/${activePluginId}/" class="plugin-iframe"></iframe>`}
+                    ${!activePluginId && activeViewId === 'plugins' && html`<${PluginsView} onOpenPluginConfig=${openPluginConfig} />`}
+                    ${!activePluginId && activeViewId === 'store' && html`<${StoreView} />`}
+                    ${!activePluginId && !PREACT_VIEWS.has(activeViewId) && html`<div ref=${contentRef}></div>`}
                 </main>
             </div>
             <div class="app-footer">
