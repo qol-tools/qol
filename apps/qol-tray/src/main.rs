@@ -128,6 +128,9 @@ async fn async_init() -> Result<(
 }
 
 async fn check_for_updates() -> bool {
+    if cfg!(feature = "dev") {
+        return false;
+    }
     match tokio::time::timeout(Duration::from_secs(2), updates::check_for_updates()).await {
         Ok(Ok(has_update)) => has_update,
         Ok(Err(e)) => {

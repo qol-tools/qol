@@ -185,8 +185,30 @@ export function App() {
 
     useSSE(handleSSE);
     useSSEReconnect(useCallback(() => {
-        if (!devEnabled && updateState.status === 'done') checkForUpdate();
-    }, [devEnabled, updateState.status]));
+        if (devEnabled) {
+            const flows = devFlowsRef.current;
+            if (flows.recompile.active) {
+                clearDevFlowTimer('recompile');
+                flows.recompile.active = false;
+                flows.recompile.percent = 100;
+                flows.recompile.done = true;
+                flows.recompile.error = null;
+                syncSidebar();
+                scheduleDevFlowDoneClear('recompile', 1800);
+            }
+            if (flows.update.active) {
+                clearDevFlowTimer('update');
+                flows.update.active = false;
+                flows.update.percent = 100;
+                flows.update.done = true;
+                flows.update.error = null;
+                syncSidebar();
+                scheduleDevFlowDoneClear('update', 2000);
+            }
+            return;
+        }
+        if (updateState.status === 'done') checkForUpdate();
+    }, [devEnabled, updateState.status, checkForUpdate, clearDevFlowTimer, syncSidebar, scheduleDevFlowDoneClear]));
 
     // Sidebar actions
     const handleSidebarAction = useCallback(async (action) => {
