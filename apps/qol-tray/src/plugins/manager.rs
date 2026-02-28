@@ -121,6 +121,7 @@ impl PluginManager {
         for plugin in self.plugins.values() {
             if let Some(pid) = plugin.daemon_pid() {
                 log::info!("Ignoring daemon pid {} for plugin {}", pid, plugin.id);
+                #[cfg(unix)]
                 crate::os::display::add_ignore_pid(pid);
             }
         }

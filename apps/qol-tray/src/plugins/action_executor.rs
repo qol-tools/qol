@@ -175,6 +175,7 @@ fn track_action_process(plugin_id: &str, action_id: &str, pid: u32) {
         running.insert(action_key(plugin_id, action_id), pid);
     }
 
+    #[cfg(unix)]
     crate::os::display::add_ignore_pid(pid);
 }
 
@@ -200,6 +201,7 @@ fn untrack_action_process(plugin_id: &str, action_id: &str, pid: u32) {
         }
     }
 
+    #[cfg(unix)]
     crate::os::display::remove_ignore_pid(pid);
 }
 

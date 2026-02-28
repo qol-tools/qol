@@ -182,14 +182,14 @@ fn notify_plugin_reload(state: &AppState, plugin_id: &str) {
         })
     };
 
-    let Some(path) = socket_path else { return };
+    let Some(_path) = socket_path else { return };
 
     #[cfg(unix)]
     {
         use std::io::Write;
         use std::os::unix::net::UnixStream;
 
-        match UnixStream::connect(&path) {
+        match UnixStream::connect(&_path) {
             Ok(mut stream) => {
                 let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(500)));
                 if stream.write_all(b"reload").is_ok() {
