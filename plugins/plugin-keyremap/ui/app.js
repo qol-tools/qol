@@ -15,6 +15,10 @@ const VALID_MODS = new Set(['ctrl', 'shift', 'alt', 'cmd', 'ralt', 'altgr']);
 let config = { ...DEFAULT_CONFIG };
 let pendingWarnings = false;
 
+// App picker state
+let allApps = null; // cached from /api/apps
+let appsLoading = false;
+
 const elements = {
     saveBtn: document.getElementById('save-btn'),
     saveStatus: document.getElementById('save-status'),
@@ -90,19 +94,33 @@ function renderModChips(mods) {
     return mods.map(m => `<span class="mod-chip-static">${m}</span>`).join(' ');
 }
 
+function appNameFor(bundleId) {
+    if (!allApps) return null;
+    const entry = allApps.find(a => a.bundle_id === bundleId);
+    return entry ? entry.name : null;
+}
+
+function escHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 function renderExcludedApps() {
     const list = elements.excludedAppsList;
     if (config.excluded_apps.length === 0) {
         list.innerHTML = '<div class="empty-state">No excluded apps. All apps will have remapping active.</div>';
         return;
     }
-    list.innerHTML = config.excluded_apps.map((app, i) =>
-        `<div class="item-row">
+    list.innerHTML = config.excluded_apps.map((app, i) => {
+        const name = appNameFor(app);
+        const label = name
+            ? `<span class="app-name">${escHtml(name)}</span><span class="app-separator">&mdash;</span><span class="app-bid">${escHtml(app)}</span>`
+            : `<span>${escHtml(app)}</span>`;
+        return `<div class="item-row">
             <img class="app-icon" src="/api/icon/${encodeURIComponent(app)}" width="20" height="20" onerror="this.style.display='none'">
-            <span>${app}</span>
+            ${label}
             <button class="btn-remove" data-type="app" data-index="${i}">&times;</button>
-        </div>`
-    ).join('');
+        </div>`;
+    }).join('');
 }
 
 function renderKeyChips(keys) {
@@ -249,20 +267,112 @@ document.addEventListener('click', (e) => {
     }
 });
 
+function addExcludedApp(bundleId) {
+    if (!bundleId || config.excluded_apps.includes(bundleId)) return;
+    config.excluded_apps.push(bundleId);
+    renderExcludedApps();
+    renderPickerDropdown();
+}
+
 document.getElementById('add-app-btn').addEventListener('click', () => {
     const input = document.getElementById('new-app-input');
     const value = input.value.trim();
     if (!value) return;
-    if (config.excluded_apps.includes(value)) return;
-    config.excluded_apps.push(value);
+    addExcludedApp(value);
     input.value = '';
-    renderExcludedApps();
+    hidePickerDropdown();
 });
 
 document.getElementById('new-app-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
         e.preventDefault();
         document.getElementById('add-app-btn').click();
+    }
+    if (e.key === 'Escape') {
+        hidePickerDropdown();
+        e.target.blur();
+    }
+});
+
+// --- App picker dropdown ---
+
+const pickerDropdown = document.getElementById('app-picker-dropdown');
+const appInput = document.getElementById('new-app-input');
+
+async function fetchApps() {
+    if (allApps !== null || appsLoading) return;
+    appsLoading = true;
+    pickerDropdown.innerHTML = '<div class="app-picker-loading">Loading apps...</div>';
+    pickerDropdown.classList.remove('hidden');
+    try {
+        const res = await fetch('/api/apps');
+        if (res.ok) {
+            allApps = await res.json();
+            renderExcludedApps(); // re-render with names
+        } else {
+            allApps = [];
+        }
+    } catch {
+        allApps = [];
+    } finally {
+        appsLoading = false;
+        renderPickerDropdown();
+    }
+}
+
+function renderPickerDropdown() {
+    if (!allApps || allApps.length === 0) {
+        pickerDropdown.innerHTML = '<div class="app-picker-empty">No apps found</div>';
+        return;
+    }
+
+    const query = appInput.value.trim().toLowerCase();
+    const filtered = allApps.filter(app => {
+        if (!query) return true;
+        return app.name.toLowerCase().includes(query)
+            || app.bundle_id.toLowerCase().includes(query);
+    });
+
+    if (filtered.length === 0) {
+        pickerDropdown.innerHTML = '<div class="app-picker-empty">No matches</div>';
+        return;
+    }
+
+    pickerDropdown.innerHTML = filtered.map(app => {
+        const excluded = config.excluded_apps.includes(app.bundle_id);
+        return `<div class="app-picker-item${excluded ? ' disabled' : ''}" data-bid="${escHtml(app.bundle_id)}">
+            <img src="/api/icon/${encodeURIComponent(app.bundle_id)}" width="24" height="24" onerror="this.style.display='none'">
+            <div class="app-picker-info">
+                <span class="app-picker-name">${escHtml(app.name)}</span>
+                <span class="app-picker-bid">${escHtml(app.bundle_id)}</span>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function showPickerDropdown() {
+    pickerDropdown.classList.remove('hidden');
+    fetchApps();
+}
+
+function hidePickerDropdown() {
+    pickerDropdown.classList.add('hidden');
+}
+
+appInput.addEventListener('focus', showPickerDropdown);
+appInput.addEventListener('input', renderPickerDropdown);
+
+pickerDropdown.addEventListener('click', (e) => {
+    const item = e.target.closest('.app-picker-item');
+    if (!item || item.classList.contains('disabled')) return;
+    const bid = item.dataset.bid;
+    appInput.value = '';
+    addExcludedApp(bid);
+});
+
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('.app-picker-container')) {
+        hidePickerDropdown();
     }
 });
 

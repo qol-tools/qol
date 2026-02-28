@@ -37,6 +37,11 @@ body {
     border-radius: 14px;
     padding: 1rem;
     backdrop-filter: blur(2px);
+    position: relative;
+}
+
+.card:has(.app-picker-dropdown:not(.hidden)) {
+    z-index: 10;
 }
 
 .card h2 {
@@ -436,6 +441,120 @@ select.key-input {
     color: #86d5a3;
     font-size: 0.82rem;
     min-height: 1em;
+}
+
+/* App picker dropdown */
+.app-picker-container {
+    position: relative;
+}
+
+.app-picker-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    margin-top: 0.3rem;
+    max-height: 280px;
+    overflow-y: auto;
+    background: rgba(8, 14, 24, 0.97);
+    border: 1px solid rgba(107, 129, 176, 0.35);
+    border-radius: 10px;
+    z-index: 100;
+    backdrop-filter: blur(8px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.app-picker-dropdown.hidden {
+    display: none;
+}
+
+.app-picker-item {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+    transition: background 0.1s;
+    border-bottom: 1px solid rgba(107, 129, 176, 0.08);
+}
+
+.app-picker-item:last-child {
+    border-bottom: none;
+}
+
+.app-picker-item:hover {
+    background: rgba(63, 120, 223, 0.2);
+}
+
+.app-picker-item.disabled {
+    opacity: 0.35;
+    cursor: default;
+    pointer-events: none;
+}
+
+.app-picker-item img {
+    width: 24px;
+    height: 24px;
+    border-radius: 5px;
+    flex-shrink: 0;
+}
+
+.app-picker-info {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.app-picker-name {
+    color: #e8eef9;
+    font-size: 0.85rem;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.app-picker-bid {
+    color: #5a6a82;
+    font-size: 0.72rem;
+    font-family: "SF Mono", "Fira Code", monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.app-picker-loading {
+    padding: 1rem;
+    text-align: center;
+    color: #5a6a82;
+    font-size: 0.85rem;
+}
+
+.app-picker-empty {
+    padding: 0.75rem;
+    text-align: center;
+    color: #5a6a82;
+    font-size: 0.85rem;
+    font-style: italic;
+}
+
+/* Enhanced excluded app row */
+.item-row .app-name {
+    color: #e8eef9;
+    font-weight: 500;
+    font-family: "Segoe UI", "SF Pro Text", sans-serif;
+    font-size: 0.85rem;
+}
+
+.item-row .app-bid {
+    color: #5a6a82;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 0.78rem;
+}
+
+.item-row .app-separator {
+    color: #3a4a62;
+    margin: 0 0.15rem;
 }
 
 @media (max-width: 640px) {

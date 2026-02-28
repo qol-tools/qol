@@ -29,9 +29,10 @@
             <h2>Excluded Apps</h2>
             <p>Apps that handle Ctrl natively (terminals, IDEs). Remapping is bypassed for these bundle IDs.</p>
             <div id="excluded-apps-list" class="item-list"></div>
-            <div class="add-row">
-                <input type="text" id="new-app-input" placeholder="com.example.app" class="text-input">
+            <div class="add-row app-picker-container">
+                <input type="text" id="new-app-input" placeholder="Search apps or type bundle ID..." class="text-input" autocomplete="off">
                 <button id="add-app-btn" class="btn-add">+ Add</button>
+                <div id="app-picker-dropdown" class="app-picker-dropdown hidden"></div>
             </div>
         </section>
 
