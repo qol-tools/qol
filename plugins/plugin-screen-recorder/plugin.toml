@@ -7,7 +7,7 @@ platforms = ["linux"]
 
 [runtime]
 command = "screen-recorder"
-actions = { record = ["record"], audio-settings = ["audio-settings"] }
+actions = { record = ["record"], settings = ["settings"] }
 
 [menu]
 label = "🎬 Screen Recorder"
@@ -15,7 +15,7 @@ items = [
     { type = "action", id = "record", label = "Start/Stop Recording", action = "run" },
     { type = "separator" },
     { type = "checkbox", id = "audio-enable", label = "Enable Audio", checked = true, action = "toggle-config", config_key = "audio.enabled" },
-    { type = "action", id = "audio-settings", label = "Audio Settings...", action = "settings" },
+    { type = "action", id = "settings", label = "Settings...", action = "settings" },
 ]
 
 # No background daemon needed for this plugin

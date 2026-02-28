@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use chrono::Local;
 use serde::Deserialize;
 use std::env;
 use std::fs::{self, File};
@@ -123,7 +124,7 @@ fn main() -> ExitCode {
     let action = env::args().nth(1).unwrap_or_else(|| "record".to_string());
     let result = match action.as_str() {
         "record" => run_record_action(),
-        "audio-settings" => open_audio_settings(),
+        "settings" => open_settings(),
         _ => Err(anyhow!("Unknown action: {}", action)),
     };
 
@@ -191,7 +192,7 @@ fn run_record_action() -> Result<()> {
     Ok(())
 }
 
-fn open_audio_settings() -> Result<()> {
+fn open_settings() -> Result<()> {
     Command::new("xdg-open")
         .arg(SETTINGS_URL)
         .stdin(Stdio::null())
@@ -398,14 +399,7 @@ fn output_file_path(format: &str) -> Result<PathBuf> {
     let mut videos = PathBuf::from(home);
     videos.push("Videos");
     fs::create_dir_all(&videos).context("failed to create output directory")?;
-    let stamp = Command::new("date")
-        .arg("+%F_%H-%M-%S")
-        .output()
-        .context("failed to generate timestamp")?;
-    if !stamp.status.success() {
-        return Err(anyhow!("date command failed"));
-    }
-    let timestamp = String::from_utf8_lossy(&stamp.stdout).trim().to_string();
+    let timestamp = Local::now().format("%F_%H-%M-%S").to_string();
     videos.push(format!("recording-{}.{}", timestamp, format));
     Ok(videos)
 }
