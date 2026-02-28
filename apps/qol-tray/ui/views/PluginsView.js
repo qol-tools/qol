@@ -105,8 +105,9 @@ export function PluginsView({ onOpenPluginConfig }) {
         }, 100);
     }, [refreshPlugins]));
 
-    // Save selection
+    // Save selection (skip until initial restore completes to avoid overwriting stored value)
     useEffect(() => {
+        if (!restoredRef.current) return;
         localStorage.setItem('plugins-selected-index', String(selectedIndex));
     }, [selectedIndex]);
 
