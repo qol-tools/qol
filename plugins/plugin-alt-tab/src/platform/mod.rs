@@ -38,6 +38,10 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
     imp::get_open_windows()
 }
 
+pub fn get_on_screen_windows() -> Vec<WindowInfo> {
+    imp::get_on_screen_windows()
+}
+
 pub fn capture_previews_cg(targets: &[(usize, u32)], max_w: usize, max_h: usize) -> Vec<(usize, Option<RgbaImage>)> {
     imp::capture_previews_cg(targets, max_w, max_h)
 }

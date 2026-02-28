@@ -499,12 +499,22 @@ fn parse_cg_window_list(list: *const c_void, own_pid: i32) -> Vec<CgWindow> {
 }
 
 pub fn get_open_windows() -> Vec<WindowInfo> {
+    get_open_windows_impl(true)
+}
+
+pub fn get_on_screen_windows() -> Vec<WindowInfo> {
+    get_open_windows_impl(false)
+}
+
+fn get_open_windows_impl(include_minimized: bool) -> Vec<WindowInfo> {
     let own_pid = std::process::id() as i32;
     let mut state = WindowEnumeration::default();
     let mut tracker = KnownWindowTracker::new();
 
     collect_on_screen_windows(own_pid, &mut state, &mut tracker);
-    collect_minimized_windows(own_pid, &mut state, &mut tracker);
+    if include_minimized {
+        collect_minimized_windows(own_pid, &mut state, &mut tracker);
+    }
     tracker.persist();
 
     state.windows

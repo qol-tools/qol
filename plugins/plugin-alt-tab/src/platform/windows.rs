@@ -4,6 +4,10 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
     Vec::new()
 }
 
+pub fn get_on_screen_windows() -> Vec<WindowInfo> {
+    Vec::new()
+}
+
 pub fn capture_previews_cg(
     _targets: &[(usize, u32)],
     _max_w: usize,

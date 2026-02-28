@@ -75,27 +75,18 @@ pub(crate) fn open_picker(
     }
 
     let display_windows: Vec<WindowInfo> = {
-        // Use prewarm cache when available to skip expensive AX/CG/proc_pidinfo calls.
-        // Falls back to fresh enumeration only when the cache is empty (first open).
-        let cached = window_cache
-            .lock()
-            .ok()
-            .and_then(|c| if c.is_empty() { None } else { Some(c.clone()) });
-        let all = if let Some(cached_windows) = cached {
-            cached_windows
+        // Use get_on_screen_windows (fast CG-only) when minimized windows aren't needed.
+        // This skips collect_minimized_windows which does expensive proc_pidinfo / AX per window.
+        let all = if config.display.show_minimized {
+            platform::get_open_windows()
         } else {
-            let fresh = platform::get_open_windows();
-            if let Ok(mut cache) = window_cache.lock() {
-                *cache = fresh.clone();
-            }
-            fresh
+            platform::get_on_screen_windows()
         };
-        if config.display.show_minimized {
-            all
-        } else {
-            all.into_iter().filter(|w| !w.is_minimized).collect()
-        }
+        all.into_iter().filter(|w| !w.is_minimized).collect()
     };
+    if let Ok(mut cache) = window_cache.lock() {
+        *cache = display_windows.clone();
+    }
 
     // Grab pre-warmed previews from cache (instant). Only capture missing windows.
     let mut initial_previews: HashMap<u32, Arc<RenderImage>> = HashMap::new();
