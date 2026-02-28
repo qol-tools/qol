@@ -87,6 +87,8 @@ pub fn run_app<F>(init: F) -> Result<()>
 where
     F: FnOnce() -> Result<(TrayManager, Arc<Mutex<PluginManager>>)>,
 {
+    crate::signal::install_signal_handler();
+
     let (_tray, plugin_manager) = init()?;
 
     #[cfg(target_os = "linux")]

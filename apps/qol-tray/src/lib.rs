@@ -11,6 +11,7 @@ pub(crate) mod os;
 pub mod runtime;
 pub mod plugins;
 pub mod process_utils;
+pub mod signal;
 pub mod tray;
 pub mod updates;
 pub mod version;
