@@ -121,6 +121,7 @@ impl Plugin {
         let pid = child.id();
         self.daemon_process = Some(child);
         crate::os::display::add_ignore_pid(pid);
+        crate::signal::register_daemon_pid(pid);
         log::info!("Registered ignore pid {} for plugin {}", pid, self.id);
         Ok(())
     }
@@ -135,6 +136,7 @@ impl Plugin {
         };
 
         log::info!("Stopping daemon for plugin: {}", self.id);
+        crate::signal::unregister_daemon_pid(child.id());
 
         #[cfg(unix)]
         unsafe {
