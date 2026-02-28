@@ -379,11 +379,10 @@ async function togglePluginLogs(pluginId) {
             discoveryController.loadPlugins(true),
             discoveryController.loadLogControls(true)
         ]);
-        updateView();
     } catch (error) {
         state.error = error?.message || 'Failed to toggle plugin logs';
-        updateView();
     }
+    if (!state.linkingId) updateView();
 }
 
 async function editPluginLogFilters(pluginId) {
@@ -411,11 +410,10 @@ async function editPluginLogFilters(pluginId) {
             discoveryController.loadPlugins(true),
             discoveryController.loadLogControls(true)
         ]);
-        updateView();
     } catch (error) {
         state.error = error?.message || 'Failed to update plugin log filters';
-        updateView();
     }
+    if (!state.linkingId) updateView();
 }
 
 async function triggerReload() {

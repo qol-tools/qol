@@ -197,25 +197,34 @@ fn interpolate_shell(template: &str, params: &HashMap<String, String>) -> String
 fn replace_template_vars(template: &str, mut replacer: impl FnMut(&str) -> String) -> String {
     let mut result = String::with_capacity(template.len());
     let mut rest = template;
+
     while let Some(start) = rest.find("{{") {
         result.push_str(&rest[..start]);
         let after_open = &rest[start + 2..];
-        if let Some(end) = after_open.find("}}") {
-            let key = &after_open[..end];
-            if !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-                result.push_str(&replacer(key));
-            } else {
-                result.push_str("{{");
-                result.push_str(key);
-                result.push_str("}}");
-            }
-            rest = &after_open[end + 2..];
-        } else {
+
+        let Some(end) = after_open.find("}}") else {
             result.push_str(&rest[start..]);
-            rest = "";
             break;
+        };
+
+        let key = &after_open[..end];
+        rest = &after_open[end + 2..];
+
+        let is_valid_key = !key.is_empty()
+            && key
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_');
+
+        if !is_valid_key {
+            result.push_str("{{");
+            result.push_str(key);
+            result.push_str("}}");
+            continue;
         }
+
+        result.push_str(&replacer(key));
     }
+
     result.push_str(rest);
     result
 }

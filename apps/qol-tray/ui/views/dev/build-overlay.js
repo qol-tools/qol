@@ -39,6 +39,11 @@ export function createPluginBuildOverlayController({
     }
 
     function cacheRows() {
+        // Cancel pending RAF so it doesn't access stale row refs
+        if (buildSyncFrame !== null) {
+            cancelAnimationFrame(buildSyncFrame);
+            buildSyncFrame = null;
+        }
         rowRefs = new Map();
         const container = getContainer();
         if (!container) return;
