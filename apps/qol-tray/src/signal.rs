@@ -34,7 +34,7 @@ mod unix {
 
     pub fn install_signal_handler() {
         unsafe {
-            libc::signal(libc::SIGINT, sigint_handler as libc::sighandler_t);
+            libc::signal(libc::SIGINT, sigint_handler as *const () as libc::sighandler_t);
         }
     }
 
