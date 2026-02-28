@@ -1,6 +1,7 @@
 pub mod action_executor;
 pub mod action_transport;
 pub mod config;
+#[allow(dead_code)]
 pub mod daemon_tracker;
 pub mod loader;
 pub mod log_control;

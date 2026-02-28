@@ -174,6 +174,7 @@ pub(super) async fn set_plugin_config(
     }
 }
 
+#[cfg(unix)]
 fn notify_plugin_reload(state: &AppState, plugin_id: &str) {
     let socket_path = {
         let manager = state.plugin_manager.lock().unwrap();
@@ -182,7 +183,6 @@ fn notify_plugin_reload(state: &AppState, plugin_id: &str) {
         })
     };
 
-    #[cfg(unix)]
     if let Some(path) = socket_path {
         use std::io::Write;
         use std::os::unix::net::UnixStream;
@@ -200,6 +200,9 @@ fn notify_plugin_reload(state: &AppState, plugin_id: &str) {
         }
     }
 }
+
+#[cfg(not(unix))]
+fn notify_plugin_reload(_state: &AppState, _plugin_id: &str) {}
 
 pub(super) async fn list_apps() -> Json<Vec<serde_json::Value>> {
     let apps = tokio::task::spawn_blocking(discover_installed_apps)
