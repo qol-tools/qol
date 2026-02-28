@@ -40,5 +40,5 @@ export function DevView() {
     DevView.handleKey = devModule.handleKey;
     DevView.isBlocking = devModule.isBlocking || (() => false);
 
-    return html`<div ref=${containerRef}></div>`;
+    return html`<div ref=${containerRef} style="flex:1;min-height:0;display:flex;flex-direction:column"></div>`;
 }
