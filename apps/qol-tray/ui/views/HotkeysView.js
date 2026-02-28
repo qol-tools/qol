@@ -49,7 +49,11 @@ function getKeyName(code) {
 export function HotkeysView() {
     const [hotkeys, setHotkeys] = useState([]);
     const [plugins, setPlugins] = useState([]);
-    const [selectedIndex, setSelectedIndex] = useState(-1);
+    const [selectedIndex, setSelectedIndex] = useState(() => {
+        const saved = parseInt(localStorage.getItem('hotkeys-selected-index'), 10);
+        return Number.isFinite(saved) ? saved : -1;
+    });
+    const hotkeysRestoredRef = useRef(false);
     const [editModal, setEditModal] = useState(null); // null | { hotkey, pluginId, action, key, recording }
     const [modalFieldIndex, setModalFieldIndex] = useState(0);
 
@@ -80,10 +84,20 @@ export function HotkeysView() {
                 const hks = hotkeysConfig.hotkeys || [];
                 setHotkeys(hks);
                 setPlugins(parseInstalledPlugins(installedPayload));
-                if (hks.length > 0) setSelectedIndex(0);
+                setSelectedIndex(prev => {
+                    hotkeysRestoredRef.current = true;
+                    if (hks.length === 0) return -1;
+                    return prev >= 0 && prev < hks.length ? prev : 0;
+                });
             } catch {}
         })();
     }, []);
+
+    // Save selection
+    useEffect(() => {
+        if (!hotkeysRestoredRef.current) return;
+        localStorage.setItem('hotkeys-selected-index', String(selectedIndex));
+    }, [selectedIndex]);
 
     // Scroll selected into view
     useEffect(() => {

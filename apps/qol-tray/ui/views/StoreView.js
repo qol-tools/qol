@@ -27,7 +27,11 @@ const SHORTCUTS = [
 
 export function StoreView() {
     const [plugins, setPlugins] = useState([]);
-    const [selectedIndex, setSelectedIndex] = useState(0);
+    const [selectedIndex, setSelectedIndex] = useState(() => {
+        const saved = parseInt(localStorage.getItem('store-selected-index') || '0', 10);
+        return saved >= 0 ? saved : 0;
+    });
+    const storeRestoredRef = useRef(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [hasToken, setHasToken] = useState(false);
     const [showTokenInput, setShowTokenInput] = useState(false);
@@ -118,8 +122,17 @@ export function StoreView() {
 
     // Clamp selection when filtered list changes
     useEffect(() => {
-        setSelectedIndex(prev => clampSelectedIndex(prev, filtered.length));
+        setSelectedIndex(prev => {
+            storeRestoredRef.current = true;
+            return clampSelectedIndex(prev, filtered.length);
+        });
     }, [filtered.length]);
+
+    // Save selection
+    useEffect(() => {
+        if (!storeRestoredRef.current) return;
+        localStorage.setItem('store-selected-index', String(selectedIndex));
+    }, [selectedIndex]);
 
     // Scroll selected into view
     useEffect(() => {
