@@ -25,6 +25,7 @@ export function mergePlugins(discovered, linkedPlugins, logControls = {}) {
             path: discoveredPlugin.path,
             status: 'local',
             has_cargo: false,
+            supports_platform: true,
             needs_rebuild: false,
             rebuild_reason: '',
             fingerprint: null,
@@ -41,6 +42,7 @@ export function mergePlugins(discovered, linkedPlugins, logControls = {}) {
             existing.status = 'linked';
             existing.path = linkedPlugin.source || existing.path;
             existing.has_cargo = !!linkedPlugin.has_cargo;
+            existing.supports_platform = linkedPlugin.supports_platform !== false;
             existing.needs_rebuild = !!linkedPlugin.needs_rebuild;
             existing.rebuild_reason = linkedPlugin.rebuild_reason || '';
             existing.fingerprint = linkedPlugin.fingerprint || null;
@@ -56,6 +58,7 @@ export function mergePlugins(discovered, linkedPlugins, logControls = {}) {
                 path: linkedPlugin.source,
                 status: 'linked',
                 has_cargo: !!linkedPlugin.has_cargo,
+                supports_platform: linkedPlugin.supports_platform !== false,
                 needs_rebuild: !!linkedPlugin.needs_rebuild,
                 rebuild_reason: linkedPlugin.rebuild_reason || '',
                 fingerprint: linkedPlugin.fingerprint || null,
@@ -74,6 +77,10 @@ export function mergePlugins(discovered, linkedPlugins, logControls = {}) {
 export function renderPluginBuildMeta(plugin) {
     if (plugin.status !== 'linked') {
         return '<span class="plugin-build-meta plugin-build-meta-placeholder" aria-hidden="true">_</span>';
+    }
+
+    if (!plugin.supports_platform) {
+        return `<span class="plugin-build-meta muted">${plugin.rebuild_reason || 'Unsupported platform'}</span>`;
     }
 
     if (!plugin.has_cargo) {

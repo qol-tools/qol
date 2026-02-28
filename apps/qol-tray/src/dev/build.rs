@@ -5,7 +5,7 @@ mod service;
 mod types;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use fingerprint::fingerprint_plugin;
 
@@ -29,16 +29,31 @@ pub fn plan_linked_plugin_builds(
         .map(|(plugin_id, path)| {
             let has_cargo = path.join("Cargo.toml").is_file();
             let last_built_fingerprint = known_fingerprints.get(plugin_id).cloned();
+            let (supports_platform, platform_reason) = check_plugin_platform(path);
 
             if !has_cargo {
                 return PluginBuildPlan {
                     plugin_id: plugin_id.clone(),
                     path: path.clone(),
                     has_cargo,
+                    supports_platform,
                     needs_rebuild: false,
                     current_fingerprint: None,
                     last_built_fingerprint,
                     reason: "Cargo.toml missing".to_string(),
+                };
+            }
+
+            if !supports_platform {
+                return PluginBuildPlan {
+                    plugin_id: plugin_id.clone(),
+                    path: path.clone(),
+                    has_cargo,
+                    supports_platform,
+                    needs_rebuild: false,
+                    current_fingerprint: None,
+                    last_built_fingerprint,
+                    reason: platform_reason,
                 };
             }
 
@@ -62,6 +77,7 @@ pub fn plan_linked_plugin_builds(
                         plugin_id: plugin_id.clone(),
                         path: path.clone(),
                         has_cargo,
+                        supports_platform: true,
                         needs_rebuild,
                         current_fingerprint: Some(current_fingerprint),
                         last_built_fingerprint,
@@ -72,6 +88,7 @@ pub fn plan_linked_plugin_builds(
                     plugin_id: plugin_id.clone(),
                     path: path.clone(),
                     has_cargo,
+                    supports_platform: true,
                     needs_rebuild: true,
                     current_fingerprint: None,
                     last_built_fingerprint,
@@ -80,6 +97,31 @@ pub fn plan_linked_plugin_builds(
             }
         })
         .collect()
+}
+
+fn check_plugin_platform(path: &Path) -> (bool, String) {
+    let toml_path = path.join("plugin.toml");
+    let content = match std::fs::read_to_string(&toml_path) {
+        Ok(c) => c,
+        Err(_) => return (true, String::new()),
+    };
+    let manifest: crate::plugins::PluginManifest = match toml::from_str(&content) {
+        Ok(m) => m,
+        Err(_) => return (true, String::new()),
+    };
+    if manifest.plugin.supports_current_platform() {
+        return (true, String::new());
+    }
+    let declared = match &manifest.plugin.platforms {
+        Some(platforms) => platforms.join(", "),
+        None => "none".to_string(),
+    };
+    let reason = format!(
+        "Not supported on {} (requires {})",
+        std::env::consts::OS,
+        declared
+    );
+    (false, reason)
 }
 
 #[cfg(test)]
@@ -155,6 +197,70 @@ mod tests {
         let loaded = load_build_fingerprints(tmp.path());
 
         assert_eq!(loaded, data);
+    }
+
+    #[test]
+    fn plan_skips_plugin_with_unsupported_platform() {
+        let tmp = TempDir::new().unwrap();
+        let plugin_dir = tmp.path().join("plugin-a");
+        write_basic_plugin(&plugin_dir);
+        let unsupported = if cfg!(target_os = "linux") {
+            "windows"
+        } else {
+            "linux"
+        };
+        fs::write(
+            plugin_dir.join("plugin.toml"),
+            format!(
+                "[plugin]\nname = \"Test\"\ndescription = \"\"\nversion = \"1.0.0\"\nplatforms = [\"{unsupported}\"]\n\n[menu]\nlabel = \"Test\"\nitems = []\n"
+            ),
+        )
+        .unwrap();
+
+        let links = HashMap::from([("plugin-a".to_string(), plugin_dir)]);
+        let plans = plan_linked_plugin_builds(&links, &HashMap::new());
+
+        assert_eq!(plans.len(), 1);
+        assert!(plans[0].has_cargo);
+        assert!(!plans[0].supports_platform);
+        assert!(!plans[0].needs_rebuild);
+        assert!(plans[0].reason.contains("Not supported on"));
+        assert!(plans[0].reason.contains(unsupported));
+    }
+
+    #[test]
+    fn plan_builds_plugin_with_matching_platform() {
+        let tmp = TempDir::new().unwrap();
+        let plugin_dir = tmp.path().join("plugin-a");
+        write_basic_plugin(&plugin_dir);
+        fs::write(
+            plugin_dir.join("plugin.toml"),
+            format!(
+                "[plugin]\nname = \"Test\"\ndescription = \"\"\nversion = \"1.0.0\"\nplatforms = [\"{}\"]\n\n[menu]\nlabel = \"Test\"\nitems = []\n",
+                std::env::consts::OS
+            ),
+        )
+        .unwrap();
+
+        let links = HashMap::from([("plugin-a".to_string(), plugin_dir)]);
+        let plans = plan_linked_plugin_builds(&links, &HashMap::new());
+
+        assert_eq!(plans.len(), 1);
+        assert!(plans[0].supports_platform);
+        assert!(plans[0].needs_rebuild);
+    }
+
+    #[test]
+    fn plan_defaults_to_supported_without_plugin_toml() {
+        let tmp = TempDir::new().unwrap();
+        let plugin_dir = tmp.path().join("plugin-a");
+        write_basic_plugin(&plugin_dir);
+
+        let links = HashMap::from([("plugin-a".to_string(), plugin_dir)]);
+        let plans = plan_linked_plugin_builds(&links, &HashMap::new());
+
+        assert_eq!(plans.len(), 1);
+        assert!(plans[0].supports_platform);
     }
 
     #[test]

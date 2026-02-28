@@ -117,7 +117,7 @@ where
     emit_core_input(&mut core_state, CoreInput::RunStarted, &mut on_event);
 
     for plan in &plans {
-        if !(plan.has_cargo && plan.needs_rebuild) {
+        if !(plan.has_cargo && plan.supports_platform && plan.needs_rebuild) {
             continue;
         }
         emit_core_input(
@@ -149,6 +149,26 @@ where
                 plugin_id: plan.plugin_id.clone(),
                 success: true,
                 output: "Skipped: Cargo.toml missing".to_string(),
+                skipped: true,
+            });
+            continue;
+        }
+
+        if !plan.supports_platform {
+            emit_core_input(
+                &mut core_state,
+                CoreInput::PluginProgress {
+                    plugin_id: plan.plugin_id.clone(),
+                    status: BuildStatus::Skipped,
+                    percent: 100,
+                    phase: plan.reason.clone(),
+                },
+                &mut on_event,
+            );
+            results.push(BuildResult {
+                plugin_id: plan.plugin_id.clone(),
+                success: true,
+                output: plan.reason.clone(),
                 skipped: true,
             });
             continue;
