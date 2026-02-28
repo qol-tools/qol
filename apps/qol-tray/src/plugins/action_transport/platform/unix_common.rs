@@ -1,35 +1,16 @@
 use super::super::DaemonActionDispatch;
+use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
+use std::io::{BufRead, BufReader, Write};
+use std::net::Shutdown;
+use std::os::unix::net::UnixStream;
 use std::path::Path;
+use std::time::Duration;
 
 const SOCKET_IO_TIMEOUT_MS: u64 = 80;
 
 pub(super) fn dispatch_action(endpoint: &Path, action_id: &str) -> DaemonActionDispatch {
-    let mut fallback_seen = false;
-
-    for payload in payload_attempts(endpoint, action_id) {
-        match send_payload(endpoint, &payload) {
-            DaemonActionDispatch::Handled => return DaemonActionDispatch::Handled,
-            DaemonActionDispatch::Error(message) => return DaemonActionDispatch::Error(message),
-            DaemonActionDispatch::Fallback => fallback_seen = true,
-            DaemonActionDispatch::Unavailable => {}
-        }
-    }
-
-    if fallback_seen {
-        DaemonActionDispatch::Fallback
-    } else {
-        DaemonActionDispatch::Unavailable
-    }
-}
-
-fn send_payload(endpoint: &Path, payload: &str) -> DaemonActionDispatch {
-    use std::io::{Read, Write};
-    use std::net::Shutdown;
-    use std::os::unix::net::UnixStream;
-    use std::time::Duration;
-
     let mut stream = match UnixStream::connect(endpoint) {
-        Ok(stream) => stream,
+        Ok(s) => s,
         Err(_) => return DaemonActionDispatch::Unavailable,
     };
 
@@ -37,33 +18,25 @@ fn send_payload(endpoint: &Path, payload: &str) -> DaemonActionDispatch {
     let _ = stream.set_write_timeout(Some(timeout));
     let _ = stream.set_read_timeout(Some(timeout));
 
+    let request = DaemonRequest {
+        action: action_id.to_string(),
+    };
+    let Ok(mut payload) = serde_json::to_string(&request) else {
+        return DaemonActionDispatch::Unavailable;
+    };
+    payload.push('\n');
+
     if stream.write_all(payload.as_bytes()).is_err() {
         return DaemonActionDispatch::Unavailable;
     }
     let _ = stream.shutdown(Shutdown::Write);
 
-    let mut buffer = [0u8; 128];
-    let read_result = stream.read(&mut buffer);
-    match read_result {
-        Ok(0) => DaemonActionDispatch::Unavailable,
-        Ok(n) => super::super::protocol::parse_response(&buffer[..n]),
-        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-            DaemonActionDispatch::Unavailable
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::TimedOut => DaemonActionDispatch::Unavailable,
-        Err(_) => DaemonActionDispatch::Unavailable,
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    match reader.read_line(&mut line) {
+        Ok(0) | Err(_) => return DaemonActionDispatch::Unavailable,
+        Ok(_) => {}
     }
-}
 
-fn payload_attempts(endpoint: &Path, action_id: &str) -> Vec<String> {
-    let mut payloads = vec![format!("action:{action_id}\n"), format!("{action_id}\n")];
-    if action_id == "open" && looks_like_launcher_socket(endpoint) {
-        payloads.insert(0, "show".to_string());
-    }
-    payloads
-}
-
-fn looks_like_launcher_socket(endpoint: &Path) -> bool {
-    let lower = endpoint.to_string_lossy().to_ascii_lowercase();
-    lower.contains("qol-launcher") || lower.contains("launcher.sock")
+    super::super::protocol::parse_response(line.trim())
 }
