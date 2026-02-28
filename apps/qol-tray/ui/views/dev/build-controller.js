@@ -53,14 +53,21 @@ export function createBuildController({
             const payload = await res.json();
             const nextState = parseHydratedBuildState(payload);
             state.building = nextState.building;
-            state.buildProgress = nextState.buildProgress;
+
             if (!state.building) {
+                state.buildProgress = nextState.buildProgress;
                 clearQueuedBuildRowSync();
+                if (!skipUpdate && !state.linkingId) onNeedsRender();
+                return;
             }
 
-            if (!skipUpdate && !state.linkingId) {
-                onNeedsRender();
+            for (const [id, hydrated] of Object.entries(nextState.buildProgress)) {
+                const live = state.buildProgress[id];
+                if (live && (live.percent ?? 0) > (hydrated.percent ?? 0)) continue;
+                state.buildProgress[id] = hydrated;
             }
+
+            if (!skipUpdate && !state.linkingId) onNeedsRender();
         } catch (e) {}
     }
 
