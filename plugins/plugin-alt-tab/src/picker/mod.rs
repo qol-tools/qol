@@ -39,23 +39,9 @@ pub(crate) fn open_picker(
         return;
     }
 
-    let display_windows: Vec<WindowInfo> = {
-        let all = platform::get_open_windows();
-        if config.display.show_minimized {
-            all
-        } else {
-            all.into_iter().filter(|w| !w.is_minimized).collect()
-        }
-    };
-    // Update the cache centrally so background processes see the current layout
-    if let Ok(mut cache) = window_cache.lock() {
-        *cache = display_windows.clone();
-    }
-
     // Fast path: if picker is already visible and alt poll is running, just cycle.
-    // We don't check is_modifier_held() here because CGEventSourceFlagsState can
-    // return false during a global hotkey event. _alt_poll_task.is_some() already
-    // proves alt is held — if it were released the poll would have fired.
+    // This MUST run before get_open_windows() to avoid expensive AX/CG/proc_pidinfo
+    // calls on every cycle keystroke.
     let existing = current.borrow().clone();
     if let Some((ref handle, _)) = existing {
         let cycled = handle
@@ -86,6 +72,19 @@ pub(crate) fn open_picker(
             cx.activate(true);
             return;
         }
+    }
+
+    let display_windows: Vec<WindowInfo> = {
+        let all = platform::get_open_windows();
+        if config.display.show_minimized {
+            all
+        } else {
+            all.into_iter().filter(|w| !w.is_minimized).collect()
+        }
+    };
+    // Update the cache centrally so background processes see the current layout
+    if let Ok(mut cache) = window_cache.lock() {
+        *cache = display_windows.clone();
     }
 
     // Grab pre-warmed previews from cache (instant). Only capture missing windows.
