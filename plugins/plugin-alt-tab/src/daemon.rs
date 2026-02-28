@@ -15,11 +15,11 @@ pub enum Command {
 }
 
 pub fn send_show() -> bool {
-    core_daemon::send_raw(&CONFIG, b"show", false)
+    core_daemon::send_action(&CONFIG, "show", false)
 }
 
 pub fn send_show_reverse() -> bool {
-    core_daemon::send_raw(&CONFIG, b"show-reverse", false)
+    core_daemon::send_action(&CONFIG, "show-reverse", false)
 }
 
 pub fn send_kill() -> bool {
