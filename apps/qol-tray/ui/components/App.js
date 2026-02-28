@@ -2,8 +2,6 @@ import { html } from '../lib/html.js';
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
 import { SidebarNav } from './SidebarNav.js';
 import { SidebarFooter } from './SidebarFooter.js';
-// ShortcutLegend will be used once views are migrated
-// import { ShortcutLegend } from './ShortcutLegendPreact.js';
 import { useRouter } from '../hooks/useRouter.js';
 import { useSSE, useSSEReconnect } from '../hooks/useSSE.js';
 import { useKeyboard } from '../hooks/useKeyboard.js';
@@ -14,11 +12,9 @@ import { PluginsView } from '../views/PluginsView.js';
 import { StoreView } from '../views/StoreView.js';
 import { HotkeysView } from '../views/HotkeysView.js';
 import { TaskRunnerView } from '../views/TaskRunnerView.js';
-import * as devView from '../views/dev.js';
+import { DevView } from '../views/DevView.js';
 
-const PREACT_VIEWS = new Set(['plugins', 'store', 'hotkeys', 'task-runner']);
-const PREACT_VIEW_MAP = { plugins: PluginsView, store: StoreView, hotkeys: HotkeysView, 'task-runner': TaskRunnerView };
-const BRIDGE_VIEWS = {};
+const VIEW_MAP = { plugins: PluginsView, store: StoreView, hotkeys: HotkeysView, 'task-runner': TaskRunnerView, dev: DevView };
 const BASE_ORDER = ['plugins', 'store', 'hotkeys', 'task-runner'];
 
 function initDevFlows() {
@@ -50,16 +46,8 @@ export function App() {
         [devEnabled]
     );
 
-    const bridgeModules = useMemo(
-        () => devEnabled ? { ...BRIDGE_VIEWS, dev: devView } : { ...BRIDGE_VIEWS },
-        [devEnabled]
-    );
-
     const router = useRouter({ viewOrder });
     const { activeViewId, activePluginId, switchView, openPluginConfig, closePluginConfig } = router;
-
-    const contentRef = useRef(null);
-    const activeViewRef = useRef(null);
 
     // Init: fetch dev/enabled + version
     useEffect(() => {
@@ -78,44 +66,6 @@ export function App() {
             } catch {}
         })();
     }, []);
-
-    // Imperative view bridge (hotkeys, task-runner, dev only)
-    useEffect(() => {
-        if (PREACT_VIEWS.has(activeViewId) || activePluginId) {
-            // Blur previous bridge view if switching away
-            const prev = activeViewRef.current;
-            if (prev?.onBlur) prev.onBlur();
-            activeViewRef.current = null;
-            return;
-        }
-
-        const el = contentRef.current;
-        if (!el) return;
-
-        const prev = activeViewRef.current;
-        if (prev?.onBlur) prev.onBlur();
-
-        el.innerHTML = '';
-        const next = bridgeModules[activeViewId];
-        if (!next) return;
-
-        next.render(el);
-        if (next.onFocus) next.onFocus();
-        activeViewRef.current = next;
-
-        return () => {
-            if (next.onBlur) next.onBlur();
-            activeViewRef.current = null;
-        };
-    }, [activeViewId, activePluginId, bridgeModules]);
-
-    // When plugin iframe opens, blur active view
-    useEffect(() => {
-        if (!activePluginId) return;
-        const prev = activeViewRef.current;
-        if (prev?.onBlur) prev.onBlur();
-        activeViewRef.current = null;
-    }, [activePluginId]);
 
     // Check for updates (non-dev)
     const checkForUpdate = useCallback(async () => {
@@ -304,8 +254,7 @@ export function App() {
             return;
         }
 
-        // Resolve active view handler (Preact component or bridge module)
-        const view = PREACT_VIEW_MAP[activeViewId] || activeViewRef.current;
+        const view = VIEW_MAP[activeViewId];
 
         if (view?.isBlocking?.()) {
             if (view.handleKey) view.handleKey(e);
@@ -346,7 +295,7 @@ export function App() {
                     ${!activePluginId && activeViewId === 'store' && html`<${StoreView} />`}
                     ${!activePluginId && activeViewId === 'hotkeys' && html`<${HotkeysView} />`}
                     ${!activePluginId && activeViewId === 'task-runner' && html`<${TaskRunnerView} />`}
-                    ${!activePluginId && !PREACT_VIEWS.has(activeViewId) && html`<div ref=${contentRef}></div>`}
+                    ${!activePluginId && activeViewId === 'dev' && html`<${DevView} />`}
                 </main>
             </div>
             <div class="app-footer">
