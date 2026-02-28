@@ -65,9 +65,8 @@ fn send_event(event_type: EventType) -> Result<()> {
     }
 }
 
-#[async_trait::async_trait]
 impl InputHandlerTrait for InputHandlerImpl {
-    async fn mouse_move(&self, x: f64, y: f64) -> Result<()> {
+    fn mouse_move(&self, x: f64, y: f64) -> Result<()> {
         let mut pos_opt = self.current_pos.lock()
             .expect("Cursor position mutex poisoned");
         
@@ -89,7 +88,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         Ok(())
     }
     
-    async fn mouse_click(&self, button: u8) -> Result<()> {
+    fn mouse_click(&self, button: u8) -> Result<()> {
         let button_enum = match button {
             1 => Button::Left,
             2 => Button::Right,
@@ -98,12 +97,12 @@ impl InputHandlerTrait for InputHandlerImpl {
         };
         
         send_event(EventType::ButtonPress(button_enum))?;
-        tokio::time::sleep(Duration::from_millis(ServerConfig::MOUSE_CLICK_DELAY_MS)).await;
+        std::thread::sleep(Duration::from_millis(ServerConfig::MOUSE_CLICK_DELAY_MS));
         send_event(EventType::ButtonRelease(button_enum))?;
         Ok(())
     }
     
-    async fn mouse_down(&self, button: u8) -> Result<()> {
+    fn mouse_down(&self, button: u8) -> Result<()> {
         let button_enum = match button {
             1 => Button::Left,
             2 => Button::Right,
@@ -115,7 +114,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         Ok(())
     }
     
-    async fn mouse_up(&self, button: u8) -> Result<()> {
+    fn mouse_up(&self, button: u8) -> Result<()> {
         let button_enum = match button {
             1 => Button::Left,
             2 => Button::Right,
@@ -127,7 +126,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         Ok(())
     }
     
-    async fn mouse_scroll(&self, delta_x: f64, delta_y: f64) -> Result<()> {
+    fn mouse_scroll(&self, delta_x: f64, delta_y: f64) -> Result<()> {
         if delta_y != 0.0 {
             send_event(EventType::Wheel {
                 delta_x: 0i64,
@@ -143,7 +142,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         Ok(())
     }
     
-    async fn key_press(&self, key: &str, modifiers: &ModifierKeys) -> Result<()> {
+    fn key_press(&self, key: &str, modifiers: &ModifierKeys) -> Result<()> {
         Self::apply_modifiers(&self.modifier_state, modifiers)?;
         
         if let Some(key_enum) = string_to_key(key) {
@@ -152,14 +151,14 @@ impl InputHandlerTrait for InputHandlerImpl {
         Ok(())
     }
     
-    async fn key_release(&self, key: &str, _modifiers: &ModifierKeys) -> Result<()> {
+    fn key_release(&self, key: &str, _modifiers: &ModifierKeys) -> Result<()> {
         if let Some(key_enum) = string_to_key(key) {
             send_event(EventType::KeyRelease(key_enum))?;
         }
         Ok(())
     }
     
-    async fn modifier_press(&self, modifier: &str) -> Result<()> {
+    fn modifier_press(&self, modifier: &str) -> Result<()> {
         let mut state = self.modifier_state.lock()
             .expect("Modifier state mutex poisoned");
         match modifier.to_lowercase().as_str() {
@@ -184,7 +183,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         Ok(())
     }
     
-    async fn modifier_release(&self, modifier: &str) -> Result<()> {
+    fn modifier_release(&self, modifier: &str) -> Result<()> {
         let mut state = self.modifier_state.lock()
             .expect("Modifier state mutex poisoned");
         match modifier.to_lowercase().as_str() {

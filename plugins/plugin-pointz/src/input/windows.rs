@@ -35,9 +35,8 @@ impl InputHandlerImpl {
     }
 }
 
-#[async_trait::async_trait]
 impl InputHandlerTrait for InputHandlerImpl {
-    async fn mouse_move(&self, x: f64, y: f64) -> Result<()> {
+    fn mouse_move(&self, x: f64, y: f64) -> Result<()> {
         let mut pos_opt = self.current_pos.lock()
             .expect("Cursor position mutex poisoned");
         
@@ -58,14 +57,14 @@ impl InputHandlerTrait for InputHandlerImpl {
         Ok(())
     }
     
-    async fn mouse_click(&self, button: u8) -> Result<()> {
-        self.mouse_down(button).await?;
-        tokio::time::sleep(Duration::from_millis(ServerConfig::MOUSE_CLICK_DELAY_MS)).await;
-        self.mouse_up(button).await?;
+    fn mouse_click(&self, button: u8) -> Result<()> {
+        self.mouse_down(button)?;
+        std::thread::sleep(Duration::from_millis(ServerConfig::MOUSE_CLICK_DELAY_MS));
+        self.mouse_up(button)?;
         Ok(())
     }
     
-    async fn mouse_down(&self, button: u8) -> Result<()> {
+    fn mouse_down(&self, button: u8) -> Result<()> {
         let flags = match button {
             1 => MOUSEEVENTF_LEFTDOWN,
             2 => MOUSEEVENTF_RIGHTDOWN,
@@ -92,7 +91,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         Ok(())
     }
     
-    async fn mouse_up(&self, button: u8) -> Result<()> {
+    fn mouse_up(&self, button: u8) -> Result<()> {
         let flags = match button {
             1 => MOUSEEVENTF_LEFTUP,
             2 => MOUSEEVENTF_RIGHTUP,
@@ -119,7 +118,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         Ok(())
     }
     
-    async fn mouse_scroll(&self, delta_x: f64, delta_y: f64) -> Result<()> {
+    fn mouse_scroll(&self, delta_x: f64, delta_y: f64) -> Result<()> {
         unsafe {
             if delta_y != 0.0 {
                 let input = INPUT {
@@ -157,7 +156,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         Ok(())
     }
     
-    async fn key_press(&self, key: &str, modifiers: &ModifierKeys) -> Result<()> {
+    fn key_press(&self, key: &str, modifiers: &ModifierKeys) -> Result<()> {
         Self::apply_modifiers(&self.modifier_state, modifiers)?;
         
         if let Some(vk_code) = string_to_vk(key) {
@@ -180,7 +179,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         Ok(())
     }
     
-    async fn key_release(&self, key: &str, _modifiers: &ModifierKeys) -> Result<()> {
+    fn key_release(&self, key: &str, _modifiers: &ModifierKeys) -> Result<()> {
         if let Some(vk_code) = string_to_vk(key) {
             unsafe {
                 let input = INPUT {
@@ -201,7 +200,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         Ok(())
     }
     
-    async fn modifier_press(&self, modifier: &str) -> Result<()> {
+    fn modifier_press(&self, modifier: &str) -> Result<()> {
         let mut state = self.modifier_state.lock()
             .expect("Modifier state mutex poisoned");
         match modifier.to_lowercase().as_str() {
@@ -282,7 +281,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         Ok(())
     }
     
-    async fn modifier_release(&self, modifier: &str) -> Result<()> {
+    fn modifier_release(&self, modifier: &str) -> Result<()> {
         let mut state = self.modifier_state.lock()
             .expect("Modifier state mutex poisoned");
         match modifier.to_lowercase().as_str() {

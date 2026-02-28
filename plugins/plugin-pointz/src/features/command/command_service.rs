@@ -26,7 +26,7 @@ impl CommandService {
             match socket.recv_from(&mut buf).await {
                 Ok((size, _addr)) => {
                     if let Ok(command) = serde_json::from_slice::<Command>(&buf[..size]) {
-                        let _ = self.input_handler.handle_command(command).await;
+                        let _ = self.input_handler.handle_command(command);
                     }
                 }
                 Err(e) => {

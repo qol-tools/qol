@@ -64,9 +64,8 @@ fn send_event(event_type: EventType) -> Result<()> {
     }
 }
 
-#[async_trait::async_trait]
 impl InputHandlerTrait for InputHandlerImpl {
-    async fn mouse_move(&self, x: f64, y: f64) -> Result<()> {
+    fn mouse_move(&self, x: f64, y: f64) -> Result<()> {
         let start = std::time::Instant::now();
 
         log::debug!("[SERVER] Received: x={:.2} y={:.2}", x, y);
@@ -98,7 +97,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         log::debug!("[SERVER] Sending to OS: new_x={:.2} new_y={:.2}", new_x, new_y);
 
         if button.is_some() {
-            self.queue_drag_event(x, y, new_x, new_y, button).await?;
+            self.queue_drag_event(x, y, new_x, new_y, button)?;
         } else {
             Self::send_mouse_move(new_x, new_y)?;
         }
@@ -111,7 +110,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         Ok(())
     }
 
-    async fn mouse_click(&self, button: u8) -> Result<()> {
+    fn mouse_click(&self, button: u8) -> Result<()> {
         let button_enum = Self::map_button(button);
         let click_state = self.next_click_count(button);
         let position = self.resolve_pointer_position();
@@ -125,7 +124,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         }
 
         Self::send_mouse_button_event(position, button_enum, true, click_state)?;
-        tokio::time::sleep(Duration::from_millis(ServerConfig::MOUSE_CLICK_DELAY_MS)).await;
+        std::thread::sleep(Duration::from_millis(ServerConfig::MOUSE_CLICK_DELAY_MS));
         {
             let mut state = self
                 .button_state
@@ -137,7 +136,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         Ok(())
     }
 
-    async fn mouse_down(&self, button: u8) -> Result<()> {
+    fn mouse_down(&self, button: u8) -> Result<()> {
         let button_enum = Self::map_button(button);
 
         *self
@@ -158,7 +157,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         Ok(())
     }
 
-    async fn mouse_up(&self, button: u8) -> Result<()> {
+    fn mouse_up(&self, button: u8) -> Result<()> {
         let button_enum = Self::map_button(button);
 
         self.flush_pending_drag()?;
@@ -180,7 +179,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         Ok(())
     }
 
-    async fn mouse_scroll(&self, delta_x: f64, delta_y: f64) -> Result<()> {
+    fn mouse_scroll(&self, delta_x: f64, delta_y: f64) -> Result<()> {
         if delta_y != 0.0 {
             send_event(EventType::Wheel {
                 delta_x: 0i64,
@@ -196,7 +195,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         Ok(())
     }
 
-    async fn key_press(&self, key: &str, modifiers: &ModifierKeys) -> Result<()> {
+    fn key_press(&self, key: &str, modifiers: &ModifierKeys) -> Result<()> {
         Self::apply_modifiers(&self.modifier_state, modifiers)?;
 
         if let Some(key_enum) = string_to_key(key) {
@@ -205,14 +204,14 @@ impl InputHandlerTrait for InputHandlerImpl {
         Ok(())
     }
 
-    async fn key_release(&self, key: &str, _modifiers: &ModifierKeys) -> Result<()> {
+    fn key_release(&self, key: &str, _modifiers: &ModifierKeys) -> Result<()> {
         if let Some(key_enum) = string_to_key(key) {
             send_event(EventType::KeyRelease(key_enum))?;
         }
         Ok(())
     }
 
-    async fn modifier_press(&self, modifier: &str) -> Result<()> {
+    fn modifier_press(&self, modifier: &str) -> Result<()> {
         let mut state = self
             .modifier_state
             .lock()
@@ -239,7 +238,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         Ok(())
     }
 
-    async fn modifier_release(&self, modifier: &str) -> Result<()> {
+    fn modifier_release(&self, modifier: &str) -> Result<()> {
         let mut state = self
             .modifier_state
             .lock()
@@ -489,7 +488,7 @@ impl InputHandlerImpl {
         Ok(())
     }
 
-    async fn queue_drag_event(
+    fn queue_drag_event(
         &self,
         delta_x: f64,
         delta_y: f64,
