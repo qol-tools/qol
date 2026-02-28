@@ -104,6 +104,10 @@ body {
     overflow: hidden;
 }
 
+#app {
+    height: 100%;
+}
+
 .app-container {
     display: flex;
     flex-direction: column;
