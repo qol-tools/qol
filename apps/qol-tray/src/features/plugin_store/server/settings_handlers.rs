@@ -203,6 +203,72 @@ fn notify_plugin_reload(state: &AppState, plugin_id: &str) {
     }
 }
 
+pub(super) async fn list_apps() -> Json<Vec<serde_json::Value>> {
+    let apps = tokio::task::spawn_blocking(discover_installed_apps)
+        .await
+        .unwrap_or_default();
+    Json(apps)
+}
+
+#[cfg(target_os = "macos")]
+fn discover_installed_apps() -> Vec<serde_json::Value> {
+    use std::process::Command;
+
+    let mdfind = Command::new("mdfind")
+        .args([
+            "-onlyin", "/Applications",
+            "-onlyin", "/System/Applications",
+        ])
+        .arg("kMDItemContentType == 'com.apple.application-bundle'")
+        .output();
+
+    let Ok(output) = mdfind else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    let mut apps: Vec<serde_json::Value> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| !line.is_empty())
+        .filter_map(|path| {
+            let app_path = std::path::Path::new(path);
+            if !app_path.is_dir() {
+                return None;
+            }
+            // Skip paths inside bundle Contents (spotlight sometimes returns nested)
+            if app_path.components().any(|c| c.as_os_str() == "Contents") {
+                return None;
+            }
+            let name = app_path.file_stem()?.to_str()?.to_string();
+            let bid = Command::new("defaults")
+                .args(["read", &format!("{}/Contents/Info", path), "CFBundleIdentifier"])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())?;
+            if bid.is_empty() {
+                return None;
+            }
+            Some(serde_json::json!({ "bundle_id": bid, "name": name }))
+        })
+        .collect();
+
+    apps.sort_by(|a, b| {
+        let na = a["name"].as_str().unwrap_or("");
+        let nb = b["name"].as_str().unwrap_or("");
+        na.to_lowercase().cmp(&nb.to_lowercase())
+    });
+    apps.dedup_by(|a, b| a["bundle_id"] == b["bundle_id"]);
+    apps
+}
+
+#[cfg(not(target_os = "macos"))]
+fn discover_installed_apps() -> Vec<serde_json::Value> {
+    Vec::new()
+}
+
 pub(super) async fn get_token_status() -> Json<TokenStatus> {
     Json(TokenStatus {
         has_token: super::super::github::get_stored_token().is_some(),
