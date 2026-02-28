@@ -1890,6 +1890,7 @@ dependencies = [
  "if-addrs",
  "log",
  "objc",
+ "qol-runtime",
  "qol-tray",
  "rdev",
  "serde",
@@ -1986,6 +1987,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5ee95bc4ef87b8d5ba32e8b7714ccc834865276eab0aed5c9958d00ec45f49e8"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "qol-runtime"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3647,3 +3656,11 @@ dependencies = [
  "quote",
  "syn 2.0.110",
 ]
+
+[[patch.unused]]
+name = "qol-plugin-api"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "qol-tray"
+version = "2.1.6"

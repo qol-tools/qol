@@ -1,11 +1,12 @@
 use anyhow::Result;
+use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 
 const DEFAULT_SOCKET_PATH: &str = "/tmp/qol-pointz.sock";
 const SETTINGS_URL: &str = "http://127.0.0.1:42700/plugins/plugin-pointz/";
 
 #[cfg(unix)]
 pub async fn run() -> Result<()> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixListener;
 
     let socket_path = socket_path();
@@ -14,43 +15,39 @@ pub async fn run() -> Result<()> {
     log::info!("IPC server listening on {}", socket_path);
 
     loop {
-        let (mut stream, _) = listener.accept().await?;
+        let (stream, _) = listener.accept().await?;
         tokio::spawn(async move {
-            let mut buf = [0u8; 128];
-            let n = match stream.read(&mut buf).await {
-                Ok(n) => n,
-                Err(_) => return,
-            };
-            if n == 0 {
+            let (reader, mut writer) = stream.into_split();
+            let mut reader = BufReader::new(reader);
+            let mut line = String::new();
+            if reader.read_line(&mut line).await.unwrap_or(0) == 0 {
                 return;
             }
 
-            let raw = match std::str::from_utf8(&buf[..n]) {
-                Ok(value) => value.trim(),
-                Err(_) => {
-                    let _ = stream.write_all(b"error invalid utf8\n").await;
-                    return;
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                return;
+            }
+
+            let action = if let Ok(req) = serde_json::from_str::<DaemonRequest>(trimmed) {
+                req.action
+            } else {
+                match trimmed.strip_prefix("action:") {
+                    Some(a) => a.to_string(),
+                    None => trimmed.to_string(),
                 }
-            };
-            let action = match raw.strip_prefix("action:") {
-                Some(action_id) => {
-                    if !is_valid_action_id(action_id) {
-                        let _ = stream.write_all(b"error invalid action id\n").await;
-                        return;
-                    }
-                    action_id
-                }
-                None => raw,
             };
 
-            let response = match action {
-                "settings" => match execute_action("settings") {
-                    Ok(()) => b"handled\n".to_vec(),
-                    Err(message) => format!("error {}\n", message).into_bytes(),
-                },
-                _ => b"fallback\n".to_vec(),
+            let response = match execute_action(&action) {
+                Ok(()) => DaemonResponse::Handled { data: None },
+                Err("unknown action") => DaemonResponse::Fallback,
+                Err(msg) => DaemonResponse::Error { message: msg.to_string() },
             };
-            let _ = stream.write_all(&response).await;
+
+            if let Ok(json) = serde_json::to_string(&response) {
+                let _ = writer.write_all(json.as_bytes()).await;
+                let _ = writer.write_all(b"\n").await;
+            }
         });
     }
 }
@@ -63,15 +60,6 @@ fn socket_path() -> String {
 #[cfg(not(unix))]
 pub async fn run() -> Result<()> {
     Ok(())
-}
-
-fn is_valid_action_id(action: &str) -> bool {
-    !action.is_empty()
-        && action.len() <= 64
-        && !action.starts_with('-')
-        && action
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 pub fn execute_action(action: &str) -> Result<(), &'static str> {
