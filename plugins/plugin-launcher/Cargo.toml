@@ -4,7 +4,7 @@ version = "1.2.12"
 edition = "2021"
 
 [dependencies]
-dirs = "5.0"
+dirs = "6.0"
 shell-words = "1.1"
 gpui = { version = "0.2", features = ["test-support"] }
 serde = { version = "1.0", features = ["derive"] }
