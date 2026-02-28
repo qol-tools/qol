@@ -98,6 +98,13 @@ export function StoreView() {
         })();
     }, []);
 
+    // Refresh on window focus (restores old onFocus lifecycle)
+    useEffect(() => {
+        const onFocus = () => loadPlugins();
+        window.addEventListener('focus', onFocus);
+        return () => window.removeEventListener('focus', onFocus);
+    }, [loadPlugins]);
+
     // SSE — debounce rapid plugins_changed events
     const sseTimerRef = useRef(null);
     useSSE(useCallback((event) => {

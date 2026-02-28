@@ -85,6 +85,13 @@ export function PluginsView({ onOpenPluginConfig }) {
     // Initial load
     useEffect(() => { refreshPlugins({ showErrorFeedback: true, restoreSelection: true }); }, [refreshPlugins]);
 
+    // Refresh on window focus (restores old onFocus lifecycle)
+    useEffect(() => {
+        const onFocus = () => refreshPlugins();
+        window.addEventListener('focus', onFocus);
+        return () => window.removeEventListener('focus', onFocus);
+    }, [refreshPlugins]);
+
     // SSE — debounce rapid plugins_changed events
     const sseTimerRef = useRef(null);
     useSSE(useCallback((event) => {

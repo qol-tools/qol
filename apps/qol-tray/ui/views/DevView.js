@@ -23,9 +23,17 @@ export function DevView() {
         devModule.render(el);
         if (devModule.onFocus) devModule.onFocus();
 
+        // Restore window focus/blur lifecycle (dev.js manages its own SSE subscription)
+        const onFocus = () => { if (devModule.onFocus) devModule.onFocus(); };
+        const onBlur = () => { if (devModule.onBlur) devModule.onBlur(); };
+        window.addEventListener('focus', onFocus);
+        window.addEventListener('blur', onBlur);
+
         return () => {
             if (devModule.onBlur) devModule.onBlur();
             if (footer) footer.innerHTML = '';
+            window.removeEventListener('focus', onFocus);
+            window.removeEventListener('blur', onBlur);
         };
     }, []);
 
