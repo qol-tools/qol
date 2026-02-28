@@ -5,18 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>QoL Tray</title>
     <link rel="stylesheet" href="styles.css">
+    <script type="importmap">
+    {
+        "imports": {
+            "preact": "./lib/preact.module.js",
+            "preact/hooks": "./lib/hooks.module.js",
+            "htm": "./lib/htm.module.js"
+        }
+    }
+    </script>
 </head>
 <body>
-    <div class="app-container">
-        <div class="app-main">
-            <aside id="sidebar"></aside>
-            <main id="content"></main>
-        </div>
-        <div class="app-footer">
-            <div id="sidebar-footer" class="app-footer-sidebar"></div>
-            <div id="content-footer" class="app-footer-content"></div>
-        </div>
-    </div>
+    <div id="app"></div>
     <script type="module" src="main.js"></script>
 </body>
 </html>
