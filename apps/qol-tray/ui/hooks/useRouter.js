@@ -20,13 +20,13 @@ function persistView(viewId, { updateHash = true } = {}) {
 }
 
 export function useRouter({ viewOrder }) {
-    const canUse = useCallback((id) => Boolean(id) && viewOrder.includes(id), [viewOrder]);
-
+    // Initializer trusts hash/localStorage without validating against viewOrder.
+    // viewOrder may be incomplete on first render (e.g. 'dev' loads async).
     const [activeViewId, setActiveViewId] = useState(() => {
         const fromHash = parseViewFromHash();
-        if (canUse(fromHash)) return fromHash;
+        if (fromHash) return fromHash;
         const fromStorage = readStoredView();
-        if (canUse(fromStorage)) return fromStorage;
+        if (fromStorage) return fromStorage;
         return 'plugins';
     });
     const [activePluginId, setActivePluginId] = useState(() => {
