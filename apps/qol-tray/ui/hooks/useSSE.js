@@ -5,7 +5,10 @@ export function useSSE(handler) {
     const handlerRef = useRef(handler);
     handlerRef.current = handler;
 
-    useEffect(() => subscribe((event) => handlerRef.current(event)), []);
+    useEffect(() => subscribe((event) => {
+        if (document.hidden) return;
+        handlerRef.current(event);
+    }), []);
 }
 
 export function useSSEReconnect(handler) {
