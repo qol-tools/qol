@@ -1,20 +1,22 @@
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixListener;
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind, RuntimeRequest, SubscribeAck};
 use qol_runtime::{CursorPos, MonitorBounds, PlatformState, WindowBounds};
 
 use crate::os::display;
 use crate::paths::STATE_SOCKET_PATH;
+use super::channel::Channel;
 use super::channels::cursor::CursorChannel;
 use super::channels::focus::FocusChannel;
 use super::channels::monitors::MonitorsChannel;
-use super::channel::Channel;
 use super::poller::{AdaptivePoller, BasicStrategy};
 use super::state::{self, InputState};
 
-/// Lock a mutex, recovering the inner value on poison.
 fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -24,7 +26,12 @@ const POLL_MAX_MS: u64 = 500;
 const COMMIT_THRESHOLD_MS: u64 = 128;
 
 pub struct RuntimeServer {
-    _handle: (), // threads are detached
+    _handle: (),
+}
+
+struct SubscriberEntry {
+    interests: HashSet<RuntimeEventKind>,
+    tx: std_mpsc::Sender<RuntimeEvent>,
 }
 
 struct SharedState {
@@ -33,6 +40,7 @@ struct SharedState {
     cursor_pos: Mutex<Option<(f32, f32)>>,
     focused_window: Mutex<Option<MonitorBounds>>,
     last_focus_bounds: Mutex<Option<MonitorBounds>>,
+    subscribers: Mutex<Vec<SubscriberEntry>>,
 }
 
 impl RuntimeServer {
@@ -54,19 +62,18 @@ impl RuntimeServer {
             cursor_pos: Mutex::new(None),
             focused_window: Mutex::new(None),
             last_focus_bounds: Mutex::new(None),
+            subscribers: Mutex::new(Vec::new()),
         });
 
         let cursor_channel = CursorChannel::new(platform.clone());
         let focus_channel = FocusChannel::new(platform.clone());
 
-        // Poll thread: cursor, focus, monitor refresh
         let poll_shared = shared.clone();
         std::thread::Builder::new()
             .name("runtime-poll".into())
             .spawn(move || poll_loop(poll_shared, cursor_channel, monitors_channel, focus_channel))
             .expect("failed to spawn runtime poll thread");
 
-        // Socket listener thread
         let sock_shared = shared;
         std::thread::Builder::new()
             .name("runtime-sock".into())
@@ -92,7 +99,9 @@ fn poll_loop(
 
     let mut last_monitor_poll = Instant::now();
     let monitor_interval = monitors.min_interval();
-    // last_focus_bounds is in SharedState now
+
+    let mut prev_active_idx: Option<usize> = None;
+    let mut prev_focus_idx: Option<usize> = None;
 
     loop {
         let mon_list = lock_or_recover(&shared.monitors).clone();
@@ -104,10 +113,11 @@ fn poll_loop(
             continue;
         }
 
-        // Periodically refresh monitor list
+        let mut monitors_changed_this_tick = false;
         if last_monitor_poll.elapsed() >= monitor_interval {
             if monitors.poll() {
                 *lock_or_recover(&shared.monitors) = monitors.monitors().to_vec();
+                monitors_changed_this_tick = true;
             }
             last_monitor_poll = Instant::now();
         }
@@ -117,7 +127,6 @@ fn poll_loop(
 
         let mut signal_changed = false;
 
-        // Poll cursor
         let cursor_moved = cursor.poll();
         let cursor_pos = cursor.position();
 
@@ -126,7 +135,6 @@ fn poll_loop(
         let cursor_monitor = cursor_pos
             .and_then(|(x, y)| state::monitor_for_point(&mon_list, x, y));
 
-        // Poll focus
         focus.poll();
         let focus_bounds = focus.bounds();
 
@@ -183,13 +191,91 @@ fn poll_loop(
             }
         }
 
+        emit_events(
+            &shared,
+            &mon_list,
+            monitors_changed_this_tick,
+            &mut prev_active_idx,
+            &mut prev_focus_idx,
+        );
+
         let interval = poller.tick(cursor_moved || signal_changed);
         std::thread::sleep(interval);
     }
 }
 
+fn emit_events(
+    shared: &SharedState,
+    mon_list: &[MonitorBounds],
+    monitors_changed: bool,
+    prev_active_idx: &mut Option<usize>,
+    prev_focus_idx: &mut Option<usize>,
+) {
+    let has_subscribers = {
+        let subs = lock_or_recover(&shared.subscribers);
+        !subs.is_empty()
+    };
+    if !has_subscribers {
+        return;
+    }
+
+    let input = lock_or_recover(&shared.input).clone();
+    let fallback = mon_list.first().copied().unwrap_or(MonitorBounds {
+        x: 0.0, y: 0.0, width: 1920.0, height: 1080.0,
+    });
+    let active = state::pick_active_monitor(&input, fallback);
+    let current_active_idx = mon_list.iter().position(|m| *m == active);
+    let current_focus_idx = input
+        .focus
+        .as_ref()
+        .and_then(|f| mon_list.iter().position(|m| *m == f.monitor));
+
+    let mut events: Vec<RuntimeEvent> = Vec::new();
+
+    if monitors_changed {
+        let fresh_list = lock_or_recover(&shared.monitors).clone();
+        events.push(RuntimeEvent::MonitorsChanged {
+            monitors: fresh_list,
+        });
+    }
+
+    if current_active_idx != *prev_active_idx {
+        events.push(RuntimeEvent::ActiveMonitorChanged {
+            monitor_idx: current_active_idx,
+            monitor: current_active_idx.and_then(|i| mon_list.get(i).copied()),
+        });
+        *prev_active_idx = current_active_idx;
+    }
+
+    if current_focus_idx != *prev_focus_idx {
+        events.push(RuntimeEvent::FocusChanged {
+            monitor_idx: current_focus_idx,
+            monitor: current_focus_idx.and_then(|i| mon_list.get(i).copied()),
+        });
+        *prev_focus_idx = current_focus_idx;
+    }
+
+    if events.is_empty() {
+        return;
+    }
+
+    let mut subs = lock_or_recover(&shared.subscribers);
+    subs.retain(|entry| {
+        for event in &events {
+            let kind = match event {
+                RuntimeEvent::ActiveMonitorChanged { .. } => RuntimeEventKind::ActiveMonitorChanged,
+                RuntimeEvent::FocusChanged { .. } => RuntimeEventKind::FocusChanged,
+                RuntimeEvent::MonitorsChanged { .. } => RuntimeEventKind::MonitorsChanged,
+            };
+            if entry.interests.contains(&kind) && entry.tx.send(event.clone()).is_err() {
+                return false;
+            }
+        }
+        true
+    });
+}
+
 fn socket_loop(shared: Arc<SharedState>) {
-    // Clean up stale socket
     let _ = std::fs::remove_file(STATE_SOCKET_PATH);
 
     let listener = match UnixListener::bind(STATE_SOCKET_PATH) {
@@ -204,40 +290,101 @@ fn socket_loop(shared: Arc<SharedState>) {
 
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
-        let _ = stream.set_read_timeout(Some(Duration::from_millis(50)));
-        let _ = stream.set_write_timeout(Some(Duration::from_millis(50)));
 
-        let shared = &shared;
-        let _ = (|| -> Option<()> {
-            let mut reader = BufReader::new(&stream);
-            let mut line = String::new();
-            reader.read_line(&mut line).ok()?;
+        let shared = shared.clone();
+        std::thread::Builder::new()
+            .name("runtime-conn".into())
+            .spawn(move || handle_connection(stream, &shared))
+            .ok();
+    }
+}
 
-            let trimmed = line.trim();
+fn handle_connection(stream: UnixStream, shared: &SharedState) {
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(50)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(50)));
 
-            // SET_FOCUS <monitor_idx> — lets plugins push focus hints
-            if let Some(rest) = trimmed.strip_prefix("SET_FOCUS ") {
-                let idx: usize = rest.parse().ok()?;
+    let mut writer = match stream.try_clone() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+
+    if reader.read_line(&mut line).is_err() || line.trim().is_empty() {
+        return;
+    }
+
+    let trimmed = line.trim();
+
+    if let Ok(request) = serde_json::from_str::<RuntimeRequest>(trimmed) {
+        match request {
+            RuntimeRequest::GetState => {
+                let state = build_state(shared);
+                let Ok(json) = serde_json::to_string(&state) else { return };
+                let _ = writer.write_all(json.as_bytes());
+                let _ = writer.write_all(b"\n");
+            }
+            RuntimeRequest::SetFocus { monitor_idx } => {
                 let monitor = {
                     let monitors = lock_or_recover(&shared.monitors);
-                    *monitors.get(idx)?
+                    monitors.get(monitor_idx).copied()
                 };
-                log::debug!("[runtime/socket] SET_FOCUS idx={} mon=({}, {})", idx, monitor.x, monitor.y);
+                if let Some(monitor) = monitor {
+                    log::debug!("[runtime/socket] SET_FOCUS idx={} mon=({}, {})", monitor_idx, monitor.x, monitor.y);
+                    lock_or_recover(&shared.input).update_focus(monitor, Instant::now());
+                }
+            }
+            RuntimeRequest::Subscribe { events } => {
+                let ack = SubscribeAck::Subscribed;
+                let Ok(json) = serde_json::to_string(&ack) else { return };
+                if writer.write_all(json.as_bytes()).is_err() { return; }
+                if writer.write_all(b"\n").is_err() { return; }
+                if writer.flush().is_err() { return; }
+
+                let _ = writer.set_write_timeout(Some(Duration::from_secs(5)));
+
+                let interests: HashSet<RuntimeEventKind> = events.into_iter().collect();
+                let (tx, rx) = std_mpsc::channel::<RuntimeEvent>();
+
+                log::info!("[runtime/socket] new subscriber: {:?}", interests);
+
+                {
+                    let mut subs = lock_or_recover(&shared.subscribers);
+                    subs.push(SubscriberEntry { interests, tx });
+                }
+
+                for event in rx {
+                    let Ok(json) = serde_json::to_string(&event) else { break };
+                    if writer.write_all(json.as_bytes()).is_err() { break; }
+                    if writer.write_all(b"\n").is_err() { break; }
+                    if writer.flush().is_err() { break; }
+                }
+
+                log::info!("[runtime/socket] subscriber disconnected");
+            }
+        }
+        return;
+    }
+
+    if let Some(rest) = trimmed.strip_prefix("SET_FOCUS ") {
+        if let Ok(idx) = rest.parse::<usize>() {
+            let monitor = {
+                let monitors = lock_or_recover(&shared.monitors);
+                monitors.get(idx).copied()
+            };
+            if let Some(monitor) = monitor {
+                log::debug!("[runtime/socket] SET_FOCUS (text) idx={} mon=({}, {})", idx, monitor.x, monitor.y);
                 lock_or_recover(&shared.input).update_focus(monitor, Instant::now());
-                return Some(());
             }
+        }
+        return;
+    }
 
-            if !trimmed.eq_ignore_ascii_case("GET_STATE") {
-                return None;
-            }
-
-            let state = build_state(shared);
-            let json = serde_json::to_string(&state).ok()?;
-            let mut writer = stream;
-            writer.write_all(json.as_bytes()).ok()?;
-            writer.write_all(b"\n").ok()?;
-            Some(())
-        })();
+    if trimmed.eq_ignore_ascii_case("GET_STATE") {
+        let state = build_state(shared);
+        let Ok(json) = serde_json::to_string(&state) else { return };
+        let _ = writer.write_all(json.as_bytes());
+        let _ = writer.write_all(b"\n");
     }
 }
 
