@@ -21,100 +21,11 @@ async fn serve_plugin_index(
     AxumPath(plugin_id): AxumPath<String>,
     axum::extract::State(plugins_dir): axum::extract::State<PathBuf>,
 ) -> Response {
-    let ui_path = match resolve_safe_ui_file(&plugins_dir, &plugin_id, "index.html").await {
-        Ok(path) => path,
-        Err(response) => return response,
-    };
-
-    let contents = match tokio::fs::read_to_string(&ui_path).await {
-        Ok(c) => c,
-        Err(e) => {
-            log::error!("Failed to read plugin UI: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read file").into_response();
-        }
-    };
-
-    let injected = inject_plugin_wrapper(&contents);
-    (
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        injected,
-    )
-        .into_response()
-}
-
-fn inject_plugin_wrapper(html: &str) -> String {
-    const NAV_HEADER: &str = r#"<div id="qol-plugin-nav" style="position:fixed;top:0;left:0;right:0;background:#1a1a1a;border-bottom:1px solid #333;padding:0.5rem 1rem;display:flex;align-items:center;gap:1rem;z-index:9999;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
-<a href="/" style="color:#4a9eff;text-decoration:none;font-size:0.9rem">← Back</a>
-</div>
-<div style="height:2.5rem"></div>"#;
-
-    const NAV_FOOTER: &str = r#"<div id="qol-plugin-footer" style="position:fixed;bottom:0;left:0;right:0;background:#1a1a1a;border-top:1px solid #333;padding:0.5rem;text-align:center;color:#666;font-size:0.85rem;z-index:9999;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
-Esc back
-</div>
-<script>document.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();window.location.href='/';}})</script>"#;
-
-    let with_header = inject_after_body_tag(html, NAV_HEADER);
-    inject_before_closing_body(&with_header, NAV_FOOTER)
-}
-
-fn inject_after_body_tag(html: &str, content: &str) -> String {
-    let insert_pos = find_body_tag_end(html);
-    let Some(pos) = insert_pos else {
-        return html.to_string();
-    };
-    format!("{}{}{}", &html[..pos], content, &html[pos..])
-}
-
-fn find_body_tag_end(html: &str) -> Option<usize> {
-    let lower = html.to_lowercase();
-    let mut search_start = 0;
-
-    while let Some(rel_pos) = lower[search_start..].find("<body") {
-        let body_start = search_start + rel_pos;
-
-        if !is_inside_comment(html, body_start) {
-            let tag_end = find_tag_end(&html[body_start..])?;
-            return Some(body_start + tag_end + 1);
-        }
-
-        search_start = body_start + 5;
+    let result = serve_file(&plugins_dir, &plugin_id, "index.html").await;
+    if result.status() == StatusCode::NOT_FOUND {
+        return super::server::assets::serve_auto_config().into_response();
     }
-
-    None
-}
-
-fn find_tag_end(tag: &str) -> Option<usize> {
-    let mut in_quote = None;
-
-    for (i, c) in tag.char_indices() {
-        match (c, in_quote) {
-            ('"' | '\'', None) => in_quote = Some(c),
-            (q, Some(open)) if q == open => in_quote = None,
-            ('>', None) => return Some(i),
-            _ => {}
-        }
-    }
-
-    None
-}
-
-fn is_inside_comment(html: &str, pos: usize) -> bool {
-    let before = &html[..pos];
-    let comment_start = before.rfind("<!--");
-    let comment_end = before.rfind("-->");
-
-    match (comment_start, comment_end) {
-        (Some(start), Some(end)) => start > end,
-        (Some(_), None) => true,
-        _ => false,
-    }
-}
-
-fn inject_before_closing_body(html: &str, content: &str) -> String {
-    let Some(pos) = html.rfind("</body>") else {
-        return html.to_string();
-    };
-    format!("{}{}{}", &html[..pos], content, &html[pos..])
+    result
 }
 
 async fn serve_plugin_file(
@@ -338,47 +249,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn find_body_tag_end_cases() {
-        let cases = [
-            ("<html><body>", Some(12)),
-            ("<html><BODY>", Some(12)),
-            ("<html><Body class='x'>", Some(22)),
-            ("<!-- <body> --><body>", Some(21)),
-            ("<!-- <body> -->", None),
-            ("", None),
-            ("<html><head></head></html>", None),
-            ("<body data-x='a>b'>", Some(19)),
-            ("<body data-x=\"a>b\">", Some(19)),
-            ("<!--<body>--><body id='real'>", Some(29)),
-            ("<body onclick=\"if(a>b){}\">", Some(26)),
-        ];
-
-        for (html, expected) in cases {
-            assert_eq!(find_body_tag_end(html), expected, "html: {:?}", html);
-        }
-    }
-
-    #[test]
-    fn is_inside_comment_cases() {
-        let cases = [
-            ("<body>", 0, false),
-            ("<!-- <body> -->", 5, true),
-            ("<!-- --> <body>", 9, false),
-            ("<!-- x --> <!-- <body>", 16, true),
-            ("<!-- a --> <!-- b --> x", 22, false),
-            ("<!-- unclosed", 5, true),
-            ("text <!-- comment -->", 0, false),
-        ];
-
-        for (html, pos, expected) in cases {
-            assert_eq!(
-                is_inside_comment(html, pos),
-                expected,
-                "html: {:?}, pos: {}",
-                html,
-                pos
-            );
-        }
-    }
 }

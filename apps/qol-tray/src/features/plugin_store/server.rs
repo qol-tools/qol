@@ -1,5 +1,5 @@
 use super::plugin_ui;
-mod assets;
+pub(crate) mod assets;
 #[cfg(feature = "dev")]
 mod dev_handlers;
 #[cfg(feature = "dev")]

@@ -17,6 +17,10 @@ pub(super) async fn serve_embedded_index() -> impl IntoResponse {
     serve_embedded_file("index.html")
 }
 
+pub(crate) fn serve_auto_config() -> impl IntoResponse {
+    serve_embedded_file("auto-config.html")
+}
+
 fn serve_embedded_file(path: &str) -> impl IntoResponse {
     let mime = if path.ends_with(".html") {
         "text/html"
