@@ -1,5 +1,5 @@
 use super::super::DaemonActionDispatch;
-use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
+use qol_runtime::protocol::DaemonRequest;
 use std::io::{BufRead, BufReader, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
