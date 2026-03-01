@@ -44,9 +44,7 @@ let unsubscribeReconnect = null;
 
 const discoveryController = createDiscoveryController({
     state,
-    onNeedsRender: () => {
-        updateView();
-    }
+    onNeedsRender: updateView
 });
 
 let mockController = null;
@@ -55,9 +53,7 @@ const buildController = createBuildController({
     state,
     getContainer: () => container,
     getPluginById: getMergedPluginById,
-    onNeedsRender: () => {
-        updateView();
-    },
+    onNeedsRender: updateView,
     onBuildComplete: () => {
         mockController?.completeMockTarget('plugin_build');
         updateView();
@@ -69,9 +65,7 @@ mockController = createMockController({
     state,
     buildController,
     getMergedPlugins: () => state.mergedList,
-    onNeedsRender: () => {
-        updateView();
-    }
+    onNeedsRender: updateView
 });
 
 export function render(containerEl) {
