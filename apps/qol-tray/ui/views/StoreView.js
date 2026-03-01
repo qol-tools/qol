@@ -1,6 +1,7 @@
 import { html } from '../lib/html.js';
 import { useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
 import { useStateRef } from '../hooks/useStateRef.js';
+import { usePersistedIndex } from '../hooks/usePersistedIndex.js';
 import { useScrollIntoView } from '../hooks/useScrollIntoView.js';
 import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus.js';
 import { useSSEDebounce } from '../hooks/useSSEDebounce.js';
@@ -30,11 +31,7 @@ const SHORTCUTS = [
 
 export function StoreView() {
     const [plugins, setPlugins, pluginsRef] = useStateRef([]);
-    const [selectedIndex, setSelectedIndex, selectedIndexRef] = useStateRef(() => {
-        const saved = parseInt(localStorage.getItem('store-selected-index') || '0', 10);
-        return saved >= 0 ? saved : 0;
-    });
-    const storeRestoredRef = useRef(false);
+    const [selectedIndex, setSelectedIndex, selectedIndexRef, storeMarkRestored] = usePersistedIndex('store-selected-index');
     const [searchQuery, setSearchQuery] = useStateRef('');
     const [hasToken, setHasToken, hasTokenRef] = useStateRef(false);
     const [showTokenInput, setShowTokenInput, showTokenInputRef] = useStateRef(false);
@@ -95,16 +92,10 @@ export function StoreView() {
     // Clamp selection when filtered list changes
     useEffect(() => {
         setSelectedIndex(prev => {
-            storeRestoredRef.current = true;
+            storeMarkRestored();
             return clampSelectedIndex(prev, filtered.length);
         });
     }, [filtered.length]);
-
-    // Save selection
-    useEffect(() => {
-        if (!storeRestoredRef.current) return;
-        localStorage.setItem('store-selected-index', String(selectedIndex));
-    }, [selectedIndex]);
 
     useScrollIntoView('#store-list .plugin-card.selected', [selectedIndex]);
 

@@ -1,6 +1,7 @@
 import { html } from '../lib/html.js';
 import { useEffect, useCallback, useRef } from 'preact/hooks';
 import { useStateRef } from '../hooks/useStateRef.js';
+import { usePersistedIndex } from '../hooks/usePersistedIndex.js';
 import { Modal } from '../components/ModalPreact.js';
 import { useFooterShortcuts } from '../hooks/useFooterShortcuts.js';
 
@@ -30,11 +31,7 @@ function escapeHtml(value) {
 export function TaskRunnerView() {
     const [actions, setActions, actionsRef] = useStateRef({});
     const [actionIds, setActionIds, actionIdsRef] = useStateRef([]);
-    const [selectedIndex, setSelectedIndex, selectedIndexRef] = useStateRef(() => {
-        const saved = parseInt(localStorage.getItem('taskrunner-selected-index') || '0', 10);
-        return saved >= 0 ? saved : 0;
-    });
-    const taskRestoredRef = useRef(false);
+    const [selectedIndex, setSelectedIndex, selectedIndexRef, taskMarkRestored] = usePersistedIndex('taskrunner-selected-index');
     const [editModal, setEditModal, editModalRef] = useStateRef(null); // null | { actionId, name, desc, command, timeout }
     const [testingId, setTestingId, testingIdRef] = useStateRef(null);
     const [testParams, setTestParams] = useStateRef({});
@@ -64,7 +61,7 @@ export function TaskRunnerView() {
                 const ids = Object.keys(a);
                 setActionIds(ids);
                 setSelectedIndex(prev => {
-                    taskRestoredRef.current = true;
+                    taskMarkRestored();
                     return prev >= 0 && prev < ids.length ? prev : 0;
                 });
             }
@@ -72,12 +69,6 @@ export function TaskRunnerView() {
     }, []);
 
     useEffect(() => { loadActions(); }, [loadActions]);
-
-    // Save selection
-    useEffect(() => {
-        if (!taskRestoredRef.current) return;
-        localStorage.setItem('taskrunner-selected-index', String(selectedIndex));
-    }, [selectedIndex]);
 
     // Persist
     const persistConfig = useCallback(async (acts) => {
