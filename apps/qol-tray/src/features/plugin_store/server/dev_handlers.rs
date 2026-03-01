@@ -11,11 +11,23 @@ use crate::dev;
 use crate::dev::state::DiscoveryStatus;
 use crate::paths::is_safe_path_component;
 
+use std::path::PathBuf;
+
 use super::dev_services;
 use super::types::{
     AppState, BuildStateResponse, DiscoveryStateResponse, MockTargetInfo,
     UpsertPluginLogControlRequest,
 };
+
+fn config_dir() -> Result<PathBuf, (StatusCode, String)> {
+    crate::paths::shared_config_dir().map_err(|e| {
+        log::error!("Failed to determine config directory: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Config dir unavailable".to_string(),
+        )
+    })
+}
 
 pub(super) async fn reload_plugins(State(state): State<AppState>) -> impl IntoResponse {
     if let Err(message) = dev_services::queue_reload(&state) {
@@ -56,16 +68,9 @@ pub(super) async fn create_link(
     State(state): State<AppState>,
     Json(req): Json<dev::LinkRequest>,
 ) -> impl IntoResponse {
-    let config_dir = match crate::paths::shared_config_dir() {
+    let config_dir = match config_dir() {
         Ok(d) => d,
-        Err(e) => {
-            log::error!("Failed to determine config directory: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Config dir unavailable".to_string(),
-            )
-                .into_response();
-        }
+        Err(e) => return e.into_response(),
     };
     let source = std::path::Path::new(&req.path);
 
@@ -97,16 +102,9 @@ pub(super) async fn delete_link(
         return (StatusCode::BAD_REQUEST, "Invalid plugin ID".to_string()).into_response();
     }
 
-    let config_dir = match crate::paths::shared_config_dir() {
+    let config_dir = match config_dir() {
         Ok(d) => d,
-        Err(e) => {
-            log::error!("Failed to determine config directory: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Config dir unavailable".to_string(),
-            )
-                .into_response();
-        }
+        Err(e) => return e.into_response(),
     };
 
     match dev::remove_link(&id, &config_dir) {
@@ -134,16 +132,9 @@ pub(super) async fn upsert_plugin_log_control(
         return (StatusCode::BAD_REQUEST, "Invalid plugin ID".to_string()).into_response();
     }
 
-    let config_dir = match crate::paths::shared_config_dir() {
+    let config_dir = match config_dir() {
         Ok(d) => d,
-        Err(e) => {
-            log::error!("Failed to determine config directory: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Config dir unavailable".to_string(),
-            )
-                .into_response();
-        }
+        Err(e) => return e.into_response(),
     };
 
     let control = crate::plugins::log_control::PluginLogControl {
@@ -302,7 +293,7 @@ pub(super) async fn mock_plugin_build(State(state): State<AppState>) -> impl Int
     )
 }
 
-fn fallback_plugin_ids(state: &AppState) -> Vec<String> {
+pub(super) fn fallback_plugin_ids(state: &AppState) -> Vec<String> {
     state
         .dev_state
         .discovery

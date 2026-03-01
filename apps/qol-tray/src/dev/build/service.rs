@@ -84,6 +84,28 @@ where
     }
 }
 
+fn emit_plugin_progress<F>(
+    state: &mut core::CoreState,
+    on_event: &mut F,
+    plugin_id: &str,
+    status: BuildStatus,
+    percent: u8,
+    phase: &str,
+) where
+    F: FnMut(core::CoreEvent),
+{
+    emit_core_input(
+        state,
+        CoreInput::PluginProgress {
+            plugin_id: plugin_id.to_string(),
+            status,
+            percent,
+            phase: phase.to_string(),
+        },
+        on_event,
+    );
+}
+
 pub fn build_linked_plugins_with_core_events<F>(
     dev_links: &HashMap<String, PathBuf>,
     known_fingerprints: &HashMap<String, String>,
@@ -120,29 +142,17 @@ where
         if !(plan.has_cargo && plan.supports_platform && plan.needs_rebuild) {
             continue;
         }
-        emit_core_input(
-            &mut core_state,
-            CoreInput::PluginProgress {
-                plugin_id: plan.plugin_id.clone(),
-                status: BuildStatus::Queued,
-                percent: 0,
-                phase: plan.reason.clone(),
-            },
-            &mut on_event,
+        emit_plugin_progress(
+            &mut core_state, &mut on_event,
+            &plan.plugin_id, BuildStatus::Queued, 0, &plan.reason,
         );
     }
 
     for plan in &plans {
         if !plan.has_cargo {
-            emit_core_input(
-                &mut core_state,
-                CoreInput::PluginProgress {
-                    plugin_id: plan.plugin_id.clone(),
-                    status: BuildStatus::Skipped,
-                    percent: 100,
-                    phase: "Skipped: Cargo.toml missing".to_string(),
-                },
-                &mut on_event,
+            emit_plugin_progress(
+                &mut core_state, &mut on_event,
+                &plan.plugin_id, BuildStatus::Skipped, 100, "Skipped: Cargo.toml missing",
             );
             fingerprints.remove(&plan.plugin_id);
             results.push(BuildResult {
@@ -155,15 +165,9 @@ where
         }
 
         if !plan.supports_platform {
-            emit_core_input(
-                &mut core_state,
-                CoreInput::PluginProgress {
-                    plugin_id: plan.plugin_id.clone(),
-                    status: BuildStatus::Skipped,
-                    percent: 100,
-                    phase: plan.reason.clone(),
-                },
-                &mut on_event,
+            emit_plugin_progress(
+                &mut core_state, &mut on_event,
+                &plan.plugin_id, BuildStatus::Skipped, 100, &plan.reason,
             );
             results.push(BuildResult {
                 plugin_id: plan.plugin_id.clone(),
@@ -175,15 +179,9 @@ where
         }
 
         if !plan.needs_rebuild {
-            emit_core_input(
-                &mut core_state,
-                CoreInput::PluginProgress {
-                    plugin_id: plan.plugin_id.clone(),
-                    status: BuildStatus::Skipped,
-                    percent: 100,
-                    phase: "Up to date".to_string(),
-                },
-                &mut on_event,
+            emit_plugin_progress(
+                &mut core_state, &mut on_event,
+                &plan.plugin_id, BuildStatus::Skipped, 100, "Up to date",
             );
             results.push(BuildResult {
                 plugin_id: plan.plugin_id.clone(),
@@ -194,27 +192,15 @@ where
             continue;
         }
 
-        emit_core_input(
-            &mut core_state,
-            CoreInput::PluginProgress {
-                plugin_id: plan.plugin_id.clone(),
-                status: BuildStatus::Building,
-                percent: 3,
-                phase: "Starting cargo build".to_string(),
-            },
-            &mut on_event,
+        emit_plugin_progress(
+            &mut core_state, &mut on_event,
+            &plan.plugin_id, BuildStatus::Building, 3, "Starting cargo build",
         );
 
-        let mut progress = |percent, phase| {
-            emit_core_input(
-                &mut core_state,
-                CoreInput::PluginProgress {
-                    plugin_id: plan.plugin_id.clone(),
-                    status: BuildStatus::Building,
-                    percent,
-                    phase,
-                },
-                &mut on_event,
+        let mut progress = |percent, phase: String| {
+            emit_plugin_progress(
+                &mut core_state, &mut on_event,
+                &plan.plugin_id, BuildStatus::Building, percent, &phase,
             );
         };
         let result = builder.build_plugin_with_progress(&plan.plugin_id, &plan.path, &mut progress);
@@ -226,26 +212,14 @@ where
             if let Some(fp) = post_build_fingerprint {
                 fingerprints.insert(plan.plugin_id.clone(), fp);
             }
-            emit_core_input(
-                &mut core_state,
-                CoreInput::PluginProgress {
-                    plugin_id: plan.plugin_id.clone(),
-                    status: BuildStatus::Success,
-                    percent: 100,
-                    phase: "Build complete".to_string(),
-                },
-                &mut on_event,
+            emit_plugin_progress(
+                &mut core_state, &mut on_event,
+                &plan.plugin_id, BuildStatus::Success, 100, "Build complete",
             );
         } else {
-            emit_core_input(
-                &mut core_state,
-                CoreInput::PluginProgress {
-                    plugin_id: plan.plugin_id.clone(),
-                    status: BuildStatus::Failed,
-                    percent: 100,
-                    phase: "Build failed".to_string(),
-                },
-                &mut on_event,
+            emit_plugin_progress(
+                &mut core_state, &mut on_event,
+                &plan.plugin_id, BuildStatus::Failed, 100, "Build failed",
             );
         }
 
