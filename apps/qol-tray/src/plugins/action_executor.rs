@@ -384,56 +384,52 @@ fn execute_via_daemon(
     resolved: &ResolvedAction,
     socket_path: &std::path::Path,
 ) -> Result<(), ActionExecutionError> {
-    match super::action_transport::dispatch_daemon_action(socket_path, &resolved.action_id) {
-        super::action_transport::DaemonActionDispatch::Handled => {
-            log::info!(
-                "Plugin action handled via daemon: {}::{}",
-                resolved.plugin_id,
-                resolved.action_id
-            );
-            Ok(())
-        }
-        super::action_transport::DaemonActionDispatch::Fallback => {
-            log::warn!(
-                "Daemon rejected action {}::{} with fallback",
-                resolved.plugin_id,
-                resolved.action_id
-            );
-            if resolved.runtime_fallback_allowed {
-                return execute_via_runtime(resolved);
-            }
-            Err(ActionExecutionError::SpawnFailed(format!(
-                "daemon rejected action {}::{}",
-                resolved.plugin_id, resolved.action_id
-            )))
-        }
-        super::action_transport::DaemonActionDispatch::Unavailable => {
-            log::warn!(
-                "Daemon unavailable for {}::{}",
-                resolved.plugin_id,
-                resolved.action_id
-            );
-            if resolved.runtime_fallback_allowed {
-                return execute_via_runtime(resolved);
-            }
-            Err(ActionExecutionError::SpawnFailed(format!(
-                "daemon unavailable for {}::{}",
-                resolved.plugin_id, resolved.action_id
-            )))
-        }
-        super::action_transport::DaemonActionDispatch::Error(message) => {
+    use super::action_transport::DaemonActionDispatch;
+
+    let dispatch = super::action_transport::dispatch_daemon_action(socket_path, &resolved.action_id);
+
+    if let DaemonActionDispatch::Handled = dispatch {
+        log::info!(
+            "Plugin action handled via daemon: {}::{}",
+            resolved.plugin_id,
+            resolved.action_id
+        );
+        return Ok(());
+    }
+
+    let reason = match &dispatch {
+        DaemonActionDispatch::Fallback => "daemon rejected action",
+        DaemonActionDispatch::Unavailable => "daemon unavailable for",
+        DaemonActionDispatch::Error(msg) => {
             log::warn!(
                 "Daemon error for {}::{}: {}",
                 resolved.plugin_id,
                 resolved.action_id,
-                message
+                msg
             );
-            Err(ActionExecutionError::SpawnFailed(format!(
+            return Err(ActionExecutionError::SpawnFailed(format!(
                 "daemon error for {}::{}: {}",
-                resolved.plugin_id, resolved.action_id, message
-            )))
+                resolved.plugin_id, resolved.action_id, msg
+            )));
         }
+        DaemonActionDispatch::Handled => unreachable!(),
+    };
+
+    log::warn!(
+        "{} {}::{}",
+        reason,
+        resolved.plugin_id,
+        resolved.action_id
+    );
+
+    if resolved.runtime_fallback_allowed {
+        return execute_via_runtime(resolved);
     }
+
+    Err(ActionExecutionError::SpawnFailed(format!(
+        "{} {}::{}",
+        reason, resolved.plugin_id, resolved.action_id
+    )))
 }
 
 fn execute_via_runtime(resolved: &ResolvedAction) -> Result<(), ActionExecutionError> {

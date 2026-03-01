@@ -1,73 +1,54 @@
+import { tryFetchJson } from '../../api/client.js';
 import {
     parseDiscoveryPayload,
     parseLogControlsPayload
 } from './discovery/reducer.js';
 
 export function createDiscoveryController({ state, onNeedsRender }) {
-    async function loadLogControls(skipUpdate = false) {
-        try {
-            const res = await fetch('/api/dev/log-controls');
-            if (res.ok) {
-                const payload = await res.json();
-                state.logControls = parseLogControlsPayload(payload);
-            }
-        } catch (e) {}
+    function maybeRender(skipUpdate) {
+        if (!skipUpdate && !state.linkingId) onNeedsRender();
+    }
 
-        if (!skipUpdate && !state.linkingId) {
-            onNeedsRender();
+    async function loadLogControls(skipUpdate = false) {
+        const payload = await tryFetchJson('/api/dev/log-controls');
+        if (payload) {
+            state.logControls = parseLogControlsPayload(payload);
         }
+        maybeRender(skipUpdate);
     }
 
     async function refreshDiscoveryState() {
-        try {
-            const res = await fetch('/api/dev/discovery-state');
-            if (!res.ok) return;
-            const data = await res.json();
-            const nextState = parseDiscoveryPayload(data, state.discovered);
-            state.discovering = nextState.discovering;
-            state.discovered = nextState.discovered;
-        } catch (e) {}
+        const data = await tryFetchJson('/api/dev/discovery-state');
+        if (!data) return;
+        const nextState = parseDiscoveryPayload(data, state.discovered);
+        state.discovering = nextState.discovering;
+        state.discovered = nextState.discovered;
     }
 
     async function fetchDiscoveryState(skipUpdate = false) {
         await refreshDiscoveryState();
-        if (!skipUpdate && !state.linkingId) {
-            onNeedsRender();
-        }
+        maybeRender(skipUpdate);
     }
 
     async function loadPlugins(skipUpdate = false) {
-        try {
-            const res = await fetch('/api/dev/links');
-            if (res.ok) {
-                state.plugins = await res.json();
-            }
-        } catch (e) {
-            console.error('Failed to load plugins:', e);
+        const plugins = await tryFetchJson('/api/dev/links');
+        if (plugins) {
+            state.plugins = plugins;
         }
-
-        if (!skipUpdate && !state.linkingId) {
-            onNeedsRender();
-        }
+        maybeRender(skipUpdate);
     }
 
     async function loadLinkedPlugins() {
-        if (state.linkingId) {
-            return;
+        if (state.linkingId) return;
+        const plugins = await tryFetchJson('/api/dev/links');
+        if (plugins) {
+            state.plugins = plugins;
         }
-        try {
-            const res = await fetch('/api/dev/links');
-            if (res.ok) {
-                state.plugins = await res.json();
-            }
-            onNeedsRender();
-        } catch (e) {}
+        onNeedsRender();
     }
 
     async function triggerDiscovery() {
-        if (state.discovering) {
-            return;
-        }
+        if (state.discovering) return;
         await fetch('/api/dev/discover', { method: 'POST' });
     }
 

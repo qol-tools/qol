@@ -51,3 +51,13 @@ export async function apiText(url, options) {
 export async function apiResponse(url, options) {
     return fetch(url, options);
 }
+
+export async function tryFetchJson(url, options) {
+    try {
+        const response = await fetch(url, options);
+        if (!response.ok) return null;
+        return await response.json();
+    } catch {
+        return null;
+    }
+}

@@ -72,59 +72,50 @@ pub(super) async fn execute_plugin_action(
         );
     }
 
-    match crate::plugins::action_executor::try_execute_action(&state.plugin_manager, &id, &action) {
-        Ok(()) => (
+    use crate::plugins::action_executor::ActionExecutionError;
+
+    let result = crate::plugins::action_executor::try_execute_action(
+        &state.plugin_manager,
+        &id,
+        &action,
+    );
+
+    let Err(error) = result else {
+        return (
             StatusCode::OK,
             Json(ExecuteActionResult {
                 success: true,
                 message: "Action dispatched".to_string(),
             }),
-        ),
-        Err(error @ crate::plugins::action_executor::ActionExecutionError::PluginNotFound(_)) => {
+        );
+    };
+
+    let (status, message) = match &error {
+        ActionExecutionError::PluginNotFound(_) => {
             log::warn!("Plugin action rejected for {}::{}: {}", id, action, error);
-            (
-                StatusCode::NOT_FOUND,
-                Json(ExecuteActionResult {
-                    success: false,
-                    message: error.to_string(),
-                }),
-            )
+            (StatusCode::NOT_FOUND, error.to_string())
         }
-        Err(error @ crate::plugins::action_executor::ActionExecutionError::InvalidActionId(_)) => {
+        ActionExecutionError::InvalidActionId(_)
+        | ActionExecutionError::MissingActionMapping { .. } => {
             log::warn!("Plugin action rejected for {}::{}: {}", id, action, error);
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ExecuteActionResult {
-                    success: false,
-                    message: error.to_string(),
-                }),
-            )
+            (StatusCode::BAD_REQUEST, error.to_string())
         }
-        Err(
-            error @ crate::plugins::action_executor::ActionExecutionError::MissingActionMapping {
-                ..
-            },
-        ) => {
-            log::warn!("Plugin action rejected for {}::{}: {}", id, action, error);
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ExecuteActionResult {
-                    success: false,
-                    message: error.to_string(),
-                }),
-            )
-        }
-        Err(error) => {
+        _ => {
             log::error!("Plugin action failed for {}::{}: {}", id, action, error);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ExecuteActionResult {
-                    success: false,
-                    message: "Action execution failed".to_string(),
-                }),
+                "Action execution failed".to_string(),
             )
         }
-    }
+    };
+
+    (
+        status,
+        Json(ExecuteActionResult {
+            success: false,
+            message,
+        }),
+    )
 }
 
 pub(super) async fn list_installed(

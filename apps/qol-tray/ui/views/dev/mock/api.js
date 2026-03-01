@@ -1,22 +1,8 @@
-import { readResponseText } from '../../../api/client.js';
+import { readResponseText, tryFetchJson } from '../../../api/client.js';
 
 export async function fetchMockTargetsState() {
-    let res;
-    try {
-        res = await fetch('/api/dev/mock-targets');
-    } catch (error) {
-        return null;
-    }
-    if (!res.ok) {
-        return null;
-    }
-
-    let payload;
-    try {
-        payload = await res.json();
-    } catch (error) {
-        return null;
-    }
+    const payload = await tryFetchJson('/api/dev/mock-targets');
+    if (!payload) return null;
 
     const runningIds = [];
     const runningById = new Map();
@@ -57,29 +43,20 @@ export async function stopMockTargetsApi() {
     } catch (error) {}
 }
 
+async function tryPost(url) {
+    try {
+        return await fetch(url, { method: 'POST' });
+    } catch {
+        return null;
+    }
+}
+
 export async function startLegacyMockTargets() {
-    let updateRes = null;
-    let recompileRes = null;
-    let buildRes = null;
-
-    try {
-        updateRes = await fetch('/api/dev/mock-self-update', { method: 'POST' });
-    } catch (error) {
-        updateRes = null;
-    }
-
-    try {
-        recompileRes = await fetch('/api/dev/mock-self-recompile', { method: 'POST' });
-    } catch (error) {
-        recompileRes = null;
-    }
-
-    try {
-        buildRes = await fetch('/api/dev/mock-plugin-build', { method: 'POST' });
-    } catch (error) {
-        buildRes = null;
-    }
-
+    const [updateRes, recompileRes, buildRes] = await Promise.all([
+        tryPost('/api/dev/mock-self-update'),
+        tryPost('/api/dev/mock-self-recompile'),
+        tryPost('/api/dev/mock-plugin-build'),
+    ]);
     return { updateRes, recompileRes, buildRes };
 }
 
