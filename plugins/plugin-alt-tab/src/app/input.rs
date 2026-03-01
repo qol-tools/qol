@@ -11,6 +11,10 @@ fn selected_window_id(this: &AltTabApp, cx: &Context<AltTabApp>) -> Option<u32> 
         .and_then(|ix| this.delegate.read(cx).windows.get(ix).map(|w| w.id))
 }
 
+fn nav_cols(this: &AltTabApp, window: &Window, cx: &Context<AltTabApp>) -> usize {
+    rendered_column_count(window, this.delegate.read(cx).windows.len())
+}
+
 pub(crate) fn handle_key_down(
     this: &mut AltTabApp,
     event: &gpui::KeyDownEvent,
@@ -50,8 +54,7 @@ pub(crate) fn handle_key_down(
                     .map(|w| w.app_name.clone());
                 platform::quit_app(win_id);
                 if let Some(app_name) = app_name {
-                    this.delegate
-                        .update(cx, |s, _cx| s.remove_app_windows(&app_name));
+                    this.delegate.update(cx, |s, _cx| s.remove_app_windows(&app_name));
                 }
                 cx.notify();
             }
@@ -64,63 +67,38 @@ pub(crate) fn handle_key_down(
             }
         }
         "enter" => {
-            let win_id = this
-                .delegate
-                .read(cx)
-                .selected_index
-                .and_then(|ix| this.delegate.read(cx).windows.get(ix).map(|w| w.id));
-            if win_id.is_some() {
-                this.delegate.update(cx, |s, _cx| {
-                    s.activate_selected(window);
-                });
+            if this.delegate.read(cx).selected_index.is_some() {
+                this.delegate.update(cx, |s, _cx| s.activate_selected(window));
             }
         }
         "tab" => {
             this.delegate.update(cx, |s, _cx| {
-                if event.keystroke.modifiers.shift {
-                    s.select_prev();
-                } else {
-                    s.select_next();
-                }
+                if event.keystroke.modifiers.shift { s.select_prev(); } else { s.select_next(); }
             });
             cx.notify();
         }
         "backtab" => {
-            this.delegate.update(cx, |s, _cx| {
-                s.select_prev();
-            });
+            this.delegate.update(cx, |s, _cx| s.select_prev());
             cx.notify();
         }
         "right" | "arrowright" => {
-            let total = this.delegate.read(cx).windows.len();
-            let cols = rendered_column_count(window, total);
-            this.delegate.update(cx, |s, _cx| {
-                s.select_right(cols);
-            });
+            let cols = nav_cols(this, window, cx);
+            this.delegate.update(cx, |s, _cx| s.select_right(cols));
             cx.notify();
         }
         "left" | "arrowleft" => {
-            let total = this.delegate.read(cx).windows.len();
-            let cols = rendered_column_count(window, total);
-            this.delegate.update(cx, |s, _cx| {
-                s.select_left(cols);
-            });
+            let cols = nav_cols(this, window, cx);
+            this.delegate.update(cx, |s, _cx| s.select_left(cols));
             cx.notify();
         }
         "down" | "arrowdown" => {
-            let total = this.delegate.read(cx).windows.len();
-            let cols = rendered_column_count(window, total);
-            this.delegate.update(cx, |s, _cx| {
-                s.select_down(cols);
-            });
+            let cols = nav_cols(this, window, cx);
+            this.delegate.update(cx, |s, _cx| s.select_down(cols));
             cx.notify();
         }
         "up" | "arrowup" => {
-            let total = this.delegate.read(cx).windows.len();
-            let cols = rendered_column_count(window, total);
-            this.delegate.update(cx, |s, _cx| {
-                s.select_up(cols);
-            });
+            let cols = nav_cols(this, window, cx);
+            this.delegate.update(cx, |s, _cx| s.select_up(cols));
             cx.notify();
         }
         _ => {}

@@ -4,8 +4,35 @@ use crate::window_source::preview_tile;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 
+#[cfg(debug_assertions)]
+mod render_perf {
+    use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+    static COUNT: AtomicU32 = AtomicU32::new(0);
+    static EPOCH_MS: AtomicU64 = AtomicU64::new(0);
+    pub fn tick() {
+        let count = COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let epoch = EPOCH_MS.load(Ordering::Relaxed);
+        if epoch == 0 {
+            EPOCH_MS.store(now_ms, Ordering::Relaxed);
+            return;
+        }
+        if now_ms - epoch < 2000 { return; }
+        let elapsed_s = (now_ms - epoch) as f32 / 1000.0;
+        eprintln!("[alt-tab/render/perf] {:.1}s: renders={} ({:.1} fps)", elapsed_s, count, count as f32 / elapsed_s);
+        COUNT.store(0, Ordering::Relaxed);
+        EPOCH_MS.store(now_ms, Ordering::Relaxed);
+    }
+}
+
 impl Render for AltTabApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(debug_assertions)]
+        render_perf::tick();
+
         let delegate = self.delegate.clone();
         let d_ref = delegate.read(cx);
         let transparent_bg = d_ref.transparent_background;
@@ -88,6 +115,8 @@ impl Render for AltTabApp {
                     let label_config = d.label_config.clone();
                     let live_previews = d.live_previews.clone();
                     let icon_cache = d.icon_cache.clone();
+                    #[cfg(target_os = "macos")]
+                    let live_surfaces = d.live_surfaces.clone();
 
                     let entity = cx.weak_entity();
                     div()
@@ -113,8 +142,17 @@ impl Render for AltTabApp {
                         .children(windows.into_iter().enumerate().map(|(i, win)| {
                             let is_selected = selected_index == Some(i);
                             let entity_for_click = entity.clone();
+                            let entity_for_hover = entity.clone();
                             div()
                                 .id(ElementId::Integer(i as u64))
+                                .on_hover(move |&hovering, _window, cx| {
+                                    if !hovering { return; }
+                                    let _ = entity_for_hover.update(cx, |this, cx| {
+                                        this.delegate.update(cx, |s, _cx| {
+                                            s.hovered_index = Some(i);
+                                        });
+                                    });
+                                })
                                 .flex()
                                 .flex_col()
                                 .items_center()
@@ -147,30 +185,49 @@ impl Render for AltTabApp {
                                             .ok();
                                     }
                                 })
-                                .when(is_selected && !transparent_bg, |s| {
-                                    s.bg(rgb(0x233050)).border_1().border_color(rgb(0x4a6fa5))
-                                })
-                                .when(is_selected && transparent_bg, |s| {
-                                    s.bg(rgba(card_bg_rgba))
+                                .when(is_selected, |s| {
+                                    s.bg(if transparent_bg { rgba(card_bg_rgba) } else { rgb(0x233050) })
                                         .border_1()
                                         .border_color(rgb(0x4a6fa5))
                                 })
+                                .when(!is_selected && transparent_bg, |s| s.bg(rgba(card_bg_rgba)))
                                 .when(!is_selected && !transparent_bg, |s| {
                                     s.bg(rgb(0x1a1e2a)).hover(|mut h| {
                                         h.background = Some(rgb(0x1e2640).into());
                                         h
                                     })
                                 })
-                                .when(!is_selected && transparent_bg, |s| {
-                                    s.bg(rgba(card_bg_rgba))
-                                })
-                                .child(div().rounded_md().overflow_hidden().child(preview_tile(
-                                    live_previews.get(&win.id),
-                                    &win.preview_path,
-                                    if win.is_minimized { icon_cache.get(&win.app_name) } else { None },
-                                    GRID_PREVIEW_WIDTH,
-                                    GRID_PREVIEW_HEIGHT,
-                                )))
+                                .child(div().rounded_md().overflow_hidden().child({
+                                    let minimized_icon = if win.is_minimized {
+                                        icon_cache.get(&win.app_name)
+                                    } else {
+                                        None
+                                    };
+                                    // macOS tile: zero-copy surface() via CVPixelBuffer
+                                    #[cfg(target_os = "macos")]
+                                    let gpu_tile = if minimized_icon.is_none() {
+                                        live_surfaces.get(&win.id).map(|buf| {
+                                            surface(buf.clone())
+                                                .w(px(GRID_PREVIEW_WIDTH))
+                                                .h(px(GRID_PREVIEW_HEIGHT))
+                                                .object_fit(ObjectFit::Fill)
+                                                .into_any_element()
+                                        })
+                                    } else {
+                                        None
+                                    };
+                                    #[cfg(not(target_os = "macos"))]
+                                    let gpu_tile: Option<AnyElement> = None;
+                                    gpu_tile.unwrap_or_else(|| {
+                                        preview_tile(
+                                            live_previews.get(&win.id),
+                                            &win.preview_path,
+                                            minimized_icon,
+                                            GRID_PREVIEW_WIDTH,
+                                            GRID_PREVIEW_HEIGHT,
+                                        )
+                                    })
+                                }))
                                 .child({
                                     let label = label_config.format(&win.app_name, &win.title);
                                     let label_text = if show_debug_overlay {

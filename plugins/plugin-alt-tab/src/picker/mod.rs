@@ -1,15 +1,17 @@
 pub(crate) mod keepalive;
 pub(crate) mod run;
+mod create;
+mod reuse;
 
 use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::config::{parse_hex_color, ActionMode, AltTabConfig, DisplayConfig};
 use crate::icon::build_icon_cache;
 use crate::layout::*;
-use crate::monitor::MonitorTracker;
 use crate::platform;
 use crate::platform::WindowInfo;
 use crate::preview::bgra_to_render_image;
 use gpui::*;
+use qol_plugin_api::monitor::MonitorTracker;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -25,7 +27,6 @@ pub(crate) fn open_picker(
     current: &std::rc::Rc<std::cell::RefCell<Option<(WindowHandle<AltTabApp>, Point<Pixels>)>>>,
     tracker: &MonitorTracker,
     last_window_count: Arc<AtomicUsize>,
-    window_cache: Arc<std::sync::Mutex<Vec<WindowInfo>>>,
     preview_cache: Arc<std::sync::Mutex<HashMap<u32, Arc<RenderImage>>>>,
     icon_cache: Arc<std::sync::Mutex<HashMap<String, Arc<RenderImage>>>>,
     reverse: bool,
@@ -34,37 +35,30 @@ pub(crate) fn open_picker(
     #[cfg(debug_assertions)]
     eprintln!("[alt-tab/open] show request (reverse={})", reverse);
 
-    // Reverse only cycles within an already-open picker — never opens one.
     if reverse && current.borrow().is_none() {
         return;
     }
 
-    // Fast path: if picker is already visible and alt poll is running, just cycle.
-    // This MUST run before get_open_windows() to avoid expensive AX/CG/proc_pidinfo
-    // calls on every cycle keystroke.
     let existing = current.borrow().clone();
     if let Some((ref handle, _)) = existing {
         let cycled = handle
-            .update(cx, |view, _window: &mut Window, cx| -> bool {
-                if view.action_mode == ActionMode::HoldToSwitch
-                    && view._alt_poll_task.is_some()
-                {
-                    #[cfg(debug_assertions)]
-                    eprintln!(
-                        "[alt-tab/hold] window already visible (reverse={}) — cycling",
-                        reverse
-                    );
-                    view.delegate.update(cx, |s, _cx| {
-                        if reverse {
-                            s.select_prev();
-                        } else {
-                            s.select_next();
-                        }
-                    });
-                    cx.notify();
-                    return true;
+            .update(cx, |view, window: &mut Window, cx| -> bool {
+                if !PICKER_VISIBLE.load(Ordering::Relaxed) {
+                    return false;
                 }
-                false
+                if view.action_mode != ActionMode::HoldToSwitch {
+                    return false;
+                }
+                if view._alt_poll_task.is_none() {
+                    view.start_alt_poll(window.window_handle(), cx);
+                }
+                #[cfg(debug_assertions)]
+                eprintln!("[alt-tab/hold] window already visible (reverse={}) — cycling", reverse);
+                view.delegate.update(cx, |s, _cx| {
+                    if reverse { s.select_prev(); } else { s.select_next(); }
+                });
+                cx.notify();
+                true
             })
             .unwrap_or(false);
         if cycled {
@@ -74,403 +68,207 @@ pub(crate) fn open_picker(
         }
     }
 
-    let display_windows: Vec<WindowInfo> = {
-        // Always use fast on-screen-only CG query for correct Z-order.
-        // Minimized windows come from the prewarm cache (avoids expensive
-        // proc_pidinfo / AX calls that made every open take 600-1300ms).
-        let on_screen = platform::get_on_screen_windows();
-        if config.display.show_minimized {
-            let on_screen_ids: HashSet<u32> = on_screen.iter().map(|w| w.id).collect();
-            let cached_minimized: Vec<WindowInfo> = window_cache
-                .lock()
-                .ok()
-                .map(|cache| {
-                    cache
-                        .iter()
-                        .filter(|w| w.is_minimized && !on_screen_ids.contains(&w.id))
-                        .cloned()
-                        .collect()
-                })
-                .unwrap_or_default();
-            let mut all = on_screen;
-            all.extend(cached_minimized);
-            all
-        } else {
-            on_screen.into_iter().filter(|w| !w.is_minimized).collect()
-        }
-    };
+    // On macOS: query which wids already have SC prewarm frames so gather() can
+    // skip the redundant ~150ms CG capture for those windows.
+    #[cfg(target_os = "macos")]
+    let skip_cg_wids = platform::sc_prewarm_wids();
+    #[cfg(not(target_os = "macos"))]
+    let skip_cg_wids = HashSet::new();
 
-    // Grab pre-warmed previews from cache (instant). Only capture missing windows.
-    let mut initial_previews: HashMap<u32, Arc<RenderImage>> = HashMap::new();
-    let mut missing_targets: Vec<(usize, u32)> = Vec::new();
-    if let Ok(pcache) = preview_cache.lock() {
-        for (i, win) in display_windows.iter().enumerate() {
-            if let Some(img) = pcache.get(&win.id) {
-                initial_previews.insert(win.id, img.clone());
-            } else {
-                missing_targets.push((i, win.id));
-            }
+    let (display_windows, initial_previews, icons) =
+        gather(config, &preview_cache, &icon_cache, &skip_cg_wids);
+
+    // Grab prewarm surfaces before first render so the picker opens with SC
+    // surfaces already populated (avoids the visible CG→SC flash on open).
+    #[cfg(target_os = "macos")]
+    let prewarm_surfaces = platform::sc_take_prewarm_surfaces();
+
+    if let Some((handle, created_on_origin)) = existing {
+        if let Some(new_origin) = reuse::try_reuse(
+            handle, created_on_origin, config, display_windows.clone(),
+            initial_previews.clone(), icons.clone(), tracker, icon_cache.clone(), cx,
+        ) {
+            *current.borrow_mut() = Some((handle, new_origin));
+            #[cfg(target_os = "macos")]
+            inject_prewarm_surfaces(handle, prewarm_surfaces, cx);
+            return;
         }
-    } else {
-        missing_targets = display_windows
-            .iter()
-            .enumerate()
-            .map(|(i, w)| (i, w.id))
-            .collect();
+        *current.borrow_mut() = None;
     }
-    // Synchronous CG capture only for windows not yet in the prewarm cache
-    if !missing_targets.is_empty() {
-        for (idx, rgba_opt) in
-            platform::capture_previews_cg(&missing_targets, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT)
-        {
-            let Some(rgba) = rgba_opt else { continue };
+
+    create::create_new(
+        config, display_windows, initial_previews, icons, tracker,
+        last_window_count, icon_cache, current, cx,
+    );
+
+    #[cfg(target_os = "macos")]
+    if let Some(h) = current.borrow().as_ref().map(|(h, _)| *h) {
+        inject_prewarm_surfaces(h, prewarm_surfaces, cx);
+    }
+}
+
+fn gather(
+    config: &AltTabConfig,
+    preview_cache: &Arc<std::sync::Mutex<HashMap<u32, Arc<RenderImage>>>>,
+    icon_cache: &Arc<std::sync::Mutex<HashMap<String, Arc<RenderImage>>>>,
+    skip_cg_wids: &HashSet<u32>,
+) -> (Vec<WindowInfo>, HashMap<u32, Arc<RenderImage>>, HashMap<String, Arc<RenderImage>>) {
+    let mut display_windows = initial_display_windows(config);
+    display_windows = recover_small_window_set(config, display_windows);
+
+    #[cfg(debug_assertions)]
+    {
+        eprintln!("[alt-tab/gather] show_minimized={} total={}", config.display.show_minimized, display_windows.len());
+        for w in &display_windows {
+            eprintln!("[alt-tab/gather]   wid={} app={:?} title={:?} minimized={}", w.id, w.app_name, w.title, w.is_minimized);
+        }
+    }
+
+    let mut initial_previews: HashMap<u32, Arc<RenderImage>> = HashMap::new();
+    // Skip CG capture for windows that already have SC prewarm surfaces — they
+    // will be injected into live_surfaces before the first render, so CG is redundant.
+    let cg_targets: Vec<(usize, u32)> = display_windows.iter().enumerate()
+        .filter(|(_, w)| !w.is_minimized && !skip_cg_wids.contains(&w.id))
+        .map(|(i, w)| (i, w.id))
+        .collect();
+    if !cg_targets.is_empty() {
+        #[cfg(debug_assertions)]
+        let cg_start = std::time::Instant::now();
+        let cg_results = platform::capture_previews_cg(&cg_targets, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT);
+        #[cfg(debug_assertions)]
+        eprintln!("[alt-tab/gather] CG capture: {} targets, {} results, {:?}",
+            cg_targets.len(), cg_results.len(), cg_start.elapsed());
+        for (idx, rgba_opt) in cg_results {
+            let Some(rgba) = rgba_opt else {
+                #[cfg(debug_assertions)]
+                if let Some(win) = display_windows.get(idx) {
+                    eprintln!("[alt-tab/gather] CG FAILED wid={} app={:?}", win.id, win.app_name);
+                }
+                continue;
+            };
             let Some(win) = display_windows.get(idx) else { continue };
-            if let Some(img) = bgra_to_render_image(&rgba.data, rgba.width, rgba.height) {
+            if let Some(img) = bgra_to_render_image(rgba.data, rgba.width, rgba.height) {
                 initial_previews.insert(win.id, img);
             }
         }
     }
-
-    let icons = icon_cache
-        .lock()
-        .map(|c| c.clone())
-        .unwrap_or_default();
-
-    // Reuse existing picker window if possible (reopen after dismiss).
-    if let Some((handle, created_on_origin)) = existing {
-        let target_count = display_windows.len().max(1);
-        let target_monitor = tracker.snapshot().map(|(m, _)| m);
-        let monitor_size = target_monitor.as_ref().map(|m| m.size());
-        let (target_w, target_h) =
-            picker_dimensions(target_count, config.display.max_columns, monitor_size, config.display.show_hotkey_hints);
-        let target_size = size(px(target_w), px(target_h));
-        let target_bounds = if let Some(ref active) = target_monitor {
-            active.centered_bounds(target_size)
-        } else {
-            Bounds::centered(None, target_size, cx)
-        };
-
-        // Determine if the target monitor differs from the one the window was created on.
-        let target_origin = target_monitor
-            .as_ref()
-            .map(|m| m.bounds().origin)
-            .unwrap_or(point(px(0.0), px(0.0)));
-        const MONITOR_TOLERANCE_PX: f64 = 6.0;
-        let monitor_changed = {
-            let dx = (created_on_origin.x.to_f64() - target_origin.x.to_f64()).abs();
-            let dy = (created_on_origin.y.to_f64() - target_origin.y.to_f64()).abs();
-            dx > MONITOR_TOLERANCE_PX || dy > MONITOR_TOLERANCE_PX
-        };
-
-        let reuse_ok = handle
-            .update(cx, |view, window: &mut Window, cx| -> bool {
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[alt-tab/hold] reuse path (poll_task={}) — applying config reset={} monitor_changed={}",
-                    view._alt_poll_task.is_some(),
-                    config.reset_selection_on_open,
-                    monitor_changed,
-                );
-
-                if monitor_changed {
-                    let x = target_bounds.origin.x.to_f64() as i32;
-                    let y = target_bounds.origin.y.to_f64() as i32;
-                    if !platform::move_app_window("qol-alt-tab-picker", x, y) {
-                        return false;
-                    }
-                }
-
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[alt-tab/hold] open_picker reusing window: setting action_mode={:?}",
-                    config.action_mode
-                );
-
-                view.action_mode = config.action_mode.clone();
-                view.alt_was_held = true;
-
-                let (card_color, card_opacity) = resolve_card_bg(&config.display);
-                view.delegate.update(cx, |s, _cx| {
-                    s.label_config = config.label.clone();
-                    s.transparent_background = config.display.transparent_background;
-                    s.card_bg_color = card_color;
-                    s.card_bg_opacity = card_opacity;
-                    s.show_debug_overlay = config.display.show_debug_overlay;
-                    s.show_hotkey_hints = config.display.show_hotkey_hints;
-                });
-
-                if config.action_mode == ActionMode::HoldToSwitch {
-                    let wh = window.window_handle();
-                    view.start_alt_poll(wh, cx);
-                } else {
-                    view._alt_poll_task = None;
-                }
-
-                view.apply_cached_windows(
-                    display_windows.clone(),
-                    config.reset_selection_on_open,
-                    initial_previews.clone(),
-                    icons.clone(),
-                    cx,
-                );
-
-                // Mirror the CycleOnce behavior from AltTabApp::new()
-                if config.open_behavior == crate::config::OpenBehavior::CycleOnce
-                    && config.reset_selection_on_open
-                    && display_windows.len() >= 2
-                {
-                    view.delegate.update(cx, |s, _cx| s.select_next());
-                }
-
-                let current_bounds = window.window_bounds().get_bounds();
-                let current_size = current_bounds.size;
-                let next_size = target_size;
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[alt-tab/reuse] target={}x{} current={}x{} count={} cols={}",
-                    target_w, target_h,
-                    current_size.width.to_f64(), current_size.height.to_f64(),
-                    target_count, preferred_column_count(target_count, config.display.max_columns),
-                );
-                if (current_size.width.to_f64() - target_w as f64).abs() >= 1.0
-                    || (current_size.height.to_f64() - target_h as f64).abs() >= 1.0
-                {
-                    window.resize(next_size);
-                }
-                window.focus(&view.focus_handle(cx));
-                window.activate_window();
-                true
-            })
-            .unwrap_or(false);
-
-        if reuse_ok {
-            #[cfg(debug_assertions)]
-            eprintln!("[alt-tab/open] reused existing picker window");
-            if !initial_previews.is_empty() {
-                let _ = handle.update(cx, |view, _window, cx| {
-                    view.delegate.update(cx, |state, cx| {
-                        for (wid, img) in initial_previews {
-                            state.live_previews.insert(wid, img);
-                        }
-                        cx.notify();
-                    });
-                });
-            }
-            // Async-fill missing icons for reuse path too
-            let missing_apps: Vec<String> = display_windows
-                .iter()
-                .map(|w| w.app_name.clone())
-                .filter(|name| !icons.contains_key(name))
-                .collect::<std::collections::HashSet<_>>()
-                .into_iter()
-                .collect();
-            if !missing_apps.is_empty() {
-                let windows_for_icons = display_windows;
-                let icon_cache_for_fill = icon_cache;
-                let handle_for_fill = handle;
-                cx.spawn(async move |cx: &mut AsyncApp| {
-                    let executor = cx.background_executor().clone();
-                    let raw_icons = executor
-                        .spawn(async move { platform::get_app_icons(&windows_for_icons) })
-                        .await;
-                    if raw_icons.is_empty() {
-                        return;
-                    }
-                    let rendered = build_icon_cache(raw_icons);
-                    if let Ok(mut icache) = icon_cache_for_fill.lock() {
-                        for (k, v) in &rendered {
-                            icache.insert(k.clone(), v.clone());
-                        }
-                    }
-                    let _ = cx.update(|cx| {
-                        let _ = handle_for_fill.update(cx, |view, _window, cx| {
-                            view.delegate.update(cx, |state, cx| {
-                                for (name, img) in rendered {
-                                    state.icon_cache.insert(name, img);
-                                }
-                                cx.notify();
-                            });
-                        });
-                    });
-                })
-                .detach();
-            }
-            PICKER_VISIBLE.store(true, Ordering::Relaxed);
-            cx.activate(true);
-            return;
-        }
-
-        // Close the old window so we don't leak orphaned windows
-        #[cfg(debug_assertions)]
-        eprintln!("[alt-tab/open] closing old window — will recreate on correct monitor");
-        let _ = handle.update(cx, |_view, window, _cx| {
-            window.remove_window();
-        });
-        *current.borrow_mut() = None;
-    }
-
-    let target_count = display_windows.len().max(1);
-    let estimated_count = target_count
-        .max(last_window_count.load(Ordering::Relaxed))
-        .max(1);
-    let create_monitor = tracker.snapshot().map(|(m, _)| m);
-    let monitor_size = create_monitor.as_ref().map(|m| m.size());
-    let (win_w, win_h) =
-        picker_dimensions(estimated_count, config.display.max_columns, monitor_size, config.display.show_hotkey_hints);
-    let win_size = size(px(win_w), px(win_h));
-    let bounds = if let Some(ref active) = create_monitor {
-        active.centered_bounds(win_size)
-    } else {
-        Bounds::centered(None, win_size, cx)
-    };
-    let create_origin = create_monitor
-        .as_ref()
-        .map(|m| m.bounds().origin)
-        .unwrap_or(point(px(0.0), px(0.0)));
-
     #[cfg(debug_assertions)]
-    eprintln!(
-        "[alt-tab/create] size={}x{} estimated_count={} actual_count={} cols={} hints={}",
-        win_w, win_h, estimated_count, target_count,
-        preferred_column_count(estimated_count, config.display.max_columns),
-        config.display.show_hotkey_hints,
-    );
-    println!(
-        "[alt-tab] opening at {:?} with size {:?}",
-        bounds.origin, bounds.size
-    );
-
-    let action_mode_for_init = config.action_mode.clone();
-    let display_windows_for_init = display_windows.clone();
-    let config_for_init = config.clone();
-    let cycle_on_open = config.open_behavior == crate::config::OpenBehavior::CycleOnce;
-    let icons_for_init = icons.clone();
-    let transparent_bg = config.display.transparent_background;
-    let show_debug_overlay = config.display.show_debug_overlay;
-    let show_hotkey_hints = config.display.show_hotkey_hints;
-    let (card_color_init, card_opacity_init) = resolve_card_bg(&config.display);
-
-    let window_background = if transparent_bg {
-        WindowBackgroundAppearance::Transparent
-    } else {
-        WindowBackgroundAppearance::Opaque
-    };
-
-    let handle = cx.open_window(
-        WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            titlebar: None,
-            window_decorations: Some(if transparent_bg { WindowDecorations::Server } else { WindowDecorations::Client }),
-            kind: platform::picker_window_kind(),
-            focus: true,
-            window_background: window_background,
-            ..Default::default()
-        },
-        move |window, cx| {
-            window.set_window_title("qol-alt-tab-picker");
-            let label_config = config_for_init.label.clone();
-            let transparent_background = config_for_init.display.transparent_background;
-            let view = cx.new(|cx| {
-                AltTabApp::new(
-                    window,
-                    cx,
-                    action_mode_for_init,
-                    display_windows_for_init,
-                    label_config,
-                    transparent_background,
-                    card_color_init,
-                    card_opacity_init,
-                    show_debug_overlay,
-                    show_hotkey_hints,
-                    cycle_on_open,
-                    initial_previews,
-                    icons_for_init,
-                )
-            });
-            window.focus(&view.focus_handle(cx));
-            window.activate_window();
-            view
-        },
-    );
-    let opened_handle = if let Ok(h) = handle {
-        #[cfg(debug_assertions)]
-        eprintln!("[alt-tab/open] opened new picker window");
-        *current.borrow_mut() = Some((h.clone(), create_origin));
-        Some(h)
-    } else {
-        #[cfg(debug_assertions)]
-        eprintln!("[alt-tab/open] failed to open picker window");
-        None
-    };
-    if opened_handle.is_some() {
-        PICKER_VISIBLE.store(true, Ordering::Relaxed);
-        cx.activate(true);
-    } else {
-        PICKER_VISIBLE.store(false, Ordering::Relaxed);
+    {
+        let non_min = display_windows.iter().filter(|w| !w.is_minimized).count();
+        let skipped = non_min - cg_targets.len();
+        if skipped > 0 {
+            eprintln!("[alt-tab/gather] CG skipped {}/{} windows (prewarm cached)", skipped, non_min);
+        }
+        eprintln!("[alt-tab/gather] initial_previews: {} ok out of {} non-minimized",
+            initial_previews.len(), non_min);
     }
-
-    if transparent_bg {
-        platform::disable_window_shadow();
-    }
-
-    // Spawn background icon fetch for any apps not yet in the cache.
-    // This fills icons within ~50ms instead of waiting for the next prewarm cycle.
-    if let Some(wh) = opened_handle {
-        let missing_apps: Vec<String> = display_windows
-            .iter()
-            .map(|w| w.app_name.clone())
-            .filter(|name| !icons.contains_key(name))
-            .collect::<std::collections::HashSet<_>>()
-            .into_iter()
-            .collect();
-        if !missing_apps.is_empty() {
-            let windows_for_icons = display_windows;
-            let icon_cache_for_fill = icon_cache;
-            cx.spawn(async move |cx: &mut AsyncApp| {
-                let executor = cx.background_executor().clone();
-                let raw_icons = executor
-                    .spawn(async move { platform::get_app_icons(&windows_for_icons) })
-                    .await;
-                if raw_icons.is_empty() {
-                    return;
-                }
-                let rendered = build_icon_cache(raw_icons);
-                if let Ok(mut icache) = icon_cache_for_fill.lock() {
-                    for (k, v) in &rendered {
-                        icache.insert(k.clone(), v.clone());
-                    }
-                }
-                let _ = cx.update(|cx| {
-                    let _ = wh.update(cx, |view, _window, cx| {
-                        view.delegate.update(cx, |state, cx| {
-                            for (name, img) in rendered {
-                                state.icon_cache.insert(name, img);
-                            }
-                            cx.notify();
-                        });
-                    });
-                });
-            })
-            .detach();
+    if let Ok(pcache) = preview_cache.lock() {
+        for win in &display_windows {
+            if !win.is_minimized { continue; }
+            if let Some(img) = pcache.get(&win.id) {
+                initial_previews.entry(win.id).or_insert_with(|| img.clone());
+            }
         }
     }
 
-    #[cfg(target_os = "macos")]
-    set_macos_accessory_policy();
+    let icons = icon_cache.lock().map(|c| c.clone()).unwrap_or_default();
+    (display_windows, initial_previews, icons)
 }
 
-fn resolve_card_bg(display: &DisplayConfig) -> (u32, f32) {
+fn initial_display_windows(config: &AltTabConfig) -> Vec<WindowInfo> {
+    if !config.display.show_minimized {
+        return platform::get_on_screen_windows();
+    }
+    // Full enumeration: single CG snapshot partitioned into on-screen + minimized.
+    // Avoids stale cache where recently-minimized windows are missing.
+    platform::get_open_windows()
+}
+
+fn recover_small_window_set(config: &AltTabConfig, display_windows: Vec<WindowInfo>) -> Vec<WindowInfo> {
+    if display_windows.len() > 2 {
+        return display_windows;
+    }
+
+    let recovered = platform::get_on_screen_windows();
+    if recovered.len() <= display_windows.len() {
+        return display_windows;
+    }
+    if config.display.show_minimized {
+        return recovered;
+    }
+    filter_non_minimized(recovered)
+}
+
+fn filter_non_minimized(windows: Vec<WindowInfo>) -> Vec<WindowInfo> {
+    windows
+        .into_iter()
+        .filter(|w| !w.is_minimized)
+        .collect()
+}
+
+pub(super) fn spawn_icon_fill(
+    handle: WindowHandle<AltTabApp>,
+    display_windows: Vec<WindowInfo>,
+    icons: &HashMap<String, Arc<RenderImage>>,
+    icon_cache: Arc<std::sync::Mutex<HashMap<String, Arc<RenderImage>>>>,
+    cx: &mut App,
+) {
+    let missing: Vec<String> = display_windows.iter()
+        .map(|w| w.app_name.clone())
+        .filter(|name| !icons.contains_key(name))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    if missing.is_empty() { return; }
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let executor = cx.background_executor().clone();
+        let raw = executor.spawn(async move { platform::get_app_icons(&display_windows) }).await;
+        if raw.is_empty() { return; }
+        let rendered = build_icon_cache(raw);
+        if let Ok(mut icache) = icon_cache.lock() {
+            for (k, v) in &rendered { icache.insert(k.clone(), v.clone()); }
+        }
+        let _ = cx.update(|cx| {
+            let _ = handle.update(cx, |view, _window, cx| {
+                view.delegate.update(cx, |state, cx| {
+                    for (name, img) in rendered { state.icon_cache.insert(name, img); }
+                    cx.notify();
+                });
+            });
+        });
+    })
+    .detach();
+}
+
+/// Inject prewarm SC surfaces as fallback for windows that have no live surface yet.
+/// Uses `entry().or_insert_with()` so it never overwrites fresher SC frames already
+/// present in `live_surfaces` from the previous session.
+#[cfg(target_os = "macos")]
+fn inject_prewarm_surfaces(
+    handle: WindowHandle<AltTabApp>,
+    surfaces: HashMap<u32, platform::SendCVBuf>,
+    cx: &mut App,
+) {
+    if surfaces.is_empty() { return; }
+    let _ = handle.update(cx, |view, _window, cx| {
+        view.delegate.update(cx, |d, _cx| {
+            for (wid, buf) in surfaces {
+                d.live_surfaces.entry(wid).or_insert_with(|| buf.into_cvpixelbuffer());
+            }
+        });
+    });
+}
+
+pub(super) fn resolve_card_bg(display: &DisplayConfig) -> (u32, f32) {
     let (r, g, b) = parse_hex_color(&display.card_background_color).unwrap_or((0x1a, 0x1e, 0x2a));
     let color = ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
-    let opacity = display.card_background_opacity.clamp(0.0, 1.0);
-    (color, opacity)
+    (color, display.card_background_opacity.clamp(0.0, 1.0))
 }
 
 #[cfg(target_os = "macos")]
 pub(crate) fn set_macos_accessory_policy() {
     use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
     use objc2_foundation::MainThreadMarker;
-
     let mtm = MainThreadMarker::new().expect("must be on main thread");
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);

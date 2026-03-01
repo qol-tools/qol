@@ -114,7 +114,6 @@ pub(crate) fn dict_get_rect(dict: CFDictionaryRef, key: CFStringRef) -> Option<(
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn dict_get_bool(dict: CFDictionaryRef, key: CFStringRef) -> Option<bool> {
     #[link(name = "CoreFoundation", kind = "framework")]
     extern "C" {

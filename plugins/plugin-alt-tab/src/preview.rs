@@ -15,9 +15,8 @@ pub(crate) fn fast_pixel_hash(data: &[u8]) -> u64 {
     hasher.finish()
 }
 
-pub(crate) fn bgra_to_render_image(data: &[u8], w: usize, h: usize) -> Option<Arc<RenderImage>> {
-    let buf =
-        image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(w as u32, h as u32, data.to_vec())?;
+pub(crate) fn bgra_to_render_image(data: Vec<u8>, w: usize, h: usize) -> Option<Arc<RenderImage>> {
+    let buf = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(w as u32, h as u32, data)?;
     let frame = image::Frame::new(buf);
     Some(Arc::new(RenderImage::new(smallvec::smallvec![frame])))
 }

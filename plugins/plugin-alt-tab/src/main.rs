@@ -4,7 +4,6 @@ mod daemon;
 mod delegate;
 mod icon;
 mod layout;
-mod monitor;
 mod picker;
 mod platform;
 mod preview;

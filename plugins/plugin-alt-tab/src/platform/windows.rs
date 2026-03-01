@@ -1,5 +1,9 @@
 use super::WindowInfo;
 
+pub fn on_screen_window_ids() -> Vec<u32> {
+    Vec::new()
+}
+
 pub fn get_open_windows() -> Vec<WindowInfo> {
     Vec::new()
 }

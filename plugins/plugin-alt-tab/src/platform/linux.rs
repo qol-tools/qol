@@ -4,6 +4,12 @@ use x11rb::connection::Connection;
 use x11rb::protocol::xproto::ConnectionExt as _;
 use x11rb::protocol::xproto::*;
 
+pub fn on_screen_window_ids() -> Vec<u32> {
+    let mut ids: Vec<u32> = get_open_windows().iter().map(|w| w.id).collect();
+    ids.sort_unstable();
+    ids
+}
+
 #[derive(Clone, Copy)]
 struct ChannelOrder {
     red: usize,

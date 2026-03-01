@@ -21,6 +21,7 @@ pub(crate) struct AltTabApp {
     pub(crate) alt_was_held: bool,
     pub(crate) _alt_poll_task: Option<Task<()>>,
     _live_preview_task: Option<Task<()>>,
+    _focus_out_sub: gpui::Subscription,
 }
 
 impl AltTabApp {
@@ -39,8 +40,17 @@ impl AltTabApp {
         initial_previews: HashMap<u32, Arc<RenderImage>>,
         icon_cache: HashMap<String, Arc<RenderImage>>,
     ) -> Self {
-        let win_delegate =
-            WindowDelegate::new_with_previews(initial_windows.clone(), label_config, transparent_background, card_bg_color, card_bg_opacity, show_debug_overlay, show_hotkey_hints, initial_previews, icon_cache);
+        let win_delegate = WindowDelegate::new_with_previews(
+            initial_windows.clone(),
+            label_config,
+            transparent_background,
+            card_bg_color,
+            card_bg_opacity,
+            show_debug_overlay,
+            show_hotkey_hints,
+            initial_previews,
+            icon_cache,
+        );
         let delegate = cx.new(|_cx| win_delegate);
 
         if cycle_on_open && initial_windows.len() >= 2 {
@@ -51,10 +61,9 @@ impl AltTabApp {
         window.focus(&focus_handle);
         let gpui_window_handle = window.to_async(cx).window_handle();
 
-        // Register the focus out subscription for Sticky mode.
-        let focus_handle_for_sub = focus_handle.clone();
-        let _focus_out_subscription = cx.on_focus_out(
-            &focus_handle_for_sub,
+        // Focus-out subscription for Sticky mode: dismiss picker when focus leaves.
+        let focus_out_sub = cx.on_focus_out(
+            &focus_handle,
             window,
             |this, _event, window, _cx| {
                 if this.action_mode != ActionMode::HoldToSwitch {
@@ -79,6 +88,7 @@ impl AltTabApp {
             alt_was_held: true,
             _alt_poll_task: None,
             _live_preview_task: Some(live_preview_task),
+            _focus_out_sub: focus_out_sub,
         };
 
         if action_mode == ActionMode::HoldToSwitch {

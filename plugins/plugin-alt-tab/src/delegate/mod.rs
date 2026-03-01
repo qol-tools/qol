@@ -11,6 +11,7 @@ use std::sync::Arc;
 pub(crate) struct WindowDelegate {
     pub(crate) windows: Vec<WindowInfo>,
     pub(crate) selected_index: Option<usize>,
+    pub(crate) hovered_index: Option<usize>,
     pub(crate) label_config: LabelConfig,
     pub(crate) transparent_background: bool,
     pub(crate) card_bg_color: u32,
@@ -19,6 +20,8 @@ pub(crate) struct WindowDelegate {
     pub(crate) show_hotkey_hints: bool,
     pub(crate) live_previews: HashMap<u32, Arc<RenderImage>>,
     pub(crate) icon_cache: HashMap<String, Arc<RenderImage>>,
+    #[cfg(target_os = "macos")]
+    pub(crate) live_surfaces: HashMap<u32, core_video::pixel_buffer::CVPixelBuffer>,
 }
 
 impl WindowDelegate {
@@ -37,6 +40,7 @@ impl WindowDelegate {
         Self {
             windows,
             selected_index,
+            hovered_index: None,
             label_config,
             transparent_background,
             card_bg_color,
@@ -45,6 +49,8 @@ impl WindowDelegate {
             show_hotkey_hints,
             live_previews,
             icon_cache,
+            #[cfg(target_os = "macos")]
+            live_surfaces: HashMap::new(),
         }
     }
 
@@ -53,35 +59,22 @@ impl WindowDelegate {
         let active_ids: std::collections::HashSet<u32> =
             self.windows.iter().map(|w| w.id).collect();
         self.live_previews.retain(|id, _| active_ids.contains(id));
-        if self.windows.is_empty() {
-            self.selected_index = None;
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "[alt-tab/select] set_windows reset={} next=None total=0",
-                reset_selection
-            );
-            return;
-        }
+        #[cfg(target_os = "macos")]
+        self.live_surfaces.retain(|id, _| active_ids.contains(id));
 
-        if reset_selection {
-            self.selected_index = Some(0);
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "[alt-tab/select] set_windows reset={} next=Some(0) total={}",
-                reset_selection,
-                self.windows.len()
-            );
-            return;
-        }
+        self.selected_index = if self.windows.is_empty() {
+            None
+        } else if reset_selection {
+            Some(0)
+        } else {
+            let current = self.selected_index.unwrap_or(0);
+            Some(current.min(self.windows.len() - 1))
+        };
 
-        let selected_row = self.selected_index.unwrap_or(0);
-        self.selected_index = Some(selected_row.min(self.windows.len() - 1));
         #[cfg(debug_assertions)]
         eprintln!(
             "[alt-tab/select] set_windows reset={} next={:?} total={}",
-            reset_selection,
-            self.selected_index,
-            self.windows.len()
+            reset_selection, self.selected_index, self.windows.len()
         );
     }
 

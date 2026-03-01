@@ -17,7 +17,7 @@ pub(crate) fn start(
         move |this: WeakEntity<super::AltTabApp>, cx: &mut AsyncApp| {
             let mut cx = cx.clone();
             async move {
-                eprintln!("[alt-tab/hold] X11 modifier poll task started");
+                eprintln!("[alt-tab/hold] modifier poll task started");
                 cx.background_executor()
                     .timer(Duration::from_millis(50))
                     .await;
@@ -29,7 +29,7 @@ pub(crate) fn start(
 
                     if !alt_held {
                         eprintln!(
-                            "[alt-tab/hold] X11 poll: Alt released — activating selected"
+                            "[alt-tab/hold] Alt released — activating selected"
                         );
                         let list = list.clone();
                         let _ = cx.update_window(window_handle, |_root, window, cx| {
@@ -50,7 +50,7 @@ pub(crate) fn start(
                     }
                 });
 
-                eprintln!("[alt-tab/hold] X11 modifier poll task ended");
+                eprintln!("[alt-tab/hold] modifier poll task ended");
             }
         },
     ));
