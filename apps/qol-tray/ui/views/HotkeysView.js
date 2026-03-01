@@ -132,30 +132,21 @@ export function HotkeysView() {
         };
         const isEditing = !!modal.hotkey;
         setHotkeys(prev => {
-            let next;
-            if (isEditing) {
-                next = prev.map(h => h.id === modal.hotkey.id ? entry : h);
-            } else {
-                next = [...prev, entry];
-                setSelectedIndex(next.length - 1);
-            }
+            const next = isEditing
+                ? prev.map(h => h.id === modal.hotkey.id ? entry : h)
+                : [...prev, entry];
+            if (!isEditing) setSelectedIndex(next.length - 1);
             persistHotkeys(next);
             return next;
         });
-        if (isEditing) {
-            setEditModal(null);
-        } else {
-            const available = getAvailableActions(modal.pluginId, entry.id);
-            if (available.length > 0) {
-                setEditModal(prev => ({
-                    ...prev, hotkey: null, key: '', action: available[0]?.id || '',
-                    recording: false, availableActions: available
-                }));
-                setModalFieldIndex(1);
-            } else {
-                setEditModal(null);
-            }
-        }
+        if (isEditing) { setEditModal(null); return; }
+        const available = getAvailableActions(modal.pluginId, entry.id);
+        if (available.length === 0) { setEditModal(null); return; }
+        setEditModal(prev => ({
+            ...prev, hotkey: null, key: '', action: available[0]?.id || '',
+            recording: false, availableActions: available
+        }));
+        setModalFieldIndex(1);
     }, [persistHotkeys, getAvailableActions]);
 
     // Delete — stable via refs
@@ -201,17 +192,12 @@ export function HotkeysView() {
             if (e.key === 'Enter') {
                 e.preventDefault();
                 const active = document.activeElement;
-                if (active?.id === 'hotkey-key') {
-                    setEditModal(prev => prev ? { ...prev, recording: true, key: '' } : prev);
-                } else if (active?.classList.contains('modal-cancel')) {
-                    setEditModal(null);
-                } else if (active?.classList.contains('modal-save')) {
-                    saveHotkey();
-                } else {
-                    const fields = Array.from(document.querySelectorAll('.edit-modal [tabindex]'));
-                    const idx = fields.indexOf(active);
-                    if (idx >= 0 && idx + 1 < fields.length) fields[idx + 1].focus();
-                }
+                if (active?.id === 'hotkey-key') { setEditModal(prev => prev ? { ...prev, recording: true, key: '' } : prev); return; }
+                if (active?.classList.contains('modal-cancel')) { setEditModal(null); return; }
+                if (active?.classList.contains('modal-save')) { saveHotkey(); return; }
+                const fields = Array.from(document.querySelectorAll('.edit-modal [tabindex]'));
+                const idx = fields.indexOf(active);
+                if (idx >= 0 && idx + 1 < fields.length) fields[idx + 1].focus();
                 return;
             }
             if (e.key === 'Tab') {

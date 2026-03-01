@@ -81,12 +81,7 @@ export function createMockController({
         mockFlowModel = next.model;
         state.mockTesting = next.mockTesting;
 
-        if (state.mockTesting) {
-            startPolling();
-        } else {
-            stopPolling();
-        }
-
+        (state.mockTesting ? startPolling : stopPolling)();
         maybeRender(skipUpdate);
     }
 
@@ -130,11 +125,7 @@ export function createMockController({
             const targetState = setBackendTargets(mockFlowModel, startedTargets);
             mockFlowModel = targetState.model;
             state.mockTesting = targetState.mockTesting;
-            if (!targetState.mockTesting) {
-                stopPolling();
-            } else {
-                startPolling();
-            }
+            (targetState.mockTesting ? startPolling : stopPolling)();
             onNeedsRender();
             return;
         }
@@ -186,7 +177,9 @@ export function createMockController({
             if (!completed || !isCurrent(runId)) return;
             finishTestingReducer();
             stopPolling();
-        } else if (buildRes.ok) {
+        }
+
+        if (!needsLocalFallback && buildRes.ok) {
             const backendTargets = setBackendTargets(mockFlowModel, ['plugin_build']);
             mockFlowModel = backendTargets.model;
             state.mockTesting = backendTargets.mockTesting;
