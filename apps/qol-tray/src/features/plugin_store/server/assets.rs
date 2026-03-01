@@ -21,20 +21,23 @@ pub(crate) fn serve_auto_config() -> impl IntoResponse {
     serve_embedded_file("auto-config.html")
 }
 
+fn mime_for_path(path: &str) -> &'static str {
+    const MIME_MAP: &[(&str, &str)] = &[
+        (".html", "text/html"),
+        (".css", "text/css"),
+        (".js", "application/javascript"),
+        (".png", "image/png"),
+        (".svg", "image/svg+xml"),
+    ];
+    MIME_MAP
+        .iter()
+        .find(|(ext, _)| path.ends_with(ext))
+        .map(|(_, mime)| *mime)
+        .unwrap_or("application/octet-stream")
+}
+
 fn serve_embedded_file(path: &str) -> impl IntoResponse {
-    let mime = if path.ends_with(".html") {
-        "text/html"
-    } else if path.ends_with(".css") {
-        "text/css"
-    } else if path.ends_with(".js") {
-        "application/javascript"
-    } else if path.ends_with(".png") {
-        "image/png"
-    } else if path.ends_with(".svg") {
-        "image/svg+xml"
-    } else {
-        "application/octet-stream"
-    };
+    let mime = mime_for_path(path);
 
     match UiAssets::get(path) {
         Some(content) => (
