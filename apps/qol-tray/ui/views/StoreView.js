@@ -7,7 +7,8 @@ import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus.js';
 import { useSSEDebounce } from '../hooks/useSSEDebounce.js';
 import { useInstalling } from '../hooks/useInstalling.js';
 import { useFeedback } from '../hooks/useFeedback.js';
-import { navigateGrid } from '../hooks/useGridNav.js';
+import { useGridNav } from '../hooks/useGridNav.js';
+import { withShiftVariants, dispatchKey } from '../utils/keys.js';
 import { Feedback } from '../components/FeedbackPreact.js';
 import {
     formatCacheAge, normalizeSearchQuery, getFilteredPlugins,
@@ -154,11 +155,7 @@ export function StoreView() {
     }, [clearFeedback, setFeedback, addInstalling, removeInstalling, loadPlugins]);
 
     // Grid navigation — stable via ref
-    const navigateInGrid = useCallback((direction) => {
-        const current = selectedIndexRef.current;
-        const next = navigateGrid('#store-list .plugin-card', current, direction);
-        if (next !== current) setSelectedIndex(next);
-    }, []);
+    const navigateInGrid = useGridNav('#store-list .plugin-card', selectedIndexRef, setSelectedIndex);
 
     // Keyboard — stable: reads mutable state via refs
     const handleKey = useCallback((e) => {
@@ -175,7 +172,7 @@ export function StoreView() {
         }
         if ((e.ctrlKey || e.metaKey) && e.key === 'r') { e.preventDefault(); refreshPlugins(); return; }
 
-        const handlers = {
+        dispatchKey(e, withShiftVariants({
             ArrowUp: () => navigateInGrid('up'),
             ArrowDown: () => navigateInGrid('down'),
             ArrowLeft: () => navigateInGrid('left'),
@@ -186,10 +183,7 @@ export function StoreView() {
             },
             s: () => searchRef.current?.focus(),
             t: () => { setShowTokenInput(true); setTimeout(() => document.getElementById('github-token-input')?.focus(), 0); },
-            T: () => { setShowTokenInput(true); setTimeout(() => document.getElementById('github-token-input')?.focus(), 0); },
-        };
-        const handler = handlers[e.key];
-        if (handler) { e.preventDefault(); handler(); }
+        }));
     }, [refreshPlugins, navigateInGrid, installPlugin]);
 
     // Expose for App keyboard routing

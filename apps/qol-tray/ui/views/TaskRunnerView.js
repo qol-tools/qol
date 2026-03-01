@@ -4,6 +4,7 @@ import { useStateRef } from '../hooks/useStateRef.js';
 import { usePersistedIndex } from '../hooks/usePersistedIndex.js';
 import { Modal } from '../components/ModalPreact.js';
 import { useFooterShortcuts } from '../hooks/useFooterShortcuts.js';
+import { withShiftVariants, dispatchKey } from '../utils/keys.js';
 
 const API_BASE = '/api/task-runner';
 const CSS_ID = 'task-runner-css';
@@ -177,21 +178,15 @@ export function TaskRunnerView() {
         }
         const ids = actionIdsRef.current;
         const idx = selectedIndexRef.current;
-        const handlers = {
+        dispatchKey(e, withShiftVariants({
             ArrowUp: () => setSelectedIndex(i => Math.max(0, i - 1)),
             ArrowDown: () => setSelectedIndex(i => Math.min(ids.length - 1, i + 1)),
             Enter: () => { if (ids.length > 0) openEditModal(ids[idx]); },
             t: () => { if (ids.length > 0) openTestPanel(ids[idx]); },
-            T: () => { if (ids.length > 0) openTestPanel(ids[idx]); },
             a: () => openEditModal(),
-            A: () => openEditModal(),
             d: deleteAction,
-            D: deleteAction,
             c: copyApiExample,
-            C: copyApiExample,
-        };
-        const handler = handlers[e.key];
-        if (handler) { e.preventDefault(); handler(); }
+        }));
     }, [saveAction, closeTestPanel, openEditModal, openTestPanel, deleteAction, copyApiExample]);
 
     const isBlocking = useCallback(() => editModalRef.current !== null || testingIdRef.current !== null, []);
