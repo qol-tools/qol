@@ -8,6 +8,7 @@ import { useSSEDebounce } from '../hooks/useSSEDebounce.js';
 import { useInstalling } from '../hooks/useInstalling.js';
 import { useFeedback } from '../hooks/useFeedback.js';
 import { useGridNav } from '../hooks/useGridNav.js';
+import { useAsyncToken } from '../hooks/useAsyncToken.js';
 import { withShiftVariants, dispatchKey } from '../utils/keys.js';
 import { Feedback } from '../components/FeedbackPreact.js';
 import {
@@ -42,7 +43,7 @@ export function StoreView() {
     const { feedback, setFeedback, clearFeedback } = useFeedback();
     const { has: isInstalling, add: addInstalling, remove: removeInstalling } = useInstalling();
 
-    const loadTokenRef = useRef(0);
+    const [nextToken, isCurrentToken] = useAsyncToken();
     const searchRef = useRef(null);
 
     useFooterShortcuts(SHORTCUTS);
@@ -54,11 +55,11 @@ export function StoreView() {
 
     // Load plugins — uses ref for hasToken to stay stable
     const loadPlugins = useCallback(async (forceRefresh = false) => {
-        const token = ++loadTokenRef.current;
+        const token = nextToken();
         setLoading(true);
         try {
             const data = await fetchPluginsRequest(forceRefresh);
-            if (token !== loadTokenRef.current) return;
+            if (!isCurrentToken(token)) return;
             const sorted = sortPluginsByName(data.plugins || []);
             setPlugins(sorted);
             setCacheAgeSecs(data.cache_age_secs ?? null);
@@ -66,14 +67,14 @@ export function StoreView() {
             setRateLimited(rl);
             if (!rl) setShowTokenInput(prev => prev && rl);
         } catch (error) {
-            if (token !== loadTokenRef.current) return;
+            if (!isCurrentToken(token)) return;
             if (looksLikeGithubAuthFailure(error?.message)) {
                 setRateLimited(true);
                 setShowTokenInput(true);
             }
             setFeedback('error', `Failed to load plugins: ${error.message}`);
         } finally {
-            if (token === loadTokenRef.current) setLoading(false);
+            if (isCurrentToken(token)) setLoading(false);
         }
     }, [setFeedback]);
 

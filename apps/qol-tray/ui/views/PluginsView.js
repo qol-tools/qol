@@ -7,6 +7,7 @@ import { useSSEDebounce } from '../hooks/useSSEDebounce.js';
 import { useInstalling } from '../hooks/useInstalling.js';
 import { useFeedback } from '../hooks/useFeedback.js';
 import { useGridNav } from '../hooks/useGridNav.js';
+import { useAsyncToken } from '../hooks/useAsyncToken.js';
 import { withShiftVariants, dispatchKey } from '../utils/keys.js';
 import { useFooterShortcuts } from '../hooks/useFooterShortcuts.js';
 import { Feedback } from '../components/FeedbackPreact.js';
@@ -38,7 +39,7 @@ export function PluginsView({ onOpenPluginConfig }) {
     const { feedback, setFeedback, clearFeedback } = useFeedback();
     const { items: installingItems, has: isInstalling } = useInstalling();
 
-    const refreshTokenRef = useRef(0);
+    const [nextToken, isCurrentToken] = useAsyncToken();
     const latestRevisionRef = useRef(0);
     const restoredRef = useRef(false);
 
@@ -47,10 +48,10 @@ export function PluginsView({ onOpenPluginConfig }) {
     // Load + refresh
     const refreshPlugins = useCallback(async (opts = {}) => {
         const { showErrorFeedback = false, restoreSelection = false, minRevision = 0 } = opts;
-        const token = ++refreshTokenRef.current;
+        const token = nextToken();
         try {
             const payload = parseInstalledPayload(await apiJson('/api/installed'));
-            if (token !== refreshTokenRef.current) return;
+            if (!isCurrentToken(token)) return;
             if (payload.revision < minRevision || payload.revision < latestRevisionRef.current) return;
             latestRevisionRef.current = payload.revision;
             const sorted = payload.plugins.sort((a, b) => a.name.localeCompare(b.name));
@@ -64,7 +65,7 @@ export function PluginsView({ onOpenPluginConfig }) {
                 return Math.min(prev, Math.max(0, sorted.length - 1));
             });
         } catch (error) {
-            if (token !== refreshTokenRef.current) return;
+            if (!isCurrentToken(token)) return;
             if (showErrorFeedback) setFeedback('error', `Failed to load plugins: ${error.message}`);
         }
     }, [setFeedback]);
