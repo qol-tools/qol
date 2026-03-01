@@ -1,3 +1,4 @@
+import { tryFetchJson } from '../../api/client.js';
 import { formatBuildOverlayDetail, normalizePercent } from '../../utils/progress.js';
 import {
     nextBuildCompletedState,
@@ -45,33 +46,34 @@ export function createBuildController({
         onBuildComplete();
     }
 
+    function maybeRender(skipUpdate) {
+        if (!skipUpdate && !state.linkingId) onNeedsRender();
+    }
+
     async function hydrateBuildState(skipUpdate = false) {
-        try {
-            const res = await fetch('/api/dev/build-state');
-            if (!res.ok) return;
+        const payload = await tryFetchJson('/api/dev/build-state');
+        if (!payload) return;
 
-            const payload = await res.json();
-            const nextState = parseHydratedBuildState(payload);
-            state.building = nextState.building;
+        const nextState = parseHydratedBuildState(payload);
+        state.building = nextState.building;
 
-            if (!state.building) {
-                state.buildProgress = nextState.buildProgress;
-                if (nextState.buildResults) {
-                    state.buildResults = nextState.buildResults;
-                }
-                clearQueuedBuildRowSync();
-                if (!skipUpdate && !state.linkingId) onNeedsRender();
-                return;
+        if (!state.building) {
+            state.buildProgress = nextState.buildProgress;
+            if (nextState.buildResults) {
+                state.buildResults = nextState.buildResults;
             }
+            clearQueuedBuildRowSync();
+            maybeRender(skipUpdate);
+            return;
+        }
 
-            for (const [id, hydrated] of Object.entries(nextState.buildProgress)) {
-                const live = state.buildProgress[id];
-                if (live && (live.percent ?? 0) > (hydrated.percent ?? 0)) continue;
-                state.buildProgress[id] = hydrated;
-            }
+        for (const [id, hydrated] of Object.entries(nextState.buildProgress)) {
+            const live = state.buildProgress[id];
+            if (live && (live.percent ?? 0) > (hydrated.percent ?? 0)) continue;
+            state.buildProgress[id] = hydrated;
+        }
 
-            if (!skipUpdate && !state.linkingId) onNeedsRender();
-        } catch (e) {}
+        maybeRender(skipUpdate);
     }
 
     function getActivePluginBuildState(plugin, mockTesting) {

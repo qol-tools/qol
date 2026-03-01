@@ -28,6 +28,10 @@ export function createMockController({
     getMergedPlugins,
     onNeedsRender
 }) {
+    function maybeRender(skipUpdate) {
+        if (!skipUpdate && !state.linkingId) onNeedsRender();
+    }
+
     let mockFlowModel = createMockFlowModel();
     const poller = createMockTargetsPoller({
         onTick: async () => {
@@ -83,9 +87,7 @@ export function createMockController({
             stopPolling();
         }
 
-        if (!skipUpdate && !state.linkingId) {
-            onNeedsRender();
-        }
+        maybeRender(skipUpdate);
     }
 
     async function triggerMockFlows() {
