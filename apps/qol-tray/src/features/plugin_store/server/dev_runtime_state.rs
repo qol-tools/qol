@@ -8,6 +8,7 @@ use crate::dev::adapters::traits::{
     BuildStateProgress, BuildStateStore, DevMockTarget, DevRuntimeStateStore,
 };
 use crate::dev::core::BuildStatus;
+use crate::dev::state::BuildResultInfo;
 
 #[derive(Debug, Default)]
 struct MockTargetState {
@@ -19,6 +20,7 @@ struct MockTargetState {
 struct RuntimeBuildState {
     building: bool,
     progress: HashMap<String, BuildStateProgress>,
+    last_results: Option<Vec<BuildResultInfo>>,
 }
 
 #[derive(Default)]
@@ -53,6 +55,7 @@ impl BuildStateStore for InMemoryDevRuntimeState {
         };
         store.building = true;
         store.progress.clear();
+        store.last_results = None;
     }
 
     fn update_plugin(&self, plugin_id: &str, status: BuildStatus, percent: u8, phase: &str) {
@@ -90,6 +93,28 @@ impl BuildStateStore for InMemoryDevRuntimeState {
         };
         store.building = false;
         store.progress.clear();
+    }
+
+    fn store_results(&self, results: Vec<BuildResultInfo>) {
+        let mut store = match self.build_state.lock() {
+            Ok(guard) => guard,
+            Err(error) => {
+                log::error!("Build state lock poisoned while storing results: {}", error);
+                return;
+            }
+        };
+        store.last_results = Some(results);
+    }
+
+    fn last_results(&self) -> Option<Vec<BuildResultInfo>> {
+        let store = match self.build_state.lock() {
+            Ok(guard) => guard,
+            Err(error) => {
+                log::error!("Build state lock poisoned while reading results: {}", error);
+                return None;
+            }
+        };
+        store.last_results.clone()
     }
 
     fn is_building(&self) -> bool {

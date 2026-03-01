@@ -298,6 +298,7 @@ pub(super) fn publish_core_event(
         CoreEvent::BuildComplete { results } => {
             let mapped = map_core_results(results);
             state_store.mark_finished();
+            state_store.store_results(mapped.clone());
             events.send(DaemonEvent::BuildComplete { results: mapped });
         }
     }
@@ -324,7 +325,12 @@ fn read_build_state_snapshot(state: &dyn DevRuntimeStateStore) -> BuildStateResp
     } else {
         HashMap::new()
     };
-    BuildStateResponse { building, progress }
+    let results = if building { None } else { state.last_results() };
+    BuildStateResponse {
+        building,
+        progress,
+        results,
+    }
 }
 
 fn mock_target_infos(state: &dyn DevRuntimeStateStore) -> Vec<MockTargetInfo> {

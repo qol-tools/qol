@@ -1,4 +1,4 @@
-import { subscribe } from '../events.js';
+import { subscribe, onReconnect } from '../events.js';
 import { jsonRequest, readResponseText } from '../api/client.js';
 import { mergePlugins, renderBuildResults, renderPluginBuildMeta } from './dev/plugin-model.js';
 import { renderDevView } from './dev/template.js';
@@ -40,6 +40,7 @@ const state = {
 
 let container = null;
 let unsubscribe = null;
+let unsubscribeReconnect = null;
 
 const discoveryController = createDiscoveryController({
     state,
@@ -77,6 +78,11 @@ export function render(containerEl) {
     container = containerEl;
     container.addEventListener('click', handleClick);
     unsubscribe = subscribe(handleEvent);
+    if (!unsubscribeReconnect) {
+        unsubscribeReconnect = onReconnect(() => {
+            void buildController.hydrateBuildState();
+        });
+    }
     void Promise.all([
         discoveryController.loadPlugins(true),
         discoveryController.fetchDiscoveryState(true),

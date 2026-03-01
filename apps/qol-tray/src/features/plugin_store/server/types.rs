@@ -122,6 +122,8 @@ pub(super) struct BuildStateResponse {
     pub(super) building: bool,
     #[serde(default)]
     pub(super) progress: HashMap<String, BuildProgressSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) results: Option<Vec<crate::dev::state::BuildResultInfo>>,
 }
 
 #[cfg(feature = "dev")]
