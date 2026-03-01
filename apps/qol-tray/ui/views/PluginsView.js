@@ -1,14 +1,17 @@
 import { html } from '../lib/html.js';
-import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
-import { useSSE } from '../hooks/useSSE.js';
+import { useEffect, useCallback, useRef } from 'preact/hooks';
+import { useStateRef } from '../hooks/useStateRef.js';
+import { useScrollIntoView } from '../hooks/useScrollIntoView.js';
+import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus.js';
+import { useSSEDebounce } from '../hooks/useSSEDebounce.js';
 import { useInstalling } from '../hooks/useInstalling.js';
 import { useFeedback } from '../hooks/useFeedback.js';
 import { navigateGrid } from '../hooks/useGridNav.js';
+import { useFooterShortcuts } from '../hooks/useFooterShortcuts.js';
 import { Feedback } from '../components/FeedbackPreact.js';
 import { Modal } from '../components/ModalPreact.js';
 import { apiJson } from '../api/client.js';
 import { parseInstalledPayload } from '../utils/plugins.js';
-import { renderShortcutLegend } from '../components/shortcut-legend.js';
 
 const PLACEHOLDER_SVG = 'data:image/svg+xml,' + encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">' +
@@ -26,11 +29,11 @@ const SHORTCUTS = [
 ];
 
 export function PluginsView({ onOpenPluginConfig }) {
-    const [plugins, setPlugins] = useState([]);
-    const [selectedIndex, setSelectedIndex] = useState(0);
-    const [contextMenuOpen, setContextMenuOpen] = useState(false);
-    const [confirmPluginId, setConfirmPluginId] = useState(null);
-    const [updating, setUpdating] = useState(new Set());
+    const [plugins, setPlugins, pluginsRef] = useStateRef([]);
+    const [selectedIndex, setSelectedIndex, selectedIndexRef] = useStateRef(0);
+    const [contextMenuOpen, setContextMenuOpen, contextMenuOpenRef] = useStateRef(false);
+    const [confirmPluginId, setConfirmPluginId, confirmPluginIdRef] = useStateRef(null);
+    const [updating, setUpdating, updatingRef] = useStateRef(new Set());
     const { feedback, setFeedback, clearFeedback } = useFeedback();
     const { items: installingItems, has: isInstalling } = useInstalling();
 
@@ -38,24 +41,7 @@ export function PluginsView({ onOpenPluginConfig }) {
     const latestRevisionRef = useRef(0);
     const restoredRef = useRef(false);
 
-    // Refs for values read inside stable callbacks (avoids callback cascades)
-    const pluginsRef = useRef(plugins);
-    pluginsRef.current = plugins;
-    const selectedIndexRef = useRef(selectedIndex);
-    selectedIndexRef.current = selectedIndex;
-    const confirmPluginIdRef = useRef(confirmPluginId);
-    confirmPluginIdRef.current = confirmPluginId;
-    const contextMenuOpenRef = useRef(contextMenuOpen);
-    contextMenuOpenRef.current = contextMenuOpen;
-    const updatingRef = useRef(updating);
-    updatingRef.current = updating;
-
-    // Footer shortcuts
-    useEffect(() => {
-        const el = document.getElementById('content-footer');
-        if (el) el.innerHTML = renderShortcutLegend(SHORTCUTS);
-        return () => { if (el) el.innerHTML = ''; };
-    }, []);
+    useFooterShortcuts(SHORTCUTS);
 
     // Load + refresh
     const refreshPlugins = useCallback(async (opts = {}) => {
@@ -85,24 +71,12 @@ export function PluginsView({ onOpenPluginConfig }) {
     // Initial load
     useEffect(() => { refreshPlugins({ showErrorFeedback: true, restoreSelection: true }); }, [refreshPlugins]);
 
-    // Refresh on window focus (restores old onFocus lifecycle)
-    useEffect(() => {
-        const onFocus = () => refreshPlugins();
-        window.addEventListener('focus', onFocus);
-        return () => window.removeEventListener('focus', onFocus);
-    }, [refreshPlugins]);
+    useRefreshOnFocus(refreshPlugins);
 
-    // SSE — debounce rapid plugins_changed events
-    const sseTimerRef = useRef(null);
-    useSSE(useCallback((event) => {
-        if (event.type !== 'plugins_changed') return;
+    useSSEDebounce('plugins_changed', useCallback((event) => {
         const revision = Number.isInteger(event.revision) ? event.revision : latestRevisionRef.current;
         latestRevisionRef.current = Math.max(latestRevisionRef.current, revision);
-        if (sseTimerRef.current) clearTimeout(sseTimerRef.current);
-        sseTimerRef.current = setTimeout(() => {
-            sseTimerRef.current = null;
-            refreshPlugins({ minRevision: revision });
-        }, 100);
+        refreshPlugins({ minRevision: revision });
     }, [refreshPlugins]));
 
     // Save selection (skip until initial restore completes to avoid overwriting stored value)
@@ -111,11 +85,7 @@ export function PluginsView({ onOpenPluginConfig }) {
         localStorage.setItem('plugins-selected-index', String(selectedIndex));
     }, [selectedIndex]);
 
-    // Scroll selected into view
-    useEffect(() => {
-        const el = document.querySelector('.plugin-card.selected');
-        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }, [selectedIndex]);
+    useScrollIntoView('.plugin-card.selected', [selectedIndex]);
 
     // Actions — all use refs so callbacks are stable
     const updatePlugin = useCallback(async (pluginId) => {
