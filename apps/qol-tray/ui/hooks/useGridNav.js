@@ -1,5 +1,13 @@
 import { useCallback } from 'preact/hooks';
 
+export function useGridNav(selector, selectedIndexRef, setSelectedIndex) {
+    return useCallback((direction) => {
+        const current = selectedIndexRef.current;
+        const next = navigateGrid(selector, current, direction);
+        if (next !== current) setSelectedIndex(next);
+    }, [selector, setSelectedIndex]);
+}
+
 export function navigateGrid(selector, selectedIndex, direction) {
     const model = gridSelectionModel(selector, selectedIndex);
     if (!model) return selectedIndex;

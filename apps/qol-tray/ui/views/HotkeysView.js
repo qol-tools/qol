@@ -7,6 +7,7 @@ import { Modal } from '../components/ModalPreact.js';
 import { useFooterShortcuts } from '../hooks/useFooterShortcuts.js';
 import { apiJson, apiResponse, jsonRequest } from '../api/client.js';
 import { parseInstalledPlugins } from '../utils/plugins.js';
+import { withShiftVariants, dispatchKey } from '../utils/keys.js';
 
 const SHORTCUTS = [
     { key: '↑↓', label: 'navigate' },
@@ -213,17 +214,13 @@ export function HotkeysView() {
         }
         const hks = hotkeysRef.current;
         const idx = selectedIndexRef.current;
-        const handlers = {
+        dispatchKey(e, withShiftVariants({
             ArrowUp: () => setSelectedIndex(i => Math.max(0, i - 1)),
             ArrowDown: () => setSelectedIndex(i => Math.min(hks.length - 1, i + 1)),
             Enter: () => { if (hks.length > 0 && idx >= 0) openEditModal(hks[idx]); },
             a: () => openEditModal(),
-            A: () => openEditModal(),
             d: deleteSelected,
-            D: deleteSelected,
-        };
-        const handler = handlers[e.key];
-        if (handler) { e.preventDefault(); handler(); }
+        }));
     }, [handleRecordingKey, saveHotkey, openEditModal, deleteSelected]);
 
     const isBlocking = useCallback(() => editModalRef.current !== null, []);

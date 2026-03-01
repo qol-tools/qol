@@ -6,7 +6,8 @@ import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus.js';
 import { useSSEDebounce } from '../hooks/useSSEDebounce.js';
 import { useInstalling } from '../hooks/useInstalling.js';
 import { useFeedback } from '../hooks/useFeedback.js';
-import { navigateGrid } from '../hooks/useGridNav.js';
+import { useGridNav } from '../hooks/useGridNav.js';
+import { withShiftVariants, dispatchKey } from '../utils/keys.js';
 import { useFooterShortcuts } from '../hooks/useFooterShortcuts.js';
 import { Feedback } from '../components/FeedbackPreact.js';
 import { Modal } from '../components/ModalPreact.js';
@@ -136,11 +137,7 @@ export function PluginsView({ onOpenPluginConfig }) {
 
     const closeAllContextMenus = useCallback(() => setContextMenuOpen(false), []);
 
-    const navigateInGrid = useCallback((direction) => {
-        const current = selectedIndexRef.current;
-        const next = navigateGrid('#plugins-grid .plugin-card:not(.ghost)', current, direction);
-        if (next !== current) setSelectedIndex(next);
-    }, []);
+    const navigateInGrid = useGridNav('#plugins-grid .plugin-card:not(.ghost)', selectedIndexRef, setSelectedIndex);
 
     // Keyboard — stable: reads all mutable state via refs
     const handleKey = useCallback((e) => {
@@ -158,21 +155,16 @@ export function PluginsView({ onOpenPluginConfig }) {
             }
             return;
         }
-        const handlers = {
+        dispatchKey(e, withShiftVariants({
             ArrowUp: () => navigateInGrid('up'),
             ArrowDown: () => navigateInGrid('down'),
             ArrowLeft: () => navigateInGrid('left'),
             ArrowRight: () => navigateInGrid('right'),
             Enter: openSelected,
             d: () => { const p = pluginsRef.current[selectedIndexRef.current]; if (p) setConfirmPluginId(p.id); },
-            D: () => { const p = pluginsRef.current[selectedIndexRef.current]; if (p) setConfirmPluginId(p.id); },
             u: () => { const p = pluginsRef.current[selectedIndexRef.current]; if (p?.update_available) updatePlugin(p.id); },
-            U: () => { const p = pluginsRef.current[selectedIndexRef.current]; if (p?.update_available) updatePlugin(p.id); },
             m: () => setContextMenuOpen(prev => !prev),
-            M: () => setContextMenuOpen(prev => !prev),
-        };
-        const handler = handlers[e.key];
-        if (handler) { e.preventDefault(); handler(); }
+        }));
     }, [confirmUninstall, closeAllContextMenus, navigateInGrid, openSelected, updatePlugin]);
 
     const isBlocking = useCallback(() => confirmPluginIdRef.current !== null || contextMenuOpenRef.current, []);
