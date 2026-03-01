@@ -44,5 +44,7 @@ export function parseHydratedBuildState(payload) {
         };
     }
 
-    return { building, buildProgress };
+    const buildResults = Array.isArray(payload?.results) ? payload.results : null;
+
+    return { building, buildProgress, buildResults };
 }

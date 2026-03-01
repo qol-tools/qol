@@ -1,4 +1,5 @@
 use crate::dev::core::{BuildStatus, CoreEvent};
+use crate::dev::state::BuildResultInfo;
 use crate::dev::BuildResult;
 use std::collections::HashMap;
 use std::path::Path;
@@ -14,6 +15,8 @@ pub trait BuildStateStore: Send + Sync {
     fn mark_started(&self);
     fn update_plugin(&self, plugin_id: &str, status: BuildStatus, percent: u8, phase: &str);
     fn mark_finished(&self);
+    fn store_results(&self, results: Vec<BuildResultInfo>);
+    fn last_results(&self) -> Option<Vec<BuildResultInfo>>;
     fn is_building(&self) -> bool;
     fn snapshot(&self) -> HashMap<String, BuildStateProgress>;
 }

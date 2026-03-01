@@ -56,6 +56,9 @@ export function createBuildController({
 
             if (!state.building) {
                 state.buildProgress = nextState.buildProgress;
+                if (nextState.buildResults) {
+                    state.buildResults = nextState.buildResults;
+                }
                 clearQueuedBuildRowSync();
                 if (!skipUpdate && !state.linkingId) onNeedsRender();
                 return;
