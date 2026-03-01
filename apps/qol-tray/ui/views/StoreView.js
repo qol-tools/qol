@@ -1,6 +1,9 @@
 import { html } from '../lib/html.js';
-import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
-import { useSSE } from '../hooks/useSSE.js';
+import { useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
+import { useStateRef } from '../hooks/useStateRef.js';
+import { useScrollIntoView } from '../hooks/useScrollIntoView.js';
+import { useRefreshOnFocus } from '../hooks/useRefreshOnFocus.js';
+import { useSSEDebounce } from '../hooks/useSSEDebounce.js';
 import { useInstalling } from '../hooks/useInstalling.js';
 import { useFeedback } from '../hooks/useFeedback.js';
 import { navigateGrid } from '../hooks/useGridNav.js';
@@ -14,7 +17,7 @@ import {
     fetchTokenStatus, saveTokenRequest, deleteTokenRequest,
     fetchPluginsRequest, installPluginRequest
 } from './store/effects.js';
-import { renderShortcutLegend } from '../components/shortcut-legend.js';
+import { useFooterShortcuts } from '../hooks/useFooterShortcuts.js';
 import * as installing from '../installing.js';
 
 const SHORTCUTS = [
@@ -26,42 +29,25 @@ const SHORTCUTS = [
 ];
 
 export function StoreView() {
-    const [plugins, setPlugins] = useState([]);
-    const [selectedIndex, setSelectedIndex] = useState(() => {
+    const [plugins, setPlugins, pluginsRef] = useStateRef([]);
+    const [selectedIndex, setSelectedIndex, selectedIndexRef] = useStateRef(() => {
         const saved = parseInt(localStorage.getItem('store-selected-index') || '0', 10);
         return saved >= 0 ? saved : 0;
     });
     const storeRestoredRef = useRef(false);
-    const [searchQuery, setSearchQuery] = useState('');
-    const [hasToken, setHasToken] = useState(false);
-    const [showTokenInput, setShowTokenInput] = useState(false);
-    const [rateLimited, setRateLimited] = useState(false);
-    const [cacheAgeSecs, setCacheAgeSecs] = useState(null);
-    const [loading, setLoading] = useState(false);
+    const [searchQuery, setSearchQuery] = useStateRef('');
+    const [hasToken, setHasToken, hasTokenRef] = useStateRef(false);
+    const [showTokenInput, setShowTokenInput, showTokenInputRef] = useStateRef(false);
+    const [rateLimited, setRateLimited] = useStateRef(false);
+    const [cacheAgeSecs, setCacheAgeSecs] = useStateRef(null);
+    const [loading, setLoading, loadingRef] = useStateRef(false);
     const { feedback, setFeedback, clearFeedback } = useFeedback();
     const { has: isInstalling, add: addInstalling, remove: removeInstalling } = useInstalling();
 
     const loadTokenRef = useRef(0);
     const searchRef = useRef(null);
 
-    // Refs for stable callbacks
-    const selectedIndexRef = useRef(selectedIndex);
-    selectedIndexRef.current = selectedIndex;
-    const showTokenInputRef = useRef(showTokenInput);
-    showTokenInputRef.current = showTokenInput;
-    const loadingRef = useRef(loading);
-    loadingRef.current = loading;
-    const pluginsRef = useRef(plugins);
-    pluginsRef.current = plugins;
-    const hasTokenRef = useRef(hasToken);
-    hasTokenRef.current = hasToken;
-
-    // Footer shortcuts
-    useEffect(() => {
-        const el = document.getElementById('content-footer');
-        if (el) el.innerHTML = renderShortcutLegend(SHORTCUTS);
-        return () => { if (el) el.innerHTML = ''; };
-    }, []);
+    useFooterShortcuts(SHORTCUTS);
 
     // Derived — memoized to avoid new array ref every render
     const filtered = useMemo(() => getFilteredPlugins(plugins, searchQuery), [plugins, searchQuery]);
@@ -102,23 +88,9 @@ export function StoreView() {
         })();
     }, []);
 
-    // Refresh on window focus (restores old onFocus lifecycle)
-    useEffect(() => {
-        const onFocus = () => loadPlugins();
-        window.addEventListener('focus', onFocus);
-        return () => window.removeEventListener('focus', onFocus);
-    }, [loadPlugins]);
+    useRefreshOnFocus(loadPlugins);
 
-    // SSE — debounce rapid plugins_changed events
-    const sseTimerRef = useRef(null);
-    useSSE(useCallback((event) => {
-        if (event.type !== 'plugins_changed') return;
-        if (sseTimerRef.current) clearTimeout(sseTimerRef.current);
-        sseTimerRef.current = setTimeout(() => {
-            sseTimerRef.current = null;
-            loadPlugins();
-        }, 100);
-    }, [loadPlugins]));
+    useSSEDebounce('plugins_changed', loadPlugins);
 
     // Clamp selection when filtered list changes
     useEffect(() => {
@@ -134,11 +106,7 @@ export function StoreView() {
         localStorage.setItem('store-selected-index', String(selectedIndex));
     }, [selectedIndex]);
 
-    // Scroll selected into view
-    useEffect(() => {
-        const el = document.querySelector('#store-list .plugin-card.selected');
-        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }, [selectedIndex]);
+    useScrollIntoView('#store-list .plugin-card.selected', [selectedIndex]);
 
     // Refresh — stable via ref
     const refreshPlugins = useCallback(() => {

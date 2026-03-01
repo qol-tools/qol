@@ -1,9 +1,11 @@
 import { html } from '../lib/html.js';
-import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
+import { useEffect, useCallback, useRef } from 'preact/hooks';
+import { useStateRef } from '../hooks/useStateRef.js';
+import { useScrollIntoView } from '../hooks/useScrollIntoView.js';
 import { Modal } from '../components/ModalPreact.js';
+import { useFooterShortcuts } from '../hooks/useFooterShortcuts.js';
 import { apiJson, apiResponse, jsonRequest } from '../api/client.js';
 import { parseInstalledPlugins } from '../utils/plugins.js';
-import { renderShortcutLegend } from '../components/shortcut-legend.js';
 
 const SHORTCUTS = [
     { key: '↑↓', label: 'navigate' },
@@ -47,31 +49,17 @@ function getKeyName(code) {
 }
 
 export function HotkeysView() {
-    const [hotkeys, setHotkeys] = useState([]);
-    const [plugins, setPlugins] = useState([]);
-    const [selectedIndex, setSelectedIndex] = useState(() => {
+    const [hotkeys, setHotkeys, hotkeysRef] = useStateRef([]);
+    const [plugins, setPlugins] = useStateRef([]);
+    const [selectedIndex, setSelectedIndex, selectedIndexRef] = useStateRef(() => {
         const saved = parseInt(localStorage.getItem('hotkeys-selected-index'), 10);
         return Number.isFinite(saved) ? saved : -1;
     });
     const hotkeysRestoredRef = useRef(false);
-    const [editModal, setEditModal] = useState(null); // null | { hotkey, pluginId, action, key, recording }
-    const [modalFieldIndex, setModalFieldIndex] = useState(0);
+    const [editModal, setEditModal, editModalRef] = useStateRef(null); // null | { hotkey, pluginId, action, key, recording }
+    const [modalFieldIndex, setModalFieldIndex, modalFieldIndexRef] = useStateRef(0);
 
-    const hotkeysRef = useRef(hotkeys);
-    hotkeysRef.current = hotkeys;
-    const selectedIndexRef = useRef(selectedIndex);
-    selectedIndexRef.current = selectedIndex;
-    const editModalRef = useRef(editModal);
-    editModalRef.current = editModal;
-    const modalFieldIndexRef = useRef(modalFieldIndex);
-    modalFieldIndexRef.current = modalFieldIndex;
-
-    // Footer shortcuts
-    useEffect(() => {
-        const el = document.getElementById('content-footer');
-        if (el) el.innerHTML = renderShortcutLegend(SHORTCUTS);
-        return () => { if (el) el.innerHTML = ''; };
-    }, []);
+    useFooterShortcuts(SHORTCUTS);
 
     // Load data
     useEffect(() => {
@@ -99,11 +87,7 @@ export function HotkeysView() {
         localStorage.setItem('hotkeys-selected-index', String(selectedIndex));
     }, [selectedIndex]);
 
-    // Scroll selected into view
-    useEffect(() => {
-        const el = document.querySelector('.hotkey-row.selected');
-        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }, [selectedIndex]);
+    useScrollIntoView('.hotkey-row.selected', [selectedIndex]);
 
     // Persist
     const persistHotkeys = useCallback(async (hks) => {

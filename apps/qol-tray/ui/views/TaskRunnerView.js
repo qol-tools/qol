@@ -1,7 +1,8 @@
 import { html } from '../lib/html.js';
-import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
+import { useEffect, useCallback, useRef } from 'preact/hooks';
+import { useStateRef } from '../hooks/useStateRef.js';
 import { Modal } from '../components/ModalPreact.js';
-import { renderShortcutLegend } from '../components/shortcut-legend.js';
+import { useFooterShortcuts } from '../hooks/useFooterShortcuts.js';
 
 const API_BASE = '/api/task-runner';
 const CSS_ID = 'task-runner-css';
@@ -27,30 +28,18 @@ function escapeHtml(value) {
 }
 
 export function TaskRunnerView() {
-    const [actions, setActions] = useState({});
-    const [actionIds, setActionIds] = useState([]);
-    const [selectedIndex, setSelectedIndex] = useState(() => {
+    const [actions, setActions, actionsRef] = useStateRef({});
+    const [actionIds, setActionIds, actionIdsRef] = useStateRef([]);
+    const [selectedIndex, setSelectedIndex, selectedIndexRef] = useStateRef(() => {
         const saved = parseInt(localStorage.getItem('taskrunner-selected-index') || '0', 10);
         return saved >= 0 ? saved : 0;
     });
     const taskRestoredRef = useRef(false);
-    const [editModal, setEditModal] = useState(null); // null | { actionId, name, desc, command, timeout }
-    const [testingId, setTestingId] = useState(null);
-    const [testParams, setTestParams] = useState({});
-    const [testResult, setTestResult] = useState(null);
-    const [testRunning, setTestRunning] = useState(false);
-
-    // Refs for stable callbacks
-    const actionIdsRef = useRef(actionIds);
-    actionIdsRef.current = actionIds;
-    const selectedIndexRef = useRef(selectedIndex);
-    selectedIndexRef.current = selectedIndex;
-    const editModalRef = useRef(editModal);
-    editModalRef.current = editModal;
-    const testingIdRef = useRef(testingId);
-    testingIdRef.current = testingId;
-    const actionsRef = useRef(actions);
-    actionsRef.current = actions;
+    const [editModal, setEditModal, editModalRef] = useStateRef(null); // null | { actionId, name, desc, command, timeout }
+    const [testingId, setTestingId, testingIdRef] = useStateRef(null);
+    const [testParams, setTestParams] = useStateRef({});
+    const [testResult, setTestResult] = useStateRef(null);
+    const [testRunning, setTestRunning] = useStateRef(false);
 
     // Load stylesheet
     useEffect(() => {
@@ -62,12 +51,7 @@ export function TaskRunnerView() {
         document.head.appendChild(link);
     }, []);
 
-    // Footer shortcuts
-    useEffect(() => {
-        const el = document.getElementById('content-footer');
-        if (el) el.innerHTML = renderShortcutLegend(SHORTCUTS);
-        return () => { if (el) el.innerHTML = ''; };
-    }, []);
+    useFooterShortcuts(SHORTCUTS);
 
     // Load actions
     const loadActions = useCallback(async () => {
