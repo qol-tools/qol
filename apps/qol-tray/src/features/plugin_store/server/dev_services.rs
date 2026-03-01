@@ -6,6 +6,7 @@ use std::time::Duration;
 use crate::daemon::DaemonEvent;
 use crate::dev;
 
+use super::dev_handlers::fallback_plugin_ids;
 use super::dev_runtime::DevRuntimeService;
 use super::restart::RestartPort;
 use super::types::{
@@ -234,19 +235,4 @@ pub(super) fn stop_mock_targets(state: &AppState) -> Vec<&'static str> {
     }
 
     stopped
-}
-
-fn fallback_plugin_ids(state: &AppState) -> Vec<String> {
-    state
-        .dev_state
-        .discovery
-        .read()
-        .map(|discovery| {
-            discovery
-                .plugins
-                .iter()
-                .map(|plugin| plugin.id.clone())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
 }

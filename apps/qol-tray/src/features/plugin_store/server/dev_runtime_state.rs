@@ -42,101 +42,64 @@ impl InMemoryDevRuntimeState {
             DevMockTarget::PluginBuild => &self.mock_plugin_build,
         }
     }
+
+    fn with_build_state<T>(&self, default: T, op: impl FnOnce(&mut RuntimeBuildState) -> T) -> T {
+        match self.build_state.lock() {
+            Ok(mut guard) => op(&mut guard),
+            Err(error) => {
+                log::error!("Build state lock poisoned: {}", error);
+                default
+            }
+        }
+    }
 }
 
 impl BuildStateStore for InMemoryDevRuntimeState {
     fn mark_started(&self) {
-        let mut store = match self.build_state.lock() {
-            Ok(guard) => guard,
-            Err(error) => {
-                log::error!("Build state lock poisoned while marking start: {}", error);
-                return;
-            }
-        };
-        store.building = true;
-        store.progress.clear();
-        store.last_results = None;
+        self.with_build_state((), |s| {
+            s.building = true;
+            s.progress.clear();
+            s.last_results = None;
+        });
     }
 
     fn update_plugin(&self, plugin_id: &str, status: BuildStatus, percent: u8, phase: &str) {
-        let mut store = match self.build_state.lock() {
-            Ok(guard) => guard,
-            Err(error) => {
-                log::error!(
-                    "Build state lock poisoned while updating progress: {}",
-                    error
-                );
-                return;
-            }
-        };
-
-        if !store.building {
-            store.building = true;
-        }
-        store.progress.insert(
-            plugin_id.to_string(),
-            BuildStateProgress {
-                status,
-                percent,
-                phase: phase.to_string(),
-            },
-        );
+        self.with_build_state((), |s| {
+            s.building = true;
+            s.progress.insert(
+                plugin_id.to_string(),
+                BuildStateProgress {
+                    status,
+                    percent,
+                    phase: phase.to_string(),
+                },
+            );
+        });
     }
 
     fn mark_finished(&self) {
-        let mut store = match self.build_state.lock() {
-            Ok(guard) => guard,
-            Err(error) => {
-                log::error!("Build state lock poisoned while marking finish: {}", error);
-                return;
-            }
-        };
-        store.building = false;
-        store.progress.clear();
+        self.with_build_state((), |s| {
+            s.building = false;
+            s.progress.clear();
+        });
     }
 
     fn store_results(&self, results: Vec<BuildResultInfo>) {
-        let mut store = match self.build_state.lock() {
-            Ok(guard) => guard,
-            Err(error) => {
-                log::error!("Build state lock poisoned while storing results: {}", error);
-                return;
-            }
-        };
-        store.last_results = Some(results);
+        self.with_build_state((), |s| {
+            s.last_results = Some(results);
+        });
     }
 
     fn last_results(&self) -> Option<Vec<BuildResultInfo>> {
-        let store = match self.build_state.lock() {
-            Ok(guard) => guard,
-            Err(error) => {
-                log::error!("Build state lock poisoned while reading results: {}", error);
-                return None;
-            }
-        };
-        store.last_results.clone()
+        self.with_build_state(None, |s| s.last_results.clone())
     }
 
     fn is_building(&self) -> bool {
-        let store = match self.build_state.lock() {
-            Ok(guard) => guard,
-            Err(error) => {
-                log::error!("Build state lock poisoned while reading building: {}", error);
-                return false;
-            }
-        };
-        store.building
+        self.with_build_state(false, |s| s.building)
     }
 
     fn snapshot(&self) -> HashMap<String, BuildStateProgress> {
-        let store = match self.build_state.lock() {
-            Ok(guard) => guard,
-            Err(error) => {
-                log::error!("Build state lock poisoned while reading snapshot: {}", error);
-                return HashMap::new();
-            }
-        };
-        store.progress.clone()
+        self.with_build_state(HashMap::new(), |s| s.progress.clone())
     }
 }
 
