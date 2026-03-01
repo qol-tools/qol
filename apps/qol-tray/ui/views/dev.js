@@ -427,6 +427,27 @@ async function triggerReload() {
     return res;
 }
 
+async function handleReloadResult(reloadRes, discoverRes) {
+    if (reloadRes.ok && discoverRes.ok) {
+        state.lastReload = new Date().toLocaleTimeString();
+        await discoveryController.loadPlugins();
+        return;
+    }
+    if (reloadRes.status === 409) {
+        state.error = 'Build already in progress';
+        await Promise.all([
+            discoveryController.loadPlugins(true),
+            buildController.hydrateBuildState(true)
+        ]);
+        return;
+    }
+    const [reloadText, discoverText] = await Promise.all([
+        readResponseText(reloadRes),
+        readResponseText(discoverRes)
+    ]);
+    state.error = reloadText || discoverText || 'Reload or discovery trigger failed';
+}
+
 async function reloadPlugins() {
     if (state.reloading || state.building) return;
 
@@ -441,22 +462,7 @@ async function reloadPlugins() {
             fetch('/api/dev/discover', { method: 'POST' })
         ]);
 
-        if (reloadRes.ok && discoverRes.ok) {
-            state.lastReload = new Date().toLocaleTimeString();
-            await discoveryController.loadPlugins();
-        } else if (reloadRes.status === 409) {
-            state.error = 'Build already in progress';
-            await Promise.all([
-                discoveryController.loadPlugins(true),
-                buildController.hydrateBuildState(true)
-            ]);
-        } else {
-            const [reloadText, discoverText] = await Promise.all([
-                readResponseText(reloadRes),
-                readResponseText(discoverRes)
-            ]);
-            state.error = reloadText || discoverText || 'Reload or discovery trigger failed';
-        }
+        await handleReloadResult(reloadRes, discoverRes);
     } catch (err) {
         state.error = err.message;
     } finally {

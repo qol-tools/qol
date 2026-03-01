@@ -36,8 +36,13 @@ export function mergePlugins(discovered, linkedPlugins, logControls = {}) {
     }
 
     for (const linkedPlugin of linkedPlugins) {
-        const existing = unified.get(linkedPlugin.id);
         const control = controlFor(linkedPlugin.id);
+        const logsMuted = !!linkedPlugin.logs_muted || control.muted;
+        const suppressedPatterns = Array.isArray(linkedPlugin.suppressed_log_patterns)
+            ? linkedPlugin.suppressed_log_patterns
+            : control.suppress_patterns;
+
+        const existing = unified.get(linkedPlugin.id);
         if (existing) {
             existing.status = 'linked';
             existing.path = linkedPlugin.source || existing.path;
@@ -47,28 +52,24 @@ export function mergePlugins(discovered, linkedPlugins, logControls = {}) {
             existing.rebuild_reason = linkedPlugin.rebuild_reason || '';
             existing.fingerprint = linkedPlugin.fingerprint || null;
             existing.last_built_fingerprint = linkedPlugin.last_built_fingerprint || null;
-            existing.logs_muted = !!linkedPlugin.logs_muted || control.muted;
-            existing.suppressed_log_patterns = Array.isArray(linkedPlugin.suppressed_log_patterns)
-                ? linkedPlugin.suppressed_log_patterns
-                : control.suppress_patterns;
-        } else {
-            unified.set(linkedPlugin.id, {
-                id: linkedPlugin.id,
-                name: linkedPlugin.name,
-                path: linkedPlugin.source,
-                status: 'linked',
-                has_cargo: !!linkedPlugin.has_cargo,
-                supports_platform: linkedPlugin.supports_platform !== false,
-                needs_rebuild: !!linkedPlugin.needs_rebuild,
-                rebuild_reason: linkedPlugin.rebuild_reason || '',
-                fingerprint: linkedPlugin.fingerprint || null,
-                last_built_fingerprint: linkedPlugin.last_built_fingerprint || null,
-                logs_muted: !!linkedPlugin.logs_muted || control.muted,
-                suppressed_log_patterns: Array.isArray(linkedPlugin.suppressed_log_patterns)
-                    ? linkedPlugin.suppressed_log_patterns
-                    : control.suppress_patterns
-            });
+            existing.logs_muted = logsMuted;
+            existing.suppressed_log_patterns = suppressedPatterns;
+            continue;
         }
+        unified.set(linkedPlugin.id, {
+            id: linkedPlugin.id,
+            name: linkedPlugin.name,
+            path: linkedPlugin.source,
+            status: 'linked',
+            has_cargo: !!linkedPlugin.has_cargo,
+            supports_platform: linkedPlugin.supports_platform !== false,
+            needs_rebuild: !!linkedPlugin.needs_rebuild,
+            rebuild_reason: linkedPlugin.rebuild_reason || '',
+            fingerprint: linkedPlugin.fingerprint || null,
+            last_built_fingerprint: linkedPlugin.last_built_fingerprint || null,
+            logs_muted: logsMuted,
+            suppressed_log_patterns: suppressedPatterns
+        });
     }
 
     return Array.from(unified.values()).sort((left, right) => left.name.localeCompare(right.name));
