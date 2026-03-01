@@ -1,6 +1,7 @@
 import { html } from '../lib/html.js';
-import { useEffect, useCallback, useRef } from 'preact/hooks';
+import { useEffect, useCallback } from 'preact/hooks';
 import { useStateRef } from '../hooks/useStateRef.js';
+import { usePersistedIndex } from '../hooks/usePersistedIndex.js';
 import { useScrollIntoView } from '../hooks/useScrollIntoView.js';
 import { Modal } from '../components/ModalPreact.js';
 import { useFooterShortcuts } from '../hooks/useFooterShortcuts.js';
@@ -51,11 +52,7 @@ function getKeyName(code) {
 export function HotkeysView() {
     const [hotkeys, setHotkeys, hotkeysRef] = useStateRef([]);
     const [plugins, setPlugins] = useStateRef([]);
-    const [selectedIndex, setSelectedIndex, selectedIndexRef] = useStateRef(() => {
-        const saved = parseInt(localStorage.getItem('hotkeys-selected-index'), 10);
-        return Number.isFinite(saved) ? saved : -1;
-    });
-    const hotkeysRestoredRef = useRef(false);
+    const [selectedIndex, setSelectedIndex, selectedIndexRef, hotkeysMarkRestored] = usePersistedIndex('hotkeys-selected-index', -1);
     const [editModal, setEditModal, editModalRef] = useStateRef(null); // null | { hotkey, pluginId, action, key, recording }
     const [modalFieldIndex, setModalFieldIndex, modalFieldIndexRef] = useStateRef(0);
 
@@ -73,19 +70,13 @@ export function HotkeysView() {
                 setHotkeys(hks);
                 setPlugins(parseInstalledPlugins(installedPayload));
                 setSelectedIndex(prev => {
-                    hotkeysRestoredRef.current = true;
+                    hotkeysMarkRestored();
                     if (hks.length === 0) return -1;
                     return prev >= 0 && prev < hks.length ? prev : 0;
                 });
             } catch {}
         })();
     }, []);
-
-    // Save selection
-    useEffect(() => {
-        if (!hotkeysRestoredRef.current) return;
-        localStorage.setItem('hotkeys-selected-index', String(selectedIndex));
-    }, [selectedIndex]);
 
     useScrollIntoView('.hotkey-row.selected', [selectedIndex]);
 

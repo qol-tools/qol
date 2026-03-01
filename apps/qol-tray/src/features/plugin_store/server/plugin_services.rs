@@ -209,6 +209,19 @@ pub(super) async fn uninstall_plugin(state: &AppState, id: &str) -> UninstallRes
     }
 }
 
+fn check_update(
+    cached_versions: &std::collections::HashMap<String, String>,
+    id: &str,
+    installed_version: &str,
+) -> (Option<String>, bool) {
+    let available = cached_versions.get(id).cloned();
+    let update_available = available
+        .as_ref()
+        .map(|v| installed_version != "unknown" && is_newer_version(v, installed_version))
+        .unwrap_or(false);
+    (available, update_available)
+}
+
 pub(super) fn list_installed(state: &AppState) -> Result<InstalledPluginsResponse, StatusCode> {
     use super::super::github::read_cache;
     use std::collections::HashMap;
@@ -229,11 +242,8 @@ pub(super) fn list_installed(state: &AppState) -> Result<InstalledPluginsRespons
         .map(|plugin| {
             let cover_path = plugin.path.join("cover.png");
             let ui_path = plugin.path.join("ui").join("index.html");
-            let available_version = cached_versions.get(&plugin.id).cloned();
-            let update_available = available_version
-                .as_ref()
-                .map(|available| is_newer_version(available, &plugin.manifest.plugin.version))
-                .unwrap_or(false);
+            let (available_version, update_available) =
+                check_update(&cached_versions, &plugin.id, &plugin.manifest.plugin.version);
 
             let actions = extract_actions(&plugin.manifest.menu.items);
 
@@ -279,11 +289,7 @@ pub(super) fn list_installed(state: &AppState) -> Result<InstalledPluginsRespons
             ),
         };
 
-        let available_version = cached_versions.get(&id).cloned();
-        let update_available = available_version
-            .as_ref()
-            .map(|available| version != "unknown" && is_newer_version(available, &version))
-            .unwrap_or(false);
+        let (available_version, update_available) = check_update(&cached_versions, &id, &version);
 
         let load_error = infer_load_error(&id, &plugin_dir, manifest.as_ref());
 
