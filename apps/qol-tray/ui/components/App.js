@@ -78,9 +78,8 @@ export function App() {
             result = await res.json();
         } catch { result = null; }
         await minDelay;
-        setUpdateState(result
-            ? (result.available ? { status: 'available', latest: result.latest } : { status: 'up-to-date' })
-            : { status: 'error' });
+        if (!result) { setUpdateState({ status: 'error' }); return; }
+        setUpdateState(result.available ? { status: 'available', latest: result.latest } : { status: 'up-to-date' });
     }, []);
 
     useEffect(() => {
@@ -110,105 +109,67 @@ export function App() {
         }, ms);
     }, [clearDevFlowTimer, syncSidebar]);
 
-    const handleSSE = useCallback((event) => {
-        const flows = devFlowsRef.current;
+    const DEV_FLOW_CLEAR_MS = { recompile: 1800, update: 2000 };
+    const DEV_FLOW_EVENTS = {
+        self_recompile_progress: 'recompile', self_recompile_complete: 'recompile', self_recompile_failed: 'recompile',
+        update_progress: 'update', update_complete: 'update', update_failed: 'update'
+    };
 
+    const DEV_FLOW_TRANSITIONS = {
+        progress: (flow, key, event) => {
+            flow.active = true;
+            flow.percent = clampPercent(event.percent);
+            if (key === 'recompile') flow.phase = (typeof event.phase === 'string' && event.phase.trim()) ? event.phase : 'Recompiling QoL Tray';
+            flow.done = false;
+            flow.error = null;
+        },
+        complete: (flow, key, event) => {
+            flow.active = false;
+            flow.percent = 100;
+            flow.done = true;
+            flow.error = null;
+            scheduleDevFlowDoneClear(key, DEV_FLOW_CLEAR_MS[key]);
+        },
+        failed: (flow, key, event) => {
+            flow.active = false;
+            flow.done = false;
+            flow.error = event?.message || `${key} failed`;
+        }
+    };
+
+    const applyDevFlowTransition = useCallback((key, phase, event) => {
+        clearDevFlowTimer(key);
+        DEV_FLOW_TRANSITIONS[phase](devFlowsRef.current[key], key, event);
+        syncSidebar();
+    }, [clearDevFlowTimer, syncSidebar, scheduleDevFlowDoneClear]);
+
+    const NON_DEV_SSE_HANDLERS = {
+        update_progress: (event) => setUpdateState({ status: 'downloading', percent: clampPercent(event.percent) }),
+        update_complete: () => { setUpdateState({ status: 'done' }); setTimeout(() => checkForUpdate(), 30000); },
+        update_failed: () => setUpdateState({ status: 'error' })
+    };
+
+    const handleSSE = useCallback((event) => {
         if (devEnabled) {
-            if (event.type === 'self_recompile_progress') {
-                clearDevFlowTimer('recompile');
-                flows.recompile.active = true;
-                flows.recompile.percent = clampPercent(event.percent);
-                flows.recompile.phase = (typeof event.phase === 'string' && event.phase.trim()) ? event.phase : 'Recompiling QoL Tray';
-                flows.recompile.done = false;
-                flows.recompile.error = null;
-                syncSidebar();
-                return;
-            }
-            if (event.type === 'self_recompile_complete') {
-                clearDevFlowTimer('recompile');
-                flows.recompile.active = false;
-                flows.recompile.percent = 100;
-                flows.recompile.done = true;
-                flows.recompile.error = null;
-                syncSidebar();
-                scheduleDevFlowDoneClear('recompile', 1800);
-                return;
-            }
-            if (event.type === 'self_recompile_failed') {
-                clearDevFlowTimer('recompile');
-                flows.recompile.active = false;
-                flows.recompile.done = false;
-                flows.recompile.error = event.message || 'Recompile failed';
-                syncSidebar();
-                return;
-            }
-            if (event.type === 'update_progress') {
-                clearDevFlowTimer('update');
-                flows.update.active = true;
-                flows.update.percent = clampPercent(event.percent);
-                flows.update.done = false;
-                flows.update.error = null;
-                syncSidebar();
-                return;
-            }
-            if (event.type === 'update_complete') {
-                clearDevFlowTimer('update');
-                flows.update.active = false;
-                flows.update.percent = 100;
-                flows.update.done = true;
-                flows.update.error = null;
-                syncSidebar();
-                scheduleDevFlowDoneClear('update', 2000);
-                return;
-            }
-            if (event.type === 'update_failed') {
-                clearDevFlowTimer('update');
-                flows.update.active = false;
-                flows.update.done = false;
-                flows.update.error = event.message || 'Update failed';
-                syncSidebar();
-                return;
-            }
+            const key = DEV_FLOW_EVENTS[event.type];
+            if (!key) return;
+            const phase = event.type.endsWith('_progress') ? 'progress' : event.type.endsWith('_complete') ? 'complete' : 'failed';
+            applyDevFlowTransition(key, phase, event);
             return;
         }
-
-        // Non-dev mode
-        if (event.type === 'update_progress') {
-            setUpdateState({ status: 'downloading', percent: clampPercent(event.percent) });
-        } else if (event.type === 'update_complete') {
-            setUpdateState({ status: 'done' });
-            setTimeout(() => checkForUpdate(), 30000);
-        } else if (event.type === 'update_failed') {
-            setUpdateState({ status: 'error' });
-        }
+        NON_DEV_SSE_HANDLERS[event.type]?.(event);
     }, [devEnabled, clearDevFlowTimer, syncSidebar, scheduleDevFlowDoneClear]);
 
     useSSE(handleSSE);
     useSSEReconnect(useCallback(() => {
         if (devEnabled) {
             const flows = devFlowsRef.current;
-            if (flows.recompile.active) {
-                clearDevFlowTimer('recompile');
-                flows.recompile.active = false;
-                flows.recompile.percent = 100;
-                flows.recompile.done = true;
-                flows.recompile.error = null;
-                syncSidebar();
-                scheduleDevFlowDoneClear('recompile', 1800);
-            }
-            if (flows.update.active) {
-                clearDevFlowTimer('update');
-                flows.update.active = false;
-                flows.update.percent = 100;
-                flows.update.done = true;
-                flows.update.error = null;
-                syncSidebar();
-                scheduleDevFlowDoneClear('update', 2000);
-            }
+            if (flows.recompile.active) applyDevFlowTransition('recompile', 'complete', {});
+            if (flows.update.active) applyDevFlowTransition('update', 'complete', {});
             return;
         }
         if (updateState.status === 'done') checkForUpdate();
-    }, [devEnabled, updateState.status, checkForUpdate, clearDevFlowTimer, syncSidebar, scheduleDevFlowDoneClear]));
+    }, [devEnabled, updateState.status, checkForUpdate, applyDevFlowTransition]));
 
     // Sidebar actions
     const handleSidebarAction = useCallback(async (action) => {
@@ -218,20 +179,13 @@ export function App() {
                 clearDevFlowTimer('update');
                 devFlowsRef.current.update = { active: true, percent: 0, done: false, error: null, clearTimer: null };
                 syncSidebar();
-            } else {
-                setUpdateState({ status: 'downloading', percent: 0 });
             }
+            if (!devEnabled) setUpdateState({ status: 'downloading', percent: 0 });
             try {
                 await fetch('/api/self-update', { method: 'POST' });
             } catch {
-                if (devEnabled) {
-                    clearDevFlowTimer('update');
-                    devFlowsRef.current.update.active = false;
-                    devFlowsRef.current.update.error = 'Update failed';
-                    syncSidebar();
-                } else {
-                    setUpdateState({ status: 'error' });
-                }
+                if (devEnabled) applyDevFlowTransition('update', 'failed', { message: 'Update failed' });
+                if (!devEnabled) setUpdateState({ status: 'error' });
             }
             return;
         }
@@ -241,38 +195,36 @@ export function App() {
             clearDevFlowTimer('recompile');
             flows.recompile = { active: true, percent: 0, phase: 'Preparing build', done: false, error: null, clearTimer: null };
             syncSidebar();
+            const RECOMPILE_ERRORS = {
+                404: 'Connected daemon is older than this UI. Stop it and launch the current checkout.',
+                409: 'Recompile already in progress'
+            };
             try {
                 const res = await fetch('/api/dev/recompile-self', { method: 'POST' });
                 if (!res.ok) {
                     const body = await readResponseText(res);
-                    throw new Error(res.status === 404
-                        ? 'Connected daemon is older than this UI. Stop it and launch the current checkout.'
-                        : res.status === 409 ? 'Recompile already in progress'
-                        : body || `Could not start recompile (${res.status})`);
+                    throw new Error(RECOMPILE_ERRORS[res.status] || body || `Could not start recompile (${res.status})`);
                 }
             } catch (error) {
-                clearDevFlowTimer('recompile');
-                flows.recompile.active = false;
-                flows.recompile.error = error?.message || 'Could not start recompile';
-                syncSidebar();
+                applyDevFlowTransition('recompile', 'failed', { message: error?.message || 'Could not start recompile' });
             }
         }
-    }, [devEnabled, checkForUpdate, clearDevFlowTimer, syncSidebar]);
+    }, [devEnabled, checkForUpdate, clearDevFlowTimer, syncSidebar, applyDevFlowTransition]);
+
+    const cycleView = useCallback((e) => {
+        e.preventDefault();
+        const idx = viewOrder.indexOf(activeViewId);
+        const next = e.shiftKey
+            ? (idx - 1 + viewOrder.length) % viewOrder.length
+            : (idx + 1) % viewOrder.length;
+        switchView(viewOrder[next]);
+    }, [viewOrder, activeViewId, switchView]);
 
     // Global keyboard handler
     useKeyboard(useCallback((e) => {
         if (activePluginId) {
             if (e.key === 'Escape') { e.preventDefault(); closePluginConfig(); return; }
-            if (e.key === 'Tab') {
-                e.preventDefault();
-                closePluginConfig();
-                const idx = viewOrder.indexOf(activeViewId);
-                const next = e.shiftKey
-                    ? (idx - 1 + viewOrder.length) % viewOrder.length
-                    : (idx + 1) % viewOrder.length;
-                switchView(viewOrder[next]);
-                return;
-            }
+            if (e.key === 'Tab') { closePluginConfig(); cycleView(e); }
             return;
         }
 
@@ -283,18 +235,10 @@ export function App() {
             return;
         }
 
-        if (e.key === 'Tab') {
-            e.preventDefault();
-            const idx = viewOrder.indexOf(activeViewId);
-            const next = e.shiftKey
-                ? (idx - 1 + viewOrder.length) % viewOrder.length
-                : (idx + 1) % viewOrder.length;
-            switchView(viewOrder[next]);
-            return;
-        }
+        if (e.key === 'Tab') { cycleView(e); return; }
 
         if (view?.handleKey) view.handleKey(e);
-    }, [activePluginId, activeViewId, viewOrder, switchView, closePluginConfig]));
+    }, [activePluginId, activeViewId, closePluginConfig, cycleView]));
 
     // Lazy mount: only mount a view when first visited, then keep it alive (display:none).
     // This preserves component state across view switches like the old vanilla JS did.
