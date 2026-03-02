@@ -23,6 +23,7 @@ A window switcher with live previews for [QoL Tray](https://github.com/qol-tools
 | Alt release | Activate (hold-to-switch mode) |
 | Q | Quit the focused app |
 | W | Close the focused window |
+| R | Minimize the focused window |
 
 ## Configuration
 
