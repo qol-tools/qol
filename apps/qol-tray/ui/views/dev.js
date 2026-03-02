@@ -75,6 +75,7 @@ export function render(containerEl) {
     unsubscribe = subscribe(handleEvent);
     if (!unsubscribeReconnect) {
         unsubscribeReconnect = onReconnect(() => {
+            if (!state.building) return;
             void buildController.hydrateBuildState();
         });
     }
@@ -508,7 +509,6 @@ export function onFocus() {
             discoveryController.loadPlugins(true),
             discoveryController.fetchDiscoveryState(true),
             discoveryController.loadLogControls(true),
-            buildController.hydrateBuildState(true),
             mockController.hydrateMockTargets(true)
         ]).finally(() => {
             updateView();
