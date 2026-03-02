@@ -4,8 +4,8 @@ use std::thread;
 use std::time::Duration;
 
 use super::objc::{
-    ax_attr, cfstr, cfstring_to_string, cls, dict_get_i32, msg_bool_usize, msg_i32, msg_ptr,
-    msg_ptr_usize, sel,
+    ax_attr, ax_element_window_id, cfstr, cfstring_to_string, cgs_set_window_alpha, cls,
+    dict_get_i32, msg_bool_usize, msg_i32, msg_ptr, msg_ptr_usize, sel,
     AXUIElementCreateApplication, AXUIElementPerformAction, AXUIElementSetAttributeValue,
     AXValueCreate, AXValueGetValue,
     CFArrayGetCount, CFArrayGetValueAtIndex, CFRelease, CfGuard, CGPoint, CGSize,
@@ -25,7 +25,6 @@ struct FrontTarget {
 
 fn front_target(pid: i32) -> Option<FrontTarget> {
     let app = CfGuard::new(unsafe { AXUIElementCreateApplication(pid) as *mut c_void })?;
-    // Prefer AXFocusedWindow — avoids targeting tiny popups/tooltips
     if let Some(focused) = ax_attr(app.as_ptr(), "AXFocusedWindow") {
         let win = focused.as_ptr();
         return Some(FrontTarget { app, _keeper: focused, win });
@@ -45,6 +44,102 @@ fn front_app_windows(pid: i32) -> Option<(CfGuard, CfGuard)> {
         return None;
     }
     Some((app, windows))
+}
+
+fn focused_or_first(app: &CfGuard, windows: &CfGuard) -> (*const c_void, Option<CfGuard>) {
+    if let Some(focused) = ax_attr(app.as_ptr(), "AXFocusedWindow") {
+        let ptr = focused.as_ptr();
+        return (ptr, Some(focused));
+    }
+    (unsafe { CFArrayGetValueAtIndex(windows.as_ptr(), 0) }, None)
+}
+
+fn activate_app(pid: i32, options: usize) {
+    unsafe {
+        let ns_app = msg_ptr_usize(
+            cls("NSRunningApplication"),
+            sel("runningApplicationWithProcessIdentifier:"),
+            pid as usize,
+        );
+        if ns_app.is_null() {
+            return;
+        }
+        msg_bool_usize(ns_app, sel("activateWithOptions:"), options);
+    }
+}
+
+fn read_ax_position(win: *const c_void) -> Option<CGPoint> {
+    let pos_ref = ax_attr(win, "AXPosition")?;
+    let mut pos = CGPoint { x: 0.0, y: 0.0 };
+    unsafe {
+        AXValueGetValue(
+            pos_ref.as_const(),
+            AX_VALUE_TYPE_CG_POINT,
+            &mut pos as *mut _ as *mut c_void,
+        );
+    }
+    Some(pos)
+}
+
+fn ax_set_position(win: *const c_void, pos: &CGPoint) {
+    let val = CfGuard::new(unsafe {
+        AXValueCreate(AX_VALUE_TYPE_CG_POINT, pos as *const _ as *const c_void)
+    }).unwrap();
+    let attr = CfGuard::new(cfstr("AXPosition")).unwrap();
+    unsafe {
+        AXUIElementSetAttributeValue(win, attr.as_const(), val.as_const());
+    }
+}
+
+/// Nudge window position +1px then back to force WindowServer to re-register input.
+fn nudge_position(win: *const c_void) {
+    let Some(pos) = read_ax_position(win) else {
+        return;
+    };
+    ax_set_position(win, &CGPoint { x: pos.x + 1.0, y: pos.y });
+    ax_set_position(win, &pos);
+}
+
+/// Hide app via AXHidden, minimize target, then unhide.
+fn ax_hidden_minimize(app: &CfGuard, target_win: *const c_void) {
+    let ax_hidden = CfGuard::new(cfstr("AXHidden")).unwrap();
+    let ax_minimized = CfGuard::new(cfstr("AXMinimized")).unwrap();
+    unsafe {
+        AXUIElementSetAttributeValue(app.as_ptr(), ax_hidden.as_const(), cf_boolean_true());
+        thread::sleep(Duration::from_millis(5));
+        AXUIElementSetAttributeValue(target_win, ax_minimized.as_const(), cf_boolean_true());
+        thread::sleep(Duration::from_millis(5));
+        AXUIElementSetAttributeValue(app.as_ptr(), ax_hidden.as_const(), cf_boolean_false());
+    }
+}
+
+/// Plain minimize — for apps that don't respond to AXHidden (Java/Electron).
+fn plain_minimize(target_win: *const c_void) {
+    let ax_minimized = CfGuard::new(cfstr("AXMinimized")).unwrap();
+    unsafe {
+        AXUIElementSetAttributeValue(target_win, ax_minimized.as_const(), cf_boolean_true());
+    }
+}
+
+/// Check if the app uses a non-native rendering pipeline (Java, etc.)
+/// by testing whether AXHidden actually affects its windows.
+fn is_java_app(pid: i32) -> bool {
+    unsafe {
+        let ns_app = msg_ptr_usize(
+            cls("NSRunningApplication"),
+            sel("runningApplicationWithProcessIdentifier:"),
+            pid as usize,
+        );
+        if ns_app.is_null() {
+            return false;
+        }
+        let bundle = msg_ptr(ns_app, sel("bundleIdentifier"));
+        if bundle.is_null() {
+            return false;
+        }
+        let id = cfstring_to_string(bundle);
+        matches!(id.as_deref(), Some(s) if s.contains("jetbrains") || s.contains("java") || s.contains("eclipse"))
+    }
 }
 
 /// Returns true for real application windows (standard windows and dialogs),
@@ -88,12 +183,10 @@ pub(super) fn find_normal_window_pid() -> Option<i32> {
     let frontmost = frontmost_pid();
     #[cfg(debug_assertions)]
     eprintln!("[window-actions:dbg] find_normal_window_pid: frontmost={frontmost:?}");
-    if let Some(pid) = frontmost {
-        if is_normal_window(pid) {
-            #[cfg(debug_assertions)]
-            eprintln!("[window-actions:dbg] find_normal_window_pid: fast path pid={pid}");
-            return Some(pid);
-        }
+    if frontmost.is_some_and(|pid| is_normal_window(pid)) {
+        #[cfg(debug_assertions)]
+        eprintln!("[window-actions:dbg] find_normal_window_pid: fast path");
+        return frontmost;
     }
 
     #[cfg(debug_assertions)]
@@ -142,17 +235,11 @@ pub(super) fn find_normal_window_pid() -> Option<i32> {
 
 pub(super) fn front_window_rect(pid: i32) -> Option<super::screen::Rect> {
     let ft = front_target(pid)?;
-    let pos_ref = ax_attr(ft.win, "AXPosition")?;
+    let pos = read_ax_position(ft.win)?;
     let size_ref = ax_attr(ft.win, "AXSize")?;
 
-    let mut pos = CGPoint { x: 0.0, y: 0.0 };
     let mut size = CGSize { width: 0.0, height: 0.0 };
     unsafe {
-        AXValueGetValue(
-            pos_ref.as_const(),
-            AX_VALUE_TYPE_CG_POINT,
-            &mut pos as *mut _ as *mut c_void,
-        );
         AXValueGetValue(
             size_ref.as_const(),
             AX_VALUE_TYPE_CG_SIZE,
@@ -178,10 +265,8 @@ pub(super) fn set_position_and_size(pid: i32, rect: super::screen::Rect) -> bool
     let ax_pos = CfGuard::new(cfstr("AXPosition")).unwrap();
     let ax_size = CfGuard::new(cfstr("AXSize")).unwrap();
 
-    // size → position → size: macOS clamps windows to screen
-    // edges, so neither size-first nor position-first works alone.
-    // First size handles shrinking, position moves it, second
-    // size corrects any clamping from the first pass.
+    // size → position → size: macOS clamps windows to screen edges,
+    // so neither order works alone. Second size corrects clamping.
     #[cfg(debug_assertions)]
     eprintln!("[window-actions:dbg] set_position_and_size: pos({},{}) size({},{})", rect.x, rect.y, rect.w, rect.h);
     unsafe {
@@ -192,58 +277,25 @@ pub(super) fn set_position_and_size(pid: i32, rect: super::screen::Rect) -> bool
     }
 }
 
-/// Instantly minimize the front window.
-/// Single-window apps: AXHidden mask hides the animation.
-/// Multi-window apps: plain AXMinimize (animation plays but no sibling damage).
+/// Instantly minimize the front window via AXHidden mask.
+/// Single-window: AXHidden=false to unhide.
+/// Multi-window: NSRunningApplication.activate to unhide (preserves sibling minimized state).
 pub(super) fn instant_minimize(pid: i32) -> bool {
     let Some((app, windows)) = front_app_windows(pid) else {
         return false;
     };
-    let count = unsafe { CFArrayGetCount(windows.as_ptr()) };
+    let (target_win, _keeper) = focused_or_first(&app, &windows);
 
-    let focused = ax_attr(app.as_ptr(), "AXFocusedWindow");
-    let target_win = focused.as_ref().map_or_else(
-        || unsafe { CFArrayGetValueAtIndex(windows.as_ptr(), 0) },
-        |f| f.as_ptr(),
-    );
-
-    let ax_minimized = CfGuard::new(cfstr("AXMinimized")).unwrap();
-
-    if count <= 1 {
-        let ax_hidden = CfGuard::new(cfstr("AXHidden")).unwrap();
-        unsafe {
-            AXUIElementSetAttributeValue(app.as_ptr(), ax_hidden.as_const(), cf_boolean_true());
-            thread::sleep(Duration::from_millis(5));
-            AXUIElementSetAttributeValue(target_win, ax_minimized.as_const(), cf_boolean_true());
-            thread::sleep(Duration::from_millis(5));
-            AXUIElementSetAttributeValue(app.as_ptr(), ax_hidden.as_const(), cf_boolean_false());
-        }
+    if is_java_app(pid) {
+        plain_minimize(target_win);
         return true;
     }
-
-    // Multi-window: AXHidden mask, unhide via NSRunningApplication instead of AXHidden=false
-    let ax_hidden = CfGuard::new(cfstr("AXHidden")).unwrap();
-    unsafe {
-        AXUIElementSetAttributeValue(app.as_ptr(), ax_hidden.as_const(), cf_boolean_true());
-        thread::sleep(Duration::from_millis(5));
-        AXUIElementSetAttributeValue(target_win, ax_minimized.as_const(), cf_boolean_true());
-        thread::sleep(Duration::from_millis(5));
-        // Unhide via NSRunningApplication — may respect minimized state of siblings
-        let ns_app = msg_ptr_usize(
-            cls("NSRunningApplication"),
-            sel("runningApplicationWithProcessIdentifier:"),
-            pid as usize,
-        );
-        if !ns_app.is_null() {
-            msg_bool_usize(ns_app, sel("activateWithOptions:"), 1); // NSApplicationActivateIgnoringOtherApps
-        }
-    }
-
+    ax_hidden_minimize(&app, target_win);
     true
 }
 
 pub(super) fn unminimize_and_raise(pid: i32) -> bool {
-    let Some((app, windows)) = front_app_windows(pid) else {
+    let Some((_app, windows)) = front_app_windows(pid) else {
         return false;
     };
 
@@ -263,35 +315,8 @@ pub(super) fn unminimize_and_raise(pid: i32) -> bool {
             AXUIElementSetAttributeValue(win, ax_minimized.as_const(), cf_boolean_false());
             AXUIElementPerformAction(win, ax_raise.as_const());
         }
-        // Nudge geometry to force WindowServer to re-register input
-        if let Some(pos_ref) = ax_attr(win, "AXPosition") {
-            let mut pos = CGPoint { x: 0.0, y: 0.0 };
-            unsafe {
-                AXValueGetValue(pos_ref.as_const(), AX_VALUE_TYPE_CG_POINT, &mut pos as *mut _ as *mut c_void);
-            }
-            let nudged = CGPoint { x: pos.x + 1.0, y: pos.y };
-            let nudge_val = CfGuard::new(unsafe {
-                AXValueCreate(AX_VALUE_TYPE_CG_POINT, &nudged as *const _ as *const c_void)
-            }).unwrap();
-            let orig_val = CfGuard::new(unsafe {
-                AXValueCreate(AX_VALUE_TYPE_CG_POINT, &pos as *const _ as *const c_void)
-            }).unwrap();
-            let ax_pos = CfGuard::new(cfstr("AXPosition")).unwrap();
-            unsafe {
-                AXUIElementSetAttributeValue(win, ax_pos.as_const(), nudge_val.as_const());
-                AXUIElementSetAttributeValue(win, ax_pos.as_const(), orig_val.as_const());
-            }
-        }
-        unsafe {
-            let ns_app = msg_ptr_usize(
-                cls("NSRunningApplication"),
-                sel("runningApplicationWithProcessIdentifier:"),
-                pid as usize,
-            );
-            if !ns_app.is_null() {
-                msg_bool_usize(ns_app, sel("activateWithOptions:"), 3);
-            }
-        }
+        nudge_position(win);
+        activate_app(pid, 3); // IgnoringOtherApps | AllWindows
         break;
     }
 

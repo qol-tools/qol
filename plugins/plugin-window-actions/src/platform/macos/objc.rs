@@ -106,6 +106,35 @@ extern "C" {
 pub(super) fn cg_window_layer() -> *const c_void { unsafe { CG_WINDOW_LAYER } }
 pub(super) fn cg_window_owner_pid() -> *const c_void { unsafe { CG_WINDOW_OWNER_PID } }
 
+// Private WindowServer APIs for per-window alpha manipulation
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGSSetWindowAlpha(cid: i32, wid: u32, alpha: f64) -> i32;
+    fn _CGSDefaultConnection() -> i32;
+}
+
+// Private AX API to get CGWindowID from an AXUIElement
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn _AXUIElementGetWindow(element: *const c_void, wid: *mut u32) -> i32;
+}
+
+pub(super) fn cgs_set_window_alpha(wid: u32, alpha: f64) -> bool {
+    unsafe {
+        let cid = _CGSDefaultConnection();
+        CGSSetWindowAlpha(cid, wid, alpha) == 0
+    }
+}
+
+pub(super) fn ax_element_window_id(element: *const c_void) -> Option<u32> {
+    let mut wid: u32 = 0;
+    let err = unsafe { _AXUIElementGetWindow(element, &mut wid) };
+    if err != 0 || wid == 0 {
+        return None;
+    }
+    Some(wid)
+}
+
 #[link(name = "objc", kind = "dylib")]
 extern "C" {
     fn objc_getClass(name: *const i8) -> *mut c_void;
