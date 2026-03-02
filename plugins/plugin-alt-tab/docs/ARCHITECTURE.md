@@ -9,6 +9,7 @@
 5. Only missing previews are captured synchronously via CG/X11.
 6. App icons are fetched asynchronously and pushed to the UI.
 7. UI opens with full previews and icons in <50ms (warm path).
+8. On macOS with SC: background streams are already running at 5fps; picker promotes selected+hovered to 30fps for live preview.
 
 ## Core Components
 
@@ -35,14 +36,33 @@
 
 - Alt key release polling for hold-to-switch mode.
 
-### `src/app/live_preview.rs`
+### `src/app/live_preview/mod.rs`
 
-- Background task that periodically refreshes window previews while picker is visible.
+- Spawn dispatcher: picks SC or CG loop based on platform capability.
+- Shared constants: `SC_POLL_INTERVAL_MS`, `LIVE_PREVIEW_INTERVAL_MS`.
+
+### `src/app/live_preview/sc.rs`
+
+- SC Spotlight loop: `activate`/`deactivate`/`sync_promoted`, surface updates, notify throttling.
+- `StreamState`: tracks active flag and `promoted: [Option<u32>; 2]` (selected + hovered at 30fps).
+- `CgState`: CG bridge capture scheduling for gap-filling when SC frames are missing.
+- Stall detection: falls back to CG-only if SC stops delivering frames.
+
+### `src/app/live_preview/cg.rs`
+
+- CG fallback loop: `capture_cg` + `build_targets` round-robin for macOS <14 or SC permission denied.
+
+### `src/app/live_preview/perf.rs`
+
+- `PerfCounters`: ticks, frames, notify, skip, CPU usage (getrusage). Logged every 2s when visible.
 
 ### `src/delegate/mod.rs`
 
-- `WindowDelegate`: owns window list, selection state, label config, preview/icon caches.
-- Selection logic: `select_next`, `select_prev`, grid-aware arrow navigation.
+- `WindowDelegate`: owns window list, selection state, hover state, label config, preview/icon/surface caches.
+
+### `src/delegate/selection.rs`
+
+- Grid-aware selection navigation.
 
 ### `src/delegate/activation.rs`
 
@@ -54,6 +74,14 @@
 - Handles reuse path (same window, update data) and fresh-open path.
 - Builds icon cache, resolves card bg config, manages transparent window options.
 
+### `src/picker/reuse.rs`
+
+- `try_reuse`: reuses existing picker window, repositions on monitor change via NSWindow API.
+
+### `src/picker/create.rs`
+
+- `create_new`: creates a fresh picker window when reuse is not possible.
+
 ### `src/picker/keepalive.rs`
 
 - Hidden 1x1 PopUp window that prevents GPUI from quitting when picker is dismissed.
@@ -61,6 +89,8 @@
 ### `src/picker/run.rs`
 
 - Daemon run loop: socket listener, command dispatch, prewarm scheduling.
+- Prewarm loop: starts persistent 5fps SC streams in background, refreshes window/icon caches every 1.2s.
+- Stream restart only when target window set actually changes (`prev_stream_wids` tracking).
 
 ### `src/config.rs`
 
@@ -90,13 +120,11 @@
 ### `src/platform/mod.rs`
 
 - Platform facade: cross-platform contract for all OS-specific operations.
-- `get_open_windows`, `capture_previews_cg`, `activate_window`, `get_app_icons`, `disable_window_shadow`, etc.
+- `get_open_windows`, `capture_previews_cg`, `activate_window`, `get_app_icons`, SC stream management, etc.
 
-### `src/platform/macos.rs`
+### `src/platform/macos/`
 
-- macOS: CG window list, CG bitmap preview capture, NSRunningApplication activation.
-- App icon extraction via CGBitmapContext (draws NSImage into known BGRA format).
-- `disable_window_shadow`: iterates NSApplication windows, clears shadow + background.
+- 9 modules: `sc/` (ScreenCaptureKit streams), `capture.rs` (CG bitmap capture), `ax.rs` (Accessibility API), `window_list.rs` (CG window enumeration + parsing), `window_enum.rs` (dedup + filtering logic), `window_actions.rs` (activate/close/quit/minimize), `picker.rs` (NSWindow helpers), `process.rs` (process info), `mod.rs` (type definitions + FFI bindings).
 
 ### `src/platform/linux.rs`
 
@@ -104,7 +132,7 @@
 
 ### `src/platform/cg_helpers.rs`
 
-- Shared macOS CG dictionary helpers (used by both platform/macos.rs and monitor/).
+- Shared macOS CG dictionary helpers (CFString, dict accessors, rect parsing).
 
 ### `src/monitor/`
 
@@ -122,8 +150,18 @@
 
 ## Performance Characteristics
 
-- Prewarm cache captures previews in background between invocations.
+### macOS (SC live preview — always-on streams)
+- Prewarm loop starts persistent 5fps SC streams in background; picker show/hide only promotes/demotes.
+- First live frame on open: instant (streams already warm).
+- Idle/background: ~0% CPU (heartbeat only).
+- Visible, low activity: 4-6% CPU.
+- Visible, cycling through windows: 7-9% CPU.
+- Visible, heavy hover (2 promoted at 30fps): 11-13% CPU.
+- Notify throttled to 100ms (~10fps GPUI re-render rate).
+- CG skipped on open for windows covered by prewarm cache.
+
+### General
 - Picker open uses cached previews instantly; only missing windows are captured synchronously.
 - App icons are fetched asynchronously after picker opens (~50ms).
-- Live preview task refreshes thumbnails while picker is visible.
 - Window reuse path avoids GPU window recreation cost.
+- Picker repositions without close/reopen on monitor change.

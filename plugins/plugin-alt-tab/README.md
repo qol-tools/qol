@@ -8,6 +8,7 @@ A window switcher with live previews for [QoL Tray](https://github.com/qol-tools
 - **Two action modes**: Sticky (stays open until Enter/Esc) or Hold-to-Switch (activates on Alt release)
 - **Transparent background mode** with configurable card color and opacity
 - **Configurable layout**: grid columns, label formatting, card appearance
+- **Always-on SC live preview** (macOS 14+) with zero-copy GPU surface rendering
 - **Background preview cache** keeps thumbnails warm for near-instant activation
 - **Web-based settings** with live grid visualizer
 
@@ -20,6 +21,8 @@ A window switcher with live previews for [QoL Tray](https://github.com/qol-tools
 | Enter | Activate selected window |
 | Escape | Dismiss without switching |
 | Alt release | Activate (hold-to-switch mode) |
+| Q | Quit the focused app |
+| W | Close the focused window |
 
 ## Configuration
 
