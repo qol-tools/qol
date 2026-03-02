@@ -18,7 +18,6 @@ function readSavedIndex() {
 }
 
 const state = {
-    reloading: false,
     building: false,
     buildResults: null,
     lastReload: null,
@@ -41,6 +40,7 @@ const state = {
 let container = null;
 let unsubscribe = null;
 let unsubscribeReconnect = null;
+let reloadCooldownUntil = 0;
 
 const discoveryController = createDiscoveryController({
     state,
@@ -55,6 +55,7 @@ const buildController = createBuildController({
     getPluginById: getMergedPluginById,
     onNeedsRender: updateView,
     onBuildComplete: () => {
+        reloadCooldownUntil = Date.now() + 1000;
         mockController?.completeMockTarget('plugin_build');
         updateView();
         void discoveryController.loadLinkedPlugins();
@@ -427,33 +428,13 @@ async function triggerReload() {
     return res;
 }
 
-async function handleReloadResult(reloadRes, discoverRes) {
-    if (reloadRes.ok && discoverRes.ok) {
-        state.lastReload = new Date().toLocaleTimeString();
-        await discoveryController.loadPlugins();
-        return;
-    }
-    if (reloadRes.status === 409) {
-        state.error = 'Build already in progress';
-        await Promise.all([
-            discoveryController.loadPlugins(true),
-            buildController.hydrateBuildState(true)
-        ]);
-        return;
-    }
-    const [reloadText, discoverText] = await Promise.all([
-        readResponseText(reloadRes),
-        readResponseText(discoverRes)
-    ]);
-    state.error = reloadText || discoverText || 'Reload or discovery trigger failed';
-}
-
 async function reloadPlugins() {
-    if (state.reloading || state.building) return;
+    if (state.building || Date.now() < reloadCooldownUntil) return;
 
-    state.reloading = true;
+    state.building = true;
     state.error = null;
     state.buildResults = null;
+    state.buildProgress = {};
     updateView();
 
     try {
@@ -462,11 +443,25 @@ async function reloadPlugins() {
             fetch('/api/dev/discover', { method: 'POST' })
         ]);
 
-        await handleReloadResult(reloadRes, discoverRes);
+        if (reloadRes.status === 409) {
+            state.building = false;
+            return;
+        }
+
+        if (!reloadRes.ok) {
+            state.building = false;
+            state.error = await readResponseText(reloadRes) || 'Reload failed';
+            return;
+        }
+
+        if (discoverRes.ok) {
+            state.lastReload = new Date().toLocaleTimeString();
+        }
+        await discoveryController.loadPlugins();
     } catch (err) {
+        state.building = false;
         state.error = err.message;
     } finally {
-        state.reloading = false;
         updateView();
     }
 }
@@ -519,14 +514,9 @@ export function onFocus() {
             updateView();
         });
     }
-    if (!unsubscribe) {
-        unsubscribe = subscribe(handleEvent);
-    }
     mockController.onFocus();
 }
 
 export function onBlur() {
-    unsubscribe?.();
-    unsubscribe = null;
     mockController.onBlur();
 }

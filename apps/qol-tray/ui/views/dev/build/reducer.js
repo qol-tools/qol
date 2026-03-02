@@ -3,6 +3,7 @@ import { normalizePercent } from '../../../utils/progress.js';
 export function nextBuildStartedState() {
     return {
         building: true,
+        error: null,
         buildResults: null,
         buildProgress: {}
     };
@@ -22,6 +23,7 @@ export function nextBuildProgressState(currentProgress, event) {
 export function nextBuildCompletedState(results) {
     return {
         building: false,
+        error: null,
         buildResults: results || []
     };
 }
