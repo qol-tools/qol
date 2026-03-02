@@ -32,6 +32,7 @@ export function createBuildController({
         }
 
         if (event.type === 'build_plugin_progress') {
+            state.building = true;
             state.buildProgress = nextBuildProgressState(state.buildProgress, event);
             queueBuildRowSync(event.plugin_id);
             return;
@@ -52,7 +53,11 @@ export function createBuildController({
 
     async function hydrateBuildState(skipUpdate = false) {
         const payload = await tryFetchJson('/api/dev/build-state');
-        if (!payload) return;
+        if (!payload) {
+            state.building = false;
+            maybeRender(skipUpdate);
+            return;
+        }
 
         const nextState = parseHydratedBuildState(payload);
         state.building = nextState.building;

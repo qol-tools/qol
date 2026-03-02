@@ -108,7 +108,7 @@ export function renderDevView({
                 <section class="dev-section">
                     <h2>Actions</h2>
                     <div class="dev-card" data-action="reload">
-                        <button class="refresh-btn ${state.building || state.reloading ? 'spinning' : ''}" tabindex="-1" aria-hidden="true"></button>
+                        <button class="refresh-btn ${state.building ? 'spinning' : ''}" tabindex="-1" aria-hidden="true"></button>
                         <div class="dev-card-content">
                             <h3>${state.building ? 'Building...' : 'Reload All Plugins'}</h3>
                             <p>${state.building ? 'Compiling linked plugins' : 'Build linked plugins and restart daemons.'}</p>
