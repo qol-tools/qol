@@ -33,9 +33,13 @@ impl MinimizedStateStore for FileMinimizedStateStore {
     }
 
     fn write(&self, record: &MinimizedWindowRecord) {
+        let rect_str = record.saved_rect.map_or_else(String::new, |r| {
+            format!("|{},{},{},{}", r[0], r[1], r[2], r[3])
+        });
         let line = format!(
-            "{}|{}|{}|{}\n",
-            record.window_id, record.pid, record.process_start_ticks, record.saved_at_unix_secs
+            "{}|{}|{}|{}{}\n",
+            record.window_id, record.pid, record.process_start_ticks, record.saved_at_unix_secs,
+            rect_str,
         );
         let _ = fs::write(&self.path, line.as_bytes());
     }
@@ -69,15 +73,21 @@ fn parse_minimized_window_record(raw: &str) -> Option<MinimizedWindowRecord> {
     let process_start_ticks = parts.next()?.trim().parse::<u64>().ok()?;
     let saved_at_unix_secs = parts.next()?.trim().parse::<u64>().ok()?;
 
-    if parts.next().is_some() {
-        return None;
-    }
+    let saved_rect = parts.next().and_then(|s| {
+        let mut r = s.split(',');
+        let x = r.next()?.parse::<f64>().ok()?;
+        let y = r.next()?.parse::<f64>().ok()?;
+        let w = r.next()?.parse::<f64>().ok()?;
+        let h = r.next()?.parse::<f64>().ok()?;
+        Some([x, y, w, h])
+    });
 
     Some(MinimizedWindowRecord {
         window_id,
         pid,
         process_start_ticks,
         saved_at_unix_secs,
+        saved_rect,
     })
 }
 

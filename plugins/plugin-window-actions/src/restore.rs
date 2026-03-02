@@ -8,6 +8,7 @@ pub struct MinimizedWindowRecord {
     pub pid: u32,
     pub process_start_ticks: u64,
     pub saved_at_unix_secs: u64,
+    pub saved_rect: Option<[f64; 4]>,
 }
 
 pub trait MinimizedStateStore {
@@ -19,6 +20,7 @@ pub trait MinimizedStateStore {
 pub trait WindowSystem {
     fn active_window_id(&self) -> Result<Option<String>, String>;
     fn minimize_window(&self, window_id: &str) -> Result<bool, String>;
+    fn window_rect(&self, window_id: &str) -> Option<[f64; 4]>;
     fn stacking_window_ids(&self) -> Result<Vec<String>, String>;
     fn is_window_id(&self, id: &str) -> bool;
     fn normalize_window_id(&self, window_id: &str) -> Option<String>;
@@ -26,6 +28,7 @@ pub trait WindowSystem {
     fn is_hidden_window(&self, window_id: &str) -> Result<bool, String>;
     fn is_launcher_window(&self, window_id: &str) -> bool;
     fn activate_window(&self, window_id: &str) -> Result<bool, String>;
+    fn restore_rect(&self, window_id: &str, rect: [f64; 4]) -> Result<(), String>;
     fn window_pid(&self, window_id: &str) -> Result<Option<u32>, String>;
     fn process_start_ticks(&self, pid: u32) -> Option<u64>;
 }
@@ -38,11 +41,17 @@ pub fn minimize_window<S: WindowSystem, T: MinimizedStateStore>(
         return Ok(());
     };
 
+    if query_or(system.is_excluded_window_type(&window_id), false) {
+        return Ok(());
+    }
+
+    let saved_rect = system.window_rect(&window_id);
+
     if !system.minimize_window(&window_id)? {
         return Err("Failed to minimize window".to_string());
     }
 
-    track_last_minimized_window(system, store, &window_id);
+    track_last_minimized_window(system, store, &window_id, saved_rect);
     Ok(())
 }
 
@@ -83,6 +92,9 @@ fn restore_last_minimized_window<S: WindowSystem, T: MinimizedStateStore>(
 
     match try_restore_window(system, &record.window_id)? {
         RestoreAttempt::Restored => {
+            if let Some(rect) = record.saved_rect {
+                let _ = system.restore_rect(&record.window_id, rect);
+            }
             store.clear();
             return Ok(true);
         }
@@ -137,6 +149,7 @@ fn track_last_minimized_window<S: WindowSystem, T: MinimizedStateStore>(
     system: &S,
     store: &T,
     window_id: &str,
+    saved_rect: Option<[f64; 4]>,
 ) {
     let Some(window_id) = system.normalize_window_id(window_id) else {
         store.clear();
@@ -158,6 +171,7 @@ fn track_last_minimized_window<S: WindowSystem, T: MinimizedStateStore>(
         pid,
         process_start_ticks,
         saved_at_unix_secs: current_unix_secs(),
+        saved_rect,
     };
 
     store.write(&record);

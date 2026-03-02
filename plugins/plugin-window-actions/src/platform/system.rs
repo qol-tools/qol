@@ -40,6 +40,10 @@ impl WindowSystem for X11WindowSystem {
         Ok(status.success())
     }
 
+    fn window_rect(&self, _window_id: &str) -> Option<[f64; 4]> {
+        None
+    }
+
     fn stacking_window_ids(&self) -> Result<Vec<String>, String> {
         let output = Command::new("xprop")
             .args(["-root", "_NET_CLIENT_LIST_STACKING"])
@@ -95,6 +99,10 @@ impl WindowSystem for X11WindowSystem {
             .status()
             .map_err(|error| format!("Failed to run wmctrl: {error}"))?;
         Ok(status.success())
+    }
+
+    fn restore_rect(&self, _window_id: &str, _rect: [f64; 4]) -> Result<(), String> {
+        Ok(())
     }
 
     fn window_pid(&self, window_id: &str) -> Result<Option<u32>, String> {
