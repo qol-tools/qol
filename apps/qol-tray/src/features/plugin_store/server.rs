@@ -3,16 +3,18 @@ pub(crate) mod assets;
 #[cfg(feature = "dev")]
 mod dev_handlers;
 #[cfg(feature = "dev")]
+mod dev_plugin_cpu;
+#[cfg(feature = "dev")]
 mod dev_runtime;
 #[cfg(feature = "dev")]
 mod dev_runtime_state;
 #[cfg(feature = "dev")]
 mod dev_services;
-#[cfg(feature = "dev")]
-mod restart;
 mod helpers;
 mod plugin_handlers;
 mod plugin_services;
+#[cfg(feature = "dev")]
+mod restart;
 mod settings_handlers;
 mod types;
 
@@ -37,6 +39,8 @@ pub async fn start_ui_server(
     daemon: &Daemon,
 ) -> Result<u16> {
     let plugins_dir = PluginLoader::default_plugin_dir()?;
+    #[cfg(feature = "dev")]
+    let plugin_cpu = dev_plugin_cpu::DevPluginCpuService::start(plugin_manager.clone());
 
     let app_state = AppState {
         plugins_dir: plugins_dir.clone(),
@@ -46,6 +50,8 @@ pub async fn start_ui_server(
         dev_state: Arc::new(crate::dev::state::DevState::new()),
         #[cfg(feature = "dev")]
         runtime: dev_runtime::new_dev_runtime(),
+        #[cfg(feature = "dev")]
+        plugin_cpu,
         #[cfg(feature = "dev")]
         restart: restart::default_restart_port(),
     };
@@ -116,6 +122,7 @@ pub async fn start_ui_server(
             get(dev_handlers::get_discovery_state),
         )
         .route("/dev/build-state", get(dev_handlers::get_build_state))
+        .route("/dev/plugin-cpu", get(dev_handlers::get_plugin_cpu))
         .route(
             "/dev/mock-check-update",
             get(dev_handlers::mock_check_update),
