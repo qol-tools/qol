@@ -32,6 +32,11 @@ pub enum DaemonEvent {
         results: Vec<crate::dev::state::BuildResultInfo>,
     },
     #[cfg(feature = "dev")]
+    PluginCpuSnapshot {
+        timestamp_ms: u64,
+        plugins: Vec<crate::features::plugin_store::server::dev_plugin_cpu::PluginCpuEntry>,
+    },
+    #[cfg(feature = "dev")]
     SelfRecompileProgress {
         percent: u8,
         phase: String,

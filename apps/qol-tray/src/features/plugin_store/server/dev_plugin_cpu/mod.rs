@@ -2,6 +2,7 @@
 
 mod platform;
 
+use crate::daemon::{DaemonEvent, EventBus};
 use crate::plugins::PluginManager;
 use serde::Serialize;
 use std::cmp::Ordering;
@@ -13,19 +14,19 @@ const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 const HISTORY_LIMIT: usize = 60;
 
 #[derive(Debug, Clone, Serialize, Default)]
-pub(super) struct PluginCpuPoint {
-    pub(super) timestamp_ms: u64,
-    pub(super) cpu_percent: f64,
+pub struct PluginCpuPoint {
+    pub timestamp_ms: u64,
+    pub cpu_percent: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
-pub(super) struct PluginCpuEntry {
-    pub(super) plugin_id: String,
-    pub(super) daemon_pid: Option<u32>,
-    pub(super) action_pids: Vec<u32>,
-    pub(super) cpu_percent: f64,
-    pub(super) cpu_seconds_total: f64,
-    pub(super) history: Vec<PluginCpuPoint>,
+pub struct PluginCpuEntry {
+    pub plugin_id: String,
+    pub daemon_pid: Option<u32>,
+    pub action_pids: Vec<u32>,
+    pub cpu_percent: f64,
+    pub cpu_seconds_total: f64,
+    pub history: Vec<PluginCpuPoint>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -66,7 +67,10 @@ pub(super) struct DevPluginCpuService {
 }
 
 impl DevPluginCpuService {
-    pub(super) fn start(plugin_manager: Arc<Mutex<PluginManager>>) -> Arc<Self> {
+    pub(super) fn start(
+        plugin_manager: Arc<Mutex<PluginManager>>,
+        events: Arc<EventBus>,
+    ) -> Arc<Self> {
         let service = Arc::new(Self {
             state: Arc::new(Mutex::new(PluginCpuState::default())),
         });
@@ -74,6 +78,7 @@ impl DevPluginCpuService {
         tokio::spawn(async move {
             loop {
                 sample_once(&state, &plugin_manager);
+                broadcast_snapshot(&state, &events);
                 tokio::time::sleep(SAMPLE_INTERVAL).await;
             }
         });
@@ -188,6 +193,33 @@ fn sample_once(state: &Arc<Mutex<PluginCpuState>>, plugin_manager: &Arc<Mutex<Pl
             row.history.pop_front();
         }
     }
+}
+
+fn broadcast_snapshot(state: &Arc<Mutex<PluginCpuState>>, events: &Arc<EventBus>) {
+    let Ok(guard) = state.lock() else {
+        return;
+    };
+    if guard.plugin_rows.is_empty() {
+        return;
+    }
+    let timestamp_ms = guard.last_timestamp_ms;
+    let plugins: Vec<PluginCpuEntry> = guard
+        .plugin_rows
+        .iter()
+        .map(|(plugin_id, row)| PluginCpuEntry {
+            plugin_id: plugin_id.clone(),
+            daemon_pid: row.daemon_pid,
+            action_pids: row.action_pids.clone(),
+            cpu_percent: row.cpu_percent,
+            cpu_seconds_total: row.cpu_seconds_total,
+            history: row.history.iter().cloned().collect(),
+        })
+        .collect();
+    drop(guard);
+    events.send(DaemonEvent::PluginCpuSnapshot {
+        timestamp_ms,
+        plugins,
+    });
 }
 
 fn update_smoothed_cpu_percent(

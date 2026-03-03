@@ -82,15 +82,15 @@
     --amber-400: #ffd34e;
     --amber-300: #ffe08a;
 
-    --accent-rgb: 74 158 255;
-    --success-rgb: 74 222 128;
-    --danger-rgb: 255 107 107;
-    --warning-rgb: 255 193 7;
-    --ink-rgb: 0 0 0;
-    --paper-rgb: 255 255 255;
-    --overlay-surface-rgb: 18 22 30;
-    --overlay-deep-rgb: 17 20 25;
-    --overlay-ink-rgb: 7 10 14;
+    --accent-rgb: 74, 158, 255;
+    --success-rgb: 74, 222, 128;
+    --danger-rgb: 255, 107, 107;
+    --warning-rgb: 255, 193, 7;
+    --ink-rgb: 0, 0, 0;
+    --paper-rgb: 255, 255, 255;
+    --overlay-surface-rgb: 18, 22, 30;
+    --overlay-deep-rgb: 17, 20, 25;
+    --overlay-ink-rgb: 7, 10, 14;
 
     --surface-canvas: var(--slate-900);
     --surface-elevated: var(--slate-850);
@@ -169,6 +169,22 @@
 
     --warning: var(--amber-500);
     --warning-bg: var(--state-warning-bg);
+    --focus-ring: rgba(var(--accent-rgb), 0.45);
+
+    --elevation-1: 0 1px 2px var(--layer-ink-20), 0 6px 16px rgba(var(--ink-rgb), 0.14);
+    --elevation-2: 0 3px 8px var(--layer-ink-24), 0 10px 26px rgba(var(--ink-rgb), 0.2);
+    --elevation-3: 0 8px 20px var(--layer-ink-28), 0 18px 44px rgba(var(--ink-rgb), 0.3);
+
+    --progress-track-bg: rgba(var(--ink-rgb, 0, 0, 0), 0.46);
+    --progress-track-inset: inset 0 0 0 1px rgba(var(--paper-rgb, 255, 255, 255), 0.26), inset 0 2px 6px rgba(var(--ink-rgb, 0, 0, 0), 0.35);
+    --progress-fill-start: rgba(var(--accent-rgb, 74, 158, 255), 0.26);
+    --progress-fill-end: rgba(var(--accent-rgb, 74, 158, 255), 0.5);
+    --progress-fill-outline: 1px solid rgba(var(--paper-rgb, 255, 255, 255), 0.16);
+    --progress-fill-glow: inset 0 0 0 1px rgba(var(--paper-rgb, 255, 255, 255), 0.08);
+    --progress-fill-stripe-a: rgba(var(--paper-rgb, 255, 255, 255), 0.24);
+    --progress-fill-stripe-b: rgba(var(--paper-rgb, 255, 255, 255), 0.08);
+    --progress-transition-fast: 120ms linear;
+    --progress-transition-medium: 220ms linear;
 
     --radius-sm: 4px;
     --radius-md: 6px;
@@ -288,7 +304,6 @@ body {
     min-height: 2.55rem;
     cursor: pointer;
     user-select: none;
-    animation: version-slide-in 0.3s ease-out;
     position: relative;
 }
 
@@ -369,8 +384,6 @@ body {
 
 .version-item.is-downloading {
     pointer-events: none;
-    position: relative;
-    overflow: hidden;
     border-left: 3px solid var(--accent);
     padding-left: calc(1.5rem - 3px);
 }
@@ -385,17 +398,6 @@ body {
     color: var(--text-muted);
     position: relative;
     z-index: 1;
-}
-
-.version-item.is-downloading .progress-fill {
-    position: absolute;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    background: linear-gradient(90deg, rgba(var(--accent-rgb), 0.55) 0%, rgba(var(--accent-rgb), 0.35) 100%);
-    box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.3), inset 0 0 8px rgba(var(--accent-rgb), 0.1);
-    transition: width 0.3s ease;
-    pointer-events: none;
 }
 
 .version-item.update-burst {

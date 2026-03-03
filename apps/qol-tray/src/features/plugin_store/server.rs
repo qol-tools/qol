@@ -3,7 +3,7 @@ pub(crate) mod assets;
 #[cfg(feature = "dev")]
 mod dev_handlers;
 #[cfg(feature = "dev")]
-mod dev_plugin_cpu;
+pub(crate) mod dev_plugin_cpu;
 #[cfg(feature = "dev")]
 mod dev_runtime;
 #[cfg(feature = "dev")]
@@ -40,7 +40,10 @@ pub async fn start_ui_server(
 ) -> Result<u16> {
     let plugins_dir = PluginLoader::default_plugin_dir()?;
     #[cfg(feature = "dev")]
-    let plugin_cpu = dev_plugin_cpu::DevPluginCpuService::start(plugin_manager.clone());
+    let plugin_cpu = dev_plugin_cpu::DevPluginCpuService::start(
+        plugin_manager.clone(),
+        daemon.events.clone(),
+    );
 
     let app_state = AppState {
         plugins_dir: plugins_dir.clone(),

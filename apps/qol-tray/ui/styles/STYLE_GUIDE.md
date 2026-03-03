@@ -55,6 +55,16 @@
   - Error: `--state-danger-bg` + danger border/text
   - Warning: `--state-warning-bg` + warning border/text
 
+- Progress indicators
+  - Never allow a fully invisible loading state.
+  - Determinate progress bars start at 0% and must not force non-zero initial width.
+  - Queued states may use copy and subtle row treatment instead of forced fill width.
+  - Progress affordances used by action cards must keep a bright active segment on a darker track.
+  - Determinate progress should still use semantic accent tokens.
+  - Use shared progress tokens: `--progress-track-bg`, `--progress-track-inset`, `--progress-fill-start`, `--progress-fill-end`, `--progress-fill-glow`.
+  - Reuse `progress-track` + `progress-fill` shared classes and set fill via `--progress-scale` instead of inline `width`.
+  - Progress fill must remain clearly brighter than its track in all dark surfaces.
+
 - Cards/panels
   - Default: `--bg-surface` + `--border-subtle`
   - Hover: `--bg-hover` + `--border-hover`

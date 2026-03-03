@@ -100,6 +100,13 @@
     transform: translateX(4px);
 }
 
+.dev-card.is-loading {
+    border-color: rgba(var(--accent-rgb), 0.56);
+    background:
+        linear-gradient(115deg, rgba(var(--accent-rgb), 0.2) 0%, rgba(var(--accent-rgb), 0.08) 38%, transparent 70%),
+        var(--bg-surface);
+}
+
 .dev-card .refresh-btn { flex-shrink: 0; }
 
 .dev-card-content { flex: 1; }
@@ -173,8 +180,7 @@
     column-gap: 0.5rem;
     align-items: start;
     padding: 0.9rem 1rem;
-    user-select: text;
-    cursor: text;
+    user-select: none;
 }
 
 .plugin-row .plugin-copy {
@@ -275,9 +281,13 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    user-select: text;
+    cursor: text;
 }
 
 .plugin-row .plugin-path {
+    user-select: text;
+    cursor: text;
     font-family: var(--font-mono);
     color: var(--text-faint);
     font-size: 0.7rem;
@@ -400,12 +410,16 @@
 
 .plugin-row.is-building .plugin-main,
 .plugin-row.is-linking .plugin-main {
-    opacity: 0.58;
+    opacity: 0.72;
 }
 
 .plugin-row.is-building,
 .plugin-row.is-linking {
     cursor: default;
+}
+
+.plugin-row.is-building {
+    background: linear-gradient(90deg, rgba(var(--accent-rgb, 74, 158, 255), 0.1) 0%, rgba(var(--accent-rgb, 74, 158, 255), 0.03) 66%, transparent 100%);
 }
 
 .plugin-build-overlay-host {
@@ -418,23 +432,11 @@
 .plugin-build-overlay {
     position: absolute;
     inset: 0;
-    overflow: hidden;
-    border-left: 3px solid rgba(var(--accent-rgb), 0.6);
-    background: rgba(var(--overlay-deep-rgb), 0.38);
+    border-left: 3px solid rgba(var(--accent-rgb, 74, 158, 255), 0.62);
 }
 
 .plugin-build-overlay .progress-fill {
-    position: absolute;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    width: 100%;
-    background: linear-gradient(90deg, rgba(var(--accent-rgb), 0.55) 0%, rgba(var(--accent-rgb), 0.35) 100%);
-    box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.3), inset 0 0 8px rgba(var(--accent-rgb), 0.1);
-    transform-origin: left center;
-    transform: scaleX(0);
-    will-change: transform;
-    transition: transform 0.12s linear;
+    z-index: 1;
 }
 
 .plugin-build-overlay-copy {
@@ -448,15 +450,13 @@
     justify-content: center;
     text-align: center;
     gap: 0.14rem;
-    width: fit-content;
-    min-width: 220px;
+    width: clamp(220px, 34%, 460px);
     max-width: min(86%, 460px);
     padding: 0.4rem 0.78rem;
     border-radius: 10px;
-    border: 1px solid var(--layer-paper-14);
-    background: rgba(var(--overlay-ink-rgb), 0.62);
-    backdrop-filter: blur(2px);
-    box-shadow: 0 6px 18px var(--layer-ink-35);
+    border: 1px solid var(--layer-paper-10);
+    background: rgba(var(--overlay-ink-rgb), 0.54);
+    box-shadow: 0 4px 12px var(--layer-ink-28);
 }
 
 .plugin-build-overlay-main {
@@ -466,7 +466,6 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
     font-weight: 700;
-    text-shadow: 0 1px 2px rgba(var(--ink-rgb), 0.8);
 }
 
 .plugin-build-overlay-sub {
@@ -474,10 +473,10 @@
     font-size: 0.74rem;
     line-height: 1.15;
     font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    text-shadow: 0 1px 2px rgba(var(--ink-rgb), 0.8);
 }
 
 .plugin-row .plugin-status-badges {

@@ -216,8 +216,8 @@ export function renderDevView({
                         </div>
                         <div class="dev-card-hint"><kbd>Ctrl+r</kbd></div>
                     </div>
-                    <div class="dev-card" data-action="mock-update">
-                        ${state.mockTesting ? '<button class="refresh-btn spinning" tabindex="-1" aria-hidden="true"></button>' : ''}
+                    <div class="dev-card ${state.mockTesting ? 'is-loading' : ''}" data-action="mock-update">
+                        <button class="refresh-btn ${state.mockTesting ? 'spinning' : 'is-hidden'}" tabindex="-1" aria-hidden="true"></button>
                         <div class="dev-card-content">
                             <h3>${state.mockTesting ? 'Stop testing mock flows' : 'Test mock flows'}</h3>
                             <p>${state.mockTesting
