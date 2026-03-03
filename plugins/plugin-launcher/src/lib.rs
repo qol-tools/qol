@@ -1,13 +1,10 @@
+pub mod ui;
 pub mod daemon;
-pub mod desktop_entry;
-pub mod frecency;
-pub mod frecency_store;
-pub mod index;
-pub mod launcher_app;
-pub mod monitor;
-pub mod platform;
-pub mod providers;
+pub mod discovery;
+pub mod launch;
 
+pub use qol_plugin_api::frecency;
+pub use qol_plugin_api::monitor;
 pub use qol_plugin_api::search::{fuzzy_match, FuzzyMatch};
 pub use qol_plugin_api::window::open_window_with_focus;
 
