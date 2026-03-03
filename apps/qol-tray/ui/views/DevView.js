@@ -6,6 +6,8 @@ import { renderShortcutLegend } from '../components/shortcut-legend.js';
 const SHORTCUTS = [
     { key: '↑↓', label: 'navigate' },
     { key: 'Enter', label: 'toggle' },
+    { key: 'm', label: 'menu' },
+    { key: 'Esc', label: 'close menu' },
     { key: 'r', label: 'discover' },
     { key: '⌘R', label: 'reload' }
 ];
@@ -23,14 +25,13 @@ export function DevView() {
         devModule.render(el);
         if (devModule.onFocus) devModule.onFocus();
 
-        // Restore window focus/blur lifecycle (dev.js manages its own SSE subscription)
         const onFocus = () => { if (devModule.onFocus) devModule.onFocus(); };
         const onBlur = () => { if (devModule.onBlur) devModule.onBlur(); };
         window.addEventListener('focus', onFocus);
         window.addEventListener('blur', onBlur);
 
         return () => {
-            if (devModule.onBlur) devModule.onBlur();
+            if (devModule.destroy) devModule.destroy();
             if (footer) footer.innerHTML = '';
             window.removeEventListener('focus', onFocus);
             window.removeEventListener('blur', onBlur);
