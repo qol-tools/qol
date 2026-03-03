@@ -182,14 +182,14 @@
 
 .badge-installed-dim {
     color: var(--text-muted);
-    background: rgba(var(--paper-rgb), 0.06);
-    border-color: rgba(var(--paper-rgb), 0.14);
+    background: var(--layer-paper-06);
+    border-color: var(--layer-paper-14);
 }
 
 .badge-build-skip {
     color: var(--text-faint);
-    background: rgba(var(--paper-rgb), 0.05);
-    border-color: rgba(var(--paper-rgb), 0.12);
+    background: var(--layer-paper-05);
+    border-color: var(--layer-paper-12);
 }
 
 .search-bar { margin-bottom: 2rem; }
@@ -297,7 +297,7 @@
     padding: 0.5rem 1rem;
     font-size: 0.9rem;
     color: var(--text-muted);
-    background: rgba(var(--paper-rgb), 0.05);
+    background: var(--layer-paper-05);
     border-radius: var(--radius-md);
     text-align: center;
 }
@@ -328,9 +328,9 @@
     right: 0.5rem;
     width: 2.1rem;
     height: 2.1rem;
-    border: 1px solid rgba(var(--paper-rgb), 0.12);
+    border: 1px solid var(--layer-paper-12);
     border-radius: 999px;
-    background: rgba(var(--ink-rgb), 0.45);
+    background: var(--layer-ink-45);
     color: var(--text-secondary);
     cursor: pointer;
     opacity: 0.92;
@@ -350,8 +350,8 @@
 
 .plugin-cog:hover {
     color: var(--text-primary);
-    background: rgba(var(--ink-rgb), 0.62);
-    border-color: rgba(var(--paper-rgb), 0.22);
+    background: var(--layer-ink-62);
+    border-color: var(--layer-paper-22);
 }
 
 .plugin-context-menu {
@@ -430,7 +430,7 @@
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(var(--ink-rgb), 0.7);
+    background: var(--layer-ink-70);
     display: flex;
     align-items: center;
     justify-content: center;
