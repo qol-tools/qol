@@ -1,5 +1,20 @@
 .dev-actions { flex: 1; }
 
+.view-body.dev-view-body {
+    max-width: none;
+    margin: 0;
+    width: 100%;
+    padding-left: 0;
+    padding-right: 0;
+}
+
+.dev-view-content {
+    max-width: 1400px;
+    margin: 0 auto;
+    width: 100%;
+    padding: 0 2rem;
+}
+
 .dev-card {
     display: flex;
     align-items: center;
