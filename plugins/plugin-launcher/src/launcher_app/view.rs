@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use gpui::*;
 
 use super::layout::HEADER_HEIGHT;
@@ -91,57 +93,87 @@ pub fn search_bar(
         .child(
             div()
                 .flex_1()
-                .text_size(px(16.))
+                .overflow_hidden()
+                .rounded_full()
+                .font_family(SharedString::from("Menlo"))
+                .text_size(px(14.))
                 .flex()
                 .items_center()
-                .children(search_bar_content(query, cursor, selection)),
+                .child(search_bar_content(query, cursor, selection)),
         )
         .child(compass_widget(hidden_above, hidden_below))
         .child(browse_status(selected, result_count, scroll_offset, visible))
 }
 
-fn search_bar_content(query: &str, cursor: usize, selection: Option<(usize, usize)>) -> Vec<AnyElement> {
+const SEARCH_VISIBLE_CHARS: usize = 25;
+
+fn search_bar_content(query: &str, cursor: usize, selection: Option<(usize, usize)>) -> AnyElement {
     if query.is_empty() {
-        return vec![div()
+        return div()
             .text_color(rgb(TEXT_MUTED))
             .child("Type to search...")
-            .into_any_element()];
+            .into_any_element();
     }
 
-    let chars: Vec<char> = query.chars().collect();
-    let mut out = Vec::with_capacity(chars.len() + 1);
-    let (sel_start, sel_end) = selection.unwrap_or((usize::MAX, usize::MAX));
-    let show_caret = selection.is_none();
+    let char_count = query.chars().count();
 
-    for (i, ch) in chars.iter().enumerate() {
-        if show_caret && i == cursor {
-            out.push(
-                div()
-                    .text_color(rgb(HIGHLIGHT))
-                    .child("|")
-                    .into_any_element(),
-            );
+    // Scroll view to keep cursor visible (leave 2 chars of room for caret)
+    let view_start = if char_count <= SEARCH_VISIBLE_CHARS {
+        0
+    } else {
+        cursor
+            .saturating_sub(SEARCH_VISIBLE_CHARS.saturating_sub(2))
+            .min(char_count.saturating_sub(SEARCH_VISIBLE_CHARS))
+    };
+    let view_end = (view_start + SEARCH_VISIBLE_CHARS).min(char_count);
+    eprintln!(
+        "[search_bar] chars={char_count} cursor={cursor} view={view_start}..{view_end} display_len={} VISIBLE_CHARS={SEARCH_VISIBLE_CHARS}",
+        view_end - view_start,
+    );
+
+    let start_byte = char_to_byte(query, view_start);
+    let end_byte = char_to_byte(query, view_end);
+    let visible = &query[start_byte..end_byte];
+
+    let mut display = visible.to_owned();
+    let mut highlights: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
+
+    if let Some((sel_start, sel_end)) = selection {
+        let adj_start = sel_start.saturating_sub(view_start).min(view_end - view_start);
+        let adj_end = sel_end.saturating_sub(view_start).min(view_end - view_start);
+        let start = char_to_byte(visible, adj_start);
+        let end = char_to_byte(visible, adj_end);
+        if start < end {
+            highlights.push((
+                start..end,
+                HighlightStyle {
+                    color: Some(rgb(TEXT).into()),
+                    background_color: Some(rgb(BG_SELECTED).into()),
+                    ..HighlightStyle::default()
+                },
+            ));
         }
-        let selected = i >= sel_start && i < sel_end;
-        let mut glyph = div().child(ch.to_string());
-        if selected {
-            glyph = glyph.bg(rgb(BG_SELECTED)).text_color(rgb(TEXT));
-        } else {
-            glyph = glyph.text_color(rgb(TEXT));
-        }
-        out.push(glyph.into_any_element());
     }
 
-    if show_caret && cursor >= chars.len() {
-        out.push(
-            div()
-                .text_color(rgb(HIGHLIGHT))
-                .child("|")
-                .into_any_element(),
-        );
+    if selection.is_none() {
+        let adj_cursor = cursor.saturating_sub(view_start).min(display.chars().count());
+        let caret_byte = char_to_byte(&display, adj_cursor);
+        display.insert(caret_byte, '|');
+        highlights.push((
+            caret_byte..caret_byte + 1,
+            HighlightStyle::color(rgb(HIGHLIGHT).into()),
+        ));
     }
 
-    out
+    let styled = StyledText::new(SharedString::from(display)).with_highlights(highlights);
+    div().text_color(rgb(TEXT)).child(styled).into_any_element()
+}
+
+fn char_to_byte(s: &str, char_idx: usize) -> usize {
+    s.char_indices()
+        .nth(char_idx)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len())
 }
 
 #[derive(Clone, Copy)]
@@ -159,7 +191,6 @@ pub struct RowWindowCue {
 }
 
 pub fn result_row(scored: &Scored, name: &str, cues: RowWindowCue, row_height: f32) -> Div {
-    let positions = &scored.m.positions;
     let base_color = row_text_color(
         cues.selected,
         cues.previous_selected,
@@ -172,21 +203,28 @@ pub fn result_row(scored: &Scored, name: &str, cues: RowWindowCue, row_height: f
         cues.distance_from_selected,
     );
 
-    let spans: Vec<AnyElement> = name
-        .char_indices()
-        .map(|(i, ch)| {
-            let color = if cues.selected && positions.contains(&i) {
-                match_heat_color(i, positions)
-            } else {
-                base_color
-            };
-            div()
-                .text_color(color)
-                .text_size(px(14.))
-                .child(ch.to_string())
-                .into_any_element()
-        })
-        .collect();
+    // Non-selected rows: minimal — just name text, no badges
+    if !cues.selected {
+        return div()
+            .h(px(row_height))
+            .w_full()
+            .flex()
+            .items_center()
+            .px_4()
+            .bg(bg)
+            .text_color(base_color)
+            .text_size(px(14.))
+            .child(name.to_owned());
+    }
+
+    // Selected row: full decoration with match highlights and badges
+    let positions = &scored.m.positions;
+    let highlights = if !positions.is_empty() {
+        char_highlights(name, positions)
+    } else {
+        vec![]
+    };
+    let styled_name = StyledText::new(SharedString::from(name.to_owned())).with_highlights(highlights);
 
     let mut row = div()
         .h(px(row_height))
@@ -206,24 +244,22 @@ pub fn result_row(scored: &Scored, name: &str, cues: RowWindowCue, row_height: f
         row = row.child(overflow_badge("^", cues.hidden_above));
     }
 
-    if cues.trail_depth > 0 && !cues.selected {
-        row = row.child(trail_badge(cues.trail_depth));
-    }
-
     row = row.child(
         div()
             .flex_1()
             .flex()
             .items_center()
-            .children(spans),
+            .text_color(base_color)
+            .text_size(px(14.))
+            .child(styled_name),
     );
 
     row = row.child(semantic_badge(
         scored.match_kind,
         scored.frecency_bonus > 0,
-        cues.selected,
+        true,
     ));
-    row = row.child(confidence_bar(cues.confidence_pct, cues.selected));
+    row = row.child(confidence_bar(cues.confidence_pct, true));
 
     if cues.edge_hit_bottom {
         row = row.child(edge_badge("v"));
@@ -414,6 +450,25 @@ fn compass_strip(hidden_count: usize, is_up: bool) -> Div {
         rgb(COMPASS_DOWN_HIGH)
     };
     div().h(px(3.)).w_full().bg(color)
+}
+
+fn char_highlights(
+    name: &str,
+    positions: &[usize],
+) -> Vec<(Range<usize>, HighlightStyle)> {
+    let byte_map: Vec<(usize, usize)> = name
+        .char_indices()
+        .map(|(byte_pos, ch)| (byte_pos, ch.len_utf8()))
+        .collect();
+
+    positions
+        .iter()
+        .filter_map(|&char_idx| {
+            let &(byte_pos, byte_len) = byte_map.get(char_idx)?;
+            let color: Hsla = match_heat_color(char_idx, positions).into();
+            Some((byte_pos..byte_pos + byte_len, HighlightStyle::color(color)))
+        })
+        .collect()
 }
 
 fn match_heat_color(index: usize, positions: &[usize]) -> gpui::Rgba {
