@@ -78,7 +78,7 @@
     flex: 1 1 auto;
     min-width: 0;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 104px 96px;
+    grid-template-columns: minmax(0, 1fr) 110px;
     gap: 0;
     align-items: stretch;
 }
@@ -88,6 +88,7 @@
     min-width: 0;
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: 0.32rem;
     column-gap: 0.5rem;
     align-items: start;
     padding: 0.9rem 1rem;
@@ -108,15 +109,14 @@
     min-height: 1.35rem;
 }
 
-.plugin-row .plugin-filter-zone {
+.plugin-row .plugin-action-column {
     width: 100%;
     align-self: stretch;
     display: flex;
-    justify-content: flex-start;
-    align-items: flex-start;
-    padding: 0.62rem 0.52rem;
+    position: relative;
     border-left: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.018);
+    background: rgba(255, 255, 255, 0.032);
+    overflow: visible;
 }
 
 .plugin-row .plugin-action-zone {
@@ -131,8 +131,8 @@
     align-items: center;
     cursor: pointer;
     padding: 0;
-    border-left: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.032);
+    border: none;
+    background: transparent;
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03), inset 0 -1px 0 rgba(0, 0, 0, 0.18);
     transition: background var(--transition), box-shadow var(--transition), border-color var(--transition);
 }
@@ -167,7 +167,6 @@
 
 .plugin-row:hover .plugin-action-zone:not(.is-disabled) {
     background: rgba(255, 255, 255, 0.05);
-    border-left-color: rgba(255, 255, 255, 0.14);
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), inset 0 -1px 0 rgba(0, 0, 0, 0.2);
 }
 
@@ -179,7 +178,6 @@
 .plugin-row .plugin-action-zone.is-disabled {
     pointer-events: none;
     cursor: default;
-    border-left-color: rgba(255, 255, 255, 0.05);
     background: rgba(255, 255, 255, 0.02);
 }
 
@@ -217,14 +215,98 @@
     min-height: 1.2em;
 }
 
-.plugin-row .plugin-log-controls {
+.plugin-row .plugin-menu-trigger {
+    -webkit-appearance: none;
+    appearance: none;
+    position: absolute;
+    top: 0.38rem;
+    right: 0.18rem;
+    width: 1.5rem;
+    height: 1.5rem;
+    border: none;
+    background: transparent;
+    color: var(--text-faint);
+    cursor: pointer;
+    opacity: 1;
+    transition: color var(--transition);
     display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    justify-content: flex-start;
-    gap: 0.3rem;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    z-index: 36;
+}
+
+.plugin-row .plugin-menu-trigger:hover {
+    color: var(--text-primary);
+}
+
+.plugin-row .plugin-menu-trigger-icon {
+    display: block;
+    width: 0.95rem;
+    height: 1.45rem;
+}
+
+.plugin-row .plugin-context-menu {
+    position: absolute;
+    top: 1.92rem;
+    right: 0.28rem;
+    min-width: 12.2rem;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-8px);
+    transition: opacity 0.15s, transform 0.15s, visibility 0.15s;
+    z-index: 35;
+}
+
+.plugin-row .plugin-context-menu.open {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+}
+
+.plugin-list:has(.plugin-context-menu.open),
+.plugin-row:has(.plugin-context-menu.open) {
+    overflow: visible;
+}
+
+.plugin-row:has(.plugin-context-menu.open) {
+    z-index: 12;
+}
+
+.plugin-row .context-action {
+    display: block;
     width: 100%;
-    max-width: none;
+    padding: 0.58rem 0.82rem;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.81rem;
+    text-align: left;
+    cursor: pointer;
+    transition: background var(--transition), color var(--transition);
+    opacity: 1;
+    font-weight: 600;
+}
+
+.plugin-row .context-action:hover {
+    background: rgba(255, 255, 255, 0.07);
+    color: var(--text-primary);
+}
+
+.plugin-row .context-action.context-cpu.start {
+    color: var(--text-primary);
+}
+
+.plugin-row .context-action.context-cpu.stop {
+    color: var(--danger);
+}
+
+.plugin-row .context-action.context-cpu.stop:hover {
+    background: rgba(255, 107, 107, 0.16);
 }
 
 .plugin-row .plugin-build-meta.muted {
@@ -336,13 +418,65 @@
     padding: 0;
 }
 
+.plugin-row .plugin-cpu-strip {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 0.48rem;
+    min-height: 1.55rem;
+}
+
+.plugin-row .plugin-cpu-strip-value {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.69rem;
+    line-height: 1;
+    min-width: 3.85rem;
+}
+
+.plugin-row .plugin-cpu-strip-graph {
+    flex: 1;
+    min-width: 84px;
+    height: 1.45rem;
+    padding: 0.11rem 0.16rem;
+    border: 1px solid rgba(255, 255, 255, 0.13);
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.22);
+}
+
+.plugin-row .plugin-cpu-sparkline {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+.plugin-row .plugin-cpu-sparkline-base {
+    stroke: rgba(255, 255, 255, 0.15);
+    stroke-width: 1;
+}
+
+.plugin-row .plugin-cpu-sparkline-line {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.plugin-row .plugin-cpu-empty {
+    color: var(--text-faint);
+    font-size: 0.67rem;
+    line-height: 1.2;
+    padding: 0.2rem 0.28rem;
+}
+
 @media (max-width: 860px) {
     .plugin-row .plugin-main {
-        grid-template-columns: minmax(0, 1fr) auto auto;
-        gap: 0.45rem;
+        grid-template-columns: minmax(0, 1fr) 84px;
+        gap: 0;
     }
 
-    .plugin-row .plugin-filter-zone,
+    .plugin-row .plugin-action-column,
     .plugin-row .plugin-action-zone {
         justify-content: center;
         padding: 0;
@@ -361,36 +495,18 @@
         justify-content: flex-start;
         padding: 0.16rem 0 0;
     }
-    .plugin-row .plugin-log-controls {
-        max-width: none;
+    .plugin-row .plugin-context-menu {
+        right: 0.1rem;
     }
 }
 
-.plugin-row .plugin-status-badges .badge,
-.plugin-row .plugin-log-controls .badge {
+.plugin-row .plugin-status-badges .badge {
     justify-content: center;
     white-space: nowrap;
     border-radius: 2px;
     padding: 0.14rem 0.44rem;
     letter-spacing: 0.03em;
     box-sizing: border-box;
-}
-
-.plugin-row .badge-button {
-    -webkit-appearance: none;
-    appearance: none;
-    font: inherit;
-    line-height: inherit;
-    font-size: inherit;
-    min-height: 0;
-    min-width: 0;
-    width: 100%;
-    cursor: pointer;
-    user-select: none;
-}
-
-.plugin-row .badge-button:hover {
-    filter: brightness(1.12);
 }
 
 /* Link input row */

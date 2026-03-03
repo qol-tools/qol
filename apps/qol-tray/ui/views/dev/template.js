@@ -5,8 +5,86 @@ export function renderDevView({
     renderPluginBuildMeta,
     renderBuildResults
 }) {
+    const sparklineWidth = 120;
+    const sparklineHeight = 28;
+    const sparklineFloor = sparklineHeight - 1;
+    const sparklineCeiling = 2;
+    const sparklineSpread = sparklineFloor - sparklineCeiling;
+    const sparklineMinMaxCpu = 5;
+    const cpuHistoryGraphLimit = 36;
+
+    const sampleCpuPercent = sample => Number.isFinite(sample?.cpu_percent) ? sample.cpu_percent : 0;
+    const cpuMonitoringEnabled = pluginId => !!state.cpuMonitoring[pluginId];
+
+    const cpuBadgeAria = plugin => {
+        const monitoringEnabled = cpuMonitoringEnabled(plugin.id);
+        if (!monitoringEnabled) {
+            return `Enable CPU monitoring for ${plugin.name}`;
+        }
+        return `Disable CPU monitoring for ${plugin.name}`;
+    };
+
+    const renderCpuSparkline = history => {
+        if (!history.length) {
+            return '<div class="plugin-cpu-empty">Waiting for samples</div>';
+        }
+
+        const maxCpu = history.reduce((maxValue, point) => {
+            const value = sampleCpuPercent(point);
+            return Math.max(maxValue, value);
+        }, sparklineMinMaxCpu);
+
+        const pointY = value => {
+            const normalized = Math.max(0, Math.min(value, maxCpu)) / maxCpu;
+            return sparklineFloor - normalized * sparklineSpread;
+        };
+
+        if (history.length === 1) {
+            const single = sampleCpuPercent(history[0]);
+            const y = pointY(single).toFixed(2);
+            return `
+                <svg class="plugin-cpu-sparkline" viewBox="0 0 ${sparklineWidth} ${sparklineHeight}" preserveAspectRatio="none" aria-hidden="true">
+                    <line class="plugin-cpu-sparkline-base" x1="0" y1="${sparklineFloor}" x2="${sparklineWidth}" y2="${sparklineFloor}"></line>
+                    <polyline class="plugin-cpu-sparkline-line" points="0,${y} ${sparklineWidth},${y}"></polyline>
+                </svg>
+            `;
+        }
+
+        const points = history.map((point, index) => {
+            const value = sampleCpuPercent(point);
+            const x = (index / (history.length - 1)) * sparklineWidth;
+            const y = pointY(value);
+            return `${x.toFixed(2)},${y.toFixed(2)}`;
+        }).join(' ');
+
+        return `
+            <svg class="plugin-cpu-sparkline" viewBox="0 0 ${sparklineWidth} ${sparklineHeight}" preserveAspectRatio="none" aria-hidden="true">
+                <line class="plugin-cpu-sparkline-base" x1="0" y1="${sparklineFloor}" x2="${sparklineWidth}" y2="${sparklineFloor}"></line>
+                <polyline class="plugin-cpu-sparkline-line" points="${points}"></polyline>
+            </svg>
+        `;
+    };
+
+    const renderCpuStrip = plugin => {
+        if (!cpuMonitoringEnabled(plugin.id)) return '';
+        const sample = state.cpuByPlugin[plugin.id];
+        const history = Array.isArray(sample?.history)
+            ? sample.history.slice(-cpuHistoryGraphLimit)
+            : [];
+        const cpuPercent = sampleCpuPercent(sample);
+        return `
+            <div class="plugin-cpu-strip">
+                <span class="plugin-cpu-strip-value">${cpuPercent.toFixed(2)}%</span>
+                <div class="plugin-cpu-strip-graph">
+                    ${renderCpuSparkline(history)}
+                </div>
+            </div>
+        `;
+    };
+
     const pluginRows = mergedList.map((plugin, index) => {
         const isSelected = state.selectedIndex === index;
+        const menuOpen = state.openPluginMenuId === plugin.id;
         const statusBadge = {
             linked: '<span class="badge badge-linked">Linked</span>',
             installed: '<span class="badge badge-installed">Installed</span>',
@@ -29,13 +107,23 @@ export function renderDevView({
         const filterCount = Array.isArray(plugin.suppressed_log_patterns)
             ? plugin.suppressed_log_patterns.length
             : 0;
-        const logControls = `
-            <div class="plugin-log-controls">
-                <button type="button" class="badge ${plugin.logs_muted ? 'badge-installed-dim' : 'badge-linked'} badge-button" data-action="toggle-plugin-logs" data-id="${plugin.id}" aria-label="${plugin.logs_muted ? 'Unmute logs' : 'Mute logs'} for ${plugin.name}">
-                    ${plugin.logs_muted ? 'Muted' : 'Logs'}
+        const menuControls = `
+            <button type="button" class="plugin-menu-trigger" data-action="toggle-plugin-menu" data-id="${plugin.id}" aria-label="Plugin options for ${plugin.name}" aria-expanded="${menuOpen ? 'true' : 'false'}">
+                <svg class="plugin-menu-trigger-icon" viewBox="0 0 12 20" fill="currentColor" aria-hidden="true" focusable="false">
+                    <circle cx="6" cy="3.5" r="1.8"></circle>
+                    <circle cx="6" cy="10" r="1.8"></circle>
+                    <circle cx="6" cy="16.5" r="1.8"></circle>
+                </svg>
+            </button>
+            <div class="plugin-context-menu ${menuOpen ? 'open' : ''}">
+                <button type="button" class="context-action" data-action="toggle-plugin-logs" data-id="${plugin.id}" aria-label="${plugin.logs_muted ? 'Unmute logs' : 'Mute logs'} for ${plugin.name}">
+                    ${plugin.logs_muted ? 'Unmute Logs' : 'Mute Logs'}
                 </button>
-                <button type="button" class="badge ${filterCount > 0 ? 'badge-local' : 'badge-build-skip'} badge-button" data-action="edit-plugin-log-filters" data-id="${plugin.id}" aria-label="Edit log filters for ${plugin.name}">
-                    ${filterCount > 0 ? `Filter ${filterCount}` : 'Filter'}
+                <button type="button" class="context-action" data-action="edit-plugin-log-filters" data-id="${plugin.id}" aria-label="Edit log filters for ${plugin.name}">
+                    ${filterCount > 0 ? `Edit Filters (${filterCount})` : 'Edit Filters'}
+                </button>
+                <button type="button" class="context-action context-cpu ${cpuMonitoringEnabled(plugin.id) ? 'stop' : 'start'}" data-action="toggle-plugin-cpu" data-id="${plugin.id}" aria-label="${cpuBadgeAria(plugin)}">
+                    ${cpuMonitoringEnabled(plugin.id) ? 'Disable CPU Monitor' : 'Enable CPU Monitor'}
                 </button>
             </div>
         `;
@@ -59,13 +147,14 @@ export function renderDevView({
                             ${renderPluginBuildMeta(plugin)}
                         </div>
                         ${statusBadges}
+                        ${renderCpuStrip(plugin)}
                     </div>
-                    <div class="plugin-filter-zone">
-                        ${logControls}
+                    <div class="plugin-action-column">
+                        <button type="button" class="plugin-action-zone ${actionDisabled ? 'is-disabled' : ''} ${rebuildActive ? 'has-rebuild' : 'rebuild-idle'}" data-action="toggle-link" data-id="${plugin.id}" aria-label="${plugin.status === 'linked' ? 'Unlink' : 'Link'} ${plugin.name}" ${actionDisabled ? 'disabled' : ''}>
+                            <img class="plugin-action-rebuild-icon" src="assets/qol-tray.png?v=1" alt="" aria-hidden="true">
+                        </button>
+                        ${menuControls}
                     </div>
-                    <button type="button" class="plugin-action-zone ${actionDisabled ? 'is-disabled' : ''} ${rebuildActive ? 'has-rebuild' : 'rebuild-idle'}" data-action="toggle-link" data-id="${plugin.id}" aria-label="${plugin.status === 'linked' ? 'Unlink' : 'Link'} ${plugin.name}" ${actionDisabled ? 'disabled' : ''}>
-                        <img class="plugin-action-rebuild-icon" src="assets/qol-tray.png?v=1" alt="" aria-hidden="true">
-                    </button>
                 </div>
                 <div class="plugin-build-overlay-host"></div>
             </div>

@@ -42,6 +42,7 @@ struct PluginCpuRow {
     action_pids: Vec<u32>,
     cpu_percent: f64,
     cpu_seconds_total: f64,
+    cpu_percent_samples: VecDeque<f64>,
     history: VecDeque<PluginCpuPoint>,
 }
 
@@ -114,6 +115,7 @@ impl DevPluginCpuService {
 }
 
 fn sample_once(state: &Arc<Mutex<PluginCpuState>>, plugin_manager: &Arc<Mutex<PluginManager>>) {
+    let cpu_percent_window_samples = platform::cpu_percent_window_samples().max(1);
     let plugin_pids = collect_plugin_pids(plugin_manager);
     let active_plugins: HashSet<String> = plugin_pids.keys().cloned().collect();
     let active_pids: HashSet<i32> = plugin_pids
@@ -176,7 +178,7 @@ fn sample_once(state: &Arc<Mutex<PluginCpuState>>, plugin_manager: &Arc<Mutex<Pl
             .or_insert_with(PluginCpuRow::default);
         row.daemon_pid = pid_set.daemon_pid;
         row.action_pids = pid_set.action_pids;
-        row.cpu_percent = (cpu_percent * 100.0).round() / 100.0;
+        update_smoothed_cpu_percent(row, cpu_percent, cpu_percent_window_samples);
         row.cpu_seconds_total = cpu_total_micros as f64 / 1_000_000.0;
         row.history.push_back(PluginCpuPoint {
             timestamp_ms,
@@ -186,6 +188,28 @@ fn sample_once(state: &Arc<Mutex<PluginCpuState>>, plugin_manager: &Arc<Mutex<Pl
             row.history.pop_front();
         }
     }
+}
+
+fn update_smoothed_cpu_percent(
+    row: &mut PluginCpuRow,
+    raw_cpu_percent: f64,
+    window_samples: usize,
+) {
+    row.cpu_percent_samples.push_back(round_two_decimals(raw_cpu_percent));
+    while row.cpu_percent_samples.len() > window_samples {
+        row.cpu_percent_samples.pop_front();
+    }
+    if row.cpu_percent_samples.is_empty() {
+        row.cpu_percent = 0.0;
+        return;
+    }
+    let averaged_cpu_percent =
+        row.cpu_percent_samples.iter().sum::<f64>() / row.cpu_percent_samples.len() as f64;
+    row.cpu_percent = round_two_decimals(averaged_cpu_percent);
+}
+
+fn round_two_decimals(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
 }
 
 fn collect_plugin_pids(

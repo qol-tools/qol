@@ -1,5 +1,5 @@
 import { subscribe, onReconnect } from '../events.js';
-import { jsonRequest, readResponseText } from '../api/client.js';
+import { jsonRequest, readResponseText, tryFetchJson } from '../api/client.js';
 import { mergePlugins, renderBuildResults, renderPluginBuildMeta } from './dev/plugin-model.js';
 import { renderDevView } from './dev/template.js';
 import { createBuildController } from './dev/build-controller.js';
@@ -11,10 +11,35 @@ import {
 } from './dev/discovery/reducer.js';
 
 export const id = 'dev';
+const CPU_MONITORING_STORAGE_KEY = 'dev-cpu-monitoring';
 
 function readSavedIndex() {
     const saved = parseInt(localStorage.getItem('dev-selected-index'), 10);
     return Number.isFinite(saved) && saved >= 0 ? saved : 0;
+}
+
+function readSavedCpuMonitoring() {
+    try {
+        const raw = localStorage.getItem(CPU_MONITORING_STORAGE_KEY);
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+            return parsed.reduce((acc, pluginId) => {
+                if (typeof pluginId !== 'string' || !pluginId) return acc;
+                acc[pluginId] = true;
+                return acc;
+            }, {});
+        }
+        if (!parsed || typeof parsed !== 'object') return {};
+        return Object.entries(parsed).reduce((acc, [pluginId, enabled]) => {
+            if (typeof pluginId !== 'string' || !pluginId) return acc;
+            if (!enabled) return acc;
+            acc[pluginId] = true;
+            return acc;
+        }, {});
+    } catch {
+        return {};
+    }
 }
 
 const state = {
@@ -34,13 +59,18 @@ const state = {
     logControls: {},
     linkingId: null,
     buildProgress: {},
-    mockTesting: false
+    mockTesting: false,
+    cpuMonitoring: readSavedCpuMonitoring(),
+    cpuByPlugin: {},
+    openPluginMenuId: null
 };
 
 let container = null;
 let unsubscribe = null;
 let unsubscribeReconnect = null;
 let reloadCooldownUntil = 0;
+let cpuPollTimer = null;
+let cpuPollInFlight = false;
 
 const discoveryController = createDiscoveryController({
     state,
@@ -127,6 +157,170 @@ function totalItems() {
     return state.mergedCount || 0;
 }
 
+function closePluginMenu() {
+    if (!state.openPluginMenuId) return;
+    state.openPluginMenuId = null;
+}
+
+function togglePluginMenu(pluginId) {
+    if (state.openPluginMenuId === pluginId) {
+        state.openPluginMenuId = null;
+        return;
+    }
+    state.openPluginMenuId = pluginId;
+}
+
+function visiblePluginIdSet() {
+    return new Set(state.mergedList.map(plugin => plugin.id));
+}
+
+function monitoredCpuPluginIds(visibleOnly = false) {
+    const monitored = Object.keys(state.cpuMonitoring).filter(pluginId => !!state.cpuMonitoring[pluginId]);
+    if (!visibleOnly) return monitored;
+    const visiblePluginIds = visiblePluginIdSet();
+    return monitored.filter(pluginId => visiblePluginIds.has(pluginId));
+}
+
+function persistCpuMonitoring() {
+    try {
+        localStorage.setItem(
+            CPU_MONITORING_STORAGE_KEY,
+            JSON.stringify(monitoredCpuPluginIds())
+        );
+    } catch {}
+}
+
+function stopCpuPolling() {
+    if (!cpuPollTimer) return;
+    window.clearInterval(cpuPollTimer);
+    cpuPollTimer = null;
+}
+
+function startCpuPolling() {
+    if (cpuPollTimer) return;
+    cpuPollTimer = window.setInterval(() => {
+        void fetchCpuUsage();
+    }, 1000);
+}
+
+function syncCpuPolling() {
+    const monitored = monitoredCpuPluginIds(true);
+    if (monitored.length === 0) {
+        stopCpuPolling();
+        return;
+    }
+    startCpuPolling();
+}
+
+function isNumber(value) {
+    return typeof value === 'number' && Number.isFinite(value);
+}
+
+function normalizeCpuHistory(history, fallbackTimestamp) {
+    if (!Array.isArray(history)) return [];
+    return history
+        .filter(point => point && (isNumber(point.cpu_percent) || isNumber(point.timestamp_ms)))
+        .map(point => ({
+            cpu_percent: isNumber(point.cpu_percent) ? point.cpu_percent : 0,
+            timestamp_ms: isNumber(point.timestamp_ms) ? point.timestamp_ms : fallbackTimestamp
+        }));
+}
+
+function normalizeCpuSample(plugin, fallbackTimestamp) {
+    return {
+        cpu_percent: isNumber(plugin?.cpu_percent) ? plugin.cpu_percent : 0,
+        cpu_seconds_total: isNumber(plugin?.cpu_seconds_total) ? plugin.cpu_seconds_total : 0,
+        timestamp_ms: fallbackTimestamp,
+        history: normalizeCpuHistory(plugin?.history, fallbackTimestamp)
+    };
+}
+
+function lastCpuHistoryPoint(sample) {
+    const history = Array.isArray(sample?.history) ? sample.history : [];
+    if (history.length === 0) return null;
+    return history[history.length - 1];
+}
+
+function cpuSamplesChanged(prev, current) {
+    if (!prev && !current) return false;
+    if (!prev || !current) return true;
+    if (prev.cpu_percent !== current.cpu_percent) return true;
+    if (prev.cpu_seconds_total !== current.cpu_seconds_total) return true;
+    if (prev.timestamp_ms !== current.timestamp_ms) return true;
+
+    const prevHistory = Array.isArray(prev.history) ? prev.history : [];
+    const currentHistory = Array.isArray(current.history) ? current.history : [];
+    if (prevHistory.length !== currentHistory.length) return true;
+
+    const prevLast = lastCpuHistoryPoint(prev);
+    const currentLast = lastCpuHistoryPoint(current);
+    if (!prevLast && !currentLast) return false;
+    if (!prevLast || !currentLast) return true;
+    if (prevLast.cpu_percent !== currentLast.cpu_percent) return true;
+    return prevLast.timestamp_ms !== currentLast.timestamp_ms;
+}
+
+function updateCpuSamples(payload) {
+    if (!payload || !Array.isArray(payload.plugins)) return false;
+
+    const monitored = monitoredCpuPluginIds(true);
+    if (monitored.length === 0) return false;
+
+    const monitoredSet = new Set(monitored);
+    const next = {};
+    const timestamp = isNumber(payload.timestamp_ms) ? payload.timestamp_ms : Date.now();
+
+    for (const plugin of payload.plugins) {
+        const pluginId = plugin?.plugin_id;
+        if (!pluginId) continue;
+        if (!monitoredSet.has(pluginId)) continue;
+        next[pluginId] = normalizeCpuSample(plugin, timestamp);
+    }
+
+    let changed = false;
+    for (const pluginId of monitored) {
+        if (!cpuSamplesChanged(state.cpuByPlugin[pluginId], next[pluginId])) continue;
+        changed = true;
+        break;
+    }
+
+    if (!changed) return false;
+    state.cpuByPlugin = next;
+    return true;
+}
+
+async function fetchCpuUsage() {
+    if (cpuPollInFlight) return;
+    const monitored = monitoredCpuPluginIds(true);
+    if (monitored.length === 0) return;
+
+    cpuPollInFlight = true;
+    let payload = null;
+    try {
+        payload = await tryFetchJson('/api/dev/plugin-cpu');
+    } finally {
+        cpuPollInFlight = false;
+    }
+
+    const changed = updateCpuSamples(payload);
+    if (!changed) return;
+    if (state.linkingId) return;
+    updateView();
+}
+
+function pruneCpuMonitoring(mergedList) {
+    const existingSamples = Object.keys(state.cpuByPlugin);
+    for (const pluginId of existingSamples) {
+        if (state.cpuMonitoring[pluginId]) continue;
+        delete state.cpuByPlugin[pluginId];
+    }
+
+    if (!state.openPluginMenuId) return;
+    const hasMenuPlugin = mergedList.some(plugin => plugin.id === state.openPluginMenuId);
+    if (hasMenuPlugin) return;
+    closePluginMenu();
+}
+
 function getMergedPluginById(pluginId) {
     return state.mergedList.find(plugin => plugin.id === pluginId) || null;
 }
@@ -139,6 +333,8 @@ function updateView() {
     const mergedList = mergePlugins(state.discovered, state.plugins, state.logControls);
     state.mergedCount = mergedList.length;
     state.mergedList = mergedList;
+    pruneCpuMonitoring(mergedList);
+    syncCpuPolling();
     state.selectedIndex = Math.max(0, Math.min(state.selectedIndex, mergedList.length - 1));
     localStorage.setItem('dev-selected-index', String(state.selectedIndex));
 
@@ -173,22 +369,46 @@ function updateView() {
 }
 
 function handleClick(e) {
-    const action = e.target.closest('[data-action]')?.dataset.action;
-    const actionId = e.target.closest('[data-id]')?.dataset.id;
+    const actionTarget = e.target.closest('[data-action]');
+    const action = actionTarget?.dataset.action;
+    const actionId = actionTarget?.dataset.id;
+
+    if (!action) {
+        if (!state.openPluginMenuId) return;
+        closePluginMenu();
+        updateView();
+        return;
+    }
 
     if (action === 'mock-update') {
         void mockController.triggerMockFlows();
     }
+    if (action === 'toggle-plugin-menu' && actionId) {
+        e.preventDefault();
+        e.stopPropagation();
+        togglePluginMenu(actionId);
+        updateView();
+        return;
+    }
     if (action === 'toggle-plugin-logs' && actionId) {
         e.preventDefault();
         e.stopPropagation();
+        closePluginMenu();
         void togglePluginLogs(actionId);
         return;
     }
     if (action === 'edit-plugin-log-filters' && actionId) {
         e.preventDefault();
         e.stopPropagation();
+        closePluginMenu();
         void editPluginLogFilters(actionId);
+        return;
+    }
+    if (action === 'toggle-plugin-cpu' && actionId) {
+        e.preventDefault();
+        e.stopPropagation();
+        closePluginMenu();
+        togglePluginCpuMonitoring(actionId);
         return;
     }
     if (action === 'toggle-link' && actionId) {
@@ -215,6 +435,7 @@ function handleClick(e) {
 function handleItemActivation() {
     const item = state.mergedList[state.selectedIndex];
     if (!item) return;
+    closePluginMenu();
     if (getActivePluginBuildState(item)) return;
 
     if (item.status === 'linked') {
@@ -420,6 +641,23 @@ async function editPluginLogFilters(pluginId) {
     if (!state.linkingId) updateView();
 }
 
+function togglePluginCpuMonitoring(pluginId) {
+    if (state.cpuMonitoring[pluginId]) {
+        delete state.cpuMonitoring[pluginId];
+        delete state.cpuByPlugin[pluginId];
+        persistCpuMonitoring();
+        syncCpuPolling();
+        updateView();
+        return;
+    }
+
+    state.cpuMonitoring[pluginId] = true;
+    persistCpuMonitoring();
+    syncCpuPolling();
+    updateView();
+    void fetchCpuUsage();
+}
+
 async function triggerReload() {
     const res = await fetch('/api/dev/reload', { method: 'POST' });
     if (!res.ok && res.status !== 409) {
@@ -478,6 +716,14 @@ export function handleKey(e) {
 
     if (e.ctrlKey || e.altKey || e.metaKey) return;
 
+    if (e.key === 'Escape') {
+        if (!state.openPluginMenuId) return;
+        e.preventDefault();
+        closePluginMenu();
+        updateView();
+        return;
+    }
+
     const total = totalItems();
 
     if (e.key === 'ArrowDown' && total > 0) {
@@ -500,10 +746,23 @@ export function handleKey(e) {
     if (e.key === 'r' || e.key === 'R') {
         e.preventDefault();
         void discoveryController.triggerDiscovery();
+        return;
+    }
+
+    if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        const item = state.mergedList[state.selectedIndex];
+        if (!item) return;
+        togglePluginMenu(item.id);
+        updateView();
     }
 }
 
 export function onFocus() {
+    syncCpuPolling();
+    if (monitoredCpuPluginIds(true).length > 0) {
+        void fetchCpuUsage();
+    }
     if (!state.linkingId) {
         void Promise.all([
             discoveryController.loadPlugins(true),
@@ -518,5 +777,22 @@ export function onFocus() {
 }
 
 export function onBlur() {
+    closePluginMenu();
     mockController.onBlur();
+}
+
+export function destroy() {
+    stopCpuPolling();
+    if (unsubscribe) {
+        unsubscribe();
+        unsubscribe = null;
+    }
+    if (unsubscribeReconnect) {
+        unsubscribeReconnect();
+        unsubscribeReconnect = null;
+    }
+    if (container) {
+        container.removeEventListener('click', handleClick);
+        container = null;
+    }
 }

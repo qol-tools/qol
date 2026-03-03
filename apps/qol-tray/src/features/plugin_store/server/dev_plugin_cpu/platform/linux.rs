@@ -1,5 +1,9 @@
 use std::fs;
 
+pub(super) fn cpu_percent_window_samples() -> usize {
+    1
+}
+
 pub(super) fn process_cpu_micros(pid: i32) -> Option<u64> {
     if pid <= 0 {
         return None;
