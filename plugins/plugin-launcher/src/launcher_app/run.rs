@@ -11,7 +11,7 @@ use crate::platform;
 
 use super::keepalive;
 use super::windows::{activate_or_open_launcher, ActiveLaunchers};
-use super::{LauncherView, PreloadedEntries, SharedEntries, SharedEntryState};
+use super::{PreloadedEntries, SharedEntries, SharedEntryState};
 
 pub fn run() {
     let show_immediately = std::env::args().any(|a| a == "--show");
@@ -55,7 +55,7 @@ pub fn run() {
             focus_cache.clone(),
             cx,
         );
-        spawn_prewarm(entries.clone(), active.clone(), cx);
+        spawn_prewarm(entries.clone(), cx);
 
         if show_immediately {
             #[cfg(debug_assertions)]
@@ -128,16 +128,17 @@ fn spawn_command_poll(
                         "[launcher] command_poll: snapshot={:?}",
                         snapshot.as_ref().map(|m| m.bounds())
                     );
-                    let entries = entries.clone();
+                    let show_entries = entries.clone();
                     let active = active.clone();
                     eprintln!("[launcher] cx.update start");
                     if let Err(e) = cx.update(move |cx| {
-                        activate_or_open_launcher(entries.clone(), active.clone(), snapshot, cx)
+                        activate_or_open_launcher(show_entries, active, snapshot, cx)
                     }) {
                         eprintln!("[launcher] command_poll: cx.update failed: {:?}", e);
                     } else {
                         eprintln!("[launcher] cx.update done");
                     }
+                    spawn_refresh(entries.clone(), cx);
                 }
                 Some(daemon::Command::Kill) => {
                     cx.update(|cx| cx.quit()).ok();
@@ -164,66 +165,41 @@ async fn wait_for_entries(entries: &SharedEntries, cx: &mut AsyncApp) {
     }
 }
 
-fn spawn_prewarm(
-    entries: SharedEntries,
-    active: Rc<RefCell<ActiveLaunchers>>,
-    cx: &mut App,
-) {
+fn spawn_prewarm(entries: SharedEntries, cx: &mut App) {
     cx.spawn({
         let entries = entries.clone();
-        let active = active.clone();
         async move |cx: &mut AsyncApp| {
             let executor = cx.background_executor().clone();
-            let mut warmed = false;
-            loop {
-                if warmed {
-                    executor.timer(Duration::from_secs(2)).await;
-                }
-
-                // Skip if a launcher is currently visible
-                let any_visible = cx
-                    .update(|cx| {
-                        active
-                            .borrow()
-                            .handles()
-                            .iter()
-                            .any(|h| h.update(cx, |v, _, _| v.is_showing).unwrap_or(false))
-                    })
-                    .unwrap_or(false);
-                if any_visible {
-                    warmed = true; // ensure timer fires on next iteration, no spin
-                    continue;
-                }
-
-                let fresh = executor
-                    .spawn(async { Arc::new(PreloadedEntries::load()) })
-                    .await;
-
-                if let Ok(mut guard) = entries.lock() {
-                    guard.entries = fresh.clone();
-                    guard.loaded_once = true;
-                }
-
-                let _ = cx.update(|cx| {
-                    for handle in active.borrow().handles() {
-                        let e = fresh.clone();
-                        let _ = handle.update(cx, |view, _, cx| {
-                            view.store.replace_entries(
-                                e.app_entries.clone(),
-                                e.file_entries.clone(),
-                            );
-                            view.store.ensure_filtered(&view.state);
-                            cx.notify();
-                        });
-                    }
-                });
-
-                if !warmed {
-                    eprintln!("[launcher] prewarm: initial load complete");
-                }
-                warmed = true;
+            let fresh = executor
+                .spawn(async { Arc::new(PreloadedEntries::load()) })
+                .await;
+            if let Ok(mut guard) = entries.lock() {
+                guard.entries = fresh;
+                guard.loaded_once = true;
             }
+            eprintln!("[launcher] prewarm: initial load complete");
         }
     })
     .detach();
+}
+
+fn spawn_refresh(entries: SharedEntries, cx: &mut AsyncApp) {
+    let _ = cx.update({
+        let entries = entries.clone();
+        move |cx: &mut App| {
+            cx.spawn({
+                async move |cx: &mut AsyncApp| {
+                    let executor = cx.background_executor().clone();
+                    let fresh = executor
+                        .spawn(async { Arc::new(PreloadedEntries::load()) })
+                        .await;
+                    if let Ok(mut guard) = entries.lock() {
+                        guard.entries = fresh;
+                        guard.loaded_once = true;
+                    }
+                }
+            })
+            .detach();
+        }
+    });
 }
