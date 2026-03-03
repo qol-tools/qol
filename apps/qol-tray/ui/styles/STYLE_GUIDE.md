@@ -28,6 +28,7 @@
 - Text: `--text-*`
 - Borders: `--border-*`
 - States: `--accent`, `--success`, `--danger`, `--warning`, `--state-*`
+- Layer alphas: `--layer-paper-*`, `--layer-ink-*`
 
 ## Usage Rules
 
@@ -37,6 +38,7 @@
   - `rgba(var(--accent-rgb), 0.2)`
   - `rgba(var(--paper-rgb), 0.08)`
   - `rgba(var(--ink-rgb), 0.6)`
+- If an alpha pattern is reused in 2+ places, promote it to a `--layer-*` token.
 - Keep compatibility aliases in `foundation.css` stable unless migrating all usages in one change.
 
 ## Component Contracts

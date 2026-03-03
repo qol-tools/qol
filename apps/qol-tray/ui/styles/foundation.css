@@ -112,6 +112,33 @@
     --state-success-bg: rgba(var(--success-rgb), 0.14);
     --state-danger-bg: rgba(var(--danger-rgb), 0.14);
     --state-warning-bg: rgba(var(--warning-rgb), 0.15);
+    --state-info-border: rgba(var(--accent-rgb), 0.45);
+    --state-success-border: rgba(var(--success-rgb), 0.45);
+    --state-danger-border: rgba(var(--danger-rgb), 0.55);
+
+    --layer-paper-02: rgba(var(--paper-rgb), 0.02);
+    --layer-paper-03: rgba(var(--paper-rgb), 0.03);
+    --layer-paper-05: rgba(var(--paper-rgb), 0.05);
+    --layer-paper-06: rgba(var(--paper-rgb), 0.06);
+    --layer-paper-07: rgba(var(--paper-rgb), 0.07);
+    --layer-paper-08: rgba(var(--paper-rgb), 0.08);
+    --layer-paper-10: rgba(var(--paper-rgb), 0.1);
+    --layer-paper-12: rgba(var(--paper-rgb), 0.12);
+    --layer-paper-13: rgba(var(--paper-rgb), 0.13);
+    --layer-paper-14: rgba(var(--paper-rgb), 0.14);
+    --layer-paper-15: rgba(var(--paper-rgb), 0.15);
+    --layer-paper-16: rgba(var(--paper-rgb), 0.16);
+    --layer-paper-22: rgba(var(--paper-rgb), 0.22);
+
+    --layer-ink-18: rgba(var(--ink-rgb), 0.18);
+    --layer-ink-20: rgba(var(--ink-rgb), 0.2);
+    --layer-ink-22: rgba(var(--ink-rgb), 0.22);
+    --layer-ink-24: rgba(var(--ink-rgb), 0.24);
+    --layer-ink-28: rgba(var(--ink-rgb), 0.28);
+    --layer-ink-35: rgba(var(--ink-rgb), 0.35);
+    --layer-ink-45: rgba(var(--ink-rgb), 0.45);
+    --layer-ink-62: rgba(var(--ink-rgb), 0.62);
+    --layer-ink-70: rgba(var(--ink-rgb), 0.7);
 
     --bg-base: var(--surface-canvas);
     --bg-elevated: var(--surface-elevated);
@@ -423,7 +450,7 @@ body {
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(90deg, rgba(var(--paper-rgb), 0.15), transparent 60%);
+    background: linear-gradient(90deg, var(--layer-paper-15), transparent 60%);
     animation: done-sweep 0.8s ease-out forwards;
     pointer-events: none;
 }
@@ -617,13 +644,13 @@ header p { color: var(--text-muted); font-size: 1.1rem; }
 }
 
 .view-feedback.error {
-    border-color: rgba(var(--danger-rgb), 0.55);
+    border-color: var(--state-danger-border);
     background: var(--state-danger-bg);
     color: var(--red-300);
 }
 
 .view-feedback.success {
-    border-color: rgba(var(--success-rgb), 0.45);
+    border-color: var(--state-success-border);
     background: var(--state-success-bg);
     color: var(--green-300);
 }

@@ -6,24 +6,46 @@
 <title>Plugin Settings</title>
 <style>
 :root {
-    --cfg-bg-glow-1: #2f3a51;
-    --cfg-bg-glow-2: #1a2937;
+    --slate-975: #111317;
+    --slate-950: #161920;
+    --slate-900: #1a1e26;
+    --slate-850: #20252f;
+    --slate-800: #272d38;
+    --slate-750: #2f3644;
+    --slate-700: #394257;
+    --slate-600: #4d5870;
+    --slate-500: #67748f;
+    --slate-400: #8a97ae;
+    --slate-300: #b8c0d0;
+    --slate-200: #d6deeb;
+    --slate-100: #edf2fb;
+    --blue-700: #2d75d5;
+    --blue-600: #3a88ea;
+    --blue-500: #4a9eff;
+    --blue-400: #68b0ff;
+    --blue-300: #8fc4ff;
+    --green-400: #4ade80;
+    --green-300: #78e8a0;
+    --red-400: #ff8787;
+
+    --cfg-bg-glow-1: var(--slate-700);
+    --cfg-bg-glow-2: var(--slate-850);
     --cfg-bg-1: #0b1018;
-    --cfg-bg-2: #121a27;
+    --cfg-bg-2: var(--slate-950);
     --cfg-bg-3: #0f141f;
-    --cfg-text-strong: #e8eef9;
-    --cfg-text-bright: #d7e4ff;
-    --cfg-text-muted: #a8b7cf;
-    --cfg-text-subtle: #9fb1cf;
-    --cfg-text-faint: #5a6a82;
-    --cfg-heading: #b8cff9;
-    --cfg-accent: #7db3ff;
+    --cfg-text-strong: var(--slate-100);
+    --cfg-text-bright: var(--slate-200);
+    --cfg-text-muted: var(--slate-400);
+    --cfg-text-subtle: var(--slate-300);
+    --cfg-text-faint: var(--slate-500);
+    --cfg-heading: var(--blue-300);
+    --cfg-accent: var(--blue-300);
     --cfg-accent-bg: rgba(63, 120, 223, 0.3);
     --cfg-accent-bg-hover: rgba(63, 120, 223, 0.5);
     --cfg-accent-bg-active: rgba(63, 120, 223, 0.4);
     --cfg-accent-border: rgba(125, 179, 255, 0.3);
-    --cfg-accent-grad-1: #3f78df;
-    --cfg-accent-grad-2: #2f57b8;
+    --cfg-accent-grad-1: var(--blue-600);
+    --cfg-accent-grad-2: var(--blue-700);
     --cfg-panel-bg: rgba(14, 22, 35, 0.74);
     --cfg-border-soft: rgba(111, 139, 188, 0.25);
     --cfg-input-bg: rgba(8, 14, 24, 0.8);
@@ -35,10 +57,10 @@
     --cfg-muted-border-soft: rgba(107, 129, 176, 0.25);
     --cfg-muted-bg-soft: rgba(107, 129, 176, 0.1);
     --cfg-divider: rgba(123, 151, 199, 0.2);
-    --cfg-success: #86d5a3;
+    --cfg-success: var(--green-300);
     --cfg-success-bg: rgba(134, 213, 163, 0.2);
     --cfg-success-border: rgba(134, 213, 163, 0.3);
-    --cfg-danger: #ff8989;
+    --cfg-danger: var(--red-400);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
