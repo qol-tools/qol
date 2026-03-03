@@ -4,20 +4,58 @@ pub struct FuzzyMatch {
     pub positions: Vec<usize>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedFuzzyQuery {
+    query_orig: Vec<char>,
+    query_lower: Vec<char>,
+}
+
+pub fn prepare_fuzzy_query(query: &str) -> PreparedFuzzyQuery {
+    PreparedFuzzyQuery {
+        query_orig: query.chars().collect(),
+        query_lower: query.chars().flat_map(|c| c.to_lowercase()).collect(),
+    }
+}
+
 pub fn fuzzy_match(query: &str, candidate: &str) -> Option<FuzzyMatch> {
-    if query.is_empty() {
+    let prepared = prepare_fuzzy_query(query);
+    fuzzy_match_prepared(&prepared, candidate)
+}
+
+pub fn fuzzy_match_prepared(prepared: &PreparedFuzzyQuery, candidate: &str) -> Option<FuzzyMatch> {
+    if prepared.query_orig.is_empty() {
         return Some(FuzzyMatch { score: 0, positions: vec![] });
     }
 
-    let q_orig: Vec<char> = query.chars().collect();
-    let q: Vec<char> = query.chars().flat_map(|c| c.to_lowercase()).collect();
     let c_orig: Vec<char> = candidate.chars().collect();
     let c_lower: Vec<char> = candidate.to_lowercase().chars().collect();
 
-    let greedy = score_pass(&q, &q_orig, &c_orig, &c_lower, false);
-    let boundary = score_pass(&q, &q_orig, &c_orig, &c_lower, true);
-    let contiguous = score_contiguous_pass(&q, &q_orig, &c_orig, &c_lower);
-    let word_match = score_word_match_pass(&q, &q_orig, &c_orig, &c_lower);
+    let greedy = score_pass(
+        &prepared.query_lower,
+        &prepared.query_orig,
+        &c_orig,
+        &c_lower,
+        false,
+    );
+    let boundary = score_pass(
+        &prepared.query_lower,
+        &prepared.query_orig,
+        &c_orig,
+        &c_lower,
+        true,
+    );
+    let contiguous = score_contiguous_pass(
+        &prepared.query_lower,
+        &prepared.query_orig,
+        &c_orig,
+        &c_lower,
+    );
+    let word_match = score_word_match_pass(
+        &prepared.query_lower,
+        &prepared.query_orig,
+        &c_orig,
+        &c_lower,
+    );
 
     [greedy, boundary, contiguous, word_match]
         .into_iter()
