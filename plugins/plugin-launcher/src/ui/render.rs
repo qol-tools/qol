@@ -23,7 +23,7 @@ impl Render for LauncherView {
             self.blur_sub = Some(cx.on_blur(
                 &self.focus_handle,
                 window,
-                |this, window, cx| {
+                |this, window, _cx| {
                     if std::time::Instant::now() < this.blur_guard_until {
                         return;
                     }
@@ -34,7 +34,7 @@ impl Render for LauncherView {
         }
 
         if self.activation_sub.is_none() {
-            self.activation_sub = Some(cx.observe_window_activation(window, |this, window, cx| {
+            self.activation_sub = Some(cx.observe_window_activation(window, |this, window, _cx| {
                 if !window.is_window_active() {
                     if std::time::Instant::now() < this.blur_guard_until {
                         return;
@@ -110,6 +110,7 @@ impl Render for LauncherView {
             .id("launcher")
             .track_focus(&self.focus_handle)
             .size_full()
+            .overflow_hidden()
             .flex()
             .flex_col()
             .bg(view::bg_color())
@@ -140,6 +141,7 @@ impl Render for LauncherView {
                 div()
                     .h(px(results_height))
                     .w_full()
+                    .overflow_hidden()
                     .flex()
                     .flex_col()
                     .bg(view::bg_color())

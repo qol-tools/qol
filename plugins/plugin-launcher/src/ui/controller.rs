@@ -18,18 +18,15 @@ impl LauncherView {
         cx: &mut Context<Self>,
     ) {
         let key = event.keystroke.key.as_str();
-        let secondary = event.keystroke.modifiers.secondary();
+        let secondary = event.keystroke.modifiers.secondary() || event.keystroke.modifiers.control;
+        let shift = event.keystroke.modifiers.shift;
+        let alt = event.keystroke.modifiers.alt;
 
         if self.handle_clipboard_shortcut(key, secondary, cx) {
             return;
         }
-
-        let key = event.keystroke.key.as_str();
-        let ctrl = event.keystroke.modifiers.control;
-        let shift = event.keystroke.modifiers.shift;
-        let alt = event.keystroke.modifiers.alt;
         let result_count = self.store.result_count();
-        match self.state.apply_key(key, ctrl, shift, alt, result_count) {
+        match self.state.apply_key(key, secondary, shift, alt, result_count) {
             InputEffect::Ignore => {}
             InputEffect::Navigate => {
                 self.store.ensure_filtered(&self.state.query, self.state.mode, self.state.fuzziness);
