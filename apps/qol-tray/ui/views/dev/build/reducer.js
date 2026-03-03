@@ -10,14 +10,25 @@ export function nextBuildStartedState() {
 }
 
 export function nextBuildProgressState(currentProgress, event) {
+    const status = event.status || 'building';
+    const normalizedPercent = normalizePercent(event.percent);
+    const previous = currentProgress[event.plugin_id];
     return {
         ...currentProgress,
         [event.plugin_id]: {
-            status: event.status || 'building',
-            percent: normalizePercent(event.percent, { round: true }),
+            status,
+            percent: resolveProgressPercent(previous, status, normalizedPercent),
             phase: event.phase || ''
         }
     };
+}
+
+function resolveProgressPercent(previous, status, normalizedPercent) {
+    if (!previous) return normalizedPercent;
+    if (status !== 'building') return normalizedPercent;
+    if (previous.status !== 'building') return normalizedPercent;
+    if (normalizedPercent >= previous.percent) return normalizedPercent;
+    return previous.percent;
 }
 
 export function nextBuildCompletedState(results) {
@@ -41,7 +52,7 @@ export function parseHydratedBuildState(payload) {
         }
         buildProgress[pluginId] = {
             status: typeof entry.status === 'string' ? entry.status : 'building',
-            percent: normalizePercent(entry.percent, { round: true }),
+            percent: normalizePercent(entry.percent),
             phase: typeof entry.phase === 'string' ? entry.phase : ''
         };
     }

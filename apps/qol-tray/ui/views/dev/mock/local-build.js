@@ -10,6 +10,11 @@ export async function runLocalMockPluginBuild({
     onClearQueuedBuildSync,
     sleep = defaultSleep
 }) {
+    const compilePhaseCount = 24;
+    const compileStepCount = 66;
+    const compileTotalMs = 1320;
+    const compileStepDelayMs = Math.round(compileTotalMs / compileStepCount);
+
     const pluginIds = getPluginIds()
         .filter(Boolean)
         .sort((a, b) => a.localeCompare(b));
@@ -36,11 +41,13 @@ export async function runLocalMockPluginBuild({
         onQueueBuildSync(pluginId);
         await sleep(120);
 
-        for (let done = 1; done <= 24; done += 1) {
+        for (let step = 1; step <= compileStepCount; step += 1) {
             if (!isCurrentRun()) return false;
-            setPluginBuilding(pluginId, Math.floor((done * 100) / 24), `${done}/24 compiling`);
+            const percent = (step * 100) / compileStepCount;
+            const phase = Math.max(1, Math.round((step * compilePhaseCount) / compileStepCount));
+            setPluginBuilding(pluginId, percent, `${phase}/24 compiling`);
             onQueueBuildSync(pluginId);
-            await sleep(55);
+            await sleep(compileStepDelayMs);
         }
     }
 

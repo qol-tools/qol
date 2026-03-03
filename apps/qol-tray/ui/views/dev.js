@@ -1,5 +1,5 @@
 import { subscribe, onReconnect } from '../events.js';
-import { jsonRequest, readResponseText, tryFetchJson } from '../api/client.js';
+import { jsonRequest, readResponseText } from '../api/client.js';
 import { mergePlugins, renderBuildResults, renderPluginBuildMeta } from './dev/plugin-model.js';
 import { renderDevView } from './dev/template.js';
 import { createBuildController } from './dev/build-controller.js';
@@ -13,9 +13,27 @@ import {
 export const id = 'dev';
 const CPU_MONITORING_STORAGE_KEY = 'dev-cpu-monitoring';
 
+function saveSpinnerTimes(root) {
+    const times = [];
+    for (const btn of root.querySelectorAll('.refresh-btn.spinning')) {
+        const anim = btn.getAnimations?.()[0];
+        times.push(anim ? anim.currentTime : null);
+    }
+    return times;
+}
+
+function restoreSpinnerTimes(root, times) {
+    if (!times.length) return;
+    const buttons = root.querySelectorAll('.refresh-btn.spinning');
+    for (let i = 0; i < buttons.length && i < times.length; i++) {
+        if (times[i] === null) continue;
+        const anim = buttons[i].getAnimations?.()[0];
+        if (anim) anim.currentTime = times[i];
+    }
+}
+
 function readSavedIndex() {
-    const saved = parseInt(localStorage.getItem('dev-selected-index'), 10);
-    return Number.isFinite(saved) && saved >= 0 ? saved : 0;
+    return -1;
 }
 
 function readSavedCpuMonitoring() {
@@ -69,8 +87,6 @@ let container = null;
 let unsubscribe = null;
 let unsubscribeReconnect = null;
 let reloadCooldownUntil = 0;
-let cpuPollTimer = null;
-let cpuPollInFlight = false;
 
 const discoveryController = createDiscoveryController({
     state,
@@ -149,6 +165,11 @@ function handleEvent(event) {
         return;
     }
 
+    if (event.type === 'plugin_cpu_snapshot') {
+        handleCpuSnapshot(event);
+        return;
+    }
+
     buildController.handleEvent(event);
     mockController.handleEvent(event);
 }
@@ -188,28 +209,6 @@ function persistCpuMonitoring() {
             JSON.stringify(monitoredCpuPluginIds())
         );
     } catch {}
-}
-
-function stopCpuPolling() {
-    if (!cpuPollTimer) return;
-    window.clearInterval(cpuPollTimer);
-    cpuPollTimer = null;
-}
-
-function startCpuPolling() {
-    if (cpuPollTimer) return;
-    cpuPollTimer = window.setInterval(() => {
-        void fetchCpuUsage();
-    }, 1000);
-}
-
-function syncCpuPolling() {
-    const monitored = monitoredCpuPluginIds(true);
-    if (monitored.length === 0) {
-        stopCpuPolling();
-        return;
-    }
-    startCpuPolling();
 }
 
 function isNumber(value) {
@@ -289,21 +288,12 @@ function updateCpuSamples(payload) {
     return true;
 }
 
-async function fetchCpuUsage() {
-    if (cpuPollInFlight) return;
-    const monitored = monitoredCpuPluginIds(true);
-    if (monitored.length === 0) return;
-
-    cpuPollInFlight = true;
-    let payload = null;
-    try {
-        payload = await tryFetchJson('/api/dev/plugin-cpu');
-    } finally {
-        cpuPollInFlight = false;
-    }
-
-    const changed = updateCpuSamples(payload);
-    if (!changed) return;
+function handleCpuSnapshot(event) {
+    const payload = {
+        timestamp_ms: event.timestamp_ms,
+        plugins: event.plugins
+    };
+    if (!updateCpuSamples(payload)) return;
     if (state.linkingId) return;
     updateView();
 }
@@ -334,13 +324,17 @@ function updateView() {
     state.mergedCount = mergedList.length;
     state.mergedList = mergedList;
     pruneCpuMonitoring(mergedList);
-    syncCpuPolling();
-    state.selectedIndex = Math.max(0, Math.min(state.selectedIndex, mergedList.length - 1));
-    localStorage.setItem('dev-selected-index', String(state.selectedIndex));
+    if (mergedList.length === 0) {
+        state.selectedIndex = -1;
+    }
+    if (mergedList.length > 0) {
+        state.selectedIndex = Math.max(-1, Math.min(state.selectedIndex, mergedList.length - 1));
+    }
 
     buildController.pruneInvisibleProgress(new Set(mergedList.map(plugin => plugin.id)));
 
     const prevScrollTop = container.querySelector('.view-body')?.scrollTop ?? 0;
+    const spinnerTimes = saveSpinnerTimes(container);
 
     container.innerHTML = renderDevView({
         state,
@@ -352,6 +346,7 @@ function updateView() {
 
     const viewBody = container.querySelector('.view-body');
     if (viewBody) viewBody.scrollTop = prevScrollTop;
+    restoreSpinnerTimes(container, spinnerTimes);
 
     const input = container.querySelector('#link-path');
     if (input) {
@@ -646,16 +641,13 @@ function togglePluginCpuMonitoring(pluginId) {
         delete state.cpuMonitoring[pluginId];
         delete state.cpuByPlugin[pluginId];
         persistCpuMonitoring();
-        syncCpuPolling();
         updateView();
         return;
     }
 
     state.cpuMonitoring[pluginId] = true;
     persistCpuMonitoring();
-    syncCpuPolling();
     updateView();
-    void fetchCpuUsage();
 }
 
 async function triggerReload() {
@@ -728,12 +720,22 @@ export function handleKey(e) {
 
     if (e.key === 'ArrowDown' && total > 0) {
         e.preventDefault();
+        if (state.selectedIndex < 0) {
+            state.selectedIndex = 0;
+            updateView();
+            return;
+        }
         state.selectedIndex = Math.min(state.selectedIndex + 1, total - 1);
         updateView();
     }
 
     if (e.key === 'ArrowUp' && total > 0) {
         e.preventDefault();
+        if (state.selectedIndex < 0) {
+            state.selectedIndex = total - 1;
+            updateView();
+            return;
+        }
         state.selectedIndex = Math.max(state.selectedIndex - 1, 0);
         updateView();
     }
@@ -759,30 +761,22 @@ export function handleKey(e) {
 }
 
 export function onFocus() {
-    syncCpuPolling();
-    if (monitoredCpuPluginIds(true).length > 0) {
-        void fetchCpuUsage();
-    }
-    if (!state.linkingId) {
-        void Promise.all([
-            discoveryController.loadPlugins(true),
-            discoveryController.fetchDiscoveryState(true),
-            discoveryController.loadLogControls(true),
-            mockController.hydrateMockTargets(true)
-        ]).finally(() => {
-            updateView();
-        });
-    }
-    mockController.onFocus();
+    if (state.linkingId) return;
+    void Promise.all([
+        discoveryController.loadPlugins(true),
+        discoveryController.fetchDiscoveryState(true),
+        discoveryController.loadLogControls(true),
+        mockController.hydrateMockTargets(true)
+    ]).finally(() => {
+        updateView();
+    });
 }
 
 export function onBlur() {
     closePluginMenu();
-    mockController.onBlur();
 }
 
 export function destroy() {
-    stopCpuPolling();
     if (unsubscribe) {
         unsubscribe();
         unsubscribe = null;

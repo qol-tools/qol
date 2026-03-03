@@ -1,5 +1,5 @@
 import { html } from '../lib/html.js';
-import { clampPercent, formatDownloadingProgress, formatPhaseProgress } from '../utils/progress.js';
+import { clampPercent, formatDownloadingProgress, formatPhaseProgress, toProgressScale } from '../utils/progress.js';
 
 export function SidebarFooter({ version, updateState, isDevMode, onAction }) {
     if (!version) return null;
@@ -7,6 +7,10 @@ export function SidebarFooter({ version, updateState, isDevMode, onAction }) {
 
     if (isDevMode) return renderDev(version, updateState, status, onAction);
     return renderStable(version, updateState, status, onAction);
+}
+
+function visiblePercent(value) {
+    return clampPercent(value);
 }
 
 function renderDev(version, state, status, onAction) {
@@ -48,8 +52,9 @@ function renderDev(version, state, status, onAction) {
 function renderStable(version, state, status, onAction) {
     if (status === 'downloading') {
         const percent = clampPercent(state?.percent);
-        return html`<div class="version-item is-downloading">
-            <div class="progress-fill" style="width: ${percent}%"></div>
+        const displayPercent = visiblePercent(percent);
+        return html`<div class="version-item is-downloading progress-track">
+            <div class="progress-fill" style="--progress-scale: ${toProgressScale(displayPercent)}"></div>
             <span class="version-main">v${version}</span>
             <span class="version-sub">${formatDownloadingProgress(percent)}</span>
         </div>`;
@@ -86,8 +91,9 @@ function renderStable(version, state, status, onAction) {
 }
 
 function devProgress(version, label, percent, extraClass) {
-    return html`<div class="version-item is-dev is-downloading ${extraClass}">
-        <div class="progress-fill" style="width: ${percent}%"></div>
+    const displayPercent = visiblePercent(percent);
+    return html`<div class="version-item is-dev is-downloading progress-track ${extraClass}">
+        <div class="progress-fill" style="--progress-scale: ${toProgressScale(displayPercent)}"></div>
         <span class="version-main">v${version}<span class="version-tag">DEV</span></span>
         <span class="version-sub">${label}</span>
     </div>`;

@@ -8,6 +8,14 @@ import {
 } from './build/reducer.js';
 import { createPluginBuildOverlayController } from './build-overlay.js';
 
+const LOADING_LOG_PREFIX = '[qol-dev-loading]';
+const DEBUG_LOADING = false;
+
+function logLoading(event, payload) {
+    if (!DEBUG_LOADING) return;
+    console.info(`${LOADING_LOG_PREFIX} ${event}`, payload);
+}
+
 export function createBuildController({
     state,
     getContainer,
@@ -25,6 +33,7 @@ export function createBuildController({
 
     function handleEvent(event) {
         if (event.type === 'build_started') {
+            logLoading('event:build_started', {});
             Object.assign(state, nextBuildStartedState());
             clearQueuedBuildRowSync();
             onNeedsRender();
@@ -32,6 +41,12 @@ export function createBuildController({
         }
 
         if (event.type === 'build_plugin_progress') {
+            logLoading('event:build_plugin_progress', {
+                pluginId: event.plugin_id,
+                status: event.status || 'building',
+                percent: normalizePercent(event.percent, { round: true }),
+                phase: event.phase || ''
+            });
             state.building = true;
             state.buildProgress = nextBuildProgressState(state.buildProgress, event);
             queueBuildRowSync(event.plugin_id);
@@ -42,6 +57,9 @@ export function createBuildController({
             return;
         }
 
+        logLoading('event:build_complete', {
+            results: Array.isArray(event.results) ? event.results.length : 0
+        });
         clearQueuedBuildRowSync();
         Object.assign(state, nextBuildCompletedState(event.results));
         onBuildComplete();
@@ -94,7 +112,7 @@ export function createBuildController({
             return null;
         }
 
-        const percent = normalizePercent(progress.percent, { round: true });
+        const percent = normalizePercent(progress.percent);
         const phase = (progress.phase || '').trim() || (status === 'queued' ? 'Queued' : 'Compiling');
         return { status, percent, phase };
     }
@@ -112,6 +130,7 @@ export function createBuildController({
     }
 
     function queueBuildRowSync(pluginId) {
+        logLoading('queue-row-sync', { pluginId });
         buildOverlayController.queue(pluginId, onNeedsRender);
     }
 

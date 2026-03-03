@@ -1,4 +1,3 @@
-import { createMockTargetsPoller } from './mock/effects.js';
 import {
     buildLegacyStartErrorMessage,
     fetchMockTargetsState,
@@ -14,9 +13,7 @@ import {
     createMockFlowModel,
     finishMockTesting,
     getMockFlowSource,
-    hasActiveBackendTargets,
     isCurrentMockRun,
-    pruneInactiveTargets,
     setBackendTargets,
     setMockFlowSource,
     stopMockFlowRun
@@ -33,11 +30,6 @@ export function createMockController({
     }
 
     let mockFlowModel = createMockFlowModel();
-    const poller = createMockTargetsPoller({
-        onTick: async () => {
-            await reconcileMockTargets();
-        }
-    });
 
     function handleEvent(event) {
         if (event.type === 'update_complete' || event.type === 'update_failed') {
@@ -57,16 +49,6 @@ export function createMockController({
         return state.mockTesting;
     }
 
-    function onFocus() {
-        if (state.mockTesting && getMockFlowSource(mockFlowModel) === 'backend') {
-            startPolling();
-        }
-    }
-
-    function onBlur() {
-        stopPolling();
-    }
-
     async function hydrateMockTargets(skipUpdate = false) {
         if (getMockFlowSource(mockFlowModel) === 'local') {
             return;
@@ -80,8 +62,6 @@ export function createMockController({
         const next = setBackendTargets(mockFlowModel, targetState.runningIds);
         mockFlowModel = next.model;
         state.mockTesting = next.mockTesting;
-
-        (state.mockTesting ? startPolling : stopPolling)();
         maybeRender(skipUpdate);
     }
 
@@ -104,7 +84,6 @@ export function createMockController({
         if (startRes instanceof Error) {
             state.error = startRes.message || 'Failed to trigger mock targets';
             finishTestingReducer();
-            stopPolling();
             onNeedsRender();
             return;
         }
@@ -125,7 +104,6 @@ export function createMockController({
             const targetState = setBackendTargets(mockFlowModel, startedTargets);
             mockFlowModel = targetState.model;
             state.mockTesting = targetState.mockTesting;
-            (targetState.mockTesting ? startPolling : stopPolling)();
             onNeedsRender();
             return;
         }
@@ -143,7 +121,6 @@ export function createMockController({
         const needsLocalFallback = !buildRes || buildRes.status === 404;
         if (needsLocalFallback) {
             mockFlowModel = setMockFlowSource(mockFlowModel, 'local');
-            stopPolling();
             const completed = await runLocalMockPluginBuild({
                 getPluginIds: () => getMergedPlugins().map(plugin => plugin.id),
                 isCurrentRun: () => isCurrent(runId),
@@ -176,14 +153,12 @@ export function createMockController({
             });
             if (!completed || !isCurrent(runId)) return;
             finishTestingReducer();
-            stopPolling();
         }
 
         if (!needsLocalFallback && buildRes.ok) {
             const backendTargets = setBackendTargets(mockFlowModel, ['plugin_build']);
             mockFlowModel = backendTargets.model;
             state.mockTesting = backendTargets.mockTesting;
-            startPolling();
         }
 
         const failure = await buildLegacyStartErrorMessage({
@@ -198,7 +173,6 @@ export function createMockController({
 
         if (failure.buildFailed) {
             finishTestingReducer();
-            stopPolling();
         }
 
         onNeedsRender();
@@ -211,7 +185,6 @@ export function createMockController({
         const stopped = stopMockFlowRun(mockFlowModel);
         mockFlowModel = stopped.model;
         state.mockTesting = stopped.mockTesting;
-        stopPolling();
 
         if (source === 'local') {
             buildController.stopLocalMockBuildUi();
@@ -225,57 +198,19 @@ export function createMockController({
         await stopMockTargetsApi();
     }
 
-    async function reconcileMockTargets() {
-        if (!state.mockTesting || !hasActiveBackendTargets(mockFlowModel)) return;
-        if (mockFlowModel.activeTargets.size === 0) {
-            finishTesting();
-            return;
-        }
-
-        const targetState = await fetchMockTargetsState();
-        if (!targetState) {
-            return;
-        }
-
-        const pruned = pruneInactiveTargets(mockFlowModel, targetState.runningById);
-        mockFlowModel = pruned.model;
-        if (pruned.done) {
-            finishTesting();
-            return;
-        }
-        if (pruned.changed) {
-            onNeedsRender();
-        }
-    }
-
     function completeMockTarget(targetId) {
         const completed = completeBackendTarget(mockFlowModel, targetId, state.mockTesting);
         mockFlowModel = completed.model;
         state.mockTesting = completed.mockTesting;
         if (completed.completed) {
-            stopPolling();
             onNeedsRender();
         }
-    }
-
-    function finishTesting() {
-        finishTestingReducer();
-        stopPolling();
-        onNeedsRender();
     }
 
     function finishTestingReducer() {
         const next = finishMockTesting(mockFlowModel);
         mockFlowModel = next.model;
         state.mockTesting = next.mockTesting;
-    }
-
-    function startPolling() {
-        poller.start();
-    }
-
-    function stopPolling() {
-        poller.stop();
     }
 
     function isCurrent(runId) {
@@ -286,8 +221,6 @@ export function createMockController({
         handleEvent,
         hydrateMockTargets,
         triggerMockFlows,
-        onFocus,
-        onBlur,
         isMockTesting,
         completeMockTarget
     };

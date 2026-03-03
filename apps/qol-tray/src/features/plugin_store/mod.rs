@@ -2,7 +2,7 @@ pub(crate) mod github;
 mod installer;
 mod plugin_ui;
 mod release_assets;
-mod server;
+pub(crate) mod server;
 
 use crate::daemon::Daemon;
 use crate::features::MenuProvider;
