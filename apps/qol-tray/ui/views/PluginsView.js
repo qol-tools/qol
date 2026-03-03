@@ -17,8 +17,8 @@ import { parseInstalledPayload } from '../utils/plugins.js';
 
 const PLACEHOLDER_SVG = 'data:image/svg+xml,' + encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">' +
-    '<rect fill="#333" width="300" height="200"/>' +
-    '<text fill="#666" x="50%" y="50%" text-anchor="middle" dy=".3em" font-family="sans-serif" font-size="14">No Cover</text>' +
+    '<rect fill="#2f3644" width="300" height="200"/>' +
+    '<text fill="#67748f" x="50%" y="50%" text-anchor="middle" dy=".3em" font-family="sans-serif" font-size="14">No Cover</text>' +
     '</svg>'
 );
 

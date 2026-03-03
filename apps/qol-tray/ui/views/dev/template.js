@@ -162,14 +162,22 @@ export function renderDevView({
     }).join('');
 
     return `
-        <div class="view-container">
-            <header>
-                <h1>Developer</h1>
-                <p>Link local plugins for development</p>
-            </header>
+        <div class="view-container dev-view-shell">
+            <div class="dev-stage-head">
+                <div class="dev-stage-title">
+                    <h1>Developer Control</h1>
+                    <p>Link plugins, run rebuild flows, and inspect live runtime state.</p>
+                </div>
+                <div class="dev-stage-tags" aria-hidden="true">
+                    <span>Runtime</span>
+                    <span>Build</span>
+                    <span>Discovery</span>
+                </div>
+            </div>
 
             <div class="view-body dev-view-body">
                 <div class="dev-view-content">
+                <div class="dev-content-frame">
                 <section class="dev-section">
                     <div class="section-header">
                         <h2>Plugins</h2>
@@ -218,6 +226,7 @@ export function renderDevView({
                         </div>
                     </div>
                 </section>
+                </div>
                 </div>
             </div>
         </div>
