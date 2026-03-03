@@ -168,7 +168,8 @@ export function renderDevView({
                 <p>Link local plugins for development</p>
             </header>
 
-            <div class="view-body">
+            <div class="view-body dev-view-body">
+                <div class="dev-view-content">
                 <section class="dev-section">
                     <div class="section-header">
                         <h2>Plugins</h2>
@@ -217,6 +218,7 @@ export function renderDevView({
                         </div>
                     </div>
                 </section>
+                </div>
             </div>
         </div>
     `;
