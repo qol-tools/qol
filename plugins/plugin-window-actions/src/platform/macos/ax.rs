@@ -1,10 +1,8 @@
 use std::collections::HashSet;
 use std::ffi::c_void;
-use std::thread;
-use std::time::Duration;
 
 use super::objc::{
-    ax_attr, ax_element_window_id, cfstr, cfstring_to_string, cgs_set_window_alpha, cls,
+    ax_attr, cfstr, cfstring_to_string, cls,
     dict_get_i32, msg_bool_usize, msg_i32, msg_ptr, msg_ptr_usize, sel,
     AXUIElementCreateApplication, AXUIElementPerformAction, AXUIElementSetAttributeValue,
     AXValueCreate, AXValueGetValue,
@@ -35,23 +33,6 @@ fn front_target(pid: i32) -> Option<FrontTarget> {
     }
     let win = unsafe { CFArrayGetValueAtIndex(windows.as_ptr(), 0) };
     Some(FrontTarget { app, _keeper: windows, win })
-}
-
-fn front_app_windows(pid: i32) -> Option<(CfGuard, CfGuard)> {
-    let app = CfGuard::new(unsafe { AXUIElementCreateApplication(pid) as *mut c_void })?;
-    let windows = ax_attr(app.as_ptr(), "AXWindows")?;
-    if unsafe { CFArrayGetCount(windows.as_ptr()) } == 0 {
-        return None;
-    }
-    Some((app, windows))
-}
-
-fn focused_or_first(app: &CfGuard, windows: &CfGuard) -> (*const c_void, Option<CfGuard>) {
-    if let Some(focused) = ax_attr(app.as_ptr(), "AXFocusedWindow") {
-        let ptr = focused.as_ptr();
-        return (ptr, Some(focused));
-    }
-    (unsafe { CFArrayGetValueAtIndex(windows.as_ptr(), 0) }, None)
 }
 
 fn activate_app(pid: i32, options: usize) {
@@ -100,29 +81,14 @@ fn nudge_position(win: *const c_void) {
     ax_set_position(win, &pos);
 }
 
-/// Hide app via AXHidden, minimize target, then unhide.
-fn ax_hidden_minimize(app: &CfGuard, target_win: *const c_void) {
-    let ax_hidden = CfGuard::new(cfstr("AXHidden")).unwrap();
+fn plain_minimize(win: *const c_void) {
     let ax_minimized = CfGuard::new(cfstr("AXMinimized")).unwrap();
     unsafe {
-        AXUIElementSetAttributeValue(app.as_ptr(), ax_hidden.as_const(), cf_boolean_true());
-        thread::sleep(Duration::from_millis(5));
-        AXUIElementSetAttributeValue(target_win, ax_minimized.as_const(), cf_boolean_true());
-        thread::sleep(Duration::from_millis(5));
-        AXUIElementSetAttributeValue(app.as_ptr(), ax_hidden.as_const(), cf_boolean_false());
-    }
-}
-
-/// Plain minimize — for apps that don't respond to AXHidden (Java/Electron).
-fn plain_minimize(target_win: *const c_void) {
-    let ax_minimized = CfGuard::new(cfstr("AXMinimized")).unwrap();
-    unsafe {
-        AXUIElementSetAttributeValue(target_win, ax_minimized.as_const(), cf_boolean_true());
+        AXUIElementSetAttributeValue(win, ax_minimized.as_const(), cf_boolean_true());
     }
 }
 
 /// Check if the app uses a non-native rendering pipeline (Java, etc.)
-/// by testing whether AXHidden actually affects its windows.
 fn is_java_app(pid: i32) -> bool {
     unsafe {
         let ns_app = msg_ptr_usize(
@@ -277,48 +243,61 @@ pub(super) fn set_position_and_size(pid: i32, rect: super::screen::Rect) -> bool
     }
 }
 
-/// Instantly minimize the front window via AXHidden mask.
-/// Single-window: AXHidden=false to unhide.
-/// Multi-window: NSRunningApplication.activate to unhide (preserves sibling minimized state).
+/// Hide the app (AXHidden=true). Instant, no animation.
+/// Dock click natively unhides. Equivalent to Cmd+H.
+/// Java apps fall back to plain AXMinimized (AXHidden doesn't mask their animations).
 pub(super) fn instant_minimize(pid: i32) -> bool {
-    let Some((app, windows)) = front_app_windows(pid) else {
-        return false;
-    };
-    let (target_win, _keeper) = focused_or_first(&app, &windows);
-
     if is_java_app(pid) {
-        plain_minimize(target_win);
+        let Some(ft) = front_target(pid) else {
+            return false;
+        };
+        plain_minimize(ft.win);
         return true;
     }
-    ax_hidden_minimize(&app, target_win);
+
+    let Some(app) = CfGuard::new(unsafe { AXUIElementCreateApplication(pid) as *mut c_void }) else {
+        return false;
+    };
+    let ax_hidden = CfGuard::new(cfstr("AXHidden")).unwrap();
+    unsafe {
+        AXUIElementSetAttributeValue(app.as_ptr(), ax_hidden.as_const(), cf_boolean_true());
+    }
     true
 }
 
 pub(super) fn unminimize_and_raise(pid: i32) -> bool {
-    let Some((_app, windows)) = front_app_windows(pid) else {
+    let app = CfGuard::new(unsafe { AXUIElementCreateApplication(pid) as *mut c_void });
+    let Some(app) = app else {
         return false;
     };
 
-    let ax_minimized = CfGuard::new(cfstr("AXMinimized")).unwrap();
-    let ax_raise = CfGuard::new(cfstr("AXRaise")).unwrap();
-    let count = unsafe { CFArrayGetCount(windows.as_ptr()) };
-
-    for i in 0..count {
-        let win = unsafe { CFArrayGetValueAtIndex(windows.as_ptr(), i) };
-        let Some(val) = ax_attr(win, "AXMinimized") else {
-            continue;
-        };
-        if val.as_ptr() != cf_boolean_true() as *mut c_void {
-            continue;
-        }
-        unsafe {
-            AXUIElementSetAttributeValue(win, ax_minimized.as_const(), cf_boolean_false());
-            AXUIElementPerformAction(win, ax_raise.as_const());
-        }
-        nudge_position(win);
-        activate_app(pid, 3); // IgnoringOtherApps | AllWindows
-        break;
+    // Unhide app if hidden.
+    let ax_hidden = CfGuard::new(cfstr("AXHidden")).unwrap();
+    unsafe {
+        AXUIElementSetAttributeValue(app.as_ptr(), ax_hidden.as_const(), cf_boolean_false());
     }
 
+    // Also unminimize any actually-minimized windows (Java apps, legacy state).
+    if let Some(windows) = ax_attr(app.as_ptr(), "AXWindows") {
+        let ax_minimized = CfGuard::new(cfstr("AXMinimized")).unwrap();
+        let ax_raise = CfGuard::new(cfstr("AXRaise")).unwrap();
+        let count = unsafe { CFArrayGetCount(windows.as_ptr()) };
+        for i in 0..count {
+            let win = unsafe { CFArrayGetValueAtIndex(windows.as_ptr(), i) };
+            let Some(val) = ax_attr(win, "AXMinimized") else {
+                continue;
+            };
+            if val.as_ptr() != cf_boolean_true() as *mut c_void {
+                continue;
+            }
+            unsafe {
+                AXUIElementSetAttributeValue(win, ax_minimized.as_const(), cf_boolean_false());
+                AXUIElementPerformAction(win, ax_raise.as_const());
+            }
+            nudge_position(win);
+        }
+    }
+
+    activate_app(pid, 3); // IgnoringOtherApps | AllWindows
     true
 }
