@@ -30,8 +30,7 @@ pub(crate) fn scan_files(roots: Vec<PathBuf>) -> Vec<FileEntry> {
     files
 }
 
-#[cfg(not(target_os = "linux"))]
-fn file_roots() -> Vec<PathBuf> {
+pub(super) fn file_roots() -> Vec<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_default();
     vec![
         PathBuf::from(format!("{home}/Desktop")),

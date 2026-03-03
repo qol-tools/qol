@@ -12,7 +12,7 @@ impl AppsProvider for LinuxAppsProvider {
     }
 }
 
-fn application_dirs() -> Vec<PathBuf> {
+pub(super) fn application_dirs() -> Vec<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_default();
     let data_home = std::env::var("XDG_DATA_HOME")
         .ok()

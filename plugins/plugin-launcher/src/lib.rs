@@ -2,6 +2,7 @@ pub mod daemon;
 pub mod desktop_entry;
 pub mod frecency;
 pub mod frecency_store;
+pub mod index;
 pub mod launcher_app;
 pub mod monitor;
 pub mod platform;

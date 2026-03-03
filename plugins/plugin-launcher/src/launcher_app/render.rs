@@ -79,7 +79,6 @@ impl Render for LauncherView {
             min_score,
             max_score,
         );
-
         div()
             .id("launcher")
             .track_focus(&self.focus_handle)

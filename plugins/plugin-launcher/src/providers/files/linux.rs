@@ -20,7 +20,7 @@ impl FilesProvider for LinuxFilesProvider {
     }
 }
 
-fn file_roots() -> Vec<PathBuf> {
+pub(super) fn file_roots() -> Vec<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_default();
 
     let mut roots = vec![
