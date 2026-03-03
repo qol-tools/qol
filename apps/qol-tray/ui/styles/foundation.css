@@ -44,35 +44,104 @@
 }
 
 :root {
-    --bg-base: #1a1a1a;
-    --bg-elevated: #252525;
-    --bg-surface: #2a2a2a;
-    --bg-hover: #303030;
-    --bg-selected: #2a3a4a;
+    --slate-975: #111317;
+    --slate-950: #161920;
+    --slate-900: #1a1e26;
+    --slate-850: #20252f;
+    --slate-800: #272d38;
+    --slate-750: #2f3644;
+    --slate-700: #394257;
+    --slate-600: #4d5870;
+    --slate-500: #67748f;
+    --slate-400: #8a97ae;
+    --slate-300: #b8c0d0;
+    --slate-200: #d6deeb;
+    --slate-100: #edf2fb;
 
-    --border-subtle: #333;
-    --border-default: #444;
-    --border-hover: #555;
+    --blue-700: #2d75d5;
+    --blue-600: #3a88ea;
+    --blue-500: #4a9eff;
+    --blue-400: #68b0ff;
+    --blue-300: #8fc4ff;
 
-    --text-primary: #fff;
-    --text-secondary: #ccc;
-    --text-muted: #888;
-    --text-faint: #666;
-    --text-disabled: #555;
+    --green-700: #179e4f;
+    --green-600: #1fb55b;
+    --green-500: #32cd73;
+    --green-400: #4ade80;
+    --green-300: #78e8a0;
 
-    --accent: #4a9eff;
-    --accent-hover: #3a8eef;
-    --accent-glow: rgba(74, 158, 255, 0.3);
+    --red-700: #db4747;
+    --red-600: #ea5656;
+    --red-500: #ff6b6b;
+    --red-400: #ff8787;
+    --red-300: #ffabab;
 
-    --success: #4ade80;
-    --success-hover: #22c55e;
-    --success-glow: rgba(74, 222, 128, 0.3);
+    --amber-700: #c98a00;
+    --amber-600: #dca110;
+    --amber-500: #ffc107;
+    --amber-400: #ffd34e;
+    --amber-300: #ffe08a;
 
-    --danger: #ff6b6b;
-    --danger-hover: #ff5252;
+    --accent-rgb: 74 158 255;
+    --success-rgb: 74 222 128;
+    --danger-rgb: 255 107 107;
+    --warning-rgb: 255 193 7;
+    --ink-rgb: 0 0 0;
+    --paper-rgb: 255 255 255;
+    --overlay-surface-rgb: 18 22 30;
+    --overlay-deep-rgb: 17 20 25;
+    --overlay-ink-rgb: 7 10 14;
 
-    --warning: #ffc107;
-    --warning-bg: rgba(255, 193, 7, 0.15);
+    --surface-canvas: var(--slate-900);
+    --surface-elevated: var(--slate-850);
+    --surface-raised: var(--slate-800);
+    --surface-hovered: var(--slate-750);
+    --surface-selected: #2a3950;
+
+    --text-strong: var(--slate-100);
+    --text-default: var(--slate-300);
+    --text-muted-2: var(--slate-500);
+    --text-subtle: var(--slate-600);
+    --text-disabled-2: var(--slate-700);
+
+    --border-weak: #2f3644;
+    --border-default-2: #3e485b;
+    --border-strong: #55627a;
+
+    --state-info-bg: rgba(var(--accent-rgb), 0.14);
+    --state-success-bg: rgba(var(--success-rgb), 0.14);
+    --state-danger-bg: rgba(var(--danger-rgb), 0.14);
+    --state-warning-bg: rgba(var(--warning-rgb), 0.15);
+
+    --bg-base: var(--surface-canvas);
+    --bg-elevated: var(--surface-elevated);
+    --bg-surface: var(--surface-raised);
+    --bg-hover: var(--surface-hovered);
+    --bg-selected: var(--surface-selected);
+
+    --border-subtle: var(--border-weak);
+    --border-default: var(--border-default-2);
+    --border-hover: var(--border-strong);
+
+    --text-primary: var(--text-strong);
+    --text-secondary: var(--text-default);
+    --text-muted: var(--text-muted-2);
+    --text-faint: var(--text-subtle);
+    --text-disabled: var(--text-disabled-2);
+
+    --accent: var(--blue-500);
+    --accent-hover: var(--blue-600);
+    --accent-glow: rgba(var(--accent-rgb), 0.3);
+
+    --success: var(--green-400);
+    --success-hover: var(--green-500);
+    --success-glow: rgba(var(--success-rgb), 0.3);
+
+    --danger: var(--red-500);
+    --danger-hover: var(--red-600);
+
+    --warning: var(--amber-500);
+    --warning-bg: var(--state-warning-bg);
 
     --radius-sm: 4px;
     --radius-md: 6px;
@@ -223,8 +292,8 @@ body {
     line-height: 1;
     padding: 0.18rem 0.34rem;
     border-radius: 999px;
-    border: 1px solid rgba(74, 158, 255, 0.45);
-    background: rgba(74, 158, 255, 0.15);
+    border: 1px solid rgba(var(--accent-rgb), 0.45);
+    background: rgba(var(--accent-rgb), 0.15);
     color: var(--accent);
     letter-spacing: 0.03em;
     font-weight: 600;
@@ -258,7 +327,7 @@ body {
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(90deg, rgba(74, 158, 255, 0.4) 0%, transparent 70%);
+    background: linear-gradient(90deg, rgba(var(--accent-rgb), 0.4) 0%, transparent 70%);
     animation: update-breathe 3s ease-in-out infinite;
     pointer-events: none;
 }
@@ -296,8 +365,8 @@ body {
     top: 0;
     left: 0;
     bottom: 0;
-    background: linear-gradient(90deg, rgba(74, 158, 255, 0.55) 0%, rgba(74, 158, 255, 0.35) 100%);
-    box-shadow: 0 0 12px rgba(74, 158, 255, 0.3), inset 0 0 8px rgba(74, 158, 255, 0.1);
+    background: linear-gradient(90deg, rgba(var(--accent-rgb), 0.55) 0%, rgba(var(--accent-rgb), 0.35) 100%);
+    box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.3), inset 0 0 8px rgba(var(--accent-rgb), 0.1);
     transition: width 0.3s ease;
     pointer-events: none;
 }
@@ -317,7 +386,7 @@ body {
 }
 
 @keyframes burst-flash {
-    0% { background: rgba(74, 158, 255, 0.3); }
+    0% { background: rgba(var(--accent-rgb), 0.3); }
     100% { background: transparent; }
 }
 
@@ -345,7 +414,7 @@ body {
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(90deg, rgba(74, 222, 128, 0.3) 0%, transparent 70%);
+    background: linear-gradient(90deg, rgba(var(--success-rgb), 0.3) 0%, transparent 70%);
     animation: done-flash 2s ease-out forwards;
     pointer-events: none;
 }
@@ -354,7 +423,7 @@ body {
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(90deg, rgba(255, 255, 255, 0.15), transparent 60%);
+    background: linear-gradient(90deg, rgba(var(--paper-rgb), 0.15), transparent 60%);
     animation: done-sweep 0.8s ease-out forwards;
     pointer-events: none;
 }
@@ -548,15 +617,15 @@ header p { color: var(--text-muted); font-size: 1.1rem; }
 }
 
 .view-feedback.error {
-    border-color: rgba(255, 107, 107, 0.55);
-    background: rgba(255, 107, 107, 0.16);
-    color: #ffd7d7;
+    border-color: rgba(var(--danger-rgb), 0.55);
+    background: var(--state-danger-bg);
+    color: var(--red-300);
 }
 
 .view-feedback.success {
-    border-color: rgba(74, 222, 128, 0.45);
-    background: rgba(74, 222, 128, 0.14);
-    color: #d8ffe7;
+    border-color: rgba(var(--success-rgb), 0.45);
+    background: var(--state-success-bg);
+    color: var(--green-300);
 }
 
 .view-feedback.info {
@@ -564,4 +633,3 @@ header p { color: var(--text-muted); font-size: 1.1rem; }
     background: var(--bg-elevated);
     color: var(--text-secondary);
 }
-

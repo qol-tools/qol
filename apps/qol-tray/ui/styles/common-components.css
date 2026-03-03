@@ -29,7 +29,7 @@
 
 .btn-success {
     background: var(--success);
-    color: #000;
+    color: var(--slate-975);
 }
 .btn-success:hover:not(:disabled) {
     background: var(--success-hover);
@@ -61,7 +61,7 @@
 }
 .btn-outline-danger:hover:not(:disabled) {
     background: var(--danger);
-    color: #fff;
+    color: var(--text-primary);
 }
 
 .btn-sm {
@@ -163,33 +163,33 @@
 }
 
 .badge-linked {
-    color: #4ade80;
-    background: rgba(74, 222, 128, 0.14);
-    border-color: rgba(74, 222, 128, 0.3);
+    color: var(--success);
+    background: rgba(var(--success-rgb), 0.14);
+    border-color: rgba(var(--success-rgb), 0.3);
 }
 
 .badge-local {
-    color: #f59e0b;
-    background: rgba(245, 158, 11, 0.14);
-    border-color: rgba(245, 158, 11, 0.32);
+    color: var(--warning);
+    background: rgba(var(--warning-rgb), 0.14);
+    border-color: rgba(var(--warning-rgb), 0.32);
 }
 
 .badge-installed {
     color: var(--accent);
-    background: rgba(74, 158, 255, 0.14);
-    border-color: rgba(74, 158, 255, 0.32);
+    background: rgba(var(--accent-rgb), 0.14);
+    border-color: rgba(var(--accent-rgb), 0.32);
 }
 
 .badge-installed-dim {
     color: var(--text-muted);
-    background: rgba(255, 255, 255, 0.06);
-    border-color: rgba(255, 255, 255, 0.14);
+    background: rgba(var(--paper-rgb), 0.06);
+    border-color: rgba(var(--paper-rgb), 0.14);
 }
 
 .badge-build-skip {
     color: var(--text-faint);
-    background: rgba(255, 255, 255, 0.05);
-    border-color: rgba(255, 255, 255, 0.12);
+    background: rgba(var(--paper-rgb), 0.05);
+    border-color: rgba(var(--paper-rgb), 0.12);
 }
 
 .search-bar { margin-bottom: 2rem; }
@@ -224,8 +224,8 @@
 .plugin-grid .plugin-card.no-ui img {
     opacity: 0.45;
 }
-.plugin-grid .plugin-card.not-loaded { border-color: #f59e0b; }
-.plugin-grid .plugin-card.not-loaded.selected { box-shadow: 0 0 10px rgba(245, 158, 11, 0.25); }
+.plugin-grid .plugin-card.not-loaded { border-color: var(--warning); }
+.plugin-grid .plugin-card.not-loaded.selected { box-shadow: 0 0 10px rgba(var(--warning-rgb), 0.25); }
 
 .plugin-grid .plugin-card img {
     width: 100%;
@@ -239,7 +239,7 @@
     bottom: 0;
     left: 0;
     right: 0;
-    background: linear-gradient(to top, rgba(0,0,0,0.9), transparent);
+    background: linear-gradient(to top, rgba(var(--ink-rgb), 0.9), transparent);
     padding: 1rem;
     color: var(--text-primary);
     font-weight: 500;
@@ -252,9 +252,9 @@
     right: 2.5rem;
     padding: 0.25rem 0.5rem;
     border-radius: var(--radius-sm);
-    background: rgba(245, 158, 11, 0.15);
-    color: #f59e0b;
-    border: 1px solid rgba(245, 158, 11, 0.35);
+    background: rgba(var(--warning-rgb), 0.15);
+    color: var(--warning);
+    border: 1px solid rgba(var(--warning-rgb), 0.35);
     font-size: 0.75rem;
     font-weight: 600;
     z-index: 20;
@@ -288,7 +288,7 @@
     padding: 0.5rem 1rem;
     font-size: 0.9rem;
     color: var(--accent);
-    background: rgba(74, 158, 255, 0.1);
+    background: rgba(var(--accent-rgb), 0.1);
     border-radius: var(--radius-md);
     text-align: center;
 }
@@ -297,7 +297,7 @@
     padding: 0.5rem 1rem;
     font-size: 0.9rem;
     color: var(--text-muted);
-    background: rgba(255, 255, 255, 0.05);
+    background: rgba(var(--paper-rgb), 0.05);
     border-radius: var(--radius-md);
     text-align: center;
 }
@@ -328,9 +328,9 @@
     right: 0.5rem;
     width: 2.1rem;
     height: 2.1rem;
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(var(--paper-rgb), 0.12);
     border-radius: 999px;
-    background: rgba(0, 0, 0, 0.45);
+    background: rgba(var(--ink-rgb), 0.45);
     color: var(--text-secondary);
     cursor: pointer;
     opacity: 0.92;
@@ -350,8 +350,8 @@
 
 .plugin-cog:hover {
     color: var(--text-primary);
-    background: rgba(0, 0, 0, 0.62);
-    border-color: rgba(255, 255, 255, 0.22);
+    background: rgba(var(--ink-rgb), 0.62);
+    border-color: rgba(var(--paper-rgb), 0.22);
 }
 
 .plugin-context-menu {
@@ -395,9 +395,9 @@
 }
 
 .context-update { color: var(--success); }
-.context-update:hover { background: rgba(74, 222, 128, 0.15); }
+.context-update:hover { background: rgba(var(--success-rgb), 0.15); }
 .context-delete { color: var(--danger); }
-.context-delete:hover { background: rgba(255, 107, 107, 0.15); }
+.context-delete:hover { background: rgba(var(--danger-rgb), 0.15); }
 
 .plugin-update {
     position: absolute;
@@ -407,7 +407,7 @@
     border: none;
     border-radius: var(--radius-sm);
     background: var(--success);
-    color: #000;
+    color: var(--slate-975);
     font-size: 0.75rem;
     font-weight: 600;
     cursor: pointer;
@@ -430,7 +430,7 @@
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.7);
+    background: rgba(var(--ink-rgb), 0.7);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -638,10 +638,10 @@
 kbd {
     display: inline-block;
     padding: 0.2rem 0.4rem;
-    background: rgba(74, 158, 255, 0.08);
-    border: 1px solid rgba(74, 158, 255, 0.25);
+    background: rgba(var(--accent-rgb), 0.08);
+    border: 1px solid rgba(var(--accent-rgb), 0.25);
     border-radius: 3px;
     font-family: var(--font-mono);
     font-size: 0.85em;
-    color: rgba(74, 158, 255, 0.7);
+    color: rgba(var(--accent-rgb), 0.7);
 }

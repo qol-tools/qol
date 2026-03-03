@@ -1,9 +1,65 @@
 .dev-actions { flex: 1; }
 
+.view-container.dev-view-shell {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background:
+        radial-gradient(circle at 18% -12%, rgba(var(--accent-rgb), 0.2), transparent 42%),
+        radial-gradient(circle at 92% 0%, rgba(var(--success-rgb), 0.09), transparent 36%);
+}
+
+.dev-stage-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1.25rem;
+    padding: 1.05rem 2rem 0.6rem;
+    border-bottom: 1px solid var(--border-subtle);
+    backdrop-filter: blur(2px);
+}
+
+.dev-stage-title h1 {
+    color: var(--text-primary);
+    font-size: clamp(1.05rem, 1.5vw, 1.4rem);
+    line-height: 1;
+    text-transform: uppercase;
+    letter-spacing: 0.11em;
+    margin: 0;
+}
+
+.dev-stage-title p {
+    margin: 0.42rem 0 0;
+    color: var(--text-muted);
+    font-size: 0.82rem;
+    letter-spacing: 0.01em;
+}
+
+.dev-stage-tags {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding-bottom: 0.18rem;
+}
+
+.dev-stage-tags span {
+    color: var(--text-primary);
+    font-size: 0.64rem;
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    border: 1px solid rgba(var(--accent-rgb), 0.42);
+    border-radius: 999px;
+    padding: 0.24rem 0.56rem;
+    background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.26), rgba(var(--accent-rgb), 0.11));
+}
+
 .view-body.dev-view-body {
     max-width: none;
     margin: 0;
     width: 100%;
+    flex: 1;
     padding-left: 0;
     padding-right: 0;
 }
@@ -12,7 +68,17 @@
     max-width: 1400px;
     margin: 0 auto;
     width: 100%;
-    padding: 0 2rem;
+    padding: 1rem 2rem 1.2rem;
+}
+
+.dev-content-frame {
+    border: 1px solid rgba(var(--accent-rgb), 0.22);
+    border-radius: 16px;
+    padding: 1.15rem 1.2rem 0.25rem;
+    background:
+        linear-gradient(180deg, rgba(var(--paper-rgb), 0.045), rgba(var(--paper-rgb), 0.02)),
+        rgba(var(--overlay-surface-rgb), 0.62);
+    box-shadow: inset 0 1px 0 rgba(var(--paper-rgb), 0.06), 0 14px 42px rgba(var(--ink-rgb), 0.28);
 }
 
 .dev-card {
@@ -86,7 +152,7 @@
 .plugin-row.selected { background: var(--bg-selected); }
 
 .plugin-row.status-linked { border-left-color: var(--success); }
-.plugin-row.status-local { border-left-color: #f59e0b; }
+.plugin-row.status-local { border-left-color: var(--warning); }
 .plugin-row.status-installed { border-left-color: var(--accent); }
 
 .plugin-row .plugin-main {
@@ -129,8 +195,8 @@
     align-self: stretch;
     display: flex;
     position: relative;
-    border-left: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.032);
+    border-left: 1px solid rgba(var(--paper-rgb), 0.08);
+    background: rgba(var(--paper-rgb), 0.032);
     overflow: visible;
 }
 
@@ -148,7 +214,7 @@
     padding: 0;
     border: none;
     background: transparent;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03), inset 0 -1px 0 rgba(0, 0, 0, 0.18);
+    box-shadow: inset 0 1px 0 rgba(var(--paper-rgb), 0.03), inset 0 -1px 0 rgba(var(--ink-rgb), 0.18);
     transition: background var(--transition), box-shadow var(--transition), border-color var(--transition);
 }
 
@@ -160,7 +226,7 @@
     clip-path: circle(50% at 50% 50%);
     opacity: 0.24;
     filter: grayscale(1) brightness(0.9);
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1);
+    box-shadow: 0 0 0 1px rgba(var(--paper-rgb), 0.1);
     pointer-events: none;
     transition: opacity var(--transition), transform var(--transition), filter var(--transition);
 }
@@ -168,7 +234,7 @@
 .plugin-row .plugin-action-zone.has-rebuild .plugin-action-rebuild-icon {
     opacity: 0.9;
     filter: none;
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.16), 0 0 10px rgba(74, 158, 255, 0.18);
+    box-shadow: 0 0 0 1px rgba(var(--paper-rgb), 0.16), 0 0 10px rgba(var(--accent-rgb), 0.18);
 }
 
 .plugin-row:hover .plugin-action-zone.has-rebuild:not(.is-disabled) .plugin-action-rebuild-icon {
@@ -181,19 +247,19 @@
 }
 
 .plugin-row:hover .plugin-action-zone:not(.is-disabled) {
-    background: rgba(255, 255, 255, 0.05);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+    background: rgba(var(--paper-rgb), 0.05);
+    box-shadow: inset 0 1px 0 rgba(var(--paper-rgb), 0.05), inset 0 -1px 0 rgba(var(--ink-rgb), 0.2);
 }
 
 .plugin-row .plugin-action-zone:not(.is-disabled):active {
-    background: rgba(255, 255, 255, 0.06);
-    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.24);
+    background: rgba(var(--paper-rgb), 0.06);
+    box-shadow: inset 0 2px 4px rgba(var(--ink-rgb), 0.24);
 }
 
 .plugin-row .plugin-action-zone.is-disabled {
     pointer-events: none;
     cursor: default;
-    background: rgba(255, 255, 255, 0.02);
+    background: rgba(var(--paper-rgb), 0.02);
 }
 
 .plugin-row .plugin-name {
@@ -308,7 +374,7 @@
 }
 
 .plugin-row .context-action:hover {
-    background: rgba(255, 255, 255, 0.07);
+    background: rgba(var(--paper-rgb), 0.07);
     color: var(--text-primary);
 }
 
@@ -321,7 +387,7 @@
 }
 
 .plugin-row .context-action.context-cpu.stop:hover {
-    background: rgba(255, 107, 107, 0.16);
+    background: rgba(var(--danger-rgb), 0.16);
 }
 
 .plugin-row .plugin-build-meta.muted {
@@ -353,8 +419,8 @@
     position: absolute;
     inset: 0;
     overflow: hidden;
-    border-left: 3px solid rgba(74, 158, 255, 0.6);
-    background: rgba(17, 20, 25, 0.38);
+    border-left: 3px solid rgba(var(--accent-rgb), 0.6);
+    background: rgba(var(--overlay-deep-rgb), 0.38);
 }
 
 .plugin-build-overlay .progress-fill {
@@ -363,8 +429,8 @@
     left: 0;
     bottom: 0;
     width: 100%;
-    background: linear-gradient(90deg, rgba(74, 158, 255, 0.55) 0%, rgba(74, 158, 255, 0.35) 100%);
-    box-shadow: 0 0 12px rgba(74, 158, 255, 0.3), inset 0 0 8px rgba(74, 158, 255, 0.1);
+    background: linear-gradient(90deg, rgba(var(--accent-rgb), 0.55) 0%, rgba(var(--accent-rgb), 0.35) 100%);
+    box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.3), inset 0 0 8px rgba(var(--accent-rgb), 0.1);
     transform-origin: left center;
     transform: scaleX(0);
     will-change: transform;
@@ -387,10 +453,10 @@
     max-width: min(86%, 460px);
     padding: 0.4rem 0.78rem;
     border-radius: 10px;
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    background: rgba(7, 10, 14, 0.62);
+    border: 1px solid rgba(var(--paper-rgb), 0.14);
+    background: rgba(var(--overlay-ink-rgb), 0.62);
     backdrop-filter: blur(2px);
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    box-shadow: 0 6px 18px rgba(var(--ink-rgb), 0.35);
 }
 
 .plugin-build-overlay-main {
@@ -400,18 +466,18 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
     font-weight: 700;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+    text-shadow: 0 1px 2px rgba(var(--ink-rgb), 0.8);
 }
 
 .plugin-build-overlay-sub {
-    color: #e4ebf7;
+    color: var(--slate-200);
     font-size: 0.74rem;
     line-height: 1.15;
     font-family: var(--font-mono);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+    text-shadow: 0 1px 2px rgba(var(--ink-rgb), 0.8);
 }
 
 .plugin-row .plugin-status-badges {
@@ -454,9 +520,9 @@
     min-width: 84px;
     height: 1.45rem;
     padding: 0.11rem 0.16rem;
-    border: 1px solid rgba(255, 255, 255, 0.13);
+    border: 1px solid rgba(var(--paper-rgb), 0.13);
     border-radius: 6px;
-    background: rgba(0, 0, 0, 0.22);
+    background: rgba(var(--ink-rgb), 0.22);
 }
 
 .plugin-row .plugin-cpu-sparkline {
@@ -466,7 +532,7 @@
 }
 
 .plugin-row .plugin-cpu-sparkline-base {
-    stroke: rgba(255, 255, 255, 0.15);
+    stroke: rgba(var(--paper-rgb), 0.15);
     stroke-width: 1;
 }
 
@@ -554,4 +620,35 @@
 
 .link-input-row input::placeholder {
     color: var(--text-faint);
+}
+
+@media (max-width: 920px) {
+    .dev-stage-head {
+        padding: 0.95rem 1rem 0.55rem;
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 0.7rem;
+    }
+
+    .dev-view-content {
+        padding: 1rem 1rem 0.5rem;
+    }
+
+    .dev-content-frame {
+        padding: 0.9rem 0.9rem 0.18rem;
+    }
+}
+
+@media (max-width: 620px) {
+    .dev-stage-tags {
+        display: none;
+    }
+
+    .dev-stage-title p {
+        font-size: 0.76rem;
+    }
+
+    .dev-content-frame {
+        border-radius: 12px;
+    }
 }
