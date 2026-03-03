@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use gpui::*;
 
 use super::layout::{resize_for_visible_rows, MAX_VISIBLE, ROW_HEIGHT};
@@ -5,6 +7,9 @@ use super::state::{EdgeHit, NavDirection};
 use super::view;
 use super::window_ops::hide;
 use super::LauncherView;
+
+static LAST_RENDER_US: AtomicU64 = AtomicU64::new(0);
+static RENDER_COUNT: AtomicU64 = AtomicU64::new(0);
 
 impl Focusable for LauncherView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
@@ -40,7 +45,18 @@ impl Render for LauncherView {
             }));
         }
 
+        let render_start = std::time::Instant::now();
+        let now_abs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+        let prev = LAST_RENDER_US.swap(now_abs, Ordering::Relaxed);
+        let gap_us = if prev > 0 { now_abs.saturating_sub(prev) } else { 0 };
+
+        let t0 = std::time::Instant::now();
         self.store.ensure_filtered(&self.state);
+        let filter_us = t0.elapsed().as_micros();
+
         let result_count = self.store.result_count();
         self.state.sync_result_window(result_count);
         let visible = result_count.min(MAX_VISIBLE);
@@ -67,6 +83,8 @@ impl Render for LauncherView {
             });
         let results_height = visible as f32 * ROW_HEIGHT;
         resize_for_visible_rows(&mut self.state.window_height, visible, window);
+
+        let t1 = std::time::Instant::now();
         let rows = self.build_visible_rows(
             scroll_offset,
             visible,
@@ -79,6 +97,15 @@ impl Render for LauncherView {
             min_score,
             max_score,
         );
+        let rows_us = t1.elapsed().as_micros();
+        let total_us = render_start.elapsed().as_micros();
+        let n = RENDER_COUNT.fetch_add(1, Ordering::Relaxed);
+        if n % 10 == 0 {
+            eprintln!(
+                "[render #{n}] total={total_us}us filter={filter_us}us rows={rows_us}us gap={gap_us}us visible={visible} results={result_count} q={:?}",
+                &self.state.query
+            );
+        }
         div()
             .id("launcher")
             .track_focus(&self.focus_handle)

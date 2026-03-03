@@ -25,17 +25,19 @@ impl LauncherView {
             return;
         }
 
-        self.store.ensure_filtered(&self.state);
+        // Use cached result_count — avoids running fuzzy search on every keystroke.
+        // render() calls ensure_filtered lazily when it actually paints.
         let result_count = self.store.result_count();
         match self.state.apply_key(event, result_count) {
             InputEffect::Ignore => {}
             InputEffect::Navigate => {
-                self.state.sync_result_window(result_count);
+                self.store.ensure_filtered(&self.state);
+                self.state.sync_result_window(self.store.result_count());
                 cx.notify();
             }
             InputEffect::QueryChanged => {
                 self.state.reset_results_position();
-                cx.notify();
+                self.schedule_query_render(cx);
             }
             InputEffect::Launch => self.launch_selected(window, cx),
             InputEffect::Dismiss => {

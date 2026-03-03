@@ -11,6 +11,7 @@ use super::state::{Fuzziness, LauncherState, SearchMode};
 
 const HALF_LIFE_DAYS: f64 = 7.0;
 const FREQUENCY_BONUS: i32 = 500;
+const MAX_FILTER_HISTORY: usize = 16;
 
 #[derive(Clone, PartialEq, Eq)]
 struct FilterKey {
@@ -24,6 +25,7 @@ pub(super) struct EntryStore {
     file_entries: Arc<Vec<files::FileEntry>>,
     cache: Vec<Scored>,
     cache_key: Option<FilterKey>,
+    filter_history: Vec<(FilterKey, Vec<Scored>)>,
     frecency: FrequencyData,
     frecency_path: PathBuf,
 }
@@ -37,6 +39,7 @@ impl EntryStore {
             file_entries,
             cache: Vec::new(),
             cache_key: None,
+            filter_history: Vec::new(),
             frecency,
             frecency_path,
         }
@@ -48,11 +51,41 @@ impl EntryStore {
             return;
         }
 
-        self.cache = match self.cache_key.as_ref() {
-            Some(previous) if Self::can_incremental_filter(previous, &key) => {
-                self.filtered_incremental(&state.query, state.mode, state.fuzziness)
+        // Save current result to history before replacing
+        if let Some(prev_key) = self.cache_key.take() {
+            let prev_results = std::mem::take(&mut self.cache);
+            if self.filter_history.len() >= MAX_FILTER_HISTORY {
+                self.filter_history.remove(0);
             }
-            _ => self.filtered_full(&state.query, state.mode, state.fuzziness),
+            self.filter_history.push((prev_key, prev_results));
+        }
+
+        // Check history for exact match
+        if let Some(idx) = self.filter_history.iter().position(|(k, _)| k == &key) {
+            let (_, results) = self.filter_history.remove(idx);
+            self.cache = results;
+            self.cache_key = Some(key);
+            return;
+        }
+
+        // Check if incremental from the previous (last history entry)
+        let incremental = self.filter_history.last()
+            .map(|(prev, _)| Self::can_incremental_filter(prev, &key))
+            .unwrap_or(false);
+
+        self.cache = if incremental {
+            let frecency = self.frecency_config();
+            search::filtered_from_candidates(
+                &self.app_entries,
+                &self.file_entries,
+                &self.filter_history.last().unwrap().1,
+                &state.query,
+                state.mode,
+                state.fuzziness,
+                Some(&frecency),
+            )
+        } else {
+            self.filtered_full(&state.query, state.mode, state.fuzziness)
         };
         self.cache_key = Some(key);
     }
@@ -81,6 +114,7 @@ impl EntryStore {
         self.file_entries = file_entries;
         self.cache.clear();
         self.cache_key = None;
+        self.filter_history.clear();
     }
 
     pub fn name(&self, scored: &Scored) -> &str {
@@ -132,19 +166,6 @@ impl EntryStore {
     fn filtered_full(&self, query: &str, mode: SearchMode, fuzziness: Fuzziness) -> Vec<Scored> {
         let frecency = self.frecency_config();
         search::filtered(&self.app_entries, &self.file_entries, query, mode, fuzziness, Some(&frecency))
-    }
-
-    fn filtered_incremental(&self, query: &str, mode: SearchMode, fuzziness: Fuzziness) -> Vec<Scored> {
-        let frecency = self.frecency_config();
-        search::filtered_from_candidates(
-            &self.app_entries,
-            &self.file_entries,
-            &self.cache,
-            query,
-            mode,
-            fuzziness,
-            Some(&frecency),
-        )
     }
 }
 

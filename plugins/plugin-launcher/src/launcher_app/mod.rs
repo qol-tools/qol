@@ -94,6 +94,10 @@ impl LauncherView {
         self.is_showing = showing;
     }
 
+    pub(super) fn schedule_query_render(&mut self, cx: &mut Context<Self>) {
+        cx.notify();
+    }
+
     pub(crate) fn reset_for_show(&mut self) -> bool {
         let should_resize = (self.state.window_height - HEADER_HEIGHT).abs() > f32::EPSILON;
         self.state = LauncherState::new();
