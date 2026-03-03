@@ -24,7 +24,7 @@ impl AppsProvider for MacosAppsProvider {
 /// internals and unrelated directory trees — avoid it.
 const MAX_DEPTH: usize = 1;
 
-fn app_dirs() -> Vec<PathBuf> {
+pub(super) fn app_dirs() -> Vec<PathBuf> {
     let mut dirs = vec![PathBuf::from("/Applications")];
     if let Ok(home) = std::env::var("HOME") {
         dirs.push(PathBuf::from(format!("{home}/Applications")));

@@ -11,7 +11,7 @@ use crate::platform;
 
 use super::keepalive;
 use super::windows::{activate_or_open_launcher, ActiveLaunchers};
-use super::{PreloadedEntries, SharedEntries, SharedEntryState};
+use super::{SharedEntries, SharedEntryState};
 
 pub fn run() {
     let show_immediately = std::env::args().any(|a| a == "--show");
@@ -55,7 +55,7 @@ pub fn run() {
             focus_cache.clone(),
             cx,
         );
-        spawn_prewarm(entries.clone(), cx);
+        crate::index::start(entries.clone());
 
         if show_immediately {
             #[cfg(debug_assertions)]
@@ -138,7 +138,6 @@ fn spawn_command_poll(
                     } else {
                         eprintln!("[launcher] cx.update done");
                     }
-                    spawn_refresh(entries.clone(), cx);
                 }
                 Some(daemon::Command::Kill) => {
                     cx.update(|cx| cx.quit()).ok();
@@ -163,43 +162,4 @@ async fn wait_for_entries(entries: &SharedEntries, cx: &mut AsyncApp) {
         }
         executor.timer(Duration::from_millis(50)).await;
     }
-}
-
-fn spawn_prewarm(entries: SharedEntries, cx: &mut App) {
-    cx.spawn({
-        let entries = entries.clone();
-        async move |cx: &mut AsyncApp| {
-            let executor = cx.background_executor().clone();
-            let fresh = executor
-                .spawn(async { Arc::new(PreloadedEntries::load()) })
-                .await;
-            if let Ok(mut guard) = entries.lock() {
-                guard.entries = fresh;
-                guard.loaded_once = true;
-            }
-            eprintln!("[launcher] prewarm: initial load complete");
-        }
-    })
-    .detach();
-}
-
-fn spawn_refresh(entries: SharedEntries, cx: &mut AsyncApp) {
-    let _ = cx.update({
-        let entries = entries.clone();
-        move |cx: &mut App| {
-            cx.spawn({
-                async move |cx: &mut AsyncApp| {
-                    let executor = cx.background_executor().clone();
-                    let fresh = executor
-                        .spawn(async { Arc::new(PreloadedEntries::load()) })
-                        .await;
-                    if let Ok(mut guard) = entries.lock() {
-                        guard.entries = fresh;
-                        guard.loaded_once = true;
-                    }
-                }
-            })
-            .detach();
-        }
-    });
 }

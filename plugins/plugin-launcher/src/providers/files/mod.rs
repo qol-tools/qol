@@ -16,6 +16,17 @@ pub trait FilesProvider: Send + Sync {
     fn load_entries(&self) -> Vec<FileEntry>;
 }
 
+pub(crate) fn watch_roots() -> Vec<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::file_roots()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        fallback::file_roots()
+    }
+}
+
 pub fn default_provider() -> Box<dyn FilesProvider> {
     #[cfg(target_os = "linux")]
     {
