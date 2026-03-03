@@ -1,10 +1,12 @@
-use crate::daemon::Daemon;
 #[cfg(feature = "dev")]
-use crate::dev::state::DiscoveredPluginInfo;
+use super::dev_plugin_cpu::DevPluginCpuService;
 #[cfg(feature = "dev")]
 use super::dev_runtime::DevRuntimeService;
 #[cfg(feature = "dev")]
 use super::restart::RestartPort;
+use crate::daemon::Daemon;
+#[cfg(feature = "dev")]
+use crate::dev::state::DiscoveredPluginInfo;
 use crate::plugins::{ActionType, PluginManager};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "dev")]
@@ -32,6 +34,8 @@ pub(super) struct AppState {
     pub(super) dev_state: Arc<crate::dev::state::DevState>,
     #[cfg(feature = "dev")]
     pub(super) runtime: Arc<DevRuntimeService>,
+    #[cfg(feature = "dev")]
+    pub(super) plugin_cpu: Arc<DevPluginCpuService>,
     #[cfg(feature = "dev")]
     pub(super) restart: Arc<dyn RestartPort>,
 }

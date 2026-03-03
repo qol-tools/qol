@@ -190,6 +190,12 @@ pub(super) async fn get_build_state(State(state): State<AppState>) -> Json<Build
     Json(state.runtime.build_state_snapshot())
 }
 
+pub(super) async fn get_plugin_cpu(
+    State(state): State<AppState>,
+) -> Json<super::dev_plugin_cpu::PluginCpuResponse> {
+    Json(state.plugin_cpu.snapshot())
+}
+
 pub(super) async fn get_log_controls(
 ) -> Json<std::collections::HashMap<String, crate::plugins::log_control::PluginLogControl>> {
     let controls = crate::paths::shared_config_dir()
@@ -239,12 +245,19 @@ pub(super) async fn stop_mock_targets(State(state): State<AppState>) -> impl Int
         StatusCode::ACCEPTED
     };
 
-    mock_targets_response(status, "stopped", stopped, state.runtime.list_mock_targets())
+    mock_targets_response(
+        status,
+        "stopped",
+        stopped,
+        state.runtime.list_mock_targets(),
+    )
 }
 
 pub(super) async fn mock_self_update(State(state): State<AppState>) -> impl IntoResponse {
     mock_start_response(
-        state.runtime.start_mock_self_update(state.daemon.events.clone()),
+        state
+            .runtime
+            .start_mock_self_update(state.daemon.events.clone()),
         "Mock update queued",
     )
 }
@@ -308,14 +321,21 @@ pub(super) fn fallback_plugin_ids(state: &AppState) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn mock_start_response(result: Result<(), &'static str>, queued_message: &'static str) -> axum::response::Response {
+fn mock_start_response(
+    result: Result<(), &'static str>,
+    queued_message: &'static str,
+) -> axum::response::Response {
     match result {
         Ok(()) => (StatusCode::ACCEPTED, queued_message).into_response(),
         Err(message) => (StatusCode::CONFLICT, message).into_response(),
     }
 }
 
-fn mock_stop_response(stopped: bool, stopping_message: &'static str, idle_message: &'static str) -> axum::response::Response {
+fn mock_stop_response(
+    stopped: bool,
+    stopping_message: &'static str,
+    idle_message: &'static str,
+) -> axum::response::Response {
     if stopped {
         return (StatusCode::ACCEPTED, stopping_message).into_response();
     }
@@ -328,5 +348,9 @@ fn mock_targets_response(
     ids: Vec<&'static str>,
     targets: Vec<MockTargetInfo>,
 ) -> axum::response::Response {
-    (status, Json(serde_json::json!({ key: ids, "targets": targets }))).into_response()
+    (
+        status,
+        Json(serde_json::json!({ key: ids, "targets": targets })),
+    )
+        .into_response()
 }

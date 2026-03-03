@@ -80,6 +80,14 @@ fn get_action_processes() -> &'static Mutex<HashMap<String, Vec<u32>>> {
     ACTION_PROCESSES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+#[cfg(feature = "dev")]
+pub fn action_processes_snapshot() -> HashMap<String, Vec<u32>> {
+    get_action_processes()
+        .lock()
+        .map(|processes| processes.clone())
+        .unwrap_or_default()
+}
+
 fn get_running_actions() -> &'static Mutex<HashMap<String, u32>> {
     RUNNING_ACTIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
@@ -386,7 +394,8 @@ fn execute_via_daemon(
 ) -> Result<(), ActionExecutionError> {
     use super::action_transport::DaemonActionDispatch;
 
-    let dispatch = super::action_transport::dispatch_daemon_action(socket_path, &resolved.action_id);
+    let dispatch =
+        super::action_transport::dispatch_daemon_action(socket_path, &resolved.action_id);
 
     if let DaemonActionDispatch::Handled = dispatch {
         log::info!(
@@ -415,12 +424,7 @@ fn execute_via_daemon(
         DaemonActionDispatch::Handled => unreachable!(),
     };
 
-    log::warn!(
-        "{} {}::{}",
-        reason,
-        resolved.plugin_id,
-        resolved.action_id
-    );
+    log::warn!("{} {}::{}", reason, resolved.plugin_id, resolved.action_id);
 
     if resolved.runtime_fallback_allowed {
         return execute_via_runtime(resolved);
