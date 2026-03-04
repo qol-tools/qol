@@ -1,6 +1,6 @@
 use super::{CFRelease, CFRetain};
 use super::buf::SendCVBuf;
-use super::callback::SendPtr;
+use super::callback::{SendPtr, FRAME_STORE};
 use super::setup::sc_fetch_content;
 use super::stream::sc_snapshot_window;
 use std::collections::HashMap;
@@ -24,6 +24,38 @@ pub(crate) fn sc_take_prewarm_surfaces() -> HashMap<u32, SendCVBuf> {
         unsafe { CFRetain(sp.0 as *const c_void) };
         result.insert(wid, SendCVBuf(sp.0));
     }
+    result
+}
+
+/// Clone live SC frames (CFRetain, non-destructive).
+/// FRAME_STORE entries remain intact for the SC loop to consume normally.
+/// Falls back to PREWARM_CACHE for any wids not in FRAME_STORE.
+pub(crate) fn sc_clone_opener_surfaces() -> HashMap<u32, SendCVBuf> {
+    let mut result = HashMap::new();
+
+    if let Ok(store) = FRAME_STORE.lock() {
+        if let Some(map) = store.as_ref() {
+            for (&wid, sp) in map.iter() {
+                if sp.0.is_null() {
+                    continue;
+                }
+                unsafe { CFRetain(sp.0 as *const c_void) };
+                result.insert(wid, SendCVBuf(sp.0));
+            }
+        }
+    }
+
+    let Ok(cache) = PREWARM_CACHE.lock() else {
+        return result;
+    };
+    for (&wid, sp) in cache.iter() {
+        if sp.0.is_null() || result.contains_key(&wid) {
+            continue;
+        }
+        unsafe { CFRetain(sp.0 as *const c_void) };
+        result.insert(wid, SendCVBuf(sp.0));
+    }
+
     result
 }
 

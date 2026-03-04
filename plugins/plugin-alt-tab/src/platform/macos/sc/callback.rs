@@ -162,6 +162,22 @@ pub(crate) fn sc_has_new_frames() -> bool {
     FRAMES_DIRTY.swap(false, std::sync::atomic::Ordering::Acquire)
 }
 
+/// Return wids that have a non-null frame in FRAME_STORE (read-only, no drain).
+pub(crate) fn sc_live_frame_wids() -> std::collections::HashSet<u32> {
+    FRAME_STORE
+        .lock()
+        .ok()
+        .and_then(|store| {
+            store.as_ref().map(|m| {
+                m.iter()
+                    .filter(|(_, sp)| !sp.0.is_null())
+                    .map(|(wid, _)| *wid)
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
+}
+
 /// Read and reset callback diagnostic counters: (calls, stored, null_img).
 pub(crate) fn sc_callback_stats() -> (u64, u64, u64) {
     let calls = CB_CALLS.swap(0, std::sync::atomic::Ordering::Relaxed);

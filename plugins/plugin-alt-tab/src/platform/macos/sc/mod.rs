@@ -11,9 +11,10 @@ use super::{CFRelease, CFRetain};
 
 pub use buf::SendCVBuf;
 
-pub(super) use callback::{sc_callback_stats, sc_has_new_frames, sc_take_frames};
+pub(super) use callback::{sc_callback_stats, sc_has_new_frames, sc_live_frame_wids, sc_take_frames};
 pub(super) use prewarm::{
-    sc_heartbeat_snapshot, sc_prewarm_retain, sc_prewarm_wids, sc_take_prewarm_surfaces,
+    sc_clone_opener_surfaces, sc_heartbeat_snapshot, sc_prewarm_retain, sc_prewarm_wids,
+    sc_take_prewarm_surfaces,
 };
 pub(super) use setup::sc_fetch_content;
 pub(super) use stream::{

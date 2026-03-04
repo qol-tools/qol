@@ -84,6 +84,16 @@ pub fn sc_prewarm_wids() -> std::collections::HashSet<u32> {
 }
 
 #[cfg(target_os = "macos")]
+pub fn sc_live_frame_wids() -> std::collections::HashSet<u32> {
+    imp::sc_live_frame_wids()
+}
+
+#[cfg(target_os = "macos")]
+pub fn sc_clone_opener_surfaces() -> std::collections::HashMap<u32, SendCVBuf> {
+    imp::sc_clone_opener_surfaces()
+}
+
+#[cfg(target_os = "macos")]
 pub fn sc_heartbeat_snapshot(wids: &[u32], max_w: usize, max_h: usize) {
     imp::sc_heartbeat_snapshot(wids, max_w, max_h)
 }

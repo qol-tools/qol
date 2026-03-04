@@ -68,15 +68,30 @@ pub(crate) fn open_picker(
         }
     }
 
-    // On macOS: query which wids already have SC prewarm frames so gather() can
-    // skip the redundant ~150ms CG capture for those windows.
     #[cfg(target_os = "macos")]
-    let skip_cg_wids = platform::sc_prewarm_wids();
+    let skip_cg_wids = {
+        let mut wids = platform::sc_prewarm_wids();
+        wids.extend(platform::sc_live_frame_wids());
+        wids
+    };
     #[cfg(not(target_os = "macos"))]
     let skip_cg_wids = HashSet::new();
 
-    let (display_windows, initial_previews, icons) =
+    let (display_windows, mut initial_previews, icons) =
         gather(config, &preview_cache, &icon_cache, &skip_cg_wids);
+
+    // For CG-skipped windows, rasterize current SC frames into initial_previews.
+    // Non-destructive read (CFRetain) — FRAME_STORE stays intact for SC loop.
+    #[cfg(target_os = "macos")]
+    {
+        let sc_frames = platform::sc_clone_opener_surfaces();
+        for (wid, buf) in sc_frames {
+            if initial_previews.contains_key(&wid) { continue; }
+            if let Some(img) = buf.to_render_image() {
+                initial_previews.insert(wid, img);
+            }
+        }
+    }
 
     // Grab prewarm surfaces before first render so the picker opens with SC
     // surfaces already populated (avoids the visible CG→SC flash on open).

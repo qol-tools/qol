@@ -182,6 +182,14 @@ pub fn sc_prewarm_wids() -> std::collections::HashSet<u32> {
     sc::sc_prewarm_wids()
 }
 
+pub fn sc_live_frame_wids() -> std::collections::HashSet<u32> {
+    sc::sc_live_frame_wids()
+}
+
+pub fn sc_clone_opener_surfaces() -> std::collections::HashMap<u32, SendCVBuf> {
+    sc::sc_clone_opener_surfaces()
+}
+
 pub fn sc_heartbeat_snapshot(wids: &[u32], max_w: usize, max_h: usize) {
     sc::sc_heartbeat_snapshot(wids, max_w, max_h)
 }
