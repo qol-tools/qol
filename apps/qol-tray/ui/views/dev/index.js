@@ -371,8 +371,8 @@ function bindActionInteractionLocks() {
     }
 }
 
-function updateView() {
-    if (actionInteractionLocks > 0) {
+function updateView(force = false) {
+    if (!force && actionInteractionLocks > 0) {
         deferredUpdatePending = true;
         return;
     }
@@ -715,13 +715,13 @@ function togglePluginCpuMonitoring(pluginId) {
         delete state.cpuMonitoring[pluginId];
         delete state.cpuByPlugin[pluginId];
         persistCpuMonitoring();
-        updateView();
+        updateView(true);
         return;
     }
 
     state.cpuMonitoring[pluginId] = true;
     persistCpuMonitoring();
-    updateView();
+    updateView(true);
 }
 
 async function triggerReload() {
