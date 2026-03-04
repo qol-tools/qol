@@ -46,3 +46,8 @@
     gap: 0.5rem;
     padding-bottom: 0.18rem;
 }
+
+.cache-age {
+    color: var(--text-faint);
+    font-size: 0.85rem;
+}
