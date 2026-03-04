@@ -1,14 +1,14 @@
-import { subscribe, onReconnect } from '../events.js';
-import { jsonRequest, readResponseText } from '../api/client.js';
-import { mergePlugins, renderBuildResults, renderPluginBuildMeta } from './dev/plugin-model.js';
-import { renderDevView } from './dev/template.js';
-import { createBuildController } from './dev/build-controller.js';
-import { createDiscoveryController } from './dev/discovery-controller.js';
-import { createMockController } from './dev/mock-controller.js';
+import { subscribe, onReconnect } from '../../events.js';
+import { jsonRequest, readResponseText } from '../../api/client.js';
+import { mergePlugins, renderBuildResults, renderPluginBuildMeta } from './plugin-model.js';
+import { renderDevView } from './template.js';
+import { createBuildController } from './build-controller.js';
+import { createDiscoveryController } from './discovery-controller.js';
+import { createMockController } from './mock-controller.js';
 import {
     nextDiscoveryCompletedState,
     nextDiscoveryStartedState
-} from './dev/discovery/reducer.js';
+} from './discovery/reducer.js';
 
 export const id = 'dev';
 const CPU_MONITORING_STORAGE_KEY = 'dev-cpu-monitoring';

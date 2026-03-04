@@ -1,7 +1,7 @@
-import { html } from '../lib/html.js';
+import { html } from '../../lib/html.js';
 import { useEffect, useRef } from 'preact/hooks';
-import * as devModule from './dev.js';
-import { renderShortcutLegend } from '../components/shortcut-legend.js';
+import * as devModule from './index.js';
+import { renderShortcutLegend } from '../../components/shortcut-legend.js';
 
 const SHORTCUTS = [
     { key: '↑↓', label: 'navigate' },
