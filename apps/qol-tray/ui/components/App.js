@@ -12,7 +12,7 @@ import { PluginsView } from '../views/plugins-view.js';
 import { StoreView } from '../views/store-view.js';
 import { HotkeysView } from '../views/hotkeys-view.js';
 import { TaskRunnerView } from '../views/task-runner-view.js';
-import { DevView } from '../views/dev-view.js';
+import { DevView } from '../views/dev/view.js';
 
 const VIEW_MAP = { plugins: PluginsView, store: StoreView, hotkeys: HotkeysView, 'task-runner': TaskRunnerView, dev: DevView };
 const BASE_ORDER = ['plugins', 'store', 'hotkeys', 'task-runner'];
