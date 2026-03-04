@@ -1,3 +1,5 @@
-@import "./styles/foundation.css";
+@import "./styles/styles.css";
+@import "./styles/page-header.css";
+@import "./styles/table.css";
 @import "./styles/common-components.css";
 @import "./styles/dev-page.css";

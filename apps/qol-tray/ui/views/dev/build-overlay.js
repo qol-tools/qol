@@ -10,9 +10,10 @@ export function createPluginBuildOverlayController({
     const LOG_PREFIX = '[qol-dev-loading]';
     const DEBUG_LOADING = false;
     let rowRefs = new Map();
-    const completionPlayedByPlugin = new Set();
+    const completionByPlugin = new Map();
     const pendingBuildRows = new Set();
     let buildSyncFrame = null;
+    let completionFrame = null;
 
     function log(event, payload) {
         if (!DEBUG_LOADING) return;
@@ -25,41 +26,46 @@ export function createPluginBuildOverlayController({
             cancelAnimationFrame(buildSyncFrame);
             buildSyncFrame = null;
         }
+        cancelCompletionFrame();
         for (const rowRef of rowRefs.values()) {
             stopFillAnimation(rowRef);
-            stopCompletion(rowRef);
+            rowRef.completing = false;
+            if (rowRef.overlay) {
+                rowRef.overlay.classList.remove('is-completing');
+            }
         }
+        completionByPlugin.clear();
     }
 
     function completeRows(pluginIds, onComplete) {
         const done = typeof onComplete === 'function' ? onComplete : () => {};
-        let pending = 0;
-        let finished = false;
-
-        const flush = () => {
-            if (finished) return;
-            if (pending > 0) return;
-            finished = true;
-            done();
-        };
+        let started = 0;
+        let longestRemainingMs = 0;
+        const now = performance.now();
 
         for (const pluginId of pluginIds) {
             const rowRef = rowRefs.get(pluginId);
-            if (!rowRef) continue;
-            if (completionPlayedByPlugin.has(rowRef.pluginId) && !rowRef.completing) {
-                clearOverlayNodes(rowRef);
+            const completionState = getCompletionState(pluginId);
+            if (completionState === 'done') continue;
+            if (completionState === 'playing') {
+                started += 1;
+                longestRemainingMs = Math.max(longestRemainingMs, completionRemainingMs(pluginId, now));
                 continue;
             }
-            const started = startCompletion(rowRef, true, () => {
-                pending = Math.max(0, pending - 1);
-                flush();
-            });
-            if (!started) continue;
-            pending += 1;
+            if (!rowRef) continue;
+            if (!ensureOverlayNodes(rowRef)) continue;
+            if (!startCompletion(rowRef, true, now)) continue;
+            started += 1;
+            longestRemainingMs = Math.max(longestRemainingMs, completionRemainingMs(pluginId, now));
         }
 
-        flush();
-        return pending > 0;
+        if (started === 0) {
+            done();
+            return false;
+        }
+
+        setTimeout(done, longestRemainingMs + 20);
+        return true;
     }
 
     function queue(pluginId, onNeedsFullRender) {
@@ -112,22 +118,21 @@ export function createPluginBuildOverlayController({
     }
 
     function makeRowRef(row, previous) {
+        const pluginId = row.dataset.pluginId || '';
+        const snapshot = getCompletionSnapshot(pluginId, performance.now());
         return {
             row,
-            pluginId: row.dataset.pluginId || '',
+            pluginId,
             overlayHost: row.querySelector('.plugin-build-overlay-host'),
             overlay: null,
             fill: null,
             main: null,
             sub: null,
-            displayPercent: finiteOr(previous?.displayPercent, Number.NaN),
-            targetPercent: finiteOr(previous?.targetPercent, Number.NaN),
-            lastBuildPercent: finiteOr(previous?.lastBuildPercent, Number.NaN),
+            displayPercent: finiteOr(previous?.displayPercent, finiteOr(snapshot?.percent, Number.NaN)),
+            targetPercent: finiteOr(previous?.targetPercent, finiteOr(snapshot?.percent, Number.NaN)),
+            lastBuildPercent: finiteOr(previous?.lastBuildPercent, finiteOr(snapshot?.percent, Number.NaN)),
             animationFrame: null,
-            completionTimer: null,
-            completionFrame: null,
-            completing: false,
-            completionWaiters: [],
+            completing: previous?.completing === true || snapshot?.completing === true,
             lastFrameTime: 0,
             lastMain: '',
             lastSub: ''
@@ -152,29 +157,17 @@ export function createPluginBuildOverlayController({
         rowRef.row.classList.toggle('is-building', isBuilding);
 
         if (!isBuilding) {
-            if (startCompletion(rowRef)) return true;
+            if (syncCompletionPlayback(rowRef)) return true;
+            if (startCompletionIfReady(rowRef)) return true;
             clearOverlayNodes(rowRef);
             return true;
         }
 
         if (buildState.status === 'completed') {
-            if (completionPlayedByPlugin.has(rowRef.pluginId) && !rowRef.completing) {
-                clearOverlayNodes(rowRef);
-                return true;
-            }
-            if (!rowRef.overlay || !rowRef.overlay.isConnected) {
-                return true;
-            }
-            if (rowRef.main) {
-                rowRef.main.textContent = 'Completed';
-                rowRef.lastMain = 'Completed';
-            }
-            if (rowRef.sub) {
-                rowRef.sub.textContent = 'Reloading plugin';
-                rowRef.lastSub = 'Reloading plugin';
-            }
-            startCompletion(rowRef, true);
-            return true;
+            if (syncCompletionPlayback(rowRef)) return true;
+            if (!ensureOverlayNodes(rowRef)) return false;
+            if (!startCompletion(rowRef, true)) return false;
+            return syncCompletionPlayback(rowRef);
         }
 
         if (!ensureOverlayNodes(rowRef)) return false;
@@ -182,8 +175,14 @@ export function createPluginBuildOverlayController({
         const label = buildState.status === 'queued' ? 'Queued' : 'Compiling';
         const detail = formatDetail(buildState.phase, buildState.percent);
         const normalizedPercent = normalizePercent(buildState.percent);
+        const cappedPercent = buildState.status === 'building'
+            ? Math.min(normalizedPercent, BUILD_ANIMATION.completionTriggerPercent - 0.2)
+            : normalizedPercent;
+        setCompletionState(rowRef.pluginId, 'idle');
+        rowRef.completing = false;
+        rowRef.overlay.classList.remove('is-completing');
         resetStaleProgressState(rowRef, buildState.status, normalizedPercent);
-        const displayPercent = toDisplayPercent(rowRef, normalizedPercent, buildState.status);
+        const displayPercent = toDisplayPercent(rowRef, cappedPercent, buildState.status);
         setFillTarget(rowRef, displayPercent, buildState.status !== 'building');
         if (rowRef.lastMain !== label && rowRef.main) {
             rowRef.main.textContent = label;
@@ -204,7 +203,7 @@ export function createPluginBuildOverlayController({
         const hadAnimationState = Number.isFinite(rowRef.displayPercent);
 
         const overlay = document.createElement('div');
-        overlay.className = 'plugin-build-overlay progress-track progress-track-direct is-downloading compiling';
+        overlay.className = 'plugin-build-overlay progress-track is-downloading compiling';
         overlay.setAttribute('aria-hidden', 'true');
 
         const fill = document.createElement('div');
@@ -243,7 +242,9 @@ export function createPluginBuildOverlayController({
 
     function clearOverlayNodes(rowRef) {
         stopFillAnimation(rowRef);
-        stopCompletion(rowRef);
+        if (rowRef.fill) {
+            rowRef.fill.style.removeProperty('--progress-transition-override');
+        }
         if (rowRef.overlayHost && rowRef.overlayHost.childElementCount > 0) {
             rowRef.overlayHost.replaceChildren();
         }
@@ -251,6 +252,7 @@ export function createPluginBuildOverlayController({
         rowRef.fill = null;
         rowRef.main = null;
         rowRef.sub = null;
+        rowRef.completing = false;
         rowRef.displayPercent = Number.NaN;
         rowRef.targetPercent = Number.NaN;
         rowRef.lastBuildPercent = Number.NaN;
@@ -259,52 +261,44 @@ export function createPluginBuildOverlayController({
         rowRef.lastSub = '';
     }
 
-    function startCompletion(rowRef, force = false, onDone = null) {
-        if (rowRef.completing) {
-            if (typeof onDone === 'function') {
-                rowRef.completionWaiters.push(onDone);
-            }
+    function startCompletionIfReady(rowRef) {
+        const completionState = getCompletionState(rowRef.pluginId);
+        if (completionState === 'done') {
+            clearOverlayNodes(rowRef);
             return true;
         }
-        if (!rowRef.overlay || !rowRef.fill) return false;
-        const completedPercent = Math.max(finiteOr(rowRef.displayPercent, 0), finiteOr(rowRef.lastBuildPercent, 0));
-        if (!force && completedPercent < BUILD_ANIMATION.completionTriggerPercent) return false;
-        if (completionPlayedByPlugin.has(rowRef.pluginId)) return true;
-        rowRef.completing = true;
-        completionPlayedByPlugin.add(rowRef.pluginId);
-        if (typeof onDone === 'function') {
-            rowRef.completionWaiters.push(onDone);
+        if (completionState === 'playing') {
+            return syncCompletionPlayback(rowRef);
         }
+        if (!ensureOverlayNodes(rowRef)) return false;
+        if (!startCompletion(rowRef)) return false;
+        return syncCompletionPlayback(rowRef);
+    }
+
+    function startCompletion(rowRef, force = false, now = performance.now()) {
+        if (!rowRef.overlay || !rowRef.fill) return false;
+        if (getCompletionState(rowRef.pluginId) === 'playing') return true;
+        const visiblePercent = finiteOr(rowRef.displayPercent, Number.NaN);
+        const fallbackPercent = finiteOr(rowRef.lastBuildPercent, 0);
+        const completedPercent = Number.isFinite(visiblePercent) ? visiblePercent : fallbackPercent;
+        if (!force && completedPercent < BUILD_ANIMATION.completionTriggerPercent) return false;
+        const startPercent = normalizePercent(completedPercent);
+        setCompletionState(rowRef.pluginId, 'playing', {
+            startedAt: now,
+            startPercent,
+            phase: 'ramp',
+            phaseStartedAt: now
+        });
+        rowRef.completing = false;
         stopFillAnimation(rowRef);
-        rowRef.displayPercent = 100;
+        rowRef.displayPercent = startPercent;
         rowRef.targetPercent = 100;
         rowRef.lastBuildPercent = 100;
-        applyFillScale(rowRef, 100);
+        rowRef.fill.style.removeProperty('--progress-transition-override');
+        applyFillScale(rowRef, startPercent);
         rowRef.overlay.classList.remove('is-completing');
-        if (rowRef.main) {
-            rowRef.main.textContent = 'Completed';
-            rowRef.lastMain = 'Completed';
-        }
-        if (rowRef.sub) {
-            rowRef.sub.textContent = 'Reloading plugin';
-            rowRef.lastSub = 'Reloading plugin';
-        }
-        rowRef.completionFrame = requestAnimationFrame(() => {
-            rowRef.completionFrame = null;
-            if (!rowRef.overlay) return;
-            rowRef.overlay.classList.add('is-completing');
-        });
-
-        rowRef.completionTimer = setTimeout(() => {
-            const waiters = rowRef.completionWaiters.slice();
-            rowRef.completionWaiters = [];
-            rowRef.completionTimer = null;
-            rowRef.completing = false;
-            clearOverlayNodes(rowRef);
-            for (const waiter of waiters) {
-                waiter();
-            }
-        }, BUILD_ANIMATION.completionVisibleMs);
+        setCompletedCopy(rowRef);
+        ensureCompletionFrame();
         return true;
     }
 
@@ -319,7 +313,6 @@ export function createPluginBuildOverlayController({
         if (status !== 'queued' && status !== 'building') return;
         if (normalizedPercent > BUILD_ANIMATION.staleResetPercent) return;
         if (!Number.isFinite(rowRef.lastBuildPercent) && !Number.isFinite(rowRef.displayPercent)) return;
-        completionPlayedByPlugin.delete(rowRef.pluginId);
         rowRef.displayPercent = Number.NaN;
         rowRef.targetPercent = Number.NaN;
         rowRef.lastBuildPercent = Number.NaN;
@@ -331,19 +324,7 @@ export function createPluginBuildOverlayController({
         const nextPercent = normalizePercent(targetPercent);
         rowRef.lastBuildPercent = nextPercent;
         if (!rowRef.fill) return;
-
-        if (nextPercent < BUILD_ANIMATION.completionTriggerPercent) {
-            completionPlayedByPlugin.delete(rowRef.pluginId);
-        }
-
-        if (nextPercent >= BUILD_ANIMATION.completionTriggerPercent) {
-            if (completionPlayedByPlugin.has(rowRef.pluginId) && !rowRef.completing) {
-                clearOverlayNodes(rowRef);
-                return;
-            }
-            startCompletion(rowRef, true);
-            return;
-        }
+        if (rowRef.completing) return;
 
         if (immediate) {
             rowRef.displayPercent = nextPercent;
@@ -385,7 +366,8 @@ export function createPluginBuildOverlayController({
         const current = finiteOr(rowRef.displayPercent, 0);
         const target = finiteOr(rowRef.targetPercent, current);
         const delta = target - current;
-        if (delta > BUILD_ANIMATION.hardSyncDelta) {
+        const allowHardSync = target < (BUILD_ANIMATION.completionTriggerPercent - 8);
+        if (allowHardSync && delta > BUILD_ANIMATION.hardSyncDelta) {
             rowRef.displayPercent = target;
             applyFillScale(rowRef, target);
             rowRef.lastFrameTime = timestamp;
@@ -411,6 +393,180 @@ export function createPluginBuildOverlayController({
         rowRef.animationFrame = requestAnimationFrame(ts => animateFill(rowRef, ts));
     }
 
+    function ensureCompletionFrame() {
+        if (completionFrame !== null) return;
+        completionFrame = requestAnimationFrame(timestamp => tickCompletionPlayback(timestamp));
+    }
+
+    function cancelCompletionFrame() {
+        if (completionFrame === null) return;
+        cancelAnimationFrame(completionFrame);
+        completionFrame = null;
+    }
+
+    function tickCompletionPlayback(timestamp) {
+        completionFrame = null;
+        let hasActiveCompletion = false;
+
+        for (const [pluginId, completion] of completionByPlugin.entries()) {
+            if (completion.state !== 'playing') continue;
+            const remainingMs = completionRemainingMs(pluginId, timestamp);
+            if (remainingMs <= 0) {
+                finalizeCompletion(pluginId);
+                const rowRef = rowRefs.get(pluginId);
+                if (rowRef) {
+                    clearOverlayNodes(rowRef);
+                }
+                continue;
+            }
+            hasActiveCompletion = true;
+            const rowRef = rowRefs.get(pluginId);
+            if (!rowRef) continue;
+            if (!ensureOverlayNodes(rowRef)) continue;
+            setCompletedCopy(rowRef);
+            renderCompletionFrame(rowRef, completion, timestamp);
+        }
+
+        if (!hasActiveCompletion) return;
+        completionFrame = requestAnimationFrame(ts => tickCompletionPlayback(ts));
+    }
+
+    function syncCompletionPlayback(rowRef) {
+        const completion = completionByPlugin.get(rowRef.pluginId);
+        if (!completion) return false;
+        if (completion.state === 'done') {
+            clearOverlayNodes(rowRef);
+            return true;
+        }
+        if (!ensureOverlayNodes(rowRef)) return false;
+        setCompletedCopy(rowRef);
+        if (!renderCompletionFrame(rowRef, completion, performance.now())) {
+            ensureCompletionFrame();
+            return true;
+        }
+        finalizeCompletion(rowRef.pluginId);
+        clearOverlayNodes(rowRef);
+        return true;
+    }
+
+    function renderCompletionFrame(rowRef, completion, timestamp) {
+        const phase = completion.phase || 'ramp';
+        if (phase === 'ramp') {
+            return renderCompletionRamp(rowRef, completion, timestamp);
+        }
+        if (phase === 'hold') {
+            return renderCompletionHold(rowRef, completion, timestamp);
+        }
+        return renderCompletionFade(rowRef, completion, timestamp);
+    }
+
+    function renderCompletionRamp(rowRef, completion, timestamp) {
+        const rampMs = BUILD_ANIMATION.completionRampMs;
+        const phaseElapsed = Math.max(0, timestamp - finiteOr(completion.phaseStartedAt, timestamp));
+        const startPercent = normalizePercent(completion.startPercent);
+        if (phaseElapsed < rampMs) {
+            const progressT = rampMs <= 0 ? 1 : phaseElapsed / rampMs;
+            const eased = easeOutCubic(progressT);
+            const nextPercent = startPercent + (100 - startPercent) * eased;
+            applyCompletionProgress(rowRef, nextPercent, false);
+            return false;
+        }
+        completion.phase = 'hold';
+        completion.phaseStartedAt = timestamp;
+        applyCompletionProgress(rowRef, 100, false);
+        return false;
+    }
+
+    function renderCompletionHold(rowRef, completion, timestamp) {
+        const phaseElapsed = Math.max(0, timestamp - finiteOr(completion.phaseStartedAt, timestamp));
+        applyCompletionProgress(rowRef, 100, false);
+        if (phaseElapsed < BUILD_ANIMATION.completionHoldMs) return false;
+        completion.phase = 'fade';
+        completion.phaseStartedAt = timestamp;
+        applyCompletionProgress(rowRef, 100, true);
+        return false;
+    }
+
+    function renderCompletionFade(rowRef, completion, timestamp) {
+        const phaseElapsed = Math.max(0, timestamp - finiteOr(completion.phaseStartedAt, timestamp));
+        applyCompletionProgress(rowRef, 100, true);
+        if (phaseElapsed < BUILD_ANIMATION.completionVisibleMs) return false;
+        return true;
+    }
+
+    function applyCompletionProgress(rowRef, percent, completing) {
+        rowRef.completing = completing;
+        if (rowRef.overlay) {
+            rowRef.overlay.classList.toggle('is-completing', completing);
+        }
+        rowRef.displayPercent = percent;
+        rowRef.targetPercent = 100;
+        rowRef.lastBuildPercent = 100;
+        applyFillScale(rowRef, percent);
+    }
+
+    function setCompletedCopy(rowRef) {
+        if (rowRef.main) {
+            rowRef.main.textContent = 'Completed';
+            rowRef.lastMain = 'Completed';
+        }
+        if (rowRef.sub) {
+            rowRef.sub.textContent = 'Reloading plugin';
+            rowRef.lastSub = 'Reloading plugin';
+        }
+    }
+
+    function getCompletionSnapshot(pluginId, now) {
+        const completion = completionByPlugin.get(pluginId);
+        if (!completion) return null;
+        if (completion.state !== 'playing') return null;
+        const phase = completion.phase || 'ramp';
+        const phaseStartedAt = finiteOr(completion.phaseStartedAt, now);
+        const phaseElapsed = Math.max(0, now - phaseStartedAt);
+        if (phase === 'fade') {
+            return { percent: 100, completing: true };
+        }
+        if (phase === 'hold') {
+            return { percent: 100, completing: false };
+        }
+        const rampMs = BUILD_ANIMATION.completionRampMs;
+        const startPercent = normalizePercent(completion.startPercent);
+        const t = rampMs <= 0 ? 1 : Math.max(0, Math.min(1, phaseElapsed / rampMs));
+        const eased = easeOutCubic(t);
+        return {
+            percent: startPercent + (100 - startPercent) * eased,
+            completing: false
+        };
+    }
+
+    function completionRemainingMs(pluginId, now = performance.now()) {
+        const completion = completionByPlugin.get(pluginId);
+        if (!completion) return 0;
+        if (completion.state !== 'playing') return 0;
+        const phase = completion.phase || 'ramp';
+        const phaseStartedAt = finiteOr(completion.phaseStartedAt, now);
+        const phaseElapsed = Math.max(0, now - phaseStartedAt);
+        if (phase === 'ramp') {
+            const rampRemaining = Math.max(0, BUILD_ANIMATION.completionRampMs - phaseElapsed);
+            return rampRemaining + BUILD_ANIMATION.completionHoldMs + BUILD_ANIMATION.completionVisibleMs;
+        }
+        if (phase === 'hold') {
+            const holdRemaining = Math.max(0, BUILD_ANIMATION.completionHoldMs - phaseElapsed);
+            return holdRemaining + BUILD_ANIMATION.completionVisibleMs;
+        }
+        return Math.max(0, BUILD_ANIMATION.completionVisibleMs - phaseElapsed);
+    }
+
+    function finalizeCompletion(pluginId) {
+        setCompletionState(pluginId, 'done');
+    }
+
+    function easeOutCubic(value) {
+        const clamped = Math.max(0, Math.min(1, value));
+        const inv = 1 - clamped;
+        return 1 - inv * inv * inv;
+    }
+
     function applyFillScale(rowRef, percent) {
         if (!rowRef.fill) return;
         rowRef.fill.style.setProperty('--progress-width', `${normalizePercent(percent).toFixed(2)}%`);
@@ -424,27 +580,31 @@ export function createPluginBuildOverlayController({
         rowRef.lastFrameTime = 0;
     }
 
-    function stopCompletion(rowRef) {
-        if (rowRef.completionFrame !== null) {
-            cancelAnimationFrame(rowRef.completionFrame);
-            rowRef.completionFrame = null;
-        }
-        if (rowRef.completionTimer === null) return;
-        const waiters = rowRef.completionWaiters.slice();
-        clearTimeout(rowRef.completionTimer);
-        rowRef.completionTimer = null;
-        rowRef.completing = false;
-        rowRef.completionWaiters = [];
-        if (waiters.length === 0) return;
-        setTimeout(() => {
-            for (const waiter of waiters) {
-                waiter();
-            }
-        }, 0);
-    }
-
     function finiteOr(value, fallback) {
         return Number.isFinite(value) ? value : fallback;
+    }
+
+    function getCompletionState(pluginId) {
+        if (!pluginId) return 'idle';
+        const completion = completionByPlugin.get(pluginId);
+        if (!completion) return 'idle';
+        return completion.state;
+    }
+
+    function setCompletionState(pluginId, state, patch = {}) {
+        if (!pluginId) return;
+        if (state === 'idle') {
+            completionByPlugin.delete(pluginId);
+            return;
+        }
+        const previous = completionByPlugin.get(pluginId) || {};
+        completionByPlugin.set(pluginId, {
+            state,
+            startedAt: finiteOr(patch.startedAt, finiteOr(previous.startedAt, 0)),
+            startPercent: finiteOr(patch.startPercent, finiteOr(previous.startPercent, 100)),
+            phase: typeof patch.phase === 'string' ? patch.phase : (previous.phase || 'ramp'),
+            phaseStartedAt: finiteOr(patch.phaseStartedAt, finiteOr(previous.phaseStartedAt, finiteOr(patch.startedAt, finiteOr(previous.startedAt, 0))))
+        });
     }
 
     return {

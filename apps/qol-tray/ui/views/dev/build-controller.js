@@ -61,8 +61,8 @@ export function createBuildController({
             results: Array.isArray(event.results) ? event.results.length : 0
         });
         const completedPluginIds = Object.keys(state.buildProgress);
-        clearQueuedBuildRowSync();
         const finalizeBuildComplete = () => {
+            clearQueuedBuildRowSync();
             Object.assign(state, nextBuildCompletedState(event.results));
             onBuildComplete();
         };
@@ -71,8 +71,8 @@ export function createBuildController({
 
     function completeLocalBuild(results) {
         const completedPluginIds = Object.keys(state.buildProgress);
-        clearQueuedBuildRowSync();
         buildOverlayController.completeRows(completedPluginIds, () => {
+            clearQueuedBuildRowSync();
             state.building = false;
             state.buildResults = Array.isArray(results) ? results : [];
             maybeRender(false);

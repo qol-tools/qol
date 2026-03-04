@@ -132,14 +132,18 @@ export function render(containerEl) {
     if (!unsubscribeReconnect) {
         unsubscribeReconnect = onReconnect(() => {
             if (!state.building) return;
+            if (mockController?.isMockTesting()) return;
             void buildController.hydrateBuildState();
         });
     }
+    const hydrateBuildPromise = mockController.isMockTesting()
+        ? Promise.resolve()
+        : buildController.hydrateBuildState(true);
     void Promise.all([
         discoveryController.loadPlugins(true),
         discoveryController.fetchDiscoveryState(true),
         discoveryController.loadLogControls(true),
-        buildController.hydrateBuildState(true),
+        hydrateBuildPromise,
         mockController.hydrateMockTargets(true)
     ]).finally(() => {
         if (!state.linkingId) {

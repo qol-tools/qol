@@ -435,7 +435,7 @@
     width: var(--progress-width, 0%);
     z-index: var(--z-1);
     transform: none;
-    transition: width var(--progress-transition-medium);
+    transition: none;
     will-change: width;
     outline: none;
     box-shadow: none;

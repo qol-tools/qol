@@ -1,3 +1,5 @@
+import { BUILD_ANIMATION } from '../build-animation.js';
+
 export async function runLocalMockPluginBuild({
     getPluginIds,
     isCurrentRun,
@@ -5,7 +7,6 @@ export async function runLocalMockPluginBuild({
     setPluginQueued,
     setPluginBuilding,
     setPluginCompleted,
-    clearPluginProgress,
     setBuildCompleted,
     onRender,
     onQueueBuildSync,
@@ -16,6 +17,11 @@ export async function runLocalMockPluginBuild({
     const compileStepCount = 66;
     const compileTotalMs = 1320;
     const compileStepDelayMs = Math.round(compileTotalMs / compileStepCount);
+    const completionStepDelayMs =
+        BUILD_ANIMATION.completionRampMs
+        + BUILD_ANIMATION.completionHoldMs
+        + BUILD_ANIMATION.completionVisibleMs
+        + 40;
 
     const pluginIds = getPluginIds()
         .filter(Boolean)
@@ -23,10 +29,6 @@ export async function runLocalMockPluginBuild({
 
     onClearQueuedBuildSync();
     setBuildStarted();
-
-    for (const pluginId of pluginIds) {
-        setPluginQueued(pluginId);
-    }
     onRender();
 
     if (pluginIds.length === 0) {
@@ -39,6 +41,9 @@ export async function runLocalMockPluginBuild({
 
     for (const pluginId of pluginIds) {
         if (!isCurrentRun()) return false;
+        setPluginQueued(pluginId);
+        onQueueBuildSync(pluginId);
+        await sleep(80);
         setPluginBuilding(pluginId, 0, '0/24 preparing');
         onQueueBuildSync(pluginId);
         await sleep(120);
@@ -54,8 +59,7 @@ export async function runLocalMockPluginBuild({
 
         setPluginCompleted(pluginId);
         onQueueBuildSync(pluginId);
-        await sleep(220);
-        clearPluginProgress(pluginId);
+        await sleep(completionStepDelayMs);
     }
 
     if (!isCurrentRun()) return false;
@@ -68,7 +72,6 @@ export async function runLocalMockPluginBuild({
             skipped: false
         }))
     ));
-    onClearQueuedBuildSync();
     return true;
 }
 
