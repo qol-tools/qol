@@ -8,11 +8,11 @@ import { useKeyboard } from '../hooks/useKeyboard.js';
 import { readResponseText } from '../api/client.js';
 import { clampPercent } from '../utils/progress.js';
 
-import { PluginsView } from '../views/PluginsView.js';
-import { StoreView } from '../views/StoreView.js';
-import { HotkeysView } from '../views/HotkeysView.js';
-import { TaskRunnerView } from '../views/TaskRunnerView.js';
-import { DevView } from '../views/DevView.js';
+import { PluginsView } from '../views/plugins-view.js';
+import { StoreView } from '../views/store-view.js';
+import { HotkeysView } from '../views/hotkeys-view.js';
+import { TaskRunnerView } from '../views/task-runner-view.js';
+import { DevView } from '../views/dev-view.js';
 
 const VIEW_MAP = { plugins: PluginsView, store: StoreView, hotkeys: HotkeysView, 'task-runner': TaskRunnerView, dev: DevView };
 const BASE_ORDER = ['plugins', 'store', 'hotkeys', 'task-runner'];
