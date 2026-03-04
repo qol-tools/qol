@@ -276,7 +276,7 @@ export function createPluginBuildOverlayController({
 
     function applyFillScale(rowRef, percent) {
         if (!rowRef.fill) return;
-        rowRef.fill.style.setProperty('--progress-scale', (normalizePercent(percent) / 100).toFixed(4));
+        rowRef.fill.style.setProperty('--progress-width', `${normalizePercent(percent).toFixed(2)}%`);
     }
 
     function stopFillAnimation(rowRef) {
