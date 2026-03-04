@@ -4,6 +4,8 @@ export async function runLocalMockPluginBuild({
     setBuildStarted,
     setPluginQueued,
     setPluginBuilding,
+    setPluginCompleted,
+    clearPluginProgress,
     setBuildCompleted,
     onRender,
     onQueueBuildSync,
@@ -30,7 +32,7 @@ export async function runLocalMockPluginBuild({
     if (pluginIds.length === 0) {
         await sleep(100);
         if (!isCurrentRun()) return false;
-        setBuildCompleted([]);
+        await Promise.resolve(setBuildCompleted([]));
         onRender();
         return true;
     }
@@ -49,20 +51,24 @@ export async function runLocalMockPluginBuild({
             onQueueBuildSync(pluginId);
             await sleep(compileStepDelayMs);
         }
+
+        setPluginCompleted(pluginId);
+        onQueueBuildSync(pluginId);
+        await sleep(220);
+        clearPluginProgress(pluginId);
     }
 
     if (!isCurrentRun()) return false;
 
-    setBuildCompleted(
+    await Promise.resolve(setBuildCompleted(
         pluginIds.map(plugin_id => ({
             plugin_id,
             success: true,
             output: 'Local mock build completed',
             skipped: false
         }))
-    );
+    ));
     onClearQueuedBuildSync();
-    onRender();
     return true;
 }
 

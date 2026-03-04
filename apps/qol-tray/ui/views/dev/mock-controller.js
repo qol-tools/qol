@@ -143,10 +143,17 @@ export function createMockController({
                         phase
                     };
                 },
-                setBuildCompleted: results => {
-                    state.building = false;
-                    state.buildResults = results;
+                setPluginCompleted: pluginId => {
+                    state.buildProgress[pluginId] = {
+                        status: 'completed',
+                        percent: 100,
+                        phase: 'Completed'
+                    };
                 },
+                clearPluginProgress: pluginId => {
+                    delete state.buildProgress[pluginId];
+                },
+                setBuildCompleted: results => buildController.completeLocalBuild(results),
                 onRender: onNeedsRender,
                 onQueueBuildSync: pluginId => buildController.queueBuildRowSync(pluginId),
                 onClearQueuedBuildSync: () => buildController.clearQueuedBuildRowSync()

@@ -1,3 +1,5 @@
+import { BUILD_ANIMATION } from './build-animation.js';
+
 export function createPluginBuildOverlayController({
     getContainer,
     getPluginById,
@@ -8,6 +10,7 @@ export function createPluginBuildOverlayController({
     const LOG_PREFIX = '[qol-dev-loading]';
     const DEBUG_LOADING = false;
     let rowRefs = new Map();
+    const completionPlayedByPlugin = new Set();
     const pendingBuildRows = new Set();
     let buildSyncFrame = null;
 
@@ -24,7 +27,39 @@ export function createPluginBuildOverlayController({
         }
         for (const rowRef of rowRefs.values()) {
             stopFillAnimation(rowRef);
+            stopCompletion(rowRef);
         }
+    }
+
+    function completeRows(pluginIds, onComplete) {
+        const done = typeof onComplete === 'function' ? onComplete : () => {};
+        let pending = 0;
+        let finished = false;
+
+        const flush = () => {
+            if (finished) return;
+            if (pending > 0) return;
+            finished = true;
+            done();
+        };
+
+        for (const pluginId of pluginIds) {
+            const rowRef = rowRefs.get(pluginId);
+            if (!rowRef) continue;
+            if (completionPlayedByPlugin.has(rowRef.pluginId) && !rowRef.completing) {
+                clearOverlayNodes(rowRef);
+                continue;
+            }
+            const started = startCompletion(rowRef, true, () => {
+                pending = Math.max(0, pending - 1);
+                flush();
+            });
+            if (!started) continue;
+            pending += 1;
+        }
+
+        flush();
+        return pending > 0;
     }
 
     function queue(pluginId, onNeedsFullRender) {
@@ -79,6 +114,7 @@ export function createPluginBuildOverlayController({
     function makeRowRef(row, previous) {
         return {
             row,
+            pluginId: row.dataset.pluginId || '',
             overlayHost: row.querySelector('.plugin-build-overlay-host'),
             overlay: null,
             fill: null,
@@ -88,22 +124,19 @@ export function createPluginBuildOverlayController({
             targetPercent: finiteOr(previous?.targetPercent, Number.NaN),
             lastBuildPercent: finiteOr(previous?.lastBuildPercent, Number.NaN),
             animationFrame: null,
+            completionTimer: null,
+            completionFrame: null,
+            completing: false,
+            completionWaiters: [],
             lastFrameTime: 0,
             lastMain: '',
             lastSub: ''
         };
     }
 
-    function syncAll(pluginIds, onNeedsFullRender) {
-        let needsFullRender = false;
+    function syncAll(pluginIds) {
         for (const pluginId of pluginIds) {
-            if (!syncRow(pluginId)) {
-                needsFullRender = true;
-                break;
-            }
-        }
-        if (needsFullRender && typeof onNeedsFullRender === 'function') {
-            onNeedsFullRender();
+            syncRow(pluginId);
         }
     }
 
@@ -119,7 +152,28 @@ export function createPluginBuildOverlayController({
         rowRef.row.classList.toggle('is-building', isBuilding);
 
         if (!isBuilding) {
+            if (startCompletion(rowRef)) return true;
             clearOverlayNodes(rowRef);
+            return true;
+        }
+
+        if (buildState.status === 'completed') {
+            if (completionPlayedByPlugin.has(rowRef.pluginId) && !rowRef.completing) {
+                clearOverlayNodes(rowRef);
+                return true;
+            }
+            if (!rowRef.overlay || !rowRef.overlay.isConnected) {
+                return true;
+            }
+            if (rowRef.main) {
+                rowRef.main.textContent = 'Completed';
+                rowRef.lastMain = 'Completed';
+            }
+            if (rowRef.sub) {
+                rowRef.sub.textContent = 'Reloading plugin';
+                rowRef.lastSub = 'Reloading plugin';
+            }
+            startCompletion(rowRef, true);
             return true;
         }
 
@@ -128,6 +182,7 @@ export function createPluginBuildOverlayController({
         const label = buildState.status === 'queued' ? 'Queued' : 'Compiling';
         const detail = formatDetail(buildState.phase, buildState.percent);
         const normalizedPercent = normalizePercent(buildState.percent);
+        resetStaleProgressState(rowRef, buildState.status, normalizedPercent);
         const displayPercent = toDisplayPercent(rowRef, normalizedPercent, buildState.status);
         setFillTarget(rowRef, displayPercent, buildState.status !== 'building');
         if (rowRef.lastMain !== label && rowRef.main) {
@@ -188,6 +243,7 @@ export function createPluginBuildOverlayController({
 
     function clearOverlayNodes(rowRef) {
         stopFillAnimation(rowRef);
+        stopCompletion(rowRef);
         if (rowRef.overlayHost && rowRef.overlayHost.childElementCount > 0) {
             rowRef.overlayHost.replaceChildren();
         }
@@ -203,6 +259,55 @@ export function createPluginBuildOverlayController({
         rowRef.lastSub = '';
     }
 
+    function startCompletion(rowRef, force = false, onDone = null) {
+        if (rowRef.completing) {
+            if (typeof onDone === 'function') {
+                rowRef.completionWaiters.push(onDone);
+            }
+            return true;
+        }
+        if (!rowRef.overlay || !rowRef.fill) return false;
+        const completedPercent = Math.max(finiteOr(rowRef.displayPercent, 0), finiteOr(rowRef.lastBuildPercent, 0));
+        if (!force && completedPercent < BUILD_ANIMATION.completionTriggerPercent) return false;
+        if (completionPlayedByPlugin.has(rowRef.pluginId)) return true;
+        rowRef.completing = true;
+        completionPlayedByPlugin.add(rowRef.pluginId);
+        if (typeof onDone === 'function') {
+            rowRef.completionWaiters.push(onDone);
+        }
+        stopFillAnimation(rowRef);
+        rowRef.displayPercent = 100;
+        rowRef.targetPercent = 100;
+        rowRef.lastBuildPercent = 100;
+        applyFillScale(rowRef, 100);
+        rowRef.overlay.classList.remove('is-completing');
+        if (rowRef.main) {
+            rowRef.main.textContent = 'Completed';
+            rowRef.lastMain = 'Completed';
+        }
+        if (rowRef.sub) {
+            rowRef.sub.textContent = 'Reloading plugin';
+            rowRef.lastSub = 'Reloading plugin';
+        }
+        rowRef.completionFrame = requestAnimationFrame(() => {
+            rowRef.completionFrame = null;
+            if (!rowRef.overlay) return;
+            rowRef.overlay.classList.add('is-completing');
+        });
+
+        rowRef.completionTimer = setTimeout(() => {
+            const waiters = rowRef.completionWaiters.slice();
+            rowRef.completionWaiters = [];
+            rowRef.completionTimer = null;
+            rowRef.completing = false;
+            clearOverlayNodes(rowRef);
+            for (const waiter of waiters) {
+                waiter();
+            }
+        }, BUILD_ANIMATION.completionVisibleMs);
+        return true;
+    }
+
     function toDisplayPercent(rowRef, normalizedPercent, status) {
         if (status !== 'building') return normalizedPercent;
         if (!Number.isFinite(rowRef.lastBuildPercent)) return normalizedPercent;
@@ -210,10 +315,35 @@ export function createPluginBuildOverlayController({
         return rowRef.lastBuildPercent;
     }
 
+    function resetStaleProgressState(rowRef, status, normalizedPercent) {
+        if (status !== 'queued' && status !== 'building') return;
+        if (normalizedPercent > BUILD_ANIMATION.staleResetPercent) return;
+        if (!Number.isFinite(rowRef.lastBuildPercent) && !Number.isFinite(rowRef.displayPercent)) return;
+        completionPlayedByPlugin.delete(rowRef.pluginId);
+        rowRef.displayPercent = Number.NaN;
+        rowRef.targetPercent = Number.NaN;
+        rowRef.lastBuildPercent = Number.NaN;
+        rowRef.lastFrameTime = 0;
+        stopFillAnimation(rowRef);
+    }
+
     function setFillTarget(rowRef, targetPercent, immediate) {
         const nextPercent = normalizePercent(targetPercent);
         rowRef.lastBuildPercent = nextPercent;
         if (!rowRef.fill) return;
+
+        if (nextPercent < BUILD_ANIMATION.completionTriggerPercent) {
+            completionPlayedByPlugin.delete(rowRef.pluginId);
+        }
+
+        if (nextPercent >= BUILD_ANIMATION.completionTriggerPercent) {
+            if (completionPlayedByPlugin.has(rowRef.pluginId) && !rowRef.completing) {
+                clearOverlayNodes(rowRef);
+                return;
+            }
+            startCompletion(rowRef, true);
+            return;
+        }
 
         if (immediate) {
             rowRef.displayPercent = nextPercent;
@@ -255,8 +385,14 @@ export function createPluginBuildOverlayController({
         const current = finiteOr(rowRef.displayPercent, 0);
         const target = finiteOr(rowRef.targetPercent, current);
         const delta = target - current;
+        if (delta > BUILD_ANIMATION.hardSyncDelta) {
+            rowRef.displayPercent = target;
+            applyFillScale(rowRef, target);
+            rowRef.lastFrameTime = timestamp;
+            return;
+        }
 
-        if (Math.abs(delta) <= 0.02) {
+        if (Math.abs(delta) <= BUILD_ANIMATION.snapDelta) {
             rowRef.displayPercent = target;
             applyFillScale(rowRef, target);
             rowRef.lastFrameTime = timestamp;
@@ -264,10 +400,11 @@ export function createPluginBuildOverlayController({
         }
 
         const elapsed = rowRef.lastFrameTime > 0 ? timestamp - rowRef.lastFrameTime : 16;
-        const dt = Math.min(48, Math.max(8, elapsed));
+        const dt = Math.min(BUILD_ANIMATION.frameMaxMs, Math.max(BUILD_ANIMATION.frameMinMs, elapsed));
         rowRef.lastFrameTime = timestamp;
-        const alpha = 1 - Math.exp(-dt / 140);
-        const next = current + delta * alpha;
+        const alpha = 1 - Math.exp(-dt / BUILD_ANIMATION.easeMs);
+        const eased = current + delta * alpha;
+        const next = Math.max(current, eased);
 
         rowRef.displayPercent = next;
         applyFillScale(rowRef, next);
@@ -287,12 +424,32 @@ export function createPluginBuildOverlayController({
         rowRef.lastFrameTime = 0;
     }
 
+    function stopCompletion(rowRef) {
+        if (rowRef.completionFrame !== null) {
+            cancelAnimationFrame(rowRef.completionFrame);
+            rowRef.completionFrame = null;
+        }
+        if (rowRef.completionTimer === null) return;
+        const waiters = rowRef.completionWaiters.slice();
+        clearTimeout(rowRef.completionTimer);
+        rowRef.completionTimer = null;
+        rowRef.completing = false;
+        rowRef.completionWaiters = [];
+        if (waiters.length === 0) return;
+        setTimeout(() => {
+            for (const waiter of waiters) {
+                waiter();
+            }
+        }, 0);
+    }
+
     function finiteOr(value, fallback) {
         return Number.isFinite(value) ? value : fallback;
     }
 
     return {
         clearQueued,
+        completeRows,
         queue,
         cacheRows,
         syncAll

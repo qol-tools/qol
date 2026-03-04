@@ -421,6 +421,9 @@
     position: absolute;
     inset: 0;
     background: var(--state-info-bg-soft);
+    opacity: 1;
+    transition: opacity var(--dev-build-overlay-fade), filter var(--dev-build-overlay-fade);
+    overflow: hidden;
 }
 
 .plugin-build-overlay.progress-track {
@@ -432,7 +435,7 @@
     width: var(--progress-width, 0%);
     z-index: var(--z-1);
     transform: none;
-    transition: width var(--progress-transition-fast);
+    transition: width var(--progress-transition-medium);
     will-change: width;
     outline: none;
     box-shadow: none;
@@ -455,6 +458,62 @@
     border-radius: var(--radius-lg-plus);
     background: var(--layer-overlay-ink-54);
     box-shadow: none;
+    opacity: 1;
+    transition: opacity var(--dev-build-overlay-fade), transform var(--dev-build-overlay-fade);
+}
+
+.plugin-build-overlay.is-completing {
+    opacity: 0;
+    filter:
+        saturate(var(--dev-build-overlay-complete-saturate))
+        brightness(var(--dev-build-overlay-complete-brightness));
+}
+
+.plugin-build-overlay.is-completing::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: var(--dev-build-overlay-complete-sweep-start);
+    width: var(--dev-build-overlay-complete-sweep-width);
+    background: linear-gradient(
+        90deg,
+        transparent 0%,
+        var(--layer-paper-12) 24%,
+        var(--layer-paper-30) 50%,
+        var(--layer-paper-12) 76%,
+        transparent 100%
+    );
+    box-shadow: 0 0 16px var(--accent-glow-soft);
+    animation:
+        plugin-build-complete-sweep
+        var(--dev-build-overlay-fade)
+        var(--dev-build-overlay-complete-sweep-ease)
+        forwards;
+    pointer-events: none;
+}
+
+.plugin-build-overlay.is-completing .progress-fill {
+    width: 100%;
+}
+
+.plugin-build-overlay.is-completing .plugin-build-overlay-copy {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(var(--dev-build-overlay-copy-scale-out));
+}
+
+@keyframes plugin-build-complete-sweep {
+    from {
+        left: var(--dev-build-overlay-complete-sweep-start);
+        opacity: 0;
+    }
+    18% {
+        opacity: 1;
+    }
+    to {
+        left: var(--dev-build-overlay-complete-sweep-end);
+        opacity: 0;
+    }
 }
 
 .plugin-build-overlay-main {

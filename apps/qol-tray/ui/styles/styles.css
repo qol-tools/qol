@@ -208,6 +208,14 @@
     --progress-fill-stripe-b: rgba(var(--paper-rgb, 255, 255, 255), 0.08);
     --progress-transition-fast: 120ms linear;
     --progress-transition-medium: 220ms linear;
+    --dev-build-overlay-fade: var(--dur-slow);
+    --dev-build-overlay-copy-scale-out: 0.96;
+    --dev-build-overlay-complete-sweep-ease: ease-out;
+    --dev-build-overlay-complete-sweep-start: -28%;
+    --dev-build-overlay-complete-sweep-end: 116%;
+    --dev-build-overlay-complete-sweep-width: 28%;
+    --dev-build-overlay-complete-saturate: 1.2;
+    --dev-build-overlay-complete-brightness: 1.12;
 
     --radius-2xs: 2px;
     --radius-xs: 3px;
@@ -681,6 +689,7 @@ body {
 .view-body {
     flex: 1;
     overflow-y: auto;
+    scrollbar-gutter: stable;
     min-height: 0;
     padding: var(--space-6) var(--space-7);
     max-width: var(--size-content-max);

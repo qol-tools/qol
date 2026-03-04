@@ -60,9 +60,23 @@ export function createBuildController({
         logLoading('event:build_complete', {
             results: Array.isArray(event.results) ? event.results.length : 0
         });
+        const completedPluginIds = Object.keys(state.buildProgress);
         clearQueuedBuildRowSync();
-        Object.assign(state, nextBuildCompletedState(event.results));
-        onBuildComplete();
+        const finalizeBuildComplete = () => {
+            Object.assign(state, nextBuildCompletedState(event.results));
+            onBuildComplete();
+        };
+        buildOverlayController.completeRows(completedPluginIds, finalizeBuildComplete);
+    }
+
+    function completeLocalBuild(results) {
+        const completedPluginIds = Object.keys(state.buildProgress);
+        clearQueuedBuildRowSync();
+        buildOverlayController.completeRows(completedPluginIds, () => {
+            state.building = false;
+            state.buildResults = Array.isArray(results) ? results : [];
+            maybeRender(false);
+        });
     }
 
     function maybeRender(skipUpdate) {
@@ -107,17 +121,19 @@ export function createBuildController({
         if (!progress) return null;
 
         const status = progress.status || 'building';
-        if (status !== 'queued' && status !== 'building') return null;
+        if (status !== 'queued' && status !== 'building' && status !== 'completed') return null;
         if (!mockTesting && (!plugin.has_cargo || !plugin.needs_rebuild)) {
             return null;
         }
 
-        const percent = normalizePercent(progress.percent);
-        const phase = (progress.phase || '').trim() || (status === 'queued' ? 'Queued' : 'Compiling');
+        const percent = status === 'completed' ? 100 : normalizePercent(progress.percent);
+        const phase = (progress.phase || '').trim()
+            || (status === 'queued' ? 'Queued' : status === 'completed' ? 'Completed' : 'Compiling');
         return { status, percent, phase };
     }
 
     function pruneInvisibleProgress(visibleIds) {
+        if (state.building) return;
         for (const pluginId of Object.keys(state.buildProgress)) {
             if (!visibleIds.has(pluginId)) {
                 delete state.buildProgress[pluginId];
@@ -142,7 +158,7 @@ export function createBuildController({
         if (!state.building) {
             return;
         }
-        buildOverlayController.syncAll(Object.keys(state.buildProgress), onNeedsRender);
+        buildOverlayController.syncAll(Object.keys(state.buildProgress));
     }
 
     function stopLocalMockBuildUi() {
@@ -154,6 +170,7 @@ export function createBuildController({
 
     return {
         handleEvent,
+        completeLocalBuild,
         hydrateBuildState,
         getActivePluginBuildState,
         pruneInvisibleProgress,
