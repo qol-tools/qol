@@ -2,6 +2,7 @@ use super::process::{
     cached_process_identity, is_regular_app, known_window_ids_by_identity, ProcessIdentity,
 };
 use super::{ax, AxWindowMeta, CgWindow};
+use super::ax::AxCache;
 use crate::platform::WindowInfo;
 use std::collections::{HashMap, HashSet};
 
@@ -83,11 +84,21 @@ fn allowed_minimized_count(
     on_screen_count: usize,
     identity: Option<ProcessIdentity>,
     snapshot: &HashMap<ProcessIdentity, HashSet<u32>>,
-    meta_map: &HashMap<u32, AxWindowMeta>,
+    id_map: &HashMap<u32, AxWindowMeta>,
+    all_meta: &[AxWindowMeta],
     accepted_count: usize,
 ) -> usize {
-    if !meta_map.is_empty() && on_screen_count != 0 {
-        return meta_map.values().filter(|window| window.is_minimized).count();
+    fn ax_minimized_count(id_map: &HashMap<u32, AxWindowMeta>, all_meta: &[AxWindowMeta]) -> usize {
+        if !id_map.is_empty() {
+            return id_map.values().filter(|w| w.is_minimized).count();
+        }
+        all_meta.iter().filter(|w| w.is_minimized).count()
+    }
+
+    let has_ax = !id_map.is_empty() || !all_meta.is_empty();
+
+    if has_ax && on_screen_count != 0 {
+        return ax_minimized_count(id_map, all_meta);
     }
 
     let snapshot_count = identity
@@ -99,8 +110,8 @@ fn allowed_minimized_count(
         return count;
     }
 
-    if !meta_map.is_empty() {
-        return meta_map.values().filter(|window| window.is_minimized).count();
+    if has_ax {
+        return ax_minimized_count(id_map, all_meta);
     }
 
     if accepted_count > on_screen_count {
@@ -118,6 +129,7 @@ pub(super) fn collect_on_screen_windows(
     parsed: Vec<CgWindow>,
     state: &mut WindowEnumeration,
     tracker: &mut KnownWindowTracker,
+    ax_cache: &mut AxCache,
 ) {
     #[cfg(debug_assertions)]
     eprintln!("[alt-tab/enum] CG on-screen: {} windows", parsed.len());
@@ -157,7 +169,7 @@ pub(super) fn collect_on_screen_windows(
         eprintln!("[alt-tab/enum] pre-dedup: wid={} pid={} app={:?} title={:?}", w.id, w.pid, w.app_name, w.title);
     }
 
-    let deduped = ax::dedup_by_ax(parsed);
+    let deduped = ax::dedup_by_ax(parsed, ax_cache);
     #[cfg(debug_assertions)]
     eprintln!("[alt-tab/enum] post-dedup: {} windows", deduped.len());
     for window in deduped {
@@ -168,17 +180,17 @@ pub(super) fn collect_on_screen_windows(
 
 fn detect_other_space_pids(
     state: &WindowEnumeration,
-    ax_cache: &mut HashMap<i32, Option<(HashMap<u32, AxWindowMeta>, usize)>>,
+    ax_cache: &mut AxCache,
 ) -> HashSet<i32> {
     let mut result = HashSet::new();
     for &pid in &state.on_screen_pids {
         let entry = ax_cache.entry(pid).or_insert_with(|| ax::ax_windows(pid));
-        let Some((meta, accepted)) = entry else { continue };
+        let Some((id_map, _, accepted)) = entry else { continue };
         // Without _AXWindowID (id_map empty), accepted count includes transient
         // windows that inflate the count — can't reliably distinguish other-space
         // windows from transient overlays. Skip to force the stricter
         // ax_is_window_minimized path instead of the permissive ax_is_window_real.
-        if meta.is_empty() {
+        if id_map.is_empty() {
             continue;
         }
         if *accepted > state.on_screen_count(pid) {
@@ -192,14 +204,42 @@ fn passes_ax_filter(
     window: &CgWindow,
     is_on_screen_pid: bool,
     is_other_space_pid: bool,
+    ax_cache: &AxCache,
 ) -> bool {
-    if is_on_screen_pid && is_other_space_pid {
+    if !is_on_screen_pid {
+        return true;
+    }
+    // Use cached ax_windows() data instead of per-window ax_find_window() calls.
+    // detect_other_space_pids already populated ax_cache for all on-screen PIDs.
+    if let Some(Some((id_map, all_meta, _))) = ax_cache.get(&window.pid) {
+        // Prefer id_map when the app supports _AXWindowID
+        if !id_map.is_empty() {
+            if is_other_space_pid {
+                return id_map.contains_key(&window.id);
+            }
+            return id_map.get(&window.id).map_or(false, |m| m.is_minimized);
+        }
+        // Fall back to title matching in all_meta (avoids per-window ax_find_window)
+        if !all_meta.is_empty() {
+            let title_match = all_meta.iter().find(|m| m.title == window.title);
+            if is_other_space_pid {
+                return title_match.is_some();
+            }
+            if let Some(meta) = title_match {
+                return meta.is_minimized;
+            }
+            // No title match — single-window fallback (matches ax_find_window behavior)
+            if all_meta.len() == 1 {
+                return all_meta[0].is_minimized;
+            }
+            return false;
+        }
+    }
+    // No cache entry — per-window fallback
+    if is_other_space_pid {
         return ax::ax_is_window_real(window.pid, window.id, &window.title);
     }
-    if is_on_screen_pid && !is_other_space_pid {
-        return ax::ax_is_window_minimized(window.pid, window.id, &window.title);
-    }
-    true
+    ax::ax_is_window_minimized(window.pid, window.id, &window.title)
 }
 
 struct ResolvedWindow {
@@ -211,7 +251,7 @@ fn resolve_minimized_budget(
     window: &CgWindow,
     state: &WindowEnumeration,
     tracker: &mut KnownWindowTracker,
-    ax_cache: &mut HashMap<i32, Option<(HashMap<u32, AxWindowMeta>, usize)>>,
+    ax_cache: &mut AxCache,
 ) -> Option<ResolvedWindow> {
     let on_screen_count = state.on_screen_count(window.pid);
     let identity = tracker.identity_for_pid(window.pid);
@@ -230,24 +270,26 @@ fn resolve_minimized_budget(
     let mut title = window.title.clone();
     let mut allowed_count = known_budget.unwrap_or(usize::MAX);
 
-    let ax_meta = ax_windows
-        .as_ref()
-        .and_then(|(meta_map, _)| meta_map.get(&window.id));
+    let ax_meta = ax_windows.as_ref().and_then(|(id_map, all_meta, _)| {
+        id_map.get(&window.id).or_else(|| {
+            all_meta.iter().find(|m| m.title == window.title)
+        })
+    });
     let ax_has_window = ax_meta.is_some();
     let ax_is_minimized = ax_meta.map_or(false, |m| m.is_minimized);
 
     if let Some(meta) = ax_meta.filter(|m| !m.title.is_empty()) {
         title = meta.title.clone();
     }
-    if let Some((meta_map, accepted_count)) = ax_windows.as_ref().filter(|_| known_budget.is_none()) {
+    if let Some((id_map, all_meta, accepted_count)) = ax_windows.as_ref().filter(|_| known_budget.is_none()) {
         allowed_count =
-            allowed_minimized_count(on_screen_count, identity, &tracker.snapshot, meta_map, *accepted_count);
+            allowed_minimized_count(on_screen_count, identity, &tracker.snapshot, id_map, all_meta, *accepted_count);
     }
 
     if known_budget.is_none() && ax_has_window && !ax_is_minimized {
         return None;
     }
-    let accepted_count = ax_windows.as_ref().map_or(0, |(_, c)| *c);
+    let accepted_count = ax_windows.as_ref().map_or(0, |(_, _, c)| *c);
     if known_ids.is_some_and(|ids| !ids.is_empty() && !ax_has_window && accepted_count == 0 && !ids.contains(&window.id)) {
         return None;
     }
@@ -259,13 +301,13 @@ pub(super) fn collect_minimized_windows(
     off_screen: Vec<CgWindow>,
     state: &mut WindowEnumeration,
     tracker: &mut KnownWindowTracker,
+    ax_cache: &mut AxCache,
 ) {
     let mut regular_app_cache: HashMap<i32, bool> = HashMap::new();
-    let mut ax_cache: HashMap<i32, Option<(HashMap<u32, AxWindowMeta>, usize)>> = HashMap::new();
     let mut minimized_count_by_pid: HashMap<i32, usize> = HashMap::new();
     let mut seen_ids = HashSet::new();
 
-    let other_space_pids = detect_other_space_pids(state, &mut ax_cache);
+    let other_space_pids = detect_other_space_pids(state, ax_cache);
 
     #[cfg(debug_assertions)]
     eprintln!("[alt-tab/enum] CG off-screen candidates: {}", off_screen.len());
@@ -289,13 +331,13 @@ pub(super) fn collect_minimized_windows(
 
         let is_on_screen_pid = state.on_screen_pids.contains(&window.pid);
         let is_other_space_pid = other_space_pids.contains(&window.pid);
-        if !passes_ax_filter(&window, is_on_screen_pid, is_other_space_pid) {
+        if !passes_ax_filter(&window, is_on_screen_pid, is_other_space_pid, ax_cache) {
             #[cfg(debug_assertions)]
             eprintln!("[alt-tab/enum] MINIMIZED skip (AX filter): wid={} app={:?}", window.id, window.app_name);
             continue;
         }
 
-        let Some(resolved) = resolve_minimized_budget(&window, state, tracker, &mut ax_cache) else {
+        let Some(resolved) = resolve_minimized_budget(&window, state, tracker, ax_cache) else {
             #[cfg(debug_assertions)]
             eprintln!("[alt-tab/enum] MINIMIZED skip (budget rejected): wid={} app={:?}", window.id, window.app_name);
             continue;

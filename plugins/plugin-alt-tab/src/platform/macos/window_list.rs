@@ -164,7 +164,8 @@ pub(super) fn get_on_screen_windows() -> Vec<WindowInfo> {
 
     let mut state = WindowEnumeration::default();
     let mut tracker = KnownWindowTracker::new();
-    collect_on_screen_windows(parsed, &mut state, &mut tracker);
+    let mut ax_cache = std::collections::HashMap::new();
+    collect_on_screen_windows(parsed, &mut state, &mut tracker, &mut ax_cache);
     state.windows
 }
 
@@ -184,7 +185,8 @@ fn get_open_windows_impl(include_minimized: bool) -> Vec<WindowInfo> {
 
     let mut state = WindowEnumeration::default();
     let mut tracker = KnownWindowTracker::new();
-    collect_on_screen_windows(on_screen, &mut state, &mut tracker);
+    let mut ax_cache = std::collections::HashMap::new();
+    collect_on_screen_windows(on_screen, &mut state, &mut tracker, &mut ax_cache);
 
     if include_minimized {
         let all_opts = K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
@@ -198,7 +200,7 @@ fn get_open_windows_impl(include_minimized: bool) -> Vec<WindowInfo> {
         let off_screen: Vec<_> = all_windows.into_iter()
             .filter(|w| !w.is_onscreen)
             .collect();
-        collect_minimized_windows(off_screen, &mut state, &mut tracker);
+        collect_minimized_windows(off_screen, &mut state, &mut tracker, &mut ax_cache);
     }
     tracker.persist();
 

@@ -7,9 +7,11 @@ use super::{CFArrayGetCount, CFArrayGetValueAtIndex, CFRelease};
 
 /// Query the Accessibility API for the number of real windows an app has.
 /// Returns None if AX is unavailable (no permission) or the app doesn't respond.
-/// Returns (id_map, accepted_count) where accepted_count includes windows that
-/// passed subrole filter but failed _AXWindowID lookup.
-pub(super) fn ax_windows(pid: i32) -> Option<(HashMap<u32, AxWindowMeta>, usize)> {
+/// Returns (id_map, all_meta, accepted_count):
+///   - id_map: keyed by _AXWindowID (empty when the app doesn't expose the attribute)
+///   - all_meta: title + minimized for every window that passed subrole filter
+///   - accepted_count: number of windows that passed subrole filter
+pub(super) fn ax_windows(pid: i32) -> Option<(HashMap<u32, AxWindowMeta>, Vec<AxWindowMeta>, usize)> {
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
         fn AXUIElementCreateApplication(pid: i32) -> *const c_void;
@@ -47,7 +49,8 @@ pub(super) fn ax_windows(pid: i32) -> Option<(HashMap<u32, AxWindowMeta>, usize)
         let count = CFArrayGetCount(windows_value as CFArrayRef);
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/ax] ax_windows pid={} AXWindows count={}", pid, count);
-        let mut out = HashMap::new();
+        let mut id_map = HashMap::new();
+        let mut all_meta: Vec<AxWindowMeta> = Vec::new();
         let mut accepted_count: usize = 0;
 
         for i in 0..count {
@@ -74,25 +77,22 @@ pub(super) fn ax_windows(pid: i32) -> Option<(HashMap<u32, AxWindowMeta>, usize)
                 CFRelease(subrole_value);
             }
 
-            // Window passed subrole filter — count it even if _AXWindowID fails below.
             accepted_count += 1;
 
+            // Try _AXWindowID (may fail — -25205 is common on newer macOS)
             let mut id_value: *const c_void = std::ptr::null();
             let id_err = AXUIElementCopyAttributeValue(win, id_attr, &mut id_value);
-            if id_err != 0 || id_value.is_null() {
-                #[cfg(debug_assertions)]
-                eprintln!("[alt-tab/ax] FILTERED no _AXWindowID pid={} err={}", pid, id_err);
-                if !id_value.is_null() {
-                    CFRelease(id_value);
-                }
-                continue;
-            }
-            let Some(id) = cg_helpers::cfnumber_to_u32(id_value) else {
+            let window_id = if id_err == 0 && !id_value.is_null() {
+                let maybe_id = cg_helpers::cfnumber_to_u32(id_value);
                 CFRelease(id_value);
-                continue;
+                maybe_id
+            } else {
+                if !id_value.is_null() { CFRelease(id_value); }
+                None
             };
-            CFRelease(id_value);
 
+            // Always query title + minimized so callers can match by title
+            // when _AXWindowID is unavailable.
             let mut title = String::new();
             let mut title_value: *const c_void = std::ptr::null();
             let title_err = AXUIElementCopyAttributeValue(win, title_attr, &mut title_value);
@@ -118,13 +118,14 @@ pub(super) fn ax_windows(pid: i32) -> Option<(HashMap<u32, AxWindowMeta>, usize)
                 CFRelease(minimized_value);
             }
 
-            out.insert(
-                id,
-                AxWindowMeta {
-                    title: title.trim().to_string(),
-                    is_minimized,
-                },
-            );
+            let meta = AxWindowMeta {
+                title: title.trim().to_string(),
+                is_minimized,
+            };
+            all_meta.push(meta.clone());
+            if let Some(id) = window_id {
+                id_map.insert(id, meta);
+            }
         }
 
         CFRelease(id_attr as *const c_void);
@@ -134,8 +135,8 @@ pub(super) fn ax_windows(pid: i32) -> Option<(HashMap<u32, AxWindowMeta>, usize)
         CFRelease(windows_value);
         CFRelease(app);
         #[cfg(debug_assertions)]
-        eprintln!("[alt-tab/ax] ax_windows pid={} id_map={} accepted={} (from {} AX windows)", pid, out.len(), accepted_count, count);
-        Some((out, accepted_count))
+        eprintln!("[alt-tab/ax] ax_windows pid={} id_map={} all_meta={} accepted={} (from {} AX windows)", pid, id_map.len(), all_meta.len(), accepted_count, count);
+        Some((id_map, all_meta, accepted_count))
     }
 }
 
@@ -187,7 +188,9 @@ pub(super) fn ax_is_window_minimized(pid: i32, cg_window_id: u32, title: &str) -
 /// AX reports the real user-visible window count. For each PID, keep only
 /// that many CG windows, but each kept window stays at its original z-position
 /// so that windows from different apps remain correctly interleaved.
-pub(super) fn dedup_by_ax(windows: Vec<CgWindow>) -> Vec<CgWindow> {
+pub(super) type AxCache = HashMap<i32, Option<(HashMap<u32, AxWindowMeta>, Vec<AxWindowMeta>, usize)>>;
+
+pub(super) fn dedup_by_ax(windows: Vec<CgWindow>, ax_cache: &mut AxCache) -> Vec<CgWindow> {
     let mut cg_count_by_pid: HashMap<i32, usize> = HashMap::new();
     for w in &windows {
         *cg_count_by_pid.entry(w.pid).or_insert(0) += 1;
@@ -205,21 +208,28 @@ pub(super) fn dedup_by_ax(windows: Vec<CgWindow>) -> Vec<CgWindow> {
         budget: usize,
     }
 
+    // Pre-populate ax_cache for multi-window PIDs so collect_minimized_windows
+    // can reuse these results instead of re-querying the same PIDs.
+    for &pid in &multi_pids {
+        ax_cache.entry(pid).or_insert_with(|| ax_windows(pid));
+    }
+
     let mut dedup_info: HashMap<i32, PidDedup> = HashMap::new();
     for pid in multi_pids {
-        let dedup = match ax_windows(pid) {
-            Some((meta, accepted_count)) if !meta.is_empty() => {
-                let budget = accepted_count.max(meta.len());
-                let ax_ids = meta.keys().copied().collect();
-                PidDedup { ax_ids, ax_meta: meta, budget }
+        let ax_result = ax_cache.get(&pid).unwrap(); // just populated above
+        let dedup = match ax_result {
+            Some((id_map, _, accepted_count)) if !id_map.is_empty() => {
+                let budget = (*accepted_count).max(id_map.len());
+                let ax_ids = id_map.keys().copied().collect();
+                PidDedup { ax_ids, ax_meta: id_map.clone(), budget }
             }
-            Some((_, accepted_count)) => {
+            Some((_, _, accepted_count)) => {
                 // AX responded but _AXWindowID failed for all windows.
                 // Use accepted_count (windows that passed subrole filter) as budget.
                 PidDedup {
                     ax_ids: HashSet::new(),
                     ax_meta: HashMap::new(),
-                    budget: accepted_count.max(1),
+                    budget: (*accepted_count).max(1),
                 }
             }
             // AX unavailable: keep 1 window per PID (safe default —
