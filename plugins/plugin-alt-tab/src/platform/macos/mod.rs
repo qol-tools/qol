@@ -125,12 +125,9 @@ mod ax;
 mod capture;
 mod picker;
 mod process;
-mod sc;
 mod window_actions;
 mod window_enum;
 mod window_list;
-
-pub use sc::SendCVBuf;
 
 pub fn get_open_windows() -> Vec<WindowInfo> {
     window_list::get_open_windows()
@@ -156,78 +153,6 @@ pub fn get_app_icons(
     windows: &[WindowInfo],
 ) -> std::collections::HashMap<String, super::RgbaImage> {
     capture::get_app_icons(windows)
-}
-
-pub fn sc_available() -> bool {
-    sc::sc_available()
-}
-
-pub fn sc_start_streams(targets: &[(usize, u32)], max_w: usize, max_h: usize) {
-    sc::sc_start_streams(targets, max_w, max_h)
-}
-
-pub fn sc_start_streams_with_content(targets: &[(usize, u32)], max_w: usize, max_h: usize) {
-    sc::sc_start_streams_with_content(targets, max_w, max_h)
-}
-
-pub fn sc_fetch_content() -> *mut std::ffi::c_void {
-    sc::sc_fetch_content()
-}
-
-pub fn sc_snapshot_window(content_ptr: *mut std::ffi::c_void, wid: u32, max_w: usize, max_h: usize) -> bool {
-    sc::sc_snapshot_window(content_ptr, wid, max_w, max_h)
-}
-
-pub fn sc_prewarm_wids() -> std::collections::HashSet<u32> {
-    sc::sc_prewarm_wids()
-}
-
-pub fn sc_live_frame_wids() -> std::collections::HashSet<u32> {
-    sc::sc_live_frame_wids()
-}
-
-pub fn sc_clone_opener_surfaces() -> std::collections::HashMap<u32, SendCVBuf> {
-    sc::sc_clone_opener_surfaces()
-}
-
-pub fn sc_heartbeat_snapshot(wids: &[u32], max_w: usize, max_h: usize) {
-    sc::sc_heartbeat_snapshot(wids, max_w, max_h)
-}
-
-pub fn sc_stop_streams() {
-    sc::sc_stop_streams()
-}
-
-pub fn sc_streams_active() -> bool {
-    sc::sc_streams_active()
-}
-
-pub fn sc_promote_stream(wid: u32, max_w: usize, max_h: usize) {
-    sc::sc_promote_stream(wid, max_w, max_h)
-}
-
-pub fn sc_demote_stream(wid: u32, max_w: usize, max_h: usize) {
-    sc::sc_demote_stream(wid, max_w, max_h)
-}
-
-pub fn sc_has_new_frames() -> bool {
-    sc::sc_has_new_frames()
-}
-
-pub fn sc_callback_stats() -> (u64, u64, u64) {
-    sc::sc_callback_stats()
-}
-
-pub fn sc_take_prewarm_surfaces() -> std::collections::HashMap<u32, SendCVBuf> {
-    sc::sc_take_prewarm_surfaces()
-}
-
-pub fn sc_prewarm_retain(live_ids: &std::collections::HashSet<u32>) {
-    sc::sc_prewarm_retain(live_ids)
-}
-
-pub fn sc_take_frames() -> std::collections::HashMap<u32, SendCVBuf> {
-    sc::sc_take_frames()
 }
 
 pub fn activate_window(window_id: u32) {

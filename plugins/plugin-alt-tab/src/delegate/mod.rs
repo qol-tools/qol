@@ -20,8 +20,6 @@ pub(crate) struct WindowDelegate {
     pub(crate) show_hotkey_hints: bool,
     pub(crate) live_previews: HashMap<u32, Arc<RenderImage>>,
     pub(crate) icon_cache: HashMap<String, Arc<RenderImage>>,
-    #[cfg(target_os = "macos")]
-    pub(crate) live_surfaces: HashMap<u32, core_video::pixel_buffer::CVPixelBuffer>,
 }
 
 impl WindowDelegate {
@@ -49,8 +47,6 @@ impl WindowDelegate {
             show_hotkey_hints,
             live_previews,
             icon_cache,
-            #[cfg(target_os = "macos")]
-            live_surfaces: HashMap::new(),
         }
     }
 
@@ -59,8 +55,6 @@ impl WindowDelegate {
         let active_ids: std::collections::HashSet<u32> =
             self.windows.iter().map(|w| w.id).collect();
         self.live_previews.retain(|id, _| active_ids.contains(id));
-        #[cfg(target_os = "macos")]
-        self.live_surfaces.retain(|id, _| active_ids.contains(id));
 
         self.selected_index = if self.windows.is_empty() {
             None

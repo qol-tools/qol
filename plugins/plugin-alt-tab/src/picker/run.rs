@@ -36,7 +36,6 @@ struct PickerCaches {
 struct PrewarmState {
     first_run: bool,
     prev_snapshot: Vec<u32>,
-    prev_stream_wids: HashSet<u32>,
 }
 
 impl PickerCaches {
@@ -55,7 +54,6 @@ impl PrewarmState {
         Self {
             first_run: true,
             prev_snapshot: Vec::new(),
-            prev_stream_wids: HashSet::new(),
         }
     }
 }
@@ -149,7 +147,7 @@ async fn run_prewarm_loop(cx: &mut AsyncApp, caches: PickerCaches) {
         caches
             .last_window_count
             .store(windows.len().max(1), Ordering::Relaxed);
-        refresh_preview_cache(&executor, &windows, &caches.preview_cache, &mut state.prev_stream_wids).await;
+        refresh_preview_cache(&executor, &windows, &caches.preview_cache).await;
         refresh_icon_cache(&executor, &windows, &caches.icon_cache).await;
         replace_window_cache(&caches.window_cache, windows);
     }
@@ -215,55 +213,9 @@ async fn refresh_preview_cache(
     executor: &gpui::BackgroundExecutor,
     windows: &[WindowInfo],
     preview_cache: &PreviewCache,
-    prev_stream_wids: &mut HashSet<u32>,
 ) {
-    if sc_enabled() {
-        refresh_sc_preview_cache(executor, windows, prev_stream_wids).await;
-        return;
-    }
     refresh_cg_preview_cache(executor, windows, preview_cache).await;
 }
-
-fn sc_enabled() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        return platform::sc_available();
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        false
-    }
-}
-
-#[cfg(target_os = "macos")]
-async fn refresh_sc_preview_cache(
-    executor: &gpui::BackgroundExecutor,
-    windows: &[WindowInfo],
-    prev_stream_wids: &mut HashSet<u32>,
-) {
-    let targets: Vec<(usize, u32)> = windows
-        .iter()
-        .enumerate()
-        .filter(|(_, w)| !w.is_minimized)
-        .map(|(i, w)| (i, w.id))
-        .collect();
-    let new_wids: HashSet<u32> = targets.iter().map(|(_, wid)| *wid).collect();
-
-    // Only restart streams if the target window set actually changed.
-    if new_wids != *prev_stream_wids && !targets.is_empty() {
-        let (w, h) = (PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT);
-        executor
-            .spawn(async move { platform::sc_start_streams_with_content(&targets, w, h) })
-            .await;
-        *prev_stream_wids = new_wids;
-    }
-
-    let retain_ids: HashSet<u32> = windows.iter().map(|w| w.id).collect();
-    platform::sc_prewarm_retain(&retain_ids);
-}
-
-#[cfg(not(target_os = "macos"))]
-async fn refresh_sc_preview_cache(_executor: &gpui::BackgroundExecutor, _windows: &[WindowInfo], _prev_stream_wids: &mut HashSet<u32>) {}
 
 async fn refresh_cg_preview_cache(
     executor: &gpui::BackgroundExecutor,

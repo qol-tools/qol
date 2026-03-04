@@ -68,35 +68,8 @@ pub(crate) fn open_picker(
         }
     }
 
-    #[cfg(target_os = "macos")]
-    let skip_cg_wids = {
-        let mut wids = platform::sc_prewarm_wids();
-        wids.extend(platform::sc_live_frame_wids());
-        wids
-    };
-    #[cfg(not(target_os = "macos"))]
-    let skip_cg_wids = HashSet::new();
-
-    let (display_windows, mut initial_previews, icons) =
-        gather(config, &preview_cache, &icon_cache, &skip_cg_wids);
-
-    // For CG-skipped windows, rasterize current SC frames into initial_previews.
-    // Non-destructive read (CFRetain) — FRAME_STORE stays intact for SC loop.
-    #[cfg(target_os = "macos")]
-    {
-        let sc_frames = platform::sc_clone_opener_surfaces();
-        for (wid, buf) in sc_frames {
-            if initial_previews.contains_key(&wid) { continue; }
-            if let Some(img) = buf.to_render_image() {
-                initial_previews.insert(wid, img);
-            }
-        }
-    }
-
-    // Grab prewarm surfaces before first render so the picker opens with SC
-    // surfaces already populated (avoids the visible CG→SC flash on open).
-    #[cfg(target_os = "macos")]
-    let prewarm_surfaces = platform::sc_take_prewarm_surfaces();
+    let (display_windows, initial_previews, icons) =
+        gather(config, &preview_cache, &icon_cache);
 
     if let Some((handle, created_on_origin)) = existing {
         if let Some(new_origin) = reuse::try_reuse(
@@ -104,8 +77,6 @@ pub(crate) fn open_picker(
             initial_previews.clone(), icons.clone(), tracker, icon_cache.clone(), cx,
         ) {
             *current.borrow_mut() = Some((handle, new_origin));
-            #[cfg(target_os = "macos")]
-            inject_prewarm_surfaces(handle, prewarm_surfaces, cx);
             return;
         }
         *current.borrow_mut() = None;
@@ -115,18 +86,12 @@ pub(crate) fn open_picker(
         config, display_windows, initial_previews, icons, tracker,
         last_window_count, icon_cache, current, cx,
     );
-
-    #[cfg(target_os = "macos")]
-    if let Some(h) = current.borrow().as_ref().map(|(h, _)| *h) {
-        inject_prewarm_surfaces(h, prewarm_surfaces, cx);
-    }
 }
 
 fn gather(
     config: &AltTabConfig,
     preview_cache: &Arc<std::sync::Mutex<HashMap<u32, Arc<RenderImage>>>>,
     icon_cache: &Arc<std::sync::Mutex<HashMap<String, Arc<RenderImage>>>>,
-    skip_cg_wids: &HashSet<u32>,
 ) -> (Vec<WindowInfo>, HashMap<u32, Arc<RenderImage>>, HashMap<String, Arc<RenderImage>>) {
     let mut display_windows = initial_display_windows(config);
     display_windows = recover_small_window_set(config, display_windows);
@@ -140,10 +105,8 @@ fn gather(
     }
 
     let mut initial_previews: HashMap<u32, Arc<RenderImage>> = HashMap::new();
-    // Skip CG capture for windows that already have SC prewarm surfaces — they
-    // will be injected into live_surfaces before the first render, so CG is redundant.
     let cg_targets: Vec<(usize, u32)> = display_windows.iter().enumerate()
-        .filter(|(_, w)| !w.is_minimized && !skip_cg_wids.contains(&w.id))
+        .filter(|(_, w)| !w.is_minimized)
         .map(|(i, w)| (i, w.id))
         .collect();
     if !cg_targets.is_empty() {
@@ -170,10 +133,6 @@ fn gather(
     #[cfg(debug_assertions)]
     {
         let non_min = display_windows.iter().filter(|w| !w.is_minimized).count();
-        let skipped = non_min - cg_targets.len();
-        if skipped > 0 {
-            eprintln!("[alt-tab/gather] CG skipped {}/{} windows (prewarm cached)", skipped, non_min);
-        }
         eprintln!("[alt-tab/gather] initial_previews: {} ok out of {} non-minimized",
             initial_previews.len(), non_min);
     }
@@ -253,25 +212,6 @@ pub(super) fn spawn_icon_fill(
         });
     })
     .detach();
-}
-
-/// Inject prewarm SC surfaces as fallback for windows that have no live surface yet.
-/// Uses `entry().or_insert_with()` so it never overwrites fresher SC frames already
-/// present in `live_surfaces` from the previous session.
-#[cfg(target_os = "macos")]
-fn inject_prewarm_surfaces(
-    handle: WindowHandle<AltTabApp>,
-    surfaces: HashMap<u32, platform::SendCVBuf>,
-    cx: &mut App,
-) {
-    if surfaces.is_empty() { return; }
-    let _ = handle.update(cx, |view, _window, cx| {
-        view.delegate.update(cx, |d, _cx| {
-            for (wid, buf) in surfaces {
-                d.live_surfaces.entry(wid).or_insert_with(|| buf.into_cvpixelbuffer());
-            }
-        });
-    });
 }
 
 pub(super) fn resolve_card_bg(display: &DisplayConfig) -> (u32, f32) {

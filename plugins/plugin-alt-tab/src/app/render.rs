@@ -115,9 +115,6 @@ impl Render for AltTabApp {
                     let label_config = d.label_config.clone();
                     let live_previews = d.live_previews.clone();
                     let icon_cache = d.icon_cache.clone();
-                    #[cfg(target_os = "macos")]
-                    let live_surfaces = d.live_surfaces.clone();
-
                     let entity = cx.weak_entity();
                     div()
                         .id("preview-grid")
@@ -203,30 +200,13 @@ impl Render for AltTabApp {
                                     } else {
                                         None
                                     };
-                                    // macOS tile: zero-copy surface() via CVPixelBuffer
-                                    #[cfg(target_os = "macos")]
-                                    let gpu_tile = if minimized_icon.is_none() {
-                                        live_surfaces.get(&win.id).map(|buf| {
-                                            surface(buf.clone())
-                                                .w(px(GRID_PREVIEW_WIDTH))
-                                                .h(px(GRID_PREVIEW_HEIGHT))
-                                                .object_fit(ObjectFit::Fill)
-                                                .into_any_element()
-                                        })
-                                    } else {
-                                        None
-                                    };
-                                    #[cfg(not(target_os = "macos"))]
-                                    let gpu_tile: Option<AnyElement> = None;
-                                    gpu_tile.unwrap_or_else(|| {
-                                        preview_tile(
-                                            live_previews.get(&win.id),
-                                            &win.preview_path,
-                                            minimized_icon,
-                                            GRID_PREVIEW_WIDTH,
-                                            GRID_PREVIEW_HEIGHT,
-                                        )
-                                    })
+                                    preview_tile(
+                                        live_previews.get(&win.id),
+                                        &win.preview_path,
+                                        minimized_icon,
+                                        GRID_PREVIEW_WIDTH,
+                                        GRID_PREVIEW_HEIGHT,
+                                    )
                                 }))
                                 .child({
                                     let label = label_config.format(&win.app_name, &win.title);
