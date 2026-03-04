@@ -5,6 +5,7 @@ import { usePersistedIndex } from '../hooks/usePersistedIndex.js';
 import { useScrollIntoView } from '../hooks/useScrollIntoView.js';
 import { Modal } from '../components/ModalPreact.js';
 import { useFooterShortcuts } from '../hooks/useFooterShortcuts.js';
+import { PageHeader } from '../components/PageHeader.js';
 import { apiJson, apiResponse, jsonRequest } from '../api/client.js';
 import { parseInstalledPlugins } from '../utils/plugins.js';
 import { withShiftVariants, dispatchKey } from '../utils/keys.js';
@@ -230,34 +231,39 @@ export function HotkeysView() {
 
     return html`
         <div class="view-container">
-            <header>
-                <h1>Hotkeys</h1>
-                <p>Configure global keyboard shortcuts for plugin actions</p>
-            </header>
+            <${PageHeader}
+                title="Hotkeys"
+                subtitle="Configure global keyboard shortcuts for plugin actions"
+            />
             <div class="view-body">
-                <div class="hotkeys-list">
+                <div class="hotkeys-list table-list">
                     ${hotkeys.length === 0 && html`
                         <div class="empty">No hotkeys configured. Press <kbd>a</kbd> to add one.</div>
                     `}
                     ${hotkeys.length > 0 && html`
-                        <div class="hotkey-header">
-                            <span class="col-key">Shortcut</span>
-                            <span class="col-plugin">Plugin</span>
-                            <span class="col-action">Action</span>
+                        <div class="hotkey-header table-list-header table-grid">
+                            <span class="col-key table-cell">Shortcut</span>
+                            <span class="col-plugin table-cell">Plugin</span>
+                            <span class="col-action table-cell">Action</span>
                         </div>
                     `}
                     ${hotkeys.map((hk, index) => {
                         const plugin = plugins.find(p => p.id === hk.plugin_id);
+                        const status = plugin?.status || 'installed';
+                        const isSelected = index === selectedIndex;
                         return html`
-                            <div key=${hk.id} class="hotkey-row ${index === selectedIndex ? 'selected' : ''}"
+                            <div key=${hk.id}
+                                 class="hotkey-row table-list-row table-grid"
+                                 data-status="${status}"
+                                 data-selected="${isSelected ? 'true' : 'false'}"
                                  data-index="${index}"
                                  onClick=${() => {
                                      if (index !== selectedIndex) setSelectedIndex(index);
                                      else openEditModal(hk);
                                  }}>
-                                <span class="col-key"><kbd>${hk.key}</kbd></span>
-                                <span class="col-plugin">${plugin?.name || hk.plugin_id}</span>
-                                <span class="col-action">${getActionLabel(plugin, hk.action)}</span>
+                                <span class="col-key table-cell"><kbd>${hk.key}</kbd></span>
+                                <span class="col-plugin table-cell">${plugin?.name || hk.plugin_id}</span>
+                                <span class="col-action table-cell">${getActionLabel(plugin, hk.action)}</span>
                             </div>
                         `;
                     })}

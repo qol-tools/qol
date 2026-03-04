@@ -136,9 +136,9 @@ export function renderDevView({
         `;
 
         return `
-            <div class="plugin-row status-${plugin.status} ${isSelected ? 'selected' : ''} ${isRowBuilding ? 'is-building' : ''} ${isLinking ? 'is-linking' : ''}" data-index="${index}" data-plugin-id="${plugin.id}">
-                <div class="plugin-main">
-                    <div class="plugin-info">
+            <div class="plugin-row table-list-row status-${plugin.status} ${isSelected ? 'selected' : ''} ${isRowBuilding ? 'is-building' : ''} ${isLinking ? 'is-linking' : ''}" data-status="${plugin.status}" data-selected="${isSelected ? 'true' : 'false'}" data-index="${index}" data-plugin-id="${plugin.id}">
+                <div class="plugin-main table-grid">
+                    <div class="plugin-info table-col">
                         <div class="plugin-copy">
                             <div class="plugin-title-row">
                                 <span class="plugin-name">${plugin.name}</span>
@@ -149,7 +149,7 @@ export function renderDevView({
                         ${statusBadges}
                         ${renderCpuStrip(plugin)}
                     </div>
-                    <div class="plugin-action-column">
+                    <div class="plugin-action-column table-col">
                         <button type="button" class="plugin-action-zone ${actionDisabled ? 'is-disabled' : ''} ${rebuildActive ? 'has-rebuild' : 'rebuild-idle'}" data-action="toggle-link" data-id="${plugin.id}" aria-label="${plugin.status === 'linked' ? 'Unlink' : 'Link'} ${plugin.name}" ${actionDisabled ? 'disabled' : ''}>
                             <img class="plugin-action-rebuild-icon" src="assets/qol-tray.png?v=1" alt="" aria-hidden="true">
                         </button>
@@ -163,12 +163,12 @@ export function renderDevView({
 
     return `
         <div class="view-container dev-view-shell">
-            <div class="dev-stage-head">
-                <div class="dev-stage-title">
+            <div class="page-header dev-stage-head">
+                <div class="page-header-main dev-stage-title">
                     <h1>Developer Control</h1>
                     <p>Link plugins, run rebuild flows, and inspect live runtime state.</p>
                 </div>
-                <div class="dev-stage-tags" aria-hidden="true">
+                <div class="page-header-actions dev-stage-tags" aria-hidden="true">
                     <span>Runtime</span>
                     <span>Build</span>
                     <span>Discovery</span>
@@ -189,7 +189,7 @@ export function renderDevView({
 
                     <div class="plugin-list-container">
                         ${mergedList.length ? `
-                            <div class="plugin-list">${pluginRows}</div>
+                            <div class="plugin-list table-list">${pluginRows}</div>
                         ` : '<p class="empty-state">No plugins found</p>'}
                     </div>
 
