@@ -106,8 +106,6 @@ fn merge_cached_minimized(
     }
 }
 
-// ── Icon fill ───────────────────────────────────────────────────────────────
-
 pub(super) struct IconFillRequest {
     pub handle: WindowHandle<AltTabApp>,
     pub windows: Vec<WindowInfo>,
@@ -151,8 +149,6 @@ fn update_view_icons(cx: &mut AsyncApp, handle: WindowHandle<AltTabApp>, icons: 
         });
     });
 }
-
-// ── Icon building ────────────────────────────────────────────────────────────
 
 pub(crate) fn build_icon_cache(
     raw_icons: HashMap<String, crate::discovery::RgbaImage>,

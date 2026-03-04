@@ -1,17 +1,20 @@
-pub(crate) mod alt_poll;
 mod input;
 mod live_preview;
 mod render;
 
-use crate::config::{ActionMode, LabelConfig};
+use crate::config::ActionMode;
+use crate::picker::create::PickerInit;
+use crate::picker::gather::GatheredWindows;
 use crate::picker::state::PickerState;
-use crate::discovery::WindowInfo;
 use crate::picker;
-use crate::{IconMap, PreviewMap};
+use crate::IconMap;
 use gpui::*;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 pub(crate) static PICKER_VISIBLE: AtomicBool = AtomicBool::new(false);
+
+const ALT_POLL_INTERVAL_MS: u64 = 50;
 
 pub(crate) struct AltTabApp {
     pub(crate) delegate: Entity<PickerState>,
@@ -24,98 +27,35 @@ pub(crate) struct AltTabApp {
 }
 
 impl AltTabApp {
-    pub(crate) fn new(
-        window: &mut Window,
-        cx: &mut Context<Self>,
-        action_mode: ActionMode,
-        initial_windows: Vec<WindowInfo>,
-        label_config: LabelConfig,
-        transparent_background: bool,
-        card_bg_color: u32,
-        card_bg_opacity: f32,
-        show_debug_overlay: bool,
-        show_hotkey_hints: bool,
-        cycle_on_open: bool,
-        initial_previews: PreviewMap,
-        icon_cache: IconMap,
-    ) -> Self {
-        let win_delegate = PickerState::new_with_previews(
-            initial_windows.clone(),
-            label_config,
-            transparent_background,
-            card_bg_color,
-            card_bg_opacity,
-            show_debug_overlay,
-            show_hotkey_hints,
-            initial_previews,
-            icon_cache,
-        );
-        let delegate = cx.new(|_cx| win_delegate);
+    pub(crate) fn new(init: PickerInit, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let should_cycle = init.cycle_on_open && init.windows.len() >= 2;
+        let action_mode = init.action_mode.clone();
+        let delegate = cx.new(|_| PickerState::from_init(init));
 
-        if cycle_on_open && initial_windows.len() >= 2 {
+        if should_cycle {
             delegate.update(cx, |s, _| s.select_next());
         }
 
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle);
-        let gpui_window_handle = window.to_async(cx).window_handle();
-
-        // Focus-out subscription for Sticky mode: dismiss picker when focus leaves.
-        let focus_out_sub = cx.on_focus_out(
-            &focus_handle,
-            window,
-            |this, _event, window, _cx| {
-                if this.action_mode != ActionMode::HoldToSwitch {
-                    PICKER_VISIBLE.store(false, Ordering::Relaxed);
-                    picker::dismiss_picker(window);
-                }
-            },
-        );
-
-        let live_preview_task = live_preview::spawn(delegate.clone(), cx);
 
         #[cfg(debug_assertions)]
-        eprintln!(
-            "[alt-tab/hold] AltTabApp::new: action_mode={:?}, alt_was_held=true (assumed)",
-            action_mode
-        );
+        eprintln!("[alt-tab/hold] AltTabApp::new: action_mode={:?}", action_mode);
 
         let mut app = Self {
-            delegate,
-            focus_handle,
+            _focus_out_sub: subscribe_focus_out(&focus_handle, window, cx),
+            _live_preview_task: Some(live_preview::spawn(delegate.clone(), cx)),
+            delegate, focus_handle,
             action_mode: action_mode.clone(),
             alt_was_held: true,
             _alt_poll_task: None,
-            _live_preview_task: Some(live_preview_task),
-            _focus_out_sub: focus_out_sub,
         };
 
         if action_mode == ActionMode::HoldToSwitch {
-            alt_poll::start(&mut app, gpui_window_handle, cx);
+            app.start_alt_poll(window.to_async(cx).window_handle(), cx);
         }
 
         app
-    }
-
-    pub(crate) fn apply_cached_windows(
-        &mut self,
-        windows: Vec<WindowInfo>,
-        reset_selection: bool,
-        previews: PreviewMap,
-        icons: IconMap,
-        cx: &mut Context<Self>,
-    ) {
-        self.delegate.update(cx, |state, cx| {
-            state.set_windows(windows, reset_selection);
-            if !previews.is_empty() {
-                state.live_previews = previews;
-            }
-            if !icons.is_empty() {
-                state.icon_cache = icons;
-            }
-            cx.notify();
-        });
-        cx.notify();
     }
 
     pub(crate) fn apply_reuse(
@@ -155,23 +95,39 @@ impl AltTabApp {
     }
 
     fn sync_alt_poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.action_mode {
-            ActionMode::HoldToSwitch => self.start_alt_poll(window.window_handle(), cx),
-            _ => self._alt_poll_task = None,
+        if self.action_mode == ActionMode::HoldToSwitch {
+            self.start_alt_poll(window.window_handle(), cx);
+            return;
         }
+        self._alt_poll_task = None;
     }
 
     fn apply_reuse_windows(&mut self, req: &crate::picker::ReuseRequest, cx: &mut Context<Self>) {
-        self.apply_cached_windows(
-            req.gathered.windows.clone(), req.config.reset_selection_on_open,
-            req.gathered.previews.clone(), req.gathered.icons.clone(), cx,
-        );
-        if req.config.open_behavior == crate::config::OpenBehavior::CycleOnce
-            && req.config.reset_selection_on_open
-            && req.gathered.windows.len() >= 2
-        {
-            self.delegate.update(cx, |s, _| s.select_next());
+        self.apply_gathered(&req.gathered, req.config.reset_selection_on_open, cx);
+        if req.config.open_behavior != crate::config::OpenBehavior::CycleOnce {
+            return;
         }
+        if !req.config.reset_selection_on_open {
+            return;
+        }
+        if req.gathered.windows.len() < 2 {
+            return;
+        }
+        self.delegate.update(cx, |s, _| s.select_next());
+    }
+
+    fn apply_gathered(&mut self, gathered: &GatheredWindows, reset: bool, cx: &mut Context<Self>) {
+        self.delegate.update(cx, |state, cx| {
+            state.set_windows(gathered.windows.clone(), reset);
+            if !gathered.previews.is_empty() {
+                state.live_previews = gathered.previews.clone();
+            }
+            if !gathered.icons.is_empty() {
+                state.icon_cache = gathered.icons.clone();
+            }
+            cx.notify();
+        });
+        cx.notify();
     }
 
     pub(crate) fn update_icons(&mut self, icons: IconMap, cx: &mut Context<Self>) {
@@ -179,13 +135,56 @@ impl AltTabApp {
         cx.notify();
     }
 
-    pub(crate) fn start_alt_poll(
-        &mut self,
-        window_handle: AnyWindowHandle,
-        cx: &mut Context<Self>,
-    ) {
-        alt_poll::start(self, window_handle, cx);
+    pub(crate) fn start_alt_poll(&mut self, window_handle: AnyWindowHandle, cx: &mut Context<Self>) {
+        let delegate = self.delegate.clone();
+        self.alt_was_held = true;
+        self._alt_poll_task = Some(cx.spawn(move |this, cx: &mut AsyncApp| {
+            alt_poll_loop(this, delegate, window_handle, cx.clone())
+        }));
     }
+}
+
+async fn alt_poll_loop(
+    this: WeakEntity<AltTabApp>,
+    delegate: Entity<PickerState>,
+    window_handle: AnyWindowHandle,
+    mut cx: AsyncApp,
+) {
+    eprintln!("[alt-tab/hold] modifier poll task started");
+    cx.background_executor().timer(Duration::from_millis(50)).await;
+
+    loop {
+        cx.background_executor().timer(Duration::from_millis(ALT_POLL_INTERVAL_MS)).await;
+        if picker::is_modifier_held() {
+            continue;
+        }
+        eprintln!("[alt-tab/hold] Alt released — activating selected");
+        let _ = cx.update_window(window_handle, |_, window, cx| {
+            delegate.update(cx, |s, _| s.activate_selected(window));
+        });
+        break;
+    }
+
+    let _ = cx.update(|cx| {
+        if let Some(entity) = this.upgrade() {
+            let _ = entity.update(cx, |app, _| { app._alt_poll_task = None; });
+        }
+    });
+    eprintln!("[alt-tab/hold] modifier poll task ended");
+}
+
+fn subscribe_focus_out(
+    handle: &FocusHandle,
+    window: &mut Window,
+    cx: &mut Context<AltTabApp>,
+) -> gpui::Subscription {
+    cx.on_focus_out(handle, window, |this, _event, window, _cx| {
+        if this.action_mode == ActionMode::HoldToSwitch {
+            return;
+        }
+        PICKER_VISIBLE.store(false, Ordering::Relaxed);
+        picker::dismiss_picker(window);
+    })
 }
 
 impl Focusable for AltTabApp {

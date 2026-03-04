@@ -47,18 +47,18 @@ fn estimate_picker_size(req: &CreateRequest, gathered: &GatheredWindows, monitor
     size(px(w), px(h))
 }
 
-struct PickerInit {
-    action_mode: ActionMode,
-    label_config: LabelConfig,
-    transparent_bg: bool,
-    card_color: u32,
-    card_opacity: f32,
-    show_debug_overlay: bool,
-    show_hotkey_hints: bool,
-    cycle_on_open: bool,
-    windows: Vec<WindowInfo>,
-    previews: PreviewMap,
-    icons: IconMap,
+pub(crate) struct PickerInit {
+    pub(crate) action_mode: ActionMode,
+    pub(crate) label_config: LabelConfig,
+    pub(crate) transparent_bg: bool,
+    pub(crate) card_color: u32,
+    pub(crate) card_opacity: f32,
+    pub(crate) show_debug_overlay: bool,
+    pub(crate) show_hotkey_hints: bool,
+    pub(crate) cycle_on_open: bool,
+    pub(crate) windows: Vec<WindowInfo>,
+    pub(crate) previews: PreviewMap,
+    pub(crate) icons: IconMap,
 }
 
 impl PickerInit {
@@ -75,13 +75,8 @@ impl PickerInit {
         }
     }
 
-    fn into_app(self, window: &mut Window, cx: &mut Context<AltTabApp>) -> AltTabApp {
-        AltTabApp::new(
-            window, cx, self.action_mode, self.windows, self.label_config,
-            self.transparent_bg, self.card_color, self.card_opacity,
-            self.show_debug_overlay, self.show_hotkey_hints, self.cycle_on_open,
-            self.previews, self.icons,
-        )
+    pub(crate) fn into_app(self, window: &mut Window, cx: &mut Context<AltTabApp>) -> AltTabApp {
+        AltTabApp::new(self, window, cx)
     }
 }
 

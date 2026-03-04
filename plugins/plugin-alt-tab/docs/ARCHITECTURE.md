@@ -9,70 +9,48 @@
 5. Only missing previews are captured synchronously via CG/X11.
 6. App icons are fetched asynchronously and pushed to the UI.
 7. UI opens with full previews and icons in <50ms (warm path).
-8. On macOS with SC: background streams are already running at 5fps; picker promotes selected+hovered to 30fps for live preview.
 
 ## Core Components
 
 ### `src/main.rs`
 
 - App entrypoint: GPUI init, daemon socket bind, command dispatch.
+- Shared type aliases: `PreviewMap`, `IconMap`, `SharedPreviewCache`, `SharedIconCache`, `PickerWindowState`.
 
 ### `src/app/mod.rs`
 
 - `AltTabApp` struct: owns delegate, focus handle, action mode, alt poll task.
 - `new()`: creates delegate, starts alt-poll if hold-to-switch, spawns live preview task.
 - `apply_cached_windows()`: hot-updates window list and previews on reuse path.
+- Alt key release polling for hold-to-switch mode (inlined, no separate module).
 
 ### `src/app/render.rs`
 
-- `Render` impl for `AltTabApp`: grid layout, card styling, icon + label rendering.
+- `Render` impl for `AltTabApp`: grid layout via `render_grid`, card styling via `render_card` + `card_bg`.
 - Transparent background mode: conditional header, card bg with configurable color/opacity.
+- `RenderSnapshot`: captures delegate state for render functions.
+- Extracted helpers: `header_bar`, `render_preview`, `render_label`, `preview_tile`, `placeholder_frame`.
 
 ### `src/app/input.rs`
 
 - Keyboard event handling: arrow navigation, tab cycling, enter/escape actions.
 
-### `src/app/alt_poll.rs`
+### `src/app/live_preview.rs`
 
-- Alt key release polling for hold-to-switch mode.
-
-### `src/app/live_preview/mod.rs`
-
-- Spawn dispatcher: picks SC or CG loop based on platform capability.
-- Shared constants: `SC_POLL_INTERVAL_MS`, `LIVE_PREVIEW_INTERVAL_MS`.
-
-### `src/app/live_preview/sc.rs`
-
-- SC Spotlight loop: `activate`/`deactivate`/`sync_promoted`, surface updates, notify throttling.
-- `StreamState`: tracks active flag and `promoted: [Option<u32>; 2]` (selected + hovered at 30fps).
-- `CgState`: CG bridge capture scheduling for gap-filling when SC frames are missing.
-- Stall detection: falls back to CG-only if SC stops delivering frames.
-
-### `src/app/live_preview/cg.rs`
-
-- CG fallback loop: `capture_cg` + `build_targets` round-robin for macOS <14 or SC permission denied.
-
-### `src/app/live_preview/perf.rs`
-
-- `PerfCounters`: ticks, frames, notify, skip, CPU usage (getrusage). Logged every 2s when visible.
-
-### `src/delegate/mod.rs`
-
-- `WindowDelegate`: owns window list, selection state, hover state, label config, preview/icon/surface caches.
-
-### `src/delegate/selection.rs`
-
-- Grid-aware selection navigation.
-
-### `src/delegate/activation.rs`
-
-- Window activation: calls `platform::activate_window`, pushes SET_FOCUS to runtime.
+- CG live preview loop: captures selected window + one round-robin window every 500ms.
+- Pipeline: `wait_for_visible` → `read_snapshot` → `pick_targets` → `run_capture` → `diff_captures` → `push_updates`.
+- `LoopState` tracks previous hashes and round-robin position.
 
 ### `src/picker/mod.rs`
 
 - `open_picker()`: the main entry point for showing the picker.
 - Handles reuse path (same window, update data) and fresh-open path.
-- Builds icon cache, resolves card bg config, manages transparent window options.
+- `PickerState` (inline `mod state`): owns window list, selection, hover, label config, preview/icon/surface caches.
+
+### `src/picker/gather.rs`
+
+- Window gathering, preview capture, icon fill.
+- `build_icon_cache()`: converts raw BGRA icon data to `Arc<RenderImage>` keyed by app name.
 
 ### `src/picker/reuse.rs`
 
@@ -82,61 +60,77 @@
 
 - `create_new`: creates a fresh picker window when reuse is not possible.
 
-### `src/picker/keepalive.rs`
-
-- Hidden 1x1 PopUp window that prevents GPUI from quitting when picker is dismissed.
-
 ### `src/picker/run.rs`
 
 - Daemon run loop: socket listener, command dispatch, prewarm scheduling.
-- Prewarm loop: starts persistent 5fps SC streams in background, refreshes window/icon caches every 1.2s.
-- Stream restart only when target window set actually changes (`prev_stream_wids` tracking).
+- Prewarm loop: refreshes window/icon caches periodically.
 
 ### `src/config.rs`
 
 - Config discovery/loading from install-scoped paths.
 - `DisplayConfig`, `LabelConfig`, `ActionMode`, `OpenBehavior` types.
 
-### `src/layout.rs`
+### `src/shared/layout.rs`
 
 - Sizing/grid math constants + functions (`picker_dimensions`, grid card sizes).
 
-### `src/icon.rs`
-
-- `build_icon_cache()`: converts raw BGRA icon data to `Arc<RenderImage>` keyed by app name.
-
-### `src/window_source.rs`
-
-- `preview_tile()`: renders a preview image or placeholder fallback for a grid card.
-
-### `src/preview.rs`
+### `src/shared/preview.rs`
 
 - `bgra_to_render_image()`: converts raw BGRA bytes to `Arc<RenderImage>` via image crate.
+- `fast_pixel_hash()`: cheap hash for change detection in live preview loop.
 
 ### `src/daemon.rs`
 
 - Socket endpoint and command dispatch (Show/ShowReverse/Kill/Ping).
 
-### `src/platform/mod.rs`
+### `src/discovery/platform/mod.rs`
 
-- Platform facade: cross-platform contract for all OS-specific operations.
-- `get_open_windows`, `capture_previews_cg`, `activate_window`, `get_app_icons`, SC stream management, etc.
+- Platform facade: `get_open_windows`, `get_on_screen_windows`, `on_screen_window_ids`.
 
-### `src/platform/macos/`
+### `src/discovery/platform/macos/`
 
-- 9 modules: `sc/` (ScreenCaptureKit streams), `capture.rs` (CG bitmap capture), `ax.rs` (Accessibility API), `window_list.rs` (CG window enumeration + parsing), `window_enum.rs` (dedup + filtering logic), `window_actions.rs` (activate/close/quit/minimize), `picker.rs` (NSWindow helpers), `process.rs` (process info), `mod.rs` (type definitions + FFI bindings).
+- `mod.rs` — CG window list parsing (`CgWindow`, `CgKeys` with RAII Drop, `fetch_cg_windows`, `parse_cg_entry`), orchestration (`get_open_windows`, `get_on_screen_windows`).
+- `ffi.rs` — CG/CF type aliases, extern blocks, constants, dictionary helpers (`cfstr`, `dict_get_*`, `cfstring_to_string`).
+- `ax.rs` — AX window queries (`ax_windows`, `ax_find_window`, `ax_is_window_minimized`), dedup logic (`dedup_by_ax`). Uses `AxAttrs` with RAII Drop for attribute keys.
+- `window_enum.rs` — Window enumeration pipeline: `WindowEnumeration` state, `KnownWindowTracker` persistence, `collect_on_screen_windows` + `collect_minimized_windows` with budget-based filtering (`BudgetContext`, `AxData`).
+- `process.rs` — Process identity helpers, regular app detection, known window ID cache.
 
-### `src/platform/linux.rs`
+### `src/discovery/platform/linux.rs`
 
-- Linux/X11: window enumeration, `_NET_WM_ICON` icon extraction, modifier detection.
+- Linux/X11: window enumeration via pipelined X11 property queries, `_NET_WM_ICON` icon extraction.
 
-### `src/platform/cg_helpers.rs`
+### `src/capture/platform/mod.rs`
 
-- Shared macOS CG dictionary helpers (CFString, dict accessors, rect parsing).
+- Platform facade: `capture_previews_cg`, `get_app_icons`.
 
-### `src/monitor/`
+### `src/capture/platform/macos.rs`
 
-- `MonitorTracker`: queries qol-tray runtime via `PlatformStateClient` for active monitor.
+- `CGWindowListCreateImage` capture, `BlitSource` + `ScaledRect` for scaled BGRA blitting.
+- `NSImage` icon extraction via `CGBitmapContext`.
+
+### `src/capture/platform/linux.rs`
+
+- X11 `GetImage` capture.
+
+### `src/actions/platform/mod.rs`
+
+- Platform facade: `activate_window`, `close_window`, `quit_app`, `minimize_window_by_id`.
+
+### `src/actions/platform/macos.rs`
+
+- AX-based window actions (raise, unminimize, close, minimize).
+- `NSRunningApplication` for app activation/termination.
+- `cg_window_pid_and_title` for CG→AX window lookup.
+
+### `src/actions/platform/linux.rs`
+
+- X11 window activation.
+
+### `src/picker/platform/`
+
+- `mod.rs` — Facade: `dismiss_picker`, `is_modifier_held`.
+- `macos.rs` — NSWindow resize-to-1x1, `CGEventSourceFlagsState` modifier check.
+- `linux.rs` — Minimize, X11 modifier check.
 
 ### `ui/`
 
@@ -150,18 +144,8 @@
 
 ## Performance Characteristics
 
-### macOS (SC live preview — always-on streams)
-- Prewarm loop starts persistent 5fps SC streams in background; picker show/hide only promotes/demotes.
-- First live frame on open: instant (streams already warm).
-- Idle/background: ~0% CPU (heartbeat only).
-- Visible, low activity: 4-6% CPU.
-- Visible, cycling through windows: 7-9% CPU.
-- Visible, heavy hover (2 promoted at 30fps): 11-13% CPU.
-- Notify throttled to 100ms (~10fps GPUI re-render rate).
-- CG skipped on open for windows covered by prewarm cache.
-
-### General
 - Picker open uses cached previews instantly; only missing windows are captured synchronously.
 - App icons are fetched asynchronously after picker opens (~50ms).
 - Window reuse path avoids GPU window recreation cost.
 - Picker repositions without close/reopen on monitor change.
+- CG live loop: selected + 1 round-robin every 500ms, diff-based updates only.

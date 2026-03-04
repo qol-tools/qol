@@ -1,6 +1,6 @@
 pub(crate) mod run;
 pub(crate) mod platform;
-mod create;
+pub(crate) mod create;
 pub(crate) mod gather;
 mod reuse;
 
@@ -151,14 +151,13 @@ pub(crate) fn resolve_card_bg(display: &DisplayConfig) -> (u32, f32) {
     (color, display.card_background_opacity.clamp(0.0, 1.0))
 }
 
-// ── Picker state (data model) ───────────────────────────────────────────────
-
 pub(crate) mod state {
     use crate::actions;
     use crate::app::PICKER_VISIBLE;
     use crate::config::{AltTabConfig, LabelConfig};
     use crate::discovery::WindowInfo;
     use crate::picker;
+    use crate::picker::create::PickerInit;
     use crate::{IconMap, PreviewMap};
     use gpui::Window;
     use std::sync::atomic::Ordering;
@@ -178,22 +177,16 @@ pub(crate) mod state {
     }
 
     impl PickerState {
-        pub(crate) fn new_with_previews(
-            windows: Vec<WindowInfo>,
-            label_config: LabelConfig,
-            transparent_background: bool,
-            card_bg_color: u32,
-            card_bg_opacity: f32,
-            show_debug_overlay: bool,
-            show_hotkey_hints: bool,
-            live_previews: PreviewMap,
-            icon_cache: IconMap,
-        ) -> Self {
-            let selected_index = if windows.is_empty() { None } else { Some(0) };
+        pub(crate) fn from_init(init: PickerInit) -> Self {
+            let selected_index = if init.windows.is_empty() { None } else { Some(0) };
             Self {
-                windows, selected_index, hovered_index: None,
-                label_config, transparent_background, card_bg_color, card_bg_opacity,
-                show_debug_overlay, show_hotkey_hints, live_previews, icon_cache,
+                windows: init.windows, selected_index, hovered_index: None,
+                label_config: init.label_config,
+                transparent_background: init.transparent_bg,
+                card_bg_color: init.card_color, card_bg_opacity: init.card_opacity,
+                show_debug_overlay: init.show_debug_overlay,
+                show_hotkey_hints: init.show_hotkey_hints,
+                live_previews: init.previews, icon_cache: init.icons,
             }
         }
 
@@ -335,8 +328,6 @@ pub(crate) mod state {
             .find(|(_, m)| x >= m.x && x < m.x + m.width && y >= m.y && y < m.y + m.height)
             .map(|(i, _)| i)
     }
-
-    // ── Grid navigation ─────────────────────────────────────────────────────
 
     enum GridDirection {
         Left,
