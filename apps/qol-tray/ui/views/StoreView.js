@@ -11,6 +11,7 @@ import { useGridNav } from '../hooks/useGridNav.js';
 import { useAsyncToken } from '../hooks/useAsyncToken.js';
 import { withShiftVariants, dispatchKey } from '../utils/keys.js';
 import { Feedback } from '../components/FeedbackPreact.js';
+import { PageHeader } from '../components/PageHeader.js';
 import {
     formatCacheAge, normalizeSearchQuery, getFilteredPlugins,
     clampSelectedIndex, sortPluginsByName, isRateLimitedWithoutToken,
@@ -197,23 +198,19 @@ export function StoreView() {
 
     return html`
         <div class="view-container">
-            <header>
-                <div class="header-row">
-                    <div>
-                        <h1>Plugin Store</h1>
-                        <p>Browse and install plugins for QoL Tray</p>
-                    </div>
-                    <div class="header-actions">
-                        <span class="cache-age">${formatCacheAge(cacheAgeSecs)}</span>
-                        <button class="btn btn-ghost btn-sm" title="Manage GitHub token"
-                                onClick=${() => { setShowTokenInput(true); setTimeout(() => document.getElementById('github-token-input')?.focus(), 0); }}>
-                            Token
-                        </button>
-                        <button class="refresh-btn ${loading ? 'spinning' : ''}" title="Refresh (r)"
-                                aria-label="Refresh" disabled=${loading} onClick=${refreshPlugins}></button>
-                    </div>
-                </div>
-            </header>
+            <${PageHeader}
+                title="Plugin Store"
+                subtitle="Browse and install plugins for QoL Tray"
+                actions=${html`
+                    <span class="cache-age">${formatCacheAge(cacheAgeSecs)}</span>
+                    <button class="btn btn-ghost btn-sm" title="Manage GitHub token"
+                            onClick=${() => { setShowTokenInput(true); setTimeout(() => document.getElementById('github-token-input')?.focus(), 0); }}>
+                        Token
+                    </button>
+                    <button class="refresh-btn ${loading ? 'spinning' : ''}" title="Refresh (r)"
+                            aria-label="Refresh" disabled=${loading} onClick=${refreshPlugins}></button>
+                `}
+            />
             <div class="view-body">
                 <div class="search-bar store-search-bar">
                     <input type="text" ref=${searchRef} placeholder="Search plugins..."
@@ -240,7 +237,7 @@ export function StoreView() {
                     </div>
                 `}
                 <${Feedback} feedback=${feedback} />
-                <div id="store-list" class="plugins-grid grid-cards grid-cards--zoom">
+                <div id="store-list" class="plugin-grid-store grid-cards grid-cards--zoom">
                     ${loading && filtered.length === 0 && html`<div class="loading">Loading plugins...</div>`}
                     ${!loading && filtered.length === 0 && html`<div class="loading">No plugins found</div>`}
                     ${filtered.map((plugin, index) => {

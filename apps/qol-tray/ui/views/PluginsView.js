@@ -12,6 +12,7 @@ import { withShiftVariants, dispatchKey } from '../utils/keys.js';
 import { useFooterShortcuts } from '../hooks/useFooterShortcuts.js';
 import { Feedback } from '../components/FeedbackPreact.js';
 import { Modal } from '../components/ModalPreact.js';
+import { PageHeader } from '../components/PageHeader.js';
 import { apiJson } from '../api/client.js';
 import { parseInstalledPayload } from '../utils/plugins.js';
 
@@ -204,10 +205,10 @@ export function PluginsView({ onOpenPluginConfig }) {
 
     return html`
         <div class="view-container" onClick=${handleBackdropClick}>
-            <header><h1>Plugins</h1></header>
+            <${PageHeader} title="Plugins" />
             <div class="view-body">
                 <${Feedback} feedback=${feedback} />
-                <div id="plugins-grid" class="plugin-grid grid-cards grid-cards--zoom">
+                <div id="plugins-grid" class="plugin-grid-media grid-cards grid-cards--zoom">
                     ${plugins.length === 0 && ghostPlugins.length === 0 && html`
                         <div class="empty">No plugins installed. Press Tab to open the store.</div>
                     `}
