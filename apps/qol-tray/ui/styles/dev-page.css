@@ -407,13 +407,12 @@
     cursor: default;
 }
 
-.plugin-row.is-building {
-    background: linear-gradient(90deg, var(--state-info-bg-soft) 0%, var(--layer-paper-03) 66%, transparent 100%);
-}
-
 .plugin-build-overlay-host {
     position: absolute;
-    inset: 0;
+    top: 0;
+    right: var(--size-action-col-md);
+    bottom: 0;
+    left: 0;
     z-index: var(--z-3);
     pointer-events: none;
 }
@@ -421,11 +420,22 @@
 .plugin-build-overlay {
     position: absolute;
     inset: 0;
-    border-left: var(--border-w-3) solid var(--state-info-border);
+    background: var(--state-info-bg-soft);
+}
+
+.plugin-build-overlay.progress-track {
+    background: var(--state-info-bg-soft);
+    box-shadow: none;
 }
 
 .plugin-build-overlay .progress-fill {
+    width: var(--progress-width, 0%);
     z-index: var(--z-1);
+    transform: none;
+    transition: width var(--progress-transition-fast);
+    will-change: width;
+    outline: none;
+    box-shadow: none;
 }
 
 .plugin-build-overlay-copy {
@@ -443,9 +453,8 @@
     max-width: min(86%, 460px);
     padding: var(--pad-overlay-copy);
     border-radius: var(--radius-lg-plus);
-    border: var(--border-w-1) solid var(--layer-paper-10);
     background: var(--layer-overlay-ink-54);
-    box-shadow: 0 4px 12px var(--layer-ink-28);
+    box-shadow: none;
 }
 
 .plugin-build-overlay-main {
@@ -540,6 +549,10 @@
 }
 
 @media (max-width: 860px) {
+    .plugin-build-overlay-host {
+        right: var(--size-action-col-sm);
+    }
+
     .plugin-row .plugin-main {
         --table-cols: minmax(0, 1fr) var(--size-action-col-sm);
     }
