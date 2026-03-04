@@ -3,6 +3,7 @@ import { useEffect, useCallback, useRef } from 'preact/hooks';
 import { useStateRef } from '../hooks/useStateRef.js';
 import { usePersistedIndex } from '../hooks/usePersistedIndex.js';
 import { Modal } from '../components/ModalPreact.js';
+import { PageHeader } from '../components/PageHeader.js';
 import { useFooterShortcuts } from '../hooks/useFooterShortcuts.js';
 import { withShiftVariants, dispatchKey } from '../utils/keys.js';
 
@@ -202,10 +203,10 @@ export function TaskRunnerView() {
 
     return html`
         <div class="view-container">
-            <header>
-                <h1>Task Runner</h1>
-                <p>HTTP API for browser extensions to run local commands</p>
-            </header>
+            <${PageHeader}
+                title="Task Runner"
+                subtitle="HTTP API for browser extensions to run local commands"
+            />
             <div class="view-body">
                 <div class="actions-list">
                     ${actionIds.length === 0 && html`
