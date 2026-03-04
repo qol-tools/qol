@@ -2,7 +2,7 @@
 
 ## Source of Truth
 
-- Global palette and semantic tokens live in `ui/styles/foundation.css`.
+- Global palette and semantic tokens live in `ui/styles/styles.css`.
 - All new UI styles must consume tokens from `:root`.
 - Hardcoded colors are not allowed in shared styles.
 
@@ -39,7 +39,7 @@
   - `rgba(var(--paper-rgb), 0.08)`
   - `rgba(var(--ink-rgb), 0.6)`
 - If an alpha pattern is reused in 2+ places, promote it to a `--layer-*` token.
-- Keep compatibility aliases in `foundation.css` stable unless migrating all usages in one change.
+- Keep compatibility aliases in `styles.css` stable unless migrating all usages in one change.
 
 ## Component Contracts
 
@@ -72,7 +72,7 @@
 
 ## File Scope Rules
 
-- `foundation.css`: only global tokens and app-wide primitives.
+- `styles.css`: only global tokens and app-wide primitives.
 - `common-components.css`: reusable component styles only.
 - View-specific files (for example `dev-page.css`): layout and view treatment only.
 - Standalone pages (for example `auto-config.html`) must define local `--cfg-*` tokens and avoid repeating raw color literals.
@@ -81,7 +81,7 @@
 
 - When touching a style block with hardcoded color literals, migrate that block to tokens in the same change.
 - Do not introduce new one-off colors without first adding a token.
-- If a new visual meaning is needed, add a semantic token in `foundation.css` first.
+- If a new visual meaning is needed, add a semantic token in `styles.css` first.
 
 ## Review Checklist
 

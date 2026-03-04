@@ -208,7 +208,7 @@
     --progress-fill-stripe-b: rgba(var(--paper-rgb, 255, 255, 255), 0.08);
     --progress-transition-fast: 120ms linear;
     --progress-transition-medium: 220ms linear;
-    --dev-build-overlay-fade: var(--dur-slow);
+    --dev-build-overlay-fade: 420ms;
     --dev-build-overlay-copy-scale-out: 0.96;
     --dev-build-overlay-complete-sweep-ease: ease-out;
     --dev-build-overlay-complete-sweep-start: -28%;

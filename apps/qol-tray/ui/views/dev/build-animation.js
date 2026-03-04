@@ -1,5 +1,7 @@
 export const BUILD_ANIMATION = {
     completionTriggerPercent: 99.9,
+    completionRampMs: 360,
+    completionHoldMs: 120,
     completionVisibleMs: 420,
     staleResetPercent: 1,
     snapDelta: 0.15,
