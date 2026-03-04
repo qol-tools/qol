@@ -27,6 +27,7 @@ function resolveProgressPercent(previous, status, normalizedPercent) {
     if (!previous) return normalizedPercent;
     if (status !== 'building') return normalizedPercent;
     if (previous.status !== 'building') return normalizedPercent;
+    if (normalizedPercent <= 1) return normalizedPercent;
     if (normalizedPercent >= previous.percent) return normalizedPercent;
     return previous.percent;
 }
