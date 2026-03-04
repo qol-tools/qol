@@ -626,7 +626,8 @@
 
 .hotkeys-list {
     flex: 1;
-    --hotkey-cols: repeat(3, minmax(0, 1fr));
+    --hotkey-col-shortcut: 10rem;
+    --hotkey-cols: var(--hotkey-col-shortcut) minmax(0, 1fr) minmax(0, 1fr);
 }
 
 .hotkey-header {
@@ -671,8 +672,17 @@
 .hotkey-row.disabled { opacity: 0.5; }
 
 .hotkey-row .col-key kbd {
+    display: inline-flex;
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    justify-content: center;
+    align-items: center;
     padding: 0.3rem 0.6rem;
     font-size: 0.9rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .hotkey-header .col-key,
@@ -681,10 +691,21 @@
 .hotkey-row .col-key,
 .hotkey-row .col-plugin,
 .hotkey-row .col-action {
+    display: block;
     min-width: 0;
 }
 
+.hotkey-header .col-key,
+.hotkey-header .col-plugin,
+.hotkey-header .col-action {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 .hotkey-row .col-key {
+    display: flex;
+    justify-content: flex-start;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
