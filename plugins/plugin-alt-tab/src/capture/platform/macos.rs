@@ -1,9 +1,5 @@
-use crate::platform::cg_helpers;
-use crate::platform::{RgbaImage, WindowInfo};
-use std::collections::HashMap;
-use std::ffi::c_void;
-
-use super::{
+use crate::discovery::platform::macos::ffi;
+use crate::discovery::platform::macos::ffi::{
     CFArrayGetCount, CFArrayGetValueAtIndex, CFDataGetBytePtr, CFDataGetLength, CFRelease,
     CGDataProviderCopyData, CGImageGetBytesPerRow, CGImageGetDataProvider, CGImageGetHeight,
     CGImageGetWidth, CGWindowListCreateImage, CGWindowListCopyWindowInfo,
@@ -12,10 +8,14 @@ use super::{
     K_CG_WINDOW_IMAGE_BOUNDS_IGNORE_FRAMING, K_CG_WINDOW_IMAGE_NOMINAL_RESOLUTION,
     K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS, K_CG_WINDOW_LIST_OPTION_INCLUDING_WINDOW,
 };
+use crate::discovery::WindowInfo;
+use qol_plugin_api::app_icon::RgbaImage;
+use std::collections::HashMap;
+use std::ffi::c_void;
 
 const ICON_SIZE: usize = 32;
 
-pub(super) fn get_app_icons(windows: &[WindowInfo]) -> HashMap<String, RgbaImage> {
+pub fn get_app_icons(windows: &[WindowInfo]) -> HashMap<String, RgbaImage> {
     let own_pid = std::process::id() as i32;
     let opts = K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
     let list = unsafe { CGWindowListCopyWindowInfo(opts, K_CG_NULL_WINDOW_ID) };
@@ -23,8 +23,8 @@ pub(super) fn get_app_icons(windows: &[WindowInfo]) -> HashMap<String, RgbaImage
         return HashMap::new();
     }
 
-    let key_pid = cg_helpers::cfstr(b"kCGWindowOwnerPID");
-    let key_owner = cg_helpers::cfstr(b"kCGWindowOwnerName");
+    let key_pid = ffi::cfstr(b"kCGWindowOwnerPID");
+    let key_owner = ffi::cfstr(b"kCGWindowOwnerName");
 
     let mut app_pids: HashMap<String, i32> = HashMap::new();
     let count = unsafe { CFArrayGetCount(list) };
@@ -33,11 +33,11 @@ pub(super) fn get_app_icons(windows: &[WindowInfo]) -> HashMap<String, RgbaImage
         if dict.is_null() {
             continue;
         }
-        let Some(pid) = cg_helpers::dict_get_i32(dict, key_pid) else { continue };
+        let Some(pid) = ffi::dict_get_i32(dict, key_pid) else { continue };
         if pid == own_pid {
             continue;
         }
-        let name = cg_helpers::dict_get_string(dict, key_owner)
+        let name = ffi::dict_get_string(dict, key_owner)
             .unwrap_or_default()
             .trim()
             .to_string();
@@ -67,7 +67,7 @@ pub(super) fn get_app_icons(windows: &[WindowInfo]) -> HashMap<String, RgbaImage
     icons
 }
 
-pub(super) fn capture_previews_cg(
+pub fn capture_previews_cg(
     targets: &[(usize, u32)],
     max_w: usize,
     max_h: usize,

@@ -1,4 +1,4 @@
-use crate::platform;
+use crate::picker;
 use gpui::{AnyWindowHandle, AppContext, AsyncApp, WeakEntity};
 use std::time::Duration;
 
@@ -25,7 +25,7 @@ pub(crate) fn start(
                     cx.background_executor()
                         .timer(Duration::from_millis(ALT_POLL_INTERVAL_MS))
                         .await;
-                    let alt_held = platform::is_modifier_held();
+                    let alt_held = picker::is_modifier_held();
 
                     if !alt_held {
                         eprintln!(

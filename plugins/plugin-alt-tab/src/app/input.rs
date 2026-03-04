@@ -1,6 +1,7 @@
 use super::{AltTabApp, PICKER_VISIBLE};
-use crate::layout::rendered_column_count;
-use crate::platform;
+use crate::shared::layout::rendered_column_count;
+use crate::actions;
+use crate::picker;
 use gpui::{Context, Window};
 use std::sync::atomic::Ordering;
 
@@ -34,11 +35,11 @@ pub(crate) fn handle_key_down(
     match event.keystroke.key.as_str() {
         "escape" | "esc" => {
             PICKER_VISIBLE.store(false, Ordering::Relaxed);
-            platform::dismiss_picker(window);
+            picker::dismiss_picker(window);
         }
         "w" => {
             if let Some(win_id) = selected_window_id(this, cx) {
-                platform::close_window(win_id);
+                actions::close_window(win_id);
                 this.delegate.update(cx, |s, _cx| s.remove_window(win_id));
                 cx.notify();
             }
@@ -52,7 +53,7 @@ pub(crate) fn handle_key_down(
                     .iter()
                     .find(|w| w.id == win_id)
                     .map(|w| w.app_name.clone());
-                platform::quit_app(win_id);
+                actions::quit_app(win_id);
                 if let Some(app_name) = app_name {
                     this.delegate.update(cx, |s, _cx| s.remove_app_windows(&app_name));
                 }
@@ -61,7 +62,7 @@ pub(crate) fn handle_key_down(
         }
         "r" => {
             if let Some(win_id) = selected_window_id(this, cx) {
-                platform::minimize_window_by_id(win_id);
+                actions::minimize_window_by_id(win_id);
                 this.delegate.update(cx, |s, _cx| s.mark_minimized(win_id));
                 cx.notify();
             }

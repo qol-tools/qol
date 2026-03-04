@@ -1,9 +1,9 @@
 use super::process::{
     cached_process_identity, is_regular_app, known_window_ids_by_identity, ProcessIdentity,
 };
-use super::{ax, AxWindowMeta, CgWindow};
-use super::ax::AxCache;
-use crate::platform::WindowInfo;
+use super::{ax, CgWindow};
+use super::ax::{AxCache, AxWindowMeta};
+use crate::discovery::WindowInfo;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Default)]

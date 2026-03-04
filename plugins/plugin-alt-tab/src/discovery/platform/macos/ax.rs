@@ -1,9 +1,14 @@
-use super::{AxWindowMeta, CFArrayRef, CgWindow};
-use crate::platform::cg_helpers;
+use super::CgWindow;
+use super::ffi;
+use super::ffi::{CFArrayRef, CFArrayGetCount, CFArrayGetValueAtIndex, CFRelease, CFRetain};
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 
-use super::{CFArrayGetCount, CFArrayGetValueAtIndex, CFRelease};
+#[derive(Clone)]
+pub(super) struct AxWindowMeta {
+    pub title: String,
+    pub is_minimized: bool,
+}
 
 /// Query the Accessibility API for the number of real windows an app has.
 /// Returns None if AX is unavailable (no permission) or the app doesn't respond.
@@ -32,7 +37,7 @@ pub(super) fn ax_windows(pid: i32) -> Option<(HashMap<u32, AxWindowMeta>, Vec<Ax
         if app.is_null() {
             return None;
         }
-        let windows_attr = cg_helpers::cfstr(b"AXWindows");
+        let windows_attr = ffi::cfstr(b"AXWindows");
         let mut windows_value: *const c_void = std::ptr::null();
         let windows_err =
             AXUIElementCopyAttributeValue(app, windows_attr, &mut windows_value);
@@ -42,10 +47,10 @@ pub(super) fn ax_windows(pid: i32) -> Option<(HashMap<u32, AxWindowMeta>, Vec<Ax
             return None;
         }
 
-        let id_attr = cg_helpers::cfstr(b"_AXWindowID");
-        let title_attr = cg_helpers::cfstr(b"AXTitle");
-        let subrole_attr = cg_helpers::cfstr(b"AXSubrole");
-        let minimized_attr = cg_helpers::cfstr(b"AXMinimized");
+        let id_attr = ffi::cfstr(b"_AXWindowID");
+        let title_attr = ffi::cfstr(b"AXTitle");
+        let subrole_attr = ffi::cfstr(b"AXSubrole");
+        let minimized_attr = ffi::cfstr(b"AXMinimized");
         let count = CFArrayGetCount(windows_value as CFArrayRef);
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/ax] ax_windows pid={} AXWindows count={}", pid, count);
@@ -66,7 +71,7 @@ pub(super) fn ax_windows(pid: i32) -> Option<(HashMap<u32, AxWindowMeta>, Vec<Ax
             let subrole_err =
                 AXUIElementCopyAttributeValue(win, subrole_attr, &mut subrole_value);
             if subrole_err == 0 && !subrole_value.is_null() {
-                let subrole = cg_helpers::cfstring_to_string(subrole_value);
+                let subrole = ffi::cfstring_to_string(subrole_value);
                 CFRelease(subrole_value);
                 if !matches!(subrole.as_deref(), Some("AXStandardWindow" | "AXDialog")) {
                     #[cfg(debug_assertions)]
@@ -83,7 +88,7 @@ pub(super) fn ax_windows(pid: i32) -> Option<(HashMap<u32, AxWindowMeta>, Vec<Ax
             let mut id_value: *const c_void = std::ptr::null();
             let id_err = AXUIElementCopyAttributeValue(win, id_attr, &mut id_value);
             let window_id = if id_err == 0 && !id_value.is_null() {
-                let maybe_id = cg_helpers::cfnumber_to_u32(id_value);
+                let maybe_id = ffi::cfnumber_to_u32(id_value);
                 CFRelease(id_value);
                 maybe_id
             } else {
@@ -97,7 +102,7 @@ pub(super) fn ax_windows(pid: i32) -> Option<(HashMap<u32, AxWindowMeta>, Vec<Ax
             let mut title_value: *const c_void = std::ptr::null();
             let title_err = AXUIElementCopyAttributeValue(win, title_attr, &mut title_value);
             if title_err == 0 && !title_value.is_null() {
-                title = cg_helpers::cfstring_to_string(title_value).unwrap_or_default();
+                title = ffi::cfstring_to_string(title_value).unwrap_or_default();
                 CFRelease(title_value);
             }
 
@@ -168,7 +173,7 @@ pub(super) fn ax_is_window_minimized(pid: i32, cg_window_id: u32, title: &str) -
     if win.is_null() {
         return false;
     }
-    let minimized_attr = cg_helpers::cfstr(b"AXMinimized");
+    let minimized_attr = ffi::cfstr(b"AXMinimized");
     let mut value: *const c_void = std::ptr::null();
     let result = unsafe {
         let err = AXUIElementCopyAttributeValue(win, minimized_attr, &mut value);
@@ -280,7 +285,7 @@ pub(super) fn dedup_by_ax(windows: Vec<CgWindow>, ax_cache: &mut AxCache) -> Vec
 /// Find an AX window element for `pid`.
 /// Tries (in order): `_AXWindowID` match → `AXTitle` match → first window if only one.
 /// Returns a CFRetained pointer; caller must CFRelease it.
-pub(super) unsafe fn ax_find_window(
+pub(crate) unsafe fn ax_find_window(
     pid: i32,
     cg_window_id: u32,
     title_hint: &str,
@@ -293,7 +298,6 @@ pub(super) unsafe fn ax_find_window(
             attr: *const c_void,
             val: *mut *const c_void,
         ) -> i32;
-        fn CFRetain(cf: *const c_void) -> *const c_void;
     }
 
     let app_el = AXUIElementCreateApplication(pid);
@@ -301,7 +305,7 @@ pub(super) unsafe fn ax_find_window(
         return std::ptr::null();
     }
 
-    let windows_attr = cg_helpers::cfstr(b"AXWindows");
+    let windows_attr = ffi::cfstr(b"AXWindows");
     let mut wins_val: *const c_void = std::ptr::null();
     let err = AXUIElementCopyAttributeValue(app_el, windows_attr, &mut wins_val);
     CFRelease(windows_attr as *const c_void);
@@ -310,8 +314,8 @@ pub(super) unsafe fn ax_find_window(
         return std::ptr::null();
     }
 
-    let id_attr = cg_helpers::cfstr(b"_AXWindowID");
-    let title_attr = cg_helpers::cfstr(b"AXTitle");
+    let id_attr = ffi::cfstr(b"_AXWindowID");
+    let title_attr = ffi::cfstr(b"AXTitle");
     let count = CFArrayGetCount(wins_val as CFArrayRef);
     #[cfg(debug_assertions)]
     eprintln!(
@@ -337,7 +341,7 @@ pub(super) unsafe fn ax_find_window(
             let mut id_val: *const c_void = std::ptr::null();
             let err = AXUIElementCopyAttributeValue(win_el, id_attr, &mut id_val);
             if err == 0 && !id_val.is_null() {
-                let maybe_id = cg_helpers::cfnumber_to_u32(id_val);
+                let maybe_id = ffi::cfnumber_to_u32(id_val);
                 CFRelease(id_val);
                 if maybe_id == Some(cg_window_id) {
                     id_match = CFRetain(win_el);
@@ -351,7 +355,7 @@ pub(super) unsafe fn ax_find_window(
             let mut title_val: *const c_void = std::ptr::null();
             let err = AXUIElementCopyAttributeValue(win_el, title_attr, &mut title_val);
             if err == 0 && !title_val.is_null() {
-                let ax_title = cg_helpers::cfstring_to_string(title_val).unwrap_or_default();
+                let ax_title = ffi::cfstring_to_string(title_val).unwrap_or_default();
                 CFRelease(title_val);
                 if ax_title == title_hint {
                     title_match = CFRetain(win_el);
@@ -366,7 +370,6 @@ pub(super) unsafe fn ax_find_window(
     CFRelease(title_attr as *const c_void);
     CFRelease(wins_val);
 
-    // Pick best match: ID > title > first (only if exactly one window)
     if !id_match.is_null() {
         if !title_match.is_null() { CFRelease(title_match); }
         if !first_win.is_null() { CFRelease(first_win); }
@@ -381,52 +384,4 @@ pub(super) unsafe fn ax_find_window(
     }
     if !first_win.is_null() { CFRelease(first_win); }
     std::ptr::null()
-}
-
-/// Press a named button (e.g. `AXCloseButton`) on an AX window element.
-/// `win_el` must be a valid, retained AX element.
-pub(super) unsafe fn ax_press_window_button(win_el: *const c_void, button_attr_name: &[u8]) {
-    #[link(name = "ApplicationServices", kind = "framework")]
-    extern "C" {
-        fn AXUIElementCopyAttributeValue(
-            el: *const c_void,
-            attr: *const c_void,
-            val: *mut *const c_void,
-        ) -> i32;
-        fn AXUIElementPerformAction(el: *const c_void, action: *const c_void) -> i32;
-    }
-
-    let button_attr = cg_helpers::cfstr(button_attr_name);
-    let press_action = cg_helpers::cfstr(b"AXPress");
-
-    let mut button_val: *const c_void = std::ptr::null();
-    let err = AXUIElementCopyAttributeValue(win_el, button_attr, &mut button_val);
-    if err == 0 && !button_val.is_null() {
-        let _ = AXUIElementPerformAction(button_val, press_action);
-        CFRelease(button_val as *const c_void);
-    }
-
-    CFRelease(button_attr as *const c_void);
-    CFRelease(press_action as *const c_void);
-}
-
-/// Set the `AXMinimized` attribute to true on an AX window element.
-/// `win_el` must be a valid, retained AX element.
-pub(super) unsafe fn ax_set_minimized(win_el: *const c_void) {
-    #[link(name = "ApplicationServices", kind = "framework")]
-    extern "C" {
-        fn AXUIElementSetAttributeValue(
-            el: *const c_void,
-            attr: *const c_void,
-            val: *const c_void,
-        ) -> i32;
-    }
-    #[link(name = "CoreFoundation", kind = "framework")]
-    extern "C" {
-        static kCFBooleanTrue: *const c_void;
-    }
-
-    let minimized_attr = cg_helpers::cfstr(b"AXMinimized");
-    let _ = AXUIElementSetAttributeValue(win_el, minimized_attr, kCFBooleanTrue);
-    CFRelease(minimized_attr as *const c_void);
 }

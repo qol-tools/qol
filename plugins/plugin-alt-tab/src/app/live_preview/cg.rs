@@ -1,16 +1,16 @@
 use super::LIVE_PREVIEW_INTERVAL_MS;
 use crate::app::{AltTabApp, PICKER_VISIBLE};
-use crate::delegate::WindowDelegate;
-use crate::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
-use crate::platform;
-use crate::preview::{bgra_to_render_image, fast_pixel_hash};
+use crate::picker::state::PickerState;
+use crate::shared::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
+use crate::capture;
+use crate::shared::preview::{bgra_to_render_image, fast_pixel_hash};
 use gpui::{AsyncApp, Entity, Task, WeakEntity};
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 pub(super) fn spawn(
-    delegate: Entity<WindowDelegate>,
+    delegate: Entity<PickerState>,
     cx: &mut gpui::Context<AltTabApp>,
 ) -> Task<()> {
     cx.spawn(
@@ -90,7 +90,7 @@ fn build_targets(
 async fn capture(
     targets: &[(usize, u32)],
     prev_hashes: &mut HashMap<u32, u64>,
-    delegate: &Entity<WindowDelegate>,
+    delegate: &Entity<PickerState>,
     this: &WeakEntity<AltTabApp>,
     cx: &AsyncApp,
     executor: &gpui::BackgroundExecutor,
@@ -99,7 +99,7 @@ async fn capture(
     let targets_owned = targets.to_vec();
     let captured = executor
         .spawn(async move {
-            platform::capture_previews_cg(&targets_owned, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT)
+            capture::capture_previews_cg(&targets_owned, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT)
         })
         .await;
 

@@ -1,13 +1,14 @@
-use super::keepalive::open_keepalive;
-use super::open_picker;
-use crate::app::{AltTabApp, PICKER_VISIBLE};
+use super::{open_picker, OpenPickerRequest};
+use crate::app::PICKER_VISIBLE;
 use crate::config::AltTabConfig;
 use crate::daemon;
-use crate::icon::build_icon_cache;
-use crate::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
-use crate::platform;
-use crate::platform::WindowInfo;
-use crate::preview::bgra_to_render_image;
+use crate::picker::gather::build_icon_cache;
+use crate::shared::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
+use crate::{SharedPreviewCache, SharedIconCache, PickerWindowState};
+use crate::capture;
+use crate::discovery;
+use crate::discovery::WindowInfo;
+use crate::shared::preview::bgra_to_render_image;
 use gpui::*;
 use qol_plugin_api::monitor::MonitorTracker;
 use std::collections::{HashMap, HashSet};
@@ -19,18 +20,21 @@ const PREWARM_REFRESH_INTERVAL_MS: u64 = 1200;
 const SMALL_WINDOW_SET_MAX: usize = 2;
 const STABLE_PREVIOUS_MIN: usize = 6;
 
-type PickerWindowState =
-    std::rc::Rc<std::cell::RefCell<Option<(WindowHandle<AltTabApp>, Point<Pixels>)>>>;
 type WindowCache = Arc<Mutex<Vec<WindowInfo>>>;
-type PreviewCache = Arc<Mutex<HashMap<u32, Arc<RenderImage>>>>;
-type IconCache = Arc<Mutex<HashMap<String, Arc<RenderImage>>>>;
 
 #[derive(Clone)]
 struct PickerCaches {
     last_window_count: Arc<AtomicUsize>,
     window_cache: WindowCache,
-    preview_cache: PreviewCache,
-    icon_cache: IconCache,
+    preview_cache: SharedPreviewCache,
+    icon_cache: SharedIconCache,
+}
+
+#[derive(Clone)]
+struct PickerState {
+    current: PickerWindowState,
+    tracker: MonitorTracker,
+    caches: PickerCaches,
 }
 
 struct PrewarmState {
@@ -46,6 +50,19 @@ impl PickerCaches {
             preview_cache: Arc::new(Mutex::new(HashMap::new())),
             icon_cache: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+}
+
+impl PickerState {
+    fn open_picker(&self, config: &AltTabConfig, reverse: bool, cx: &mut App) {
+        let req = OpenPickerRequest {
+            config, current: &self.current, tracker: &self.tracker,
+            last_window_count: self.caches.last_window_count.clone(),
+            preview_cache: self.caches.preview_cache.clone(),
+            icon_cache: self.caches.icon_cache.clone(),
+            reverse,
+        };
+        open_picker(&req, cx);
     }
 }
 
@@ -66,58 +83,25 @@ pub(crate) fn run_app(
     let app = Application::new();
 
     app.run(move |cx: &mut App| {
-        let tracker = MonitorTracker::start(cx);
+        qol_plugin_api::keepalive::open_keepalive(cx, None);
+        super::platform::set_accessory_policy();
 
-        open_keepalive(cx);
+        let state = PickerState {
+            current: picker_window_state(),
+            tracker: MonitorTracker::start(cx),
+            caches: PickerCaches::new(),
+        };
 
-        #[cfg(target_os = "macos")]
-        super::set_macos_accessory_policy();
-
-        let current = picker_window_state();
-        let caches = PickerCaches::new();
-
-        spawn_prewarm_task(cx, caches.clone());
-        open_on_start(show_on_start, &config, &current, &tracker, &caches, cx);
-        spawn_daemon_loop(cx, rx, current, tracker, caches);
+        spawn_prewarm_task(cx, state.caches.clone());
+        if show_on_start {
+            state.open_picker(&config, false, cx);
+        }
+        spawn_daemon_loop(cx, rx, state);
     });
 }
 
 fn picker_window_state() -> PickerWindowState {
     std::rc::Rc::new(std::cell::RefCell::new(None))
-}
-
-fn open_on_start(
-    show_on_start: bool,
-    config: &AltTabConfig,
-    current: &PickerWindowState,
-    tracker: &MonitorTracker,
-    caches: &PickerCaches,
-    cx: &mut App,
-) {
-    if !show_on_start {
-        return;
-    }
-    open_picker_from_state(config, current, tracker, caches, false, cx);
-}
-
-fn open_picker_from_state(
-    config: &AltTabConfig,
-    current: &PickerWindowState,
-    tracker: &MonitorTracker,
-    caches: &PickerCaches,
-    reverse: bool,
-    cx: &mut App,
-) {
-    open_picker(
-        config,
-        current,
-        tracker,
-        caches.last_window_count.clone(),
-        caches.preview_cache.clone(),
-        caches.icon_cache.clone(),
-        reverse,
-        cx,
-    );
 }
 
 fn spawn_prewarm_task(cx: &mut App, caches: PickerCaches) {
@@ -172,7 +156,7 @@ async fn should_skip_prewarm_refresh(
     prev_snapshot: &mut Vec<u32>,
     window_cache: &WindowCache,
 ) -> bool {
-    let snapshot = executor.spawn(async { platform::on_screen_window_ids() }).await;
+    let snapshot = executor.spawn(async { discovery::on_screen_window_ids() }).await;
     let cached_len = cached_window_len(window_cache);
     if should_skip_refresh(&snapshot, prev_snapshot, cached_len) {
         return true;
@@ -206,13 +190,13 @@ async fn load_stable_windows(
 }
 
 async fn fetch_open_windows(executor: &gpui::BackgroundExecutor) -> Vec<WindowInfo> {
-    executor.spawn(async { platform::get_open_windows() }).await
+    executor.spawn(async { discovery::get_open_windows() }).await
 }
 
 async fn refresh_preview_cache(
     executor: &gpui::BackgroundExecutor,
     windows: &[WindowInfo],
-    preview_cache: &PreviewCache,
+    preview_cache: &SharedPreviewCache,
 ) {
     refresh_cg_preview_cache(executor, windows, preview_cache).await;
 }
@@ -220,11 +204,11 @@ async fn refresh_preview_cache(
 async fn refresh_cg_preview_cache(
     executor: &gpui::BackgroundExecutor,
     windows: &[WindowInfo],
-    preview_cache: &PreviewCache,
+    preview_cache: &SharedPreviewCache,
 ) {
     let targets: Vec<(usize, u32)> = windows.iter().enumerate().map(|(i, w)| (i, w.id)).collect();
     let captured = executor
-        .spawn(async move { platform::capture_previews_cg(&targets, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT) })
+        .spawn(async move { capture::capture_previews_cg(&targets, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT) })
         .await;
 
     let live_ids: HashSet<u32> = windows.iter().map(|w| w.id).collect();
@@ -246,13 +230,13 @@ async fn refresh_cg_preview_cache(
 async fn refresh_icon_cache(
     executor: &gpui::BackgroundExecutor,
     windows: &[WindowInfo],
-    icon_cache: &IconCache,
+    icon_cache: &SharedIconCache,
 ) {
     let cached_names = cached_icon_names(icon_cache);
     let icon_windows = missing_icon_windows(windows, &cached_names);
     if !icon_windows.is_empty() {
         let raw_icons = executor
-            .spawn(async move { platform::get_app_icons(&icon_windows) })
+            .spawn(async move { capture::get_app_icons(&icon_windows) })
             .await;
         if !raw_icons.is_empty() {
             let rendered = build_icon_cache(raw_icons);
@@ -262,7 +246,7 @@ async fn refresh_icon_cache(
     retain_active_icons(icon_cache, windows);
 }
 
-fn cached_icon_names(icon_cache: &IconCache) -> HashSet<String> {
+fn cached_icon_names(icon_cache: &SharedIconCache) -> HashSet<String> {
     icon_cache
         .lock()
         .ok()
@@ -278,7 +262,7 @@ fn missing_icon_windows(windows: &[WindowInfo], cached_names: &HashSet<String>) 
         .collect()
 }
 
-fn merge_icons(icon_cache: &IconCache, rendered: HashMap<String, Arc<RenderImage>>) {
+fn merge_icons(icon_cache: &SharedIconCache, rendered: crate::IconMap) {
     let Ok(mut cache) = icon_cache.lock() else {
         return;
     };
@@ -287,7 +271,7 @@ fn merge_icons(icon_cache: &IconCache, rendered: HashMap<String, Arc<RenderImage
     }
 }
 
-fn retain_active_icons(icon_cache: &IconCache, windows: &[WindowInfo]) {
+fn retain_active_icons(icon_cache: &SharedIconCache, windows: &[WindowInfo]) {
     let active: HashSet<&str> = windows.iter().map(|w| w.app_name.as_str()).collect();
     let Ok(mut cache) = icon_cache.lock() else {
         return;
@@ -305,9 +289,7 @@ fn replace_window_cache(window_cache: &WindowCache, windows: Vec<WindowInfo>) {
 fn spawn_daemon_loop(
     cx: &mut App,
     rx: mpsc::Receiver<daemon::Command>,
-    current: PickerWindowState,
-    tracker: MonitorTracker,
-    caches: PickerCaches,
+    state: PickerState,
 ) {
     let rx = Arc::new(Mutex::new(rx));
     cx.spawn(async move |cx: &mut AsyncApp| {
@@ -317,12 +299,8 @@ fn spawn_daemon_loop(
                 break;
             };
             match cmd {
-                daemon::Command::Show => {
-                    dispatch_show(cx, false, current.clone(), tracker.clone(), caches.clone());
-                }
-                daemon::Command::ShowReverse => {
-                    dispatch_show(cx, true, current.clone(), tracker.clone(), caches.clone());
-                }
+                daemon::Command::Show => dispatch_show(cx, false, &state),
+                daemon::Command::ShowReverse => dispatch_show(cx, true, &state),
                 daemon::Command::Kill => {
                     shutdown_daemon(cx);
                     break;
@@ -342,25 +320,13 @@ async fn recv_command(
         .await
 }
 
-fn dispatch_show(
-    cx: &AsyncApp,
-    reverse: bool,
-    current: PickerWindowState,
-    tracker: MonitorTracker,
-    caches: PickerCaches,
-) {
+fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     #[cfg(debug_assertions)]
     eprintln!("[alt-tab/daemon] received Show (reverse={})", reverse);
-    let _ = cx.update(|app_cx| {
-        let reloaded_config = crate::config::load_alt_tab_config();
-        open_picker_from_state(
-            &reloaded_config,
-            &current,
-            &tracker,
-            &caches,
-            reverse,
-            app_cx,
-        );
+    let state = state.clone();
+    let _ = cx.update(move |app_cx| {
+        let config = crate::config::load_alt_tab_config();
+        state.open_picker(&config, reverse, app_cx);
     });
 }
 

@@ -1,11 +1,84 @@
-//! CoreGraphics dictionary utilities for macOS platform modules.
-//! Only compiled on macOS.
-
-#![cfg(target_os = "macos")]
-
 use std::ffi::c_void;
 
-type CFDictionaryRef = *const c_void;
+// ── Type aliases ─────────────────────────────────────────────────
+
+pub(crate) type CFArrayRef = *const c_void;
+pub(crate) type CFDictionaryRef = *const c_void;
+pub(crate) type CGImageRef = *const c_void;
+pub(crate) type CFDataRef = *const c_void;
+pub(crate) type CGDataProviderRef = *const c_void;
+
+// ── Geometry ─────────────────────────────────────────────────────
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub(crate) struct CGRect {
+    pub origin: CGPoint,
+    pub size: CGSize,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub(crate) struct CGPoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub(crate) struct CGSize {
+    pub width: f64,
+    pub height: f64,
+}
+
+// ── Constants ────────────────────────────────────────────────────
+
+pub(crate) const CG_RECT_NULL: CGRect = CGRect {
+    origin: CGPoint { x: f64::INFINITY, y: f64::INFINITY },
+    size: CGSize { width: 0.0, height: 0.0 },
+};
+pub(crate) const K_CG_WINDOW_LIST_OPTION_INCLUDING_WINDOW: u32 = 1 << 3;
+pub(crate) const K_CG_WINDOW_IMAGE_BOUNDS_IGNORE_FRAMING: u32 = 1 << 0;
+pub(crate) const K_CG_WINDOW_IMAGE_NOMINAL_RESOLUTION: u32 = 1 << 9;
+pub(crate) const K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY: u32 = 1;
+pub(crate) const K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS: u32 = 1 << 4;
+pub(crate) const K_CG_NULL_WINDOW_ID: u32 = 0;
+pub(crate) const K_CG_WINDOW_LAYER_NORMAL: i32 = 0;
+
+// ── CoreGraphics FFI ─────────────────────────────────────────────
+
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    pub(crate) fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> CFArrayRef;
+    pub(crate) fn CGWindowListCreateImage(
+        screen_bounds: CGRect,
+        list_option: u32,
+        window_id: u32,
+        image_option: u32,
+    ) -> CGImageRef;
+    pub(crate) fn CGImageGetWidth(image: CGImageRef) -> usize;
+    pub(crate) fn CGImageGetHeight(image: CGImageRef) -> usize;
+    pub(crate) fn CGImageGetBytesPerRow(image: CGImageRef) -> usize;
+    #[allow(dead_code)]
+    pub(crate) fn CGImageGetBitsPerPixel(image: CGImageRef) -> usize;
+    pub(crate) fn CGImageGetDataProvider(image: CGImageRef) -> CGDataProviderRef;
+    pub(crate) fn CGDataProviderCopyData(provider: CGDataProviderRef) -> CFDataRef;
+}
+
+// ── CoreFoundation FFI ───────────────────────────────────────────
+
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    pub(crate) fn CFArrayGetCount(arr: CFArrayRef) -> isize;
+    pub(crate) fn CFArrayGetValueAtIndex(arr: CFArrayRef, idx: isize) -> *const c_void;
+    pub(crate) fn CFRelease(cf: *const c_void);
+    pub(crate) fn CFRetain(cf: *const c_void) -> *const c_void;
+    pub(crate) fn CFDataGetBytePtr(data: CFDataRef) -> *const u8;
+    pub(crate) fn CFDataGetLength(data: CFDataRef) -> isize;
+}
+
+// ── Dictionary / string helpers ──────────────────────────────────
+
 type CFStringRef = *const c_void;
 type CFNumberRef = *const c_void;
 
@@ -83,15 +156,15 @@ pub(crate) fn dict_get_f64(dict: CFDictionaryRef, key: CFStringRef) -> Option<f6
 
 pub(crate) fn dict_get_rect(dict: CFDictionaryRef, key: CFStringRef) -> Option<(f64, f64, f64, f64)> {
     #[repr(C)]
-    struct CGPoint { x: f64, y: f64 }
+    struct CgPoint { x: f64, y: f64 }
     #[repr(C)]
-    struct CGSize { width: f64, height: f64 }
+    struct CgSize { width: f64, height: f64 }
     #[repr(C)]
-    struct CGRect { origin: CGPoint, size: CGSize }
+    struct CgRect { origin: CgPoint, size: CgSize }
 
     #[link(name = "CoreGraphics", kind = "framework")]
     extern "C" {
-        fn CGRectMakeWithDictionaryRepresentation(dict: CFDictionaryRef, rect: *mut CGRect) -> bool;
+        fn CGRectMakeWithDictionaryRepresentation(dict: CFDictionaryRef, rect: *mut CgRect) -> bool;
     }
     #[link(name = "CoreFoundation", kind = "framework")]
     extern "C" {
@@ -102,9 +175,9 @@ pub(crate) fn dict_get_rect(dict: CFDictionaryRef, key: CFStringRef) -> Option<(
         if val.is_null() {
             return None;
         }
-        let mut rect = CGRect {
-            origin: CGPoint { x: 0.0, y: 0.0 },
-            size: CGSize { width: 0.0, height: 0.0 },
+        let mut rect = CgRect {
+            origin: CgPoint { x: 0.0, y: 0.0 },
+            size: CgSize { width: 0.0, height: 0.0 },
         };
         if CGRectMakeWithDictionaryRepresentation(val as CFDictionaryRef, &mut rect) {
             Some((rect.origin.x, rect.origin.y, rect.size.width, rect.size.height))
@@ -221,3 +294,4 @@ pub(crate) fn dict_get_string(dict: CFDictionaryRef, key: CFStringRef) -> Option
         String::from_utf8(buf[..len].to_vec()).ok()
     }
 }
+

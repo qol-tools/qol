@@ -1,14 +1,13 @@
-use super::ax::{ax_find_window, ax_press_window_button, ax_set_minimized};
-use crate::platform::cg_helpers;
-use std::ffi::c_void;
-
-use super::{
+use crate::discovery::platform::macos::ffi;
+use crate::discovery::platform::macos::ffi::{
     CFArrayGetCount, CFArrayGetValueAtIndex, CFRelease, CFDictionaryRef,
     CGWindowListCopyWindowInfo,
     K_CG_NULL_WINDOW_ID, K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
 };
+use crate::discovery::platform::macos::ax::ax_find_window;
+use std::ffi::c_void;
 
-pub(super) fn activate_window(window_id: u32) {
+pub fn activate_window(window_id: u32) {
     let Some((pid, title)) = cg_window_pid_and_title(window_id) else {
         return;
     };
@@ -32,11 +31,11 @@ pub(super) fn activate_window(window_id: u32) {
             extern "C" {
                 static kCFBooleanFalse: *const c_void;
             }
-            let minimized_attr = cg_helpers::cfstr(b"AXMinimized");
+            let minimized_attr = ffi::cfstr(b"AXMinimized");
             let _ = AXUIElementSetAttributeValue(win, minimized_attr, kCFBooleanFalse);
             CFRelease(minimized_attr as *const c_void);
 
-            let raise = cg_helpers::cfstr(b"AXRaise");
+            let raise = ffi::cfstr(b"AXRaise");
             let _ = AXUIElementPerformAction(win, raise);
             CFRelease(raise as *const c_void);
             CFRelease(win);
@@ -55,7 +54,7 @@ pub(super) fn activate_window(window_id: u32) {
     });
 }
 
-pub(super) fn close_window(window_id: u32) {
+pub fn close_window(window_id: u32) {
     let Some((pid, title)) = cg_window_pid_and_title(window_id) else {
         return;
     };
@@ -69,7 +68,7 @@ pub(super) fn close_window(window_id: u32) {
     }
 }
 
-pub(super) fn quit_app(window_id: u32) {
+pub fn quit_app(window_id: u32) {
     let Some((pid, _title)) = cg_window_pid_and_title(window_id) else {
         return;
     };
@@ -81,7 +80,7 @@ pub(super) fn quit_app(window_id: u32) {
     });
 }
 
-pub(super) fn minimize_window_by_id(window_id: u32) {
+pub fn minimize_window_by_id(window_id: u32) {
     let Some((pid, title)) = cg_window_pid_and_title(window_id) else {
         return;
     };
@@ -101,9 +100,9 @@ fn cg_window_pid_and_title(window_id: u32) -> Option<(i32, String)> {
     if list.is_null() {
         return None;
     }
-    let key_pid = cg_helpers::cfstr(b"kCGWindowOwnerPID");
-    let key_number = cg_helpers::cfstr(b"kCGWindowNumber");
-    let key_name = cg_helpers::cfstr(b"kCGWindowName");
+    let key_pid = ffi::cfstr(b"kCGWindowOwnerPID");
+    let key_number = ffi::cfstr(b"kCGWindowNumber");
+    let key_name = ffi::cfstr(b"kCGWindowName");
 
     let count = unsafe { CFArrayGetCount(list) };
     let mut result: Option<(i32, String)> = None;
@@ -113,14 +112,14 @@ fn cg_window_pid_and_title(window_id: u32) -> Option<(i32, String)> {
         if dict.is_null() {
             continue;
         }
-        let Some(num) = cg_helpers::dict_get_i32(dict, key_number) else {
+        let Some(num) = ffi::dict_get_i32(dict, key_number) else {
             continue;
         };
         if num as u32 != window_id {
             continue;
         }
-        if let Some(pid) = cg_helpers::dict_get_i32(dict, key_pid) {
-            let title = cg_helpers::dict_get_string(dict, key_name).unwrap_or_default();
+        if let Some(pid) = ffi::dict_get_i32(dict, key_pid) {
+            let title = ffi::dict_get_string(dict, key_name).unwrap_or_default();
             result = Some((pid, title));
         }
         break;
@@ -133,4 +132,52 @@ fn cg_window_pid_and_title(window_id: u32) -> Option<(i32, String)> {
         CFRelease(key_name as *const c_void);
     }
     result
+}
+
+/// Press a named button (e.g. `AXCloseButton`) on an AX window element.
+/// `win_el` must be a valid, retained AX element.
+unsafe fn ax_press_window_button(win_el: *const c_void, button_attr_name: &[u8]) {
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn AXUIElementCopyAttributeValue(
+            el: *const c_void,
+            attr: *const c_void,
+            val: *mut *const c_void,
+        ) -> i32;
+        fn AXUIElementPerformAction(el: *const c_void, action: *const c_void) -> i32;
+    }
+
+    let button_attr = ffi::cfstr(button_attr_name);
+    let press_action = ffi::cfstr(b"AXPress");
+
+    let mut button_val: *const c_void = std::ptr::null();
+    let err = AXUIElementCopyAttributeValue(win_el, button_attr, &mut button_val);
+    if err == 0 && !button_val.is_null() {
+        let _ = AXUIElementPerformAction(button_val, press_action);
+        CFRelease(button_val as *const c_void);
+    }
+
+    CFRelease(button_attr as *const c_void);
+    CFRelease(press_action as *const c_void);
+}
+
+/// Set the `AXMinimized` attribute to true on an AX window element.
+/// `win_el` must be a valid, retained AX element.
+unsafe fn ax_set_minimized(win_el: *const c_void) {
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn AXUIElementSetAttributeValue(
+            el: *const c_void,
+            attr: *const c_void,
+            val: *const c_void,
+        ) -> i32;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        static kCFBooleanTrue: *const c_void;
+    }
+
+    let minimized_attr = ffi::cfstr(b"AXMinimized");
+    let _ = AXUIElementSetAttributeValue(win_el, minimized_attr, kCFBooleanTrue);
+    CFRelease(minimized_attr as *const c_void);
 }

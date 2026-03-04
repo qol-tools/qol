@@ -1,8 +1,16 @@
-pub(super) fn picker_window_kind() -> gpui::WindowKind {
+pub fn set_accessory_policy() {
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+    use objc2_foundation::MainThreadMarker;
+    let mtm = MainThreadMarker::new().expect("must be on main thread");
+    let app = NSApplication::sharedApplication(mtm);
+    app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+}
+
+pub fn picker_window_kind() -> gpui::WindowKind {
     gpui::WindowKind::Normal
 }
 
-pub(super) fn dismiss_picker(_window: &mut gpui::Window) {
+pub fn dismiss_picker(_window: &mut gpui::Window) {
     use objc2_app_kit::NSApplication;
     use objc2_foundation::MainThreadMarker;
     let mtm = MainThreadMarker::new().expect("must be on main thread");
@@ -17,7 +25,7 @@ pub(super) fn dismiss_picker(_window: &mut gpui::Window) {
 
 /// Move the picker window so its top-left sits at (gpui_x, gpui_y) in GPUI global
 /// coordinates (Y-down, origin = top-left of primary screen). Returns true on success.
-pub(super) fn reposition_picker(gpui_x: f64, gpui_y: f64) -> bool {
+fn reposition_picker(gpui_x: f64, gpui_y: f64) -> bool {
     use objc2_app_kit::{NSApplication, NSScreen};
     use objc2_foundation::{MainThreadMarker, NSPoint};
     let mtm = MainThreadMarker::new().expect("must be on main thread");
@@ -51,17 +59,21 @@ fn cg_event_flags() -> u64 {
     unsafe { CGEventSourceFlagsState(K_CG_EVENT_SOURCE_STATE_COMBINED) }
 }
 
-pub(super) fn is_modifier_held() -> bool {
+pub fn is_modifier_held() -> bool {
     const K_CG_EVENT_FLAG_MASK_ALTERNATE: u64 = 0x0008_0000;
     cg_event_flags() & K_CG_EVENT_FLAG_MASK_ALTERNATE != 0
 }
 
-pub(super) fn is_shift_held() -> bool {
+pub fn is_shift_held() -> bool {
     const K_CG_EVENT_FLAG_MASK_SHIFT: u64 = 0x0002_0000;
     cg_event_flags() & K_CG_EVENT_FLAG_MASK_SHIFT != 0
 }
 
-pub(super) fn disable_window_shadow() {
+pub fn reposition_picker_window(x: f64, y: f64) -> bool {
+    reposition_picker(x, y)
+}
+
+pub fn disable_window_shadow() {
     use objc2_app_kit::{NSApplication, NSColor};
     use objc2_foundation::MainThreadMarker;
 

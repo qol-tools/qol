@@ -4,18 +4,17 @@ mod live_preview;
 mod render;
 
 use crate::config::{ActionMode, LabelConfig};
-use crate::delegate::WindowDelegate;
-use crate::platform;
-use crate::platform::WindowInfo;
+use crate::picker::state::PickerState;
+use crate::discovery::WindowInfo;
+use crate::picker;
+use crate::{IconMap, PreviewMap};
 use gpui::*;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 pub(crate) static PICKER_VISIBLE: AtomicBool = AtomicBool::new(false);
 
 pub(crate) struct AltTabApp {
-    pub(crate) delegate: Entity<WindowDelegate>,
+    pub(crate) delegate: Entity<PickerState>,
     pub(crate) focus_handle: FocusHandle,
     pub(crate) action_mode: ActionMode,
     pub(crate) alt_was_held: bool,
@@ -37,10 +36,10 @@ impl AltTabApp {
         show_debug_overlay: bool,
         show_hotkey_hints: bool,
         cycle_on_open: bool,
-        initial_previews: HashMap<u32, Arc<RenderImage>>,
-        icon_cache: HashMap<String, Arc<RenderImage>>,
+        initial_previews: PreviewMap,
+        icon_cache: IconMap,
     ) -> Self {
-        let win_delegate = WindowDelegate::new_with_previews(
+        let win_delegate = PickerState::new_with_previews(
             initial_windows.clone(),
             label_config,
             transparent_background,
@@ -68,7 +67,7 @@ impl AltTabApp {
             |this, _event, window, _cx| {
                 if this.action_mode != ActionMode::HoldToSwitch {
                     PICKER_VISIBLE.store(false, Ordering::Relaxed);
-                    platform::dismiss_picker(window);
+                    picker::dismiss_picker(window);
                 }
             },
         );
@@ -102,8 +101,8 @@ impl AltTabApp {
         &mut self,
         windows: Vec<WindowInfo>,
         reset_selection: bool,
-        previews: HashMap<u32, Arc<RenderImage>>,
-        icons: HashMap<String, Arc<RenderImage>>,
+        previews: PreviewMap,
+        icons: IconMap,
         cx: &mut Context<Self>,
     ) {
         self.delegate.update(cx, |state, cx| {
@@ -116,6 +115,67 @@ impl AltTabApp {
             }
             cx.notify();
         });
+        cx.notify();
+    }
+
+    pub(crate) fn apply_reuse(
+        &mut self,
+        req: &crate::picker::ReuseRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.reposition_if_needed(req) {
+            return false;
+        }
+        self.apply_reuse_config(req, cx);
+        self.sync_alt_poll(window, cx);
+        self.apply_reuse_windows(req, cx);
+        true
+    }
+
+    fn reposition_if_needed(&self, req: &crate::picker::ReuseRequest) -> bool {
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[alt-tab/hold] reuse path (poll_task={}) — reset={} monitor_changed={}",
+            self._alt_poll_task.is_some(), req.config.reset_selection_on_open, req.layout.monitor_changed,
+        );
+        if !req.layout.monitor_changed {
+            return true;
+        }
+        picker::platform::reposition_picker_window(
+            req.layout.bounds.origin.x.to_f64(), req.layout.bounds.origin.y.to_f64(),
+        )
+    }
+
+    fn apply_reuse_config(&mut self, req: &crate::picker::ReuseRequest, cx: &mut Context<Self>) {
+        let (card_color, card_opacity) = crate::picker::resolve_card_bg(&req.config.display);
+        self.action_mode = req.config.action_mode.clone();
+        self.alt_was_held = true;
+        self.delegate.update(cx, |s, _| s.apply_config(req.config, card_color, card_opacity));
+    }
+
+    fn sync_alt_poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.action_mode {
+            ActionMode::HoldToSwitch => self.start_alt_poll(window.window_handle(), cx),
+            _ => self._alt_poll_task = None,
+        }
+    }
+
+    fn apply_reuse_windows(&mut self, req: &crate::picker::ReuseRequest, cx: &mut Context<Self>) {
+        self.apply_cached_windows(
+            req.gathered.windows.clone(), req.config.reset_selection_on_open,
+            req.gathered.previews.clone(), req.gathered.icons.clone(), cx,
+        );
+        if req.config.open_behavior == crate::config::OpenBehavior::CycleOnce
+            && req.config.reset_selection_on_open
+            && req.gathered.windows.len() >= 2
+        {
+            self.delegate.update(cx, |s, _| s.select_next());
+        }
+    }
+
+    pub(crate) fn update_icons(&mut self, icons: IconMap, cx: &mut Context<Self>) {
+        self.delegate.update(cx, |state, _| state.insert_icons(icons));
         cx.notify();
     }
 

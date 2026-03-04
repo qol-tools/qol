@@ -1,17 +1,66 @@
-use super::window_enum::{
-    collect_minimized_windows, collect_on_screen_windows, KnownWindowTracker, WindowEnumeration,
-};
-use super::CgWindow;
-use crate::platform::cg_helpers;
-use crate::platform::WindowInfo;
-use std::ffi::c_void;
-
-use super::{
+use ffi::{
     CFArrayGetCount, CFArrayGetValueAtIndex, CFRelease, CFDictionaryRef,
     CGWindowListCopyWindowInfo,
     K_CG_NULL_WINDOW_ID, K_CG_WINDOW_LAYER_NORMAL,
     K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS, K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
 };
+use crate::discovery::WindowInfo;
+use std::ffi::c_void;
+use window_enum::{
+    collect_minimized_windows, collect_on_screen_windows, KnownWindowTracker, WindowEnumeration,
+};
+
+pub(crate) mod ax;
+pub(crate) mod ffi;
+mod process;
+mod window_enum;
+
+/// Parsed CG window entry.
+pub(super) struct CgWindow {
+    pub id: u32,
+    pub pid: i32,
+    pub app_name: String,
+    pub title: String,
+    pub has_title: bool,
+    pub sharing_state: i32,
+    pub is_onscreen: bool,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl CgWindow {
+    pub fn into_window_info(self, is_minimized: bool) -> WindowInfo {
+        WindowInfo {
+            id: self.id,
+            title: self.title,
+            app_name: self.app_name,
+            preview_path: None,
+            icon: None,
+            x: self.x,
+            y: self.y,
+            width: self.w,
+            height: self.h,
+            is_minimized,
+        }
+    }
+
+    pub fn to_window_info(&self, is_minimized: bool, title: String) -> WindowInfo {
+        WindowInfo {
+            id: self.id,
+            title,
+            app_name: self.app_name.clone(),
+            preview_path: None,
+            icon: None,
+            x: self.x,
+            y: self.y,
+            width: self.w,
+            height: self.h,
+            is_minimized,
+        }
+    }
+}
 
 /// Fast pre-filter for known system process windows.
 fn is_system_process(app_name: &str) -> bool {
@@ -22,15 +71,15 @@ fn is_system_process(app_name: &str) -> bool {
 }
 
 /// Shared helper: parse normal-layer windows from a CG window list.
-pub(super) fn parse_cg_window_list(list: *const c_void, own_pid: i32) -> Vec<CgWindow> {
-    let key_layer = cg_helpers::cfstr(b"kCGWindowLayer");
-    let key_pid = cg_helpers::cfstr(b"kCGWindowOwnerPID");
-    let key_owner = cg_helpers::cfstr(b"kCGWindowOwnerName");
-    let key_name = cg_helpers::cfstr(b"kCGWindowName");
-    let key_number = cg_helpers::cfstr(b"kCGWindowNumber");
-    let key_bounds = cg_helpers::cfstr(b"kCGWindowBounds");
-    let key_sharing = cg_helpers::cfstr(b"kCGWindowSharingState");
-    let key_is_onscreen = cg_helpers::cfstr(b"kCGWindowIsOnscreen");
+fn parse_cg_window_list(list: *const c_void, own_pid: i32) -> Vec<CgWindow> {
+    let key_layer = ffi::cfstr(b"kCGWindowLayer");
+    let key_pid = ffi::cfstr(b"kCGWindowOwnerPID");
+    let key_owner = ffi::cfstr(b"kCGWindowOwnerName");
+    let key_name = ffi::cfstr(b"kCGWindowName");
+    let key_number = ffi::cfstr(b"kCGWindowNumber");
+    let key_bounds = ffi::cfstr(b"kCGWindowBounds");
+    let key_sharing = ffi::cfstr(b"kCGWindowSharingState");
+    let key_is_onscreen = ffi::cfstr(b"kCGWindowIsOnscreen");
 
     let count = unsafe { CFArrayGetCount(list) };
     let mut result: Vec<CgWindow> = Vec::with_capacity(count.max(0) as usize);
@@ -40,39 +89,39 @@ pub(super) fn parse_cg_window_list(list: *const c_void, own_pid: i32) -> Vec<CgW
         if dict.is_null() {
             continue;
         }
-        let Some(layer) = cg_helpers::dict_get_i32(dict, key_layer) else {
+        let Some(layer) = ffi::dict_get_i32(dict, key_layer) else {
             continue;
         };
         if layer != K_CG_WINDOW_LAYER_NORMAL {
             continue;
         }
-        let Some(pid) = cg_helpers::dict_get_i32(dict, key_pid) else {
+        let Some(pid) = ffi::dict_get_i32(dict, key_pid) else {
             continue;
         };
         if pid == own_pid {
             continue;
         }
-        let app_name = cg_helpers::dict_get_string(dict, key_owner)
+        let app_name = ffi::dict_get_string(dict, key_owner)
             .unwrap_or_default()
             .trim()
             .to_string();
-        let title = cg_helpers::dict_get_string(dict, key_name)
+        let title = ffi::dict_get_string(dict, key_name)
             .unwrap_or_default()
             .trim()
             .to_string();
-        let Some(id) = cg_helpers::dict_get_i32(dict, key_number) else {
+        let Some(id) = ffi::dict_get_i32(dict, key_number) else {
             continue;
         };
         if app_name.is_empty() && title.is_empty() {
             continue;
         }
-        let (wx, wy, ww, wh) = cg_helpers::dict_get_rect(dict, key_bounds)
+        let (wx, wy, ww, wh) = ffi::dict_get_rect(dict, key_bounds)
             .unwrap_or((0.0, 0.0, 0.0, 0.0));
         if is_system_process(&app_name) {
             continue;
         }
-        let sharing_state = cg_helpers::dict_get_i32(dict, key_sharing).unwrap_or(0);
-        let is_onscreen = cg_helpers::dict_get_bool(dict, key_is_onscreen).unwrap_or(false);
+        let sharing_state = ffi::dict_get_i32(dict, key_sharing).unwrap_or(0);
+        let is_onscreen = ffi::dict_get_bool(dict, key_is_onscreen).unwrap_or(false);
         let has_title = !title.is_empty();
         let display_title = if title.is_empty() { app_name.clone() } else { title };
         result.push(CgWindow {
@@ -95,12 +144,12 @@ pub(super) fn parse_cg_window_list(list: *const c_void, own_pid: i32) -> Vec<CgW
     result
 }
 
-pub(super) fn get_open_windows() -> Vec<WindowInfo> {
+pub fn get_open_windows() -> Vec<WindowInfo> {
     get_open_windows_impl(true)
 }
 
 /// Cheap CG-only snapshot of on-screen window IDs (no AX, no proc_pidinfo).
-pub(super) fn on_screen_window_ids() -> Vec<u32> {
+pub fn on_screen_window_ids() -> Vec<u32> {
     let own_pid = std::process::id() as i32;
     let options =
         K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
@@ -109,9 +158,9 @@ pub(super) fn on_screen_window_ids() -> Vec<u32> {
         return Vec::new();
     }
 
-    let key_layer = cg_helpers::cfstr(b"kCGWindowLayer");
-    let key_pid = cg_helpers::cfstr(b"kCGWindowOwnerPID");
-    let key_number = cg_helpers::cfstr(b"kCGWindowNumber");
+    let key_layer = ffi::cfstr(b"kCGWindowLayer");
+    let key_pid = ffi::cfstr(b"kCGWindowOwnerPID");
+    let key_number = ffi::cfstr(b"kCGWindowNumber");
 
     let count = unsafe { CFArrayGetCount(list) };
     let mut ids = Vec::with_capacity(count.max(0) as usize);
@@ -121,19 +170,19 @@ pub(super) fn on_screen_window_ids() -> Vec<u32> {
         if dict.is_null() {
             continue;
         }
-        let Some(layer) = cg_helpers::dict_get_i32(dict, key_layer) else {
+        let Some(layer) = ffi::dict_get_i32(dict, key_layer) else {
             continue;
         };
         if layer != K_CG_WINDOW_LAYER_NORMAL {
             continue;
         }
-        let Some(pid) = cg_helpers::dict_get_i32(dict, key_pid) else {
+        let Some(pid) = ffi::dict_get_i32(dict, key_pid) else {
             continue;
         };
         if pid == own_pid {
             continue;
         }
-        let Some(id) = cg_helpers::dict_get_i32(dict, key_number) else {
+        let Some(id) = ffi::dict_get_i32(dict, key_number) else {
             continue;
         };
         ids.push(id as u32);
@@ -151,7 +200,7 @@ pub(super) fn on_screen_window_ids() -> Vec<u32> {
 }
 
 /// Fast path: CG window list + regular-app filter + AX dedup.
-pub(super) fn get_on_screen_windows() -> Vec<WindowInfo> {
+pub fn get_on_screen_windows() -> Vec<WindowInfo> {
     let own_pid = std::process::id() as i32;
     let options =
         K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
