@@ -3,15 +3,15 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 0.5rem;
-    padding: 0.6rem 1.2rem;
+    gap: var(--space-2);
+    padding: var(--pad-btn);
     border-radius: var(--radius-md);
     font-size: 0.9rem;
     font-weight: 500;
     letter-spacing: 0.01em;
     cursor: pointer;
     transition: transform var(--transition), background var(--transition), border-color var(--transition), color var(--transition), box-shadow var(--transition), opacity var(--transition);
-    border: 1px solid transparent;
+    border: var(--border-w-1) solid transparent;
     font-family: inherit;
     box-shadow: inset 0 1px 0 var(--layer-paper-10), 0 1px 2px var(--layer-ink-20);
 }
@@ -78,7 +78,7 @@
 }
 
 .btn-sm {
-    padding: 0.4rem 0.8rem;
+    padding: var(--pad-btn-sm);
     font-size: 0.8rem;
     height: 32px;
 }
@@ -122,7 +122,7 @@
     bottom: 0;
     width: 100%;
     min-width: 0;
-    z-index: 0;
+    z-index: var(--z-base);
     background:
         linear-gradient(90deg, var(--progress-fill-start) 0%, var(--progress-fill-end) 100%);
     outline: var(--progress-fill-outline);
@@ -155,7 +155,7 @@
     position: relative;
     width: 2.5rem;
     height: 2.5rem;
-    border: 2px solid transparent;
+    border: var(--border-w-2) solid transparent;
     border-radius: 50%;
     background: transparent;
     color: var(--text-secondary);
@@ -223,8 +223,8 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 0.14rem 0.44rem;
-    border: 1px solid transparent;
+    padding: var(--pad-badge);
+    border: var(--border-w-1) solid transparent;
     border-radius: 2px;
     font-size: 0.69rem;
     font-weight: 700;
@@ -266,17 +266,17 @@
 
 .search-bar { margin-bottom: 2rem; }
 
-.store-search-bar { margin-bottom: 1rem; }
+.store-search-bar { margin-bottom: var(--space-4); }
 
 .search-bar input {
     width: 100%;
-    padding: 1rem;
+    padding: var(--space-4);
     font-size: 1rem;
-    border: 2px solid var(--border-subtle);
+    border: var(--border-w-2) solid var(--border-subtle);
     border-radius: var(--radius-lg);
     background: var(--bg-surface);
     color: var(--text-secondary);
-    transition: border-color 0.3s;
+    transition: border-color var(--dur-slow);
 }
 
 .search-bar input:focus {
@@ -287,7 +287,7 @@
 .plugin-grid-media .plugin-card,
 .plugin-grid .plugin-card {
     aspect-ratio: 16 / 9;
-    min-height: 160px;
+    min-height: var(--size-card-min-h);
 }
 
 .plugin-grid-media .plugin-card.no-ui,
@@ -318,7 +318,7 @@
     left: 0;
     right: 0;
     background: linear-gradient(to top, rgba(var(--ink-rgb), 0.9), transparent);
-    padding: 1rem;
+    padding: var(--space-4);
     color: var(--text-primary);
     font-weight: 500;
     font-size: 1rem;
@@ -328,25 +328,25 @@
     position: absolute;
     top: 0.5rem;
     right: 2.5rem;
-    padding: 0.25rem 0.5rem;
+    padding: var(--pad-pill);
     border-radius: var(--radius-sm);
     background: rgba(var(--warning-rgb), 0.15);
     color: var(--warning);
-    border: 1px solid rgba(var(--warning-rgb), 0.35);
+    border: var(--border-w-1) solid rgba(var(--warning-rgb), 0.35);
     font-size: 0.75rem;
     font-weight: 600;
-    z-index: 20;
+    z-index: var(--z-control);
 }
 
 .plugin-grid-store .plugin-card,
 .plugins-grid .plugin-card {
     background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
+    border: var(--border-w-1) solid var(--border-subtle);
     box-shadow: var(--elevation-1);
-    padding: 1.5rem;
+    padding: var(--space-6);
     display: grid;
     grid-template-rows: auto auto 1fr auto;
-    row-gap: 0.75rem;
+    row-gap: var(--space-3);
     aspect-ratio: auto;
     transition: border-color var(--transition), box-shadow var(--transition), transform var(--transition);
 }
@@ -375,12 +375,12 @@
     min-height: calc(1.6em * 3);
 }
 .plugin-grid-store .plugin-card .button-group,
-.plugins-grid .plugin-card .button-group { display: flex; gap: 0.5rem; min-height: 2.5rem; align-items: center; }
+.plugins-grid .plugin-card .button-group { display: flex; gap: var(--space-2); min-height: 2.5rem; align-items: center; }
 .plugin-grid-store .plugin-card .button-group .refresh-btn,
 .plugins-grid .plugin-card .button-group .refresh-btn { margin: 0 auto; }
 
 .installed-badge {
-    padding: 0.5rem 1rem;
+    padding: var(--space-2) var(--space-4);
     font-size: 0.9rem;
     color: var(--accent);
     background: rgba(var(--accent-rgb), 0.1);
@@ -389,7 +389,7 @@
 }
 
 .installing-badge {
-    padding: 0.5rem 1rem;
+    padding: var(--space-2) var(--space-4);
     font-size: 0.9rem;
     color: var(--text-muted);
     background: var(--layer-paper-05);
@@ -415,9 +415,9 @@
 
 .plugin-grid-media .plugin-card.ghost .refresh-btn,
 .plugin-grid .plugin-card.ghost .refresh-btn {
-    width: 2rem;
-    height: 2rem;
-    border-width: 2px;
+    width: var(--size-control-sm);
+    height: var(--size-control-sm);
+    border-width: var(--border-w-2);
 }
 
 .plugin-cog {
@@ -426,14 +426,14 @@
     right: 0.5rem;
     width: 2.1rem;
     height: 2.1rem;
-    border: 1px solid var(--layer-paper-12);
+    border: var(--border-w-1) solid var(--layer-paper-12);
     border-radius: 999px;
     background: var(--layer-ink-45);
     color: var(--text-secondary);
     cursor: pointer;
     opacity: 0.92;
     transition: color var(--transition), background var(--transition), border-color var(--transition);
-    z-index: 20;
+    z-index: var(--z-control);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -457,14 +457,14 @@
     top: 2.8rem;
     right: 0.5rem;
     background: var(--bg-surface);
-    border: 1px solid var(--border-default);
+    border: var(--border-w-1) solid var(--border-default);
     border-radius: var(--radius-md);
     overflow: hidden;
     opacity: 0;
     visibility: hidden;
     transform: translateY(-8px);
-    transition: opacity 0.15s, transform 0.15s, visibility 0.15s;
-    z-index: 30;
+    transition: opacity var(--dur-fast), transform var(--dur-fast), visibility var(--dur-fast);
+    z-index: var(--z-popover);
     box-shadow: var(--elevation-3);
 }
 
@@ -483,7 +483,7 @@
 .context-delete {
     display: block;
     width: 100%;
-    padding: 0.6rem 1rem;
+    padding: var(--pad-token-input);
     border: none;
     background: transparent;
     font-size: 0.9rem;
@@ -503,7 +503,7 @@
     position: absolute;
     top: 0.5rem;
     left: 0.5rem;
-    padding: 0.3rem 0.6rem;
+    padding: var(--pad-keycap);
     border: none;
     border-radius: var(--radius-sm);
     background: var(--success);
@@ -512,13 +512,13 @@
     font-weight: 600;
     cursor: pointer;
     transition: background var(--transition), transform var(--transition);
-    z-index: 20;
+    z-index: var(--z-control);
 }
 
 .plugin-update:hover:not(:disabled) { background: var(--success-hover); transform: scale(1.05); }
 .plugin-update:disabled { cursor: not-allowed; }
 .plugin-update.updating { pointer-events: none; }
-.plugin-update .update-spinner { width: 1.2rem; height: 1.2rem; border-width: 2px; min-width: 1.2rem; min-height: 1.2rem; }
+.plugin-update .update-spinner { width: 1.2rem; height: 1.2rem; border-width: var(--border-w-2); min-width: 1.2rem; min-height: 1.2rem; }
 
 .plugin-grid-media .plugin-card.has-update,
 .plugin-grid .plugin-card.has-update { border-color: var(--success); }
@@ -536,35 +536,35 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 100;
+    z-index: var(--z-modal);
 }
 
 .confirm-modal-content,
 .edit-modal-content {
     background: var(--bg-surface);
-    border: 1px solid var(--border-default);
+    border: var(--border-w-1) solid var(--border-default);
     border-radius: var(--radius-xl);
-    padding: 2rem;
+    padding: var(--space-7);
     box-shadow: var(--elevation-3);
 }
 
-.confirm-modal-content { max-width: 400px; text-align: center; }
-.edit-modal-content { width: 100%; max-width: 450px; }
+.confirm-modal-content { max-width: var(--size-modal-sm); text-align: center; }
+.edit-modal-content { width: 100%; max-width: var(--size-modal-md); }
 
 .confirm-modal-content h3,
-.edit-modal-content h3 { color: var(--text-primary); margin-bottom: 0.5rem; }
+.edit-modal-content h3 { color: var(--text-primary); margin-bottom: var(--space-2); }
 
-.edit-modal-content h3 { margin-bottom: 1.5rem; font-size: 1.3rem; }
+.edit-modal-content h3 { margin-bottom: var(--space-6); font-size: 1.3rem; }
 
-.confirm-modal-content p { color: var(--text-muted); margin-bottom: 1.5rem; }
+.confirm-modal-content p { color: var(--text-muted); margin-bottom: var(--space-6); }
 
 .confirm-modal-buttons,
 .modal-buttons {
     display: flex;
-    gap: 1rem;
+    gap: var(--space-4);
 }
 
-.modal-buttons { margin-top: 1.5rem; }
+.modal-buttons { margin-top: var(--space-6); }
 
 .confirm-modal-buttons button,
 .modal-buttons button {
@@ -589,21 +589,21 @@
 
 .rate-limit-banner {
     background: var(--warning-bg);
-    border: 1px solid var(--warning);
+    border: var(--border-w-1) solid var(--warning);
     border-radius: var(--radius-lg);
-    padding: 1rem;
-    margin-bottom: 1.5rem;
+    padding: var(--space-4);
+    margin-bottom: var(--space-6);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 1rem;
+    gap: var(--space-4);
 }
 
 .rate-limit-banner span { color: var(--warning); }
 
 .rate-limit-banner button,
 .token-input-container button {
-    padding: 0.5rem 1rem;
+    padding: var(--space-2) var(--space-4);
     border: none;
     border-radius: var(--radius-md);
     cursor: pointer;
@@ -621,14 +621,14 @@
 
 .token-input-container {
     display: flex;
-    gap: 0.5rem;
-    margin-bottom: 0.5rem;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
 }
 
 .token-input-container input {
     flex: 1;
-    padding: 0.6rem 1rem;
-    border: 1px solid var(--border-default);
+    padding: var(--pad-token-input);
+    border: var(--border-w-1) solid var(--border-default);
     border-radius: var(--radius-md);
     background: var(--bg-surface);
     color: var(--text-secondary);
@@ -653,8 +653,8 @@
 .hotkey-header {
     display: grid;
     grid-template-columns: var(--hotkey-cols);
-    gap: 1rem;
-    padding: 0.7rem 1rem;
+    gap: var(--space-4);
+    padding: var(--pad-header-row);
     font-weight: 600;
     color: var(--text-muted);
     font-size: 0.8rem;
@@ -665,12 +665,12 @@
 .hotkey-row {
     display: grid;
     grid-template-columns: var(--hotkey-cols);
-    gap: 1rem;
-    padding: 0.85rem 1rem;
+    gap: var(--space-4);
+    padding: var(--pad-list-row);
     background: transparent;
     cursor: pointer;
-    min-height: 60px;
-    border-left: 3px solid transparent;
+    min-height: var(--size-row-sm);
+    border-left: var(--border-w-3) solid transparent;
     box-sizing: border-box;
 }
 
@@ -683,7 +683,7 @@
     max-width: 100%;
     justify-content: center;
     align-items: center;
-    padding: 0.3rem 0.6rem;
+    padding: var(--pad-keycap);
     font-size: 0.9rem;
     white-space: nowrap;
     overflow: hidden;
@@ -726,15 +726,15 @@
 .hotkey-row .col-status { text-align: center; font-size: 0.8rem; }
 .hotkey-row:not(.disabled) .col-status { color: var(--success); }
 
-.form-group { margin-bottom: 1.25rem; }
-.form-group label { display: block; color: var(--text-muted); font-size: 0.9rem; margin-bottom: 0.5rem; }
+.form-group { margin-bottom: var(--space-5); }
+.form-group label { display: block; color: var(--text-muted); font-size: 0.9rem; margin-bottom: var(--space-2); }
 .form-group label .hint { color: var(--text-faint); font-size: 0.8rem; }
 
 .form-group input[type="text"],
 .form-group select {
     width: 100%;
-    padding: 0.75rem 1rem;
-    border: 1px solid var(--border-default);
+    padding: var(--space-3) var(--space-4);
+    border: var(--border-w-1) solid var(--border-default);
     border-radius: var(--radius-md);
     background: var(--bg-base);
     color: var(--text-secondary);
@@ -747,7 +747,7 @@
     border-color: var(--accent);
 }
 
-.key-input-row { display: flex; gap: 0.5rem; }
+.key-input-row { display: flex; gap: var(--space-2); }
 .key-input-row input { flex: 1; font-family: var(--font-mono); cursor: pointer; }
 .key-input-row input:focus { border-color: var(--accent); }
 .key-input-row input.recording { border-color: var(--danger); animation: pulse-border 1s ease-in-out infinite; }
@@ -755,7 +755,7 @@
 .checkbox-label {
     display: flex !important;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
     cursor: pointer;
 }
 
@@ -772,9 +772,9 @@
 
 kbd {
     display: inline-block;
-    padding: 0.2rem 0.4rem;
+    padding: var(--pad-pill-tight);
     background: rgba(var(--accent-rgb), 0.08);
-    border: 1px solid rgba(var(--accent-rgb), 0.25);
+    border: var(--border-w-1) solid rgba(var(--accent-rgb), 0.25);
     border-radius: 3px;
     font-family: var(--font-mono);
     font-size: 0.85em;
