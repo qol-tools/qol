@@ -127,6 +127,14 @@
 }
 
 .plugin-row:last-child { border-bottom: none; }
+.plugin-row:first-child {
+    border-top-left-radius: var(--radius-lg);
+    border-top-right-radius: var(--radius-lg);
+}
+.plugin-row:last-child {
+    border-bottom-left-radius: var(--radius-lg);
+    border-bottom-right-radius: var(--radius-lg);
+}
 .plugin-row.selected { background: var(--bg-selected); }
 
 .plugin-row.status-linked { border-left-color: var(--success); }
@@ -213,16 +221,27 @@
     box-shadow: 0 0 0 1px var(--layer-paper-16), 0 0 10px var(--accent-glow-faint);
 }
 
-.plugin-row:hover .plugin-action-zone.has-rebuild:not(.is-disabled) .plugin-action-rebuild-icon {
+.plugin-row .plugin-action-zone.has-rebuild:not(.is-disabled):hover .plugin-action-rebuild-icon {
+    opacity: 0.92;
+    transform: scale(1.04);
+}
+.plugin-row .plugin-action-zone.has-rebuild.is-hovered:not(.is-disabled) .plugin-action-rebuild-icon {
     opacity: 0.92;
     transform: scale(1.04);
 }
 
-.plugin-row:hover .plugin-action-zone.rebuild-idle:not(.is-disabled) .plugin-action-rebuild-icon {
+.plugin-row .plugin-action-zone.rebuild-idle:not(.is-disabled):hover .plugin-action-rebuild-icon {
+    opacity: 0.3;
+}
+.plugin-row .plugin-action-zone.rebuild-idle.is-hovered:not(.is-disabled) .plugin-action-rebuild-icon {
     opacity: 0.3;
 }
 
-.plugin-row:hover .plugin-action-zone:not(.is-disabled) {
+.plugin-row .plugin-action-zone:not(.is-disabled):hover {
+    background: var(--layer-paper-05);
+    box-shadow: inset 0 1px 0 var(--layer-paper-05), inset 0 -1px 0 var(--layer-ink-20);
+}
+.plugin-row .plugin-action-zone.is-hovered:not(.is-disabled) {
     background: var(--layer-paper-05);
     box-shadow: inset 0 1px 0 var(--layer-paper-05), inset 0 -1px 0 var(--layer-ink-20);
 }
@@ -281,9 +300,9 @@
     appearance: none;
     position: absolute;
     top: var(--offset-menu-trigger-top);
-    right: var(--offset-menu-trigger-right);
-    width: var(--size-control-xs);
-    height: var(--size-control-xs);
+    right: 0;
+    width: var(--size-control-sm);
+    height: var(--size-control-sm);
     border: none;
     background: transparent;
     color: var(--text-faint);

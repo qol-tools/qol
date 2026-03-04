@@ -23,18 +23,10 @@ export function DevView() {
         if (footer) footer.innerHTML = renderShortcutLegend(SHORTCUTS);
 
         devModule.render(el);
-        if (devModule.onFocus) devModule.onFocus();
-
-        const onFocus = () => { if (devModule.onFocus) devModule.onFocus(); };
-        const onBlur = () => { if (devModule.onBlur) devModule.onBlur(); };
-        window.addEventListener('focus', onFocus);
-        window.addEventListener('blur', onBlur);
 
         return () => {
             if (devModule.destroy) devModule.destroy();
             if (footer) footer.innerHTML = '';
-            window.removeEventListener('focus', onFocus);
-            window.removeEventListener('blur', onBlur);
         };
     }, []);
 

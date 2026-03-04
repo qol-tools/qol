@@ -87,6 +87,9 @@ let container = null;
 let unsubscribe = null;
 let unsubscribeReconnect = null;
 let reloadCooldownUntil = 0;
+let focusRefreshPending = true;
+let actionInteractionLocks = 0;
+let deferredUpdatePending = false;
 
 const discoveryController = createDiscoveryController({
     state,
@@ -116,6 +119,13 @@ mockController = createMockController({
 });
 
 export function render(containerEl) {
+    if (container) {
+        container.removeEventListener('click', handleClick);
+    }
+    if (unsubscribe) {
+        unsubscribe();
+        unsubscribe = null;
+    }
     container = containerEl;
     container.addEventListener('click', handleClick);
     unsubscribe = subscribe(handleEvent);
@@ -189,6 +199,23 @@ function togglePluginMenu(pluginId) {
         return;
     }
     state.openPluginMenuId = pluginId;
+}
+
+function syncPluginMenuDom() {
+    if (!container) return;
+    const rows = container.querySelectorAll('.plugin-row[data-plugin-id]');
+    for (const row of rows) {
+        const pluginId = row.dataset.pluginId;
+        const isOpen = pluginId === state.openPluginMenuId;
+        const menu = row.querySelector('.plugin-context-menu');
+        if (menu) {
+            menu.classList.toggle('open', isOpen);
+        }
+        const trigger = row.querySelector('.plugin-menu-trigger');
+        if (trigger) {
+            trigger.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        }
+    }
 }
 
 function visiblePluginIdSet() {
@@ -319,7 +346,33 @@ function getActivePluginBuildState(plugin) {
     return buildController.getActivePluginBuildState(plugin, state.mockTesting);
 }
 
+function lockActionInteraction() {
+    actionInteractionLocks += 1;
+}
+
+function unlockActionInteraction() {
+    actionInteractionLocks = Math.max(0, actionInteractionLocks - 1);
+    if (actionInteractionLocks !== 0) return;
+    if (!deferredUpdatePending) return;
+    deferredUpdatePending = false;
+    updateView();
+}
+
+function bindActionInteractionLocks() {
+    if (!container) return;
+    const columns = container.querySelectorAll('.plugin-action-column');
+    for (const column of columns) {
+        column.addEventListener('pointerenter', lockActionInteraction);
+        column.addEventListener('pointerleave', unlockActionInteraction);
+    }
+}
+
 function updateView() {
+    if (actionInteractionLocks > 0) {
+        deferredUpdatePending = true;
+        return;
+    }
+
     const mergedList = mergePlugins(state.discovered, state.plugins, state.logControls);
     state.mergedCount = mergedList.length;
     state.mergedList = mergedList;
@@ -335,6 +388,8 @@ function updateView() {
 
     const prevScrollTop = container.querySelector('.view-body')?.scrollTop ?? 0;
     const spinnerTimes = saveSpinnerTimes(container);
+    const hoveredActionZone = container.querySelector('.plugin-action-zone:hover');
+    const hoveredActionId = hoveredActionZone?.dataset.id || null;
 
     container.innerHTML = renderDevView({
         state,
@@ -347,6 +402,15 @@ function updateView() {
     const viewBody = container.querySelector('.view-body');
     if (viewBody) viewBody.scrollTop = prevScrollTop;
     restoreSpinnerTimes(container, spinnerTimes);
+    if (hoveredActionId) {
+        const actionZones = container.querySelectorAll('.plugin-action-zone[data-id]');
+        for (const zone of actionZones) {
+            if (zone.dataset.id !== hoveredActionId) continue;
+            if (zone.classList.contains('is-disabled')) continue;
+            zone.classList.add('is-hovered');
+            break;
+        }
+    }
 
     const input = container.querySelector('#link-path');
     if (input) {
@@ -361,17 +425,20 @@ function updateView() {
 
     buildController.cacheRows();
     buildController.syncAll();
+    bindActionInteractionLocks();
 }
 
 function handleClick(e) {
-    const actionTarget = e.target.closest('[data-action]');
+    const target = e.target instanceof Element ? e.target : e.target?.parentElement;
+    if (!target) return;
+    const actionTarget = target.closest('[data-action]');
     const action = actionTarget?.dataset.action;
     const actionId = actionTarget?.dataset.id;
 
     if (!action) {
         if (!state.openPluginMenuId) return;
         closePluginMenu();
-        updateView();
+        syncPluginMenuDom();
         return;
     }
 
@@ -382,13 +449,14 @@ function handleClick(e) {
         e.preventDefault();
         e.stopPropagation();
         togglePluginMenu(actionId);
-        updateView();
+        syncPluginMenuDom();
         return;
     }
     if (action === 'toggle-plugin-logs' && actionId) {
         e.preventDefault();
         e.stopPropagation();
         closePluginMenu();
+        syncPluginMenuDom();
         void togglePluginLogs(actionId);
         return;
     }
@@ -396,6 +464,7 @@ function handleClick(e) {
         e.preventDefault();
         e.stopPropagation();
         closePluginMenu();
+        syncPluginMenuDom();
         void editPluginLogFilters(actionId);
         return;
     }
@@ -403,12 +472,13 @@ function handleClick(e) {
         e.preventDefault();
         e.stopPropagation();
         closePluginMenu();
+        syncPluginMenuDom();
         togglePluginCpuMonitoring(actionId);
         return;
     }
     if (action === 'toggle-link' && actionId) {
         if (state.linkingId) return;
-        const row = e.target.closest('.plugin-row');
+        const row = target.closest('.plugin-row');
         if (row) {
             state.selectedIndex = parseInt(row.dataset.index);
         }
@@ -712,7 +782,7 @@ export function handleKey(e) {
         if (!state.openPluginMenuId) return;
         e.preventDefault();
         closePluginMenu();
-        updateView();
+        syncPluginMenuDom();
         return;
     }
 
@@ -756,12 +826,14 @@ export function handleKey(e) {
         const item = state.mergedList[state.selectedIndex];
         if (!item) return;
         togglePluginMenu(item.id);
-        updateView();
+        syncPluginMenuDom();
     }
 }
 
 export function onFocus() {
     if (state.linkingId) return;
+    if (!focusRefreshPending) return;
+    focusRefreshPending = false;
     void Promise.all([
         discoveryController.loadPlugins(true),
         discoveryController.fetchDiscoveryState(true),
@@ -774,6 +846,7 @@ export function onFocus() {
 
 export function onBlur() {
     closePluginMenu();
+    focusRefreshPending = true;
 }
 
 export function destroy() {
@@ -789,4 +862,6 @@ export function destroy() {
         container.removeEventListener('click', handleClick);
         container = null;
     }
+    actionInteractionLocks = 0;
+    deferredUpdatePending = false;
 }
