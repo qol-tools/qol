@@ -624,11 +624,14 @@
 .token-help a { color: var(--accent); text-decoration: none; }
 .token-help a:hover { text-decoration: underline; }
 
-.hotkeys-list { flex: 1; }
+.hotkeys-list {
+    flex: 1;
+    --hotkey-cols: repeat(3, minmax(0, 1fr));
+}
 
 .hotkey-header {
     display: grid;
-    grid-template-columns: auto 1fr 1fr;
+    grid-template-columns: var(--hotkey-cols);
     gap: 1rem;
     padding: 0.75rem 1rem;
     background: var(--bg-elevated);
@@ -644,7 +647,7 @@
 
 .hotkey-row {
     display: grid;
-    grid-template-columns: auto 1fr 1fr;
+    grid-template-columns: var(--hotkey-cols);
     gap: 1rem;
     padding: 1rem;
     background: var(--bg-surface);
@@ -670,6 +673,28 @@
 .hotkey-row .col-key kbd {
     padding: 0.3rem 0.6rem;
     font-size: 0.9rem;
+}
+
+.hotkey-header .col-key,
+.hotkey-header .col-plugin,
+.hotkey-header .col-action,
+.hotkey-row .col-key,
+.hotkey-row .col-plugin,
+.hotkey-row .col-action {
+    min-width: 0;
+}
+
+.hotkey-row .col-key {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.hotkey-row .col-plugin,
+.hotkey-row .col-action {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .hotkey-row .col-status { text-align: center; font-size: 0.8rem; }
