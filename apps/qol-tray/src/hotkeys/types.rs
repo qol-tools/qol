@@ -1,7 +1,7 @@
 use global_hotkey::hotkey::Code;
-use std::sync::LazyLock as Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::LazyLock as Lazy;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HotkeyConfig {

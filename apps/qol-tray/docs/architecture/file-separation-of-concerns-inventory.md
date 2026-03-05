@@ -46,7 +46,9 @@ Legend:
 | `src/features/plugin_store/github/mod.rs` | 102 | GitHub client facade and cache policy | External API boundary | clean | keep | Manifest and release concerns extracted |
 | `src/features/plugin_store/github/releases.rs` | 84 | Latest-release fetch and platform-asset verification | Release boundary | clean | keep |  |
 | `src/features/plugin_store/github/token.rs` | 141 | GitHub token storage, validation, and request helpers | Auth boundary | clean | keep |  |
-| `src/features/plugin_store/installer.rs` | 245 | Plugin install/update/uninstall orchestration and operation locking | Installation boundary | review | keep | Transaction, source sync, and dependency handling were extracted |
+| `src/features/plugin_store/installer/mod.rs` | 56 | Plugin installer facade and public API | Installation boundary | clean | keep | Operation locking and transaction flow extracted |
+| `src/features/plugin_store/installer/operation_lock.rs` | 75 | Plugin install/update operation lock acquisition and stale-lock recovery | Locking boundary | clean | keep |  |
+| `src/features/plugin_store/installer/operations.rs` | 132 | Plugin install/update/uninstall transaction flow | Installation boundary | clean | keep | Locking concerns extracted |
 | `src/features/plugin_store/installer/command.rs` | 76 | Git and cargo command execution helpers | Process/tooling boundary | clean | keep |  |
 | `src/features/plugin_store/installer/dependency.rs` | 113 | Dependency install orchestration and plan shaping | Installation domain boundary | clean | keep | Manifest, release, and source-build concerns extracted |
 | `src/features/plugin_store/installer/dependency/manifest.rs` | 47 | Plugin manifest load and execution-contract preflight | Contract boundary | clean | keep |  |
@@ -93,7 +95,11 @@ Legend:
 | `src/features/task_runner/interpolation.rs` | 316 | Template interpolation and shell escaping | Pure utility boundary | clean | keep | Includes property-based and example-based tests |
 | `src/features/task_runner/mod.rs` | 13 | Task-runner feature facade | Feature boundary | clean | keep |  |
 | `src/features/task_runner/platform/mod.rs` | 20 | Task runner platform dispatch and shell adapter policy | Platform facade | clean | keep | Unix and Windows shell adapters are inlined; unsupported targets fail at compile time |
-| `src/hotkeys/mod.rs` | 483 | Hotkey config + registration + dispatch runtime | Feature boundary | review | split | High complexity by size; validate single responsibility |
+| `src/hotkeys/listener.rs` | 127 | Hotkey listener loop, reload handling, and action dispatch | Runtime boundary | clean | keep | Listener runtime extracted from hotkey manager module |
+| `src/hotkeys/mod.rs` | 131 | Hotkey manager facade and hotkey registration | Feature boundary | review | keep | Parser, storage, listener, and tests extracted; registration flow remains the dense seam |
+| `src/hotkeys/parser.rs` | 30 | Hotkey string parsing and modifier/key resolution | Parsing boundary | clean | keep |  |
+| `src/hotkeys/store.rs` | 28 | Hotkey config file IO | Storage boundary | clean | keep |  |
+| `src/hotkeys/tests.rs` | 189 | Hotkey parser and action-id validation tests | Test boundary | clean | keep |  |
 | `src/hotkeys/types.rs` | 104 | Hotkey model/types and key maps | Domain model boundary | clean | keep |  |
 | `src/installer/files.rs` | 60 | Installer file operations | Filesystem boundary | clean | keep |  |
 | `src/installer/mod.rs` | 134 | Application installer facade | Feature boundary | clean | keep |  |
@@ -122,7 +128,9 @@ Legend:
 | `src/plugins/action_transport/platform/mod.rs` | 20 | Action transport platform dispatch and fallback policy | Platform facade | clean | keep | Windows fallback is inlined; unsupported targets fail at compile time |
 | `src/plugins/action_transport/platform/unix_common.rs` | 65 | Unix action transport implementation | Platform adapter | clean | keep |  |
 | `src/plugins/action_transport/protocol.rs` | 62 | Action transport protocol framing | Protocol boundary | clean | keep |  |
-| `src/plugins/config.rs` | 284 | Plugin configuration persistence | Storage boundary | review | keep | Medium-large; verify boundary remains focused |
+| `src/plugins/config/mod.rs` | 71 | Plugin config facade and plugin-local restore/set flow | Storage boundary | clean | keep | Storage and tests extracted |
+| `src/plugins/config/store.rs` | 44 | Plugin config file IO helpers | Storage boundary | clean | keep |  |
+| `src/plugins/config/tests.rs` | 138 | Plugin config tests | Test boundary | clean | keep |  |
 | `src/plugins/daemon_lifecycle/log_relay.rs` | 85 | Plugin daemon stdout/stderr relay and per-line suppression | Logging boundary | clean | keep |  |
 | `src/plugins/daemon_lifecycle/mod.rs` | 38 | Plugin daemon lifecycle facade and daemon registration | Lifecycle boundary | clean | keep | Spawn, relay, and readiness concerns extracted |
 | `src/plugins/daemon_lifecycle/readiness.rs` | 123 | Plugin daemon readiness, socket wait, and shutdown completion | Lifecycle boundary | clean | keep |  |
@@ -139,7 +147,11 @@ Legend:
 | `src/plugins/loader/scan.rs` | 129 | Plugin directory scan, load diagnostics, and platform skip handling | Filesystem boundary | clean | keep |  |
 | `src/plugins/loader/tests.rs` | 264 | Plugin loader tests | Test boundary | clean | keep |  |
 | `src/plugins/log_control.rs` | 153 | Per-plugin log muting/filtering policy persistence | Config boundary | clean | keep |  |
-| `src/plugins/manager.rs` | 312 | Plugin manager orchestration | Service boundary | review | keep | Medium-large; verify boundary remains focused |
+| `src/plugins/manager/autostart.rs` | 128 | Plugin daemon autostart policy and startup worker fan-out | Lifecycle boundary | clean | keep | Dev-linked autostart policy and tests extracted from manager facade |
+| `src/plugins/manager/dev_registry.rs` | 125 | Dev-link registry loading and legacy symlink migration | Dev registry boundary | clean | keep | Dev-link migration and backup restoration extracted from manager facade |
+| `src/plugins/manager/loading.rs` | 78 | Plugin manager load pipeline and resolved-source registration | Service boundary | clean | keep | Load orchestration extracted from manager facade |
+| `src/plugins/manager/mod.rs` | 50 | Plugin manager facade and public API | Service boundary | clean | keep | Load and runtime concerns extracted |
+| `src/plugins/manager/runtime.rs` | 67 | Plugin manager reload, shutdown, and daemon restart operations | Lifecycle boundary | clean | keep | Runtime control extracted from manager facade |
 | `src/plugins/manifest/mod.rs` | 37 | Manifest facade and shared traversal/platform helpers | Contract boundary | clean | keep |  |
 | `src/plugins/manifest/schema.rs` | 105 | Manifest schema and serde model types | Contract schema boundary | clean | keep |  |
 | `src/plugins/manifest/schema_tests.rs` | 318 | Manifest schema parsing and defaulting tests | Test boundary | clean | keep |  |
@@ -243,6 +255,6 @@ Legend:
 These are only signals from file-level concerns and size, not final moves:
 
 - Coalesce candidates (small facade-only modules): `src/*/mod.rs` files that only re-export or route with minimal logic.
-- Split-first hotspots: `src/doctor/mod.rs`, `src/plugins/manager.rs`, `src/plugins/config.rs`, `src/plugins/manifest/validation.rs`.
+- Split-first hotspots: `src/doctor/mod.rs`, `src/hotkeys/mod.rs`, `src/dev/build/cargo_build.rs`, `src/plugins/manifest/validation.rs`.
 - UI unification hotspots: `ui/views/dev/index.js` + `ui/views/dev/template.js` (controller + string-template rendering) should align with component/reducer style used by other pages.
 - Platform boundary check: keep OS API usage confined to `platform/*` and `os/*` adapter files.
