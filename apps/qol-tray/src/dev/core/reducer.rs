@@ -1,6 +1,4 @@
-use super::events::CoreEvent;
-use super::state::{CoreBuildProgress, CoreState};
-use super::types::{BuildStatus, CoreInput};
+use super::model::{BuildStatus, CoreBuildProgress, CoreEvent, CoreInput, CoreState};
 
 fn normalized_percent(status: BuildStatus, percent: u8) -> u8 {
     match status {
@@ -56,7 +54,6 @@ pub fn reduce(mut state: CoreState, input: CoreInput) -> (CoreState, Vec<CoreEve
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dev::core::types::{BuildStatus, CoreInput};
     use proptest::prelude::*;
 
     fn status_from_code(code: u8) -> BuildStatus {

@@ -1,5 +1,4 @@
 use super::super::release_assets::{resolve_asset_pattern, PlatformTarget};
-use super::cache::CachedPlugin;
 use crate::version::normalize_semver_tag;
 use anyhow::Result;
 use serde::Deserialize;
@@ -143,6 +142,7 @@ impl PluginMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::features::plugin_store::github::cache::CachedPlugin;
     use crate::plugins::manifest::{MenuConfig, PluginInfo, PluginManifest};
 
     fn make_repo(name: &str) -> GitHubRepo {

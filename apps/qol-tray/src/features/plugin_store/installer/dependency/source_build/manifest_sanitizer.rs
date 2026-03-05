@@ -47,7 +47,7 @@ fn strip_target_dev_dependencies(
         return;
     };
 
-    for target_entry in target.values_mut() {
+    for (_, target_entry) in target.iter_mut() {
         let Some(target_table) = target_entry.as_table_mut() else {
             continue;
         };

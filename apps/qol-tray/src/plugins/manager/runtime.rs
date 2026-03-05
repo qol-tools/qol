@@ -35,7 +35,7 @@ pub(super) fn sync_ignore_pids(manager: &PluginManager) {
         };
         log::info!("Ignoring daemon pid {} for plugin {}", pid, plugin.id);
         #[cfg(unix)]
-        crate::os::display::add_ignore_pid(pid);
+        crate::desktop_state::add_ignore_pid(pid);
     }
 }
 

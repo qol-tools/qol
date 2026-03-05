@@ -23,15 +23,18 @@ pub(super) fn spawn_daemon(plugin: &Plugin, daemon_config: &DaemonConfig) -> Res
 }
 
 fn daemon_path(plugin: &Plugin, daemon_config: &DaemonConfig) -> Result<PathBuf> {
-    super::super::resolve_plugin_command_path(&plugin.path, &daemon_config.command).ok_or_else(
-        || {
-            anyhow::anyhow!(
-                "Daemon executable not found for command {:?} in {:?}",
-                daemon_config.command,
-                plugin.path
-            )
-        },
+    super::super::resolve_plugin_command_path_for_source(
+        &plugin.path,
+        &daemon_config.command,
+        Some(&plugin.source),
     )
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "Daemon executable not found for command {:?} in {:?}",
+            daemon_config.command,
+            plugin.path
+        )
+    })
 }
 
 fn daemon_command(plugin: &Plugin, daemon_config: &DaemonConfig, daemon_path: &Path) -> Command {

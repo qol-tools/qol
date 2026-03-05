@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::os::display::Platform;
 use super::super::channel::Channel;
+use crate::desktop_state::Platform;
 
 const MIN_INTERVAL: Duration = Duration::from_millis(16);
 

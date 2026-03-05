@@ -9,32 +9,42 @@ Legend:
 
 | File | Lines | Concern | Boundary | SoC status | Action | Notes |
 |---|---:|---|---|---|---|---|
-| `src/bin/doctor.rs` | 4 | Doctor CLI entrypoint | CLI boundary | clean | keep |  |
-| `src/bin/install.rs` | 3 | Installer CLI entrypoint | CLI boundary | clean | keep |  |
+| `src/doctor/main.rs` | 4 | Doctor binary entrypoint colocated with doctor domain | CLI boundary | clean | keep | Replaces generic src/bin bucket |
+| `src/installer/main.rs` | 3 | Installer binary entrypoint colocated with installer domain | CLI boundary | clean | keep | Replaces generic src/bin bucket |
 | `src/daemon/events.rs` | 133 | Event bus types and publish/subscribe behavior | Daemon internal boundary | clean | keep |  |
 | `src/daemon/init.rs` | 20 | Daemon construction helpers | Daemon internal boundary | clean | keep |  |
 | `src/daemon/mod.rs` | 185 | Daemon facade and lifecycle orchestration | Daemon boundary | clean | keep |  |
 | `src/dev/adapters/mod.rs` | 1 | Dev adapter exports | Dev adapter boundary | clean | keep |  |
 | `src/dev/adapters/traits.rs` | 67 | Dev adapter traits/contracts | Abstraction seam | clean | keep |  |
-| `src/dev/build.rs` | 298 | Dev build module facade | Dev build boundary | review | keep | Medium-large; verify boundary remains focused |
-| `src/dev/build/cargo_build.rs` | 369 | Cargo build process invocation and parsing | Process/tooling boundary | review | keep | Medium-large; verify boundary remains focused |
-| `src/dev/build/fingerprint.rs` | 112 | Source fingerprint calculation | Build domain boundary | clean | keep |  |
+| `src/dev/build.rs` | 15 | Dev build composition facade | Dev build boundary | clean | keep | Planning and execution moved into focused submodules |
+| `src/dev/build/cargo_build.rs` | 28 | Cargo build facade | Process/tooling boundary | clean | keep | Delegates self-build and plugin-build flows |
+| `src/dev/build/cargo_build/codesign.rs` | 74 | macOS debug-binary codesign adapter | Platform tooling boundary | clean | keep |  |
+| `src/dev/build/cargo_build/plugin_build.rs` | 320 | Cargo plugin-build process and progress streaming | Process/tooling boundary | review | keep | Still large, but isolated from self-build and codesign concerns |
+| `src/dev/build/cargo_build/self_build.rs` | 240 | qol-tray self-build process and artifact progress | Process/tooling boundary | review | keep | Still large, but isolated from plugin-build concerns |
+| `src/dev/build/fingerprint.rs` | 12 | Fingerprint facade | Build domain boundary | clean | keep | Delegates discovery and hashing |
+| `src/dev/build/fingerprint/hash.rs` | 58 | Fingerprint hashing and file streaming | Build domain boundary | clean | keep |  |
+| `src/dev/build/fingerprint/inputs.rs` | 72 | Fingerprint input discovery policy | Build domain boundary | clean | keep |  |
 | `src/dev/build/fingerprint_store.rs` | 61 | Fingerprint persistence | Storage boundary | clean | keep |  |
-| `src/dev/build/service.rs` | 272 | Build service orchestration | Dev service boundary | clean | keep |  |
+| `src/dev/build/planning.rs` | 337 | Plugin build planning and rebuild reasoning | Dev build boundary | review | keep | Still dense, but extracted from facade |
+| `src/dev/build/service.rs` | 108 | Build service facade and persistence wiring | Dev service boundary | clean | keep | Execution pipeline moved into runner |
+| `src/dev/build/service/runner.rs` | 234 | Build-run execution pipeline and core event emission | Dev service boundary | review | keep | Still dense, but isolated from service wiring |
 | `src/dev/build/types.rs` | 48 | Build domain types | Domain model boundary | clean | keep |  |
 | `src/dev/config.rs` | 73 | Dev configuration loading and defaults | Config boundary | clean | keep |  |
-| `src/dev/core/events.rs` | 15 | Dev core event model | Pure core boundary | clean | keep |  |
-| `src/dev/core/mod.rs` | 12 | Dev core exports | Pure core boundary | clean | keep |  |
+| `src/dev/core/mod.rs` | 8 | Dev core composition facade | Pure core boundary | clean | keep | Re-exports consolidated model and reducer |
+| `src/dev/core/model.rs` | 77 | Dev core model and reducer contract types | Pure core boundary | clean | keep | Coalesces previous events/state/types buckets |
 | `src/dev/core/progress_estimator.rs` | 147 | Progress estimation logic | Pure core boundary | clean | keep |  |
 | `src/dev/core/progress_parser.rs` | 118 | Console progress parsing logic | Pure core boundary | clean | keep |  |
 | `src/dev/core/reducer.rs` | 137 | State reducer for dev runtime | Pure core boundary | clean | keep |  |
-| `src/dev/core/state.rs` | 16 | Dev core state model | Pure core boundary | clean | keep |  |
-| `src/dev/core/types.rs` | 48 | Shared dev core types | Pure core boundary | clean | keep |  |
 | `src/dev/discovery.rs` | 350 | Discovery of local/dev plugins | Discovery boundary | review | keep | Medium-large; verify boundary remains focused |
 | `src/dev/linking.rs` | 232 | Dev link management (dev-links.json) | Filesystem/config boundary | clean | keep |  |
 | `src/dev/mod.rs` | 24 | Dev module composition | Dev feature boundary | clean | keep |  |
 | `src/dev/state.rs` | 98 | Shared dev runtime state | State boundary | clean | keep |  |
-| `src/doctor/mod.rs` | 493 | System health checks and fixes | Doctor feature boundary | review | split | High complexity by size; validate single responsibility |
+| `src/doctor/checks.rs` | 190 | Doctor checks for install identity, autostart target, and plugins dir | Diagnosis boundary | review | keep | Focused after split, but still the densest doctor owner |
+| `src/doctor/cli.rs` | 108 | Doctor CLI command parsing and report rendering | CLI boundary | clean | keep | CLI extracted from doctor facade |
+| `src/doctor/diagnosis.rs` | 78 | Doctor diagnosis model, fix actions, and fix application | Diagnosis boundary | clean | keep |  |
+| `src/doctor/install_id.rs` | 63 | Install-id path resolution and file helpers | Install identity boundary | clean | keep |  |
+| `src/doctor/mod.rs` | 110 | Doctor facade and startup fix orchestration | Doctor feature boundary | clean | keep | Checks, CLI, diagnosis, and report concerns extracted |
+| `src/doctor/report.rs` | 63 | Doctor report model types | Report boundary | clean | keep |  |
 | `src/doctor/platform/linux.rs` | 33 | Linux-specific doctor checks | Platform adapter | clean | keep |  |
 | `src/doctor/platform/macos.rs` | 32 | macOS-specific doctor checks | Platform adapter | clean | keep |  |
 | `src/doctor/platform/mod.rs` | 23 | Doctor platform dispatch facade | Platform facade | clean | keep |  |
@@ -114,10 +124,11 @@ Legend:
 | `src/menu/builder.rs` | 170 | Tray menu model construction | UI/menu boundary | clean | keep |  |
 | `src/menu/mod.rs` | 2 | Menu module exports | UI/menu boundary | clean | keep |  |
 | `src/menu/router.rs` | 51 | Menu event routing and dispatch | UI/menu boundary | clean | keep |  |
-| `src/os/display/linux.rs` | 154 | Linux display/focus implementation | Platform adapter | clean | keep |  |
-| `src/os/display/macos.rs` | 208 | macOS display/focus implementation | Platform adapter | clean | keep |  |
-| `src/os/display/mod.rs` | 53 | Display/focus platform facade | Platform facade | clean | keep |  |
-| `src/os/mod.rs` | 1 | OS abstraction module export | Platform facade | clean | keep |  |
+| `src/desktop_state/ignore_pids.rs` | 27 | Ignore-pid registry for desktop focus filtering | Runtime state boundary | clean | keep | Extracted from desktop-state facade |
+| `src/desktop_state/mod.rs` | 7 | Desktop-state facade exports | Runtime facade | clean | keep |  |
+| `src/desktop_state/platform/linux.rs` | 154 | Linux desktop-state implementation | Platform adapter | clean | keep |  |
+| `src/desktop_state/platform/macos.rs` | 208 | macOS desktop-state implementation | Platform adapter | clean | keep |  |
+| `src/desktop_state/platform/mod.rs` | 26 | Desktop-state platform facade | Platform facade | clean | keep | Ignore-pid registry extracted |
 | `src/paths.rs` | 229 | Config/data path resolution and path safety primitives | Filesystem boundary | clean | keep |  |
 | `src/plugins/action_executor.rs` | 121 | Action executor facade and public API | Execution boundary | clean | keep | Resolution, execution, and tracking concerns extracted |
 | `src/plugins/action_executor/execution.rs` | 135 | Runtime and daemon action execution flow | Execution boundary | clean | keep |  |
@@ -255,6 +266,6 @@ Legend:
 These are only signals from file-level concerns and size, not final moves:
 
 - Coalesce candidates (small facade-only modules): `src/*/mod.rs` files that only re-export or route with minimal logic.
-- Split-first hotspots: `src/doctor/mod.rs`, `src/hotkeys/mod.rs`, `src/dev/build/cargo_build.rs`, `src/plugins/manifest/validation.rs`.
+- Split-first hotspots: `src/doctor/checks.rs`, `src/hotkeys/mod.rs`, `src/dev/build/cargo_build.rs`, `src/plugins/manifest/validation.rs`.
 - UI unification hotspots: `ui/views/dev/index.js` + `ui/views/dev/template.js` (controller + string-template rendering) should align with component/reducer style used by other pages.
 - Platform boundary check: keep OS API usage confined to `platform/*` and `os/*` adapter files.

@@ -8,14 +8,14 @@ use std::time::{Duration, Instant};
 use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind, RuntimeRequest, SubscribeAck};
 use qol_runtime::{CursorPos, MonitorBounds, PlatformState, WindowBounds};
 
-use crate::os::display;
-use crate::paths::STATE_SOCKET_PATH;
 use super::channel::Channel;
 use super::channels::cursor::CursorChannel;
 use super::channels::focus::FocusChannel;
 use super::channels::monitors::MonitorsChannel;
 use super::poller::{AdaptivePoller, BasicStrategy};
 use super::state::{self, InputState};
+use crate::desktop_state;
+use crate::paths::STATE_SOCKET_PATH;
 
 fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
@@ -45,7 +45,7 @@ struct SharedState {
 
 impl RuntimeServer {
     pub fn start() -> Self {
-        let platform: Arc<dyn display::Platform> = Arc::new(display::create());
+        let platform: Arc<dyn desktop_state::Platform> = Arc::new(desktop_state::create());
 
         let monitors_channel = MonitorsChannel::new(platform.clone());
         let initial_monitors = monitors_channel.monitors().to_vec();
@@ -132,8 +132,8 @@ fn poll_loop(
 
         *lock_or_recover(&shared.cursor_pos) = cursor_pos;
 
-        let cursor_monitor = cursor_pos
-            .and_then(|(x, y)| state::monitor_for_point(&mon_list, x, y));
+        let cursor_monitor =
+            cursor_pos.and_then(|(x, y)| state::monitor_for_point(&mon_list, x, y));
 
         focus.poll();
         let focus_bounds = focus.bounds();
@@ -142,8 +142,7 @@ fn poll_loop(
             *lock_or_recover(&shared.focused_window) = focus_bounds;
         }
 
-        let focus_monitor = focus_bounds
-            .and_then(|wb| state::monitor_for_bounds(&mon_list, &wb));
+        let focus_monitor = focus_bounds.and_then(|wb| state::monitor_for_bounds(&mon_list, &wb));
 
         {
             let mut guard = lock_or_recover(&shared.input);
@@ -177,7 +176,15 @@ fn poll_loop(
             let focus_after = guard.focus.as_ref().map(|f| (f.monitor, f.at));
 
             if cursor_before != cursor_after || focus_before != focus_after {
-                let active = state::pick_active_monitor(&guard, MonitorBounds { x: 0.0, y: 0.0, width: 0.0, height: 0.0 });
+                let active = state::pick_active_monitor(
+                    &guard,
+                    MonitorBounds {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 0.0,
+                        height: 0.0,
+                    },
+                );
                 log::debug!(
                     "[runtime/poll] STATE CHANGE committed={} focus_changed={} focus_bounds={:?} \
                      cursor=({:?}) focus=({:?}) → active=({}, {})",
@@ -186,7 +193,8 @@ fn poll_loop(
                     focus_bounds.map(|b| (b.x, b.y, b.width, b.height)),
                     guard.cursor.as_ref().map(|c| (c.monitor.x, c.monitor.y)),
                     guard.focus.as_ref().map(|f| (f.monitor.x, f.monitor.y)),
-                    active.x, active.y,
+                    active.x,
+                    active.y,
                 );
             }
         }
@@ -221,7 +229,10 @@ fn emit_events(
 
     let input = lock_or_recover(&shared.input).clone();
     let fallback = mon_list.first().copied().unwrap_or(MonitorBounds {
-        x: 0.0, y: 0.0, width: 1920.0, height: 1080.0,
+        x: 0.0,
+        y: 0.0,
+        width: 1920.0,
+        height: 1080.0,
     });
     let active = state::pick_active_monitor(&input, fallback);
     let current_active_idx = mon_list.iter().position(|m| *m == active);
@@ -281,7 +292,11 @@ fn socket_loop(shared: Arc<SharedState>) {
     let listener = match UnixListener::bind(STATE_SOCKET_PATH) {
         Ok(l) => l,
         Err(e) => {
-            log::error!("Failed to bind runtime socket at {}: {}", STATE_SOCKET_PATH, e);
+            log::error!(
+                "Failed to bind runtime socket at {}: {}",
+                STATE_SOCKET_PATH,
+                e
+            );
             return;
         }
     };
@@ -320,7 +335,9 @@ fn handle_connection(stream: UnixStream, shared: &SharedState) {
         match request {
             RuntimeRequest::GetState => {
                 let state = build_state(shared);
-                let Ok(json) = serde_json::to_string(&state) else { return };
+                let Ok(json) = serde_json::to_string(&state) else {
+                    return;
+                };
                 let _ = writer.write_all(json.as_bytes());
                 let _ = writer.write_all(b"\n");
             }
@@ -330,16 +347,29 @@ fn handle_connection(stream: UnixStream, shared: &SharedState) {
                     monitors.get(monitor_idx).copied()
                 };
                 if let Some(monitor) = monitor {
-                    log::debug!("[runtime/socket] SET_FOCUS idx={} mon=({}, {})", monitor_idx, monitor.x, monitor.y);
+                    log::debug!(
+                        "[runtime/socket] SET_FOCUS idx={} mon=({}, {})",
+                        monitor_idx,
+                        monitor.x,
+                        monitor.y
+                    );
                     lock_or_recover(&shared.input).update_focus(monitor, Instant::now());
                 }
             }
             RuntimeRequest::Subscribe { events } => {
                 let ack = SubscribeAck::Subscribed;
-                let Ok(json) = serde_json::to_string(&ack) else { return };
-                if writer.write_all(json.as_bytes()).is_err() { return; }
-                if writer.write_all(b"\n").is_err() { return; }
-                if writer.flush().is_err() { return; }
+                let Ok(json) = serde_json::to_string(&ack) else {
+                    return;
+                };
+                if writer.write_all(json.as_bytes()).is_err() {
+                    return;
+                }
+                if writer.write_all(b"\n").is_err() {
+                    return;
+                }
+                if writer.flush().is_err() {
+                    return;
+                }
 
                 let _ = writer.set_write_timeout(Some(Duration::from_secs(5)));
 
@@ -354,10 +384,18 @@ fn handle_connection(stream: UnixStream, shared: &SharedState) {
                 }
 
                 for event in rx {
-                    let Ok(json) = serde_json::to_string(&event) else { break };
-                    if writer.write_all(json.as_bytes()).is_err() { break; }
-                    if writer.write_all(b"\n").is_err() { break; }
-                    if writer.flush().is_err() { break; }
+                    let Ok(json) = serde_json::to_string(&event) else {
+                        break;
+                    };
+                    if writer.write_all(json.as_bytes()).is_err() {
+                        break;
+                    }
+                    if writer.write_all(b"\n").is_err() {
+                        break;
+                    }
+                    if writer.flush().is_err() {
+                        break;
+                    }
                 }
 
                 log::info!("[runtime/socket] subscriber disconnected");
@@ -373,7 +411,12 @@ fn handle_connection(stream: UnixStream, shared: &SharedState) {
                 monitors.get(idx).copied()
             };
             if let Some(monitor) = monitor {
-                log::debug!("[runtime/socket] SET_FOCUS (text) idx={} mon=({}, {})", idx, monitor.x, monitor.y);
+                log::debug!(
+                    "[runtime/socket] SET_FOCUS (text) idx={} mon=({}, {})",
+                    idx,
+                    monitor.x,
+                    monitor.y
+                );
                 lock_or_recover(&shared.input).update_focus(monitor, Instant::now());
             }
         }
@@ -382,7 +425,9 @@ fn handle_connection(stream: UnixStream, shared: &SharedState) {
 
     if trimmed.eq_ignore_ascii_case("GET_STATE") {
         let state = build_state(shared);
-        let Ok(json) = serde_json::to_string(&state) else { return };
+        let Ok(json) = serde_json::to_string(&state) else {
+            return;
+        };
         let _ = writer.write_all(json.as_bytes());
         let _ = writer.write_all(b"\n");
     }
@@ -396,28 +441,38 @@ fn build_state(shared: &SharedState) -> PlatformState {
 
     let input = lock_or_recover(&shared.input).clone();
 
-    let cursor_monitor_idx = input.cursor.as_ref()
+    let cursor_monitor_idx = input
+        .cursor
+        .as_ref()
         .and_then(|c| monitors.iter().position(|m| *m == c.monitor));
 
-    let focus_monitor_idx = input.focus.as_ref()
+    let focus_monitor_idx = input
+        .focus
+        .as_ref()
         .and_then(|f| monitors.iter().position(|m| *m == f.monitor));
 
     let fallback = monitors.first().copied().unwrap_or(MonitorBounds {
-        x: 0.0, y: 0.0, width: 1920.0, height: 1080.0,
+        x: 0.0,
+        y: 0.0,
+        width: 1920.0,
+        height: 1080.0,
     });
     let active = state::pick_active_monitor(&input, fallback);
     let active_monitor_idx = monitors.iter().position(|m| *m == active);
 
-    log::debug!("[runtime/build_state] GET_STATE cursor_idx={:?} focus_idx={:?} active_idx={:?}",
-        cursor_monitor_idx, focus_monitor_idx, active_monitor_idx);
+    log::debug!(
+        "[runtime/build_state] GET_STATE cursor_idx={:?} focus_idx={:?} active_idx={:?}",
+        cursor_monitor_idx,
+        focus_monitor_idx,
+        active_monitor_idx
+    );
 
-    let focused_window = (*lock_or_recover(&shared.focused_window))
-        .map(|wb| WindowBounds {
-            x: wb.x,
-            y: wb.y,
-            width: wb.width,
-            height: wb.height,
-        });
+    let focused_window = (*lock_or_recover(&shared.focused_window)).map(|wb| WindowBounds {
+        x: wb.x,
+        y: wb.y,
+        width: wb.width,
+        height: wb.height,
+    });
 
     PlatformState {
         cursor,

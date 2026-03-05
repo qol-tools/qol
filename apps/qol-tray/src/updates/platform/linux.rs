@@ -1,8 +1,8 @@
 use anyhow::Result;
-use tokio_stream::StreamExt;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio_stream::StreamExt;
 
 use crate::daemon::{DaemonEvent, EventBus};
 

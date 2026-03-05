@@ -4,6 +4,7 @@ use std::sync::{Mutex, OnceLock};
 static ACTION_PROCESSES: OnceLock<Mutex<HashMap<String, Vec<u32>>>> = OnceLock::new();
 static RUNNING_ACTIONS: OnceLock<Mutex<HashMap<String, u32>>> = OnceLock::new();
 
+#[cfg(any(test, feature = "dev"))]
 pub(super) fn action_processes_snapshot() -> HashMap<String, Vec<u32>> {
     action_processes()
         .lock()
@@ -11,6 +12,7 @@ pub(super) fn action_processes_snapshot() -> HashMap<String, Vec<u32>> {
         .unwrap_or_default()
 }
 
+#[cfg(test)]
 pub(super) fn running_actions_snapshot() -> HashMap<String, u32> {
     running_actions()
         .lock()
@@ -18,6 +20,7 @@ pub(super) fn running_actions_snapshot() -> HashMap<String, u32> {
         .unwrap_or_default()
 }
 
+#[cfg(test)]
 pub(super) fn clear_tracking() {
     clear_action_processes();
     clear_running_actions();
@@ -76,14 +79,14 @@ pub(super) fn track_action_process(plugin_id: &str, action_id: &str, pid: u32) {
     push_action_process(plugin_id, pid);
     remember_running_action(plugin_id, action_id, pid);
     #[cfg(unix)]
-    crate::os::display::add_ignore_pid(pid);
+    crate::desktop_state::add_ignore_pid(pid);
 }
 
 pub(super) fn untrack_action_process(plugin_id: &str, action_id: &str, pid: u32) {
     remove_action_process(plugin_id, pid);
     forget_running_action(plugin_id, action_id, pid);
     #[cfg(unix)]
-    crate::os::display::remove_ignore_pid(pid);
+    crate::desktop_state::remove_ignore_pid(pid);
 }
 
 fn action_processes() -> &'static Mutex<HashMap<String, Vec<u32>>> {
@@ -98,6 +101,7 @@ fn action_key(plugin_id: &str, action_id: &str) -> String {
     format!("{plugin_id}::{action_id}")
 }
 
+#[cfg(test)]
 fn clear_action_processes() {
     let Ok(mut processes) = action_processes().lock() else {
         return;

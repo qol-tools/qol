@@ -7,5 +7,4 @@ pub(crate) trait Channel: Send {
 
     /// Minimum poll interval for this channel.
     fn min_interval(&self) -> Duration;
-
 }

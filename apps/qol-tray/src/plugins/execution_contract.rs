@@ -1,4 +1,5 @@
 use super::PluginManifest;
+use crate::plugins::PluginSource;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
@@ -22,15 +23,23 @@ impl std::fmt::Display for MissingBinaryContractError {
 
 impl std::error::Error for MissingBinaryContractError {}
 
+#[cfg(test)]
 pub(crate) fn resolve_plugin_command_path(plugin_dir: &Path, command: &str) -> Option<PathBuf> {
+    resolve_plugin_command_path_for_source(plugin_dir, command, None)
+}
+
+pub(crate) fn resolve_plugin_command_path_for_source(
+    plugin_dir: &Path,
+    command: &str,
+    source: Option<&PluginSource>,
+) -> Option<PathBuf> {
     let command_path = Path::new(command);
     if command_path.components().count() != 1 {
         return None;
     }
 
     let canonical_plugin_dir = std::fs::canonicalize(plugin_dir).ok()?;
-    resolve_primary_candidate(plugin_dir, command_path, &canonical_plugin_dir)
-        .or_else(|| resolve_dev_candidate(plugin_dir, command_path, &canonical_plugin_dir))
+    resolve_candidate_by_source(source, plugin_dir, command_path, &canonical_plugin_dir)
         .or_else(|| resolve_windows_candidate(plugin_dir, command_path, &canonical_plugin_dir))
 }
 
@@ -39,10 +48,20 @@ pub(crate) fn validate_execution_contract(
     manifest: &PluginManifest,
     plugin_path: &Path,
 ) -> Result<()> {
+    validate_execution_contract_for_source(plugin_id, manifest, plugin_path, None)
+}
+
+pub(crate) fn validate_execution_contract_for_source(
+    plugin_id: &str,
+    manifest: &PluginManifest,
+    plugin_path: &Path,
+    source: Option<&PluginSource>,
+) -> Result<()> {
     ensure_command_binary_exists(
         plugin_id,
         plugin_path,
         "runtime.command",
+        source,
         manifest
             .runtime
             .as_ref()
@@ -52,6 +71,7 @@ pub(crate) fn validate_execution_contract(
         plugin_id,
         plugin_path,
         "daemon.command",
+        source,
         manifest
             .daemon
             .as_ref()
@@ -59,6 +79,21 @@ pub(crate) fn validate_execution_contract(
             .map(|daemon| daemon.command.as_str()),
     )?;
     Ok(())
+}
+
+fn resolve_candidate_by_source(
+    source: Option<&PluginSource>,
+    plugin_dir: &Path,
+    command_path: &Path,
+    canonical_plugin_dir: &Path,
+) -> Option<PathBuf> {
+    if matches!(source, Some(PluginSource::DevLinked)) {
+        return resolve_dev_candidate(plugin_dir, command_path, canonical_plugin_dir)
+            .or_else(|| resolve_primary_candidate(plugin_dir, command_path, canonical_plugin_dir));
+    }
+
+    resolve_primary_candidate(plugin_dir, command_path, canonical_plugin_dir)
+        .or_else(|| resolve_dev_candidate(plugin_dir, command_path, canonical_plugin_dir))
 }
 
 fn resolve_primary_candidate(
@@ -98,6 +133,13 @@ fn resolve_dev_candidate(
         }
     }
 
+    #[cfg(not(feature = "dev"))]
+    {
+        let _ = plugin_dir;
+        let _ = command_path;
+        let _ = canonical_plugin_dir;
+    }
+
     None
 }
 
@@ -117,6 +159,13 @@ fn resolve_windows_candidate(
         }
     }
 
+    #[cfg(not(windows))]
+    {
+        let _ = plugin_dir;
+        let _ = command_path;
+        let _ = canonical_plugin_dir;
+    }
+
     None
 }
 
@@ -134,12 +183,13 @@ fn ensure_command_binary_exists(
     plugin_id: &str,
     plugin_path: &Path,
     command_field: &'static str,
+    source: Option<&PluginSource>,
     command: Option<&str>,
 ) -> Result<()> {
     let Some(command) = command else {
         return Ok(());
     };
-    if resolve_plugin_command_path(plugin_path, command).is_some() {
+    if resolve_plugin_command_path_for_source(plugin_path, command, source).is_some() {
         return Ok(());
     }
 

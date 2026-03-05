@@ -1,8 +1,17 @@
+#[cfg(test)]
 use super::manifest_loader;
-use crate::plugins::{MissingBinaryContractError, Plugin};
-use anyhow::{Context, Result};
+#[cfg(test)]
+use crate::plugins::execution_contract::MissingBinaryContractError;
+#[cfg(test)]
+use crate::plugins::Plugin;
+#[cfg(test)]
+use anyhow::Context;
+#[cfg(test)]
+use anyhow::Result;
+#[cfg(test)]
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
 pub(super) fn discover_plugin_items(dir: &Path) -> Result<Vec<(String, PathBuf)>> {
     if !dir.exists() {
         log::warn!("Plugin directory does not exist: {:?}", dir);
@@ -18,6 +27,7 @@ pub(super) fn discover_plugin_items(dir: &Path) -> Result<Vec<(String, PathBuf)>
     Ok(items)
 }
 
+#[cfg(test)]
 pub(super) fn load_items(items: &[(String, PathBuf)]) -> Result<Vec<Plugin>> {
     let mut diagnostics = LoadDiagnostics::new(items.len());
     let mut plugins = Vec::new();
@@ -30,6 +40,7 @@ pub(super) fn load_items(items: &[(String, PathBuf)]) -> Result<Vec<Plugin>> {
     Ok(plugins)
 }
 
+#[cfg(test)]
 fn read_plugin_item(entry: std::fs::DirEntry) -> Option<(String, PathBuf)> {
     let path = entry.path();
     if skip_plugin_path(&path) {
@@ -39,6 +50,7 @@ fn read_plugin_item(entry: std::fs::DirEntry) -> Option<(String, PathBuf)> {
     Some((id, path))
 }
 
+#[cfg(test)]
 fn skip_plugin_path(path: &Path) -> bool {
     let Ok(metadata) = std::fs::symlink_metadata(path) else {
         return true;
@@ -48,6 +60,7 @@ fn skip_plugin_path(path: &Path) -> bool {
         || path.extension().is_some_and(|ext| ext == "backup")
 }
 
+#[cfg(test)]
 fn process_item(
     id: &str,
     path: &Path,
@@ -60,6 +73,7 @@ fn process_item(
     }
 }
 
+#[cfg(test)]
 fn push_plugin(plugin: Plugin, plugins: &mut Vec<Plugin>, diagnostics: &mut LoadDiagnostics) {
     if !plugin.manifest.plugin.supports_current_platform() {
         diagnostics.record_skipped_platform(&plugin);
@@ -74,6 +88,7 @@ fn push_plugin(plugin: Plugin, plugins: &mut Vec<Plugin>, diagnostics: &mut Load
     plugins.push(plugin);
 }
 
+#[cfg(test)]
 struct LoadDiagnostics {
     discovered: usize,
     skipped_platform: usize,
@@ -81,6 +96,7 @@ struct LoadDiagnostics {
     missing_binaries: usize,
 }
 
+#[cfg(test)]
 impl LoadDiagnostics {
     fn new(discovered: usize) -> Self {
         Self {

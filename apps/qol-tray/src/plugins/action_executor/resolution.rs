@@ -102,7 +102,11 @@ fn daemon_command_path(plugin: &Plugin) -> Option<PathBuf> {
         .daemon
         .as_ref()
         .filter(|daemon| daemon.enabled)?;
-    super::super::resolve_plugin_command_path(&plugin.path, &daemon.command)
+    super::super::resolve_plugin_command_path_for_source(
+        &plugin.path,
+        &daemon.command,
+        Some(&plugin.source),
+    )
 }
 
 fn paths_match(left: &Path, right: &Path) -> bool {
@@ -158,11 +162,14 @@ fn runtime_command_escapes_plugin_dir(command: &str) -> bool {
 }
 
 fn runtime_command_path(plugin: &Plugin, command: &str) -> Result<PathBuf, ActionExecutionError> {
-    super::super::resolve_plugin_command_path(&plugin.path, command).ok_or_else(|| {
-        ActionExecutionError::RuntimeCommandNotFound {
-            plugin_id: plugin.id.clone(),
-            command: command.to_string(),
-        }
+    super::super::resolve_plugin_command_path_for_source(
+        &plugin.path,
+        command,
+        Some(&plugin.source),
+    )
+    .ok_or_else(|| ActionExecutionError::RuntimeCommandNotFound {
+        plugin_id: plugin.id.clone(),
+        command: command.to_string(),
     })
 }
 

@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use qol_runtime::MonitorBounds;
 
-use crate::os::display::Platform;
 use super::super::channel::Channel;
+use crate::desktop_state::Platform;
 
 const MIN_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -27,7 +27,6 @@ impl FocusChannel {
     pub(crate) fn bounds(&self) -> Option<MonitorBounds> {
         self.bounds
     }
-
 }
 
 impl Channel for FocusChannel {
@@ -37,9 +36,11 @@ impl Channel for FocusChannel {
         }
         let fresh = self.platform.focused_window_bounds();
         if fresh.is_some() && fresh != self.bounds {
-            log::debug!("[runtime/focus_ch] CHANGED old={:?} new={:?}",
+            log::debug!(
+                "[runtime/focus_ch] CHANGED old={:?} new={:?}",
                 self.bounds.map(|b| (b.x, b.y, b.width, b.height)),
-                fresh.map(|b| (b.x, b.y, b.width, b.height)));
+                fresh.map(|b| (b.x, b.y, b.width, b.height))
+            );
             self.bounds = fresh;
             return true;
         }

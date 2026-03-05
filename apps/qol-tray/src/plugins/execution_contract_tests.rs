@@ -1,4 +1,8 @@
-use super::resolve_plugin_command_path;
+use super::execution_contract::resolve_plugin_command_path;
+#[cfg(feature = "dev")]
+use super::execution_contract::resolve_plugin_command_path_for_source;
+#[cfg(feature = "dev")]
+use crate::plugins::PluginSource;
 use std::fs;
 use tempfile::TempDir;
 
@@ -48,4 +52,23 @@ fn resolve_plugin_command_path_allows_internal_symlink() {
 
     let resolved = resolve_plugin_command_path(temp_dir.path(), "binary");
     assert_eq!(resolved, Some(linked_binary));
+}
+
+#[cfg(feature = "dev")]
+#[test]
+fn resolve_plugin_command_path_prefers_debug_binary_for_dev_linked_plugins() {
+    let temp_dir = TempDir::new().unwrap();
+    let root_binary = temp_dir.path().join("binary");
+    let debug_binary = temp_dir.path().join("target").join("debug").join("binary");
+    fs::create_dir_all(debug_binary.parent().unwrap()).unwrap();
+    fs::write(&root_binary, "root").unwrap();
+    fs::write(&debug_binary, "debug").unwrap();
+
+    let resolved = resolve_plugin_command_path_for_source(
+        temp_dir.path(),
+        "binary",
+        Some(&PluginSource::DevLinked),
+    );
+
+    assert_eq!(resolved, Some(debug_binary));
 }

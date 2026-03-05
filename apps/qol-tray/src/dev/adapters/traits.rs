@@ -36,11 +36,8 @@ pub trait CargoPluginBuilder: Send + Sync {
 
 pub trait BuildFingerprintStore: Send + Sync {
     fn load(&self, config_dir: &Path) -> HashMap<String, String>;
-    fn save(
-        &self,
-        config_dir: &Path,
-        fingerprints: &HashMap<String, String>,
-    ) -> Result<(), String>;
+    fn save(&self, config_dir: &Path, fingerprints: &HashMap<String, String>)
+        -> Result<(), String>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
