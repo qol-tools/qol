@@ -6,17 +6,17 @@ use axum::{
 };
 
 use crate::hotkeys::trigger_reload;
-use crate::paths::is_safe_path_component;
 use crate::plugins::PluginConfigManager;
 
+use super::helpers::validate_plugin_id_bad_request;
 use super::types::{AppState, TokenRequest, TokenStatus, MAX_CONFIG_SIZE, MAX_COVER_SIZE};
 
 pub(super) async fn serve_cover(
     Path(plugin_id): Path<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    if !is_safe_path_component(&plugin_id) {
-        return (StatusCode::BAD_REQUEST, "Invalid plugin ID").into_response();
+    if let Err(error) = validate_plugin_id_bad_request(&plugin_id) {
+        return error.into_response();
     }
 
     let plugin_root = state.plugins_dir.join(&plugin_id);
@@ -114,8 +114,8 @@ pub(super) async fn serve_icon(Path(bundle_id): Path<String>) -> impl IntoRespon
 }
 
 pub(super) async fn get_plugin_config(Path(plugin_id): Path<String>) -> impl IntoResponse {
-    if !is_safe_path_component(&plugin_id) {
-        return (StatusCode::BAD_REQUEST, "Invalid plugin ID").into_response();
+    if let Err(error) = validate_plugin_id_bad_request(&plugin_id) {
+        return error.into_response();
     }
 
     let config = match PluginConfigManager::new().and_then(|m| m.get_config(&plugin_id)) {
@@ -150,8 +150,8 @@ pub(super) async fn set_plugin_config(
     State(state): State<AppState>,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
-    if !is_safe_path_component(&plugin_id) {
-        return (StatusCode::BAD_REQUEST, "Invalid plugin ID").into_response();
+    if let Err(error) = validate_plugin_id_bad_request(&plugin_id) {
+        return error.into_response();
     }
 
     if body.len() > MAX_CONFIG_SIZE {

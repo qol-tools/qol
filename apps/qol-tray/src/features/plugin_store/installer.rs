@@ -470,10 +470,10 @@ fn is_pid_alive(pid: u32) -> bool {
 }
 
 fn validate_plugin_id(plugin_id: &str) -> Result<()> {
-    if !crate::paths::is_safe_path_component(plugin_id) {
-        anyhow::bail!("Invalid plugin ID: {}", plugin_id);
+    if super::validation::is_safe_plugin_id(plugin_id) {
+        return Ok(());
     }
-    Ok(())
+    anyhow::bail!("{}: {}", super::validation::INVALID_PLUGIN_ID, plugin_id)
 }
 
 async fn run_git<I, S>(

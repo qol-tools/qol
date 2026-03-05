@@ -5,6 +5,7 @@ use crate::plugins::PluginLoader;
 use super::helpers::{
     extract_actions, infer_load_error, is_newer_version, read_installed_plugin_dirs,
     read_manifest_without_validation, read_plugin_version, reload_manager_and_notify,
+    shared_config_dir,
 };
 use super::types::{
     AppState, InstalledPlugin, InstalledPluginsResponse, PluginInfo, PluginsResponse,
@@ -13,7 +14,7 @@ use super::types::{
 
 #[cfg(feature = "dev")]
 fn unlink_dev_plugin_if_linked(plugin_id: &str) -> Result<bool, String> {
-    let config_dir = crate::paths::shared_config_dir().map_err(|e| e.to_string())?;
+    let config_dir = shared_config_dir()?;
     match crate::dev::remove_link(plugin_id, &config_dir) {
         Ok(()) => Ok(true),
         Err(error) if error.contains("not dev-linked") => Ok(false),

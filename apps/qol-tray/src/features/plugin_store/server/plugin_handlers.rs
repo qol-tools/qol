@@ -5,8 +5,7 @@ use axum::{
     Json,
 };
 
-use crate::paths::is_safe_path_component;
-
+use super::helpers::{validate_plugin_id, validate_plugin_id_bad_request};
 use super::plugin_services;
 use super::types::{
     AppState, ExecuteActionResult, InstalledPluginsResponse, PluginsQuery, PluginsResponse,
@@ -23,9 +22,7 @@ pub(super) async fn install_plugin(
     Path(id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<Json<super::types::PluginInfo>, (StatusCode, String)> {
-    if !is_safe_path_component(&id) {
-        return Err((StatusCode::BAD_REQUEST, "Invalid plugin ID".to_string()));
-    }
+    validate_plugin_id_bad_request(&id)?;
 
     plugin_services::install_plugin(&state, &id).await.map(Json)
 }
@@ -34,11 +31,8 @@ pub(super) async fn update_plugin(
     Path(id): Path<String>,
     State(state): State<AppState>,
 ) -> Json<UninstallResult> {
-    if !is_safe_path_component(&id) {
-        return Json(UninstallResult {
-            success: false,
-            message: "Invalid plugin ID".to_string(),
-        });
+    if validate_plugin_id(&id).is_err() {
+        return invalid_plugin_id_uninstall_result();
     }
 
     Json(plugin_services::update_plugin(&state, &id).await)
@@ -48,11 +42,8 @@ pub(super) async fn uninstall_plugin(
     Path(id): Path<String>,
     State(state): State<AppState>,
 ) -> Json<UninstallResult> {
-    if !is_safe_path_component(&id) {
-        return Json(UninstallResult {
-            success: false,
-            message: "Invalid plugin ID".to_string(),
-        });
+    if validate_plugin_id(&id).is_err() {
+        return invalid_plugin_id_uninstall_result();
     }
 
     Json(plugin_services::uninstall_plugin(&state, &id).await)
@@ -62,14 +53,8 @@ pub(super) async fn execute_plugin_action(
     Path((id, action)): Path<(String, String)>,
     State(state): State<AppState>,
 ) -> (StatusCode, Json<ExecuteActionResult>) {
-    if !is_safe_path_component(&id) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ExecuteActionResult {
-                success: false,
-                message: "Invalid plugin ID".to_string(),
-            }),
-        );
+    if validate_plugin_id(&id).is_err() {
+        return invalid_plugin_id_action_result();
     }
 
     use crate::plugins::action_executor::ActionExecutionError;
@@ -136,4 +121,21 @@ pub(super) async fn sse_handler(State(state): State<AppState>) -> impl IntoRespo
     });
 
     Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+fn invalid_plugin_id_uninstall_result() -> Json<UninstallResult> {
+    Json(UninstallResult {
+        success: false,
+        message: "Invalid plugin ID".to_string(),
+    })
+}
+
+fn invalid_plugin_id_action_result() -> (StatusCode, Json<ExecuteActionResult>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ExecuteActionResult {
+            success: false,
+            message: "Invalid plugin ID".to_string(),
+        }),
+    )
 }
