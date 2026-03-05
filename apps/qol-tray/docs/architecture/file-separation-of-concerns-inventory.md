@@ -40,14 +40,16 @@ Legend:
 | `src/doctor/platform/mod.rs` | 23 | Doctor platform dispatch facade | Platform facade | clean | keep |  |
 | `src/doctor/platform/windows.rs` | 57 | Windows-specific doctor checks | Platform adapter | clean | keep |  |
 | `src/features/mod.rs` | 36 | Feature registry contracts and composition | Feature boundary | clean | keep |  |
-| `src/features/plugin_store/github.rs` | 679 | GitHub API integration and metadata cache | External API boundary | mixed | split | High complexity by size; validate single responsibility; known multi-concern hotspot |
+| `src/features/plugin_store/github/cache.rs` | 142 | Plugin-store cache persistence and cache model | Cache boundary | clean | keep |  |
+| `src/features/plugin_store/github/mod.rs` | 498 | GitHub client and release/manifest discovery orchestration | External API boundary | review | split | Cache and token concerns extracted; client/release flow still large |
+| `src/features/plugin_store/github/token.rs` | 141 | GitHub token storage, validation, and request helpers | Auth boundary | clean | keep |  |
 | `src/features/plugin_store/installer.rs` | 876 | Plugin install/update transactional workflow | Installation domain boundary | mixed | split | Large mixed file; identify 2-4 extractable seams; known multi-concern hotspot |
 | `src/features/plugin_store/mod.rs` | 58 | Plugin store feature facade | Feature boundary | clean | keep |  |
 | `src/features/plugin_store/plugin_ui.rs` | 252 | Serving plugin-provided UI assets safely | Web/file serving boundary | clean | keep |  |
 | `src/features/plugin_store/release_assets.rs` | 127 | Release asset matching/resolution logic | Release domain boundary | clean | keep |  |
-| `src/features/plugin_store/server.rs` | 410 | HTTP API route wiring and middleware composition | HTTP composition boundary | review | split | Medium-large; verify boundary remains focused; route/controller/view composition should stay thin |
+| `src/features/plugin_store/server.rs` | 212 | HTTP API route wiring and middleware composition | HTTP composition boundary | clean | keep | Route composition is now thin after handler extraction |
 | `src/features/plugin_store/server/assets.rs` | 51 | Embedded UI asset serving | HTTP static boundary | clean | keep |  |
-| `src/features/plugin_store/server/dev_handlers.rs` | 544 | Dev-only API handlers and request validation | HTTP handler boundary | mixed | split | High complexity by size; validate single responsibility; known multi-concern hotspot |
+| `src/features/plugin_store/server/dev_handlers.rs` | 21 | Dev reload/recompile handlers | HTTP handler boundary | clean | keep |  |
 | `src/features/plugin_store/server/dev_plugin_cpu/mod.rs` | 347 | Per-plugin CPU sampling service | Telemetry service boundary | review | keep | Medium-large; verify boundary remains focused |
 | `src/features/plugin_store/server/dev_plugin_cpu/platform/linux.rs` | 27 | Linux CPU sampling adapter | Platform adapter | clean | keep |  |
 | `src/features/plugin_store/server/dev_plugin_cpu/platform/macos.rs` | 41 | macOS CPU sampling adapter | Platform adapter | clean | keep |  |
@@ -72,7 +74,11 @@ Legend:
 | `src/features/plugin_store/server/settings/github_token_handlers.rs` | 65 | GitHub token status/set/delete handlers | HTTP handler boundary | clean | keep |  |
 | `src/features/plugin_store/server/settings/hotkey_handlers.rs` | 98 | Hotkeys GET/PUT handlers | HTTP handler boundary | clean | keep |  |
 | `src/features/plugin_store/server/types.rs` | 163 | Plugin-store server DTOs and shared state structs | API contract boundary | clean | keep |  |
-| `src/features/task_runner/mod.rs` | 622 | Task runner API + execution orchestration | Feature/service boundary | mixed | split | High complexity by size; validate single responsibility; known multi-concern hotspot |
+| `src/features/task_runner/config.rs` | 202 | Task-runner config model, state, and persistence | Config boundary | clean | keep |  |
+| `src/features/task_runner/execution.rs` | 111 | Task-runner command execution orchestration | Service boundary | clean | keep |  |
+| `src/features/task_runner/handlers.rs` | 136 | Task-runner HTTP handlers and API DTOs | HTTP handler boundary | clean | keep |  |
+| `src/features/task_runner/interpolation.rs` | 316 | Template interpolation and shell escaping | Pure utility boundary | clean | keep | Includes property-based and example-based tests |
+| `src/features/task_runner/mod.rs` | 13 | Task-runner feature facade | Feature boundary | clean | keep |  |
 | `src/features/task_runner/platform/mod.rs` | 20 | Task runner platform dispatch and shell adapter policy | Platform facade | clean | keep | Unix and Windows shell adapters are inlined; unsupported targets fail at compile time |
 | `src/hotkeys/mod.rs` | 483 | Hotkey config + registration + dispatch runtime | Feature boundary | review | split | High complexity by size; validate single responsibility |
 | `src/hotkeys/types.rs` | 104 | Hotkey model/types and key maps | Domain model boundary | clean | keep |  |
@@ -101,10 +107,10 @@ Legend:
 | `src/plugins/action_transport/protocol.rs` | 62 | Action transport protocol framing | Protocol boundary | clean | keep |  |
 | `src/plugins/config.rs` | 284 | Plugin configuration persistence | Storage boundary | review | keep | Medium-large; verify boundary remains focused |
 | `src/plugins/daemon_tracker/mod.rs` | 164 | Daemon pid/socket tracking facade | Lifecycle boundary | clean | keep |  |
-| `src/plugins/daemon_tracker/platform/linux.rs` | 104 | Linux daemon tracking implementation | Platform adapter | clean | keep |  |
-| `src/plugins/daemon_tracker/platform/macos.rs` | 138 | macOS daemon tracking implementation | Platform adapter | clean | keep |  |
-| `src/plugins/daemon_tracker/platform/mod.rs` | 14 | Daemon tracker platform dispatch | Platform facade | clean | keep |  |
-| `src/plugins/daemon_tracker/platform/windows.rs` | 10 | Windows daemon tracking implementation | Platform adapter | clean | keep |  |
+| `src/plugins/daemon_tracker/platform/linux.rs` | 69 | Linux daemon tracking implementation | Platform adapter | clean | keep | Socket cleanup delegated to shared Unix helper |
+| `src/plugins/daemon_tracker/platform/macos.rs` | 96 | macOS daemon tracking implementation | Platform adapter | clean | keep | Socket cleanup delegated to shared Unix helper |
+| `src/plugins/daemon_tracker/platform/mod.rs` | 55 | Daemon tracker platform dispatch and Windows fallback policy | Platform facade | clean | keep | Windows fallback is inlined; unsupported targets fail at compile time |
+| `src/plugins/daemon_tracker/platform/socket_cleanup.rs` | 127 | Shared Unix stale-socket cleanup policy | Platform shared boundary | clean | keep | Shared by Linux and macOS adapters |
 | `src/plugins/loader.rs` | 415 | Plugin discovery/loading from filesystem | Filesystem boundary | review | keep | Medium-large; verify boundary remains focused |
 | `src/plugins/log_control.rs` | 153 | Per-plugin log muting/filtering policy persistence | Config boundary | clean | keep |  |
 | `src/plugins/manager.rs` | 312 | Plugin manager orchestration | Service boundary | review | keep | Medium-large; verify boundary remains focused |
@@ -133,9 +139,7 @@ Legend:
 | `src/tray/platform/windows.rs` | 50 | Windows tray implementation | Platform adapter | clean | keep |  |
 | `src/updates/mod.rs` | 51 | Update check/install orchestration | Update feature boundary | clean | keep |  |
 | `src/updates/platform/linux.rs` | 107 | Linux update install implementation | Platform adapter | clean | keep |  |
-| `src/updates/platform/macos.rs` | 12 | macOS update install implementation | Platform adapter | clean | keep |  |
-| `src/updates/platform/mod.rs` | 29 | Update platform dispatch | Platform facade | clean | keep |  |
-| `src/updates/platform/windows.rs` | 12 | Windows update install implementation | Platform adapter | clean | keep |  |
+| `src/updates/platform/mod.rs` | 27 | Update platform dispatch and browser-fallback policy | Platform facade | clean | keep | macOS and Windows fallback is inlined; unsupported targets fail at compile time |
 | `src/version.rs` | 155 | Version parsing and normalization helpers | Shared utility | clean | keep |  |
 | `ui/api/client.js` | 63 | Fetch wrappers and API request helpers | HTTP client boundary | clean | keep |  |
 | `ui/assets/qol-tray.png` | 130 | Brand/icon raster asset | UI asset boundary | clean | keep | Static asset |
@@ -209,6 +213,6 @@ Legend:
 These are only signals from file-level concerns and size, not final moves:
 
 - Coalesce candidates (small facade-only modules): `src/*/mod.rs` files that only re-export or route with minimal logic.
-- Split-first hotspots: `src/plugins/manifest.rs`, `src/plugins/action_executor.rs`, `src/features/plugin_store/installer.rs`, `src/features/plugin_store/github.rs`, `src/features/plugin_store/server/dev_handlers.rs`, `src/features/task_runner/mod.rs`.
+- Split-first hotspots: `src/plugins/manifest.rs`, `src/plugins/action_executor.rs`, `src/features/plugin_store/installer.rs`, `src/features/plugin_store/github/mod.rs`.
 - UI unification hotspots: `ui/views/dev/index.js` + `ui/views/dev/template.js` (controller + string-template rendering) should align with component/reducer style used by other pages.
 - Platform boundary check: keep OS API usage confined to `platform/*` and `os/*` adapter files.
