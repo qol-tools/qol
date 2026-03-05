@@ -44,10 +44,12 @@ pub(super) fn validate_plugin_id_bad_request(
         .map_err(|message| (axum::http::StatusCode::BAD_REQUEST, message.to_string()))
 }
 
+#[cfg(feature = "dev")]
 pub(super) fn shared_config_dir() -> Result<std::path::PathBuf, String> {
     crate::paths::shared_config_dir().map_err(|e| e.to_string())
 }
 
+#[cfg(feature = "dev")]
 pub(super) fn shared_config_dir_or_status() -> Result<std::path::PathBuf, axum::http::StatusCode> {
     shared_config_dir().map_err(|error| {
         log::error!("Failed to determine config directory: {}", error);
@@ -55,6 +57,7 @@ pub(super) fn shared_config_dir_or_status() -> Result<std::path::PathBuf, axum::
     })
 }
 
+#[cfg(feature = "dev")]
 pub(super) fn shared_config_dir_or_response(
     unavailable_message: &'static str,
 ) -> Result<std::path::PathBuf, (axum::http::StatusCode, String)> {

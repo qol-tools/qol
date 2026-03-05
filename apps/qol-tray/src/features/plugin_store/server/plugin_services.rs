@@ -2,10 +2,11 @@ use axum::http::StatusCode;
 
 use crate::plugins::PluginLoader;
 
+#[cfg(feature = "dev")]
+use super::helpers::shared_config_dir;
 use super::helpers::{
     extract_actions, infer_load_error, is_newer_version, read_installed_plugin_dirs,
     read_manifest_without_validation, read_plugin_version, reload_manager_and_notify,
-    shared_config_dir,
 };
 use super::types::{
     AppState, InstalledPlugin, InstalledPluginsResponse, PluginInfo, PluginsResponse,

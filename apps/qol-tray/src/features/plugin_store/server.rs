@@ -30,7 +30,7 @@ mod types;
 
 use anyhow::Result;
 use axum::{
-    http::{header, HeaderValue, StatusCode},
+    http::{header, HeaderValue},
     middleware,
     routing::{get, post},
     Router,
