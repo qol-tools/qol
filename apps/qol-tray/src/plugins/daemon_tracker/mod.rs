@@ -92,10 +92,7 @@ pub(crate) fn kill_from_pid_files() {
             }
             if crate::process_utils::is_pid_alive(pid) {
                 log::info!("Killing orphan daemon process: {} ({})", pid, exe.display());
-                crate::process_utils::terminate_pid(
-                    pid,
-                    std::time::Duration::from_millis(100),
-                );
+                crate::process_utils::terminate_pid(pid, std::time::Duration::from_millis(100));
             }
         }
         let _ = std::fs::remove_file(&path);
@@ -140,11 +137,7 @@ impl ManagedRoots {
     }
 
     fn candidate_roots(&self) -> Vec<PathBuf> {
-        let mut roots: Vec<PathBuf> = self
-            .dev_link_dirs
-            .iter()
-            .map(|d| resolve_path(d))
-            .collect();
+        let mut roots: Vec<PathBuf> = self.dev_link_dirs.iter().map(|d| resolve_path(d)).collect();
 
         if let Some(root) = &self.shared_plugins_root {
             roots.push(resolve_path(root));
