@@ -62,15 +62,18 @@ Legend:
 | `src/features/plugin_store/server/restart/platform/mod.rs` | 25 | Restart platform dispatch | Platform facade | clean | keep |  |
 | `src/features/plugin_store/server/restart/platform/unix.rs` | 63 | Unix restart implementation | Platform adapter | clean | keep |  |
 | `src/features/plugin_store/server/restart/platform/windows.rs` | 12 | Windows restart implementation | Platform adapter | clean | keep |  |
-| `src/features/plugin_store/server/settings_handlers.rs` | 401 | Settings/config/token/hotkeys HTTP handlers | HTTP handler boundary | review | keep | Medium-large; verify boundary remains focused |
+| `src/features/plugin_store/server/settings/mod.rs` | 15 | Settings handler composition and exports | HTTP composition boundary | clean | keep |  |
+| `src/features/plugin_store/server/settings/media_cover_handlers.rs` | 138 | Cover retrieval/validation handler flow | HTTP handler boundary | review | keep | Medium-large; verify boundary remains focused |
+| `src/features/plugin_store/server/settings/media_icon_handlers.rs` | 71 | Bundle icon lookup and PNG encoding handlers | HTTP handler boundary | clean | keep |  |
+| `src/features/plugin_store/server/settings/media_apps_handlers.rs` | 11 | Installed-app list handler entrypoint | HTTP handler boundary | clean | keep | Platform logic delegated to platform module |
+| `src/features/plugin_store/server/settings/media_apps_handlers/platform/mod.rs` | 12 | Installed-app platform dispatch | Platform facade | clean | keep |  |
+| `src/features/plugin_store/server/settings/media_apps_handlers/platform/macos.rs` | 80 | macOS installed-app discovery implementation | Platform adapter | review | keep | Medium-large; verify boundary remains focused |
+| `src/features/plugin_store/server/settings/plugin_config_handlers.rs` | 151 | Plugin config GET/PUT handlers | HTTP handler boundary | review | keep | Medium-large; verify boundary remains focused |
+| `src/features/plugin_store/server/settings/github_token_handlers.rs` | 65 | GitHub token status/set/delete handlers | HTTP handler boundary | clean | keep |  |
+| `src/features/plugin_store/server/settings/hotkey_handlers.rs` | 98 | Hotkeys GET/PUT handlers | HTTP handler boundary | clean | keep |  |
 | `src/features/plugin_store/server/types.rs` | 163 | Plugin-store server DTOs and shared state structs | API contract boundary | clean | keep |  |
 | `src/features/task_runner/mod.rs` | 622 | Task runner API + execution orchestration | Feature/service boundary | mixed | split | High complexity by size; validate single responsibility; known multi-concern hotspot |
-| `src/features/task_runner/platform/linux.rs` | 5 | Linux shell invocation behavior | Platform adapter | clean | keep |  |
-| `src/features/task_runner/platform/macos.rs` | 5 | macOS shell invocation behavior | Platform adapter | clean | keep |  |
-| `src/features/task_runner/platform/mod.rs` | 26 | Task runner platform dispatch facade | Platform facade | clean | keep |  |
-| `src/features/task_runner/platform/unix_common.rs` | 7 | Shared Unix task-runner behavior | Platform shared boundary | clean | keep |  |
-| `src/features/task_runner/platform/unsupported.rs` | 5 | Unsupported-platform fallback behavior | Platform fallback boundary | clean | keep |  |
-| `src/features/task_runner/platform/windows.rs` | 7 | Windows shell invocation behavior | Platform adapter | clean | keep |  |
+| `src/features/task_runner/platform/mod.rs` | 20 | Task runner platform dispatch and shell adapter policy | Platform facade | clean | keep | Unix and Windows shell adapters are inlined; unsupported targets fail at compile time |
 | `src/hotkeys/mod.rs` | 483 | Hotkey config + registration + dispatch runtime | Feature boundary | review | split | High complexity by size; validate single responsibility |
 | `src/hotkeys/types.rs` | 104 | Hotkey model/types and key maps | Domain model boundary | clean | keep |  |
 | `src/installer/files.rs` | 60 | Installer file operations | Filesystem boundary | clean | keep |  |
@@ -93,10 +96,8 @@ Legend:
 | `src/paths.rs` | 229 | Config/data path resolution and path safety primitives | Filesystem boundary | clean | keep |  |
 | `src/plugins/action_executor.rs` | 801 | Action execution + process tracking + routing | Execution boundary | mixed | split | Large mixed file; identify 2-4 extractable seams; known multi-concern hotspot |
 | `src/plugins/action_transport/mod.rs` | 21 | Action transport facade | Transport boundary | clean | keep |  |
-| `src/plugins/action_transport/platform/mod.rs` | 21 | Action transport platform dispatch | Platform facade | clean | keep |  |
-| `src/plugins/action_transport/platform/unix_common.rs` | 42 | Unix action transport implementation | Platform adapter | clean | keep |  |
-| `src/plugins/action_transport/platform/unsupported.rs` | 6 | Unsupported action transport fallback | Platform fallback boundary | clean | keep |  |
-| `src/plugins/action_transport/platform/windows.rs` | 6 | Windows action transport implementation | Platform adapter | clean | keep |  |
+| `src/plugins/action_transport/platform/mod.rs` | 20 | Action transport platform dispatch and fallback policy | Platform facade | clean | keep | Windows fallback is inlined; unsupported targets fail at compile time |
+| `src/plugins/action_transport/platform/unix_common.rs` | 65 | Unix action transport implementation | Platform adapter | clean | keep |  |
 | `src/plugins/action_transport/protocol.rs` | 62 | Action transport protocol framing | Protocol boundary | clean | keep |  |
 | `src/plugins/config.rs` | 284 | Plugin configuration persistence | Storage boundary | review | keep | Medium-large; verify boundary remains focused |
 | `src/plugins/daemon_tracker/mod.rs` | 164 | Daemon pid/socket tracking facade | Lifecycle boundary | clean | keep |  |
@@ -111,9 +112,8 @@ Legend:
 | `src/plugins/mod.rs` | 451 | Plugin model and lifecycle facade | Plugin domain boundary | review | split | High complexity by size; validate single responsibility |
 | `src/plugins/resolver.rs` | 208 | Plugin source resolution (installed vs linked) | Resolution boundary | clean | keep |  |
 | `src/process_utils/mod.rs` | 15 | Process helper facade | Process boundary | clean | keep |  |
-| `src/process_utils/platform/mod.rs` | 28 | Process helper platform dispatch | Platform facade | clean | keep |  |
+| `src/process_utils/platform/mod.rs` | 40 | Process helper platform dispatch and fallback policy | Platform facade | clean | keep | Unsupported targets fail at compile time |
 | `src/process_utils/platform/unix_common.rs` | 40 | Unix process helper implementation | Platform adapter | clean | keep |  |
-| `src/process_utils/platform/unsupported.rs` | 9 | Unsupported process helper fallback | Platform fallback boundary | clean | keep |  |
 | `src/process_utils/platform/windows.rs` | 49 | Windows process helper implementation | Platform adapter | clean | keep |  |
 | `src/runtime/channel.rs` | 11 | Runtime channel contracts | Runtime contract boundary | clean | keep |  |
 | `src/runtime/channels/cursor.rs` | 46 | Cursor sampling channel | Runtime polling boundary | clean | keep |  |
