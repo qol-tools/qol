@@ -7,6 +7,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod command;
 use command::{run_cargo_build, run_git, run_git_checked};
+mod lock;
+use lock::{open_lock_file, stale_lockfile};
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(120);
 const CARGO_BUILD_TIMEOUT: Duration = Duration::from_secs(300);
@@ -397,7 +399,7 @@ impl PluginInstaller {
                 Ok(PluginOperationLock { path })
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                if stale_lockfile(&path) {
+                if stale_lockfile(&path, LOCKFILE_MAX_AGE) {
                     let _ = std::fs::remove_file(&path);
                     let mut file = open_lock_file(&path).with_context(|| {
                         format!(
@@ -425,51 +427,6 @@ impl Drop for PluginOperationLock {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
     }
-}
-
-fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(path)
-}
-
-fn stale_lockfile(path: &Path) -> bool {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return lockfile_too_old(path, LOCKFILE_MAX_AGE);
-    };
-    let Some(raw_pid) = content.split_whitespace().next() else {
-        return lockfile_too_old(path, LOCKFILE_MAX_AGE);
-    };
-    let Ok(pid) = raw_pid.parse::<u32>() else {
-        return lockfile_too_old(path, LOCKFILE_MAX_AGE);
-    };
-
-    #[cfg(unix)]
-    {
-        return !is_pid_alive(pid);
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = pid;
-        lockfile_too_old(path, LOCKFILE_MAX_AGE)
-    }
-}
-
-fn lockfile_too_old(path: &Path, max_age: Duration) -> bool {
-    let Ok(meta) = std::fs::metadata(path) else {
-        return false;
-    };
-    let Ok(modified) = meta.modified() else {
-        return false;
-    };
-    modified.elapsed().is_ok_and(|age| age > max_age)
-}
-
-#[cfg(unix)]
-fn is_pid_alive(pid: u32) -> bool {
-    crate::process_utils::is_pid_alive(pid as i32)
 }
 
 fn validate_plugin_id(plugin_id: &str) -> Result<()> {
