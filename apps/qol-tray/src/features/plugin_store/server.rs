@@ -10,7 +10,10 @@ mod dev_runtime;
 mod dev_runtime_state;
 #[cfg(feature = "dev")]
 mod dev_services;
+#[cfg(feature = "dev")]
+mod dev_validation;
 mod helpers;
+mod meta_handlers;
 mod plugin_handlers;
 mod plugin_services;
 #[cfg(feature = "dev")]
@@ -21,12 +24,10 @@ mod types;
 
 use anyhow::Result;
 use axum::{
-    extract::State,
     http::{header, HeaderValue, StatusCode},
     middleware,
-    response::IntoResponse,
     routing::{get, post},
-    Json, Router,
+    Router,
 };
 use std::sync::{Arc, Mutex};
 use tower_http::set_header::SetResponseHeaderLayer;
@@ -98,10 +99,10 @@ pub async fn start_ui_server(
             "/hotkeys",
             axum::routing::put(settings_handlers::set_hotkeys),
         )
-        .route("/dev/enabled", get(dev_enabled))
-        .route("/version", get(get_version))
-        .route("/check-update", get(check_update))
-        .route("/self-update", post(self_update));
+        .route("/dev/enabled", get(meta_handlers::dev_enabled))
+        .route("/version", get(meta_handlers::get_version))
+        .route("/check-update", get(meta_handlers::check_update))
+        .route("/self-update", post(meta_handlers::self_update));
 
     #[cfg(feature = "dev")]
     let api = api
@@ -202,31 +203,4 @@ async fn bind_listener() -> Result<(tokio::net::TcpListener, u16)> {
     let address = format!("127.0.0.1:{}", DEFAULT_UI_SERVER_PORT);
     let listener = tokio::net::TcpListener::bind(&address).await?;
     Ok((listener, DEFAULT_UI_SERVER_PORT))
-}
-
-async fn dev_enabled() -> Json<bool> {
-    Json(cfg!(feature = "dev"))
-}
-
-async fn get_version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
-}
-
-async fn check_update() -> Json<serde_json::Value> {
-    let available = crate::updates::check_for_updates().await.unwrap_or(false);
-    let latest = crate::updates::latest_version().map(String::from);
-    Json(serde_json::json!({ "available": available, "latest": latest }))
-}
-
-async fn self_update(State(state): State<AppState>) -> impl IntoResponse {
-    let events = state.daemon.events.clone();
-    tokio::spawn(async move {
-        if let Err(e) = crate::updates::download_and_install(events.clone()).await {
-            log::error!("Self-update failed: {}", e);
-            events.send(crate::daemon::DaemonEvent::UpdateFailed {
-                message: e.to_string(),
-            });
-        }
-    });
-    StatusCode::ACCEPTED
 }
