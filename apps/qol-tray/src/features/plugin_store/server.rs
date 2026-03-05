@@ -15,6 +15,8 @@ mod dev_runtime_state;
 #[cfg(feature = "dev")]
 mod dev_services;
 #[cfg(feature = "dev")]
+mod dev_state_handlers;
+#[cfg(feature = "dev")]
 mod dev_validation;
 mod helpers;
 mod meta_handlers;
@@ -126,16 +128,16 @@ pub async fn start_ui_server(
             "/dev/log-controls",
             get(dev_link_handlers::get_log_controls),
         )
-        .route("/dev/discover", post(dev_handlers::trigger_discovery))
+        .route("/dev/discover", post(dev_state_handlers::trigger_discovery))
         .route(
             "/dev/discovery-state",
-            get(dev_handlers::get_discovery_state),
+            get(dev_state_handlers::get_discovery_state),
         )
-        .route("/dev/build-state", get(dev_handlers::get_build_state))
-        .route("/dev/plugin-cpu", get(dev_handlers::get_plugin_cpu))
+        .route("/dev/build-state", get(dev_state_handlers::get_build_state))
+        .route("/dev/plugin-cpu", get(dev_state_handlers::get_plugin_cpu))
         .route(
             "/dev/plugin-cpu/monitoring",
-            axum::routing::put(dev_handlers::set_plugin_cpu_monitoring),
+            axum::routing::put(dev_state_handlers::set_plugin_cpu_monitoring),
         )
         .route(
             "/dev/mock-check-update",
