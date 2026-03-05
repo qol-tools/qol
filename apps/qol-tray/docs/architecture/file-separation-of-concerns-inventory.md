@@ -109,7 +109,11 @@ Legend:
 | `src/os/display/mod.rs` | 53 | Display/focus platform facade | Platform facade | clean | keep |  |
 | `src/os/mod.rs` | 1 | OS abstraction module export | Platform facade | clean | keep |  |
 | `src/paths.rs` | 229 | Config/data path resolution and path safety primitives | Filesystem boundary | clean | keep |  |
-| `src/plugins/action_executor.rs` | 801 | Action execution + process tracking + routing | Execution boundary | mixed | split | Large mixed file; identify 2-4 extractable seams; known multi-concern hotspot |
+| `src/plugins/action_executor.rs` | 121 | Action executor facade and public API | Execution boundary | clean | keep | Resolution, execution, and tracking concerns extracted |
+| `src/plugins/action_executor/execution.rs` | 135 | Runtime and daemon action execution flow | Execution boundary | clean | keep |  |
+| `src/plugins/action_executor/resolution.rs` | 178 | Action target resolution and runtime-fallback policy | Resolution boundary | clean | keep |  |
+| `src/plugins/action_executor/tests.rs` | 308 | Action executor tests | Test boundary | clean | keep |  |
+| `src/plugins/action_executor/tracking.rs` | 180 | Action process tracking, reservation, and cleanup | Lifecycle boundary | review | keep | Tracking is isolated; consider platform helper extraction if this grows |
 | `src/plugins/action_transport/mod.rs` | 21 | Action transport facade | Transport boundary | clean | keep |  |
 | `src/plugins/action_transport/platform/mod.rs` | 20 | Action transport platform dispatch and fallback policy | Platform facade | clean | keep | Windows fallback is inlined; unsupported targets fail at compile time |
 | `src/plugins/action_transport/platform/unix_common.rs` | 65 | Unix action transport implementation | Platform adapter | clean | keep |  |
@@ -123,7 +127,11 @@ Legend:
 | `src/plugins/loader.rs` | 415 | Plugin discovery/loading from filesystem | Filesystem boundary | review | keep | Medium-large; verify boundary remains focused |
 | `src/plugins/log_control.rs` | 153 | Per-plugin log muting/filtering policy persistence | Config boundary | clean | keep |  |
 | `src/plugins/manager.rs` | 312 | Plugin manager orchestration | Service boundary | review | keep | Medium-large; verify boundary remains focused |
-| `src/plugins/manifest.rs` | 910 | Plugin manifest schema + validation rules | Contract boundary | mixed | split | Large mixed file; identify 2-4 extractable seams; known multi-concern hotspot |
+| `src/plugins/manifest/mod.rs` | 37 | Manifest facade and shared traversal/platform helpers | Contract boundary | clean | keep |  |
+| `src/plugins/manifest/schema.rs` | 105 | Manifest schema and serde model types | Contract schema boundary | clean | keep |  |
+| `src/plugins/manifest/schema_tests.rs` | 318 | Manifest schema parsing and defaulting tests | Test boundary | clean | keep |  |
+| `src/plugins/manifest/validation.rs` | 292 | Manifest validation rules and contract enforcement | Contract validation boundary | review | keep | Validation is now isolated; split again only if rules keep growing |
+| `src/plugins/manifest/validation_tests.rs` | 281 | Manifest validation tests | Test boundary | clean | keep |  |
 | `src/plugins/mod.rs` | 451 | Plugin model and lifecycle facade | Plugin domain boundary | review | split | High complexity by size; validate single responsibility |
 | `src/plugins/resolver.rs` | 208 | Plugin source resolution (installed vs linked) | Resolution boundary | clean | keep |  |
 | `src/process_utils/mod.rs` | 15 | Process helper facade | Process boundary | clean | keep |  |
@@ -222,6 +230,6 @@ Legend:
 These are only signals from file-level concerns and size, not final moves:
 
 - Coalesce candidates (small facade-only modules): `src/*/mod.rs` files that only re-export or route with minimal logic.
-- Split-first hotspots: `src/plugins/manifest.rs`, `src/plugins/action_executor.rs`, `src/features/plugin_store/installer/dependency/source_build.rs`, `src/features/plugin_store/github/mod.rs`.
+- Split-first hotspots: `src/plugins/action_executor.rs`, `src/features/plugin_store/installer/dependency/source_build.rs`, `src/features/plugin_store/github/mod.rs`, `src/plugins/mod.rs`.
 - UI unification hotspots: `ui/views/dev/index.js` + `ui/views/dev/template.js` (controller + string-template rendering) should align with component/reducer style used by other pages.
 - Platform boundary check: keep OS API usage confined to `platform/*` and `os/*` adapter files.
