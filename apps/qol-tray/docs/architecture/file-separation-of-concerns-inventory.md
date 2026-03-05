@@ -51,7 +51,9 @@ Legend:
 | `src/features/plugin_store/installer/dependency.rs` | 113 | Dependency install orchestration and plan shaping | Installation domain boundary | clean | keep | Manifest, release, and source-build concerns extracted |
 | `src/features/plugin_store/installer/dependency/manifest.rs` | 47 | Plugin manifest load and execution-contract preflight | Contract boundary | clean | keep |  |
 | `src/features/plugin_store/installer/dependency/release.rs` | 74 | GitHub release asset fetch and binary download | External API boundary | clean | keep |  |
-| `src/features/plugin_store/installer/dependency/source_build.rs` | 234 | Source-build fallback, built-binary install, and Cargo manifest sanitization | Build/install boundary | review | keep | Largest remaining dependency installer seam; split again only if it grows |
+| `src/features/plugin_store/installer/dependency/source_build/artifact.rs` | 92 | Built-binary output resolution, staging, install, and permissions | Build artifact boundary | clean | keep |  |
+| `src/features/plugin_store/installer/dependency/source_build/manifest_sanitizer.rs` | 113 | Cargo manifest sanitization for release fallback builds | Build manifest boundary | clean | keep |  |
+| `src/features/plugin_store/installer/dependency/source_build/mod.rs` | 50 | Source-build fallback coordination | Build/install boundary | clean | keep | Artifact and manifest concerns extracted |
 | `src/features/plugin_store/installer/lock.rs` | 47 | Installer lockfile primitives and stale-lock detection | Concurrency boundary | clean | keep |  |
 | `src/features/plugin_store/installer/source.rs` | 149 | Repository clone/default-branch/reset preparation | Source sync boundary | clean | keep |  |
 | `src/features/plugin_store/installer/staging.rs` | 191 | Staging, swap, rollback, and temp-dir cleanup | Transaction boundary | clean | keep |  |
@@ -121,7 +123,10 @@ Legend:
 | `src/plugins/action_transport/platform/unix_common.rs` | 65 | Unix action transport implementation | Platform adapter | clean | keep |  |
 | `src/plugins/action_transport/protocol.rs` | 62 | Action transport protocol framing | Protocol boundary | clean | keep |  |
 | `src/plugins/config.rs` | 284 | Plugin configuration persistence | Storage boundary | review | keep | Medium-large; verify boundary remains focused |
-| `src/plugins/daemon_lifecycle.rs` | 320 | Plugin daemon process startup, log relay, readiness, and shutdown | Lifecycle boundary | review | keep | Root plugin module no longer owns daemon orchestration; split relay helpers only if this grows |
+| `src/plugins/daemon_lifecycle/log_relay.rs` | 85 | Plugin daemon stdout/stderr relay and per-line suppression | Logging boundary | clean | keep |  |
+| `src/plugins/daemon_lifecycle/mod.rs` | 38 | Plugin daemon lifecycle facade and daemon registration | Lifecycle boundary | clean | keep | Spawn, relay, and readiness concerns extracted |
+| `src/plugins/daemon_lifecycle/readiness.rs` | 123 | Plugin daemon readiness, socket wait, and shutdown completion | Lifecycle boundary | clean | keep |  |
+| `src/plugins/daemon_lifecycle/spawn.rs` | 89 | Plugin daemon process spawn, env setup, and log relay configuration | Process launch boundary | clean | keep |  |
 | `src/plugins/daemon_tracker/mod.rs` | 164 | Daemon pid/socket tracking facade | Lifecycle boundary | clean | keep |  |
 | `src/plugins/daemon_tracker/platform/linux.rs` | 69 | Linux daemon tracking implementation | Platform adapter | clean | keep | Socket cleanup delegated to shared Unix helper |
 | `src/plugins/daemon_tracker/platform/macos.rs` | 96 | macOS daemon tracking implementation | Platform adapter | clean | keep | Socket cleanup delegated to shared Unix helper |
@@ -238,6 +243,6 @@ Legend:
 These are only signals from file-level concerns and size, not final moves:
 
 - Coalesce candidates (small facade-only modules): `src/*/mod.rs` files that only re-export or route with minimal logic.
-- Split-first hotspots: `src/features/plugin_store/installer/dependency/source_build.rs`, `src/plugins/daemon_lifecycle.rs`, `src/plugins/loader.rs`, `src/plugins/manifest/validation.rs`.
+- Split-first hotspots: `src/doctor/mod.rs`, `src/plugins/manager.rs`, `src/plugins/config.rs`, `src/plugins/manifest/validation.rs`.
 - UI unification hotspots: `ui/views/dev/index.js` + `ui/views/dev/template.js` (controller + string-template rendering) should align with component/reducer style used by other pages.
 - Platform boundary check: keep OS API usage confined to `platform/*` and `os/*` adapter files.
