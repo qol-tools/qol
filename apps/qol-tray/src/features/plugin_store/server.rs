@@ -25,7 +25,7 @@ mod plugin_services;
 #[cfg(feature = "dev")]
 mod restart;
 mod security;
-mod settings_handlers;
+mod settings;
 mod types;
 
 use anyhow::Result;
@@ -76,9 +76,9 @@ pub async fn start_ui_server(
         .route("/plugins", get(plugin_handlers::list_plugins))
         .route("/installed", get(plugin_handlers::list_installed))
         .route("/events", get(plugin_handlers::sse_handler))
-        .route("/cover/{id}", get(settings_handlers::serve_cover))
-        .route("/icon/{bundle_id}", get(settings_handlers::serve_icon))
-        .route("/apps", get(settings_handlers::list_apps))
+        .route("/cover/{id}", get(settings::serve_cover))
+        .route("/icon/{bundle_id}", get(settings::serve_icon))
+        .route("/apps", get(settings::list_apps))
         .route(
             "/plugins/{id}/actions/{action}",
             post(plugin_handlers::execute_plugin_action),
@@ -86,25 +86,19 @@ pub async fn start_ui_server(
         .route("/install/{id}", post(plugin_handlers::install_plugin))
         .route("/update/{id}", post(plugin_handlers::update_plugin))
         .route("/uninstall/{id}", post(plugin_handlers::uninstall_plugin))
+        .route("/plugins/{id}/config", get(settings::get_plugin_config))
         .route(
             "/plugins/{id}/config",
-            get(settings_handlers::get_plugin_config),
+            axum::routing::put(settings::set_plugin_config),
         )
-        .route(
-            "/plugins/{id}/config",
-            axum::routing::put(settings_handlers::set_plugin_config),
-        )
-        .route("/github-token", get(settings_handlers::get_token_status))
-        .route("/github-token", post(settings_handlers::set_github_token))
+        .route("/github-token", get(settings::get_token_status))
+        .route("/github-token", post(settings::set_github_token))
         .route(
             "/github-token",
-            axum::routing::delete(settings_handlers::delete_github_token),
+            axum::routing::delete(settings::delete_github_token),
         )
-        .route("/hotkeys", get(settings_handlers::get_hotkeys))
-        .route(
-            "/hotkeys",
-            axum::routing::put(settings_handlers::set_hotkeys),
-        )
+        .route("/hotkeys", get(settings::get_hotkeys))
+        .route("/hotkeys", axum::routing::put(settings::set_hotkeys))
         .route("/dev/enabled", get(meta_handlers::dev_enabled))
         .route("/version", get(meta_handlers::get_version))
         .route("/check-update", get(meta_handlers::check_update))
