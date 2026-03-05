@@ -6,7 +6,6 @@ use std::time::Duration;
 use crate::daemon::DaemonEvent;
 use crate::dev;
 
-use super::dev_handlers::fallback_plugin_ids;
 use super::dev_runtime::DevRuntimeService;
 use super::helpers::shared_config_dir;
 use super::restart::RestartPort;
@@ -72,6 +71,14 @@ pub(super) fn queue_reload(state: &AppState) -> Result<(), &'static str> {
     });
 
     Ok(())
+}
+
+pub(super) fn refresh_discovery(state: &AppState) {
+    crate::dev::state::start_discovery(
+        &state.dev_state,
+        &state.daemon.events,
+        state.plugins_dir.clone(),
+    );
 }
 
 pub(super) fn queue_self_recompile(state: &AppState) -> Result<(), &'static str> {
@@ -221,6 +228,14 @@ pub(super) fn start_mock_targets(state: &AppState) -> Result<Vec<&'static str>, 
     Ok(started)
 }
 
+pub(super) fn queue_mock_plugin_build(state: &AppState) -> Result<(), &'static str> {
+    let events = state.daemon.events.clone();
+    let config_dir = shared_config_dir().ok();
+    state
+        .runtime
+        .start_mock_plugin_build(events, config_dir, fallback_plugin_ids(state))
+}
+
 pub(super) fn stop_mock_targets(state: &AppState) -> Vec<&'static str> {
     let runtime = state.runtime.clone();
     let mut stopped = Vec::new();
@@ -236,4 +251,19 @@ pub(super) fn stop_mock_targets(state: &AppState) -> Vec<&'static str> {
     }
 
     stopped
+}
+
+fn fallback_plugin_ids(state: &AppState) -> Vec<String> {
+    state
+        .dev_state
+        .discovery
+        .read()
+        .map(|discovery| {
+            discovery
+                .plugins
+                .iter()
+                .map(|plugin| plugin.id.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
 }
