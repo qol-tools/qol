@@ -234,7 +234,13 @@ pub(super) fn list_installed(state: &AppState) -> Result<InstalledPluginsRespons
     })?;
 
     let cached_versions: HashMap<String, String> = read_cache()
-        .map(|cache| cache.plugins.into_iter().map(|plugin| (plugin.id, plugin.version)).collect())
+        .map(|cache| {
+            cache
+                .plugins
+                .into_iter()
+                .map(|plugin| (plugin.id, plugin.version))
+                .collect()
+        })
         .unwrap_or_default();
 
     let mut plugins_by_id: HashMap<String, InstalledPlugin> = manager
@@ -242,8 +248,11 @@ pub(super) fn list_installed(state: &AppState) -> Result<InstalledPluginsRespons
         .map(|plugin| {
             let cover_path = plugin.path.join("cover.png");
             let ui_path = plugin.path.join("ui").join("index.html");
-            let (available_version, update_available) =
-                check_update(&cached_versions, &plugin.id, &plugin.manifest.plugin.version);
+            let (available_version, update_available) = check_update(
+                &cached_versions,
+                &plugin.id,
+                &plugin.manifest.plugin.version,
+            );
 
             let actions = extract_actions(&plugin.manifest.menu.items);
 

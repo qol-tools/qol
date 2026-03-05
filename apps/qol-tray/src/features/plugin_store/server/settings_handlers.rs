@@ -105,7 +105,12 @@ pub(super) async fn serve_icon(Path(bundle_id): Path<String>) -> impl IntoRespon
         }
     }
 
-    (StatusCode::OK, [(header::CONTENT_TYPE, "image/png")], png_buf).into_response()
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "image/png")],
+        png_buf,
+    )
+        .into_response()
 }
 
 pub(super) async fn get_plugin_config(Path(plugin_id): Path<String>) -> impl IntoResponse {
@@ -178,9 +183,9 @@ pub(super) async fn set_plugin_config(
 fn notify_plugin_reload(state: &AppState, plugin_id: &str) {
     let socket_path = {
         let manager = state.plugin_manager.lock().unwrap();
-        manager.get(plugin_id).and_then(|p| {
-            p.manifest.daemon.as_ref()?.socket.clone()
-        })
+        manager
+            .get(plugin_id)
+            .and_then(|p| p.manifest.daemon.as_ref()?.socket.clone())
     };
 
     if let Some(path) = socket_path {
@@ -217,8 +222,10 @@ fn discover_installed_apps() -> Vec<serde_json::Value> {
 
     let mdfind = Command::new("mdfind")
         .args([
-            "-onlyin", "/Applications",
-            "-onlyin", "/System/Applications",
+            "-onlyin",
+            "/Applications",
+            "-onlyin",
+            "/System/Applications",
         ])
         .arg("kMDItemContentType == 'com.apple.application-bundle'")
         .output();
@@ -244,7 +251,11 @@ fn discover_installed_apps() -> Vec<serde_json::Value> {
             }
             let name = app_path.file_stem()?.to_str()?.to_string();
             let bid = Command::new("defaults")
-                .args(["read", &format!("{}/Contents/Info", path), "CFBundleIdentifier"])
+                .args([
+                    "read",
+                    &format!("{}/Contents/Info", path),
+                    "CFBundleIdentifier",
+                ])
                 .output()
                 .ok()
                 .filter(|o| o.status.success())

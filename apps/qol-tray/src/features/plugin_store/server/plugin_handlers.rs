@@ -74,11 +74,8 @@ pub(super) async fn execute_plugin_action(
 
     use crate::plugins::action_executor::ActionExecutionError;
 
-    let result = crate::plugins::action_executor::try_execute_action(
-        &state.plugin_manager,
-        &id,
-        &action,
-    );
+    let result =
+        crate::plugins::action_executor::try_execute_action(&state.plugin_manager, &id, &action);
 
     let Err(error) = result else {
         return (

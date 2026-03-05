@@ -1,5 +1,5 @@
 import { subscribe, onReconnect } from '../../events.js';
-import { jsonRequest, readResponseText } from '../../api/client.js';
+import { jsonRequest, readResponseText, tryFetchJson } from '../../api/client.js';
 import { mergePlugins, renderBuildResults, renderPluginBuildMeta } from './plugin-model.js';
 import { renderDevView } from './template.js';
 import { createBuildController } from './build-controller.js';
@@ -12,6 +12,12 @@ import {
 
 export const id = 'dev';
 const CPU_MONITORING_STORAGE_KEY = 'dev-cpu-monitoring';
+
+function isSafePluginId(pluginId) {
+    if (typeof pluginId !== 'string') return false;
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(pluginId)) return false;
+    return !pluginId.startsWith('-');
+}
 
 function saveSpinnerTimes(root) {
     const times = [];
@@ -43,14 +49,14 @@ function readSavedCpuMonitoring() {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
             return parsed.reduce((acc, pluginId) => {
-                if (typeof pluginId !== 'string' || !pluginId) return acc;
+                if (!isSafePluginId(pluginId)) return acc;
                 acc[pluginId] = true;
                 return acc;
             }, {});
         }
         if (!parsed || typeof parsed !== 'object') return {};
         return Object.entries(parsed).reduce((acc, [pluginId, enabled]) => {
-            if (typeof pluginId !== 'string' || !pluginId) return acc;
+            if (!isSafePluginId(pluginId)) return acc;
             if (!enabled) return acc;
             acc[pluginId] = true;
             return acc;
@@ -90,6 +96,8 @@ let reloadCooldownUntil = 0;
 let focusRefreshPending = true;
 let actionInteractionLocks = 0;
 let deferredUpdatePending = false;
+let cpuMonitoringSyncChain = Promise.resolve();
+let cpuEnableHydrationTimer = null;
 
 const discoveryController = createDiscoveryController({
     state,
@@ -139,12 +147,14 @@ export function render(containerEl) {
     const hydrateBuildPromise = mockController.isMockTesting()
         ? Promise.resolve()
         : buildController.hydrateBuildState(true);
+    const hydrateCpuPromise = queueCpuMonitoringSync().then(() => hydrateCpuSnapshot(true));
     void Promise.all([
         discoveryController.loadPlugins(true),
         discoveryController.fetchDiscoveryState(true),
         discoveryController.loadLogControls(true),
         hydrateBuildPromise,
-        mockController.hydrateMockTargets(true)
+        mockController.hydrateMockTargets(true),
+        hydrateCpuPromise
     ]).finally(() => {
         if (!state.linkingId) {
             updateView();
@@ -227,7 +237,10 @@ function visiblePluginIdSet() {
 }
 
 function monitoredCpuPluginIds(visibleOnly = false) {
-    const monitored = Object.keys(state.cpuMonitoring).filter(pluginId => !!state.cpuMonitoring[pluginId]);
+    const monitored = Object.keys(state.cpuMonitoring).filter(pluginId => {
+        if (!isSafePluginId(pluginId)) return false;
+        return !!state.cpuMonitoring[pluginId];
+    });
     if (!visibleOnly) return monitored;
     const visiblePluginIds = visiblePluginIdSet();
     return monitored.filter(pluginId => visiblePluginIds.has(pluginId));
@@ -239,6 +252,22 @@ function persistCpuMonitoring() {
             CPU_MONITORING_STORAGE_KEY,
             JSON.stringify(monitoredCpuPluginIds())
         );
+    } catch {}
+}
+
+function queueCpuMonitoringSync() {
+    const pluginIds = monitoredCpuPluginIds();
+    cpuMonitoringSyncChain = cpuMonitoringSyncChain
+        .catch(() => {})
+        .then(() => syncCpuMonitoringState(pluginIds));
+    return cpuMonitoringSyncChain;
+}
+
+async function syncCpuMonitoringState(pluginIds) {
+    try {
+        await fetch('/api/dev/plugin-cpu/monitoring', {
+            ...jsonRequest('PUT', { plugin_ids: pluginIds })
+        });
     } catch {}
 }
 
@@ -327,6 +356,32 @@ function handleCpuSnapshot(event) {
     if (!updateCpuSamples(payload)) return;
     if (state.linkingId) return;
     updateView();
+}
+
+async function hydrateCpuSnapshot(skipUpdate = false) {
+    const payload = await tryFetchJson('/api/dev/plugin-cpu');
+    if (!payload) return;
+    if (!updateCpuSamples(payload)) return;
+    if (skipUpdate) return;
+    if (state.linkingId) return;
+    updateView(true);
+}
+
+function scheduleCpuHydrationRetry(pluginId, attempts = 6) {
+    if (!state.cpuMonitoring[pluginId]) return;
+    if (state.cpuByPlugin[pluginId]) return;
+    if (attempts <= 0) return;
+    if (cpuEnableHydrationTimer !== null) {
+        clearTimeout(cpuEnableHydrationTimer);
+        cpuEnableHydrationTimer = null;
+    }
+    cpuEnableHydrationTimer = setTimeout(() => {
+        cpuEnableHydrationTimer = null;
+        if (!state.cpuMonitoring[pluginId]) return;
+        void hydrateCpuSnapshot().then(() => {
+            scheduleCpuHydrationRetry(pluginId, attempts - 1);
+        });
+    }, 1000);
 }
 
 function pruneCpuMonitoring(mergedList) {
@@ -711,16 +766,28 @@ async function editPluginLogFilters(pluginId) {
 }
 
 function togglePluginCpuMonitoring(pluginId) {
+    if (!isSafePluginId(pluginId)) return;
+
     if (state.cpuMonitoring[pluginId]) {
         delete state.cpuMonitoring[pluginId];
         delete state.cpuByPlugin[pluginId];
+        if (cpuEnableHydrationTimer !== null) {
+            clearTimeout(cpuEnableHydrationTimer);
+            cpuEnableHydrationTimer = null;
+        }
         persistCpuMonitoring();
+        void queueCpuMonitoringSync();
         updateView(true);
         return;
     }
 
     state.cpuMonitoring[pluginId] = true;
     persistCpuMonitoring();
+    void queueCpuMonitoringSync().finally(() => {
+        void hydrateCpuSnapshot().then(() => {
+            scheduleCpuHydrationRetry(pluginId);
+        });
+    });
     updateView(true);
 }
 
