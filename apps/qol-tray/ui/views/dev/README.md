@@ -11,3 +11,15 @@
 - Plugin build overlays are tracked per plugin row.
 - Completion playback is phase-based (`ramp -> hold -> fade`) and should run once per row.
 - Completion state is restored on rerender so normal UI updates do not reset active row playback.
+
+## CPU Monitor Toggle
+
+- CPU monitoring is synchronized to backend with `/api/dev/plugin-cpu/monitoring`.
+- Disabled plugins are removed from backend sampling, not only hidden in UI.
+- Enabling a plugin refreshes CPU snapshot state without requiring a browser refresh.
+- Monitoring payload IDs are validated and bounded server-side before sampling state is updated.
+
+## Security Notes
+
+- Dev view HTML rendering escapes plugin metadata before writing to `innerHTML`.
+- API mutation routes reject browser cross-site requests via fetch metadata/origin checks.

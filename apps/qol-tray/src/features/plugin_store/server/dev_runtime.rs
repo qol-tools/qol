@@ -4,9 +4,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::daemon::{DaemonEvent, EventBus};
+use crate::dev;
 use crate::dev::adapters::traits::{CoreEventSink, DevMockTarget, DevRuntimeStateStore};
 use crate::dev::core::{BuildStatus, CoreBuildResult, CoreEvent};
-use crate::dev;
 use crate::dev::state::BuildResultInfo;
 
 use super::dev_runtime_state::in_memory_runtime_state;
@@ -99,20 +99,23 @@ impl DevRuntimeService {
     }
 
     pub(super) fn stop_mock_self_update(&self) -> bool {
-        self.state.request_stop_mock_target(DevMockTarget::SelfUpdate)
+        self.state
+            .request_stop_mock_target(DevMockTarget::SelfUpdate)
     }
 
     pub(super) fn start_mock_self_recompile(
         &self,
         events: Arc<EventBus>,
     ) -> Result<(), &'static str> {
-        if !self.state.try_start_mock_target(DevMockTarget::SelfRecompile) {
+        if !self
+            .state
+            .try_start_mock_target(DevMockTarget::SelfRecompile)
+        {
             return Err("Mock self-recompile already in progress");
         }
         let state = Arc::clone(&self.state);
         tokio::spawn(async move {
-            let _guard =
-                MockTargetGuard::new(Arc::clone(&state), DevMockTarget::SelfRecompile);
+            let _guard = MockTargetGuard::new(Arc::clone(&state), DevMockTarget::SelfRecompile);
 
             for i in 0..=100u8 {
                 if state.mock_target_cancelled(DevMockTarget::SelfRecompile) {
@@ -223,7 +226,8 @@ impl DevRuntimeService {
     }
 
     pub(super) fn stop_mock_plugin_build(&self) -> bool {
-        self.state.request_stop_mock_target(DevMockTarget::PluginBuild)
+        self.state
+            .request_stop_mock_target(DevMockTarget::PluginBuild)
     }
 }
 

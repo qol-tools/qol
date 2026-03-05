@@ -122,7 +122,8 @@ impl DevRuntimeStateStore for InMemoryDevRuntimeState {
     }
 
     fn finish_self_recompile(&self) {
-        self.self_recompile_in_progress.store(false, Ordering::SeqCst);
+        self.self_recompile_in_progress
+            .store(false, Ordering::SeqCst);
     }
 
     fn self_recompile_in_progress(&self) -> bool {

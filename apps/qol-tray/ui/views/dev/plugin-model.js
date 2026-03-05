@@ -1,3 +1,5 @@
+import { escapeHtml } from '../../utils/escape-html.js';
+
 function shortFingerprint(value) {
     if (!value) return '';
     return value.slice(0, 8);
@@ -81,7 +83,8 @@ export function renderPluginBuildMeta(plugin) {
     }
 
     if (!plugin.supports_platform) {
-        return `<span class="plugin-build-meta muted">${plugin.rebuild_reason || 'Unsupported platform'}</span>`;
+        const reason = escapeHtml(plugin.rebuild_reason || 'Unsupported platform');
+        return `<span class="plugin-build-meta muted">${reason}</span>`;
     }
 
     if (!plugin.has_cargo) {
@@ -92,9 +95,9 @@ export function renderPluginBuildMeta(plugin) {
     const last = shortFingerprint(plugin.last_built_fingerprint);
     const reason = plugin.rebuild_reason || (plugin.needs_rebuild ? 'Source changed' : 'Up to date');
     const parts = [];
-    if (plugin.needs_rebuild && reason) parts.push(reason);
-    if (current) parts.push(`fp ${current}`);
-    if (last) parts.push(`last ${last}`);
+    if (plugin.needs_rebuild && reason) parts.push(escapeHtml(reason));
+    if (current) parts.push(`fp ${escapeHtml(current)}`);
+    if (last) parts.push(`last ${escapeHtml(last)}`);
     return `<span class="plugin-build-meta">${parts.join(' • ')}</span>`;
 }
 
@@ -113,5 +116,8 @@ export function renderBuildResults(buildResults) {
         return `<span class="build-success">Build succeeded${skippedText}</span>`;
     }
 
-    return `<span class="build-error">Build failed: ${failed.map(result => result.plugin_id).join(', ')}</span>`;
+    const failedIds = failed
+        .map(result => escapeHtml(result.plugin_id))
+        .join(', ');
+    return `<span class="build-error">Build failed: ${failedIds}</span>`;
 }

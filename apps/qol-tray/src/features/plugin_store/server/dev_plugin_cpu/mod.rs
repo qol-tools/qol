@@ -53,6 +53,8 @@ struct PluginCpuState {
     last_timestamp_ms: u64,
     pid_cpu_micros: HashMap<i32, u64>,
     plugin_rows: HashMap<String, PluginCpuRow>,
+    monitored_plugin_ids: HashSet<String>,
+    monitoring_filter_enabled: bool,
 }
 
 #[derive(Default)]
@@ -117,11 +119,36 @@ impl DevPluginCpuService {
             plugins,
         }
     }
+
+    pub(super) fn set_monitored_plugins(&self, plugin_ids: Vec<String>) {
+        let monitored_plugin_ids = plugin_ids.into_iter().collect::<HashSet<_>>();
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        state.monitoring_filter_enabled = true;
+        state.monitored_plugin_ids = monitored_plugin_ids;
+        let monitored = state.monitored_plugin_ids.clone();
+        state
+            .plugin_rows
+            .retain(|plugin_id, _| monitored.contains(plugin_id));
+        if !state.plugin_rows.is_empty() {
+            return;
+        }
+        state.pid_cpu_micros.clear();
+    }
 }
 
 fn sample_once(state: &Arc<Mutex<PluginCpuState>>, plugin_manager: &Arc<Mutex<PluginManager>>) {
     let cpu_percent_window_samples = platform::cpu_percent_window_samples().max(1);
-    let plugin_pids = collect_plugin_pids(plugin_manager);
+    let mut plugin_pids = collect_plugin_pids(plugin_manager);
+    let monitored_plugin_filter = monitored_plugin_filter(state);
+    if let Some(monitored_plugin_ids) = monitored_plugin_filter {
+        if monitored_plugin_ids.is_empty() {
+            clear_sample_state(state);
+            return;
+        }
+        plugin_pids.retain(|plugin_id, _| monitored_plugin_ids.contains(plugin_id));
+    }
     let active_plugins: HashSet<String> = plugin_pids.keys().cloned().collect();
     let active_pids: HashSet<i32> = plugin_pids
         .values()
@@ -222,12 +249,33 @@ fn broadcast_snapshot(state: &Arc<Mutex<PluginCpuState>>, events: &Arc<EventBus>
     });
 }
 
+fn monitored_plugin_filter(state: &Arc<Mutex<PluginCpuState>>) -> Option<HashSet<String>> {
+    let Ok(guard) = state.lock() else {
+        return None;
+    };
+    if !guard.monitoring_filter_enabled {
+        return None;
+    }
+    Some(guard.monitored_plugin_ids.clone())
+}
+
+fn clear_sample_state(state: &Arc<Mutex<PluginCpuState>>) {
+    let Ok(mut guard) = state.lock() else {
+        return;
+    };
+    guard.plugin_rows.clear();
+    guard.pid_cpu_micros.clear();
+    guard.last_sample_at = None;
+    guard.last_timestamp_ms = now_millis();
+}
+
 fn update_smoothed_cpu_percent(
     row: &mut PluginCpuRow,
     raw_cpu_percent: f64,
     window_samples: usize,
 ) {
-    row.cpu_percent_samples.push_back(round_two_decimals(raw_cpu_percent));
+    row.cpu_percent_samples
+        .push_back(round_two_decimals(raw_cpu_percent));
     while row.cpu_percent_samples.len() > window_samples {
         row.cpu_percent_samples.pop_front();
     }

@@ -154,3 +154,10 @@ pub(super) struct UpsertPluginLogControlRequest {
     #[serde(default)]
     pub(super) suppress_patterns: Vec<String>,
 }
+
+#[cfg(feature = "dev")]
+#[derive(Debug, Clone, Deserialize, Default)]
+pub(super) struct SetPluginCpuMonitoringRequest {
+    #[serde(default)]
+    pub(super) plugin_ids: Vec<String>,
+}
