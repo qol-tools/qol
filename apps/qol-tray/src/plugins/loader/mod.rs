@@ -32,11 +32,10 @@ impl PluginLoader {
     }
 
     pub fn load_resolved(resolved: &[super::resolver::ResolvedPlugin]) -> Result<Vec<Plugin>> {
-        let items: Vec<(String, PathBuf)> = resolved
+        resolved
             .iter()
-            .map(|resolved| (resolved.id.clone(), resolved.path.clone()))
-            .collect();
-        scan::load_items(&items)
+            .map(manifest_loader::load_resolved_plugin)
+            .collect()
     }
 
     #[cfg(test)]

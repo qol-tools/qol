@@ -1,13 +1,25 @@
 use std::time::Duration;
 
 pub(crate) trait PollStrategy: Send {
-    fn next_interval(&mut self, current: Duration, changed: bool, min: Duration, max: Duration) -> Duration;
+    fn next_interval(
+        &mut self,
+        current: Duration,
+        changed: bool,
+        min: Duration,
+        max: Duration,
+    ) -> Duration;
 }
 
 pub(crate) struct BasicStrategy;
 
 impl PollStrategy for BasicStrategy {
-    fn next_interval(&mut self, current: Duration, changed: bool, min: Duration, max: Duration) -> Duration {
+    fn next_interval(
+        &mut self,
+        current: Duration,
+        changed: bool,
+        min: Duration,
+        max: Duration,
+    ) -> Duration {
         let next = if changed {
             current / 2
         } else {
@@ -35,7 +47,9 @@ impl AdaptivePoller {
     }
 
     pub(crate) fn tick(&mut self, changed: bool) -> Duration {
-        self.current = self.strategy.next_interval(self.current, changed, self.min, self.max);
+        self.current = self
+            .strategy
+            .next_interval(self.current, changed, self.min, self.max);
         self.current
     }
 

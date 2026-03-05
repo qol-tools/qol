@@ -86,7 +86,7 @@ fn execute_via_runtime(resolved: &ResolvedAction) -> Result<(), ActionExecutionE
         command_path,
         resolved.args
     );
-    let mut child = spawn_runtime_command(resolved, command_path)?;
+    let child = spawn_runtime_command(resolved, command_path)?;
     let pid = child.id();
     track_action_process(&resolved.plugin_id, &resolved.action_id, pid);
     spawn_wait_untracker(resolved, child, pid);

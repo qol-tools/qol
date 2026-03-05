@@ -69,7 +69,11 @@ struct CfGuard(*const c_void);
 
 impl CfGuard {
     fn new(ptr: *const c_void) -> Option<Self> {
-        if ptr.is_null() { None } else { Some(Self(ptr)) }
+        if ptr.is_null() {
+            None
+        } else {
+            Some(Self(ptr))
+        }
     }
 
     fn as_ptr(&self) -> *const c_void {
@@ -114,15 +118,26 @@ fn ax_get_pid(element: *const c_void) -> Option<i32> {
 fn ax_get_point(value: &CfGuard) -> Option<CGPoint> {
     let mut point = CGPoint { x: 0.0, y: 0.0 };
     let ok = unsafe {
-        AXValueGetValue(value.as_ptr(), K_AX_VALUE_CG_POINT_TYPE, &mut point as *mut _ as *mut c_void)
+        AXValueGetValue(
+            value.as_ptr(),
+            K_AX_VALUE_CG_POINT_TYPE,
+            &mut point as *mut _ as *mut c_void,
+        )
     };
     ok.then_some(point)
 }
 
 fn ax_get_size(value: &CfGuard) -> Option<CGSize> {
-    let mut size = CGSize { width: 0.0, height: 0.0 };
+    let mut size = CGSize {
+        width: 0.0,
+        height: 0.0,
+    };
     let ok = unsafe {
-        AXValueGetValue(value.as_ptr(), K_AX_VALUE_CG_SIZE_TYPE, &mut size as *mut _ as *mut c_void)
+        AXValueGetValue(
+            value.as_ptr(),
+            K_AX_VALUE_CG_SIZE_TYPE,
+            &mut size as *mut _ as *mut c_void,
+        )
     };
     (ok && size.width > 0.0 && size.height > 0.0).then_some(size)
 }
@@ -134,9 +149,14 @@ fn focused_window_bounds_ax(own_pid: i32) -> Option<MonitorBounds> {
 
     let app_pid = ax_get_pid(focused_app.as_ptr());
     if let Some(pid) = app_pid {
-        let ignored = super::is_ignored_pid(pid as u32);
+        let ignored = super::super::is_ignored_pid(pid as u32);
         if pid == own_pid || ignored {
-            log::debug!("[runtime/ax] SKIP pid={} own={} ignored={}", pid, pid == own_pid, ignored);
+            log::debug!(
+                "[runtime/ax] SKIP pid={} own={} ignored={}",
+                pid,
+                pid == own_pid,
+                ignored
+            );
             return None;
         }
     }
@@ -147,8 +167,14 @@ fn focused_window_bounds_ax(own_pid: i32) -> Option<MonitorBounds> {
             None
         })?;
 
-    let pos = ax_get_point(&ax_get_attr(focused_window.as_ptr(), &ax_attr_str(b"AXPosition"))?)?;
-    let sz = ax_get_size(&ax_get_attr(focused_window.as_ptr(), &ax_attr_str(b"AXSize"))?)?;
+    let pos = ax_get_point(&ax_get_attr(
+        focused_window.as_ptr(),
+        &ax_attr_str(b"AXPosition"),
+    )?)?;
+    let sz = ax_get_size(&ax_get_attr(
+        focused_window.as_ptr(),
+        &ax_attr_str(b"AXSize"),
+    )?)?;
 
     let result = MonitorBounds {
         x: pos.x as f32,
@@ -156,8 +182,14 @@ fn focused_window_bounds_ax(own_pid: i32) -> Option<MonitorBounds> {
         width: sz.width as f32,
         height: sz.height as f32,
     };
-    log::debug!("[runtime/ax] HIT pid={:?} window=({}, {}, {}x{})",
-        app_pid, result.x, result.y, result.width, result.height);
+    log::debug!(
+        "[runtime/ax] HIT pid={:?} window=({}, {}, {}x{})",
+        app_pid,
+        result.x,
+        result.y,
+        result.width,
+        result.height
+    );
     Some(result)
 }
 

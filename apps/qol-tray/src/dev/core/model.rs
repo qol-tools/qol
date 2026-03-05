@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuildStatus {
     Queued,
@@ -45,4 +47,31 @@ pub enum CoreInput {
     RunFinished {
         results: Vec<CoreBuildResult>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoreEvent {
+    BuildStarted,
+    BuildPluginProgress {
+        plugin_id: String,
+        status: BuildStatus,
+        percent: u8,
+        phase: String,
+    },
+    BuildComplete {
+        results: Vec<CoreBuildResult>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CoreBuildProgress {
+    pub status: BuildStatus,
+    pub percent: u8,
+    pub phase: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CoreState {
+    pub building: bool,
+    pub progress: HashMap<String, CoreBuildProgress>,
 }

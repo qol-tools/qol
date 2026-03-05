@@ -17,13 +17,15 @@ pub use config::PluginConfigManager;
 pub use loader::PluginLoader;
 pub use manager::PluginManager;
 pub use manifest::{ActionType, MenuItem, PluginManifest};
+pub use resolver::PluginSource;
 
 use anyhow::Result;
 use std::path::PathBuf;
 use std::process::Child;
 
 pub(crate) use execution_contract::{
-    resolve_plugin_command_path, validate_execution_contract, MissingBinaryContractError,
+    resolve_plugin_command_path_for_source, validate_execution_contract,
+    validate_execution_contract_for_source,
 };
 
 #[derive(Debug)]
@@ -31,15 +33,26 @@ pub struct Plugin {
     pub id: String,
     pub manifest: PluginManifest,
     pub path: PathBuf,
+    pub source: PluginSource,
     daemon_process: Option<Child>,
 }
 
 impl Plugin {
     pub fn new(id: String, manifest: PluginManifest, path: PathBuf) -> Self {
+        Self::new_with_source(id, manifest, path, PluginSource::Installed)
+    }
+
+    pub fn new_with_source(
+        id: String,
+        manifest: PluginManifest,
+        path: PathBuf,
+        source: PluginSource,
+    ) -> Self {
         Self {
             id,
             manifest,
             path,
+            source,
             daemon_process: None,
         }
     }

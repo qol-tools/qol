@@ -4,11 +4,9 @@ mod manifests;
 mod releases;
 mod token;
 
-pub use cache::{
-    cache_age_secs, read_cache, update_cached_version, write_cache, CachedPlugin, PluginCache,
-};
+pub use cache::{cache_age_secs, read_cache, update_cached_version, write_cache};
 pub use catalog::PluginMetadata;
-pub use token::{
+pub(crate) use token::{
     build_github_request, delete_token, get_stored_token, send_checked, store_token,
     validate_token, TokenValidationError,
 };

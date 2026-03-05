@@ -32,7 +32,7 @@ fn register_daemon(plugin: &mut Plugin, child: Child) {
     let pid = child.id();
     plugin.daemon_process = Some(child);
     #[cfg(unix)]
-    crate::os::display::add_ignore_pid(pid);
+    crate::desktop_state::add_ignore_pid(pid);
     crate::signal::register_daemon_pid(pid);
     log::info!("Registered ignore pid {} for plugin {}", pid, plugin.id);
 }

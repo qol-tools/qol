@@ -70,7 +70,14 @@ impl Platform for LinuxQueries {
         let conn = self.conn.as_ref()?;
 
         let prop = conn
-            .get_property(false, self.root, self.active_window_atom, AtomEnum::WINDOW, 0, 1)
+            .get_property(
+                false,
+                self.root,
+                self.active_window_atom,
+                AtomEnum::WINDOW,
+                0,
+                1,
+            )
             .ok()?
             .reply()
             .ok()?;

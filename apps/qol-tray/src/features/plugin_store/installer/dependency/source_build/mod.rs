@@ -4,9 +4,7 @@ mod manifest_sanitizer;
 use super::super::command::run_cargo_build;
 use super::DependencyPlan;
 use anyhow::Result;
-use std::path::Path;
-
-pub(super) use artifact::{dependency_binary_output_path, set_executable_permissions};
+use std::path::{Path, PathBuf};
 
 pub(super) async fn build_fallback_binary(plan: &DependencyPlan<'_>) -> Result<()> {
     ensure_source_fallback_available(plan)?;
@@ -47,4 +45,12 @@ fn ensure_build_succeeded(output: &std::process::Output) -> Result<()> {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     anyhow::bail!("Cargo build failed: {}", stderr.trim())
+}
+
+pub(super) fn dependency_binary_output_path(plugin_dir: &Path, binary_name: &str) -> PathBuf {
+    artifact::dependency_binary_output_path(plugin_dir, binary_name)
+}
+
+pub(super) async fn set_executable_permissions(path: &Path) -> Result<()> {
+    artifact::set_executable_permissions(path).await
 }
