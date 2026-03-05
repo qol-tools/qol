@@ -75,7 +75,7 @@ impl CargoProgressEstimator {
         self.ratio = ratio;
 
         let mut percent = (ratio * 99.0).round() as u8;
-        if done > 0 {
+        if ratio > 0.0 {
             percent = percent.max(1);
         }
         (percent.min(99), done, total)
@@ -142,6 +142,17 @@ mod tests {
         let (p1, d1, t1) = estimator.update(92, 236, 0.45);
         assert_eq!(d1, 2);
         assert_eq!(t1, 146);
+        assert!(p1 >= p0);
+    }
+
+    #[test]
+    fn estimator_keeps_percent_monotonic_when_done_temporarily_regresses() {
+        let mut estimator = CargoProgressEstimator::default();
+
+        let (p0, _, _) = estimator.update(66, 264, 0.193);
+        assert_eq!(p0, 1);
+
+        let (p1, _, _) = estimator.update(3, 1389, 0.194);
         assert!(p1 >= p0);
     }
 }
