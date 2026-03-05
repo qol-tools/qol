@@ -5,6 +5,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+mod command;
+use command::{run_cargo_build, run_git, run_git_checked};
+
 const GIT_TIMEOUT: Duration = Duration::from_secs(120);
 const CARGO_BUILD_TIMEOUT: Duration = Duration::from_secs(300);
 const DEFAULT_CARGO_BUILD_JOBS: usize = 4;
@@ -474,76 +477,6 @@ fn validate_plugin_id(plugin_id: &str) -> Result<()> {
         return Ok(());
     }
     anyhow::bail!("{}: {}", super::validation::INVALID_PLUGIN_ID, plugin_id)
-}
-
-async fn run_git<I, S>(
-    args: I,
-    current_dir: Option<&Path>,
-    timeout: Duration,
-    operation: &str,
-) -> Result<std::process::Output>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<std::ffi::OsStr>,
-{
-    let mut command = tokio::process::Command::new("git");
-    command.args(args);
-    if let Some(current_dir) = current_dir {
-        command.current_dir(current_dir);
-    }
-    tokio::time::timeout(timeout, command.output())
-        .await
-        .with_context(|| format!("Git {} timed out", operation))?
-        .with_context(|| format!("Failed to run git {}", operation))
-}
-
-async fn run_git_checked<I, S>(
-    args: I,
-    current_dir: Option<&Path>,
-    operation: &str,
-) -> Result<std::process::Output>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<std::ffi::OsStr>,
-{
-    let output = run_git(args, current_dir, GIT_TIMEOUT, operation).await?;
-    if output.status.success() {
-        return Ok(output);
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    anyhow::bail!("Git {} failed: {}", operation, stderr)
-}
-
-async fn run_cargo_build(manifest_path: &Path, plugin_dir: &Path) -> Result<std::process::Output> {
-    let jobs = cargo_build_jobs();
-    let mut command = tokio::process::Command::new("cargo");
-    command
-        .arg("build")
-        .arg("--release")
-        .arg("--jobs")
-        .arg(jobs.to_string())
-        .arg("--manifest-path")
-        .arg(manifest_path)
-        .current_dir(plugin_dir);
-    tokio::time::timeout(CARGO_BUILD_TIMEOUT, command.output())
-        .await
-        .context("Cargo build timed out")?
-        .context("Failed to run cargo build")
-}
-
-fn cargo_build_jobs() -> usize {
-    if let Ok(raw) = std::env::var("QOL_TRAY_CARGO_BUILD_JOBS") {
-        if let Ok(parsed) = raw.parse::<usize>() {
-            if parsed > 0 {
-                return parsed;
-            }
-        }
-    }
-
-    std::thread::available_parallelism()
-        .map(|n| n.get().min(DEFAULT_CARGO_BUILD_JOBS))
-        .unwrap_or(DEFAULT_CARGO_BUILD_JOBS)
-        .max(1)
 }
 
 fn strip_dev_dependencies_for_release_build(manifest_path: &Path) -> Result<()> {
