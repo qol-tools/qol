@@ -42,7 +42,9 @@ Legend:
 | `src/features/mod.rs` | 36 | Feature registry contracts and composition | Feature boundary | clean | keep |  |
 | `src/features/plugin_store/github/cache.rs` | 142 | Plugin-store cache persistence and cache model | Cache boundary | clean | keep |  |
 | `src/features/plugin_store/github/catalog.rs` | 295 | Plugin catalog parsing, filtering, manifest shaping, and metadata tests | Catalog boundary | clean | keep |  |
-| `src/features/plugin_store/github/mod.rs` | 208 | GitHub client and release-fetch orchestration | External API boundary | review | keep | Cache, token, and catalog concerns extracted; release verification still sizable |
+| `src/features/plugin_store/github/manifests.rs` | 32 | Plugin manifest fetch across default branches | External API boundary | clean | keep |  |
+| `src/features/plugin_store/github/mod.rs` | 102 | GitHub client facade and cache policy | External API boundary | clean | keep | Manifest and release concerns extracted |
+| `src/features/plugin_store/github/releases.rs` | 84 | Latest-release fetch and platform-asset verification | Release boundary | clean | keep |  |
 | `src/features/plugin_store/github/token.rs` | 141 | GitHub token storage, validation, and request helpers | Auth boundary | clean | keep |  |
 | `src/features/plugin_store/installer.rs` | 245 | Plugin install/update/uninstall orchestration and operation locking | Installation boundary | review | keep | Transaction, source sync, and dependency handling were extracted |
 | `src/features/plugin_store/installer/command.rs` | 76 | Git and cargo command execution helpers | Process/tooling boundary | clean | keep |  |
@@ -119,12 +121,18 @@ Legend:
 | `src/plugins/action_transport/platform/unix_common.rs` | 65 | Unix action transport implementation | Platform adapter | clean | keep |  |
 | `src/plugins/action_transport/protocol.rs` | 62 | Action transport protocol framing | Protocol boundary | clean | keep |  |
 | `src/plugins/config.rs` | 284 | Plugin configuration persistence | Storage boundary | review | keep | Medium-large; verify boundary remains focused |
+| `src/plugins/daemon_lifecycle.rs` | 320 | Plugin daemon process startup, log relay, readiness, and shutdown | Lifecycle boundary | review | keep | Root plugin module no longer owns daemon orchestration; split relay helpers only if this grows |
 | `src/plugins/daemon_tracker/mod.rs` | 164 | Daemon pid/socket tracking facade | Lifecycle boundary | clean | keep |  |
 | `src/plugins/daemon_tracker/platform/linux.rs` | 69 | Linux daemon tracking implementation | Platform adapter | clean | keep | Socket cleanup delegated to shared Unix helper |
 | `src/plugins/daemon_tracker/platform/macos.rs` | 96 | macOS daemon tracking implementation | Platform adapter | clean | keep | Socket cleanup delegated to shared Unix helper |
 | `src/plugins/daemon_tracker/platform/mod.rs` | 55 | Daemon tracker platform dispatch and Windows fallback policy | Platform facade | clean | keep | Windows fallback is inlined; unsupported targets fail at compile time |
 | `src/plugins/daemon_tracker/platform/socket_cleanup.rs` | 127 | Shared Unix stale-socket cleanup policy | Platform shared boundary | clean | keep | Shared by Linux and macOS adapters |
-| `src/plugins/loader.rs` | 415 | Plugin discovery/loading from filesystem | Filesystem boundary | review | keep | Medium-large; verify boundary remains focused |
+| `src/plugins/execution_contract.rs` | 150 | Plugin command resolution and execution-contract validation | Contract boundary | clean | keep | Path resolution and binary-presence checks extracted from root plugin module |
+| `src/plugins/execution_contract_tests.rs` | 51 | Execution-contract path resolution tests | Test boundary | clean | keep |  |
+| `src/plugins/loader/manifest_loader.rs` | 45 | Plugin manifest read, parse, and contract validation | Filesystem boundary | clean | keep |  |
+| `src/plugins/loader/mod.rs` | 59 | Plugin loader facade and entrypoints | Filesystem boundary | clean | keep | Scan and manifest loading concerns extracted |
+| `src/plugins/loader/scan.rs` | 129 | Plugin directory scan, load diagnostics, and platform skip handling | Filesystem boundary | clean | keep |  |
+| `src/plugins/loader/tests.rs` | 264 | Plugin loader tests | Test boundary | clean | keep |  |
 | `src/plugins/log_control.rs` | 153 | Per-plugin log muting/filtering policy persistence | Config boundary | clean | keep |  |
 | `src/plugins/manager.rs` | 312 | Plugin manager orchestration | Service boundary | review | keep | Medium-large; verify boundary remains focused |
 | `src/plugins/manifest/mod.rs` | 37 | Manifest facade and shared traversal/platform helpers | Contract boundary | clean | keep |  |
@@ -132,7 +140,7 @@ Legend:
 | `src/plugins/manifest/schema_tests.rs` | 318 | Manifest schema parsing and defaulting tests | Test boundary | clean | keep |  |
 | `src/plugins/manifest/validation.rs` | 292 | Manifest validation rules and contract enforcement | Contract validation boundary | review | keep | Validation is now isolated; split again only if rules keep growing |
 | `src/plugins/manifest/validation_tests.rs` | 281 | Manifest validation tests | Test boundary | clean | keep |  |
-| `src/plugins/mod.rs` | 451 | Plugin model and lifecycle facade | Plugin domain boundary | review | split | High complexity by size; validate single responsibility |
+| `src/plugins/mod.rs` | 64 | Plugin domain facade and Plugin owner type | Plugin domain boundary | clean | keep | Daemon lifecycle and execution contract were extracted |
 | `src/plugins/resolver.rs` | 208 | Plugin source resolution (installed vs linked) | Resolution boundary | clean | keep |  |
 | `src/process_utils/mod.rs` | 15 | Process helper facade | Process boundary | clean | keep |  |
 | `src/process_utils/platform/mod.rs` | 40 | Process helper platform dispatch and fallback policy | Platform facade | clean | keep | Unsupported targets fail at compile time |
@@ -230,6 +238,6 @@ Legend:
 These are only signals from file-level concerns and size, not final moves:
 
 - Coalesce candidates (small facade-only modules): `src/*/mod.rs` files that only re-export or route with minimal logic.
-- Split-first hotspots: `src/plugins/action_executor.rs`, `src/features/plugin_store/installer/dependency/source_build.rs`, `src/features/plugin_store/github/mod.rs`, `src/plugins/mod.rs`.
+- Split-first hotspots: `src/features/plugin_store/installer/dependency/source_build.rs`, `src/plugins/daemon_lifecycle.rs`, `src/plugins/loader.rs`, `src/plugins/manifest/validation.rs`.
 - UI unification hotspots: `ui/views/dev/index.js` + `ui/views/dev/template.js` (controller + string-template rendering) should align with component/reducer style used by other pages.
 - Platform boundary check: keep OS API usage confined to `platform/*` and `os/*` adapter files.
