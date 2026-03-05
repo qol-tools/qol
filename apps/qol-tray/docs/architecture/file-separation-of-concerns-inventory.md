@@ -46,7 +46,10 @@ Legend:
 | `src/features/plugin_store/github/token.rs` | 141 | GitHub token storage, validation, and request helpers | Auth boundary | clean | keep |  |
 | `src/features/plugin_store/installer.rs` | 245 | Plugin install/update/uninstall orchestration and operation locking | Installation boundary | review | keep | Transaction, source sync, and dependency handling were extracted |
 | `src/features/plugin_store/installer/command.rs` | 76 | Git and cargo command execution helpers | Process/tooling boundary | clean | keep |  |
-| `src/features/plugin_store/installer/dependency.rs` | 406 | Dependency artifact install and source-build fallback flow | Installation domain boundary | review | split | Still large, but now isolated from staging and lock concerns |
+| `src/features/plugin_store/installer/dependency.rs` | 113 | Dependency install orchestration and plan shaping | Installation domain boundary | clean | keep | Manifest, release, and source-build concerns extracted |
+| `src/features/plugin_store/installer/dependency/manifest.rs` | 47 | Plugin manifest load and execution-contract preflight | Contract boundary | clean | keep |  |
+| `src/features/plugin_store/installer/dependency/release.rs` | 74 | GitHub release asset fetch and binary download | External API boundary | clean | keep |  |
+| `src/features/plugin_store/installer/dependency/source_build.rs` | 234 | Source-build fallback, built-binary install, and Cargo manifest sanitization | Build/install boundary | review | keep | Largest remaining dependency installer seam; split again only if it grows |
 | `src/features/plugin_store/installer/lock.rs` | 47 | Installer lockfile primitives and stale-lock detection | Concurrency boundary | clean | keep |  |
 | `src/features/plugin_store/installer/source.rs` | 149 | Repository clone/default-branch/reset preparation | Source sync boundary | clean | keep |  |
 | `src/features/plugin_store/installer/staging.rs` | 191 | Staging, swap, rollback, and temp-dir cleanup | Transaction boundary | clean | keep |  |
@@ -219,6 +222,6 @@ Legend:
 These are only signals from file-level concerns and size, not final moves:
 
 - Coalesce candidates (small facade-only modules): `src/*/mod.rs` files that only re-export or route with minimal logic.
-- Split-first hotspots: `src/plugins/manifest.rs`, `src/plugins/action_executor.rs`, `src/features/plugin_store/installer/dependency.rs`, `src/features/plugin_store/github/mod.rs`.
+- Split-first hotspots: `src/plugins/manifest.rs`, `src/plugins/action_executor.rs`, `src/features/plugin_store/installer/dependency/source_build.rs`, `src/features/plugin_store/github/mod.rs`.
 - UI unification hotspots: `ui/views/dev/index.js` + `ui/views/dev/template.js` (controller + string-template rendering) should align with component/reducer style used by other pages.
 - Platform boundary check: keep OS API usage confined to `platform/*` and `os/*` adapter files.
