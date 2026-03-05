@@ -8,6 +8,7 @@ use crate::dev;
 
 use super::dev_handlers::fallback_plugin_ids;
 use super::dev_runtime::DevRuntimeService;
+use super::helpers::shared_config_dir;
 use super::restart::RestartPort;
 use super::types::{
     AppState, MOCK_TARGET_PLUGIN_BUILD, MOCK_TARGET_SELF_RECOMPILE, MOCK_TARGET_SELF_UPDATE,
@@ -26,7 +27,7 @@ pub(super) fn queue_reload(state: &AppState) -> Result<(), &'static str> {
     let plugin_manager = state.plugin_manager.clone();
     let events = state.daemon.events.clone();
     let event_sink = runtime.create_core_event_sink(events.clone());
-    let config_dir = crate::paths::shared_config_dir().ok();
+    let config_dir = shared_config_dir().ok();
 
     tokio::task::spawn_blocking(move || {
         struct BuildGuard {
@@ -196,7 +197,7 @@ pub(super) fn start_mock_targets(state: &AppState) -> Result<Vec<&'static str>, 
     }
 
     let events = state.daemon.events.clone();
-    let config_dir = crate::paths::shared_config_dir().ok();
+    let config_dir = shared_config_dir().ok();
     let fallback_plugin_ids = fallback_plugin_ids(state);
     let mut started = Vec::new();
 

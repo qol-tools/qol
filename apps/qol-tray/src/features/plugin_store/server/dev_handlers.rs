@@ -9,12 +9,15 @@ use axum::{
 
 use crate::dev;
 use crate::dev::state::DiscoveryStatus;
-use crate::paths::is_safe_path_component;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
 
 use super::dev_services;
+use super::helpers::{
+    shared_config_dir, shared_config_dir_or_response, shared_config_dir_or_status,
+    validate_plugin_id, validate_plugin_id_bad_request,
+};
 use super::types::{
     AppState, BuildStateResponse, DiscoveryStateResponse, MockTargetInfo,
     SetPluginCpuMonitoringRequest, UpsertPluginLogControlRequest,
@@ -23,13 +26,7 @@ use super::types::{
 const MAX_MONITORED_PLUGIN_IDS: usize = 128;
 
 fn config_dir() -> Result<PathBuf, (StatusCode, String)> {
-    crate::paths::shared_config_dir().map_err(|e| {
-        log::error!("Failed to determine config directory: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Config dir unavailable".to_string(),
-        )
-    })
+    shared_config_dir_or_response("Config dir unavailable")
 }
 
 pub(super) async fn reload_plugins(State(state): State<AppState>) -> impl IntoResponse {
@@ -50,10 +47,7 @@ pub(super) async fn recompile_self(State(state): State<AppState>) -> impl IntoRe
 pub(super) async fn list_linked_plugins(
     State(_state): State<AppState>,
 ) -> Result<Json<Vec<dev::LinkedPlugin>>, StatusCode> {
-    let config_dir = crate::paths::shared_config_dir().map_err(|e| {
-        log::error!("Failed to determine config directory: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let config_dir = shared_config_dir_or_status()?;
     tokio::task::spawn_blocking(move || dev::list_linked_plugins(&config_dir))
         .await
         .map_err(|e| {
@@ -79,11 +73,7 @@ pub(super) async fn create_link(
 
     match dev::create_link(source, &config_dir) {
         Ok(_) => {
-            crate::dev::state::start_discovery(
-                &state.dev_state,
-                &state.daemon.events,
-                state.plugins_dir.clone(),
-            );
+            refresh_discovery_state(&state);
             (StatusCode::OK, "Link created".to_string()).into_response()
         }
         Err(e) if e.contains("Already linked") => (StatusCode::CONFLICT, e).into_response(),
@@ -101,8 +91,8 @@ pub(super) async fn delete_link(
     Path(id): Path<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    if !is_safe_path_component(&id) {
-        return (StatusCode::BAD_REQUEST, "Invalid plugin ID".to_string()).into_response();
+    if let Err(error) = validate_plugin_id_bad_request(&id) {
+        return error.into_response();
     }
 
     let config_dir = match config_dir() {
@@ -112,11 +102,7 @@ pub(super) async fn delete_link(
 
     match dev::remove_link(&id, &config_dir) {
         Ok(()) => {
-            crate::dev::state::start_discovery(
-                &state.dev_state,
-                &state.daemon.events,
-                state.plugins_dir.clone(),
-            );
+            refresh_discovery_state(&state);
             (StatusCode::OK, "Unlinked".to_string()).into_response()
         }
         Err(e) => {
@@ -131,8 +117,8 @@ pub(super) async fn upsert_plugin_log_control(
     State(state): State<AppState>,
     Json(req): Json<UpsertPluginLogControlRequest>,
 ) -> impl IntoResponse {
-    if !is_safe_path_component(&id) {
-        return (StatusCode::BAD_REQUEST, "Invalid plugin ID".to_string()).into_response();
+    if let Err(error) = validate_plugin_id_bad_request(&id) {
+        return error.into_response();
     }
 
     let config_dir = match config_dir() {
@@ -213,7 +199,7 @@ pub(super) async fn set_plugin_cpu_monitoring(
 
 pub(super) async fn get_log_controls(
 ) -> Json<std::collections::HashMap<String, crate::plugins::log_control::PluginLogControl>> {
-    let controls = crate::paths::shared_config_dir()
+    let controls = shared_config_dir()
         .ok()
         .map(|dir| crate::plugins::log_control::load_all_controls(&dir))
         .unwrap_or_default();
@@ -222,11 +208,7 @@ pub(super) async fn get_log_controls(
 
 pub(super) async fn trigger_discovery(State(state): State<AppState>) -> impl IntoResponse {
     log::info!("Discovery refresh requested");
-    crate::dev::state::start_discovery(
-        &state.dev_state,
-        &state.daemon.events,
-        state.plugins_dir.clone(),
-    );
+    refresh_discovery_state(&state);
     StatusCode::OK
 }
 
@@ -312,7 +294,7 @@ pub(super) async fn stop_mock_plugin_build(State(state): State<AppState>) -> imp
 
 pub(super) async fn mock_plugin_build(State(state): State<AppState>) -> impl IntoResponse {
     let events = state.daemon.events.clone();
-    let config_dir = crate::paths::shared_config_dir().ok();
+    let config_dir = shared_config_dir().ok();
     mock_start_response(
         state
             .runtime
@@ -382,7 +364,7 @@ fn sanitize_monitored_plugin_ids(plugin_ids: Vec<String>) -> Result<Vec<String>,
         if plugin_id.is_empty() {
             continue;
         }
-        if !is_safe_path_component(plugin_id) {
+        if validate_plugin_id(plugin_id).is_err() {
             return Err("Invalid plugin ID in monitoring list");
         }
         let normalized = plugin_id.to_string();
@@ -392,6 +374,14 @@ fn sanitize_monitored_plugin_ids(plugin_ids: Vec<String>) -> Result<Vec<String>,
         sanitized.push(normalized);
     }
     Ok(sanitized)
+}
+
+fn refresh_discovery_state(state: &AppState) {
+    crate::dev::state::start_discovery(
+        &state.dev_state,
+        &state.daemon.events,
+        state.plugins_dir.clone(),
+    );
 }
 
 #[cfg(test)]

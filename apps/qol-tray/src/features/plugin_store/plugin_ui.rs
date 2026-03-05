@@ -5,8 +5,6 @@ use axum::{
     routing::get,
     Router,
 };
-#[cfg(feature = "dev")]
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub fn router(plugins_dir: PathBuf) -> Router {
@@ -55,14 +53,12 @@ async fn serve_file(plugins_dir: &Path, plugin_id: &str, file_path: &str) -> Res
     ([(header::CONTENT_TYPE, mime)], contents).into_response()
 }
 
-use crate::paths::is_safe_path_component;
-
 async fn resolve_safe_ui_file(
     plugins_dir: &Path,
     plugin_id: &str,
     file_path: &str,
 ) -> Result<PathBuf, Response> {
-    if !is_safe_path_component(plugin_id) || !is_safe_subpath(file_path) {
+    if !super::validation::is_safe_plugin_id(plugin_id) || !is_safe_subpath(file_path) {
         log::warn!(
             "Unsafe path: plugin_id={}, file_path={}",
             plugin_id,
@@ -163,9 +159,7 @@ fn resolve_plugin_root(plugins_dir: &Path, plugin_id: &str) -> PathBuf {
 #[cfg(feature = "dev")]
 fn resolve_dev_link_path(plugin_id: &str) -> Option<PathBuf> {
     let config_dir = crate::paths::shared_config_dir().ok()?;
-    let dev_links_path = config_dir.join("dev-links.json");
-    let content = std::fs::read_to_string(dev_links_path).ok()?;
-    let links: HashMap<String, PathBuf> = serde_json::from_str(&content).ok()?;
+    let links = crate::dev::load_dev_links(&config_dir);
     links.get(plugin_id).cloned()
 }
 
@@ -248,5 +242,4 @@ mod tests {
             assert_eq!(guess_mime(&path), expected, "file: {}", filename);
         }
     }
-
 }
