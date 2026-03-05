@@ -3,6 +3,10 @@ pub(crate) mod assets;
 #[cfg(feature = "dev")]
 mod dev_handlers;
 #[cfg(feature = "dev")]
+mod dev_link_handlers;
+#[cfg(feature = "dev")]
+mod dev_mock_handlers;
+#[cfg(feature = "dev")]
 pub(crate) mod dev_plugin_cpu;
 #[cfg(feature = "dev")]
 mod dev_runtime;
@@ -108,17 +112,20 @@ pub async fn start_ui_server(
     let api = api
         .route("/dev/reload", post(dev_handlers::reload_plugins))
         .route("/dev/recompile-self", post(dev_handlers::recompile_self))
-        .route("/dev/links", get(dev_handlers::list_linked_plugins))
-        .route("/dev/links", post(dev_handlers::create_link))
+        .route("/dev/links", get(dev_link_handlers::list_linked_plugins))
+        .route("/dev/links", post(dev_link_handlers::create_link))
         .route(
             "/dev/links/{id}",
-            axum::routing::delete(dev_handlers::delete_link),
+            axum::routing::delete(dev_link_handlers::delete_link),
         )
         .route(
             "/dev/log-controls/{id}",
-            axum::routing::put(dev_handlers::upsert_plugin_log_control),
+            axum::routing::put(dev_link_handlers::upsert_plugin_log_control),
         )
-        .route("/dev/log-controls", get(dev_handlers::get_log_controls))
+        .route(
+            "/dev/log-controls",
+            get(dev_link_handlers::get_log_controls),
+        )
         .route("/dev/discover", post(dev_handlers::trigger_discovery))
         .route(
             "/dev/discovery-state",
@@ -132,40 +139,43 @@ pub async fn start_ui_server(
         )
         .route(
             "/dev/mock-check-update",
-            get(dev_handlers::mock_check_update),
+            get(dev_mock_handlers::mock_check_update),
         )
-        .route("/dev/mock-targets", get(dev_handlers::list_mock_targets))
+        .route(
+            "/dev/mock-targets",
+            get(dev_mock_handlers::list_mock_targets),
+        )
         .route(
             "/dev/mock-targets/start",
-            post(dev_handlers::start_mock_targets),
+            post(dev_mock_handlers::start_mock_targets),
         )
         .route(
             "/dev/mock-targets/stop",
-            post(dev_handlers::stop_mock_targets),
+            post(dev_mock_handlers::stop_mock_targets),
         )
         .route(
             "/dev/mock-plugin-build",
-            post(dev_handlers::mock_plugin_build),
+            post(dev_mock_handlers::mock_plugin_build),
         )
         .route(
             "/dev/mock-plugin-build/stop",
-            post(dev_handlers::stop_mock_plugin_build),
+            post(dev_mock_handlers::stop_mock_plugin_build),
         )
         .route(
             "/dev/mock-self-recompile",
-            post(dev_handlers::mock_self_recompile),
+            post(dev_mock_handlers::mock_self_recompile),
         )
         .route(
             "/dev/mock-self-recompile/stop",
-            post(dev_handlers::stop_mock_self_recompile),
+            post(dev_mock_handlers::stop_mock_self_recompile),
         )
         .route(
             "/dev/mock-self-update",
-            post(dev_handlers::mock_self_update),
+            post(dev_mock_handlers::mock_self_update),
         )
         .route(
             "/dev/mock-self-update/stop",
-            post(dev_handlers::stop_mock_self_update),
+            post(dev_mock_handlers::stop_mock_self_update),
         );
 
     let api = api
