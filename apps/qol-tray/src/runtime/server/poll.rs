@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use qol_runtime::MonitorBounds;
 
-use super::super::channel::Channel;
+use super::super::Channel;
 use super::super::channels::cursor::CursorChannel;
 use super::super::channels::focus::FocusChannel;
 use super::super::channels::monitors::MonitorsChannel;

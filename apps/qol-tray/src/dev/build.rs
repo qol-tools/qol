@@ -12,4 +12,4 @@ pub use service::{
     build_linked_plugins, build_linked_plugins_with_core_events,
     build_linked_plugins_with_progress, default_build_application_service, BuildApplicationService,
 };
-pub use types::{BuildResult, BuildRun, PluginBuildProgress};
+pub use types::{BuildResult, BuildRun, PluginBuildPlan, PluginBuildProgress};

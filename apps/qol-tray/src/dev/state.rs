@@ -57,6 +57,32 @@ impl Default for DevState {
     }
 }
 
+fn try_begin_discovery(state: &DevState) -> bool {
+    let mut guard = state.discovery.write().unwrap();
+    if guard.status == DiscoveryStatus::Discovering { return false; }
+    guard.status = DiscoveryStatus::Discovering;
+    true
+}
+
+fn run_discovery(
+    state: std::sync::Arc<DevState>,
+    events: std::sync::Arc<crate::daemon::EventBus>,
+    plugins_dir: std::path::PathBuf,
+) {
+    let config = crate::dev::DevConfig::load().unwrap_or_default();
+    let discovered = crate::dev::discover_plugins(&config, &plugins_dir);
+    let plugins: Vec<DiscoveredPluginInfo> = discovered
+        .into_iter()
+        .map(|p| DiscoveredPluginInfo { id: p.id, name: p.name, path: p.path })
+        .collect();
+    {
+        let mut guard = state.discovery.write().unwrap();
+        guard.status = DiscoveryStatus::Complete;
+        guard.plugins = plugins.clone();
+    }
+    events.send(crate::daemon::DaemonEvent::DiscoveryComplete { plugins });
+}
+
 pub fn start_discovery(
     state: &std::sync::Arc<DevState>,
     events: &std::sync::Arc<crate::daemon::EventBus>,
@@ -64,35 +90,7 @@ pub fn start_discovery(
 ) {
     let state = std::sync::Arc::clone(state);
     let events = std::sync::Arc::clone(events);
-
-    {
-        let mut guard = state.discovery.write().unwrap();
-        if guard.status == DiscoveryStatus::Discovering {
-            return;
-        }
-        guard.status = DiscoveryStatus::Discovering;
-    }
-
+    if !try_begin_discovery(&state) { return; }
     events.send(crate::daemon::DaemonEvent::DiscoveryStarted);
-
-    std::thread::spawn(move || {
-        let config = crate::dev::DevConfig::load().unwrap_or_default();
-        let discovered = crate::dev::discover_plugins(&config, &plugins_dir);
-
-        let plugins: Vec<DiscoveredPluginInfo> = discovered
-            .into_iter()
-            .map(|p| DiscoveredPluginInfo {
-                id: p.id,
-                name: p.name,
-                path: p.path,
-            })
-            .collect();
-
-        {
-            let mut guard = state.discovery.write().unwrap();
-            guard.status = DiscoveryStatus::Complete;
-            guard.plugins = plugins.clone();
-        }
-        events.send(crate::daemon::DaemonEvent::DiscoveryComplete { plugins });
-    });
+    std::thread::spawn(move || run_discovery(state, events, plugins_dir));
 }

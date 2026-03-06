@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::dev::adapters::traits::{
+use crate::dev::adapters::{
     BuildStateProgress, BuildStateStore, DevMockTarget, DevRuntimeStateStore,
 };
 use crate::dev::core::BuildStatus;

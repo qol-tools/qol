@@ -7,7 +7,7 @@ use super::restart::RestartPort;
 use crate::daemon::Daemon;
 #[cfg(feature = "dev")]
 use crate::dev::state::DiscoveredPluginInfo;
-use crate::plugins::{ActionType, PluginManager};
+use crate::plugins::{ActionType, PluginLoader, PluginManager};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "dev")]
 use std::collections::HashMap;
@@ -38,6 +38,29 @@ pub(super) struct AppState {
     pub(super) plugin_cpu: Arc<DevPluginCpuService>,
     #[cfg(feature = "dev")]
     pub(super) restart: Arc<dyn RestartPort>,
+}
+
+impl AppState {
+    pub(super) fn new(
+        plugin_manager: Arc<Mutex<PluginManager>>,
+        daemon: &Daemon,
+    ) -> anyhow::Result<(Self, PathBuf)> {
+        let plugins_dir = PluginLoader::default_plugin_dir()?;
+        let state = Self {
+            plugins_dir: plugins_dir.clone(),
+            #[cfg(feature = "dev")]
+            plugin_cpu: DevPluginCpuService::start(plugin_manager.clone(), daemon.events.clone()),
+            plugin_manager,
+            daemon: daemon.clone(),
+            #[cfg(feature = "dev")]
+            dev_state: Arc::new(crate::dev::state::DevState::new()),
+            #[cfg(feature = "dev")]
+            runtime: super::dev_runtime::new_dev_runtime(),
+            #[cfg(feature = "dev")]
+            restart: super::restart::default_restart_port(),
+        };
+        Ok((state, plugins_dir))
+    }
 }
 
 #[derive(Serialize)]

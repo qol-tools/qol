@@ -60,71 +60,47 @@ fn show_already_running_notification() {
     }
 }
 
-fn app_init() -> Result<(TrayManager, Arc<Mutex<PluginManager>>)> {
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
-
-    let (shutdown_tx, shutdown_rx, update_available, plugin_manager, feature_registry, events) =
-        rt.block_on(async_init())?;
-
-    std::thread::spawn(move || {
-        rt.block_on(std::future::pending::<()>());
-    });
-
-    let tray = TrayManager::new(
-        feature_registry,
-        shutdown_tx,
-        shutdown_rx,
-        update_available,
-        events,
-    )?;
-
-    log::info!("QoL Tray daemon started successfully");
-    Ok((tray, plugin_manager))
+struct InitResult {
+    shutdown_tx: broadcast::Sender<()>,
+    shutdown_rx: broadcast::Receiver<()>,
+    update_available: bool,
+    plugin_manager: Arc<Mutex<PluginManager>>,
+    feature_registry: Arc<FeatureRegistry>,
+    events: Arc<qol_tray::daemon::EventBus>,
 }
 
-async fn async_init() -> Result<(
-    broadcast::Sender<()>,
-    broadcast::Receiver<()>,
-    bool,
-    Arc<Mutex<PluginManager>>,
-    Arc<FeatureRegistry>,
-    Arc<qol_tray::daemon::EventBus>,
-)> {
+fn app_init() -> Result<(TrayManager, Arc<Mutex<PluginManager>>)> {
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let init = rt.block_on(async_init())?;
+    std::thread::spawn(move || { rt.block_on(std::future::pending::<()>()); });
+    let tray = TrayManager::new(
+        init.feature_registry,
+        init.shutdown_tx,
+        init.shutdown_rx,
+        init.update_available,
+        init.events,
+    )?;
+    log::info!("QoL Tray daemon started successfully");
+    Ok((tray, init.plugin_manager))
+}
+
+async fn async_init() -> Result<InitResult> {
     let update_available = check_for_updates().await;
-
     let (shutdown_tx, shutdown_rx) = broadcast::channel::<()>(1);
-
-    // Start platform state server before plugins so the socket is ready
-    // when plugin daemons start and try to connect.
     #[cfg(unix)]
     let _state_server = qol_tray::runtime::RuntimeServer::start();
-
     let mut plugin_manager = PluginManager::new();
     plugin_manager.load_plugins()?;
     let plugin_manager = Arc::new(Mutex::new(plugin_manager));
-
     let daemon = Daemon::new();
-
     let mut feature_registry = FeatureRegistry::new();
     feature_registry.register(Box::new(features::plugin_store::Plugins::new()));
     let feature_registry = Arc::new(feature_registry);
-
     features::plugin_store::Plugins::start_server(plugin_manager.clone(), &daemon).await?;
-
     if let Err(e) = hotkeys::start_hotkey_listener(plugin_manager.clone()) {
         log::warn!("Failed to start hotkey listener: {}", e);
     }
-
-    Ok((
-        shutdown_tx,
-        shutdown_rx,
-        update_available,
-        plugin_manager,
-        feature_registry,
-        daemon.events.clone(),
-    ))
+    Ok(InitResult { shutdown_tx, shutdown_rx, update_available, plugin_manager, feature_registry, events: daemon.events.clone() })
 }
 
 async fn check_for_updates() -> bool {

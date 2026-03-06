@@ -4,6 +4,7 @@ use super::tracking::{
     untrack_action_process,
 };
 use super::ActionExecutionError;
+use crate::plugins::action_transport::DaemonActionDispatch;
 use std::path::Path;
 
 pub(super) fn execute_resolved_action(
@@ -20,37 +21,24 @@ fn execute_via_daemon(
     resolved: &ResolvedAction,
     socket_path: &Path,
 ) -> Result<(), ActionExecutionError> {
-    use crate::plugins::action_transport::DaemonActionDispatch;
-
     let dispatch =
         crate::plugins::action_transport::dispatch_daemon_action(socket_path, &resolved.action_id);
     if matches!(dispatch, DaemonActionDispatch::Handled) {
-        log::info!(
-            "Plugin action handled via daemon: {}::{}",
-            resolved.plugin_id,
-            resolved.action_id
-        );
+        log::info!("Plugin action handled via daemon: {}::{}", resolved.plugin_id, resolved.action_id);
         return Ok(());
     }
-
     let reason = daemon_failure_reason(resolved, &dispatch)?;
     log::warn!("{} {}::{}", reason, resolved.plugin_id, resolved.action_id);
     if resolved.runtime_fallback_allowed {
         return execute_via_runtime(resolved);
     }
-
-    Err(ActionExecutionError::SpawnFailed(format!(
-        "{} {}::{}",
-        reason, resolved.plugin_id, resolved.action_id
-    )))
+    Err(ActionExecutionError::SpawnFailed(format!("{} {}::{}", reason, resolved.plugin_id, resolved.action_id)))
 }
 
 fn daemon_failure_reason(
     resolved: &ResolvedAction,
-    dispatch: &crate::plugins::action_transport::DaemonActionDispatch,
+    dispatch: &DaemonActionDispatch,
 ) -> Result<&'static str, ActionExecutionError> {
-    use crate::plugins::action_transport::DaemonActionDispatch;
-
     match dispatch {
         DaemonActionDispatch::Fallback => Ok("daemon rejected action"),
         DaemonActionDispatch::Unavailable => Ok("daemon unavailable for"),

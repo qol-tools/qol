@@ -6,7 +6,7 @@ use std::process::{Child, Command};
 
 use super::super::types::BuildResult;
 use super::codesign::codesign_debug_binaries;
-use super::spawn::{spawn_piped, CargoChild};
+use super::{spawn_piped, CargoChild};
 
 pub(super) fn build_cargo_plugin_with_progress<F>(
     plugin_id: &str,
@@ -16,21 +16,28 @@ pub(super) fn build_cargo_plugin_with_progress<F>(
 where
     F: FnMut(u8, String),
 {
-    log::info!("Building linked plugin via cargo: {}", plugin_id);
-    on_progress(0, "Preparing build".to_string());
-
-    let CargoChild {
-        child,
-        stdout,
-        stderr,
-    } = match spawn_build(path) {
-        Ok(child) => child,
-        Err(error) => return failed_spawn(plugin_id, error),
-    };
+    let CargoChild { child, stdout, stderr } =
+        match start_build(plugin_id, path, &mut on_progress) {
+            Ok(c) => c,
+            Err(result) => return result,
+        };
     let readers = streams::spawn_output_readers(stdout, stderr);
     progress::emit_progress(readers.progress_rx(), &mut on_progress);
     let combined = readers.join_output();
     finish_build(plugin_id, path, child, combined, &mut on_progress)
+}
+
+fn start_build<F>(
+    plugin_id: &str,
+    path: &Path,
+    on_progress: &mut F,
+) -> Result<CargoChild, BuildResult>
+where
+    F: FnMut(u8, String),
+{
+    log::info!("Building linked plugin via cargo: {}", plugin_id);
+    on_progress(0, "Preparing build".to_string());
+    spawn_build(path).map_err(|error| failed_spawn(plugin_id, error))
 }
 
 fn spawn_build(path: &Path) -> Result<CargoChild, std::io::Error> {

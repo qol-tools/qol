@@ -143,13 +143,11 @@ fn ax_get_size(value: &CfGuard) -> Option<CGSize> {
     (ok && size.width > 0.0 && size.height > 0.0).then_some(size)
 }
 
-fn focused_window_bounds_ax(own_pid: i32) -> Option<MonitorBounds> {
+fn resolve_focused_app(own_pid: i32) -> Option<(CfGuard, Option<i32>)> {
     let system = CfGuard::new(unsafe { AXUIElementCreateSystemWide() })?;
-
-    let focused_app = ax_get_attr(system.as_ptr(), &ax_attr_str(b"AXFocusedApplication"))?;
-
-    let app_pid = ax_get_pid(focused_app.as_ptr());
-    if let Some(pid) = app_pid {
+    let app = ax_get_attr(system.as_ptr(), &ax_attr_str(b"AXFocusedApplication"))?;
+    let pid = ax_get_pid(app.as_ptr());
+    if let Some(pid) = pid {
         let ignored = super::super::is_ignored_pid(pid as u32);
         if pid == own_pid || ignored {
             log::debug!(
@@ -161,37 +159,33 @@ fn focused_window_bounds_ax(own_pid: i32) -> Option<MonitorBounds> {
             return None;
         }
     }
+    Some((app, pid))
+}
 
-    let focused_window = ax_get_attr(focused_app.as_ptr(), &ax_attr_str(b"AXFocusedWindow"))
-        .or_else(|| {
-            log::debug!("[runtime/ax] pid={:?} has no focused window", app_pid);
-            None
-        })?;
-
-    let pos = ax_get_point(&ax_get_attr(
-        focused_window.as_ptr(),
-        &ax_attr_str(b"AXPosition"),
-    )?)?;
-    let sz = ax_get_size(&ax_get_attr(
-        focused_window.as_ptr(),
-        &ax_attr_str(b"AXSize"),
-    )?)?;
-
-    let result = MonitorBounds {
+fn ax_window_bounds(window: &CfGuard) -> Option<MonitorBounds> {
+    let pos = ax_get_point(&ax_get_attr(window.as_ptr(), &ax_attr_str(b"AXPosition"))?)?;
+    let sz = ax_get_size(&ax_get_attr(window.as_ptr(), &ax_attr_str(b"AXSize"))?)?;
+    Some(MonitorBounds {
         x: pos.x as f32,
         y: pos.y as f32,
         width: sz.width as f32,
         height: sz.height as f32,
-    };
+    })
+}
+
+fn focused_window_bounds_ax(own_pid: i32) -> Option<MonitorBounds> {
+    let (app, app_pid) = resolve_focused_app(own_pid)?;
+    let focused_window = ax_get_attr(app.as_ptr(), &ax_attr_str(b"AXFocusedWindow"))
+        .or_else(|| {
+            log::debug!("[runtime/ax] pid={:?} has no focused window", app_pid);
+            None
+        })?;
+    let bounds = ax_window_bounds(&focused_window)?;
     log::debug!(
         "[runtime/ax] HIT pid={:?} window=({}, {}, {}x{})",
-        app_pid,
-        result.x,
-        result.y,
-        result.width,
-        result.height
+        app_pid, bounds.x, bounds.y, bounds.width, bounds.height
     );
-    Some(result)
+    Some(bounds)
 }
 
 pub(super) struct MacQueries {

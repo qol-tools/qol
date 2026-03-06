@@ -1,84 +1,42 @@
 export function createCompletionStore({ createSnapshot, computeRemainingMs, finiteOr }) {
-    const completionByPlugin = new Map();
-
-    function clear(pluginId) {
-        if (!pluginId) {
-            return;
-        }
-
-        completionByPlugin.delete(pluginId);
-    }
-
-    function clearAll() {
-        completionByPlugin.clear();
-    }
-
-    function entries() {
-        return completionByPlugin.entries();
-    }
-
-    function get(pluginId) {
-        return completionByPlugin.get(pluginId) || null;
-    }
-
-    function getState(pluginId) {
-        return get(pluginId)?.state || 'idle';
-    }
-
-    function remainingMs(pluginId, now) {
-        const completion = get(pluginId);
-        if (!completion || completion.state !== 'playing') {
-            return 0;
-        }
-
-        return computeRemainingMs(completion, now);
-    }
-
-    function snapshot(pluginId, now) {
-        const completion = get(pluginId);
-        if (!completion || completion.state !== 'playing') {
-            return null;
-        }
-
-        return createSnapshot(completion, now);
-    }
-
-    function setState(pluginId, state, patch = {}) {
-        if (!pluginId) {
-            return;
-        }
-
-        if (state === 'idle') {
-            completionByPlugin.delete(pluginId);
-            return;
-        }
-
-        const previous = completionByPlugin.get(pluginId) || {};
-        completionByPlugin.set(pluginId, {
-            state,
-            startedAt: finiteOr(patch.startedAt, finiteOr(previous.startedAt, 0)),
-            startPercent: finiteOr(patch.startPercent, finiteOr(previous.startPercent, 100)),
-            phase: typeof patch.phase === 'string' ? patch.phase : (previous.phase || 'ramp'),
-            phaseStartedAt: finiteOr(
-                patch.phaseStartedAt,
-                finiteOr(previous.phaseStartedAt, finiteOr(patch.startedAt, finiteOr(previous.startedAt, 0)))
-            )
-        });
-    }
-
-    function finalize(pluginId) {
-        setState(pluginId, 'done');
-    }
-
+    const ctx = { map: new Map(), createSnapshot, computeRemainingMs, finiteOr };
     return {
-        clear,
-        clearAll,
-        entries,
-        finalize,
-        get,
-        getState,
-        remainingMs,
-        setState,
-        snapshot
+        clear: id => { if (id) ctx.map.delete(id); },
+        clearAll: () => ctx.map.clear(),
+        entries: () => ctx.map.entries(),
+        finalize: id => setState(ctx, id, 'done'),
+        get: id => ctx.map.get(id) || null,
+        getState: id => ctx.map.get(id)?.state || 'idle',
+        remainingMs: (id, now) => remainingMs(ctx, id, now),
+        setState: (id, state, patch) => setState(ctx, id, state, patch),
+        snapshot: (id, now) => snapshot(ctx, id, now)
     };
+}
+
+function remainingMs(ctx, pluginId, now) {
+    const c = ctx.map.get(pluginId);
+    if (!c || c.state !== 'playing') return 0;
+    return ctx.computeRemainingMs(c, now);
+}
+
+function snapshot(ctx, pluginId, now) {
+    const c = ctx.map.get(pluginId);
+    if (!c || c.state !== 'playing') return null;
+    return ctx.createSnapshot(c, now);
+}
+
+function setState(ctx, pluginId, state, patch = {}) {
+    if (!pluginId) return;
+    if (state === 'idle') { ctx.map.delete(pluginId); return; }
+    const prev = ctx.map.get(pluginId) || {};
+    ctx.map.set(pluginId, {
+        state,
+        startedAt: ctx.finiteOr(patch.startedAt, ctx.finiteOr(prev.startedAt, 0)),
+        startPercent: ctx.finiteOr(patch.startPercent, ctx.finiteOr(prev.startPercent, 100)),
+        phase: typeof patch.phase === 'string' ? patch.phase : (prev.phase || 'ramp'),
+        phaseStartedAt: ctx.finiteOr(
+            patch.phaseStartedAt,
+            ctx.finiteOr(prev.phaseStartedAt, ctx.finiteOr(patch.startedAt, ctx.finiteOr(prev.startedAt, 0)))
+        )
+    });
 }

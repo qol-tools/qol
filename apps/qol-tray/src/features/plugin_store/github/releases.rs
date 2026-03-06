@@ -30,30 +30,15 @@ impl GitHubClient {
         normalized_release_tag(&plugin_release.tag_name)
     }
 
-    async fn verify_platform_binary_support(
-        &self,
-        manifest: &crate::plugins::PluginManifest,
-        target: PlatformTarget,
-        plugin_repo: &str,
-        plugin_release: &GitHubRelease,
-    ) -> Result<()> {
+    async fn verify_platform_binary_support(&self, manifest: &crate::plugins::PluginManifest, target: PlatformTarget, plugin_repo: &str, plugin_release: &GitHubRelease) -> Result<()> {
         let required_assets = required_release_assets(manifest, target)?;
         let mut release_cache = HashMap::from([(plugin_repo.to_string(), plugin_release.clone())]);
-
         for required_asset in required_assets {
-            let release = self
-                .release_for_repo(&mut release_cache, &required_asset.repo)
-                .await?;
-            if release_has_asset(release, &required_asset.name) {
-                continue;
+            let release = self.release_for_repo(&mut release_cache, &required_asset.repo).await?;
+            if !release_has_asset(release, &required_asset.name) {
+                anyhow::bail!("missing asset '{}' in latest release of {}", required_asset.name, required_asset.repo);
             }
-            anyhow::bail!(
-                "missing asset '{}' in latest release of {}",
-                required_asset.name,
-                required_asset.repo
-            );
         }
-
         Ok(())
     }
 

@@ -41,39 +41,29 @@ fn build_context() -> Result<ContextData> {
 
 fn diagnose(context: ContextData) -> Diagnosis {
     let Some(target_path) = context.target else {
-        return warn_outcome(
-            ID,
-            format!(
-                "autostart entry missing at {}",
-                context.autostart_path.display()
-            ),
-            Some(FixAction::WriteAutostartEntry {
-                binary_path: context.current_exe,
-            }),
+        return warn_with_fix(
+            format!("autostart entry missing at {}", context.autostart_path.display()),
+            context.current_exe,
         );
     };
-
     let expected = canonical_or_original(&context.current_exe);
     let actual = canonical_or_original(&target_path);
     if expected == actual {
         return ok_outcome(
             ID,
-            format!(
-                "autostart target matches current binary ({})",
-                actual.display()
-            ),
+            format!("autostart target matches current binary ({})", actual.display()),
         );
     }
+    warn_with_fix(
+        format!("autostart target points to {} instead of {}", target_path.display(), context.current_exe.display()),
+        context.current_exe,
+    )
+}
 
+fn warn_with_fix(message: String, exe: PathBuf) -> Diagnosis {
     warn_outcome(
         ID,
-        format!(
-            "autostart target points to {} instead of {}",
-            target_path.display(),
-            context.current_exe.display()
-        ),
-        Some(FixAction::WriteAutostartEntry {
-            binary_path: context.current_exe,
-        }),
+        message,
+        Some(FixAction::WriteAutostartEntry { binary_path: exe }),
     )
 }

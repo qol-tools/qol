@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use super::super::channel::Channel;
+use super::super::Channel;
 use crate::desktop_state::SharedPlatform;
 
 const MIN_INTERVAL: Duration = Duration::from_millis(16);

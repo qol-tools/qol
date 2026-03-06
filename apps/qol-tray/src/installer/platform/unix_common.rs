@@ -30,6 +30,26 @@ pub fn start_now(binary_path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn pkill_signal(signal: &str, process_name: &str) {
+    let _ = Command::new("pkill")
+        .arg(format!("-{signal}"))
+        .arg("-x")
+        .arg(process_name)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+fn wait_for_exit(process_name: &str) -> bool {
+    for _ in 0..30 {
+        if !is_running(process_name) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    false
+}
+
 pub fn stop_running(binary_path: &Path, process_name: &str) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
@@ -40,30 +60,10 @@ pub fn stop_running(binary_path: &Path, process_name: &str) -> Result<()> {
     }
     #[cfg(not(target_os = "linux"))]
     let _ = binary_path;
-
-    let _ = Command::new("pkill")
-        .arg("-TERM")
-        .arg("-x")
-        .arg(process_name)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-
-    for _ in 0..30 {
-        if !is_running(process_name) {
-            return Ok(());
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
+    pkill_signal("TERM", process_name);
+    if !wait_for_exit(process_name) {
+        pkill_signal("KILL", process_name);
     }
-
-    let _ = Command::new("pkill")
-        .arg("-KILL")
-        .arg("-x")
-        .arg(process_name)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-
     Ok(())
 }
 
@@ -97,52 +97,48 @@ pub fn on_file_copied(source: &Path, target: &Path) -> Result<()> {
 }
 
 #[cfg(target_os = "linux")]
+fn wait_all_pids_exit(pids: &[i32]) -> bool {
+    for _ in 0..30 {
+        if pids.iter().all(|pid| !crate::process_utils::is_pid_alive(*pid)) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    false
+}
+
+#[cfg(target_os = "linux")]
 fn stop_running_linux(binary_path: &Path) {
     let pids = linux_pids_for_binary(binary_path);
     if pids.is_empty() {
         return;
     }
-
     for pid in &pids {
         crate::process_utils::terminate_pid(*pid, std::time::Duration::from_millis(100));
     }
-
-    for _ in 0..30 {
-        if pids
-            .iter()
-            .all(|pid| !crate::process_utils::is_pid_alive(*pid))
-        {
-            return;
+    if !wait_all_pids_exit(&pids) {
+        for pid in pids {
+            crate::process_utils::terminate_pid(pid, std::time::Duration::from_millis(10));
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
     }
+}
 
-    for pid in pids {
-        crate::process_utils::terminate_pid(pid, std::time::Duration::from_millis(10));
-    }
+#[cfg(target_os = "linux")]
+fn pid_matches_binary(pid: i32, target: &std::path::Path) -> bool {
+    let exe = std::path::Path::new("/proc").join(pid.to_string()).join("exe");
+    let Ok(exe_path) = std::fs::read_link(exe) else { return false; };
+    std::fs::canonicalize(&exe_path).unwrap_or(exe_path).as_path() == target
 }
 
 #[cfg(target_os = "linux")]
 fn linux_pids_for_binary(binary_path: &Path) -> Vec<i32> {
     let target = std::fs::canonicalize(binary_path).unwrap_or_else(|_| binary_path.to_path_buf());
     let current_pid = std::process::id() as i32;
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return Vec::new();
-    };
-
+    let Ok(entries) = std::fs::read_dir("/proc") else { return Vec::new(); };
     entries
         .filter_map(|entry| entry.ok())
         .filter_map(|entry| entry.file_name().to_string_lossy().parse::<i32>().ok())
-        .filter(|pid| *pid > 0 && *pid != current_pid)
-        .filter(|pid| {
-            let exe = std::path::Path::new("/proc")
-                .join(pid.to_string())
-                .join("exe");
-            let Ok(exe_path) = std::fs::read_link(exe) else {
-                return false;
-            };
-            let resolved = std::fs::canonicalize(&exe_path).unwrap_or(exe_path);
-            resolved == target
-        })
+        .filter(|&pid| pid > 0 && pid != current_pid)
+        .filter(|&pid| pid_matches_binary(pid, &target))
         .collect()
 }

@@ -5,60 +5,84 @@ import { Modal } from '../../components/ModalPreact.js';
 const MODIFIER_KEYS = ['Control', 'Alt', 'Shift', 'Meta'];
 const MODIFIER_NAMES = ['Ctrl', 'Alt', 'Shift', 'Super'];
 
-export function HotkeyEditModal({
-    modal,
-    plugins,
-    onPluginChange,
-    onActionChange,
-    onStartRecording,
-    onClose,
-    onSave
-}) {
-    const title = modal.hotkey ? 'Edit Hotkey' : 'Add Hotkey';
+const NAV_KEY_MAP = {
+    Space: 'Space', Enter: 'Enter', Escape: 'Escape', Tab: 'Tab',
+    Backspace: 'Backspace', Delete: 'Delete', Insert: 'Insert',
+    Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
+    ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+    F1: 'F1', F2: 'F2', F3: 'F3', F4: 'F4', F5: 'F5', F6: 'F6',
+    F7: 'F7', F8: 'F8', F9: 'F9', F10: 'F10', F11: 'F11', F12: 'F12',
+    PrintScreen: 'PrintScreen', Pause: 'Pause'
+};
 
+export function HotkeyEditModal({ modal, plugins, onPluginChange, onActionChange, onStartRecording, onClose, onSave }) {
+    const title = modal.hotkey ? 'Edit Hotkey' : 'Add Hotkey';
     useEffect(() => {
         setTimeout(() => document.getElementById('hotkey-plugin')?.focus(), 0);
     }, []);
-
     return html`
         <${Modal} open=${true} onClose=${onClose} className="edit-modal">
             <div class="edit-modal-content">
                 <h3>${title}</h3>
-                <div class="form-group">
-                    <label>Plugin</label>
-                    <select id="hotkey-plugin" tabindex="1"
-                            value=${modal.pluginId}
-                            onChange=${(e) => onPluginChange(e.target.value)}>
-                        <option value="">Select plugin...</option>
-                        ${plugins.map(p => html`<option key=${p.id} value=${p.id}>${p.name}</option>`)}
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Action</label>
-                    <select id="hotkey-action" tabindex="2"
-                            value=${modal.action}
-                            onChange=${(e) => onActionChange(e.target.value)}>
-                        ${modal.availableActions.length === 0
-                            ? html`<option value="">All actions assigned</option>`
-                            : modal.availableActions.map(a => html`<option key=${a.id} value=${a.id}>${a.label}</option>`)}
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Shortcut <span class="hint">(Enter to record)</span></label>
-                    <div class="key-input-row">
-                        <input type="text" id="hotkey-key" tabindex="3"
-                               value=${modal.key} readonly
-                               class=${modal.recording ? 'recording' : ''}
-                               placeholder=${modal.recording ? 'Press keys... (Esc to cancel)' : 'Press Enter to record'}
-                               onClick=${onStartRecording} />
-                    </div>
-                </div>
-                <div class="modal-buttons">
-                    <button class="btn btn-ghost modal-cancel" tabindex="4" onClick=${onClose}>Cancel <kbd>Esc</kbd></button>
-                    <button class="btn btn-primary modal-save" tabindex="5" onClick=${onSave}>Save <kbd>Ctrl+Enter</kbd></button>
-                </div>
+                <${PluginField} modal=${modal} plugins=${plugins} onPluginChange=${onPluginChange} />
+                <${ActionField} modal=${modal} onActionChange=${onActionChange} />
+                <${KeyField} modal=${modal} onStartRecording=${onStartRecording} />
+                <${ModalActions} onClose=${onClose} onSave=${onSave} />
             </div>
         <//>
+    `;
+}
+
+function PluginField({ modal, plugins, onPluginChange }) {
+    return html`
+        <div class="form-group">
+            <label>Plugin</label>
+            <select id="hotkey-plugin" tabindex="1"
+                    value=${modal.pluginId}
+                    onChange=${(e) => onPluginChange(e.target.value)}>
+                <option value="">Select plugin...</option>
+                ${plugins.map(p => html`<option key=${p.id} value=${p.id}>${p.name}</option>`)}
+            </select>
+        </div>
+    `;
+}
+
+function ActionField({ modal, onActionChange }) {
+    return html`
+        <div class="form-group">
+            <label>Action</label>
+            <select id="hotkey-action" tabindex="2"
+                    value=${modal.action}
+                    onChange=${(e) => onActionChange(e.target.value)}>
+                ${modal.availableActions.length === 0
+                    ? html`<option value="">All actions assigned</option>`
+                    : modal.availableActions.map(a => html`<option key=${a.id} value=${a.id}>${a.label}</option>`)}
+            </select>
+        </div>
+    `;
+}
+
+function KeyField({ modal, onStartRecording }) {
+    return html`
+        <div class="form-group">
+            <label>Shortcut <span class="hint">(Enter to record)</span></label>
+            <div class="key-input-row">
+                <input type="text" id="hotkey-key" tabindex="3"
+                       value=${modal.key} readonly
+                       class=${modal.recording ? 'recording' : ''}
+                       placeholder=${modal.recording ? 'Press keys... (Esc to cancel)' : 'Press Enter to record'}
+                       onClick=${onStartRecording} />
+            </div>
+        </div>
+    `;
+}
+
+function ModalActions({ onClose, onSave }) {
+    return html`
+        <div class="modal-buttons">
+            <button class="btn btn-ghost modal-cancel" tabindex="4" onClick=${onClose}>Cancel <kbd>Esc</kbd></button>
+            <button class="btn btn-primary modal-save" tabindex="5" onClick=${onSave}>Save <kbd>Ctrl+Enter</kbd></button>
+        </div>
     `;
 }
 
@@ -169,38 +193,5 @@ function getKeyName(code) {
     if (code.startsWith('Key')) return code.slice(3);
     if (code.startsWith('Digit')) return code.slice(5);
     if (code.startsWith('Numpad')) return code;
-
-    const map = {
-        Space: 'Space',
-        Enter: 'Enter',
-        Escape: 'Escape',
-        Tab: 'Tab',
-        Backspace: 'Backspace',
-        Delete: 'Delete',
-        Insert: 'Insert',
-        Home: 'Home',
-        End: 'End',
-        PageUp: 'PageUp',
-        PageDown: 'PageDown',
-        ArrowUp: 'Up',
-        ArrowDown: 'Down',
-        ArrowLeft: 'Left',
-        ArrowRight: 'Right',
-        F1: 'F1',
-        F2: 'F2',
-        F3: 'F3',
-        F4: 'F4',
-        F5: 'F5',
-        F6: 'F6',
-        F7: 'F7',
-        F8: 'F8',
-        F9: 'F9',
-        F10: 'F10',
-        F11: 'F11',
-        F12: 'F12',
-        PrintScreen: 'PrintScreen',
-        Pause: 'Pause'
-    };
-
-    return map[code] || null;
+    return NAV_KEY_MAP[code] || null;
 }

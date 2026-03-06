@@ -51,27 +51,29 @@ fn loaded_plugins_by_id(
 ) -> HashMap<String, InstalledPlugin> {
     manager
         .plugins()
-        .map(|plugin| {
-            let (available_version, update_available) =
-                check_update(cached_versions, &plugin.id, &plugin.manifest.plugin.version);
-            (
-                plugin.id.clone(),
-                InstalledPlugin {
-                    id: plugin.id.clone(),
-                    name: plugin.manifest.plugin.name.clone(),
-                    description: plugin.manifest.plugin.description.clone(),
-                    version: plugin.manifest.plugin.version.clone(),
-                    loaded: true,
-                    load_error: None,
-                    has_cover: plugin.path.join("cover.png").exists(),
-                    has_ui: plugin.path.join("ui").join("index.html").exists(),
-                    available_version,
-                    update_available,
-                    actions: extract_actions(&plugin.manifest.menu.items),
-                },
-            )
-        })
+        .map(|plugin| (plugin.id.clone(), loaded_plugin_info(plugin, cached_versions)))
         .collect()
+}
+
+fn loaded_plugin_info(
+    plugin: &crate::plugins::Plugin,
+    cached_versions: &HashMap<String, String>,
+) -> InstalledPlugin {
+    let (available_version, update_available) =
+        check_update(cached_versions, &plugin.id, &plugin.manifest.plugin.version);
+    InstalledPlugin {
+        id: plugin.id.clone(),
+        name: plugin.manifest.plugin.name.clone(),
+        description: plugin.manifest.plugin.description.clone(),
+        version: plugin.manifest.plugin.version.clone(),
+        loaded: true,
+        load_error: None,
+        has_cover: plugin.path.join("cover.png").exists(),
+        has_ui: plugin.path.join("ui").join("index.html").exists(),
+        available_version,
+        update_available,
+        actions: extract_actions(&plugin.manifest.menu.items),
+    }
 }
 
 fn add_unloaded_plugins(

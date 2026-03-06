@@ -1,9 +1,15 @@
 #![cfg(feature = "dev")]
 
-use axum::{extract::State, http::StatusCode, response::IntoResponse};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Router};
 
 use super::dev_services;
 use super::types::AppState;
+
+pub(super) fn routes() -> Router<AppState> {
+    Router::new()
+        .route("/dev/reload", post(reload_plugins))
+        .route("/dev/recompile-self", post(recompile_self))
+}
 
 pub(super) async fn reload_plugins(State(state): State<AppState>) -> impl IntoResponse {
     if let Err(message) = dev_services::queue_reload(&state) {

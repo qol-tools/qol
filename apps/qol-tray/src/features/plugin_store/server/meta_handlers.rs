@@ -1,6 +1,20 @@
-use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
 
 use super::types::AppState;
+
+pub(super) fn routes() -> Router<AppState> {
+    Router::new()
+        .route("/dev/enabled", get(dev_enabled))
+        .route("/version", get(get_version))
+        .route("/check-update", get(check_update))
+        .route("/self-update", post(self_update))
+}
 
 pub(super) async fn dev_enabled() -> Json<bool> {
     Json(cfg!(feature = "dev"))

@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::dev::adapters::traits::{DevMockTarget, DevRuntimeStateStore};
+use crate::dev::adapters::{DevMockTarget, DevRuntimeStateStore};
 use crate::dev::state::BuildResultInfo;
 
 use super::super::types::{

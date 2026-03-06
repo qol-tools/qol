@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::daemon::{DaemonEvent, EventBus};
-use crate::dev::adapters::traits::{CoreEventSink, DevRuntimeStateStore};
+use crate::dev::adapters::{CoreEventSink, DevRuntimeStateStore};
 use crate::dev::core::{BuildStatus, CoreBuildResult, CoreEvent};
 use crate::dev::state::BuildResultInfo;
 

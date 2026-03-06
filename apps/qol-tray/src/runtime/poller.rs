@@ -13,18 +13,8 @@ pub(crate) trait PollStrategy: Send {
 pub(crate) struct BasicStrategy;
 
 impl PollStrategy for BasicStrategy {
-    fn next_interval(
-        &mut self,
-        current: Duration,
-        changed: bool,
-        min: Duration,
-        max: Duration,
-    ) -> Duration {
-        let next = if changed {
-            current / 2
-        } else {
-            current.saturating_mul(2)
-        };
+    fn next_interval(&mut self, current: Duration, changed: bool, min: Duration, max: Duration) -> Duration {
+        let next = if changed { current / 2 } else { current.saturating_mul(2) };
         next.clamp(min, max)
     }
 }
