@@ -1,3 +1,6 @@
+import { createCompletionPhaseRenderer } from './completion/phases.js';
+import { createCompletionStore } from './completion/store.js';
+
 export function createCompletionController({
     buildAnimation,
     rowRefs,
@@ -9,7 +12,17 @@ export function createCompletionController({
     setOverlayCopy,
     finiteOr
 }) {
-    const completionByPlugin = new Map();
+    const phases = createCompletionPhaseRenderer({
+        buildAnimation,
+        normalizePercent,
+        applyFillScale,
+        finiteOr
+    });
+    const completionState = createCompletionStore({
+        createSnapshot: phases.snapshot,
+        computeRemainingMs: phases.remainingMs,
+        finiteOr
+    });
     let completionFrame = null;
 
     function clearAll() {
@@ -21,11 +34,11 @@ export function createCompletionController({
                 rowRef.overlay.classList.remove('is-completing');
             }
         }
-        completionByPlugin.clear();
+        completionState.clearAll();
     }
 
     function clear(pluginId) {
-        setState(pluginId, 'idle');
+        completionState.clear(pluginId);
     }
 
     function completeRows(pluginIds, onComplete) {
@@ -36,9 +49,9 @@ export function createCompletionController({
 
         for (const pluginId of pluginIds) {
             const rowRef = rowRefs.get(pluginId);
-            const completionState = getState(pluginId);
-            if (completionState === 'done') continue;
-            if (completionState === 'playing') {
+            const completionStatus = getState(pluginId);
+            if (completionStatus === 'done') continue;
+            if (completionStatus === 'playing') {
                 started += 1;
                 longestRemainingMs = Math.max(longestRemainingMs, remainingMs(pluginId, now));
                 continue;
@@ -60,12 +73,12 @@ export function createCompletionController({
     }
 
     function startIfReady(rowRef) {
-        const completionState = getState(rowRef.pluginId);
-        if (completionState === 'done') {
+        const completionStatus = getState(rowRef.pluginId);
+        if (completionStatus === 'done') {
             clearOverlayNodes(rowRef, stopFillAnimation);
             return true;
         }
-        if (completionState === 'playing') {
+        if (completionStatus === 'playing') {
             return syncPlayback(rowRef);
         }
         if (!ensureOverlayNodes(rowRef)) return false;
@@ -82,7 +95,7 @@ export function createCompletionController({
         if (!force && completedPercent < buildAnimation.completionTriggerPercent) return false;
 
         const startPercent = normalizePercent(completedPercent);
-        setState(rowRef.pluginId, 'playing', {
+        completionState.setState(rowRef.pluginId, 'playing', {
             startedAt: now,
             startPercent,
             phase: 'ramp',
@@ -102,7 +115,7 @@ export function createCompletionController({
     }
 
     function syncPlayback(rowRef) {
-        const completion = completionByPlugin.get(rowRef.pluginId);
+        const completion = completionState.get(rowRef.pluginId);
         if (!completion) return false;
         if (completion.state === 'done') {
             clearOverlayNodes(rowRef, stopFillAnimation);
@@ -120,34 +133,11 @@ export function createCompletionController({
     }
 
     function snapshot(pluginId, now) {
-        const completion = completionByPlugin.get(pluginId);
-        if (!completion || completion.state !== 'playing') return null;
-
-        const phase = completion.phase || 'ramp';
-        const phaseStartedAt = finiteOr(completion.phaseStartedAt, now);
-        const phaseElapsed = Math.max(0, now - phaseStartedAt);
-        if (phase === 'fade') {
-            return { percent: 100, completing: true };
-        }
-        if (phase === 'hold') {
-            return { percent: 100, completing: false };
-        }
-
-        const rampMs = buildAnimation.completionRampMs;
-        const startPercent = normalizePercent(completion.startPercent);
-        const t = rampMs <= 0 ? 1 : Math.max(0, Math.min(1, phaseElapsed / rampMs));
-        const eased = easeOutCubic(t);
-        return {
-            percent: startPercent + (100 - startPercent) * eased,
-            completing: false
-        };
+        return completionState.snapshot(pluginId, now);
     }
 
     function getState(pluginId) {
-        if (!pluginId) return 'idle';
-        const completion = completionByPlugin.get(pluginId);
-        if (!completion) return 'idle';
-        return completion.state;
+        return completionState.getState(pluginId);
     }
 
     function ensureFrame() {
@@ -165,7 +155,7 @@ export function createCompletionController({
         completionFrame = null;
         let hasActiveCompletion = false;
 
-        for (const [pluginId, completion] of completionByPlugin.entries()) {
+        for (const [pluginId, completion] of completionState.entries()) {
             if (completion.state !== 'playing') continue;
             if (remainingMs(pluginId, timestamp) <= 0) {
                 finalize(pluginId);
@@ -188,103 +178,19 @@ export function createCompletionController({
     }
 
     function renderFrame(rowRef, completion, timestamp) {
-        const phase = completion.phase || 'ramp';
-        if (phase === 'ramp') {
-            return renderRamp(rowRef, completion, timestamp);
-        }
-        if (phase === 'hold') {
-            return renderHold(rowRef, completion, timestamp);
-        }
-        return renderFade(rowRef, completion, timestamp);
-    }
-
-    function renderRamp(rowRef, completion, timestamp) {
-        const phaseElapsed = Math.max(0, timestamp - finiteOr(completion.phaseStartedAt, timestamp));
-        const rampMs = buildAnimation.completionRampMs;
-        if (phaseElapsed < rampMs) {
-            const progressT = rampMs <= 0 ? 1 : phaseElapsed / rampMs;
-            const eased = easeOutCubic(progressT);
-            const startPercent = normalizePercent(completion.startPercent);
-            const nextPercent = startPercent + (100 - startPercent) * eased;
-            applyProgress(rowRef, nextPercent, false);
-            return false;
-        }
-        completion.phase = 'hold';
-        completion.phaseStartedAt = timestamp;
-        applyProgress(rowRef, 100, false);
-        return false;
-    }
-
-    function renderHold(rowRef, completion, timestamp) {
-        const phaseElapsed = Math.max(0, timestamp - finiteOr(completion.phaseStartedAt, timestamp));
-        applyProgress(rowRef, 100, false);
-        if (phaseElapsed < buildAnimation.completionHoldMs) return false;
-        completion.phase = 'fade';
-        completion.phaseStartedAt = timestamp;
-        applyProgress(rowRef, 100, true);
-        return false;
-    }
-
-    function renderFade(rowRef, completion, timestamp) {
-        const phaseElapsed = Math.max(0, timestamp - finiteOr(completion.phaseStartedAt, timestamp));
-        applyProgress(rowRef, 100, true);
-        return phaseElapsed >= buildAnimation.completionVisibleMs;
-    }
-
-    function applyProgress(rowRef, percent, completing) {
-        rowRef.completing = completing;
-        if (rowRef.overlay) {
-            rowRef.overlay.classList.toggle('is-completing', completing);
-        }
-        rowRef.displayPercent = percent;
-        rowRef.targetPercent = 100;
-        rowRef.lastBuildPercent = 100;
-        applyFillScale(rowRef, percent, normalizePercent);
+        return phases.renderFrame(rowRef, completion, timestamp);
     }
 
     function remainingMs(pluginId, now = performance.now()) {
-        const completion = completionByPlugin.get(pluginId);
-        if (!completion || completion.state !== 'playing') return 0;
-
-        const phase = completion.phase || 'ramp';
-        const phaseStartedAt = finiteOr(completion.phaseStartedAt, now);
-        const phaseElapsed = Math.max(0, now - phaseStartedAt);
-        if (phase === 'ramp') {
-            const rampRemaining = Math.max(0, buildAnimation.completionRampMs - phaseElapsed);
-            return rampRemaining + buildAnimation.completionHoldMs + buildAnimation.completionVisibleMs;
-        }
-        if (phase === 'hold') {
-            const holdRemaining = Math.max(0, buildAnimation.completionHoldMs - phaseElapsed);
-            return holdRemaining + buildAnimation.completionVisibleMs;
-        }
-        return Math.max(0, buildAnimation.completionVisibleMs - phaseElapsed);
+        return completionState.remainingMs(pluginId, now);
     }
 
     function finalize(pluginId) {
-        setState(pluginId, 'done');
+        completionState.finalize(pluginId);
     }
 
     function setCompletedCopy(rowRef) {
         setOverlayCopy(rowRef, 'Completed', 'Reloading plugin');
-    }
-
-    function setState(pluginId, state, patch = {}) {
-        if (!pluginId) return;
-        if (state === 'idle') {
-            completionByPlugin.delete(pluginId);
-            return;
-        }
-        const previous = completionByPlugin.get(pluginId) || {};
-        completionByPlugin.set(pluginId, {
-            state,
-            startedAt: finiteOr(patch.startedAt, finiteOr(previous.startedAt, 0)),
-            startPercent: finiteOr(patch.startPercent, finiteOr(previous.startPercent, 100)),
-            phase: typeof patch.phase === 'string' ? patch.phase : (previous.phase || 'ramp'),
-            phaseStartedAt: finiteOr(
-                patch.phaseStartedAt,
-                finiteOr(previous.phaseStartedAt, finiteOr(patch.startedAt, finiteOr(previous.startedAt, 0)))
-            )
-        });
     }
 
     return {
@@ -297,10 +203,4 @@ export function createCompletionController({
         startIfReady,
         syncPlayback
     };
-}
-
-function easeOutCubic(value) {
-    const clamped = Math.max(0, Math.min(1, value));
-    const inv = 1 - clamped;
-    return 1 - inv * inv * inv;
 }
