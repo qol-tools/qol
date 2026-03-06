@@ -1,28 +1,28 @@
 use super::super::types::PluginBuildPlan;
 
 #[derive(Debug, Clone)]
-pub(super) struct QueuedPlugin {
-    pub(super) plugin_id: String,
-    pub(super) phase: String,
+pub(in crate::dev::build) struct QueuedPlugin {
+    pub(in crate::dev::build) plugin_id: String,
+    pub(in crate::dev::build) phase: String,
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct SkipRecord {
-    pub(super) phase: String,
-    pub(super) output: String,
-    pub(super) remove_fingerprint: bool,
+pub(in crate::dev::build) struct SkipRecord {
+    pub(in crate::dev::build) phase: String,
+    pub(in crate::dev::build) output: String,
+    pub(in crate::dev::build) remove_fingerprint: bool,
 }
 
-pub(super) enum PlanDisposition {
+pub(in crate::dev::build) enum PlanDisposition {
     Build,
     Skip(SkipRecord),
 }
 
-pub(super) fn queued_plugins(plans: &[PluginBuildPlan]) -> Vec<QueuedPlugin> {
+pub(in crate::dev::build) fn queued_plugins(plans: &[PluginBuildPlan]) -> Vec<QueuedPlugin> {
     plans.iter().filter_map(queued_plugin).collect()
 }
 
-pub(super) fn classify_plan(plan: &PluginBuildPlan) -> PlanDisposition {
+pub(in crate::dev::build) fn classify_plan(plan: &PluginBuildPlan) -> PlanDisposition {
     if !plan.has_cargo {
         return PlanDisposition::Skip(missing_cargo_skip());
     }

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use crate::dev::adapters::traits::CargoPluginBuilder;
 use crate::dev::core::{self, BuildStatus};
 
-use super::super::planning::{classify_plan, queued_plugins, PlanDisposition, SkipRecord};
+use super::super::planning::queue::{classify_plan, queued_plugins, PlanDisposition, SkipRecord};
 use super::super::types::{BuildResult, BuildRun, PluginBuildPlan};
 use super::events::CoreEventEmitter;
 

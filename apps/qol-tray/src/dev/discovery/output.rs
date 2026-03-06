@@ -27,7 +27,7 @@ pub fn discover_plugins(
 }
 
 fn shape_discovered_plugins(sources: Vec<ClassifiedSource>) -> Vec<DiscoveredPlugin> {
-    let mut discovered = Vec::new();
+    let mut discovered: Vec<DiscoveredPlugin> = Vec::new();
 
     for source in sources {
         if source.already_linked {

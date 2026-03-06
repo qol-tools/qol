@@ -40,13 +40,8 @@ impl PlanBasis {
     }
 
     fn unsupported_platform(self) -> PluginBuildPlan {
-        self.build_plan(
-            true,
-            false,
-            false,
-            None,
-            self.selection.platform_reason.clone(),
-        )
+        let reason = self.selection.platform_reason.clone();
+        self.build_plan(true, false, false, None, reason)
     }
 
     fn fingerprinted(self, current_fingerprint: String) -> PluginBuildPlan {

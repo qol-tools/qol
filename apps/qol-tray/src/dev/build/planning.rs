@@ -1,4 +1,4 @@
-mod queue;
+pub(in crate::dev::build) mod queue;
 mod rebuild_reason;
 mod selection;
 
@@ -6,8 +6,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::types::PluginBuildPlan;
-
-pub(super) use queue::{classify_plan, queued_plugins, PlanDisposition, QueuedPlugin, SkipRecord};
 
 pub fn plan_linked_plugin_builds(
     dev_links: &HashMap<String, PathBuf>,

@@ -3,7 +3,7 @@ mod output;
 mod search;
 mod source;
 
-pub use output::{discover_plugins, DiscoveredPlugin};
+pub use output::discover_plugins;
 
 #[cfg(test)]
 mod tests {

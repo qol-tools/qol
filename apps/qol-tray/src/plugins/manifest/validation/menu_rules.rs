@@ -1,4 +1,4 @@
-use super::MenuItem;
+use crate::plugins::manifest::MenuItem;
 use anyhow::{bail, Result};
 use std::collections::BTreeSet;
 
