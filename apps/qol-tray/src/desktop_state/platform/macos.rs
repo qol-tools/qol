@@ -1,6 +1,7 @@
-use super::Platform;
 use qol_runtime::MonitorBounds;
 use std::ffi::c_void;
+
+use crate::desktop_state::Platform;
 
 #[repr(C)]
 #[derive(Copy, Clone)]

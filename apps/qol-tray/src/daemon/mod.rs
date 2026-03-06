@@ -1,10 +1,29 @@
 mod events;
-mod init;
 
 pub use events::EventBus;
-pub use init::Daemon;
+
+use std::sync::Arc;
 
 use serde::Serialize;
+
+#[derive(Clone)]
+pub struct Daemon {
+    pub events: Arc<EventBus>,
+}
+
+impl Daemon {
+    pub fn new() -> Self {
+        Self {
+            events: Arc::new(EventBus::new()),
+        }
+    }
+}
+
+impl Default for Daemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
