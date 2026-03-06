@@ -1,6 +1,7 @@
 mod codesign;
 mod plugin_build;
 mod self_build;
+mod spawn;
 
 use std::path::Path;
 
