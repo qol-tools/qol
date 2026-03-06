@@ -1,13 +1,24 @@
 import { html } from '../lib/html.js';
-import { useEffect, useCallback, useRef } from 'preact/hooks';
+import { useEffect, useCallback } from 'preact/hooks';
 import { useStateRef } from '../hooks/useStateRef.js';
 import { usePersistedIndex } from '../hooks/usePersistedIndex.js';
-import { Modal } from '../components/ModalPreact.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { useFooterShortcuts } from '../hooks/useFooterShortcuts.js';
 import { withShiftVariants, dispatchKey } from '../utils/keys.js';
+import {
+    API_BASE,
+    buildApiExample,
+    buildSavedActions,
+    createEditModalState,
+    extractParams,
+    loadTaskRunnerData,
+    nextSelectedIndex,
+    persistTaskRunnerConfig,
+    removeSelectedAction,
+    runTaskActionTest
+} from './task-runner/data.js';
+import { ActionEditModal, TestPanel } from './task-runner/panels.js';
 
-const API_BASE = '/api/task-runner';
 const CSS_ID = 'task-runner-css';
 
 const SHORTCUTS = [
@@ -19,17 +30,6 @@ const SHORTCUTS = [
     { key: 'c', label: 'copy API' }
 ];
 
-function extractParams(command) {
-    const matches = command.match(/\{\{(\w+)\}\}/g) || [];
-    return [...new Set(matches.map(m => m.slice(2, -2)))];
-}
-
-function escapeHtml(value) {
-    return String(value).replace(/[&<>"']/g, c =>
-        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])
-    );
-}
-
 export function TaskRunnerView() {
     const [actions, setActions, actionsRef] = useStateRef({});
     const [actionIds, setActionIds, actionIdsRef] = useStateRef([]);
@@ -40,7 +40,6 @@ export function TaskRunnerView() {
     const [testResult, setTestResult] = useStateRef(null);
     const [testRunning, setTestRunning] = useStateRef(false);
 
-    // Load stylesheet
     useEffect(() => {
         if (document.getElementById(CSS_ID)) return;
         const link = document.createElement('link');
@@ -52,80 +51,48 @@ export function TaskRunnerView() {
 
     useFooterShortcuts(SHORTCUTS);
 
-    // Load actions
     const loadActions = useCallback(async () => {
         try {
-            const res = await fetch(`${API_BASE}/config`);
-            if (res.ok) {
-                const config = await res.json();
-                const a = config.actions || {};
-                setActions(a);
-                const ids = Object.keys(a);
-                setActionIds(ids);
-                setSelectedIndex(prev => {
-                    taskMarkRestored();
-                    return prev >= 0 && prev < ids.length ? prev : 0;
-                });
-            }
+            const loaded = await loadTaskRunnerData();
+            setActions(loaded.actions);
+            setActionIds(loaded.actionIds);
+            setSelectedIndex(prev => {
+                taskMarkRestored();
+                return prev >= 0 && prev < loaded.actionIds.length ? prev : 0;
+            });
         } catch {}
     }, []);
 
     useEffect(() => { loadActions(); }, [loadActions]);
 
-    // Persist
-    const persistConfig = useCallback(async (acts) => {
-        try {
-            await fetch(`${API_BASE}/config`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ actions: acts })
-            });
-        } catch {}
-    }, []);
-
-    // Delete — stable via refs
     const deleteAction = useCallback(() => {
         const ids = actionIdsRef.current;
         const idx = selectedIndexRef.current;
         if (ids.length === 0 || idx < 0) return;
-        const id = ids[idx];
-        setActions(prev => { const next = { ...prev }; delete next[id]; persistConfig(next); return next; });
-        setActionIds(prev => { const next = prev.filter(a => a !== id); return next; });
-        setSelectedIndex(prev => Math.min(prev, Math.max(0, ids.length - 2)));
-    }, [persistConfig]);
-
-    // Open edit modal — stable via ref
-    const openEditModal = useCallback((actionId = null) => {
-        const action = actionId ? actionsRef.current[actionId] : null;
-        setEditModal({
-            actionId: actionId || '',
-            isNew: !actionId,
-            name: action?.name || '',
-            description: action?.description || '',
-            command: action?.command || '',
-            timeout: action?.timeout || 60
-        });
+        const nextActions = removeSelectedAction(actionsRef.current, ids, idx);
+        const nextIds = Object.keys(nextActions);
+        setActions(nextActions);
+        setActionIds(nextIds);
+        setSelectedIndex(nextSelectedIndex(nextIds, idx));
+        void persistTaskRunnerConfig(nextActions);
     }, []);
 
-    // Save action
+    const openEditModal = useCallback((actionId = null) => {
+        setEditModal(createEditModalState(actionsRef.current, actionId));
+    }, []);
+
     const saveAction = useCallback(() => {
         if (!editModal) return;
-        const id = editModal.actionId.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
-        const name = editModal.name.trim();
-        const command = editModal.command.trim();
-        if (!id || !name || !command) return;
-        const action = { name, description: editModal.description.trim(), command, timeout: editModal.timeout };
-        setActions(prev => { const next = { ...prev, [id]: action }; persistConfig(next); return next; });
-        setActionIds(prev => {
-            if (prev.includes(id)) return prev;
-            const next = [...prev, id];
-            setSelectedIndex(next.length - 1);
-            return next;
-        });
+        const saved = buildSavedActions(actionsRef.current, editModal);
+        if (!saved.actionId || !saved.actions[saved.actionId]?.name || !saved.actions[saved.actionId]?.command) return;
+        const nextIds = Object.keys(saved.actions);
+        setActions(saved.actions);
+        setActionIds(nextIds);
+        if (editModal.isNew) setSelectedIndex(nextIds.length - 1);
+        void persistTaskRunnerConfig(saved.actions);
         setEditModal(null);
-    }, [editModal, persistConfig]);
+    }, [editModal]);
 
-    // Test panel
     const openTestPanel = useCallback((actionId) => {
         setTestingId(actionId);
         setTestParams({});
@@ -144,29 +111,17 @@ export function TaskRunnerView() {
         setTestRunning(true);
         setTestResult(null);
         try {
-            const res = await fetch(`${API_BASE}/execute`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: testingId, params: testParams })
-            });
-            setTestResult(await res.json());
+            setTestResult(await runTaskActionTest(testingId, testParams));
         } catch (e) {
             setTestResult({ success: false, error: e.message, exitCode: -1 });
         }
         setTestRunning(false);
     }, [testingId, testRunning, testParams]);
 
-    // Copy API example — stable via refs
     const copyApiExample = useCallback(() => {
-        const ids = actionIdsRef.current;
-        const acts = actionsRef.current;
-        const exampleAction = ids[0] || 'my-action';
-        const params = acts[exampleAction] ? extractParams(acts[exampleAction].command) : ['param1'];
-        const paramsObj = params.length > 0 ? params.reduce((acc, p) => ({ ...acc, [p]: '...' }), {}) : {};
-        navigator.clipboard.writeText(JSON.stringify({ action: exampleAction, params: paramsObj }, null, 2));
+        navigator.clipboard.writeText(buildApiExample(actionsRef.current, actionIdsRef.current).json);
     }, []);
 
-    // Keyboard — stable via refs
     const handleKey = useCallback((e) => {
         if (editModalRef.current) {
             if (e.key === 'Escape') { e.preventDefault(); setEditModal(null); return; }
@@ -195,11 +150,7 @@ export function TaskRunnerView() {
     TaskRunnerView.handleKey = handleKey;
     TaskRunnerView.isBlocking = isBlocking;
 
-    // API usage example
-    const exampleAction = actionIds[0] || 'my-action';
-    const exampleParams = actions[exampleAction] ? extractParams(actions[exampleAction].command) : ['param1'];
-    const exampleParamsObj = exampleParams.length > 0 ? exampleParams.reduce((acc, p) => ({ ...acc, [p]: '...' }), {}) : {};
-    const exampleJson = JSON.stringify({ action: exampleAction, params: exampleParamsObj }, null, 2);
+    const exampleJson = buildApiExample(actions, actionIds).json;
 
     return html`
         <div class="view-container">
@@ -273,102 +224,5 @@ export function TaskRunnerView() {
                 />
             `}
         </div>
-    `;
-}
-
-function TestPanel({ actionId, params, testParams, onParamChange, onRun, onClose, running, result }) {
-    const panelRef = useRef(null);
-
-    useEffect(() => {
-        const firstInput = panelRef.current?.querySelector('.test-param-input');
-        if (firstInput) firstInput.focus();
-        else panelRef.current?.focus();
-    }, []);
-
-    const handleKeydown = useCallback((e) => {
-        if (e.key === 'Enter' && !running) { e.preventDefault(); onRun(); }
-        if (e.key === 'Escape') { e.preventDefault(); onClose(); }
-    }, [running, onRun, onClose]);
-
-    return html`
-        <div class="test-panel" ref=${panelRef} tabindex="0" onKeydown=${handleKeydown}>
-            <div class="test-panel-header">
-                <span>Test: ${actionId}</span>
-                <span class="test-hints"><kbd>Enter</kbd> run <kbd>Esc</kbd> close</span>
-            </div>
-            ${params.length > 0
-                ? html`<div class="test-params">
-                    ${params.map(p => html`
-                        <div key=${p} class="test-param-row">
-                            <label>${p}</label>
-                            <input type="text" class="test-param-input" data-param="${p}"
-                                   value=${testParams[p] || ''}
-                                   onInput=${(e) => onParamChange(p, e.target.value)}
-                                   placeholder="Enter value..." />
-                        </div>
-                    `)}
-                </div>`
-                : html`<div class="test-no-params">No parameters required. Press <kbd>Enter</kbd> to run.</div>`
-            }
-            ${running && html`<div class="test-running">Running...</div>`}
-            ${result && html`
-                <div class="test-result ${result.success ? 'success' : 'error'}">
-                    <div class="test-result-status">${result.success ? `Success (exit ${result.exitCode})` : `Failed (exit ${result.exitCode})`}</div>
-                    ${result.stdout && html`<div class="test-result-output"><strong>stdout:</strong><pre>${result.stdout}</pre></div>`}
-                    ${result.stderr && html`<div class="test-result-output"><strong>stderr:</strong><pre>${result.stderr}</pre></div>`}
-                    ${result.error && html`<div class="test-result-error">${result.error}</div>`}
-                </div>
-            `}
-        </div>
-    `;
-}
-
-function ActionEditModal({ modal, onUpdate, onClose, onSave }) {
-    const title = modal.isNew ? 'New Action' : 'Edit Action';
-
-    useEffect(() => {
-        const el = modal.isNew ? document.getElementById('action-id') : document.getElementById('action-name');
-        setTimeout(() => el?.focus(), 0);
-    }, []);
-
-    return html`
-        <${Modal} open=${true} onClose=${onClose} className="edit-modal">
-            <div class="edit-modal-content">
-                <h3>${title}</h3>
-                <div class="form-group">
-                    <label>ID <span class="hint">(used in API calls)</span></label>
-                    <input type="text" id="action-id" value=${modal.actionId}
-                           placeholder="e.g., open-vscode" disabled=${!modal.isNew}
-                           onInput=${(e) => onUpdate('actionId', e.target.value)} />
-                </div>
-                <div class="form-group">
-                    <label>Name</label>
-                    <input type="text" id="action-name" value=${modal.name}
-                           placeholder="e.g., Open in VS Code"
-                           onInput=${(e) => onUpdate('name', e.target.value)} />
-                </div>
-                <div class="form-group">
-                    <label>Description <span class="hint">(optional)</span></label>
-                    <input type="text" id="action-desc" value=${modal.description}
-                           placeholder="e.g., Opens a path in Visual Studio Code"
-                           onInput=${(e) => onUpdate('description', e.target.value)} />
-                </div>
-                <div class="form-group">
-                    <label>Command <span class="hint">(use ${'{{'}param${'}}'}  for parameters)</span></label>
-                    <input type="text" id="action-command" value=${modal.command}
-                           placeholder="e.g., code {{path}}"
-                           onInput=${(e) => onUpdate('command', e.target.value)} />
-                </div>
-                <div class="form-group">
-                    <label>Timeout <span class="hint">(seconds)</span></label>
-                    <input type="number" id="action-timeout" value=${modal.timeout} min="1" max="3600"
-                           onInput=${(e) => onUpdate('timeout', parseInt(e.target.value, 10) || 60)} />
-                </div>
-                <div class="modal-buttons">
-                    <button class="modal-cancel" onClick=${onClose}>Cancel</button>
-                    <button class="modal-save" onClick=${onSave}>Save</button>
-                </div>
-            </div>
-        <//>
     `;
 }
