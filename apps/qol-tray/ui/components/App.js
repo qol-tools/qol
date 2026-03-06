@@ -2,38 +2,22 @@ import { html } from '../lib/html.js';
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
 import { SidebarNav } from './SidebarNav.js';
 import { SidebarFooter } from './SidebarFooter.js';
+import {
+    applyDevFlowTransition as applyFlowStateTransition,
+    completeReconnectFlows,
+    devFlowKey,
+    devFlowPhase,
+    initDevFlows,
+    resolveDevSidebarState,
+    startRecompileFlow,
+    startUpdateFlow
+} from './app/dev-flows.js';
+import { buildViewOrder, renderMountedViews, VIEW_MAP } from './app/views.js';
 import { useRouter } from '../hooks/useRouter.js';
 import { useSSE, useSSEReconnect } from '../hooks/useSSE.js';
 import { useKeyboard } from '../hooks/useKeyboard.js';
 import { readResponseText } from '../api/client.js';
 import { clampPercent } from '../utils/progress.js';
-
-import { PluginsView } from '../views/plugins-view.js';
-import { StoreView } from '../views/store-view.js';
-import { HotkeysView } from '../views/hotkeys-view.js';
-import { TaskRunnerView } from '../views/task-runner-view.js';
-import { DevView } from '../views/dev/view.js';
-
-const VIEW_MAP = { plugins: PluginsView, store: StoreView, hotkeys: HotkeysView, 'task-runner': TaskRunnerView, dev: DevView };
-const BASE_ORDER = ['plugins', 'store', 'hotkeys', 'task-runner'];
-
-function initDevFlows() {
-    return {
-        update: { active: false, percent: 0, done: false, error: null, clearTimer: null },
-        recompile: { active: false, percent: 0, phase: 'Preparing build', done: false, error: null, clearTimer: null }
-    };
-}
-
-function resolveDevSidebarState(devFlows) {
-    const { recompile, update } = devFlows;
-    if (recompile.error) return { status: 'error', message: recompile.error };
-    if (recompile.active) return { status: 'compiling', percent: recompile.percent, phase: recompile.phase || 'Recompiling QoL Tray' };
-    if (update.error) return { status: 'error', message: update.error };
-    if (update.active) return { status: 'downloading', percent: update.percent };
-    if (recompile.done) return { status: 'recompile_done' };
-    if (update.done) return { status: 'done' };
-    return { status: 'idle' };
-}
 
 export function App() {
     const [devEnabled, setDevEnabled] = useState(false);
@@ -41,10 +25,7 @@ export function App() {
     const [updateState, setUpdateState] = useState({ status: 'checking' });
     const devFlowsRef = useRef(initDevFlows());
 
-    const viewOrder = useMemo(
-        () => devEnabled ? [...BASE_ORDER, 'dev'] : [...BASE_ORDER],
-        [devEnabled]
-    );
+    const viewOrder = useMemo(() => buildViewOrder(devEnabled), [devEnabled]);
 
     const router = useRouter({ viewOrder });
     const { activeViewId, activePluginId, switchView, openPluginConfig, closePluginConfig } = router;
@@ -109,63 +90,43 @@ export function App() {
         }, ms);
     }, [clearDevFlowTimer, syncSidebar]);
 
-    const DEV_FLOW_CLEAR_MS = { recompile: 1800, update: 2000 };
-    const DEV_FLOW_EVENTS = {
-        self_recompile_progress: 'recompile', self_recompile_complete: 'recompile', self_recompile_failed: 'recompile',
-        update_progress: 'update', update_complete: 'update', update_failed: 'update'
-    };
-
-    const DEV_FLOW_TRANSITIONS = {
-        progress: (flow, key, event) => {
-            flow.active = true;
-            flow.percent = clampPercent(event.percent);
-            if (key === 'recompile') flow.phase = (typeof event.phase === 'string' && event.phase.trim()) ? event.phase : 'Recompiling QoL Tray';
-            flow.done = false;
-            flow.error = null;
-        },
-        complete: (flow, key, event) => {
-            flow.active = false;
-            flow.percent = 100;
-            flow.done = true;
-            flow.error = null;
-            scheduleDevFlowDoneClear(key, DEV_FLOW_CLEAR_MS[key]);
-        },
-        failed: (flow, key, event) => {
-            flow.active = false;
-            flow.done = false;
-            flow.error = event?.message || `${key} failed`;
-        }
-    };
-
     const applyDevFlowTransition = useCallback((key, phase, event) => {
         clearDevFlowTimer(key);
-        DEV_FLOW_TRANSITIONS[phase](devFlowsRef.current[key], key, event);
+        applyFlowStateTransition(
+            devFlowsRef.current,
+            { key, phase, event },
+            scheduleDevFlowDoneClear
+        );
         syncSidebar();
     }, [clearDevFlowTimer, syncSidebar, scheduleDevFlowDoneClear]);
 
-    const NON_DEV_SSE_HANDLERS = {
-        update_progress: (event) => setUpdateState({ status: 'downloading', percent: clampPercent(event.percent) }),
-        update_complete: () => { setUpdateState({ status: 'done' }); setTimeout(() => checkForUpdate(), 30000); },
-        update_failed: () => setUpdateState({ status: 'error' })
-    };
-
     const handleSSE = useCallback((event) => {
         if (devEnabled) {
-            const key = DEV_FLOW_EVENTS[event.type];
+            const key = devFlowKey(event.type);
             if (!key) return;
-            const phase = event.type.endsWith('_progress') ? 'progress' : event.type.endsWith('_complete') ? 'complete' : 'failed';
+            const phase = devFlowPhase(event.type);
             applyDevFlowTransition(key, phase, event);
             return;
         }
-        NON_DEV_SSE_HANDLERS[event.type]?.(event);
-    }, [devEnabled, clearDevFlowTimer, syncSidebar, scheduleDevFlowDoneClear]);
+
+        if (event.type === 'update_progress') {
+            setUpdateState({ status: 'downloading', percent: clampPercent(event.percent) });
+            return;
+        }
+        if (event.type === 'update_complete') {
+            setUpdateState({ status: 'done' });
+            setTimeout(() => checkForUpdate(), 30000);
+            return;
+        }
+        if (event.type === 'update_failed') {
+            setUpdateState({ status: 'error' });
+        }
+    }, [devEnabled, applyDevFlowTransition, checkForUpdate]);
 
     useSSE(handleSSE);
     useSSEReconnect(useCallback(() => {
         if (devEnabled) {
-            const flows = devFlowsRef.current;
-            if (flows.recompile.active) applyDevFlowTransition('recompile', 'complete', {});
-            if (flows.update.active) applyDevFlowTransition('update', 'complete', {});
+            completeReconnectFlows(devFlowsRef.current, applyDevFlowTransition);
             return;
         }
         if (updateState.status === 'done') checkForUpdate();
@@ -177,7 +138,7 @@ export function App() {
         if (action === 'self-update') {
             if (devEnabled) {
                 clearDevFlowTimer('update');
-                devFlowsRef.current.update = { active: true, percent: 0, done: false, error: null, clearTimer: null };
+                startUpdateFlow(devFlowsRef.current);
                 syncSidebar();
             }
             if (!devEnabled) setUpdateState({ status: 'downloading', percent: 0 });
@@ -193,7 +154,7 @@ export function App() {
             const flows = devFlowsRef.current;
             if (!devEnabled || flows.recompile.active || flows.update.active) return;
             clearDevFlowTimer('recompile');
-            flows.recompile = { active: true, percent: 0, phase: 'Preparing build', done: false, error: null, clearTimer: null };
+            startRecompileFlow(devFlowsRef.current);
             syncSidebar();
             const RECOMPILE_ERRORS = {
                 404: 'Connected daemon is older than this UI. Stop it and launch the current checkout.',
@@ -252,10 +213,6 @@ export function App() {
         });
     }, [activeViewId]);
 
-    const slotStyle = (id) => activeViewId === id && !activePluginId
-        ? 'flex:1;min-height:0;display:flex;flex-direction:column'
-        : 'display:none';
-
     return html`
         <div class="app-container">
             <div class="app-main">
@@ -273,11 +230,12 @@ export function App() {
                 </aside>
                 <main id="content" class=${activePluginId ? 'has-plugin-iframe' : ''}>
                     ${activePluginId && html`<iframe src="/plugins/${activePluginId}/" class="plugin-iframe"></iframe>`}
-                    ${mounted.has('plugins') && html`<div style=${slotStyle('plugins')}><${PluginsView} onOpenPluginConfig=${openPluginConfig} /></div>`}
-                    ${mounted.has('store') && html`<div style=${slotStyle('store')}><${StoreView} /></div>`}
-                    ${mounted.has('hotkeys') && html`<div style=${slotStyle('hotkeys')}><${HotkeysView} /></div>`}
-                    ${mounted.has('task-runner') && html`<div style=${slotStyle('task-runner')}><${TaskRunnerView} /></div>`}
-                    ${mounted.has('dev') && html`<div style=${slotStyle('dev')}><${DevView} /></div>`}
+                    ${renderMountedViews({
+                        mounted,
+                        activeViewId,
+                        activePluginId,
+                        openPluginConfig
+                    })}
                 </main>
             </div>
             <div class="app-footer">
