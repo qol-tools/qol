@@ -12,11 +12,11 @@ path = "src/main.rs"
 
 [[bin]]
 name = "qol-tray-install"
-path = "src/bin/install.rs"
+path = "src/installer/main.rs"
 
 [[bin]]
 name = "qol-tray-doctor"
-path = "src/bin/doctor.rs"
+path = "src/doctor/main.rs"
 
 [lib]
 name = "qol_tray"

@@ -18,26 +18,30 @@ fn parse_cmd_autostart_target(content: &str) -> Option<String> {
         if !trimmed.to_ascii_lowercase().starts_with("start") {
             continue;
         }
-
-        let quoted = quoted_segments(trimmed);
-        if quoted.len() >= 2 {
-            return Some(quoted[1].clone());
+        if let Some(result) = parse_start_line(trimmed) {
+            return Some(result);
         }
-        if quoted.len() == 1 {
-            return Some(quoted[0].clone());
-        }
-
-        let rest = trimmed
-            .char_indices()
-            .find(|(_, ch)| ch.is_whitespace())
-            .map(|(idx, _)| trimmed[idx..].trim())
-            .unwrap_or("");
-        if rest.is_empty() {
-            continue;
-        }
-        return Some(rest.trim_matches('"').to_string());
     }
     None
+}
+
+fn parse_start_line(trimmed: &str) -> Option<String> {
+    let quoted = quoted_segments(trimmed);
+    if quoted.len() >= 2 {
+        return Some(quoted[1].clone());
+    }
+    if quoted.len() == 1 {
+        return Some(quoted[0].clone());
+    }
+    let rest = trimmed
+        .char_indices()
+        .find(|(_, ch)| ch.is_whitespace())
+        .map(|(idx, _)| trimmed[idx..].trim())
+        .unwrap_or("");
+    if rest.is_empty() {
+        return None;
+    }
+    Some(rest.trim_matches('"').to_string())
 }
 
 fn quoted_segments(value: &str) -> Vec<String> {

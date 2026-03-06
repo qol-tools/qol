@@ -1,5 +1,4 @@
 use crate::hotkeys::trigger_reload;
-use crate::paths::is_safe_path_component;
 use crate::plugins::{MenuItem, PluginLoader, PluginManifest};
 
 use super::types::{AppState, PluginAction};
@@ -10,25 +9,60 @@ pub(super) fn read_installed_plugin_dirs(
     if !plugins_dir.exists() {
         return Vec::new();
     }
-
     std::fs::read_dir(plugins_dir)
         .ok()
         .into_iter()
         .flatten()
         .filter_map(|e| e.ok())
-        .filter_map(|entry| {
-            let path = entry.path();
-            let metadata = std::fs::symlink_metadata(&path).ok()?;
-            if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                return None;
-            }
-            let id = entry.file_name().into_string().ok()?;
-            if id.starts_with('.') || id.ends_with(".backup") || !is_safe_path_component(&id) {
-                return None;
-            }
-            Some((id, path))
-        })
+        .filter_map(valid_plugin_entry)
         .collect()
+}
+
+fn valid_plugin_entry(entry: std::fs::DirEntry) -> Option<(String, std::path::PathBuf)> {
+    let path = entry.path();
+    let metadata = std::fs::symlink_metadata(&path).ok()?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return None;
+    }
+    let id = entry.file_name().into_string().ok()?;
+    if id.starts_with('.')
+        || id.ends_with(".backup")
+        || !super::super::validation::is_safe_plugin_id(&id)
+    {
+        return None;
+    }
+    Some((id, path))
+}
+
+pub(super) fn validate_plugin_id(plugin_id: &str) -> Result<(), &'static str> {
+    super::super::validation::validate_plugin_id(plugin_id)
+}
+
+pub(super) fn validate_plugin_id_bad_request(
+    plugin_id: &str,
+) -> Result<(), (axum::http::StatusCode, String)> {
+    validate_plugin_id(plugin_id)
+        .map_err(|message| (axum::http::StatusCode::BAD_REQUEST, message.to_string()))
+}
+
+#[cfg(feature = "dev")]
+pub(super) fn shared_config_dir() -> Result<std::path::PathBuf, String> {
+    crate::paths::shared_config_dir().map_err(|e| e.to_string())
+}
+
+#[cfg(feature = "dev")]
+pub(super) fn shared_config_dir_or_status() -> Result<std::path::PathBuf, axum::http::StatusCode> {
+    shared_config_dir().map_err(|error| {
+        log::error!("Failed to determine config directory: {}", error);
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    })
+}
+
+#[cfg(feature = "dev")]
+pub(super) fn shared_config_dir_or_response(
+    unavailable_message: &'static str,
+) -> Result<std::path::PathBuf, (axum::http::StatusCode, String)> {
+    shared_config_dir_or_status().map_err(|status| (status, unavailable_message.to_string()))
 }
 
 pub(super) fn read_plugin_version(plugin_dir: &std::path::Path) -> Result<String, ()> {

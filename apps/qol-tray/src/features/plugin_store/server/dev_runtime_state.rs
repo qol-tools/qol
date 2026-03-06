@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::dev::adapters::traits::{
+use crate::dev::adapters::{
     BuildStateProgress, BuildStateStore, DevMockTarget, DevRuntimeStateStore,
 };
 use crate::dev::core::BuildStatus;
@@ -122,7 +122,8 @@ impl DevRuntimeStateStore for InMemoryDevRuntimeState {
     }
 
     fn finish_self_recompile(&self) {
-        self.self_recompile_in_progress.store(false, Ordering::SeqCst);
+        self.self_recompile_in_progress
+            .store(false, Ordering::SeqCst);
     }
 
     fn self_recompile_in_progress(&self) -> bool {

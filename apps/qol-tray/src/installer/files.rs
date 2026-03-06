@@ -34,27 +34,25 @@ fn copy_entry(source: &Path, target: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(source)
         .with_context(|| format!("Failed to read metadata for {}", source.display()))?;
     let file_type = metadata.file_type();
-
     if file_type.is_symlink() {
-        super::platform::copy_symlink(source, target)?;
-        return Ok(());
+        return super::platform::copy_symlink(source, target);
     }
-
     if file_type.is_dir() {
-        copy_dir_recursive(source, target)?;
-        return Ok(());
+        return copy_dir_recursive(source, target);
     }
-
     if file_type.is_file() {
-        fs::copy(source, target).with_context(|| {
-            format!(
-                "Failed to copy {} to {}",
-                source.display(),
-                target.display()
-            )
-        })?;
-        super::platform::on_file_copied(source, target)?;
+        return copy_file(source, target);
     }
-
     Ok(())
+}
+
+fn copy_file(source: &Path, target: &Path) -> Result<()> {
+    fs::copy(source, target).with_context(|| {
+        format!(
+            "Failed to copy {} to {}",
+            source.display(),
+            target.display()
+        )
+    })?;
+    super::platform::on_file_copied(source, target)
 }

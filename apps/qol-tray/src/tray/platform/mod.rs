@@ -39,50 +39,55 @@ pub fn create_tray(
     events: Arc<EventBus>,
 ) -> Result<PlatformTray> {
     #[cfg(target_os = "linux")]
-    {
-        linux::store_shutdown_rx(shutdown_rx);
-        linux::create_tray(
-            feature_registry,
-            shutdown_tx,
-            icon,
-            update_available,
-            events,
-        )?;
-        Ok(PlatformTray::Linux)
-    }
-
+    return create_linux_tray(feature_registry, shutdown_tx, shutdown_rx, icon, update_available, events);
     #[cfg(target_os = "macos")]
-    {
-        let _ = shutdown_rx;
-        let tray_icon = macos::create_tray(
-            feature_registry,
-            shutdown_tx,
-            icon,
-            update_available,
-            events,
-        )?;
-        Ok(PlatformTray::MacOS {
-            _tray_icon: tray_icon,
-        })
-    }
-
+    return create_macos_tray(feature_registry, shutdown_tx, shutdown_rx, icon, update_available, events);
     #[cfg(target_os = "windows")]
-    {
-        let _ = shutdown_rx;
-        let tray_icon = windows::create_tray(
-            feature_registry,
-            shutdown_tx,
-            icon,
-            update_available,
-            events,
-        )?;
-        Ok(PlatformTray::Windows {
-            _tray_icon: tray_icon,
-        })
-    }
+    create_windows_tray(feature_registry, shutdown_tx, shutdown_rx, icon, update_available, events)
 }
 
-/// Run the application. Calls `init` to create the tray, then blocks until shutdown.
+#[cfg(target_os = "linux")]
+fn create_linux_tray(
+    feature_registry: Arc<FeatureRegistry>,
+    shutdown_tx: broadcast::Sender<()>,
+    shutdown_rx: broadcast::Receiver<()>,
+    icon: Icon,
+    update_available: bool,
+    events: Arc<EventBus>,
+) -> Result<PlatformTray> {
+    linux::store_shutdown_rx(shutdown_rx);
+    linux::create_tray(feature_registry, shutdown_tx, icon, update_available, events)?;
+    Ok(PlatformTray::Linux)
+}
+
+#[cfg(target_os = "macos")]
+fn create_macos_tray(
+    feature_registry: Arc<FeatureRegistry>,
+    shutdown_tx: broadcast::Sender<()>,
+    shutdown_rx: broadcast::Receiver<()>,
+    icon: Icon,
+    update_available: bool,
+    events: Arc<EventBus>,
+) -> Result<PlatformTray> {
+    let _ = shutdown_rx;
+    let tray_icon = macos::create_tray(feature_registry, shutdown_tx, icon, update_available, events)?;
+    Ok(PlatformTray::MacOS { _tray_icon: tray_icon })
+}
+
+#[cfg(target_os = "windows")]
+fn create_windows_tray(
+    feature_registry: Arc<FeatureRegistry>,
+    shutdown_tx: broadcast::Sender<()>,
+    shutdown_rx: broadcast::Receiver<()>,
+    icon: Icon,
+    update_available: bool,
+    events: Arc<EventBus>,
+) -> Result<PlatformTray> {
+    let _ = shutdown_rx;
+    let tray_icon = windows::create_tray(feature_registry, shutdown_tx, icon, update_available, events)?;
+    Ok(PlatformTray::Windows { _tray_icon: tray_icon })
+}
+
 pub fn run_app<F>(init: F) -> Result<()>
 where
     F: FnOnce() -> Result<(TrayManager, Arc<Mutex<PluginManager>>)>,
@@ -127,23 +132,28 @@ pub(crate) fn spawn_menu_event_handler<F>(
 {
     let router = Arc::new(router);
     let menu_receiver = MenuEvent::receiver();
-
     std::thread::spawn(move || {
         while let Ok(event) = menu_receiver.recv() {
             log::debug!("Menu event: {}", event.id.0);
-
-            let result = router.route(&event.id.0);
-            if let Err(e) = &result {
-                log::error!("Error handling menu event: {}", e);
-                continue;
-            }
-
-            if matches!(result, Ok(crate::menu::router::HandlerResult::Quit)) {
-                log::info!("Quitting application");
-                let _ = shutdown_tx.send(());
+            if handle_menu_event(&router, &event.id.0, &shutdown_tx) {
                 on_quit();
                 break;
             }
         }
     });
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn handle_menu_event(router: &Arc<EventRouter>, event_id: &str, shutdown_tx: &broadcast::Sender<()>) -> bool {
+    let result = router.route(event_id);
+    if let Err(e) = &result {
+        log::error!("Error handling menu event: {}", e);
+        return false;
+    }
+    if matches!(result, Ok(crate::menu::router::HandlerResult::Quit)) {
+        log::info!("Quitting application");
+        let _ = shutdown_tx.send(());
+        return true;
+    }
+    false
 }

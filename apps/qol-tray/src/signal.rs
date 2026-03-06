@@ -18,11 +18,17 @@ mod unix {
     pub fn register_daemon_pid(pid: u32) {
         let pid = pid as i32;
         for slot in &DAEMON_PIDS {
-            if slot.compare_exchange(0, pid, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+            if slot
+                .compare_exchange(0, pid, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
                 return;
             }
         }
-        log::warn!("Signal handler PID table full, daemon pid {} not tracked", pid);
+        log::warn!(
+            "Signal handler PID table full, daemon pid {} not tracked",
+            pid
+        );
     }
 
     pub fn unregister_daemon_pid(pid: u32) {
@@ -34,7 +40,10 @@ mod unix {
 
     pub fn install_signal_handler() {
         unsafe {
-            libc::signal(libc::SIGINT, sigint_handler as *const () as libc::sighandler_t);
+            libc::signal(
+                libc::SIGINT,
+                sigint_handler as *const () as libc::sighandler_t,
+            );
         }
     }
 

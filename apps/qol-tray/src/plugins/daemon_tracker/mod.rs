@@ -75,30 +75,26 @@ pub(crate) fn dev_link_dirs() -> Vec<PathBuf> {
 /// via the platform-specific `pid_exe_path`.
 pub(crate) fn kill_from_pid_files() {
     let roots = ManagedRoots::load();
-
     for path in daemon_pid_files() {
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        for line in content.lines() {
-            let Ok(pid) = line.trim().parse::<i32>() else {
-                continue;
-            };
-            let Some(exe) = platform::pid_exe_path(pid) else {
-                continue;
-            };
-            if !roots.contains(&exe) {
-                continue;
-            }
-            if crate::process_utils::is_pid_alive(pid) {
-                log::info!("Killing orphan daemon process: {} ({})", pid, exe.display());
-                crate::process_utils::terminate_pid(
-                    pid,
-                    std::time::Duration::from_millis(100),
-                );
-            }
-        }
-        let _ = std::fs::remove_file(&path);
+        process_pid_file(&path, &roots);
+    }
+}
+
+fn process_pid_file(path: &Path, roots: &ManagedRoots) {
+    let Ok(content) = std::fs::read_to_string(path) else { return; };
+    for line in content.lines() {
+        kill_pid_if_managed(line, roots);
+    }
+    let _ = std::fs::remove_file(path);
+}
+
+fn kill_pid_if_managed(line: &str, roots: &ManagedRoots) {
+    let Ok(pid) = line.trim().parse::<i32>() else { return; };
+    let Some(exe) = platform::pid_exe_path(pid) else { return; };
+    if !roots.contains(&exe) { return; }
+    if crate::process_utils::is_pid_alive(pid) {
+        log::info!("Killing orphan daemon process: {} ({})", pid, exe.display());
+        crate::process_utils::terminate_pid(pid, std::time::Duration::from_millis(100));
     }
 }
 
@@ -140,11 +136,7 @@ impl ManagedRoots {
     }
 
     fn candidate_roots(&self) -> Vec<PathBuf> {
-        let mut roots: Vec<PathBuf> = self
-            .dev_link_dirs
-            .iter()
-            .map(|d| resolve_path(d))
-            .collect();
+        let mut roots: Vec<PathBuf> = self.dev_link_dirs.iter().map(|d| resolve_path(d)).collect();
 
         if let Some(root) = &self.shared_plugins_root {
             roots.push(resolve_path(root));

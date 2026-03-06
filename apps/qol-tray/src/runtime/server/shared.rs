@@ -1,0 +1,107 @@
+mod snapshot;
+mod subscribers;
+
+use std::collections::HashSet;
+use std::sync::mpsc as std_mpsc;
+use std::sync::{Mutex, MutexGuard};
+
+use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind};
+use qol_runtime::MonitorBounds;
+
+use super::super::state::InputState;
+use subscribers::SubscriberEntry;
+
+pub(super) struct SharedState {
+    input: Mutex<InputState>,
+    monitors: Mutex<Vec<MonitorBounds>>,
+    cursor_pos: Mutex<Option<(f32, f32)>>,
+    focused_window: Mutex<Option<MonitorBounds>>,
+    last_focus_bounds: Mutex<Option<MonitorBounds>>,
+    subscribers: Mutex<Vec<SubscriberEntry>>,
+}
+
+impl SharedState {
+    pub(super) fn new(monitors: Vec<MonitorBounds>) -> Self {
+        Self {
+            input: Mutex::new(InputState::default()),
+            monitors: Mutex::new(monitors),
+            cursor_pos: Mutex::new(None),
+            focused_window: Mutex::new(None),
+            last_focus_bounds: Mutex::new(None),
+            subscribers: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub(super) fn add_subscriber(
+        &self,
+        interests: HashSet<RuntimeEventKind>,
+        tx: std_mpsc::Sender<RuntimeEvent>,
+    ) {
+        subscribers::push(&self.subscribers, interests, tx);
+    }
+
+    pub(super) fn build_state(&self) -> qol_runtime::PlatformState {
+        snapshot::build_state(self)
+    }
+
+    pub(super) fn focused_window(&self) -> Option<MonitorBounds> {
+        *lock_or_recover(&self.focused_window)
+    }
+
+    pub(super) fn has_subscribers(&self) -> bool {
+        subscribers::has_subscribers(&self.subscribers)
+    }
+
+    pub(super) fn input(&self) -> InputState {
+        lock_or_recover(&self.input).clone()
+    }
+
+    pub(super) fn monitor_at(&self, idx: usize) -> Option<MonitorBounds> {
+        lock_or_recover(&self.monitors).get(idx).copied()
+    }
+
+    pub(super) fn monitors(&self) -> Vec<MonitorBounds> {
+        lock_or_recover(&self.monitors).clone()
+    }
+
+    pub(super) fn publish(&self, events: &[RuntimeEvent]) {
+        subscribers::publish(&self.subscribers, events);
+    }
+
+    pub(super) fn remember_focus_bounds(&self, bounds: Option<MonitorBounds>) -> bool {
+        let mut last_bounds = lock_or_recover(&self.last_focus_bounds);
+        let changed = *last_bounds != bounds;
+        if changed {
+            *last_bounds = bounds;
+        }
+        changed
+    }
+
+    pub(super) fn set_cursor_pos(&self, cursor_pos: Option<(f32, f32)>) {
+        *lock_or_recover(&self.cursor_pos) = cursor_pos;
+    }
+
+    pub(super) fn set_monitors(&self, monitors: Vec<MonitorBounds>) {
+        *lock_or_recover(&self.monitors) = monitors;
+    }
+
+    pub(super) fn store_focused_window(&self, bounds: Option<MonitorBounds>) {
+        let Some(bounds) = bounds else {
+            return;
+        };
+        *lock_or_recover(&self.focused_window) = Some(bounds);
+    }
+
+    pub(super) fn with_input<T>(&self, update: impl FnOnce(&mut InputState) -> T) -> T {
+        let mut input = lock_or_recover(&self.input);
+        update(&mut input)
+    }
+
+    fn cursor_pos(&self) -> Option<(f32, f32)> {
+        *lock_or_recover(&self.cursor_pos)
+    }
+}
+
+pub(super) fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|error| error.into_inner())
+}

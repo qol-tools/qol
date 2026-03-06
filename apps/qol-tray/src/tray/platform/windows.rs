@@ -1,8 +1,8 @@
 use crate::daemon::EventBus;
 use crate::features::FeatureRegistry;
 use anyhow::Result;
-use std::sync::OnceLock as OnceCell;
 use std::sync::Arc;
+use std::sync::OnceLock as OnceCell;
 use tokio::sync::broadcast;
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 

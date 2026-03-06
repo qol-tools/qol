@@ -3,6 +3,7 @@ mod installer;
 mod plugin_ui;
 mod release_assets;
 pub(crate) mod server;
+mod validation;
 
 use crate::daemon::Daemon;
 use crate::features::MenuProvider;

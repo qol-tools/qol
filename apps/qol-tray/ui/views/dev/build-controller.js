@@ -1,183 +1,35 @@
-import { tryFetchJson } from '../../api/client.js';
 import { formatBuildOverlayDetail, normalizePercent } from '../../utils/progress.js';
-import {
-    nextBuildCompletedState,
-    nextBuildProgressState,
-    nextBuildStartedState,
-    parseHydratedBuildState
-} from './build/reducer.js';
+import { dispatchBuildEvent, completeLocalBuild } from './build/event-handler.js';
+import { hydrateBuildState } from './build/hydration.js';
+import { getActivePluginBuildState, pruneInvisibleProgress } from './build/active-state.js';
+import { resetBuildState } from './build/reducer.js';
 import { createPluginBuildOverlayController } from './build-overlay.js';
 
-const LOADING_LOG_PREFIX = '[qol-dev-loading]';
-const DEBUG_LOADING = false;
-
-function logLoading(event, payload) {
-    if (!DEBUG_LOADING) return;
-    console.info(`${LOADING_LOG_PREFIX} ${event}`, payload);
-}
-
-export function createBuildController({
-    state,
-    getContainer,
-    getPluginById,
-    onNeedsRender,
-    onBuildComplete
-}) {
-    const buildOverlayController = createPluginBuildOverlayController({
+function createOverlay(state, getContainer, getPluginById) {
+    return createPluginBuildOverlayController({
         getContainer,
         getPluginById,
-        getBuildState: plugin => getActivePluginBuildState(plugin, state.mockTesting),
+        getBuildState: plugin => getActivePluginBuildState(state, plugin, state.mockTesting),
         formatDetail: formatBuildOverlayDetail,
         normalizePercent
     });
+}
 
-    function handleEvent(event) {
-        if (event.type === 'build_started') {
-            logLoading('event:build_started', {});
-            Object.assign(state, nextBuildStartedState());
-            clearQueuedBuildRowSync();
-            onNeedsRender();
-            return;
-        }
-
-        if (event.type === 'build_plugin_progress') {
-            logLoading('event:build_plugin_progress', {
-                pluginId: event.plugin_id,
-                status: event.status || 'building',
-                percent: normalizePercent(event.percent, { round: true }),
-                phase: event.phase || ''
-            });
-            state.building = true;
-            state.buildProgress = nextBuildProgressState(state.buildProgress, event);
-            queueBuildRowSync(event.plugin_id);
-            return;
-        }
-
-        if (event.type !== 'build_complete') {
-            return;
-        }
-
-        logLoading('event:build_complete', {
-            results: Array.isArray(event.results) ? event.results.length : 0
-        });
-        const completedPluginIds = Object.keys(state.buildProgress);
-        const finalizeBuildComplete = () => {
-            clearQueuedBuildRowSync();
-            Object.assign(state, nextBuildCompletedState(event.results));
-            onBuildComplete();
-        };
-        buildOverlayController.completeRows(completedPluginIds, finalizeBuildComplete);
-    }
-
-    function completeLocalBuild(results) {
-        const completedPluginIds = Object.keys(state.buildProgress);
-        buildOverlayController.completeRows(completedPluginIds, () => {
-            clearQueuedBuildRowSync();
-            state.building = false;
-            state.buildResults = Array.isArray(results) ? results : [];
-            maybeRender(false);
-        });
-    }
-
-    function maybeRender(skipUpdate) {
-        if (!skipUpdate && !state.linkingId) onNeedsRender();
-    }
-
-    async function hydrateBuildState(skipUpdate = false) {
-        const payload = await tryFetchJson('/api/dev/build-state');
-        if (!payload) {
-            state.building = false;
-            maybeRender(skipUpdate);
-            return;
-        }
-
-        const nextState = parseHydratedBuildState(payload);
-        state.building = nextState.building;
-
-        if (!state.building) {
-            state.buildProgress = nextState.buildProgress;
-            if (nextState.buildResults) {
-                state.buildResults = nextState.buildResults;
-            }
-            clearQueuedBuildRowSync();
-            maybeRender(skipUpdate);
-            return;
-        }
-
-        for (const [id, hydrated] of Object.entries(nextState.buildProgress)) {
-            const live = state.buildProgress[id];
-            if (live && (live.percent ?? 0) > (hydrated.percent ?? 0)) continue;
-            state.buildProgress[id] = hydrated;
-        }
-
-        maybeRender(skipUpdate);
-    }
-
-    function getActivePluginBuildState(plugin, mockTesting) {
-        if (!state.building) return null;
-        if (!mockTesting && plugin.status !== 'linked') return null;
-
-        const progress = state.buildProgress[plugin.id];
-        if (!progress) return null;
-
-        const status = progress.status || 'building';
-        if (status !== 'queued' && status !== 'building' && status !== 'completed') return null;
-        if (!mockTesting && (!plugin.has_cargo || !plugin.needs_rebuild)) {
-            return null;
-        }
-
-        const percent = status === 'completed' ? 100 : normalizePercent(progress.percent);
-        const phase = (progress.phase || '').trim()
-            || (status === 'queued' ? 'Queued' : status === 'completed' ? 'Completed' : 'Compiling');
-        return { status, percent, phase };
-    }
-
-    function pruneInvisibleProgress(visibleIds) {
-        if (state.building) return;
-        for (const pluginId of Object.keys(state.buildProgress)) {
-            if (!visibleIds.has(pluginId)) {
-                delete state.buildProgress[pluginId];
-            }
-        }
-    }
-
-    function clearQueuedBuildRowSync() {
-        buildOverlayController.clearQueued();
-    }
-
-    function queueBuildRowSync(pluginId) {
-        logLoading('queue-row-sync', { pluginId });
-        buildOverlayController.queue(pluginId, onNeedsRender);
-    }
-
-    function cacheRows() {
-        buildOverlayController.cacheRows();
-    }
-
-    function syncAll() {
-        if (!state.building) {
-            return;
-        }
-        buildOverlayController.syncAll(Object.keys(state.buildProgress));
-    }
-
-    function stopLocalMockBuildUi() {
-        clearQueuedBuildRowSync();
-        state.building = false;
-        state.buildProgress = {};
-        state.buildResults = null;
-    }
-
+export function createBuildController({ state, getContainer, getPluginById, onNeedsRender, onBuildComplete }) {
+    const overlay = createOverlay(state, getContainer, getPluginById);
+    const clearSync = () => overlay.clearQueued();
+    const maybeRender = () => { if (!state.linkingId) onNeedsRender(); };
+    const queueSync = (pluginId) => overlay.queue(pluginId, onNeedsRender);
     return {
-        handleEvent,
-        completeLocalBuild,
-        hydrateBuildState,
-        getActivePluginBuildState,
-        pruneInvisibleProgress,
-        clearQueuedBuildRowSync,
-        queueBuildRowSync,
-        cacheRows,
-        syncAll,
-        stopLocalMockBuildUi
+        handleEvent: (e) => dispatchBuildEvent(e, state, overlay, clearSync, queueSync, onNeedsRender, onBuildComplete),
+        completeLocalBuild: (results) => completeLocalBuild(state, overlay, clearSync, maybeRender, results),
+        hydrateBuildState: (skip) => hydrateBuildState(state, clearSync, skip ? () => {} : maybeRender),
+        getActivePluginBuildState: (plugin, mock) => getActivePluginBuildState(state, plugin, mock),
+        pruneInvisibleProgress: (ids) => pruneInvisibleProgress(state, ids),
+        clearQueuedBuildRowSync: clearSync,
+        queueBuildRowSync: queueSync,
+        cacheRows: () => overlay.cacheRows(),
+        syncAll: () => { if (state.building) overlay.syncAll(Object.keys(state.buildProgress)); },
+        stopLocalMockBuildUi: () => { clearSync(); resetBuildState(state); }
     };
 }

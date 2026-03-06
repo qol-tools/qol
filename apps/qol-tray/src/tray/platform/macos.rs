@@ -55,10 +55,6 @@ fn stop_event_loop() {
     }
 
     unsafe {
-        dispatch_async_f(
-            &_dispatch_main_q,
-            std::ptr::null_mut(),
-            terminate_on_main,
-        );
+        dispatch_async_f(&_dispatch_main_q, std::ptr::null_mut(), terminate_on_main);
     }
 }

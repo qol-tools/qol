@@ -40,6 +40,12 @@ export function nextBuildCompletedState(results) {
     };
 }
 
+export function resetBuildState(state) {
+    state.building = false;
+    state.buildProgress = {};
+    state.buildResults = null;
+}
+
 export function parseHydratedBuildState(payload) {
     const building = !!payload?.building;
     const rawProgress = payload?.progress && typeof payload.progress === 'object'

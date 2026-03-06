@@ -14,74 +14,46 @@ pub enum PluginSource {
     DevLinked,
 }
 
-pub fn resolve_all(
-    plugins_dir: &Path,
-    dev_links: &HashMap<String, PathBuf>,
-) -> Vec<ResolvedPlugin> {
-    let mut resolved: HashMap<String, ResolvedPlugin> = HashMap::new();
-    let dev_link_targets: HashSet<PathBuf> = dev_links
-        .values()
-        .map(|path| canonical_or_original(path))
-        .collect();
+pub fn resolve_all(plugins_dir: &Path, dev_links: &HashMap<String, PathBuf>) -> Vec<ResolvedPlugin> {
+    let dev_link_targets: HashSet<PathBuf> = dev_links.values().map(|p| canonical_or_original(p)).collect();
+    let mut resolved = scan_installed(plugins_dir, &dev_link_targets);
+    apply_dev_links(&mut resolved, dev_links);
+    let mut result: Vec<_> = resolved.into_values().collect();
+    result.sort_by(|a, b| a.id.cmp(&b.id));
+    result
+}
 
-    if let Ok(entries) = std::fs::read_dir(plugins_dir) {
-        for entry in entries.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            let id = entry.file_name().to_string_lossy().to_string();
-
-            if dev_link_targets.contains(&canonical_or_original(&path)) {
-                continue;
-            }
-
-            if id.starts_with('.') {
-                continue;
-            }
-
-            if path.extension().is_some_and(|ext| ext == "backup") {
-                continue;
-            }
-
-            let Ok(metadata) = std::fs::symlink_metadata(&path) else {
-                continue;
-            };
-
-            if metadata.file_type().is_symlink() {
-                log::warn!("Skipping symlink in plugins dir: {}", id);
-                continue;
-            }
-
-            if !metadata.is_dir() {
-                continue;
-            }
-
-            resolved.insert(
-                id.clone(),
-                ResolvedPlugin {
-                    id,
-                    path,
-                    source: PluginSource::Installed,
-                },
-            );
-        }
+fn scan_installed(plugins_dir: &Path, dev_link_targets: &HashSet<PathBuf>) -> HashMap<String, ResolvedPlugin> {
+    let mut resolved = HashMap::new();
+    let Ok(entries) = std::fs::read_dir(plugins_dir) else { return resolved; };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let id = entry.file_name().to_string_lossy().to_string();
+        if should_skip(&id, &path, dev_link_targets) { continue; }
+        resolved.insert(id.clone(), ResolvedPlugin { id, path, source: PluginSource::Installed });
     }
+    resolved
+}
 
+fn should_skip(id: &str, path: &Path, dev_link_targets: &HashSet<PathBuf>) -> bool {
+    if dev_link_targets.contains(&canonical_or_original(path)) { return true; }
+    if id.starts_with('.') { return true; }
+    if path.extension().is_some_and(|ext| ext == "backup") { return true; }
+    let Ok(metadata) = std::fs::symlink_metadata(path) else { return true; };
+    if metadata.file_type().is_symlink() {
+        log::warn!("Skipping symlink in plugins dir: {}", id);
+        return true;
+    }
+    !metadata.is_dir()
+}
+
+fn apply_dev_links(resolved: &mut HashMap<String, ResolvedPlugin>, dev_links: &HashMap<String, PathBuf>) {
     for (id, path) in dev_links {
         if resolved.contains_key(id) {
             log::info!("Dev-link overrides installed plugin: {}", id);
         }
-        resolved.insert(
-            id.clone(),
-            ResolvedPlugin {
-                id: id.clone(),
-                path: path.clone(),
-                source: PluginSource::DevLinked,
-            },
-        );
+        resolved.insert(id.clone(), ResolvedPlugin { id: id.clone(), path: path.clone(), source: PluginSource::DevLinked });
     }
-
-    let mut result: Vec<_> = resolved.into_values().collect();
-    result.sort_by(|a, b| a.id.cmp(&b.id));
-    result
 }
 
 fn canonical_or_original(path: &Path) -> PathBuf {
