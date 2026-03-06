@@ -13,7 +13,6 @@ use std::sync::mpsc;
 // Shared type aliases for image caches used across picker, app, and icon modules.
 type PreviewMap = std::collections::HashMap<u32, std::sync::Arc<gpui::RenderImage>>;
 type IconMap = std::collections::HashMap<String, std::sync::Arc<gpui::RenderImage>>;
-type SharedPreviewCache = std::sync::Arc<std::sync::Mutex<PreviewMap>>;
 type SharedIconCache = std::sync::Arc<std::sync::Mutex<IconMap>>;
 type PickerWindowState = std::rc::Rc<std::cell::RefCell<Option<(gpui::WindowHandle<app::AltTabApp>, gpui::Point<gpui::Pixels>)>>>;
 

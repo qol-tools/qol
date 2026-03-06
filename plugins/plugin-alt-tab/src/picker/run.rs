@@ -3,12 +3,10 @@ use crate::app::PICKER_VISIBLE;
 use crate::config::AltTabConfig;
 use crate::daemon;
 use crate::picker::gather::build_icon_cache;
-use crate::shared::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
-use crate::{SharedPreviewCache, SharedIconCache, PickerWindowState};
+use crate::{SharedIconCache, PickerWindowState};
 use crate::capture;
 use crate::discovery;
 use crate::discovery::WindowInfo;
-use crate::shared::preview::bgra_to_render_image;
 use gpui::*;
 use qol_plugin_api::monitor::MonitorTracker;
 use std::collections::{HashMap, HashSet};
@@ -26,7 +24,6 @@ type WindowCache = Arc<Mutex<Vec<WindowInfo>>>;
 struct PickerCaches {
     last_window_count: Arc<AtomicUsize>,
     window_cache: WindowCache,
-    preview_cache: SharedPreviewCache,
     icon_cache: SharedIconCache,
 }
 
@@ -47,7 +44,6 @@ impl PickerCaches {
         Self {
             last_window_count: Arc::new(AtomicUsize::new(super::default_estimated_window_count())),
             window_cache: Arc::new(Mutex::new(Vec::new())),
-            preview_cache: Arc::new(Mutex::new(HashMap::new())),
             icon_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -58,7 +54,6 @@ impl PickerState {
         let req = OpenPickerRequest {
             config, current: &self.current, tracker: &self.tracker,
             last_window_count: self.caches.last_window_count.clone(),
-            preview_cache: self.caches.preview_cache.clone(),
             icon_cache: self.caches.icon_cache.clone(),
             reverse,
         };
@@ -131,7 +126,6 @@ async fn run_prewarm_loop(cx: &mut AsyncApp, caches: PickerCaches) {
         caches
             .last_window_count
             .store(windows.len().max(1), Ordering::Relaxed);
-        refresh_preview_cache(&executor, &windows, &caches.preview_cache).await;
         refresh_icon_cache(&executor, &windows, &caches.icon_cache).await;
         replace_window_cache(&caches.window_cache, windows);
     }
@@ -191,40 +185,6 @@ async fn load_stable_windows(
 
 async fn fetch_open_windows(executor: &gpui::BackgroundExecutor) -> Vec<WindowInfo> {
     executor.spawn(async { discovery::get_open_windows() }).await
-}
-
-async fn refresh_preview_cache(
-    executor: &gpui::BackgroundExecutor,
-    windows: &[WindowInfo],
-    preview_cache: &SharedPreviewCache,
-) {
-    refresh_cg_preview_cache(executor, windows, preview_cache).await;
-}
-
-async fn refresh_cg_preview_cache(
-    executor: &gpui::BackgroundExecutor,
-    windows: &[WindowInfo],
-    preview_cache: &SharedPreviewCache,
-) {
-    let targets: Vec<(usize, u32)> = windows.iter().enumerate().map(|(i, w)| (i, w.id)).collect();
-    let captured = executor
-        .spawn(async move { capture::capture_previews_cg(&targets, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT) })
-        .await;
-
-    let live_ids: HashSet<u32> = windows.iter().map(|w| w.id).collect();
-    let Ok(mut cache) = preview_cache.lock() else {
-        return;
-    };
-    cache.retain(|id, _| live_ids.contains(id));
-
-    for (idx, rgba_opt) in captured {
-        let Some(rgba) = rgba_opt else { continue };
-        let Some(win) = windows.get(idx) else { continue };
-        let Some(img) = bgra_to_render_image(rgba.data, rgba.width, rgba.height) else {
-            continue;
-        };
-        cache.insert(win.id, img);
-    }
 }
 
 async fn refresh_icon_cache(

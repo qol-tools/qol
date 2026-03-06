@@ -9,7 +9,7 @@ pub(crate) use reuse::ReuseRequest;
 
 use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::config::{parse_hex_color, ActionMode, AltTabConfig, DisplayConfig};
-use crate::{SharedIconCache, SharedPreviewCache, PickerWindowState};
+use crate::{SharedIconCache, PickerWindowState};
 use gather::{GatheredWindows, gather, IconFillRequest, spawn_icon_fill};
 use gpui::*;
 use qol_plugin_api::monitor::MonitorTracker;
@@ -27,7 +27,6 @@ pub(crate) struct OpenPickerRequest<'a> {
     pub current: &'a PickerWindowState,
     pub tracker: &'a MonitorTracker,
     pub last_window_count: Arc<AtomicUsize>,
-    pub preview_cache: SharedPreviewCache,
     pub icon_cache: SharedIconCache,
     pub reverse: bool,
 }
@@ -43,7 +42,7 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
         return;
     }
 
-    let gathered = gather(req.config, &req.preview_cache, &req.icon_cache);
+    let gathered = gather(req.config, &req.icon_cache);
     if try_reuse_existing(req, &gathered, cx) {
         return;
     }

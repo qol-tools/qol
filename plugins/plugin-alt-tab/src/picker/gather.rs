@@ -3,9 +3,7 @@ use crate::capture;
 use crate::config::AltTabConfig;
 use crate::discovery;
 use crate::discovery::WindowInfo;
-use crate::shared::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
-use crate::shared::preview::bgra_to_render_image;
-use crate::{IconMap, PreviewMap, SharedIconCache, SharedPreviewCache};
+use crate::{IconMap, PreviewMap, SharedIconCache};
 use gpui::*;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -18,7 +16,6 @@ pub(crate) struct GatheredWindows {
 
 pub(super) fn gather(
     config: &AltTabConfig,
-    preview_cache: &SharedPreviewCache,
     icon_cache: &SharedIconCache,
 ) -> GatheredWindows {
     let windows = recover_small_window_set(config, initial_display_windows(config));
@@ -31,17 +28,8 @@ pub(super) fn gather(
         }
     }
 
-    let mut previews = capture_initial_previews(&windows);
-    merge_cached_minimized(&mut previews, &windows, preview_cache);
-
-    #[cfg(debug_assertions)]
-    {
-        let non_min = windows.iter().filter(|w| !w.is_minimized).count();
-        eprintln!("[alt-tab/gather] initial_previews: {} ok out of {} non-minimized", previews.len(), non_min);
-    }
-
     let icons = icon_cache.lock().map(|c| c.clone()).unwrap_or_default();
-    GatheredWindows { windows, previews, icons }
+    GatheredWindows { windows, previews: HashMap::new(), icons }
 }
 
 fn initial_display_windows(config: &AltTabConfig) -> Vec<WindowInfo> {
@@ -63,47 +51,6 @@ fn recover_small_window_set(config: &AltTabConfig, display_windows: Vec<WindowIn
         return recovered;
     }
     recovered.into_iter().filter(|w| !w.is_minimized).collect()
-}
-
-fn capture_initial_previews(windows: &[WindowInfo]) -> PreviewMap {
-    let mut previews = HashMap::new();
-    let cg_targets: Vec<(usize, u32)> = windows.iter().enumerate()
-        .filter(|(_, w)| !w.is_minimized)
-        .map(|(i, w)| (i, w.id))
-        .collect();
-    if cg_targets.is_empty() {
-        return previews;
-    }
-
-    #[cfg(debug_assertions)]
-    let cg_start = std::time::Instant::now();
-    let cg_results = capture::capture_previews_cg(&cg_targets, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT);
-    #[cfg(debug_assertions)]
-    eprintln!("[alt-tab/gather] CG capture: {} targets, {} results, {:?}",
-        cg_targets.len(), cg_results.len(), cg_start.elapsed());
-
-    for (idx, rgba_opt) in cg_results {
-        let Some(rgba) = rgba_opt else { continue };
-        let Some(win) = windows.get(idx) else { continue };
-        let Some(img) = bgra_to_render_image(rgba.data, rgba.width, rgba.height) else { continue };
-        previews.insert(win.id, img);
-    }
-    previews
-}
-
-fn merge_cached_minimized(
-    previews: &mut PreviewMap,
-    windows: &[WindowInfo],
-    preview_cache: &SharedPreviewCache,
-) {
-    let Ok(pcache) = preview_cache.lock() else { return };
-    for win in windows {
-        if !win.is_minimized {
-            continue;
-        }
-        let Some(img) = pcache.get(&win.id) else { continue };
-        previews.entry(win.id).or_insert_with(|| img.clone());
-    }
 }
 
 pub(super) struct IconFillRequest {

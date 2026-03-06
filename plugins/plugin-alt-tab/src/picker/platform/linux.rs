@@ -1,4 +1,3 @@
-use x11rb::connection::Connection;
 use x11rb::protocol::xproto::ConnectionExt as _;
 
 pub fn picker_window_kind() -> gpui::WindowKind {

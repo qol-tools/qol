@@ -10,6 +10,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 const LIVE_PREVIEW_INTERVAL_MS: u64 = 500;
+const VISIBILITY_POLL_MS: u64 = 16;
 
 pub(crate) fn spawn(
     delegate: Entity<PickerState>,
@@ -57,16 +58,20 @@ async fn preview_loop(
 }
 
 async fn wait_for_visible(executor: &gpui::BackgroundExecutor, state: &mut LoopState) -> bool {
-    if !state.skip_timer || !PICKER_VISIBLE.load(Ordering::Relaxed) {
-        executor.timer(Duration::from_millis(LIVE_PREVIEW_INTERVAL_MS)).await;
+    if state.skip_timer {
+        while !PICKER_VISIBLE.load(Ordering::Relaxed) {
+            executor.timer(Duration::from_millis(VISIBILITY_POLL_MS)).await;
+        }
+        state.skip_timer = false;
+        return true;
     }
+    executor.timer(Duration::from_millis(LIVE_PREVIEW_INTERVAL_MS)).await;
     if !PICKER_VISIBLE.load(Ordering::Relaxed) {
         state.prev_hashes.clear();
         state.skip_timer = true;
         state.round_robin_pos = 0;
         return false;
     }
-    state.skip_timer = false;
     true
 }
 
