@@ -75,27 +75,42 @@ Legend:
 | `src/features/plugin_store/server.rs` | 212 | HTTP API route wiring and middleware composition | HTTP composition boundary | clean | keep | Route composition is now thin after handler extraction |
 | `src/features/plugin_store/server/assets.rs` | 51 | Embedded UI asset serving | HTTP static boundary | clean | keep |  |
 | `src/features/plugin_store/server/dev_handlers.rs` | 21 | Dev reload/recompile handlers | HTTP handler boundary | clean | keep |  |
-| `src/features/plugin_store/server/dev_plugin_cpu/mod.rs` | 347 | Per-plugin CPU sampling service | Telemetry service boundary | review | keep | Medium-large; verify boundary remains focused |
+| `src/features/plugin_store/server/dev_plugin_cpu/mod.rs` | 55 | Per-plugin CPU sampling service facade | Telemetry service boundary | clean | keep | Sampling, state, and snapshot concerns extracted |
 | `src/features/plugin_store/server/dev_plugin_cpu/platform/linux.rs` | 27 | Linux CPU sampling adapter | Platform adapter | clean | keep |  |
 | `src/features/plugin_store/server/dev_plugin_cpu/platform/macos.rs` | 41 | macOS CPU sampling adapter | Platform adapter | clean | keep |  |
 | `src/features/plugin_store/server/dev_plugin_cpu/platform/mod.rs` | 39 | CPU sampling platform facade | Platform facade | clean | keep |  |
-| `src/features/plugin_store/server/dev_runtime.rs` | 397 | Dev runtime mock/build orchestration | Dev service boundary | review | keep | Medium-large; verify boundary remains focused |
+| `src/features/plugin_store/server/dev_plugin_cpu/sampling.rs` | 315 | CPU sampling loop and event broadcast orchestration | Telemetry service boundary | review | keep | Largest remaining telemetry seam after the split |
+| `src/features/plugin_store/server/dev_plugin_cpu/snapshot.rs` | 83 | CPU snapshot shaping and ordering | Telemetry response boundary | clean | keep |  |
+| `src/features/plugin_store/server/dev_plugin_cpu/state.rs` | 33 | CPU sampling state model | Telemetry state boundary | clean | keep |  |
+| `src/features/plugin_store/server/dev_runtime/mod.rs` | 115 | Dev runtime facade and service wiring | Dev service boundary | clean | keep | Core events, mock flow, and snapshot shaping extracted |
+| `src/features/plugin_store/server/dev_runtime/core_events.rs` | 90 | Dev runtime core-event sink and event publication | Dev service boundary | clean | keep |  |
+| `src/features/plugin_store/server/dev_runtime/mock.rs` | 235 | Dev mock-target orchestration | Dev mock boundary | review | keep | Medium-large but now isolated from runtime state and event glue |
+| `src/features/plugin_store/server/dev_runtime/snapshot.rs` | 94 | Dev runtime snapshot shaping | Dev state boundary | clean | keep |  |
 | `src/features/plugin_store/server/dev_runtime_state.rs` | 176 | In-memory dev runtime state store | State storage boundary | clean | keep |  |
-| `src/features/plugin_store/server/dev_services.rs` | 238 | Dev action queue helper layer | Service boundary | clean | keep |  |
+| `src/features/plugin_store/server/dev_services/mod.rs` | 35 | Dev service facade and public dev actions | Service boundary | clean | keep | Reload, recompile, and mock flows extracted |
+| `src/features/plugin_store/server/dev_services/reload.rs` | 96 | Dev reload orchestration | Service boundary | clean | keep |  |
+| `src/features/plugin_store/server/dev_services/recompile.rs` | 181 | Self-recompile orchestration | Service boundary | review | keep | Still the densest dev-services seam |
+| `src/features/plugin_store/server/dev_services/mock.rs` | 120 | Mock-target trigger and stop orchestration | Service boundary | clean | keep |  |
 | `src/features/plugin_store/server/helpers.rs` | 104 | Plugin-store HTTP helper utilities | HTTP helper boundary | clean | keep |  |
 | `src/features/plugin_store/server/plugin_handlers.rs` | 139 | Plugin action/list/install HTTP handlers | HTTP handler boundary | clean | keep |  |
-| `src/features/plugin_store/server/plugin_services.rs` | 326 | Plugin-store domain services behind handlers | Domain service boundary | review | keep | Medium-large; verify boundary remains focused |
+| `src/features/plugin_store/server/plugin_services/mod.rs` | 32 | Plugin-store domain service facade | Domain service boundary | clean | keep | Catalog, installed-state, and operations concerns extracted |
+| `src/features/plugin_store/server/plugin_services/catalog.rs` | 74 | Store catalog response shaping | Domain service boundary | clean | keep |  |
+| `src/features/plugin_store/server/plugin_services/installed.rs` | 147 | Installed-plugin response shaping | Domain service boundary | clean | keep |  |
+| `src/features/plugin_store/server/plugin_services/operations.rs` | 160 | Install/update/uninstall orchestration helpers | Domain service boundary | review | keep | Medium-large but isolated from catalog and installed-state shaping |
 | `src/features/plugin_store/server/restart/mod.rs` | 49 | Self-restart abstraction and policy | Lifecycle boundary | clean | keep |  |
 | `src/features/plugin_store/server/restart/platform/mod.rs` | 25 | Restart platform dispatch | Platform facade | clean | keep |  |
 | `src/features/plugin_store/server/restart/platform/unix.rs` | 63 | Unix restart implementation | Platform adapter | clean | keep |  |
 | `src/features/plugin_store/server/restart/platform/windows.rs` | 12 | Windows restart implementation | Platform adapter | clean | keep |  |
 | `src/features/plugin_store/server/settings/mod.rs` | 15 | Settings handler composition and exports | HTTP composition boundary | clean | keep |  |
-| `src/features/plugin_store/server/settings/media_cover_handlers.rs` | 138 | Cover retrieval/validation handler flow | HTTP handler boundary | review | keep | Medium-large; verify boundary remains focused |
+| `src/features/plugin_store/server/settings/media_cover_handlers/mod.rs` | 32 | Cover handler facade | HTTP handler boundary | clean | keep | Cover retrieval logic extracted |
+| `src/features/plugin_store/server/settings/media_cover_handlers/cover_file.rs` | 105 | Cover retrieval, validation, and response shaping | HTTP handler boundary | clean | keep |  |
 | `src/features/plugin_store/server/settings/media_icon_handlers.rs` | 71 | Bundle icon lookup and PNG encoding handlers | HTTP handler boundary | clean | keep |  |
 | `src/features/plugin_store/server/settings/media_apps_handlers.rs` | 11 | Installed-app list handler entrypoint | HTTP handler boundary | clean | keep | Platform logic delegated to platform module |
 | `src/features/plugin_store/server/settings/media_apps_handlers/platform/mod.rs` | 12 | Installed-app platform dispatch | Platform facade | clean | keep |  |
 | `src/features/plugin_store/server/settings/media_apps_handlers/platform/macos.rs` | 80 | macOS installed-app discovery implementation | Platform adapter | review | keep | Medium-large; verify boundary remains focused |
-| `src/features/plugin_store/server/settings/plugin_config_handlers.rs` | 151 | Plugin config GET/PUT handlers | HTTP handler boundary | review | keep | Medium-large; verify boundary remains focused |
+| `src/features/plugin_store/server/settings/plugin_config_handlers/mod.rs` | 75 | Plugin config handler facade | HTTP handler boundary | clean | keep | IO and notify concerns extracted |
+| `src/features/plugin_store/server/settings/plugin_config_handlers/io.rs` | 60 | Plugin config read/write and response shaping | HTTP handler boundary | clean | keep |  |
+| `src/features/plugin_store/server/settings/plugin_config_handlers/notify.rs` | 34 | Plugin config change notification and side effects | HTTP handler boundary | clean | keep |  |
 | `src/features/plugin_store/server/settings/github_token_handlers.rs` | 65 | GitHub token status/set/delete handlers | HTTP handler boundary | clean | keep |  |
 | `src/features/plugin_store/server/settings/hotkey_handlers.rs` | 98 | Hotkeys GET/PUT handlers | HTTP handler boundary | clean | keep |  |
 | `src/features/plugin_store/server/types.rs` | 163 | Plugin-store server DTOs and shared state structs | API contract boundary | clean | keep |  |
@@ -242,17 +257,22 @@ Legend:
 | `ui/views/dev/README.md` | 25 | Dev view behavior notes and operational constraints | UI documentation boundary | clean | keep | Page-specific behavior contract |
 | `ui/views/dev/build-animation.js` | 12 | Build animation constants/timings | UI animation boundary | clean | keep |  |
 | `ui/views/dev/build-controller.js` | 183 | Dev build progress orchestration | UI page controller boundary | clean | keep |  |
-| `ui/views/dev/build-overlay.js` | 617 | Per-row build overlay animation control | UI animation boundary | review | split | High complexity by size; validate single responsibility |
+| `ui/views/dev/build-overlay.js` | 267 | Build overlay facade and row sync orchestration | UI animation boundary | clean | keep | Completion playback and DOM row helpers extracted |
+| `ui/views/dev/build-overlay/completion.js` | 306 | Completion playback state and timing orchestration | UI animation boundary | review | keep | Largest remaining animation seam after the split |
+| `ui/views/dev/build-overlay/dom.js` | 120 | Build overlay row-ref caching and DOM node management | UI animation boundary | clean | keep |  |
 | `ui/views/dev/build/reducer.js` | 64 | Dev build reducer/state transitions | UI reducer boundary | clean | keep |  |
 | `ui/views/dev/discovery-controller.js` | 63 | Dev discovery data orchestration | UI page controller boundary | clean | keep |  |
 | `ui/views/dev/discovery/reducer.js` | 27 | Dev discovery reducer/state transitions | UI reducer boundary | clean | keep |  |
-| `ui/views/dev/index.js` | 938 | Dev page controller/state/event wiring | UI page controller boundary | review | split | Large mixed file; identify 2-4 extractable seams; route/controller/view composition should stay thin |
+| `ui/views/dev/cpu-controller.js` | 245 | Dev page CPU monitoring state, hydration, and snapshot sync | UI page controller boundary | clean | keep | Extracted from the dev-page composition root |
+| `ui/views/dev/index.js` | 508 | Dev page composition, DOM wiring, and event routing | UI page controller boundary | review | keep | CPU sync and plugin action flows extracted; composition root is materially thinner |
 | `ui/views/dev/mock-controller.js` | 234 | Dev mock flow orchestration | UI page controller boundary | clean | keep |  |
 | `ui/views/dev/mock/api.js` | 99 | Dev mock API calls | UI API boundary | clean | keep |  |
 | `ui/views/dev/mock/local-build.js` | 80 | Local mock build simulation | UI simulation boundary | clean | keep |  |
 | `ui/views/dev/mock/reducer.js` | 129 | Dev mock reducer/state transitions | UI reducer boundary | clean | keep |  |
+| `ui/views/dev/plugin-actions-controller.js` | 277 | Dev page link/unlink, reload, and log-control actions | UI page controller boundary | review | keep | Focused controller, but still the densest non-animation page seam |
 | `ui/views/dev/plugin-model.js` | 123 | Dev plugin view model transforms | UI page domain boundary | clean | keep |  |
-| `ui/views/dev/template.js` | 246 | Dev page template rendering | UI view/render boundary | review | split | Route/controller/view composition should stay thin |
+| `ui/views/dev/plugin-row-template.js` | 192 | Dev plugin-row and CPU-strip rendering | UI view/render boundary | clean | keep | Extracted from the page shell template |
+| `ui/views/dev/template.js` | 88 | Dev page shell template rendering | UI view/render boundary | clean | keep | Plugin-row rendering extracted |
 | `ui/views/dev/view.js` | 37 | Dev page mount adapter | UI route boundary | clean | keep |  |
 | `ui/views/hotkeys-view.js` | 336 | Hotkeys page behavior and modal flow | UI page boundary | review | keep | Medium-large; verify boundary remains focused |
 | `ui/views/plugins-view.js` | 267 | Installed plugins page behavior | UI page boundary | clean | keep |  |
@@ -267,5 +287,5 @@ These are only signals from file-level concerns and size, not final moves:
 
 - Coalesce candidates (small facade-only modules): `src/*/mod.rs` files that only re-export or route with minimal logic.
 - Split-first hotspots: `src/doctor/checks.rs`, `src/hotkeys/mod.rs`, `src/dev/build/cargo_build.rs`, `src/plugins/manifest/validation.rs`.
-- UI unification hotspots: `ui/views/dev/index.js` + `ui/views/dev/template.js` (controller + string-template rendering) should align with component/reducer style used by other pages.
+- UI unification hotspots: `ui/views/dev/build-overlay.js` remains the primary dev-page UI hotspot after the controller/render splits.
 - Platform boundary check: keep OS API usage confined to `platform/*` and `os/*` adapter files.
