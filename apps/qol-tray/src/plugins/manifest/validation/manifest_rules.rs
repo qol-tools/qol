@@ -1,4 +1,4 @@
-use super::PluginManifest;
+use crate::plugins::manifest::{PluginManifest, CURRENT_MANIFEST_VERSION};
 use anyhow::{bail, Result};
 
 impl PluginManifest {
@@ -16,13 +16,13 @@ impl PluginManifest {
 }
 
 fn validate_manifest_version(version: u32) -> Result<()> {
-    if version == super::CURRENT_MANIFEST_VERSION {
+    if version == CURRENT_MANIFEST_VERSION {
         return Ok(());
     }
 
     bail!(
         "Unsupported manifest_version {} (expected {})",
         version,
-        super::CURRENT_MANIFEST_VERSION
+        CURRENT_MANIFEST_VERSION
     )
 }

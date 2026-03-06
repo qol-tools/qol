@@ -1,4 +1,4 @@
-use super::DaemonConfig;
+use crate::plugins::manifest::DaemonConfig;
 use anyhow::{bail, Result};
 use std::path::{Component, Path};
 

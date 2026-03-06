@@ -1,4 +1,4 @@
-use super::RuntimeConfig;
+use crate::plugins::manifest::RuntimeConfig;
 use anyhow::{bail, Result};
 use std::collections::{BTreeSet, HashMap};
 
