@@ -1,0 +1,44 @@
+:root {
+    --card-hover-scale: 1.02;
+    --card-active-scale: 1.05;
+    --card-hover-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    --card-active-shadow: 0 4px 12px var(--accent-glow);
+    --grid-card-min-width: var(--size-grid-card-min);
+    --grid-card-max-width: var(--size-grid-card-max);
+}
+
+.grid-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(var(--grid-card-min-width), var(--grid-card-max-width)));
+    gap: var(--space-6);
+    flex: 1;
+    align-content: start;
+    justify-content: start;
+}
+
+.grid-cards .plugin-card {
+    position: relative;
+    border: var(--border-w-1) solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    transition: transform var(--transition), border-color var(--transition), box-shadow var(--transition);
+    cursor: pointer;
+}
+
+.grid-cards .plugin-card.selected {
+    border-color: var(--accent);
+    z-index: var(--z-selected);
+}
+
+.grid-cards.grid-cards--zoom .plugin-card:hover:not(.selected) {
+    transform: scale(var(--card-hover-scale));
+    border-color: var(--border-hover);
+    box-shadow: var(--card-hover-shadow);
+}
+
+.grid-cards.grid-cards--zoom .plugin-card.selected,
+.grid-cards.grid-cards--zoom .plugin-card.selected:hover {
+    transform: scale(var(--card-active-scale));
+    border-color: var(--accent);
+    box-shadow: var(--card-active-shadow);
+}
