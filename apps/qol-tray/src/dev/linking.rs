@@ -1,6 +1,10 @@
+mod listing;
+mod store;
+
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+
+pub use listing::list_linked_plugins;
+pub use store::{create_link, load_dev_links, remove_link};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LinkedPlugin {
@@ -22,113 +26,11 @@ pub struct LinkRequest {
     pub path: String,
 }
 
-pub fn load_dev_links(config_dir: &Path) -> HashMap<String, PathBuf> {
-    let path = config_dir.join("dev-links.json");
-    let Ok(content) = std::fs::read_to_string(&path) else {
-        return HashMap::new();
-    };
-    serde_json::from_str(&content).unwrap_or_default()
-}
-
-fn save_dev_links(config_dir: &Path, links: &HashMap<String, PathBuf>) -> Result<(), String> {
-    let path = config_dir.join("dev-links.json");
-    let tmp_path = config_dir.join(".dev-links.json.tmp");
-    let content = serde_json::to_string_pretty(links)
-        .map_err(|e| format!("Failed to serialize dev-links: {}", e))?;
-    std::fs::write(&tmp_path, &content)
-        .map_err(|e| format!("Failed to write dev-links temp file: {}", e))?;
-    std::fs::rename(&tmp_path, &path)
-        .map_err(|e| format!("Failed to finalize dev-links.json: {}", e))
-}
-
-pub fn list_linked_plugins(config_dir: &Path) -> Result<Vec<LinkedPlugin>, String> {
-    let links = load_dev_links(config_dir);
-    let known_fingerprints = super::build::load_build_fingerprints(config_dir);
-    let log_controls = crate::plugins::log_control::load_all_controls(config_dir);
-    let plans = super::build::plan_linked_plugin_builds(&links, &known_fingerprints);
-    let mut plans_by_id = HashMap::new();
-    for plan in plans {
-        plans_by_id.insert(plan.plugin_id.clone(), plan);
-    }
-
-    let mut plugins: Vec<LinkedPlugin> = links
-        .iter()
-        .map(|(id, path)| {
-            let name = read_plugin_name(&path.join("plugin.toml")).unwrap_or_else(|| id.clone());
-            let plan = plans_by_id.get(id);
-            let log_control = log_controls.get(id).cloned().unwrap_or_default();
-            LinkedPlugin {
-                id: id.clone(),
-                name,
-                source: path.to_string_lossy().to_string(),
-                has_cargo: plan.map(|p| p.has_cargo).unwrap_or(false),
-                supports_platform: plan.map(|p| p.supports_platform).unwrap_or(true),
-                needs_rebuild: plan.map(|p| p.needs_rebuild).unwrap_or(false),
-                rebuild_reason: plan
-                    .map(|p| p.reason.clone())
-                    .unwrap_or_else(|| "Unknown".to_string()),
-                fingerprint: plan.and_then(|p| p.current_fingerprint.clone()),
-                last_built_fingerprint: plan.and_then(|p| p.last_built_fingerprint.clone()),
-                logs_muted: log_control.muted,
-                suppressed_log_patterns: log_control.suppress_patterns,
-            }
-        })
-        .collect();
-
-    plugins.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(plugins)
-}
-
-pub fn create_link(source: &Path, config_dir: &Path) -> Result<String, String> {
-    if !source.exists() {
-        return Err("Source path does not exist".to_string());
-    }
-
-    if !source.join("plugin.toml").exists() {
-        return Err("No plugin.toml found in source".to_string());
-    }
-
-    let plugin_id = source
-        .file_name()
-        .ok_or("Invalid path")?
-        .to_string_lossy()
-        .to_string();
-
-    let mut links = load_dev_links(config_dir);
-
-    if links.contains_key(&plugin_id) {
-        return Err("Already linked".to_string());
-    }
-
-    links.insert(plugin_id.clone(), source.to_path_buf());
-    save_dev_links(config_dir, &links)?;
-
-    log::info!("Created dev-link: {} -> {:?}", plugin_id, source);
-    Ok(plugin_id)
-}
-
-pub fn remove_link(id: &str, config_dir: &Path) -> Result<(), String> {
-    let mut links = load_dev_links(config_dir);
-
-    if links.remove(id).is_none() {
-        return Err("Plugin not dev-linked".to_string());
-    }
-
-    save_dev_links(config_dir, &links)?;
-    log::info!("Removed dev-link: {}", id);
-    Ok(())
-}
-
-fn read_plugin_name(toml_path: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(toml_path).ok()?;
-    let manifest: crate::plugins::PluginManifest = toml::from_str(&content).ok()?;
-    Some(manifest.plugin.name)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::Path;
     use tempfile::TempDir;
 
     fn write_plugin_toml(dir: &Path, name: &str) {
