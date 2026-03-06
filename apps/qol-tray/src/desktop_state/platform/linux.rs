@@ -1,4 +1,4 @@
-use super::Platform;
+use crate::desktop_state::Platform;
 use qol_runtime::MonitorBounds;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::*;

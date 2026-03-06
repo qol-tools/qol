@@ -1,19 +1,18 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use super::super::channel::Channel;
-use crate::desktop_state::Platform;
+use crate::desktop_state::SharedPlatform;
 
 const MIN_INTERVAL: Duration = Duration::from_millis(16);
 
 pub(crate) struct CursorChannel {
-    platform: Arc<dyn Platform>,
+    platform: SharedPlatform,
     last_pos: Option<(f32, f32)>,
     current_pos: Option<(f32, f32)>,
 }
 
 impl CursorChannel {
-    pub(crate) fn new(platform: Arc<dyn Platform>) -> Self {
+    pub(crate) fn new(platform: SharedPlatform) -> Self {
         Self {
             platform,
             last_pos: None,

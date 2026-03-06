@@ -1,21 +1,20 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use qol_runtime::MonitorBounds;
 
 use super::super::channel::Channel;
-use crate::desktop_state::Platform;
+use crate::desktop_state::SharedPlatform;
 
 const MIN_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) struct FocusChannel {
-    platform: Arc<dyn Platform>,
+    platform: SharedPlatform,
     bounds: Option<MonitorBounds>,
     poll_allowed: bool,
 }
 
 impl FocusChannel {
-    pub(crate) fn new(platform: Arc<dyn Platform>) -> Self {
+    pub(crate) fn new(platform: SharedPlatform) -> Self {
         let poll_allowed = platform.poll_focused_window();
         Self {
             platform,
