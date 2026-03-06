@@ -6,31 +6,24 @@ import { createCpuController, readSavedCpuMonitoring } from './cpu-controller.js
 import { createDiscoveryController } from './discovery-controller.js';
 import { createMockController } from './mock-controller.js';
 import { createPluginActionsController } from './plugin-actions-controller.js';
+import { routeDevClick } from './action-router.js';
+import { routeDevKey } from './key-router.js';
 import {
     nextDiscoveryCompletedState,
     nextDiscoveryStartedState
 } from './discovery/reducer.js';
+import {
+    bindActionInteractionLocks as bindActionLocks,
+    bindLinkInput,
+    readHoveredActionId,
+    restoreHoveredAction,
+    restoreSpinnerTimes,
+    restoreViewBodyScroll,
+    saveSpinnerTimes,
+    syncPluginMenuDom as syncPluginMenuState
+} from './view-dom.js';
 
 export const id = 'dev';
-
-function saveSpinnerTimes(root) {
-    const times = [];
-    for (const btn of root.querySelectorAll('.refresh-btn.spinning')) {
-        const anim = btn.getAnimations?.()[0];
-        times.push(anim ? anim.currentTime : null);
-    }
-    return times;
-}
-
-function restoreSpinnerTimes(root, times) {
-    if (!times.length) return;
-    const buttons = root.querySelectorAll('.refresh-btn.spinning');
-    for (let i = 0; i < buttons.length && i < times.length; i++) {
-        if (times[i] === null) continue;
-        const anim = buttons[i].getAnimations?.()[0];
-        if (anim) anim.currentTime = times[i];
-    }
-}
 
 function readSavedIndex() {
     return -1;
@@ -183,10 +176,6 @@ function handleEvent(event) {
     mockController.handleEvent(event);
 }
 
-function totalItems() {
-    return state.mergedCount || 0;
-}
-
 function closePluginMenu() {
     if (!state.openPluginMenuId) return;
     state.openPluginMenuId = null;
@@ -201,20 +190,7 @@ function togglePluginMenu(pluginId) {
 }
 
 function syncPluginMenuDom() {
-    if (!container) return;
-    const rows = container.querySelectorAll('.plugin-row[data-plugin-id]');
-    for (const row of rows) {
-        const pluginId = row.dataset.pluginId;
-        const isOpen = pluginId === state.openPluginMenuId;
-        const menu = row.querySelector('.plugin-context-menu');
-        if (menu) {
-            menu.classList.toggle('open', isOpen);
-        }
-        const trigger = row.querySelector('.plugin-menu-trigger');
-        if (trigger) {
-            trigger.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-        }
-    }
+    syncPluginMenuState(container, state.openPluginMenuId);
 }
 
 function visiblePluginIdSet() {
@@ -241,13 +217,12 @@ function unlockActionInteraction() {
     updateView();
 }
 
-function bindActionInteractionLocks() {
+function bindActionInteractionZones() {
     if (!container) return;
-    const columns = container.querySelectorAll('.plugin-action-column');
-    for (const column of columns) {
-        column.addEventListener('pointerenter', lockActionInteraction);
-        column.addEventListener('pointerleave', unlockActionInteraction);
-    }
+    bindActionLocks(container, {
+        onEnter: lockActionInteraction,
+        onLeave: unlockActionInteraction
+    });
 }
 
 function updateView(force = false) {
@@ -272,8 +247,7 @@ function updateView(force = false) {
 
     const prevScrollTop = container.querySelector('.view-body')?.scrollTop ?? 0;
     const spinnerTimes = saveSpinnerTimes(container);
-    const hoveredActionZone = container.querySelector('.plugin-action-zone:hover');
-    const hoveredActionId = hoveredActionZone?.dataset.id || null;
+    const hoveredActionId = readHoveredActionId(container);
 
     container.innerHTML = renderDevView({
         state,
@@ -283,191 +257,48 @@ function updateView(force = false) {
         renderBuildResults
     });
 
-    const viewBody = container.querySelector('.view-body');
-    if (viewBody) viewBody.scrollTop = prevScrollTop;
+    restoreViewBodyScroll(container, prevScrollTop);
     restoreSpinnerTimes(container, spinnerTimes);
-
-    if (hoveredActionId) {
-        const actionZones = container.querySelectorAll('.plugin-action-zone[data-id]');
-        for (const zone of actionZones) {
-            if (zone.dataset.id !== hoveredActionId) continue;
-            if (zone.classList.contains('is-disabled')) continue;
-            zone.classList.add('is-hovered');
-            break;
-        }
-    }
-
-    const input = container.querySelector('#link-path');
-    if (input) {
-        input.addEventListener('input', event => {
-            state.linkPath = event.target.value;
-        });
-        input.addEventListener('keydown', event => {
-            if (event.key === 'Enter') actionsController.confirmLink();
-            if (event.key === 'Escape') actionsController.cancelLink();
-        });
-    }
+    restoreHoveredAction(container, hoveredActionId);
+    bindLinkInput(container, {
+        onInput: value => {
+            state.linkPath = value;
+        },
+        onConfirm: () => actionsController.confirmLink(),
+        onCancel: () => actionsController.cancelLink()
+    });
 
     buildController.cacheRows();
     buildController.syncAll();
-    bindActionInteractionLocks();
+    bindActionInteractionZones();
 }
 
 function handleClick(event) {
-    const target = event.target instanceof Element ? event.target : event.target?.parentElement;
-    if (!target) return;
-
-    const actionTarget = target.closest('[data-action]');
-    const action = actionTarget?.dataset.action;
-    const actionId = actionTarget?.dataset.id;
-
-    if (!action) {
-        if (!state.openPluginMenuId) return;
-        closePluginMenu();
-        syncPluginMenuDom();
-        return;
-    }
-
-    if (action === 'mock-update') {
-        void mockController.triggerMockFlows();
-        return;
-    }
-
-    if (action === 'toggle-plugin-menu' && actionId) {
-        event.preventDefault();
-        event.stopPropagation();
-        togglePluginMenu(actionId);
-        syncPluginMenuDom();
-        return;
-    }
-
-    if (action === 'toggle-plugin-logs' && actionId) {
-        event.preventDefault();
-        event.stopPropagation();
-        closePluginMenu();
-        syncPluginMenuDom();
-        void actionsController.togglePluginLogs(actionId);
-        return;
-    }
-
-    if (action === 'edit-plugin-log-filters' && actionId) {
-        event.preventDefault();
-        event.stopPropagation();
-        closePluginMenu();
-        syncPluginMenuDom();
-        void actionsController.editPluginLogFilters(actionId);
-        return;
-    }
-
-    if (action === 'toggle-plugin-cpu' && actionId) {
-        event.preventDefault();
-        event.stopPropagation();
-        closePluginMenu();
-        syncPluginMenuDom();
-        cpuController.toggle(actionId);
-        return;
-    }
-
-    if (action === 'toggle-link' && actionId) {
-        if (state.linkingId) return;
-        const row = target.closest('.plugin-row');
-        if (row) {
-            state.selectedIndex = parseInt(row.dataset.index, 10);
-        }
-        actionsController.handleItemActivation();
-        updateView();
-        return;
-    }
-
-    if (action === 'reload') {
-        void actionsController.reloadPlugins();
-        return;
-    }
-
-    if (action === 'refresh-discovery') {
-        void discoveryController.triggerDiscovery();
-        return;
-    }
-
-    if (action === 'add-link') {
-        actionsController.showLinkInput();
-        return;
-    }
-
-    if (action === 'confirm-link') {
-        void actionsController.confirmLink();
-        return;
-    }
-
-    if (action === 'cancel-link') {
-        actionsController.cancelLink();
-    }
+    routeDevClick({
+        event,
+        state,
+        actionsController,
+        discoveryController,
+        mockController,
+        cpuController,
+        closePluginMenu,
+        togglePluginMenu,
+        syncPluginMenuDom,
+        updateView
+    });
 }
 
 export function handleKey(event) {
-    if (state.showLinkInput) return;
-
-    if ((event.ctrlKey || event.metaKey) && (event.key === 'r' || event.key === 'R')) {
-        event.preventDefault();
-        void actionsController.reloadPlugins();
-        return;
-    }
-
-    if (event.ctrlKey || event.altKey || event.metaKey) return;
-
-    if (event.key === 'Escape') {
-        if (!state.openPluginMenuId) return;
-        event.preventDefault();
-        closePluginMenu();
-        syncPluginMenuDom();
-        return;
-    }
-
-    const total = totalItems();
-
-    if (event.key === 'ArrowDown' && total > 0) {
-        event.preventDefault();
-        if (state.selectedIndex < 0) {
-            state.selectedIndex = 0;
-            updateView();
-            return;
-        }
-        state.selectedIndex = Math.min(state.selectedIndex + 1, total - 1);
-        updateView();
-        return;
-    }
-
-    if (event.key === 'ArrowUp' && total > 0) {
-        event.preventDefault();
-        if (state.selectedIndex < 0) {
-            state.selectedIndex = total - 1;
-            updateView();
-            return;
-        }
-        state.selectedIndex = Math.max(state.selectedIndex - 1, 0);
-        updateView();
-        return;
-    }
-
-    if (event.key === ' ' || event.key === 'Enter') {
-        event.preventDefault();
-        actionsController.handleItemActivation();
-        return;
-    }
-
-    if (event.key === 'r' || event.key === 'R') {
-        event.preventDefault();
-        void discoveryController.triggerDiscovery();
-        return;
-    }
-
-    if (event.key === 'm' || event.key === 'M') {
-        event.preventDefault();
-        const item = state.mergedList[state.selectedIndex];
-        if (!item) return;
-        togglePluginMenu(item.id);
-        syncPluginMenuDom();
-    }
+    routeDevKey({
+        event,
+        state,
+        actionsController,
+        discoveryController,
+        closePluginMenu,
+        togglePluginMenu,
+        syncPluginMenuDom,
+        updateView
+    });
 }
 
 export function onFocus() {
