@@ -31,6 +31,11 @@ pub fn config_roots() -> Vec<PathBuf> {
     if !roots.contains(&base) {
         roots.push(base);
     }
+    if let Some(config_dir) = dirs::config_dir().map(|p| p.join("qol-tray")) {
+        if !roots.contains(&config_dir) {
+            roots.push(config_dir);
+        }
+    }
     roots
 }
 
