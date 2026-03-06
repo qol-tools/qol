@@ -5,7 +5,10 @@ use gtk::{self, glib};
 use std::sync::Arc;
 use std::sync::OnceLock as OnceCell;
 use tokio::sync::broadcast;
-use tray_icon::{Icon, TrayIconBuilder};
+use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
+
+type StartupResult = std::result::Result<(), String>;
+type StartupTx = std::sync::mpsc::Sender<StartupResult>;
 
 static SHUTDOWN_RX: OnceCell<std::sync::Mutex<Option<broadcast::Receiver<()>>>> = OnceCell::new();
 
@@ -28,47 +31,50 @@ pub fn create_tray(
     update_available: bool,
     events: Arc<EventBus>,
 ) -> Result<()> {
-    let (startup_tx, startup_rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
-
-    std::thread::spawn(move || {
-        if gtk::init().is_err() {
-            let _ = startup_tx.send(Err("Failed to initialize GTK".to_string()));
-            return;
-        }
-
-        let (menu, router) =
-            match crate::menu::builder::build_menu(feature_registry, update_available, events) {
-                Ok(result) => result,
-                Err(e) => {
-                    let _ = startup_tx.send(Err(format!("Failed to build menu: {}", e)));
-                    return;
-                }
-            };
-
-        let tray_icon = TrayIconBuilder::new()
-            .with_menu(Box::new(menu))
-            .with_tooltip("QoL Tray")
-            .with_icon(icon)
-            .build();
-
-        let tray_icon = match tray_icon {
-            Ok(icon) => icon,
-            Err(e) => {
-                let _ = startup_tx.send(Err(format!("Failed to create tray icon: {}", e)));
-                return;
-            }
-        };
-
-        setup_event_loop(router, shutdown_tx);
-        let _ = startup_tx.send(Ok(()));
-        std::mem::forget(tray_icon);
-        gtk::main();
-    });
-
+    let (startup_tx, startup_rx) = std::sync::mpsc::channel::<StartupResult>();
+    std::thread::spawn(move || run_tray_thread(startup_tx, feature_registry, shutdown_tx, icon, update_available, events));
     match startup_rx.recv_timeout(std::time::Duration::from_secs(5)) {
         Ok(Ok(())) => Ok(()),
         Ok(Err(message)) => anyhow::bail!(message),
         Err(_) => anyhow::bail!("Timed out while initializing Linux tray"),
+    }
+}
+
+fn run_tray_thread(
+    startup_tx: StartupTx,
+    feature_registry: Arc<FeatureRegistry>,
+    shutdown_tx: broadcast::Sender<()>,
+    icon: Icon,
+    update_available: bool,
+    events: Arc<EventBus>,
+) {
+    if gtk::init().is_err() {
+        let _ = startup_tx.send(Err("Failed to initialize GTK".to_string()));
+        return;
+    }
+    let Some((tray_icon, router)) = build_menu_and_icon(&startup_tx, feature_registry, update_available, events, icon) else {
+        return;
+    };
+    setup_event_loop(router, shutdown_tx);
+    let _ = startup_tx.send(Ok(()));
+    std::mem::forget(tray_icon);
+    gtk::main();
+}
+
+fn build_menu_and_icon(
+    startup_tx: &StartupTx,
+    feature_registry: Arc<FeatureRegistry>,
+    update_available: bool,
+    events: Arc<EventBus>,
+    icon: Icon,
+) -> Option<(TrayIcon, crate::menu::router::EventRouter)> {
+    let (menu, router) = match crate::menu::builder::build_menu(feature_registry, update_available, events) {
+        Ok(r) => r,
+        Err(e) => { let _ = startup_tx.send(Err(format!("Failed to build menu: {}", e))); return None; }
+    };
+    match TrayIconBuilder::new().with_menu(Box::new(menu)).with_tooltip("QoL Tray").with_icon(icon).build() {
+        Ok(t) => Some((t, router)),
+        Err(e) => { let _ = startup_tx.send(Err(format!("Failed to create tray icon: {}", e))); None }
     }
 }
 

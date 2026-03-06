@@ -1,9 +1,29 @@
 #![cfg(feature = "dev")]
 
-use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
 
 use super::dev_services;
 use super::types::{AppState, MockTargetInfo};
+
+pub(super) fn routes() -> Router<AppState> {
+    Router::new()
+        .route("/dev/mock-check-update", get(mock_check_update))
+        .route("/dev/mock-targets", get(list_mock_targets))
+        .route("/dev/mock-targets/start", post(start_mock_targets))
+        .route("/dev/mock-targets/stop", post(stop_mock_targets))
+        .route("/dev/mock-plugin-build", post(mock_plugin_build))
+        .route("/dev/mock-plugin-build/stop", post(stop_mock_plugin_build))
+        .route("/dev/mock-self-recompile", post(mock_self_recompile))
+        .route("/dev/mock-self-recompile/stop", post(stop_mock_self_recompile))
+        .route("/dev/mock-self-update", post(mock_self_update))
+        .route("/dev/mock-self-update/stop", post(stop_mock_self_update))
+}
 
 pub(super) async fn mock_check_update() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "available": true, "latest": "99.0.0" }))

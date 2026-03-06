@@ -10,22 +10,17 @@ pub(super) fn build_state(shared: &SharedState) -> PlatformState {
     let cursor_monitor_idx = cursor_monitor_idx(&input, &monitors);
     let focus_monitor_idx = focus_monitor_idx(&input, &monitors);
     let active_monitor_idx = active_monitor_idx(&input, &monitors);
-    let focused_window = focused_window(shared);
-
     log::debug!(
         "[runtime/build_state] GET_STATE cursor_idx={:?} focus_idx={:?} active_idx={:?}",
-        cursor_monitor_idx,
-        focus_monitor_idx,
-        active_monitor_idx
+        cursor_monitor_idx, focus_monitor_idx, active_monitor_idx
     );
-
     PlatformState {
         cursor,
         monitors,
         cursor_monitor_idx,
         focus_monitor_idx,
         active_monitor_idx,
-        focused_window,
+        focused_window: focused_window(shared),
     }
 }
 

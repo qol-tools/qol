@@ -1,4 +1,3 @@
-mod loading;
 mod search_paths;
 
 use anyhow::Result;
@@ -13,7 +12,13 @@ pub struct DevConfig {
 
 impl DevConfig {
     pub fn load() -> Result<Self> {
-        loading::load()
+        let path = crate::paths::dev_config_path()?;
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let content = std::fs::read_to_string(&path)?;
+        let config: Self = serde_json::from_str(&content)?;
+        Ok(config)
     }
 
     pub fn effective_search_paths(&self) -> Vec<PathBuf> {

@@ -28,42 +28,38 @@ fn active_patterns(patterns: Vec<String>) -> Option<Arc<Vec<String>>> {
     Some(Arc::new(active_patterns))
 }
 
-fn spawn_log_relay<R>(
+fn spawn_log_relay<R: std::io::Read + Send + 'static>(
     plugin_id: String,
     stream_name: &'static str,
     reader: R,
     suppress_patterns: Option<Arc<Vec<String>>>,
     to_stderr: bool,
-) where
-    R: std::io::Read + Send + 'static,
-{
+) {
     std::thread::spawn(move || {
-        let mut reader = BufReader::new(reader);
-        let mut line = String::new();
+        let log_prefix = format!("{} ({})", plugin_id, stream_name);
+        relay_lines(reader, &log_prefix, suppress_patterns.as_ref(), to_stderr);
+    });
+}
 
-        loop {
-            line.clear();
-            let read = match reader.read_line(&mut line) {
-                Ok(read) => read,
-                Err(error) => {
-                    log::debug!(
-                        "Plugin daemon log relay failed for {} ({}): {}",
-                        plugin_id,
-                        stream_name,
-                        error
-                    );
-                    break;
-                }
-            };
-            if read == 0 {
-                break;
-            }
-            if should_suppress_line(&line, suppress_patterns.as_ref()) {
-                continue;
-            }
+fn relay_lines(
+    reader: impl std::io::Read,
+    log_prefix: &str,
+    suppress: Option<&Arc<Vec<String>>>,
+    to_stderr: bool,
+) {
+    let mut buf = BufReader::new(reader);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = buf.read_line(&mut line).unwrap_or_else(|e| {
+            log::debug!("Plugin daemon log relay failed for {}: {}", log_prefix, e);
+            0
+        });
+        if n == 0 { break }
+        if !should_suppress_line(&line, suppress) {
             print_relay_line(&line, to_stderr);
         }
-    });
+    }
 }
 
 fn should_suppress_line(line: &str, patterns: Option<&Arc<Vec<String>>>) -> bool {

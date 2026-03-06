@@ -5,7 +5,7 @@ use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::super::types::BuildResult;
-use super::spawn::{spawn_piped, CargoChild};
+use super::{spawn_piped, CargoChild};
 
 static LAST_ARTIFACT_COUNT: AtomicU32 = AtomicU32::new(0);
 
@@ -20,22 +20,28 @@ where
     if let Err(error) = ensure_manifest(&manifest_path) {
         return failed_build(error);
     }
-
-    log::info!("Building qol-tray from {}", repo_root.display());
-    on_progress(2, "Preparing build".to_string());
-
-    let CargoChild {
-        child,
-        stdout,
-        stderr,
-    } = match spawn_build(&repo_root, &manifest_path) {
-        Ok(child) => child,
-        Err(error) => return failed_build(error),
-    };
+    let CargoChild { child, stdout, stderr } =
+        match start_build(&repo_root, &manifest_path, &mut on_progress) {
+            Ok(c) => c,
+            Err(result) => return result,
+        };
     let readers = artifacts::spawn_readers(stdout, stderr);
     readers.emit_progress(&mut on_progress);
     let (actual_done, combined) = readers.join();
     finish_build(child, actual_done, combined, &mut on_progress)
+}
+
+fn start_build<F>(
+    repo_root: &Path,
+    manifest_path: &Path,
+    on_progress: &mut F,
+) -> Result<CargoChild, BuildResult>
+where
+    F: FnMut(u8, String),
+{
+    log::info!("Building qol-tray from {}", repo_root.display());
+    on_progress(2, "Preparing build".to_string());
+    spawn_build(repo_root, manifest_path).map_err(failed_build)
 }
 
 fn predicted_artifact_count() -> u32 {

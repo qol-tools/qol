@@ -105,10 +105,16 @@ fn load_from_dir_loads_valid_plugin() {
 #[test]
 fn load_plugin_fails_for_invalid_dirs() {
     let temp_dir = TempDir::new().unwrap();
-    assert!(PluginLoader::load_plugin(temp_dir.path()).is_err());
-
-    fs::write(temp_dir.path().join("plugin.toml"), "invalid {{{").unwrap();
-    assert!(PluginLoader::load_plugin(temp_dir.path()).is_err());
+    let cases = [
+        ("no-toml", None),
+        ("bad-toml", Some("invalid {{{")),
+    ];
+    for (name, content) in cases {
+        let dir = temp_dir.path().join(name);
+        fs::create_dir(&dir).unwrap();
+        if let Some(c) = content { fs::write(dir.join("plugin.toml"), c).unwrap(); }
+        assert!(PluginLoader::load_plugin(&dir).is_err(), "case: {name}");
+    }
 }
 
 #[test]
@@ -236,18 +242,19 @@ fn load_plugin_allows_missing_daemon_binary_when_disabled() {
 #[test]
 fn load_plugin_skips_binary_check_for_unsupported_platform() {
     let temp_dir = TempDir::new().unwrap();
-    let unsupported_platform = if cfg!(target_os = "linux") {
-        "windows"
-    } else {
-        "linux"
-    };
-    let manifest = format!(
-        r#"
-[plugin]
+    fs::write(temp_dir.path().join("plugin.toml"), unsupported_platform_manifest()).unwrap();
+    let plugin = PluginLoader::load_plugin(temp_dir.path()).unwrap();
+    assert!(!plugin.manifest.plugin.supports_current_platform());
+}
+
+fn unsupported_platform_manifest() -> String {
+    let platform = if cfg!(target_os = "linux") { "windows" } else { "linux" };
+    format!(
+        r#"[plugin]
 name = "Unsupported"
 description = ""
 version = "1.0.0"
-platforms = ["{unsupported_platform}"]
+platforms = ["{platform}"]
 
 [menu]
 label = "Unsupported"
@@ -256,9 +263,5 @@ items = []
 [runtime]
 command = "runtime-plugin"
 "#
-    );
-    fs::write(temp_dir.path().join("plugin.toml"), manifest).unwrap();
-
-    let plugin = PluginLoader::load_plugin(temp_dir.path()).unwrap();
-    assert!(!plugin.manifest.plugin.supports_current_platform());
+    )
 }

@@ -9,28 +9,29 @@ pub(super) fn read_installed_plugin_dirs(
     if !plugins_dir.exists() {
         return Vec::new();
     }
-
     std::fs::read_dir(plugins_dir)
         .ok()
         .into_iter()
         .flatten()
         .filter_map(|e| e.ok())
-        .filter_map(|entry| {
-            let path = entry.path();
-            let metadata = std::fs::symlink_metadata(&path).ok()?;
-            if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                return None;
-            }
-            let id = entry.file_name().into_string().ok()?;
-            if id.starts_with('.')
-                || id.ends_with(".backup")
-                || !super::super::validation::is_safe_plugin_id(&id)
-            {
-                return None;
-            }
-            Some((id, path))
-        })
+        .filter_map(valid_plugin_entry)
         .collect()
+}
+
+fn valid_plugin_entry(entry: std::fs::DirEntry) -> Option<(String, std::path::PathBuf)> {
+    let path = entry.path();
+    let metadata = std::fs::symlink_metadata(&path).ok()?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return None;
+    }
+    let id = entry.file_name().into_string().ok()?;
+    if id.starts_with('.')
+        || id.ends_with(".backup")
+        || !super::super::validation::is_safe_plugin_id(&id)
+    {
+        return None;
+    }
+    Some((id, path))
 }
 
 pub(super) fn validate_plugin_id(plugin_id: &str) -> Result<(), &'static str> {

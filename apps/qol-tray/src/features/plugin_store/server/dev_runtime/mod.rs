@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::daemon::EventBus;
-use crate::dev::adapters::traits::{CoreEventSink, DevRuntimeStateStore};
+use crate::dev::adapters::{CoreEventSink, DevRuntimeStateStore};
 
 use super::dev_runtime_state::in_memory_runtime_state;
 use super::types::{BuildStateResponse, MockTargetInfo};

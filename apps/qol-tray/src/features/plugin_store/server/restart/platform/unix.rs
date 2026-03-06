@@ -23,41 +23,25 @@ fn restart_command_override() -> Option<String> {
     Some(trimmed.to_string())
 }
 
-fn spawn_detached_script(script: &str, binary: Option<&Path>) -> Result<(), String> {
-    let mut setsid_cmd = std::process::Command::new("setsid");
-    setsid_cmd
-        .arg("-f")
-        .arg("sh")
-        .arg("-c")
-        .arg(script)
-        .arg("qol-tray-restart")
+fn configure_sh_command(cmd: &mut std::process::Command, script: &str, binary: Option<&Path>) {
+    cmd.arg("sh").arg("-c").arg(script).arg("qol-tray-restart")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     if let Some(path) = binary {
-        setsid_cmd.arg(path);
+        cmd.arg(path);
     }
-    match setsid_cmd.spawn() {
-        Ok(_) => return Ok(()),
-        Err(error) => {
-            log::warn!("setsid restart handoff failed: {}", error);
-        }
-    }
+}
 
-    let mut nohup_cmd = std::process::Command::new("nohup");
-    nohup_cmd
-        .arg("sh")
-        .arg("-c")
-        .arg(script)
-        .arg("qol-tray-restart")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    if let Some(path) = binary {
-        nohup_cmd.arg(path);
+fn spawn_detached_script(script: &str, binary: Option<&Path>) -> Result<(), String> {
+    let mut setsid = std::process::Command::new("setsid");
+    setsid.arg("-f");
+    configure_sh_command(&mut setsid, script, binary);
+    match setsid.spawn() {
+        Ok(_) => return Ok(()),
+        Err(error) => log::warn!("setsid restart handoff failed: {}", error),
     }
-    match nohup_cmd.spawn() {
-        Ok(_) => Ok(()),
-        Err(error) => Err(error.to_string()),
-    }
+    let mut nohup = std::process::Command::new("nohup");
+    configure_sh_command(&mut nohup, script, binary);
+    nohup.spawn().map(|_| ()).map_err(|e| e.to_string())
 }

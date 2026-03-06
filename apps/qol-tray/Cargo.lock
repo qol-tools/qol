@@ -1743,6 +1743,7 @@ dependencies = [
 [[package]]
 name = "qol-plugin-api"
 version = "0.1.0"
+source = "git+https://github.com/qol-tools/qol-plugin-api#ea4a37cd4b3e4f24f72e3a35590757d494dd9d21"
 dependencies = [
  "dirs",
  "objc2",
@@ -1757,6 +1758,7 @@ dependencies = [
 [[package]]
 name = "qol-runtime"
 version = "0.1.0"
+source = "git+https://github.com/qol-tools/qol-runtime#8047a0bebe4493469d328c42156ca929d960c8cd"
 dependencies = [
  "serde",
  "serde_json",

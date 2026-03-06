@@ -4,7 +4,8 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    Json,
+    routing::{get, post},
+    Json, Router,
 };
 
 use crate::dev;
@@ -16,6 +17,15 @@ use super::helpers::{
     validate_plugin_id_bad_request,
 };
 use super::types::{AppState, UpsertPluginLogControlRequest};
+
+pub(super) fn routes() -> Router<AppState> {
+    Router::new()
+        .route("/dev/links", get(list_linked_plugins))
+        .route("/dev/links", post(create_link))
+        .route("/dev/links/{id}", axum::routing::delete(delete_link))
+        .route("/dev/log-controls/{id}", axum::routing::put(upsert_plugin_log_control))
+        .route("/dev/log-controls", get(get_log_controls))
+}
 
 fn config_dir() -> Result<PathBuf, (StatusCode, String)> {
     shared_config_dir_or_response("Config dir unavailable")
@@ -47,10 +57,16 @@ pub(super) async fn create_link(
         Err(e) => return e.into_response(),
     };
     let source = std::path::Path::new(&req.path);
+    link_result_response(dev::create_link(source, &config_dir), &state)
+}
 
-    match dev::create_link(source, &config_dir) {
+fn link_result_response(
+    result: Result<String, String>,
+    state: &AppState,
+) -> axum::response::Response {
+    match result {
         Ok(_) => {
-            dev_services::refresh_discovery(&state);
+            dev_services::refresh_discovery(state);
             (StatusCode::OK, "Link created".to_string()).into_response()
         }
         Err(e) if e.contains("Already linked") => (StatusCode::CONFLICT, e).into_response(),
@@ -97,28 +113,35 @@ pub(super) async fn upsert_plugin_log_control(
     if let Err(error) = validate_plugin_id_bad_request(&id) {
         return error.into_response();
     }
-
     let config_dir = match config_dir() {
         Ok(d) => d,
         Err(e) => return e.into_response(),
     };
+    upsert_log_control_response(req, &config_dir, &id, &state)
+}
 
-    let control = crate::plugins::log_control::PluginLogControl {
-        muted: req.muted,
-        suppress_patterns: req.suppress_patterns,
-    };
+fn try_restart_daemon(state: &AppState, id: &str) {
+    if let Ok(mut manager) = state.plugin_manager.lock() {
+        if let Err(error) = manager.restart_running_plugin_daemon(id) {
+            log::warn!(
+                "Updated log control for {}, but failed to restart running daemon: {}",
+                id,
+                error
+            );
+        }
+    }
+}
 
-    match crate::plugins::log_control::upsert_control(&config_dir, &id, control) {
+fn upsert_log_control_response(
+    req: UpsertPluginLogControlRequest,
+    config_dir: &std::path::Path,
+    id: &str,
+    state: &AppState,
+) -> axum::response::Response {
+    let control = crate::plugins::log_control::PluginLogControl { muted: req.muted, suppress_patterns: req.suppress_patterns };
+    match crate::plugins::log_control::upsert_control(config_dir, id, control) {
         Ok(()) => {
-            if let Ok(mut manager) = state.plugin_manager.lock() {
-                if let Err(error) = manager.restart_running_plugin_daemon(&id) {
-                    log::warn!(
-                        "Updated log control for {}, but failed to restart running daemon: {}",
-                        id,
-                        error
-                    );
-                }
-            }
+            try_restart_daemon(state, id);
             (StatusCode::OK, "Updated".to_string()).into_response()
         }
         Err(e) => {

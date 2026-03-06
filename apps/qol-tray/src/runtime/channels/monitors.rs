@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use super::super::channel::Channel;
+use super::super::Channel;
 use crate::desktop_state::SharedPlatform;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(5);

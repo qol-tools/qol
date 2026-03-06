@@ -7,14 +7,7 @@ const PLACEHOLDER_SVG = 'data:image/svg+xml,' + encodeURIComponent(
     '</svg>'
 );
 
-export function PluginsGrid({
-    plugins,
-    ghostPlugins,
-    selectedIndex,
-    contextMenuOpen,
-    updating,
-    onCardClick
-}) {
+export function PluginsGrid({ plugins, ghostPlugins, selectedIndex, contextMenuOpen, updating, onCardClick }) {
     return html`
         <div id="plugins-grid" class="plugin-grid-media grid-cards grid-cards--zoom">
             ${plugins.length === 0 && ghostPlugins.length === 0 && html`
@@ -27,38 +20,55 @@ export function PluginsGrid({
                 </div>
             `)}
             ${plugins.map((plugin, index) => html`
-                <div key=${plugin.id}
-                     class=${cardClassName(plugin, index === selectedIndex)}
-                     data-index="${index}" data-plugin-id="${plugin.id}"
-                     onClick=${(e) => onCardClick(e, index, plugin.id)}>
-                    <img src=${plugin.has_cover ? `/api/cover/${plugin.id}` : PLACEHOLDER_SVG}
-                         alt=${plugin.name}
-                         onError=${(e) => { e.target.src = PLACEHOLDER_SVG; }} />
-                    <div class="plugin-name">${plugin.name}</div>
-                    ${plugin.loaded === false && html`<div class="plugin-load-state">Not loaded</div>`}
-                    ${plugin.update_available && html`
-                        <button class="plugin-update ${updating.has(plugin.id) ? 'updating' : ''}"
-                                aria-label="Update plugin"
-                                disabled=${updating.has(plugin.id)}>
-                            ${updating.has(plugin.id)
-                                ? html`<span class="refresh-btn spinning update-spinner"></span>`
-                                : `↑ ${plugin.available_version}`}
-                        </button>
-                    `}
-                    <button class="plugin-cog" aria-label="Plugin options">
-                        <svg class="plugin-cog-icon" viewBox="0 0 12 20" fill="currentColor" aria-hidden="true" focusable="false">
-                            <circle cx="6" cy="3.5" r="1.8"></circle>
-                            <circle cx="6" cy="10" r="1.8"></circle>
-                            <circle cx="6" cy="16.5" r="1.8"></circle>
-                        </svg>
-                    </button>
-                    <div class=${contextMenuClassName(contextMenuOpen, index === selectedIndex)}>
-                        ${plugin.update_available && html`<button class="context-update">Update</button>`}
-                        <button class="context-delete">Delete</button>
-                    </div>
-                </div>
+                <${PluginCard} plugin=${plugin} index=${index} selectedIndex=${selectedIndex}
+                    contextMenuOpen=${contextMenuOpen} updating=${updating} onCardClick=${onCardClick} />
             `)}
         </div>
+    `;
+}
+
+function PluginCard({ plugin, index, selectedIndex, contextMenuOpen, updating, onCardClick }) {
+    return html`
+        <div key=${plugin.id}
+             class=${cardClassName(plugin, index === selectedIndex)}
+             data-index="${index}" data-plugin-id="${plugin.id}"
+             onClick=${(e) => onCardClick(e, index, plugin.id)}>
+            <img src=${plugin.has_cover ? `/api/cover/${plugin.id}` : PLACEHOLDER_SVG}
+                 alt=${plugin.name}
+                 onError=${(e) => { e.target.src = PLACEHOLDER_SVG; }} />
+            <div class="plugin-name">${plugin.name}</div>
+            ${plugin.loaded === false && html`<div class="plugin-load-state">Not loaded</div>`}
+            ${plugin.update_available && html`<${PluginUpdateButton} plugin=${plugin} updating=${updating} />`}
+            <${PluginCogButton} />
+            <div class=${contextMenuClassName(contextMenuOpen, index === selectedIndex)}>
+                ${plugin.update_available && html`<button class="context-update">Update</button>`}
+                <button class="context-delete">Delete</button>
+            </div>
+        </div>
+    `;
+}
+
+function PluginUpdateButton({ plugin, updating }) {
+    return html`
+        <button class="plugin-update ${updating.has(plugin.id) ? 'updating' : ''}"
+                aria-label="Update plugin"
+                disabled=${updating.has(plugin.id)}>
+            ${updating.has(plugin.id)
+                ? html`<span class="refresh-btn spinning update-spinner"></span>`
+                : `↑ ${plugin.available_version}`}
+        </button>
+    `;
+}
+
+function PluginCogButton() {
+    return html`
+        <button class="plugin-cog" aria-label="Plugin options">
+            <svg class="plugin-cog-icon" viewBox="0 0 12 20" fill="currentColor" aria-hidden="true" focusable="false">
+                <circle cx="6" cy="3.5" r="1.8"></circle>
+                <circle cx="6" cy="10" r="1.8"></circle>
+                <circle cx="6" cy="16.5" r="1.8"></circle>
+            </svg>
+        </button>
     `;
 }
 
@@ -72,9 +82,6 @@ function cardClassName(plugin, selected) {
 }
 
 function contextMenuClassName(contextMenuOpen, selected) {
-    if (contextMenuOpen && selected) {
-        return 'plugin-context-menu open';
-    }
-
+    if (contextMenuOpen && selected) return 'plugin-context-menu open';
     return 'plugin-context-menu';
 }

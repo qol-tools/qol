@@ -91,6 +91,23 @@ mod tests {
 #[cfg(all(test, feature = "dev"))]
 mod dev_tests {
     use super::*;
+    use crate::dev::state::DiscoveredPluginInfo;
+
+    fn plugin(id: &str, name: &str, path: &str) -> DiscoveredPluginInfo {
+        DiscoveredPluginInfo { id: id.into(), name: name.into(), path: path.into() }
+    }
+
+    fn assert_discovery_event(plugins: Vec<DiscoveredPluginInfo>, expected_count: usize) {
+        let event = DaemonEvent::DiscoveryComplete { plugins: plugins.clone() };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "discovery_complete");
+        assert_eq!(json["plugins"].as_array().unwrap().len(), expected_count);
+        for (i, p) in plugins.iter().enumerate() {
+            assert_eq!(json["plugins"][i]["id"], p.id, "id at {}", i);
+            assert_eq!(json["plugins"][i]["name"], p.name, "name at {}", i);
+            assert_eq!(json["plugins"][i]["path"], p.path, "path at {}", i);
+        }
+    }
 
     #[test]
     fn discovery_events_serialize_with_type_only() {
@@ -110,54 +127,13 @@ mod dev_tests {
 
     #[test]
     fn discovery_complete_serializes_plugin_data() {
-        use crate::dev::state::DiscoveredPluginInfo;
-        let cases: Vec<(Vec<DiscoveredPluginInfo>, usize)> = vec![
-            (vec![], 0),
-            (
-                vec![DiscoveredPluginInfo {
-                    id: "plugin-a".into(),
-                    name: "Plugin A".into(),
-                    path: "/path/a".into(),
-                }],
-                1,
-            ),
-            (
-                vec![
-                    DiscoveredPluginInfo {
-                        id: "plugin-a".into(),
-                        name: "Plugin A".into(),
-                        path: "/path/a".into(),
-                    },
-                    DiscoveredPluginInfo {
-                        id: "plugin-b".into(),
-                        name: "Plugin B".into(),
-                        path: "/path/b".into(),
-                    },
-                ],
-                2,
-            ),
-        ];
-
-        for (plugins, expected_count) in cases {
-            let event = DaemonEvent::DiscoveryComplete {
-                plugins: plugins.clone(),
-            };
-            let json = serde_json::to_value(&event).unwrap();
-
-            assert_eq!(json["type"], "discovery_complete");
-            assert_eq!(json["plugins"].as_array().unwrap().len(), expected_count);
-
-            for (i, plugin) in plugins.iter().enumerate() {
-                assert_eq!(json["plugins"][i]["id"], plugin.id);
-                assert_eq!(json["plugins"][i]["name"], plugin.name);
-                assert_eq!(json["plugins"][i]["path"], plugin.path);
-            }
-        }
+        assert_discovery_event(vec![], 0);
+        assert_discovery_event(vec![plugin("plugin-a", "Plugin A", "/path/a")], 1);
+        assert_discovery_event(vec![plugin("plugin-a", "Plugin A", "/path/a"), plugin("plugin-b", "Plugin B", "/path/b")], 2);
     }
 
     #[test]
     fn plugin_info_fields_serialize_correctly() {
-        use crate::dev::state::DiscoveredPluginInfo;
         let cases: Vec<(&str, &str, &str)> = vec![
             ("simple-id", "Simple Name", "/simple/path"),
             (

@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use qol_runtime::MonitorBounds;
 
-use super::super::channel::Channel;
+use super::super::Channel;
 use crate::desktop_state::SharedPlatform;
 
 const MIN_INTERVAL: Duration = Duration::from_millis(100);

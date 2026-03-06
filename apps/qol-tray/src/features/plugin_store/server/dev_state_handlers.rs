@@ -1,6 +1,12 @@
 #![cfg(feature = "dev")]
 
-use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
 
 use crate::dev::state::DiscoveryStatus;
 
@@ -10,6 +16,15 @@ use super::types::{
     AppState, BuildStateResponse, DiscoveryStateResponse, SetPluginCpuMonitoringRequest,
 };
 
+pub(super) fn routes() -> Router<AppState> {
+    Router::new()
+        .route("/dev/discover", post(trigger_discovery))
+        .route("/dev/discovery-state", get(get_discovery_state))
+        .route("/dev/build-state", get(get_build_state))
+        .route("/dev/plugin-cpu", get(get_plugin_cpu))
+        .route("/dev/plugin-cpu/monitoring", axum::routing::put(set_plugin_cpu_monitoring))
+}
+
 pub(super) async fn get_discovery_state(
     State(state): State<AppState>,
 ) -> Json<DiscoveryStateResponse> {
@@ -17,10 +32,7 @@ pub(super) async fn get_discovery_state(
         Ok(guard) => guard,
         Err(error) => {
             log::error!("Discovery state lock poisoned: {}", error);
-            return Json(DiscoveryStateResponse {
-                status: "idle".to_string(),
-                plugins: Vec::new(),
-            });
+            return Json(DiscoveryStateResponse { status: "idle".to_string(), plugins: Vec::new() });
         }
     };
     let status = match guard.status {

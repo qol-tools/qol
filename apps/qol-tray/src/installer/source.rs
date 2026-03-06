@@ -11,35 +11,30 @@ pub(super) fn resolve_source_binary(repo_root: &Path) -> Result<PathBuf> {
     if let Some(path) = source_binary_from_args()? {
         return ensure_existing_source(path);
     }
-
     if let Some(path) = source_binary_from_env() {
         return ensure_existing_source(path);
     }
-
     if let Some(path) = source_binary_from_platform_candidates()? {
         return Ok(path);
     }
+    release_binary(repo_root)
+}
 
-    let source_binary = repo_root
+fn release_binary(repo_root: &Path) -> Result<PathBuf> {
+    let path = repo_root
         .join("target")
         .join("release")
         .join(platform::binary_filename());
-
-    if source_binary.is_file() {
-        return Ok(source_binary);
+    if path.is_file() {
+        return Ok(path);
     }
-
     if repo_root.join("Cargo.toml").is_file() {
         build_release_binary(repo_root)?;
-        if source_binary.is_file() {
-            return Ok(source_binary);
+        if path.is_file() {
+            return Ok(path);
         }
     }
-
-    Err(anyhow!(
-        "Built binary not found at {}",
-        source_binary.display()
-    ))
+    Err(anyhow!("Built binary not found at {}", path.display()))
 }
 
 fn source_binary_from_args() -> Result<Option<PathBuf>> {

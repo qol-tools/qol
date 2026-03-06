@@ -5,7 +5,7 @@ mod runner;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::dev::adapters::traits::{BuildFingerprintStore, CargoPluginBuilder, CoreEventSink};
+use crate::dev::adapters::{BuildFingerprintStore, CargoPluginBuilder, CoreEventSink};
 use crate::dev::core;
 
 use super::cargo_build::CargoCommandPluginBuilder;

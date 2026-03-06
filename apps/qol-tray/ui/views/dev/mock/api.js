@@ -65,35 +65,31 @@ export async function readMockStartError(startRes) {
     return message || 'Failed to trigger mock targets';
 }
 
-export async function buildLegacyStartErrorMessage({
-    updateRes,
-    recompileRes,
-    buildRes,
-    needsLocalFallback
-}) {
+function detectLegacyFailures(updateRes, recompileRes, buildRes, needsLocalFallback) {
     const updateUnsupported = !!updateRes && updateRes.status === 404;
     const recompileUnsupported = !!recompileRes && recompileRes.status === 404;
-    const updateFailed = !updateUnsupported && (!updateRes || !updateRes.ok);
-    const recompileFailed = !recompileUnsupported && (!recompileRes || !recompileRes.ok);
-    const buildFailed = !needsLocalFallback && buildRes && !buildRes.ok;
+    return {
+        update: !updateUnsupported && (!updateRes || !updateRes.ok),
+        recompile: !recompileUnsupported && (!recompileRes || !recompileRes.ok),
+        build: !needsLocalFallback && !!buildRes && !buildRes.ok
+    };
+}
 
-    if (!updateFailed && !recompileFailed && !buildFailed) {
-        return { message: null, buildFailed };
+async function formatFailureMessage(res, fallback) {
+    const text = res ? await readResponseText(res) : '';
+    return text || fallback;
+}
+
+export async function buildLegacyStartErrorMessage(
+    updateRes, recompileRes, buildRes, needsLocalFallback
+) {
+    const failed = detectLegacyFailures(updateRes, recompileRes, buildRes, needsLocalFallback);
+    if (!failed.update && !failed.recompile && !failed.build) {
+        return { message: null, buildFailed: false };
     }
-
     const messages = [];
-    if (updateFailed) {
-        const updateText = updateRes ? await readResponseText(updateRes) : '';
-        messages.push(updateText || 'Failed to trigger mock update flow');
-    }
-    if (recompileFailed) {
-        const recompileText = recompileRes ? await readResponseText(recompileRes) : '';
-        messages.push(recompileText || 'Failed to trigger mock recompile flow');
-    }
-    if (buildFailed) {
-        const buildText = await readResponseText(buildRes);
-        messages.push(buildText || 'Failed to trigger mock plugin build flow');
-    }
-
-    return { message: messages.join(' • '), buildFailed };
+    if (failed.update) messages.push(await formatFailureMessage(updateRes, 'Failed to trigger mock update flow'));
+    if (failed.recompile) messages.push(await formatFailureMessage(recompileRes, 'Failed to trigger mock recompile flow'));
+    if (failed.build) messages.push(await formatFailureMessage(buildRes, 'Failed to trigger mock plugin build flow'));
+    return { message: messages.join(' • '), buildFailed: !!failed.build };
 }
