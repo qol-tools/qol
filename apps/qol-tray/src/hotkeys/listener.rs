@@ -1,15 +1,14 @@
+use super::catalog::load_available_actions;
 use super::HotkeyManager;
 use crate::plugins::PluginManager;
 use anyhow::Result;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyEventReceiver, HotKeyState};
-use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 
 static RELOAD_SENDER: OnceLock<Sender<()>> = OnceLock::new();
 const HOTKEY_LOOP_SLEEP_MS: u64 = 10;
 
-type AvailableActions = HashMap<String, HashSet<String>>;
 type SharedPluginManager = Arc<Mutex<PluginManager>>;
 
 pub fn trigger_reload() {
@@ -119,51 +118,10 @@ impl HotkeyListenerLoop {
         );
     }
 }
-
-fn available_actions(plugin_manager: &SharedPluginManager) -> Result<AvailableActions> {
-    let manager = plugin_manager
-        .lock()
-        .map_err(|_| anyhow::anyhow!("plugin manager lock failed"))?;
-    let mut actions_by_plugin = HashMap::new();
-
-    for plugin in manager.plugins() {
-        actions_by_plugin.insert(
-            plugin.id.clone(),
-            collect_action_ids(&plugin.manifest.menu.items),
-        );
-    }
-
-    Ok(actions_by_plugin)
-}
-
-fn collect_action_ids(items: &[crate::plugins::MenuItem]) -> HashSet<String> {
-    let mut action_ids = HashSet::new();
-    let mut collect = |item: &crate::plugins::MenuItem| match item {
-        crate::plugins::MenuItem::Action { id, .. }
-        | crate::plugins::MenuItem::Checkbox { id, .. } => {
-            action_ids.insert(id.clone());
-        }
-        crate::plugins::MenuItem::Separator | crate::plugins::MenuItem::Submenu { .. } => {}
-    };
-
-    crate::plugins::manifest::walk_menu_items(items, &mut collect);
-    action_ids
-}
-
 fn install_reload_channel() -> Receiver<()> {
     let (reload_tx, reload_rx) = mpsc::channel::<()>();
     let _ = RELOAD_SENDER.set(reload_tx);
     reload_rx
-}
-
-fn load_available_actions(plugin_manager: &SharedPluginManager) -> AvailableActions {
-    match available_actions(plugin_manager) {
-        Ok(actions) => actions,
-        Err(error) => {
-            log::error!("Failed to resolve available plugin actions: {}", error);
-            HashMap::new()
-        }
-    }
 }
 
 fn reload_requested(reload_rx: &Receiver<()>) -> bool {
