@@ -13,16 +13,22 @@ import { withShiftVariants, dispatchKey } from '../utils/keys.js';
 import { Feedback } from '../components/FeedbackPreact.js';
 import { PageHeader } from '../components/PageHeader.js';
 import {
-    formatCacheAge, normalizeSearchQuery, getFilteredPlugins,
-    clampSelectedIndex, sortPluginsByName, isRateLimitedWithoutToken,
-    looksLikeGithubAuthFailure, isStoreUpdateAvailable
+    formatCacheAge,
+    normalizeSearchQuery,
+    getFilteredPlugins,
+    clampSelectedIndex,
+    looksLikeGithubAuthFailure
 } from './store/reducer.js';
 import {
-    fetchTokenStatus, saveTokenRequest, deleteTokenRequest,
-    fetchPluginsRequest, installPluginRequest
-} from './store/effects.js';
+    loadStorePlugins,
+    loadStoreTokenState,
+    saveStoreToken,
+    deleteStoreToken,
+    installStorePlugin
+} from './store/data.js';
+import { StoreTokenPanel } from './store/token-panel.js';
+import { StoreGrid } from './store/grid.js';
 import { useFooterShortcuts } from '../hooks/useFooterShortcuts.js';
-import * as installing from '../installing.js';
 
 const SHORTCUTS = [
     { key: '←↑↓→', label: 'navigate' },
@@ -46,82 +52,99 @@ export function StoreView() {
 
     const [nextToken, isCurrentToken] = useAsyncToken();
     const searchRef = useRef(null);
+    const tokenInputRef = useRef(null);
 
     useFooterShortcuts(SHORTCUTS);
 
-    // Derived — memoized to avoid new array ref every render
     const filtered = useMemo(() => getFilteredPlugins(plugins, searchQuery), [plugins, searchQuery]);
     const filteredRef = useRef(filtered);
     filteredRef.current = filtered;
 
-    // Load plugins — uses ref for hasToken to stay stable
-    const loadPlugins = useCallback(async (forceRefresh = false) => {
+    const focusTokenInput = useCallback(() => {
+        setTimeout(() => tokenInputRef.current?.focus(), 0);
+    }, []);
+
+    const openTokenInput = useCallback(() => {
+        setShowTokenInput(true);
+        focusTokenInput();
+    }, [focusTokenInput]);
+
+    const closeTokenInput = useCallback(() => {
+        setShowTokenInput(false);
+    }, []);
+
+    const loadPlugins = useCallback(async (options = {}) => {
+        const { forceRefresh = false, hasToken = hasTokenRef.current } = options;
         const token = nextToken();
         setLoading(true);
         try {
-            const data = await fetchPluginsRequest(forceRefresh);
+            const data = await loadStorePlugins({ forceRefresh, hasToken });
             if (!isCurrentToken(token)) return;
-            const sorted = sortPluginsByName(data.plugins || []);
-            setPlugins(sorted);
-            setCacheAgeSecs(data.cache_age_secs ?? null);
-            const rl = isRateLimitedWithoutToken(sorted, hasTokenRef.current);
-            setRateLimited(rl);
-            if (!rl) setShowTokenInput(prev => prev && rl);
+            setPlugins(data.plugins);
+            setCacheAgeSecs(data.cacheAgeSecs);
+            setRateLimited(data.rateLimited);
+            if (!data.rateLimited) {
+                setShowTokenInput(false);
+            }
         } catch (error) {
             if (!isCurrentToken(token)) return;
             if (looksLikeGithubAuthFailure(error?.message)) {
                 setRateLimited(true);
-                setShowTokenInput(true);
+                openTokenInput();
             }
             setFeedback('error', `Failed to load plugins: ${error.message}`);
         } finally {
             if (isCurrentToken(token)) setLoading(false);
         }
-    }, [setFeedback]);
+    }, [nextToken, isCurrentToken, openTokenInput, setFeedback]);
 
-    // Init
     useEffect(() => {
         (async () => {
-            const tok = await fetchTokenStatus();
-            setHasToken(tok);
-            loadPlugins();
+            const tokenState = await loadStoreTokenState();
+            setHasToken(tokenState);
+            loadPlugins({ hasToken: tokenState });
         })();
-    }, []);
+    }, [loadPlugins]);
 
     useRefreshOnFocus(loadPlugins);
 
-    useSSEDebounce('plugins_changed', loadPlugins);
+    useSSEDebounce('plugins_changed', () => loadPlugins());
 
-    // Clamp selection when filtered list changes
     useEffect(() => {
         setSelectedIndex(prev => {
             storeMarkRestored();
             return clampSelectedIndex(prev, filtered.length);
         });
-    }, [filtered.length]);
+    }, [filtered.length, setSelectedIndex, storeMarkRestored]);
 
     useScrollIntoView('#store-list .plugin-card.selected', [selectedIndex]);
 
-    // Refresh — stable via ref
     const refreshPlugins = useCallback(() => {
-        if (!loadingRef.current) loadPlugins(true);
+        if (loadingRef.current) {
+            return;
+        }
+
+        loadPlugins({ forceRefresh: true });
     }, [loadPlugins]);
 
-    // Token actions
     const saveToken = useCallback(async () => {
-        const input = searchRef.current?.closest('.view-container')?.querySelector('#github-token-input');
-        const tokenVal = input?.value?.trim();
-        if (!tokenVal) { setFeedback('error', 'Token cannot be empty'); return; }
+        const input = tokenInputRef.current;
+        const tokenValue = input?.value?.trim();
+        if (!tokenValue) {
+            setFeedback('error', 'Token cannot be empty');
+            return;
+        }
+
         clearFeedback();
         try {
-            await saveTokenRequest(tokenVal);
+            await saveStoreToken(tokenValue);
             setHasToken(true);
             setShowTokenInput(false);
             setRateLimited(false);
             setFeedback('success', 'GitHub token saved');
-            loadPlugins();
-        } catch (e) {
-            setFeedback('error', `Failed to save token: ${e.message}`);
+            loadPlugins({ hasToken: true });
+        } catch (error) {
+            setFeedback('error', `Failed to save token: ${error.message}`);
             input?.focus();
             input?.select();
         }
@@ -130,23 +153,25 @@ export function StoreView() {
     const deleteToken = useCallback(async () => {
         clearFeedback();
         try {
-            await deleteTokenRequest();
+            await deleteStoreToken();
             setHasToken(false);
             setShowTokenInput(false);
             setFeedback('success', 'GitHub token removed');
-        } catch (e) {
-            setFeedback('error', `Failed to delete token: ${e.message}`);
+        } catch (error) {
+            setFeedback('error', `Failed to delete token: ${error.message}`);
         }
     }, [clearFeedback, setFeedback]);
 
-    // Install — stable via ref for plugins
     const installPlugin = useCallback(async (id) => {
-        if (installing.has(id)) return;
+        if (isInstalling(id)) {
+            return;
+        }
+
         const plugin = pluginsRef.current.find(p => p.id === id);
         clearFeedback();
         addInstalling(id, plugin?.name || id);
         try {
-            await installPluginRequest(id);
+            await installStorePlugin(id);
             setFeedback('success', `Installed ${plugin?.name || id}`);
         } catch (error) {
             setFeedback('error', `Failed to install ${plugin?.name || id}: ${error.message}`);
@@ -154,25 +179,38 @@ export function StoreView() {
             removeInstalling(id);
             loadPlugins();
         }
-    }, [clearFeedback, setFeedback, addInstalling, removeInstalling, loadPlugins]);
+    }, [isInstalling, pluginsRef, clearFeedback, addInstalling, setFeedback, removeInstalling, loadPlugins]);
 
-    // Grid navigation — stable via ref
     const navigateInGrid = useGridNav('#store-list .plugin-card', selectedIndexRef, setSelectedIndex);
 
-    // Keyboard — stable: reads mutable state via refs
     const handleKey = useCallback((e) => {
         const inSearch = document.activeElement === searchRef.current;
         if (inSearch) {
-            if (e.key === 'Escape') { e.preventDefault(); searchRef.current.blur(); return; }
-            if ((e.ctrlKey || e.metaKey) && e.key === 'r') { e.preventDefault(); refreshPlugins(); return; }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                searchRef.current.blur();
+                return;
+            }
+
+            if ((e.ctrlKey || e.metaKey) && e.key === 'r') {
+                e.preventDefault();
+                refreshPlugins();
+            }
+
             return;
         }
+
         if (showTokenInputRef.current && e.key === 'Escape') {
             e.preventDefault();
-            setShowTokenInput(false);
+            closeTokenInput();
             return;
         }
-        if ((e.ctrlKey || e.metaKey) && e.key === 'r') { e.preventDefault(); refreshPlugins(); return; }
+
+        if ((e.ctrlKey || e.metaKey) && e.key === 'r') {
+            e.preventDefault();
+            refreshPlugins();
+            return;
+        }
 
         dispatchKey(e, withShiftVariants({
             ArrowUp: () => navigateInGrid('up'),
@@ -181,20 +219,32 @@ export function StoreView() {
             ArrowRight: () => navigateInGrid('right'),
             Enter: () => {
                 const plugin = filteredRef.current[selectedIndexRef.current];
-                if (plugin && !plugin.installed && !installing.has(plugin.id)) installPlugin(plugin.id);
+                if (plugin && !plugin.installed && !isInstalling(plugin.id)) {
+                    installPlugin(plugin.id);
+                }
             },
             s: () => searchRef.current?.focus(),
-            t: () => { setShowTokenInput(true); setTimeout(() => document.getElementById('github-token-input')?.focus(), 0); },
+            t: openTokenInput
         }));
-    }, [refreshPlugins, navigateInGrid, installPlugin]);
+    }, [refreshPlugins, closeTokenInput, navigateInGrid, isInstalling, installPlugin, openTokenInput]);
 
-    // Expose for App keyboard routing
     StoreView.handleKey = handleKey;
     StoreView.isBlocking = () => false;
 
     const handleSearch = useCallback((e) => {
         setSearchQuery(normalizeSearchQuery(e.target.value));
-    }, []);
+    }, [setSearchQuery]);
+
+    const handleCardClick = useCallback((event, index, pluginId) => {
+        if (event.target.closest('button.install')) {
+            installPlugin(pluginId);
+            return;
+        }
+
+        if (index !== selectedIndexRef.current) {
+            setSelectedIndex(index);
+        }
+    }, [installPlugin, setSelectedIndex, selectedIndexRef]);
 
     return html`
         <div class="view-container">
@@ -204,7 +254,7 @@ export function StoreView() {
                 actions=${html`
                     <span class="cache-age">${formatCacheAge(cacheAgeSecs)}</span>
                     <button class="btn btn-ghost btn-sm" title="Manage GitHub token"
-                            onClick=${() => { setShowTokenInput(true); setTimeout(() => document.getElementById('github-token-input')?.focus(), 0); }}>
+                            onClick=${openTokenInput}>
                         Token
                     </button>
                     <button class="refresh-btn ${loading ? 'spinning' : ''}" title="Refresh (r)"
@@ -216,61 +266,24 @@ export function StoreView() {
                     <input type="text" ref=${searchRef} placeholder="Search plugins..."
                            value=${searchQuery} onInput=${handleSearch} />
                 </div>
-                ${showTokenInput && html`
-                    <div class="token-input-container">
-                        <input type="password" id="github-token-input" placeholder="Paste GitHub token (no scopes needed)" />
-                        <button class="btn btn-primary" onClick=${saveToken}>Save</button>
-                        ${hasToken && html`<button class="btn btn-ghost" onClick=${deleteToken}>Remove Token</button>`}
-                        <button class="btn btn-ghost" onClick=${() => setShowTokenInput(false)}>Cancel</button>
-                    </div>
-                    <p class="token-help">
-                        <a href="https://github.com/settings/tokens/new" target="_blank">Create token</a> — no scopes needed, just for rate limits
-                    </p>
-                `}
-                ${!showTokenInput && rateLimited && !hasToken && html`
-                    <div class="rate-limit-banner">
-                        <span>GitHub API rate limit reached.</span>
-                        <button class="btn btn-primary"
-                                onClick=${() => { setShowTokenInput(true); setTimeout(() => document.getElementById('github-token-input')?.focus(), 0); }}>
-                            Add GitHub Token
-                        </button>
-                    </div>
-                `}
+                <${StoreTokenPanel}
+                    showTokenInput=${showTokenInput}
+                    hasToken=${hasToken}
+                    rateLimited=${rateLimited}
+                    tokenInputRef=${tokenInputRef}
+                    onSave=${saveToken}
+                    onDelete=${deleteToken}
+                    onCancel=${closeTokenInput}
+                    onShow=${openTokenInput}
+                />
                 <${Feedback} feedback=${feedback} />
-                <div id="store-list" class="plugin-grid-store grid-cards grid-cards--zoom">
-                    ${loading && filtered.length === 0 && html`<div class="loading">Loading plugins...</div>`}
-                    ${!loading && filtered.length === 0 && html`<div class="loading">No plugins found</div>`}
-                    ${filtered.map((plugin, index) => {
-                        const inst = installing.has(plugin.id);
-                        const hasUpdate = isStoreUpdateAvailable(plugin);
-                        const versionDisplay = hasUpdate
-                            ? `v${plugin.installed_version} → v${plugin.version}`
-                            : `v${plugin.version}`;
-                        return html`
-                            <div key=${plugin.id}
-                                 class="plugin-card ${plugin.installed ? 'installed' : ''} ${inst ? 'installing' : ''} ${index === selectedIndex ? 'selected' : ''}"
-                                 data-index="${index}" data-plugin-id="${plugin.id}"
-                                 onClick=${(e) => {
-                                     if (e.target.tagName === 'BUTTON' && e.target.classList.contains('install')) {
-                                         installPlugin(plugin.id);
-                                         return;
-                                     }
-                                     if (index !== selectedIndex) setSelectedIndex(index);
-                                 }}>
-                                <h3>${plugin.name}</h3>
-                                <div class="version${hasUpdate ? ' has-update' : ''}">${versionDisplay}</div>
-                                <div class="description">${plugin.description}</div>
-                                <div class="button-group">
-                                    ${plugin.installed
-                                        ? html`<span class="installed-badge">${hasUpdate ? 'Update Available' : 'Installed'}</span>`
-                                        : inst
-                                            ? html`<button class="refresh-btn spinning" disabled></button>`
-                                            : html`<button class="btn btn-primary install" style="width: 100%">Install</button>`}
-                                </div>
-                            </div>
-                        `;
-                    })}
-                </div>
+                <${StoreGrid}
+                    plugins=${filtered}
+                    loading=${loading}
+                    selectedIndex=${selectedIndex}
+                    isInstalling=${isInstalling}
+                    onCardClick=${handleCardClick}
+                />
             </div>
         </div>
     `;
