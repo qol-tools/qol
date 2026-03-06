@@ -1,0 +1,97 @@
+.confirm-modal,
+.edit-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--layer-ink-70);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: var(--z-modal);
+}
+
+.confirm-modal-content,
+.edit-modal-content {
+    background: var(--bg-surface);
+    border: var(--border-w-1) solid var(--border-default);
+    border-radius: var(--radius-xl);
+    padding: var(--space-7);
+    box-shadow: var(--elevation-3);
+}
+
+.confirm-modal-content {
+    max-width: var(--size-modal-sm);
+    text-align: center;
+}
+
+.edit-modal-content {
+    width: 100%;
+    max-width: var(--size-modal-md);
+}
+
+.confirm-modal-content h3,
+.edit-modal-content h3 {
+    color: var(--text-primary);
+    margin-bottom: var(--space-2);
+}
+
+.edit-modal-content h3 {
+    margin-bottom: var(--space-6);
+    font-size: var(--fs-display);
+}
+
+.confirm-modal-content p {
+    color: var(--text-muted);
+    margin-bottom: var(--space-6);
+}
+
+.confirm-modal-buttons,
+.modal-buttons {
+    display: flex;
+    gap: var(--space-4);
+}
+
+.modal-buttons {
+    margin-top: var(--space-6);
+}
+
+.confirm-modal-buttons button,
+.modal-buttons button {
+    flex: 1;
+}
+
+.confirm-cancel,
+.modal-cancel {
+    background: var(--bg-hover);
+    color: var(--text-secondary);
+}
+
+.confirm-cancel:hover,
+.modal-cancel:hover {
+    background: var(--border-default);
+}
+
+.confirm-delete {
+    background: var(--danger);
+    color: var(--text-primary);
+}
+
+.confirm-delete:hover {
+    background: var(--danger-hover);
+}
+
+.modal-save {
+    background: var(--accent);
+    color: var(--text-primary);
+}
+
+.modal-save:hover {
+    background: var(--accent-hover);
+}
+
+.modal-buttons button:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}

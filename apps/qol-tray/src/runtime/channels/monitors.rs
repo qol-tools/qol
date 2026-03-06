@@ -1,23 +1,19 @@
-use std::sync::Arc;
 use std::time::Duration;
 
-use crate::os::display::Platform;
-use super::super::channel::Channel;
+use super::super::Channel;
+use crate::desktop_state::SharedPlatform;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 
 pub(crate) struct MonitorsChannel {
-    platform: Arc<dyn Platform>,
+    platform: SharedPlatform,
     monitors: Vec<qol_runtime::MonitorBounds>,
 }
 
 impl MonitorsChannel {
-    pub(crate) fn new(platform: Arc<dyn Platform>) -> Self {
+    pub(crate) fn new(platform: SharedPlatform) -> Self {
         let monitors = platform.physical_monitors();
-        Self {
-            platform,
-            monitors,
-        }
+        Self { platform, monitors }
     }
 
     pub(crate) fn monitors(&self) -> &[qol_runtime::MonitorBounds] {

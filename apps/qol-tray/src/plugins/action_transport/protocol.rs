@@ -14,9 +14,9 @@ pub(super) fn parse_response(line: &str) -> DaemonActionDispatch {
     match word {
         "handled" => DaemonActionDispatch::Handled,
         "fallback" => DaemonActionDispatch::Fallback,
-        "error" => DaemonActionDispatch::Error(
-            line.strip_prefix("error").unwrap_or("").trim().to_string(),
-        ),
+        "error" => {
+            DaemonActionDispatch::Error(line.strip_prefix("error").unwrap_or("").trim().to_string())
+        }
         _ => DaemonActionDispatch::Unavailable,
     }
 }
@@ -44,7 +44,10 @@ mod tests {
             ),
             ("handled", DaemonActionDispatch::Handled),
             ("fallback", DaemonActionDispatch::Fallback),
-            ("error something broke", DaemonActionDispatch::Error("something broke".to_string())),
+            (
+                "error something broke",
+                DaemonActionDispatch::Error("something broke".to_string()),
+            ),
             ("", DaemonActionDispatch::Unavailable),
             ("garbage", DaemonActionDispatch::Unavailable),
         ];

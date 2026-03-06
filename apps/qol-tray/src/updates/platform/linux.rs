@@ -1,39 +1,31 @@
 use anyhow::Result;
-use tokio_stream::StreamExt;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio_stream::StreamExt;
 
 use crate::daemon::{DaemonEvent, EventBus};
 
 use super::super::{latest_version, GITHUB_REPO};
 
 async fn download_asset(url: &str, dest: &Path, events: &EventBus) -> Result<()> {
-    let client = reqwest::Client::new();
-    let request = crate::features::plugin_store::github::build_github_request(&client, url, None);
+    let request = crate::features::plugin_store::github::build_github_request(&reqwest::Client::new(), url, None);
     let response = crate::features::plugin_store::github::send_checked(request).await?;
-
     let total = response.content_length();
     let mut stream = response.bytes_stream();
     let mut file = std::fs::File::create(dest)?;
     let mut downloaded: u64 = 0;
     let mut last_percent: u8 = 0;
-
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
         file.write_all(&chunk)?;
         downloaded += chunk.len() as u64;
-
-        let percent = total
-            .map(|t| ((downloaded * 100) / t).min(100) as u8)
-            .unwrap_or(0);
-
+        let percent = total.map(|t| ((downloaded * 100) / t).min(100) as u8).unwrap_or(0);
         if percent != last_percent {
             events.send(DaemonEvent::UpdateProgress { percent });
             last_percent = percent;
         }
     }
-
     Ok(())
 }
 

@@ -19,64 +19,55 @@ function persistView(viewId, { updateHash = true } = {}) {
     }
 }
 
+function initActiveView() {
+    const fromHash = parseViewFromHash();
+    if (fromHash) return fromHash;
+    const fromStorage = readStoredView();
+    if (fromStorage) return fromStorage;
+    return 'plugins';
+}
+
+function initActivePluginId() {
+    const hash = window.location.hash.replace(/^#/, '').trim();
+    const match = hash.match(/^plugins\/(.+)$/);
+    return match ? match[1] : null;
+}
+
+function handleHashChange(viewOrder, setActivePluginId, setActiveViewId) {
+    const raw = window.location.hash.replace(/^#/, '').trim();
+    const pluginMatch = raw.match(/^plugins\/(.+)$/);
+    if (pluginMatch) { setActivePluginId(pluginMatch[1]); return; }
+    setActivePluginId(null);
+    const viewId = parseViewFromHash();
+    if (viewOrder.includes(viewId)) setActiveViewId(viewId);
+}
+
+function doSwitchView(viewId, viewOrder, setActivePluginId, setActiveViewId) {
+    if (!viewOrder.includes(viewId)) return;
+    setActivePluginId(null);
+    setActiveViewId(viewId);
+    persistView(viewId);
+}
+
+function doClosePluginConfig(setActivePluginId, setActiveViewId) {
+    setActivePluginId(null);
+    setActiveViewId(prev => { persistView(prev); return prev; });
+}
+
 export function useRouter({ viewOrder }) {
-    // Initializer trusts hash/localStorage without validating against viewOrder.
-    // viewOrder may be incomplete on first render (e.g. 'dev' loads async).
-    const [activeViewId, setActiveViewId] = useState(() => {
-        const fromHash = parseViewFromHash();
-        if (fromHash) return fromHash;
-        const fromStorage = readStoredView();
-        if (fromStorage) return fromStorage;
-        return 'plugins';
-    });
-    const [activePluginId, setActivePluginId] = useState(() => {
-        const hash = window.location.hash.replace(/^#/, '').trim();
-        const match = hash.match(/^plugins\/(.+)$/);
-        return match ? match[1] : null;
-    });
-
-    const switchView = useCallback((viewId) => {
-        if (!viewOrder.includes(viewId)) return;
-        setActivePluginId(null);
-        setActiveViewId(viewId);
-        persistView(viewId);
-    }, [viewOrder]);
-
+    const [activeViewId, setActiveViewId] = useState(initActiveView);
+    const [activePluginId, setActivePluginId] = useState(initActivePluginId);
+    const switchView = useCallback(id => doSwitchView(id, viewOrder, setActivePluginId, setActiveViewId), [viewOrder]);
     const openPluginConfig = useCallback((pluginId) => {
         setActivePluginId(pluginId);
         window.history.replaceState(null, '', `#plugins/${pluginId}`);
     }, []);
-
-    const closePluginConfig = useCallback(() => {
-        setActivePluginId(null);
-        setActiveViewId(prev => {
-            persistView(prev);
-            return prev;
-        });
-    }, []);
-
+    const closePluginConfig = useCallback(() => doClosePluginConfig(setActivePluginId, setActiveViewId), []);
     useEffect(() => {
-        const handler = () => {
-            const raw = window.location.hash.replace(/^#/, '').trim();
-            const pluginMatch = raw.match(/^plugins\/(.+)$/);
-            if (pluginMatch) {
-                setActivePluginId(pluginMatch[1]);
-                return;
-            }
-            setActivePluginId(null);
-            const viewId = parseViewFromHash();
-            if (viewOrder.includes(viewId)) {
-                setActiveViewId(viewId);
-            }
-        };
+        const handler = () => handleHashChange(viewOrder, setActivePluginId, setActiveViewId);
         window.addEventListener('hashchange', handler);
         return () => window.removeEventListener('hashchange', handler);
     }, [viewOrder]);
-
-    // Persist on view change
-    useEffect(() => {
-        if (!activePluginId) persistView(activeViewId);
-    }, [activeViewId, activePluginId]);
-
+    useEffect(() => { if (!activePluginId) persistView(activeViewId); }, [activeViewId, activePluginId]);
     return { activeViewId, activePluginId, switchView, openPluginConfig, closePluginConfig, viewOrder };
 }

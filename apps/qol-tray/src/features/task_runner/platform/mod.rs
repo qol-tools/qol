@@ -1,26 +1,20 @@
 use tokio::process::Command;
 
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+compile_error!(
+    "features::task_runner::platform::shell_command is not implemented for this target OS"
+);
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-mod unix_common;
-
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(target_os = "macos")]
-mod macos;
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-mod unsupported;
-#[cfg(target_os = "windows")]
-mod windows;
-
-#[cfg(target_os = "linux")]
-use linux as imp;
-#[cfg(target_os = "macos")]
-use macos as imp;
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-use unsupported as imp;
-#[cfg(target_os = "windows")]
-use windows as imp;
-
 pub fn shell_command(script: &str) -> Command {
-    imp::shell_command(script)
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c").arg(script);
+    cmd
+}
+
+#[cfg(target_os = "windows")]
+pub fn shell_command(script: &str) -> Command {
+    let mut cmd = Command::new("cmd");
+    cmd.arg("/C").arg(script);
+    cmd
 }

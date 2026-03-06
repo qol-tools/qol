@@ -19,47 +19,54 @@ impl InputState {
             return;
         }
         let same_monitor = self.cursor.as_ref().is_some_and(|c| c.monitor == monitor);
-        // Re-stamp if: (a) cursor changed monitors, or
-        // (b) cursor moved and focus currently has a newer timestamp (reclaim from focus)
-        let focus_is_newer = self.focus.as_ref().is_some_and(|f|
-            self.cursor.as_ref().map_or(true, |c| f.at > c.at)
-        );
+        let focus_is_newer = self
+            .focus
+            .as_ref()
+            .is_some_and(|f| self.cursor.as_ref().map_or(true, |c| f.at > c.at));
         if !same_monitor || focus_is_newer {
-            log::debug!("[runtime/state] cursor STAMPED mon=({}, {}) at={:?} reason={}",
-                monitor.x, monitor.y, at,
-                if !same_monitor { "monitor_change" } else { "reclaim_from_focus" });
+            log::debug!(
+                "[runtime/state] cursor STAMPED mon=({}, {}) at={:?} reason={}",
+                monitor.x, monitor.y, at, cursor_stamp_reason(same_monitor)
+            );
             self.cursor = Some(Stamped { monitor, at });
         }
     }
 
     pub(crate) fn update_focus(&mut self, monitor: MonitorBounds, at: Instant) {
-        log::debug!("[runtime/state] focus STAMPED mon=({}, {}) at={:?}",
-            monitor.x, monitor.y, at);
+        log::debug!(
+            "[runtime/state] focus STAMPED mon=({}, {}) at={:?}",
+            monitor.x,
+            monitor.y,
+            at
+        );
         self.focus = Some(Stamped { monitor, at });
     }
 }
 
-pub(crate) fn monitor_for_point(monitors: &[MonitorBounds], x: f32, y: f32) -> Option<MonitorBounds> {
-    monitors.iter().find(|m| {
-        let right = m.x + m.width;
-        let bottom = m.y + m.height;
-        x >= m.x && x < right && y >= m.y && y < bottom
-    }).copied()
+fn cursor_stamp_reason(same_monitor: bool) -> &'static str {
+    if same_monitor { "reclaim_from_focus" } else { "monitor_change" }
+}
+
+pub(crate) fn monitor_for_point(
+    monitors: &[MonitorBounds],
+    x: f32,
+    y: f32,
+) -> Option<MonitorBounds> {
+    monitors
+        .iter()
+        .find(|m| {
+            let right = m.x + m.width;
+            let bottom = m.y + m.height;
+            x >= m.x && x < right && y >= m.y && y < bottom
+        })
+        .copied()
 }
 
 pub(crate) fn pick_active_monitor(state: &InputState, fallback: MonitorBounds) -> MonitorBounds {
-    let result = match (state.cursor.as_ref(), state.focus.as_ref()) {
+    match (state.cursor.as_ref(), state.focus.as_ref()) {
         (Some(cursor), Some(focus)) => {
-            let winner = if cursor.at > focus.at { "cursor" } else { "focus" };
-            log::debug!("[runtime/pick] cursor_mon=({},{}) cursor_at={:?} focus_mon=({},{}) focus_at={:?} → {}",
-                cursor.monitor.x, cursor.monitor.y, cursor.at,
-                focus.monitor.x, focus.monitor.y, focus.at,
-                winner);
-            if cursor.at > focus.at {
-                cursor.monitor
-            } else {
-                focus.monitor
-            }
+            log_pick_both(cursor, focus);
+            if cursor.at > focus.at { cursor.monitor } else { focus.monitor }
         }
         (Some(cursor), None) => {
             log::debug!("[runtime/pick] cursor only → ({}, {})", cursor.monitor.x, cursor.monitor.y);
@@ -73,11 +80,21 @@ pub(crate) fn pick_active_monitor(state: &InputState, fallback: MonitorBounds) -
             log::debug!("[runtime/pick] fallback");
             fallback
         }
-    };
-    result
+    }
 }
 
-pub(crate) fn monitor_for_bounds(monitors: &[MonitorBounds], window: &MonitorBounds) -> Option<MonitorBounds> {
+fn log_pick_both(cursor: &Stamped, focus: &Stamped) {
+    let winner = if cursor.at > focus.at { "cursor" } else { "focus" };
+    log::debug!("[runtime/pick] cursor_mon=({},{}) cursor_at={:?} focus_mon=({},{}) focus_at={:?} → {}",
+        cursor.monitor.x, cursor.monitor.y, cursor.at,
+        focus.monitor.x, focus.monitor.y, focus.at,
+        winner);
+}
+
+pub(crate) fn monitor_for_bounds(
+    monitors: &[MonitorBounds],
+    window: &MonitorBounds,
+) -> Option<MonitorBounds> {
     monitors
         .iter()
         .filter_map(|m| {

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::dev::adapters::traits::BuildFingerprintStore;
+use crate::dev::adapters::BuildFingerprintStore;
 
 use super::types::{BuildFingerprintState, DEV_BUILD_STATE_FILE};
 
@@ -38,22 +38,13 @@ pub fn save_build_fingerprints(
     config_dir: &Path,
     fingerprints: &HashMap<String, String>,
 ) -> Result<(), String> {
-    if let Err(e) = std::fs::create_dir_all(config_dir) {
-        return Err(format!(
-            "Failed to create config directory {}: {}",
-            config_dir.display(),
-            e
-        ));
-    }
-
+    std::fs::create_dir_all(config_dir)
+        .map_err(|e| format!("Failed to create config directory {}: {}", config_dir.display(), e))?;
     let state_path = config_dir.join(DEV_BUILD_STATE_FILE);
     let tmp_path = config_dir.join(".dev-build-fingerprints.tmp");
-    let state = BuildFingerprintState {
-        fingerprints: fingerprints.clone(),
-    };
+    let state = BuildFingerprintState { fingerprints: fingerprints.clone() };
     let content = serde_json::to_string_pretty(&state)
         .map_err(|e| format!("Failed to serialize build fingerprints: {}", e))?;
-
     std::fs::write(&tmp_path, content)
         .map_err(|e| format!("Failed to write build fingerprint temp file: {}", e))?;
     std::fs::rename(&tmp_path, &state_path)

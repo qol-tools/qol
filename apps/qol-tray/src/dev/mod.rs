@@ -16,6 +16,7 @@ pub use build::load_build_fingerprints;
 pub use build::save_build_fingerprints;
 pub use build::BuildApplicationService;
 pub use build::BuildResult;
+pub use build::BuildRun;
 pub use build::PluginBuildProgress;
 pub use config::DevConfig;
 pub use discovery::discover_plugins;
