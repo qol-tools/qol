@@ -2,9 +2,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::dev::adapters::traits::CargoPluginBuilder;
-use crate::dev::core::{self, BuildStatus, CoreBuildResult, CoreInput, CoreState};
+use crate::dev::core::{self, BuildStatus};
 
+use super::super::planning::{classify_plan, queued_plugins, PlanDisposition, SkipRecord};
 use super::super::types::{BuildResult, BuildRun, PluginBuildPlan};
+use super::events::CoreEventEmitter;
 
 pub(super) struct RunRequest<'a, F>
 where
@@ -26,7 +28,7 @@ where
         plans,
         request.known_fingerprints,
         request.builder,
-        request.on_event,
+        CoreEventEmitter::new(request.on_event),
     )
     .run()
 }
@@ -39,8 +41,7 @@ where
     fingerprints: HashMap<String, String>,
     results: Vec<BuildResult>,
     builder: &'a dyn CargoPluginBuilder,
-    core_state: CoreState,
-    on_event: F,
+    events: CoreEventEmitter<F>,
 }
 
 impl<'a, F> BuildRunner<'a, F>
@@ -51,26 +52,25 @@ where
         plans: Vec<PluginBuildPlan>,
         known_fingerprints: &HashMap<String, String>,
         builder: &'a dyn CargoPluginBuilder,
-        on_event: F,
+        events: CoreEventEmitter<F>,
     ) -> Self {
         Self {
             plans,
             fingerprints: known_fingerprints.clone(),
             results: Vec::new(),
             builder,
-            core_state: CoreState::default(),
-            on_event,
+            events,
         }
     }
 
     fn run(mut self) -> BuildRun {
-        self.start();
-        self.queue_buildable();
+        self.events.run_started();
+        self.emit_queued();
         let plans = self.plans.clone();
         for plan in &plans {
             self.run_plan(plan);
         }
-        self.finish();
+        self.events.run_finished(&self.results);
         BuildRun {
             plans: self.plans,
             results: self.results,
@@ -78,40 +78,23 @@ where
         }
     }
 
-    fn start(&mut self) {
-        self.emit_input(CoreInput::RunStarted);
-    }
-
-    fn queue_buildable(&mut self) {
-        let queued: Vec<_> = self
-            .plans
-            .iter()
-            .filter(|plan| buildable(plan))
-            .map(|plan| (plan.plugin_id.clone(), plan.reason.clone()))
-            .collect();
-        for (plugin_id, reason) in queued {
-            self.emit_progress(&plugin_id, BuildStatus::Queued, 0, &reason);
+    fn emit_queued(&mut self) {
+        for queued in queued_plugins(&self.plans) {
+            self.events
+                .plugin_progress(&queued.plugin_id, BuildStatus::Queued, 0, &queued.phase);
         }
     }
 
     fn run_plan(&mut self, plan: &PluginBuildPlan) {
-        if !plan.has_cargo {
-            self.record_skip(plan, missing_cargo_skip());
-            return;
+        match classify_plan(plan) {
+            PlanDisposition::Build => self.build_plan(plan),
+            PlanDisposition::Skip(skip) => self.record_skip(plan, skip),
         }
-        if !plan.supports_platform {
-            self.record_skip(plan, unsupported_platform_skip(plan));
-            return;
-        }
-        if !plan.needs_rebuild {
-            self.record_skip(plan, up_to_date_skip());
-            return;
-        }
-        self.build_plan(plan);
     }
 
     fn record_skip(&mut self, plan: &PluginBuildPlan, skip: SkipRecord) {
-        self.emit_progress(&plan.plugin_id, BuildStatus::Skipped, 100, &skip.phase);
+        self.events
+            .plugin_progress(&plan.plugin_id, BuildStatus::Skipped, 100, &skip.phase);
         if skip.remove_fingerprint {
             self.fingerprints.remove(&plan.plugin_id);
         }
@@ -124,7 +107,7 @@ where
     }
 
     fn build_plan(&mut self, plan: &PluginBuildPlan) {
-        self.emit_progress(
+        self.events.plugin_progress(
             &plan.plugin_id,
             BuildStatus::Building,
             3,
@@ -133,7 +116,8 @@ where
         let result = self.run_builder(plan);
         if result.success {
             self.record_success(plan);
-        } else {
+        }
+        if !result.success {
             self.record_failure(plan);
         }
         self.results.push(result);
@@ -142,8 +126,9 @@ where
     fn run_builder(&mut self, plan: &PluginBuildPlan) -> BuildResult {
         let builder = self.builder;
         let plugin_id = plan.plugin_id.clone();
+        let events = &mut self.events;
         let mut progress = |percent, phase: String| {
-            self.emit_progress(&plugin_id, BuildStatus::Building, percent, &phase);
+            events.plugin_progress(&plugin_id, BuildStatus::Building, percent, &phase);
         };
         builder.build_plugin_with_progress(&plugin_id, &plan.path, &mut progress)
     }
@@ -153,68 +138,13 @@ where
             self.fingerprints
                 .insert(plan.plugin_id.clone(), fingerprint);
         }
-        self.emit_progress(&plan.plugin_id, BuildStatus::Success, 100, "Build complete");
+        self.events
+            .plugin_progress(&plan.plugin_id, BuildStatus::Success, 100, "Build complete");
     }
 
     fn record_failure(&mut self, plan: &PluginBuildPlan) {
-        self.emit_progress(&plan.plugin_id, BuildStatus::Failed, 100, "Build failed");
-    }
-
-    fn finish(&mut self) {
-        self.emit_input(CoreInput::RunFinished {
-            results: self.results.iter().map(to_core_result).collect(),
-        });
-    }
-
-    fn emit_progress(&mut self, plugin_id: &str, status: BuildStatus, percent: u8, phase: &str) {
-        self.emit_input(CoreInput::PluginProgress {
-            plugin_id: plugin_id.to_string(),
-            status,
-            percent,
-            phase: phase.to_string(),
-        });
-    }
-
-    fn emit_input(&mut self, input: CoreInput) {
-        let (next_state, events) = core::reduce(std::mem::take(&mut self.core_state), input);
-        self.core_state = next_state;
-        for event in events {
-            (self.on_event)(event);
-        }
-    }
-}
-
-struct SkipRecord {
-    phase: String,
-    output: String,
-    remove_fingerprint: bool,
-}
-
-fn buildable(plan: &PluginBuildPlan) -> bool {
-    plan.has_cargo && plan.supports_platform && plan.needs_rebuild
-}
-
-fn missing_cargo_skip() -> SkipRecord {
-    SkipRecord {
-        phase: "Skipped: Cargo.toml missing".to_string(),
-        output: "Skipped: Cargo.toml missing".to_string(),
-        remove_fingerprint: true,
-    }
-}
-
-fn unsupported_platform_skip(plan: &PluginBuildPlan) -> SkipRecord {
-    SkipRecord {
-        phase: plan.reason.clone(),
-        output: plan.reason.clone(),
-        remove_fingerprint: false,
-    }
-}
-
-fn up_to_date_skip() -> SkipRecord {
-    SkipRecord {
-        phase: "Up to date".to_string(),
-        output: "Skipped: Up to date".to_string(),
-        remove_fingerprint: false,
+        self.events
+            .plugin_progress(&plan.plugin_id, BuildStatus::Failed, 100, "Build failed");
     }
 }
 
@@ -222,13 +152,4 @@ fn post_build_fingerprint(plan: &PluginBuildPlan) -> Option<String> {
     super::super::fingerprint::fingerprint_plugin(&plan.path)
         .ok()
         .or_else(|| plan.current_fingerprint.clone())
-}
-
-fn to_core_result(result: &BuildResult) -> CoreBuildResult {
-    CoreBuildResult {
-        plugin_id: result.plugin_id.clone(),
-        success: result.success,
-        output: result.output.clone(),
-        skipped: result.skipped,
-    }
 }

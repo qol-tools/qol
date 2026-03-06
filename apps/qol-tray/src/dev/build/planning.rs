@@ -1,174 +1,34 @@
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+mod queue;
+mod rebuild_reason;
+mod selection;
 
-use super::fingerprint::fingerprint_plugin;
+use std::collections::HashMap;
+use std::path::PathBuf;
+
 use super::types::PluginBuildPlan;
+
+pub(super) use queue::{classify_plan, queued_plugins, PlanDisposition, QueuedPlugin, SkipRecord};
 
 pub fn plan_linked_plugin_builds(
     dev_links: &HashMap<String, PathBuf>,
     known_fingerprints: &HashMap<String, String>,
 ) -> Vec<PluginBuildPlan> {
-    sorted_links(dev_links)
+    selection::select_linked_plugins(dev_links)
         .into_iter()
-        .map(|(plugin_id, path)| plan_plugin_build(plugin_id, path, known_fingerprints))
+        .map(|selection| rebuild_reason::plan_selection(selection, known_fingerprints))
         .collect()
-}
-
-fn sorted_links(dev_links: &HashMap<String, PathBuf>) -> Vec<(&String, &PathBuf)> {
-    let mut links: Vec<_> = dev_links.iter().collect();
-    links.sort_by(|(left, _), (right, _)| left.cmp(right));
-    links
-}
-
-fn plan_plugin_build(
-    plugin_id: &String,
-    path: &PathBuf,
-    known_fingerprints: &HashMap<String, String>,
-) -> PluginBuildPlan {
-    let has_cargo = path.join("Cargo.toml").is_file();
-    let last_built_fingerprint = known_fingerprints.get(plugin_id).cloned();
-    let (supports_platform, platform_reason) = check_plugin_platform(path);
-
-    if !has_cargo {
-        return missing_cargo_plan(plugin_id, path, last_built_fingerprint);
-    }
-
-    if !supports_platform {
-        return unsupported_platform_plan(plugin_id, path, last_built_fingerprint, platform_reason);
-    }
-
-    match fingerprint_plugin(path) {
-        Ok(current_fingerprint) => {
-            fingerprinted_plan(plugin_id, path, last_built_fingerprint, current_fingerprint)
-        }
-        Err(error) => fingerprint_unavailable_plan(plugin_id, path, last_built_fingerprint, error),
-    }
-}
-
-fn missing_cargo_plan(
-    plugin_id: &String,
-    path: &PathBuf,
-    last_built_fingerprint: Option<String>,
-) -> PluginBuildPlan {
-    PluginBuildPlan {
-        plugin_id: plugin_id.clone(),
-        path: path.clone(),
-        has_cargo: false,
-        supports_platform: true,
-        needs_rebuild: false,
-        current_fingerprint: None,
-        last_built_fingerprint,
-        reason: "Cargo.toml missing".to_string(),
-    }
-}
-
-fn unsupported_platform_plan(
-    plugin_id: &String,
-    path: &PathBuf,
-    last_built_fingerprint: Option<String>,
-    reason: String,
-) -> PluginBuildPlan {
-    PluginBuildPlan {
-        plugin_id: plugin_id.clone(),
-        path: path.clone(),
-        has_cargo: true,
-        supports_platform: false,
-        needs_rebuild: false,
-        current_fingerprint: None,
-        last_built_fingerprint,
-        reason,
-    }
-}
-
-fn fingerprinted_plan(
-    plugin_id: &String,
-    path: &PathBuf,
-    last_built_fingerprint: Option<String>,
-    current_fingerprint: String,
-) -> PluginBuildPlan {
-    let needs_rebuild = build_needed(&last_built_fingerprint, &current_fingerprint);
-    PluginBuildPlan {
-        plugin_id: plugin_id.clone(),
-        path: path.clone(),
-        has_cargo: true,
-        supports_platform: true,
-        needs_rebuild,
-        current_fingerprint: Some(current_fingerprint),
-        last_built_fingerprint: last_built_fingerprint.clone(),
-        reason: build_reason(last_built_fingerprint.as_ref(), needs_rebuild),
-    }
-}
-
-fn fingerprint_unavailable_plan(
-    plugin_id: &String,
-    path: &PathBuf,
-    last_built_fingerprint: Option<String>,
-    error: String,
-) -> PluginBuildPlan {
-    PluginBuildPlan {
-        plugin_id: plugin_id.clone(),
-        path: path.clone(),
-        has_cargo: true,
-        supports_platform: true,
-        needs_rebuild: true,
-        current_fingerprint: None,
-        last_built_fingerprint,
-        reason: format!("Fingerprint unavailable: {}", error),
-    }
-}
-
-fn build_needed(last_built_fingerprint: &Option<String>, current_fingerprint: &str) -> bool {
-    last_built_fingerprint
-        .as_ref()
-        .map(|known| known != current_fingerprint)
-        .unwrap_or(true)
-}
-
-fn build_reason(last_built_fingerprint: Option<&String>, needs_rebuild: bool) -> String {
-    if !needs_rebuild {
-        return "Up to date".to_string();
-    }
-    if last_built_fingerprint.is_some() {
-        return "Source changed".to_string();
-    }
-    "No successful build recorded".to_string()
-}
-
-fn check_plugin_platform(path: &Path) -> (bool, String) {
-    let toml_path = path.join("plugin.toml");
-    let Ok(content) = std::fs::read_to_string(&toml_path) else {
-        return (true, String::new());
-    };
-    let Ok(manifest) = toml::from_str::<crate::plugins::PluginManifest>(&content) else {
-        return (true, String::new());
-    };
-    if manifest.plugin.supports_current_platform() {
-        return (true, String::new());
-    }
-    let declared = manifest
-        .plugin
-        .platforms
-        .as_ref()
-        .map(|platforms| platforms.join(", "))
-        .unwrap_or_else(|| "none".to_string());
-    (
-        false,
-        format!(
-            "Not supported on {} (requires {})",
-            std::env::consts::OS,
-            declared
-        ),
-    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dev::build::fingerprint::fingerprint_plugin;
     use crate::dev::build::{
         build_linked_plugins_with_progress, load_build_fingerprints, save_build_fingerprints,
     };
     use crate::dev::core::BuildStatus;
     use std::fs;
+    use std::path::Path;
     use tempfile::TempDir;
 
     fn write_basic_plugin(root: &Path) {

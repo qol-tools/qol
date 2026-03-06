@@ -1,3 +1,5 @@
+mod events;
+mod persistence;
 mod runner;
 
 use std::collections::HashMap;
@@ -30,23 +32,15 @@ impl<'a> BuildApplicationService<'a> {
     }
 
     pub fn run(&self, dev_links: &HashMap<String, PathBuf>, config_dir: Option<&Path>) -> BuildRun {
-        let known_fingerprints = config_dir
-            .map(|dir| self.fingerprint_store.load(dir))
-            .unwrap_or_default();
-
+        let known_fingerprints =
+            persistence::load_known_fingerprints(self.fingerprint_store, config_dir);
         let build_run = runner::run_build(runner::RunRequest {
             dev_links,
             known_fingerprints: &known_fingerprints,
             builder: self.builder,
             on_event: |event| self.event_sink.publish(event),
         });
-
-        if let Some(dir) = config_dir {
-            if let Err(error) = self.fingerprint_store.save(dir, &build_run.fingerprints) {
-                log::error!("Failed to persist build fingerprints: {}", error);
-            }
-        }
-
+        persistence::persist_build_run(self.fingerprint_store, config_dir, &build_run);
         build_run
     }
 }
@@ -86,20 +80,7 @@ where
     F: FnMut(PluginBuildProgress),
 {
     build_linked_plugins_with_core_events(dev_links, known_fingerprints, |event| {
-        if let core::CoreEvent::BuildPluginProgress {
-            plugin_id,
-            status,
-            percent,
-            phase,
-        } = event
-        {
-            on_progress(PluginBuildProgress {
-                plugin_id,
-                status,
-                percent,
-                phase,
-            });
-        }
+        events::emit_plugin_progress(event, &mut on_progress);
     })
 }
 
