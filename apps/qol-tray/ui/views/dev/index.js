@@ -1,23 +1,17 @@
 import { subscribe, onReconnect } from '../../events.js';
-import { jsonRequest, readResponseText, tryFetchJson } from '../../api/client.js';
 import { mergePlugins, renderBuildResults, renderPluginBuildMeta } from './plugin-model.js';
 import { renderDevView } from './template.js';
 import { createBuildController } from './build-controller.js';
+import { createCpuController, readSavedCpuMonitoring } from './cpu-controller.js';
 import { createDiscoveryController } from './discovery-controller.js';
 import { createMockController } from './mock-controller.js';
+import { createPluginActionsController } from './plugin-actions-controller.js';
 import {
     nextDiscoveryCompletedState,
     nextDiscoveryStartedState
 } from './discovery/reducer.js';
 
 export const id = 'dev';
-const CPU_MONITORING_STORAGE_KEY = 'dev-cpu-monitoring';
-
-function isSafePluginId(pluginId) {
-    if (typeof pluginId !== 'string') return false;
-    if (!/^[A-Za-z0-9_-]{1,64}$/.test(pluginId)) return false;
-    return !pluginId.startsWith('-');
-}
 
 function saveSpinnerTimes(root) {
     const times = [];
@@ -40,30 +34,6 @@ function restoreSpinnerTimes(root, times) {
 
 function readSavedIndex() {
     return -1;
-}
-
-function readSavedCpuMonitoring() {
-    try {
-        const raw = localStorage.getItem(CPU_MONITORING_STORAGE_KEY);
-        if (!raw) return {};
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-            return parsed.reduce((acc, pluginId) => {
-                if (!isSafePluginId(pluginId)) return acc;
-                acc[pluginId] = true;
-                return acc;
-            }, {});
-        }
-        if (!parsed || typeof parsed !== 'object') return {};
-        return Object.entries(parsed).reduce((acc, [pluginId, enabled]) => {
-            if (!isSafePluginId(pluginId)) return acc;
-            if (!enabled) return acc;
-            acc[pluginId] = true;
-            return acc;
-        }, {});
-    } catch {
-        return {};
-    }
 }
 
 const state = {
@@ -92,15 +62,28 @@ const state = {
 let container = null;
 let unsubscribe = null;
 let unsubscribeReconnect = null;
-let reloadCooldownUntil = 0;
 let focusRefreshPending = true;
 let actionInteractionLocks = 0;
 let deferredUpdatePending = false;
-let cpuMonitoringSyncChain = Promise.resolve();
-let cpuEnableHydrationTimer = null;
 
 const discoveryController = createDiscoveryController({
     state,
+    onNeedsRender: updateView
+});
+
+const cpuController = createCpuController({
+    state,
+    getVisiblePluginIds: visiblePluginIdSet,
+    onNeedsRender: updateView,
+    onMissingMenuPlugin: closePluginMenu
+});
+
+const actionsController = createPluginActionsController({
+    state,
+    discoveryController,
+    getMergedPluginById,
+    getActivePluginBuildState,
+    closePluginMenu,
     onNeedsRender: updateView
 });
 
@@ -112,7 +95,7 @@ const buildController = createBuildController({
     getPluginById: getMergedPluginById,
     onNeedsRender: updateView,
     onBuildComplete: () => {
-        reloadCooldownUntil = Date.now() + 1000;
+        actionsController.markReloadComplete();
         mockController?.completeMockTarget('plugin_build');
         updateView();
         void discoveryController.loadLinkedPlugins();
@@ -134,9 +117,11 @@ export function render(containerEl) {
         unsubscribe();
         unsubscribe = null;
     }
+
     container = containerEl;
     container.addEventListener('click', handleClick);
     unsubscribe = subscribe(handleEvent);
+
     if (!unsubscribeReconnect) {
         unsubscribeReconnect = onReconnect(() => {
             if (!state.building) return;
@@ -144,10 +129,12 @@ export function render(containerEl) {
             void buildController.hydrateBuildState();
         });
     }
+
     const hydrateBuildPromise = mockController.isMockTesting()
         ? Promise.resolve()
         : buildController.hydrateBuildState(true);
-    const hydrateCpuPromise = queueCpuMonitoringSync().then(() => hydrateCpuSnapshot(true));
+    const hydrateCpuPromise = cpuController.queueSync().then(() => cpuController.hydrate(true));
+
     void Promise.all([
         discoveryController.loadPlugins(true),
         discoveryController.fetchDiscoveryState(true),
@@ -156,18 +143,17 @@ export function render(containerEl) {
         mockController.hydrateMockTargets(true),
         hydrateCpuPromise
     ]).finally(() => {
-        if (!state.linkingId) {
-            updateView();
-        }
+        if (state.linkingId) return;
+        updateView();
     });
 }
 
 function handleEvent(event) {
     if (
-        state.linkingId &&
-        (event.type === 'discovery_started' ||
-            event.type === 'discovery_complete' ||
-            event.type === 'plugins_changed')
+        state.linkingId
+        && (event.type === 'discovery_started'
+            || event.type === 'discovery_complete'
+            || event.type === 'plugins_changed')
     ) {
         return;
     }
@@ -189,8 +175,7 @@ function handleEvent(event) {
         return;
     }
 
-    if (event.type === 'plugin_cpu_snapshot') {
-        handleCpuSnapshot(event);
+    if (cpuController.handleEvent(event)) {
         return;
     }
 
@@ -236,167 +221,6 @@ function visiblePluginIdSet() {
     return new Set(state.mergedList.map(plugin => plugin.id));
 }
 
-function monitoredCpuPluginIds(visibleOnly = false) {
-    const monitored = Object.keys(state.cpuMonitoring).filter(pluginId => {
-        if (!isSafePluginId(pluginId)) return false;
-        return !!state.cpuMonitoring[pluginId];
-    });
-    if (!visibleOnly) return monitored;
-    const visiblePluginIds = visiblePluginIdSet();
-    return monitored.filter(pluginId => visiblePluginIds.has(pluginId));
-}
-
-function persistCpuMonitoring() {
-    try {
-        localStorage.setItem(
-            CPU_MONITORING_STORAGE_KEY,
-            JSON.stringify(monitoredCpuPluginIds())
-        );
-    } catch {}
-}
-
-function queueCpuMonitoringSync() {
-    const pluginIds = monitoredCpuPluginIds();
-    cpuMonitoringSyncChain = cpuMonitoringSyncChain
-        .catch(() => {})
-        .then(() => syncCpuMonitoringState(pluginIds));
-    return cpuMonitoringSyncChain;
-}
-
-async function syncCpuMonitoringState(pluginIds) {
-    try {
-        await fetch('/api/dev/plugin-cpu/monitoring', {
-            ...jsonRequest('PUT', { plugin_ids: pluginIds })
-        });
-    } catch {}
-}
-
-function isNumber(value) {
-    return typeof value === 'number' && Number.isFinite(value);
-}
-
-function normalizeCpuHistory(history, fallbackTimestamp) {
-    if (!Array.isArray(history)) return [];
-    return history
-        .filter(point => point && (isNumber(point.cpu_percent) || isNumber(point.timestamp_ms)))
-        .map(point => ({
-            cpu_percent: isNumber(point.cpu_percent) ? point.cpu_percent : 0,
-            timestamp_ms: isNumber(point.timestamp_ms) ? point.timestamp_ms : fallbackTimestamp
-        }));
-}
-
-function normalizeCpuSample(plugin, fallbackTimestamp) {
-    return {
-        cpu_percent: isNumber(plugin?.cpu_percent) ? plugin.cpu_percent : 0,
-        cpu_seconds_total: isNumber(plugin?.cpu_seconds_total) ? plugin.cpu_seconds_total : 0,
-        timestamp_ms: fallbackTimestamp,
-        history: normalizeCpuHistory(plugin?.history, fallbackTimestamp)
-    };
-}
-
-function lastCpuHistoryPoint(sample) {
-    const history = Array.isArray(sample?.history) ? sample.history : [];
-    if (history.length === 0) return null;
-    return history[history.length - 1];
-}
-
-function cpuSamplesChanged(prev, current) {
-    if (!prev && !current) return false;
-    if (!prev || !current) return true;
-    if (prev.cpu_percent !== current.cpu_percent) return true;
-    if (prev.cpu_seconds_total !== current.cpu_seconds_total) return true;
-    if (prev.timestamp_ms !== current.timestamp_ms) return true;
-
-    const prevHistory = Array.isArray(prev.history) ? prev.history : [];
-    const currentHistory = Array.isArray(current.history) ? current.history : [];
-    if (prevHistory.length !== currentHistory.length) return true;
-
-    const prevLast = lastCpuHistoryPoint(prev);
-    const currentLast = lastCpuHistoryPoint(current);
-    if (!prevLast && !currentLast) return false;
-    if (!prevLast || !currentLast) return true;
-    if (prevLast.cpu_percent !== currentLast.cpu_percent) return true;
-    return prevLast.timestamp_ms !== currentLast.timestamp_ms;
-}
-
-function updateCpuSamples(payload) {
-    if (!payload || !Array.isArray(payload.plugins)) return false;
-
-    const monitored = monitoredCpuPluginIds(true);
-    if (monitored.length === 0) return false;
-
-    const monitoredSet = new Set(monitored);
-    const next = {};
-    const timestamp = isNumber(payload.timestamp_ms) ? payload.timestamp_ms : Date.now();
-
-    for (const plugin of payload.plugins) {
-        const pluginId = plugin?.plugin_id;
-        if (!pluginId) continue;
-        if (!monitoredSet.has(pluginId)) continue;
-        next[pluginId] = normalizeCpuSample(plugin, timestamp);
-    }
-
-    let changed = false;
-    for (const pluginId of monitored) {
-        if (!cpuSamplesChanged(state.cpuByPlugin[pluginId], next[pluginId])) continue;
-        changed = true;
-        break;
-    }
-
-    if (!changed) return false;
-    state.cpuByPlugin = next;
-    return true;
-}
-
-function handleCpuSnapshot(event) {
-    const payload = {
-        timestamp_ms: event.timestamp_ms,
-        plugins: event.plugins
-    };
-    if (!updateCpuSamples(payload)) return;
-    if (state.linkingId) return;
-    updateView();
-}
-
-async function hydrateCpuSnapshot(skipUpdate = false) {
-    const payload = await tryFetchJson('/api/dev/plugin-cpu');
-    if (!payload) return;
-    if (!updateCpuSamples(payload)) return;
-    if (skipUpdate) return;
-    if (state.linkingId) return;
-    updateView(true);
-}
-
-function scheduleCpuHydrationRetry(pluginId, attempts = 6) {
-    if (!state.cpuMonitoring[pluginId]) return;
-    if (state.cpuByPlugin[pluginId]) return;
-    if (attempts <= 0) return;
-    if (cpuEnableHydrationTimer !== null) {
-        clearTimeout(cpuEnableHydrationTimer);
-        cpuEnableHydrationTimer = null;
-    }
-    cpuEnableHydrationTimer = setTimeout(() => {
-        cpuEnableHydrationTimer = null;
-        if (!state.cpuMonitoring[pluginId]) return;
-        void hydrateCpuSnapshot().then(() => {
-            scheduleCpuHydrationRetry(pluginId, attempts - 1);
-        });
-    }, 1000);
-}
-
-function pruneCpuMonitoring(mergedList) {
-    const existingSamples = Object.keys(state.cpuByPlugin);
-    for (const pluginId of existingSamples) {
-        if (state.cpuMonitoring[pluginId]) continue;
-        delete state.cpuByPlugin[pluginId];
-    }
-
-    if (!state.openPluginMenuId) return;
-    const hasMenuPlugin = mergedList.some(plugin => plugin.id === state.openPluginMenuId);
-    if (hasMenuPlugin) return;
-    closePluginMenu();
-}
-
 function getMergedPluginById(pluginId) {
     return state.mergedList.find(plugin => plugin.id === pluginId) || null;
 }
@@ -435,7 +259,8 @@ function updateView(force = false) {
     const mergedList = mergePlugins(state.discovered, state.plugins, state.logControls);
     state.mergedCount = mergedList.length;
     state.mergedList = mergedList;
-    pruneCpuMonitoring(mergedList);
+    cpuController.prune(mergedList);
+
     if (mergedList.length === 0) {
         state.selectedIndex = -1;
     }
@@ -461,6 +286,7 @@ function updateView(force = false) {
     const viewBody = container.querySelector('.view-body');
     if (viewBody) viewBody.scrollTop = prevScrollTop;
     restoreSpinnerTimes(container, spinnerTimes);
+
     if (hoveredActionId) {
         const actionZones = container.querySelectorAll('.plugin-action-zone[data-id]');
         for (const zone of actionZones) {
@@ -473,12 +299,12 @@ function updateView(force = false) {
 
     const input = container.querySelector('#link-path');
     if (input) {
-        input.addEventListener('input', e => {
-            state.linkPath = e.target.value;
+        input.addEventListener('input', event => {
+            state.linkPath = event.target.value;
         });
-        input.addEventListener('keydown', e => {
-            if (e.key === 'Enter') confirmLink();
-            if (e.key === 'Escape') cancelLink();
+        input.addEventListener('keydown', event => {
+            if (event.key === 'Enter') actionsController.confirmLink();
+            if (event.key === 'Escape') actionsController.cancelLink();
         });
     }
 
@@ -487,9 +313,10 @@ function updateView(force = false) {
     bindActionInteractionLocks();
 }
 
-function handleClick(e) {
-    const target = e.target instanceof Element ? e.target : e.target?.parentElement;
+function handleClick(event) {
+    const target = event.target instanceof Element ? event.target : event.target?.parentElement;
     if (!target) return;
+
     const actionTarget = target.closest('[data-action]');
     const action = actionTarget?.dataset.action;
     const actionId = actionTarget?.dataset.id;
@@ -503,355 +330,94 @@ function handleClick(e) {
 
     if (action === 'mock-update') {
         void mockController.triggerMockFlows();
+        return;
     }
+
     if (action === 'toggle-plugin-menu' && actionId) {
-        e.preventDefault();
-        e.stopPropagation();
+        event.preventDefault();
+        event.stopPropagation();
         togglePluginMenu(actionId);
         syncPluginMenuDom();
         return;
     }
+
     if (action === 'toggle-plugin-logs' && actionId) {
-        e.preventDefault();
-        e.stopPropagation();
+        event.preventDefault();
+        event.stopPropagation();
         closePluginMenu();
         syncPluginMenuDom();
-        void togglePluginLogs(actionId);
+        void actionsController.togglePluginLogs(actionId);
         return;
     }
+
     if (action === 'edit-plugin-log-filters' && actionId) {
-        e.preventDefault();
-        e.stopPropagation();
+        event.preventDefault();
+        event.stopPropagation();
         closePluginMenu();
         syncPluginMenuDom();
-        void editPluginLogFilters(actionId);
+        void actionsController.editPluginLogFilters(actionId);
         return;
     }
+
     if (action === 'toggle-plugin-cpu' && actionId) {
-        e.preventDefault();
-        e.stopPropagation();
+        event.preventDefault();
+        event.stopPropagation();
         closePluginMenu();
         syncPluginMenuDom();
-        togglePluginCpuMonitoring(actionId);
+        cpuController.toggle(actionId);
         return;
     }
+
     if (action === 'toggle-link' && actionId) {
         if (state.linkingId) return;
         const row = target.closest('.plugin-row');
         if (row) {
-            state.selectedIndex = parseInt(row.dataset.index);
+            state.selectedIndex = parseInt(row.dataset.index, 10);
         }
-        handleItemActivation();
+        actionsController.handleItemActivation();
         updateView();
         return;
     }
+
     if (action === 'reload') {
-        void reloadPlugins();
+        void actionsController.reloadPlugins();
+        return;
     }
+
     if (action === 'refresh-discovery') {
         void discoveryController.triggerDiscovery();
-    }
-    if (action === 'add-link') showLinkInput();
-    if (action === 'confirm-link') void confirmLink();
-    if (action === 'cancel-link') cancelLink();
-}
-
-function handleItemActivation() {
-    const item = state.mergedList[state.selectedIndex];
-    if (!item) return;
-    closePluginMenu();
-    if (getActivePluginBuildState(item)) return;
-
-    if (item.status === 'linked') {
-        void deleteLink(item.id);
         return;
     }
 
-    if (item.path) {
-        void quickLink(item.path, item.id);
+    if (action === 'add-link') {
+        actionsController.showLinkInput();
         return;
     }
 
-    showLinkInput();
-}
-
-function seedDiscoveredFromLinked(pluginId) {
-    if (!pluginId) return;
-
-    const linked = state.plugins.find(plugin => plugin.id === pluginId);
-    const merged = state.mergedList.find(plugin => plugin.id === pluginId);
-    const path = linked?.source || merged?.path || '';
-    if (!path) return;
-
-    const seeded = {
-        id: pluginId,
-        name: linked?.name || merged?.name || pluginId,
-        path
-    };
-
-    const existingIndex = state.discovered.findIndex(plugin => plugin.id === pluginId);
-    if (existingIndex >= 0) {
-        state.discovered[existingIndex] = {
-            ...state.discovered[existingIndex],
-            ...seeded
-        };
+    if (action === 'confirm-link') {
+        void actionsController.confirmLink();
         return;
     }
 
-    state.discovered.push(seeded);
-}
-
-async function quickLink(path, id) {
-    if (state.linkingId) return;
-    state.linkingId = id;
-    updateView();
-
-    try {
-        const res = await fetch('/api/dev/links', {
-            ...jsonRequest('POST', { path, id })
-        });
-        if (!res.ok) {
-            console.error('Failed to link:', await readResponseText(res));
-            return;
-        }
-        await triggerReload();
-        await discoveryController.loadPlugins(true);
-    } catch (e) {
-        console.error('Failed to link:', e);
-    } finally {
-        state.linkingId = null;
-        updateView();
+    if (action === 'cancel-link') {
+        actionsController.cancelLink();
     }
 }
 
-function showLinkInput() {
-    state.showLinkInput = true;
-    state.linkError = null;
-    updateView();
-}
-
-function cancelLink() {
-    state.showLinkInput = false;
-    state.linkPath = '';
-    state.linkError = null;
-    updateView();
-}
-
-async function confirmLink() {
-    if (!state.linkPath.trim()) {
-        state.linkError = 'Enter a path';
-        updateView();
-        return;
-    }
-
-    try {
-        const res = await fetch('/api/dev/links', {
-            ...jsonRequest('POST', { path: state.linkPath })
-        });
-
-        if (!res.ok) {
-            state.linkError = await readResponseText(res);
-            updateView();
-            return;
-        }
-
-        state.showLinkInput = false;
-        state.linkPath = '';
-        state.linkError = null;
-        await triggerReload();
-        await discoveryController.loadPlugins();
-    } catch (e) {
-        state.linkError = e.message;
-        updateView();
-    }
-}
-
-async function deleteLink(id) {
-    if (state.linkingId) return;
-    state.linkingId = id;
-    seedDiscoveredFromLinked(id);
-    updateView();
-
-    try {
-        const res = await fetch(`/api/dev/links/${id}`, { method: 'DELETE' });
-        if (!res.ok) {
-            console.error('Failed to delete link:', await readResponseText(res));
-            return;
-        }
-        await triggerReload();
-        await Promise.all([
-            discoveryController.loadPlugins(true),
-            discoveryController.refreshDiscoveryState()
-        ]);
-    } catch (e) {
-        console.error('Failed to delete link:', e);
-    } finally {
-        state.linkingId = null;
-        updateView();
-    }
-}
-
-function getCurrentLinkedPlugin(pluginId) {
-    return state.plugins.find(plugin => plugin.id === pluginId) || null;
-}
-
-function normalizePatternsInput(raw) {
-    if (!raw) return [];
-    return raw
-        .split(',')
-        .map(value => value.trim())
-        .filter(Boolean);
-}
-
-async function savePluginLogControl(pluginId, control) {
-    const res = await fetch(`/api/dev/log-controls/${encodeURIComponent(pluginId)}`, {
-        ...jsonRequest('PUT', control)
-    });
-    if (!res.ok) {
-        const message = await readResponseText(res);
-        throw new Error(message || 'Failed to update plugin log control');
-    }
-}
-
-async function togglePluginLogs(pluginId) {
-    const plugin = getCurrentLinkedPlugin(pluginId) || getMergedPluginById(pluginId);
-    if (!plugin) return;
-
-    try {
-        await savePluginLogControl(pluginId, {
-            muted: !plugin.logs_muted,
-            suppress_patterns: Array.isArray(plugin.suppressed_log_patterns)
-                ? plugin.suppressed_log_patterns
-                : []
-        });
-        await Promise.all([
-            discoveryController.loadPlugins(true),
-            discoveryController.loadLogControls(true)
-        ]);
-    } catch (error) {
-        state.error = error?.message || 'Failed to toggle plugin logs';
-    }
-    if (!state.linkingId) updateView();
-}
-
-async function editPluginLogFilters(pluginId) {
-    const plugin = getCurrentLinkedPlugin(pluginId) || getMergedPluginById(pluginId);
-    if (!plugin) return;
-
-    const current = Array.isArray(plugin.suppressed_log_patterns)
-        ? plugin.suppressed_log_patterns
-        : [];
-    const initial = current.join(', ');
-    const value = window.prompt(
-        'Mute log lines containing these comma-separated substrings (leave empty to clear):',
-        initial
-    );
-    if (value === null) return;
-
-    const suppress_patterns = normalizePatternsInput(value);
-
-    try {
-        await savePluginLogControl(pluginId, {
-            muted: !!plugin.logs_muted,
-            suppress_patterns
-        });
-        await Promise.all([
-            discoveryController.loadPlugins(true),
-            discoveryController.loadLogControls(true)
-        ]);
-    } catch (error) {
-        state.error = error?.message || 'Failed to update plugin log filters';
-    }
-    if (!state.linkingId) updateView();
-}
-
-function togglePluginCpuMonitoring(pluginId) {
-    if (!isSafePluginId(pluginId)) return;
-
-    if (state.cpuMonitoring[pluginId]) {
-        delete state.cpuMonitoring[pluginId];
-        delete state.cpuByPlugin[pluginId];
-        if (cpuEnableHydrationTimer !== null) {
-            clearTimeout(cpuEnableHydrationTimer);
-            cpuEnableHydrationTimer = null;
-        }
-        persistCpuMonitoring();
-        void queueCpuMonitoringSync();
-        updateView(true);
-        return;
-    }
-
-    state.cpuMonitoring[pluginId] = true;
-    persistCpuMonitoring();
-    void queueCpuMonitoringSync().finally(() => {
-        void hydrateCpuSnapshot().then(() => {
-            scheduleCpuHydrationRetry(pluginId);
-        });
-    });
-    updateView(true);
-}
-
-async function triggerReload() {
-    const res = await fetch('/api/dev/reload', { method: 'POST' });
-    if (!res.ok && res.status !== 409) {
-        const message = await readResponseText(res);
-        throw new Error(message || 'Failed to queue reload');
-    }
-    return res;
-}
-
-async function reloadPlugins() {
-    if (state.building || Date.now() < reloadCooldownUntil) return;
-
-    state.building = true;
-    state.error = null;
-    state.buildResults = null;
-    state.buildProgress = {};
-    updateView();
-
-    try {
-        const [reloadRes, discoverRes] = await Promise.all([
-            fetch('/api/dev/reload', { method: 'POST' }),
-            fetch('/api/dev/discover', { method: 'POST' })
-        ]);
-
-        if (reloadRes.status === 409) {
-            state.building = false;
-            return;
-        }
-
-        if (!reloadRes.ok) {
-            state.building = false;
-            state.error = await readResponseText(reloadRes) || 'Reload failed';
-            return;
-        }
-
-        if (discoverRes.ok) {
-            state.lastReload = new Date().toLocaleTimeString();
-        }
-        await discoveryController.loadPlugins();
-    } catch (err) {
-        state.building = false;
-        state.error = err.message;
-    } finally {
-        updateView();
-    }
-}
-
-export function handleKey(e) {
+export function handleKey(event) {
     if (state.showLinkInput) return;
 
-    if ((e.ctrlKey || e.metaKey) && (e.key === 'r' || e.key === 'R')) {
-        e.preventDefault();
-        void reloadPlugins();
+    if ((event.ctrlKey || event.metaKey) && (event.key === 'r' || event.key === 'R')) {
+        event.preventDefault();
+        void actionsController.reloadPlugins();
         return;
     }
 
-    if (e.ctrlKey || e.altKey || e.metaKey) return;
+    if (event.ctrlKey || event.altKey || event.metaKey) return;
 
-    if (e.key === 'Escape') {
+    if (event.key === 'Escape') {
         if (!state.openPluginMenuId) return;
-        e.preventDefault();
+        event.preventDefault();
         closePluginMenu();
         syncPluginMenuDom();
         return;
@@ -859,8 +425,8 @@ export function handleKey(e) {
 
     const total = totalItems();
 
-    if (e.key === 'ArrowDown' && total > 0) {
-        e.preventDefault();
+    if (event.key === 'ArrowDown' && total > 0) {
+        event.preventDefault();
         if (state.selectedIndex < 0) {
             state.selectedIndex = 0;
             updateView();
@@ -868,10 +434,11 @@ export function handleKey(e) {
         }
         state.selectedIndex = Math.min(state.selectedIndex + 1, total - 1);
         updateView();
+        return;
     }
 
-    if (e.key === 'ArrowUp' && total > 0) {
-        e.preventDefault();
+    if (event.key === 'ArrowUp' && total > 0) {
+        event.preventDefault();
         if (state.selectedIndex < 0) {
             state.selectedIndex = total - 1;
             updateView();
@@ -879,21 +446,23 @@ export function handleKey(e) {
         }
         state.selectedIndex = Math.max(state.selectedIndex - 1, 0);
         updateView();
+        return;
     }
 
-    if (e.key === ' ' || e.key === 'Enter') {
-        e.preventDefault();
-        handleItemActivation();
+    if (event.key === ' ' || event.key === 'Enter') {
+        event.preventDefault();
+        actionsController.handleItemActivation();
+        return;
     }
 
-    if (e.key === 'r' || e.key === 'R') {
-        e.preventDefault();
+    if (event.key === 'r' || event.key === 'R') {
+        event.preventDefault();
         void discoveryController.triggerDiscovery();
         return;
     }
 
-    if (e.key === 'm' || e.key === 'M') {
-        e.preventDefault();
+    if (event.key === 'm' || event.key === 'M') {
+        event.preventDefault();
         const item = state.mergedList[state.selectedIndex];
         if (!item) return;
         togglePluginMenu(item.id);
@@ -933,6 +502,7 @@ export function destroy() {
         container.removeEventListener('click', handleClick);
         container = null;
     }
+    cpuController.destroy();
     actionInteractionLocks = 0;
     deferredUpdatePending = false;
 }

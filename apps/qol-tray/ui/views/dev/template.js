@@ -1,4 +1,5 @@
-import { escapeAttr, escapeHtml, safeStatusToken } from '../../utils/escape-html.js';
+import { escapeAttr, escapeHtml } from '../../utils/escape-html.js';
+import { renderPluginRows } from './plugin-row-template.js';
 
 export function renderDevView({
     state,
@@ -7,171 +8,12 @@ export function renderDevView({
     renderPluginBuildMeta,
     renderBuildResults
 }) {
-    const sparklineWidth = 120;
-    const sparklineHeight = 28;
-    const sparklineFloor = sparklineHeight - 1;
-    const sparklineCeiling = 2;
-    const sparklineSpread = sparklineFloor - sparklineCeiling;
-    const sparklineMinMaxCpu = 5;
-    const cpuHistoryGraphLimit = 36;
-
-    const sampleCpuPercent = sample => Number.isFinite(sample?.cpu_percent) ? sample.cpu_percent : 0;
-    const cpuMonitoringEnabled = pluginId => !!state.cpuMonitoring[pluginId];
-    const toText = value => escapeHtml(value);
-    const toAttr = value => escapeAttr(value);
-
-    const cpuBadgeAria = plugin => {
-        const monitoringEnabled = cpuMonitoringEnabled(plugin.id);
-        if (!monitoringEnabled) {
-            return `Enable CPU monitoring for ${plugin.name}`;
-        }
-        return `Disable CPU monitoring for ${plugin.name}`;
-    };
-
-    const renderCpuSparkline = history => {
-        if (!history.length) {
-            return '<div class="plugin-cpu-empty">Waiting for samples</div>';
-        }
-
-        const maxCpu = history.reduce((maxValue, point) => {
-            const value = sampleCpuPercent(point);
-            return Math.max(maxValue, value);
-        }, sparklineMinMaxCpu);
-
-        const pointY = value => {
-            const normalized = Math.max(0, Math.min(value, maxCpu)) / maxCpu;
-            return sparklineFloor - normalized * sparklineSpread;
-        };
-
-        if (history.length === 1) {
-            const single = sampleCpuPercent(history[0]);
-            const y = pointY(single).toFixed(2);
-            return `
-                <svg class="plugin-cpu-sparkline" viewBox="0 0 ${sparklineWidth} ${sparklineHeight}" preserveAspectRatio="none" aria-hidden="true">
-                    <line class="plugin-cpu-sparkline-base" x1="0" y1="${sparklineFloor}" x2="${sparklineWidth}" y2="${sparklineFloor}"></line>
-                    <polyline class="plugin-cpu-sparkline-line" points="0,${y} ${sparklineWidth},${y}"></polyline>
-                </svg>
-            `;
-        }
-
-        const points = history.map((point, index) => {
-            const value = sampleCpuPercent(point);
-            const x = (index / (history.length - 1)) * sparklineWidth;
-            const y = pointY(value);
-            return `${x.toFixed(2)},${y.toFixed(2)}`;
-        }).join(' ');
-
-        return `
-            <svg class="plugin-cpu-sparkline" viewBox="0 0 ${sparklineWidth} ${sparklineHeight}" preserveAspectRatio="none" aria-hidden="true">
-                <line class="plugin-cpu-sparkline-base" x1="0" y1="${sparklineFloor}" x2="${sparklineWidth}" y2="${sparklineFloor}"></line>
-                <polyline class="plugin-cpu-sparkline-line" points="${points}"></polyline>
-            </svg>
-        `;
-    };
-
-    const renderCpuStrip = plugin => {
-        if (!cpuMonitoringEnabled(plugin.id)) return '';
-        const sample = state.cpuByPlugin[plugin.id];
-        const history = Array.isArray(sample?.history)
-            ? sample.history.slice(-cpuHistoryGraphLimit)
-            : [];
-        const cpuPercent = sampleCpuPercent(sample);
-        return `
-            <div class="plugin-cpu-strip">
-                <span class="plugin-cpu-strip-value">${cpuPercent.toFixed(2)}%</span>
-                <div class="plugin-cpu-strip-graph">
-                    ${renderCpuSparkline(history)}
-                </div>
-            </div>
-        `;
-    };
-
-    const pluginRows = mergedList.map((plugin, index) => {
-        const isSelected = state.selectedIndex === index;
-        const menuOpen = state.openPluginMenuId === plugin.id;
-        const statusToken = safeStatusToken(plugin.status);
-        const pluginId = toAttr(plugin.id);
-        const pluginName = toText(plugin.name || plugin.id || 'Unknown plugin');
-        const pluginNameAttr = toAttr(plugin.name || plugin.id || 'Unknown plugin');
-        const pluginPath = toText(plugin.path || '');
-        const cpuEnabled = cpuMonitoringEnabled(plugin.id);
-        const statusBadge = {
-            linked: '<span class="badge badge-linked">Linked</span>',
-            installed: '<span class="badge badge-installed">Installed</span>',
-            local: '<span class="badge badge-local">Local Clone</span>'
-        }[statusToken] || '';
-
-        let buildBadge = '';
-        if (statusToken === 'linked' && !plugin.supports_platform) {
-            buildBadge = '<span class="badge badge-build-skip">Unsupported</span>';
-        }
-        if (statusToken === 'linked' && plugin.supports_platform && !plugin.has_cargo) {
-            buildBadge = '<span class="badge badge-build-skip">No Cargo</span>';
-        }
-
-        const buildState = getActivePluginBuildState(plugin);
-        const isRowBuilding = !!buildState;
-        const isLinking = state.linkingId === plugin.id;
-        const actionDisabled = isRowBuilding || !!state.linkingId;
-        const rebuildActive = plugin.status === 'linked' && plugin.has_cargo && plugin.needs_rebuild;
-        const filterCount = Array.isArray(plugin.suppressed_log_patterns)
-            ? plugin.suppressed_log_patterns.length
-            : 0;
-        const cpuActionLabel = cpuEnabled ? 'Disable CPU Monitor' : 'Enable CPU Monitor';
-        const cpuActionClass = cpuEnabled ? 'stop' : 'start';
-        const menuControls = `
-            <button type="button" class="plugin-menu-trigger" data-action="toggle-plugin-menu" data-id="${pluginId}" aria-label="Plugin options for ${pluginNameAttr}" aria-expanded="${menuOpen ? 'true' : 'false'}">
-                <svg class="plugin-menu-trigger-icon" viewBox="0 0 12 20" fill="currentColor" aria-hidden="true" focusable="false">
-                    <circle cx="6" cy="3.5" r="1.8"></circle>
-                    <circle cx="6" cy="10" r="1.8"></circle>
-                    <circle cx="6" cy="16.5" r="1.8"></circle>
-                </svg>
-            </button>
-            <div class="plugin-context-menu ${menuOpen ? 'open' : ''}">
-                <button type="button" class="context-action" data-action="toggle-plugin-logs" data-id="${pluginId}" aria-label="${plugin.logs_muted ? 'Unmute logs' : 'Mute logs'} for ${pluginNameAttr}">
-                    ${plugin.logs_muted ? 'Unmute Logs' : 'Mute Logs'}
-                </button>
-                <button type="button" class="context-action" data-action="edit-plugin-log-filters" data-id="${pluginId}" aria-label="Edit log filters for ${pluginNameAttr}">
-                    ${filterCount > 0 ? `Edit Filters (${filterCount})` : 'Edit Filters'}
-                </button>
-                <button type="button" class="context-action context-cpu ${cpuActionClass}" data-action="toggle-plugin-cpu" data-id="${pluginId}" aria-label="${toAttr(cpuBadgeAria(plugin))}">
-                    ${cpuActionLabel}
-                </button>
-            </div>
-        `;
-        const statusBadges = `
-            <div class="plugin-status-badges">
-                ${statusBadge}
-                ${buildBadge}
-                ${plugin.hasStoreInstall ? '<span class="badge badge-installed-dim">+Store</span>' : ''}
-            </div>
-        `;
-
-        return `
-            <div class="plugin-row table-list-row status-${statusToken} ${isSelected ? 'selected' : ''} ${isRowBuilding ? 'is-building' : ''} ${isLinking ? 'is-linking' : ''}" data-status="${statusToken}" data-selected="${isSelected ? 'true' : 'false'}" data-index="${index}" data-plugin-id="${pluginId}">
-                <div class="plugin-main table-grid">
-                    <div class="plugin-info table-col">
-                        <div class="plugin-copy">
-                            <div class="plugin-title-row">
-                                <span class="plugin-name">${pluginName}</span>
-                            </div>
-                            <span class="plugin-path">${pluginPath}</span>
-                            ${renderPluginBuildMeta(plugin)}
-                        </div>
-                        ${statusBadges}
-                        ${renderCpuStrip(plugin)}
-                    </div>
-                    <div class="plugin-action-column table-col">
-                        <button type="button" class="plugin-action-zone ${actionDisabled ? 'is-disabled' : ''} ${rebuildActive ? 'has-rebuild' : 'rebuild-idle'}" data-action="toggle-link" data-id="${pluginId}" aria-label="${statusToken === 'linked' ? 'Unlink' : 'Link'} ${pluginNameAttr}" ${actionDisabled ? 'disabled' : ''}>
-                            <img class="plugin-action-rebuild-icon" src="assets/qol-tray.png?v=1" alt="" aria-hidden="true">
-                        </button>
-                        ${menuControls}
-                    </div>
-                </div>
-                <div class="plugin-build-overlay-host"></div>
-            </div>
-        `;
-    }).join('');
+    const pluginRows = renderPluginRows({
+        state,
+        mergedList,
+        getActivePluginBuildState,
+        renderPluginBuildMeta
+    });
 
     return `
         <div class="view-container dev-view-shell">
@@ -207,11 +49,11 @@ export function renderDevView({
 
                     ${state.showLinkInput ? `
                         <div class="link-input-row">
-                            <input type="text" id="link-path" placeholder="/path/to/plugin" value="${toAttr(state.linkPath)}" autofocus>
+                            <input type="text" id="link-path" placeholder="/path/to/plugin" value="${escapeAttr(state.linkPath)}">
                             <button class="btn btn-sm btn-primary" data-action="confirm-link">Link</button>
                             <button class="btn btn-sm btn-ghost" data-action="cancel-link">Cancel</button>
                         </div>
-                        ${state.linkError ? `<p class="error-msg">${toText(state.linkError)}</p>` : ''}
+                        ${state.linkError ? `<p class="error-msg">${escapeHtml(state.linkError)}</p>` : ''}
                     ` : ''}
                 </section>
 
@@ -223,8 +65,8 @@ export function renderDevView({
                             <h3>${state.building ? 'Building...' : 'Reload All Plugins'}</h3>
                             <p>${state.building ? 'Compiling linked plugins' : 'Build linked plugins and restart daemons.'}</p>
                             ${renderBuildResults(state.buildResults)}
-                            ${state.lastReload ? `<span class="last-action">Last: ${toText(state.lastReload)}</span>` : ''}
-                            ${state.error ? `<span class="error-msg">${toText(state.error)}</span>` : ''}
+                            ${state.lastReload ? `<span class="last-action">Last: ${escapeHtml(state.lastReload)}</span>` : ''}
+                            ${state.error ? `<span class="error-msg">${escapeHtml(state.error)}</span>` : ''}
                         </div>
                         <div class="dev-card-hint"><kbd>Ctrl+r</kbd></div>
                     </div>
