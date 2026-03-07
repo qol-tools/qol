@@ -1,7 +1,7 @@
 [plugin]
 name = "My Plugin"
 description = "A qol-tray plugin"
-version = "1.1.0"
+version = "1.1.1"
 author = ""
 platforms = ["linux", "macos"]
 
