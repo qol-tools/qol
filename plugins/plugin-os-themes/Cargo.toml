@@ -6,9 +6,10 @@ edition = "2021"
 [dependencies]
 anyhow = "1"
 qol-plugin-api = { git = "https://github.com/qol-tools/qol-plugin-api", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-x11 = { version = "2", features = ["xlib", "xfixes", "xcursor"] }
+x11 = { version = "2", features = ["xlib", "xcursor"] }
 libc = "0.2"
 
 [profile.release]

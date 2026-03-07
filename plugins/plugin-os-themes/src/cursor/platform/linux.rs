@@ -4,14 +4,11 @@ use std::process::{Command, Stdio};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use x11::{xcursor, xfixes, xlib};
+use x11::{xcursor, xlib};
 
 const SETTINGS_URL: &str = "http://127.0.0.1:42700/plugins/plugin-os-themes/";
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
 const VELOCITY_WINDOW: Duration = Duration::from_millis(150);
-const VELOCITY_THRESHOLD: f64 = 3000.0;
-const CALM_DURATION: Duration = Duration::from_millis(600);
-const SCALE_FACTOR: u32 = 2;
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
 
@@ -24,6 +21,8 @@ extern "C" fn handle_signal(_: libc::c_int) {
 }
 
 pub fn run() -> Result<()> {
+    let config = crate::config::load();
+    let calm_duration = Duration::from_millis(config.calm_duration_ms);
     unsafe {
         libc::signal(libc::SIGTERM, handle_signal as libc::sighandler_t);
         libc::signal(libc::SIGINT, handle_signal as libc::sighandler_t);
@@ -50,13 +49,13 @@ pub fn run() -> Result<()> {
         }
 
         let v = velocity(&samples);
-        if v > VELOCITY_THRESHOLD {
+        if v > config.velocity_threshold {
             last_shake = Some(now);
             if grown.is_none() {
                 eprintln!("[shake-to-grow] grow velocity={v:.0} px/s");
-                grown = grow_cursor(display, root);
+                grown = grow_cursor(display, root, config.scale_factor);
             }
-        } else if last_shake.map_or(false, |t| now - t > CALM_DURATION) {
+        } else if last_shake.map_or(false, |t| now - t > calm_duration) {
             if let Some(cursor) = grown.take() {
                 eprintln!("[shake-to-grow] restore");
                 restore_cursor(display, root, cursor);
@@ -108,8 +107,8 @@ fn velocity(samples: &VecDeque<(Instant, i32, i32)>) -> f64 {
     }
 }
 
-fn grow_cursor(display: *mut xlib::Display, root: xlib::Window) -> Option<xlib::Cursor> {
-    let cursor = make_grown_cursor(display)?;
+fn grow_cursor(display: *mut xlib::Display, root: xlib::Window, scale: u32) -> Option<xlib::Cursor> {
+    let cursor = make_grown_cursor(display, scale)?;
     apply_to_tree(display, root, cursor);
     unsafe { xlib::XFlush(display) };
     Some(cursor)
@@ -153,42 +152,24 @@ fn window_children(display: *mut xlib::Display, window: xlib::Window) -> Vec<xli
     vec
 }
 
-fn make_grown_cursor(display: *mut xlib::Display) -> Option<xlib::Cursor> {
-    let ci = unsafe { xfixes::XFixesGetCursorImage(display) };
-    if ci.is_null() {
-        eprintln!("[shake-to-grow] warn: XFixesGetCursorImage returned null");
+fn make_grown_cursor(display: *mut xlib::Display, scale: u32) -> Option<xlib::Cursor> {
+    let base_size = unsafe { xcursor::XcursorGetDefaultSize(display) };
+    let target_size = base_size * scale as i32;
+    let theme = unsafe { xcursor::XcursorGetTheme(display) };
+    let images = unsafe {
+        xcursor::XcursorLibraryLoadImages(c"left_ptr".as_ptr(), theme, target_size)
+    };
+    if images.is_null() {
+        eprintln!("[shake-to-grow] warn: XcursorLibraryLoadImages returned null");
         return None;
     }
-    let (sw, sh) = unsafe { ((*ci).width as u32, (*ci).height as u32) };
-    let (dw, dh) = (sw * SCALE_FACTOR, sh * SCALE_FACTOR);
-    let src: Vec<u32> = (0..(sw * sh) as usize)
-        .map(|i| unsafe { *(*ci).pixels.add(i) as u32 })
-        .collect();
-
-    let scaled = unsafe { xcursor::XcursorImageCreate(dw as i32, dh as i32) };
-    if scaled.is_null() {
-        unsafe { xlib::XFree(ci as *mut _) };
+    let cursor = unsafe { xcursor::XcursorImagesLoadCursor(display, images) };
+    unsafe { xcursor::XcursorImagesDestroy(images) };
+    if cursor == 0 {
+        eprintln!("[shake-to-grow] warn: XcursorImagesLoadCursor returned 0");
         return None;
     }
-
-    unsafe {
-        (*scaled).xhot = (*ci).xhot as u32 * SCALE_FACTOR;
-        (*scaled).yhot = (*ci).yhot as u32 * SCALE_FACTOR;
-        let dst = std::slice::from_raw_parts_mut((*scaled).pixels, (dw * dh) as usize);
-        scale_nearest(&src, sw, sh, dst, dw, dh);
-        let cursor = xcursor::XcursorImageLoadCursor(display, scaled);
-        xcursor::XcursorImageDestroy(scaled);
-        xlib::XFree(ci as *mut _);
-        Some(cursor)
-    }
-}
-
-fn scale_nearest(src: &[u32], sw: u32, sh: u32, dst: &mut [u32], dw: u32, dh: u32) {
-    for dy in 0..dh {
-        for dx in 0..dw {
-            dst[(dy * dw + dx) as usize] = src[(dy * sh / dh * sw + dx * sw / dw) as usize];
-        }
-    }
+    Some(cursor)
 }
 
 pub fn open_settings() -> Result<()> {
@@ -226,16 +207,5 @@ mod tests {
         samples.push_back((t0 + Duration::from_millis(100), 0, 0));
         let v = velocity(&samples);
         assert!((v - 3000.0).abs() < 1.0, "expected ~3000 px/s, got {v}");
-    }
-
-    #[test]
-    fn scale_nearest_2x_maps_source_quadrants() {
-        let src = [0xFFFF0000u32, 0xFF00FF00, 0xFF0000FF, 0xFFFFFFFF];
-        let mut dst = [0u32; 16];
-        scale_nearest(&src, 2, 2, &mut dst, 4, 4);
-        assert_eq!(dst[0], 0xFFFF0000, "top-left");
-        assert_eq!(dst[2], 0xFF00FF00, "top-right");
-        assert_eq!(dst[8], 0xFF0000FF, "bottom-left");
-        assert_eq!(dst[10], 0xFFFFFFFF, "bottom-right");
     }
 }
