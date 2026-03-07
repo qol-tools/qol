@@ -38,7 +38,10 @@ export function useApp() {
     }, [devEnabled]);
     const handleSidebarAction = useSidebarActions({ checkForUpdate, beginSelfUpdate, failSelfUpdate, beginDevRecompile, failDevRecompile, defaultWorktreeRef });
     const palette = usePaletteContext();
-    useEffect(() => { palette.setActiveViewId(activeViewId); }, [activeViewId]);
+    useEffect(() => {
+        palette.setActiveViewId(activeViewId);
+        if (palette.active) palette.deactivate();
+    }, [activeViewId]);
     useAppKeyboardRouting({ activePluginId, activeViewId, closePluginConfig, switchView, viewOrder, palette });
     const handleViewClick = useCallback((viewId) => {
         if (activePluginId) closePluginConfig();

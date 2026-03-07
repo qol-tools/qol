@@ -3,7 +3,6 @@ import { useStateRef } from '../../hooks/useStateRef.js';
 import { useAsyncToken } from '../../hooks/useAsyncToken.js';
 import { useRefreshOnFocus } from '../../hooks/useRefreshOnFocus.js';
 import { useSSEDebounce } from '../../hooks/useSSEDebounce.js';
-import { useScrollIntoView } from '../../hooks/useScrollIntoView.js';
 import { useInstalling } from '../../hooks/useInstalling.js';
 import { loadInstalledPlugins, buildGhostPlugins } from './data.js';
 
@@ -43,7 +42,6 @@ function useListEffects(refreshPlugins, selectedIndex, latestRevisionRef, restor
         if (!restoredRef.current) return;
         localStorage.setItem('plugins-selected-index', String(selectedIndex));
     }, [selectedIndex]);
-    useScrollIntoView('.plugin-card.selected', [selectedIndex]);
 }
 
 export function usePluginsList(setFeedback) {
