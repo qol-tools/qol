@@ -87,14 +87,14 @@ async fn validate_file_entry(path: &Path) -> Result<(), Response> {
 
 async fn verify_plugin_root_allowed(
     plugins_dir: &Path,
-    plugin_id: &str,
+    _plugin_id: &str,
     plugin_root: &Path,
 ) -> Result<PathBuf, Response> {
     let canonical_plugins_dir = canonicalize_or_not_found(plugins_dir).await?;
     let canonical_plugin_root = canonicalize_or_not_found(plugin_root).await?;
     let under_installed_root = canonical_plugin_root.starts_with(&canonical_plugins_dir);
     #[cfg(feature = "dev")]
-    let under_dev_link_root = is_dev_link_target(plugin_id, &canonical_plugin_root);
+    let under_dev_link_root = is_dev_link_target(_plugin_id, &canonical_plugin_root);
     #[cfg(not(feature = "dev"))]
     let under_dev_link_root = false;
     if !under_installed_root && !under_dev_link_root {
