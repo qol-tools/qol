@@ -1,10 +1,3 @@
-import { escapeHtml } from '../../utils/escape-html.js';
-
-function shortFingerprint(value) {
-    if (!value) return '';
-    return value.slice(0, 8);
-}
-
 function getLogControl(logControls, pluginId) {
     const control = logControls?.[pluginId];
     if (!control || typeof control !== 'object') {
@@ -81,47 +74,3 @@ export function mergePlugins(discovered, linkedPlugins, logControls = {}) {
     return Array.from(unified.values()).sort((left, right) => left.name.localeCompare(right.name));
 }
 
-export function renderPluginBuildMeta(plugin) {
-    if (plugin.status !== 'linked') {
-        return '<span class="plugin-build-meta plugin-build-meta-placeholder" aria-hidden="true">_</span>';
-    }
-
-    if (!plugin.supports_platform) {
-        const reason = escapeHtml(plugin.rebuild_reason || 'Unsupported platform');
-        return `<span class="plugin-build-meta muted">${reason}</span>`;
-    }
-
-    if (!plugin.has_cargo) {
-        return '<span class="plugin-build-meta muted">Not buildable: Cargo.toml missing</span>';
-    }
-
-    const current = shortFingerprint(plugin.fingerprint);
-    const last = shortFingerprint(plugin.last_built_fingerprint);
-    const reason = plugin.rebuild_reason || (plugin.needs_rebuild ? 'Source changed' : 'Up to date');
-    const parts = [];
-    if (plugin.needs_rebuild && reason) parts.push(escapeHtml(reason));
-    if (current) parts.push(`fp ${escapeHtml(current)}`);
-    if (last) parts.push(`last ${escapeHtml(last)}`);
-    return `<span class="plugin-build-meta">${parts.join(' • ')}</span>`;
-}
-
-export function renderBuildResults(buildResults) {
-    if (!buildResults) return '';
-
-    const failed = buildResults.filter(result => !result.success);
-    const skipped = buildResults.filter(result => result.skipped);
-    if (buildResults.length === 0 || skipped.length === buildResults.length) {
-        return '<span class="build-success">All linked plugins are up to date</span>';
-    }
-
-    const allSuccess = failed.length === 0;
-    if (allSuccess) {
-        const skippedText = skipped.length ? ` (${skipped.length} skipped)` : '';
-        return `<span class="build-success">Build succeeded${skippedText}</span>`;
-    }
-
-    const failedIds = failed
-        .map(result => escapeHtml(result.plugin_id))
-        .join(', ');
-    return `<span class="build-error">Build failed: ${failedIds}</span>`;
-}
