@@ -83,10 +83,9 @@ fn get_active_window_id(conn: &RustConnection, root: u32, active_window_atom: u3
         .ok()?;
     let window_id = prop.value32()?.next()?;
     if window_id == 0 {
-        None
-    } else {
-        Some(window_id)
+        return None;
     }
+    Some(window_id)
 }
 
 fn is_own_window(

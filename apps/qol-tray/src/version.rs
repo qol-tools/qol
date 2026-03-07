@@ -38,13 +38,10 @@ impl Version {
 
 pub fn normalize_semver_tag(tag: &str) -> Option<String> {
     let trimmed = tag.trim();
-    let without_prefix = if let Some(stripped) = trimmed.strip_prefix('v') {
-        stripped
-    } else if let Some(stripped) = trimmed.strip_prefix('V') {
-        stripped
-    } else {
-        trimmed
-    };
+    let without_prefix = trimmed
+        .strip_prefix('v')
+        .or_else(|| trimmed.strip_prefix('V'))
+        .unwrap_or(trimmed);
 
     if without_prefix.is_empty() {
         return None;

@@ -86,11 +86,7 @@ impl CargoProgressEstimator {
 
     fn advance_ratio(&mut self, done: u32, total: u32, raw_ratio: f64, time_ratio: f64) -> u8 {
         let mut ratio = (raw_ratio * 0.35) + (time_ratio * 0.65);
-        if done < total {
-            ratio = ratio.min(0.985);
-        } else {
-            ratio = 0.99;
-        }
+        ratio = if done < total { ratio.min(0.985) } else { 0.99 };
         ratio = ratio.max(self.ratio);
         self.ratio = ratio;
         let mut percent = (ratio * 99.0).round() as u8;

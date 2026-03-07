@@ -47,27 +47,18 @@ fn valid_install_id(value: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+fn validated_install_id(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    valid_install_id(trimmed).then(|| trimmed.to_string())
+}
+
 fn install_id_from_env() -> Option<String> {
-    let value = env::var(INSTALL_ID_ENV).ok()?;
-    let trimmed = value.trim();
-    if valid_install_id(trimmed) {
-        Some(trimmed.to_string())
-    } else {
-        None
-    }
+    validated_install_id(&env::var(INSTALL_ID_ENV).ok()?)
 }
 
 fn install_id_from_marker_file() -> Option<String> {
-    let exe = env::current_exe().ok()?;
-    let parent = exe.parent()?;
-    let marker_path = parent.join(INSTALL_ID_FILE);
-    let content = fs::read_to_string(marker_path).ok()?;
-    let trimmed = content.trim();
-    if valid_install_id(trimmed) {
-        Some(trimmed.to_string())
-    } else {
-        None
-    }
+    let marker_path = env::current_exe().ok()?.parent()?.join(INSTALL_ID_FILE);
+    validated_install_id(&fs::read_to_string(marker_path).ok()?)
 }
 
 fn active_install_id_path() -> Result<PathBuf> {
@@ -75,14 +66,7 @@ fn active_install_id_path() -> Result<PathBuf> {
 }
 
 fn install_id_from_active_file() -> Option<String> {
-    let path = active_install_id_path().ok()?;
-    let content = fs::read_to_string(path).ok()?;
-    let trimmed = content.trim();
-    if valid_install_id(trimmed) {
-        Some(trimmed.to_string())
-    } else {
-        None
-    }
+    validated_install_id(&fs::read_to_string(active_install_id_path().ok()?).ok()?)
 }
 
 pub fn config_dir_for_install_id(install_id: &str) -> Result<PathBuf> {
