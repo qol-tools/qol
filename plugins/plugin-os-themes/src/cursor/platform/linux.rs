@@ -85,7 +85,8 @@ pub fn run() -> Result<()> {
         }
 
         let v = velocity(&samples);
-        let target = if v > config.velocity_threshold {
+        let is_shake = v > config.velocity_threshold && shakiness(&samples) > config.shakiness_threshold;
+        let target = if is_shake {
             last_shake = Some(now);
             scale_factor
         } else if current_scale > 1.0 + f32::EPSILON {
@@ -178,6 +179,23 @@ fn velocity(samples: &VecDeque<(Instant, i32, i32)>) -> f64 {
     } else {
         dist / elapsed
     }
+}
+
+fn shakiness(samples: &VecDeque<(Instant, i32, i32)>) -> f64 {
+    if samples.len() < 2 {
+        return 0.0;
+    }
+    let total: f64 = samples
+        .iter()
+        .map(|(_, dx, dy)| ((*dx as f64).powi(2) + (*dy as f64).powi(2)).sqrt())
+        .sum();
+    if total < 1.0 {
+        return 0.0;
+    }
+    let net_x: f64 = samples.iter().map(|(_, dx, _)| *dx as f64).sum();
+    let net_y: f64 = samples.iter().map(|(_, _, dy)| *dy as f64).sum();
+    let net = (net_x.powi(2) + net_y.powi(2)).sqrt();
+    total / (net + 1.0)
 }
 
 fn load_base_pixels(display: *mut xlib::Display) -> Option<BaseCursor> {
@@ -307,6 +325,27 @@ mod tests {
         samples.push_back((t0 + Duration::from_millis(100), 0, 0));
         let v = velocity(&samples);
         assert!((v - 3000.0).abs() < 1.0, "expected ~3000 px/s, got {v}");
+    }
+
+    #[test]
+    fn shakiness_glide_is_low() {
+        let mut samples = VecDeque::new();
+        let t0 = Instant::now();
+        for i in 0..9 {
+            samples.push_back((t0 + Duration::from_millis(i * 16), 100, 0));
+        }
+        assert!(shakiness(&samples) < 1.5, "straight glide should have low shakiness");
+    }
+
+    #[test]
+    fn shakiness_back_and_forth_is_high() {
+        let mut samples = VecDeque::new();
+        let t0 = Instant::now();
+        for i in 0..9 {
+            let dx = if i % 2 == 0 { 100 } else { -100 };
+            samples.push_back((t0 + Duration::from_millis(i * 16), dx, 0));
+        }
+        assert!(shakiness(&samples) > 3.0, "back-and-forth should have high shakiness");
     }
 
     #[test]
