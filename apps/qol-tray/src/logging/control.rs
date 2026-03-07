@@ -217,6 +217,7 @@ mod tests {
         assert_eq!(loaded_after_clear, LogControl::default());
     }
 
+    #[cfg(feature = "dev")]
     #[test]
     fn upsert_core_control_roundtrip_and_clear() {
         let tmp = TempDir::new().unwrap();

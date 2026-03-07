@@ -1,8 +1,8 @@
-use crate::plugins::{manifest::walk_menu_items, MenuItem, PluginManager};
+use crate::plugins::{manifest::walk_menu_items, MenuItem, PluginId, PluginManager};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-pub(super) type AvailableActions = HashMap<String, HashSet<String>>;
+pub(super) type AvailableActions = HashMap<PluginId, HashSet<String>>;
 
 pub(super) fn load_available_actions(
     plugin_manager: &Arc<Mutex<PluginManager>>,

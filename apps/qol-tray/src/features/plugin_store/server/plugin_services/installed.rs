@@ -1,3 +1,4 @@
+use crate::plugins::PluginId;
 use axum::http::StatusCode;
 use std::collections::HashMap;
 use std::path::Path;
@@ -48,7 +49,7 @@ fn cached_versions() -> HashMap<String, String> {
 fn loaded_plugins_by_id(
     manager: &crate::plugins::PluginManager,
     cached_versions: &HashMap<String, String>,
-) -> HashMap<String, InstalledPlugin> {
+) -> HashMap<PluginId, InstalledPlugin> {
     manager
         .plugins()
         .map(|plugin| {
@@ -64,8 +65,11 @@ fn loaded_plugin_info(
     plugin: &crate::plugins::Plugin,
     cached_versions: &HashMap<String, String>,
 ) -> InstalledPlugin {
-    let (available_version, update_available) =
-        check_update(cached_versions, &plugin.id, &plugin.manifest.plugin.version);
+    let (available_version, update_available) = check_update(
+        cached_versions,
+        plugin.id.as_str(),
+        &plugin.manifest.plugin.version,
+    );
     InstalledPlugin {
         id: plugin.id.clone(),
         name: plugin.manifest.plugin.name.clone(),
@@ -84,32 +88,36 @@ fn loaded_plugin_info(
 fn add_unloaded_plugins(
     plugins_dir: &Path,
     cached_versions: &HashMap<String, String>,
-    plugins_by_id: &mut HashMap<String, InstalledPlugin>,
+    plugins_by_id: &mut HashMap<PluginId, InstalledPlugin>,
 ) {
-    for (id, plugin_dir) in read_installed_plugin_dirs(plugins_dir) {
-        if plugins_by_id.contains_key(&id) {
+    for (raw_id, plugin_dir) in read_installed_plugin_dirs(plugins_dir) {
+        if plugins_by_id.contains_key(raw_id.as_str()) {
             continue;
         }
+        let id = PluginId::new(raw_id);
         plugins_by_id.insert(id.clone(), unloaded_plugin(id, plugin_dir, cached_versions));
     }
 }
 
 fn unloaded_plugin(
-    id: String,
+    id: PluginId,
     plugin_dir: std::path::PathBuf,
     cached_versions: &HashMap<String, String>,
 ) -> InstalledPlugin {
     let manifest = read_manifest_without_validation(&plugin_dir);
-    let (name, description, version, actions) = unloaded_plugin_details(&id, manifest.as_ref());
-    let (available_version, update_available) = check_update(cached_versions, &id, &version);
+    let (name, description, version, actions) =
+        unloaded_plugin_details(id.as_str(), manifest.as_ref());
+    let (available_version, update_available) =
+        check_update(cached_versions, id.as_str(), &version);
 
+    let load_error = infer_load_error(id.as_str(), &plugin_dir, manifest.as_ref());
     InstalledPlugin {
-        id: id.clone(),
+        id,
         name,
         description,
         version,
         loaded: false,
-        load_error: infer_load_error(&id, &plugin_dir, manifest.as_ref()),
+        load_error,
         has_cover: plugin_dir.join("cover.png").exists(),
         has_ui: plugin_dir.join("ui").join("index.html").exists(),
         available_version,

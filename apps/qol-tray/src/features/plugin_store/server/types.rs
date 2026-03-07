@@ -7,7 +7,7 @@ use super::restart::RestartPort;
 use crate::daemon::Daemon;
 #[cfg(feature = "dev")]
 use crate::dev::state::DiscoveredPluginInfo;
-use crate::plugins::{ActionType, PluginLoader, PluginManager};
+use crate::plugins::{ActionType, PluginId, PluginLoader, PluginManager};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "dev")]
 use std::collections::HashMap;
@@ -114,7 +114,7 @@ pub(super) struct PluginAction {
 
 #[derive(Serialize)]
 pub(super) struct InstalledPlugin {
-    pub(super) id: String,
+    pub(super) id: PluginId,
     pub(super) name: String,
     pub(super) description: String,
     pub(super) version: String,

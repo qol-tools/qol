@@ -8,7 +8,7 @@ use crate::plugins::manifest::{
     ActionType, DaemonConfig, MenuConfig, MenuItem, PluginInfo, PluginManifest, RuntimeConfig,
     CURRENT_MANIFEST_VERSION,
 };
-use crate::plugins::Plugin;
+use crate::plugins::{Plugin, PluginId};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -55,7 +55,7 @@ fn make_plugin(
     };
 
     Plugin::new(
-        "plugin-test".to_string(),
+        PluginId::new("plugin-test"),
         manifest,
         dir.path().to_path_buf(),
     )

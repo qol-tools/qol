@@ -72,7 +72,7 @@ fn daemon_dispatch_error(
 
 fn execute_via_runtime(resolved: &ResolvedAction) -> Result<(), ActionExecutionError> {
     let command_path = runtime_command_path(resolved)?;
-    if !reserve_runtime_spawn(&resolved.plugin_id, &resolved.action_id) {
+    if !reserve_runtime_spawn(resolved.plugin_id.as_str(), &resolved.action_id) {
         return Ok(());
     }
 
@@ -83,7 +83,7 @@ fn execute_via_runtime(resolved: &ResolvedAction) -> Result<(), ActionExecutionE
     );
     let child = spawn_runtime_command(resolved, command_path)?;
     let pid = child.id();
-    track_action_process(&resolved.plugin_id, &resolved.action_id, pid);
+    track_action_process(resolved.plugin_id.as_str(), &resolved.action_id, pid);
     spawn_wait_untracker(resolved, child, pid);
     log::info!("Runtime action started (pid: {})", pid);
     Ok(())
@@ -106,7 +106,7 @@ fn spawn_runtime_command(
     runtime_command(resolved, command_path)
         .spawn()
         .map_err(|error| {
-            clear_runtime_spawn_reservation(&resolved.plugin_id, &resolved.action_id);
+            clear_runtime_spawn_reservation(resolved.plugin_id.as_str(), &resolved.action_id);
             ActionExecutionError::SpawnFailed(error.to_string())
         })
 }
@@ -125,7 +125,7 @@ fn runtime_command(resolved: &ResolvedAction, command_path: &Path) -> std::proce
 }
 
 fn spawn_wait_untracker(resolved: &ResolvedAction, mut child: std::process::Child, pid: u32) {
-    let plugin_id = resolved.plugin_id.clone();
+    let plugin_id = resolved.plugin_id.to_string();
     let action_id = resolved.action_id.clone();
     std::thread::spawn(move || {
         let _ = child.wait();

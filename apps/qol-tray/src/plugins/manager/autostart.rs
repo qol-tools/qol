@@ -1,5 +1,5 @@
 use crate::plugins::resolver::PluginSource;
-use crate::plugins::Plugin;
+use crate::plugins::{Plugin, PluginId};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
@@ -8,7 +8,7 @@ const DEV_DAEMON_AUTOSTART_MARKER: &str = ".qol-tray-dev-autostart";
 
 pub(super) fn start_plugin_daemons(
     plugins: &mut [Plugin],
-    resolved_sources: &HashMap<String, PluginSource>,
+    resolved_sources: &HashMap<PluginId, PluginSource>,
 ) -> Vec<u32> {
     let pids = Mutex::new(Vec::new());
     std::thread::scope(|scope| {
@@ -22,10 +22,13 @@ pub(super) fn start_plugin_daemons(
     pids.into_inner().unwrap()
 }
 
-fn should_start_daemon(plugin: &Plugin, resolved_sources: &HashMap<String, PluginSource>) -> bool {
+fn should_start_daemon(
+    plugin: &Plugin,
+    resolved_sources: &HashMap<PluginId, PluginSource>,
+) -> bool {
     let daemon_enabled = daemon_enabled(plugin);
     let source = resolved_sources.get(&plugin.id);
-    should_autostart_daemon_for_source(&plugin.id, &plugin.path, daemon_enabled, source)
+    should_autostart_daemon_for_source(plugin.id.as_str(), &plugin.path, daemon_enabled, source)
 }
 
 fn daemon_enabled(plugin: &Plugin) -> bool {

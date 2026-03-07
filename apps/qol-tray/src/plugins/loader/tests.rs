@@ -98,7 +98,7 @@ fn load_from_dir_loads_valid_plugin() {
     let result = PluginLoader::load_from_dir(temp_dir.path()).unwrap();
 
     assert_eq!(result.len(), 1);
-    assert_eq!(result[0].id, "test-plugin");
+    assert_eq!(result[0].id.as_str(), "test-plugin");
     assert_eq!(result[0].manifest.plugin.name, "Test Plugin");
 }
 
@@ -125,7 +125,7 @@ fn load_plugin_extracts_id_from_directory_name() {
 
     let plugin = PluginLoader::load_plugin(&plugin_dir).unwrap();
 
-    assert_eq!(plugin.id, "my-custom-plugin");
+    assert_eq!(plugin.id.as_str(), "my-custom-plugin");
 }
 
 #[test]
@@ -173,7 +173,7 @@ fn load_from_dir_handles_mixed_valid_and_invalid() {
     let result = PluginLoader::load_from_dir(temp_dir.path()).unwrap();
 
     assert_eq!(result.len(), 1);
-    assert_eq!(result[0].id, "valid-plugin");
+    assert_eq!(result[0].id.as_str(), "valid-plugin");
 }
 
 #[test]
@@ -187,7 +187,7 @@ fn load_plugin_handles_special_characters_in_id() {
         fs::write(plugin_dir.join("plugin.toml"), VALID_MANIFEST).unwrap();
 
         let plugin = PluginLoader::load_plugin(&plugin_dir).unwrap();
-        assert_eq!(plugin.id, name, "plugin name: {}", name);
+        assert_eq!(plugin.id.as_str(), name, "plugin name: {}", name);
     }
 }
 
@@ -209,7 +209,13 @@ fn load_plugin_accepts_runtime_binary_when_present() {
     let plugin = PluginLoader::load_plugin(temp_dir.path()).unwrap();
     assert_eq!(
         plugin.id,
-        temp_dir.path().file_name().unwrap().to_str().unwrap()
+        temp_dir
+            .path()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .into()
     );
 }
 
@@ -234,7 +240,13 @@ fn load_plugin_allows_missing_daemon_binary_when_disabled() {
     let plugin = PluginLoader::load_plugin(temp_dir.path()).unwrap();
     assert_eq!(
         plugin.id,
-        temp_dir.path().file_name().unwrap().to_str().unwrap()
+        temp_dir
+            .path()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .into()
     );
 }
 

@@ -3,12 +3,12 @@ mod dev_registry;
 mod loading;
 mod runtime;
 
-use super::Plugin;
+use super::{Plugin, PluginId};
 use anyhow::Result;
 use std::collections::HashMap;
 
 pub struct PluginManager {
-    plugins: HashMap<String, Plugin>,
+    plugins: HashMap<PluginId, Plugin>,
 }
 
 impl PluginManager {
