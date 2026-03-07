@@ -37,6 +37,7 @@ pub enum RuntimeRequest {
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeEventKind {
     ActiveMonitorChanged,
+    CursorMoved,
     FocusChanged,
     MonitorsChanged,
 }
@@ -47,6 +48,10 @@ pub enum RuntimeEvent {
     ActiveMonitorChanged {
         monitor_idx: Option<usize>,
         monitor: Option<MonitorBounds>,
+    },
+    CursorMoved {
+        x: f32,
+        y: f32,
     },
     FocusChanged {
         monitor_idx: Option<usize>,
