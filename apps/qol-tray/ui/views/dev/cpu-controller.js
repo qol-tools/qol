@@ -37,10 +37,23 @@ async function hydrateCpu(state, update, onNeedsRender, skipUpdate) {
     if (!skipUpdate && !state.linkingId) onNeedsRender(true);
 }
 
-function pruneSamples(state, mergedList, onMissingMenuPlugin) {
-    for (const id of Object.keys(state.cpuByPlugin)) {
-        if (!state.cpuMonitoring[id]) delete state.cpuByPlugin[id];
+function pruneSamples(state, mergedList, persist, queueSync, onMissingMenuPlugin) {
+    const linkedIds = new Set(mergedList.filter(p => p.status === 'linked').map(p => p.id));
+    let monitoringChanged = false;
+
+    for (const id of Object.keys(state.cpuMonitoring)) {
+        if (linkedIds.has(id)) continue;
+        delete state.cpuMonitoring[id];
+        monitoringChanged = true;
     }
+    for (const id of Object.keys(state.cpuByPlugin)) {
+        if (!linkedIds.has(id) || !state.cpuMonitoring[id]) delete state.cpuByPlugin[id];
+    }
+    if (monitoringChanged) {
+        persist();
+        void queueSync();
+    }
+
     if (!state.openPluginMenuId) return;
     if (mergedList.some(p => p.id === state.openPluginMenuId)) return;
     onMissingMenuPlugin();
@@ -77,7 +90,7 @@ export function createCpuController({ state, getVisiblePluginIds, onNeedsRender,
         destroy: hydration.clear,
         handleEvent: e => routeCpuEvent(e, update, state, onNeedsRender),
         hydrate,
-        prune: list => pruneSamples(state, list, onMissingMenuPlugin),
+        prune: list => pruneSamples(state, list, persist, doSync, onMissingMenuPlugin),
         queueSync: doSync,
         toggle: id => toggleCpu(id, state, persist, hydration, doSync, hydrate, onNeedsRender)
     };
