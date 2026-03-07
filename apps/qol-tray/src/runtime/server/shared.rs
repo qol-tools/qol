@@ -97,7 +97,7 @@ impl SharedState {
         update(&mut input)
     }
 
-    fn cursor_pos(&self) -> Option<(f32, f32)> {
+    pub(super) fn cursor_pos(&self) -> Option<(f32, f32)> {
         *lock_or_recover(&self.cursor_pos)
     }
 }
