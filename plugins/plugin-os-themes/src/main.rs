@@ -31,17 +31,29 @@ fn run_daemon() -> ExitCode {
         return ExitCode::from(1);
     }
     std::thread::spawn(move || {
-        if matches!(rx.recv(), Ok(daemon::Command::Kill)) {
-            cursor::request_shutdown();
+        loop {
+            match rx.recv() {
+                Ok(daemon::Command::Kill) => {
+                    cursor::request_shutdown();
+                    break;
+                }
+                Ok(daemon::Command::Reload) => cursor::request_reload(),
+                Err(_) => break,
+            }
         }
     });
-    let result = cursor::run();
-    daemon::cleanup();
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("{e:#}");
-            ExitCode::from(1)
+    loop {
+        cursor::reset_running();
+        let result = cursor::run();
+        if !cursor::was_reload_requested() {
+            daemon::cleanup();
+            return match result {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("{e:#}");
+                    ExitCode::from(1)
+                }
+            };
         }
     }
 }

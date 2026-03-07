@@ -11,9 +11,24 @@ const POLL_INTERVAL: Duration = Duration::from_millis(16);
 const VELOCITY_WINDOW: Duration = Duration::from_millis(150);
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
+static RELOAD_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+pub fn reset_running() {
+    RELOAD_REQUESTED.store(false, Ordering::SeqCst);
+    RUNNING.store(true, Ordering::SeqCst);
+}
 
 pub fn request_shutdown() {
     RUNNING.store(false, Ordering::Relaxed);
+}
+
+pub fn request_reload() {
+    RELOAD_REQUESTED.store(true, Ordering::SeqCst);
+    RUNNING.store(false, Ordering::SeqCst);
+}
+
+pub fn was_reload_requested() -> bool {
+    RELOAD_REQUESTED.load(Ordering::SeqCst)
 }
 
 extern "C" fn handle_signal(_: libc::c_int) {
