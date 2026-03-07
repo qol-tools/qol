@@ -82,7 +82,7 @@ pub fn run() -> Result<()> {
     }
 
     if let Some(cursor) = grown.take() {
-        restore_cursor(display, root, cursor);
+        restore_cursor(display, root, cursor, config.scale_factor, config.restore_steps);
     }
     unsafe { xlib::XCloseDisplay(display) };
     Ok(())
