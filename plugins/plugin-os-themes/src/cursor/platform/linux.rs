@@ -15,6 +15,10 @@ const SCALE_FACTOR: u32 = 2;
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
 
+pub fn request_shutdown() {
+    RUNNING.store(false, Ordering::Relaxed);
+}
+
 extern "C" fn handle_signal(_: libc::c_int) {
     RUNNING.store(false, Ordering::Relaxed);
 }
