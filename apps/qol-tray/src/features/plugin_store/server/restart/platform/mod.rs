@@ -13,12 +13,12 @@ pub(super) fn binary_name() -> &'static str {
 }
 
 #[cfg(unix)]
-pub(super) fn spawn_delayed(binary: &std::path::Path) -> Result<(), String> {
-    unix::spawn_delayed(binary)
+pub(super) fn exec_restart(binary: &std::path::Path) -> Result<(), String> {
+    unix::exec_restart(binary)
 }
 #[cfg(windows)]
-pub(super) fn spawn_delayed(binary: &std::path::Path) -> Result<(), String> {
-    windows::spawn_delayed(binary)
+pub(super) fn exec_restart(binary: &std::path::Path) -> Result<(), String> {
+    windows::exec_restart(binary)
 }
 
 #[cfg(not(any(unix, windows)))]

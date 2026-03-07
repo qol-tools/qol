@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 pub(super) trait RestartPort: Send + Sync {
     fn resolve_restart_binary(&self) -> Option<PathBuf>;
-    fn spawn_delayed_restart(&self, binary: &Path) -> Result<(), String>;
+    fn exec_restart(&self, binary: &Path) -> Result<(), String>;
 }
 
 pub(super) struct PlatformRestartPort;
@@ -30,8 +30,8 @@ impl RestartPort for PlatformRestartPort {
         candidates.into_iter().find(|candidate| candidate.is_file())
     }
 
-    fn spawn_delayed_restart(&self, binary: &Path) -> Result<(), String> {
-        platform::spawn_delayed(binary)
+    fn exec_restart(&self, binary: &Path) -> Result<(), String> {
+        platform::exec_restart(binary)
     }
 }
 
