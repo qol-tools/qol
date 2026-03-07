@@ -48,8 +48,28 @@ fn existing_common_dev_dirs(home: PathBuf) -> Vec<PathBuf> {
 }
 
 fn workspace_parent() -> Option<PathBuf> {
-    let cwd = std::env::current_dir().ok()?;
-    Some(cwd.parent()?.to_path_buf())
+    git_main_repo_parent().or_else(|| {
+        let cwd = std::env::current_dir().ok()?;
+        cwd.parent().map(|p| p.to_path_buf())
+    })
+}
+
+fn git_main_repo_parent() -> Option<PathBuf> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--git-common-dir"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let git_dir = PathBuf::from(&raw);
+    let git_dir = if git_dir.is_absolute() {
+        git_dir
+    } else {
+        std::env::current_dir().ok()?.join(git_dir)
+    };
+    git_dir.parent()?.parent().map(|p| p.to_path_buf())
 }
 
 fn unique_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {

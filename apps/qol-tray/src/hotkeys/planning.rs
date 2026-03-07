@@ -44,7 +44,7 @@ fn plan_binding(
 
 fn binding_available(available_actions: &AvailableActions, binding: &HotkeyBinding) -> bool {
     available_actions
-        .get(&binding.plugin_id)
+        .get(binding.plugin_id.as_str())
         .is_some_and(|actions| actions.contains(&binding.action))
 }
 

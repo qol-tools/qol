@@ -1,9 +1,9 @@
 use super::ActionExecutionError;
-use crate::plugins::Plugin;
+use crate::plugins::{Plugin, PluginId};
 use std::path::{Component, Path, PathBuf};
 
 pub(super) struct ResolvedAction {
-    pub(super) plugin_id: String,
+    pub(super) plugin_id: PluginId,
     pub(super) action_id: String,
     pub(super) plugin_dir: PathBuf,
     pub(super) daemon_socket: Option<PathBuf>,

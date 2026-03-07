@@ -1,24 +1,24 @@
 use crate::plugins::resolver::ResolvedPlugin;
-use crate::plugins::{Plugin, PluginManifest, PluginSource};
+use crate::plugins::{Plugin, PluginId, PluginManifest, PluginSource};
 use anyhow::{Context, Result};
 use std::path::Path;
 
 pub(super) fn load_plugin_with_id(id: &str, path: &Path) -> Result<Plugin> {
-    load_plugin_with_source(id, path, PluginSource::Installed)
+    load_plugin_with_source(PluginId::new(id), path, PluginSource::Installed)
 }
 
 pub(super) fn load_resolved_plugin(resolved: &ResolvedPlugin) -> Result<Plugin> {
-    load_plugin_with_source(&resolved.id, &resolved.path, resolved.source.clone())
+    load_plugin_with_source(resolved.id.clone(), &resolved.path, resolved.source.clone())
 }
 
-fn load_plugin_with_source(id: &str, path: &Path, source: PluginSource) -> Result<Plugin> {
+fn load_plugin_with_source(id: PluginId, path: &Path, source: PluginSource) -> Result<Plugin> {
     let manifest_path = manifest_path(path);
     ensure_manifest_exists(path, &manifest_path)?;
     let manifest_content = read_manifest(&manifest_path)?;
     let manifest = parse_manifest(&manifest_content)?;
-    validate_manifest_contract(id, &manifest, path, &source)?;
+    validate_manifest_contract(id.as_str(), &manifest, path, &source)?;
     Ok(Plugin::new_with_source(
-        id.to_string(),
+        id,
         manifest,
         path.to_path_buf(),
         source,

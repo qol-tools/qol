@@ -1,6 +1,6 @@
 use super::{autostart, dev_registry, runtime, PluginManager};
 use crate::plugins::resolver::{PluginSource, ResolvedPlugin};
-use crate::plugins::{Plugin, PluginLoader};
+use crate::plugins::{Plugin, PluginId, PluginLoader};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::Path;
@@ -14,7 +14,7 @@ pub(super) fn load_plugins(manager: &mut PluginManager) -> Result<()> {
 
 struct ResolutionContext {
     resolved: Vec<ResolvedPlugin>,
-    resolved_sources: HashMap<String, PluginSource>,
+    resolved_sources: HashMap<PluginId, PluginSource>,
 }
 
 struct LoadedPlugins {
@@ -58,7 +58,7 @@ fn log_resolved_plugins(resolved: &[ResolvedPlugin]) {
     }
 }
 
-fn resolved_sources(resolved: &[ResolvedPlugin]) -> HashMap<String, PluginSource> {
+fn resolved_sources(resolved: &[ResolvedPlugin]) -> HashMap<PluginId, PluginSource> {
     resolved
         .iter()
         .map(|plugin| (plugin.id.clone(), plugin.source.clone()))

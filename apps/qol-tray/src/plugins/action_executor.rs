@@ -1,4 +1,5 @@
 use super::manager::PluginManager;
+use crate::plugins::PluginId;
 use std::fmt::{Display, Formatter};
 use std::sync::{Arc, Mutex};
 
@@ -19,22 +20,22 @@ pub fn action_processes_snapshot() -> std::collections::HashMap<String, Vec<u32>
 #[derive(Debug)]
 pub enum ActionExecutionError {
     PluginManagerPoisoned,
-    PluginNotFound(String),
+    PluginNotFound(PluginId),
     InvalidActionId(String),
     RuntimeCommandEscapesPluginDir {
-        plugin_id: String,
+        plugin_id: PluginId,
         command: String,
     },
     RuntimeCommandNotFound {
-        plugin_id: String,
+        plugin_id: PluginId,
         command: String,
     },
     MissingActionMapping {
-        plugin_id: String,
+        plugin_id: PluginId,
         action_id: String,
     },
     NoExecutionTarget {
-        plugin_id: String,
+        plugin_id: PluginId,
         action_id: String,
     },
     SpawnFailed(String),
@@ -116,6 +117,6 @@ fn resolve_plugin_action(
         .map_err(|_| ActionExecutionError::PluginManagerPoisoned)?;
     let plugin = plugins
         .get(plugin_id)
-        .ok_or_else(|| ActionExecutionError::PluginNotFound(plugin_id.to_string()))?;
+        .ok_or_else(|| ActionExecutionError::PluginNotFound(PluginId::new(plugin_id)))?;
     resolution::resolve_action(plugin, action_id)
 }

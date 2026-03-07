@@ -38,7 +38,7 @@ fn collect_daemon_pids(plugin_manager: &Arc<Mutex<PluginManager>>) -> HashMap<St
     match plugin_manager.lock() {
         Ok(manager) => manager
             .plugins()
-            .filter_map(|plugin| plugin.daemon_pid().map(|pid| (plugin.id.clone(), pid)))
+            .filter_map(|plugin| plugin.daemon_pid().map(|pid| (plugin.id.to_string(), pid)))
             .collect(),
         Err(error) => {
             log::error!(
