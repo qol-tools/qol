@@ -1,5 +1,3 @@
-#![cfg(feature = "dev")]
-
 mod core_events;
 mod mock;
 mod snapshot;

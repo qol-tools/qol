@@ -1,5 +1,3 @@
-#![cfg(feature = "dev")]
-
 use std::collections::HashSet;
 
 use super::helpers::validate_plugin_id;

@@ -73,10 +73,10 @@ check: lint
 	cargo check
 
 lint: fmt-check
-	cargo clippy --all-targets -- -D warnings
+	cargo clippy --all-targets --all-features -- -D warnings
 
 lint-fix: fmt
-	cargo clippy --fix --all-targets --allow-dirty --allow-staged -- -D warnings
+	cargo clippy --fix --all-targets --all-features --allow-dirty --allow-staged -- -D warnings
 
 fmt:
 	cargo fmt --all

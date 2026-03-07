@@ -12,7 +12,7 @@ pub struct ParsedConsoleSegment {
 }
 
 pub fn drain_console_segments(pending: &mut String, mut on_segment: impl FnMut(&str)) {
-    while let Some(idx) = pending.find(|c| c == '\n' || c == '\r') {
+    while let Some(idx) = pending.find(['\n', '\r']) {
         let segment = pending[..idx].to_string();
         pending.drain(..=idx);
         on_segment(&segment);

@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BuildStatus {
+    #[default]
     Queued,
     Building,
     Skipped,
@@ -18,12 +19,6 @@ impl BuildStatus {
             Self::Success => "success",
             Self::Failed => "failed",
         }
-    }
-}
-
-impl Default for BuildStatus {
-    fn default() -> Self {
-        Self::Queued
     }
 }
 

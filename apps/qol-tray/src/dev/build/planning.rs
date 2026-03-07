@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use super::types::PluginBuildPlan;
 
-pub fn plan_linked_plugin_builds(
+pub(crate) fn plan_linked_plugin_builds(
     dev_links: &HashMap<String, PathBuf>,
     known_fingerprints: &HashMap<String, String>,
 ) -> Vec<PluginBuildPlan> {

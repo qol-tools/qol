@@ -51,7 +51,7 @@ fn resolve_update_url() -> Result<(String, PathBuf)> {
     if let Ok(url) = std::env::var("QOL_TRAY_DEV_UPDATE_URL") {
         let filename = url
             .split('/')
-            .last()
+            .next_back()
             .unwrap_or("dev-update.deb")
             .to_string();
         return Ok((url, std::env::temp_dir().join(filename)));

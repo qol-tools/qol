@@ -1,5 +1,3 @@
-#![cfg(feature = "dev")]
-
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Router};
 
 use super::dev_services;

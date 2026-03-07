@@ -25,7 +25,7 @@ fn walker(path: &Path) -> impl Iterator<Item = Result<walkdir::DirEntry, walkdir
     WalkDir::new(path)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|entry| keep_entry(entry))
+        .filter_entry(keep_entry)
 }
 
 fn keep_entry(entry: &walkdir::DirEntry) -> bool {

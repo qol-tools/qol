@@ -1,5 +1,3 @@
-#![cfg(feature = "dev")]
-
 mod mock;
 mod recompile;
 mod reload;
