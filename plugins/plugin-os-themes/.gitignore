@@ -2,5 +2,5 @@ config.json
 *.log
 .DS_Store
 target/
-plugin-template
-plugin-template.new
+plugin-os-themes
+plugin-os-themes.new
