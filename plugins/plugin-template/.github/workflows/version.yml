@@ -1,0 +1,19 @@
+name: Version
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+
+jobs:
+  version:
+    permissions:
+      contents: write
+    uses: qol-tools/qol-cicd/.github/workflows/plugin-version.yml@main
+    with:
+      cargo_manifest: Cargo.toml
+      plugin_manifest: plugin.toml
+      tag_prefix: v
+    secrets: inherit
