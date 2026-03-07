@@ -27,6 +27,7 @@ pub fn run() -> Result<()> {
     let display = unsafe { xlib::XOpenDisplay(ptr::null()) };
     anyhow::ensure!(!display.is_null(), "failed to open X11 display");
     let root = unsafe { xlib::XDefaultRootWindow(display) };
+    eprintln!("[shake-to-grow] started");
 
     let mut samples: VecDeque<(Instant, i32, i32)> = VecDeque::new();
     let mut last_pos = query_pointer(display, root);
@@ -44,13 +45,16 @@ pub fn run() -> Result<()> {
             samples.pop_front();
         }
 
-        if velocity(&samples) > VELOCITY_THRESHOLD {
+        let v = velocity(&samples);
+        if v > VELOCITY_THRESHOLD {
             last_shake = Some(now);
             if grown.is_none() {
+                eprintln!("[shake-to-grow] grow velocity={v:.0} px/s");
                 grown = grow_cursor(display, root);
             }
         } else if last_shake.map_or(false, |t| now - t > CALM_DURATION) {
             if let Some(cursor) = grown.take() {
+                eprintln!("[shake-to-grow] restore");
                 restore_cursor(display, root, cursor);
             }
             last_shake = None;
@@ -148,6 +152,7 @@ fn window_children(display: *mut xlib::Display, window: xlib::Window) -> Vec<xli
 fn make_grown_cursor(display: *mut xlib::Display) -> Option<xlib::Cursor> {
     let ci = unsafe { xfixes::XFixesGetCursorImage(display) };
     if ci.is_null() {
+        eprintln!("[shake-to-grow] warn: XFixesGetCursorImage returned null");
         return None;
     }
     let (sw, sh) = unsafe { ((*ci).width as u32, (*ci).height as u32) };
