@@ -18,14 +18,14 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            velocity_threshold: 7777.0,
-            shakiness_threshold: 48.0,
-            regrow_velocity_threshold: 4000.0,
-            regrow_shakiness_threshold: 15.0,
-            post_trigger_threshold: 1500.0,
-            scale_factor: 5,
-            calm_duration_ms: 1000,
-            restore_steps: 15,
+            velocity_threshold: 4500.0,
+            shakiness_threshold: 75.0,
+            regrow_velocity_threshold: 1500.0,
+            regrow_shakiness_threshold: 3.0,
+            post_trigger_threshold: 1000.0,
+            scale_factor: 4,
+            calm_duration_ms: 650,
+            restore_steps: 18,
         }
     }
 }
