@@ -1,3 +1,4 @@
 /target/
 /screen-recorder
 /screen-recorder.new
+.cargo/config.toml
