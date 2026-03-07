@@ -21,7 +21,7 @@ pub(super) fn stale_lockfile(path: &Path, max_age: Duration) -> bool {
 
     #[cfg(unix)]
     {
-        return !is_pid_alive(pid);
+        !is_pid_alive(pid)
     }
 
     #[cfg(not(unix))]

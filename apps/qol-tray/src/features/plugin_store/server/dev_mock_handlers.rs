@@ -20,7 +20,10 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/dev/mock-plugin-build", post(mock_plugin_build))
         .route("/dev/mock-plugin-build/stop", post(stop_mock_plugin_build))
         .route("/dev/mock-self-recompile", post(mock_self_recompile))
-        .route("/dev/mock-self-recompile/stop", post(stop_mock_self_recompile))
+        .route(
+            "/dev/mock-self-recompile/stop",
+            post(stop_mock_self_recompile),
+        )
         .route("/dev/mock-self-update", post(mock_self_update))
         .route("/dev/mock-self-update/stop", post(stop_mock_self_update))
 }

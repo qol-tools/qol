@@ -7,7 +7,7 @@ use axum::{
 };
 use std::path::{Path, PathBuf};
 
-pub fn router(plugins_dir: PathBuf) -> Router {
+pub(super) fn router(plugins_dir: PathBuf) -> Router {
     Router::new()
         .route("/{plugin_id}", get(serve_plugin_index))
         .route("/{plugin_id}/", get(serve_plugin_index))
@@ -114,7 +114,11 @@ async fn verify_path_chain(
     }
     let canonical_ui_path = canonicalize_or_not_found(ui_path).await?;
     if !canonical_ui_path.starts_with(&canonical_ui_root) {
-        log::warn!("Path traversal attempt: {:?} escapes {:?}", canonical_ui_path, canonical_ui_root);
+        log::warn!(
+            "Path traversal attempt: {:?} escapes {:?}",
+            canonical_ui_path,
+            canonical_ui_root
+        );
         return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
     }
     Ok(canonical_ui_path)
@@ -126,7 +130,11 @@ async fn resolve_safe_ui_file(
     file_path: &str,
 ) -> Result<PathBuf, Response> {
     if !super::validation::is_safe_plugin_id(plugin_id) || !is_safe_subpath(file_path) {
-        log::warn!("Unsafe path: plugin_id={}, file_path={}", plugin_id, file_path);
+        log::warn!(
+            "Unsafe path: plugin_id={}, file_path={}",
+            plugin_id,
+            file_path
+        );
         return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
     }
     let plugin_root = resolve_plugin_root(plugins_dir, plugin_id);
@@ -135,7 +143,8 @@ async fn resolve_safe_ui_file(
     validate_dir_entry(&plugin_root).await?;
     validate_dir_entry(&ui_root).await?;
     validate_file_entry(&ui_path).await?;
-    let canonical_plugin_root = verify_plugin_root_allowed(plugins_dir, plugin_id, &plugin_root).await?;
+    let canonical_plugin_root =
+        verify_plugin_root_allowed(plugins_dir, plugin_id, &plugin_root).await?;
     verify_path_chain(&canonical_plugin_root, &ui_root, &ui_path).await
 }
 

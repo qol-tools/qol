@@ -22,6 +22,12 @@ fn server_port() -> u16 {
 
 pub struct Plugins;
 
+impl Default for Plugins {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Plugins {
     pub fn new() -> Self {
         Self

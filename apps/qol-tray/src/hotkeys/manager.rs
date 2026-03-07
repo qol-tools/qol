@@ -72,7 +72,7 @@ impl HotkeyManager {
         manager: &GlobalHotKeyManager,
         registration: PlannedRegistration,
     ) {
-        if let Err(error) = manager.register(registration.hotkey.clone()) {
+        if let Err(error) = manager.register(registration.hotkey) {
             log::error!(
                 "Failed to register hotkey {}: {}",
                 registration.binding_key,

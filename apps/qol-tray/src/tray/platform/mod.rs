@@ -39,11 +39,32 @@ pub fn create_tray(
     events: Arc<EventBus>,
 ) -> Result<PlatformTray> {
     #[cfg(target_os = "linux")]
-    return create_linux_tray(feature_registry, shutdown_tx, shutdown_rx, icon, update_available, events);
+    return create_linux_tray(
+        feature_registry,
+        shutdown_tx,
+        shutdown_rx,
+        icon,
+        update_available,
+        events,
+    );
     #[cfg(target_os = "macos")]
-    return create_macos_tray(feature_registry, shutdown_tx, shutdown_rx, icon, update_available, events);
+    return create_macos_tray(
+        feature_registry,
+        shutdown_tx,
+        shutdown_rx,
+        icon,
+        update_available,
+        events,
+    );
     #[cfg(target_os = "windows")]
-    create_windows_tray(feature_registry, shutdown_tx, shutdown_rx, icon, update_available, events)
+    create_windows_tray(
+        feature_registry,
+        shutdown_tx,
+        shutdown_rx,
+        icon,
+        update_available,
+        events,
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -56,7 +77,13 @@ fn create_linux_tray(
     events: Arc<EventBus>,
 ) -> Result<PlatformTray> {
     linux::store_shutdown_rx(shutdown_rx);
-    linux::create_tray(feature_registry, shutdown_tx, icon, update_available, events)?;
+    linux::create_tray(
+        feature_registry,
+        shutdown_tx,
+        icon,
+        update_available,
+        events,
+    )?;
     Ok(PlatformTray::Linux)
 }
 
@@ -70,8 +97,16 @@ fn create_macos_tray(
     events: Arc<EventBus>,
 ) -> Result<PlatformTray> {
     let _ = shutdown_rx;
-    let tray_icon = macos::create_tray(feature_registry, shutdown_tx, icon, update_available, events)?;
-    Ok(PlatformTray::MacOS { _tray_icon: tray_icon })
+    let tray_icon = macos::create_tray(
+        feature_registry,
+        shutdown_tx,
+        icon,
+        update_available,
+        events,
+    )?;
+    Ok(PlatformTray::MacOS {
+        _tray_icon: tray_icon,
+    })
 }
 
 #[cfg(target_os = "windows")]
@@ -84,8 +119,16 @@ fn create_windows_tray(
     events: Arc<EventBus>,
 ) -> Result<PlatformTray> {
     let _ = shutdown_rx;
-    let tray_icon = windows::create_tray(feature_registry, shutdown_tx, icon, update_available, events)?;
-    Ok(PlatformTray::Windows { _tray_icon: tray_icon })
+    let tray_icon = windows::create_tray(
+        feature_registry,
+        shutdown_tx,
+        icon,
+        update_available,
+        events,
+    )?;
+    Ok(PlatformTray::Windows {
+        _tray_icon: tray_icon,
+    })
 }
 
 pub fn run_app<F>(init: F) -> Result<()>
@@ -144,7 +187,11 @@ pub(crate) fn spawn_menu_event_handler<F>(
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn handle_menu_event(router: &Arc<EventRouter>, event_id: &str, shutdown_tx: &broadcast::Sender<()>) -> bool {
+fn handle_menu_event(
+    router: &Arc<EventRouter>,
+    event_id: &str,
+    shutdown_tx: &broadcast::Sender<()>,
+) -> bool {
     let result = router.route(event_id);
     if let Err(e) = &result {
         log::error!("Error handling menu event: {}", e);

@@ -4,8 +4,8 @@ mod manifests;
 mod releases;
 mod token;
 
-pub use cache::{cache_age_secs, read_cache, update_cached_version, write_cache};
-pub use catalog::PluginMetadata;
+pub(crate) use cache::{cache_age_secs, read_cache, update_cached_version, write_cache};
+pub(crate) use catalog::PluginMetadata;
 pub(crate) use token::{
     build_github_request, delete_token, get_stored_token, send_checked, store_token,
     validate_token, TokenValidationError,
@@ -17,14 +17,14 @@ use catalog::{build_plugin_metadata, filter_plugin_repos, GitHubRepo};
 const CACHE_TTL_SECS: u64 = 3600;
 const CACHE_FORMAT_VERSION: u32 = 2;
 
-pub struct GitHubClient {
+pub(crate) struct GitHubClient {
     org: String,
     client: reqwest::Client,
     token: Option<String>,
 }
 
 impl GitHubClient {
-    pub fn new(org: impl Into<String>) -> Self {
+    pub(crate) fn new(org: impl Into<String>) -> Self {
         Self {
             org: org.into(),
             client: reqwest::Client::new(),
@@ -36,7 +36,7 @@ impl GitHubClient {
         build_github_request(&self.client, url, self.token.as_deref())
     }
 
-    pub async fn list_plugins(&self) -> Result<Vec<PluginMetadata>> {
+    pub(crate) async fn list_plugins(&self) -> Result<Vec<PluginMetadata>> {
         let repos = self.fetch_plugin_repos().await?;
         let mut plugins = Vec::new();
 
@@ -69,7 +69,10 @@ impl GitHubClient {
         Some(build_plugin_metadata(repo, manifest, version))
     }
 
-    pub async fn list_plugins_cached(&self, force_refresh: bool) -> Result<Vec<PluginMetadata>> {
+    pub(crate) async fn list_plugins_cached(
+        &self,
+        force_refresh: bool,
+    ) -> Result<Vec<PluginMetadata>> {
         if !force_refresh {
             if let Some(plugins) = cache::valid_cache() {
                 return Ok(plugins);

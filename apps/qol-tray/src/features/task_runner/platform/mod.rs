@@ -6,7 +6,7 @@ compile_error!(
 );
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub fn shell_command(script: &str) -> Command {
+pub(super) fn shell_command(script: &str) -> Command {
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg(script);
     cmd

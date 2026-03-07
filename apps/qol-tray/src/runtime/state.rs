@@ -22,11 +22,14 @@ impl InputState {
         let focus_is_newer = self
             .focus
             .as_ref()
-            .is_some_and(|f| self.cursor.as_ref().map_or(true, |c| f.at > c.at));
+            .is_some_and(|f| self.cursor.as_ref().is_none_or(|c| f.at > c.at));
         if !same_monitor || focus_is_newer {
             log::debug!(
                 "[runtime/state] cursor STAMPED mon=({}, {}) at={:?} reason={}",
-                monitor.x, monitor.y, at, cursor_stamp_reason(same_monitor)
+                monitor.x,
+                monitor.y,
+                at,
+                cursor_stamp_reason(same_monitor)
             );
             self.cursor = Some(Stamped { monitor, at });
         }
@@ -44,7 +47,11 @@ impl InputState {
 }
 
 fn cursor_stamp_reason(same_monitor: bool) -> &'static str {
-    if same_monitor { "reclaim_from_focus" } else { "monitor_change" }
+    if same_monitor {
+        "reclaim_from_focus"
+    } else {
+        "monitor_change"
+    }
 }
 
 pub(crate) fn monitor_for_point(
@@ -66,14 +73,26 @@ pub(crate) fn pick_active_monitor(state: &InputState, fallback: MonitorBounds) -
     match (state.cursor.as_ref(), state.focus.as_ref()) {
         (Some(cursor), Some(focus)) => {
             log_pick_both(cursor, focus);
-            if cursor.at > focus.at { cursor.monitor } else { focus.monitor }
+            if cursor.at > focus.at {
+                cursor.monitor
+            } else {
+                focus.monitor
+            }
         }
         (Some(cursor), None) => {
-            log::debug!("[runtime/pick] cursor only → ({}, {})", cursor.monitor.x, cursor.monitor.y);
+            log::debug!(
+                "[runtime/pick] cursor only → ({}, {})",
+                cursor.monitor.x,
+                cursor.monitor.y
+            );
             cursor.monitor
         }
         (None, Some(focus)) => {
-            log::debug!("[runtime/pick] focus only → ({}, {})", focus.monitor.x, focus.monitor.y);
+            log::debug!(
+                "[runtime/pick] focus only → ({}, {})",
+                focus.monitor.x,
+                focus.monitor.y
+            );
             focus.monitor
         }
         (None, None) => {
@@ -84,11 +103,21 @@ pub(crate) fn pick_active_monitor(state: &InputState, fallback: MonitorBounds) -
 }
 
 fn log_pick_both(cursor: &Stamped, focus: &Stamped) {
-    let winner = if cursor.at > focus.at { "cursor" } else { "focus" };
-    log::debug!("[runtime/pick] cursor_mon=({},{}) cursor_at={:?} focus_mon=({},{}) focus_at={:?} → {}",
-        cursor.monitor.x, cursor.monitor.y, cursor.at,
-        focus.monitor.x, focus.monitor.y, focus.at,
-        winner);
+    let winner = if cursor.at > focus.at {
+        "cursor"
+    } else {
+        "focus"
+    };
+    log::debug!(
+        "[runtime/pick] cursor_mon=({},{}) cursor_at={:?} focus_mon=({},{}) focus_at={:?} → {}",
+        cursor.monitor.x,
+        cursor.monitor.y,
+        cursor.at,
+        focus.monitor.x,
+        focus.monitor.y,
+        focus.at,
+        winner
+    );
 }
 
 pub(crate) fn monitor_for_bounds(

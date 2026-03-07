@@ -19,7 +19,13 @@ pub(super) fn start_mock_targets(state: &AppState) -> Result<Vec<&'static str>, 
 
     start_mock_self_update(runtime.as_ref(), events.clone(), &mut started);
     start_mock_self_recompile(runtime.as_ref(), events.clone(), &mut started);
-    start_mock_plugin_build(runtime.as_ref(), events, config_dir, fallback_plugin_ids, &mut started);
+    start_mock_plugin_build(
+        runtime.as_ref(),
+        events,
+        config_dir,
+        fallback_plugin_ids,
+        &mut started,
+    );
     if started.is_empty() {
         return Err("No mock targets were started");
     }

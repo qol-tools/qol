@@ -42,7 +42,10 @@ fn build_context() -> Result<ContextData> {
 fn diagnose(context: ContextData) -> Diagnosis {
     let Some(target_path) = context.target else {
         return warn_with_fix(
-            format!("autostart entry missing at {}", context.autostart_path.display()),
+            format!(
+                "autostart entry missing at {}",
+                context.autostart_path.display()
+            ),
             context.current_exe,
         );
     };
@@ -51,11 +54,18 @@ fn diagnose(context: ContextData) -> Diagnosis {
     if expected == actual {
         return ok_outcome(
             ID,
-            format!("autostart target matches current binary ({})", actual.display()),
+            format!(
+                "autostart target matches current binary ({})",
+                actual.display()
+            ),
         );
     }
     warn_with_fix(
-        format!("autostart target points to {} instead of {}", target_path.display(), context.current_exe.display()),
+        format!(
+            "autostart target points to {} instead of {}",
+            target_path.display(),
+            context.current_exe.display()
+        ),
         context.current_exe,
     )
 }

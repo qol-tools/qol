@@ -22,7 +22,10 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/dev/discovery-state", get(get_discovery_state))
         .route("/dev/build-state", get(get_build_state))
         .route("/dev/plugin-cpu", get(get_plugin_cpu))
-        .route("/dev/plugin-cpu/monitoring", axum::routing::put(set_plugin_cpu_monitoring))
+        .route(
+            "/dev/plugin-cpu/monitoring",
+            axum::routing::put(set_plugin_cpu_monitoring),
+        )
 }
 
 pub(super) async fn get_discovery_state(
@@ -32,7 +35,10 @@ pub(super) async fn get_discovery_state(
         Ok(guard) => guard,
         Err(error) => {
             log::error!("Discovery state lock poisoned: {}", error);
-            return Json(DiscoveryStateResponse { status: "idle".to_string(), plugins: Vec::new() });
+            return Json(DiscoveryStateResponse {
+                status: "idle".to_string(),
+                plugins: Vec::new(),
+            });
         }
     };
     let status = match guard.status {

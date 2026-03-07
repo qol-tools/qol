@@ -6,11 +6,11 @@ use std::time::{Duration, Instant};
 
 use qol_runtime::MonitorBounds;
 
-use super::super::Channel;
 use super::super::channels::cursor::CursorChannel;
 use super::super::channels::focus::FocusChannel;
 use super::super::channels::monitors::MonitorsChannel;
 use super::super::poller::{AdaptivePoller, BasicStrategy};
+use super::super::Channel;
 use super::shared::SharedState;
 use crate::desktop_state::SharedPlatform;
 use crate::runtime::state;

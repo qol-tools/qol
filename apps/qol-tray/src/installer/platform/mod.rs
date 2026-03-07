@@ -20,7 +20,7 @@ use windows as imp;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 compile_error!("installer platform implementation is required for this target OS");
 
-pub fn binary_filename() -> String {
+pub(super) fn binary_filename() -> String {
     if cfg!(target_os = "windows") {
         "qol-tray.exe".to_string()
     } else {
@@ -28,42 +28,42 @@ pub fn binary_filename() -> String {
     }
 }
 
-pub fn install_dir() -> Result<PathBuf> {
+pub(super) fn install_dir() -> Result<PathBuf> {
     imp::install_dir()
 }
 
-pub fn autostart_path() -> Result<PathBuf> {
+pub(super) fn autostart_path() -> Result<PathBuf> {
     imp::autostart_path()
 }
 
-pub fn write_autostart_entry(binary_path: &Path) -> Result<()> {
+pub(super) fn write_autostart_entry(binary_path: &Path) -> Result<()> {
     imp::write_autostart_entry(binary_path)
 }
 
-pub fn start_now(binary_path: &Path) -> Result<()> {
+pub(super) fn start_now(binary_path: &Path) -> Result<()> {
     imp::start_now(binary_path)
 }
 
-pub fn stop_running(binary_path: &Path) -> Result<()> {
+pub(super) fn stop_running(binary_path: &Path) -> Result<()> {
     imp::stop_running(binary_path)
 }
 
-pub fn set_executable_permissions(path: &Path) -> Result<()> {
+pub(super) fn set_executable_permissions(path: &Path) -> Result<()> {
     imp::set_executable_permissions(path)
 }
 
-pub fn prepare_atomic_replace(installed_binary: &Path) -> Result<()> {
+pub(super) fn prepare_atomic_replace(installed_binary: &Path) -> Result<()> {
     imp::prepare_atomic_replace(installed_binary)
 }
 
-pub fn copy_symlink(source: &Path, target: &Path) -> Result<()> {
+pub(super) fn copy_symlink(source: &Path, target: &Path) -> Result<()> {
     imp::copy_symlink(source, target)
 }
 
-pub fn on_file_copied(source: &Path, target: &Path) -> Result<()> {
+pub(super) fn on_file_copied(source: &Path, target: &Path) -> Result<()> {
     imp::on_file_copied(source, target)
 }
 
-pub fn bundled_binary_candidates(installer_path: &Path) -> Vec<PathBuf> {
+pub(super) fn bundled_binary_candidates(installer_path: &Path) -> Vec<PathBuf> {
     imp::bundled_binary_candidates(installer_path)
 }

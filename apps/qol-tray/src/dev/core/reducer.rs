@@ -17,8 +17,23 @@ fn apply_plugin_progress(
 ) -> (CoreState, Vec<CoreEvent>) {
     state.building = true;
     let normalized = normalized_percent(status, percent);
-    state.progress.insert(plugin_id.clone(), CoreBuildProgress { status, percent: normalized, phase: phase.clone() });
-    (state, vec![CoreEvent::BuildPluginProgress { plugin_id, status, percent: normalized, phase }])
+    state.progress.insert(
+        plugin_id.clone(),
+        CoreBuildProgress {
+            status,
+            percent: normalized,
+            phase: phase.clone(),
+        },
+    );
+    (
+        state,
+        vec![CoreEvent::BuildPluginProgress {
+            plugin_id,
+            status,
+            percent: normalized,
+            phase,
+        }],
+    )
 }
 
 pub fn reduce(mut state: CoreState, input: CoreInput) -> (CoreState, Vec<CoreEvent>) {
@@ -28,8 +43,12 @@ pub fn reduce(mut state: CoreState, input: CoreInput) -> (CoreState, Vec<CoreEve
             state.progress.clear();
             (state, vec![CoreEvent::BuildStarted])
         }
-        CoreInput::PluginProgress { plugin_id, status, percent, phase } =>
-            apply_plugin_progress(state, plugin_id, status, percent, phase),
+        CoreInput::PluginProgress {
+            plugin_id,
+            status,
+            percent,
+            phase,
+        } => apply_plugin_progress(state, plugin_id, status, percent, phase),
         CoreInput::RunFinished { results } => {
             state.building = false;
             state.progress.clear();

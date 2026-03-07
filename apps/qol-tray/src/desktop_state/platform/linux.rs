@@ -13,7 +13,7 @@ pub(super) struct LinuxQueries {
 }
 
 impl LinuxQueries {
-    pub fn new() -> Self {
+    pub(super) fn new() -> Self {
         if is_wayland() {
             return Self::disconnected();
         }
@@ -24,14 +24,26 @@ impl LinuxQueries {
     }
 
     fn disconnected() -> Self {
-        Self { conn: None, root: 0, active_window_atom: 0, wm_pid_atom: None, own_pid: 0 }
+        Self {
+            conn: None,
+            root: 0,
+            active_window_atom: 0,
+            wm_pid_atom: None,
+            own_pid: 0,
+        }
     }
 
     fn from_x11_conn(conn: RustConnection, screen_num: usize) -> Self {
         let root = conn.setup().roots[screen_num].root;
         let active_window_atom = intern_atom_id(&conn, b"_NET_ACTIVE_WINDOW").unwrap_or(0);
         let wm_pid_atom = intern_atom_id(&conn, b"_NET_WM_PID");
-        Self { conn: Some(conn), root, active_window_atom, wm_pid_atom, own_pid: std::process::id() }
+        Self {
+            conn: Some(conn),
+            root,
+            active_window_atom,
+            wm_pid_atom,
+            own_pid: std::process::id(),
+        }
     }
 }
 
@@ -57,7 +69,10 @@ impl Platform for LinuxQueries {
 }
 
 fn intern_atom_id(conn: &RustConnection, name: &[u8]) -> Option<u32> {
-    conn.intern_atom(false, name).ok().and_then(|c| c.reply().ok()).map(|r| r.atom)
+    conn.intern_atom(false, name)
+        .ok()
+        .and_then(|c| c.reply().ok())
+        .map(|r| r.atom)
 }
 
 fn get_active_window_id(conn: &RustConnection, root: u32, active_window_atom: u32) -> Option<u32> {
@@ -67,11 +82,22 @@ fn get_active_window_id(conn: &RustConnection, root: u32, active_window_atom: u3
         .reply()
         .ok()?;
     let window_id = prop.value32()?.next()?;
-    if window_id == 0 { None } else { Some(window_id) }
+    if window_id == 0 {
+        None
+    } else {
+        Some(window_id)
+    }
 }
 
-fn is_own_window(conn: &RustConnection, window_id: u32, wm_pid_atom: Option<u32>, own_pid: u32) -> bool {
-    let Some(pid_atom) = wm_pid_atom else { return false; };
+fn is_own_window(
+    conn: &RustConnection,
+    window_id: u32,
+    wm_pid_atom: Option<u32>,
+    own_pid: u32,
+) -> bool {
+    let Some(pid_atom) = wm_pid_atom else {
+        return false;
+    };
     let pid_prop = conn
         .get_property(false, window_id, pid_atom, AtomEnum::CARDINAL, 0, 1)
         .ok()

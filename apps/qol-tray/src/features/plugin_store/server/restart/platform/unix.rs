@@ -24,7 +24,10 @@ fn restart_command_override() -> Option<String> {
 }
 
 fn configure_sh_command(cmd: &mut std::process::Command, script: &str, binary: Option<&Path>) {
-    cmd.arg("sh").arg("-c").arg(script).arg("qol-tray-restart")
+    cmd.arg("sh")
+        .arg("-c")
+        .arg(script)
+        .arg("qol-tray-restart")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());

@@ -12,7 +12,9 @@ pub(super) fn build_state(shared: &SharedState) -> PlatformState {
     let active_monitor_idx = active_monitor_idx(&input, &monitors);
     log::debug!(
         "[runtime/build_state] GET_STATE cursor_idx={:?} focus_idx={:?} active_idx={:?}",
-        cursor_monitor_idx, focus_monitor_idx, active_monitor_idx
+        cursor_monitor_idx,
+        focus_monitor_idx,
+        active_monitor_idx
     );
     PlatformState {
         cursor,
@@ -25,16 +27,12 @@ pub(super) fn build_state(shared: &SharedState) -> PlatformState {
 }
 
 fn cursor_monitor_idx(input: &InputState, monitors: &[MonitorBounds]) -> Option<usize> {
-    let Some(cursor) = input.cursor.as_ref() else {
-        return None;
-    };
+    let cursor = input.cursor.as_ref()?;
     monitor_idx(monitors, cursor.monitor)
 }
 
 fn focus_monitor_idx(input: &InputState, monitors: &[MonitorBounds]) -> Option<usize> {
-    let Some(focus) = input.focus.as_ref() else {
-        return None;
-    };
+    let focus = input.focus.as_ref()?;
     monitor_idx(monitors, focus.monitor)
 }
 

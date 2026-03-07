@@ -70,9 +70,13 @@ struct InitResult {
 }
 
 fn app_init() -> Result<(TrayManager, Arc<Mutex<PluginManager>>)> {
-    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
     let init = rt.block_on(async_init())?;
-    std::thread::spawn(move || { rt.block_on(std::future::pending::<()>()); });
+    std::thread::spawn(move || {
+        rt.block_on(std::future::pending::<()>());
+    });
     let tray = TrayManager::new(
         init.feature_registry,
         init.shutdown_tx,
@@ -100,7 +104,14 @@ async fn async_init() -> Result<InitResult> {
     if let Err(e) = hotkeys::start_hotkey_listener(plugin_manager.clone()) {
         log::warn!("Failed to start hotkey listener: {}", e);
     }
-    Ok(InitResult { shutdown_tx, shutdown_rx, update_available, plugin_manager, feature_registry, events: daemon.events.clone() })
+    Ok(InitResult {
+        shutdown_tx,
+        shutdown_rx,
+        update_available,
+        plugin_manager,
+        feature_registry,
+        events: daemon.events.clone(),
+    })
 }
 
 async fn check_for_updates() -> bool {

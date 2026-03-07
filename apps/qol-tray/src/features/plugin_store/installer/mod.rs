@@ -18,30 +18,30 @@ const LOCKFILE_MAX_AGE: Duration = Duration::from_secs(30);
 #[cfg(not(unix))]
 const LOCKFILE_MAX_AGE: Duration = Duration::from_secs(300);
 
-pub struct PluginInstaller {
+pub(super) struct PluginInstaller {
     plugins_dir: PathBuf,
 }
 
 impl PluginInstaller {
-    pub fn new(plugins_dir: PathBuf) -> Self {
+    pub(super) fn new(plugins_dir: PathBuf) -> Self {
         Self { plugins_dir }
     }
 
-    pub async fn install(&self, repo_url: &str, plugin_id: &str) -> Result<()> {
+    pub(super) async fn install(&self, repo_url: &str, plugin_id: &str) -> Result<()> {
         validate_plugin_id(plugin_id)?;
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
         operations::ensure_no_dev_link_conflict(plugin_id)?;
         operations::install(&self.plugins_dir, repo_url, plugin_id).await
     }
 
-    pub async fn update(&self, repo_url: &str, plugin_id: &str) -> Result<()> {
+    pub(super) async fn update(&self, repo_url: &str, plugin_id: &str) -> Result<()> {
         validate_plugin_id(plugin_id)?;
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
         operations::ensure_no_dev_link_conflict(plugin_id)?;
         operations::update(&self.plugins_dir, repo_url, plugin_id).await
     }
 
-    pub async fn uninstall(&self, plugin_id: &str) -> Result<()> {
+    pub(super) async fn uninstall(&self, plugin_id: &str) -> Result<()> {
         validate_plugin_id(plugin_id)?;
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
         operations::uninstall(&self.plugins_dir, plugin_id).await

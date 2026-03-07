@@ -23,7 +23,10 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/dev/links", get(list_linked_plugins))
         .route("/dev/links", post(create_link))
         .route("/dev/links/{id}", axum::routing::delete(delete_link))
-        .route("/dev/log-controls/{id}", axum::routing::put(upsert_plugin_log_control))
+        .route(
+            "/dev/log-controls/{id}",
+            axum::routing::put(upsert_plugin_log_control),
+        )
         .route("/dev/log-controls", get(get_log_controls))
 }
 
@@ -138,7 +141,10 @@ fn upsert_log_control_response(
     id: &str,
     state: &AppState,
 ) -> axum::response::Response {
-    let control = crate::plugins::log_control::PluginLogControl { muted: req.muted, suppress_patterns: req.suppress_patterns };
+    let control = crate::plugins::log_control::PluginLogControl {
+        muted: req.muted,
+        suppress_patterns: req.suppress_patterns,
+    };
     match crate::plugins::log_control::upsert_control(config_dir, id, control) {
         Ok(()) => {
             try_restart_daemon(state, id);

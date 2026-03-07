@@ -81,7 +81,9 @@ pub(crate) fn kill_from_pid_files() {
 }
 
 fn process_pid_file(path: &Path, roots: &ManagedRoots) {
-    let Ok(content) = std::fs::read_to_string(path) else { return; };
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return;
+    };
     for line in content.lines() {
         kill_pid_if_managed(line, roots);
     }
@@ -89,9 +91,15 @@ fn process_pid_file(path: &Path, roots: &ManagedRoots) {
 }
 
 fn kill_pid_if_managed(line: &str, roots: &ManagedRoots) {
-    let Ok(pid) = line.trim().parse::<i32>() else { return; };
-    let Some(exe) = platform::pid_exe_path(pid) else { return; };
-    if !roots.contains(&exe) { return; }
+    let Ok(pid) = line.trim().parse::<i32>() else {
+        return;
+    };
+    let Some(exe) = platform::pid_exe_path(pid) else {
+        return;
+    };
+    if !roots.contains(&exe) {
+        return;
+    }
     if crate::process_utils::is_pid_alive(pid) {
         log::info!("Killing orphan daemon process: {} ({})", pid, exe.display());
         crate::process_utils::terminate_pid(pid, std::time::Duration::from_millis(100));
@@ -119,7 +127,7 @@ pub(crate) struct ManagedRoots {
 }
 
 impl ManagedRoots {
-    pub fn load() -> Self {
+    pub(crate) fn load() -> Self {
         Self {
             installs_root: paths::installs_dir().ok(),
             shared_plugins_root: paths::plugins_dir().ok(),
@@ -128,7 +136,7 @@ impl ManagedRoots {
     }
 
     /// Check if the given binary path belongs to a managed plugin.
-    pub fn contains(&self, target: &Path) -> bool {
+    pub(crate) fn contains(&self, target: &Path) -> bool {
         let target = resolve_path(target);
         self.candidate_roots()
             .iter()

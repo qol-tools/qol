@@ -38,9 +38,7 @@ fn plan_binding(
         return None;
     }
 
-    let Some(hotkey) = parse_planned_hotkey(binding) else {
-        return None;
-    };
+    let hotkey = parse_planned_hotkey(binding)?;
     Some(PlannedRegistration::from_binding(binding, hotkey))
 }
 

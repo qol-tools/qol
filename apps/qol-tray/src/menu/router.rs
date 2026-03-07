@@ -19,8 +19,10 @@ impl EventPattern {
     }
 }
 
+type SyncFn = Box<dyn Fn(&str) -> Result<HandlerResult> + Send + Sync>;
+
 pub enum EventHandler {
-    Sync(Box<dyn Fn(&str) -> Result<HandlerResult> + Send + Sync>),
+    Sync(SyncFn),
 }
 
 pub enum HandlerResult {

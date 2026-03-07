@@ -124,7 +124,7 @@ pub(super) fn required_release_assets(
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct PluginMetadata {
+pub(crate) struct PluginMetadata {
     pub id: String,
     pub name: String,
     pub description: String,
@@ -134,7 +134,7 @@ pub struct PluginMetadata {
 }
 
 impl PluginMetadata {
-    pub fn supports_current_platform(&self) -> bool {
+    pub(crate) fn supports_current_platform(&self) -> bool {
         crate::plugins::manifest::supports_current_platform(&self.platforms)
     }
 }

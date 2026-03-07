@@ -41,7 +41,10 @@ fn collect_daemon_pids(plugin_manager: &Arc<Mutex<PluginManager>>) -> HashMap<St
             .filter_map(|plugin| plugin.daemon_pid().map(|pid| (plugin.id.clone(), pid)))
             .collect(),
         Err(error) => {
-            log::error!("Plugin manager lock poisoned for CPU diagnostics: {}", error);
+            log::error!(
+                "Plugin manager lock poisoned for CPU diagnostics: {}",
+                error
+            );
             HashMap::new()
         }
     }
@@ -60,10 +63,19 @@ fn build_pid_sets(
         actions.sort_unstable();
         actions.dedup();
         let mut all_pids = actions.clone();
-        if let Some(pid) = daemon_pid { all_pids.push(pid); }
+        if let Some(pid) = daemon_pid {
+            all_pids.push(pid);
+        }
         all_pids.sort_unstable();
         all_pids.dedup();
-        result.insert(plugin_id, PluginPidSet { daemon_pid, action_pids: actions, all_pids });
+        result.insert(
+            plugin_id,
+            PluginPidSet {
+                daemon_pid,
+                action_pids: actions,
+                all_pids,
+            },
+        );
     }
     result
 }

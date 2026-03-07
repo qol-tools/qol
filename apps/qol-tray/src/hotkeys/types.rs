@@ -25,7 +25,7 @@ pub struct HotkeyAction {
     pub action: String,
 }
 
-pub static KEY_CODE_MAP: Lazy<HashMap<&'static str, Code>> = Lazy::new(|| {
+pub(super) static KEY_CODE_MAP: Lazy<HashMap<&'static str, Code>> = Lazy::new(|| {
     HashMap::from([
         ("a", Code::KeyA),
         ("b", Code::KeyB),

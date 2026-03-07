@@ -175,15 +175,19 @@ fn ax_window_bounds(window: &CfGuard) -> Option<MonitorBounds> {
 
 fn focused_window_bounds_ax(own_pid: i32) -> Option<MonitorBounds> {
     let (app, app_pid) = resolve_focused_app(own_pid)?;
-    let focused_window = ax_get_attr(app.as_ptr(), &ax_attr_str(b"AXFocusedWindow"))
-        .or_else(|| {
+    let focused_window =
+        ax_get_attr(app.as_ptr(), &ax_attr_str(b"AXFocusedWindow")).or_else(|| {
             log::debug!("[runtime/ax] pid={:?} has no focused window", app_pid);
             None
         })?;
     let bounds = ax_window_bounds(&focused_window)?;
     log::debug!(
         "[runtime/ax] HIT pid={:?} window=({}, {}, {}x{})",
-        app_pid, bounds.x, bounds.y, bounds.width, bounds.height
+        app_pid,
+        bounds.x,
+        bounds.y,
+        bounds.width,
+        bounds.height
     );
     Some(bounds)
 }

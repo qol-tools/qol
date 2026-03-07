@@ -10,10 +10,7 @@ mod unix {
     const MAX_DAEMONS: usize = 16;
 
     /// 0 = empty slot. Stores pid as i32 (matches libc::pid_t).
-    static DAEMON_PIDS: [AtomicI32; MAX_DAEMONS] = {
-        const EMPTY: AtomicI32 = AtomicI32::new(0);
-        [EMPTY; MAX_DAEMONS]
-    };
+    static DAEMON_PIDS: [AtomicI32; MAX_DAEMONS] = [const { AtomicI32::new(0) }; MAX_DAEMONS];
 
     pub fn register_daemon_pid(pid: u32) {
         let pid = pid as i32;

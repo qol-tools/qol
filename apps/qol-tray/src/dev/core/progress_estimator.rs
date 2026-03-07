@@ -8,7 +8,12 @@ pub struct CargoProgressEstimator {
 }
 
 impl CargoProgressEstimator {
-    pub fn update(&mut self, observed_done: u32, observed_total: u32, elapsed_secs: f64) -> (u8, u32, u32) {
+    pub fn update(
+        &mut self,
+        observed_done: u32,
+        observed_total: u32,
+        elapsed_secs: f64,
+    ) -> (u8, u32, u32) {
         if let Some(result) = self.ensure_baseline(observed_done, observed_total, elapsed_secs) {
             return result;
         }
@@ -20,7 +25,12 @@ impl CargoProgressEstimator {
         (percent, done, total)
     }
 
-    fn ensure_baseline(&mut self, observed_done: u32, observed_total: u32, elapsed_secs: f64) -> Option<(u8, u32, u32)> {
+    fn ensure_baseline(
+        &mut self,
+        observed_done: u32,
+        observed_total: u32,
+        elapsed_secs: f64,
+    ) -> Option<(u8, u32, u32)> {
         if self.baseline_done.is_some() {
             return None;
         }
@@ -38,7 +48,9 @@ impl CargoProgressEstimator {
     fn rebase(&self, observed_done: u32, observed_total: u32) -> (u32, u32) {
         let baseline = self.baseline_done.unwrap_or(0);
         let mut total = observed_total.saturating_sub(baseline);
-        if total == 0 { total = 1; }
+        if total == 0 {
+            total = 1;
+        }
         let done = observed_done.saturating_sub(baseline).min(total);
         (done, total)
     }
@@ -58,7 +70,9 @@ impl CargoProgressEstimator {
     }
 
     fn compute_time_ratio(&self, done: u32, total: u32, elapsed_secs: f64, raw_ratio: f64) -> f64 {
-        let Some(avg_unit_secs) = self.avg_unit_secs else { return raw_ratio; };
+        let Some(avg_unit_secs) = self.avg_unit_secs else {
+            return raw_ratio;
+        };
         let remaining_units = total.saturating_sub(done) as f64;
         if remaining_units <= 0.0 {
             return 1.0;
@@ -80,7 +94,9 @@ impl CargoProgressEstimator {
         ratio = ratio.max(self.ratio);
         self.ratio = ratio;
         let mut percent = (ratio * 99.0).round() as u8;
-        if ratio > 0.0 { percent = percent.max(1); }
+        if ratio > 0.0 {
+            percent = percent.max(1);
+        }
         percent.min(99)
     }
 }
