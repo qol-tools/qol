@@ -1,6 +1,7 @@
 mod mock;
 mod recompile;
 mod reload;
+mod worktrees;
 
 use super::types::AppState;
 
@@ -20,8 +21,11 @@ pub(super) fn refresh_discovery(state: &AppState) {
     );
 }
 
-pub(super) fn queue_self_recompile(state: &AppState) -> Result<(), &'static str> {
-    recompile::queue_self_recompile(state)
+pub(super) fn queue_self_recompile(
+    state: &AppState,
+    worktree_path: Option<std::path::PathBuf>,
+) -> Result<(), &'static str> {
+    recompile::queue_self_recompile(state, worktree_path)
 }
 
 pub(super) fn start_mock_targets(state: &AppState) -> Result<Vec<&'static str>, &'static str> {
@@ -34,4 +38,8 @@ pub(super) fn queue_mock_plugin_build(state: &AppState) -> Result<(), &'static s
 
 pub(super) fn stop_mock_targets(state: &AppState) -> Vec<&'static str> {
     mock::stop_mock_targets(state)
+}
+
+pub(super) fn list_worktrees() -> Vec<super::types::WorktreeInfo> {
+    worktrees::scan(std::path::Path::new(env!("CARGO_MANIFEST_DIR")))
 }

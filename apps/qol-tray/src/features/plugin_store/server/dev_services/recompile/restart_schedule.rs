@@ -11,6 +11,7 @@ pub(super) fn schedule_self_restart_after_idle(
     plugin_manager: Arc<Mutex<crate::plugins::PluginManager>>,
     runtime: Arc<DevRuntimeService>,
     restart: Arc<dyn RestartPort>,
+    worktree_path: Option<PathBuf>,
 ) {
     if !runtime.try_mark_restart_pending() {
         return;
@@ -18,7 +19,8 @@ pub(super) fn schedule_self_restart_after_idle(
 
     tokio::spawn(async move {
         wait_for_restart_idle(runtime.as_ref()).await;
-        let Some(restart_binary) = resolve_restart_binary(runtime.as_ref(), restart.as_ref())
+        let Some(restart_binary) =
+            resolve_restart_binary(runtime.as_ref(), restart.as_ref(), worktree_path.as_deref())
         else {
             return;
         };
@@ -50,7 +52,15 @@ fn restart_idle(runtime: &DevRuntimeService) -> bool {
 fn resolve_restart_binary(
     runtime: &DevRuntimeService,
     restart: &dyn RestartPort,
+    worktree_path: Option<&Path>,
 ) -> Option<PathBuf> {
+    if let Some(wt) = worktree_path {
+        let candidate = restart.binary_at(wt);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
     let Some(path) = restart.resolve_restart_binary() else {
         log::error!("Self recompile completed but restart binary could not be resolved");
         runtime.clear_restart_pending();

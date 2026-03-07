@@ -19,6 +19,7 @@ fn handle_recompile_success(task: SelfRecompileTask) {
         task.plugin_manager,
         task.runtime,
         task.restart,
+        task.worktree_path,
     );
 }
 

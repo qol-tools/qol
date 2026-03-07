@@ -9,13 +9,32 @@ use super::{spawn_piped, CargoChild};
 
 static LAST_ARTIFACT_COUNT: AtomicU32 = AtomicU32::new(0);
 
+fn main_repo_root() -> PathBuf {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut dir = manifest.as_path();
+    loop {
+        if dir.join(".worktrees").is_dir() {
+            return dir.to_path_buf();
+        }
+        match dir.parent() {
+            Some(p) => dir = p,
+            None => return manifest,
+        }
+    }
+}
+
 const QOL_TRAY_ID: &str = "qol-tray";
 
-pub(super) fn build_qol_tray_self_with_progress<F>(mut on_progress: F) -> BuildResult
+pub(super) fn build_qol_tray_self_with_progress<F>(
+    repo_root: Option<&Path>,
+    mut on_progress: F,
+) -> BuildResult
 where
     F: FnMut(u8, String),
 {
-    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = repo_root
+        .map(Path::to_path_buf)
+        .unwrap_or_else(main_repo_root);
     let manifest_path = repo_root.join("Cargo.toml");
     if let Err(error) = ensure_manifest(&manifest_path) {
         return failed_build(error);

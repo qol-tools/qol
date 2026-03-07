@@ -39,9 +39,9 @@ impl CargoPluginBuilder for CargoCommandPluginBuilder {
     }
 }
 
-pub fn build_qol_tray_self_with_progress<F>(on_progress: F) -> BuildResult
+pub fn build_qol_tray_self_with_progress<F>(repo_root: Option<&Path>, on_progress: F) -> BuildResult
 where
     F: FnMut(u8, String),
 {
-    self_build::build_qol_tray_self_with_progress(on_progress)
+    self_build::build_qol_tray_self_with_progress(repo_root, on_progress)
 }
