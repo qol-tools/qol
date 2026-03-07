@@ -3,12 +3,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-pub fn install_dir() -> Result<PathBuf> {
+pub(super) fn install_dir() -> Result<PathBuf> {
     let local_data = dirs::data_local_dir().context("Could not determine local data directory")?;
     Ok(local_data.join("Programs").join("qol-tray").join("bin"))
 }
 
-pub fn autostart_path() -> Result<PathBuf> {
+pub(super) fn autostart_path() -> Result<PathBuf> {
     let app_data = std::env::var_os("APPDATA").context("APPDATA is not set")?;
     Ok(PathBuf::from(app_data)
         .join("Microsoft")
@@ -19,7 +19,7 @@ pub fn autostart_path() -> Result<PathBuf> {
         .join("qol-tray.cmd"))
 }
 
-pub fn write_autostart_entry(binary_path: &Path) -> Result<()> {
+pub(super) fn write_autostart_entry(binary_path: &Path) -> Result<()> {
     let path = autostart_path()?;
     let parent = path
         .parent()
@@ -35,7 +35,7 @@ pub fn write_autostart_entry(binary_path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn start_now(binary_path: &Path) -> Result<()> {
+pub(super) fn start_now(binary_path: &Path) -> Result<()> {
     Command::new(binary_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -45,7 +45,7 @@ pub fn start_now(binary_path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn stop_running(_: &Path) -> Result<()> {
+pub(super) fn stop_running(_: &Path) -> Result<()> {
     let _ = Command::new("taskkill")
         .args(["/F", "/IM", "qol-tray.exe"])
         .stdout(Stdio::null())
@@ -54,11 +54,11 @@ pub fn stop_running(_: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn set_executable_permissions(_: &Path) -> Result<()> {
+pub(super) fn set_executable_permissions(_: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn prepare_atomic_replace(installed_binary: &Path) -> Result<()> {
+pub(super) fn prepare_atomic_replace(installed_binary: &Path) -> Result<()> {
     if installed_binary.exists() {
         fs::remove_file(installed_binary).with_context(|| {
             format!(
@@ -70,7 +70,7 @@ pub fn prepare_atomic_replace(installed_binary: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn copy_symlink(source: &Path, target: &Path) -> Result<()> {
+pub(super) fn copy_symlink(source: &Path, target: &Path) -> Result<()> {
     let link_target = fs::read_link(source)
         .with_context(|| format!("Failed to read symlink {}", source.display()))?;
     let resolved = source
@@ -86,11 +86,11 @@ pub fn copy_symlink(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn on_file_copied(_: &Path, _: &Path) -> Result<()> {
+pub(super) fn on_file_copied(_: &Path, _: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn bundled_binary_candidates(installer_path: &Path) -> Vec<PathBuf> {
+pub(super) fn bundled_binary_candidates(installer_path: &Path) -> Vec<PathBuf> {
     installer_path
         .parent()
         .map(|dir| vec![dir.join(super::binary_filename())])

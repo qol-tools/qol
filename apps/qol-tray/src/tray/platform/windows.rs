@@ -9,7 +9,7 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 static QUIT_SIGNAL: OnceCell<std::sync::Condvar> = OnceCell::new();
 static QUIT_MUTEX: OnceCell<std::sync::Mutex<bool>> = OnceCell::new();
 
-pub fn create_tray(
+pub(super) fn create_tray(
     feature_registry: Arc<FeatureRegistry>,
     shutdown_tx: broadcast::Sender<()>,
     icon: Icon,
@@ -33,7 +33,7 @@ pub fn create_tray(
     Ok(tray_icon)
 }
 
-pub fn run_event_loop() {
+pub(super) fn run_event_loop() {
     let mutex = QUIT_MUTEX.get().unwrap();
     let condvar = QUIT_SIGNAL.get().unwrap();
 
