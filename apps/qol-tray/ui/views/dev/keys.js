@@ -24,14 +24,6 @@ function handleArrowKey(event, state, delta, bump) {
     bump();
 }
 
-function handleMenuToggleKey(event, state, bump) {
-    event.preventDefault();
-    const item = state.mergedList[state.selectedIndex];
-    if (!item) return;
-    state.openPluginMenuId = state.openPluginMenuId === item.id ? null : item.id;
-    bump();
-}
-
 export function handleDevKey(event, state, ctrl, bump) {
     if (state.showLinkInput) return;
     if ((event.ctrlKey || event.metaKey) && (event.key === 'r' || event.key === 'R')) {
@@ -44,6 +36,4 @@ export function handleDevKey(event, state, ctrl, bump) {
     if (event.key === 'ArrowDown') { handleArrowKey(event, state, 1, bump); return; }
     if (event.key === 'ArrowUp') { handleArrowKey(event, state, -1, bump); return; }
     if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); ctrl.actionsController.handleItemActivation(); return; }
-    if (event.key === 'r' || event.key === 'R') { event.preventDefault(); void ctrl.discoveryController.triggerDiscovery(); return; }
-    if (event.key === 'm' || event.key === 'M') handleMenuToggleKey(event, state, bump);
 }

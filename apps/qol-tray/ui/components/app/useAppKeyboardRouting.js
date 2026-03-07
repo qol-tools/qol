@@ -7,7 +7,8 @@ export function useAppKeyboardRouting({
     activeViewId,
     closePluginConfig,
     switchView,
-    viewOrder
+    viewOrder,
+    palette
 }) {
     const cycleView = useCallback((event) => {
         event.preventDefault();
@@ -19,6 +20,20 @@ export function useAppKeyboardRouting({
     }, [activeViewId, switchView, viewOrder]);
 
     useKeyboard(useCallback((event) => {
+        const view = VIEW_MAP[activeViewId];
+
+        if ((event.ctrlKey || event.metaKey) && event.key === 'e') {
+            event.preventDefault();
+            if (!palette.active && !activePluginId && !view?.isBlocking?.()) palette.activate();
+            return;
+        }
+
+        if (palette.active) {
+            event.preventDefault();
+            if (event.key === 'Escape') palette.deactivate();
+            return;
+        }
+
         if (activePluginId) {
             if (event.key === 'Escape') {
                 event.preventDefault();
@@ -31,8 +46,6 @@ export function useAppKeyboardRouting({
             }
             return;
         }
-
-        const view = VIEW_MAP[activeViewId];
 
         if (view?.isBlocking?.()) {
             if (view.handleKey) {
@@ -49,5 +62,5 @@ export function useAppKeyboardRouting({
         if (view?.handleKey) {
             view.handleKey(event);
         }
-    }, [activePluginId, activeViewId, closePluginConfig, cycleView]));
+    }, [activePluginId, activeViewId, closePluginConfig, cycleView, palette]));
 }
