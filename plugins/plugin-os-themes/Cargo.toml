@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1"
+serde_json = "1"
 qol-plugin-api = { git = "https://github.com/qol-tools/qol-plugin-api", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 
