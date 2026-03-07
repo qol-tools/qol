@@ -21,12 +21,3 @@ codegen-units = 1
 [dev-dependencies]
 qol-tray = { git = "https://github.com/qol-tools/qol-tray" }
 toml = "0.9"
-
-[patch."https://github.com/qol-tools/qol-runtime"]
-qol-runtime = { path = "../qol-runtime" }
-
-[patch."https://github.com/qol-tools/qol-plugin-api"]
-qol-plugin-api = { path = "../qol-plugin-api" }
-
-[patch."https://github.com/qol-tools/qol-tray"]
-qol-tray = { path = "../qol-tray" }
