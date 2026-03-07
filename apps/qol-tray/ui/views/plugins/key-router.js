@@ -10,7 +10,7 @@ function routePluginsKey(e, list, modal, actions) {
         routeContextMenuKey(e, list, modal);
         return;
     }
-    routeNormalKey(e, list, modal, actions);
+    routeNormalKey(e, list, actions);
 }
 
 function routeConfirmKey(e, clearConfirm, confirmUninstall) {
@@ -26,22 +26,19 @@ function routeContextMenuKey(e, list, modal) {
     if (plugin) { modal.closeAll(); modal.setConfirmPluginId(plugin.id); }
 }
 
-function routeNormalKey(e, list, modal, actions) {
+function routeNormalKey(e, list, actions) {
     dispatchKey(e, withShiftVariants({
         ArrowUp: () => actions.navigateInGrid('up'),
         ArrowDown: () => actions.navigateInGrid('down'),
         ArrowLeft: () => actions.navigateInGrid('left'),
         ArrowRight: () => actions.navigateInGrid('right'),
         Enter: actions.openSelected,
-        d: () => { const p = list.pluginsRef.current[list.selectedIndexRef.current]; if (p) modal.setConfirmPluginId(p.id); },
-        u: () => { const p = list.pluginsRef.current[list.selectedIndexRef.current]; if (p?.update_available) actions.updatePlugin(p.id); },
-        m: () => modal.setContextMenuOpen(prev => !prev),
     }));
 }
 
 export function usePluginsKeyHandler(list, modal, actions) {
     return useCallback(
         e => routePluginsKey(e, list, modal, actions),
-        [actions.confirmUninstall, actions.openSelected, actions.updatePlugin, actions.navigateInGrid]
+        [actions.confirmUninstall, actions.openSelected, actions.navigateInGrid]
     );
 }

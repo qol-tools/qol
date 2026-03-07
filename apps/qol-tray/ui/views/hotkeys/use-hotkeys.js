@@ -36,6 +36,7 @@ export function useHotkeys() {
         startRecording: m.startRecording,
         closeModal: m.closeModal,
         saveHotkey: m.saveHotkey,
+        deleteSelected,
         handleKey,
         isBlocking
     };
@@ -130,19 +131,17 @@ function useKeyboard(d, m, deleteSelected) {
             if (action) applyModalAction(action, e, d.setEditModal, m.saveHotkey, d.modalFieldIndexRef, d.setModalFieldIndex);
             return;
         }
-        dispatchListKey(e, d, m.openEditModal, deleteSelected);
-    }, [m.saveHotkey, m.openEditModal, deleteSelected]);
+        dispatchListKey(e, d, m.openEditModal);
+    }, [m.saveHotkey, m.openEditModal]);
     return { handleKey, isBlocking: useCallback(() => d.editModalRef.current !== null, []) };
 }
 
-function dispatchListKey(e, d, openEditModal, deleteSelected) {
+function dispatchListKey(e, d, openEditModal) {
     const hks = d.hotkeysRef.current;
     const idx = d.selectedIndexRef.current;
     dispatchKey(e, withShiftVariants({
         ArrowUp: () => d.setSelectedIndex(i => Math.max(0, i - 1)),
         ArrowDown: () => d.setSelectedIndex(i => Math.min(hks.length - 1, i + 1)),
         Enter: () => { if (hks.length > 0 && idx >= 0) openEditModal(hks[idx]); },
-        a: () => openEditModal(),
-        d: deleteSelected,
     }));
 }

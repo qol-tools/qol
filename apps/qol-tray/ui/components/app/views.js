@@ -1,4 +1,5 @@
 import { html } from '../../lib/html.js';
+import { useLayoutEffect, useRef } from 'preact/hooks';
 import { PluginsView } from '../../views/plugins-view.js';
 import { StoreView } from '../../views/store-view.js';
 import { HotkeysView } from '../../views/hotkeys-view.js';
@@ -13,14 +14,33 @@ export const VIEW_MAP = {
     dev: DevView
 };
 
+export const VIEW_LABELS = {
+    plugins: 'Plugins',
+    store: 'Plugin Store',
+    hotkeys: 'Hotkeys',
+    'task-runner': 'Task Runner',
+    dev: 'Dev'
+};
+
 const BASE_ORDER = ['plugins', 'store', 'hotkeys', 'task-runner'];
 
 export function buildViewOrder(devEnabled) {
-    if (!devEnabled) {
-        return [...BASE_ORDER];
-    }
+    return devEnabled ? [...BASE_ORDER, 'dev'] : [...BASE_ORDER];
+}
 
-    return [...BASE_ORDER, 'dev'];
+function ViewSlot({ active, children }) {
+    const ref = useRef(null);
+    useLayoutEffect(() => {
+        if (!active || !ref.current) return;
+        const el = ref.current;
+        el.style.animation = 'none';
+        void el.offsetWidth;
+        el.style.animation = '';
+    }, [active]);
+    const style = active
+        ? 'flex:1;min-height:0;display:flex;flex-direction:column'
+        : 'display:none';
+    return html`<div class="view-slot" ref=${ref} style=${style}>${children}</div>`;
 }
 
 export function renderMountedViews({
@@ -29,19 +49,12 @@ export function renderMountedViews({
     activePluginId,
     openPluginConfig
 }) {
+    const active = (id) => activeViewId === id && !activePluginId;
     return html`
-        ${mounted.has('plugins') && html`<div style=${slotStyle('plugins', activeViewId, activePluginId)}><${PluginsView} onOpenPluginConfig=${openPluginConfig} /></div>`}
-        ${mounted.has('store') && html`<div style=${slotStyle('store', activeViewId, activePluginId)}><${StoreView} /></div>`}
-        ${mounted.has('hotkeys') && html`<div style=${slotStyle('hotkeys', activeViewId, activePluginId)}><${HotkeysView} /></div>`}
-        ${mounted.has('task-runner') && html`<div style=${slotStyle('task-runner', activeViewId, activePluginId)}><${TaskRunnerView} /></div>`}
-        ${mounted.has('dev') && html`<div style=${slotStyle('dev', activeViewId, activePluginId)}><${DevView} /></div>`}
+        ${mounted.has('plugins') && html`<${ViewSlot} active=${active('plugins')}><${PluginsView} onOpenPluginConfig=${openPluginConfig} /><//>`}
+        ${mounted.has('store') && html`<${ViewSlot} active=${active('store')}><${StoreView} /><//>`}
+        ${mounted.has('hotkeys') && html`<${ViewSlot} active=${active('hotkeys')}><${HotkeysView} /><//>`}
+        ${mounted.has('task-runner') && html`<${ViewSlot} active=${active('task-runner')}><${TaskRunnerView} /><//>`}
+        ${mounted.has('dev') && html`<${ViewSlot} active=${active('dev')}><${DevView} /><//>`}
     `;
-}
-
-function slotStyle(id, activeViewId, activePluginId) {
-    if (activeViewId === id && !activePluginId) {
-        return 'flex:1;min-height:0;display:flex;flex-direction:column';
-    }
-
-    return 'display:none';
 }

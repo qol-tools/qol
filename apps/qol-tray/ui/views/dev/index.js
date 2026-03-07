@@ -1,19 +1,12 @@
 import { html } from '../../lib/html.js';
-import { useEffect, useRef } from 'preact/hooks';
-import { useFooterShortcuts } from '../../hooks/useFooterShortcuts.js';
+import { useEffect, useRef, useMemo } from 'preact/hooks';
+import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
+
 import { useDevController } from './use-controller.js';
 import { DevLayout } from './components/DevLayout.js';
 
 export const id = 'dev';
 
-const SHORTCUTS = [
-    { key: '↑↓', label: 'navigate' },
-    { key: 'Enter', label: 'toggle' },
-    { key: 'm', label: 'menu' },
-    { key: 'Esc', label: 'close menu' },
-    { key: 'r', label: 'discover' },
-    { key: '⌘R', label: 'reload' }
-];
 
 function useBuildOverlaySync(ctrl) {
     useEffect(() => {
@@ -25,10 +18,20 @@ function useBuildOverlaySync(ctrl) {
 export function DevViewInner() {
     const containerRef = useRef(null);
     const ctrl = useDevController(containerRef);
-    useFooterShortcuts(SHORTCUTS);
+
     useBuildOverlaySync(ctrl);
     DevViewInner.handleKey = ctrl.handleKey;
     DevViewInner.isBlocking = () => false;
+
+    const ctrlRef = useRef(ctrl);
+    ctrlRef.current = ctrl;
+    const commands = useMemo(() => [
+        { id: 'dev:discover', label: 'Discover plugins', run: () => ctrlRef.current.triggerDiscovery() },
+        { id: 'dev:reload', label: 'Reload plugins', run: () => ctrlRef.current.reloadPlugins() },
+        { id: 'dev:menu', label: 'Toggle plugin menu', run: () => ctrlRef.current.handleItemActivation() },
+    ], []);
+    useRegisterCommands('dev', commands);
+
     return html`
         <div ref=${containerRef} style="flex:1;min-height:0;display:flex;flex-direction:column">
             <${DevLayout} ctrl=${ctrl} />

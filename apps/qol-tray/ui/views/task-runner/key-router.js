@@ -11,20 +11,16 @@ function routeTaskKey(e, data, edit, test) {
         if (e.key === 'Escape') { e.preventDefault(); test.closeTestPanel(); }
         return;
     }
-    routeNormalKey(e, data, edit, test);
+    routeNormalKey(e, data, edit);
 }
 
-function routeNormalKey(e, data, edit, test) {
+function routeNormalKey(e, data, edit) {
     const ids = data.actionIdsRef.current;
     const idx = data.selectedIndexRef.current;
     dispatchKey(e, withShiftVariants({
         ArrowUp: () => data.setSelectedIndex(i => Math.max(0, i - 1)),
         ArrowDown: () => data.setSelectedIndex(i => Math.min(ids.length - 1, i + 1)),
         Enter: () => { if (ids.length > 0) edit.openEditModal(ids[idx]); },
-        t: () => { if (ids.length > 0) test.openTestPanel(ids[idx]); },
-        a: () => edit.openEditModal(),
-        d: data.deleteAction,
-        c: data.copyApiExample,
     }));
 }
 

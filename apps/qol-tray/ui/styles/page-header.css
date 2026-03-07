@@ -1,20 +1,47 @@
 .page-header {
     display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: var(--space-5);
-    padding: var(--space-4) var(--space-7) var(--space-2);
-    border-bottom: var(--border-w-1) solid var(--border-subtle);
-    backdrop-filter: blur(2px);
+    flex-direction: column;
+    position: relative;
     flex-shrink: 0;
-    min-height: var(--size-page-header);
     box-sizing: border-box;
 }
 
+.page-header-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-5);
+    height: var(--size-page-header);
+    padding: 0 var(--space-7);
+    border-bottom: var(--border-w-1) solid var(--border-subtle);
+    position: relative;
+}
+
+.noise-reveal {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+    filter: blur(0.4px);
+}
+
+.noise-border {
+    position: absolute;
+    bottom: calc(-1 * var(--border-w-1));
+    left: 0;
+    width: 100%;
+    height: 3px;
+    pointer-events: none;
+    z-index: 1;
+    filter: blur(0.6px);
+}
+
 .page-header-main {
-    display: grid;
-    grid-template-rows: auto 1.05em;
-    row-gap: var(--space-2);
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-4);
     min-width: 0;
 }
 
@@ -25,6 +52,7 @@
     text-transform: uppercase;
     letter-spacing: var(--ls-3xl);
     margin: 0;
+    flex-shrink: 0;
 }
 
 .page-header-main p {
@@ -33,18 +61,36 @@
     font-size: var(--fs-sm-plus);
     letter-spacing: var(--ls-tight);
     line-height: var(--lh-tight);
-    min-height: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
-.page-header-main p:empty {
-    visibility: hidden;
-}
 
-.page-header-actions {
+.page-header-badge {
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    padding-bottom: var(--space-1);
+    flex-shrink: 0;
+}
+
+.page-header-badge .btn-sm {
+    height: var(--size-control-sm);
+    padding: 0 var(--space-2);
+    border-color: transparent;
+    background: transparent;
+    box-shadow: none;
+}
+
+.page-header-badge .btn-sm:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: transparent;
+    box-shadow: none;
+}
+
+.page-header-badge .refresh-btn {
+    width: var(--size-control-sm);
+    height: var(--size-control-sm);
 }
 
 .cache-age {
