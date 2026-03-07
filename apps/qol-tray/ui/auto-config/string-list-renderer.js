@@ -1,13 +1,10 @@
 import { getVal } from './config-paths.js';
-import { prettyLabel } from './heuristics.js';
+import { createFieldLabel } from './field-label.js';
 
 export function renderStringList(key, path, state) {
     const div = document.createElement('div');
     div.className = 'field-group';
-    const label = document.createElement('div');
-    label.className = 'field-label';
-    label.textContent = prettyLabel(key);
-    div.appendChild(label);
+    div.appendChild(createFieldLabel(key));
     const listEl = document.createElement('div');
     listEl.className = 'string-list';
     div.appendChild(listEl);

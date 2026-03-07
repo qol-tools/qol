@@ -17,38 +17,72 @@ import {
 import { renderStringList } from './string-list-renderer.js';
 import { renderObjectArray } from './object-array-renderer.js';
 
-export function renderConfig(container, obj, state, path = '') {
-    for (const [key, value] of Object.entries(obj)) {
-        const fullPath = path ? `${path}.${key}` : key;
+export function renderConfig(container, obj, state) {
+    const renderState = { config: state.config, path: '', depth: 0 };
+    renderEntries(container, obj, renderState);
+}
 
-        if (typeof value === 'boolean') {
-            container.appendChild(renderBoolean(key, fullPath, state));
-        } else if (typeof value === 'number') {
-            container.appendChild(renderNumber(key, value, fullPath, state));
-        } else if (isColorField(key, value)) {
-            container.appendChild(renderColor(key, fullPath, state));
-        } else if (typeof value === 'string') {
-            container.appendChild(renderString(key, fullPath, state));
-        } else if (isModArray(key, value)) {
-            container.appendChild(renderModArrayStandalone(key, fullPath, state));
-        } else if (isStringArray(value)) {
-            container.appendChild(renderStringList(key, fullPath, state));
-        } else if (isObjectArray(value) || isEmptyObjectArray(key, value)) {
-            container.appendChild(renderObjectArray(key, value, fullPath, state));
-        } else if (isPlainObject(value)) {
-            container.appendChild(renderSection(key, value, fullPath, state));
-        }
+function renderEntries(container, obj, renderState) {
+    for (const [key, value] of Object.entries(obj)) {
+        const nextState = nextRenderState(renderState, key);
+        container.appendChild(renderEntry(key, value, nextState));
     }
 }
 
-export function renderSection(key, value, path, state) {
-    const card = document.createElement('section');
-    card.className = 'card';
+function renderEntry(key, value, renderState) {
+    if (typeof value === 'boolean') return renderBoolean(key, renderState.path, renderState);
+    if (typeof value === 'number') return renderNumber(key, value, renderState.path, renderState);
+    if (isColorField(key, value)) return renderColor(key, renderState.path, renderState);
+    if (typeof value === 'string') return renderString(key, renderState.path, renderState);
+    if (isModArray(key, value)) return renderModArrayStandalone(key, renderState.path, renderState);
+    if (isStringArray(value)) return renderStringList(key, renderState.path, renderState);
+    if (isObjectArray(value) || isEmptyObjectArray(key, value)) {
+        return renderObjectArray(key, value, renderState.path, renderState);
+    }
+    if (isPlainObject(value)) return renderSection(key, value, renderState);
+    return document.createDocumentFragment();
+}
 
-    const heading = document.createElement('h2');
-    heading.textContent = prettyLabel(key);
-    card.appendChild(heading);
+function renderSection(key, value, renderState) {
+    const section = createSection(renderState.depth);
+    section.appendChild(createHeading(key, renderState.depth));
+    renderEntries(section, value, nestedState(renderState));
+    return section;
+}
 
-    renderConfig(card, value, state, path);
-    return card;
+function createSection(depth) {
+    const section = document.createElement('section');
+    section.className = depth === 1 ? 'card config-section' : 'nested-section config-subsection';
+    return section;
+}
+
+function createHeading(key, depth) {
+    const heading = document.createElement(depth === 1 ? 'h2' : 'h3');
+    const text = prettyLabel(key);
+    heading.className = headingClassName(text);
+    heading.textContent = text;
+    heading.title = text;
+    return heading;
+}
+
+function nextRenderState(renderState, key) {
+    return {
+        config: renderState.config,
+        path: renderState.path ? `${renderState.path}.${key}` : key,
+        depth: renderState.depth + 1,
+    };
+}
+
+function nestedState(renderState) {
+    return {
+        config: renderState.config,
+        path: renderState.path,
+        depth: renderState.depth,
+    };
+}
+
+function headingClassName(text) {
+    if (text.length > 28) return 'section-title-tight';
+    if (text.length > 20) return 'section-title-compact';
+    return '';
 }
