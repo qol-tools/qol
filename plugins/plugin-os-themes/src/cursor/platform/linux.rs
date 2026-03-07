@@ -102,19 +102,47 @@ fn velocity(samples: &VecDeque<(Instant, i32, i32)>) -> f64 {
 
 fn grow_cursor(display: *mut xlib::Display, root: xlib::Window) -> Option<xlib::Cursor> {
     let cursor = make_grown_cursor(display)?;
-    unsafe {
-        xlib::XDefineCursor(display, root, cursor);
-        xlib::XFlush(display);
-    }
+    apply_to_tree(display, root, cursor);
+    unsafe { xlib::XFlush(display) };
     Some(cursor)
 }
 
 fn restore_cursor(display: *mut xlib::Display, root: xlib::Window, cursor: xlib::Cursor) {
+    clear_from_tree(display, root);
     unsafe {
-        xlib::XUndefineCursor(display, root);
         xlib::XFreeCursor(display, cursor);
         xlib::XFlush(display);
     }
+}
+
+fn apply_to_tree(display: *mut xlib::Display, window: xlib::Window, cursor: xlib::Cursor) {
+    unsafe { xlib::XDefineCursor(display, window, cursor) };
+    for child in window_children(display, window) {
+        apply_to_tree(display, child, cursor);
+    }
+}
+
+fn clear_from_tree(display: *mut xlib::Display, window: xlib::Window) {
+    unsafe { xlib::XUndefineCursor(display, window) };
+    for child in window_children(display, window) {
+        clear_from_tree(display, child);
+    }
+}
+
+fn window_children(display: *mut xlib::Display, window: xlib::Window) -> Vec<xlib::Window> {
+    let mut root_ret: xlib::Window = 0;
+    let mut parent_ret: xlib::Window = 0;
+    let mut children: *mut xlib::Window = ptr::null_mut();
+    let mut nchildren: u32 = 0;
+    let ok = unsafe {
+        xlib::XQueryTree(display, window, &mut root_ret, &mut parent_ret, &mut children, &mut nchildren)
+    };
+    if ok == 0 || children.is_null() {
+        return Vec::new();
+    }
+    let vec = unsafe { std::slice::from_raw_parts(children, nchildren as usize).to_vec() };
+    unsafe { xlib::XFree(children as *mut _) };
+    vec
 }
 
 fn make_grown_cursor(display: *mut xlib::Display) -> Option<xlib::Cursor> {
