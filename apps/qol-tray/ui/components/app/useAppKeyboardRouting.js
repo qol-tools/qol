@@ -28,9 +28,7 @@ export function useAppKeyboardRouting({
             return;
         }
 
-        if (palette.active) {
-            event.preventDefault();
-            if (event.key === 'Escape') palette.deactivate();
+        if (palette.active && event.key !== 'Tab') {
             return;
         }
 

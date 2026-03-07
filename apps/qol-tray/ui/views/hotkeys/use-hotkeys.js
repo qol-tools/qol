@@ -1,7 +1,6 @@
 import { useEffect, useCallback } from 'preact/hooks';
 import { useStateRef } from '../../hooks/useStateRef.js';
 import { usePersistedIndex } from '../../hooks/usePersistedIndex.js';
-import { useScrollIntoView } from '../../hooks/useScrollIntoView.js';
 import { withShiftVariants, dispatchKey } from '../../utils/keys.js';
 import {
     buildSavedHotkeys,
@@ -49,7 +48,6 @@ function useHotkeysData() {
     const [editModal, setEditModal, editModalRef] = useStateRef(null);
     const [modalFieldIndex, setModalFieldIndex, modalFieldIndexRef] = useStateRef(0);
     useEffect(() => { loadInitialData(setHotkeys, setPlugins, setSelectedIndex, markRestored); }, []);
-    useScrollIntoView('.hotkey-row.selected', [selectedIndex]);
     return {
         hotkeys, setHotkeys, hotkeysRef,
         plugins,

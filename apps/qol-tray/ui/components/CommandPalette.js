@@ -2,11 +2,15 @@ import { html } from '../lib/html.js';
 import { useRef, useState, useEffect, useMemo, useCallback } from 'preact/hooks';
 import { usePaletteContext } from '../palette/context.js';
 import { getCommands } from '../palette/registry.js';
+import { fuzzyMatch } from '../lib/fuzzy.js';
 
 function filterCommands(commands, query) {
     if (!query) return commands;
-    const q = query.toLowerCase();
-    return commands.filter(c => c.label.toLowerCase().includes(q));
+    return commands
+        .map(c => ({ cmd: c, match: fuzzyMatch(query, c.label) }))
+        .filter(({ match }) => match !== null)
+        .sort((a, b) => a.match.score - b.match.score)
+        .map(({ cmd }) => cmd);
 }
 
 export function CommandPalette() {
@@ -43,23 +47,20 @@ export function CommandPalette() {
             deactivate();
             return;
         }
-        if (e.key === 'Tab') {
-            e.preventDefault();
-            return;
-        }
         if (mode !== 'action' || commands.length === 0) return;
         if (e.key === 'ArrowDown') {
             e.preventDefault();
-            setSelectedIndex(i => Math.min(i + 1, commands.length - 1));
+            setSelectedIndex(i => i + 1 >= commands.length ? 0 : i + 1);
             return;
         }
         if (e.key === 'ArrowUp') {
             e.preventDefault();
-            setSelectedIndex(i => Math.max(i - 1, 0));
+            setSelectedIndex(i => i - 1 < 0 ? commands.length - 1 : i - 1);
             return;
         }
         if (e.key === 'Enter') {
             e.preventDefault();
+            e.stopPropagation();
             const cmd = commands[selectedIndex];
             if (cmd) executeCommand(cmd);
         }
