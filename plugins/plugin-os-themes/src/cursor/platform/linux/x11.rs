@@ -52,14 +52,6 @@ impl CursorSession {
         }
     }
 
-    pub fn reapply_active(&self) {
-        let Some(cursor) = self.active_cursor else {
-            return;
-        };
-        apply_to_tree(self.display, self.root, cursor);
-        self.flush();
-    }
-
     pub fn restore(&mut self) {
         let had_active_cursor = self.active_cursor.is_some();
         self.free_active_cursor();
