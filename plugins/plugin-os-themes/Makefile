@@ -1,6 +1,6 @@
 .PHONY: dev release
 
-BINARY=plugin-template
+BINARY=plugin-os-themes
 OUTPUT=./$(BINARY)
 STAGED=./$(BINARY).new
 

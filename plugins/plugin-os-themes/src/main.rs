@@ -1,15 +1,13 @@
-mod platform;
+mod cursor;
+mod theme;
 
 use std::env;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let result = match env::args().nth(1).as_deref() {
-        None | Some("run") => {
-            println!("Hello from My Plugin");
-            Ok(())
-        }
-        Some("settings") => platform::open_settings(),
+        None | Some("run") => cursor::run(),
+        Some("settings") => cursor::open_settings(),
         Some(action) => {
             eprintln!("Unknown action: {action}");
             return ExitCode::from(1);
