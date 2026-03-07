@@ -1,3 +1,4 @@
+mod config;
 mod cursor;
 mod daemon;
 mod theme;
