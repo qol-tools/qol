@@ -91,7 +91,8 @@ pub fn run() -> Result<()> {
             last_shake = Some(now);
             scale_factor
         } else if current_scale > 1.0 + f32::EPSILON {
-            if v > config.post_trigger_threshold {
+            let at_full = current_scale >= scale_factor - f32::EPSILON;
+            if at_full && v > config.post_trigger_threshold {
                 last_shake = Some(now);
                 scale_factor
             } else if last_shake.map_or(false, |t| now - t > calm_duration) {
