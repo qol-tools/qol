@@ -16,12 +16,12 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            velocity_threshold: 3000.0,
-            shakiness_threshold: 3.0,
-            post_trigger_threshold: 800.0,
-            scale_factor: 2,
-            calm_duration_ms: 600,
-            restore_steps: 8,
+            velocity_threshold: 7777.0,
+            shakiness_threshold: 48.0,
+            post_trigger_threshold: 1500.0,
+            scale_factor: 5,
+            calm_duration_ms: 1000,
+            restore_steps: 15,
         }
     }
 }
