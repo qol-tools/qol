@@ -12,3 +12,4 @@ Cargo.lock
 .cursor/
 .idea/
 .cargo/config.toml
+.worktrees/
