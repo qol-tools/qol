@@ -78,14 +78,19 @@ impl PollRuntime {
         }
     }
 
-    fn emit_events(&mut self, mon_list: &[MonitorBounds], monitors_changed: bool) {
+    fn emit_events(
+        &mut self,
+        mon_list: &[MonitorBounds],
+        monitors_changed: bool,
+        cursor_moved: bool,
+    ) {
         if !self.shared.has_subscribers() {
             return;
         }
 
-        let events = self
-            .event_tracker
-            .build(&self.shared, mon_list, monitors_changed);
+        let events =
+            self.event_tracker
+                .build(&self.shared, mon_list, monitors_changed, cursor_moved);
         if events.is_empty() {
             return;
         }
@@ -93,10 +98,13 @@ impl PollRuntime {
         self.shared.publish(&events);
     }
 
-    fn poll_inputs(&mut self, mon_list: &[MonitorBounds]) -> bool {
+    fn poll_inputs(&mut self, mon_list: &[MonitorBounds]) -> (bool, bool) {
         let sample = self.sample_inputs(mon_list);
-        self.shared
-            .with_input(|input| apply_updates(input, &sample))
+        let cursor_moved = sample.cursor_moved;
+        let changed = self
+            .shared
+            .with_input(|input| apply_updates(input, &sample));
+        (changed, cursor_moved)
     }
 
     fn refresh_empty_monitors(&mut self) {
@@ -159,8 +167,8 @@ impl PollRuntime {
     fn tick(&mut self) -> Duration {
         let mon_list = self.shared.monitors();
         let monitors_changed = self.refresh_monitors();
-        let input_changed = self.poll_inputs(&mon_list);
-        self.emit_events(&mon_list, monitors_changed);
+        let (input_changed, cursor_moved) = self.poll_inputs(&mon_list);
+        self.emit_events(&mon_list, monitors_changed, cursor_moved);
         self.poller.tick(input_changed)
     }
 

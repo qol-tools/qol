@@ -22,6 +22,7 @@ impl EventTracker {
         shared: &SharedState,
         monitors: &[MonitorBounds],
         monitors_changed: bool,
+        cursor_moved: bool,
     ) -> Vec<RuntimeEvent> {
         let input = shared.input();
         let current_active_idx = active_monitor_idx(&input, monitors);
@@ -32,6 +33,9 @@ impl EventTracker {
             events.push(event);
         }
         if let Some(event) = self.active_monitor_event(monitors, current_active_idx) {
+            events.push(event);
+        }
+        if let Some(event) = cursor_moved_event(shared, cursor_moved) {
             events.push(event);
         }
         if let Some(event) = self.focus_event(monitors, current_focus_idx) {
@@ -72,6 +76,14 @@ impl EventTracker {
             monitor: monitor_at(monitors, current_idx),
         })
     }
+}
+
+fn cursor_moved_event(shared: &SharedState, moved: bool) -> Option<RuntimeEvent> {
+    if !moved {
+        return None;
+    }
+    let (x, y) = shared.cursor_pos()?;
+    Some(RuntimeEvent::CursorMoved { x, y })
 }
 
 fn monitors_changed_event(shared: &SharedState, changed: bool) -> Option<RuntimeEvent> {

@@ -43,6 +43,7 @@ fn publish_to_subscriber(entry: &SubscriberEntry, events: &[RuntimeEvent]) -> bo
 fn event_kind(event: &RuntimeEvent) -> RuntimeEventKind {
     match event {
         RuntimeEvent::ActiveMonitorChanged { .. } => RuntimeEventKind::ActiveMonitorChanged,
+        RuntimeEvent::CursorMoved { .. } => RuntimeEventKind::CursorMoved,
         RuntimeEvent::FocusChanged { .. } => RuntimeEventKind::FocusChanged,
         RuntimeEvent::MonitorsChanged { .. } => RuntimeEventKind::MonitorsChanged,
     }
