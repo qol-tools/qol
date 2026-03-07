@@ -1,15 +1,25 @@
 # plugin-os-themes
 
-A [qol-tray](https://github.com/qol-tools/qol-tray) plugin for cursor effects and OS-wide theming.
+A [qol-tray](https://github.com/qol-tools/qol-tray) plugin for OS-wide theming — GTK, Qt, icons, cursors, and more.
 
-## Features
+OS theming on Linux has no unified API. This plugin aims to be the single place to manage it all from qol-tray. The scope is broad; implementation is incremental.
 
-**Shake-to-grow** — shake your cursor to temporarily scale it up, then it smoothly animates back to normal size.
+## Current Features
+
+**Shake-to-grow** — shake your cursor to temporarily scale it up, then it smoothly animates back to normal.
 
 - Triggered by shaky motion (direction reversals), not just fast movement — gliding across monitors won't activate it
-- Cursor grows instantly and shrinks back gradually over configurable steps
-- Intermediate movement sustains the grown state via a lower post-trigger threshold
 - Smooth bilinear-interpolated scaling applied to all windows
+- Intermediate movement sustains the grown state via a lower post-trigger threshold
+- All parameters configurable via the qol-tray settings UI
+
+## Planned
+
+- GTK theme switching (`~/.config/gtk-3.0/settings.ini`, `gsettings`)
+- Qt theme switching (`~/.config/qt5ct/qt5ct.conf`)
+- Icon theme management
+- Cursor theme management
+- Wayland support (deferred — no cross-compositor API exists yet)
 
 ## Build
 
