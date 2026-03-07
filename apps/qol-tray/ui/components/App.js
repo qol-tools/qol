@@ -5,7 +5,7 @@ import { useApp } from './app/useApp.js';
 import { renderMountedViews } from './app/views.js';
 
 export function App() {
-    const { devEnabled, appVersion, viewOrder, activeViewId, activePluginId, openPluginConfig, closePluginConfig, mounted, updateState, handleSidebarAction, handleViewClick } = useApp();
+    const { devEnabled, appVersion, viewOrder, activeViewId, activePluginId, openPluginConfig, closePluginConfig, mounted, updateState, handleSidebarAction, handleViewClick, worktrees, defaultWorktree, setDefaultWorktree } = useApp();
     return html`
         <div class="app-container">
             <div class="app-main">
@@ -18,7 +18,8 @@ export function App() {
             </div>
             <div class="app-footer">
                 <div id="sidebar-footer" class="app-footer-sidebar"><${SidebarFooter}
-                    version=${appVersion} updateState=${updateState} isDevMode=${devEnabled} onAction=${handleSidebarAction} /></div>
+                    version=${appVersion} updateState=${updateState} isDevMode=${devEnabled} onAction=${handleSidebarAction}
+                    worktrees=${worktrees} defaultWorktree=${defaultWorktree} setDefaultWorktree=${setDefaultWorktree} /></div>
                 <div id="content-footer" class="app-footer-content"></div>
             </div>
         </div>

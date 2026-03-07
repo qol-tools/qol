@@ -192,3 +192,40 @@ pub(super) struct SetPluginCpuMonitoringRequest {
     #[serde(default)]
     pub(super) plugin_ids: Vec<String>,
 }
+
+#[cfg(feature = "dev")]
+#[derive(Debug, Clone, Deserialize, Default)]
+pub(super) struct RecompileSelfRequest {
+    pub(super) worktree_path: Option<String>,
+}
+
+#[cfg(feature = "dev")]
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct WorktreeInfo {
+    pub(super) branch: String,
+    pub(super) path: String,
+}
+
+#[cfg(all(test, feature = "dev"))]
+mod tests {
+    use super::RecompileSelfRequest;
+
+    #[test]
+    fn recompile_request_path_is_optional() {
+        let cases = [
+            (r#"{}"#, None),
+            (r#"{"worktree_path":null}"#, None),
+            (r#"{"worktree_path":"/a/b/c"}"#, Some("/a/b/c")),
+        ];
+        for (input, expected_path) in cases {
+            let req: RecompileSelfRequest = serde_json::from_str(input)
+                .unwrap_or_else(|e| panic!("failed to parse {:?}: {}", input, e));
+            assert_eq!(
+                req.worktree_path.as_deref(),
+                expected_path,
+                "input: {}",
+                input
+            );
+        }
+    }
+}
