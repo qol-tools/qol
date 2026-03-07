@@ -106,7 +106,7 @@ fn restore_plugin_backups(plugins_dir: &Path) {
 
 #[cfg(feature = "dev")]
 fn restore_backup_entry(path: PathBuf) {
-    if !path.extension().is_some_and(|ext| ext == "backup") {
+    if path.extension().is_none_or(|ext| ext != "backup") {
         return;
     }
 

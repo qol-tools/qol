@@ -12,13 +12,13 @@ pub struct ClassifiedSource {
     pub installed_not_linked: bool,
 }
 
-pub struct LinkState<'a> {
+pub(super) struct LinkState<'a> {
     plugins_dir: &'a Path,
     dev_links: &'a HashMap<String, PathBuf>,
 }
 
 impl<'a> LinkState<'a> {
-    pub fn new(plugins_dir: &'a Path, dev_links: &'a HashMap<String, PathBuf>) -> Self {
+    pub(super) fn new(plugins_dir: &'a Path, dev_links: &'a HashMap<String, PathBuf>) -> Self {
         Self {
             plugins_dir,
             dev_links,
@@ -26,7 +26,7 @@ impl<'a> LinkState<'a> {
     }
 }
 
-pub fn classify_sources(
+pub(super) fn classify_sources(
     plugin_dirs: &[PathBuf],
     link_state: &LinkState<'_>,
 ) -> Vec<ClassifiedSource> {

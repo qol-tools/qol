@@ -1,6 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
+pub(super) struct RowConfig {
+    pub(super) cpu_percent_window_samples: usize,
+    pub(super) history_limit: usize,
+}
+
 use super::super::snapshot::PluginCpuPoint;
 use super::super::state::{PluginCpuRow, PluginCpuState, PluginPidSet};
 
@@ -31,19 +36,17 @@ pub(super) fn sample_plugin_row(
     current_cpu_by_pid: &HashMap<i32, u64>,
     elapsed: f64,
     timestamp_ms: u64,
-    cpu_percent_window_samples: usize,
-    history_limit: usize,
+    config: &RowConfig,
 ) {
+    let cpu_percent_window_samples = config.cpu_percent_window_samples;
+    let history_limit = config.history_limit;
     let (cpu_percent, cpu_total_micros) = sample_plugin_cpu(
         &mut state.pid_cpu_micros,
         &pid_set,
         current_cpu_by_pid,
         elapsed,
     );
-    let row = state
-        .plugin_rows
-        .entry(plugin_id)
-        .or_insert_with(PluginCpuRow::default);
+    let row = state.plugin_rows.entry(plugin_id).or_default();
     row.daemon_pid = pid_set.daemon_pid;
     row.action_pids = pid_set.action_pids;
     update_smoothed_cpu_percent(row, cpu_percent, cpu_percent_window_samples);

@@ -42,8 +42,10 @@ pub(super) fn sample_once(
         &current_cpu_by_pid,
         elapsed,
         timestamp_ms,
-        cpu_percent_window_samples,
-        history_limit,
+        &rows::RowConfig {
+            cpu_percent_window_samples,
+            history_limit,
+        },
     );
 }
 
@@ -53,8 +55,7 @@ fn sample_rows(
     current_cpu_by_pid: &HashMap<i32, u64>,
     elapsed: f64,
     timestamp_ms: u64,
-    cpu_percent_window_samples: usize,
-    history_limit: usize,
+    config: &rows::RowConfig,
 ) {
     for (plugin_id, pid_set) in plugin_pids {
         rows::sample_plugin_row(
@@ -64,8 +65,7 @@ fn sample_rows(
             current_cpu_by_pid,
             elapsed,
             timestamp_ms,
-            cpu_percent_window_samples,
-            history_limit,
+            config,
         );
     }
 }

@@ -1,5 +1,3 @@
-#![cfg(feature = "dev")]
-
 mod platform;
 mod sampling;
 mod snapshot;

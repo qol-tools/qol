@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use walkdir::{DirEntry, WalkDir};
 
-pub fn find_plugin_dirs(search_paths: &[PathBuf]) -> Vec<PathBuf> {
+pub(super) fn find_plugin_dirs(search_paths: &[PathBuf]) -> Vec<PathBuf> {
     let mut plugins = Vec::new();
 
     for search_path in search_paths {

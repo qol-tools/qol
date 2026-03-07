@@ -1,5 +1,3 @@
-#![cfg(feature = "dev")]
-
 use std::sync::RwLock;
 
 #[derive(Debug, Clone, serde::Serialize)]

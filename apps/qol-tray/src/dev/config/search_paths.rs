@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use super::DevConfig;
 
-pub fn effective_search_paths(config: &DevConfig) -> Vec<PathBuf> {
+pub(super) fn effective_search_paths(config: &DevConfig) -> Vec<PathBuf> {
     unique_paths(configured_or_default_paths(config))
 }
 

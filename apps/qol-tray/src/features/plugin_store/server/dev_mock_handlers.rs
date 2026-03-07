@@ -1,5 +1,3 @@
-#![cfg(feature = "dev")]
-
 use axum::{
     extract::State,
     http::StatusCode,
