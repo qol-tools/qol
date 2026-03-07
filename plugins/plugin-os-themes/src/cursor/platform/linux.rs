@@ -75,7 +75,7 @@ pub fn run() -> Result<()> {
         } else if last_shake.map_or(false, |t| now - t > calm_duration) {
             if let Some(cursor) = grown.take() {
                 eprintln!("[shake-to-grow] restore");
-                restore_cursor(display, root, cursor);
+                restore_cursor(display, root, cursor, config.scale_factor, config.restore_steps);
             }
             last_shake = None;
         }
@@ -131,17 +131,42 @@ fn grow_cursor(display: *mut xlib::Display, root: xlib::Window, scale: u32) -> O
     Some(cursor)
 }
 
-fn restore_cursor(display: *mut xlib::Display, root: xlib::Window, grown: xlib::Cursor) {
-    if let Some(normal) = make_grown_cursor(display, 1) {
-        apply_to_tree(display, root, normal);
-        unsafe { xlib::XFreeCursor(display, normal) };
-    } else {
-        clear_from_tree(display, root);
+fn restore_cursor(
+    display: *mut xlib::Display,
+    root: xlib::Window,
+    grown: xlib::Cursor,
+    scale: u32,
+    steps: u32,
+) {
+    let raw_size = unsafe { xcursor::XcursorGetDefaultSize(display) };
+    let base_size = if raw_size > 0 { raw_size } else { 24 };
+    let steps = steps.max(1);
+    for step in 1..=steps {
+        if !RUNNING.load(Ordering::Relaxed) {
+            break;
+        }
+        let t = step as f32 / steps as f32;
+        let size = (base_size as f32 * (scale as f32 * (1.0 - t) + t)) as i32;
+        let theme = unsafe { xcursor::XcursorGetTheme(display) };
+        let images = unsafe {
+            xcursor::XcursorLibraryLoadImages(c"left_ptr".as_ptr(), theme, size)
+        };
+        if images.is_null() {
+            continue;
+        }
+        let cursor = unsafe { xcursor::XcursorImagesLoadCursor(display, images) };
+        unsafe { xcursor::XcursorImagesDestroy(images) };
+        if cursor == 0 {
+            continue;
+        }
+        apply_to_tree(display, root, cursor);
+        unsafe {
+            xlib::XFlush(display);
+            xlib::XFreeCursor(display, cursor);
+        }
+        std::thread::sleep(POLL_INTERVAL);
     }
-    unsafe {
-        xlib::XFreeCursor(display, grown);
-        xlib::XFlush(display);
-    }
+    unsafe { xlib::XFreeCursor(display, grown) };
 }
 
 fn apply_to_tree(display: *mut xlib::Display, window: xlib::Window, cursor: xlib::Cursor) {

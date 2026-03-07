@@ -9,6 +9,7 @@ pub struct Config {
     pub post_trigger_threshold: f64,
     pub scale_factor: u32,
     pub calm_duration_ms: u64,
+    pub restore_steps: u32,
 }
 
 impl Default for Config {
@@ -18,6 +19,7 @@ impl Default for Config {
             post_trigger_threshold: 800.0,
             scale_factor: 2,
             calm_duration_ms: 600,
+            restore_steps: 8,
         }
     }
 }
@@ -39,8 +41,8 @@ pub fn load() -> Config {
         }
     }
     eprintln!(
-        "[shake-to-grow] config: velocity_threshold={} post_trigger_threshold={} scale_factor={} calm_duration_ms={}",
-        config.velocity_threshold, config.post_trigger_threshold, config.scale_factor, config.calm_duration_ms
+        "[shake-to-grow] config: velocity_threshold={} post_trigger_threshold={} scale_factor={} calm_duration_ms={} restore_steps={}",
+        config.velocity_threshold, config.post_trigger_threshold, config.scale_factor, config.calm_duration_ms, config.restore_steps
     );
     config
 }
