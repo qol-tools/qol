@@ -4,3 +4,4 @@ config.json
 target/
 plugin-template
 plugin-template.new
+.cargo/config.toml
