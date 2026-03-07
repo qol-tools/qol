@@ -9,6 +9,11 @@ platforms = ["linux"]
 command = "plugin-os-themes"
 actions = { run = ["run"], settings = ["settings"] }
 
+[daemon]
+enabled = true
+command = "plugin-os-themes"
+socket = "/tmp/qol-os-themes.sock"
+
 [menu]
 label = "OS Themes"
 items = [

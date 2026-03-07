@@ -1,23 +1,55 @@
 mod cursor;
+mod daemon;
 mod theme;
 
 use std::env;
 use std::process::ExitCode;
+use std::sync::mpsc;
 
 fn main() -> ExitCode {
-    let result = match env::args().nth(1).as_deref() {
-        None | Some("run") => cursor::run(),
-        Some("settings") => cursor::open_settings(),
+    match env::args().nth(1).as_deref() {
+        None | Some("run") => run_daemon(),
+        Some("settings") => run_settings(),
+        Some("kill") => {
+            daemon::send_kill();
+            ExitCode::SUCCESS
+        }
         Some(action) => {
             eprintln!("Unknown action: {action}");
-            return ExitCode::from(1);
+            ExitCode::from(1)
         }
-    };
+    }
+}
 
+fn run_daemon() -> ExitCode {
+    if daemon::send_ping() {
+        return ExitCode::SUCCESS;
+    }
+    let (tx, rx) = mpsc::channel();
+    if !daemon::start_listener(tx) {
+        return ExitCode::from(1);
+    }
+    std::thread::spawn(move || {
+        if matches!(rx.recv(), Ok(daemon::Command::Kill)) {
+            cursor::request_shutdown();
+        }
+    });
+    let result = cursor::run();
+    daemon::cleanup();
     match result {
         Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("{error:#}");
+        Err(e) => {
+            eprintln!("{e:#}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn run_settings() -> ExitCode {
+    match cursor::open_settings() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("{e:#}");
             ExitCode::from(1)
         }
     }
