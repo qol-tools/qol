@@ -83,6 +83,10 @@ body {
     font-size: 1rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .card > p {
@@ -90,6 +94,63 @@ body {
     color: var(--cfg-text-subtle);
     font-size: 0.85rem;
     line-height: 1.3;
+}
+
+.config-section {
+    padding: 1rem;
+}
+
+.config-subsection {
+    margin-top: 0.75rem;
+    padding: 0.85rem 0.95rem 0.3rem;
+    background: rgba(3, 13, 33, 0.42);
+    border: 1px solid rgba(82, 122, 191, 0.24);
+    border-radius: 12px;
+}
+
+.config-section,
+.config-subsection {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.75rem 1rem;
+    align-items: start;
+}
+
+.config-section > h2,
+.config-subsection > h3,
+.config-section > p,
+.config-subsection > p,
+.config-section > .nested-section,
+.config-subsection > .nested-section,
+.config-section > .rules-list,
+.config-subsection > .rules-list,
+.config-section > .add-rule-row,
+.config-subsection > .add-rule-row {
+    grid-column: 1 / -1;
+}
+
+.config-subsection:first-of-type {
+    margin-top: 0.35rem;
+}
+
+.config-subsection h3 {
+    margin: 0 0 0.8rem;
+    color: var(--cfg-text-bright);
+    font-size: 0.86rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.section-title-compact {
+    font-size: 0.9em;
+}
+
+.section-title-tight {
+    font-size: 0.82em;
 }
 
 .toggle-row {
@@ -116,18 +177,31 @@ body {
     color: var(--cfg-text-subtle);
     font-size: 0.85rem;
     margin-bottom: 0.3rem;
+    min-width: 0;
+    line-height: 1.25;
+    display: block;
+    overflow-wrap: normal;
+    word-break: normal;
+}
+
+.field-label-compact {
+    font-size: 0.8rem;
+}
+
+.field-label-tight {
+    font-size: 0.75rem;
 }
 
 .text-input,
 .number-input,
 select.field-select {
-    padding: 0.45rem 0.7rem;
+    padding: var(--pad-input-compact);
     background: var(--cfg-input-bg);
     border: 1px solid var(--cfg-input-border);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     color: var(--cfg-text-strong);
     font-family: var(--font-mono);
-    font-size: 0.85rem;
+    font-size: var(--fs-md-minus);
 }
 
 .text-input {
@@ -135,7 +209,19 @@ select.field-select {
 }
 
 .number-input {
-    width: 100px;
+    width: 4.85rem;
+    min-width: 4.85rem;
+    appearance: textfield;
+    text-align: center;
+    justify-self: start;
+    padding-right: 1.4rem;
+    transition: border-color var(--transition), box-shadow var(--transition), background-color var(--transition);
+}
+
+.number-input,
+.number-input:hover,
+.number-input:focus {
+    cursor: ns-resize;
 }
 
 select.field-select {
@@ -147,6 +233,23 @@ select.field-select {
 select.field-select:focus {
     outline: none;
     border-color: var(--cfg-accent);
+    box-shadow: 0 0 0 1px rgba(125, 179, 255, 0.25);
+}
+
+.number-input:hover {
+    background: rgba(15, 26, 44, 0.92);
+    border-color: rgba(125, 179, 255, 0.42);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 14' fill='none' stroke='%239bc2ff' stroke-width='1.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 1.5 2.5 4'/%3E%3Cpath d='M5 1.5 7.5 4'/%3E%3Cpath d='M5 12.5 2.5 10'/%3E%3Cpath d='M5 12.5 7.5 10'/%3E%3C/svg%3E");
+    background-position: right 0.45rem center;
+    background-repeat: no-repeat;
+    background-size: 0.55rem 0.8rem;
+    box-shadow: 0 0 0 1px rgba(125, 179, 255, 0.18);
+}
+
+.number-input::-webkit-outer-spin-button,
+.number-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
 }
 
 .text-input::placeholder {
@@ -416,16 +519,26 @@ select.field-select:focus {
     padding: 0.5rem 0;
 }
 
-.nested-section {
-    margin-top: 0.5rem;
-}
-
 .nested-section .field-group {
     margin-bottom: 0.6rem;
 }
 
 .field-group {
-    margin-bottom: 0.6rem;
+    margin-bottom: 0;
+    min-width: 0;
+}
+
+.field-group-number {
+    width: auto;
+    justify-self: start;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+}
+
+.field-group-number .field-label {
+    max-width: 13rem;
+    margin-bottom: 0.4rem;
 }
 
 .field-group:last-child {

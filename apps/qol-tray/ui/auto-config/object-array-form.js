@@ -1,4 +1,5 @@
 import { getVal, setVal } from './config-paths.js';
+import { createFieldLabel } from './field-label.js';
 import { KNOWN_MODS, prettyLabel } from './heuristics.js';
 
 export function buildAddForm(container, schema, arrayPath, state, rerender) {
@@ -37,9 +38,7 @@ function buildModsInput(container, fieldKey) {
 function buildModSide(container, fieldKey) {
     const side = document.createElement('div');
     side.className = 'rule-side';
-    const label = document.createElement('span');
-    label.className = 'field-label';
-    label.textContent = prettyLabel(fieldKey);
+    const label = createFieldLabel(fieldKey);
     label.style.marginRight = '0.25rem';
     label.style.marginBottom = '0';
     side.appendChild(label);
