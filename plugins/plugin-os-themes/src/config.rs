@@ -27,21 +27,17 @@ pub fn load() -> Config {
     let config: Config = if paths.iter().any(|p| p.exists()) {
         qol_plugin_api::config::load_plugin_config(PLUGIN_NAMES)
     } else {
-        let defaults = Config::default();
-        if let Some(path) = paths.last() {
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            match serde_json::to_string_pretty(&defaults) {
-                Ok(json) => {
-                    let _ = std::fs::write(path, json);
-                    eprintln!("[shake-to-grow] wrote default config to {}", path.display());
-                }
-                Err(e) => eprintln!("[shake-to-grow] failed to write default config: {e}"),
-            }
-        }
-        defaults
+        Config::default()
     };
+    if let Some(path) = paths.last() {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match serde_json::to_string_pretty(&config) {
+            Ok(json) => { let _ = std::fs::write(path, json); }
+            Err(e) => eprintln!("[shake-to-grow] failed to write config: {e}"),
+        }
+    }
     eprintln!(
         "[shake-to-grow] config: velocity_threshold={} post_trigger_threshold={} scale_factor={} calm_duration_ms={}",
         config.velocity_threshold, config.post_trigger_threshold, config.scale_factor, config.calm_duration_ms
