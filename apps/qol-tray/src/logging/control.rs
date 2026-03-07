@@ -33,26 +33,31 @@ pub fn save_all_plugin_controls(
     config_dir: &Path,
     controls: &HashMap<String, LogControl>,
 ) -> Result<(), String> {
-    if let Err(e) = std::fs::create_dir_all(config_dir) {
-        return Err(format!(
-            "Failed to create config directory {}: {}",
-            config_dir.display(),
-            e
-        ));
-    }
-
-    let state_path = config_dir.join(LOG_CONTROL_STATE_FILE);
-    let tmp_path = config_dir.join(".dev-plugin-log-controls.tmp");
     let state = PluginLogControlFile {
         plugins: controls.clone(),
     };
-    let content = serde_json::to_string_pretty(&state)
-        .map_err(|e| format!("Failed to serialize plugin log controls: {}", e))?;
+    save_controls_file(config_dir, LOG_CONTROL_STATE_FILE, &state)
+}
 
-    std::fs::write(&tmp_path, content)
-        .map_err(|e| format!("Failed to write plugin log control temp file: {}", e))?;
-    std::fs::rename(&tmp_path, &state_path)
-        .map_err(|e| format!("Failed to finalize plugin log control file: {}", e))
+fn save_controls_file(
+    config_dir: &Path,
+    filename: &str,
+    state: &impl Serialize,
+) -> Result<(), String> {
+    std::fs::create_dir_all(config_dir).map_err(|e| {
+        format!(
+            "Failed to create config directory {}: {}",
+            config_dir.display(),
+            e
+        )
+    })?;
+    let path = config_dir.join(filename);
+    let tmp_path = config_dir.join(format!(".{}.tmp", filename));
+    let content = serde_json::to_string_pretty(state)
+        .map_err(|e| format!("Failed to serialize {}: {}", filename, e))?;
+    std::fs::write(&tmp_path, &content)
+        .map_err(|e| format!("Failed to write {}: {}", filename, e))?;
+    std::fs::rename(&tmp_path, &path).map_err(|e| format!("Failed to finalize {}: {}", filename, e))
 }
 
 pub fn load_plugin_control(config_dir: &Path, plugin_id: &str) -> LogControl {
@@ -71,43 +76,35 @@ pub fn load_plugin_control_from_shared_config(plugin_id: &str) -> LogControl {
 pub fn upsert_plugin_control(
     config_dir: &Path,
     plugin_id: &str,
-    mut control: LogControl,
+    control: LogControl,
 ) -> Result<(), String> {
-    control.suppress_patterns = normalize_patterns(control.suppress_patterns);
-
     let mut controls = load_all_plugin_controls(config_dir);
-    if control.muted || !control.suppress_patterns.is_empty() {
-        controls.insert(plugin_id.to_string(), control);
-    } else {
-        controls.remove(plugin_id);
-    }
-
+    upsert_control_entry(&mut controls, plugin_id, control);
     save_all_plugin_controls(config_dir, &controls)
 }
 
-fn normalize_patterns(patterns: Vec<String>) -> Vec<String> {
-    use std::collections::HashSet;
-
-    let mut seen = HashSet::new();
-    let mut normalized = Vec::new();
-
-    for pattern in patterns {
-        let trimmed = pattern.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let capped = if trimmed.len() > 160 {
-            trimmed[..160].to_string()
-        } else {
-            trimmed.to_string()
-        };
-
-        if seen.insert(capped.clone()) {
-            normalized.push(capped);
-        }
+fn upsert_control_entry(
+    controls: &mut HashMap<String, LogControl>,
+    key: &str,
+    mut control: LogControl,
+) {
+    control.suppress_patterns = normalize_patterns(control.suppress_patterns);
+    if !control.muted && control.suppress_patterns.is_empty() {
+        controls.remove(key);
+        return;
     }
+    controls.insert(key.to_string(), control);
+}
 
-    normalized
+fn normalize_patterns(patterns: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    patterns
+        .iter()
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .map(|p| p.chars().take(160).collect::<String>())
+        .filter(|p| seen.insert(p.clone()))
+        .collect()
 }
 
 #[cfg(feature = "dev")]
@@ -136,39 +133,20 @@ fn save_all_core_controls(
     config_dir: &Path,
     controls: &HashMap<String, LogControl>,
 ) -> Result<(), String> {
-    if let Err(e) = std::fs::create_dir_all(config_dir) {
-        return Err(format!(
-            "Failed to create config directory {}: {}",
-            config_dir.display(),
-            e
-        ));
-    }
-    let path = config_dir.join(CORE_LOG_CONTROL_STATE_FILE);
-    let tmp_path = config_dir.join(".dev-core-log-controls.tmp");
     let state = CoreLogControlFile {
         sections: controls.clone(),
     };
-    let content = serde_json::to_string_pretty(&state)
-        .map_err(|e| format!("Failed to serialize core log controls: {}", e))?;
-    std::fs::write(&tmp_path, content)
-        .map_err(|e| format!("Failed to write core log control temp file: {}", e))?;
-    std::fs::rename(&tmp_path, &path)
-        .map_err(|e| format!("Failed to finalize core log control file: {}", e))
+    save_controls_file(config_dir, CORE_LOG_CONTROL_STATE_FILE, &state)
 }
 
 #[cfg(feature = "dev")]
 pub fn upsert_core_control(
     config_dir: &Path,
     section: &str,
-    mut control: LogControl,
+    control: LogControl,
 ) -> Result<(), String> {
-    control.suppress_patterns = normalize_patterns(control.suppress_patterns);
     let mut controls = load_all_core_controls(config_dir);
-    if control.muted || !control.suppress_patterns.is_empty() {
-        controls.insert(section.to_string(), control);
-    } else {
-        controls.remove(section);
-    }
+    upsert_control_entry(&mut controls, section, control);
     save_all_core_controls(config_dir, &controls)
 }
 

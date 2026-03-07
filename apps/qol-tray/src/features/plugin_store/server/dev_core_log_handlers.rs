@@ -57,11 +57,7 @@ async fn upsert_core_log_control(
     match crate::logging::upsert_core_control(&config_dir, &section, control.clone()) {
         Ok(()) => {
             if let Ok(mut controls) = state.core_log_controls.write() {
-                if control.muted || !control.suppress_patterns.is_empty() {
-                    controls.insert(section, control);
-                } else {
-                    controls.remove(&section);
-                }
+                sync_control_cache(&mut controls, section, control);
             }
             (StatusCode::OK, "Updated".to_string()).into_response()
         }
@@ -70,4 +66,16 @@ async fn upsert_core_log_control(
             (StatusCode::INTERNAL_SERVER_ERROR, e).into_response()
         }
     }
+}
+
+fn sync_control_cache(
+    controls: &mut std::collections::HashMap<String, crate::logging::LogControl>,
+    key: String,
+    control: crate::logging::LogControl,
+) {
+    if !control.muted && control.suppress_patterns.is_empty() {
+        controls.remove(&key);
+        return;
+    }
+    controls.insert(key, control);
 }

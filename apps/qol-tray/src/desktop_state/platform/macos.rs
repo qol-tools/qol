@@ -71,10 +71,9 @@ struct CfGuard(*const c_void);
 impl CfGuard {
     fn new(ptr: *const c_void) -> Option<Self> {
         if ptr.is_null() {
-            None
-        } else {
-            Some(Self(ptr))
+            return None;
         }
+        Some(Self(ptr))
     }
 
     fn as_ptr(&self) -> *const c_void {

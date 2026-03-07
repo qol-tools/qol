@@ -128,11 +128,10 @@ pub(crate) fn monitor_for_bounds(
         .iter()
         .filter_map(|m| {
             let area = intersection_area(window, m);
-            if area > 0.0 {
-                Some((*m, area))
-            } else {
-                None
+            if area <= 0.0 {
+                return None;
             }
+            Some((*m, area))
         })
         .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(m, _)| m)

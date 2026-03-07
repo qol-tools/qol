@@ -34,47 +34,13 @@ pub fn build_menu(
 
 fn append_feature_items(menu: &Menu, items: &[PluginMenuItem], feature_id: &str) {
     for item in items {
-        append_menu_item_to_menu(menu, item, feature_id);
-    }
-}
-
-fn append_menu_item_to_menu(menu: &Menu, item: &PluginMenuItem, feature_id: &str) {
-    match item {
-        PluginMenuItem::Submenu {
-            id,
-            label,
-            items: sub_items,
-        } => {
-            let full_id = format!("{}::{}", feature_id, id);
-            log::debug!("Creating submenu with ID: {}", full_id);
-            let submenu = Submenu::with_id(&full_id, label, true);
-            sub_items
-                .iter()
-                .for_each(|sub| add_menu_item(&submenu, sub, feature_id));
-            let _ = menu.append(&submenu);
-        }
-        PluginMenuItem::Action { id, label, .. } => {
-            let _ = menu.append(&MenuItem::with_id(
-                format!("{}::{}", feature_id, id),
-                label,
-                true,
-                None,
-            ));
-        }
-        PluginMenuItem::Checkbox {
-            id, label, checked, ..
-        } => {
-            let _ = menu.append(&CheckMenuItem::with_id(
-                format!("{}::{}", feature_id, id),
-                label,
-                true,
-                *checked,
-                None,
-            ));
-        }
-        PluginMenuItem::Separator => {
-            let _ = menu.append(&PredefinedMenuItem::separator());
-        }
+        append_item(
+            &|i| {
+                let _ = menu.append(i);
+            },
+            item,
+            feature_id,
+        );
     }
 }
 
@@ -140,37 +106,38 @@ fn create_quit_route(menu: &Menu) -> EventRoute {
     }
 }
 
-fn add_menu_item(parent: &Submenu, item: &PluginMenuItem, prefix_id: &str) {
+fn append_item(
+    append: &dyn Fn(&dyn tray_icon::menu::IsMenuItem),
+    item: &PluginMenuItem,
+    prefix_id: &str,
+) {
     match item {
         PluginMenuItem::Action { id, label, .. } => {
-            let _ = parent.append(&MenuItem::with_id(
-                format!("{}::{}", prefix_id, id),
-                label,
-                true,
-                None,
-            ));
+            let full_id = format!("{}::{}", prefix_id, id);
+            append(&MenuItem::with_id(full_id, label, true, None));
         }
         PluginMenuItem::Checkbox {
             id, label, checked, ..
         } => {
-            let _ = parent.append(&CheckMenuItem::with_id(
-                format!("{}::{}", prefix_id, id),
-                label,
-                true,
-                *checked,
-                None,
+            let full_id = format!("{}::{}", prefix_id, id);
+            append(&CheckMenuItem::with_id(
+                full_id, label, true, *checked, None,
             ));
         }
         PluginMenuItem::Separator => {
-            let _ = parent.append(&PredefinedMenuItem::separator());
+            append(&PredefinedMenuItem::separator());
         }
         PluginMenuItem::Submenu { id, label, items } => {
             let full_id = format!("{}::{}", prefix_id, id);
+            log::debug!("Creating submenu with ID: {}", full_id);
             let submenu = Submenu::with_id(&full_id, label, true);
+            let sub_append: &dyn Fn(&dyn tray_icon::menu::IsMenuItem) = &|i| {
+                let _ = submenu.append(i);
+            };
             items
                 .iter()
-                .for_each(|sub| add_menu_item(&submenu, sub, prefix_id));
-            let _ = parent.append(&submenu);
+                .for_each(|sub| append_item(sub_append, sub, prefix_id));
+            append(&submenu);
         }
     }
 }

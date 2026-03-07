@@ -137,13 +137,7 @@ fn action_error_response(
         | ActionExecutionError::MissingActionMapping { .. } => StatusCode::BAD_REQUEST,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
-    let message = if status.is_server_error() {
-        log::error!("Plugin action failed for {}::{}: {}", id, action, error);
-        "Action execution failed".to_string()
-    } else {
-        log::warn!("Plugin action rejected for {}::{}: {}", id, action, error);
-        error.to_string()
-    };
+    let message = log_and_message(status, id, action, error);
     (
         status,
         Json(ExecuteActionResult {
@@ -151,4 +145,18 @@ fn action_error_response(
             message,
         }),
     )
+}
+
+fn log_and_message(
+    status: StatusCode,
+    id: &str,
+    action: &str,
+    error: &ActionExecutionError,
+) -> String {
+    if status.is_server_error() {
+        log::error!("Plugin action failed for {}::{}: {}", id, action, error);
+        return "Action execution failed".to_string();
+    }
+    log::warn!("Plugin action rejected for {}::{}: {}", id, action, error);
+    error.to_string()
 }

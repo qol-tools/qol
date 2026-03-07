@@ -43,6 +43,10 @@ fn spawn_relay<R: Read + Send + 'static>(
 }
 
 fn relay_lines(reader: impl Read, prefix: &str, suppress: Option<&[String]>, to_stderr: bool) {
+    let write: fn(&str) = match to_stderr {
+        true => |l| eprint!("{}", l),
+        false => |l| print!("{}", l),
+    };
     let mut buf = BufReader::new(reader);
     let mut line = String::new();
     loop {
@@ -55,11 +59,7 @@ fn relay_lines(reader: impl Read, prefix: &str, suppress: Option<&[String]>, to_
             break;
         }
         if !should_suppress(&line, suppress) {
-            if to_stderr {
-                eprint!("{}", line);
-            } else {
-                print!("{}", line);
-            }
+            write(&line);
         }
     }
 }
