@@ -73,8 +73,12 @@
 ## File Scope Rules
 
 - `styles.css`: only global tokens and app-wide primitives.
+- `theme-tokens.css`: color palette and semantic token definitions.
+- `common-controls.css`: shared form controls, search bars, input styles.
 - `common-components.css`: reusable component styles only.
-- View-specific files (for example `dev-page.css`): layout and view treatment only.
+- `page-header.css`: PageHeader layout, noise border/reveal animation, command palette positioning.
+- `app-shell.css`: sidebar, view slots, app-level layout.
+- View-specific files (for example `dev-layout.css`, `plugin-grid.css`): layout and view treatment only.
 - Standalone pages (for example `auto-config.html`) must define local `--cfg-*` tokens and avoid repeating raw color literals.
 
 ## Migration Rules
