@@ -54,7 +54,13 @@ inside the feature module, not at the root. Adding macOS support later means add
 
 ---
 
-## What To Build Next: shake-to-grow (X11)
+## The Only Goal Right Now: shake-to-grow (X11)
+
+Everything else in this repo (`theme/`, the roadmap section) is scaffolding that
+exists so the architecture is in place later. Do not touch it. Do not implement it.
+The one and only deliverable is shake-to-grow working on X11.
+
+## shake-to-grow (X11)
 
 This is the first real feature. Implement it in `src/cursor/platform/linux.rs`.
 
