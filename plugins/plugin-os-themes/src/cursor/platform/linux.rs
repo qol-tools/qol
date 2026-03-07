@@ -70,6 +70,8 @@ pub fn run() -> Result<()> {
                 eprintln!("[shake-to-grow] grow velocity={v:.0} px/s");
                 grown = grow_cursor(display, root, config.scale_factor);
             }
+        } else if grown.is_some() && v > config.post_trigger_threshold {
+            last_shake = Some(now);
         } else if last_shake.map_or(false, |t| now - t > calm_duration) {
             if let Some(cursor) = grown.take() {
                 eprintln!("[shake-to-grow] restore");
@@ -129,10 +131,15 @@ fn grow_cursor(display: *mut xlib::Display, root: xlib::Window, scale: u32) -> O
     Some(cursor)
 }
 
-fn restore_cursor(display: *mut xlib::Display, root: xlib::Window, cursor: xlib::Cursor) {
-    clear_from_tree(display, root);
+fn restore_cursor(display: *mut xlib::Display, root: xlib::Window, grown: xlib::Cursor) {
+    if let Some(normal) = make_grown_cursor(display, 1) {
+        apply_to_tree(display, root, normal);
+        unsafe { xlib::XFreeCursor(display, normal) };
+    } else {
+        clear_from_tree(display, root);
+    }
     unsafe {
-        xlib::XFreeCursor(display, cursor);
+        xlib::XFreeCursor(display, grown);
         xlib::XFlush(display);
     }
 }
@@ -168,7 +175,8 @@ fn window_children(display: *mut xlib::Display, window: xlib::Window) -> Vec<xli
 }
 
 fn make_grown_cursor(display: *mut xlib::Display, scale: u32) -> Option<xlib::Cursor> {
-    let base_size = unsafe { xcursor::XcursorGetDefaultSize(display) };
+    let raw_size = unsafe { xcursor::XcursorGetDefaultSize(display) };
+    let base_size = if raw_size > 0 { raw_size } else { 24 };
     let target_size = base_size * scale as i32;
     let theme = unsafe { xcursor::XcursorGetTheme(display) };
     let images = unsafe {
