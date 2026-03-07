@@ -1,15 +1,22 @@
-pub mod platform;
+mod control;
+mod platform;
 
 use anyhow::Result;
 
-pub use platform::open_settings;
-pub use platform::request_reload;
-pub use platform::request_shutdown;
-pub use platform::reset_running;
-pub use platform::run;
-pub use platform::was_reload_requested;
+use crate::config::Config;
 
-pub trait CursorEffect {
-    fn start(&self) -> Result<()>;
-    fn stop(&self) -> Result<()>;
+pub use control::{RunControl, RunState};
+pub use platform::install_signal_handlers;
+pub(crate) use control::request_external_stop;
+
+pub trait CursorEffect: Send + Sync {
+    fn run(&self, config: &Config, control: &dyn RunControl) -> Result<()>;
+}
+
+pub fn create_effect() -> Box<dyn CursorEffect> {
+    platform::create_effect()
+}
+
+pub fn open_settings() -> Result<()> {
+    platform::open_settings()
 }

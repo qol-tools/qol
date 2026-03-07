@@ -31,24 +31,48 @@ impl Default for Config {
 }
 
 pub fn load() -> Config {
-    let paths = qol_plugin_api::config::plugin_config_paths(PLUGIN_NAMES);
-    let config: Config = if paths.iter().any(|p| p.exists()) {
-        qol_plugin_api::config::load_plugin_config(PLUGIN_NAMES)
-    } else {
-        Config::default()
-    };
-    if let Some(path) = paths.last() {
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        match serde_json::to_string_pretty(&config) {
-            Ok(json) => { let _ = std::fs::write(path, json); }
-            Err(e) => eprintln!("[shake-to-grow] failed to write config: {e}"),
-        }
+    let config = load_from_disk();
+    persist(&config);
+    log_config(&config);
+    config
+}
+
+fn load_from_disk() -> Config {
+    if config_paths().iter().any(|path| path.exists()) {
+        return qol_plugin_api::config::load_plugin_config(PLUGIN_NAMES);
     }
+    Config::default()
+}
+
+fn persist(config: &Config) {
+    let Some(path) = config_paths().into_iter().last() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match serde_json::to_string_pretty(config) {
+        Ok(json) => {
+            let _ = std::fs::write(path, json);
+        }
+        Err(error) => eprintln!("[shake-to-grow] failed to write config: {error}"),
+    }
+}
+
+fn log_config(config: &Config) {
     eprintln!(
         "[shake-to-grow] config: velocity={} shakiness={} regrow_velocity={} regrow_shakiness={} post_trigger={} scale={} calm_ms={} steps={}",
-        config.velocity_threshold, config.shakiness_threshold, config.regrow_velocity_threshold, config.regrow_shakiness_threshold, config.post_trigger_threshold, config.scale_factor, config.calm_duration_ms, config.restore_steps
+        config.velocity_threshold,
+        config.shakiness_threshold,
+        config.regrow_velocity_threshold,
+        config.regrow_shakiness_threshold,
+        config.post_trigger_threshold,
+        config.scale_factor,
+        config.calm_duration_ms,
+        config.restore_steps,
     );
-    config
+}
+
+fn config_paths() -> Vec<std::path::PathBuf> {
+    qol_plugin_api::config::plugin_config_paths(PLUGIN_NAMES)
 }
