@@ -1589,6 +1589,7 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "libc",
+ "qol-plugin-api",
  "qol-tray",
  "toml 0.9.12+spec-1.1.0",
  "x11",
