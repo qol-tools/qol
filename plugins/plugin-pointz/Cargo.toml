@@ -50,12 +50,3 @@ priority = "optional"
 assets = [
     ["target/release/pointzerver", "usr/bin/", "755"],
 ]
-
-[patch."https://github.com/qol-tools/qol-runtime"]
-qol-runtime = { path = "../qol-runtime" }
-
-[patch."https://github.com/qol-tools/qol-plugin-api"]
-qol-plugin-api = { path = "../qol-plugin-api" }
-
-[patch."https://github.com/qol-tools/qol-tray"]
-qol-tray = { path = "../qol-tray" }
