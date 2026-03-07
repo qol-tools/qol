@@ -4,3 +4,4 @@ config.json
 target/
 plugin-os-themes
 plugin-os-themes.new
+.cargo/config.toml

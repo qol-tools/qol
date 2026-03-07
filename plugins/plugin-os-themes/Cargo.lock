@@ -1699,7 +1699,7 @@ dependencies = [
 [[package]]
 name = "qol-plugin-api"
 version = "0.1.0"
-source = "git+https://github.com/qol-tools/qol-plugin-api#51a6652167c6e29b633aa1b992b2d6ce90d85bcb"
+source = "git+https://github.com/qol-tools/qol-plugin-api#d78a07d3ef74f7ae8e55f0fe74133bed98814504"
 dependencies = [
  "dirs",
  "objc2",
@@ -1722,8 +1722,8 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "2.3.0"
-source = "git+https://github.com/qol-tools/qol-tray#7b816a55af273af6bed02c3ecc93da8ef1aad0e1"
+version = "2.5.0"
+source = "git+https://github.com/qol-tools/qol-tray#04860edc824507bba788be747df5b621336b236a"
 dependencies = [
  "anyhow",
  "axum",
