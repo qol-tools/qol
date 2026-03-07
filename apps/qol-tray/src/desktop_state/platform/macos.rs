@@ -197,7 +197,7 @@ pub(super) struct MacQueries {
 }
 
 impl MacQueries {
-    pub fn new(own_pid: i32) -> Self {
+    pub(super) fn new(own_pid: i32) -> Self {
         Self { own_pid }
     }
 }

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
-pub fn create_tray(
+pub(super) fn create_tray(
     feature_registry: Arc<FeatureRegistry>,
     shutdown_tx: broadcast::Sender<()>,
     icon: Icon,
@@ -26,7 +26,7 @@ pub fn create_tray(
     Ok(tray_icon)
 }
 
-pub fn run_event_loop() {
+pub(super) fn run_event_loop() {
     use objc2_app_kit::NSApplication;
     use objc2_foundation::MainThreadMarker;
 
