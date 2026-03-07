@@ -87,7 +87,12 @@ pub fn run() -> Result<()> {
         }
 
         let v = velocity(&samples);
-        let is_shake = v > config.velocity_threshold && shakiness(&samples) > config.shakiness_threshold;
+        let s = shakiness(&samples);
+        let is_shake = if !growing && current_scale > 1.0 + f32::EPSILON {
+            v > config.regrow_velocity_threshold && s > config.regrow_shakiness_threshold
+        } else {
+            v > config.velocity_threshold && s > config.shakiness_threshold
+        };
 
         if is_shake {
             growing = true;
