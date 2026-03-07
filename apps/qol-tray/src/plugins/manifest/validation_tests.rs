@@ -31,15 +31,7 @@ fn base_manifest() -> PluginManifest {
 }
 
 fn valid_basename_strategy() -> impl Strategy<Value = String> {
-    let first = prop_oneof!['a'..='z', 'A'..='Z', '0'..='9', Just('_')];
-    let rest = prop_oneof!['a'..='z', 'A'..='Z', '0'..='9', Just('_'), Just('-')];
-
-    (first, prop::collection::vec(rest, 0..63)).prop_map(|(first, rest)| {
-        let mut value = String::with_capacity(rest.len() + 1);
-        value.push(first);
-        value.extend(rest);
-        value
-    })
+    proptest::string::string_regex("[a-zA-Z0-9_][a-zA-Z0-9_-]{0,62}").unwrap()
 }
 
 mod manifest_rules {
@@ -66,7 +58,6 @@ mod manifest_rules {
 
 mod command_rules {
     use super::*;
-    use proptest::prelude::*;
 
     #[test]
     fn validate_rejects_absolute_runtime_command() {
