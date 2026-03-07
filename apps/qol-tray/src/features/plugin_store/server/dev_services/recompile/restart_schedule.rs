@@ -22,10 +22,12 @@ pub(super) fn schedule_self_restart_after_idle(
         else {
             return;
         };
-        if !spawn_restart(runtime.as_ref(), restart.as_ref(), &restart_binary) {
-            return;
-        }
-        shutdown_and_exit(plugin_manager);
+        exec_restart_after_cleanup(
+            plugin_manager,
+            runtime.as_ref(),
+            restart.as_ref(),
+            &restart_binary,
+        );
     });
 }
 
@@ -58,25 +60,12 @@ fn resolve_restart_binary(
     Some(path)
 }
 
-fn spawn_restart(
+fn exec_restart_after_cleanup(
+    plugin_manager: Arc<Mutex<crate::plugins::PluginManager>>,
     runtime: &DevRuntimeService,
     restart: &dyn RestartPort,
     restart_binary: &Path,
-) -> bool {
-    if let Err(error) = restart.spawn_delayed_restart(restart_binary) {
-        log::error!(
-            "Self recompile completed but restart spawn failed for {}: {}",
-            restart_binary.display(),
-            error
-        );
-        runtime.clear_restart_pending();
-        return false;
-    }
-
-    true
-}
-
-fn shutdown_and_exit(plugin_manager: Arc<Mutex<crate::plugins::PluginManager>>) {
+) {
     match plugin_manager.lock() {
         Ok(mut manager) => manager.shutdown(),
         Err(error) => log::error!(
@@ -84,6 +73,14 @@ fn shutdown_and_exit(plugin_manager: Arc<Mutex<crate::plugins::PluginManager>>) 
             error
         ),
     }
-
+    if let Err(error) = restart.exec_restart(restart_binary) {
+        log::error!(
+            "Self recompile exec restart failed for {}: {}",
+            restart_binary.display(),
+            error
+        );
+        runtime.clear_restart_pending();
+        std::process::exit(1);
+    }
     std::process::exit(0);
 }
