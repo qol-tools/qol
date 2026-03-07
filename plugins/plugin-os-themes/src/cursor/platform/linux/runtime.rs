@@ -22,7 +22,7 @@ struct LinuxCursorEffect;
 
 impl CursorEffect for LinuxCursorEffect {
     fn run(&self, config: &Config, control: &dyn RunControl) -> Result<()> {
-        let Some(mut session) = open_session(config.shake_to_grow().scale_factor)? else {
+        let Some(mut session) = open_session(config.scale_factor)? else {
             return Ok(());
         };
         let client = PlatformStateClient::from_env();
