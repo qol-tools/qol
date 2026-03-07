@@ -127,6 +127,11 @@ pub fn run() -> Result<()> {
                     unsafe { xlib::XFreeCursor(display, old) };
                 }
             }
+        } else if current_scale > 1.0 + f32::EPSILON {
+            if let Some(cursor) = active_cursor {
+                apply_to_tree(display, root, cursor);
+                unsafe { xlib::XFlush(display) };
+            }
         }
     }
 
