@@ -122,3 +122,9 @@ assets = [
     ["assets/icon.png", "usr/share/icons/hicolor/64x64/apps/qol-tray.png", "644"],
 ]
 maintainer-scripts = "scripts/installer/platform/linux/debian/"
+
+[patch."https://github.com/qol-tools/qol-runtime"]
+qol-runtime = { path = "../qol-runtime" }
+
+[patch."https://github.com/qol-tools/qol-plugin-api"]
+qol-plugin-api = { path = "../qol-plugin-api" }
