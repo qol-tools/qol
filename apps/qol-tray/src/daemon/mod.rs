@@ -94,11 +94,17 @@ mod dev_tests {
     use crate::dev::state::DiscoveredPluginInfo;
 
     fn plugin(id: &str, name: &str, path: &str) -> DiscoveredPluginInfo {
-        DiscoveredPluginInfo { id: id.into(), name: name.into(), path: path.into() }
+        DiscoveredPluginInfo {
+            id: id.into(),
+            name: name.into(),
+            path: path.into(),
+        }
     }
 
     fn assert_discovery_event(plugins: Vec<DiscoveredPluginInfo>, expected_count: usize) {
-        let event = DaemonEvent::DiscoveryComplete { plugins: plugins.clone() };
+        let event = DaemonEvent::DiscoveryComplete {
+            plugins: plugins.clone(),
+        };
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "discovery_complete");
         assert_eq!(json["plugins"].as_array().unwrap().len(), expected_count);
@@ -129,7 +135,13 @@ mod dev_tests {
     fn discovery_complete_serializes_plugin_data() {
         assert_discovery_event(vec![], 0);
         assert_discovery_event(vec![plugin("plugin-a", "Plugin A", "/path/a")], 1);
-        assert_discovery_event(vec![plugin("plugin-a", "Plugin A", "/path/a"), plugin("plugin-b", "Plugin B", "/path/b")], 2);
+        assert_discovery_event(
+            vec![
+                plugin("plugin-a", "Plugin A", "/path/a"),
+                plugin("plugin-b", "Plugin B", "/path/b"),
+            ],
+            2,
+        );
     }
 
     #[test]

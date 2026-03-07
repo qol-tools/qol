@@ -51,7 +51,12 @@ fn loaded_plugins_by_id(
 ) -> HashMap<String, InstalledPlugin> {
     manager
         .plugins()
-        .map(|plugin| (plugin.id.clone(), loaded_plugin_info(plugin, cached_versions)))
+        .map(|plugin| {
+            (
+                plugin.id.clone(),
+                loaded_plugin_info(plugin, cached_versions),
+            )
+        })
         .collect()
 }
 

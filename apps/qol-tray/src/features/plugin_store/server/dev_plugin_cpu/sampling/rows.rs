@@ -34,8 +34,16 @@ pub(super) fn sample_plugin_row(
     cpu_percent_window_samples: usize,
     history_limit: usize,
 ) {
-    let (cpu_percent, cpu_total_micros) = sample_plugin_cpu(&mut state.pid_cpu_micros, &pid_set, current_cpu_by_pid, elapsed);
-    let row = state.plugin_rows.entry(plugin_id).or_insert_with(PluginCpuRow::default);
+    let (cpu_percent, cpu_total_micros) = sample_plugin_cpu(
+        &mut state.pid_cpu_micros,
+        &pid_set,
+        current_cpu_by_pid,
+        elapsed,
+    );
+    let row = state
+        .plugin_rows
+        .entry(plugin_id)
+        .or_insert_with(PluginCpuRow::default);
     row.daemon_pid = pid_set.daemon_pid;
     row.action_pids = pid_set.action_pids;
     update_smoothed_cpu_percent(row, cpu_percent, cpu_percent_window_samples);
@@ -50,8 +58,12 @@ fn sample_pid_cpu_percent(
     elapsed: f64,
 ) -> f64 {
     let previous = pid_cpu_micros.insert(pid_i32, current_cpu_micros);
-    let Some(previous) = previous else { return 0.0; };
-    if elapsed <= 0.0 { return 0.0; }
+    let Some(previous) = previous else {
+        return 0.0;
+    };
+    if elapsed <= 0.0 {
+        return 0.0;
+    }
     let delta_micros = current_cpu_micros.saturating_sub(previous) as f64;
     (delta_micros / 1_000_000.0) / elapsed * 100.0
 }
@@ -66,7 +78,9 @@ fn sample_plugin_cpu(
     let mut cpu_total_micros: u128 = 0;
     for pid in &pid_set.all_pids {
         let pid_i32 = *pid as i32;
-        let Some(current_cpu_micros) = current_cpu_by_pid.get(&pid_i32).copied() else { continue; };
+        let Some(current_cpu_micros) = current_cpu_by_pid.get(&pid_i32).copied() else {
+            continue;
+        };
         cpu_total_micros += current_cpu_micros as u128;
         cpu_percent += sample_pid_cpu_percent(pid_cpu_micros, pid_i32, current_cpu_micros, elapsed);
     }
@@ -74,7 +88,10 @@ fn sample_plugin_cpu(
 }
 
 fn update_row_history(row: &mut PluginCpuRow, timestamp_ms: u64, history_limit: usize) {
-    row.history.push_back(PluginCpuPoint { timestamp_ms, cpu_percent: row.cpu_percent });
+    row.history.push_back(PluginCpuPoint {
+        timestamp_ms,
+        cpu_percent: row.cpu_percent,
+    });
     while row.history.len() > history_limit {
         row.history.pop_front();
     }

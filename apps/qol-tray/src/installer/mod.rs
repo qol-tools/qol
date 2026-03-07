@@ -23,8 +23,12 @@ pub fn run() -> Result<()> {
     let repo_root = env::current_dir().context("Failed to determine current directory")?;
     let source_binary = source::resolve_source_binary(&repo_root)?;
     let install_dir = platform::install_dir()?;
-    fs::create_dir_all(&install_dir)
-        .with_context(|| format!("Failed to create install directory {}", install_dir.display()))?;
+    fs::create_dir_all(&install_dir).with_context(|| {
+        format!(
+            "Failed to create install directory {}",
+            install_dir.display()
+        )
+    })?;
     let installed_binary = install_dir.join(platform::binary_filename());
     platform::stop_running(&installed_binary)?;
     install_binary_atomically(&source_binary, &installed_binary)?;
@@ -56,7 +60,10 @@ fn print_summary(
     println!("Autostart entry: {}", platform::autostart_path()?.display());
     println!("Plugins directory: {}", plugins_dir.display());
     if !is_in_path(install_dir) {
-        println!("{} is not in PATH. Add it to run qol-tray directly.", install_dir.display());
+        println!(
+            "{} is not in PATH. Add it to run qol-tray directly.",
+            install_dir.display()
+        );
     }
     Ok(())
 }
@@ -66,12 +73,22 @@ fn install_binary_atomically(source_binary: &Path, installed_binary: &Path) -> R
     if staged_binary.exists() {
         let _ = fs::remove_file(&staged_binary);
     }
-    fs::copy(source_binary, &staged_binary)
-        .with_context(|| format!("Failed to copy {} to {}", source_binary.display(), staged_binary.display()))?;
+    fs::copy(source_binary, &staged_binary).with_context(|| {
+        format!(
+            "Failed to copy {} to {}",
+            source_binary.display(),
+            staged_binary.display()
+        )
+    })?;
     platform::set_executable_permissions(&staged_binary)?;
     platform::prepare_atomic_replace(installed_binary)?;
-    fs::rename(&staged_binary, installed_binary)
-        .with_context(|| format!("Failed to finalize install by moving {} to {}", staged_binary.display(), installed_binary.display()))?;
+    fs::rename(&staged_binary, installed_binary).with_context(|| {
+        format!(
+            "Failed to finalize install by moving {} to {}",
+            staged_binary.display(),
+            installed_binary.display()
+        )
+    })?;
     Ok(())
 }
 

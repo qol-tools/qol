@@ -4,12 +4,12 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-type HttpResult<T> = Result<T, Response>;
+type HttpResult<T> = Result<T, Box<Response>>;
 
 pub(in super::super) async fn serve_icon(Path(bundle_id): Path<String>) -> impl IntoResponse {
     serve_icon_inner(bundle_id)
         .await
-        .unwrap_or_else(|response| response)
+        .unwrap_or_else(|response| *response)
 }
 
 async fn serve_icon_inner(bundle_id: String) -> HttpResult<Response> {
@@ -26,7 +26,7 @@ async fn load_icon_rgba(bundle_id: String) -> HttpResult<(Vec<u8>, u32, u32)> {
     .await
     .ok()
     .flatten()
-    .ok_or_else(icon_not_found_response)?;
+    .ok_or_else(|| Box::new(icon_not_found_response()))?;
     Ok((icon.data, icon.width as u32, icon.height as u32))
 }
 
@@ -41,7 +41,7 @@ fn encode_rgba_to_png(rgba: &[u8], width: u32, height: u32) -> HttpResult<Vec<u8
     let mut writer = png_writer(&mut png_buf, width, height)?;
     writer
         .write_image_data(rgba)
-        .map_err(|_| png_encode_failed_response())?;
+        .map_err(|_| Box::new(png_encode_failed_response()))?;
     drop(writer);
     Ok(png_buf)
 }
@@ -56,7 +56,7 @@ fn png_writer(
     encoder.set_depth(png::BitDepth::Eight);
     encoder
         .write_header()
-        .map_err(|_| png_encode_failed_response())
+        .map_err(|_| Box::new(png_encode_failed_response()))
 }
 
 fn icon_png_response(data: Vec<u8>) -> Response {

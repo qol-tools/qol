@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
-pub fn read_autostart_target() -> Result<Option<PathBuf>> {
+pub(super) fn read_autostart_target() -> Result<Option<PathBuf>> {
     let path = crate::installer::autostart_path()?;
     if !path.exists() {
         return Ok(None);

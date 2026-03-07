@@ -10,13 +10,13 @@ use super::super::types::AppState;
 mod io;
 mod notify;
 
-type HttpResult<T> = Result<T, Response>;
+type HttpResult<T> = Result<T, Box<Response>>;
 const APPLICATION_JSON: &str = "application/json";
 
 pub(in super::super) async fn get_plugin_config(
     Path(plugin_id): Path<String>,
 ) -> impl IntoResponse {
-    get_plugin_config_inner(plugin_id).unwrap_or_else(|response| response)
+    get_plugin_config_inner(plugin_id).unwrap_or_else(|response| *response)
 }
 
 pub(in super::super) async fn set_plugin_config(
@@ -24,7 +24,7 @@ pub(in super::super) async fn set_plugin_config(
     State(state): State<AppState>,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
-    set_plugin_config_inner(plugin_id, &state, body).unwrap_or_else(|response| response)
+    set_plugin_config_inner(plugin_id, &state, body).unwrap_or_else(|response| *response)
 }
 
 fn get_plugin_config_inner(plugin_id: String) -> HttpResult<Response> {
@@ -46,7 +46,7 @@ fn set_plugin_config_inner(
 }
 
 fn validated_plugin_id(plugin_id: String) -> HttpResult<String> {
-    validate_plugin_id_bad_request(&plugin_id).map_err(IntoResponse::into_response)?;
+    validate_plugin_id_bad_request(&plugin_id).map_err(|e| Box::new(e.into_response()))?;
     Ok(plugin_id)
 }
 

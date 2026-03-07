@@ -113,7 +113,7 @@ fn socket_reachable(path: &Path) -> bool {
 
     #[cfg(unix)]
     {
-        return std::os::unix::net::UnixStream::connect(path).is_ok();
+        std::os::unix::net::UnixStream::connect(path).is_ok()
     }
 
     #[cfg(not(unix))]

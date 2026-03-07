@@ -10,7 +10,7 @@ fn cache_path() -> Option<PathBuf> {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct PluginCache {
+pub(crate) struct PluginCache {
     #[serde(default)]
     pub format_version: u32,
     pub timestamp: u64,
@@ -18,7 +18,7 @@ pub struct PluginCache {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CachedPlugin {
+pub(crate) struct CachedPlugin {
     pub id: String,
     pub name: String,
     pub description: String,
@@ -61,13 +61,13 @@ fn current_timestamp() -> u64 {
         .unwrap_or(0)
 }
 
-pub fn read_cache() -> Option<PluginCache> {
+pub(crate) fn read_cache() -> Option<PluginCache> {
     let path = cache_path()?;
     let content = std::fs::read_to_string(&path).ok()?;
     serde_json::from_str(&content).ok()
 }
 
-pub fn write_cache(plugins: &[PluginMetadata]) -> Result<()> {
+pub(crate) fn write_cache(plugins: &[PluginMetadata]) -> Result<()> {
     let Some(path) = cache_path() else {
         anyhow::bail!("Could not determine cache path");
     };
@@ -95,11 +95,11 @@ fn plugin_cache(plugins: &[PluginMetadata]) -> PluginCache {
     }
 }
 
-pub fn cache_age_secs() -> Option<u64> {
+pub(crate) fn cache_age_secs() -> Option<u64> {
     read_cache().map(|cache| current_timestamp() - cache.timestamp)
 }
 
-pub fn update_cached_version(plugin_id: &str, version: &str) {
+pub(crate) fn update_cached_version(plugin_id: &str, version: &str) {
     let Some(mut cache) = read_cache() else {
         return;
     };

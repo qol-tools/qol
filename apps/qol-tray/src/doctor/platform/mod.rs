@@ -18,6 +18,6 @@ use windows as imp;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 compile_error!("doctor platform implementation is required for this target OS");
 
-pub fn read_autostart_target() -> Result<Option<PathBuf>> {
+pub(super) fn read_autostart_target() -> Result<Option<PathBuf>> {
     imp::read_autostart_target()
 }

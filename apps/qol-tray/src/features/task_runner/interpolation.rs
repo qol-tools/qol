@@ -70,6 +70,8 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
+    type TestCase<'a> = (&'a str, &'a [(&'a str, &'a str)], &'a str);
+
     #[test]
     fn interpolate_single_param() {
         let cases = [
@@ -93,7 +95,7 @@ mod tests {
 
     #[test]
     fn interpolate_multiple_params() {
-        let cases: &[(&str, &[(&str, &str)], &str)] = &[
+        let cases: &[TestCase<'_>] = &[
             ("{{a}} {{b}}", &[("a", "x"), ("b", "y")], "x y"),
             (
                 "{{x}}{{y}}{{z}}",
@@ -121,7 +123,7 @@ mod tests {
 
     #[test]
     fn interpolate_missing_params() {
-        let cases: &[(&str, &[(&str, &str)], &str)] = &[
+        let cases: &[TestCase<'_>] = &[
             ("{{missing}}", &[], ""),
             ("hello {{name}}", &[], "hello "),
             ("{{a}} {{b}}", &[("a", "x")], "x "),

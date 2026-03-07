@@ -43,7 +43,7 @@ use crate::daemon::Daemon;
 use crate::plugins::PluginManager;
 use types::*;
 
-pub async fn start_ui_server(
+pub(crate) async fn start_ui_server(
     plugin_manager: Arc<Mutex<PluginManager>>,
     daemon: &Daemon,
 ) -> Result<u16> {

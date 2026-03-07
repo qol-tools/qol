@@ -55,7 +55,9 @@ fn relay_lines(
             log::debug!("Plugin daemon log relay failed for {}: {}", log_prefix, e);
             0
         });
-        if n == 0 { break }
+        if n == 0 {
+            break;
+        }
         if !should_suppress_line(&line, suppress) {
             print_relay_line(&line, to_stderr);
         }

@@ -29,7 +29,10 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/icon/{bundle_id}", get(serve_icon))
         .route("/apps", get(list_apps))
         .route("/plugins/{id}/config", get(get_plugin_config))
-        .route("/plugins/{id}/config", axum::routing::put(set_plugin_config))
+        .route(
+            "/plugins/{id}/config",
+            axum::routing::put(set_plugin_config),
+        )
         .route("/github-token", get(get_token_status))
         .route("/github-token", post(set_github_token))
         .route("/github-token", axum::routing::delete(delete_github_token))

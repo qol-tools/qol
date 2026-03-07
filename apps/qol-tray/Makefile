@@ -1,10 +1,11 @@
-.PHONY: build release run dev test check clean contracts install
+.PHONY: build release run dev test check lint lint-fix fmt fmt-check clean contracts install
 
-build:
+build: lint
 	cargo build
 
 release:
 	@set -e; \
+	$(MAKE) lint; \
 	cargo test; \
 	git fetch --tags --force; \
 	OLD=$$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/'); \
@@ -58,18 +59,30 @@ release:
 	git push; \
 	git push --tags
 
-run:
+run: lint
 	cargo run --bin qol-tray
 
-dev:
+dev: lint
 	-pkill -f 'qol-tray'
 	cargo run --bin qol-tray --features dev
 
-test:
+test: lint
 	cargo test
 
-check:
+check: lint
 	cargo check
+
+lint: fmt-check
+	cargo clippy --all-targets -- -D warnings
+
+lint-fix: fmt
+	cargo clippy --fix --all-targets --allow-dirty --allow-staged -- -D warnings
+
+fmt:
+	cargo fmt --all
+
+fmt-check:
+	cargo fmt --all --check
 
 clean:
 	cargo clean

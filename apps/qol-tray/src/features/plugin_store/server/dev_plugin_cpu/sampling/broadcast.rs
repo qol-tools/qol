@@ -6,10 +6,18 @@ use super::super::state::{PluginCpuRow, PluginCpuState};
 pub(super) fn snapshot_for_broadcast(
     state: &Arc<Mutex<PluginCpuState>>,
 ) -> Option<(u64, Vec<PluginCpuEntry>)> {
-    let Ok(guard) = state.lock() else { return None; };
-    if guard.plugin_rows.is_empty() { return None; }
+    let Ok(guard) = state.lock() else {
+        return None;
+    };
+    if guard.plugin_rows.is_empty() {
+        return None;
+    }
     let timestamp_ms = guard.last_timestamp_ms;
-    let plugins = guard.plugin_rows.iter().map(|(id, row)| to_entry(id, row)).collect();
+    let plugins = guard
+        .plugin_rows
+        .iter()
+        .map(|(id, row)| to_entry(id, row))
+        .collect();
     Some((timestamp_ms, plugins))
 }
 

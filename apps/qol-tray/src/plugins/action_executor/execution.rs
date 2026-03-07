@@ -24,7 +24,11 @@ fn execute_via_daemon(
     let dispatch =
         crate::plugins::action_transport::dispatch_daemon_action(socket_path, &resolved.action_id);
     if matches!(dispatch, DaemonActionDispatch::Handled) {
-        log::info!("Plugin action handled via daemon: {}::{}", resolved.plugin_id, resolved.action_id);
+        log::info!(
+            "Plugin action handled via daemon: {}::{}",
+            resolved.plugin_id,
+            resolved.action_id
+        );
         return Ok(());
     }
     let reason = daemon_failure_reason(resolved, &dispatch)?;
@@ -32,7 +36,10 @@ fn execute_via_daemon(
     if resolved.runtime_fallback_allowed {
         return execute_via_runtime(resolved);
     }
-    Err(ActionExecutionError::SpawnFailed(format!("{} {}::{}", reason, resolved.plugin_id, resolved.action_id)))
+    Err(ActionExecutionError::SpawnFailed(format!(
+        "{} {}::{}",
+        reason, resolved.plugin_id, resolved.action_id
+    )))
 }
 
 fn daemon_failure_reason(

@@ -35,11 +35,17 @@ fn build_context() -> Result<Context> {
 
 fn diagnose_both(marker: String, active: String) -> Diagnosis {
     if marker == active {
-        return ok_outcome(ID, format!("marker and active install id are aligned ({})", marker));
+        return ok_outcome(
+            ID,
+            format!("marker and active install id are aligned ({})", marker),
+        );
     }
     warn_outcome(
         ID,
-        format!("marker install id ({}) differs from active install id ({})", marker, active),
+        format!(
+            "marker install id ({}) differs from active install id ({})",
+            marker, active
+        ),
         Some(FixAction::SetActiveInstallId(marker)),
     )
 }
@@ -55,8 +61,14 @@ fn diagnose_marker_only(marker: String) -> Diagnosis {
 fn diagnose_active_only(marker_path: PathBuf, active: String) -> Diagnosis {
     warn_outcome(
         ID,
-        format!("install marker missing near executable; active install id is {}", active),
-        Some(FixAction::WriteInstallMarker { marker_path, install_id: active }),
+        format!(
+            "install marker missing near executable; active install id is {}",
+            active
+        ),
+        Some(FixAction::WriteInstallMarker {
+            marker_path,
+            install_id: active,
+        }),
     )
 }
 
@@ -65,6 +77,10 @@ fn diagnose(context: Context) -> Diagnosis {
         (Some(marker), Some(active)) => diagnose_both(marker, active),
         (Some(marker), None) => diagnose_marker_only(marker),
         (None, Some(active)) => diagnose_active_only(context.marker_path, active),
-        (None, None) => warn_outcome(ID, "no install marker or active install id found".to_string(), None),
+        (None, None) => warn_outcome(
+            ID,
+            "no install marker or active install id found".to_string(),
+            None,
+        ),
     }
 }

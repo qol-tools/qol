@@ -59,7 +59,9 @@ impl Default for DevState {
 
 fn try_begin_discovery(state: &DevState) -> bool {
     let mut guard = state.discovery.write().unwrap();
-    if guard.status == DiscoveryStatus::Discovering { return false; }
+    if guard.status == DiscoveryStatus::Discovering {
+        return false;
+    }
     guard.status = DiscoveryStatus::Discovering;
     true
 }
@@ -73,7 +75,11 @@ fn run_discovery(
     let discovered = crate::dev::discover_plugins(&config, &plugins_dir);
     let plugins: Vec<DiscoveredPluginInfo> = discovered
         .into_iter()
-        .map(|p| DiscoveredPluginInfo { id: p.id, name: p.name, path: p.path })
+        .map(|p| DiscoveredPluginInfo {
+            id: p.id,
+            name: p.name,
+            path: p.path,
+        })
         .collect();
     {
         let mut guard = state.discovery.write().unwrap();
@@ -90,7 +96,9 @@ pub fn start_discovery(
 ) {
     let state = std::sync::Arc::clone(state);
     let events = std::sync::Arc::clone(events);
-    if !try_begin_discovery(&state) { return; }
+    if !try_begin_discovery(&state) {
+        return;
+    }
     events.send(crate::daemon::DaemonEvent::DiscoveryStarted);
     std::thread::spawn(move || run_discovery(state, events, plugins_dir));
 }

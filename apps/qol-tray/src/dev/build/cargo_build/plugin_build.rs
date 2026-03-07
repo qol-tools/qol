@@ -16,11 +16,14 @@ pub(super) fn build_cargo_plugin_with_progress<F>(
 where
     F: FnMut(u8, String),
 {
-    let CargoChild { child, stdout, stderr } =
-        match start_build(plugin_id, path, &mut on_progress) {
-            Ok(c) => c,
-            Err(result) => return result,
-        };
+    let CargoChild {
+        child,
+        stdout,
+        stderr,
+    } = match start_build(plugin_id, path, &mut on_progress) {
+        Ok(c) => c,
+        Err(result) => return result,
+    };
     let readers = streams::spawn_output_readers(stdout, stderr);
     progress::emit_progress(readers.progress_rx(), &mut on_progress);
     let combined = readers.join_output();

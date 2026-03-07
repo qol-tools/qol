@@ -90,9 +90,7 @@ fn active_monitor_idx(input: &InputState, monitors: &[MonitorBounds]) -> Option<
 }
 
 fn focus_monitor_idx(input: &InputState, monitors: &[MonitorBounds]) -> Option<usize> {
-    let Some(focus) = input.focus.as_ref() else {
-        return None;
-    };
+    let focus = input.focus.as_ref()?;
     monitor_idx(monitors, focus.monitor)
 }
 

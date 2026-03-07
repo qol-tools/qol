@@ -20,11 +20,14 @@ where
     if let Err(error) = ensure_manifest(&manifest_path) {
         return failed_build(error);
     }
-    let CargoChild { child, stdout, stderr } =
-        match start_build(&repo_root, &manifest_path, &mut on_progress) {
-            Ok(c) => c,
-            Err(result) => return result,
-        };
+    let CargoChild {
+        child,
+        stdout,
+        stderr,
+    } = match start_build(&repo_root, &manifest_path, &mut on_progress) {
+        Ok(c) => c,
+        Err(result) => return result,
+    };
     let readers = artifacts::spawn_readers(stdout, stderr);
     readers.emit_progress(&mut on_progress);
     let (actual_done, combined) = readers.join();

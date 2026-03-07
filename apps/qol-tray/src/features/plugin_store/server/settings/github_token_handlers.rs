@@ -7,7 +7,7 @@ use axum::{
 use super::super::super::github;
 use super::super::types::{TokenRequest, TokenStatus};
 
-type HttpResult<T> = Result<T, Response>;
+type HttpResult<T> = Result<T, Box<Response>>;
 
 pub(in super::super) async fn get_token_status() -> Json<TokenStatus> {
     Json(TokenStatus {
@@ -20,23 +20,23 @@ pub(in super::super) async fn set_github_token(
 ) -> impl IntoResponse {
     set_github_token_inner(payload.token)
         .await
-        .unwrap_or_else(|response| response)
+        .unwrap_or_else(|response| *response)
 }
 
 pub(in super::super) async fn delete_github_token() -> impl IntoResponse {
-    delete_github_token_inner().unwrap_or_else(|response| response)
+    delete_github_token_inner().unwrap_or_else(|response| *response)
 }
 
 async fn set_github_token_inner(token: String) -> HttpResult<Response> {
     github::validate_token(&token)
         .await
-        .map_err(token_validation_response)?;
-    github::store_token(&token).map_err(|_| store_failed_response())?;
+        .map_err(|e| Box::new(token_validation_response(e)))?;
+    github::store_token(&token).map_err(|_| Box::new(store_failed_response()))?;
     Ok(token_stored_response())
 }
 
 fn delete_github_token_inner() -> HttpResult<Response> {
-    github::delete_token().map_err(|_| delete_failed_response())?;
+    github::delete_token().map_err(|_| Box::new(delete_failed_response()))?;
     Ok(token_deleted_response())
 }
 

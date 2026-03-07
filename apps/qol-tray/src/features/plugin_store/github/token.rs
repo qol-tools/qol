@@ -7,7 +7,7 @@ fn token_path() -> Option<PathBuf> {
 }
 
 #[derive(Debug)]
-pub enum TokenValidationError {
+pub(crate) enum TokenValidationError {
     Empty,
     Invalid(String),
     Upstream(String),
@@ -47,7 +47,7 @@ pub(crate) async fn send_checked(request: reqwest::RequestBuilder) -> Result<req
     Ok(response)
 }
 
-pub fn get_stored_token() -> Option<String> {
+pub(crate) fn get_stored_token() -> Option<String> {
     let path = token_path()?;
     let metadata = std::fs::symlink_metadata(&path).ok()?;
     if metadata.file_type().is_symlink() {
@@ -65,7 +65,7 @@ pub fn get_stored_token() -> Option<String> {
     Some(token.to_string())
 }
 
-pub fn store_token(token: &str) -> Result<()> {
+pub(crate) fn store_token(token: &str) -> Result<()> {
     let Some(path) = token_path() else {
         anyhow::bail!("Could not determine token path");
     };
@@ -83,7 +83,7 @@ fn ensure_token_dir(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-pub async fn validate_token(token: &str) -> std::result::Result<(), TokenValidationError> {
+pub(crate) async fn validate_token(token: &str) -> std::result::Result<(), TokenValidationError> {
     let trimmed = token.trim();
     if trimmed.is_empty() {
         return Err(TokenValidationError::Empty);
@@ -130,7 +130,7 @@ fn invalid_status(status: reqwest::StatusCode) -> bool {
     status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN
 }
 
-pub fn delete_token() -> Result<()> {
+pub(crate) fn delete_token() -> Result<()> {
     let Some(path) = token_path() else {
         return Ok(());
     };

@@ -75,7 +75,9 @@ fn parse_key_code_navigation() {
 
 #[test]
 fn parse_key_code_invalid() {
-    for input in ["unknown", "", "ctrl", "shift", "f0", "f13", "key", " ", "aa"] {
+    for input in [
+        "unknown", "", "ctrl", "shift", "f0", "f13", "key", " ", "aa",
+    ] {
         assert_eq!(parse_key_code(input), None, "input: {:?}", input);
     }
 }
@@ -123,11 +125,31 @@ fn parse_hotkey_single_modifier() {
 #[test]
 fn parse_hotkey_multi_modifier() {
     for (input, key, mods) in [
-        ("Ctrl+Shift+R", Code::KeyR, Modifiers::CONTROL | Modifiers::SHIFT),
-        ("Ctrl+Alt+R", Code::KeyR, Modifiers::CONTROL | Modifiers::ALT),
-        ("Ctrl+Shift+Alt+R", Code::KeyR, Modifiers::CONTROL | Modifiers::SHIFT | Modifiers::ALT),
-        ("Ctrl+Shift+Alt+Super+R", Code::KeyR, Modifiers::CONTROL | Modifiers::SHIFT | Modifiers::ALT | Modifiers::SUPER),
-        ("Ctrl + Shift + R", Code::KeyR, Modifiers::CONTROL | Modifiers::SHIFT),
+        (
+            "Ctrl+Shift+R",
+            Code::KeyR,
+            Modifiers::CONTROL | Modifiers::SHIFT,
+        ),
+        (
+            "Ctrl+Alt+R",
+            Code::KeyR,
+            Modifiers::CONTROL | Modifiers::ALT,
+        ),
+        (
+            "Ctrl+Shift+Alt+R",
+            Code::KeyR,
+            Modifiers::CONTROL | Modifiers::SHIFT | Modifiers::ALT,
+        ),
+        (
+            "Ctrl+Shift+Alt+Super+R",
+            Code::KeyR,
+            Modifiers::CONTROL | Modifiers::SHIFT | Modifiers::ALT | Modifiers::SUPER,
+        ),
+        (
+            "Ctrl + Shift + R",
+            Code::KeyR,
+            Modifiers::CONTROL | Modifiers::SHIFT,
+        ),
     ] {
         assert_parses(input, key, mods);
     }
@@ -176,8 +198,16 @@ fn parse_hotkey_invalid_cases() {
 #[test]
 fn is_valid_action_id_accepts_valid() {
     for input in [
-        "run", "toggle-feature", "action_name", "Action123",
-        "a", "ABC", "a-b-c", "a_b_c", "123", "a1b2c3",
+        "run",
+        "toggle-feature",
+        "action_name",
+        "Action123",
+        "a",
+        "ABC",
+        "a-b-c",
+        "a_b_c",
+        "123",
+        "a1b2c3",
     ] {
         assert!(is_valid_action_id(input), "input: {:?}", input);
     }
@@ -187,11 +217,27 @@ fn is_valid_action_id_accepts_valid() {
 #[test]
 fn is_valid_action_id_rejects_invalid() {
     for input in [
-        "", "-", "--help", "-v", "-flag",
-        "foo bar", "foo\tbar", "foo;bar", "foo&bar", "foo|bar",
-        "foo>bar", "foo<bar", "$(whoami)", "`whoami`",
-        "foo\0bar", "foo\nbar", "foo/bar", "foo\\bar",
-        "foo=bar", "foo'bar", "foo\"bar",
+        "",
+        "-",
+        "--help",
+        "-v",
+        "-flag",
+        "foo bar",
+        "foo\tbar",
+        "foo;bar",
+        "foo&bar",
+        "foo|bar",
+        "foo>bar",
+        "foo<bar",
+        "$(whoami)",
+        "`whoami`",
+        "foo\0bar",
+        "foo\nbar",
+        "foo/bar",
+        "foo\\bar",
+        "foo=bar",
+        "foo'bar",
+        "foo\"bar",
     ] {
         assert!(!is_valid_action_id(input), "input: {:?}", input);
     }

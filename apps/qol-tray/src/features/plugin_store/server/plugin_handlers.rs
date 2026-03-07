@@ -6,20 +6,23 @@ use axum::{
     Json, Router,
 };
 
-use crate::plugins::action_executor::ActionExecutionError;
 use super::helpers::{validate_plugin_id, validate_plugin_id_bad_request};
 use super::plugin_services;
 use super::types::{
     AppState, ExecuteActionResult, InstalledPluginsResponse, PluginsQuery, PluginsResponse,
     UninstallResult,
 };
+use crate::plugins::action_executor::ActionExecutionError;
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
         .route("/plugins", get(list_plugins))
         .route("/installed", get(list_installed))
         .route("/events", get(sse_handler))
-        .route("/plugins/{id}/actions/{action}", post(execute_plugin_action))
+        .route(
+            "/plugins/{id}/actions/{action}",
+            post(execute_plugin_action),
+        )
         .route("/install/{id}", post(install_plugin))
         .route("/update/{id}", post(update_plugin))
         .route("/uninstall/{id}", post(uninstall_plugin))
@@ -141,5 +144,11 @@ fn action_error_response(
         log::warn!("Plugin action rejected for {}::{}: {}", id, action, error);
         error.to_string()
     };
-    (status, Json(ExecuteActionResult { success: false, message }))
+    (
+        status,
+        Json(ExecuteActionResult {
+            success: false,
+            message,
+        }),
+    )
 }

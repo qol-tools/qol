@@ -9,7 +9,7 @@ use super::super::types::AppState;
 
 mod cover_file;
 
-type HttpResult<T> = Result<T, Response>;
+type HttpResult<T> = Result<T, Box<Response>>;
 
 pub(in super::super) async fn serve_cover(
     Path(plugin_id): Path<String>,
@@ -17,7 +17,7 @@ pub(in super::super) async fn serve_cover(
 ) -> impl IntoResponse {
     serve_cover_inner(&state, plugin_id)
         .await
-        .unwrap_or_else(|response| response)
+        .unwrap_or_else(|response| *response)
 }
 
 async fn serve_cover_inner(state: &AppState, plugin_id: String) -> HttpResult<Response> {
@@ -27,6 +27,6 @@ async fn serve_cover_inner(state: &AppState, plugin_id: String) -> HttpResult<Re
 }
 
 fn validated_plugin_id(plugin_id: String) -> HttpResult<String> {
-    validate_plugin_id_bad_request(&plugin_id).map_err(IntoResponse::into_response)?;
+    validate_plugin_id_bad_request(&plugin_id).map_err(|e| Box::new(e.into_response()))?;
     Ok(plugin_id)
 }
