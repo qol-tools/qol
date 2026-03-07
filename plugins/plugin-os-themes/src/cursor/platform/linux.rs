@@ -71,6 +71,7 @@ pub fn run() -> Result<()> {
     let mut samples: VecDeque<(Instant, i32, i32)> = VecDeque::new();
     let mut last_pos = query_pointer(display, root);
     let mut current_scale: f32 = 1.0;
+    let mut growing = false;
     let mut last_shake: Option<Instant> = None;
     let mut active_cursor: Option<xlib::Cursor> = None;
 
@@ -87,22 +88,19 @@ pub fn run() -> Result<()> {
 
         let v = velocity(&samples);
         let is_shake = v > config.velocity_threshold && shakiness(&samples) > config.shakiness_threshold;
-        let target = if is_shake {
+
+        if is_shake {
+            growing = true;
             last_shake = Some(now);
-            scale_factor
-        } else if current_scale > 1.0 + f32::EPSILON {
-            let at_full = current_scale >= scale_factor - f32::EPSILON;
-            if at_full && v > config.post_trigger_threshold {
+        } else if growing && current_scale >= scale_factor - f32::EPSILON {
+            if v > config.post_trigger_threshold {
                 last_shake = Some(now);
-                scale_factor
             } else if last_shake.map_or(false, |t| now - t > calm_duration) {
-                1.0
-            } else {
-                current_scale
+                growing = false;
             }
-        } else {
-            1.0
-        };
+        }
+
+        let target = if growing { scale_factor } else { 1.0 };
 
         let new_scale = if target > current_scale {
             (current_scale + grow_step).min(target)
