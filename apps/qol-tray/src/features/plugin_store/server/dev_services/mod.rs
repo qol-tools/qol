@@ -8,6 +8,10 @@ pub(super) fn queue_reload(state: &AppState) -> Result<(), &'static str> {
     reload::queue_reload(state)
 }
 
+pub(super) fn queue_reload_single(state: &AppState, plugin_id: String) -> Result<(), &'static str> {
+    reload::queue_reload_single(state, plugin_id)
+}
+
 pub(super) fn refresh_discovery(state: &AppState) {
     crate::dev::state::start_discovery(
         &state.dev_state,

@@ -5,6 +5,7 @@ import { createBuildController } from './build-controller.js';
 import { createCpuController, readSavedCpuMonitoring } from './cpu-controller.js';
 import { createDiscoveryController } from './discovery-controller.js';
 import { createMockController } from './mock-controller.js';
+import { createCoreLogActions } from './core-log-actions.js';
 import { createPluginActionsController } from './plugin-actions-controller.js';
 import { routeDevClick } from './action-router.js';
 import { routeDevKey } from './key-router.js';
@@ -49,7 +50,9 @@ const state = {
     mockTesting: false,
     cpuMonitoring: readSavedCpuMonitoring(),
     cpuByPlugin: {},
-    openPluginMenuId: null
+    openPluginMenuId: null,
+    coreLogControls: {},
+    openCoreMenuId: null
 };
 
 let container = null;
@@ -77,6 +80,12 @@ const actionsController = createPluginActionsController({
     getMergedPluginById,
     getActivePluginBuildState,
     closePluginMenu,
+    onNeedsRender: updateView
+});
+
+const coreLogActions = createCoreLogActions({
+    state,
+    discoveryController,
     onNeedsRender: updateView
 });
 
@@ -132,6 +141,7 @@ export function render(containerEl) {
         discoveryController.loadPlugins(true),
         discoveryController.fetchDiscoveryState(true),
         discoveryController.loadLogControls(true),
+        discoveryController.loadCoreLogControls(true),
         hydrateBuildPromise,
         mockController.hydrateMockTargets(true),
         hydrateCpuPromise
@@ -145,7 +155,6 @@ function handleEvent(event) {
     if (
         state.linkingId
         && (event.type === 'discovery_started'
-            || event.type === 'discovery_complete'
             || event.type === 'plugins_changed')
     ) {
         return;
@@ -177,8 +186,9 @@ function handleEvent(event) {
 }
 
 function closePluginMenu() {
-    if (!state.openPluginMenuId) return;
+    if (!state.openPluginMenuId && !state.openCoreMenuId) return;
     state.openPluginMenuId = null;
+    state.openCoreMenuId = null;
 }
 
 function togglePluginMenu(pluginId) {
@@ -190,7 +200,7 @@ function togglePluginMenu(pluginId) {
 }
 
 function syncPluginMenuDom() {
-    syncPluginMenuState(container, state.openPluginMenuId);
+    syncPluginMenuState(container, state.openPluginMenuId, state.openCoreMenuId);
 }
 
 function visiblePluginIdSet() {
@@ -278,6 +288,7 @@ function handleClick(event) {
         event,
         state,
         actionsController,
+        coreLogActions,
         discoveryController,
         mockController,
         cpuController,
@@ -309,6 +320,7 @@ export function onFocus() {
         discoveryController.loadPlugins(true),
         discoveryController.fetchDiscoveryState(true),
         discoveryController.loadLogControls(true),
+        discoveryController.loadCoreLogControls(true),
         mockController.hydrateMockTargets(true)
     ]).finally(() => {
         updateView();

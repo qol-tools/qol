@@ -1,5 +1,5 @@
 export function routeDevClick({
-    event, state, actionsController, discoveryController, mockController,
+    event, state, actionsController, coreLogActions, discoveryController, mockController,
     cpuController, closePluginMenu, togglePluginMenu, syncPluginMenuDom, updateView
 }) {
     const target = readEventTarget(event);
@@ -8,11 +8,26 @@ export function routeDevClick({
     const action = actionTarget?.dataset.action;
     const actionId = actionTarget?.dataset.id;
     if (!action) {
-        if (state.openPluginMenuId) { closePluginMenu(); syncPluginMenuDom(); }
+        if (state.openPluginMenuId || state.openCoreMenuId) { closePluginMenu(); syncPluginMenuDom(); updateView(); }
         return;
     }
     if (action === 'mock-update') { void mockController.triggerMockFlows(); return; }
     if (dispatchMenuToggle(action, actionId, event, togglePluginMenu, syncPluginMenuDom)) return;
+    if (action === 'toggle-core-menu' && actionId) {
+        event.preventDefault();
+        event.stopPropagation();
+        state.openCoreMenuId = state.openCoreMenuId === actionId ? null : actionId;
+        syncPluginMenuDom();
+        return;
+    }
+    if (action === 'toggle-core-logs' && actionId) {
+        runMenuAction(event, closePluginMenu, syncPluginMenuDom, () => { state.openCoreMenuId = null; void coreLogActions.toggleCoreLogs(actionId); });
+        return;
+    }
+    if (action === 'edit-core-log-filters' && actionId) {
+        runMenuAction(event, closePluginMenu, syncPluginMenuDom, () => { state.openCoreMenuId = null; void coreLogActions.editCoreLogFilters(actionId); });
+        return;
+    }
     if (dispatchMenuItemAction(action, actionId, event, actionsController, cpuController, closePluginMenu, syncPluginMenuDom)) return;
     if (dispatchLinkAction(action, actionId, target, state, actionsController, updateView)) return;
     dispatchGlobalAction(action, actionsController, discoveryController);

@@ -7,7 +7,7 @@ pub fn list_linked_plugins(config_dir: &Path) -> Result<Vec<LinkedPlugin>, Strin
     let links = super::store::load_dev_links(config_dir);
     let known_fingerprints = crate::dev::load_build_fingerprints(config_dir);
     let plans = super::super::build::plan_linked_plugin_builds(&links, &known_fingerprints);
-    let log_controls = crate::plugins::log_control::load_all_controls(config_dir);
+    let log_controls = crate::logging::load_all_plugin_controls(config_dir);
     let plans_by_id: HashMap<String, _> = plans
         .into_iter()
         .map(|p| (p.plugin_id.clone(), p))
@@ -29,7 +29,7 @@ fn build_plugin_entry(
     path: &Path,
     plan: Option<&crate::dev::build::PluginBuildPlan>,
     name: String,
-    log_control: crate::plugins::log_control::PluginLogControl,
+    log_control: crate::logging::LogControl,
 ) -> LinkedPlugin {
     LinkedPlugin {
         id: id.to_string(),

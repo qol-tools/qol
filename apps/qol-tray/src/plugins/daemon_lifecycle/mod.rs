@@ -1,4 +1,3 @@
-mod log_relay;
 mod readiness;
 mod spawn;
 

@@ -38,12 +38,18 @@ pub(super) struct AppState {
     pub(super) plugin_cpu: Arc<DevPluginCpuService>,
     #[cfg(feature = "dev")]
     pub(super) restart: Arc<dyn RestartPort>,
+    #[cfg(feature = "dev")]
+    pub(super) core_log_controls:
+        Arc<std::sync::RwLock<HashMap<String, crate::logging::LogControl>>>,
 }
 
 impl AppState {
     pub(super) fn new(
         plugin_manager: Arc<Mutex<PluginManager>>,
         daemon: &Daemon,
+        #[cfg(feature = "dev")] core_log_controls: Arc<
+            std::sync::RwLock<HashMap<String, crate::logging::LogControl>>,
+        >,
     ) -> anyhow::Result<(Self, PathBuf)> {
         let plugins_dir = PluginLoader::default_plugin_dir()?;
         let state = Self {
@@ -58,6 +64,8 @@ impl AppState {
             runtime: super::dev_runtime::new_dev_runtime(),
             #[cfg(feature = "dev")]
             restart: super::restart::default_restart_port(),
+            #[cfg(feature = "dev")]
+            core_log_controls,
         };
         Ok((state, plugins_dir))
     }

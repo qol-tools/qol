@@ -1,4 +1,3 @@
-use super::log_relay;
 use crate::plugins::manifest::DaemonConfig;
 use crate::plugins::Plugin;
 use anyhow::Result;
@@ -18,7 +17,12 @@ pub(super) fn spawn_daemon(plugin: &Plugin, daemon_config: &DaemonConfig) -> Res
     let mut command = daemon_command(plugin, daemon_config, &daemon_path);
     let relay_patterns = configure_log_relay(plugin, &mut command);
     let mut child = command.spawn()?;
-    log_relay::attach_filtered_log_relay(plugin, &mut child, relay_patterns);
+    crate::logging::relay::attach(
+        &plugin.id,
+        child.stdout.take(),
+        child.stderr.take(),
+        relay_patterns,
+    );
     Ok(child)
 }
 
@@ -77,7 +81,7 @@ fn apply_process_group(_command: &mut Command) {
 }
 
 fn configure_log_relay(plugin: &Plugin, command: &mut Command) -> Vec<String> {
-    let log_control = crate::plugins::log_control::load_control_from_shared_config(&plugin.id);
+    let log_control = crate::logging::load_plugin_control_from_shared_config(&plugin.id);
     if log_control.muted {
         command.stdout(Stdio::null()).stderr(Stdio::null());
         return Vec::new();

@@ -66,9 +66,9 @@ fn link_result_response(
     state: &AppState,
 ) -> axum::response::Response {
     match result {
-        Ok(_) => {
+        Ok(plugin_id) => {
             dev_services::refresh_discovery(state);
-            (StatusCode::OK, "Link created".to_string()).into_response()
+            (StatusCode::OK, plugin_id).into_response()
         }
         Err(e) if e.contains("Already linked") => (StatusCode::CONFLICT, e).into_response(),
         Err(e) if e.contains("does not exist") || e.contains("No plugin.toml") => {
@@ -139,11 +139,11 @@ fn upsert_log_control_response(
     id: &str,
     state: &AppState,
 ) -> axum::response::Response {
-    let control = crate::plugins::log_control::PluginLogControl {
+    let control = crate::logging::LogControl {
         muted: req.muted,
         suppress_patterns: req.suppress_patterns,
     };
-    match crate::plugins::log_control::upsert_control(config_dir, id, control) {
+    match crate::logging::upsert_plugin_control(config_dir, id, control) {
         Ok(()) => {
             try_restart_daemon(state, id);
             (StatusCode::OK, "Updated".to_string()).into_response()
@@ -156,10 +156,10 @@ fn upsert_log_control_response(
 }
 
 pub(super) async fn get_log_controls(
-) -> Json<std::collections::HashMap<String, crate::plugins::log_control::PluginLogControl>> {
+) -> Json<std::collections::HashMap<String, crate::logging::LogControl>> {
     let controls = shared_config_dir()
         .ok()
-        .map(|dir| crate::plugins::log_control::load_all_controls(&dir))
+        .map(|dir| crate::logging::load_all_plugin_controls(&dir))
         .unwrap_or_default();
     Json(controls)
 }

@@ -1,4 +1,5 @@
 import { escapeAttr, escapeHtml } from '../../utils/escape-html.js';
+import { renderCoreLogSection } from './core-log-template.js';
 import { renderPluginRows } from './plugin-row-template.js';
 
 export function renderDevView({ state, mergedList, getActivePluginBuildState, renderPluginBuildMeta, renderBuildResults }) {
@@ -10,6 +11,7 @@ export function renderDevView({ state, mergedList, getActivePluginBuildState, re
                 <div class="dev-view-content">
                 <div class="dev-content-frame">
                 ${renderPluginsSection(state, mergedList, pluginRows)}
+                ${renderCoreLogSection(state)}
                 ${renderActionsSection(state, renderBuildResults)}
                 </div>
                 </div>

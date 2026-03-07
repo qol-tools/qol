@@ -37,8 +37,11 @@ async function reloadPlugins(state, cooldown, discoveryController, onNeedsRender
     await doReload(state, discoveryController, onNeedsRender);
 }
 
-async function triggerReload() {
-    const response = await fetch('/api/dev/reload', { method: 'POST' });
+async function triggerReload(pluginId) {
+    const url = pluginId
+        ? `/api/dev/reload/${encodeURIComponent(pluginId)}`
+        : '/api/dev/reload';
+    const response = await fetch(url, { method: 'POST' });
     if (response.ok || response.status === 409) return response;
     const message = await readResponseText(response);
     throw new Error(message || 'Failed to queue reload');
