@@ -140,29 +140,46 @@ fn restore_cursor(
 ) {
     let raw_size = unsafe { xcursor::XcursorGetDefaultSize(display) };
     let base_size = if raw_size > 0 { raw_size } else { 24 };
+    let theme = unsafe { xcursor::XcursorGetTheme(display) };
+    let base_images = unsafe {
+        xcursor::XcursorLibraryLoadImages(c"left_ptr".as_ptr(), theme, base_size)
+    };
+    if base_images.is_null() {
+        unsafe { xlib::XFreeCursor(display, grown) };
+        return;
+    }
+    let (sw, sh, xhot, yhot, pixels) = unsafe {
+        let img = &**(*base_images).images;
+        let px = std::slice::from_raw_parts(img.pixels, (img.width * img.height) as usize).to_vec();
+        (img.width, img.height, img.xhot, img.yhot, px)
+    };
+    unsafe { xcursor::XcursorImagesDestroy(base_images) };
     let steps = steps.max(1);
     for step in 1..=steps {
         if !RUNNING.load(Ordering::Relaxed) {
             break;
         }
         let t = step as f32 / steps as f32;
-        let size = (base_size as f32 * (scale as f32 * (1.0 - t) + t)) as i32;
-        let theme = unsafe { xcursor::XcursorGetTheme(display) };
-        let images = unsafe {
-            xcursor::XcursorLibraryLoadImages(c"left_ptr".as_ptr(), theme, size)
-        };
-        if images.is_null() {
+        let factor = scale as f32 * (1.0 - t) + t;
+        let dw = ((sw as f32 * factor) as u32).max(1);
+        let dh = ((sh as f32 * factor) as u32).max(1);
+        let img = unsafe { xcursor::XcursorImageCreate(dw as i32, dh as i32) };
+        if img.is_null() {
+            std::thread::sleep(POLL_INTERVAL);
             continue;
         }
-        let cursor = unsafe { xcursor::XcursorImagesLoadCursor(display, images) };
-        unsafe { xcursor::XcursorImagesDestroy(images) };
-        if cursor == 0 {
-            continue;
-        }
-        apply_to_tree(display, root, cursor);
         unsafe {
-            xlib::XFlush(display);
-            xlib::XFreeCursor(display, cursor);
+            (*img).xhot = (xhot as f32 * factor) as u32;
+            (*img).yhot = (yhot as f32 * factor) as u32;
+            let dst = std::slice::from_raw_parts_mut((*img).pixels, (dw * dh) as usize);
+            scale_nearest(&pixels, sw, sh, dst, dw, dh);
+            let cursor = xcursor::XcursorImageLoadCursor(display, img);
+            xcursor::XcursorImageDestroy(img);
+            if cursor != 0 {
+                apply_to_tree(display, root, cursor);
+                xlib::XFlush(display);
+                xlib::XFreeCursor(display, cursor);
+            }
         }
         std::thread::sleep(POLL_INTERVAL);
     }
@@ -173,13 +190,6 @@ fn apply_to_tree(display: *mut xlib::Display, window: xlib::Window, cursor: xlib
     unsafe { xlib::XDefineCursor(display, window, cursor) };
     for child in window_children(display, window) {
         apply_to_tree(display, child, cursor);
-    }
-}
-
-fn clear_from_tree(display: *mut xlib::Display, window: xlib::Window) {
-    unsafe { xlib::XUndefineCursor(display, window) };
-    for child in window_children(display, window) {
-        clear_from_tree(display, child);
     }
 }
 
@@ -202,22 +212,49 @@ fn window_children(display: *mut xlib::Display, window: xlib::Window) -> Vec<xli
 fn make_grown_cursor(display: *mut xlib::Display, scale: u32) -> Option<xlib::Cursor> {
     let raw_size = unsafe { xcursor::XcursorGetDefaultSize(display) };
     let base_size = if raw_size > 0 { raw_size } else { 24 };
-    let target_size = base_size * scale as i32;
     let theme = unsafe { xcursor::XcursorGetTheme(display) };
     let images = unsafe {
-        xcursor::XcursorLibraryLoadImages(c"left_ptr".as_ptr(), theme, target_size)
+        xcursor::XcursorLibraryLoadImages(c"left_ptr".as_ptr(), theme, base_size)
     };
     if images.is_null() {
         eprintln!("[shake-to-grow] warn: XcursorLibraryLoadImages returned null");
         return None;
     }
-    let cursor = unsafe { xcursor::XcursorImagesLoadCursor(display, images) };
+    let (sw, sh, xhot, yhot, pixels) = unsafe {
+        let img = &**(*images).images;
+        let px = std::slice::from_raw_parts(img.pixels, (img.width * img.height) as usize).to_vec();
+        (img.width, img.height, img.xhot, img.yhot, px)
+    };
     unsafe { xcursor::XcursorImagesDestroy(images) };
+    let dw = sw * scale;
+    let dh = sh * scale;
+    let scaled = unsafe { xcursor::XcursorImageCreate(dw as i32, dh as i32) };
+    if scaled.is_null() {
+        eprintln!("[shake-to-grow] warn: XcursorImageCreate returned null");
+        return None;
+    }
+    let cursor = unsafe {
+        (*scaled).xhot = xhot * scale;
+        (*scaled).yhot = yhot * scale;
+        let dst = std::slice::from_raw_parts_mut((*scaled).pixels, (dw * dh) as usize);
+        scale_nearest(&pixels, sw, sh, dst, dw, dh);
+        let cursor = xcursor::XcursorImageLoadCursor(display, scaled);
+        xcursor::XcursorImageDestroy(scaled);
+        cursor
+    };
     if cursor == 0 {
-        eprintln!("[shake-to-grow] warn: XcursorImagesLoadCursor returned 0");
+        eprintln!("[shake-to-grow] warn: XcursorImageLoadCursor returned 0");
         return None;
     }
     Some(cursor)
+}
+
+fn scale_nearest(src: &[u32], sw: u32, sh: u32, dst: &mut [u32], dw: u32, dh: u32) {
+    for dy in 0..dh {
+        for dx in 0..dw {
+            dst[(dy * dw + dx) as usize] = src[(dy * sh / dh * sw + dx * sw / dw) as usize];
+        }
+    }
 }
 
 pub fn open_settings() -> Result<()> {
@@ -255,5 +292,16 @@ mod tests {
         samples.push_back((t0 + Duration::from_millis(100), 0, 0));
         let v = velocity(&samples);
         assert!((v - 3000.0).abs() < 1.0, "expected ~3000 px/s, got {v}");
+    }
+
+    #[test]
+    fn scale_nearest_2x_maps_source_quadrants() {
+        let src = [0xFFFF0000u32, 0xFF00FF00, 0xFF0000FF, 0xFFFFFFFF];
+        let mut dst = [0u32; 16];
+        scale_nearest(&src, 2, 2, &mut dst, 4, 4);
+        assert_eq!(dst[0], 0xFFFF0000, "top-left");
+        assert_eq!(dst[2], 0xFF00FF00, "top-right");
+        assert_eq!(dst[8], 0xFF0000FF, "bottom-left");
+        assert_eq!(dst[10], 0xFFFFFFFF, "bottom-right");
     }
 }
