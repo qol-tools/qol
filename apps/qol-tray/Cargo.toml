@@ -92,6 +92,18 @@ libc = "0.2"
 proptest = "1.6"
 tempfile = "3.8"
 
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unreachable_pub = "warn"
+
+[lints.clippy]
+await_holding_lock = "warn"
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+unused_async = "warn"
+zombie_processes = "warn"
+
 [profile.release]
 incremental = true
 

@@ -7,6 +7,30 @@ on:
     branches: [main]
 
 jobs:
+  lint:
+    if: github.ref == 'refs/heads/main' || contains(github.event.head_commit.message, '(ci)') || contains(github.event.head_commit.message, 'ci,') || contains(github.event.head_commit.message, ', ci')
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev libxdo-dev
+
+      - name: Lint
+        run: cargo clippy --all-targets
+
   build:
     if: github.ref == 'refs/heads/main' || contains(github.event.head_commit.message, '(ci)') || contains(github.event.head_commit.message, 'ci,') || contains(github.event.head_commit.message, ', ci')
     strategy:
