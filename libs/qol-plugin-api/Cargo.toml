@@ -29,3 +29,6 @@ core-text = { git = "https://github.com/servo/core-foundation-rs", tag = "core-t
 core-graphics = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
 core-foundation = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
 core-foundation-sys = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
+
+[patch."https://github.com/qol-tools/qol-runtime"]
+qol-runtime = { path = "../qol-runtime" }
