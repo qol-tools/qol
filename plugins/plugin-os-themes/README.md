@@ -1,35 +1,42 @@
-# My Plugin
+# plugin-os-themes
 
-A binary-first `qol-tray` plugin template.
+A [qol-tray](https://github.com/qol-tools/qol-tray) plugin for cursor effects and OS-wide theming.
+
+## Features
+
+**Shake-to-grow** — shake your cursor to temporarily scale it up, then it smoothly animates back to normal size.
+
+- Triggered by shaky motion (direction reversals), not just fast movement — gliding across monitors won't activate it
+- Cursor grows instantly and shrinks back gradually over configurable steps
+- Intermediate movement sustains the grown state via a lower post-trigger threshold
+- Smooth bilinear-interpolated scaling applied to all windows
 
 ## Build
 
-- `make dev` builds `plugin-template` and copies it to the plugin root
-- `make release` builds an optimized `plugin-template` and copies it to the plugin root
+- `make dev` — builds and installs to the plugin root
+- `make release` — optimized build
+
+## Configuration
+
+Settings are editable via the qol-tray UI (Settings → OS Themes → Settings).
+
+| Field | Default | Description |
+|---|---|---|
+| `velocity_threshold` | `7777` | px/s required to trigger grow |
+| `shakiness_threshold` | `48` | path/displacement ratio required (filters out glides) |
+| `post_trigger_threshold` | `1500` | px/s to sustain grown state |
+| `scale_factor` | `5` | cursor size multiplier when grown |
+| `calm_duration_ms` | `1000` | ms of calm before shrinking back |
+| `restore_steps` | `15` | animation frames for the shrink-back |
+
+Config is written to `~/.config/qol-tray/plugins/plugin-os-themes/config.json`.
 
 ## Runtime Contract
 
-- Runtime command: `plugin-template`
-- Default action: `run`
-- Action mapping: `run -> ["run"]`
-- No daemon by default (add `[daemon]` only when needed)
-
-## Customize
-
-1. Rename `plugin-template` in `Cargo.toml`, `plugin.toml`, and `Makefile`
-2. Implement your action handling in `src/main.rs`
-3. Update `plugin.toml` menu/actions to match your runtime contract
-4. Update `[[dependencies.binaries]]` to your release repository and pattern
-
-## Contract Notes
-
-- Commands must be binary basenames (`[A-Za-z0-9_-]+`)
-- If `runtime.actions` is present, map every executable menu action
-- If using a daemon socket, use absolute socket paths and optional `daemon.action_aliases` for action renames
-
-## Usage
-
-Trigger plugin actions from QoL Tray UI and bind them to global hotkeys as needed.
+- Command: `plugin-os-themes`
+- Actions: `run` (start daemon), `settings` (open config UI)
+- Daemon socket: `/tmp/qol-os-themes.sock`
+- Platforms: Linux (X11)
 
 ## License
 
