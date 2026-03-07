@@ -21,11 +21,14 @@ function renderPluginInfo(plugin, statusBadges, state, renderPluginBuildMeta) {
     `;
 }
 
-function renderActionColumn(actionDisabled, rebuildActive, statusToken, pluginId, pluginNameAttr, menuControls) {
+function renderActionColumn(actionDisabled, isLinking, rebuildActive, statusToken, pluginId, pluginNameAttr, menuControls) {
+    const icon = isLinking
+        ? '<span class="refresh-btn spinning" aria-hidden="true"></span>'
+        : '<img class="plugin-action-rebuild-icon" src="assets/qol-tray.png?v=1" alt="" aria-hidden="true">';
     return `
         <div class="plugin-action-column table-col">
             <button type="button" class="plugin-action-zone ${actionDisabled ? 'is-disabled' : ''} ${rebuildActive ? 'has-rebuild' : 'rebuild-idle'}" data-action="toggle-link" data-id="${pluginId}" aria-label="${statusToken === 'linked' ? 'Unlink' : 'Link'} ${pluginNameAttr}" ${actionDisabled ? 'disabled' : ''}>
-                <img class="plugin-action-rebuild-icon" src="assets/qol-tray.png?v=1" alt="" aria-hidden="true">
+                ${icon}
             </button>
             ${menuControls}
         </div>
@@ -44,7 +47,7 @@ function renderPluginRow(state, plugin, index, getActivePluginBuildState, render
     const menuControls = renderPluginMenuControls({ state, plugin, menuOpen: state.openPluginMenuId === plugin.id, pluginId, pluginNameAttr });
     const statusBadges = renderStatusBadges(plugin, statusToken);
     const info = renderPluginInfo(plugin, statusBadges, state, renderPluginBuildMeta);
-    const actions = renderActionColumn(actionDisabled, rebuildActive, statusToken, pluginId, pluginNameAttr, menuControls);
+    const actions = renderActionColumn(actionDisabled, isLinking, rebuildActive, statusToken, pluginId, pluginNameAttr, menuControls);
     return `
         <div class="plugin-row table-list-row status-${statusToken} ${isSelected ? 'selected' : ''} ${isRowBuilding ? 'is-building' : ''} ${isLinking ? 'is-linking' : ''}" data-status="${statusToken}" data-selected="${isSelected ? 'true' : 'false'}" data-index="${index}" data-plugin-id="${pluginId}">
             <div class="plugin-main table-grid">${info}${actions}</div>

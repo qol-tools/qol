@@ -1,6 +1,8 @@
 use super::plugin_ui;
 pub(crate) mod assets;
 #[cfg(feature = "dev")]
+mod dev_core_log_handlers;
+#[cfg(feature = "dev")]
 mod dev_handlers;
 #[cfg(feature = "dev")]
 mod dev_link_handlers;
@@ -46,8 +48,14 @@ use types::*;
 pub(crate) async fn start_ui_server(
     plugin_manager: Arc<Mutex<PluginManager>>,
     daemon: &Daemon,
+    #[cfg(feature = "dev")] core_log_controls: crate::logging::CoreControlsHandle,
 ) -> Result<u16> {
-    let (app_state, plugins_dir) = AppState::new(plugin_manager, daemon)?;
+    let (app_state, plugins_dir) = AppState::new(
+        plugin_manager,
+        daemon,
+        #[cfg(feature = "dev")]
+        core_log_controls,
+    )?;
     #[cfg(feature = "dev")]
     start_dev_discovery(&app_state);
     let app = assemble_app(app_state, plugins_dir);
@@ -69,7 +77,8 @@ fn api_router(app_state: AppState) -> Router {
         .merge(dev_handlers::routes())
         .merge(dev_link_handlers::routes())
         .merge(dev_state_handlers::routes())
-        .merge(dev_mock_handlers::routes());
+        .merge(dev_mock_handlers::routes())
+        .merge(dev_core_log_handlers::routes());
     api.with_state(app_state)
         .layer(middleware::from_fn(security::reject_cross_site_mutations))
 }

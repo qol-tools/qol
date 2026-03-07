@@ -84,22 +84,32 @@ export function bindActionInteractionLocks(root, { onEnter, onLeave }) {
     }
 }
 
-export function syncPluginMenuDom(root, openPluginMenuId) {
+export function syncPluginMenuDom(root, openPluginMenuId, openCoreMenuId) {
     if (!root) {
         return;
     }
 
-    const rows = root.querySelectorAll('.plugin-row[data-plugin-id]');
-    for (const row of rows) {
+    const pluginRows = root.querySelectorAll('.plugin-row[data-plugin-id]');
+    for (const row of pluginRows) {
         const isOpen = row.dataset.pluginId === openPluginMenuId;
-        const menu = row.querySelector('.plugin-context-menu');
-        if (menu) {
-            menu.classList.toggle('open', isOpen);
-        }
+        syncMenuRow(row, isOpen);
+    }
 
-        const trigger = row.querySelector('.plugin-menu-trigger');
-        if (trigger) {
-            trigger.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-        }
+    const coreRows = root.querySelectorAll('.core-log-row[data-core-section]');
+    for (const row of coreRows) {
+        const isOpen = row.dataset.coreSection === openCoreMenuId;
+        syncMenuRow(row, isOpen);
+    }
+}
+
+function syncMenuRow(row, isOpen) {
+    const menu = row.querySelector('.plugin-context-menu');
+    if (menu) {
+        menu.classList.toggle('open', isOpen);
+    }
+
+    const trigger = row.querySelector('.plugin-menu-trigger');
+    if (trigger) {
+        trigger.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
     }
 }

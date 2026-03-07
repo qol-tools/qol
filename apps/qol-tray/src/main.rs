@@ -13,6 +13,10 @@ use tokio::sync::broadcast;
 const DEFAULT_PORT: u16 = 42700;
 
 fn main() -> Result<()> {
+    #[cfg(feature = "dev")]
+    let core_log_controls = qol_tray::logging::init_dev_logger();
+
+    #[cfg(not(feature = "dev"))]
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     if is_already_running() {
@@ -33,6 +37,11 @@ fn main() -> Result<()> {
     );
 
     log::info!("Starting QoL Tray daemon...");
+
+    #[cfg(feature = "dev")]
+    return tray::platform::run_app(move || app_init(core_log_controls));
+
+    #[cfg(not(feature = "dev"))]
     tray::platform::run_app(app_init)
 }
 
@@ -69,11 +78,28 @@ struct InitResult {
     events: Arc<qol_tray::daemon::EventBus>,
 }
 
+#[cfg(feature = "dev")]
+fn app_init(
+    core_log_controls: qol_tray::logging::CoreControlsHandle,
+) -> Result<(TrayManager, Arc<Mutex<PluginManager>>)> {
+    app_init_inner(core_log_controls)
+}
+
+#[cfg(not(feature = "dev"))]
 fn app_init() -> Result<(TrayManager, Arc<Mutex<PluginManager>>)> {
+    app_init_inner()
+}
+
+fn app_init_inner(
+    #[cfg(feature = "dev")] core_log_controls: qol_tray::logging::CoreControlsHandle,
+) -> Result<(TrayManager, Arc<Mutex<PluginManager>>)> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    let init = rt.block_on(async_init())?;
+    let init = rt.block_on(async_init_inner(
+        #[cfg(feature = "dev")]
+        core_log_controls,
+    ))?;
     std::thread::spawn(move || {
         rt.block_on(std::future::pending::<()>());
     });
@@ -88,7 +114,9 @@ fn app_init() -> Result<(TrayManager, Arc<Mutex<PluginManager>>)> {
     Ok((tray, init.plugin_manager))
 }
 
-async fn async_init() -> Result<InitResult> {
+async fn async_init_inner(
+    #[cfg(feature = "dev")] core_log_controls: qol_tray::logging::CoreControlsHandle,
+) -> Result<InitResult> {
     let update_available = check_for_updates().await;
     let (shutdown_tx, shutdown_rx) = broadcast::channel::<()>(1);
     #[cfg(unix)]
@@ -100,7 +128,13 @@ async fn async_init() -> Result<InitResult> {
     let mut feature_registry = FeatureRegistry::new();
     feature_registry.register(Box::new(features::plugin_store::Plugins::new()));
     let feature_registry = Arc::new(feature_registry);
-    features::plugin_store::Plugins::start_server(plugin_manager.clone(), &daemon).await?;
+    features::plugin_store::Plugins::start_server(
+        plugin_manager.clone(),
+        &daemon,
+        #[cfg(feature = "dev")]
+        core_log_controls,
+    )
+    .await?;
     if let Err(e) = hotkeys::start_hotkey_listener(plugin_manager.clone()) {
         log::warn!("Failed to start hotkey listener: {}", e);
     }

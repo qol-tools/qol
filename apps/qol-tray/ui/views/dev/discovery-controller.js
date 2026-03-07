@@ -5,6 +5,7 @@ export function createDiscoveryController({ state, onNeedsRender }) {
     const ctx = { state, onNeedsRender };
     return {
         loadLogControls: skip => loadLogControls(ctx, skip),
+        loadCoreLogControls: skip => loadCoreLogControls(ctx, skip),
         refreshDiscoveryState: () => refreshDiscoveryState(ctx),
         fetchDiscoveryState: skip => fetchDiscoveryState(ctx, skip),
         loadPlugins: skip => loadPlugins(ctx, skip),
@@ -20,6 +21,12 @@ function maybeRender(ctx, skipUpdate) {
 async function loadLogControls(ctx, skipUpdate = false) {
     const payload = await tryFetchJson('/api/dev/log-controls');
     if (payload) ctx.state.logControls = parseLogControlsPayload(payload);
+    maybeRender(ctx, skipUpdate);
+}
+
+async function loadCoreLogControls(ctx, skipUpdate = false) {
+    const payload = await tryFetchJson('/api/dev/core-log-controls');
+    if (payload) ctx.state.coreLogControls = payload;
     maybeRender(ctx, skipUpdate);
 }
 

@@ -36,9 +36,16 @@ impl Plugins {
     pub async fn start_server(
         plugin_manager: Arc<Mutex<PluginManager>>,
         daemon: &Daemon,
+        #[cfg(feature = "dev")] core_log_controls: crate::logging::CoreControlsHandle,
     ) -> Result<()> {
         log::info!("Starting plugin server with embedded UI");
-        let port = server::start_ui_server(plugin_manager, daemon).await?;
+        let port = server::start_ui_server(
+            plugin_manager,
+            daemon,
+            #[cfg(feature = "dev")]
+            core_log_controls,
+        )
+        .await?;
         ACTIVE_SERVER_PORT.store(port, Ordering::Relaxed);
         log::info!("Plugin server started at http://127.0.0.1:{}", port);
         Ok(())

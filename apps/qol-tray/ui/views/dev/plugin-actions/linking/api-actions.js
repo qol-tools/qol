@@ -15,8 +15,9 @@ async function confirmLink(linkInputState, triggerReload, discoveryController) {
     try {
         const response = await postLink({ path });
         if (!response.ok) { linkInputState.failLink(await readResponseText(response)); return; }
+        const pluginId = (await readResponseText(response)) || undefined;
         linkInputState.clearLinkInput();
-        await triggerReload();
+        await triggerReload(pluginId);
         await discoveryController.loadPlugins();
     } catch (error) {
         linkInputState.failLink(error.message);
@@ -28,7 +29,7 @@ async function quickLink(state, onNeedsRender, path, id, triggerReload, discover
         try {
             const response = await postLink({ path, id });
             if (!response.ok) { console.error('Failed to link:', await readResponseText(response)); return; }
-            await triggerReload();
+            await triggerReload(id);
             await discoveryController.loadPlugins(true);
         } catch (error) {
             console.error('Failed to link:', error);
@@ -41,7 +42,6 @@ async function deleteLink(state, onNeedsRender, id, triggerReload, discoveryCont
         try {
             const response = await fetch(`/api/dev/links/${id}`, { method: 'DELETE' });
             if (!response.ok) { console.error('Failed to delete link:', await readResponseText(response)); return; }
-            await triggerReload();
             await Promise.all([discoveryController.loadPlugins(true), discoveryController.refreshDiscoveryState()]);
         } catch (error) {
             console.error('Failed to delete link:', error);
@@ -53,12 +53,12 @@ async function runWithLinkingId(state, onNeedsRender, id, beforeStart, task) {
     if (state.linkingId) { return; }
     state.linkingId = id;
     if (typeof beforeStart === 'function') { beforeStart(); }
-    onNeedsRender();
+    onNeedsRender(true);
     try {
         if (typeof task === 'function') { await task(); }
     } finally {
         state.linkingId = null;
-        onNeedsRender();
+        onNeedsRender(true);
     }
 }
 

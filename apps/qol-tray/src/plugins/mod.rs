@@ -8,7 +8,6 @@ mod execution_contract;
 #[cfg(test)]
 mod execution_contract_tests;
 pub mod loader;
-pub mod log_control;
 pub mod manager;
 pub mod manifest;
 pub mod resolver;
