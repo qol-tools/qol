@@ -41,6 +41,7 @@ struct BaseCursor {
     xhot: u32,
     yhot: u32,
     pixels: Vec<u32>,
+    default_size: u32,
 }
 
 pub fn run() -> Result<()> {
@@ -58,7 +59,7 @@ pub fn run() -> Result<()> {
     let root = unsafe { xlib::XDefaultRootWindow(display) };
     eprintln!("[shake-to-grow] started");
 
-    let base = match load_base_pixels(display) {
+    let base = match load_base_pixels(display, config.scale_factor) {
         Some(b) => b,
         None => {
             eprintln!("[shake-to-grow] warn: failed to load base cursor pixels");
@@ -198,12 +199,12 @@ fn shakiness(samples: &VecDeque<(Instant, i32, i32)>) -> f64 {
     total / (net + 1.0)
 }
 
-fn load_base_pixels(display: *mut xlib::Display) -> Option<BaseCursor> {
+fn load_base_pixels(display: *mut xlib::Display, scale_factor: u32) -> Option<BaseCursor> {
     let raw_size = unsafe { xcursor::XcursorGetDefaultSize(display) };
-    let base_size = if raw_size > 0 { raw_size } else { 24 };
+    let default_size = if raw_size > 0 { raw_size as u32 } else { 24 };
     let theme = unsafe { xcursor::XcursorGetTheme(display) };
     let images = unsafe {
-        xcursor::XcursorLibraryLoadImages(c"left_ptr".as_ptr(), theme, base_size)
+        xcursor::XcursorLibraryLoadImages(c"left_ptr".as_ptr(), theme, (default_size * scale_factor) as i32)
     };
     if images.is_null() {
         return None;
@@ -211,22 +212,24 @@ fn load_base_pixels(display: *mut xlib::Display) -> Option<BaseCursor> {
     let base = unsafe {
         let img = &**(*images).images;
         let pixels = std::slice::from_raw_parts(img.pixels, (img.width * img.height) as usize).to_vec();
-        BaseCursor { width: img.width, height: img.height, xhot: img.xhot, yhot: img.yhot, pixels }
+        BaseCursor { width: img.width, height: img.height, xhot: img.xhot, yhot: img.yhot, pixels, default_size }
     };
     unsafe { xcursor::XcursorImagesDestroy(images) };
     Some(base)
 }
 
 fn make_cursor_at_scale(display: *mut xlib::Display, base: &BaseCursor, scale: f32) -> Option<xlib::Cursor> {
-    let dw = ((base.width as f32 * scale) as u32).max(1);
-    let dh = ((base.height as f32 * scale) as u32).max(1);
+    let target_px = base.default_size as f32 * scale;
+    let factor = target_px / base.width as f32;
+    let dw = ((base.width as f32 * factor) as u32).max(1);
+    let dh = ((base.height as f32 * factor) as u32).max(1);
     let img = unsafe { xcursor::XcursorImageCreate(dw as i32, dh as i32) };
     if img.is_null() {
         return None;
     }
     let cursor = unsafe {
-        (*img).xhot = (base.xhot as f32 * scale) as u32;
-        (*img).yhot = (base.yhot as f32 * scale) as u32;
+        (*img).xhot = (base.xhot as f32 * factor) as u32;
+        (*img).yhot = (base.yhot as f32 * factor) as u32;
         let dst = std::slice::from_raw_parts_mut((*img).pixels, (dw * dh) as usize);
         scale_bilinear(&base.pixels, base.width, base.height, dst, dw, dh);
         let cursor = xcursor::XcursorImageLoadCursor(display, img);
