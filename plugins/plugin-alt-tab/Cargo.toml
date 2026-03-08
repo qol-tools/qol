@@ -13,8 +13,8 @@ open = "5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 smallvec = "1.13"
-qol-color = { path = "../../../qol-color" }
-qol-config = { path = "../../../qol-config" }
+qol-color = { path = "../qol-color" }
+qol-config = { path = "../qol-config" }
 qol-plugin-api = { path = "../qol-plugin-api", features = ["app-icons"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
