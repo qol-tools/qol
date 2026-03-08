@@ -5,7 +5,6 @@ import { PaletteProvider } from '../palette/context.js';
 import { useApp } from './app/useApp.js';
 import { renderMountedViews } from './app/views.js';
 import { useScrollFollow } from '../hooks/useScrollIntoView.js';
-import { CloseGuard } from './CloseGuard.js';
 
 export function App() {
     return html`<${PaletteProvider}><${AppShell} /><//>`;
@@ -30,7 +29,6 @@ function AppShell() {
                     worktrees=${worktrees} defaultWorktree=${defaultWorktree} setDefaultWorktree=${setDefaultWorktree} /></div>
                 <div id="content-footer" class="app-footer-content"></div>
             </div>
-            <${CloseGuard} />
         </div>
     `;
 }
