@@ -10,38 +10,29 @@ const GLOW_ROWS = [0.3, 1, 0.3];
 
 export function NoiseBorder({ active }) {
     const canvasRef = useRef(null);
-    const activeRef = useRef(active);
-    activeRef.current = active;
 
     useEffect(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
         const parent = canvas.parentElement;
-        let lastW = 0;
-        let cleanup = null;
+
+        if (!active) {
+            canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+            return;
+        }
+
+        if (parent.offsetWidth > 0) return runAnimation(canvas);
+
+        let animCleanup = null;
+        let started = false;
         const observer = new ResizeObserver((entries) => {
             const w = entries[0].contentRect.width;
-            if (w === 0 || lastW > 0) { lastW = w; return; }
-            lastW = w;
-            if (activeRef.current) cleanup = runAnimation(canvas);
+            if (w === 0 || started) return;
+            started = true;
+            animCleanup = runAnimation(canvas);
         });
         observer.observe(parent);
-        if (parent.offsetWidth > 0) {
-            lastW = parent.offsetWidth;
-            if (active) cleanup = runAnimation(canvas);
-        }
-        return () => { observer.disconnect(); cleanup?.(); };
-    }, []);
-
-    useEffect(() => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const w = canvas.parentElement.offsetWidth;
-        if (w === 0) return;
-        if (active) return runAnimation(canvas);
-        canvas.width = w;
-        canvas.height = BORDER_HEIGHT;
-        canvas.getContext('2d').clearRect(0, 0, w, BORDER_HEIGHT);
+        return () => { observer.disconnect(); animCleanup?.(); };
     }, [active]);
 
     return html`<canvas ref=${canvasRef} class="noise-border" />`;
