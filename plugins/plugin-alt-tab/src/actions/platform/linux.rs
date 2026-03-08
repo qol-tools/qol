@@ -1,9 +1,25 @@
 pub fn activate_window(window_id: u32) {
-    std::process::Command::new("xdotool")
+    eprintln!("[alt-tab/activate] xdotool windowactivate {}", window_id);
+    match std::process::Command::new("xdotool")
         .arg("windowactivate")
+        .arg("--sync")
         .arg(window_id.to_string())
         .status()
-        .ok();
+    {
+        Ok(status) if status.success() => {
+            eprintln!("[alt-tab/activate] xdotool succeeded for {}", window_id);
+        }
+        Ok(status) => {
+            eprintln!(
+                "[alt-tab/activate] xdotool failed for {} (exit={})",
+                window_id,
+                status.code().unwrap_or(-1)
+            );
+        }
+        Err(e) => {
+            eprintln!("[alt-tab/activate] xdotool spawn failed: {}", e);
+        }
+    }
 }
 
 pub fn close_window(window_id: u32) {

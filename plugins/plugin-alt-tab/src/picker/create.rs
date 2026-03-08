@@ -24,7 +24,17 @@ pub(super) fn create_new(req: &CreateRequest, gathered: GatheredWindows, cx: &mu
     let Some(handle) = handle else {
         return on_open_failure();
     };
-    *req.current.borrow_mut() = Some((handle.clone(), layout.origin));
+    let target = req
+        .tracker
+        .snapshot()
+        .map(|m| qol_plugin_api::window::MonitorKey::from_bounds(&m.0.bounds()))
+        .unwrap_or(qol_plugin_api::window::MonitorKey {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        });
+    req.current.borrow_mut().insert(target, handle.clone());
     post.finalize(handle, req.icon_cache.clone(), cx);
 }
 

@@ -125,6 +125,7 @@ struct ResolvedProps {
     wm_class: Vec<Option<GetPropertyReply>>,
     icon: Vec<Option<GetPropertyReply>>,
     state: Vec<Option<GetPropertyReply>>,
+    geom: Vec<Option<x11rb::protocol::xproto::GetGeometryReply>>,
 }
 
 fn collect_window_info(conn: &impl Connection, ids: &[u32], atoms: &AtomMap) -> Vec<WindowInfo> {
@@ -169,6 +170,13 @@ fn pipeline_and_resolve(conn: &impl Connection, ids: &[u32], atoms: &AtomMap) ->
                 None
             }
         }),
+        geom: {
+            let cookies: Vec<_> = ids.iter().map(|&id| conn.get_geometry(id).ok()).collect();
+            cookies
+                .into_iter()
+                .map(|c| c.and_then(|c| c.reply().ok()))
+                .collect()
+        },
     }
 }
 
@@ -200,10 +208,10 @@ fn build_window_info(
         app_name: resolve_app_name(idx, props),
         preview_path: None,
         icon: props.icon[idx].take().and_then(|r| extract_x11_icon(&r)),
-        x: 0.0,
-        y: 0.0,
-        width: 0.0,
-        height: 0.0,
+        x: props.geom[idx].as_ref().map_or(0.0, |r| r.x as f32),
+        y: props.geom[idx].as_ref().map_or(0.0, |r| r.y as f32),
+        width: props.geom[idx].as_ref().map_or(0.0, |r| r.width as f32),
+        height: props.geom[idx].as_ref().map_or(0.0, |r| r.height as f32),
         is_minimized: resolve_minimized(idx, props, hidden_atom),
     })
 }

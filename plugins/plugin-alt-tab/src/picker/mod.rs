@@ -35,7 +35,7 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
     #[cfg(debug_assertions)]
     eprintln!("[alt-tab/open] show request (reverse={})", req.reverse);
 
-    if req.reverse && req.current.borrow().is_none() {
+    if req.reverse && req.current.borrow().is_empty() {
         return;
     }
     if try_cycle_existing(req, cx) {
@@ -50,11 +50,15 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
 }
 
 fn try_cycle_existing(req: &OpenPickerRequest, cx: &mut App) -> bool {
-    let existing = req.current.borrow().clone();
-    let Some((ref handle, _)) = existing else {
+    let target = match req.tracker.snapshot() {
+        Some(m) => qol_plugin_api::window::MonitorKey::from_bounds(&m.0.bounds()),
+        None => return false,
+    };
+    let existing = req.current.borrow().existing(target);
+    let Some(handle) = existing else {
         return false;
     };
-    if !try_cycle_selection(handle, req.reverse, cx) {
+    if !try_cycle_selection(&handle, req.reverse, cx) {
         return false;
     }
     PICKER_VISIBLE.store(true, Ordering::Relaxed);
@@ -63,9 +67,16 @@ fn try_cycle_existing(req: &OpenPickerRequest, cx: &mut App) -> bool {
 }
 
 fn try_reuse_existing(req: &OpenPickerRequest, gathered: &GatheredWindows, cx: &mut App) -> bool {
-    let Some((handle, origin)) = req.current.borrow().clone() else {
+    let target = match req.tracker.snapshot() {
+        Some(m) => qol_plugin_api::window::MonitorKey::from_bounds(&m.0.bounds()),
+        None => return false,
+    };
+    let existing = req.current.borrow().existing(target);
+    let Some(handle) = existing else {
         return false;
     };
+    let monitor = req.tracker.snapshot().map(|(m, _)| m);
+    let origin = reuse::monitor_origin(&monitor);
     let input = reuse::LayoutInput {
         config: req.config,
         window_count: gathered.windows.len(),
@@ -81,18 +92,22 @@ fn try_reuse_existing(req: &OpenPickerRequest, gathered: &GatheredWindows, cx: &
     };
     if reuse::try_reuse(&reuse_req, cx) {
         finalize_reuse(handle, gathered, &req.icon_cache, cx);
-        *req.current.borrow_mut() = Some((handle, layout.origin));
         return true;
     }
-    discard_old_window(req, &handle, cx);
+    discard_old_window(req, target, handle, cx);
     false
 }
 
-fn discard_old_window(req: &OpenPickerRequest, handle: &WindowHandle<AltTabApp>, cx: &mut App) {
+fn discard_old_window(
+    req: &OpenPickerRequest,
+    target: qol_plugin_api::window::MonitorKey,
+    handle: WindowHandle<AltTabApp>,
+    cx: &mut App,
+) {
     #[cfg(debug_assertions)]
     eprintln!("[alt-tab/open] closing old window — will recreate on correct monitor");
     let _ = handle.update(cx, |_, window, _| window.remove_window());
-    *req.current.borrow_mut() = None;
+    req.current.borrow_mut().remove(target);
 }
 
 fn create_from_request(req: &OpenPickerRequest, gathered: GatheredWindows, cx: &mut App) {
@@ -284,9 +299,14 @@ pub(crate) mod state {
 
         pub(crate) fn activate_selected(&self, window: &mut Window) {
             let Some(ix) = self.selected_index else {
+                eprintln!("[alt-tab/activate] no selection — skipping");
                 return;
             };
             let win = &self.windows[ix];
+            eprintln!(
+                "[alt-tab/activate] idx={} id={} app={} title={}",
+                ix, win.id, win.app_name, win.title
+            );
             actions::activate_window(win.id);
             push_focus_hint(win);
             PICKER_VISIBLE.store(false, Ordering::Relaxed);
