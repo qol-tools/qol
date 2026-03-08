@@ -1807,7 +1807,7 @@ dependencies = [
 [[package]]
 name = "qol-runtime"
 version = "0.1.0"
-source = "git+https://github.com/qol-tools/qol-runtime#8047a0bebe4493469d328c42156ca929d960c8cd"
+source = "git+https://github.com/qol-tools/qol-runtime#b22d6bb62c0bc4e486d55410ec560e7a4034c046"
 dependencies = [
  "serde",
  "serde_json",
