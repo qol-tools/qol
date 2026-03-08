@@ -1,0 +1,9 @@
+[package]
+name = "qol-platform"
+version = "0.1.0"
+edition = "2021"
+description = "Platform detection and capabilities for qol-tools"
+license = "MIT"
+
+[dependencies]
+dirs = "6.0"
