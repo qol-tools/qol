@@ -93,3 +93,11 @@ contracts:
 install:
 	cargo build --release --bins
 	target/release/qol-tray-install
+
+wasm:
+	cd ../qol-wasm && wasm-pack build --target web --release
+	mkdir -p ui/wasm
+	cp ../qol-wasm/pkg/qol_wasm.d.ts ui/wasm/
+	cp ../qol-wasm/pkg/qol_wasm_bg.wasm ui/wasm/
+	cp ../qol-wasm/pkg/qol_wasm_bg.wasm.d.ts ui/wasm/
+	cp ../qol-wasm/pkg/qol_wasm.js ui/wasm/

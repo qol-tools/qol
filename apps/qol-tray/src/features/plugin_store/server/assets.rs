@@ -28,6 +28,7 @@ fn mime_for_path(path: &str) -> &'static str {
         (".js", "application/javascript"),
         (".png", "image/png"),
         (".svg", "image/svg+xml"),
+        (".wasm", "application/wasm"),
     ];
     MIME_MAP
         .iter()
