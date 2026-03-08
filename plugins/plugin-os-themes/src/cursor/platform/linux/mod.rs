@@ -2,7 +2,6 @@ mod motion;
 mod runtime;
 mod scale;
 mod x11;
-mod x11_xfixes;
 
 use std::process::{Command, Stdio};
 
