@@ -19,7 +19,6 @@ pub struct ShakeDetector {
 
 pub struct ScaleUpdate {
     pub scale_changed: Option<f32>,
-    pub should_reapply: bool,
     pub event: Option<ScaleEvent>,
 }
 
@@ -94,7 +93,6 @@ impl ShakeDetector {
         let scale_changed = scale_changed(previous_scale, next_scale);
         ScaleUpdate {
             scale_changed,
-            should_reapply: scale_changed.is_none() && self.is_scaled(),
             event: scale_event(previous_scale, next_scale, metrics.velocity),
         }
     }

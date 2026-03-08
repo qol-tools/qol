@@ -1,41 +1,11 @@
-use std::ffi::CStr;
 use std::ptr;
 
 use anyhow::{ensure, Result};
-use x11::{xcursor, xfixes, xlib};
+use x11::{xcursor, xlib};
 
-const CURSOR_NAMES: &[&CStr] = &[
-    c"left_ptr",
-    c"default",
-    c"xterm",
-    c"text",
-    c"hand2",
-    c"pointer",
-    c"watch",
-    c"wait",
-    c"fleur",
-    c"all-scroll",
-    c"grab",
-    c"grabbing",
-    c"top_left_corner",
-    c"top_right_corner",
-    c"bottom_left_corner",
-    c"bottom_right_corner",
-    c"sb_h_double_arrow",
-    c"sb_v_double_arrow",
-    c"col-resize",
-    c"row-resize",
-    c"left_side",
-    c"right_side",
-    c"top_side",
-    c"bottom_side",
-    c"crosshair",
-    c"not-allowed",
-    c"question_arrow",
-    c"help",
-    c"copy",
-    c"progress",
-];
+use super::scale::scale_bilinear;
+
+const MAX_CURSOR_DIMENSION: u32 = 512;
 
 pub struct CursorSession {
     display: *mut xlib::Display,
@@ -58,126 +28,83 @@ impl CursorSession {
         let display = unsafe { xlib::XOpenDisplay(ptr::null()) };
         ensure!(!display.is_null(), "failed to open X11 display");
 
-        reset_stale_cursors(display);
-
-        let base = load_base_cursor(display, scale_factor);
-        ensure!(base.is_some(), "failed to load base cursor pixels");
+        let Some(base) = load_base_cursor(display, scale_factor) else {
+            unsafe { xlib::XCloseDisplay(display) };
+            ensure!(false, "failed to load base cursor pixels");
+            unreachable!();
+        };
 
         Ok(Self {
             display,
             root: unsafe { xlib::XDefaultRootWindow(display) },
-            base: base.unwrap(),
+            base,
             active_cursor: None,
         })
     }
 
-    pub fn pointer_position(&self) -> (i32, i32) {
-        query_pointer(self.display, self.root)
-    }
-
-    pub fn set_scale(&mut self, scale: f32) {
-        let Some(cursor) = make_cursor_at_scale(self.display, &self.base, scale) else {
-            return;
+    pub fn set_scale(&mut self, scale: f32) -> bool {
+        if scale <= 1.0 + f32::EPSILON {
+            self.restore();
+            return true;
+        }
+        let Some(cursor) = make_cursor_at_scale(self.display, self.root, &self.base, scale) else {
+            return false;
         };
         apply_to_tree(self.display, self.root, cursor);
         self.flush();
         if let Some(old_cursor) = self.active_cursor.replace(cursor) {
             unsafe { xlib::XFreeCursor(self.display, old_cursor) };
         }
+        true
+    }
+
+    pub fn refresh(&mut self) -> bool {
+        false
     }
 
     pub fn restore(&mut self) {
-        let had_active_cursor = self.active_cursor.is_some();
-        self.free_active_cursor();
-        if !had_active_cursor {
+        if self.active_cursor.is_none() {
             return;
         }
-        let Some(cursor) = make_cursor_at_scale(self.display, &self.base, 1.0) else {
-            return;
-        };
-        apply_to_tree(self.display, self.root, cursor);
+        clear_tree(self.display, self.root);
         self.flush();
-        unsafe { xlib::XFreeCursor(self.display, cursor) };
+        if let Some(cursor) = self.active_cursor.take() {
+            unsafe { xlib::XFreeCursor(self.display, cursor) };
+        }
     }
 
     fn flush(&self) {
         unsafe { xlib::XFlush(self.display) };
     }
-
-    fn free_active_cursor(&mut self) {
-        let Some(cursor) = self.active_cursor.take() else {
-            return;
-        };
-        unsafe { xlib::XFreeCursor(self.display, cursor) };
-    }
 }
 
 impl Drop for CursorSession {
     fn drop(&mut self) {
-        self.free_active_cursor();
+        self.restore();
         unsafe { xlib::XCloseDisplay(self.display) };
     }
-}
-
-fn reset_stale_cursors(display: *mut xlib::Display) {
-    for name in CURSOR_NAMES {
-        let cursor = unsafe { xcursor::XcursorLibraryLoadCursor(display, name.as_ptr()) };
-        if cursor == 0 {
-            continue;
-        }
-        unsafe {
-            xfixes::XFixesChangeCursorByName(display, cursor, name.as_ptr());
-            xlib::XFreeCursor(display, cursor);
-        }
-    }
-    unsafe { xlib::XFlush(display) };
-    eprintln!("[shake-to-grow] reset stale cursor overrides");
-}
-
-fn query_pointer(display: *mut xlib::Display, root: xlib::Window) -> (i32, i32) {
-    let (mut root_out, mut child_out): (xlib::Window, xlib::Window) = (0, 0);
-    let (mut root_x, mut root_y, mut window_x, mut window_y): (i32, i32, i32, i32) = (0, 0, 0, 0);
-    let mut mask: u32 = 0;
-    unsafe {
-        xlib::XQueryPointer(
-            display,
-            root,
-            &mut root_out,
-            &mut child_out,
-            &mut root_x,
-            &mut root_y,
-            &mut window_x,
-            &mut window_y,
-            &mut mask,
-        );
-    }
-    (root_x, root_y)
 }
 
 fn load_base_cursor(display: *mut xlib::Display, scale_factor: u32) -> Option<BaseCursor> {
     let raw_size = unsafe { xcursor::XcursorGetDefaultSize(display) };
     let default_size = if raw_size > 0 { raw_size as u32 } else { 24 };
+    let request_size = default_size.saturating_mul(scale_factor.max(1));
     let theme = unsafe { xcursor::XcursorGetTheme(display) };
     let images = unsafe {
-        xcursor::XcursorLibraryLoadImages(
-            c"left_ptr".as_ptr(),
-            theme,
-            (default_size * scale_factor) as i32,
-        )
+        xcursor::XcursorLibraryLoadImages(c"left_ptr".as_ptr(), theme, request_size as i32)
     };
     if images.is_null() {
         return None;
     }
 
     let image = unsafe { &**(*images).images };
-    let pixels = unsafe {
-        std::slice::from_raw_parts(image.pixels, (image.width * image.height) as usize).to_vec()
-    };
+    let pixel_count = checked_pixel_count(image.width, image.height)?;
+    let pixels = unsafe { std::slice::from_raw_parts(image.pixels, pixel_count).to_vec() };
     let base = BaseCursor {
         width: image.width,
         height: image.height,
-        xhot: image.xhot,
-        yhot: image.yhot,
+        xhot: sanitize_hotspot(image.xhot, image.width),
+        yhot: sanitize_hotspot(image.yhot, image.height),
         pixels,
         default_size,
     };
@@ -188,101 +115,86 @@ fn load_base_cursor(display: *mut xlib::Display, scale_factor: u32) -> Option<Ba
 
 fn make_cursor_at_scale(
     display: *mut xlib::Display,
+    root: xlib::Window,
     base: &BaseCursor,
     scale: f32,
 ) -> Option<xlib::Cursor> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
     let target_size = base.default_size as f32 * scale;
     let factor = target_size / base.width as f32;
-    let width = ((base.width as f32 * factor) as u32).max(1);
-    let height = ((base.height as f32 * factor) as u32).max(1);
-    let image = unsafe { xcursor::XcursorImageCreate(width as i32, height as i32) };
+    if !factor.is_finite() || factor <= 0.0 {
+        return None;
+    }
+    let requested_width = scaled_dimension(base.width, factor)?;
+    let requested_height = scaled_dimension(base.height, factor)?;
+    let (max_width, max_height) = best_cursor_size(display, root, requested_width, requested_height);
+    let width = requested_width.min(max_width.max(1));
+    let height = requested_height.min(max_height.max(1));
+    let pixel_count = checked_pixel_count(width, height)?;
+    let image =
+        unsafe { xcursor::XcursorImageCreate(width.try_into().ok()?, height.try_into().ok()?) };
     if image.is_null() {
         return None;
     }
 
     let cursor = unsafe {
-        (*image).xhot = (base.xhot as f32 * factor) as u32;
-        (*image).yhot = (base.yhot as f32 * factor) as u32;
-        let pixels = std::slice::from_raw_parts_mut((*image).pixels, (width * height) as usize);
-        let source = PixelGrid::new(&base.pixels, ImageSize::new(base.width, base.height));
-        let request = ScaleRequest::new(source, ImageSize::new(width, height));
-        scale_bilinear(&request, pixels);
+        (*image).xhot = scaled_hotspot(base.xhot, factor, width);
+        (*image).yhot = scaled_hotspot(base.yhot, factor, height);
+        let pixels = std::slice::from_raw_parts_mut((*image).pixels, pixel_count);
+        scale_bilinear(&base.pixels, base.width, base.height, pixels, width, height);
         let cursor = xcursor::XcursorImageLoadCursor(display, image);
         xcursor::XcursorImageDestroy(image);
         cursor
     };
-
     if cursor == 0 {
         return None;
     }
     Some(cursor)
 }
 
-fn scale_bilinear(request: &ScaleRequest<'_>, dst: &mut [u32]) {
-    for dy in 0..request.dst.height {
-        for dx in 0..request.dst.width {
-            let point = PixelPoint { x: dx, y: dy };
-            dst[(dy * request.dst.width + dx) as usize] = scaled_pixel(request, point);
+fn best_cursor_size(
+    display: *mut xlib::Display,
+    root: xlib::Window,
+    width: u32,
+    height: u32,
+) -> (u32, u32) {
+    let mut best_width = width;
+    let mut best_height = height;
+    unsafe {
+        xlib::XQueryBestCursor(
+            display,
+            root,
+            width,
+            height,
+            &mut best_width,
+            &mut best_height,
+        );
+    }
+    (
+        sanitize_dimension(best_width),
+        sanitize_dimension(best_height),
+    )
+}
+
+fn apply_to_tree(display: *mut xlib::Display, window: xlib::Window, cursor: xlib::Cursor) {
+    let mut stack = vec![window];
+    while let Some(window) = stack.pop() {
+        unsafe { xlib::XDefineCursor(display, window, cursor) };
+        for child in window_children(display, window) {
+            stack.push(child);
         }
     }
 }
 
-fn scaled_pixel(request: &ScaleRequest<'_>, point: PixelPoint) -> u32 {
-    let source = source_point(request, point);
-    let corners = pixel_corners(request, &source);
-    blend_pixel(corners, BlendFactors::from(&source))
-}
-
-fn source_point(request: &ScaleRequest<'_>, point: PixelPoint) -> SourcePoint {
-    let sx = point.x as f32 * (request.src.width as f32 - 1.0) / scale_span(request.dst.width);
-    let sy = point.y as f32 * (request.src.height as f32 - 1.0) / scale_span(request.dst.height);
-    let x0 = sx as u32;
-    let y0 = sy as u32;
-    SourcePoint {
-        x0,
-        y0,
-        x1: (x0 + 1).min(request.src.width - 1),
-        y1: (y0 + 1).min(request.src.height - 1),
-        tx: sx - x0 as f32,
-        ty: sy - y0 as f32,
-    }
-}
-
-fn scale_span(length: u32) -> f32 {
-    (length as f32 - 1.0).max(1.0)
-}
-
-fn pixel_corners(request: &ScaleRequest<'_>, source: &SourcePoint) -> [u32; 4] {
-    [
-        request.src.pixel(source.x0, source.y0),
-        request.src.pixel(source.x1, source.y0),
-        request.src.pixel(source.x0, source.y1),
-        request.src.pixel(source.x1, source.y1),
-    ]
-}
-
-fn blend_pixel(corners: [u32; 4], blend: BlendFactors) -> u32 {
-    let mut out = 0u32;
-    for shift in [0u32, 8, 16, 24] {
-        out |= blended_channel(corners, blend, shift) << shift;
-    }
-    out
-}
-
-fn blended_channel(corners: [u32; 4], blend: BlendFactors, shift: u32) -> u32 {
-    let [p00, p10, p01, p11] = corners;
-    let channel = |pixel: u32| ((pixel >> shift) & 0xFF) as f32;
-    let value = channel(p00) * (1.0 - blend.tx) * (1.0 - blend.ty)
-        + channel(p10) * blend.tx * (1.0 - blend.ty)
-        + channel(p01) * (1.0 - blend.tx) * blend.ty
-        + channel(p11) * blend.tx * blend.ty;
-    value as u32 & 0xFF
-}
-
-fn apply_to_tree(display: *mut xlib::Display, window: xlib::Window, cursor: xlib::Cursor) {
-    unsafe { xlib::XDefineCursor(display, window, cursor) };
-    for child in window_children(display, window) {
-        apply_to_tree(display, child, cursor);
+fn clear_tree(display: *mut xlib::Display, window: xlib::Window) {
+    let mut stack = vec![window];
+    while let Some(window) = stack.pop() {
+        unsafe { xlib::XUndefineCursor(display, window) };
+        for child in window_children(display, window) {
+            stack.push(child);
+        }
     }
 }
 
@@ -304,102 +216,43 @@ fn window_children(display: *mut xlib::Display, window: xlib::Window) -> Vec<xli
     if status == 0 || children.is_null() {
         return Vec::new();
     }
-
     let windows = unsafe { std::slice::from_raw_parts(children, child_count as usize).to_vec() };
     unsafe { xlib::XFree(children as *mut _) };
     windows
 }
 
-struct ScaleRequest<'a> {
-    src: PixelGrid<'a>,
-    dst: ImageSize,
-}
-
-impl<'a> ScaleRequest<'a> {
-    fn new(src: PixelGrid<'a>, dst: ImageSize) -> Self {
-        Self { src, dst }
+fn checked_pixel_count(width: u32, height: u32) -> Option<usize> {
+    if width == 0 || height == 0 {
+        return None;
     }
+    let width = usize::try_from(width).ok()?;
+    let height = usize::try_from(height).ok()?;
+    width.checked_mul(height)
 }
 
-#[derive(Clone, Copy)]
-struct PixelPoint {
-    x: u32,
-    y: u32,
-}
-
-#[derive(Clone, Copy)]
-struct ImageSize {
-    width: u32,
-    height: u32,
-}
-
-impl ImageSize {
-    fn new(width: u32, height: u32) -> Self {
-        Self { width, height }
+fn scaled_dimension(base: u32, factor: f32) -> Option<u32> {
+    let scaled = (base as f32 * factor).round();
+    if !scaled.is_finite() || scaled < 1.0 || scaled > i32::MAX as f32 {
+        return None;
     }
+    Some((scaled as u32).min(MAX_CURSOR_DIMENSION).max(1))
 }
 
-struct PixelGrid<'a> {
-    pixels: &'a [u32],
-    width: u32,
-    height: u32,
-}
-
-impl<'a> PixelGrid<'a> {
-    fn new(pixels: &'a [u32], size: ImageSize) -> Self {
-        Self {
-            pixels,
-            width: size.width,
-            height: size.height,
-        }
+fn scaled_hotspot(hotspot: u32, factor: f32, bound: u32) -> u32 {
+    let scaled = (hotspot as f32 * factor).round();
+    if !scaled.is_finite() || scaled < 0.0 {
+        return 0;
     }
+    (scaled as u32).min(bound.saturating_sub(1))
+}
 
-    fn pixel(&self, x: u32, y: u32) -> u32 {
-        self.pixels[(y * self.width + x) as usize]
+fn sanitize_hotspot(hotspot: u32, bound: u32) -> u32 {
+    hotspot.min(bound.saturating_sub(1))
+}
+
+fn sanitize_dimension(value: u32) -> u32 {
+    if value == 0 {
+        return 1;
     }
-}
-
-struct SourcePoint {
-    x0: u32,
-    y0: u32,
-    x1: u32,
-    y1: u32,
-    tx: f32,
-    ty: f32,
-}
-
-#[derive(Clone, Copy)]
-struct BlendFactors {
-    tx: f32,
-    ty: f32,
-}
-
-impl From<&SourcePoint> for BlendFactors {
-    fn from(source: &SourcePoint) -> Self {
-        Self {
-            tx: source.tx,
-            ty: source.ty,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::scale_bilinear;
-    use super::{ImageSize, PixelGrid, ScaleRequest};
-
-    #[test]
-    fn scale_bilinear_2x_maps_source_corners() {
-        let src = [0xFFFF0000u32, 0xFF00FF00, 0xFF0000FF, 0xFFFFFFFF];
-        let mut dst = [0u32; 16];
-        let request = ScaleRequest::new(
-            PixelGrid::new(&src, ImageSize::new(2, 2)),
-            ImageSize::new(4, 4),
-        );
-        scale_bilinear(&request, &mut dst);
-        assert_eq!(dst[0], 0xFFFF0000, "top-left corner");
-        assert_eq!(dst[3], 0xFF00FF00, "top-right corner");
-        assert_eq!(dst[12], 0xFF0000FF, "bottom-left corner");
-        assert_eq!(dst[15], 0xFFFFFFFF, "bottom-right corner");
-    }
+    value.min(MAX_CURSOR_DIMENSION)
 }

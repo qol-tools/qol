@@ -10,9 +10,10 @@ use crate::config::Config;
 use crate::cursor::{CursorEffect, RunControl};
 
 use super::motion::{MotionSample, ScaleEvent, ScaleUpdate, ShakeDetector};
-use super::x11::CursorSession;
 
 const TICK_INTERVAL: Duration = Duration::from_millis(16);
+const LIVE_CURSOR_REFRESH: Duration = Duration::from_millis(90);
+const SELF_EVENT_SUPPRESSION: Duration = Duration::from_millis(75);
 
 pub fn create_effect() -> Box<dyn CursorEffect> {
     Box::new(LinuxCursorEffect)
@@ -22,7 +23,7 @@ struct LinuxCursorEffect;
 
 impl CursorEffect for LinuxCursorEffect {
     fn run(&self, config: &Config, control: &dyn RunControl) -> Result<()> {
-        let mut session = open_session(config.scale_factor)?;
+        let mut session = open_session(config)?;
         let client = PlatformStateClient::from_env();
         let subscription = client
             .subscribe(vec![RuntimeEventKind::CursorMoved])
@@ -31,6 +32,8 @@ impl CursorEffect for LinuxCursorEffect {
         let mut detector = ShakeDetector::new(config);
         let mut last_pos: Option<(f32, f32)> = None;
         let mut scaled = false;
+        let mut next_refresh = Instant::now();
+        let mut suppressed_until: Option<Instant> = None;
         loop {
             if control.should_stop() {
                 break;
@@ -40,20 +43,35 @@ impl CursorEffect for LinuxCursorEffect {
             } else {
                 Duration::from_secs(86400)
             };
-            let sample = match rx.recv_timeout(timeout) {
+            let result = rx.recv_timeout(timeout);
+            let now = Instant::now();
+            let sample = match result {
                 Ok((x, y)) => {
                     let (dx, dy) = delta(last_pos, x, y);
                     last_pos = Some((x, y));
-                    MotionSample::new(Instant::now(), dx, dy)
+                    suppressed_sample(now, suppressed_until, dx, dy)
                 }
-                Err(RecvTimeoutError::Timeout) => MotionSample::new(Instant::now(), 0, 0),
+                Err(RecvTimeoutError::Timeout) => MotionSample::new(now, 0, 0),
                 Err(RecvTimeoutError::Disconnected) => break,
             };
             let update = detector.record(sample);
             scaled = update
                 .scale_changed
                 .map_or(scaled, |s| s > 1.0 + f32::EPSILON);
-            apply_update(&mut session, update);
+            if apply_update(&mut session, update) {
+                suppressed_until = Some(Instant::now() + SELF_EVENT_SUPPRESSION);
+                next_refresh = Instant::now() + LIVE_CURSOR_REFRESH;
+            }
+            if !scaled {
+                continue;
+            }
+            if now < next_refresh {
+                continue;
+            }
+            if session.refresh() {
+                suppressed_until = Some(Instant::now() + SELF_EVENT_SUPPRESSION);
+            }
+            next_refresh = Instant::now() + LIVE_CURSOR_REFRESH;
         }
         session.restore();
         Ok(())
@@ -82,18 +100,56 @@ fn delta(last: Option<(f32, f32)>, x: f32, y: f32) -> (i32, i32) {
     ((x - lx) as i32, (y - ly) as i32)
 }
 
-fn open_session(scale_factor: u32) -> Result<CursorSession> {
-    let session = CursorSession::open(scale_factor)?;
-    eprintln!("[shake-to-grow] started");
-    Ok(session)
+fn open_session(config: &Config) -> Result<Session> {
+    eprintln!("[shake-to-grow] started mode=tree");
+    Ok(Session::Tree(super::x11::CursorSession::open(
+        config.scale_factor,
+    )?))
 }
 
-fn apply_update(session: &mut CursorSession, update: ScaleUpdate) {
+fn apply_update(session: &mut Session, update: ScaleUpdate) -> bool {
     if let Some(event) = update.event {
         log_event(event);
     }
     if let Some(scale) = update.scale_changed {
-        session.set_scale(scale);
+        return session.set_scale(scale);
+    }
+    false
+}
+
+fn suppressed_sample(
+    now: Instant,
+    suppressed_until: Option<Instant>,
+    dx: i32,
+    dy: i32,
+) -> MotionSample {
+    if suppressed_until.is_some_and(|until| now < until) {
+        return MotionSample::new(now, 0, 0);
+    }
+    MotionSample::new(now, dx, dy)
+}
+
+enum Session {
+    Tree(super::x11::CursorSession),
+}
+
+impl Session {
+    fn set_scale(&mut self, scale: f32) -> bool {
+        match self {
+            Self::Tree(session) => session.set_scale(scale),
+        }
+    }
+
+    fn refresh(&mut self) -> bool {
+        match self {
+            Self::Tree(session) => session.refresh(),
+        }
+    }
+
+    fn restore(&mut self) {
+        match self {
+            Self::Tree(session) => session.restore(),
+        }
     }
 }
 
