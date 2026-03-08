@@ -84,7 +84,6 @@ pub struct Scored {
     pub frecency_bonus: i32,
 }
 
-
 pub fn filtered(
     app_entries: &[AppEntry],
     file_entries: &[FileEntry],
@@ -162,7 +161,13 @@ pub struct FrecencyConfig<'a> {
 fn frecency_bonus_for(name: &str, query: &str, config: Option<&FrecencyConfig>) -> i32 {
     let Some(cfg) = config else { return 0 };
     let key = name.to_lowercase();
-    let raw = crate::frecency::frequency_bonus(&key, cfg.data, cfg.now, cfg.half_life_days, cfg.bonus_weight);
+    let raw = crate::frecency::frequency_bonus(
+        &key,
+        cfg.data,
+        cfg.now,
+        cfg.half_life_days,
+        cfg.bonus_weight,
+    );
     cap_frecency_bonus(raw, name, query)
 }
 
@@ -295,7 +300,11 @@ fn extension_hint(query: &str) -> Option<&str> {
     let trimmed = query.trim();
     let (_, suffix) = trimmed.rsplit_once('.')?;
     let hint = suffix.trim().trim_matches('"').trim_matches('\'');
-    if hint.is_empty() || hint.chars().any(|c| c.is_whitespace() || c == '/' || c == '\\') {
+    if hint.is_empty()
+        || hint
+            .chars()
+            .any(|c| c.is_whitespace() || c == '/' || c == '\\')
+    {
         return None;
     }
     Some(hint)

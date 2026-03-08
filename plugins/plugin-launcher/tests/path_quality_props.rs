@@ -11,7 +11,11 @@ struct PathQualityConfig {
 fn score_path_quality(path: &str, config: &PathQualityConfig) -> i32 {
     let mut penalty = 0i32;
 
-    let standard_dirs = ["/usr/share/applications", "/usr/lib", ".local/share/applications"];
+    let standard_dirs = [
+        "/usr/share/applications",
+        "/usr/lib",
+        ".local/share/applications",
+    ];
     let is_standard = standard_dirs.iter().any(|d| path.contains(d));
     if !is_standard {
         penalty += 50;
@@ -25,7 +29,8 @@ fn score_path_quality(path: &str, config: &PathQualityConfig) -> i32 {
     penalty += (depth as i32) * config.depth_penalty;
 
     if config.penalize_hidden {
-        let hidden_count = path.split('/')
+        let hidden_count = path
+            .split('/')
             .filter(|p| p.starts_with('.') && *p != ".local")
             .count();
         penalty += (hidden_count as i32) * 500;
@@ -35,7 +40,10 @@ fn score_path_quality(path: &str, config: &PathQualityConfig) -> i32 {
 }
 
 fn path_cfg(depth_penalty: i32, penalize_hidden: bool) -> PathQualityConfig {
-    PathQualityConfig { depth_penalty, penalize_hidden }
+    PathQualityConfig {
+        depth_penalty,
+        penalize_hidden,
+    }
 }
 
 proptest! {

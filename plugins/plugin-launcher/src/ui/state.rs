@@ -125,7 +125,10 @@ impl LauncherState {
     }
 
     pub(crate) fn char_to_byte_index(s: &str, char_idx: usize) -> usize {
-        s.char_indices().nth(char_idx).map(|(i, _)| i).unwrap_or(s.len())
+        s.char_indices()
+            .nth(char_idx)
+            .map(|(i, _)| i)
+            .unwrap_or(s.len())
     }
 
     pub(crate) fn delete_selection(&mut self) -> bool {

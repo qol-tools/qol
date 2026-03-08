@@ -41,7 +41,9 @@ struct FrequencyData {
 
 impl Default for FrequencyData {
     fn default() -> Self {
-        Self { entries: HashMap::new() }
+        Self {
+            entries: HashMap::new(),
+        }
     }
 }
 
@@ -58,7 +60,11 @@ fn effective_count(entry: &FrequencyEntry, now: u64, half_life_days: f64) -> f64
 
 fn score_path_quality(path: &str, cfg: &RankingConfig) -> i32 {
     let mut penalty = 0i32;
-    let standard_dirs = ["/usr/share/applications", "/usr/lib", ".local/share/applications"];
+    let standard_dirs = [
+        "/usr/share/applications",
+        "/usr/lib",
+        ".local/share/applications",
+    ];
     let is_standard = standard_dirs.iter().any(|d| path.contains(d));
     if !is_standard {
         penalty += 50;
@@ -69,7 +75,8 @@ fn score_path_quality(path: &str, cfg: &RankingConfig) -> i32 {
     let depth = path.matches('/').count();
     penalty += (depth as i32) * cfg.depth_penalty;
     if cfg.penalize_hidden {
-        let hidden_count = path.split('/')
+        let hidden_count = path
+            .split('/')
             .filter(|p| p.starts_with('.') && *p != ".local")
             .count();
         penalty += (hidden_count as i32) * 500;
@@ -79,7 +86,8 @@ fn score_path_quality(path: &str, cfg: &RankingConfig) -> i32 {
 
 fn calc_frequency_bonus(path: &str, freq: &FrequencyData, cfg: &RankingConfig) -> i32 {
     let now = 1_000_000_000u64;
-    freq.entries.get(path)
+    freq.entries
+        .get(path)
         .map(|e| (effective_count(e, now, cfg.half_life_days) * cfg.frequency_bonus as f64) as i32)
         .unwrap_or(0)
 }
@@ -88,12 +96,21 @@ fn score_result(r: &SearchResult, query: &str, freq: &FrequencyData, cfg: &Ranki
     let name = r.name.to_lowercase();
     let q = query.to_lowercase();
 
-    let match_penalty = if name == q { cfg.exact_bonus }
-        else if name.starts_with(&q) { cfg.prefix_penalty }
-        else if name.contains(&q) { cfg.contains_penalty }
-        else { 300 };
+    let match_penalty = if name == q {
+        cfg.exact_bonus
+    } else if name.starts_with(&q) {
+        cfg.prefix_penalty
+    } else if name.contains(&q) {
+        cfg.contains_penalty
+    } else {
+        300
+    };
 
-    let type_penalty = if !cfg.prefer_apps || r.path.ends_with(".desktop") { 0 } else { 1000 };
+    let type_penalty = if !cfg.prefer_apps || r.path.ends_with(".desktop") {
+        0
+    } else {
+        1000
+    };
     let path_penalty = score_path_quality(&r.path, cfg);
     let length_penalty = r.name.len() as i32;
     let frequency_bonus = calc_frequency_bonus(&r.path, freq, cfg);

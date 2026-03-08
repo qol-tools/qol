@@ -26,10 +26,17 @@ impl LauncherView {
             return;
         }
         let result_count = self.store.result_count();
-        match self.state.apply_key(key, secondary, shift, alt, result_count) {
+        match self
+            .state
+            .apply_key(key, secondary, shift, alt, result_count)
+        {
             InputEffect::Ignore => {}
             InputEffect::Navigate => {
-                self.store.ensure_filtered(&self.state.query, self.state.mode, self.state.fuzziness);
+                self.store.ensure_filtered(
+                    &self.state.query,
+                    self.state.mode,
+                    self.state.fuzziness,
+                );
                 self.state.sync_result_window(self.store.result_count());
                 cx.notify();
             }
@@ -45,7 +52,12 @@ impl LauncherView {
         }
     }
 
-    fn handle_clipboard_shortcut(&mut self, key: &str, secondary: bool, cx: &mut Context<Self>) -> bool {
+    fn handle_clipboard_shortcut(
+        &mut self,
+        key: &str,
+        secondary: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(shortcut) = Self::clipboard_shortcut(key, secondary) else {
             return false;
         };
@@ -100,13 +112,21 @@ impl LauncherView {
     }
 
     fn launch_selected(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
-        self.store.ensure_filtered(&self.state.query, self.state.mode, self.state.fuzziness);
+        self.store
+            .ensure_filtered(&self.state.query, self.state.mode, self.state.fuzziness);
         let Some(scored) = self.store.get(self.state.selected) else {
-            eprintln!("[controller] launch_selected: no scored item at index {}", self.state.selected);
+            eprintln!(
+                "[controller] launch_selected: no scored item at index {}",
+                self.state.selected
+            );
             return;
         };
-        eprintln!("[controller] launch_selected: index={} source={:?} name={:?}",
-            self.state.selected, scored.source, self.store.name(scored));
+        eprintln!(
+            "[controller] launch_selected: index={} source={:?} name={:?}",
+            self.state.selected,
+            scored.source,
+            self.store.name(scored)
+        );
         let Some(item) = self.store.item(scored) else {
             eprintln!("[controller] launch_selected: failed to resolve item");
             return;

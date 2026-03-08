@@ -43,7 +43,10 @@ impl IndexingView {
             let mut async_cx = cx.clone();
             async move {
                 for item in all_items {
-                    async_cx.background_executor().timer(Duration::from_millis(40)).await;
+                    async_cx
+                        .background_executor()
+                        .timer(Duration::from_millis(40))
+                        .await;
                     let next = item.clone();
                     this.update(&mut async_cx, |view, cx| {
                         view.items.push(next);
@@ -52,7 +55,8 @@ impl IndexingView {
                             view.selected = view.filtered_items().len().saturating_sub(1);
                         }
                         cx.notify();
-                    }).ok();
+                    })
+                    .ok();
                 }
             }
         });
@@ -64,7 +68,10 @@ impl IndexingView {
             self.items.iter().collect()
         } else {
             let q = self.query.to_lowercase();
-            self.items.iter().filter(|item| item.to_lowercase().contains(&q)).collect()
+            self.items
+                .iter()
+                .filter(|item| item.to_lowercase().contains(&q))
+                .collect()
         }
     }
 
@@ -109,8 +116,14 @@ impl Render for IndexingView {
                 let key = &event.keystroke.key;
 
                 match key.as_str() {
-                    "up" => { this.move_up(); cx.notify(); }
-                    "down" => { this.move_down(); cx.notify(); }
+                    "up" => {
+                        this.move_up();
+                        cx.notify();
+                    }
+                    "down" => {
+                        this.move_down();
+                        cx.notify();
+                    }
                     "enter" => {
                         let filtered = this.filtered_items();
                         if let Some(item) = filtered.get(this.selected) {
@@ -168,7 +181,7 @@ impl Render for IndexingView {
                             } else {
                                 self.query.clone()
                             }),
-                    )
+                    ),
             )
             .child(
                 div()
@@ -179,26 +192,32 @@ impl Render for IndexingView {
                     .px_4()
                     .text_color(rgb(0x6c7086))
                     .text_size(px(12.))
-                    .child(status)
+                    .child(status),
             )
-            .children(
-                filtered.iter().enumerate().take(8).map(|(i, item)| {
-                    let is_selected = i == self.selected;
-                    div()
-                        .h(px(32.))
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .px_4()
-                        .bg(if is_selected { rgb(0x45475a) } else { rgb(0x1e1e2e) })
-                        .child(
-                            div()
-                                .text_color(if is_selected { rgb(0xcdd6f4) } else { rgb(0xa6adc8) })
-                                .text_size(px(14.))
-                                .child((*item).clone()),
-                        )
-                })
-            )
+            .children(filtered.iter().enumerate().take(8).map(|(i, item)| {
+                let is_selected = i == self.selected;
+                div()
+                    .h(px(32.))
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .px_4()
+                    .bg(if is_selected {
+                        rgb(0x45475a)
+                    } else {
+                        rgb(0x1e1e2e)
+                    })
+                    .child(
+                        div()
+                            .text_color(if is_selected {
+                                rgb(0xcdd6f4)
+                            } else {
+                                rgb(0xa6adc8)
+                            })
+                            .text_size(px(14.))
+                            .child((*item).clone()),
+                    )
+            }))
     }
 }
 

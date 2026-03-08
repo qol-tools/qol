@@ -20,29 +20,26 @@ impl Focusable for LauncherView {
 impl Render for LauncherView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.blur_sub.is_none() {
-            self.blur_sub = Some(cx.on_blur(
-                &self.focus_handle,
-                window,
-                |this, window, _cx| {
-                    if std::time::Instant::now() < this.blur_guard_until {
-                        return;
-                    }
-                    this.set_showing(false);
-                    hide(window);
-                },
-            ));
+            self.blur_sub = Some(cx.on_blur(&self.focus_handle, window, |this, window, _cx| {
+                if std::time::Instant::now() < this.blur_guard_until {
+                    return;
+                }
+                this.set_showing(false);
+                hide(window);
+            }));
         }
 
         if self.activation_sub.is_none() {
-            self.activation_sub = Some(cx.observe_window_activation(window, |this, window, _cx| {
-                if !window.is_window_active() {
-                    if std::time::Instant::now() < this.blur_guard_until {
-                        return;
+            self.activation_sub =
+                Some(cx.observe_window_activation(window, |this, window, _cx| {
+                    if !window.is_window_active() {
+                        if std::time::Instant::now() < this.blur_guard_until {
+                            return;
+                        }
+                        this.set_showing(false);
+                        hide(window);
                     }
-                    this.set_showing(false);
-                    hide(window);
-                }
-            }));
+                }));
         }
 
         let render_start = std::time::Instant::now();
@@ -51,10 +48,15 @@ impl Render for LauncherView {
             .unwrap_or_default()
             .as_micros() as u64;
         let prev = LAST_RENDER_US.swap(now_abs, Ordering::Relaxed);
-        let gap_us = if prev > 0 { now_abs.saturating_sub(prev) } else { 0 };
+        let gap_us = if prev > 0 {
+            now_abs.saturating_sub(prev)
+        } else {
+            0
+        };
 
         let t0 = std::time::Instant::now();
-        self.store.ensure_filtered(&self.state.query, self.state.mode, self.state.fuzziness);
+        self.store
+            .ensure_filtered(&self.state.query, self.state.mode, self.state.fuzziness);
         let filter_us = t0.elapsed().as_micros();
 
         let result_count = self.store.result_count();
@@ -117,8 +119,8 @@ impl Render for LauncherView {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
                     "escape" | "esc" => {
-                    this.set_showing(false);
-                    hide(window);
+                        this.set_showing(false);
+                        hide(window);
                     }
                     _ => this.handle_key(event, window, cx),
                 }
@@ -277,6 +279,8 @@ impl LauncherView {
 
         let numerator = (max_score - score) as f32;
         let denominator = (max_score - min_score) as f32;
-        ((numerator / denominator) * 100.0).round().clamp(0.0, 100.0) as u8
+        ((numerator / denominator) * 100.0)
+            .round()
+            .clamp(0.0, 100.0) as u8
     }
 }

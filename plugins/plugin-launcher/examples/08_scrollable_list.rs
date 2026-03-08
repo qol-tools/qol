@@ -56,23 +56,25 @@ impl Render for ScrollView {
                     .id("scroll-container")
                     .flex_1()
                     .overflow_y_scroll()
-                    .children(
-                        self.items.iter().enumerate().map(|(i, item)| {
-                            div()
-                                .h(px(32.))
-                                .w_full()
-                                .flex()
-                                .items_center()
-                                .px_4()
-                                .bg(if i % 2 == 0 { rgb(0x1e1e2e) } else { rgb(0x252536) })
-                                .child(
-                                    div()
-                                        .text_color(rgb(0xcdd6f4))
-                                        .text_size(px(14.))
-                                        .child(item.clone()),
-                                )
-                        })
-                    ),
+                    .children(self.items.iter().enumerate().map(|(i, item)| {
+                        div()
+                            .h(px(32.))
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .px_4()
+                            .bg(if i % 2 == 0 {
+                                rgb(0x1e1e2e)
+                            } else {
+                                rgb(0x252536)
+                            })
+                            .child(
+                                div()
+                                    .text_color(rgb(0xcdd6f4))
+                                    .text_size(px(14.))
+                                    .child(item.clone()),
+                            )
+                    })),
             )
     }
 }

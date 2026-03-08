@@ -17,17 +17,50 @@ struct SectionListView {
 impl SectionListView {
     fn new(cx: &mut Context<Self>) -> Self {
         let entries = vec![
-            SectionEntry { label: "Apps".into(), is_header: true },
-            SectionEntry { label: "Firefox".into(), is_header: false },
-            SectionEntry { label: "Chrome".into(), is_header: false },
-            SectionEntry { label: "Terminal".into(), is_header: false },
-            SectionEntry { label: "Files".into(), is_header: true },
-            SectionEntry { label: "Home".into(), is_header: false },
-            SectionEntry { label: "Downloads".into(), is_header: false },
-            SectionEntry { label: "Projects".into(), is_header: false },
-            SectionEntry { label: "Web".into(), is_header: true },
-            SectionEntry { label: "qol.tools".into(), is_header: false },
-            SectionEntry { label: "Docs".into(), is_header: false },
+            SectionEntry {
+                label: "Apps".into(),
+                is_header: true,
+            },
+            SectionEntry {
+                label: "Firefox".into(),
+                is_header: false,
+            },
+            SectionEntry {
+                label: "Chrome".into(),
+                is_header: false,
+            },
+            SectionEntry {
+                label: "Terminal".into(),
+                is_header: false,
+            },
+            SectionEntry {
+                label: "Files".into(),
+                is_header: true,
+            },
+            SectionEntry {
+                label: "Home".into(),
+                is_header: false,
+            },
+            SectionEntry {
+                label: "Downloads".into(),
+                is_header: false,
+            },
+            SectionEntry {
+                label: "Projects".into(),
+                is_header: false,
+            },
+            SectionEntry {
+                label: "Web".into(),
+                is_header: true,
+            },
+            SectionEntry {
+                label: "qol.tools".into(),
+                is_header: false,
+            },
+            SectionEntry {
+                label: "Docs".into(),
+                is_header: false,
+            },
         ];
 
         let selected = entries.iter().position(|e| !e.is_header).unwrap_or(0);
@@ -89,8 +122,14 @@ impl Render for SectionListView {
             .bg(rgb(0x1e1e2e))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
                 match event.keystroke.key.as_str() {
-                    "up" => { this.move_up(); cx.notify(); }
-                    "down" => { this.move_down(); cx.notify(); }
+                    "up" => {
+                        this.move_up();
+                        cx.notify();
+                    }
+                    "down" => {
+                        this.move_down();
+                        cx.notify();
+                    }
                     "enter" => {
                         if let Some(entry) = this.entries.get(this.selected) {
                             if !entry.is_header {
@@ -115,7 +154,7 @@ impl Render for SectionListView {
                             div()
                                 .text_color(rgb(0x6c7086))
                                 .text_size(px(12.))
-                                .child(entry.label.clone())
+                                .child(entry.label.clone()),
                         )
                 } else {
                     let is_selected = i == self.selected;
@@ -125,12 +164,20 @@ impl Render for SectionListView {
                         .flex()
                         .items_center()
                         .px_4()
-                        .bg(if is_selected { rgb(0x45475a) } else { rgb(0x1e1e2e) })
+                        .bg(if is_selected {
+                            rgb(0x45475a)
+                        } else {
+                            rgb(0x1e1e2e)
+                        })
                         .child(
                             div()
-                                .text_color(if is_selected { rgb(0xcdd6f4) } else { rgb(0xa6adc8) })
+                                .text_color(if is_selected {
+                                    rgb(0xcdd6f4)
+                                } else {
+                                    rgb(0xa6adc8)
+                                })
                                 .text_size(px(14.))
-                                .child(entry.label.clone())
+                                .child(entry.label.clone()),
                         )
                 }
             }))

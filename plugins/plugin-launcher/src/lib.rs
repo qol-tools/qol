@@ -1,7 +1,7 @@
-pub mod ui;
 pub mod daemon;
 pub mod discovery;
 pub mod launch;
+pub mod ui;
 
 pub use qol_plugin_api::frecency;
 pub use qol_plugin_api::monitor;

@@ -38,15 +38,25 @@ impl FuzzyView {
 
     fn matched_items(&self) -> Vec<(String, FuzzyMatch)> {
         if self.query.is_empty() {
-            return self.items.iter()
-                .map(|name| (name.clone(), FuzzyMatch { score: 0, positions: vec![] }))
+            return self
+                .items
+                .iter()
+                .map(|name| {
+                    (
+                        name.clone(),
+                        FuzzyMatch {
+                            score: 0,
+                            positions: vec![],
+                        },
+                    )
+                })
                 .collect();
         }
 
-        let mut results: Vec<_> = self.items.iter()
-            .filter_map(|name| {
-                fuzzy_match(&self.query, name).map(|m| (name.clone(), m))
-            })
+        let mut results: Vec<_> = self
+            .items
+            .iter()
+            .filter_map(|name| fuzzy_match(&self.query, name).map(|m| (name.clone(), m)))
             .collect();
         results.sort_by_key(|(_, m)| m.score);
         results
@@ -61,7 +71,11 @@ impl Focusable for FuzzyView {
 
 fn render_highlighted(name: &str, positions: &[usize], selected: bool) -> Div {
     let highlight = rgb(0xf9e2af);
-    let normal = if selected { rgb(0xcdd6f4) } else { rgb(0xa6adc8) };
+    let normal = if selected {
+        rgb(0xcdd6f4)
+    } else {
+        rgb(0xa6adc8)
+    };
     let chars: Vec<char> = name.chars().collect();
 
     let mut container = div().flex().flex_row();
@@ -157,7 +171,12 @@ impl Render for FuzzyView {
                     .gap_2()
                     .border_b_1()
                     .border_color(rgb(0x45475a))
-                    .child(div().text_color(rgb(0x6c7086)).text_size(px(16.)).child(">"))
+                    .child(
+                        div()
+                            .text_color(rgb(0x6c7086))
+                            .text_size(px(16.))
+                            .child(">"),
+                    )
                     .child(
                         div()
                             .flex_1()
@@ -171,28 +190,33 @@ impl Render for FuzzyView {
                     ),
             )
             .children(
-                matched.iter().enumerate().take(max_visible).map(|(i, (name, m))| {
-                    let is_selected = i == self.selected;
-                    div()
-                        .h(px(32.))
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .px_4()
-                        .bg(if is_selected { rgb(0x45475a) } else { rgb(0x1e1e2e) })
-                        .child(render_highlighted(name, &m.positions, is_selected))
-                        .child(
-                            div()
-                                .text_color(rgb(0x585b70))
-                                .text_size(px(11.))
-                                .child(if self.query.is_empty() {
+                matched
+                    .iter()
+                    .enumerate()
+                    .take(max_visible)
+                    .map(|(i, (name, m))| {
+                        let is_selected = i == self.selected;
+                        div()
+                            .h(px(32.))
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .px_4()
+                            .bg(if is_selected {
+                                rgb(0x45475a)
+                            } else {
+                                rgb(0x1e1e2e)
+                            })
+                            .child(render_highlighted(name, &m.positions, is_selected))
+                            .child(div().text_color(rgb(0x585b70)).text_size(px(11.)).child(
+                                if self.query.is_empty() {
                                     String::new()
                                 } else {
                                     format!("{}", m.score)
-                                }),
-                        )
-                }),
+                                },
+                            ))
+                    }),
             )
     }
 }

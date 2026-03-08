@@ -36,32 +36,81 @@ struct FrecencyView {
 impl FrecencyView {
     fn new(cx: &mut Context<Self>) -> Self {
         let items = vec![
-            "Firefox", "Chrome", "VS Code", "Slack", "Discord",
-            "Spotify", "Terminal", "Files", "Settings", "Calculator",
-        ].into_iter().map(String::from).collect();
+            "Firefox",
+            "Chrome",
+            "VS Code",
+            "Slack",
+            "Discord",
+            "Spotify",
+            "Terminal",
+            "Files",
+            "Settings",
+            "Calculator",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
 
         let mut frequency = HashMap::new();
-        frequency.insert("Terminal".into(), FrequencyEntry { count: 20, last_accessed: NOW });
-        frequency.insert("Firefox".into(), FrequencyEntry { count: 15, last_accessed: NOW });
-        frequency.insert("VS Code".into(), FrequencyEntry { count: 10, last_accessed: NOW - 3 * SECS_PER_DAY });
-        frequency.insert("Slack".into(), FrequencyEntry { count: 5, last_accessed: NOW - 14 * SECS_PER_DAY });
+        frequency.insert(
+            "Terminal".into(),
+            FrequencyEntry {
+                count: 20,
+                last_accessed: NOW,
+            },
+        );
+        frequency.insert(
+            "Firefox".into(),
+            FrequencyEntry {
+                count: 15,
+                last_accessed: NOW,
+            },
+        );
+        frequency.insert(
+            "VS Code".into(),
+            FrequencyEntry {
+                count: 10,
+                last_accessed: NOW - 3 * SECS_PER_DAY,
+            },
+        );
+        frequency.insert(
+            "Slack".into(),
+            FrequencyEntry {
+                count: 5,
+                last_accessed: NOW - 14 * SECS_PER_DAY,
+            },
+        );
 
-        Self { query: String::new(), items, frequency, selected: 0, focus_handle: cx.focus_handle() }
+        Self {
+            query: String::new(),
+            items,
+            frequency,
+            selected: 0,
+            focus_handle: cx.focus_handle(),
+        }
     }
 
     fn score_item(&self, name: &str) -> i32 {
         let n = name.to_lowercase();
         let q = self.query.to_lowercase();
 
-        let match_penalty = if q.is_empty() { 0 }
-            else if n == q { 0 }
-            else if n.starts_with(&q) { 100 }
-            else if n.contains(&q) { 200 }
-            else { 10000 };
+        let match_penalty = if q.is_empty() {
+            0
+        } else if n == q {
+            0
+        } else if n.starts_with(&q) {
+            100
+        } else if n.contains(&q) {
+            200
+        } else {
+            10000
+        };
 
         let length_penalty = name.len() as i32;
 
-        let frequency_bonus = self.frequency.get(name)
+        let frequency_bonus = self
+            .frequency
+            .get(name)
             .map(|e| (effective_count(e, HALF_LIFE_DAYS) * FREQUENCY_BONUS as f64) as i32)
             .unwrap_or(0);
 
@@ -69,10 +118,17 @@ impl FrecencyView {
     }
 
     fn ranked_items(&self) -> Vec<ScoredItem> {
-        let mut scored: Vec<_> = self.items.iter()
-            .map(|name| ScoredItem { name: name.clone(), score: self.score_item(name) })
+        let mut scored: Vec<_> = self
+            .items
+            .iter()
+            .map(|name| ScoredItem {
+                name: name.clone(),
+                score: self.score_item(name),
+            })
             .filter(|item| {
-                if self.query.is_empty() { return true; }
+                if self.query.is_empty() {
+                    return true;
+                }
                 let q = self.query.to_lowercase();
                 item.name.to_lowercase().contains(&q)
             })
@@ -85,7 +141,10 @@ impl FrecencyView {
         let ranked = self.ranked_items();
         if let Some(item) = ranked.get(self.selected) {
             let name = item.name.clone();
-            let entry = self.frequency.entry(name).or_insert(FrequencyEntry { count: 0, last_accessed: NOW });
+            let entry = self.frequency.entry(name).or_insert(FrequencyEntry {
+                count: 0,
+                last_accessed: NOW,
+            });
             entry.count += 1;
             entry.last_accessed = NOW;
         }
@@ -114,12 +173,16 @@ impl Render for FrecencyView {
                 let key = &event.keystroke.key;
                 match key.as_str() {
                     "up" => {
-                        if this.selected > 0 { this.selected -= 1; }
+                        if this.selected > 0 {
+                            this.selected -= 1;
+                        }
                         cx.notify();
                     }
                     "down" => {
                         let max = this.ranked_items().len().saturating_sub(1);
-                        if this.selected < max { this.selected += 1; }
+                        if this.selected < max {
+                            this.selected += 1;
+                        }
                         cx.notify();
                     }
                     "enter" => {
@@ -167,7 +230,12 @@ impl Render for FrecencyView {
                     .gap_2()
                     .border_b_1()
                     .border_color(rgb(0x45475a))
-                    .child(div().text_color(rgb(0x6c7086)).text_size(px(16.)).child(">"))
+                    .child(
+                        div()
+                            .text_color(rgb(0x6c7086))
+                            .text_size(px(16.))
+                            .child(">"),
+                    )
                     .child(
                         div()
                             .flex_1()
@@ -181,29 +249,41 @@ impl Render for FrecencyView {
                     ),
             )
             .children(
-                ranked.iter().enumerate().take(max_visible).map(|(i, item)| {
-                    let is_selected = i == self.selected;
-                    div()
-                        .h(px(32.))
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .px_4()
-                        .bg(if is_selected { rgb(0x45475a) } else { rgb(0x1e1e2e) })
-                        .child(
-                            div()
-                                .text_color(if is_selected { rgb(0xcdd6f4) } else { rgb(0xa6adc8) })
-                                .text_size(px(14.))
-                                .child(item.name.clone()),
-                        )
-                        .child(
-                            div()
-                                .text_color(rgb(0x585b70))
-                                .text_size(px(11.))
-                                .child(format!("{}", item.score)),
-                        )
-                })
+                ranked
+                    .iter()
+                    .enumerate()
+                    .take(max_visible)
+                    .map(|(i, item)| {
+                        let is_selected = i == self.selected;
+                        div()
+                            .h(px(32.))
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .px_4()
+                            .bg(if is_selected {
+                                rgb(0x45475a)
+                            } else {
+                                rgb(0x1e1e2e)
+                            })
+                            .child(
+                                div()
+                                    .text_color(if is_selected {
+                                        rgb(0xcdd6f4)
+                                    } else {
+                                        rgb(0xa6adc8)
+                                    })
+                                    .text_size(px(14.))
+                                    .child(item.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_color(rgb(0x585b70))
+                                    .text_size(px(11.))
+                                    .child(format!("{}", item.score)),
+                            )
+                    }),
             )
     }
 }

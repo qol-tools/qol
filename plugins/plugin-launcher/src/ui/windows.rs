@@ -293,12 +293,11 @@ fn activate_launcher_handle(
 ) -> bool {
     let activated = handle
         .update(cx, |view, window, cx| {
-            view.store.replace_entries(
-                entries.app_entries.clone(),
-                entries.file_entries.clone(),
-            );
+            view.store
+                .replace_entries(entries.app_entries.clone(), entries.file_entries.clone());
             let should_resize = view.reset_for_show();
-            view.store.ensure_filtered(&view.state.query, view.state.mode, view.state.fuzziness);
+            view.store
+                .ensure_filtered(&view.state.query, view.state.mode, view.state.fuzziness);
             if resize_to_header && should_resize {
                 window.resize(size(px(WINDOW_WIDTH), px(window_height_for_rows(0))));
             }

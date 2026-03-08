@@ -100,8 +100,10 @@ impl LauncherView {
         async_cx: &mut AsyncApp,
         last_level: &mut u8,
     ) -> bool {
-        this.update(async_cx, |view, cx| view.apply_trail_decay_update(last_level, cx))
-            .unwrap_or(false)
+        this.update(async_cx, |view, cx| {
+            view.apply_trail_decay_update(last_level, cx)
+        })
+        .unwrap_or(false)
     }
 
     fn apply_trail_decay_update(&mut self, last_level: &mut u8, cx: &mut Context<Self>) -> bool {
