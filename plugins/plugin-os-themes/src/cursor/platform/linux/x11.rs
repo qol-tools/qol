@@ -14,6 +14,12 @@ pub struct CursorSession {
     active_cursor: Option<xlib::Cursor>,
 }
 
+struct PointerState {
+    x: i32,
+    y: i32,
+    child: xlib::Window,
+}
+
 struct BaseCursor {
     width: u32,
     height: u32,
@@ -66,7 +72,10 @@ impl CursorSession {
         if self.active_cursor.is_none() {
             return;
         }
+        let pointer = query_pointer(self.display, self.root);
         clear_tree(self.display, self.root);
+        restore_root_cursor(self.display, self.root, &self.base);
+        force_cursor_recompute(self.display, self.root, pointer);
         self.flush();
         if let Some(cursor) = self.active_cursor.take() {
             unsafe { xlib::XFreeCursor(self.display, cursor) };
@@ -196,6 +205,101 @@ fn clear_tree(display: *mut xlib::Display, window: xlib::Window) {
             stack.push(child);
         }
     }
+}
+
+fn restore_root_cursor(display: *mut xlib::Display, root: xlib::Window, base: &BaseCursor) {
+    let Some(cursor) = make_cursor_at_scale(display, root, base, 1.0) else {
+        return;
+    };
+    unsafe { xlib::XDefineCursor(display, root, cursor) };
+    unsafe { xlib::XFreeCursor(display, cursor) };
+}
+
+fn force_cursor_recompute(
+    display: *mut xlib::Display,
+    root: xlib::Window,
+    pointer: Option<PointerState>,
+) {
+    let Some(pointer) = pointer else {
+        return;
+    };
+    let outside = outside_window_point(display, pointer.child);
+    if let Some((x, y)) = outside {
+        unsafe { xlib::XWarpPointer(display, 0, root, 0, 0, 0, 0, x, y) };
+        unsafe { xlib::XWarpPointer(display, 0, root, 0, 0, 0, 0, pointer.x, pointer.y) };
+        return;
+    }
+    let x2 = nudged_coordinate(pointer.x);
+    unsafe { xlib::XWarpPointer(display, 0, root, 0, 0, 0, 0, x2, pointer.y) };
+    unsafe { xlib::XWarpPointer(display, 0, root, 0, 0, 0, 0, pointer.x, pointer.y) };
+}
+
+fn query_pointer(display: *mut xlib::Display, root: xlib::Window) -> Option<PointerState> {
+    let mut root_out = 0;
+    let mut child_out = 0;
+    let mut root_x = 0;
+    let mut root_y = 0;
+    let mut window_x = 0;
+    let mut window_y = 0;
+    let mut mask = 0;
+    let status = unsafe {
+        xlib::XQueryPointer(
+            display,
+            root,
+            &mut root_out,
+            &mut child_out,
+            &mut root_x,
+            &mut root_y,
+            &mut window_x,
+            &mut window_y,
+            &mut mask,
+        )
+    };
+    if status == 0 {
+        return None;
+    }
+    Some(PointerState {
+        x: root_x,
+        y: root_y,
+        child: child_out,
+    })
+}
+
+fn outside_window_point(display: *mut xlib::Display, window: xlib::Window) -> Option<(i32, i32)> {
+    if window == 0 {
+        return None;
+    }
+    let mut attributes = std::mem::MaybeUninit::<xlib::XWindowAttributes>::uninit();
+    let status = unsafe { xlib::XGetWindowAttributes(display, window, attributes.as_mut_ptr()) };
+    if status == 0 {
+        return None;
+    }
+    let attributes = unsafe { attributes.assume_init() };
+    let screen = unsafe { xlib::XDefaultScreen(display) };
+    let screen_width = unsafe { xlib::XDisplayWidth(display, screen) };
+    let screen_height = unsafe { xlib::XDisplayHeight(display, screen) };
+    if attributes.x > 0 {
+        return Some((attributes.x - 1, attributes.y.max(0)));
+    }
+    let right = attributes.x + attributes.width;
+    if right < screen_width {
+        return Some((right + 1, attributes.y.max(0)));
+    }
+    if attributes.y > 0 {
+        return Some((attributes.x.max(0), attributes.y - 1));
+    }
+    let bottom = attributes.y + attributes.height;
+    if bottom < screen_height {
+        return Some((attributes.x.max(0), bottom + 1));
+    }
+    None
+}
+
+fn nudged_coordinate(value: i32) -> i32 {
+    if value > 0 {
+        return value - 1;
+    }
+    value.saturating_add(1)
 }
 
 fn window_children(display: *mut xlib::Display, window: xlib::Window) -> Vec<xlib::Window> {
