@@ -1,7 +1,7 @@
 mod cargo_build;
 mod fingerprint;
 mod fingerprint_store;
-mod planning;
+pub(super) mod planning;
 mod service;
 mod types;
 

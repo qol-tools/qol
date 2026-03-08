@@ -12,39 +12,42 @@ pub(super) fn scan(manifest_dir: &Path) -> Vec<WorktreeInfo> {
 }
 
 fn find_worktrees_root(start: &Path) -> Option<std::path::PathBuf> {
-    let mut dir = start;
-    loop {
-        if dir.join(".worktrees").is_dir() {
-            return Some(dir.to_path_buf());
-        }
-        dir = dir.parent()?;
-    }
+    start
+        .ancestors()
+        .find(|d| d.join(".worktrees").is_dir())
+        .map(|d| d.to_path_buf())
 }
 
 fn collect(root: &Path, dir: &Path, depth: u8) -> Vec<WorktreeInfo> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return vec![];
-    };
-    let mut results = vec![];
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        if path.join("Cargo.toml").is_file() {
-            let branch = path
-                .strip_prefix(root)
-                .map(|r| r.to_string_lossy().replace('\\', "/"))
-                .unwrap_or_default();
-            results.push(WorktreeInfo {
-                branch,
-                path: path.to_string_lossy().into_owned(),
-            });
-        } else if depth < 1 {
-            results.extend(collect(root, &path, depth + 1));
-        }
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_dir())
+                .flat_map(|p| process_entry(root, &p, depth))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn process_entry(root: &Path, path: &Path, depth: u8) -> Vec<WorktreeInfo> {
+    if path.join("Cargo.toml").is_file() {
+        let branch = path
+            .strip_prefix(root)
+            .map(|r| r.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_default();
+        return vec![WorktreeInfo {
+            branch,
+            path: path.to_string_lossy().into_owned(),
+        }];
     }
-    results
+
+    if depth < 1 {
+        return collect(root, path, depth + 1);
+    }
+
+    vec![]
 }
 
 #[cfg(all(test, feature = "dev"))]

@@ -5,8 +5,11 @@ mod worktrees;
 
 use super::types::AppState;
 
-pub(super) fn queue_reload(state: &AppState) -> Result<(), &'static str> {
-    reload::queue_reload(state)
+pub(super) fn queue_reload(
+    state: &AppState,
+    worktree_branch: Option<String>,
+) -> Result<(), &'static str> {
+    reload::queue_reload(state, worktree_branch)
 }
 
 pub(super) fn queue_reload_single(state: &AppState, plugin_id: String) -> Result<(), &'static str> {
@@ -41,5 +44,6 @@ pub(super) fn stop_mock_targets(state: &AppState) -> Vec<&'static str> {
 }
 
 pub(super) fn list_worktrees() -> Vec<super::types::WorktreeInfo> {
-    worktrees::scan(std::path::Path::new(env!("CARGO_MANIFEST_DIR")))
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    worktrees::scan(&root)
 }

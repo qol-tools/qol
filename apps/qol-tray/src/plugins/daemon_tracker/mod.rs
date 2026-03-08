@@ -56,19 +56,16 @@ pub(crate) fn daemon_pid_files() -> Vec<PathBuf> {
 /// Collect dev-link directories from the shared config, if available.
 pub(crate) fn dev_link_dirs() -> Vec<PathBuf> {
     #[cfg(feature = "dev")]
-    {
-        let config_dir = match crate::paths::shared_config_dir() {
-            Ok(d) => d,
-            Err(_) => return Vec::new(),
-        };
-        crate::dev::load_dev_links(&config_dir)
-            .into_values()
-            .collect()
-    }
+    return crate::paths::shared_config_dir()
+        .map(|config_dir| {
+            crate::dev::active_dev_links(&config_dir)
+                .into_values()
+                .collect()
+        })
+        .unwrap_or_default();
+
     #[cfg(not(feature = "dev"))]
-    {
-        Vec::new()
-    }
+    Vec::new()
 }
 
 /// Kill orphan daemons found in PID files, verifying each is a managed plugin binary

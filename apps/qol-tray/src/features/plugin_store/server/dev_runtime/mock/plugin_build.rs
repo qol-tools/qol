@@ -55,7 +55,7 @@ async fn run_build_loop(
         let state = Arc::clone(&state);
         let sink = Arc::clone(&event_sink);
         tasks.spawn(
-            async move { run_single_plugin(plugin_id, state.as_ref(), sink.as_ref()).await },
+            async move { run_single_plugin(&plugin_id, state.as_ref(), sink.as_ref()).await },
         );
     }
 

@@ -4,9 +4,9 @@ use std::path::Path;
 use super::LinkedPlugin;
 
 pub fn list_linked_plugins(config_dir: &Path) -> Result<Vec<LinkedPlugin>, String> {
-    let links = super::store::load_dev_links(config_dir);
+    let links = super::active_dev_links(config_dir);
     let known_fingerprints = crate::dev::load_build_fingerprints(config_dir);
-    let plans = super::super::build::plan_linked_plugin_builds(&links, &known_fingerprints);
+    let plans = super::super::build::plan_linked_plugin_builds(&links, &known_fingerprints, None);
     let log_controls = crate::logging::load_all_plugin_controls(config_dir);
     let plans_by_id: HashMap<String, _> = plans
         .into_iter()
