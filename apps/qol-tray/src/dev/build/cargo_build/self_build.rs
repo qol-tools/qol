@@ -23,22 +23,8 @@ where
         .map(Path::to_path_buf)
         .unwrap_or_else(paths::repo_root_from_manifest_dir);
 
-    // If a centralized worktree path is given but contains no Cargo.toml at the root,
-    // check if qol-tray was explicitly checked out inside it.
     if !repo_root.join("Cargo.toml").exists() {
-        let nested_tray = repo_root.join("qol-tray");
-        if nested_tray.join("Cargo.toml").exists() {
-            repo_root = nested_tray;
-        } else {
-            // Revert back to base repository if this feature doesn't span qol-tray
-            let base = paths::repo_root_from_manifest_dir();
-            log::info!(
-                "[worktree] qol-tray not found in feature {}, falling back to base: {}",
-                repo_root.display(),
-                base.display()
-            );
-            repo_root = base;
-        }
+        repo_root = resolve_missing_tray_root(&repo_root);
     }
 
     let manifest_path = repo_root.join("Cargo.toml");
@@ -57,6 +43,21 @@ where
     readers.emit_progress(&mut on_progress);
     let (actual_done, combined) = readers.join();
     finish_build(&mut child, actual_done, combined, &mut on_progress)
+}
+
+fn resolve_missing_tray_root(repo_root: &Path) -> std::path::PathBuf {
+    let nested_tray = repo_root.join("qol-tray");
+    if nested_tray.join("Cargo.toml").exists() {
+        return nested_tray;
+    }
+
+    let base = paths::repo_root_from_manifest_dir();
+    log::info!(
+        "[worktree] qol-tray not found in feature {}, falling back to base: {}",
+        repo_root.display(),
+        base.display()
+    );
+    base
 }
 
 fn start_build<F>(
