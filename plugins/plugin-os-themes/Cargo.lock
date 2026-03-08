@@ -1589,6 +1589,7 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "libc",
+ "qol-config",
  "qol-plugin-api",
  "qol-tray",
  "serde",
@@ -1697,11 +1698,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "qol-plugin-api"
-version = "0.1.0"
-source = "git+https://github.com/qol-tools/qol-plugin-api#3786c2c9bc0a4ec1b5ea601d37391e6631bd89db"
+name = "qol-config"
+version = "0.2.0"
 dependencies = [
  "dirs",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "qol-plugin-api"
+version = "0.1.0"
+dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-core-graphics",
@@ -1714,7 +1722,6 @@ dependencies = [
 [[package]]
 name = "qol-runtime"
 version = "0.1.0"
-source = "git+https://github.com/qol-tools/qol-runtime#b22d6bb62c0bc4e486d55410ec560e7a4034c046"
 dependencies = [
  "serde",
  "serde_json",
@@ -3218,3 +3225,7 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
+
+[[patch.unused]]
+name = "qol-tray"
+version = "2.8.0"

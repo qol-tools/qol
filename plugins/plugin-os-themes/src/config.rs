@@ -13,7 +13,6 @@ pub struct Config {
     pub scale_factor: u32,
     pub calm_duration_ms: u64,
     pub restore_steps: u32,
-    pub enable_shape_preserving_growth: bool,
 }
 
 impl Default for Config {
@@ -27,7 +26,6 @@ impl Default for Config {
             scale_factor: 4,
             calm_duration_ms: 650,
             restore_steps: 18,
-            enable_shape_preserving_growth: false,
         }
     }
 }
@@ -63,7 +61,7 @@ fn persist(config: &Config) {
 
 fn log_config(config: &Config) {
     eprintln!(
-        "[shake-to-grow] config: velocity={} shakiness={} regrow_velocity={} regrow_shakiness={} post_trigger={} scale={} calm_ms={} steps={} shape_preserving={}",
+        "[shake-to-grow] config: velocity={} shakiness={} regrow_velocity={} regrow_shakiness={} post_trigger={} scale={} calm_ms={} steps={}",
         config.velocity_threshold,
         config.shakiness_threshold,
         config.regrow_velocity_threshold,
@@ -72,7 +70,6 @@ fn log_config(config: &Config) {
         config.scale_factor,
         config.calm_duration_ms,
         config.restore_steps,
-        config.enable_shape_preserving_growth,
     );
 }
 

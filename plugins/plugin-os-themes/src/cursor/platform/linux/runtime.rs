@@ -55,12 +55,15 @@ impl CursorEffect for LinuxCursorEffect {
                 Err(RecvTimeoutError::Disconnected) => break,
             };
             let update = detector.record(sample);
+            let was_scaled = scaled;
             scaled = update
                 .scale_changed
                 .map_or(scaled, |s| s > 1.0 + f32::EPSILON);
             if apply_update(&mut session, update) {
                 suppressed_until = Some(Instant::now() + SELF_EVENT_SUPPRESSION);
-                next_refresh = Instant::now() + LIVE_CURSOR_REFRESH;
+                if !was_scaled && scaled {
+                    next_refresh = Instant::now() + LIVE_CURSOR_REFRESH;
+                }
             }
             if !scaled {
                 continue;
@@ -101,29 +104,10 @@ fn delta(last: Option<(f32, f32)>, x: f32, y: f32) -> (i32, i32) {
 }
 
 fn open_session(config: &Config) -> Result<Session> {
-    if config.enable_shape_preserving_growth {
-        return open_shape_preserving_session(config);
-    }
     eprintln!("[shake-to-grow] started mode=tree");
     Ok(Session::Tree(super::x11::CursorSession::open(
         config.scale_factor,
     )?))
-}
-
-fn open_shape_preserving_session(config: &Config) -> Result<Session> {
-    let fallback = super::x11::CursorSession::open(config.scale_factor)?;
-    let experimental = super::x11_xfixes::CursorSession::open(config.scale_factor);
-    let Ok(experimental) = experimental else {
-        eprintln!("[shake-to-grow] shape-preserving unavailable; falling back to tree");
-        eprintln!("[shake-to-grow] started mode=tree");
-        return Ok(Session::Tree(fallback));
-    };
-    eprintln!("[shake-to-grow] started mode=shape-preserving");
-    Ok(Session::ShapePreserving {
-        experimental,
-        fallback,
-        fallback_only: false,
-    })
 }
 
 fn apply_update(session: &mut Session, update: ScaleUpdate) -> bool {
@@ -150,82 +134,26 @@ fn suppressed_sample(
 
 enum Session {
     Tree(super::x11::CursorSession),
-    ShapePreserving {
-        experimental: super::x11_xfixes::CursorSession,
-        fallback: super::x11::CursorSession,
-        fallback_only: bool,
-    },
 }
 
 impl Session {
     fn set_scale(&mut self, scale: f32) -> bool {
         match self {
             Self::Tree(session) => session.set_scale(scale),
-            Self::ShapePreserving {
-                experimental,
-                fallback,
-                fallback_only,
-            } => set_shape_preserving_scale(
-                experimental,
-                fallback,
-                fallback_only,
-                scale,
-            ),
         }
     }
 
     fn refresh(&mut self) -> bool {
         match self {
             Self::Tree(session) => session.refresh(),
-            Self::ShapePreserving {
-                experimental,
-                fallback,
-                fallback_only,
-            } => refresh_shape_preserving(experimental, fallback, *fallback_only),
         }
     }
 
     fn restore(&mut self) {
         match self {
             Self::Tree(session) => session.restore(),
-            Self::ShapePreserving {
-                experimental,
-                fallback,
-                ..
-            } => {
-                experimental.restore();
-                fallback.restore();
-            }
         }
     }
-}
-
-fn set_shape_preserving_scale(
-    experimental: &mut super::x11_xfixes::CursorSession,
-    fallback: &mut super::x11::CursorSession,
-    fallback_only: &mut bool,
-    scale: f32,
-) -> bool {
-    if *fallback_only {
-        return fallback.set_scale(scale);
-    }
-    if experimental.set_scale(scale) {
-        return true;
-    }
-    *fallback_only = true;
-    eprintln!("[shake-to-grow] shape-preserving failed; falling back to tree");
-    fallback.set_scale(scale)
-}
-
-fn refresh_shape_preserving(
-    experimental: &mut super::x11_xfixes::CursorSession,
-    fallback: &mut super::x11::CursorSession,
-    fallback_only: bool,
-) -> bool {
-    if fallback_only {
-        return fallback.refresh();
-    }
-    experimental.refresh()
 }
 
 fn log_event(event: ScaleEvent) {
