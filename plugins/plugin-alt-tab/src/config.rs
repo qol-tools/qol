@@ -26,7 +26,7 @@ impl Default for DisplayConfig {
     }
 }
 
-pub use qol_plugin_api::color::parse_hex_color;
+pub use qol_color::parse_hex_color;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
