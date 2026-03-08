@@ -25,7 +25,12 @@ pub fn preferred_column_count(window_count: usize, max_columns: usize) -> usize 
     cols
 }
 
-pub fn picker_dimensions(window_count: usize, max_columns: usize, monitor_size: Option<(f32, f32)>, show_hotkey_hints: bool) -> (f32, f32) {
+pub fn picker_dimensions(
+    window_count: usize,
+    max_columns: usize,
+    monitor_size: Option<(f32, f32)>,
+    show_hotkey_hints: bool,
+) -> (f32, f32) {
     let count = window_count.max(1);
     let cols = preferred_column_count(count, max_columns);
     let width = width_for_cols(cols);
@@ -39,7 +44,11 @@ pub fn picker_dimensions(window_count: usize, max_columns: usize, monitor_size: 
     // height being calculated for more columns than the window can show.
     let actual_cols = cols_for_width(clamped_w, count);
 
-    let hints_height = if show_hotkey_hints { HOTKEY_HINTS_HEIGHT } else { 0.0 };
+    let hints_height = if show_hotkey_hints {
+        HOTKEY_HINTS_HEIGHT
+    } else {
+        0.0
+    };
     let height = picker_height_for(count, actual_cols) + hints_height;
     (clamped_w, height.clamp(320.0, max_h))
 }

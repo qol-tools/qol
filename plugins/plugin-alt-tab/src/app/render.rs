@@ -1,7 +1,9 @@
 use super::AltTabApp;
 use crate::config::LabelConfig;
 use crate::discovery::WindowInfo;
-use crate::shared::layout::{GRID_CARD_HEIGHT, GRID_CARD_WIDTH, GRID_PREVIEW_HEIGHT, GRID_PREVIEW_WIDTH};
+use crate::shared::layout::{
+    GRID_CARD_HEIGHT, GRID_CARD_WIDTH, GRID_PREVIEW_HEIGHT, GRID_PREVIEW_WIDTH,
+};
 use crate::{IconMap, PreviewMap};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -23,9 +25,16 @@ mod render_perf {
             EPOCH_MS.store(now_ms, Ordering::Relaxed);
             return;
         }
-        if now_ms - epoch < 2000 { return; }
+        if now_ms - epoch < 2000 {
+            return;
+        }
         let elapsed_s = (now_ms - epoch) as f32 / 1000.0;
-        eprintln!("[alt-tab/render/perf] {:.1}s: renders={} ({:.1} fps)", elapsed_s, count, count as f32 / elapsed_s);
+        eprintln!(
+            "[alt-tab/render/perf] {:.1}s: renders={} ({:.1} fps)",
+            elapsed_s,
+            count,
+            count as f32 / elapsed_s
+        );
         COUNT.store(0, Ordering::Relaxed);
         EPOCH_MS.store(now_ms, Ordering::Relaxed);
     }
@@ -105,8 +114,18 @@ fn header_bar(left: &str, right: &str) -> Div {
         .flex()
         .items_center()
         .justify_between()
-        .child(div().text_color(rgb(0x5e6a84)).text_xs().child(left.to_string()))
-        .child(div().text_color(rgb(0x3a4252)).text_xs().child(right.to_string()))
+        .child(
+            div()
+                .text_color(rgb(0x5e6a84))
+                .text_xs()
+                .child(left.to_string()),
+        )
+        .child(
+            div()
+                .text_color(rgb(0x3a4252))
+                .text_xs()
+                .child(right.to_string()),
+        )
 }
 
 fn render_grid(snap: &RenderSnapshot, entity: WeakEntity<AltTabApp>) -> Div {
@@ -125,12 +144,18 @@ fn render_grid(snap: &RenderSnapshot, entity: WeakEntity<AltTabApp>) -> Div {
             .gap_3()
             .when(snap.windows.is_empty(), |s| {
                 s.items_center().justify_center().child(
-                    div().text_sm().text_color(rgb(0x5e6a84)).child("Scanning windows..."),
+                    div()
+                        .text_sm()
+                        .text_color(rgb(0x5e6a84))
+                        .child("Scanning windows..."),
                 )
             })
-            .children(snap.windows.iter().enumerate().map(|(i, win)| {
-                render_card(i, win, snap, entity.clone())
-            })),
+            .children(
+                snap.windows
+                    .iter()
+                    .enumerate()
+                    .map(|(i, win)| render_card(i, win, snap, entity.clone())),
+            ),
     )
 }
 
@@ -148,7 +173,9 @@ fn render_card(
         .on_hover({
             let entity = entity.clone();
             move |&hovering, _window, cx| {
-                if !hovering { return; }
+                if !hovering {
+                    return;
+                }
                 let _ = entity.update(cx, |this, cx| {
                     this.delegate.update(cx, |s, _| s.hovered_index = Some(i));
                 });
@@ -177,7 +204,10 @@ fn render_card(
 
 fn card_bg(el: Stateful<Div>, selected: bool, transparent: bool, card_rgba: u32) -> Stateful<Div> {
     if selected && transparent {
-        return el.bg(rgba(card_rgba)).border_1().border_color(rgb(0x4a6fa5));
+        return el
+            .bg(rgba(card_rgba))
+            .border_1()
+            .border_color(rgb(0x4a6fa5));
     }
     if selected {
         return el.bg(rgb(0x233050)).border_1().border_color(rgb(0x4a6fa5));
@@ -192,16 +222,30 @@ fn card_bg(el: Stateful<Div>, selected: bool, transparent: bool, card_rgba: u32)
 }
 
 fn render_preview(win: &WindowInfo, live_previews: &PreviewMap, icon_cache: &IconMap) -> Div {
-    let minimized_icon = if win.is_minimized { icon_cache.get(&win.app_name) } else { None };
-    div().rounded_md().overflow_hidden().child(
-        preview_tile(live_previews.get(&win.id), &win.preview_path, minimized_icon),
-    )
+    let minimized_icon = if win.is_minimized {
+        icon_cache.get(&win.app_name)
+    } else {
+        None
+    };
+    div().rounded_md().overflow_hidden().child(preview_tile(
+        live_previews.get(&win.id),
+        &win.preview_path,
+        minimized_icon,
+    ))
 }
 
 fn render_label(i: usize, win: &WindowInfo, selected: bool, snap: &RenderSnapshot) -> Div {
     let label = snap.label_config.format(&win.app_name, &win.title);
-    let text = if snap.show_debug_overlay { format!("[{}] {}", i, label) } else { label };
-    let color = if selected { rgb(0xffffff) } else { rgb(0x7a849e) };
+    let text = if snap.show_debug_overlay {
+        format!("[{}] {}", i, label)
+    } else {
+        label
+    };
+    let color = if selected {
+        rgb(0xffffff)
+    } else {
+        rgb(0x7a849e)
+    };
     let app_icon = snap.icon_cache.get(&win.app_name).cloned();
 
     div()
@@ -214,9 +258,21 @@ fn render_label(i: usize, win: &WindowInfo, selected: bool, snap: &RenderSnapsho
         .px_1()
         .text_color(color)
         .when_some(app_icon, |el, icon| {
-            el.child(img(icon).w(px(16.0)).h(px(16.0)).rounded_sm().flex_shrink_0())
+            el.child(
+                img(icon)
+                    .w(px(16.0))
+                    .h(px(16.0))
+                    .rounded_sm()
+                    .flex_shrink_0(),
+            )
         })
-        .child(div().text_xs().text_ellipsis().overflow_hidden().child(text))
+        .child(
+            div()
+                .text_xs()
+                .text_ellipsis()
+                .overflow_hidden()
+                .child(text),
+        )
 }
 
 fn preview_tile(

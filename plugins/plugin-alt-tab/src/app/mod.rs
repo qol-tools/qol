@@ -3,10 +3,10 @@ mod live_preview;
 mod render;
 
 use crate::config::ActionMode;
+use crate::picker;
 use crate::picker::create::PickerInit;
 use crate::picker::gather::GatheredWindows;
 use crate::picker::state::PickerState;
-use crate::picker;
 use crate::IconMap;
 use gpui::*;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -40,12 +40,16 @@ impl AltTabApp {
         window.focus(&focus_handle);
 
         #[cfg(debug_assertions)]
-        eprintln!("[alt-tab/hold] AltTabApp::new: action_mode={:?}", action_mode);
+        eprintln!(
+            "[alt-tab/hold] AltTabApp::new: action_mode={:?}",
+            action_mode
+        );
 
         let mut app = Self {
             _focus_out_sub: subscribe_focus_out(&focus_handle, window, cx),
             _live_preview_task: Some(live_preview::spawn(delegate.clone(), cx)),
-            delegate, focus_handle,
+            delegate,
+            focus_handle,
             action_mode: action_mode.clone(),
             alt_was_held: true,
             _alt_poll_task: None,
@@ -77,13 +81,16 @@ impl AltTabApp {
         #[cfg(debug_assertions)]
         eprintln!(
             "[alt-tab/hold] reuse path (poll_task={}) — reset={} monitor_changed={}",
-            self._alt_poll_task.is_some(), req.config.reset_selection_on_open, req.layout.monitor_changed,
+            self._alt_poll_task.is_some(),
+            req.config.reset_selection_on_open,
+            req.layout.monitor_changed,
         );
         if !req.layout.monitor_changed {
             return true;
         }
         picker::platform::reposition_picker_window(
-            req.layout.bounds.origin.x.to_f64(), req.layout.bounds.origin.y.to_f64(),
+            req.layout.bounds.origin.x.to_f64(),
+            req.layout.bounds.origin.y.to_f64(),
         )
     }
 
@@ -91,7 +98,9 @@ impl AltTabApp {
         let (card_color, card_opacity) = crate::picker::resolve_card_bg(&req.config.display);
         self.action_mode = req.config.action_mode.clone();
         self.alt_was_held = true;
-        self.delegate.update(cx, |s, _| s.apply_config(req.config, card_color, card_opacity));
+        self.delegate.update(cx, |s, _| {
+            s.apply_config(req.config, card_color, card_opacity)
+        });
     }
 
     fn sync_alt_poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -131,11 +140,16 @@ impl AltTabApp {
     }
 
     pub(crate) fn update_icons(&mut self, icons: IconMap, cx: &mut Context<Self>) {
-        self.delegate.update(cx, |state, _| state.insert_icons(icons));
+        self.delegate
+            .update(cx, |state, _| state.insert_icons(icons));
         cx.notify();
     }
 
-    pub(crate) fn start_alt_poll(&mut self, window_handle: AnyWindowHandle, cx: &mut Context<Self>) {
+    pub(crate) fn start_alt_poll(
+        &mut self,
+        window_handle: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) {
         let delegate = self.delegate.clone();
         self.alt_was_held = true;
         self._alt_poll_task = Some(cx.spawn(move |this, cx: &mut AsyncApp| {
@@ -151,10 +165,14 @@ async fn alt_poll_loop(
     mut cx: AsyncApp,
 ) {
     eprintln!("[alt-tab/hold] modifier poll task started");
-    cx.background_executor().timer(Duration::from_millis(50)).await;
+    cx.background_executor()
+        .timer(Duration::from_millis(50))
+        .await;
 
     loop {
-        cx.background_executor().timer(Duration::from_millis(ALT_POLL_INTERVAL_MS)).await;
+        cx.background_executor()
+            .timer(Duration::from_millis(ALT_POLL_INTERVAL_MS))
+            .await;
         if picker::is_modifier_held() {
             continue;
         }
@@ -167,7 +185,9 @@ async fn alt_poll_loop(
 
     let _ = cx.update(|cx| {
         if let Some(entity) = this.upgrade() {
-            let _ = entity.update(cx, |app, _| { app._alt_poll_task = None; });
+            let _ = entity.update(cx, |app, _| {
+                app._alt_poll_task = None;
+            });
         }
     });
     eprintln!("[alt-tab/hold] modifier poll task ended");

@@ -28,7 +28,12 @@ pub fn capture_previews_cg(
     })
 }
 
-fn capture_window(conn: &RustConnection, wid: u32, max_w: usize, max_h: usize) -> Option<RgbaImage> {
+fn capture_window(
+    conn: &RustConnection,
+    wid: u32,
+    max_w: usize,
+    max_h: usize,
+) -> Option<RgbaImage> {
     let geom = conn.get_geometry(wid).ok()?.reply().ok()?;
     let (src_w, src_h) = (geom.width as usize, geom.height as usize);
     if src_w == 0 || src_h == 0 {
@@ -49,9 +54,13 @@ fn read_pixmap_pixels(
     width: u16,
     height: u16,
 ) -> Option<(Vec<u8>, u8)> {
-    conn.composite_redirect_window(wid, Redirect::AUTOMATIC).ok()?.check().ok()?;
+    conn.composite_redirect_window(wid, Redirect::AUTOMATIC)
+        .ok()?
+        .check()
+        .ok()?;
     let pixmap = conn.generate_id().ok()?;
-    let name_ok = conn.composite_name_window_pixmap(wid, pixmap)
+    let name_ok = conn
+        .composite_name_window_pixmap(wid, pixmap)
         .ok()
         .and_then(|c| c.check().ok());
     if name_ok.is_none() {
@@ -97,7 +106,11 @@ fn scale_bgra(
             }
         }
     }
-    RgbaImage { data: out, width: max_w, height: max_h }
+    RgbaImage {
+        data: out,
+        width: max_w,
+        height: max_h,
+    }
 }
 
 pub fn get_app_icons(windows: &[WindowInfo]) -> std::collections::HashMap<String, RgbaImage> {

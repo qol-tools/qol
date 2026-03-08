@@ -1,12 +1,12 @@
 use super::{open_picker, OpenPickerRequest};
 use crate::app::PICKER_VISIBLE;
+use crate::capture;
 use crate::config::AltTabConfig;
 use crate::daemon;
-use crate::picker::gather::build_icon_cache;
-use crate::{SharedIconCache, PickerWindowState};
-use crate::capture;
 use crate::discovery;
 use crate::discovery::WindowInfo;
+use crate::picker::gather::build_icon_cache;
+use crate::{PickerWindowState, SharedIconCache};
 use gpui::*;
 use qol_plugin_api::monitor::MonitorTracker;
 use std::collections::{HashMap, HashSet};
@@ -52,7 +52,9 @@ impl PickerCaches {
 impl PickerState {
     fn open_picker(&self, config: &AltTabConfig, reverse: bool, cx: &mut App) {
         let req = OpenPickerRequest {
-            config, current: &self.current, tracker: &self.tracker,
+            config,
+            current: &self.current,
+            tracker: &self.tracker,
             last_window_count: self.caches.last_window_count.clone(),
             icon_cache: self.caches.icon_cache.clone(),
             reverse,
@@ -150,7 +152,9 @@ async fn should_skip_prewarm_refresh(
     prev_snapshot: &mut Vec<u32>,
     window_cache: &WindowCache,
 ) -> bool {
-    let snapshot = executor.spawn(async { discovery::on_screen_window_ids() }).await;
+    let snapshot = executor
+        .spawn(async { discovery::on_screen_window_ids() })
+        .await;
     let cached_len = cached_window_len(window_cache);
     if should_skip_refresh(&snapshot, prev_snapshot, cached_len) {
         return true;
@@ -164,7 +168,11 @@ fn cached_window_len(window_cache: &WindowCache) -> usize {
 }
 
 fn read_window_cache(window_cache: &WindowCache) -> Vec<WindowInfo> {
-    window_cache.lock().ok().map(|c| c.clone()).unwrap_or_default()
+    window_cache
+        .lock()
+        .ok()
+        .map(|c| c.clone())
+        .unwrap_or_default()
 }
 
 async fn load_stable_windows(
@@ -184,7 +192,9 @@ async fn load_stable_windows(
 }
 
 async fn fetch_open_windows(executor: &gpui::BackgroundExecutor) -> Vec<WindowInfo> {
-    executor.spawn(async { discovery::get_open_windows() }).await
+    executor
+        .spawn(async { discovery::get_open_windows() })
+        .await
 }
 
 async fn refresh_icon_cache(
@@ -246,25 +256,19 @@ fn replace_window_cache(window_cache: &WindowCache, windows: Vec<WindowInfo>) {
     *cache = windows;
 }
 
-fn spawn_daemon_loop(
-    cx: &mut App,
-    rx: mpsc::Receiver<daemon::Command>,
-    state: PickerState,
-) {
+fn spawn_daemon_loop(cx: &mut App, rx: mpsc::Receiver<daemon::Command>, state: PickerState) {
     let rx = Arc::new(Mutex::new(rx));
-    cx.spawn(async move |cx: &mut AsyncApp| {
-        loop {
-            let Some(cmd) = recv_command(cx, rx.clone()).await else {
+    cx.spawn(async move |cx: &mut AsyncApp| loop {
+        let Some(cmd) = recv_command(cx, rx.clone()).await else {
+            shutdown_daemon(cx);
+            break;
+        };
+        match cmd {
+            daemon::Command::Show => dispatch_show(cx, false, &state),
+            daemon::Command::ShowReverse => dispatch_show(cx, true, &state),
+            daemon::Command::Kill => {
                 shutdown_daemon(cx);
                 break;
-            };
-            match cmd {
-                daemon::Command::Show => dispatch_show(cx, false, &state),
-                daemon::Command::ShowReverse => dispatch_show(cx, true, &state),
-                daemon::Command::Kill => {
-                    shutdown_daemon(cx);
-                    break;
-                }
             }
         }
     })

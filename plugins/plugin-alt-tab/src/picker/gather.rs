@@ -14,22 +14,30 @@ pub(crate) struct GatheredWindows {
     pub icons: IconMap,
 }
 
-pub(super) fn gather(
-    config: &AltTabConfig,
-    icon_cache: &SharedIconCache,
-) -> GatheredWindows {
+pub(super) fn gather(config: &AltTabConfig, icon_cache: &SharedIconCache) -> GatheredWindows {
     let windows = recover_small_window_set(config, initial_display_windows(config));
 
     #[cfg(debug_assertions)]
     {
-        eprintln!("[alt-tab/gather] show_minimized={} total={}", config.display.show_minimized, windows.len());
+        eprintln!(
+            "[alt-tab/gather] show_minimized={} total={}",
+            config.display.show_minimized,
+            windows.len()
+        );
         for w in &windows {
-            eprintln!("[alt-tab/gather]   wid={} app={:?} title={:?} minimized={}", w.id, w.app_name, w.title, w.is_minimized);
+            eprintln!(
+                "[alt-tab/gather]   wid={} app={:?} title={:?} minimized={}",
+                w.id, w.app_name, w.title, w.is_minimized
+            );
         }
     }
 
     let icons = icon_cache.lock().map(|c| c.clone()).unwrap_or_default();
-    GatheredWindows { windows, previews: HashMap::new(), icons }
+    GatheredWindows {
+        windows,
+        previews: HashMap::new(),
+        icons,
+    }
 }
 
 fn initial_display_windows(config: &AltTabConfig) -> Vec<WindowInfo> {
@@ -39,7 +47,10 @@ fn initial_display_windows(config: &AltTabConfig) -> Vec<WindowInfo> {
     discovery::get_open_windows()
 }
 
-fn recover_small_window_set(config: &AltTabConfig, display_windows: Vec<WindowInfo>) -> Vec<WindowInfo> {
+fn recover_small_window_set(
+    config: &AltTabConfig,
+    display_windows: Vec<WindowInfo>,
+) -> Vec<WindowInfo> {
     if display_windows.len() > 2 {
         return display_windows;
     }
@@ -73,7 +84,9 @@ pub(super) fn spawn_icon_fill(req: IconFillRequest, known: &IconMap, cx: &mut Ap
 async fn fill_missing_icons(cx: &mut AsyncApp, req: IconFillRequest) {
     let executor = cx.background_executor().clone();
     let windows = req.windows;
-    let raw = executor.spawn(async move { capture::get_app_icons(&windows) }).await;
+    let raw = executor
+        .spawn(async move { capture::get_app_icons(&windows) })
+        .await;
     if raw.is_empty() {
         return;
     }
@@ -97,9 +110,7 @@ fn update_view_icons(cx: &mut AsyncApp, handle: WindowHandle<AltTabApp>, icons: 
     });
 }
 
-pub(crate) fn build_icon_cache(
-    raw_icons: HashMap<String, crate::discovery::RgbaImage>,
-) -> IconMap {
+pub(crate) fn build_icon_cache(raw_icons: HashMap<String, crate::discovery::RgbaImage>) -> IconMap {
     let mut cache: IconMap = HashMap::new();
     for (app_name, icon) in raw_icons {
         let buf = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(

@@ -123,4 +123,3 @@ pub fn load_alt_tab_config() -> AltTabConfig {
     );
     config
 }
-

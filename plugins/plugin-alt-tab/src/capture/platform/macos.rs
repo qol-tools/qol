@@ -1,10 +1,9 @@
 use crate::discovery::platform::macos::ffi;
 use crate::discovery::platform::macos::ffi::{
-    CFArrayGetCount, CFArrayGetValueAtIndex, CFDataGetBytePtr, CFDataGetLength, CFRelease,
-    CGDataProviderCopyData, CGImageGetBytesPerRow, CGImageGetDataProvider, CGImageGetHeight,
-    CGImageGetWidth, CGWindowListCreateImage, CGWindowListCopyWindowInfo,
-    CFDictionaryRef, CGImageRef,
-    CG_RECT_NULL, K_CG_NULL_WINDOW_ID,
+    CFArrayGetCount, CFArrayGetValueAtIndex, CFDataGetBytePtr, CFDataGetLength, CFDictionaryRef,
+    CFRelease, CGDataProviderCopyData, CGImageGetBytesPerRow, CGImageGetDataProvider,
+    CGImageGetHeight, CGImageGetWidth, CGImageRef, CGWindowListCopyWindowInfo,
+    CGWindowListCreateImage, CG_RECT_NULL, K_CG_NULL_WINDOW_ID,
     K_CG_WINDOW_IMAGE_BOUNDS_IGNORE_FRAMING, K_CG_WINDOW_IMAGE_NOMINAL_RESOLUTION,
     K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS, K_CG_WINDOW_LIST_OPTION_INCLUDING_WINDOW,
 };
@@ -24,7 +23,9 @@ pub fn get_app_icons(windows: &[WindowInfo]) -> HashMap<String, RgbaImage> {
         if !needed.contains(name.as_str()) {
             continue;
         }
-        let Some(icon) = qol_plugin_api::app_icon::icon_for_pid(*pid, ICON_SIZE) else { continue };
+        let Some(icon) = qol_plugin_api::app_icon::icon_for_pid(*pid, ICON_SIZE) else {
+            continue;
+        };
         icons.insert(name.clone(), icon);
     }
     icons
@@ -32,7 +33,12 @@ pub fn get_app_icons(windows: &[WindowInfo]) -> HashMap<String, RgbaImage> {
 
 fn resolve_app_pids() -> HashMap<String, i32> {
     let own_pid = std::process::id() as i32;
-    let list = unsafe { CGWindowListCopyWindowInfo(K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS, K_CG_NULL_WINDOW_ID) };
+    let list = unsafe {
+        CGWindowListCopyWindowInfo(
+            K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
+            K_CG_NULL_WINDOW_ID,
+        )
+    };
     if list.is_null() {
         return HashMap::new();
     }
@@ -61,8 +67,11 @@ fn collect_pids_from_list(list: ffi::CFArrayRef, own_pid: i32) -> HashMap<String
 }
 
 fn extract_owner(
-    list: ffi::CFArrayRef, i: isize,
-    key_pid: *const c_void, key_owner: *const c_void, own_pid: i32,
+    list: ffi::CFArrayRef,
+    i: isize,
+    key_pid: *const c_void,
+    key_owner: *const c_void,
+    own_pid: i32,
 ) -> Option<(String, i32)> {
     let dict = unsafe { CFArrayGetValueAtIndex(list, i) } as CFDictionaryRef;
     if dict.is_null() {
@@ -72,7 +81,10 @@ fn extract_owner(
     if pid == own_pid {
         return None;
     }
-    let name = ffi::dict_get_string(dict, key_owner).unwrap_or_default().trim().to_string();
+    let name = ffi::dict_get_string(dict, key_owner)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
     if name.is_empty() {
         return None;
     }
@@ -117,8 +129,10 @@ fn extract_cgimage_pixels(img: CGImageRef, max_w: usize, max_h: usize) -> Option
     }
     let raw = copy_cgimage_data(img)?;
     let src = BlitSource {
-        data: &raw, bytes_per_row: unsafe { CGImageGetBytesPerRow(img) },
-        w: src_w, h: src_h,
+        data: &raw,
+        bytes_per_row: unsafe { CGImageGetBytesPerRow(img) },
+        w: src_w,
+        h: src_h,
     };
     let scaled = compute_scaled_rect(src_w, src_h, max_w, max_h);
     Some(blit_scaled(&src, &scaled))
@@ -157,10 +171,19 @@ struct ScaledRect {
 }
 
 fn compute_scaled_rect(src_w: usize, src_h: usize, max_w: usize, max_h: usize) -> ScaledRect {
-    let scale = (max_w as f32 / src_w as f32).min(max_h as f32 / src_h as f32).min(1.0);
+    let scale = (max_w as f32 / src_w as f32)
+        .min(max_h as f32 / src_h as f32)
+        .min(1.0);
     let w = ((src_w as f32 * scale).round() as usize).max(1).min(max_w);
     let h = ((src_h as f32 * scale).round() as usize).max(1).min(max_h);
-    ScaledRect { w, h, offset_x: (max_w - w) / 2, offset_y: (max_h - h) / 2, canvas_w: max_w, canvas_h: max_h }
+    ScaledRect {
+        w,
+        h,
+        offset_x: (max_w - w) / 2,
+        offset_y: (max_h - h) / 2,
+        canvas_w: max_w,
+        canvas_h: max_h,
+    }
 }
 
 fn blit_scaled(src: &BlitSource, rect: &ScaledRect) -> RgbaImage {
@@ -170,13 +193,19 @@ fn blit_scaled(src: &BlitSource, rect: &ScaledRect) -> RgbaImage {
         let dst_row = (rect.offset_y + y) * rect.canvas_w + rect.offset_x;
         blit_row(src, src_row, rect.w, &mut bgra, dst_row);
     }
-    RgbaImage { data: bgra, width: rect.canvas_w, height: rect.canvas_h }
+    RgbaImage {
+        data: bgra,
+        width: rect.canvas_w,
+        height: rect.canvas_h,
+    }
 }
 
 fn blit_row(src: &BlitSource, src_row: usize, dst_w: usize, dst: &mut [u8], dst_row: usize) {
     for x in 0..dst_w {
         let s = src_row + (x * src.w / dst_w) * 4;
-        if s + 4 > src.data.len() { continue; }
+        if s + 4 > src.data.len() {
+            continue;
+        }
         let d = (dst_row + x) * 4;
         dst[d..d + 4].copy_from_slice(&src.data[s..s + 4]);
     }

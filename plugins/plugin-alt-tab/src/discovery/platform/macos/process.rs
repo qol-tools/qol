@@ -36,13 +36,7 @@ struct ProcBsdInfo {
 
 #[link(name = "proc")]
 extern "C" {
-    fn proc_pidinfo(
-        pid: i32,
-        flavor: i32,
-        arg: u64,
-        buffer: *mut c_void,
-        buffersize: i32,
-    ) -> i32;
+    fn proc_pidinfo(pid: i32, flavor: i32, arg: u64, buffer: *mut c_void, buffersize: i32) -> i32;
 }
 
 const PROC_PIDTBSDINFO: i32 = 3;
@@ -80,10 +74,7 @@ pub(super) fn process_identity(pid: i32) -> Option<ProcessIdentity> {
         .saturating_mul(1_000_000)
         .saturating_add(info.pbi_start_tvusec);
 
-    Some(ProcessIdentity {
-        pid,
-        start_time_us,
-    })
+    Some(ProcessIdentity { pid, start_time_us })
 }
 
 pub(super) fn cached_process_identity(

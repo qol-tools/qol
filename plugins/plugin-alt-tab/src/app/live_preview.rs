@@ -12,10 +12,7 @@ use std::time::Duration;
 const LIVE_PREVIEW_INTERVAL_MS: u64 = 500;
 const VISIBILITY_POLL_MS: u64 = 16;
 
-pub(crate) fn spawn(
-    delegate: Entity<PickerState>,
-    cx: &mut gpui::Context<AltTabApp>,
-) -> Task<()> {
+pub(crate) fn spawn(delegate: Entity<PickerState>, cx: &mut gpui::Context<AltTabApp>) -> Task<()> {
     cx.spawn(move |this: WeakEntity<AltTabApp>, cx: &mut AsyncApp| {
         let cx = cx.clone();
         async move { preview_loop(delegate, this, cx).await }
@@ -28,11 +25,7 @@ struct LoopState {
     round_robin_pos: usize,
 }
 
-async fn preview_loop(
-    delegate: Entity<PickerState>,
-    this: WeakEntity<AltTabApp>,
-    cx: AsyncApp,
-) {
+async fn preview_loop(delegate: Entity<PickerState>, this: WeakEntity<AltTabApp>, cx: AsyncApp) {
     let executor = cx.background_executor().clone();
     let mut state = LoopState {
         prev_hashes: HashMap::new(),
@@ -60,12 +53,16 @@ async fn preview_loop(
 async fn wait_for_visible(executor: &gpui::BackgroundExecutor, state: &mut LoopState) -> bool {
     if state.skip_timer {
         while !PICKER_VISIBLE.load(Ordering::Relaxed) {
-            executor.timer(Duration::from_millis(VISIBILITY_POLL_MS)).await;
+            executor
+                .timer(Duration::from_millis(VISIBILITY_POLL_MS))
+                .await;
         }
         state.skip_timer = false;
         return true;
     }
-    executor.timer(Duration::from_millis(LIVE_PREVIEW_INTERVAL_MS)).await;
+    executor
+        .timer(Duration::from_millis(LIVE_PREVIEW_INTERVAL_MS))
+        .await;
     if !PICKER_VISIBLE.load(Ordering::Relaxed) {
         state.prev_hashes.clear();
         state.skip_timer = true;
@@ -83,13 +80,22 @@ struct Snapshot {
 fn read_snapshot(delegate: &Entity<PickerState>, cx: &AsyncApp) -> Snapshot {
     cx.update(|app_cx| {
         let state = delegate.read(app_cx);
-        let all_ids = state.windows.iter().enumerate()
+        let all_ids = state
+            .windows
+            .iter()
+            .enumerate()
             .filter(|(_, w)| !w.is_minimized)
             .map(|(i, w)| (i, w.id))
             .collect();
-        Snapshot { all_ids, selected_idx: state.selected_index }
+        Snapshot {
+            all_ids,
+            selected_idx: state.selected_index,
+        }
     })
-    .unwrap_or_else(|_| Snapshot { all_ids: Vec::new(), selected_idx: None })
+    .unwrap_or_else(|_| Snapshot {
+        all_ids: Vec::new(),
+        selected_idx: None,
+    })
 }
 
 fn pick_targets(snap: &Snapshot, round_robin_pos: &mut usize) -> Vec<(usize, u32)> {
@@ -99,7 +105,9 @@ fn pick_targets(snap: &Snapshot, round_robin_pos: &mut usize) -> Vec<(usize, u32
             t.push(entry);
         }
     }
-    let non_selected: Vec<(usize, u32)> = snap.all_ids.iter()
+    let non_selected: Vec<(usize, u32)> = snap
+        .all_ids
+        .iter()
         .filter(|(i, _)| Some(*i) != snap.selected_idx)
         .copied()
         .collect();
@@ -117,9 +125,11 @@ async fn run_capture(
     executor: &gpui::BackgroundExecutor,
 ) -> Vec<(usize, Option<RgbaImage>)> {
     let owned = targets.to_vec();
-    executor.spawn(async move {
-        capture::capture_previews_cg(&owned, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT)
-    }).await
+    executor
+        .spawn(async move {
+            capture::capture_previews_cg(&owned, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT)
+        })
+        .await
 }
 
 fn diff_captures(
@@ -127,7 +137,8 @@ fn diff_captures(
     targets: &[(usize, u32)],
     prev_hashes: &mut HashMap<u32, u64>,
 ) -> Vec<(u32, std::sync::Arc<RenderImage>)> {
-    captured.into_iter()
+    captured
+        .into_iter()
         .filter_map(|(idx, rgba)| diff_one(idx, rgba?, targets, prev_hashes))
         .collect()
 }

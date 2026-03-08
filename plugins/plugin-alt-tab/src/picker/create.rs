@@ -1,11 +1,11 @@
+use super::GatheredWindows;
 use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::config::{ActionMode, AltTabConfig, LabelConfig};
 use crate::discovery::WindowInfo;
 use crate::shared::layout::*;
-use super::GatheredWindows;
+use crate::{IconMap, PickerWindowState, PreviewMap, SharedIconCache};
 use gpui::*;
 use qol_plugin_api::monitor::{ActiveMonitor, MonitorTracker};
-use crate::{IconMap, PreviewMap, SharedIconCache, PickerWindowState};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -21,7 +21,9 @@ pub(super) fn create_new(req: &CreateRequest, gathered: GatheredWindows, cx: &mu
     let layout = compute_create_layout(req, &gathered, cx);
     let post = PostCreateData::new(req.config, &gathered);
     let handle = open_picker_window(layout.bounds, PickerInit::new(req.config, gathered), cx);
-    let Some(handle) = handle else { return on_open_failure(); };
+    let Some(handle) = handle else {
+        return on_open_failure();
+    };
     *req.current.borrow_mut() = Some((handle.clone(), layout.origin));
     post.finalize(handle, req.icon_cache.clone(), cx);
 }
@@ -31,7 +33,11 @@ struct CreateLayout {
     origin: Point<Pixels>,
 }
 
-fn compute_create_layout(req: &CreateRequest, gathered: &GatheredWindows, cx: &mut App) -> CreateLayout {
+fn compute_create_layout(
+    req: &CreateRequest,
+    gathered: &GatheredWindows,
+    cx: &mut App,
+) -> CreateLayout {
     let monitor = req.tracker.snapshot().map(|(m, _)| m);
     let size = estimate_picker_size(req, gathered, &monitor);
     let bounds = super::reuse::centered_bounds(&monitor, size, cx);
@@ -39,11 +45,22 @@ fn compute_create_layout(req: &CreateRequest, gathered: &GatheredWindows, cx: &m
     CreateLayout { bounds, origin }
 }
 
-fn estimate_picker_size(req: &CreateRequest, gathered: &GatheredWindows, monitor: &Option<ActiveMonitor>) -> Size<Pixels> {
+fn estimate_picker_size(
+    req: &CreateRequest,
+    gathered: &GatheredWindows,
+    monitor: &Option<ActiveMonitor>,
+) -> Size<Pixels> {
     let target = gathered.windows.len().max(1);
-    let estimated = target.max(req.last_window_count.load(Ordering::Relaxed)).max(1);
+    let estimated = target
+        .max(req.last_window_count.load(Ordering::Relaxed))
+        .max(1);
     let monitor_size = monitor.as_ref().map(|m| m.size());
-    let (w, h) = picker_dimensions(estimated, req.config.display.max_columns, monitor_size, req.config.display.show_hotkey_hints);
+    let (w, h) = picker_dimensions(
+        estimated,
+        req.config.display.max_columns,
+        monitor_size,
+        req.config.display.show_hotkey_hints,
+    );
     size(px(w), px(h))
 }
 
@@ -65,13 +82,17 @@ impl PickerInit {
     fn new(config: &AltTabConfig, gathered: GatheredWindows) -> Self {
         let (card_color, card_opacity) = super::resolve_card_bg(&config.display);
         Self {
-            action_mode: config.action_mode.clone(), label_config: config.label.clone(),
+            action_mode: config.action_mode.clone(),
+            label_config: config.label.clone(),
             transparent_bg: config.display.transparent_background,
-            card_color, card_opacity,
+            card_color,
+            card_opacity,
             show_debug_overlay: config.display.show_debug_overlay,
             show_hotkey_hints: config.display.show_hotkey_hints,
             cycle_on_open: config.open_behavior == crate::config::OpenBehavior::CycleOnce,
-            windows: gathered.windows, previews: gathered.previews, icons: gathered.icons,
+            windows: gathered.windows,
+            previews: gathered.previews,
+            icons: gathered.icons,
         }
     }
 
@@ -80,7 +101,11 @@ impl PickerInit {
     }
 }
 
-fn open_picker_window(bounds: Bounds<Pixels>, init: PickerInit, cx: &mut App) -> Option<WindowHandle<AltTabApp>> {
+fn open_picker_window(
+    bounds: Bounds<Pixels>,
+    init: PickerInit,
+    cx: &mut App,
+) -> Option<WindowHandle<AltTabApp>> {
     let opts = picker_window_options(bounds, init.transparent_bg);
     cx.open_window(opts, move |window, cx| {
         window.set_window_title("qol-alt-tab-picker");
@@ -88,16 +113,29 @@ fn open_picker_window(bounds: Bounds<Pixels>, init: PickerInit, cx: &mut App) ->
         window.focus(&view.focus_handle(cx));
         window.activate_window();
         view
-    }).ok()
+    })
+    .ok()
 }
 
 fn picker_window_options(bounds: Bounds<Pixels>, transparent: bool) -> WindowOptions {
-    let bg = if transparent { WindowBackgroundAppearance::Transparent } else { WindowBackgroundAppearance::Opaque };
-    let decor = if transparent { WindowDecorations::Server } else { WindowDecorations::Client };
+    let bg = if transparent {
+        WindowBackgroundAppearance::Transparent
+    } else {
+        WindowBackgroundAppearance::Opaque
+    };
+    let decor = if transparent {
+        WindowDecorations::Server
+    } else {
+        WindowDecorations::Client
+    };
     WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)), titlebar: None,
-        window_decorations: Some(decor), kind: super::platform::picker_window_kind(),
-        focus: true, window_background: bg, ..Default::default()
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        titlebar: None,
+        window_decorations: Some(decor),
+        kind: super::platform::picker_window_kind(),
+        focus: true,
+        window_background: bg,
+        ..Default::default()
     }
 }
 
@@ -129,7 +167,9 @@ impl PostCreateData {
             super::platform::disable_window_shadow();
         }
         let icon_req = super::IconFillRequest {
-            handle, windows: self.windows, icon_cache,
+            handle,
+            windows: self.windows,
+            icon_cache,
         };
         super::spawn_icon_fill(icon_req, &self.icons, cx);
         super::platform::set_accessory_policy();

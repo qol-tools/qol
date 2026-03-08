@@ -45,7 +45,8 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
 }
 
 fn intern_atoms(conn: &impl Connection) -> AtomMap {
-    let cookies: Vec<_> = ATOM_NAMES.iter()
+    let cookies: Vec<_> = ATOM_NAMES
+        .iter()
         .map(|name| conn.intern_atom(false, name.as_bytes()).ok())
         .collect();
     let mut map = AtomMap::new();
@@ -59,14 +60,16 @@ fn intern_atoms(conn: &impl Connection) -> AtomMap {
 }
 
 fn fetch_window_ids(conn: &impl Connection, root: u32, atoms: &AtomMap) -> Vec<u32> {
-    let list_atom = atoms.get("_NET_CLIENT_LIST_STACKING")
+    let list_atom = atoms
+        .get("_NET_CLIENT_LIST_STACKING")
         .or_else(|| atoms.get("_NET_CLIENT_LIST"))
         .copied()
         .unwrap_or(0);
     if list_atom == 0 {
         return Vec::new();
     }
-    let prop = conn.get_property(false, root, list_atom, AtomEnum::WINDOW, 0, 1024)
+    let prop = conn
+        .get_property(false, root, list_atom, AtomEnum::WINDOW, 0, 1024)
         .ok()
         .and_then(|c| c.reply().ok());
     let Some(prop) = prop else {
@@ -80,10 +83,16 @@ fn fetch_window_ids(conn: &impl Connection, root: u32, atoms: &AtomMap) -> Vec<u
 
 fn filter_normal_windows(conn: &impl Connection, ids: &[u32], atoms: &AtomMap) -> Vec<u32> {
     let type_atom = atoms.get("_NET_WM_WINDOW_TYPE").copied();
-    let normal_atom = atoms.get("_NET_WM_WINDOW_TYPE_NORMAL").copied().unwrap_or(0);
+    let normal_atom = atoms
+        .get("_NET_WM_WINDOW_TYPE_NORMAL")
+        .copied()
+        .unwrap_or(0);
 
-    let type_cookies: Vec<_> = ids.iter()
-        .map(|&id| type_atom.and_then(|ta| conn.get_property(false, id, ta, AtomEnum::ATOM, 0, 10).ok()))
+    let type_cookies: Vec<_> = ids
+        .iter()
+        .map(|&id| {
+            type_atom.and_then(|ta| conn.get_property(false, id, ta, AtomEnum::ATOM, 0, 10).ok())
+        })
         .collect();
 
     let mut filtered = Vec::with_capacity(ids.len());
@@ -138,11 +147,28 @@ fn pipeline_and_resolve(conn: &impl Connection, ids: &[u32], atoms: &AtomMap) ->
     let wm_icon_atom = atoms.get("_NET_WM_ICON").copied().unwrap_or(0);
 
     ResolvedProps {
-        state: batch_prop(conn, ids, |c, id| state_atom.and_then(|a| c.get_property(false, id, a, AtomEnum::ATOM, 0, 64).ok())),
-        net_name: batch_prop(conn, ids, |c, id| net_name_atom.and_then(|a| c.get_property(false, id, a, AtomEnum::ANY, 0, 1024).ok())),
-        wm_name: batch_prop(conn, ids, |c, id| c.get_property(false, id, AtomEnum::WM_NAME, AtomEnum::ANY, 0, 1024).ok()),
-        wm_class: batch_prop(conn, ids, |c, id| c.get_property(false, id, wm_class_atom, AtomEnum::STRING, 0, 1024).ok()),
-        icon: batch_prop(conn, ids, |c, id| if wm_icon_atom != 0 { c.get_property(false, id, wm_icon_atom, AtomEnum::CARDINAL, 0, 65536).ok() } else { None }),
+        state: batch_prop(conn, ids, |c, id| {
+            state_atom.and_then(|a| c.get_property(false, id, a, AtomEnum::ATOM, 0, 64).ok())
+        }),
+        net_name: batch_prop(conn, ids, |c, id| {
+            net_name_atom.and_then(|a| c.get_property(false, id, a, AtomEnum::ANY, 0, 1024).ok())
+        }),
+        wm_name: batch_prop(conn, ids, |c, id| {
+            c.get_property(false, id, AtomEnum::WM_NAME, AtomEnum::ANY, 0, 1024)
+                .ok()
+        }),
+        wm_class: batch_prop(conn, ids, |c, id| {
+            c.get_property(false, id, wm_class_atom, AtomEnum::STRING, 0, 1024)
+                .ok()
+        }),
+        icon: batch_prop(conn, ids, |c, id| {
+            if wm_icon_atom != 0 {
+                c.get_property(false, id, wm_icon_atom, AtomEnum::CARDINAL, 0, 65536)
+                    .ok()
+            } else {
+                None
+            }
+        }),
     }
 }
 
@@ -152,10 +178,18 @@ fn batch_prop<C: Connection>(
     fire: impl Fn(&C, u32) -> Option<x11rb::cookie::Cookie<'_, C, GetPropertyReply>>,
 ) -> Vec<Option<GetPropertyReply>> {
     let cookies: Vec<_> = ids.iter().map(|&id| fire(conn, id)).collect();
-    cookies.into_iter().map(|c| c.and_then(|c| c.reply().ok())).collect()
+    cookies
+        .into_iter()
+        .map(|c| c.and_then(|c| c.reply().ok()))
+        .collect()
 }
 
-fn build_window_info(id: u32, idx: usize, props: &mut ResolvedProps, hidden_atom: u32) -> Option<WindowInfo> {
+fn build_window_info(
+    id: u32,
+    idx: usize,
+    props: &mut ResolvedProps,
+    hidden_atom: u32,
+) -> Option<WindowInfo> {
     let title = resolve_title(idx, props);
     if title.is_empty() || title == "Desktop" {
         return None;
@@ -166,7 +200,10 @@ fn build_window_info(id: u32, idx: usize, props: &mut ResolvedProps, hidden_atom
         app_name: resolve_app_name(idx, props),
         preview_path: None,
         icon: props.icon[idx].take().and_then(|r| extract_x11_icon(&r)),
-        x: 0.0, y: 0.0, width: 0.0, height: 0.0,
+        x: 0.0,
+        y: 0.0,
+        width: 0.0,
+        height: 0.0,
         is_minimized: resolve_minimized(idx, props, hidden_atom),
     })
 }
@@ -178,7 +215,8 @@ fn resolve_title(idx: usize, props: &mut ResolvedProps) -> String {
             return title;
         }
     }
-    props.wm_name[idx].take()
+    props.wm_name[idx]
+        .take()
         .map(|r| String::from_utf8_lossy(&r.value).into_owned())
         .unwrap_or_default()
 }
@@ -199,8 +237,12 @@ fn resolve_app_name(idx: usize, props: &mut ResolvedProps) -> String {
 }
 
 fn resolve_minimized(idx: usize, props: &mut ResolvedProps, hidden_atom: u32) -> bool {
-    props.state[idx].take()
-        .and_then(|r| r.value32().map(|atoms| atoms.into_iter().any(|a| a == hidden_atom)))
+    props.state[idx]
+        .take()
+        .and_then(|r| {
+            r.value32()
+                .map(|atoms| atoms.into_iter().any(|a| a == hidden_atom))
+        })
         .unwrap_or(false)
 }
 
@@ -268,5 +310,9 @@ fn argb_to_bgra(pixels: &[u32], src_w: usize, src_h: usize, target: usize) -> Rg
             bgra[dst + 3] = ((argb >> 24) & 0xff) as u8;
         }
     }
-    RgbaImage { data: bgra, width: target, height: target }
+    RgbaImage {
+        data: bgra,
+        width: target,
+        height: target,
+    }
 }

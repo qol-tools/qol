@@ -1,7 +1,7 @@
+use super::GatheredWindows;
 use crate::app::AltTabApp;
 use crate::config::AltTabConfig;
 use crate::shared::layout::*;
-use super::GatheredWindows;
 use gpui::*;
 use qol_plugin_api::monitor::{ActiveMonitor, MonitorTracker};
 
@@ -27,15 +27,17 @@ pub(super) struct LayoutInput<'a> {
 }
 
 pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
-    req.handle.update(cx, |view, window: &mut Window, cx| {
-        if !view.apply_reuse(req, window, cx) {
-            return false;
-        }
-        resize_if_needed(window, req.layout.size);
-        window.focus(&view.focus_handle(cx));
-        window.activate_window();
-        true
-    }).unwrap_or(false)
+    req.handle
+        .update(cx, |view, window: &mut Window, cx| {
+            if !view.apply_reuse(req, window, cx) {
+                return false;
+            }
+            resize_if_needed(window, req.layout.size);
+            window.focus(&view.focus_handle(cx));
+            window.activate_window();
+            true
+        })
+        .unwrap_or(false)
 }
 
 pub(super) fn compute_layout(input: &LayoutInput, cx: &mut App) -> ReuseLayout {
@@ -44,17 +46,31 @@ pub(super) fn compute_layout(input: &LayoutInput, cx: &mut App) -> ReuseLayout {
     let bounds = centered_bounds(&monitor, size, cx);
     let origin = monitor_origin(&monitor);
     let monitor_changed = origin_diverged(input.created_on_origin, origin);
-    ReuseLayout { bounds, size, origin, monitor_changed }
+    ReuseLayout {
+        bounds,
+        size,
+        origin,
+        monitor_changed,
+    }
 }
 
 fn picker_size(input: &LayoutInput, monitor: &Option<ActiveMonitor>) -> Size<Pixels> {
     let count = input.window_count.max(1);
     let monitor_size = monitor.as_ref().map(|m| m.size());
-    let (w, h) = picker_dimensions(count, input.config.display.max_columns, monitor_size, input.config.display.show_hotkey_hints);
+    let (w, h) = picker_dimensions(
+        count,
+        input.config.display.max_columns,
+        monitor_size,
+        input.config.display.show_hotkey_hints,
+    );
     size(px(w), px(h))
 }
 
-pub(super) fn centered_bounds(monitor: &Option<ActiveMonitor>, win_size: Size<Pixels>, cx: &mut App) -> Bounds<Pixels> {
+pub(super) fn centered_bounds(
+    monitor: &Option<ActiveMonitor>,
+    win_size: Size<Pixels>,
+    cx: &mut App,
+) -> Bounds<Pixels> {
     match monitor.as_ref() {
         Some(active) => active.centered_bounds(win_size),
         None => Bounds::centered(None, win_size, cx),
@@ -62,7 +78,10 @@ pub(super) fn centered_bounds(monitor: &Option<ActiveMonitor>, win_size: Size<Pi
 }
 
 pub(super) fn monitor_origin(monitor: &Option<ActiveMonitor>) -> Point<Pixels> {
-    monitor.as_ref().map(|m| m.bounds().origin).unwrap_or(point(px(0.0), px(0.0)))
+    monitor
+        .as_ref()
+        .map(|m| m.bounds().origin)
+        .unwrap_or(point(px(0.0), px(0.0)))
 }
 
 fn origin_diverged(a: Point<Pixels>, b: Point<Pixels>) -> bool {
@@ -80,6 +99,9 @@ fn resize_if_needed(window: &mut Window, target: Size<Pixels>) {
         return;
     }
     #[cfg(debug_assertions)]
-    eprintln!("[alt-tab/reuse] resize {}x{} → {}x{}", current.width, current.height, target.width, target.height);
+    eprintln!(
+        "[alt-tab/reuse] resize {}x{} → {}x{}",
+        current.width, current.height, target.width, target.height
+    );
     window.resize(target);
 }

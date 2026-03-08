@@ -1,7 +1,7 @@
 use super::{AltTabApp, PICKER_VISIBLE};
-use crate::shared::layout::rendered_column_count;
 use crate::actions;
 use crate::picker;
+use crate::shared::layout::rendered_column_count;
 use gpui::{Context, Window};
 use std::sync::atomic::Ordering;
 
@@ -45,15 +45,23 @@ fn on_activate(this: &AltTabApp, window: &mut Window, cx: &mut Context<AltTabApp
 }
 
 fn on_close(this: &mut AltTabApp, cx: &mut Context<AltTabApp>) {
-    let Some(win_id) = selected_window_id(this, cx) else { return };
+    let Some(win_id) = selected_window_id(this, cx) else {
+        return;
+    };
     actions::close_window(win_id);
     this.delegate.update(cx, |s, _| s.remove_window(win_id));
     cx.notify();
 }
 
 fn on_quit(this: &mut AltTabApp, cx: &mut Context<AltTabApp>) {
-    let Some(win_id) = selected_window_id(this, cx) else { return };
-    let app_name = this.delegate.read(cx).windows.iter()
+    let Some(win_id) = selected_window_id(this, cx) else {
+        return;
+    };
+    let app_name = this
+        .delegate
+        .read(cx)
+        .windows
+        .iter()
         .find(|w| w.id == win_id)
         .map(|w| w.app_name.clone());
     actions::quit_app(win_id);
@@ -64,7 +72,9 @@ fn on_quit(this: &mut AltTabApp, cx: &mut Context<AltTabApp>) {
 }
 
 fn on_minimize(this: &mut AltTabApp, cx: &mut Context<AltTabApp>) {
-    let Some(win_id) = selected_window_id(this, cx) else { return };
+    let Some(win_id) = selected_window_id(this, cx) else {
+        return;
+    };
     actions::minimize_window_by_id(win_id);
     this.delegate.update(cx, |s, _| s.mark_minimized(win_id));
     cx.notify();
@@ -72,7 +82,11 @@ fn on_minimize(this: &mut AltTabApp, cx: &mut Context<AltTabApp>) {
 
 fn on_tab(this: &mut AltTabApp, reverse: bool, cx: &mut Context<AltTabApp>) {
     this.delegate.update(cx, |s, _| {
-        if reverse { s.select_prev(); } else { s.select_next(); }
+        if reverse {
+            s.select_prev();
+        } else {
+            s.select_next();
+        }
     });
     cx.notify();
 }
@@ -90,5 +104,7 @@ fn on_arrow(
 
 fn selected_window_id(this: &AltTabApp, cx: &Context<AltTabApp>) -> Option<u32> {
     let state = this.delegate.read(cx);
-    state.selected_index.and_then(|ix| state.windows.get(ix).map(|w| w.id))
+    state
+        .selected_index
+        .and_then(|ix| state.windows.get(ix).map(|w| w.id))
 }
