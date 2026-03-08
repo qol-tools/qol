@@ -21,6 +21,9 @@ impl Render for LauncherView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.blur_sub.is_none() {
             self.blur_sub = Some(cx.on_blur(&self.focus_handle, window, |this, window, _cx| {
+                if !this.is_showing {
+                    return;
+                }
                 if std::time::Instant::now() < this.blur_guard_until {
                     return;
                 }
@@ -33,6 +36,9 @@ impl Render for LauncherView {
             self.activation_sub =
                 Some(cx.observe_window_activation(window, |this, window, _cx| {
                     if !window.is_window_active() {
+                        if !this.is_showing {
+                            return;
+                        }
                         if std::time::Instant::now() < this.blur_guard_until {
                             return;
                         }
@@ -117,6 +123,9 @@ impl Render for LauncherView {
             .flex_col()
             .bg(view::bg_color())
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if !this.is_showing {
+                    return;
+                }
                 match event.keystroke.key.as_str() {
                     "escape" | "esc" => {
                         this.set_showing(false);

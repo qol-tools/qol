@@ -1,4 +1,4 @@
-use launcher::launcher_app::key_to_input_char;
+use launcher::ui::key_to_input_char;
 use proptest::prelude::*;
 
 mod common;
