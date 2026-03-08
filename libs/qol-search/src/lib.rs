@@ -264,7 +264,10 @@ fn compute_score(positions: &[usize], candidate: &[char], query_orig: &[char]) -
 }
 
 fn is_fully_contiguous(positions: &[usize]) -> bool {
-    positions.len() > 1 && positions.windows(2).all(|window| window[1] == window[0] + 1)
+    positions.len() > 1
+        && positions
+            .windows(2)
+            .all(|window| window[1] == window[0] + 1)
 }
 
 #[cfg(test)]
