@@ -19,22 +19,21 @@ pub fn discover_plugins(
 ) -> Vec<DiscoveredPlugin> {
     let config_dir = plugins_dir.parent().unwrap_or(plugins_dir);
     let dev_links = crate::dev::load_dev_links(config_dir);
-    let search_paths = config.effective_search_paths();
-    let plugin_dirs = search::find_plugin_dirs(&search_paths);
-    let link_state = LinkState::new(plugins_dir, &dev_links);
+
+    let resolved_dev_links = crate::dev::active_dev_links(config_dir);
+
+    let plugin_dirs = search::find_plugin_dirs(&config.effective_search_paths());
+    let link_state = LinkState::new(plugins_dir, &dev_links, &resolved_dev_links);
 
     shape_discovered_plugins(classify_sources(&plugin_dirs, &link_state))
 }
 
 fn shape_discovered_plugins(sources: Vec<ClassifiedSource>) -> Vec<DiscoveredPlugin> {
-    let mut discovered: Vec<DiscoveredPlugin> = Vec::new();
-
-    for source in sources {
-        if source.already_linked {
-            continue;
-        }
-        discovered.push(source.into());
-    }
+    let mut discovered: Vec<DiscoveredPlugin> = sources
+        .into_iter()
+        .filter(|s| !s.already_linked)
+        .map(DiscoveredPlugin::from)
+        .collect();
 
     discovered.sort_by(|a, b| a.name.cmp(&b.name));
     discovered

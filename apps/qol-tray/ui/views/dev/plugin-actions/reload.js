@@ -12,8 +12,12 @@ async function handleReloadResponse(state, reloadResponse) {
 
 async function doReload(state, discoveryController, onNeedsRender) {
     try {
+        const worktreePath = localStorage.getItem('dev.recompile.defaultWorktree') || null;
+        const reloadOpts = worktreePath
+            ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ worktree_path: worktreePath }) }
+            : { method: 'POST' };
         const [reloadResponse, discoverResponse] = await Promise.all([
-            fetch('/api/dev/reload', { method: 'POST' }),
+            fetch('/api/dev/reload', reloadOpts),
             fetch('/api/dev/discover', { method: 'POST' })
         ]);
         if (!await handleReloadResponse(state, reloadResponse)) return;

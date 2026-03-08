@@ -1,6 +1,7 @@
 pub(in crate::dev::build) mod queue;
 mod rebuild_reason;
 mod selection;
+pub(crate) mod worktree;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -10,8 +11,10 @@ use super::types::PluginBuildPlan;
 pub(crate) fn plan_linked_plugin_builds(
     dev_links: &HashMap<String, PathBuf>,
     known_fingerprints: &HashMap<String, String>,
+    worktree_branch: Option<&str>,
 ) -> Vec<PluginBuildPlan> {
-    selection::select_linked_plugins(dev_links)
+    let effective_links = worktree::resolve_worktree_paths(dev_links, worktree_branch);
+    selection::select_linked_plugins(&effective_links)
         .into_iter()
         .map(|selection| rebuild_reason::plan_selection(selection, known_fingerprints))
         .collect()
@@ -46,7 +49,7 @@ mod tests {
         write_basic_plugin(&plugin_dir);
 
         let links = HashMap::from([("plugin-a".to_string(), plugin_dir)]);
-        let plans = plan_linked_plugin_builds(&links, &HashMap::new());
+        let plans = plan_linked_plugin_builds(&links, &HashMap::new(), None);
 
         assert_eq!(plans.len(), 1);
         assert!(plans[0].needs_rebuild);
@@ -62,7 +65,7 @@ mod tests {
         let links = HashMap::from([("plugin-a".to_string(), plugin_dir.clone())]);
         let fingerprint = fingerprint_plugin(&plugin_dir).unwrap();
         let known = HashMap::from([("plugin-a".to_string(), fingerprint)]);
-        let plans = plan_linked_plugin_builds(&links, &known);
+        let plans = plan_linked_plugin_builds(&links, &known, None);
 
         assert_eq!(plans.len(), 1);
         assert!(!plans[0].needs_rebuild);
@@ -77,7 +80,7 @@ mod tests {
         fs::write(plugin_dir.join("src.rs"), "fn main() {}\n").unwrap();
 
         let links = HashMap::from([("plugin-a".to_string(), plugin_dir)]);
-        let plans = plan_linked_plugin_builds(&links, &HashMap::new());
+        let plans = plan_linked_plugin_builds(&links, &HashMap::new(), None);
 
         assert_eq!(plans.len(), 1);
         assert!(!plans[0].has_cargo);
@@ -115,7 +118,7 @@ mod tests {
         .unwrap();
 
         let links = HashMap::from([("plugin-a".to_string(), plugin_dir)]);
-        let plans = plan_linked_plugin_builds(&links, &HashMap::new());
+        let plans = plan_linked_plugin_builds(&links, &HashMap::new(), None);
 
         assert_eq!(plans.len(), 1);
         assert!(plans[0].has_cargo);
@@ -140,7 +143,7 @@ mod tests {
         .unwrap();
 
         let links = HashMap::from([("plugin-a".to_string(), plugin_dir)]);
-        let plans = plan_linked_plugin_builds(&links, &HashMap::new());
+        let plans = plan_linked_plugin_builds(&links, &HashMap::new(), None);
 
         assert_eq!(plans.len(), 1);
         assert!(plans[0].supports_platform);
@@ -154,7 +157,7 @@ mod tests {
         write_basic_plugin(&plugin_dir);
 
         let links = HashMap::from([("plugin-a".to_string(), plugin_dir)]);
-        let plans = plan_linked_plugin_builds(&links, &HashMap::new());
+        let plans = plan_linked_plugin_builds(&links, &HashMap::new(), None);
 
         assert_eq!(plans.len(), 1);
         assert!(plans[0].supports_platform);

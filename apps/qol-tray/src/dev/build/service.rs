@@ -31,13 +31,19 @@ impl<'a> BuildApplicationService<'a> {
         }
     }
 
-    pub fn run(&self, dev_links: &HashMap<String, PathBuf>, config_dir: Option<&Path>) -> BuildRun {
+    pub fn run(
+        &self,
+        dev_links: &HashMap<String, PathBuf>,
+        config_dir: Option<&Path>,
+        worktree_branch: Option<&str>,
+    ) -> BuildRun {
         let known_fingerprints =
             persistence::load_known_fingerprints(self.fingerprint_store, config_dir);
         let build_run = runner::run_build(runner::RunRequest {
             dev_links,
             known_fingerprints: &known_fingerprints,
             builder: self.builder,
+            worktree_branch,
             on_event: |event| self.event_sink.publish(event),
         });
         persistence::persist_build_run(self.fingerprint_store, config_dir, &build_run);
@@ -67,6 +73,7 @@ where
         dev_links,
         known_fingerprints,
         builder: &CargoCommandPluginBuilder,
+        worktree_branch: None,
         on_event,
     })
 }

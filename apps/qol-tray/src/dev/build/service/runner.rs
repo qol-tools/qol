@@ -18,6 +18,7 @@ where
     pub(super) dev_links: &'a HashMap<String, PathBuf>,
     pub(super) known_fingerprints: &'a HashMap<String, String>,
     pub(super) builder: &'a dyn CargoPluginBuilder,
+    pub(super) worktree_branch: Option<&'a str>,
     pub(super) on_event: F,
 }
 
@@ -25,8 +26,11 @@ pub(super) fn run_build<F>(request: RunRequest<'_, F>) -> BuildRun
 where
     F: FnMut(core::CoreEvent),
 {
-    let plans =
-        super::super::plan_linked_plugin_builds(request.dev_links, request.known_fingerprints);
+    let plans = super::super::plan_linked_plugin_builds(
+        request.dev_links,
+        request.known_fingerprints,
+        request.worktree_branch,
+    );
     BuildRunner::new(
         plans,
         request.known_fingerprints,

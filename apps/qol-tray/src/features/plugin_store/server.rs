@@ -58,6 +58,8 @@ pub(crate) async fn start_ui_server(
     )?;
     #[cfg(feature = "dev")]
     start_dev_discovery(&app_state);
+    #[cfg(feature = "dev")]
+    schedule_post_restart_rebuild(&app_state);
     let app = assemble_app(app_state, plugins_dir);
     let (listener, port) = bind_listener().await?;
     tokio::spawn(async move {
@@ -66,6 +68,26 @@ pub(crate) async fn start_ui_server(
         }
     });
     Ok(port)
+}
+
+#[cfg(feature = "dev")]
+fn schedule_post_restart_rebuild(app_state: &AppState) {
+    let branch = match std::env::var("QOL_DEV_WORKTREE_BRANCH") {
+        Ok(b) if !b.is_empty() => b,
+        _ => return,
+    };
+    // Consume the env var so it doesn't persist across future restarts
+    std::env::remove_var("QOL_DEV_WORKTREE_BRANCH");
+    log::info!(
+        "[worktree] post-restart plugin rebuild for branch: {}",
+        branch
+    );
+    let state = app_state.clone();
+    tokio::task::spawn_blocking(move || {
+        if let Err(e) = dev_services::queue_reload(&state, Some(branch)) {
+            log::warn!("[worktree] post-restart rebuild skipped: {}", e);
+        }
+    });
 }
 
 fn api_router(app_state: AppState) -> Router {

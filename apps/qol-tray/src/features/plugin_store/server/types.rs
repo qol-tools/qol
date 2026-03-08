@@ -200,6 +200,12 @@ pub(super) struct RecompileSelfRequest {
 }
 
 #[cfg(feature = "dev")]
+#[derive(Debug, Clone, Deserialize, Default)]
+pub(super) struct ReloadRequest {
+    pub(super) worktree_path: Option<String>,
+}
+
+#[cfg(feature = "dev")]
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct WorktreeInfo {
     pub(super) branch: String,

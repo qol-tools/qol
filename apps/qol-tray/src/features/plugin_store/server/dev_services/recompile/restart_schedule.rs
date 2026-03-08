@@ -28,11 +28,13 @@ pub(super) fn schedule_self_restart_after_idle(
             });
             return;
         };
+        let worktree_branch = worktree_path.as_deref().and_then(resolve_branch_from_path);
         exec_restart_after_cleanup(
             plugin_manager,
             runtime.as_ref(),
             restart.as_ref(),
             &restart_binary,
+            worktree_branch.as_deref(),
         );
     });
 }
@@ -58,20 +60,25 @@ fn resolve_restart_binary(
     restart: &dyn RestartPort,
     worktree_path: Option<&Path>,
 ) -> Option<PathBuf> {
-    if let Some(wt) = worktree_path {
-        let candidate = restart.binary_at(wt);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
+    let binary = worktree_path
+        .map(|wt| restart.binary_at(wt))
+        .filter(|p| p.is_file())
+        .or_else(|| restart.resolve_restart_binary());
 
-    let Some(path) = restart.resolve_restart_binary() else {
+    if binary.is_none() {
         log::error!("Self recompile completed but restart binary could not be resolved");
         runtime.clear_restart_pending();
-        return None;
-    };
+    }
 
-    Some(path)
+    binary
+}
+
+fn resolve_branch_from_path(worktree_path: &Path) -> Option<String> {
+    let known = super::super::list_worktrees();
+    known
+        .into_iter()
+        .find(|w| Path::new(&w.path) == worktree_path)
+        .map(|w| w.branch)
 }
 
 fn exec_restart_after_cleanup(
@@ -79,6 +86,7 @@ fn exec_restart_after_cleanup(
     runtime: &DevRuntimeService,
     restart: &dyn RestartPort,
     restart_binary: &Path,
+    worktree_branch: Option<&str>,
 ) {
     match plugin_manager.lock() {
         Ok(mut manager) => manager.shutdown(),
@@ -87,6 +95,11 @@ fn exec_restart_after_cleanup(
             error
         ),
     }
+
+    worktree_branch.map_or_else(
+        || std::env::remove_var("QOL_DEV_WORKTREE_BRANCH"),
+        |branch| std::env::set_var("QOL_DEV_WORKTREE_BRANCH", branch),
+    );
     if let Err(error) = restart.exec_restart(restart_binary) {
         log::error!(
             "Self recompile exec restart failed for {}: {}",

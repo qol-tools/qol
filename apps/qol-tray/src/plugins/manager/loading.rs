@@ -43,8 +43,7 @@ fn resolution_context() -> Result<ResolutionContext> {
 }
 
 fn resolve_plugins(plugins_dir: &Path) -> Vec<ResolvedPlugin> {
-    let dev_links = dev_registry::load_dev_links();
-    super::super::resolver::resolve_all(plugins_dir, &dev_links)
+    super::super::resolver::resolve_all(plugins_dir, &dev_registry::active_dev_links())
 }
 
 fn log_resolved_plugins(resolved: &[ResolvedPlugin]) {
