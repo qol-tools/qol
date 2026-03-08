@@ -12,10 +12,10 @@ serde_json = "1.0"
 notify = { version = "8", default-features = false, features = [
   "macos_fsevent",
 ] }
-qol-plugin-api = { path = "../qol-plugin-api" }
-qol-search = { path = "../qol-search" }
-qol-frecency = { path = "../qol-frecency" }
-qol-platform = { path = "../qol-platform" }
+qol-plugin-api = { git = "https://github.com/qol-tools/qol-plugin-api" }
+qol-search = { git = "https://github.com/qol-tools/qol-search" }
+qol-frecency = { git = "https://github.com/qol-tools/qol-frecency" }
+qol-platform = { git = "https://github.com/qol-tools/qol-platform" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 shell-words = "1.1"
