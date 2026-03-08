@@ -74,10 +74,8 @@ impl WindowSystem for X11WindowSystem {
 
     fn is_excluded_window_type(&self, window_id: &str) -> Result<bool, String> {
         let output = run_output("xprop", &["-id", window_id, "_NET_WM_WINDOW_TYPE"])?;
-        Ok(
-            output.contains("_NET_WM_WINDOW_TYPE_DESKTOP")
-                || output.contains("_NET_WM_WINDOW_TYPE_DOCK"),
-        )
+        Ok(output.contains("_NET_WM_WINDOW_TYPE_DESKTOP")
+            || output.contains("_NET_WM_WINDOW_TYPE_DOCK"))
     }
 
     fn is_hidden_window(&self, window_id: &str) -> Result<bool, String> {

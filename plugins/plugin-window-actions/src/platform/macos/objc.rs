@@ -45,10 +45,7 @@ extern "C" {
         attribute: *const c_void,
         value: *const c_void,
     ) -> i32;
-    pub(super) fn AXUIElementPerformAction(
-        element: *const c_void,
-        action: *const c_void,
-    ) -> i32;
+    pub(super) fn AXUIElementPerformAction(element: *const c_void, action: *const c_void) -> i32;
     pub(super) fn AXValueCreate(value_type: u32, value: *const c_void) -> *mut c_void;
     pub(super) fn AXValueGetValue(
         value: *const c_void,
@@ -75,10 +72,7 @@ extern "C" {
     fn CFStringGetTypeID() -> usize;
     pub(super) fn CFArrayGetCount(array: *const c_void) -> isize;
     pub(super) fn CFArrayGetValueAtIndex(array: *const c_void, idx: isize) -> *const c_void;
-    pub(super) fn CFDictionaryGetValue(
-        dict: *const c_void,
-        key: *const c_void,
-    ) -> *const c_void;
+    pub(super) fn CFDictionaryGetValue(dict: *const c_void, key: *const c_void) -> *const c_void;
     pub(super) fn CFNumberGetValue(
         number: *const c_void,
         the_type: i32,
@@ -91,8 +85,12 @@ extern "C" {
     static CF_BOOLEAN_TRUE: *const c_void;
 }
 
-pub(super) fn cf_boolean_false() -> *const c_void { unsafe { CF_BOOLEAN_FALSE } }
-pub(super) fn cf_boolean_true() -> *const c_void { unsafe { CF_BOOLEAN_TRUE } }
+pub(super) fn cf_boolean_false() -> *const c_void {
+    unsafe { CF_BOOLEAN_FALSE }
+}
+pub(super) fn cf_boolean_true() -> *const c_void {
+    unsafe { CF_BOOLEAN_TRUE }
+}
 
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
@@ -103,8 +101,12 @@ extern "C" {
     static CG_WINDOW_OWNER_PID: *const c_void;
 }
 
-pub(super) fn cg_window_layer() -> *const c_void { unsafe { CG_WINDOW_LAYER } }
-pub(super) fn cg_window_owner_pid() -> *const c_void { unsafe { CG_WINDOW_OWNER_PID } }
+pub(super) fn cg_window_layer() -> *const c_void {
+    unsafe { CG_WINDOW_LAYER }
+}
+pub(super) fn cg_window_owner_pid() -> *const c_void {
+    unsafe { CG_WINDOW_OWNER_PID }
+}
 
 #[link(name = "objc", kind = "dylib")]
 extern "C" {
@@ -197,21 +199,13 @@ pub(super) unsafe fn msg_usize(obj: *mut c_void, sel: *mut c_void) -> usize {
     f(obj, sel)
 }
 
-pub(super) unsafe fn msg_ptr_usize(
-    obj: *mut c_void,
-    sel: *mut c_void,
-    arg: usize,
-) -> *mut c_void {
+pub(super) unsafe fn msg_ptr_usize(obj: *mut c_void, sel: *mut c_void, arg: usize) -> *mut c_void {
     let f: unsafe extern "C" fn(*mut c_void, *mut c_void, usize) -> *mut c_void =
         std::mem::transmute(objc_msgSend as usize);
     f(obj, sel, arg)
 }
 
-pub(super) unsafe fn msg_bool_usize(
-    obj: *mut c_void,
-    sel: *mut c_void,
-    arg: usize,
-) -> bool {
+pub(super) unsafe fn msg_bool_usize(obj: *mut c_void, sel: *mut c_void, arg: usize) -> bool {
     let f: unsafe extern "C" fn(*mut c_void, *mut c_void, usize) -> i8 =
         std::mem::transmute(objc_msgSend as usize);
     f(obj, sel, arg) != 0
@@ -227,11 +221,7 @@ pub(super) unsafe fn msg_rect(obj: *mut c_void, sel: *mut c_void) -> CGRect {
 #[cfg(target_arch = "x86_64")]
 pub(super) unsafe fn msg_rect(obj: *mut c_void, sel: *mut c_void) -> CGRect {
     let mut rect: CGRect = std::mem::zeroed();
-    objc_msgSend_stret(
-        &mut rect as *mut _ as *mut c_void,
-        obj,
-        sel,
-    );
+    objc_msgSend_stret(&mut rect as *mut _ as *mut c_void, obj, sel);
     rect
 }
 
@@ -263,7 +253,12 @@ pub(super) fn dict_get_i32(dict: *const c_void, key: *const c_void) -> Option<i3
             return None;
         }
         let mut out: i32 = 0;
-        if CFNumberGetValue(val, CF_NUMBER_SINT32_TYPE, &mut out as *mut _ as *mut c_void) == 0 {
+        if CFNumberGetValue(
+            val,
+            CF_NUMBER_SINT32_TYPE,
+            &mut out as *mut _ as *mut c_void,
+        ) == 0
+        {
             return None;
         }
         Some(out)

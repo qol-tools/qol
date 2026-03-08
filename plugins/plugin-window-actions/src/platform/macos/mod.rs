@@ -84,7 +84,12 @@ impl WindowSystem for MacWindowSystem {
 
     fn restore_rect(&self, window_id: &str, rect: [f64; 4]) -> Result<(), String> {
         let pid = parse_pid(window_id).ok_or_else(|| format!("Invalid window ID: {window_id}"))?;
-        let r = screen::Rect { x: rect[0], y: rect[1], w: rect[2], h: rect[3] };
+        let r = screen::Rect {
+            x: rect[0],
+            y: rect[1],
+            w: rect[2],
+            h: rect[3],
+        };
         ax::set_position_and_size(pid as i32, r);
         Ok(())
     }

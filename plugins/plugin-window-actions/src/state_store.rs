@@ -38,7 +38,10 @@ impl MinimizedStateStore for FileMinimizedStateStore {
         });
         let line = format!(
             "{}|{}|{}|{}{}\n",
-            record.window_id, record.pid, record.process_start_ticks, record.saved_at_unix_secs,
+            record.window_id,
+            record.pid,
+            record.process_start_ticks,
+            record.saved_at_unix_secs,
             rect_str,
         );
         let _ = fs::write(&self.path, line.as_bytes());

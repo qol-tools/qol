@@ -57,7 +57,12 @@ fn reveal_taskbar() -> Result<(), String> {
 
     run_status(
         "xdotool",
-        &["mousemove", "--sync", &edge_x.to_string(), &edge_y.to_string()],
+        &[
+            "mousemove",
+            "--sync",
+            &edge_x.to_string(),
+            &edge_y.to_string(),
+        ],
     )?;
     thread::sleep(Duration::from_millis(100));
     run_status("xdotool", &["mousemove", &x.to_string(), &y.to_string()])?;
@@ -144,7 +149,8 @@ fn xrandr_monitor_bounds() -> Vec<MonitorBounds> {
 }
 
 fn parse_monitor_bounds_from_xrandr_line(line: &str) -> Option<MonitorBounds> {
-    line.split_whitespace().find_map(parse_xrandr_geometry_token)
+    line.split_whitespace()
+        .find_map(parse_xrandr_geometry_token)
 }
 
 fn parse_xrandr_geometry_token(token: &str) -> Option<MonitorBounds> {

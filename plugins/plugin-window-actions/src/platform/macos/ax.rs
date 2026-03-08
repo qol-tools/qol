@@ -2,15 +2,12 @@ use std::collections::HashSet;
 use std::ffi::c_void;
 
 use super::objc::{
-    ax_attr, cfstr, cfstring_to_string, cls,
-    dict_get_i32, msg_bool_usize, msg_i32, msg_ptr, msg_ptr_usize, sel,
+    ax_attr, cf_boolean_false, cf_boolean_true, cfstr, cfstring_to_string, cg_window_layer,
+    cg_window_owner_pid, cls, dict_get_i32, msg_bool_usize, msg_i32, msg_ptr, msg_ptr_usize, sel,
     AXUIElementCreateApplication, AXUIElementPerformAction, AXUIElementSetAttributeValue,
-    AXValueCreate, AXValueGetValue,
-    CFArrayGetCount, CFArrayGetValueAtIndex, CFRelease, CfGuard, CGPoint, CGSize,
-    CGWindowListCopyWindowInfo,
-    AX_VALUE_TYPE_CG_POINT, AX_VALUE_TYPE_CG_SIZE,
+    AXValueCreate, AXValueGetValue, CFArrayGetCount, CFArrayGetValueAtIndex, CFRelease, CGPoint,
+    CGSize, CGWindowListCopyWindowInfo, CfGuard, AX_VALUE_TYPE_CG_POINT, AX_VALUE_TYPE_CG_SIZE,
     CG_WINDOW_LIST_EXCLUDE_DESKTOP, CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
-    cf_boolean_false, cf_boolean_true, cg_window_layer, cg_window_owner_pid,
 };
 
 /// App element + the best target window (focused, or AXWindows[0] fallback).
@@ -25,14 +22,22 @@ fn front_target(pid: i32) -> Option<FrontTarget> {
     let app = CfGuard::new(unsafe { AXUIElementCreateApplication(pid) as *mut c_void })?;
     if let Some(focused) = ax_attr(app.as_ptr(), "AXFocusedWindow") {
         let win = focused.as_ptr();
-        return Some(FrontTarget { app, _keeper: focused, win });
+        return Some(FrontTarget {
+            app,
+            _keeper: focused,
+            win,
+        });
     }
     let windows = ax_attr(app.as_ptr(), "AXWindows")?;
     if unsafe { CFArrayGetCount(windows.as_ptr()) } == 0 {
         return None;
     }
     let win = unsafe { CFArrayGetValueAtIndex(windows.as_ptr(), 0) };
-    Some(FrontTarget { app, _keeper: windows, win })
+    Some(FrontTarget {
+        app,
+        _keeper: windows,
+        win,
+    })
 }
 
 fn activate_app(pid: i32, options: usize) {
@@ -65,7 +70,8 @@ fn read_ax_position(win: *const c_void) -> Option<CGPoint> {
 fn ax_set_position(win: *const c_void, pos: &CGPoint) {
     let val = CfGuard::new(unsafe {
         AXValueCreate(AX_VALUE_TYPE_CG_POINT, pos as *const _ as *const c_void)
-    }).unwrap();
+    })
+    .unwrap();
     let attr = CfGuard::new(cfstr("AXPosition")).unwrap();
     unsafe {
         AXUIElementSetAttributeValue(win, attr.as_const(), val.as_const());
@@ -77,7 +83,13 @@ fn nudge_position(win: *const c_void) {
     let Some(pos) = read_ax_position(win) else {
         return;
     };
-    ax_set_position(win, &CGPoint { x: pos.x + 1.0, y: pos.y });
+    ax_set_position(
+        win,
+        &CGPoint {
+            x: pos.x + 1.0,
+            y: pos.y,
+        },
+    );
     ax_set_position(win, &pos);
 }
 
@@ -195,7 +207,9 @@ pub(super) fn find_normal_window_pid() -> Option<i32> {
 
     unsafe { CFRelease(list) };
     #[cfg(debug_assertions)]
-    eprintln!("[window-actions:dbg] find_normal_window_pid: result={result:?} (fallback={frontmost:?})");
+    eprintln!(
+        "[window-actions:dbg] find_normal_window_pid: result={result:?} (fallback={frontmost:?})"
+    );
     result.or(frontmost)
 }
 
@@ -204,7 +218,10 @@ pub(super) fn front_window_rect(pid: i32) -> Option<super::screen::Rect> {
     let pos = read_ax_position(ft.win)?;
     let size_ref = ax_attr(ft.win, "AXSize")?;
 
-    let mut size = CGSize { width: 0.0, height: 0.0 };
+    let mut size = CGSize {
+        width: 0.0,
+        height: 0.0,
+    };
     unsafe {
         AXValueGetValue(
             size_ref.as_const(),
@@ -212,21 +229,34 @@ pub(super) fn front_window_rect(pid: i32) -> Option<super::screen::Rect> {
             &mut size as *mut _ as *mut c_void,
         );
     }
-    Some(super::screen::Rect { x: pos.x, y: pos.y, w: size.width, h: size.height })
+    Some(super::screen::Rect {
+        x: pos.x,
+        y: pos.y,
+        w: size.width,
+        h: size.height,
+    })
 }
 
 pub(super) fn set_position_and_size(pid: i32, rect: super::screen::Rect) -> bool {
     let Some(ft) = front_target(pid) else {
         return false;
     };
-    let pos = CGPoint { x: rect.x, y: rect.y };
-    let size = CGSize { width: rect.w, height: rect.h };
+    let pos = CGPoint {
+        x: rect.x,
+        y: rect.y,
+    };
+    let size = CGSize {
+        width: rect.w,
+        height: rect.h,
+    };
     let pos_val = CfGuard::new(unsafe {
         AXValueCreate(AX_VALUE_TYPE_CG_POINT, &pos as *const _ as *const c_void)
-    }).unwrap();
+    })
+    .unwrap();
     let size_val = CfGuard::new(unsafe {
         AXValueCreate(AX_VALUE_TYPE_CG_SIZE, &size as *const _ as *const c_void)
-    }).unwrap();
+    })
+    .unwrap();
 
     let ax_pos = CfGuard::new(cfstr("AXPosition")).unwrap();
     let ax_size = CfGuard::new(cfstr("AXSize")).unwrap();
@@ -234,7 +264,10 @@ pub(super) fn set_position_and_size(pid: i32, rect: super::screen::Rect) -> bool
     // size → position → size: macOS clamps windows to screen edges,
     // so neither order works alone. Second size corrects clamping.
     #[cfg(debug_assertions)]
-    eprintln!("[window-actions:dbg] set_position_and_size: pos({},{}) size({},{})", rect.x, rect.y, rect.w, rect.h);
+    eprintln!(
+        "[window-actions:dbg] set_position_and_size: pos({},{}) size({},{})",
+        rect.x, rect.y, rect.w, rect.h
+    );
     unsafe {
         let e1 = AXUIElementSetAttributeValue(ft.win, ax_size.as_const(), size_val.as_const());
         let e2 = AXUIElementSetAttributeValue(ft.win, ax_pos.as_const(), pos_val.as_const());
@@ -255,7 +288,8 @@ pub(super) fn instant_minimize(pid: i32) -> bool {
         return true;
     }
 
-    let Some(app) = CfGuard::new(unsafe { AXUIElementCreateApplication(pid) as *mut c_void }) else {
+    let Some(app) = CfGuard::new(unsafe { AXUIElementCreateApplication(pid) as *mut c_void })
+    else {
         return false;
     };
     let ax_hidden = CfGuard::new(cfstr("AXHidden")).unwrap();
