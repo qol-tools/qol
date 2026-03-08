@@ -22,9 +22,7 @@ struct LinuxCursorEffect;
 
 impl CursorEffect for LinuxCursorEffect {
     fn run(&self, config: &Config, control: &dyn RunControl) -> Result<()> {
-        let Some(mut session) = open_session(config.scale_factor)? else {
-            return Ok(());
-        };
+        let mut session = open_session(config.scale_factor)?;
         let client = PlatformStateClient::from_env();
         let subscription = client
             .subscribe(vec![RuntimeEventKind::CursorMoved])
@@ -37,7 +35,11 @@ impl CursorEffect for LinuxCursorEffect {
             if control.should_stop() {
                 break;
             }
-            let timeout = if scaled { TICK_INTERVAL } else { Duration::from_secs(86400) };
+            let timeout = if scaled {
+                TICK_INTERVAL
+            } else {
+                Duration::from_secs(86400)
+            };
             let sample = match rx.recv_timeout(timeout) {
                 Ok((x, y)) => {
                     let (dx, dy) = delta(last_pos, x, y);
@@ -48,7 +50,9 @@ impl CursorEffect for LinuxCursorEffect {
                 Err(RecvTimeoutError::Disconnected) => break,
             };
             let update = detector.record(sample);
-            scaled = update.scale_changed.map_or(scaled, |s| s > 1.0 + f32::EPSILON);
+            scaled = update
+                .scale_changed
+                .map_or(scaled, |s| s > 1.0 + f32::EPSILON);
             apply_update(&mut session, update);
         }
         session.restore();
@@ -78,13 +82,10 @@ fn delta(last: Option<(f32, f32)>, x: f32, y: f32) -> (i32, i32) {
     ((x - lx) as i32, (y - ly) as i32)
 }
 
-fn open_session(scale_factor: u32) -> Result<Option<CursorSession>> {
-    let Some(session) = CursorSession::open(scale_factor)? else {
-        eprintln!("[shake-to-grow] warn: failed to load base cursor pixels");
-        return Ok(None);
-    };
+fn open_session(scale_factor: u32) -> Result<CursorSession> {
+    let session = CursorSession::open(scale_factor)?;
     eprintln!("[shake-to-grow] started");
-    Ok(Some(session))
+    Ok(session)
 }
 
 fn apply_update(session: &mut CursorSession, update: ScaleUpdate) {

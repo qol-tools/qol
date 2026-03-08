@@ -1,7 +1,41 @@
+use std::ffi::CStr;
 use std::ptr;
 
 use anyhow::{ensure, Result};
-use x11::{xcursor, xlib};
+use x11::{xcursor, xfixes, xlib};
+
+const CURSOR_NAMES: &[&CStr] = &[
+    c"left_ptr",
+    c"default",
+    c"xterm",
+    c"text",
+    c"hand2",
+    c"pointer",
+    c"watch",
+    c"wait",
+    c"fleur",
+    c"all-scroll",
+    c"grab",
+    c"grabbing",
+    c"top_left_corner",
+    c"top_right_corner",
+    c"bottom_left_corner",
+    c"bottom_right_corner",
+    c"sb_h_double_arrow",
+    c"sb_v_double_arrow",
+    c"col-resize",
+    c"row-resize",
+    c"left_side",
+    c"right_side",
+    c"top_side",
+    c"bottom_side",
+    c"crosshair",
+    c"not-allowed",
+    c"question_arrow",
+    c"help",
+    c"copy",
+    c"progress",
+];
 
 pub struct CursorSession {
     display: *mut xlib::Display,
@@ -20,21 +54,21 @@ struct BaseCursor {
 }
 
 impl CursorSession {
-    pub fn open(scale_factor: u32) -> Result<Option<Self>> {
+    pub fn open(scale_factor: u32) -> Result<Self> {
         let display = unsafe { xlib::XOpenDisplay(ptr::null()) };
         ensure!(!display.is_null(), "failed to open X11 display");
 
-        let Some(base) = load_base_cursor(display, scale_factor) else {
-            unsafe { xlib::XCloseDisplay(display) };
-            return Ok(None);
-        };
+        reset_stale_cursors(display);
 
-        Ok(Some(Self {
+        let base = load_base_cursor(display, scale_factor);
+        ensure!(base.is_some(), "failed to load base cursor pixels");
+
+        Ok(Self {
             display,
             root: unsafe { xlib::XDefaultRootWindow(display) },
-            base,
+            base: base.unwrap(),
             active_cursor: None,
-        }))
+        })
     }
 
     pub fn pointer_position(&self) -> (i32, i32) {
@@ -83,6 +117,21 @@ impl Drop for CursorSession {
         self.free_active_cursor();
         unsafe { xlib::XCloseDisplay(self.display) };
     }
+}
+
+fn reset_stale_cursors(display: *mut xlib::Display) {
+    for name in CURSOR_NAMES {
+        let cursor = unsafe { xcursor::XcursorLibraryLoadCursor(display, name.as_ptr()) };
+        if cursor == 0 {
+            continue;
+        }
+        unsafe {
+            xfixes::XFixesChangeCursorByName(display, cursor, name.as_ptr());
+            xlib::XFreeCursor(display, cursor);
+        }
+    }
+    unsafe { xlib::XFlush(display) };
+    eprintln!("[shake-to-grow] reset stale cursor overrides");
 }
 
 fn query_pointer(display: *mut xlib::Display, root: xlib::Window) -> (i32, i32) {
@@ -230,6 +279,37 @@ fn blended_channel(corners: [u32; 4], blend: BlendFactors, shift: u32) -> u32 {
     value as u32 & 0xFF
 }
 
+fn apply_to_tree(display: *mut xlib::Display, window: xlib::Window, cursor: xlib::Cursor) {
+    unsafe { xlib::XDefineCursor(display, window, cursor) };
+    for child in window_children(display, window) {
+        apply_to_tree(display, child, cursor);
+    }
+}
+
+fn window_children(display: *mut xlib::Display, window: xlib::Window) -> Vec<xlib::Window> {
+    let mut root = 0;
+    let mut parent = 0;
+    let mut children: *mut xlib::Window = ptr::null_mut();
+    let mut child_count = 0;
+    let status = unsafe {
+        xlib::XQueryTree(
+            display,
+            window,
+            &mut root,
+            &mut parent,
+            &mut children,
+            &mut child_count,
+        )
+    };
+    if status == 0 || children.is_null() {
+        return Vec::new();
+    }
+
+    let windows = unsafe { std::slice::from_raw_parts(children, child_count as usize).to_vec() };
+    unsafe { xlib::XFree(children as *mut _) };
+    windows
+}
+
 struct ScaleRequest<'a> {
     src: PixelGrid<'a>,
     dst: ImageSize,
@@ -301,37 +381,6 @@ impl From<&SourcePoint> for BlendFactors {
             ty: source.ty,
         }
     }
-}
-
-fn apply_to_tree(display: *mut xlib::Display, window: xlib::Window, cursor: xlib::Cursor) {
-    unsafe { xlib::XDefineCursor(display, window, cursor) };
-    for child in window_children(display, window) {
-        apply_to_tree(display, child, cursor);
-    }
-}
-
-fn window_children(display: *mut xlib::Display, window: xlib::Window) -> Vec<xlib::Window> {
-    let mut root = 0;
-    let mut parent = 0;
-    let mut children: *mut xlib::Window = ptr::null_mut();
-    let mut child_count = 0;
-    let status = unsafe {
-        xlib::XQueryTree(
-            display,
-            window,
-            &mut root,
-            &mut parent,
-            &mut children,
-            &mut child_count,
-        )
-    };
-    if status == 0 || children.is_null() {
-        return Vec::new();
-    }
-
-    let windows = unsafe { std::slice::from_raw_parts(children, child_count as usize).to_vec() };
-    unsafe { xlib::XFree(children as *mut _) };
-    windows
 }
 
 #[cfg(test)]

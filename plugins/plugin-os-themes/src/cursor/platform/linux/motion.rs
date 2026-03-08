@@ -240,7 +240,10 @@ mod tests {
         samples.push_back(MotionSample::new(t0, 300, 0));
         samples.push_back(MotionSample::new(t0 + Duration::from_millis(100), 0, 0));
         let velocity = velocity(&samples);
-        assert!((velocity - 3000.0).abs() < 1.0, "expected ~3000 px/s, got {velocity}");
+        assert!(
+            (velocity - 3000.0).abs() < 1.0,
+            "expected ~3000 px/s, got {velocity}"
+        );
     }
 
     #[test]
@@ -248,9 +251,16 @@ mod tests {
         let mut samples = VecDeque::new();
         let t0 = Instant::now();
         for i in 0..9 {
-            samples.push_back(MotionSample::new(t0 + Duration::from_millis(i * 16), 100, 0));
+            samples.push_back(MotionSample::new(
+                t0 + Duration::from_millis(i * 16),
+                100,
+                0,
+            ));
         }
-        assert!(shakiness(&samples) < 1.5, "straight glide should have low shakiness");
+        assert!(
+            shakiness(&samples) < 1.5,
+            "straight glide should have low shakiness"
+        );
     }
 
     #[test]
@@ -261,6 +271,9 @@ mod tests {
             let dx = if i % 2 == 0 { 100 } else { -100 };
             samples.push_back(MotionSample::new(t0 + Duration::from_millis(i * 16), dx, 0));
         }
-        assert!(shakiness(&samples) > 3.0, "back-and-forth should have high shakiness");
+        assert!(
+            shakiness(&samples) > 3.0,
+            "back-and-forth should have high shakiness"
+        );
     }
 }
