@@ -67,6 +67,9 @@ impl MonitorTracker {
             monitor.y,
         );
 
-        Some((ActiveMonitor::from_bounds(monitor), state.active_monitor_idx))
+        Some((
+            ActiveMonitor::from_bounds(monitor),
+            state.active_monitor_idx,
+        ))
     }
 }

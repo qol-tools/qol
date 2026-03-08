@@ -69,9 +69,8 @@ pub fn icon_for_pid(pid: i32, size: usize) -> Option<RgbaImage> {
 }
 
 fn nsimage_to_rgba(ns_image: &objc2_app_kit::NSImage, size: usize) -> Option<RgbaImage> {
-    let cg_image = unsafe {
-        ns_image.CGImageForProposedRect_context_hints(std::ptr::null_mut(), None, None)
-    }?;
+    let cg_image =
+        unsafe { ns_image.CGImageForProposedRect_context_hints(std::ptr::null_mut(), None, None) }?;
 
     let img_ptr = &*cg_image as *const objc2_core_graphics::CGImage as CGImageRef;
 
@@ -106,10 +105,17 @@ fn nsimage_to_rgba(ns_image: &objc2_app_kit::NSImage, size: usize) -> Option<Rgb
 
     let draw_rect = CGRect {
         origin: CGPoint { x: 0.0, y: 0.0 },
-        size: CGSize { width: size as f64, height: size as f64 },
+        size: CGSize {
+            width: size as f64,
+            height: size as f64,
+        },
     };
     unsafe { CGContextDrawImage(ctx, draw_rect, img_ptr) };
     unsafe { CFRelease(ctx) };
 
-    Some(RgbaImage { data: buf, width: size, height: size })
+    Some(RgbaImage {
+        data: buf,
+        width: size,
+        height: size,
+    })
 }

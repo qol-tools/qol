@@ -24,7 +24,10 @@ pub fn fuzzy_match(query: &str, candidate: &str) -> Option<FuzzyMatch> {
 
 pub fn fuzzy_match_prepared(prepared: &PreparedFuzzyQuery, candidate: &str) -> Option<FuzzyMatch> {
     if prepared.query_orig.is_empty() {
-        return Some(FuzzyMatch { score: 0, positions: vec![] });
+        return Some(FuzzyMatch {
+            score: 0,
+            positions: vec![],
+        });
     }
 
     let c_orig: Vec<char> = candidate.chars().collect();
@@ -211,7 +214,10 @@ fn is_boundary(chars: &[char], idx: usize) -> bool {
     }
     let prev = chars[idx - 1];
     let curr = chars[idx];
-    prev == ' ' || prev == '-' || prev == '_' || prev == '/'
+    prev == ' '
+        || prev == '-'
+        || prev == '_'
+        || prev == '/'
         || (curr.is_uppercase() && prev.is_lowercase())
 }
 

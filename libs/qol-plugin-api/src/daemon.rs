@@ -47,7 +47,9 @@ pub fn send_action(config: &DaemonConfig, action: &str, expect_reply: bool) -> b
     let timeout = std::time::Duration::from_millis(ACK_TIMEOUT_MS);
     let _ = stream.set_write_timeout(Some(timeout));
 
-    let request = DaemonRequest { action: action.to_string() };
+    let request = DaemonRequest {
+        action: action.to_string(),
+    };
     let Ok(mut payload) = serde_json::to_string(&request) else {
         return false;
     };

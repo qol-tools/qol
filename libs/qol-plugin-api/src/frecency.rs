@@ -23,7 +23,13 @@ pub fn effective_count(entry: &FrequencyEntry, now: u64, half_life_days: f64) ->
     entry.count as f64 * decay
 }
 
-pub fn frequency_bonus(key: &str, data: &FrequencyData, now: u64, half_life_days: f64, bonus_weight: i32) -> i32 {
+pub fn frequency_bonus(
+    key: &str,
+    data: &FrequencyData,
+    now: u64,
+    half_life_days: f64,
+    bonus_weight: i32,
+) -> i32 {
     data.entries
         .get(key)
         .map(|e| (effective_count(e, now, half_life_days) * bonus_weight as f64) as i32)
@@ -48,7 +54,9 @@ pub fn prune(data: &mut FrequencyData, now: u64, half_life_days: f64) {
         entries.sort_by(|a, b| {
             let score_a = effective_count(&a.1, now, half_life_days);
             let score_b = effective_count(&b.1, now, half_life_days);
-            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+            score_b
+                .partial_cmp(&score_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
         entries.truncate(MAX_ENTRIES);
         data.entries = entries.into_iter().collect();
