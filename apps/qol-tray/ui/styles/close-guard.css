@@ -16,6 +16,11 @@
     pointer-events: auto;
 }
 
+.close-guard-backdrop.dissolving {
+    opacity: 0;
+    transition: opacity 1.3s ease;
+}
+
 .close-guard-timer {
     position: relative;
     z-index: 9001;
