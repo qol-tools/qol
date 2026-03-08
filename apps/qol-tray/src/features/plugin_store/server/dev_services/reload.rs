@@ -32,7 +32,10 @@ pub(super) fn queue_reload_single(state: &AppState, plugin_id: String) -> Result
     }
 
     log::info!("Developer reload requested for plugin: {}", plugin_id);
-    let task = reload_task(state, runtime.clone(), Some(plugin_id), None);
+    let branch = shared_config_dir()
+        .ok()
+        .and_then(|dir| dev::get_active_worktree_branch(&dir));
+    let task = reload_task(state, runtime.clone(), Some(plugin_id), branch);
     tokio::task::spawn_blocking(move || run_reload(task));
     Ok(())
 }
