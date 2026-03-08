@@ -1,7 +1,7 @@
 [plugin]
 name = "Window Actions"
 description = "Window snapping, centering, and multi-monitor management"
-version = "1.4.2"
+version = "1.4.3"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
