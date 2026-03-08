@@ -2,12 +2,12 @@ import { html } from '../lib/html.js';
 import { useRef, useState, useEffect, useMemo, useCallback } from 'preact/hooks';
 import { usePaletteContext } from '../palette/context.js';
 import { getCommands } from '../palette/registry.js';
-import { fuzzyMatch } from '../lib/fuzzy.js';
+import init, { fuzzy_match as wasmFuzzyMatch } from '../wasm/qol_wasm.js';
 
 function filterCommands(commands, query) {
     if (!query) return commands;
     return commands
-        .map(c => ({ cmd: c, match: fuzzyMatch(query, c.label) }))
+        .map(c => ({ cmd: c, match: wasmFuzzyMatch(query, c.label) }))
         .filter(({ match }) => match !== null)
         .sort((a, b) => a.match.score - b.match.score)
         .map(({ cmd }) => cmd);
@@ -17,10 +17,24 @@ export function CommandPalette() {
     const { active, query, mode, actionQuery, activeViewId, activate, deactivate, setQuery } = usePaletteContext();
     const inputRef = useRef(null);
     const [selectedIndex, setSelectedIndex] = useState(0);
+    const [wasmLoaded, setWasmLoaded] = useState(false);
+
+    useEffect(() => {
+        let cancelled = false;
+        init()
+            .then(() => {
+                if (cancelled) return;
+                setWasmLoaded(true);
+            })
+            .catch(console.error);
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     const commands = useMemo(
-        () => mode === 'action' ? filterCommands(getCommands(activeViewId), actionQuery) : [],
-        [mode, activeViewId, actionQuery]
+        () => mode === 'action' && wasmLoaded ? filterCommands(getCommands(activeViewId), actionQuery) : [],
+        [mode, activeViewId, actionQuery, wasmLoaded]
     );
 
     useEffect(() => {
