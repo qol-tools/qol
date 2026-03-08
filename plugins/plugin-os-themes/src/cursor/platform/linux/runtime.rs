@@ -12,8 +12,6 @@ use crate::cursor::{CursorEffect, RunControl};
 use super::motion::{MotionSample, ScaleEvent, ScaleUpdate, ShakeDetector};
 
 const TICK_INTERVAL: Duration = Duration::from_millis(16);
-const LIVE_CURSOR_REFRESH: Duration = Duration::from_millis(90);
-const SELF_EVENT_SUPPRESSION: Duration = Duration::from_millis(75);
 
 pub fn create_effect() -> Box<dyn CursorEffect> {
     Box::new(LinuxCursorEffect)
@@ -32,8 +30,6 @@ impl CursorEffect for LinuxCursorEffect {
         let mut detector = ShakeDetector::new(config);
         let mut last_pos: Option<(f32, f32)> = None;
         let mut scaled = false;
-        let mut next_refresh = Instant::now();
-        let mut suppressed_until: Option<Instant> = None;
         loop {
             if control.should_stop() {
                 break;
@@ -49,32 +45,19 @@ impl CursorEffect for LinuxCursorEffect {
                 Ok((x, y)) => {
                     let (dx, dy) = delta(last_pos, x, y);
                     last_pos = Some((x, y));
-                    suppressed_sample(now, suppressed_until, dx, dy)
+                    MotionSample::new(now, dx, dy)
                 }
                 Err(RecvTimeoutError::Timeout) => MotionSample::new(now, 0, 0),
                 Err(RecvTimeoutError::Disconnected) => break,
             };
             let update = detector.record(sample);
-            let was_scaled = scaled;
             scaled = update
                 .scale_changed
                 .map_or(scaled, |s| s > 1.0 + f32::EPSILON);
-            if apply_update(&mut session, update) {
-                suppressed_until = Some(Instant::now() + SELF_EVENT_SUPPRESSION);
-                if !was_scaled && scaled {
-                    next_refresh = Instant::now() + LIVE_CURSOR_REFRESH;
-                }
+            if scaled {
+                session.refresh();
             }
-            if !scaled {
-                continue;
-            }
-            if now < next_refresh {
-                continue;
-            }
-            if session.refresh() {
-                suppressed_until = Some(Instant::now() + SELF_EVENT_SUPPRESSION);
-            }
-            next_refresh = Instant::now() + LIVE_CURSOR_REFRESH;
+            apply_update(&mut session, update);
         }
         session.restore();
         Ok(())
@@ -118,18 +101,6 @@ fn apply_update(session: &mut Session, update: ScaleUpdate) -> bool {
         return session.set_scale(scale);
     }
     false
-}
-
-fn suppressed_sample(
-    now: Instant,
-    suppressed_until: Option<Instant>,
-    dx: i32,
-    dy: i32,
-) -> MotionSample {
-    if suppressed_until.is_some_and(|until| now < until) {
-        return MotionSample::new(now, 0, 0);
-    }
-    MotionSample::new(now, dx, dy)
 }
 
 enum Session {
