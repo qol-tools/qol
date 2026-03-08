@@ -157,7 +157,7 @@ fn parse_xrandr_geometry_token(token: &str) -> Option<MonitorBounds> {
     let (width_raw, rest) = token.split_once('x')?;
     let width = width_raw.parse::<i32>().ok()?;
 
-    let x_offset_start = rest.find(|ch| ch == '+' || ch == '-')?;
+    let x_offset_start = rest.find(['+', '-'])?;
     let height = rest.get(..x_offset_start)?.parse::<i32>().ok()?;
     if width <= 0 || height <= 0 {
         return None;
