@@ -12,7 +12,7 @@ const LIVE_REFRESH_ATTEMPTS: u8 = 3;
 const XFIXES_CURSOR_NOTIFY: i32 = 1;
 const XFIXES_DISPLAY_CURSOR_NOTIFY: i32 = 0;
 const XFIXES_DISPLAY_CURSOR_NOTIFY_MASK: libc::c_ulong = 1;
-const MAX_IGNORED_CURSOR_SERIALS: usize = 8;
+const MAX_IGNORED_CURSOR_SERIALS: usize = 32;
 
 unsafe extern "C" {
     #[link_name = "XFixesSelectCursorInput"]
@@ -28,14 +28,24 @@ pub struct CursorSession {
     root: xlib::Window,
     base: BaseCursor,
     active_cursor: Option<xlib::Cursor>,
+    applied_cursor: Option<CursorImage>,
     current_scale: f32,
     grow_cursor: Option<CursorImage>,
     last_pointer: Option<PointerState>,
+    probe_anchor: Option<PointerState>,
     restore_cursor: Option<CursorImage>,
-    refresh_needs_recompute: bool,
+    refresh_mode: RefreshMode,
     xfixes_event_base: Option<i32>,
     last_notified_cursor_serial: Option<u64>,
     ignored_cursor_serials: Vec<u64>,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum RefreshMode {
+    None,
+    Notify,
+    Recompute,
+    Probe,
 }
 
 #[derive(Clone, Copy)]
@@ -81,11 +91,13 @@ impl CursorSession {
             root,
             base,
             active_cursor: None,
+            applied_cursor: None,
             current_scale: 1.0,
             grow_cursor: None,
             last_pointer: None,
+            probe_anchor: None,
             restore_cursor: None,
-            refresh_needs_recompute: false,
+            refresh_mode: RefreshMode::None,
             xfixes_event_base: subscribe_cursor_notifications(display, root),
             last_notified_cursor_serial: load_live_cursor_serial(display),
             ignored_cursor_serials: Vec::new(),
@@ -127,8 +139,12 @@ impl CursorSession {
                 scale,
             );
         }
-        let cursor = if let Some(grow_cursor) = self.grow_cursor.as_ref() {
-            make_cursor_from_image_at_scale(self.display, self.root, grow_cursor, scale)
+        let expected_applied_cursor = self
+            .grow_cursor
+            .as_ref()
+            .and_then(|grow_cursor| scale_cursor_image_for_display(self.display, self.root, grow_cursor, scale));
+        let cursor = if let Some(expected_applied_cursor) = expected_applied_cursor.as_ref() {
+            make_cursor_from_image(self.display, expected_applied_cursor)
         } else {
             make_cursor_at_scale(self.display, self.root, &self.base, scale)
         };
@@ -137,17 +153,21 @@ impl CursorSession {
         };
         apply_to_tree(self.display, self.root, cursor);
         self.flush();
+        let observed_applied_cursor = load_live_cursor_image(self.display, self.base.default_size);
+        self.applied_cursor = expected_applied_cursor.or(observed_applied_cursor.clone());
         log_raw_live_cursor_state(
             "grow apply raw sample",
             self.display,
             self.base.default_size,
             self.grow_cursor.as_ref(),
+            self.applied_cursor.as_ref(),
             self.restore_cursor.as_ref(),
         );
         log_live_refresh_sample_state(
             "grow apply live sample",
-            load_live_cursor_image(self.display, self.base.default_size).as_ref(),
+            observed_applied_cursor.as_ref(),
             self.grow_cursor.as_ref(),
+            self.applied_cursor.as_ref(),
             self.restore_cursor.as_ref(),
         );
         self.remember_current_cursor_serial();
@@ -164,37 +184,45 @@ impl CursorSession {
         if self.current_scale <= 1.0 + f32::EPSILON {
             return false;
         }
+        if !live_refresh_enabled() {
+            self.drain_cursor_notifications();
+            let pointer = query_pointer(self.display, self.root);
+            self.last_pointer = pointer;
+            self.probe_anchor = pointer;
+            self.refresh_mode = RefreshMode::None;
+            return false;
+        }
         let pointer = query_pointer(self.display, self.root);
-        let child_changed = pointer.is_some_and(|pointer| pointer_changed_child(self.last_pointer, pointer));
+        let child_changed =
+            pointer.is_some_and(|pointer| pointer_changed_child(self.last_pointer, pointer));
         let cursor_notify_pending = self.poll_cursor_notifications();
         if !child_changed && !cursor_notify_pending {
             self.last_pointer = pointer;
             return false;
         }
         eprintln!(
-            "[shake-to-grow] live refresh gate child_changed={child_changed} cursor_notify_pending={cursor_notify_pending}"
+            "[shake-to-grow] live refresh gate child_changed={child_changed} cursor_notify_pending={cursor_notify_pending} probe_needed=false"
         );
         log_refresh_pointer(self.last_pointer, pointer);
-        hide_cursor(self.display, self.root);
-        if !self.arm_live_refresh(pointer, child_changed || cursor_notify_pending) {
-            show_cursor(self.display, self.root);
+        if !self.arm_live_refresh(pointer, child_changed, cursor_notify_pending, false) {
             self.last_pointer = pointer;
             return false;
         }
         log_raw_live_cursor_state(
-            "live refresh pre-hide",
+            "live refresh pre-refresh",
             self.display,
             self.base.default_size,
             self.grow_cursor.as_ref(),
+            self.applied_cursor.as_ref(),
             self.restore_cursor.as_ref(),
         );
         let refreshed = self.finish_live_refresh(query_pointer(self.display, self.root));
-        show_cursor(self.display, self.root);
         log_raw_live_cursor_state(
-            "live refresh post-show",
+            "live refresh post-refresh",
             self.display,
             self.base.default_size,
             self.grow_cursor.as_ref(),
+            self.applied_cursor.as_ref(),
             self.restore_cursor.as_ref(),
         );
         self.remember_current_cursor_serial();
@@ -224,14 +252,16 @@ impl CursorSession {
             unsafe { xlib::XFreeCursor(self.display, cursor) };
         }
         self.current_scale = 1.0;
+        self.applied_cursor = None;
         self.grow_cursor = None;
         self.last_pointer = None;
+        self.probe_anchor = None;
         self.restore_cursor = None;
-        self.refresh_needs_recompute = false;
+        self.refresh_mode = RefreshMode::None;
     }
 
     fn flush(&self) {
-        unsafe { xlib::XFlush(self.display) };
+        sync(self.display);
     }
 
     fn capture_live_cursors(&mut self) {
@@ -244,10 +274,17 @@ impl CursorSession {
         self.grow_cursor = Some(live_cursor.clone());
         self.restore_cursor = Some(live_cursor);
         self.last_pointer = query_pointer(self.display, self.root);
+        self.probe_anchor = self.last_pointer;
         self.remember_current_cursor_serial();
     }
 
-    fn arm_live_refresh(&mut self, pointer: Option<PointerState>, recompute_needed: bool) -> bool {
+    fn arm_live_refresh(
+        &mut self,
+        pointer: Option<PointerState>,
+        child_changed: bool,
+        cursor_notify_pending: bool,
+        probe_needed: bool,
+    ) -> bool {
         let Some(pointer) = pointer else {
             eprintln!("[shake-to-grow] live refresh skipped: pointer unavailable");
             return false;
@@ -256,25 +293,54 @@ impl CursorSession {
             eprintln!("[shake-to-grow] live refresh skipped: pointer on root");
             return false;
         }
-        self.refresh_needs_recompute = recompute_needed;
-        eprintln!(
-            "[shake-to-grow] live refresh armed child={} pos=({}, {}) recompute_needed={}",
-            pointer.child,
-            pointer.x,
-            pointer.y,
-            self.refresh_needs_recompute,
+        let root_mask = arm_root_mask(
+            self.grow_cursor.as_ref(),
+            self.restore_cursor.as_ref(),
         );
-        log_optional_cursor_image("live refresh root mask", self.restore_cursor.as_ref());
+        log_optional_cursor_image(
+            "live refresh root mask",
+            root_mask,
+        );
         log_optional_cursor_image("live refresh current grow", self.grow_cursor.as_ref());
-        restore_root_cursor(self.display, self.root, &self.base, self.restore_cursor.as_ref());
+        mask_root_for_refresh(
+            self.display,
+            self.root,
+            None, // Never use active scaled cursor during sampling to avoid bias
+            &self.base,
+            root_mask,
+        );
         clear_descendants(self.display, self.root);
         self.flush();
+        let armed_sample = load_live_cursor_image(self.display, self.base.default_size);
+        let armed_change = armed_sample_indicates_change(
+            self.grow_cursor.as_ref(),
+            self.applied_cursor.as_ref(),
+            armed_sample.as_ref(),
+        );
         log_raw_live_cursor_state(
             "live refresh armed sample",
             self.display,
             self.base.default_size,
             self.grow_cursor.as_ref(),
+            self.applied_cursor.as_ref(),
             self.restore_cursor.as_ref(),
+        );
+        self.refresh_mode = choose_refresh_mode(
+            child_changed,
+            cursor_notify_pending,
+            probe_needed,
+            armed_change,
+        );
+        if self.refresh_mode == RefreshMode::None {
+            self.remember_current_cursor_serial();
+            return false;
+        }
+        eprintln!(
+            "[shake-to-grow] live refresh armed child={} pos=({}, {}) mode={}",
+            pointer.child,
+            pointer.x,
+            pointer.y,
+            refresh_mode_label(self.refresh_mode),
         );
         self.remember_current_cursor_serial();
         true
@@ -282,16 +348,19 @@ impl CursorSession {
 
     fn finish_live_refresh(&mut self, pointer: Option<PointerState>) -> bool {
         let previous_cursor = self.active_cursor;
+        let refresh_mode = self.refresh_mode;
         if pointer.is_some_and(|pointer| pointer.child == 0) {
-            self.refresh_needs_recompute = false;
+            self.refresh_mode = RefreshMode::None;
             self.last_pointer = pointer;
+            self.probe_anchor = pointer;
             self.reapply_existing_cursor(previous_cursor);
             return false;
         }
         let mut settled_pointer = pointer;
+        let mut immediate_sample = None;
+        let probe_anchor = self.probe_anchor.or(self.last_pointer);
         if let Some(pointer) = pointer {
-            let child_changed =
-                self.refresh_needs_recompute || pointer_changed_child(self.last_pointer, pointer);
+            let child_changed = pointer_changed_child(self.last_pointer, pointer);
             eprintln!(
                 "[shake-to-grow] live refresh sampling child={} pos=({}, {})",
                 pointer.child,
@@ -299,22 +368,28 @@ impl CursorSession {
                 pointer.y,
             );
             eprintln!("[shake-to-grow] live refresh child_changed={child_changed}");
-            if child_changed {
+            if refresh_mode == RefreshMode::Recompute {
                 eprintln!("[shake-to-grow] live refresh mode=recompute");
                 force_cursor_recompute(self.display, self.root, pointer);
                 wait_for_cursor_recompute(self.display);
             }
-            if !child_changed {
+            if refresh_mode == RefreshMode::Probe {
+                eprintln!("[shake-to-grow] live refresh mode=probe");
+                probe_pointer_motion(self.display, self.root, probe_anchor, pointer);
+                wait_for_cursor_recompute(self.display);
+            }
+            if refresh_mode == RefreshMode::Notify {
                 eprintln!("[shake-to-grow] live refresh mode=notify");
                 wait_for_cursor_recompute(self.display);
             }
             settled_pointer = query_pointer(self.display, self.root);
             log_refresh_pointer_state("live refresh post-recompute", settled_pointer);
-            let immediate_sample = load_live_cursor_image(self.display, self.base.default_size);
+            immediate_sample = load_live_cursor_image(self.display, self.base.default_size);
             log_live_refresh_sample_state(
                 "live refresh immediate sample",
                 immediate_sample.as_ref(),
                 self.grow_cursor.as_ref(),
+                self.applied_cursor.as_ref(),
                 self.restore_cursor.as_ref(),
             );
         }
@@ -323,50 +398,68 @@ impl CursorSession {
             self.display,
             self.base.default_size,
             self.grow_cursor.as_ref(),
+            self.applied_cursor.as_ref(),
         );
+        let sample = sample;
         let Some(sample) = sample else {
             self.last_pointer = settled_pointer;
+            self.probe_anchor = settled_pointer;
             return self.handle_failed_refresh_sample(previous_cursor);
         };
-        if sampled_our_scaled_cursor(self.grow_cursor.as_ref(), &sample) {
+        if is_our_enlarged_cursor(self.grow_cursor.as_ref(), self.applied_cursor.as_ref(), &sample) {
             log_cursor_image("live refresh rejected scaled sample", &sample);
             self.last_pointer = settled_pointer;
+            self.probe_anchor = settled_pointer;
             return self.handle_failed_refresh_sample(previous_cursor);
         }
-        self.refresh_needs_recompute = false;
+        if !refresh_sample_persisted(
+            self.grow_cursor.as_ref(),
+            self.applied_cursor.as_ref(),
+            immediate_sample.as_ref(),
+            &sample,
+        ) {
+            self.last_pointer = settled_pointer;
+            self.probe_anchor = settled_pointer;
+            return self.handle_failed_refresh_sample(previous_cursor);
+        }
+        self.refresh_mode = RefreshMode::None;
         if self.grow_cursor.as_ref().is_some_and(|current| same_cursor_image(current, &sample)) {
             log_cursor_image("live refresh unchanged", &sample);
             self.last_pointer = settled_pointer;
-            self.reapply_existing_cursor(previous_cursor);
-            return false;
+            self.probe_anchor = settled_pointer;
+            return self.handle_failed_refresh_sample(previous_cursor);
         }
         log_cursor_image("live refresh apply", &sample);
         self.restore_cursor = Some(sample.clone());
         self.grow_cursor = Some(sample);
-        let next_cursor = self
-            .grow_cursor
+        let expected_applied_cursor = self.grow_cursor.as_ref().and_then(|image| {
+            scale_cursor_image_for_display(self.display, self.root, image, self.current_scale)
+        });
+        let next_cursor = expected_applied_cursor
             .as_ref()
-            .and_then(|image| {
-                make_cursor_from_image_at_scale(self.display, self.root, image, self.current_scale)
-            });
+            .and_then(|image| make_cursor_from_image(self.display, image));
         let Some(next_cursor) = next_cursor else {
             eprintln!("[shake-to-grow] live refresh failed to build scaled cursor");
             self.last_pointer = settled_pointer;
+            self.probe_anchor = settled_pointer;
             self.reapply_existing_cursor(previous_cursor);
             return false;
         };
         apply_to_tree(self.display, self.root, next_cursor);
         self.flush();
+        self.applied_cursor = expected_applied_cursor;
         if let Some(old_cursor) = self.active_cursor.replace(next_cursor) {
             unsafe { xlib::XFreeCursor(self.display, old_cursor) };
         }
         self.last_pointer = settled_pointer;
+        self.probe_anchor = settled_pointer;
         true
     }
 
     fn handle_failed_refresh_sample(&mut self, cursor: Option<xlib::Cursor>) -> bool {
-        self.refresh_needs_recompute = false;
+        self.refresh_mode = RefreshMode::None;
         self.reapply_existing_cursor(cursor);
+        self.remember_current_cursor_serial();
         false
     }
 
@@ -376,17 +469,20 @@ impl CursorSession {
         };
         apply_to_tree(self.display, self.root, cursor);
         self.flush();
+        let observed_applied_cursor = load_live_cursor_image(self.display, self.base.default_size);
         log_raw_live_cursor_state(
             "live refresh reapply raw sample",
             self.display,
             self.base.default_size,
             self.grow_cursor.as_ref(),
+            self.applied_cursor.as_ref(),
             self.restore_cursor.as_ref(),
         );
         log_live_refresh_sample_state(
             "live refresh reapply sample",
-            load_live_cursor_image(self.display, self.base.default_size).as_ref(),
+            observed_applied_cursor.as_ref(),
             self.grow_cursor.as_ref(),
+            self.applied_cursor.as_ref(),
             self.restore_cursor.as_ref(),
         );
         self.remember_current_cursor_serial();
@@ -431,7 +527,28 @@ impl CursorSession {
         pending
     }
 
+    fn drain_cursor_notifications(&mut self) {
+        let Some(event_base) = self.xfixes_event_base else {
+            return;
+        };
+        while unsafe { xlib::XPending(self.display) } > 0 {
+            let mut event = std::mem::MaybeUninit::<xlib::XEvent>::uninit();
+            unsafe { xlib::XNextEvent(self.display, event.as_mut_ptr()) };
+            let event = unsafe { event.assume_init() };
+            let event_type = event.get_type();
+            if event_type != event_base + XFIXES_CURSOR_NOTIFY {
+                continue;
+            }
+        }
+    }
+
     fn remember_current_cursor_serial(&mut self) {
+        let Some(sample) = load_live_cursor_image(self.display, self.base.default_size) else {
+            return;
+        };
+        if !is_our_cursor_serial(self.grow_cursor.as_ref(), self.applied_cursor.as_ref(), &sample) {
+            return;
+        }
         let Some(serial) = load_live_cursor_serial(self.display) else {
             return;
         };
@@ -483,9 +600,8 @@ fn make_cursor_at_scale(
     if !scale.is_finite() || scale <= 0.0 {
         return None;
     }
-    let target_size = base.default_size as f32 * scale;
-    let factor = target_size / base.width as f32;
-    if !factor.is_finite() || factor <= 0.0 {
+    let factor = scale;
+    if factor <= 0.0 {
         return None;
     }
     let requested_width = scaled_dimension(base.width, factor)?;
@@ -587,6 +703,40 @@ fn restore_root_cursor(
     unsafe { xlib::XFreeCursor(display, cursor) };
 }
 
+fn mask_root_for_refresh(
+    display: *mut xlib::Display,
+    root: xlib::Window,
+    active_cursor: Option<xlib::Cursor>,
+    base: &BaseCursor,
+    restore_cursor: Option<&CursorImage>,
+) {
+    if let Some(active_cursor) = active_cursor {
+        unsafe { xlib::XDefineCursor(display, root, active_cursor) };
+        return;
+    }
+    if restore_cursor.is_none() {
+        define_transparent_root_cursor(display, root);
+        return;
+    }
+    restore_root_cursor(display, root, base, restore_cursor);
+}
+
+fn define_transparent_root_cursor(display: *mut xlib::Display, root: xlib::Window) {
+    let transparent = CursorImage {
+        width: 1,
+        height: 1,
+        xhot: 0,
+        yhot: 0,
+        pixels: vec![0],
+        default_size: 1,
+    };
+    let Some(cursor) = make_cursor_from_image(display, &transparent) else {
+        return;
+    };
+    unsafe { xlib::XDefineCursor(display, root, cursor) };
+    unsafe { xlib::XFreeCursor(display, cursor) };
+}
+
 fn make_cursor_from_image(
     display: *mut xlib::Display,
     image: &CursorImage,
@@ -613,18 +763,17 @@ fn make_cursor_from_image(
     Some(cursor)
 }
 
-fn make_cursor_from_image_at_scale(
+fn scale_cursor_image_for_display(
     display: *mut xlib::Display,
     root: xlib::Window,
     image: &CursorImage,
     scale: f32,
-) -> Option<xlib::Cursor> {
+) -> Option<CursorImage> {
     if !scale.is_finite() || scale <= 0.0 {
         return None;
     }
-    let target_size = image.default_size as f32 * scale;
-    let factor = target_size / image.width as f32;
-    if !factor.is_finite() || factor <= 0.0 {
+    let factor = scale;
+    if factor <= 0.0 {
         return None;
     }
     let requested_width = scaled_dimension(image.width, factor)?;
@@ -634,24 +783,16 @@ fn make_cursor_from_image_at_scale(
     let width = requested_width.min(max_width.max(1));
     let height = requested_height.min(max_height.max(1));
     let pixel_count = checked_pixel_count(width, height)?;
-    let cursor_image =
-        unsafe { xcursor::XcursorImageCreate(width.try_into().ok()?, height.try_into().ok()?) };
-    if cursor_image.is_null() {
-        return None;
-    }
-    let cursor = unsafe {
-        (*cursor_image).xhot = scaled_hotspot(image.xhot, factor, width);
-        (*cursor_image).yhot = scaled_hotspot(image.yhot, factor, height);
-        let pixels = std::slice::from_raw_parts_mut((*cursor_image).pixels, pixel_count);
-        scale_bilinear(&image.pixels, image.width, image.height, pixels, width, height);
-        let cursor = xcursor::XcursorImageLoadCursor(display, cursor_image);
-        xcursor::XcursorImageDestroy(cursor_image);
-        cursor
-    };
-    if cursor == 0 {
-        return None;
-    }
-    Some(cursor)
+    let mut pixels = vec![0; pixel_count];
+    scale_bilinear(&image.pixels, image.width, image.height, &mut pixels, width, height);
+    Some(CursorImage {
+        width,
+        height,
+        xhot: scaled_hotspot(image.xhot, factor, width),
+        yhot: scaled_hotspot(image.yhot, factor, height),
+        pixels,
+        default_size: image.default_size,
+    })
 }
 
 fn load_live_cursor_image(display: *mut xlib::Display, default_size: u32) -> Option<CursorImage> {
@@ -696,12 +837,20 @@ fn sync(display: *mut xlib::Display) {
     unsafe { xlib::XSync(display, xlib::False) };
 }
 
+fn live_refresh_enabled() -> bool {
+    std::env::var_os("QOL_OS_THEMES_DISABLE_LIVE_REFRESH").is_none()
+}
+
 fn stable_live_cursor_sample(
     display: *mut xlib::Display,
     default_size: u32,
     current_grow_cursor: Option<&CursorImage>,
+    current_applied_cursor: Option<&CursorImage>,
 ) -> Option<CursorImage> {
     let mut previous = None;
+    let mut samples = Vec::new();
+    let mut best = None;
+    let mut best_count = 0usize;
     let mut attempts = 0;
     while attempts < LIVE_REFRESH_ATTEMPTS {
         sync(display);
@@ -724,7 +873,7 @@ fn stable_live_cursor_sample(
             attempts += 1;
             continue;
         }
-        if sampled_our_scaled_cursor(current_grow_cursor, &current) {
+        if is_our_enlarged_cursor(current_grow_cursor, current_applied_cursor, &current) {
             eprintln!(
                 "[shake-to-grow] live refresh attempt={} ignored=self-sample",
                 attempts + 1,
@@ -748,8 +897,24 @@ fn stable_live_cursor_sample(
             );
             return Some(current);
         }
+        let count = sample_recurrence_count(&samples, &current);
+        if count > best_count {
+            best = Some(current.clone());
+            best_count = count;
+        }
+        samples.push(current.clone());
         previous = Some(current);
         attempts += 1;
+    }
+    if let Some(best) = best {
+        if best_count >= 2 {
+            log_cursor_image_with_attempt("live refresh stabilized", best_count, &best);
+            return Some(best);
+        }
+        if samples.len() == 1 {
+            log_cursor_image_with_attempt("live refresh stabilized", 1, &best);
+            return Some(best);
+        }
     }
     eprintln!("[shake-to-grow] live refresh failed to stabilize");
     None
@@ -761,20 +926,8 @@ fn wait_for_cursor_recompute(display: *mut xlib::Display) {
     sync(display);
 }
 
-fn hide_cursor(display: *mut xlib::Display, root: xlib::Window) {
-    eprintln!("[shake-to-grow] live refresh cursor_visibility=hide");
-    unsafe { xfixes::XFixesHideCursor(display, root) };
-    sync(display);
-}
-
-fn show_cursor(display: *mut xlib::Display, root: xlib::Window) {
-    eprintln!("[shake-to-grow] live refresh cursor_visibility=show");
-    unsafe { xfixes::XFixesShowCursor(display, root) };
-    sync(display);
-}
-
 fn force_cursor_recompute(display: *mut xlib::Display, root: xlib::Window, pointer: PointerState) {
-    let outside = outside_window_point(display, pointer.child);
+    let outside = outside_window_point(display, pointer.child, pointer.x, pointer.y);
     if let Some((x, y)) = outside {
         eprintln!(
             "[shake-to-grow] live refresh recompute path=outside from=({}, {}) outside=({}, {})",
@@ -784,6 +937,7 @@ fn force_cursor_recompute(display: *mut xlib::Display, root: xlib::Window, point
             y,
         );
         unsafe { xlib::XWarpPointer(display, 0, root, 0, 0, 0, 0, x, y) };
+        settle_pointer_warp(display);
         unsafe { xlib::XWarpPointer(display, 0, root, 0, 0, 0, 0, pointer.x, pointer.y) };
         return;
     }
@@ -796,9 +950,62 @@ fn force_cursor_recompute(display: *mut xlib::Display, root: xlib::Window, point
 }
 
 fn nudge_pointer(display: *mut xlib::Display, root: xlib::Window, pointer: PointerState) {
-    let x2 = nudged_coordinate(pointer.x);
-    unsafe { xlib::XWarpPointer(display, 0, root, 0, 0, 0, 0, x2, pointer.y) };
+    let nudged = probe_step_start(None, pointer);
+    unsafe { xlib::XWarpPointer(display, 0, root, 0, 0, 0, 0, nudged.x, nudged.y) };
+    settle_pointer_warp(display);
     unsafe { xlib::XWarpPointer(display, 0, root, 0, 0, 0, 0, pointer.x, pointer.y) };
+}
+
+fn probe_pointer_motion(
+    display: *mut xlib::Display,
+    root: xlib::Window,
+    previous: Option<PointerState>,
+    current: PointerState,
+) {
+    let replay_start = probe_step_start(previous, current);
+    eprintln!(
+        "[shake-to-grow] live refresh probe path=previous from=({}, {}) previous=({}, {}) start=({}, {})",
+        current.x,
+        current.y,
+        previous.map(|pointer| pointer.x).unwrap_or(current.x),
+        previous.map(|pointer| pointer.y).unwrap_or(current.y),
+        replay_start.x,
+        replay_start.y,
+    );
+    unsafe { xlib::XWarpPointer(display, 0, root, 0, 0, 0, 0, replay_start.x, replay_start.y) };
+    settle_pointer_warp(display);
+    unsafe { xlib::XWarpPointer(display, 0, root, 0, 0, 0, 0, current.x, current.y) };
+}
+
+fn probe_step_start(previous: Option<PointerState>, current: PointerState) -> PointerState {
+    let dx = previous.map(|pointer| current.x - pointer.x).unwrap_or(0);
+    let dy = previous.map(|pointer| current.y - pointer.y).unwrap_or(0);
+    let step_x = probe_step_component(dx, current.x);
+    let step_y = probe_step_component(dy, current.y);
+    PointerState {
+        x: current.x - step_x,
+        y: current.y - step_y,
+        child: current.child,
+    }
+}
+
+fn probe_step_component(delta: i32, current: i32) -> i32 {
+    if delta > 0 {
+        return 1;
+    }
+    if delta < 0 {
+        return -1;
+    }
+    if current > 0 {
+        return 1;
+    }
+    -1
+}
+
+fn settle_pointer_warp(display: *mut xlib::Display) {
+    sync(display);
+    std::thread::sleep(LIVE_REFRESH_DELAY);
+    sync(display);
 }
 
 fn query_pointer(display: *mut xlib::Display, root: xlib::Window) -> Option<PointerState> {
@@ -848,7 +1055,12 @@ fn query_pointer_at(
     Some((root_x, root_y, child_out))
 }
 
-fn outside_window_point(display: *mut xlib::Display, window: xlib::Window) -> Option<(i32, i32)> {
+fn outside_window_point(
+    display: *mut xlib::Display,
+    window: xlib::Window,
+    pointer_x: i32,
+    pointer_y: i32,
+) -> Option<(i32, i32)> {
     if window == 0 {
         return None;
     }
@@ -887,26 +1099,34 @@ fn outside_window_point(display: *mut xlib::Display, window: xlib::Window) -> Op
     let top = root_y;
     let right = root_x + attributes.width;
     let bottom = root_y + attributes.height;
+    let min_x = left.max(0);
+    let min_y = top.max(0);
+    let max_x = (right - 1).min(root_attributes.width.saturating_sub(1));
+    let max_y = (bottom - 1).min(root_attributes.height.saturating_sub(1));
+    let clamped_x = pointer_x.clamp(min_x, max_x);
+    let clamped_y = pointer_y.clamp(min_y, max_y);
+    let mut candidates = Vec::new();
     if left > 0 {
-        return Some((left - 1, top.max(0)));
+        candidates.push((left - 1, clamped_y));
     }
     if right < root_attributes.width {
-        return Some((right + 1, top.max(0)));
+        candidates.push((right + 1, clamped_y));
     }
     if top > 0 {
-        return Some((left.max(0), top - 1));
+        candidates.push((clamped_x, top - 1));
     }
     if bottom < root_attributes.height {
-        return Some((left.max(0), bottom + 1));
+        candidates.push((clamped_x, bottom + 1));
     }
-    None
+    if candidates.is_empty() {
+        return None;
+    }
+    candidates.sort_by_key(|(x, y)| manhattan_distance(pointer_x, pointer_y, *x, *y));
+    candidates.into_iter().next()
 }
 
-fn nudged_coordinate(value: i32) -> i32 {
-    if value > 0 {
-        return value - 1;
-    }
-    value.saturating_add(1)
+fn manhattan_distance(x1: i32, y1: i32, x2: i32, y2: i32) -> i32 {
+    x1.abs_diff(x2) as i32 + y1.abs_diff(y2) as i32
 }
 
 fn window_children(display: *mut xlib::Display, window: xlib::Window) -> Vec<xlib::Window> {
@@ -982,14 +1202,183 @@ fn same_cursor_image(left: &CursorImage, right: &CursorImage) -> bool {
     left.pixels == right.pixels
 }
 
-fn sampled_our_scaled_cursor(previous: Option<&CursorImage>, sample: &CursorImage) -> bool {
-    let Some(previous) = previous else {
-        return false;
-    };
-    if sample.width > previous.width.saturating_mul(2) {
+fn is_our_enlarged_cursor(
+    grow_cursor: Option<&CursorImage>,
+    applied_cursor: Option<&CursorImage>,
+    sample: &CursorImage,
+) -> bool {
+    // We only ignore samples that are definitely SCALEED enlarged overrides.
+    // Unscaled mask/baseline cursors (even if they are ours) must NOT be ignored
+    // during sampling, otherwise we can't stabilize.
+    if applied_cursor_is_scaled_variant(grow_cursor, applied_cursor)
+        && applied_cursor.is_some_and(|applied| same_cursor_image(applied, sample))
+    {
         return true;
     }
-    sample.height > previous.height.saturating_mul(2)
+    let baseline_width = grow_cursor
+        .map(|grow_cursor| grow_cursor.width)
+        .unwrap_or(sample.default_size);
+    let baseline_height = grow_cursor
+        .map(|grow_cursor| grow_cursor.height)
+        .unwrap_or(sample.default_size);
+
+    // If it's significantly larger than baseline, it's likely our enlarged override.
+    // We use a more permissive 1/4 factor to catch early scaling steps.
+    sample.width >= baseline_width.saturating_mul(5) / 4
+        || sample.height >= baseline_height.saturating_mul(5) / 4
+}
+
+fn is_our_cursor_serial(
+    grow_cursor: Option<&CursorImage>,
+    applied_cursor: Option<&CursorImage>,
+    sample: &CursorImage,
+) -> bool {
+    // For serial tracking (ignoring our own updates), we are MORE inclusive.
+    // We ignore serials for both our enlarged overrides AND our unscaled mask cursors.
+    if grow_cursor.is_some_and(|grow| same_cursor_image(grow, sample)) {
+        return true;
+    }
+    is_our_enlarged_cursor(grow_cursor, applied_cursor, sample)
+}
+
+fn applied_cursor_is_scaled_variant(
+    grow_cursor: Option<&CursorImage>,
+    applied_cursor: Option<&CursorImage>,
+) -> bool {
+    let Some(grow_cursor) = grow_cursor else {
+        return false;
+    };
+    let Some(applied_cursor) = applied_cursor else {
+        return false;
+    };
+    if applied_cursor.width != grow_cursor.width {
+        return true;
+    }
+    applied_cursor.height != grow_cursor.height
+}
+
+fn arm_root_mask<'a>(
+    grow_cursor: Option<&'a CursorImage>,
+    restore_cursor: Option<&'a CursorImage>,
+) -> Option<&'a CursorImage> {
+    // We want to mask the root with a normal-sized cursor that looks like
+    // what we had before growing, to avoid sampling our own enlarged cursor
+    // and to minimize the "blink" when overrides are temporarily removed.
+    grow_cursor.or(restore_cursor)
+}
+
+fn refresh_sample_persisted(
+    grow_cursor: Option<&CursorImage>,
+    applied_cursor: Option<&CursorImage>,
+    immediate_sample: Option<&CursorImage>,
+    sample: &CursorImage,
+) -> bool {
+    let Some(immediate_sample) = immediate_sample else {
+        return true;
+    };
+    if is_our_enlarged_cursor(grow_cursor, applied_cursor, immediate_sample) {
+        if grow_cursor.is_some_and(|grow| same_cursor_image(grow, sample)) {
+            return true;
+        }
+        if is_distinct_live_candidate(grow_cursor, applied_cursor, sample) {
+            return true;
+        }
+        eprintln!("[shake-to-grow] live refresh rejected immediate self-sample");
+        return false;
+    }
+    if grow_cursor.is_some_and(|grow| same_cursor_image(grow, immediate_sample)) {
+        return true;
+    }
+    if same_cursor_image(immediate_sample, sample) {
+        return true;
+    }
+    if is_distinct_live_candidate(grow_cursor, applied_cursor, immediate_sample)
+        && is_distinct_live_candidate(grow_cursor, applied_cursor, sample)
+    {
+        eprintln!(
+            "[shake-to-grow] live refresh accepted settled transition immediate={:016x} stable={:016x}",
+            cursor_hash(immediate_sample),
+            cursor_hash(sample),
+        );
+        return true;
+    }
+    eprintln!(
+        "[shake-to-grow] live refresh rejected unstable candidate immediate={:016x} stable={:016x}",
+        cursor_hash(immediate_sample),
+        cursor_hash(sample),
+    );
+    false
+}
+
+fn armed_sample_indicates_change(
+    grow_cursor: Option<&CursorImage>,
+    applied_cursor: Option<&CursorImage>,
+    armed_sample: Option<&CursorImage>,
+) -> bool {
+    let Some(armed_sample) = armed_sample else {
+        return false;
+    };
+    is_distinct_live_candidate(grow_cursor, applied_cursor, armed_sample)
+}
+
+fn choose_refresh_mode(
+    child_changed: bool,
+    cursor_notify_pending: bool,
+    _probe_needed: bool,
+    armed_change: bool,
+) -> RefreshMode {
+    if armed_change {
+        // If we already see a distinct cursor compared to our baseline,
+        // we just need to wait long enough to stabilize it.
+        return RefreshMode::Notify;
+    }
+    if child_changed {
+        // If we haven't seen a change yet but we crossed into a new window,
+        // use Recompute to force toolkits (Gtk/Qt) to re-apply their cursors.
+        return RefreshMode::Recompute;
+    }
+    if cursor_notify_pending {
+        // For same-window notifications, use Probe (nudge) to be sure the
+        // toolkit actually flushes its buffer to the X server.
+        return RefreshMode::Probe;
+    }
+    RefreshMode::None
+}
+
+fn refresh_mode_label(mode: RefreshMode) -> &'static str {
+    match mode {
+        RefreshMode::None => "none",
+        RefreshMode::Notify => "notify",
+        RefreshMode::Recompute => "recompute",
+        RefreshMode::Probe => "probe",
+    }
+}
+
+fn is_distinct_live_candidate(
+    grow_cursor: Option<&CursorImage>,
+    applied_cursor: Option<&CursorImage>,
+    sample: &CursorImage,
+) -> bool {
+    if is_empty_cursor(sample) {
+        return false;
+    }
+    if is_our_enlarged_cursor(grow_cursor, applied_cursor, sample) {
+        return false;
+    }
+    if grow_cursor.is_some_and(|grow| same_cursor_image(grow, sample)) {
+        return false;
+    }
+    true
+}
+
+fn sample_recurrence_count(samples: &[CursorImage], current: &CursorImage) -> usize {
+    let mut count = 1usize;
+    for sample in samples {
+        if same_cursor_image(sample, current) {
+            count += 1;
+        }
+    }
+    count
 }
 
 fn is_empty_cursor(image: &CursorImage) -> bool {
@@ -1037,6 +1426,7 @@ fn log_live_refresh_sample_state(
     prefix: &str,
     sample: Option<&CursorImage>,
     grow_cursor: Option<&CursorImage>,
+    applied_cursor: Option<&CursorImage>,
     restore_cursor: Option<&CursorImage>,
 ) {
     let Some(sample) = sample else {
@@ -1044,13 +1434,14 @@ fn log_live_refresh_sample_state(
         return;
     };
     eprintln!(
-        "[shake-to-grow] {prefix}: size={}x{} hot=({}, {}) hash={:016x} matches_grow={} matches_restore={}",
+        "[shake-to-grow] {prefix}: size={}x{} hot=({}, {}) hash={:016x} matches_grow={} matches_applied={} matches_restore={}",
         sample.width,
         sample.height,
         sample.xhot,
         sample.yhot,
         cursor_hash(sample),
         grow_cursor.is_some_and(|grow| same_cursor_image(grow, sample)),
+        applied_cursor.is_some_and(|applied| same_cursor_image(applied, sample)),
         restore_cursor.is_some_and(|restore| same_cursor_image(restore, sample)),
     );
 }
@@ -1060,6 +1451,7 @@ fn log_raw_live_cursor_state(
     display: *mut xlib::Display,
     default_size: u32,
     grow_cursor: Option<&CursorImage>,
+    applied_cursor: Option<&CursorImage>,
     restore_cursor: Option<&CursorImage>,
 ) {
     let image = unsafe { xfixes::XFixesGetCursorImage(display) };
@@ -1094,7 +1486,7 @@ fn log_raw_live_cursor_state(
         default_size,
     };
     eprintln!(
-        "[shake-to-grow] {prefix}: serial={} atom={} size={}x{} hot=({}, {}) hash={:016x} matches_grow={} matches_restore={}",
+        "[shake-to-grow] {prefix}: serial={} atom={} size={}x{} hot=({}, {}) hash={:016x} matches_grow={} matches_applied={} matches_restore={}",
         image_ref.cursor_serial,
         image_ref.atom,
         cursor.width,
@@ -1103,6 +1495,7 @@ fn log_raw_live_cursor_state(
         cursor.yhot,
         cursor_hash(&cursor),
         grow_cursor.is_some_and(|grow| same_cursor_image(grow, &cursor)),
+        applied_cursor.is_some_and(|applied| same_cursor_image(applied, &cursor)),
         restore_cursor.is_some_and(|restore| same_cursor_image(restore, &cursor)),
     );
     unsafe { xlib::XFree(image as *mut _) };
@@ -1116,15 +1509,14 @@ fn log_scale_plan(
     height: u32,
     xhot: u32,
     yhot: u32,
-    default_size: u32,
+    _default_size: u32,
     scale: f32,
 ) {
     if !scale.is_finite() || scale <= 0.0 {
         eprintln!("[shake-to-grow] {prefix}: invalid_scale={scale}");
         return;
     }
-    let target_size = default_size as f32 * scale;
-    let factor = target_size / width as f32;
+    let factor = scale;
     let Some(requested_width) = scaled_dimension(width, factor) else {
         eprintln!("[shake-to-grow] {prefix}: invalid_requested_width factor={factor}");
         return;
