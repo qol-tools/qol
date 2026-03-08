@@ -77,7 +77,11 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let dep_dir = tmp.path().join("my-lib");
         fs::create_dir_all(dep_dir.join("src")).unwrap();
-        fs::write(dep_dir.join("Cargo.toml"), "[package]\nname = \"my-lib\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").unwrap();
+        fs::write(
+            dep_dir.join("Cargo.toml"),
+            "[package]\nname = \"my-lib\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
         fs::write(dep_dir.join("src/lib.rs"), "pub fn foo() {}\n").unwrap();
 
         let plugin_dir = tmp.path().join("plugin-a");
@@ -96,7 +100,10 @@ mod tests {
 
         let plans = plan_linked_plugin_builds(&links, &known, None);
         assert_eq!(plans.len(), 1);
-        assert!(plans[0].needs_rebuild, "path dep change should trigger rebuild");
+        assert!(
+            plans[0].needs_rebuild,
+            "path dep change should trigger rebuild"
+        );
         assert_eq!(plans[0].reason, "Source changed");
     }
 
