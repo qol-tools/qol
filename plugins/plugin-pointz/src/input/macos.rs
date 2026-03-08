@@ -94,7 +94,11 @@ impl InputHandlerTrait for InputHandlerImpl {
             (new_x, new_y, button)
         };
 
-        log::debug!("[SERVER] Sending to OS: new_x={:.2} new_y={:.2}", new_x, new_y);
+        log::debug!(
+            "[SERVER] Sending to OS: new_x={:.2} new_y={:.2}",
+            new_x,
+            new_y
+        );
 
         if button.is_some() {
             self.queue_drag_event(x, y, new_x, new_y, button)?;
@@ -144,10 +148,7 @@ impl InputHandlerTrait for InputHandlerImpl {
             .lock()
             .expect("Button state mutex poisoned") = Some(button_enum);
 
-        let mut drag = self
-            .drag_state
-            .lock()
-            .expect("Drag state mutex poisoned");
+        let mut drag = self.drag_state.lock().expect("Drag state mutex poisoned");
         drag.pending_x = 0.0;
         drag.pending_y = 0.0;
         drag.last_flush = Instant::now();
@@ -167,10 +168,7 @@ impl InputHandlerTrait for InputHandlerImpl {
             .lock()
             .expect("Button state mutex poisoned") = None;
 
-        let mut drag = self
-            .drag_state
-            .lock()
-            .expect("Drag state mutex poisoned");
+        let mut drag = self.drag_state.lock().expect("Drag state mutex poisoned");
         drag.pending_x = 0.0;
         drag.pending_y = 0.0;
         drag.button = None;
@@ -496,15 +494,13 @@ impl InputHandlerImpl {
         target_y: f64,
         button: Option<Button>,
     ) -> Result<()> {
-        let mut drag = self
-            .drag_state
-            .lock()
-            .expect("Drag state mutex poisoned");
+        let mut drag = self.drag_state.lock().expect("Drag state mutex poisoned");
 
         drag.pending_x += delta_x;
         drag.pending_y += delta_y;
 
-        let should_flush = drag.last_flush.elapsed() >= Duration::from_millis(DRAG_BATCH_INTERVAL_MS);
+        let should_flush =
+            drag.last_flush.elapsed() >= Duration::from_millis(DRAG_BATCH_INTERVAL_MS);
 
         if should_flush {
             Self::send_mouse_drag(target_x, target_y, button)?;
@@ -517,10 +513,7 @@ impl InputHandlerImpl {
     }
 
     fn flush_pending_drag(&self) -> Result<()> {
-        let mut drag = self
-            .drag_state
-            .lock()
-            .expect("Drag state mutex poisoned");
+        let mut drag = self.drag_state.lock().expect("Drag state mutex poisoned");
 
         if drag.pending_x != 0.0 || drag.pending_y != 0.0 {
             let pos = self.resolve_pointer_position();

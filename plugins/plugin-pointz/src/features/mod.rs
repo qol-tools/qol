@@ -1,3 +1,2 @@
-pub mod discovery;
 pub mod command;
-
+pub mod discovery;

@@ -1,14 +1,11 @@
-use anyhow::Result;
-use crate::input::InputHandlerTrait;
-use crate::domain::models::ModifierKeys;
 use crate::domain::config::ServerConfig;
+use crate::domain::models::ModifierKeys;
+use crate::input::InputHandlerTrait;
+use anyhow::Result;
 use std::sync::Mutex;
 use std::time::Duration;
 use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, SetCursorPos};
-use windows::{
-    Win32::Foundation::POINT,
-    Win32::UI::Input::KeyboardAndMouse::*,
-};
+use windows::{Win32::Foundation::POINT, Win32::UI::Input::KeyboardAndMouse::*};
 
 pub struct InputHandlerImpl {
     current_pos: Mutex<Option<(f64, f64)>>,
@@ -37,33 +34,37 @@ impl InputHandlerImpl {
 
 impl InputHandlerTrait for InputHandlerImpl {
     fn mouse_move(&self, x: f64, y: f64) -> Result<()> {
-        let mut pos_opt = self.current_pos.lock()
+        let mut pos_opt = self
+            .current_pos
+            .lock()
             .expect("Cursor position mutex poisoned");
-        
+
         let (new_x, new_y) = if let Some((px, py)) = *pos_opt {
             (px + x, py + y)
         } else if let Some((cx, cy)) = Self::get_cursor_position() {
             (cx + x, cy + y)
         } else {
-            (ServerConfig::FALLBACK_SCREEN_WIDTH / 2.0 + x,
-             ServerConfig::FALLBACK_SCREEN_HEIGHT / 2.0 + y)
+            (
+                ServerConfig::FALLBACK_SCREEN_WIDTH / 2.0 + x,
+                ServerConfig::FALLBACK_SCREEN_HEIGHT / 2.0 + y,
+            )
         };
-        
+
         *pos_opt = Some((new_x, new_y));
-        
+
         unsafe {
             SetCursorPos(new_x as i32, new_y as i32)?;
         }
         Ok(())
     }
-    
+
     fn mouse_click(&self, button: u8) -> Result<()> {
         self.mouse_down(button)?;
         std::thread::sleep(Duration::from_millis(ServerConfig::MOUSE_CLICK_DELAY_MS));
         self.mouse_up(button)?;
         Ok(())
     }
-    
+
     fn mouse_down(&self, button: u8) -> Result<()> {
         let flags = match button {
             1 => MOUSEEVENTF_LEFTDOWN,
@@ -71,7 +72,7 @@ impl InputHandlerTrait for InputHandlerImpl {
             3 => MOUSEEVENTF_MIDDLEDOWN,
             _ => MOUSEEVENTF_LEFTDOWN,
         };
-        
+
         unsafe {
             let input = INPUT {
                 r#type: INPUT_MOUSE,
@@ -90,7 +91,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         }
         Ok(())
     }
-    
+
     fn mouse_up(&self, button: u8) -> Result<()> {
         let flags = match button {
             1 => MOUSEEVENTF_LEFTUP,
@@ -98,7 +99,7 @@ impl InputHandlerTrait for InputHandlerImpl {
             3 => MOUSEEVENTF_MIDDLEUP,
             _ => MOUSEEVENTF_LEFTUP,
         };
-        
+
         unsafe {
             let input = INPUT {
                 r#type: INPUT_MOUSE,
@@ -117,7 +118,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         }
         Ok(())
     }
-    
+
     fn mouse_scroll(&self, delta_x: f64, delta_y: f64) -> Result<()> {
         unsafe {
             if delta_y != 0.0 {
@@ -155,10 +156,10 @@ impl InputHandlerTrait for InputHandlerImpl {
         }
         Ok(())
     }
-    
+
     fn key_press(&self, key: &str, modifiers: &ModifierKeys) -> Result<()> {
         Self::apply_modifiers(&self.modifier_state, modifiers)?;
-        
+
         if let Some(vk_code) = string_to_vk(key) {
             unsafe {
                 let input = INPUT {
@@ -178,7 +179,7 @@ impl InputHandlerTrait for InputHandlerImpl {
         }
         Ok(())
     }
-    
+
     fn key_release(&self, key: &str, _modifiers: &ModifierKeys) -> Result<()> {
         if let Some(vk_code) = string_to_vk(key) {
             unsafe {
@@ -199,9 +200,11 @@ impl InputHandlerTrait for InputHandlerImpl {
         }
         Ok(())
     }
-    
+
     fn modifier_press(&self, modifier: &str) -> Result<()> {
-        let mut state = self.modifier_state.lock()
+        let mut state = self
+            .modifier_state
+            .lock()
             .expect("Modifier state mutex poisoned");
         match modifier.to_lowercase().as_str() {
             "ctrl" | "control" => {
@@ -280,9 +283,11 @@ impl InputHandlerTrait for InputHandlerImpl {
         }
         Ok(())
     }
-    
+
     fn modifier_release(&self, modifier: &str) -> Result<()> {
-        let mut state = self.modifier_state.lock()
+        let mut state = self
+            .modifier_state
+            .lock()
             .expect("Modifier state mutex poisoned");
         match modifier.to_lowercase().as_str() {
             "ctrl" | "control" => {
@@ -365,9 +370,8 @@ impl InputHandlerTrait for InputHandlerImpl {
 
 impl InputHandlerImpl {
     fn apply_modifiers(state: &Mutex<ModifierKeys>, modifiers: &ModifierKeys) -> Result<()> {
-        let mut state_guard = state.lock()
-            .expect("Modifier state mutex poisoned");
-        
+        let mut state_guard = state.lock().expect("Modifier state mutex poisoned");
+
         if modifiers.ctrl && !state_guard.ctrl {
             unsafe {
                 let input = INPUT {
@@ -440,7 +444,7 @@ impl InputHandlerImpl {
             }
             state_guard.meta = true;
         }
-        
+
         if !modifiers.ctrl && state_guard.ctrl {
             unsafe {
                 let input = INPUT {
@@ -513,7 +517,7 @@ impl InputHandlerImpl {
             }
             state_guard.meta = false;
         }
-        
+
         Ok(())
     }
 }
@@ -600,4 +604,3 @@ fn string_to_vk(s: &str) -> Option<u16> {
         _ => None,
     }
 }
-

@@ -1,8 +1,8 @@
-use anyhow::Result;
-use tokio::net::UdpSocket;
 use crate::domain::config::ServerConfig;
 use crate::domain::models::DiscoveryResponse;
 use crate::utils::get_hostname;
+use anyhow::Result;
+use tokio::net::UdpSocket;
 
 pub struct DiscoveryService {
     pub(crate) socket: UdpSocket,
@@ -47,4 +47,3 @@ impl DiscoveryService {
         }
     }
 }
-

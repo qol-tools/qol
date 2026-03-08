@@ -20,15 +20,39 @@ pub struct ModifierKeys {
 #[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "type")]
 pub enum Command {
-    MouseMove { x: f64, y: f64 },
-    MouseClick { button: MouseButton },
-    MouseDown { button: MouseButton },
-    MouseUp { button: MouseButton },
-    MouseScroll { delta_x: f64, delta_y: f64 },
-    KeyPress { key: String, #[serde(default)] modifiers: ModifierKeys },
-    KeyRelease { key: String, #[serde(default)] modifiers: ModifierKeys },
-    ModifierPress { modifier: String },
-    ModifierRelease { modifier: String },
+    MouseMove {
+        x: f64,
+        y: f64,
+    },
+    MouseClick {
+        button: MouseButton,
+    },
+    MouseDown {
+        button: MouseButton,
+    },
+    MouseUp {
+        button: MouseButton,
+    },
+    MouseScroll {
+        delta_x: f64,
+        delta_y: f64,
+    },
+    KeyPress {
+        key: String,
+        #[serde(default)]
+        modifiers: ModifierKeys,
+    },
+    KeyRelease {
+        key: String,
+        #[serde(default)]
+        modifiers: ModifierKeys,
+    },
+    ModifierPress {
+        modifier: String,
+    },
+    ModifierRelease {
+        modifier: String,
+    },
 }
 
 #[cfg(test)]
@@ -94,4 +118,3 @@ mod tests {
         }
     }
 }
-

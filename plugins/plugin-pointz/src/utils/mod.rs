@@ -1,6 +1,6 @@
-use std::net::IpAddr;
-use if_addrs::get_if_addrs;
 use crate::domain::config::ServerConfig;
+use if_addrs::get_if_addrs;
+use std::net::IpAddr;
 
 pub fn get_local_ip() -> Option<IpAddr> {
     get_if_addrs()
@@ -16,4 +16,3 @@ pub fn get_hostname() -> String {
         .and_then(|h| h.into_string().ok())
         .unwrap_or_else(|| ServerConfig::UNKNOWN_HOSTNAME.to_string())
 }
-

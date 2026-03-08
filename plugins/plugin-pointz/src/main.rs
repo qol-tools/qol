@@ -22,10 +22,7 @@ fn main() {
     }
 
     let action = if args.iter().any(|a| a == "--action") {
-        args.iter()
-            .skip_while(|a| *a != "--action")
-            .nth(1)
-            .cloned()
+        args.iter().skip_while(|a| *a != "--action").nth(1).cloned()
     } else if let Some(first) = args.first() {
         Some(first.clone())
     } else {

@@ -18,9 +18,7 @@ pub struct ServerStatus {
 }
 
 pub async fn run() -> Result<()> {
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any);
+    let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any);
 
     let app = Router::new()
         .route("/status", get(get_status))
@@ -50,4 +48,3 @@ async fn get_status() -> Json<ServerStatus> {
 async fn health_check() -> &'static str {
     "ok"
 }
-

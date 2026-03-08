@@ -1,9 +1,9 @@
+use crate::domain::config::ServerConfig;
+use crate::domain::models::Command;
+use crate::input::InputHandler;
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
-use crate::domain::models::Command;
-use crate::domain::config::ServerConfig;
-use crate::input::InputHandler;
 
 pub struct CommandService {
     input_handler: Arc<InputHandler>,
@@ -36,4 +36,3 @@ impl CommandService {
         }
     }
 }
-
