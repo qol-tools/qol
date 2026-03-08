@@ -31,7 +31,8 @@ async fn main() -> Result<()> {
     }
 
     let command_service = features::command::command_service::CommandService::new();
-    let discovery_service = features::discovery::discovery_service::DiscoveryService::new(config.clone());
+    let discovery_service =
+        features::discovery::discovery_service::DiscoveryService::new(config.clone());
 
     tokio::select! {
         res = status_server::run() => res?,
