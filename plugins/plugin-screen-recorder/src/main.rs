@@ -13,21 +13,12 @@ use std::time::Duration;
 const PIDFILE: &str = "/tmp/record-region.pid";
 const SNAP_MARGIN_PX: i32 = 50;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub(crate) struct Config {
     #[serde(default)]
     pub audio: AudioConfig,
     #[serde(default)]
     pub video: VideoConfig,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            audio: AudioConfig::default(),
-            video: VideoConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
