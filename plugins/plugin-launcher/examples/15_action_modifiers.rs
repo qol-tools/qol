@@ -148,10 +148,18 @@ impl Render for ActionView {
                     .flex()
                     .items_center()
                     .px_4()
-                    .bg(if is_selected { rgb(0x45475a) } else { rgb(0x1e1e2e) })
+                    .bg(if is_selected {
+                        rgb(0x45475a)
+                    } else {
+                        rgb(0x1e1e2e)
+                    })
                     .child(
                         div()
-                            .text_color(if is_selected { rgb(0xcdd6f4) } else { rgb(0xa6adc8) })
+                            .text_color(if is_selected {
+                                rgb(0xcdd6f4)
+                            } else {
+                                rgb(0xa6adc8)
+                            })
                             .text_size(px(14.))
                             .child(item.clone()),
                     )

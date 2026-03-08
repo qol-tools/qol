@@ -89,7 +89,12 @@ pub fn search_bar(
                 .text_size(px(12.))
                 .child(fuzziness_label),
         )
-        .child(div().text_color(rgb(TEXT_MUTED)).text_size(px(16.)).child(">"))
+        .child(
+            div()
+                .text_color(rgb(TEXT_MUTED))
+                .text_size(px(16.))
+                .child(">"),
+        )
         .child(
             div()
                 .flex_1()
@@ -102,7 +107,12 @@ pub fn search_bar(
                 .child(search_bar_content(query, cursor, selection)),
         )
         .child(compass_widget(hidden_above, hidden_below))
-        .child(browse_status(selected, result_count, scroll_offset, visible))
+        .child(browse_status(
+            selected,
+            result_count,
+            scroll_offset,
+            visible,
+        ))
 }
 
 const SEARCH_VISIBLE_CHARS: usize = 25;
@@ -138,8 +148,12 @@ fn search_bar_content(query: &str, cursor: usize, selection: Option<(usize, usiz
     let mut highlights: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
 
     if let Some((sel_start, sel_end)) = selection {
-        let adj_start = sel_start.saturating_sub(view_start).min(view_end - view_start);
-        let adj_end = sel_end.saturating_sub(view_start).min(view_end - view_start);
+        let adj_start = sel_start
+            .saturating_sub(view_start)
+            .min(view_end - view_start);
+        let adj_end = sel_end
+            .saturating_sub(view_start)
+            .min(view_end - view_start);
         let start = char_to_byte(visible, adj_start);
         let end = char_to_byte(visible, adj_end);
         if start < end {
@@ -155,7 +169,9 @@ fn search_bar_content(query: &str, cursor: usize, selection: Option<(usize, usiz
     }
 
     if selection.is_none() {
-        let adj_cursor = cursor.saturating_sub(view_start).min(display.chars().count());
+        let adj_cursor = cursor
+            .saturating_sub(view_start)
+            .min(display.chars().count());
         let caret_byte = char_to_byte(&display, adj_cursor);
         display.insert(caret_byte, '|');
         highlights.push((
@@ -190,11 +206,7 @@ pub struct RowWindowCue {
 }
 
 pub fn result_row(scored: &Scored, name: &str, cues: RowWindowCue, row_height: f32) -> Div {
-    let base_color = row_text_color(
-        cues.selected,
-        cues.previous_selected,
-        cues.trail_depth,
-    );
+    let base_color = row_text_color(cues.selected, cues.previous_selected, cues.trail_depth);
     let bg = row_bg_color(
         cues.selected,
         cues.previous_selected,
@@ -221,7 +233,8 @@ pub fn result_row(scored: &Scored, name: &str, cues: RowWindowCue, row_height: f
     } else {
         vec![]
     };
-    let styled_name = StyledText::new(SharedString::from(name.to_owned())).with_highlights(highlights);
+    let styled_name =
+        StyledText::new(SharedString::from(name.to_owned())).with_highlights(highlights);
 
     let mut row = div()
         .h(px(row_height))
@@ -269,7 +282,12 @@ pub fn result_row(scored: &Scored, name: &str, cues: RowWindowCue, row_height: f
     row
 }
 
-fn browse_status(selected: usize, result_count: usize, scroll_offset: usize, visible: usize) -> Div {
+fn browse_status(
+    selected: usize,
+    result_count: usize,
+    scroll_offset: usize,
+    visible: usize,
+) -> Div {
     let (selection_label, range_label) = if result_count == 0 {
         ("0/0".to_string(), "0-0".to_string())
     } else {
@@ -349,7 +367,11 @@ fn confidence_bar(confidence_pct: u8, selected: bool) -> Div {
         .flex()
         .items_center()
         .justify_end()
-        .text_color(if selected { rgb(TEXT_DIM) } else { rgb(TEXT_FAINT) })
+        .text_color(if selected {
+            rgb(TEXT_DIM)
+        } else {
+            rgb(TEXT_FAINT)
+        })
         .text_size(px(10.))
         .child(label)
 }
@@ -396,7 +418,11 @@ fn semantic_badge(kind: MatchKind, freq_bonus: bool, selected: bool) -> Div {
         .flex()
         .items_center()
         .bg(bg)
-        .text_color(if selected { rgb(TEXT_SELECTED) } else { rgb(TEXT_FAINT) })
+        .text_color(if selected {
+            rgb(TEXT_SELECTED)
+        } else {
+            rgb(TEXT_FAINT)
+        })
         .text_size(px(10.))
         .child(label)
 }
@@ -451,10 +477,7 @@ fn compass_strip(hidden_count: usize, is_up: bool) -> Div {
     div().h(px(3.)).w_full().bg(color)
 }
 
-fn char_highlights(
-    name: &str,
-    positions: &[usize],
-) -> Vec<(Range<usize>, HighlightStyle)> {
+fn char_highlights(name: &str, positions: &[usize]) -> Vec<(Range<usize>, HighlightStyle)> {
     let byte_map: Vec<(usize, usize)> = name
         .char_indices()
         .map(|(byte_pos, ch)| (byte_pos, ch.len_utf8()))
@@ -482,11 +505,7 @@ fn match_heat_color(index: usize, positions: &[usize]) -> gpui::Rgba {
     }
 }
 
-fn row_text_color(
-    selected: bool,
-    previous_selected: bool,
-    trail_depth: u8,
-) -> gpui::Rgba {
+fn row_text_color(selected: bool, previous_selected: bool, trail_depth: u8) -> gpui::Rgba {
     if selected {
         rgb(TEXT_SELECTED)
     } else if trail_depth >= 2 {

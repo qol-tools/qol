@@ -3,7 +3,12 @@ use proptest::prelude::*;
 mod common;
 use common::config;
 
-fn calculate_window_height(item_count: usize, header_height: f32, item_height: f32, max_visible: usize) -> f32 {
+fn calculate_window_height(
+    item_count: usize,
+    header_height: f32,
+    item_height: f32,
+    max_visible: usize,
+) -> f32 {
     let visible = item_count.min(max_visible);
     header_height + (visible as f32 * item_height)
 }

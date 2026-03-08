@@ -20,7 +20,8 @@ impl IconResolver {
     }
 
     fn is_valid_extension(path: &str) -> bool {
-        path.rsplit('.').next()
+        path.rsplit('.')
+            .next()
             .map(|ext| VALID_ICON_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
             .unwrap_or(false)
     }
@@ -58,7 +59,10 @@ impl IconSize {
 
     fn new(size: u32) -> Self {
         let clamped = size.clamp(Self::MIN, Self::MAX);
-        Self { width: clamped, height: clamped }
+        Self {
+            width: clamped,
+            height: clamped,
+        }
     }
 
     fn from_dimensions(width: u32, height: u32) -> Self {

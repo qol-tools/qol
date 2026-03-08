@@ -18,14 +18,78 @@ impl IconListView {
     fn new(cx: &mut Context<Self>) -> Self {
         Self {
             items: vec![
-                ListItemData { label: "Firefox".into(), icon_color: Rgba { r: 1.0, g: 0.3, b: 0.0, a: 1.0 } },
-                ListItemData { label: "Chrome".into(), icon_color: Rgba { r: 0.2, g: 0.6, b: 0.9, a: 1.0 } },
-                ListItemData { label: "VS Code".into(), icon_color: Rgba { r: 0.0, g: 0.5, b: 0.8, a: 1.0 } },
-                ListItemData { label: "Slack".into(), icon_color: Rgba { r: 0.4, g: 0.1, b: 0.5, a: 1.0 } },
-                ListItemData { label: "Discord".into(), icon_color: Rgba { r: 0.4, g: 0.4, b: 0.9, a: 1.0 } },
-                ListItemData { label: "Spotify".into(), icon_color: Rgba { r: 0.1, g: 0.8, b: 0.3, a: 1.0 } },
-                ListItemData { label: "Terminal".into(), icon_color: Rgba { r: 0.2, g: 0.2, b: 0.2, a: 1.0 } },
-                ListItemData { label: "Files".into(), icon_color: Rgba { r: 0.9, g: 0.7, b: 0.2, a: 1.0 } },
+                ListItemData {
+                    label: "Firefox".into(),
+                    icon_color: Rgba {
+                        r: 1.0,
+                        g: 0.3,
+                        b: 0.0,
+                        a: 1.0,
+                    },
+                },
+                ListItemData {
+                    label: "Chrome".into(),
+                    icon_color: Rgba {
+                        r: 0.2,
+                        g: 0.6,
+                        b: 0.9,
+                        a: 1.0,
+                    },
+                },
+                ListItemData {
+                    label: "VS Code".into(),
+                    icon_color: Rgba {
+                        r: 0.0,
+                        g: 0.5,
+                        b: 0.8,
+                        a: 1.0,
+                    },
+                },
+                ListItemData {
+                    label: "Slack".into(),
+                    icon_color: Rgba {
+                        r: 0.4,
+                        g: 0.1,
+                        b: 0.5,
+                        a: 1.0,
+                    },
+                },
+                ListItemData {
+                    label: "Discord".into(),
+                    icon_color: Rgba {
+                        r: 0.4,
+                        g: 0.4,
+                        b: 0.9,
+                        a: 1.0,
+                    },
+                },
+                ListItemData {
+                    label: "Spotify".into(),
+                    icon_color: Rgba {
+                        r: 0.1,
+                        g: 0.8,
+                        b: 0.3,
+                        a: 1.0,
+                    },
+                },
+                ListItemData {
+                    label: "Terminal".into(),
+                    icon_color: Rgba {
+                        r: 0.2,
+                        g: 0.2,
+                        b: 0.2,
+                        a: 1.0,
+                    },
+                },
+                ListItemData {
+                    label: "Files".into(),
+                    icon_color: Rgba {
+                        r: 0.9,
+                        g: 0.7,
+                        b: 0.2,
+                        a: 1.0,
+                    },
+                },
             ],
             selected: 0,
             focus_handle: cx.focus_handle(),
@@ -62,8 +126,14 @@ impl Render for IconListView {
             .bg(rgb(0x1e1e2e))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
                 match event.keystroke.key.as_str() {
-                    "up" => { this.move_up(); cx.notify(); }
-                    "down" => { this.move_down(); cx.notify(); }
+                    "up" => {
+                        this.move_up();
+                        cx.notify();
+                    }
+                    "down" => {
+                        this.move_down();
+                        cx.notify();
+                    }
                     "enter" => {
                         println!("Selected: {}", this.items[this.selected].label);
                     }
@@ -79,19 +149,21 @@ impl Render for IconListView {
                     .items_center()
                     .px_3()
                     .gap_3()
-                    .bg(if is_selected { rgb(0x45475a) } else { rgb(0x1e1e2e) })
+                    .bg(if is_selected {
+                        rgb(0x45475a)
+                    } else {
+                        rgb(0x1e1e2e)
+                    })
+                    .child(div().w(px(24.)).h(px(24.)).rounded_md().bg(item.icon_color))
                     .child(
                         div()
-                            .w(px(24.))
-                            .h(px(24.))
-                            .rounded_md()
-                            .bg(item.icon_color)
-                    )
-                    .child(
-                        div()
-                            .text_color(if is_selected { rgb(0xcdd6f4) } else { rgb(0xa6adc8) })
+                            .text_color(if is_selected {
+                                rgb(0xcdd6f4)
+                            } else {
+                                rgb(0xa6adc8)
+                            })
                             .text_size(px(14.))
-                            .child(item.label.clone())
+                            .child(item.label.clone()),
                     )
             }))
     }

@@ -106,7 +106,10 @@ fn collect_apps(dir: &Path, depth: usize, out: &mut Vec<AppEntry>) {
         if !path.is_dir() {
             continue;
         }
-        if path.extension().is_some_and(|ext| ext == "app" || ext == "prefPane") {
+        if path
+            .extension()
+            .is_some_and(|ext| ext == "app" || ext == "prefPane")
+        {
             if let Some(app_entry) = parse_app_bundle(&path) {
                 out.push(app_entry);
             }
@@ -121,10 +124,7 @@ fn collect_apps(dir: &Path, depth: usize, out: &mut Vec<AppEntry>) {
 }
 
 fn parse_app_bundle(path: &Path) -> Option<AppEntry> {
-    let name = path
-        .file_stem()
-        .and_then(|s| s.to_str())?
-        .to_string();
+    let name = path.file_stem().and_then(|s| s.to_str())?.to_string();
 
     Some(AppEntry {
         name,

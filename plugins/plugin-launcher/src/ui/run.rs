@@ -48,13 +48,7 @@ pub fn run() {
         keepalive::open_keepalive_window(cx);
         platform::set_activation_policy();
 
-        spawn_command_poll(
-            entries.clone(),
-            active.clone(),
-            rx,
-            focus_cache.clone(),
-            cx,
-        );
+        spawn_command_poll(entries.clone(), active.clone(), rx, focus_cache.clone(), cx);
         discovery::start(entries.clone());
 
         if show_immediately {
@@ -89,61 +83,59 @@ fn spawn_command_poll(
     cx: &mut App,
 ) {
     let rx = Arc::new(Mutex::new(rx));
-    cx.spawn(async move |cx: &mut AsyncApp| {
-        loop {
-            let next_command = cx
-                .background_spawn({
-                    let rx = rx.clone();
-                    async move {
-                        let guard = rx.lock().ok()?;
-                        guard.recv().ok()
-                    }
-                })
-                .await;
+    cx.spawn(async move |cx: &mut AsyncApp| loop {
+        let next_command = cx
+            .background_spawn({
+                let rx = rx.clone();
+                async move {
+                    let guard = rx.lock().ok()?;
+                    guard.recv().ok()
+                }
+            })
+            .await;
 
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "[launcher] command_poll: next_command={}",
-                match &next_command {
-                    Some(daemon::Command::Show) => "Show",
-                    Some(daemon::Command::Kill) => "Kill",
-                    None => "None",
-                }
-            );
-            match next_command {
-                Some(daemon::Command::Show) => {
-                    eprintln!("[launcher] command: show");
-                    wait_for_entries(&entries, cx).await;
-                    let focus_cache = focus_cache.clone();
-                    eprintln!("[launcher] snapshot start");
-                    let snapshot = cx
-                        .background_spawn(async move { focus_cache.snapshot().map(|(m, _)| m) })
-                        .await;
-                    eprintln!(
-                        "[launcher] snapshot done: {}",
-                        if snapshot.is_some() { "some" } else { "none" }
-                    );
-                    #[cfg(debug_assertions)]
-                    eprintln!(
-                        "[launcher] command_poll: snapshot={:?}",
-                        snapshot.as_ref().map(|m| m.bounds())
-                    );
-                    let show_entries = entries.clone();
-                    let active = active.clone();
-                    eprintln!("[launcher] cx.update start");
-                    match cx.update(move |cx| {
-                        activate_or_open_launcher(show_entries, active, snapshot, cx)
-                    }) {
-                        Ok(_) => eprintln!("[launcher] cx.update done"),
-                        Err(e) => eprintln!("[launcher] command_poll: cx.update failed: {:?}", e),
-                    }
-                }
-                Some(daemon::Command::Kill) => {
-                    cx.update(|cx| cx.quit()).ok();
-                    break;
-                }
-                None => break,
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[launcher] command_poll: next_command={}",
+            match &next_command {
+                Some(daemon::Command::Show) => "Show",
+                Some(daemon::Command::Kill) => "Kill",
+                None => "None",
             }
+        );
+        match next_command {
+            Some(daemon::Command::Show) => {
+                eprintln!("[launcher] command: show");
+                wait_for_entries(&entries, cx).await;
+                let focus_cache = focus_cache.clone();
+                eprintln!("[launcher] snapshot start");
+                let snapshot = cx
+                    .background_spawn(async move { focus_cache.snapshot().map(|(m, _)| m) })
+                    .await;
+                eprintln!(
+                    "[launcher] snapshot done: {}",
+                    if snapshot.is_some() { "some" } else { "none" }
+                );
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "[launcher] command_poll: snapshot={:?}",
+                    snapshot.as_ref().map(|m| m.bounds())
+                );
+                let show_entries = entries.clone();
+                let active = active.clone();
+                eprintln!("[launcher] cx.update start");
+                match cx
+                    .update(move |cx| activate_or_open_launcher(show_entries, active, snapshot, cx))
+                {
+                    Ok(_) => eprintln!("[launcher] cx.update done"),
+                    Err(e) => eprintln!("[launcher] command_poll: cx.update failed: {:?}", e),
+                }
+            }
+            Some(daemon::Command::Kill) => {
+                cx.update(|cx| cx.quit()).ok();
+                break;
+            }
+            None => break,
         }
     })
     .detach();
@@ -152,10 +144,7 @@ fn spawn_command_poll(
 async fn wait_for_entries(entries: &SharedEntries, cx: &mut AsyncApp) {
     let executor = cx.background_executor().clone();
     loop {
-        let ready = entries
-            .lock()
-            .map(|g| g.loaded_once)
-            .unwrap_or(false);
+        let ready = entries.lock().map(|g| g.loaded_once).unwrap_or(false);
         if ready {
             break;
         }

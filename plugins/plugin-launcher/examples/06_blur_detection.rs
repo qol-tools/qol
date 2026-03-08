@@ -29,14 +29,13 @@ impl Focusable for BlurView {
 impl Render for BlurView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.blur_subscription.is_none() {
-            self.blur_subscription = Some(cx.on_blur(
-                &self.focus_handle,
-                window,
-                |_this, _window, cx| {
-                    println!("Focus lost - quitting");
-                    cx.quit();
-                },
-            ));
+            self.blur_subscription =
+                Some(
+                    cx.on_blur(&self.focus_handle, window, |_this, _window, cx| {
+                        println!("Focus lost - quitting");
+                        cx.quit();
+                    }),
+                );
         }
 
         div()

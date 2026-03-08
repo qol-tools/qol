@@ -4,8 +4,7 @@ use std::path::{Path, PathBuf};
 use super::super::AppEntry;
 
 const EXEC_FIELD_CODES: &[&str] = &[
-    "%u", "%U", "%f", "%F", "%i", "%c", "%k",
-    "%d", "%D", "%n", "%N", "%v", "%m",
+    "%u", "%U", "%f", "%F", "%i", "%c", "%k", "%d", "%D", "%n", "%N", "%v", "%m",
 ];
 
 pub fn cache_dir() -> Option<PathBuf> {
@@ -101,7 +100,10 @@ fn parse_desktop_entry(path: &Path) -> Option<AppEntry> {
             .map(|l| l[prefix.len()..].to_string())
     };
 
-    if content.lines().any(|l| l == "NoDisplay=true" || l == "Hidden=true") {
+    if content
+        .lines()
+        .any(|l| l == "NoDisplay=true" || l == "Hidden=true")
+    {
         return None;
     }
 

@@ -22,7 +22,12 @@ impl FilterDelegate {
             self.matches = self.items.clone();
         } else {
             let q = query.to_lowercase();
-            self.matches = self.items.iter().filter(|i| i.to_lowercase().contains(&q)).cloned().collect();
+            self.matches = self
+                .items
+                .iter()
+                .filter(|i| i.to_lowercase().contains(&q))
+                .cloned()
+                .collect();
         }
     }
 }

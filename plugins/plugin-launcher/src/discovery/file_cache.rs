@@ -73,7 +73,11 @@ pub fn store(roots: &[PathBuf], entries: &[FileEntry]) {
 }
 
 fn cache_path() -> Option<PathBuf> {
-    Some(super::platform::cache_dir()?.join("gpui-test").join(CACHE_FILE_NAME))
+    Some(
+        super::platform::cache_dir()?
+            .join("gpui-test")
+            .join(CACHE_FILE_NAME),
+    )
 }
 
 fn is_stale(path: &Path) -> bool {

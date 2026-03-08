@@ -73,26 +73,31 @@ impl Render for ResizeView {
                         div()
                             .text_color(rgb(0xcdd6f4))
                             .text_size(px(14.))
-                            .child(format!("Items: {} | A=add, C=clear, Esc=quit", self.items.len())),
+                            .child(format!(
+                                "Items: {} | A=add, C=clear, Esc=quit",
+                                self.items.len()
+                            )),
                     ),
             )
-            .children(
-                self.items.iter().enumerate().take(8).map(|(i, item)| {
-                    div()
-                        .h(px(32.))
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .px_4()
-                        .bg(if i % 2 == 0 { rgb(0x1e1e2e) } else { rgb(0x252536) })
-                        .child(
-                            div()
-                                .text_color(rgb(0xcdd6f4))
-                                .text_size(px(14.))
-                                .child(item.clone()),
-                        )
-                })
-            )
+            .children(self.items.iter().enumerate().take(8).map(|(i, item)| {
+                div()
+                    .h(px(32.))
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .px_4()
+                    .bg(if i % 2 == 0 {
+                        rgb(0x1e1e2e)
+                    } else {
+                        rgb(0x252536)
+                    })
+                    .child(
+                        div()
+                            .text_color(rgb(0xcdd6f4))
+                            .text_size(px(14.))
+                            .child(item.clone()),
+                    )
+            }))
     }
 }
 

@@ -97,20 +97,18 @@ fn setup_global_hotkey() -> Result<mpsc::Receiver<()>, BackendStatus> {
 
     let (tx, rx) = mpsc::channel();
 
-    std::thread::spawn(move || {
-        loop {
-            match conn.wait_for_event() {
-                Ok(event) => {
-                    if let x11rb::protocol::Event::KeyPress(ev) = event {
-                        if ev.detail == HOTKEY_KEYCODE {
-                            if tx.send(()).is_err() {
-                                break;
-                            }
+    std::thread::spawn(move || loop {
+        match conn.wait_for_event() {
+            Ok(event) => {
+                if let x11rb::protocol::Event::KeyPress(ev) = event {
+                    if ev.detail == HOTKEY_KEYCODE {
+                        if tx.send(()).is_err() {
+                            break;
                         }
                     }
                 }
-                Err(_) => break,
             }
+            Err(_) => break,
         }
     });
 
@@ -170,7 +168,8 @@ fn setup_global_hotkey() -> Result<mpsc::Receiver<()>, BackendStatus> {
         _user_info: *mut c_void,
     ) -> CGEventRef {
         if event_type == K_CG_EVENT_KEY_DOWN {
-            let keycode = unsafe { CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE) };
+            let keycode =
+                unsafe { CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE) };
             if keycode == F12_KEYCODE {
                 if let Some(tx) = TX.get() {
                     let _ = tx.send(());
@@ -181,7 +180,8 @@ fn setup_global_hotkey() -> Result<mpsc::Receiver<()>, BackendStatus> {
     }
 
     let (tx, rx) = mpsc::channel();
-    TX.set(tx).map_err(|_| BackendStatus::err("already initialized"))?;
+    TX.set(tx)
+        .map_err(|_| BackendStatus::err("already initialized"))?;
 
     std::thread::spawn(move || {
         let event_mask: u64 = 1 << K_CG_EVENT_KEY_DOWN;
@@ -198,7 +198,9 @@ fn setup_global_hotkey() -> Result<mpsc::Receiver<()>, BackendStatus> {
         };
 
         if tap.is_null() {
-            eprintln!("CGEventTapCreate failed - grant Accessibility permission in System Settings");
+            eprintln!(
+                "CGEventTapCreate failed - grant Accessibility permission in System Settings"
+            );
             return;
         }
 
@@ -268,16 +270,18 @@ impl MultiMonitorView {
                     break;
                 }
 
-                let (result, next_state) = cx
-                    .background_spawn(async move { poll_once(state) })
-                    .await;
+                let (result, next_state) =
+                    cx.background_spawn(async move { poll_once(state) }).await;
                 state = next_state;
 
                 if let Some(view) = view.upgrade() {
-                    let _ = cx.update_entity(&view, |this: &mut MultiMonitorView, cx: &mut Context<MultiMonitorView>| {
-                        this.apply_poll(result, cx);
-                        cx.notify();
-                    });
+                    let _ = cx.update_entity(
+                        &view,
+                        |this: &mut MultiMonitorView, cx: &mut Context<MultiMonitorView>| {
+                            this.apply_poll(result, cx);
+                            cx.notify();
+                        },
+                    );
                 } else {
                     break;
                 }
@@ -417,7 +421,10 @@ impl MultiMonitorView {
         if let Some(point) = poll.click_point {
             let display_infos = get_display_infos(&cx.displays());
             let display_id = display_for_point_from_infos(&display_infos, point);
-            self.last_click = Some(ClickInfo { global: point, display_id });
+            self.last_click = Some(ClickInfo {
+                global: point,
+                display_id,
+            });
             self.last_click_at = Some(Instant::now());
         }
     }
@@ -461,7 +468,9 @@ impl Render for MultiMonitorView {
 
         let (map_origin, scale) = match union.as_ref() {
             Some(union_bounds) => {
-                let scale = if union_bounds.size.width <= px(0.) || union_bounds.size.height <= px(0.) {
+                let scale = if union_bounds.size.width <= px(0.)
+                    || union_bounds.size.height <= px(0.)
+                {
                     1.0
                 } else {
                     (map_width / union_bounds.size.width).min(map_height / union_bounds.size.height)
@@ -471,10 +480,7 @@ impl Render for MultiMonitorView {
                 let offset_x = (map_width - scaled_width).to_f64() * 0.5;
                 let offset_y = (map_height - scaled_height).to_f64() * 0.5;
                 (
-                    point(
-                        padding + px(offset_x as f32),
-                        padding + px(offset_y as f32),
-                    ),
+                    point(padding + px(offset_x as f32), padding + px(offset_y as f32)),
                     scale,
                 )
             }
@@ -488,7 +494,11 @@ impl Render for MultiMonitorView {
                 let window_area = bounds_area(&snapshot.bounds);
                 let (display_label, overlap_percent) = focus_display
                     .map(|(id, area)| {
-                        let percent = if window_area > 0.0 { area / window_area * 100.0 } else { 0.0 };
+                        let percent = if window_area > 0.0 {
+                            area / window_area * 100.0
+                        } else {
+                            0.0
+                        };
                         (format!("Display {}", u32::from(id)), percent)
                     })
                     .unwrap_or_else(|| ("none".to_string(), 0.0));
@@ -497,7 +507,10 @@ impl Render for MultiMonitorView {
                     "Focused window: {} ({:.1}% overlap) id={} bounds=({}, {}, {}, {})",
                     display_label,
                     overlap_percent,
-                    snapshot.window_id.map(|id| id.to_string()).unwrap_or_else(|| "?".to_string()),
+                    snapshot
+                        .window_id
+                        .map(|id| id.to_string())
+                        .unwrap_or_else(|| "?".to_string()),
                     px_i64(snapshot.bounds.origin.x),
                     px_i64(snapshot.bounds.origin.y),
                     px_i64(snapshot.bounds.size.width),
@@ -588,11 +601,19 @@ impl Render for MultiMonitorView {
                     rgb(0x45475a)
                 };
 
-                let bg_color = if is_active { rgb(0x313244) } else { rgb(0x1e1e2e) };
+                let bg_color = if is_active {
+                    rgb(0x313244)
+                } else {
+                    rgb(0x1e1e2e)
+                };
                 let label = format!(
                     "Display {}{}",
                     u32::from(id),
-                    if primary_id == Some(id) { " (primary)" } else { "" }
+                    if primary_id == Some(id) {
+                        " (primary)"
+                    } else {
+                        ""
+                    }
                 );
                 let size_label = format!(
                     "{} x {}",
@@ -633,7 +654,8 @@ impl Render for MultiMonitorView {
             }
 
             if let Some(snapshot) = self.focus_snapshot.as_ref() {
-                let focused_scaled = scale_bounds(&snapshot.bounds, union_bounds, map_origin, scale);
+                let focused_scaled =
+                    scale_bounds(&snapshot.bounds, union_bounds, map_origin, scale);
                 map_children.push(
                     div()
                         .absolute()
@@ -641,7 +663,12 @@ impl Render for MultiMonitorView {
                         .top(focused_scaled.origin.y)
                         .w(focused_scaled.size.width)
                         .h(focused_scaled.size.height)
-                        .bg(Rgba { r: 0.6, g: 1.0, b: 0.6, a: 0.08 })
+                        .bg(Rgba {
+                            r: 0.6,
+                            g: 1.0,
+                            b: 0.6,
+                            a: 0.08,
+                        })
                         .border_1()
                         .border_color(rgb(0xa6e3a1))
                         .child(
@@ -663,7 +690,12 @@ impl Render for MultiMonitorView {
                     .top(test_scaled.origin.y)
                     .w(test_scaled.size.width)
                     .h(test_scaled.size.height)
-                    .bg(Rgba { r: 0.6, g: 0.6, b: 0.7, a: 0.06 })
+                    .bg(Rgba {
+                        r: 0.6,
+                        g: 0.6,
+                        b: 0.7,
+                        a: 0.06,
+                    })
                     .border_1()
                     .border_color(rgb(0x9399b2))
                     .child(
@@ -879,7 +911,10 @@ fn get_display_infos(displays: &[Rc<dyn PlatformDisplay>]) -> Vec<DisplayInfo> {
             .iter()
             .enumerate()
             .map(|(i, display)| {
-                let bounds = cg_bounds.get(i).cloned().unwrap_or_else(|| display.bounds());
+                let bounds = cg_bounds
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| display.bounds());
                 DisplayInfo {
                     id: display.id(),
                     bounds,
@@ -905,10 +940,7 @@ fn display_union_from_infos(infos: &[DisplayInfo]) -> Option<Bounds<Pixels>> {
     Some(iter.fold(first, |acc, info| acc.union(&info.bounds)))
 }
 
-fn display_for_point_from_infos(
-    infos: &[DisplayInfo],
-    point: Point<Pixels>,
-) -> Option<DisplayId> {
+fn display_for_point_from_infos(infos: &[DisplayInfo], point: Point<Pixels>) -> Option<DisplayId> {
     infos
         .iter()
         .find(|info| info.bounds.contains(&point))
@@ -993,7 +1025,10 @@ fn poll_once(mut state: PollState) -> (PollResult, PollState) {
 #[cfg(target_os = "linux")]
 fn poll_focus() -> (Option<FocusSnapshot>, BackendStatus) {
     if is_wayland_session() {
-        return (None, BackendStatus::err("Wayland session (focus unavailable)"));
+        return (
+            None,
+            BackendStatus::err("Wayland session (focus unavailable)"),
+        );
     }
     if !command_exists("xdotool") {
         return (None, BackendStatus::err("xdotool not found"));
@@ -1052,9 +1087,7 @@ fn poll_focus() -> (Option<FocusSnapshot>, BackendStatus) {
         end tell
     "#;
 
-    let output = Command::new("osascript")
-        .args(["-e", script])
-        .output();
+    let output = Command::new("osascript").args(["-e", script]).output();
 
     let Ok(out) = output else {
         return (None, BackendStatus::err("osascript failed"));
@@ -1112,7 +1145,10 @@ fn poll_focus() -> (Option<FocusSnapshot>, BackendStatus) {
 #[cfg(target_os = "linux")]
 fn poll_click(state: &mut PollState) -> (Option<Point<Pixels>>, BackendStatus) {
     if is_wayland_session() {
-        return (None, BackendStatus::err("Wayland session (clicks unavailable)"));
+        return (
+            None,
+            BackendStatus::err("Wayland session (clicks unavailable)"),
+        );
     }
     if !command_exists("xinput") || !command_exists("xdotool") {
         return (None, BackendStatus::err("xinput/xdotool not found"));
@@ -1158,7 +1194,10 @@ fn poll_click(state: &mut PollState) -> (Option<Point<Pixels>>, BackendStatus) {
 
 #[cfg(target_os = "macos")]
 fn poll_click(_state: &mut PollState) -> (Option<Point<Pixels>>, BackendStatus) {
-    (None, BackendStatus::err("macOS (click tracking not implemented)"))
+    (
+        None,
+        BackendStatus::err("macOS (click tracking not implemented)"),
+    )
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -1168,7 +1207,10 @@ fn poll_click(_state: &mut PollState) -> (Option<Point<Pixels>>, BackendStatus) 
 
 #[cfg(target_os = "linux")]
 fn detect_xinput_device_id() -> Option<String> {
-    let output = Command::new("xinput").args(["list", "--short"]).output().ok()?;
+    let output = Command::new("xinput")
+        .args(["list", "--short"])
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -1179,7 +1221,9 @@ fn detect_xinput_device_id() -> Option<String> {
         let dominated = line.to_lowercase();
         if line.contains("slave  pointer")
             && !line.contains("XTEST")
-            && (dominated.contains("mouse") || dominated.contains("logitech") || dominated.contains("razer"))
+            && (dominated.contains("mouse")
+                || dominated.contains("logitech")
+                || dominated.contains("razer"))
         {
             if let Some(id) = parse_xinput_id(line) {
                 return Some(id);
@@ -1188,7 +1232,11 @@ fn detect_xinput_device_id() -> Option<String> {
     }
 
     for line in stdout.lines() {
-        if line.contains("slave  pointer") && !line.contains("XTEST") && !line.contains("Consumer") && !line.contains("Keyboard") {
+        if line.contains("slave  pointer")
+            && !line.contains("XTEST")
+            && !line.contains("Consumer")
+            && !line.contains("Keyboard")
+        {
             if let Some(id) = parse_xinput_id(line) {
                 return Some(id);
             }
@@ -1251,16 +1299,16 @@ fn parse_shell_u64(output: &str, key: &str) -> Option<u64> {
 
 #[cfg(target_os = "linux")]
 fn is_wayland_session() -> bool {
-    env::var("XDG_SESSION_TYPE").map(|val| val == "wayland").unwrap_or(false)
+    env::var("XDG_SESSION_TYPE")
+        .map(|val| val == "wayland")
+        .unwrap_or(false)
         || env::var_os("WAYLAND_DISPLAY").is_some()
 }
 
 #[cfg(target_os = "linux")]
 fn command_exists(cmd: &str) -> bool {
     env::var_os("PATH")
-        .and_then(|paths| {
-            env::split_paths(&paths).find(|path| path.join(cmd).is_file())
-        })
+        .and_then(|paths| env::split_paths(&paths).find(|path| path.join(cmd).is_file()))
         .is_some()
 }
 
@@ -1287,9 +1335,11 @@ impl Focusable for LauncherPopup {
 impl Render for LauncherPopup {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.blur_sub.is_none() {
-            self.blur_sub = Some(cx.on_blur(&self.focus_handle, window, |_this, window, _cx| {
-                window.remove_window();
-            }));
+            self.blur_sub = Some(
+                cx.on_blur(&self.focus_handle, window, |_this, window, _cx| {
+                    window.remove_window();
+                }),
+            );
         }
 
         div()
@@ -1314,7 +1364,11 @@ impl Render for LauncherPopup {
     }
 }
 
-fn open_launcher_popup_at(click_point: Option<Point<Pixels>>, display: Rc<dyn PlatformDisplay>, cx: &mut App) -> Option<WindowHandle<LauncherPopup>> {
+fn open_launcher_popup_at(
+    click_point: Option<Point<Pixels>>,
+    display: Rc<dyn PlatformDisplay>,
+    cx: &mut App,
+) -> Option<WindowHandle<LauncherPopup>> {
     let display_infos = get_display_infos(&cx.displays());
     let display_bounds = display_infos
         .iter()
@@ -1327,7 +1381,8 @@ fn open_launcher_popup_at(click_point: Option<Point<Pixels>>, display: Rc<dyn Pl
     } else {
         display_bounds.origin.x + (display_bounds.size.width - px(LAUNCHER_WIDTH)) / 2.0
     };
-    let center_y = display_bounds.origin.y + (display_bounds.size.height - px(LAUNCHER_HEIGHT)) / 3.0;
+    let center_y =
+        display_bounds.origin.y + (display_bounds.size.height - px(LAUNCHER_HEIGHT)) / 3.0;
 
     let bounds = Bounds::new(
         point(center_x, center_y),
@@ -1343,12 +1398,12 @@ fn open_launcher_popup_at(click_point: Option<Point<Pixels>>, display: Rc<dyn Pl
         ..Default::default()
     };
 
-    cx.open_window(options, |_window, cx| cx.new(|cx| LauncherPopup::new(cx))).ok()
+    cx.open_window(options, |_window, cx| cx.new(|cx| LauncherPopup::new(cx)))
+        .ok()
 }
 
 #[cfg(target_os = "macos")]
 fn get_macos_display_bounds() -> Vec<Bounds<Pixels>> {
-
     #[repr(C)]
     #[derive(Debug, Copy, Clone)]
     struct CGRect {
@@ -1455,7 +1510,8 @@ fn main() {
             ..Default::default()
         };
 
-        open_window_with_focus(cx, options, |window, cx| MultiMonitorView::new(window, cx)).unwrap();
+        open_window_with_focus(cx, options, |window, cx| MultiMonitorView::new(window, cx))
+            .unwrap();
 
         cx.activate(true);
     });

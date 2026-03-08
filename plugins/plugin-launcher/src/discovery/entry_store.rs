@@ -29,7 +29,10 @@ pub struct EntryStore {
 }
 
 impl EntryStore {
-    pub fn new(app_entries: Arc<Vec<discovery::AppEntry>>, file_entries: Arc<Vec<discovery::FileEntry>>) -> Self {
+    pub fn new(
+        app_entries: Arc<Vec<discovery::AppEntry>>,
+        file_entries: Arc<Vec<discovery::FileEntry>>,
+    ) -> Self {
         let frecency_path = frecency::default_store_path("qol-launcher");
         let frecency = frecency::load(&frecency_path);
         Self {
@@ -68,7 +71,9 @@ impl EntryStore {
             return;
         }
 
-        let incremental = self.filter_history.last()
+        let incremental = self
+            .filter_history
+            .last()
             .map(|(prev, _)| Self::can_incremental_filter(prev, &key))
             .unwrap_or(false);
 
@@ -106,7 +111,9 @@ impl EntryStore {
         app_entries: Arc<Vec<discovery::AppEntry>>,
         file_entries: Arc<Vec<discovery::FileEntry>>,
     ) {
-        if Arc::ptr_eq(&self.app_entries, &app_entries) && Arc::ptr_eq(&self.file_entries, &file_entries) {
+        if Arc::ptr_eq(&self.app_entries, &app_entries)
+            && Arc::ptr_eq(&self.file_entries, &file_entries)
+        {
             return;
         }
         self.app_entries = app_entries;
@@ -156,7 +163,14 @@ impl EntryStore {
 
     fn filtered_full(&self, query: &str, mode: SearchMode, fuzziness: Fuzziness) -> Vec<Scored> {
         let frecency = self.frecency_config();
-        search::filtered(&self.app_entries, &self.file_entries, query, mode, fuzziness, Some(&frecency))
+        search::filtered(
+            &self.app_entries,
+            &self.file_entries,
+            query,
+            mode,
+            fuzziness,
+            Some(&frecency),
+        )
     }
 }
 

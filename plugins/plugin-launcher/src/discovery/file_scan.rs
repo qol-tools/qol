@@ -35,7 +35,8 @@ fn collect_files(dir: &Path, depth: usize, out: &mut Vec<FileEntry>) {
             continue;
         };
         if file_type.is_dir() {
-            let is_hidden = path.file_name()
+            let is_hidden = path
+                .file_name()
                 .and_then(|n| n.to_str())
                 .is_some_and(|name| name.starts_with('.'));
             if !is_hidden {

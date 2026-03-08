@@ -9,33 +9,77 @@ pub enum InputEffect {
 }
 
 impl LauncherState {
-    pub fn apply_key(&mut self, key: &str, ctrl: bool, shift: bool, alt: bool, result_count: usize) -> InputEffect {
+    pub fn apply_key(
+        &mut self,
+        key: &str,
+        ctrl: bool,
+        shift: bool,
+        alt: bool,
+        result_count: usize,
+    ) -> InputEffect {
         match key {
             "escape" | "esc" => InputEffect::Dismiss,
             "up" if ctrl => {
-                if self.decrease_fuzziness() { InputEffect::QueryChanged } else { InputEffect::Navigate }
+                if self.decrease_fuzziness() {
+                    InputEffect::QueryChanged
+                } else {
+                    InputEffect::Navigate
+                }
             }
             "down" if ctrl => {
-                if self.increase_fuzziness() { InputEffect::QueryChanged } else { InputEffect::Navigate }
+                if self.increase_fuzziness() {
+                    InputEffect::QueryChanged
+                } else {
+                    InputEffect::Navigate
+                }
             }
             "tab" => {
                 self.cycle_mode(shift);
                 InputEffect::QueryChanged
             }
-            "left" => { self.move_left(shift); InputEffect::Navigate }
-            "right" => { self.move_right(shift); InputEffect::Navigate }
-            "home" => { self.move_home(shift); InputEffect::Navigate }
-            "end" => { self.move_end(shift); InputEffect::Navigate }
-            "up" if !ctrl => { self.move_up(); InputEffect::Navigate }
-            "down" if !ctrl => { self.move_down(result_count); InputEffect::Navigate }
+            "left" => {
+                self.move_left(shift);
+                InputEffect::Navigate
+            }
+            "right" => {
+                self.move_right(shift);
+                InputEffect::Navigate
+            }
+            "home" => {
+                self.move_home(shift);
+                InputEffect::Navigate
+            }
+            "end" => {
+                self.move_end(shift);
+                InputEffect::Navigate
+            }
+            "up" if !ctrl => {
+                self.move_up();
+                InputEffect::Navigate
+            }
+            "down" if !ctrl => {
+                self.move_down(result_count);
+                InputEffect::Navigate
+            }
             "enter" => InputEffect::Launch,
             "backspace" => {
-                if self.backspace() { InputEffect::QueryChanged } else { InputEffect::Navigate }
+                if self.backspace() {
+                    InputEffect::QueryChanged
+                } else {
+                    InputEffect::Navigate
+                }
             }
             "delete" => {
-                if self.delete_forward() { InputEffect::QueryChanged } else { InputEffect::Navigate }
+                if self.delete_forward() {
+                    InputEffect::QueryChanged
+                } else {
+                    InputEffect::Navigate
+                }
             }
-            "a" if ctrl => { self.select_all(); InputEffect::Navigate }
+            "a" if ctrl => {
+                self.select_all();
+                InputEffect::Navigate
+            }
             "space" if !ctrl => {
                 self.insert_char(' ');
                 InputEffect::QueryChanged
