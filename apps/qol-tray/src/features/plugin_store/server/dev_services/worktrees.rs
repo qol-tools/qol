@@ -4,50 +4,93 @@ use std::path::Path;
 use super::super::types::WorktreeInfo;
 
 pub(super) fn scan(manifest_dir: &Path) -> Vec<WorktreeInfo> {
-    let Some(root) = find_worktrees_root(manifest_dir) else {
-        return vec![];
-    };
-    let wt_dir = root.join(".worktrees");
-    collect(&wt_dir, &wt_dir, 0)
+    let mut results = vec![];
+
+    if let Some(root) = find_dir_in_ancestors(manifest_dir, ".worktrees") {
+        results.extend(collect_legacy(&root.join(".worktrees")));
+    }
+
+    if let Some(root) = find_dir_in_ancestors(manifest_dir, "worktrees") {
+        results.extend(collect_centralized(&root.join("worktrees")));
+    }
+
+    results
 }
 
-fn find_worktrees_root(start: &Path) -> Option<std::path::PathBuf> {
+fn find_dir_in_ancestors(start: &Path, dir_name: &str) -> Option<std::path::PathBuf> {
     start
         .ancestors()
-        .find(|d| d.join(".worktrees").is_dir())
+        .find(|d| d.join(dir_name).is_dir())
         .map(|d| d.to_path_buf())
 }
 
-fn collect(root: &Path, dir: &Path, depth: u8) -> Vec<WorktreeInfo> {
+/// Legacy: `.worktrees/<group>/<branch>/Cargo.toml` — each leaf is a worktree.
+fn collect_legacy(wt_dir: &Path) -> Vec<WorktreeInfo> {
+    collect_legacy_recursive(wt_dir, wt_dir, 0)
+}
+
+fn collect_legacy_recursive(root: &Path, dir: &Path, depth: u8) -> Vec<WorktreeInfo> {
+    read_child_dirs(dir)
+        .into_iter()
+        .flat_map(|p| {
+            if p.join("Cargo.toml").is_file() {
+                let branch = p
+                    .strip_prefix(root)
+                    .map(|r| r.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_default();
+                vec![WorktreeInfo {
+                    branch,
+                    path: p.to_string_lossy().into_owned(),
+                }]
+            } else if depth < 1 {
+                collect_legacy_recursive(root, &p, depth + 1)
+            } else {
+                vec![]
+            }
+        })
+        .collect()
+}
+
+/// Centralized: `worktrees/<feature>/<repo…>` — one entry per feature group,
+/// branch resolved from git.
+fn collect_centralized(worktrees_dir: &Path) -> Vec<WorktreeInfo> {
+    read_child_dirs(worktrees_dir)
+        .into_iter()
+        .filter_map(|feature_dir| {
+            let branch = resolve_git_branch(&feature_dir)?;
+            Some(WorktreeInfo {
+                branch,
+                path: feature_dir.to_string_lossy().into_owned(),
+            })
+        })
+        .collect()
+}
+
+fn resolve_git_branch(feature_dir: &Path) -> Option<String> {
+    let repo_dir = read_child_dirs(feature_dir)
+        .into_iter()
+        .find(|p| p.join("Cargo.toml").is_file())?;
+
+    std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(&repo_dir)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn read_child_dirs(dir: &Path) -> Vec<std::path::PathBuf> {
     std::fs::read_dir(dir)
         .map(|entries| {
             entries
                 .flatten()
                 .map(|e| e.path())
                 .filter(|p| p.is_dir())
-                .flat_map(|p| process_entry(root, &p, depth))
                 .collect()
         })
         .unwrap_or_default()
-}
-
-fn process_entry(root: &Path, path: &Path, depth: u8) -> Vec<WorktreeInfo> {
-    if path.join("Cargo.toml").is_file() {
-        let branch = path
-            .strip_prefix(root)
-            .map(|r| r.to_string_lossy().replace('\\', "/"))
-            .unwrap_or_default();
-        return vec![WorktreeInfo {
-            branch,
-            path: path.to_string_lossy().into_owned(),
-        }];
-    }
-
-    if depth < 1 {
-        return collect(root, path, depth + 1);
-    }
-
-    vec![]
 }
 
 #[cfg(all(test, feature = "dev"))]
