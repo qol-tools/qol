@@ -14,7 +14,10 @@ pub fn run() -> Result<()> {
 
     let control = Arc::new(RunState::new());
     let (tx, rx) = mpsc::channel();
-    ensure!(daemon::start_listener(tx), "failed to start daemon listener");
+    ensure!(
+        daemon::start_listener(tx),
+        "failed to start daemon listener"
+    );
 
     let listener_control = Arc::clone(&control);
     std::thread::spawn(move || handle_daemon_commands(rx, listener_control));
