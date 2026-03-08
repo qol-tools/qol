@@ -1,7 +1,7 @@
 use std::ptr;
 
 use anyhow::{ensure, Result};
-use x11::{xcursor, xlib};
+use x11::{xcursor, xfixes, xlib};
 
 use super::scale::scale_bilinear;
 
@@ -12,6 +12,7 @@ pub struct CursorSession {
     root: xlib::Window,
     base: BaseCursor,
     active_cursor: Option<xlib::Cursor>,
+    restore_cursor: Option<CursorImage>,
 }
 
 struct PointerState {
@@ -27,6 +28,14 @@ struct BaseCursor {
     yhot: u32,
     pixels: Vec<u32>,
     default_size: u32,
+}
+
+struct CursorImage {
+    width: u32,
+    height: u32,
+    xhot: u32,
+    yhot: u32,
+    pixels: Vec<u32>,
 }
 
 impl CursorSession {
@@ -45,6 +54,7 @@ impl CursorSession {
             root: unsafe { xlib::XDefaultRootWindow(display) },
             base,
             active_cursor: None,
+            restore_cursor: None,
         })
     }
 
@@ -56,6 +66,9 @@ impl CursorSession {
         let Some(cursor) = make_cursor_at_scale(self.display, self.root, &self.base, scale) else {
             return false;
         };
+        if self.active_cursor.is_none() {
+            self.restore_cursor = load_live_cursor_image(self.display);
+        }
         apply_to_tree(self.display, self.root, cursor);
         self.flush();
         if let Some(old_cursor) = self.active_cursor.replace(cursor) {
@@ -74,12 +87,13 @@ impl CursorSession {
         }
         let pointer = query_pointer(self.display, self.root);
         clear_tree(self.display, self.root);
-        restore_root_cursor(self.display, self.root, &self.base);
+        restore_root_cursor(self.display, self.root, &self.base, self.restore_cursor.as_ref());
         force_cursor_recompute(self.display, self.root, pointer);
         self.flush();
         if let Some(cursor) = self.active_cursor.take() {
             unsafe { xlib::XFreeCursor(self.display, cursor) };
         }
+        self.restore_cursor = None;
     }
 
     fn flush(&self) {
@@ -207,12 +221,75 @@ fn clear_tree(display: *mut xlib::Display, window: xlib::Window) {
     }
 }
 
-fn restore_root_cursor(display: *mut xlib::Display, root: xlib::Window, base: &BaseCursor) {
-    let Some(cursor) = make_cursor_at_scale(display, root, base, 1.0) else {
+fn restore_root_cursor(
+    display: *mut xlib::Display,
+    root: xlib::Window,
+    base: &BaseCursor,
+    restore_cursor: Option<&CursorImage>,
+) {
+    let cursor = if let Some(restore_cursor) = restore_cursor {
+        make_cursor_from_image(display, restore_cursor)
+    } else {
+        make_cursor_at_scale(display, root, base, 1.0)
+    };
+    let Some(cursor) = cursor else {
         return;
     };
     unsafe { xlib::XDefineCursor(display, root, cursor) };
     unsafe { xlib::XFreeCursor(display, cursor) };
+}
+
+fn make_cursor_from_image(
+    display: *mut xlib::Display,
+    image: &CursorImage,
+) -> Option<xlib::Cursor> {
+    let pixel_count = checked_pixel_count(image.width, image.height)?;
+    let cursor_image = unsafe {
+        xcursor::XcursorImageCreate(image.width.try_into().ok()?, image.height.try_into().ok()?)
+    };
+    if cursor_image.is_null() {
+        return None;
+    }
+    let cursor = unsafe {
+        (*cursor_image).xhot = image.xhot;
+        (*cursor_image).yhot = image.yhot;
+        let pixels = std::slice::from_raw_parts_mut((*cursor_image).pixels, pixel_count);
+        pixels.copy_from_slice(&image.pixels);
+        let cursor = xcursor::XcursorImageLoadCursor(display, cursor_image);
+        xcursor::XcursorImageDestroy(cursor_image);
+        cursor
+    };
+    if cursor == 0 {
+        return None;
+    }
+    Some(cursor)
+}
+
+fn load_live_cursor_image(display: *mut xlib::Display) -> Option<CursorImage> {
+    let image = unsafe { xfixes::XFixesGetCursorImage(display) };
+    if image.is_null() {
+        return None;
+    }
+    let image_ref = unsafe { &*image };
+    let width = u32::from(image_ref.width);
+    let height = u32::from(image_ref.height);
+    let Some(pixel_count) = checked_pixel_count(width, height) else {
+        unsafe { xlib::XFree(image as *mut _) };
+        return None;
+    };
+    let pixels = unsafe { std::slice::from_raw_parts(image_ref.pixels, pixel_count) }
+        .iter()
+        .map(|pixel| *pixel as u32)
+        .collect::<Vec<_>>();
+    let cursor = CursorImage {
+        width,
+        height,
+        xhot: sanitize_hotspot(u32::from(image_ref.xhot), width),
+        yhot: sanitize_hotspot(u32::from(image_ref.yhot), height),
+        pixels,
+    };
+    unsafe { xlib::XFree(image as *mut _) };
+    Some(cursor)
 }
 
 fn force_cursor_recompute(
