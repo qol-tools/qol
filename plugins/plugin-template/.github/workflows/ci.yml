@@ -1,31 +1,11 @@
-name: CI
+name: Rust CI
 
 on:
   push:
-    branches: [main]
+    branches: ["main"]
   pull_request:
-    branches: [main]
+    branches: ["main"]
 
 jobs:
-  build:
-    if: github.ref == 'refs/heads/main' || contains(github.event.head_commit.message, '(ci)') || contains(github.event.head_commit.message, 'ci,') || contains(github.event.head_commit.message, ', ci')
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    env:
-      RUSTFLAGS: -D warnings
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Check
-        run: cargo check
-
-      - name: Test
-        run: cargo test
+  test:
+    uses: qol-tools/qol-cicd/.github/workflows/plugin-ci.yml@main
