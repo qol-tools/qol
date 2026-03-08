@@ -73,6 +73,34 @@ mod tests {
     }
 
     #[test]
+    fn path_dep_change_triggers_rebuild() {
+        let tmp = TempDir::new().unwrap();
+        let dep_dir = tmp.path().join("my-lib");
+        fs::create_dir_all(dep_dir.join("src")).unwrap();
+        fs::write(dep_dir.join("Cargo.toml"), "[package]\nname = \"my-lib\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").unwrap();
+        fs::write(dep_dir.join("src/lib.rs"), "pub fn foo() {}\n").unwrap();
+
+        let plugin_dir = tmp.path().join("plugin-a");
+        fs::create_dir_all(plugin_dir.join("src")).unwrap();
+        fs::write(
+            plugin_dir.join("Cargo.toml"),
+            "[package]\nname = \"test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nmy-lib = { path = \"../my-lib\" }\n",
+        ).unwrap();
+        fs::write(plugin_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let links = HashMap::from([("plugin-a".to_string(), plugin_dir.clone())]);
+        let fingerprint = fingerprint_plugin(&plugin_dir).unwrap();
+        let known = HashMap::from([("plugin-a".to_string(), fingerprint)]);
+
+        fs::write(dep_dir.join("src/lib.rs"), "pub fn foo() { changed() }\n").unwrap();
+
+        let plans = plan_linked_plugin_builds(&links, &known, None);
+        assert_eq!(plans.len(), 1);
+        assert!(plans[0].needs_rebuild, "path dep change should trigger rebuild");
+        assert_eq!(plans[0].reason, "Source changed");
+    }
+
+    #[test]
     fn plan_skips_plugin_without_cargo_manifest() {
         let tmp = TempDir::new().unwrap();
         let plugin_dir = tmp.path().join("plugin-a");
