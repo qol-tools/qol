@@ -65,6 +65,16 @@ pub(super) fn shared_config_dir_or_response(
     shared_config_dir_or_status().map_err(|status| (status, unavailable_message.to_string()))
 }
 
+#[cfg(feature = "dev")]
+pub(super) fn persist_worktree_branch(branch: Option<&str>) {
+    let Ok(config_dir) = shared_config_dir() else {
+        return;
+    };
+    if let Err(e) = crate::dev::set_active_worktree_branch(&config_dir, branch) {
+        log::error!("Failed to persist worktree branch: {}", e);
+    }
+}
+
 pub(super) fn read_plugin_version(plugin_dir: &std::path::Path) -> Result<String, ()> {
     let manifest_path = plugin_dir.join("plugin.toml");
     let content = std::fs::read_to_string(&manifest_path).map_err(|_| ())?;

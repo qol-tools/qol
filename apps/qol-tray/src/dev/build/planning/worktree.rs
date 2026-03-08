@@ -2,17 +2,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub fn current_worktree_branch() -> Option<String> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let worktrees_dir = root
-        .ancestors()
-        .find(|p| p.file_name() == Some(std::ffi::OsStr::new(".worktrees")))?;
-
-    root.strip_prefix(worktrees_dir)
-        .ok()
-        .map(|p| p.to_string_lossy().into_owned())
-}
-
 pub fn resolve_worktree_paths(
     dev_links: &HashMap<String, PathBuf>,
     branch: Option<&str>,

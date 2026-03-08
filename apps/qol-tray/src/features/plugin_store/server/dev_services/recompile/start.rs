@@ -16,6 +16,12 @@ pub(super) fn queue_self_recompile(
         return Err("Self recompile already in progress");
     }
     log::info!("Developer self recompile requested");
+
+    let branch = worktree_path
+        .as_deref()
+        .and_then(super::restart_schedule::resolve_branch_from_path);
+    super::super::super::helpers::persist_worktree_branch(branch.as_deref());
+
     tokio::spawn(run_self_recompile(SelfRecompileTask::from_state(
         state,
         worktree_path,

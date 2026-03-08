@@ -4,13 +4,16 @@ mod store;
 use serde::{Deserialize, Serialize};
 
 pub use listing::list_linked_plugins;
-pub use store::{create_link, load_dev_links, remove_link};
+pub use store::{
+    create_link, get_active_worktree_branch, load_dev_links, remove_link,
+    set_active_worktree_branch,
+};
 
 pub fn active_dev_links(
     config_dir: &std::path::Path,
 ) -> std::collections::HashMap<String, std::path::PathBuf> {
     let base = load_dev_links(config_dir);
-    crate::dev::resolve_worktree_paths(&base, crate::dev::current_worktree_branch().as_deref())
+    crate::dev::resolve_worktree_paths(&base, get_active_worktree_branch(config_dir).as_deref())
 }
 
 #[derive(Debug, Clone, Serialize)]

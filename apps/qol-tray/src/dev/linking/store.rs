@@ -9,6 +9,24 @@ pub fn load_dev_links(config_dir: &Path) -> HashMap<String, PathBuf> {
     serde_json::from_str(&content).unwrap_or_default()
 }
 
+pub fn set_active_worktree_branch(config_dir: &Path, branch: Option<&str>) -> Result<(), String> {
+    let path = config_dir.join("active-worktree.txt");
+    if let Some(branch) = branch {
+        return std::fs::write(&path, branch.trim()).map_err(|e| format!("Failed to write: {}", e));
+    }
+
+    let _ = std::fs::remove_file(&path);
+    Ok(())
+}
+
+pub fn get_active_worktree_branch(config_dir: &Path) -> Option<String> {
+    let path = config_dir.join("active-worktree.txt");
+    std::fs::read_to_string(&path)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 pub fn create_link(source: &Path, config_dir: &Path) -> Result<String, String> {
     let plugin_id = validate_link_source(source)?;
     let mut links = load_dev_links(config_dir);
