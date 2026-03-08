@@ -5,6 +5,7 @@ pub(crate) mod desktop_state;
 pub mod dev;
 pub mod doctor;
 pub mod features;
+pub(crate) mod file_io;
 pub mod hotkeys;
 pub mod installer;
 pub mod logging;

@@ -1,27 +1,14 @@
 mod artifacts;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::super::types::BuildResult;
 use super::{spawn_piped, CargoChild};
+use crate::paths;
 
 static LAST_ARTIFACT_COUNT: AtomicU32 = AtomicU32::new(0);
-
-fn main_repo_root() -> PathBuf {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let mut dir = manifest.as_path();
-    loop {
-        if dir.join(".worktrees").is_dir() {
-            return dir.to_path_buf();
-        }
-        match dir.parent() {
-            Some(p) => dir = p,
-            None => return manifest,
-        }
-    }
-}
 
 const QOL_TRAY_ID: &str = "qol-tray";
 
@@ -34,13 +21,13 @@ where
 {
     let repo_root = repo_root
         .map(Path::to_path_buf)
-        .unwrap_or_else(main_repo_root);
+        .unwrap_or_else(paths::repo_root_from_manifest_dir);
     let manifest_path = repo_root.join("Cargo.toml");
     if let Err(error) = ensure_manifest(&manifest_path) {
         return failed_build(error);
     }
     let CargoChild {
-        child,
+        mut child,
         stdout,
         stderr,
     } = match start_build(&repo_root, &manifest_path, &mut on_progress) {
@@ -50,7 +37,7 @@ where
     let readers = artifacts::spawn_readers(stdout, stderr);
     readers.emit_progress(&mut on_progress);
     let (actual_done, combined) = readers.join();
-    finish_build(child, actual_done, combined, &mut on_progress)
+    finish_build(&mut child, actual_done, combined, &mut on_progress)
 }
 
 fn start_build<F>(
@@ -103,7 +90,7 @@ fn spawn_build(repo_root: &Path, manifest_path: &Path) -> Result<CargoChild, Str
 }
 
 fn finish_build<F>(
-    mut child: Child,
+    child: &mut Child,
     actual_done: u32,
     combined: String,
     on_progress: &mut F,
@@ -111,11 +98,13 @@ fn finish_build<F>(
 where
     F: FnMut(u8, String),
 {
-    match super::wait_with_timeout(&mut child, super::BUILD_TIMEOUT) {
-        Ok(true) => successful_build(actual_done, combined, on_progress),
-        Ok(false) => failed_status_build(combined),
-        Err(message) => failed_build(message),
-    }
+    super::finish_build(
+        QOL_TRAY_ID,
+        child,
+        combined,
+        on_progress,
+        |output, progress| successful_build(actual_done, output, progress),
+    )
 }
 
 fn successful_build<F>(actual_done: u32, combined: String, on_progress: &mut F) -> BuildResult
@@ -125,28 +114,13 @@ where
     LAST_ARTIFACT_COUNT.store(actual_done, Ordering::Relaxed);
     on_progress(100, "Build complete".to_string());
     log::info!("qol-tray build succeeded ({} artifacts)", actual_done);
-    finished_build(true, combined)
-}
-
-fn failed_status_build(combined: String) -> BuildResult {
-    log::error!("qol-tray build failed\n{}", combined);
-    finished_build(false, combined)
+    finished_build(combined)
 }
 
 fn failed_build(output: String) -> BuildResult {
-    BuildResult {
-        plugin_id: QOL_TRAY_ID.to_string(),
-        success: false,
-        output,
-        skipped: false,
-    }
+    super::failed_build(QOL_TRAY_ID, output)
 }
 
-fn finished_build(success: bool, output: String) -> BuildResult {
-    BuildResult {
-        plugin_id: QOL_TRAY_ID.to_string(),
-        success,
-        output,
-        skipped: false,
-    }
+fn finished_build(output: String) -> BuildResult {
+    super::finished_build(QOL_TRAY_ID, output)
 }

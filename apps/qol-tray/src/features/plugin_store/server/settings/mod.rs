@@ -1,5 +1,6 @@
 mod github_token_handlers;
 mod hotkey_handlers;
+mod http_json;
 mod media_apps_handlers;
 mod media_cover_handlers;
 mod media_icon_handlers;

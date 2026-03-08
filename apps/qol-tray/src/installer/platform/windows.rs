@@ -21,28 +21,13 @@ pub(super) fn autostart_path() -> Result<PathBuf> {
 
 pub(super) fn write_autostart_entry(binary_path: &Path) -> Result<()> {
     let path = autostart_path()?;
-    let parent = path
-        .parent()
-        .context("Autostart path has no parent directory")?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("Failed to create directory {}", parent.display()))?;
-
     let binary = binary_path.display().to_string().replace('\"', "\"\"");
     let content = format!("@echo off\r\nstart \"\" \"{}\"\r\n", binary);
-
-    fs::write(&path, content)
-        .with_context(|| format!("Failed to write autostart file {}", path.display()))?;
-    Ok(())
+    super::write_text_file(&path, &content)
 }
 
 pub(super) fn start_now(binary_path: &Path) -> Result<()> {
-    Command::new(binary_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .with_context(|| format!("Failed to start {}", binary_path.display()))?;
-    Ok(())
+    super::spawn_detached(binary_path)
 }
 
 pub(super) fn stop_running(_: &Path) -> Result<()> {
@@ -88,11 +73,4 @@ pub(super) fn copy_symlink(source: &Path, target: &Path) -> Result<()> {
 
 pub(super) fn on_file_copied(_: &Path, _: &Path) -> Result<()> {
     Ok(())
-}
-
-pub(super) fn bundled_binary_candidates(installer_path: &Path) -> Vec<PathBuf> {
-    installer_path
-        .parent()
-        .map(|dir| vec![dir.join(super::binary_filename())])
-        .unwrap_or_default()
 }

@@ -1,17 +1,17 @@
 use axum::{
     extract::{Path, State},
-    http::{header, StatusCode},
+    http::StatusCode,
     response::{IntoResponse, Response},
 };
 
 use super::super::helpers::validate_plugin_id_bad_request;
 use super::super::types::AppState;
+use super::http_json;
 
 mod io;
 mod notify;
 
 type HttpResult<T> = Result<T, Box<Response>>;
-const APPLICATION_JSON: &str = "application/json";
 
 pub(in super::super) async fn get_plugin_config(
     Path(plugin_id): Path<String>,
@@ -54,12 +54,7 @@ fn config_json_response(config: &serde_json::Value) -> Response {
     let Ok(json) = io::encode_config_json(config) else {
         return serialize_config_failed_response();
     };
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, APPLICATION_JSON)],
-        json,
-    )
-        .into_response()
+    http_json::json_response(json)
 }
 
 fn config_saved_response() -> Response {

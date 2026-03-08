@@ -1,14 +1,14 @@
 use axum::{
-    http::{header, StatusCode},
+    http::StatusCode,
     response::{IntoResponse, Response},
 };
 
 use crate::hotkeys::{trigger_reload, HotkeyConfig, HotkeyManager};
 
 use super::super::types::MAX_CONFIG_SIZE;
+use super::http_json;
 
 type HttpResult<T> = Result<T, Box<Response>>;
-const APPLICATION_JSON: &str = "application/json";
 
 pub(in super::super) async fn get_hotkeys() -> impl IntoResponse {
     get_hotkeys_inner().unwrap_or_else(|response| *response)
@@ -41,30 +41,18 @@ fn hotkey_manager() -> HttpResult<HotkeyManager> {
 }
 
 fn parse_hotkeys(body: axum::body::Bytes) -> HttpResult<HotkeyConfig> {
-    if body.len() > MAX_CONFIG_SIZE {
-        return Err(Box::new(config_too_large_response()));
-    }
-    serde_json::from_slice(&body).map_err(|_| Box::new(invalid_json_response()))
+    http_json::parse_json_body(body, MAX_CONFIG_SIZE)
 }
 
 fn hotkeys_json_response(config: &HotkeyConfig) -> Response {
     let Ok(json) = encode_hotkeys_json(config) else {
         return serialize_failed_response();
     };
-    json_response(json)
+    http_json::json_response(json)
 }
 
 fn encode_hotkeys_json(config: &HotkeyConfig) -> HttpResult<Vec<u8>> {
-    serde_json::to_vec(config).map_err(|_| Box::new(serialize_failed_response()))
-}
-
-fn json_response(json: Vec<u8>) -> Response {
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, APPLICATION_JSON)],
-        json,
-    )
-        .into_response()
+    http_json::encode_json(config, "Failed to serialize hotkeys")
 }
 
 fn hotkeys_saved_response() -> Response {
@@ -89,12 +77,4 @@ fn serialize_failed_response() -> Response {
         "Failed to serialize hotkeys",
     )
         .into_response()
-}
-
-fn invalid_json_response() -> Response {
-    (StatusCode::BAD_REQUEST, "Invalid JSON").into_response()
-}
-
-fn config_too_large_response() -> Response {
-    (StatusCode::PAYLOAD_TOO_LARGE, "Config too large").into_response()
 }
