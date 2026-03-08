@@ -1,6 +1,6 @@
 [package]
 name = "qol-tray"
-version = "2.11.0"
+version = "2.11.1"
 edition = "2021"
 description = "Quality of Life Tray - Pluggable system tray daemon for utility scripts"
 license = "MIT"
