@@ -70,11 +70,11 @@ pub struct ScrollRule {
 }
 
 pub fn load_config() -> RemapConfig {
-    let paths = qol_plugin_api::config::plugin_config_paths(PLUGIN_NAMES);
+    let paths = qol_config::plugin_config_paths(PLUGIN_NAMES);
     let has_file = paths.iter().any(|p| p.exists());
 
     let config = if has_file {
-        qol_plugin_api::config::load_plugin_config(PLUGIN_NAMES)
+        qol_config::load_plugin_config(PLUGIN_NAMES)
     } else {
         let defaults = builtin_defaults();
         if let Some(path) = paths.first() {
