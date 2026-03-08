@@ -73,7 +73,7 @@ fn resolve_restart_binary(
     binary
 }
 
-fn resolve_branch_from_path(worktree_path: &Path) -> Option<String> {
+pub(super) fn resolve_branch_from_path(worktree_path: &Path) -> Option<String> {
     let known = super::super::list_worktrees();
     known
         .into_iter()
