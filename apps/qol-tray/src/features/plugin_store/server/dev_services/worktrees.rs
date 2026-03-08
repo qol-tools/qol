@@ -24,7 +24,6 @@ fn find_dir_in_ancestors(start: &Path, dir_name: &str) -> Option<std::path::Path
         .map(|d| d.to_path_buf())
 }
 
-/// Legacy: `.worktrees/<group>/<branch>/Cargo.toml` — each leaf is a worktree.
 fn collect_legacy(wt_dir: &Path) -> Vec<WorktreeInfo> {
     collect_legacy_recursive(wt_dir, wt_dir, 0)
 }
@@ -38,21 +37,19 @@ fn collect_legacy_recursive(root: &Path, dir: &Path, depth: u8) -> Vec<WorktreeI
                     .strip_prefix(root)
                     .map(|r| r.to_string_lossy().replace('\\', "/"))
                     .unwrap_or_default();
-                vec![WorktreeInfo {
+                return vec![WorktreeInfo {
                     branch,
                     path: p.to_string_lossy().into_owned(),
-                }]
-            } else if depth < 1 {
-                collect_legacy_recursive(root, &p, depth + 1)
-            } else {
-                vec![]
+                }];
             }
+            if depth < 1 {
+                return collect_legacy_recursive(root, &p, depth + 1);
+            }
+            vec![]
         })
         .collect()
 }
 
-/// Centralized: `worktrees/<feature>/<repo…>` — one entry per feature group,
-/// branch resolved from git.
 fn collect_centralized(worktrees_dir: &Path) -> Vec<WorktreeInfo> {
     read_child_dirs(worktrees_dir)
         .into_iter()
