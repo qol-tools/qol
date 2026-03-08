@@ -3,6 +3,7 @@ use axum::{http::StatusCode, response::IntoResponse, response::Response};
 use crate::plugins::PluginConfigManager;
 
 use super::super::super::types::MAX_CONFIG_SIZE;
+use super::super::http_json;
 
 pub(super) fn load_plugin_config(plugin_id: &str) -> Result<serde_json::Value, Box<Response>> {
     let config = PluginConfigManager::new()
@@ -14,10 +15,7 @@ pub(super) fn load_plugin_config(plugin_id: &str) -> Result<serde_json::Value, B
 pub(super) fn parse_config_body(
     body: axum::body::Bytes,
 ) -> Result<serde_json::Value, Box<Response>> {
-    if body.len() > MAX_CONFIG_SIZE {
-        return Err(Box::new(config_too_large_response()));
-    }
-    serde_json::from_slice(&body).map_err(|_| Box::new(invalid_json_response()))
+    http_json::parse_json_body(body, MAX_CONFIG_SIZE)
 }
 
 pub(super) fn save_plugin_config(
@@ -30,7 +28,7 @@ pub(super) fn save_plugin_config(
 }
 
 pub(super) fn encode_config_json(config: &serde_json::Value) -> Result<Vec<u8>, Box<Response>> {
-    serde_json::to_vec(config).map_err(|_| Box::new(serialize_config_failed_response()))
+    http_json::encode_json(config, "Failed to serialize config")
 }
 
 fn config_not_found_response() -> Response {
@@ -43,20 +41,4 @@ fn read_config_failed_response() -> Response {
 
 fn save_config_failed_response() -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save config").into_response()
-}
-
-fn serialize_config_failed_response() -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "Failed to serialize config",
-    )
-        .into_response()
-}
-
-fn invalid_json_response() -> Response {
-    (StatusCode::BAD_REQUEST, "Invalid JSON").into_response()
-}
-
-fn config_too_large_response() -> Response {
-    (StatusCode::PAYLOAD_TOO_LARGE, "Config too large").into_response()
 }

@@ -45,6 +45,45 @@ pub(super) fn wait_with_timeout(child: &mut Child, timeout: Duration) -> Result<
     }
 }
 
+pub(super) fn finish_build<F>(
+    plugin_id: &str,
+    child: &mut Child,
+    output: String,
+    on_progress: &mut F,
+    on_success: impl FnOnce(String, &mut F) -> BuildResult,
+) -> BuildResult
+where
+    F: FnMut(u8, String),
+{
+    match wait_with_timeout(child, BUILD_TIMEOUT) {
+        Ok(true) => on_success(output, on_progress),
+        Ok(false) => failed_status_build(plugin_id, output),
+        Err(message) => failed_build(plugin_id, message),
+    }
+}
+
+pub(super) fn failed_build(plugin_id: &str, output: String) -> BuildResult {
+    build_result(plugin_id, false, output)
+}
+
+pub(super) fn failed_status_build(plugin_id: &str, output: String) -> BuildResult {
+    log::error!("Cargo build failed for {}:\n{}", plugin_id, output);
+    build_result(plugin_id, false, output)
+}
+
+pub(super) fn finished_build(plugin_id: &str, output: String) -> BuildResult {
+    build_result(plugin_id, true, output)
+}
+
+fn build_result(plugin_id: &str, success: bool, output: String) -> BuildResult {
+    BuildResult {
+        plugin_id: plugin_id.to_string(),
+        success,
+        output,
+        skipped: false,
+    }
+}
+
 pub(crate) struct CargoCommandPluginBuilder;
 
 impl CargoPluginBuilder for CargoCommandPluginBuilder {

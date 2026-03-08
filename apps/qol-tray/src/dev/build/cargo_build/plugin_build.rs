@@ -17,7 +17,7 @@ where
     F: FnMut(u8, String),
 {
     let CargoChild {
-        child,
+        mut child,
         stdout,
         stderr,
     } = match start_build(plugin_id, path, &mut on_progress) {
@@ -27,7 +27,7 @@ where
     let readers = streams::spawn_output_readers(stdout, stderr);
     progress::emit_progress(readers.progress_rx(), &mut on_progress);
     let combined = readers.join_output();
-    finish_build(plugin_id, path, child, combined, &mut on_progress)
+    finish_build(plugin_id, path, &mut child, combined, &mut on_progress)
 }
 
 fn start_build<F>(
@@ -57,18 +57,20 @@ fn spawn_build(path: &Path) -> Result<CargoChild, std::io::Error> {
 fn finish_build<F>(
     plugin_id: &str,
     path: &Path,
-    mut child: Child,
+    child: &mut Child,
     combined: String,
     on_progress: &mut F,
 ) -> BuildResult
 where
     F: FnMut(u8, String),
 {
-    match super::wait_with_timeout(&mut child, super::BUILD_TIMEOUT) {
-        Ok(true) => success_build(plugin_id, path, combined, on_progress),
-        Ok(false) => failed_status_build(plugin_id, combined),
-        Err(message) => failed_build(plugin_id, message),
-    }
+    super::finish_build(
+        plugin_id,
+        child,
+        combined,
+        on_progress,
+        |output, progress| success_build(plugin_id, path, output, progress),
+    )
 }
 
 fn success_build<F>(
@@ -83,34 +85,11 @@ where
     codesign_debug_binaries(plugin_id, path);
     on_progress(100, "Build complete".to_string());
     log::info!("Cargo build succeeded for {}", plugin_id);
-    finished_build(plugin_id, true, combined)
-}
-
-fn failed_status_build(plugin_id: &str, combined: String) -> BuildResult {
-    log::error!("Cargo build failed for {}:\n{}", plugin_id, combined);
-    finished_build(plugin_id, false, combined)
+    super::finished_build(plugin_id, combined)
 }
 
 fn failed_spawn(plugin_id: &str, error: std::io::Error) -> BuildResult {
     let message = format!("Failed to run cargo build: {}", error);
     log::error!("Build error for {}: {}", plugin_id, message);
-    failed_build(plugin_id, message)
-}
-
-fn failed_build(plugin_id: &str, output: String) -> BuildResult {
-    BuildResult {
-        plugin_id: plugin_id.to_string(),
-        success: false,
-        output,
-        skipped: false,
-    }
-}
-
-fn finished_build(plugin_id: &str, success: bool, output: String) -> BuildResult {
-    BuildResult {
-        plugin_id: plugin_id.to_string(),
-        success,
-        output,
-        skipped: false,
-    }
+    super::failed_build(plugin_id, message)
 }

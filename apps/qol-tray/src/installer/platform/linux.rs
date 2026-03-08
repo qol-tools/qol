@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use std::fs;
 use std::path::{Path, PathBuf};
 
 const DESKTOP_TEMPLATE: &str =
@@ -16,17 +15,8 @@ pub(super) fn autostart_path() -> Result<PathBuf> {
 
 pub(super) fn write_autostart_entry(binary_path: &Path) -> Result<()> {
     let path = autostart_path()?;
-    let parent = path
-        .parent()
-        .context("Autostart path has no parent directory")?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("Failed to create directory {}", parent.display()))?;
-
     let desktop = render_desktop_entry(binary_path);
-
-    fs::write(&path, desktop)
-        .with_context(|| format!("Failed to write autostart file {}", path.display()))?;
-    Ok(())
+    super::write_text_file(&path, &desktop)
 }
 
 fn render_desktop_entry(binary_path: &Path) -> String {
@@ -77,11 +67,4 @@ pub(super) fn copy_symlink(source: &Path, target: &Path) -> Result<()> {
 
 pub(super) fn on_file_copied(source: &Path, target: &Path) -> Result<()> {
     super::unix_common::on_file_copied(source, target)
-}
-
-pub(super) fn bundled_binary_candidates(installer_path: &Path) -> Vec<PathBuf> {
-    installer_path
-        .parent()
-        .map(|dir| vec![dir.join(super::binary_filename())])
-        .unwrap_or_default()
 }

@@ -3,6 +3,8 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
+use crate::file_io;
+
 const APP_NAME: &str = "qol-tray";
 const INSTALL_ID_ENV: &str = "QOL_TRAY_INSTALL_ID";
 const INSTALL_ID_FILE: &str = "qol-tray.install-id";
@@ -91,10 +93,7 @@ pub fn set_active_install_id(install_id: &str) -> Result<()> {
         return Err(anyhow!("invalid install id"));
     }
     let path = active_install_id_path()?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create directory {}", parent.display()))?;
-    }
+    file_io::ensure_parent_dir(&path)?;
     fs::write(&path, format!("{}\n", install_id))
         .with_context(|| format!("Failed to write active install marker {}", path.display()))
 }
@@ -131,6 +130,20 @@ pub fn dev_config_path() -> Result<PathBuf> {
 pub fn open_url(url: &str) -> Result<()> {
     open::that(url)?;
     Ok(())
+}
+
+pub fn repo_root_from_manifest_dir() -> PathBuf {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut dir = manifest.as_path();
+    loop {
+        if dir.join(".worktrees").is_dir() {
+            return dir.to_path_buf();
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent,
+            None => return manifest,
+        }
+    }
 }
 
 #[cfg(test)]

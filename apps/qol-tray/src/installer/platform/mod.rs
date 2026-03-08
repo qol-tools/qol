@@ -1,5 +1,7 @@
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -65,5 +67,29 @@ pub(super) fn on_file_copied(source: &Path, target: &Path) -> Result<()> {
 }
 
 pub(super) fn bundled_binary_candidates(installer_path: &Path) -> Vec<PathBuf> {
-    imp::bundled_binary_candidates(installer_path)
+    installer_path
+        .parent()
+        .map(|dir| vec![dir.join(binary_filename())])
+        .unwrap_or_default()
+}
+
+pub(super) fn write_text_file(path: &Path, content: &str) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("Autostart path has no parent directory"))?;
+    fs::create_dir_all(parent)
+        .with_context(|| format!("Failed to create directory {}", parent.display()))?;
+    fs::write(path, content)
+        .with_context(|| format!("Failed to write autostart file {}", path.display()))?;
+    Ok(())
+}
+
+pub(super) fn spawn_detached(binary_path: &Path) -> Result<()> {
+    Command::new(binary_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("Failed to start {}", binary_path.display()))?;
+    Ok(())
 }

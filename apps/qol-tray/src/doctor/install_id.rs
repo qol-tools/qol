@@ -2,6 +2,8 @@ use anyhow::{anyhow, Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::file_io;
+
 const APP_NAME: &str = "qol-tray";
 const INSTALL_ID_MARKER_FILE: &str = "qol-tray.install-id";
 const ACTIVE_INSTALL_ID_FILE: &str = "active-install-id";
@@ -37,21 +39,13 @@ pub(super) fn write_install_id_file(path: &Path, install_id: &str) -> Result<()>
         anyhow::bail!("invalid install id");
     }
 
-    ensure_parent_dir(path)?;
+    file_io::ensure_parent_dir(path)?;
     fs::write(path, format!("{}\n", install_id))
         .with_context(|| format!("failed to write {}", path.display()))
 }
 
 pub(super) fn canonical_or_original(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
-}
-
-fn ensure_parent_dir(path: &Path) -> Result<()> {
-    let Some(parent) = path.parent() else {
-        return Ok(());
-    };
-    fs::create_dir_all(parent)
-        .with_context(|| format!("failed to create directory {}", parent.display()))
 }
 
 fn valid_install_id(value: &str) -> bool {
