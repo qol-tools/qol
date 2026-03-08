@@ -1,5 +1,5 @@
 import { html } from '../lib/html.js';
-import { useState, useRef, useEffect } from 'preact/hooks';
+import { useState, useRef, useEffect, useCallback } from 'preact/hooks';
 import { shuffle, resolveColor, filledImageData } from '../lib/canvas.js';
 
 const HOLD_MS = 2500;
@@ -74,64 +74,70 @@ export function CloseGuard() {
     const [visible, setVisible] = useState(false);
     const [remaining, setRemaining] = useState(HOLD_MS);
     const [danger, setDanger] = useState(false);
+    const [dissolving, setDissolving] = useState(false);
+
     const phaseRef = useRef('idle');
     const startRef = useRef(null);
     const rafRef = useRef(null);
     const bubbleRafRef = useRef(null);
     const canvasRef = useRef(null);
 
+    const cancel = useCallback(() => {
+        if (phaseRef.current === 'idle') return;
+        phaseRef.current = 'idle';
+        startRef.current = null;
+        if (rafRef.current) cancelAnimationFrame(rafRef.current);
+        if (bubbleRafRef.current) cancelAnimationFrame(bubbleRafRef.current);
+        rafRef.current = null;
+        bubbleRafRef.current = null;
+        const canvas = canvasRef.current;
+        if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+        setVisible(false);
+        setDanger(false);
+        setDissolving(false);
+        setRemaining(HOLD_MS);
+    }, []);
+
+    const startEvaporation = useCallback(() => {
+        if (!canvasRef.current) return;
+        setDissolving(true);
+        const s = createEvaporateState(canvasRef.current);
+        const tick = () => {
+            if (evaporateFrame(s)) { bubbleRafRef.current = null; return; }
+            bubbleRafRef.current = requestAnimationFrame(tick);
+        };
+        bubbleRafRef.current = requestAnimationFrame(tick);
+    }, []);
+
+    const tick = useCallback(() => {
+        const elapsed = performance.now() - startRef.current;
+        const rem = Math.max(0, HOLD_MS - elapsed);
+        setRemaining(rem);
+        setDanger(rem <= RED_AT_MS);
+        if (rem <= 0) { window.close(); return; }
+        if (rem <= BUBBLE_AT_MS && phaseRef.current === 'holding') {
+            phaseRef.current = 'dissolving';
+            startEvaporation();
+        }
+        rafRef.current = requestAnimationFrame(tick);
+    }, [startEvaporation]);
+
+    const onKeyDown = useCallback((e) => {
+        if (!e.ctrlKey || e.key !== 'w') return;
+        e.preventDefault();
+        if (phaseRef.current !== 'idle') return;
+        phaseRef.current = 'holding';
+        startRef.current = performance.now();
+        setVisible(true);
+        rafRef.current = requestAnimationFrame(tick);
+    }, [tick]);
+
+    const onKeyUp = useCallback((e) => {
+        if (e.key !== 'w' && e.key !== 'Control') return;
+        cancel();
+    }, [cancel]);
+
     useEffect(() => {
-        function startEvaporation() {
-            if (!canvasRef.current) return;
-            const s = createEvaporateState(canvasRef.current);
-            function loop() {
-                if (evaporateFrame(s)) return;
-                bubbleRafRef.current = requestAnimationFrame(loop);
-            }
-            bubbleRafRef.current = requestAnimationFrame(loop);
-        }
-
-        function tick() {
-            const elapsed = performance.now() - startRef.current;
-            const rem = Math.max(0, HOLD_MS - elapsed);
-            setRemaining(rem);
-            setDanger(rem <= RED_AT_MS);
-            if (rem <= 0) { window.close(); return; }
-            if (rem <= BUBBLE_AT_MS && phaseRef.current === 'holding') {
-                phaseRef.current = 'dissolving';
-                startEvaporation();
-            }
-            rafRef.current = requestAnimationFrame(tick);
-        }
-
-        function cancel() {
-            if (phaseRef.current === 'idle') return;
-            phaseRef.current = 'idle';
-            startRef.current = null;
-            if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
-            if (bubbleRafRef.current) { cancelAnimationFrame(bubbleRafRef.current); bubbleRafRef.current = null; }
-            const canvas = canvasRef.current;
-            if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
-            setVisible(false);
-            setDanger(false);
-            setRemaining(HOLD_MS);
-        }
-
-        function onKeyDown(e) {
-            if (!(e.ctrlKey && e.key === 'w')) return;
-            e.preventDefault();
-            if (phaseRef.current !== 'idle') return;
-            phaseRef.current = 'holding';
-            startRef.current = performance.now();
-            setVisible(true);
-            rafRef.current = requestAnimationFrame(tick);
-        }
-
-        function onKeyUp(e) {
-            if (e.key !== 'w' && e.key !== 'Control') return;
-            cancel();
-        }
-
         document.addEventListener('keydown', onKeyDown);
         document.addEventListener('keyup', onKeyUp);
         return () => {
@@ -139,13 +145,16 @@ export function CloseGuard() {
             document.removeEventListener('keydown', onKeyDown);
             document.removeEventListener('keyup', onKeyUp);
         };
-    }, []);
+    }, [onKeyDown, onKeyUp, cancel]);
+
+    const backdropCls = 'close-guard-backdrop'
+        + (visible ? ' visible' : '')
+        + (dissolving ? ' dissolving' : '');
+    const timerCls = 'close-guard-timer' + (danger ? ' danger' : '');
 
     return html`
-        <div class=${'close-guard-backdrop' + (visible ? ' visible' : '')}>
-            <span class=${'close-guard-timer' + (danger ? ' danger' : '')}>
-                ${(remaining / 1000).toFixed(1)}
-            </span>
+        <div class=${backdropCls}>
+            <span class=${timerCls}>${(remaining / 1000).toFixed(1)}</span>
         </div>
         <canvas ref=${canvasRef} class="close-guard-canvas" />
     `;
