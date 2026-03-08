@@ -34,15 +34,11 @@ fn resolve_plugin_worktree(dev_link_path: &Path, branch: Option<&str>) -> PathBu
     };
 
     if match_path == dev_link_path {
-        let label = branch.unwrap_or("base worktree");
-        log::info!(
-            "[worktree] already on branch {}: {}",
-            label,
-            dev_link_path.display()
-        );
+        log::debug!("[worktree] already on target: {}", dev_link_path.display());
         return dev_link_path.to_path_buf();
     }
 
+    #[cfg(feature = "dev")]
     log::info!(
         "[worktree] resolved {} -> {}",
         dev_link_path.display(),
