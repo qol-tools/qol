@@ -12,6 +12,7 @@ pub struct CursorSession {
     root: xlib::Window,
     base: BaseCursor,
     active_cursor: Option<xlib::Cursor>,
+    grow_cursor: Option<CursorImage>,
     restore_cursor: Option<CursorImage>,
 }
 
@@ -30,12 +31,14 @@ struct BaseCursor {
     default_size: u32,
 }
 
+#[derive(Clone)]
 struct CursorImage {
     width: u32,
     height: u32,
     xhot: u32,
     yhot: u32,
     pixels: Vec<u32>,
+    default_size: u32,
 }
 
 impl CursorSession {
@@ -54,6 +57,7 @@ impl CursorSession {
             root: unsafe { xlib::XDefaultRootWindow(display) },
             base,
             active_cursor: None,
+            grow_cursor: None,
             restore_cursor: None,
         })
     }
@@ -63,12 +67,17 @@ impl CursorSession {
             self.restore();
             return true;
         }
-        let Some(cursor) = make_cursor_at_scale(self.display, self.root, &self.base, scale) else {
+        if self.active_cursor.is_none() {
+            self.capture_live_cursors();
+        }
+        let cursor = if let Some(grow_cursor) = self.grow_cursor.as_ref() {
+            make_cursor_from_image_at_scale(self.display, self.root, grow_cursor, scale)
+        } else {
+            make_cursor_at_scale(self.display, self.root, &self.base, scale)
+        };
+        let Some(cursor) = cursor else {
             return false;
         };
-        if self.active_cursor.is_none() {
-            self.restore_cursor = load_live_cursor_image(self.display);
-        }
         apply_to_tree(self.display, self.root, cursor);
         self.flush();
         if let Some(old_cursor) = self.active_cursor.replace(cursor) {
@@ -93,11 +102,21 @@ impl CursorSession {
         if let Some(cursor) = self.active_cursor.take() {
             unsafe { xlib::XFreeCursor(self.display, cursor) };
         }
+        self.grow_cursor = None;
         self.restore_cursor = None;
     }
 
     fn flush(&self) {
         unsafe { xlib::XFlush(self.display) };
+    }
+
+    fn capture_live_cursors(&mut self) {
+        let live_cursor = load_live_cursor_image(self.display, self.base.default_size);
+        let Some(live_cursor) = live_cursor else {
+            return;
+        };
+        self.grow_cursor = Some(live_cursor.clone());
+        self.restore_cursor = Some(live_cursor);
     }
 }
 
@@ -265,7 +284,48 @@ fn make_cursor_from_image(
     Some(cursor)
 }
 
-fn load_live_cursor_image(display: *mut xlib::Display) -> Option<CursorImage> {
+fn make_cursor_from_image_at_scale(
+    display: *mut xlib::Display,
+    root: xlib::Window,
+    image: &CursorImage,
+    scale: f32,
+) -> Option<xlib::Cursor> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    let target_size = image.default_size as f32 * scale;
+    let factor = target_size / image.width as f32;
+    if !factor.is_finite() || factor <= 0.0 {
+        return None;
+    }
+    let requested_width = scaled_dimension(image.width, factor)?;
+    let requested_height = scaled_dimension(image.height, factor)?;
+    let (max_width, max_height) =
+        best_cursor_size(display, root, requested_width, requested_height);
+    let width = requested_width.min(max_width.max(1));
+    let height = requested_height.min(max_height.max(1));
+    let pixel_count = checked_pixel_count(width, height)?;
+    let cursor_image =
+        unsafe { xcursor::XcursorImageCreate(width.try_into().ok()?, height.try_into().ok()?) };
+    if cursor_image.is_null() {
+        return None;
+    }
+    let cursor = unsafe {
+        (*cursor_image).xhot = scaled_hotspot(image.xhot, factor, width);
+        (*cursor_image).yhot = scaled_hotspot(image.yhot, factor, height);
+        let pixels = std::slice::from_raw_parts_mut((*cursor_image).pixels, pixel_count);
+        scale_bilinear(&image.pixels, image.width, image.height, pixels, width, height);
+        let cursor = xcursor::XcursorImageLoadCursor(display, cursor_image);
+        xcursor::XcursorImageDestroy(cursor_image);
+        cursor
+    };
+    if cursor == 0 {
+        return None;
+    }
+    Some(cursor)
+}
+
+fn load_live_cursor_image(display: *mut xlib::Display, default_size: u32) -> Option<CursorImage> {
     let image = unsafe { xfixes::XFixesGetCursorImage(display) };
     if image.is_null() {
         return None;
@@ -287,6 +347,7 @@ fn load_live_cursor_image(display: *mut xlib::Display) -> Option<CursorImage> {
         xhot: sanitize_hotspot(u32::from(image_ref.xhot), width),
         yhot: sanitize_hotspot(u32::from(image_ref.yhot), height),
         pixels,
+        default_size,
     };
     unsafe { xlib::XFree(image as *mut _) };
     Some(cursor)
