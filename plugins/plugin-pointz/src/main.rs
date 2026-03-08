@@ -30,9 +30,9 @@ async fn main() -> Result<()> {
         log::info!("Handling action: {}", act);
     }
 
-    let command_service = features::command::command_service::CommandService::new();
+    let command_service = features::command::command_service::CommandService::new()?;
     let discovery_service =
-        features::discovery::discovery_service::DiscoveryService::new(config.clone());
+        features::discovery::discovery_service::DiscoveryService::new(config.clone())?;
 
     tokio::select! {
         res = status_server::run() => res?,
