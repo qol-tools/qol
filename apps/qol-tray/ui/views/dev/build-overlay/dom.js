@@ -100,14 +100,15 @@ export function finiteOr(value, fallback) {
 function makeRowRef(row, previous, getCompletionSnapshot) {
     const pluginId = row.dataset.pluginId || '';
     const snapshot = getCompletionSnapshot(pluginId, performance.now());
+    const preserveOverlay = previous?.overlay?.isConnected;
     return {
         row,
         pluginId,
         overlayHost: row.querySelector('.plugin-build-overlay-host'),
-        overlay: null,
-        fill: null,
-        main: null,
-        sub: null,
+        overlay: preserveOverlay ? previous.overlay : null,
+        fill: preserveOverlay ? previous.fill : null,
+        main: preserveOverlay ? previous.main : null,
+        sub: preserveOverlay ? previous.sub : null,
         displayPercent: finiteOr(previous?.displayPercent, finiteOr(snapshot?.percent, Number.NaN)),
         targetPercent: finiteOr(previous?.targetPercent, finiteOr(snapshot?.percent, Number.NaN)),
         lastBuildPercent: finiteOr(previous?.lastBuildPercent, finiteOr(snapshot?.percent, Number.NaN)),

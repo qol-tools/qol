@@ -15,6 +15,7 @@ use crate::dev::core::{CoreBuildResult, CoreEvent};
 use super::core_events;
 
 const MOCK_PROGRESS_DELAY: Duration = Duration::from_millis(45);
+const MOCK_RECOMPILE_DELAY: Duration = Duration::from_millis(35);
 
 pub(super) fn start_mock_self_update(
     state: Arc<dyn DevRuntimeStateStore>,
@@ -38,6 +39,7 @@ async fn run_mock_self_update(state: Arc<dyn DevRuntimeStateStore>, events: Arc<
     run_percent_task(
         state,
         DevMockTarget::SelfUpdate,
+        MOCK_PROGRESS_DELAY,
         move |percent| progress_events.send(DaemonEvent::UpdateProgress { percent }),
         move || events.send(DaemonEvent::UpdateComplete),
     )
@@ -132,6 +134,7 @@ fn mock_target_cancelled(state: &dyn DevRuntimeStateStore, target: DevMockTarget
 async fn run_percent_task<ProgressFn, CompleteFn>(
     state: Arc<dyn DevRuntimeStateStore>,
     target: DevMockTarget,
+    step_delay: Duration,
     mut on_progress: ProgressFn,
     on_complete: CompleteFn,
 ) where
@@ -146,7 +149,7 @@ async fn run_percent_task<ProgressFn, CompleteFn>(
         }
 
         on_progress(percent);
-        tokio::time::sleep(MOCK_PROGRESS_DELAY).await;
+        tokio::time::sleep(step_delay).await;
     }
 
     on_complete();

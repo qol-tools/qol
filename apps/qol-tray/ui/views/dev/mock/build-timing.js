@@ -2,13 +2,15 @@ import { BUILD_ANIMATION } from '../build-animation.js';
 
 const COMPILE_PHASE_COUNT = 24;
 const COMPILE_STEP_COUNT = 66;
-const COMPILE_TOTAL_MS = 1320;
+const MIN_BUILD_MS = 1000;
+const MAX_BUILD_MS = 3000;
 
 export function compileTiming() {
+    const totalMs = MIN_BUILD_MS + Math.random() * (MAX_BUILD_MS - MIN_BUILD_MS);
     return {
         phaseCount: COMPILE_PHASE_COUNT,
         stepCount: COMPILE_STEP_COUNT,
-        stepDelayMs: Math.round(COMPILE_TOTAL_MS / COMPILE_STEP_COUNT),
+        stepDelayMs: Math.round(totalMs / COMPILE_STEP_COUNT),
         completionDelayMs:
             BUILD_ANIMATION.completionRampMs
             + BUILD_ANIMATION.completionHoldMs

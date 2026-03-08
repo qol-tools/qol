@@ -38,10 +38,10 @@ export function resolveDevSidebarState(devFlows) {
     if (recompile.state === FLOW_STATE.FAILED) return { status: 'error', message: recompile.message };
     if (recompile.state === FLOW_STATE.ACTIVE) return { status: 'compiling', percent: recompile.percent, phase: recompile.phase || 'Recompiling QoL Tray' };
     if (recompile.state === FLOW_STATE.RESTARTING) return { status: 'compiling', percent: 100, phase: 'Restarting...' };
+    if (recompile.state === FLOW_STATE.DONE) return { status: 'recompile_done' };
     if (update.state === FLOW_STATE.FAILED) return { status: 'error', message: update.message };
     if (update.state === FLOW_STATE.ACTIVE) return { status: 'downloading', percent: update.percent };
     if (update.state === FLOW_STATE.RESTARTING) return { status: 'downloading', percent: 100 };
-    if (recompile.state === FLOW_STATE.DONE) return { status: 'recompile_done' };
     if (update.state === FLOW_STATE.DONE) return { status: 'done' };
     return { status: 'idle' };
 }

@@ -10,7 +10,8 @@ export function nextBuildStartedState() {
 }
 
 export function nextBuildProgressState(currentProgress, event) {
-    const status = event.status || 'building';
+    const rawStatus = event.status || 'building';
+    const status = rawStatus === 'success' ? 'completed' : rawStatus;
     const normalizedPercent = normalizePercent(event.percent);
     const previous = currentProgress[event.plugin_id];
     return {
