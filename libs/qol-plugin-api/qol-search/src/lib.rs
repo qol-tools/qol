@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, PartialEq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FuzzyMatch {
     pub score: i32,
     pub positions: Vec<usize>,
@@ -119,14 +121,14 @@ fn score_contiguous_pass(
         }
 
         let positions: Vec<usize> = (start..start + query.len()).collect();
-        let m = FuzzyMatch {
+        let candidate_match = FuzzyMatch {
             score: compute_score(&positions, candidate, query_orig),
             positions,
         };
 
         best = match best {
-            Some(current) if current.score <= m.score => Some(current),
-            _ => Some(m),
+            Some(current) if current.score <= candidate_match.score => Some(current),
+            _ => Some(candidate_match),
         };
     }
 
@@ -163,14 +165,14 @@ fn score_word_match_pass(
 
         let positions: Vec<usize> = (start..end).collect();
         let word_bonus = -10 * query.len() as i32;
-        let m = FuzzyMatch {
+        let candidate_match = FuzzyMatch {
             score: compute_score(&positions, candidate, query_orig) + word_bonus,
             positions,
         };
 
         best = match best {
-            Some(current) if current.score <= m.score => Some(current),
-            _ => Some(m),
+            Some(current) if current.score <= candidate_match.score => Some(current),
+            _ => Some(candidate_match),
         };
     }
 
@@ -212,6 +214,7 @@ fn is_boundary(chars: &[char], idx: usize) -> bool {
     if idx == 0 {
         return true;
     }
+
     let prev = chars[idx - 1];
     let curr = chars[idx];
     prev == ' '
@@ -226,15 +229,10 @@ fn compute_score(positions: &[usize], candidate: &[char], query_orig: &[char]) -
     let query_len = query_orig.len();
 
     for (i, &pos) in positions.iter().enumerate() {
-        let gap = if i == 0 {
-            // When the first match lands on a word boundary, the distance
-            // into the string barely matters — cap it so "Microsoft Teams"
-            // isn't punished for having a long prefix before "Teams".
-            if pos > 0 && is_boundary(candidate, pos) {
-                pos.min(1)
-            } else {
-                pos
-            }
+        let gap = if i == 0 && pos > 0 && is_boundary(candidate, pos) {
+            pos.min(1)
+        } else if i == 0 {
+            pos
         } else {
             pos - positions[i - 1] - 1
         };
@@ -266,7 +264,7 @@ fn compute_score(positions: &[usize], candidate: &[char], query_orig: &[char]) -
 }
 
 fn is_fully_contiguous(positions: &[usize]) -> bool {
-    positions.len() > 1 && positions.windows(2).all(|w| w[1] == w[0] + 1)
+    positions.len() > 1 && positions.windows(2).all(|window| window[1] == window[0] + 1)
 }
 
 #[cfg(test)]

@@ -1,0 +1,9 @@
+[package]
+name = "qol-search"
+version = "0.1.0"
+edition = "2021"
+description = "Shared fuzzy search utilities for QoL projects"
+license = "MIT"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
