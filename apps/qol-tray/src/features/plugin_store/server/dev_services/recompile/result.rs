@@ -20,6 +20,7 @@ fn handle_recompile_success(task: SelfRecompileTask) {
         task.runtime,
         task.restart,
         task.worktree_path,
+        task.events,
     );
 }
 

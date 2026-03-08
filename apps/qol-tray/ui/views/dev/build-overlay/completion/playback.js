@@ -1,9 +1,7 @@
 export function clearAll(ctx) {
     cancelFrame(ctx);
     for (const rowRef of ctx.rowRefs.values()) {
-        ctx.stopFillAnimation(rowRef);
-        rowRef.completing = false;
-        if (rowRef.overlay) rowRef.overlay.classList.remove('is-completing');
+        ctx.clearOverlayNodes(rowRef, ctx.stopFillAnimation);
     }
     ctx.store.clearAll();
 }

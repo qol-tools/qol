@@ -12,6 +12,7 @@ pub(super) fn schedule_self_restart_after_idle(
     runtime: Arc<DevRuntimeService>,
     restart: Arc<dyn RestartPort>,
     worktree_path: Option<PathBuf>,
+    events: Arc<crate::daemon::EventBus>,
 ) {
     if !runtime.try_mark_restart_pending() {
         return;
@@ -22,6 +23,9 @@ pub(super) fn schedule_self_restart_after_idle(
         let Some(restart_binary) =
             resolve_restart_binary(runtime.as_ref(), restart.as_ref(), worktree_path.as_deref())
         else {
+            events.send(crate::daemon::DaemonEvent::SelfRecompileFailed {
+                message: "Restart binary not found after build".to_string(),
+            });
             return;
         };
         exec_restart_after_cleanup(

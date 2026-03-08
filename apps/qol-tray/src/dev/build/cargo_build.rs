@@ -4,6 +4,7 @@ mod self_build;
 
 use std::path::Path;
 use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
+use std::time::{Duration, Instant};
 
 use super::types::BuildResult;
 use crate::dev::adapters::CargoPluginBuilder;
@@ -24,6 +25,24 @@ pub(super) fn spawn_piped(command: &mut Command) -> Result<CargoChild, std::io::
         stdout,
         stderr,
     })
+}
+
+pub(super) const BUILD_TIMEOUT: Duration = Duration::from_secs(120);
+
+pub(super) fn wait_with_timeout(child: &mut Child, timeout: Duration) -> Result<bool, String> {
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status.success()),
+            Ok(None) if start.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("Build timed out after {}s", timeout.as_secs()));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(250)),
+            Err(e) => return Err(format!("Failed waiting for build: {}", e)),
+        }
+    }
 }
 
 pub(crate) struct CargoCommandPluginBuilder;

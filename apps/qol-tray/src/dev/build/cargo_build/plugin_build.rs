@@ -64,10 +64,10 @@ fn finish_build<F>(
 where
     F: FnMut(u8, String),
 {
-    match child.wait() {
-        Ok(status) if status.success() => success_build(plugin_id, path, combined, on_progress),
-        Ok(_) => failed_status_build(plugin_id, combined),
-        Err(error) => failed_wait_build(plugin_id, error),
+    match super::wait_with_timeout(&mut child, super::BUILD_TIMEOUT) {
+        Ok(true) => success_build(plugin_id, path, combined, on_progress),
+        Ok(false) => failed_status_build(plugin_id, combined),
+        Err(message) => failed_build(plugin_id, message),
     }
 }
 
@@ -89,12 +89,6 @@ where
 fn failed_status_build(plugin_id: &str, combined: String) -> BuildResult {
     log::error!("Cargo build failed for {}:\n{}", plugin_id, combined);
     finished_build(plugin_id, false, combined)
-}
-
-fn failed_wait_build(plugin_id: &str, error: std::io::Error) -> BuildResult {
-    let message = format!("Failed while waiting for cargo build: {}", error);
-    log::error!("Build error for {}: {}", plugin_id, message);
-    failed_build(plugin_id, message)
 }
 
 fn failed_spawn(plugin_id: &str, error: std::io::Error) -> BuildResult {

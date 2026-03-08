@@ -16,12 +16,12 @@ function readDefaultWorktree() {
     try { return localStorage.getItem(WT_KEY) || null; } catch { return null; }
 }
 
-export function useApp() {
+export function useApp({ onDissolve } = {}) {
     const { devEnabled, appVersion } = useAppBootstrap();
     const viewOrder = useMemo(() => buildViewOrder(devEnabled), [devEnabled]);
     const { activeViewId, activePluginId, switchView, openPluginConfig, closePluginConfig } = useRouter({ viewOrder });
     const mounted = useMountedViews(activeViewId);
-    const { updateState, checkForUpdate, beginSelfUpdate, failSelfUpdate, beginDevRecompile, failDevRecompile } = useAppUpdateCoordinator({ devEnabled, appVersion });
+    const { updateState, checkForUpdate, beginSelfUpdate, failSelfUpdate, beginDevRecompile, failDevRecompile } = useAppUpdateCoordinator({ devEnabled, appVersion, onDissolve });
     const [worktrees, setWorktrees] = useState([]);
     const [defaultWorktree, setDefaultWorktreeState] = useState(readDefaultWorktree);
     const defaultWorktreeRef = useRef(defaultWorktree);

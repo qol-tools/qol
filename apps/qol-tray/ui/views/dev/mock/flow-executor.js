@@ -10,6 +10,7 @@ import {
     setBackendTargets,
     stopMockFlowRun
 } from './reducer.js';
+import { MOCK_FLOWS_DONE } from './events.js';
 
 export function beginNewRun(ctx) {
     const started = beginMockFlowRun(ctx.model);
@@ -126,5 +127,8 @@ export function completeMockTarget(ctx, targetId) {
     const result = completeBackendTarget(ctx.model, targetId, ctx.state.mockTesting);
     ctx.model = result.model;
     ctx.state.mockTesting = result.mockTesting;
-    if (result.completed) ctx.onNeedsRender();
+    if (!result.completed) return;
+    ctx.buildController.stopLocalMockBuildUi();
+    ctx.onNeedsRender();
+    document.dispatchEvent(new CustomEvent(MOCK_FLOWS_DONE));
 }
