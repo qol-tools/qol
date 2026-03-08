@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -13,81 +12,19 @@ use super::layout::{window_height_for_rows, HEADER_HEIGHT, WINDOW_WIDTH};
 use super::platform;
 use super::{LauncherView, LAUNCHER_APP_ID};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct MonitorKey {
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-}
+use qol_plugin_api::window::{ActiveWindows, MonitorKey};
 
-impl MonitorKey {
-    fn from_bounds(bounds: &Bounds<Pixels>) -> Self {
-        Self {
-            x: bounds.origin.x.to_f64().round() as i32,
-            y: bounds.origin.y.to_f64().round() as i32,
-            width: bounds.size.width.to_f64().round() as i32,
-            height: bounds.size.height.to_f64().round() as i32,
-        }
-    }
-}
+pub(crate) type ActiveLaunchers = ActiveWindows<LauncherView>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum LauncherTarget {
-    Default,
-    Monitor(MonitorKey),
-}
-
-impl LauncherTarget {
-    fn from_snapshot(snapshot: Option<&monitor::ActiveMonitor>) -> Self {
-        snapshot
-            .map(|m| Self::Monitor(MonitorKey::from_bounds(&m.bounds())))
-            .unwrap_or(Self::Default)
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct ActiveLaunchers {
-    windows: HashMap<LauncherTarget, WindowHandle<LauncherView>>,
-}
-
-impl ActiveLaunchers {
-    fn existing(&self, target: LauncherTarget) -> Option<WindowHandle<LauncherView>> {
-        self.windows.get(&target).cloned()
-    }
-
-    fn insert(&mut self, target: LauncherTarget, handle: WindowHandle<LauncherView>) {
-        self.windows.insert(target, handle);
-    }
-
-    fn remove(&mut self, target: LauncherTarget) {
-        self.windows.remove(&target);
-    }
-
-    pub(crate) fn handles(&self) -> Vec<WindowHandle<LauncherView>> {
-        self.windows.values().cloned().collect()
-    }
-
-    fn hide_non_target(&mut self, target: LauncherTarget, cx: &mut App) {
-        let handles: Vec<(LauncherTarget, WindowHandle<LauncherView>)> = self
-            .windows
-            .iter()
-            .filter(|(key, _)| **key != target)
-            .map(|(key, handle)| (*key, handle.clone()))
-            .collect();
-
-        let mut removed = Vec::new();
-        for (key, handle) in handles {
-            let _ = handle.update(cx, |view, window, _| {
-                view.set_showing(false);
-                window.remove_window();
-            });
-            removed.push(key);
-        }
-        for key in removed {
-            self.windows.remove(&key);
-        }
-    }
+fn get_target(snapshot: Option<&monitor::ActiveMonitor>) -> MonitorKey {
+    snapshot
+        .map(|m| MonitorKey::from_bounds(&m.bounds()))
+        .unwrap_or(MonitorKey {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        })
 }
 
 fn snapshot_entries(entries: &SharedEntries) -> Arc<PreloadedEntries> {
@@ -103,11 +40,11 @@ pub(crate) fn activate_or_open_launcher(
     monitor_snapshot: Option<monitor::ActiveMonitor>,
     cx: &mut App,
 ) {
-    let target = LauncherTarget::from_snapshot(monitor_snapshot.as_ref());
+    let target = get_target(monitor_snapshot.as_ref());
     let current_entries = snapshot_entries(&entries);
     eprintln!(
         "[launcher] activate_or_open target={target:?} cached_windows={}",
-        active.borrow().windows.len()
+        active.borrow().len()
     );
     #[cfg(debug_assertions)]
     eprintln!(
@@ -124,9 +61,16 @@ pub(crate) fn activate_or_open_launcher(
     #[cfg(debug_assertions)]
     eprintln!(
         "[launcher] cached_windows={}",
-        active.borrow().windows.len()
+        active.borrow().len()
     );
-    active.borrow_mut().hide_non_target(target, cx);
+    active.borrow().hide_non_target(
+        target,
+        |view: &mut LauncherView, window: &mut Window, _| {
+            view.set_showing(false);
+            window.minimize_window();
+        },
+        cx,
+    );
 
     if try_activate_existing_launcher(active.clone(), current_entries.clone(), target, cx) {
         eprintln!("[launcher] activate_or_open reused existing launcher");
@@ -173,7 +117,7 @@ fn open_launcher_window(
     cx: &mut App,
     options: WindowOptions,
     entries: Arc<PreloadedEntries>,
-    target: LauncherTarget,
+    target: MonitorKey,
 ) -> Option<WindowHandle<LauncherView>> {
     match open_window_with_focus(cx, options, {
         let entries = entries.clone();
@@ -220,20 +164,15 @@ fn open_launcher_window(
 fn try_activate_visible_launcher(
     active: Rc<RefCell<ActiveLaunchers>>,
     entries: Arc<PreloadedEntries>,
-    expected_target: LauncherTarget,
+    expected_target: MonitorKey,
     cx: &mut App,
 ) -> bool {
-    let handles: Vec<(LauncherTarget, WindowHandle<LauncherView>)> = active
-        .borrow()
-        .windows
-        .iter()
-        .map(|(target, handle)| (*target, *handle))
-        .collect();
+    let handles = active.borrow().iter();
 
     let mut visible = None;
     let mut dead = Vec::new();
     for (target, handle) in handles {
-        match handle.update(cx, |view, _, _| view.is_showing) {
+        match handle.update(cx, |view: &mut LauncherView, _, _| view.is_showing) {
             Ok(true) => {
                 visible = Some((target, handle));
                 break;
@@ -269,7 +208,7 @@ fn try_activate_visible_launcher(
 fn try_activate_existing_launcher(
     active: Rc<RefCell<ActiveLaunchers>>,
     entries: Arc<PreloadedEntries>,
-    target: LauncherTarget,
+    target: MonitorKey,
     cx: &mut App,
 ) -> bool {
     let existing = active.borrow().existing(target);
