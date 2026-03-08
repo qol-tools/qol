@@ -19,9 +19,28 @@ pub(super) fn build_qol_tray_self_with_progress<F>(
 where
     F: FnMut(u8, String),
 {
-    let repo_root = repo_root
+    let mut repo_root = repo_root
         .map(Path::to_path_buf)
         .unwrap_or_else(paths::repo_root_from_manifest_dir);
+
+    // If a centralized worktree path is given but contains no Cargo.toml at the root,
+    // check if qol-tray was explicitly checked out inside it.
+    if !repo_root.join("Cargo.toml").exists() {
+        let nested_tray = repo_root.join("qol-tray");
+        if nested_tray.join("Cargo.toml").exists() {
+            repo_root = nested_tray;
+        } else {
+            // Revert back to base repository if this feature doesn't span qol-tray
+            let base = paths::repo_root_from_manifest_dir();
+            log::info!(
+                "[worktree] qol-tray not found in feature {}, falling back to base: {}",
+                repo_root.display(),
+                base.display()
+            );
+            repo_root = base;
+        }
+    }
+
     let manifest_path = repo_root.join("Cargo.toml");
     if let Err(error) = ensure_manifest(&manifest_path) {
         return failed_build(error);
