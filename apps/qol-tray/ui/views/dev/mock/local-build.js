@@ -11,12 +11,13 @@ export async function runLocalMockPluginBuild(
         return true;
     }
 
-    for (const pluginId of pluginIds) {
+    const runs = pluginIds.map(async pluginId => {
         for await (const step of simulatePluginBuild(pluginId, sleep)) {
-            if (!isCurrentRun()) return false;
+            if (!isCurrentRun()) return;
             applyStep(step);
         }
-    }
+    });
+    await Promise.all(runs);
 
     if (!isCurrentRun()) return false;
     await Promise.resolve(completeBuild(buildResults(pluginIds)));

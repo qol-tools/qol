@@ -13,6 +13,7 @@ function syncCompletedRow(rowRef, completion, ensureRowOverlayNodes) {
 }
 
 function syncActiveRow(rowRef, buildState, buildAnimation, normalizePercent, formatDetail, ensureRowOverlayNodes, completion, fill, setOverlayCopy) {
+    if (completion.getState(rowRef.pluginId) === 'playing') return true;
     if (!ensureRowOverlayNodes(rowRef)) return false;
     const label = buildState.status === 'queued' ? 'Queued' : 'Compiling';
     const detail = formatDetail(buildState.phase, buildState.percent);

@@ -38,7 +38,9 @@ function handleBuildComplete(state, event, overlay, clearSync, onBuildComplete) 
     logLoading('event:build_complete', {
         results: Array.isArray(event.results) ? event.results.length : 0
     });
-    const completedPluginIds = Object.keys(state.buildProgress);
+    const completedPluginIds = Object.keys(state.buildProgress)
+        .filter(id => state.buildProgress[id]?.status !== 'skipped');
+    overlay.cancelPendingSync();
     overlay.completeRows(completedPluginIds, () => {
         clearSync();
         Object.assign(state, nextBuildCompletedState(event.results));
@@ -47,7 +49,9 @@ function handleBuildComplete(state, event, overlay, clearSync, onBuildComplete) 
 }
 
 export function completeLocalBuild(state, overlay, clearSync, maybeRender, results) {
-    const ids = Object.keys(state.buildProgress);
+    const ids = Object.keys(state.buildProgress)
+        .filter(id => state.buildProgress[id]?.status !== 'skipped');
+    overlay.cancelPendingSync();
     overlay.completeRows(ids, () => {
         clearSync();
         state.building = false;

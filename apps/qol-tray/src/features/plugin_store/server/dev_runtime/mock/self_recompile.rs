@@ -8,6 +8,7 @@ pub(super) async fn run(state: Arc<dyn DevRuntimeStateStore>, events: Arc<EventB
     super::run_percent_task(
         state,
         DevMockTarget::SelfRecompile,
+        super::MOCK_RECOMPILE_DELAY,
         move |percent| {
             progress_events.send(DaemonEvent::SelfRecompileProgress {
                 percent,

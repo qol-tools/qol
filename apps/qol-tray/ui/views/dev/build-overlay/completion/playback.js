@@ -104,7 +104,8 @@ function tick(ctx, timestamp) {
     let hasActive = false;
     for (const [pluginId, completion] of ctx.store.entries()) {
         if (completion.state !== 'playing') continue;
-        if (ctx.store.remainingMs(pluginId, timestamp) <= 0) {
+        const remaining = ctx.store.remainingMs(pluginId, timestamp);
+        if (remaining <= 0) {
             finalizeAndClear(ctx, pluginId);
             continue;
         }
