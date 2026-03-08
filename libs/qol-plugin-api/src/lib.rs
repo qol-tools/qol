@@ -1,15 +1,8 @@
 #[cfg(feature = "app-icons")]
 pub mod app_icon;
 
-pub mod color;
-pub mod config;
 #[cfg(unix)]
 pub mod daemon;
-pub mod frecency;
-pub mod platform;
-pub mod search {
-    pub use qol_search::*;
-}
 
 #[cfg(feature = "gpui")]
 pub mod keepalive;

@@ -11,12 +11,10 @@ gpui = ["dep:gpui"]
 app-icons = []
 
 [dependencies]
-dirs = "6.0"
 gpui = { version = "0.2", optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 qol-runtime = { git = "https://github.com/qol-tools/qol-runtime" }
-qol-search = { path = "qol-search" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
