@@ -197,8 +197,8 @@ fn find_boundary_match(
     start: usize,
 ) -> Option<usize> {
     let mut first = None;
-    for i in start..candidate_lower.len() {
-        if candidate_lower[i] == query_char {
+    for (i, &ch) in candidate_lower.iter().enumerate().skip(start) {
+        if ch == query_char {
             if first.is_none() {
                 first = Some(i);
             }
