@@ -3,9 +3,9 @@ pub mod discovery;
 pub mod launch;
 pub mod ui;
 
-pub use qol_plugin_api::frecency;
+pub use qol_frecency as frecency;
 pub use qol_plugin_api::monitor;
-pub use qol_plugin_api::search::{fuzzy_match, FuzzyMatch};
+pub use qol_search::{fuzzy_match, FuzzyMatch};
 pub use qol_plugin_api::window::open_window_with_focus;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

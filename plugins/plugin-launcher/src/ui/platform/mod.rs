@@ -23,4 +23,4 @@ pub fn set_activation_policy() {
     imp::set_activation_policy()
 }
 
-pub use qol_plugin_api::platform::{current_capabilities, PlatformCapabilities};
+pub use qol_platform::{current_capabilities, PlatformCapabilities};
