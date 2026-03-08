@@ -1,0 +1,39 @@
+.close-guard-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 9000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(var(--overlay-ink-rgb), 0.82);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+}
+
+.close-guard-backdrop.visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.close-guard-timer {
+    position: relative;
+    z-index: 9001;
+    font-size: 5rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+    transition: color 0.3s ease;
+    user-select: none;
+    letter-spacing: -0.02em;
+}
+
+.close-guard-timer.danger {
+    color: var(--danger);
+}
+
+.close-guard-canvas {
+    position: fixed;
+    inset: 0;
+    z-index: 9002;
+    pointer-events: none;
+}
