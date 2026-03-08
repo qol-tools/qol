@@ -10,9 +10,7 @@ pub struct AppTracker {
 
 impl AppTracker {
     pub fn start() -> Arc<Self> {
-        let bundle_id = Arc::new(RwLock::new(
-            frontmost_bundle_id().unwrap_or_default(),
-        ));
+        let bundle_id = Arc::new(RwLock::new(frontmost_bundle_id().unwrap_or_default()));
 
         let poll_ref = Arc::clone(&bundle_id);
         std::thread::spawn(move || loop {

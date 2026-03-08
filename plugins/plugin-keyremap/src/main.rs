@@ -1,5 +1,7 @@
 #[cfg(not(target_os = "macos"))]
-compile_error!("plugin-keyremap: only macOS is supported (requires CGEventTap and Accessibility APIs)");
+compile_error!(
+    "plugin-keyremap: only macOS is supported (requires CGEventTap and Accessibility APIs)"
+);
 
 mod app_tracker;
 mod config;

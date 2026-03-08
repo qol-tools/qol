@@ -31,12 +31,24 @@ impl Modifiers {
 
     pub fn label(&self) -> String {
         let mut parts = Vec::new();
-        if self.ctrl { parts.push("ctrl"); }
-        if self.shift { parts.push("shift"); }
-        if self.alt { parts.push("alt"); }
-        if self.cmd { parts.push("cmd"); }
-        if self.ralt { parts.push("ralt"); }
-        if parts.is_empty() { return "(none)".into(); }
+        if self.ctrl {
+            parts.push("ctrl");
+        }
+        if self.shift {
+            parts.push("shift");
+        }
+        if self.alt {
+            parts.push("alt");
+        }
+        if self.cmd {
+            parts.push("cmd");
+        }
+        if self.ralt {
+            parts.push("ralt");
+        }
+        if parts.is_empty() {
+            return "(none)".into();
+        }
         parts.join("+")
     }
 }
@@ -105,15 +117,28 @@ pub enum ScrollAction {
 }
 
 pub fn resolve(config: &RemapConfig) -> ResolvedConfig {
-    let key_rules: Vec<ResolvedKeyRule> = config.key_rules.iter().flat_map(resolve_key_rule).collect();
+    let key_rules: Vec<ResolvedKeyRule> =
+        config.key_rules.iter().flat_map(resolve_key_rule).collect();
     warn_shadowed_rules(&key_rules);
     ResolvedConfig {
         enabled: config.enabled,
         excluded_apps: config.excluded_apps.iter().cloned().collect(),
-        char_rules: config.char_rules.iter().filter_map(resolve_char_rule).collect(),
+        char_rules: config
+            .char_rules
+            .iter()
+            .filter_map(resolve_char_rule)
+            .collect(),
         key_rules,
-        mouse_rules: config.mouse_rules.iter().filter_map(resolve_mouse_rule).collect(),
-        scroll_rules: config.scroll_rules.iter().filter_map(resolve_scroll_rule).collect(),
+        mouse_rules: config
+            .mouse_rules
+            .iter()
+            .filter_map(resolve_mouse_rule)
+            .collect(),
+        scroll_rules: config
+            .scroll_rules
+            .iter()
+            .filter_map(resolve_scroll_rule)
+            .collect(),
     }
 }
 
@@ -139,21 +164,28 @@ fn warn_shadowed_rules(rules: &[ResolvedKeyRule]) {
 pub fn diff_key_rules(old: &[ResolvedKeyRule], new: &[ResolvedKeyRule]) -> Vec<String> {
     let mut warnings = Vec::new();
     for old_rule in old {
-        let new_match = new.iter().find(|r| r.from_mods == old_rule.from_mods && r.from_key == old_rule.from_key);
+        let new_match = new
+            .iter()
+            .find(|r| r.from_mods == old_rule.from_mods && r.from_key == old_rule.from_key);
         match new_match {
-            Some(new_rule) if new_rule.to_mods != old_rule.to_mods || new_rule.to_key != old_rule.to_key => {
+            Some(new_rule)
+                if new_rule.to_mods != old_rule.to_mods || new_rule.to_key != old_rule.to_key =>
+            {
                 warnings.push(format!(
                     "rule changed — {}: was {}+{}, now {}+{}",
                     rule_label(&old_rule.from_mods, old_rule.from_key),
-                    old_rule.to_mods.label(), keycode::key_name(old_rule.to_key),
-                    new_rule.to_mods.label(), keycode::key_name(new_rule.to_key),
+                    old_rule.to_mods.label(),
+                    keycode::key_name(old_rule.to_key),
+                    new_rule.to_mods.label(),
+                    keycode::key_name(new_rule.to_key),
                 ));
             }
             None => {
                 warnings.push(format!(
                     "rule removed — {} (was {}+{})",
                     rule_label(&old_rule.from_mods, old_rule.from_key),
-                    old_rule.to_mods.label(), keycode::key_name(old_rule.to_key),
+                    old_rule.to_mods.label(),
+                    keycode::key_name(old_rule.to_key),
                 ));
             }
             _ => {}
@@ -171,7 +203,9 @@ pub fn process_key_event(
     // Phase 1: global char_rules (bypass excluded apps)
     for rule in &config.char_rules {
         if rule.global && rule.from_mods.matches(&mods) && rule.from_key == key {
-            return KeyAction::Char { text: rule.to_char.clone() };
+            return KeyAction::Char {
+                text: rule.to_char.clone(),
+            };
         }
     }
 
@@ -193,7 +227,9 @@ pub fn process_key_event(
     // Phase 4: non-global char_rules
     for rule in &config.char_rules {
         if !rule.global && rule.from_mods.matches(&mods) && rule.from_key == key {
-            return KeyAction::Char { text: rule.to_char.clone() };
+            return KeyAction::Char {
+                text: rule.to_char.clone(),
+            };
         }
     }
 
@@ -282,7 +318,12 @@ fn resolve_char_rule(rule: &CharRule) -> Option<ResolvedCharRule> {
 
 fn resolve_key_rule(rule: &KeyRule) -> Vec<ResolvedKeyRule> {
     match rule {
-        KeyRule::Batch { from_mods, to_mods, keys, global } => {
+        KeyRule::Batch {
+            from_mods,
+            to_mods,
+            keys,
+            global,
+        } => {
             let from = parse_modifiers(from_mods);
             let to = parse_modifiers(to_mods);
             let global = *global;
@@ -299,9 +340,19 @@ fn resolve_key_rule(rule: &KeyRule) -> Vec<ResolvedKeyRule> {
                 })
                 .collect()
         }
-        KeyRule::Single { from_mods, from_key, to_mods, to_key, global } => {
-            let Some(fk) = keycode::parse_key(from_key) else { return vec![] };
-            let Some(tk) = keycode::parse_key(to_key) else { return vec![] };
+        KeyRule::Single {
+            from_mods,
+            from_key,
+            to_mods,
+            to_key,
+            global,
+        } => {
+            let Some(fk) = keycode::parse_key(from_key) else {
+                return vec![];
+            };
+            let Some(tk) = keycode::parse_key(to_key) else {
+                return vec![];
+            };
             vec![ResolvedKeyRule {
                 from_mods: parse_modifiers(from_mods),
                 from_key: fk,
@@ -350,15 +401,20 @@ mod tests {
     }
 
     fn arb_modifiers() -> impl Strategy<Value = Modifiers> {
-        (any::<bool>(), any::<bool>(), any::<bool>(), any::<bool>(), any::<bool>()).prop_map(
-            |(ctrl, shift, alt, cmd, ralt)| Modifiers {
+        (
+            any::<bool>(),
+            any::<bool>(),
+            any::<bool>(),
+            any::<bool>(),
+            any::<bool>(),
+        )
+            .prop_map(|(ctrl, shift, alt, cmd, ralt)| Modifiers {
                 ctrl,
                 shift,
                 alt,
                 cmd,
                 ralt,
-            },
-        )
+            })
     }
 
     fn arb_keycode() -> impl Strategy<Value = u16> {

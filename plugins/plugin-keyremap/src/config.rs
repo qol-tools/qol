@@ -112,8 +112,7 @@ mod tests {
 
     #[test]
     fn parse_empty_config() {
-        let config: RemapConfig =
-            serde_json::from_str("{}").expect("empty config should parse");
+        let config: RemapConfig = serde_json::from_str("{}").expect("empty config should parse");
         assert!(config.enabled);
         assert!(config.excluded_apps.is_empty());
         assert!(config.key_rules.is_empty());
@@ -151,7 +150,9 @@ mod tests {
         let json = r#"{ "from_mods": ["ctrl"], "from_key": "y", "to_mods": ["cmd", "shift"], "to_key": "z" }"#;
         let rule: KeyRule = serde_json::from_str(json).expect("single rule should parse");
         match rule {
-            KeyRule::Single { from_key, to_key, .. } => {
+            KeyRule::Single {
+                from_key, to_key, ..
+            } => {
                 assert_eq!(from_key, "y");
                 assert_eq!(to_key, "z");
             }

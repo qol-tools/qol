@@ -8,7 +8,9 @@ use core_graphics::event::{
 };
 
 use crate::app_tracker::AppTracker;
-use crate::remap::{self, KeyAction, Modifiers, MouseAction, MouseButton, ResolvedConfig, ScrollAction};
+use crate::remap::{
+    self, KeyAction, Modifiers, MouseAction, MouseButton, ResolvedConfig, ScrollAction,
+};
 
 pub struct TapState {
     config: AtomicPtr<ResolvedConfig>,
@@ -36,7 +38,10 @@ impl TapState {
 
     fn config(&self) -> Arc<ResolvedConfig> {
         let ptr = self.config.load(Ordering::Acquire);
-        assert!(!ptr.is_null(), "TapState config pointer should never be null");
+        assert!(
+            !ptr.is_null(),
+            "TapState config pointer should never be null"
+        );
         unsafe {
             Arc::increment_strong_count(ptr);
             Arc::from_raw(ptr)
@@ -144,9 +149,7 @@ fn handle_event(
         CGEventType::RightMouseDown | CGEventType::RightMouseUp => {
             handle_mouse_event(config.as_ref(), event, MouseButton::Right, &bundle_id)
         }
-        CGEventType::ScrollWheel => {
-            handle_scroll_event(config.as_ref(), event, &bundle_id)
-        }
+        CGEventType::ScrollWheel => handle_scroll_event(config.as_ref(), event, &bundle_id),
         _ => CallbackResult::Keep,
     }
 }
@@ -176,7 +179,10 @@ fn handle_key_event(
 
     match action {
         KeyAction::Passthrough => CallbackResult::Keep,
-        KeyAction::Remap { mods: new_mods, key } => {
+        KeyAction::Remap {
+            mods: new_mods,
+            key,
+        } => {
             let new_flags = build_flags(flags, mods, new_mods);
             event.set_flags(new_flags);
             event.set_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE, key as i64);
