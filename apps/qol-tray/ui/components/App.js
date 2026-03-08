@@ -1,10 +1,12 @@
 import { html } from '../lib/html.js';
+import { useRef, useCallback } from 'preact/hooks';
 import { SidebarNav } from './SidebarNav.js';
 import { SidebarFooter } from './SidebarFooter.js';
 import { PaletteProvider } from '../palette/context.js';
 import { useApp } from './app/useApp.js';
 import { renderMountedViews } from './app/views.js';
 import { useScrollFollow } from '../hooks/useScrollIntoView.js';
+import { RecompileDissolve } from './RecompileDissolve.js';
 
 export function App() {
     return html`<${PaletteProvider}><${AppShell} /><//>`;
@@ -12,7 +14,9 @@ export function App() {
 
 function AppShell() {
     useScrollFollow();
-    const { devEnabled, appVersion, viewOrder, activeViewId, activePluginId, openPluginConfig, closePluginConfig, mounted, updateState, handleSidebarAction, handleViewClick, worktrees, defaultWorktree, setDefaultWorktree } = useApp();
+    const dissolveRef = useRef(null);
+    const onDissolve = useCallback((reload) => dissolveRef.current?.(reload), []);
+    const { devEnabled, appVersion, viewOrder, activeViewId, activePluginId, openPluginConfig, closePluginConfig, mounted, updateState, handleSidebarAction, handleViewClick, worktrees, defaultWorktree, setDefaultWorktree } = useApp({ onDissolve });
     return html`
         <div class="app-container">
             <div class="app-main">
@@ -29,6 +33,7 @@ function AppShell() {
                     worktrees=${worktrees} defaultWorktree=${defaultWorktree} setDefaultWorktree=${setDefaultWorktree} /></div>
                 <div id="content-footer" class="app-footer-content"></div>
             </div>
+            <${RecompileDissolve} triggerRef=${dissolveRef} />
         </div>
     `;
 }

@@ -1,10 +1,11 @@
-import { useCallback } from 'preact/hooks';
+import { useCallback, useEffect } from 'preact/hooks';
 import { useSSE, useSSEReconnect } from '../../hooks/useSSE.js';
 import { clampPercent } from '../../utils/progress.js';
 import { devFlowKey, devFlowPhase } from './dev-flows.js';
 import { useUpdateChecker } from './use-update-checker.js';
 import { useDevFlows } from './use-dev-flows.js';
 import { useDevActions } from './use-dev-actions.js';
+import { MOCK_FLOWS_DONE } from '../../views/dev/mock/events.js';
 
 function routeDevSSE(event, applyDevFlowTransition) {
     const key = devFlowKey(event.type);
@@ -24,11 +25,13 @@ function routeSSEEvent(event, devEnabled, applyDevFlowTransition, checkForUpdate
 }
 
 function routeSSEReconnect(devEnabled, updateStatus, completeReconnect, checkForUpdate) {
-    if (devEnabled) { completeReconnect(); return; }
-    if (updateStatus === 'done') checkForUpdate();
+    if (devEnabled) return completeReconnect();
+    if (updateStatus === 'downloading') return 'update';
+    if (updateStatus === 'done') { checkForUpdate(); return null; }
+    return null;
 }
 
-export function useAppUpdateCoordinator({ devEnabled, appVersion }) {
+export function useAppUpdateCoordinator({ devEnabled, appVersion, onDissolve }) {
     const { updateState, setUpdateState, checkForUpdate } = useUpdateChecker(devEnabled, appVersion);
     const devFlows = useDevFlows(setUpdateState);
     const actions = useDevActions(devEnabled, devFlows, setUpdateState);
@@ -37,8 +40,16 @@ export function useAppUpdateCoordinator({ devEnabled, appVersion }) {
         [devEnabled, devFlows.applyDevFlowTransition, checkForUpdate, setUpdateState]
     ));
     useSSEReconnect(useCallback(
-        () => routeSSEReconnect(devEnabled, updateState.status, devFlows.completeReconnect, checkForUpdate),
-        [devEnabled, updateState.status, devFlows.completeReconnect, checkForUpdate]
+        () => {
+            const restartedFlow = routeSSEReconnect(devEnabled, updateState.status, devFlows.completeReconnect, checkForUpdate);
+            if (restartedFlow && onDissolve) onDissolve(true);
+        },
+        [devEnabled, updateState.status, devFlows.completeReconnect, checkForUpdate, onDissolve]
     ));
+    useEffect(() => {
+        const handler = () => { if (onDissolve) onDissolve(false); };
+        document.addEventListener(MOCK_FLOWS_DONE, handler);
+        return () => document.removeEventListener(MOCK_FLOWS_DONE, handler);
+    }, [onDissolve]);
     return { updateState, checkForUpdate, ...actions };
 }

@@ -111,10 +111,10 @@ fn finish_build<F>(
 where
     F: FnMut(u8, String),
 {
-    match child.wait() {
-        Ok(status) if status.success() => successful_build(actual_done, combined, on_progress),
-        Ok(_) => failed_status_build(combined),
-        Err(error) => failed_wait_build(error),
+    match super::wait_with_timeout(&mut child, super::BUILD_TIMEOUT) {
+        Ok(true) => successful_build(actual_done, combined, on_progress),
+        Ok(false) => failed_status_build(combined),
+        Err(message) => failed_build(message),
     }
 }
 
@@ -131,12 +131,6 @@ where
 fn failed_status_build(combined: String) -> BuildResult {
     log::error!("qol-tray build failed\n{}", combined);
     finished_build(false, combined)
-}
-
-fn failed_wait_build(error: std::io::Error) -> BuildResult {
-    let message = format!("Failed while waiting for cargo build: {}", error);
-    log::error!("{}", message);
-    failed_build(message)
 }
 
 fn failed_build(output: String) -> BuildResult {

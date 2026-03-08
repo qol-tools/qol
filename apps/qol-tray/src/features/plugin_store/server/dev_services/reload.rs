@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use crate::dev;
-use crate::dev::BuildRun;
 
 use super::super::dev_runtime::DevRuntimeService;
 use super::super::helpers::shared_config_dir;
@@ -69,14 +68,11 @@ fn run_reload(task: ReloadTask) {
     let _guard = BuildGuard {
         runtime: task.runtime.clone(),
     };
-    let build_run = run_build(&task);
-    if !all_builds_succeeded(&build_run) {
-        return;
-    }
+    run_build(&task);
     reload_plugins(task.plugin_manager, task.events);
 }
 
-fn run_build(task: &ReloadTask) -> BuildRun {
+fn run_build(task: &ReloadTask) {
     let mut dev_links = task
         .config_dir
         .as_deref()
@@ -87,11 +83,7 @@ fn run_build(task: &ReloadTask) -> BuildRun {
     }
     let event_sink = task.runtime.create_core_event_sink(task.events.clone());
     let build_service = dev::default_build_application_service(event_sink.as_ref());
-    build_service.run(&dev_links, task.config_dir.as_deref())
-}
-
-fn all_builds_succeeded(build_run: &BuildRun) -> bool {
-    build_run.results.is_empty() || build_run.results.iter().all(|result| result.success)
+    build_service.run(&dev_links, task.config_dir.as_deref());
 }
 
 fn reload_plugins(

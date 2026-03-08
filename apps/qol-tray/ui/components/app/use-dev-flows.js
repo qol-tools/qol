@@ -2,6 +2,7 @@ import { useRef, useCallback } from 'preact/hooks';
 import {
     applyDevFlowTransition as applyFlowStateTransition,
     completeReconnectFlows,
+    FLOW_STATE,
     initDevFlows,
     resolveDevSidebarState,
     startRecompileFlow,
@@ -21,8 +22,14 @@ function doScheduleClear(flows, syncSidebar, key, ms) {
     if (!flow) return;
     flow.clearTimer = setTimeout(() => {
         flow.clearTimer = null;
-        flow.done = false;
-        if (!flow.active && !flow.error) syncSidebar();
+        if (flow.state === FLOW_STATE.DONE) {
+            flow.state = FLOW_STATE.IDLE;
+            flow.percent = 0;
+            flow.phase = null;
+            flow.message = null;
+            flow.restarts = false;
+            syncSidebar();
+        }
     }, ms);
 }
 
@@ -40,7 +47,7 @@ function doBeginUpdateFlow(devFlowsRef, syncSidebar) {
 
 function doBeginRecompileFlow(devFlowsRef, syncSidebar) {
     const flows = devFlowsRef.current;
-    if (flows.recompile.active || flows.update.active) return false;
+    if (flows.recompile.state === FLOW_STATE.ACTIVE || flows.update.state === FLOW_STATE.ACTIVE) return false;
     doClearTimer(flows, 'recompile');
     startRecompileFlow(flows);
     syncSidebar();
@@ -53,6 +60,10 @@ export function useDevFlows(setUpdateState) {
     const applyDevFlowTransition = useCallback((key, phase, event) => doApplyTransition(devFlowsRef, key, phase, event, syncSidebar), [syncSidebar]);
     const beginUpdateFlow = useCallback(() => doBeginUpdateFlow(devFlowsRef, syncSidebar), [syncSidebar]);
     const beginRecompileFlow = useCallback(() => doBeginRecompileFlow(devFlowsRef, syncSidebar), [syncSidebar]);
-    const completeReconnect = useCallback(() => completeReconnectFlows(devFlowsRef.current, applyDevFlowTransition), [applyDevFlowTransition]);
+    const completeReconnect = useCallback(() => {
+        const restartedFlow = completeReconnectFlows(devFlowsRef.current, (k, ms) => doScheduleClear(devFlowsRef.current, syncSidebar, k, ms));
+        syncSidebar();
+        return restartedFlow;
+    }, [syncSidebar]);
     return { applyDevFlowTransition, beginUpdateFlow, beginRecompileFlow, completeReconnect };
 }
