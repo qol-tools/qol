@@ -13,6 +13,7 @@ pub struct Config {
     pub scale_factor: u32,
     pub calm_duration_ms: u64,
     pub restore_steps: u32,
+    pub enable_shape_preserving_growth: bool,
 }
 
 impl Default for Config {
@@ -26,6 +27,7 @@ impl Default for Config {
             scale_factor: 4,
             calm_duration_ms: 650,
             restore_steps: 18,
+            enable_shape_preserving_growth: false,
         }
     }
 }
@@ -39,7 +41,7 @@ pub fn load() -> Config {
 
 fn load_from_disk() -> Config {
     if config_paths().iter().any(|path| path.exists()) {
-        return qol_plugin_api::config::load_plugin_config(PLUGIN_NAMES);
+        return qol_config::load_plugin_config(PLUGIN_NAMES);
     }
     Config::default()
 }
@@ -61,7 +63,7 @@ fn persist(config: &Config) {
 
 fn log_config(config: &Config) {
     eprintln!(
-        "[shake-to-grow] config: velocity={} shakiness={} regrow_velocity={} regrow_shakiness={} post_trigger={} scale={} calm_ms={} steps={}",
+        "[shake-to-grow] config: velocity={} shakiness={} regrow_velocity={} regrow_shakiness={} post_trigger={} scale={} calm_ms={} steps={} shape_preserving={}",
         config.velocity_threshold,
         config.shakiness_threshold,
         config.regrow_velocity_threshold,
@@ -70,9 +72,10 @@ fn log_config(config: &Config) {
         config.scale_factor,
         config.calm_duration_ms,
         config.restore_steps,
+        config.enable_shape_preserving_growth,
     );
 }
 
 fn config_paths() -> Vec<std::path::PathBuf> {
-    qol_plugin_api::config::plugin_config_paths(PLUGIN_NAMES)
+    qol_config::plugin_config_paths(PLUGIN_NAMES)
 }
