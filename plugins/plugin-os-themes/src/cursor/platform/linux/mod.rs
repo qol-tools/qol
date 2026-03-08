@@ -1,5 +1,6 @@
 mod motion;
 mod runtime;
+mod scale;
 mod x11;
 
 use std::process::{Command, Stdio};
