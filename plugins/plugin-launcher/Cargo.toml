@@ -13,9 +13,9 @@ notify = { version = "8", default-features = false, features = [
   "macos_fsevent",
 ] }
 qol-plugin-api = { path = "../qol-plugin-api" }
-qol-search = { path = "../../../qol-search" }
-qol-frecency = { path = "../../../qol-frecency" }
-qol-platform = { path = "../../../qol-platform" }
+qol-search = { path = "../qol-search" }
+qol-frecency = { path = "../qol-frecency" }
+qol-platform = { path = "../qol-platform" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 shell-words = "1.1"
