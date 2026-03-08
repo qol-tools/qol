@@ -1,0 +1,13 @@
+name: Version
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  version:
+    permissions:
+      contents: write
+    uses: qol-tools/qol-cicd/.github/workflows/lib-version.yml@main
+    secrets: inherit

@@ -1,0 +1,11 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  test:
+    uses: qol-tools/qol-cicd/.github/workflows/lib-ci.yml@main

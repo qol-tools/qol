@@ -1,0 +1,8 @@
+[package]
+name = "qol-color"
+version = "0.1.0"
+edition = "2021"
+description = "Color parsing utilities for qol-tools"
+license = "MIT"
+
+[dependencies]
