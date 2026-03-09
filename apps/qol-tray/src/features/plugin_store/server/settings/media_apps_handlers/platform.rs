@@ -71,7 +71,7 @@ fn output_string(output: std::process::Output) -> Option<String> {
 }
 
 fn sort_and_dedup_apps(apps: &mut Vec<Value>) {
-    apps.sort_by(|left, right| app_name(left).cmp(&app_name(right)));
+    apps.sort_by_key(app_name);
     apps.dedup_by(|left, right| left["bundle_id"] == right["bundle_id"]);
 }
 
