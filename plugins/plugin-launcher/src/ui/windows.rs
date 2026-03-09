@@ -63,11 +63,11 @@ pub(crate) fn activate_or_open_launcher(
         "[launcher] cached_windows={}",
         active.borrow().len()
     );
-    active.borrow().hide_non_target(
+    active.borrow_mut().hide_non_target(
         target,
         |view: &mut LauncherView, window: &mut Window, _| {
             view.set_showing(false);
-            window.minimize_window();
+            window.remove_window();
         },
         cx,
     );
@@ -172,7 +172,7 @@ fn try_activate_visible_launcher(
     let mut visible = None;
     let mut dead = Vec::new();
     for (target, handle) in handles {
-        match handle.update(cx, |view: &mut LauncherView, _, _| view.is_showing) {
+        match handle.update(cx, |view: &mut LauncherView, _: &mut Window, _| view.is_showing) {
             Ok(true) => {
                 visible = Some((target, handle));
                 break;
