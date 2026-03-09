@@ -45,18 +45,32 @@ mod unix {
     }
 
     extern "C" fn sigint_handler(_sig: libc::c_int) {
-        // All calls here are async-signal-safe: kill() and _exit().
+        // All calls here are async-signal-safe: kill(), nanosleep(), _exit().
         for slot in &DAEMON_PIDS {
             let pid = slot.load(Ordering::Relaxed);
             if pid > 0 {
                 unsafe {
-                    // Kill the entire process group (setsid makes pid == pgid).
                     libc::kill(-pid, libc::SIGTERM);
                 }
             }
         }
+        let grace = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 50_000_000, // 50ms
+        };
         unsafe {
-            libc::_exit(130); // 128 + SIGINT(2), standard convention
+            libc::nanosleep(&grace, std::ptr::null_mut());
+        }
+        for slot in &DAEMON_PIDS {
+            let pid = slot.load(Ordering::Relaxed);
+            if pid > 0 {
+                unsafe {
+                    libc::kill(-pid, libc::SIGKILL);
+                }
+            }
+        }
+        unsafe {
+            libc::_exit(130);
         }
     }
 }

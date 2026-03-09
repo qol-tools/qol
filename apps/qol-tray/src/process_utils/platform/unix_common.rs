@@ -10,19 +10,23 @@ pub(super) fn terminate_pid(pid: i32, grace: Duration) {
         return;
     }
 
-    // SAFETY: Signals are sent to caller-provided pid; errors are ignored,
-    // matching previous best-effort semantics.
     unsafe {
         libc::kill(pid, libc::SIGTERM);
     }
 
     std::thread::sleep(grace);
 
-    if is_pid_alive(pid) {
-        // SAFETY: Same reasoning as above for SIGKILL best-effort cleanup.
-        unsafe {
-            libc::kill(pid, libc::SIGKILL);
-        }
+    if !is_pid_alive(pid) {
+        return;
+    }
+
+    unsafe {
+        libc::kill(pid, libc::SIGKILL);
+    }
+
+    std::thread::sleep(Duration::from_millis(10));
+    unsafe {
+        libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG);
     }
 }
 

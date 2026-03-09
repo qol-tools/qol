@@ -74,6 +74,11 @@ fn force_kill_daemon(plugin: &Plugin, child: &mut Child) -> Result<()> {
         "Daemon for {} didn't exit gracefully, forcing kill",
         plugin.id
     );
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    #[cfg(not(unix))]
     child.kill()?;
     child.wait()?;
     Ok(())

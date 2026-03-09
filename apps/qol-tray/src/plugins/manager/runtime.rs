@@ -25,6 +25,7 @@ pub(super) fn restart_running_plugin_daemon(
     plugin.stop_daemon()?;
     plugin.start_daemon()?;
     sync_ignore_pids(manager);
+    persist_daemon_pids(manager);
     Ok(())
 }
 
@@ -57,6 +58,15 @@ fn stop_plugin_daemon(plugin: &mut Plugin) {
     if let Err(error) = plugin.stop_daemon() {
         log::error!("Failed to stop daemon for plugin {}: {}", plugin.id, error);
     }
+}
+
+pub(super) fn persist_daemon_pids(manager: &PluginManager) {
+    let pids: Vec<u32> = manager
+        .plugins
+        .values()
+        .filter_map(|p| p.daemon_pid())
+        .collect();
+    super::super::daemon_tracker::save_daemon_pids(&pids);
 }
 
 fn plugin_mut<'a>(manager: &'a mut PluginManager, plugin_id: &str) -> Result<&'a mut Plugin> {

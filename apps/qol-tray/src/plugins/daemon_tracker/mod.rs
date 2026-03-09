@@ -91,16 +91,29 @@ fn kill_pid_if_managed(line: &str, roots: &ManagedRoots) {
     let Ok(pid) = line.trim().parse::<i32>() else {
         return;
     };
-    let Some(exe) = platform::pid_exe_path(pid) else {
-        return;
-    };
-    if !roots.contains(&exe) {
+    if !crate::process_utils::is_pid_alive(pid) {
+        crate::process_utils::reap_children_nonblocking();
         return;
     }
-    if crate::process_utils::is_pid_alive(pid) {
-        log::info!("Killing orphan daemon process: {} ({})", pid, exe.display());
-        crate::process_utils::terminate_pid(pid, std::time::Duration::from_millis(100));
+    let exe = platform::pid_exe_path(pid);
+    let is_managed = exe.as_ref().is_some_and(|e| roots.contains(e));
+    if !is_managed {
+        if exe.is_some() {
+            return;
+        }
+        log::info!(
+            "Killing saved daemon pid {} (exe path unavailable — zombie or crashed)",
+            pid
+        );
+    } else {
+        log::info!(
+            "Killing orphan daemon process: {} ({})",
+            pid,
+            exe.unwrap().display()
+        );
     }
+    crate::process_utils::terminate_pid(pid, std::time::Duration::from_millis(100));
+    crate::process_utils::reap_children_nonblocking();
 }
 
 fn resolve_path(p: &Path) -> PathBuf {

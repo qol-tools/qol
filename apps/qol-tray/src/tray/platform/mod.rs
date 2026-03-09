@@ -139,6 +139,12 @@ where
 
     let (_tray, plugin_manager) = init()?;
 
+    #[cfg(target_os = "macos")]
+    {
+        let pm = plugin_manager.clone();
+        macos::register_shutdown_fn(move || shutdown_plugins(&pm));
+    }
+
     #[cfg(target_os = "linux")]
     linux::run_event_loop();
 
