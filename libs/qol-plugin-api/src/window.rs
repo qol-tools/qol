@@ -61,10 +61,9 @@ impl<T: 'static> ActiveWindows<T> {
             .collect()
     }
 
-    pub fn hide_non_target<F>(&mut self, target: MonitorKey, mut f: F, cx: &mut App)
+    pub fn destroy_non_target(&mut self, target: MonitorKey, cx: &mut App)
     where
         T: Render,
-        F: FnMut(&mut T, &mut Window, &mut Context<T>),
     {
         let non_targets: Vec<MonitorKey> = self
             .windows
@@ -74,7 +73,7 @@ impl<T: 'static> ActiveWindows<T> {
             .collect();
         for key in non_targets {
             if let Some(handle) = self.windows.remove(&key) {
-                let _ = handle.update(cx, |view, window, cx| f(view, window, cx));
+                let _ = handle.update(cx, |_, window, _| window.remove_window());
             }
         }
     }
