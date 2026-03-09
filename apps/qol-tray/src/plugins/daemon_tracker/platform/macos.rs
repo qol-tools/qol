@@ -61,7 +61,7 @@ fn pid_buffer(count: i32) -> Vec<i32> {
 }
 
 fn listed_pids(pids: &mut [i32]) -> i32 {
-    let size = (pids.len() * std::mem::size_of::<i32>()) as i32;
+    let size = std::mem::size_of_val(pids) as i32;
     unsafe { proc_listallpids(pids.as_mut_ptr(), size) }
 }
 

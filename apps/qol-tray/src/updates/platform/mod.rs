@@ -15,6 +15,7 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
+#[allow(clippy::unused_async)]
 pub(super) async fn download_and_install(_events: Arc<EventBus>) -> Result<()> {
     open_latest_release_page()
 }
