@@ -46,6 +46,7 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
     if try_reuse_existing(req, &gathered, cx) {
         return;
     }
+    destroy_non_target_windows(req, cx);
     create_from_request(req, gathered, cx);
 }
 
@@ -96,6 +97,14 @@ fn try_reuse_existing(req: &OpenPickerRequest, gathered: &GatheredWindows, cx: &
     }
     discard_old_window(req, target, handle, cx);
     false
+}
+
+fn destroy_non_target_windows(req: &OpenPickerRequest, cx: &mut App) {
+    let target = match req.tracker.snapshot() {
+        Some(m) => qol_plugin_api::window::MonitorKey::from_bounds(&m.0.bounds()),
+        None => return,
+    };
+    req.current.borrow_mut().destroy_non_target(target, cx);
 }
 
 fn discard_old_window(
