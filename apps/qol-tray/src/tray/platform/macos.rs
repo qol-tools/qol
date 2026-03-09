@@ -1,9 +1,19 @@
 use crate::daemon::EventBus;
 use crate::features::FeatureRegistry;
 use anyhow::Result;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::broadcast;
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
+
+type ShutdownFn = Box<dyn FnOnce() + Send>;
+static SHUTDOWN_FN: OnceLock<Mutex<Option<ShutdownFn>>> = OnceLock::new();
+
+pub(super) fn register_shutdown_fn(f: impl FnOnce() + Send + 'static) {
+    let cell = SHUTDOWN_FN.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = cell.lock() {
+        *guard = Some(Box::new(f));
+    }
+}
 
 pub(super) fn create_tray(
     feature_registry: Arc<FeatureRegistry>,
@@ -49,6 +59,13 @@ fn stop_event_loop() {
     }
 
     extern "C" fn terminate_on_main(_: *mut std::ffi::c_void) {
+        if let Some(cell) = SHUTDOWN_FN.get() {
+            if let Ok(mut guard) = cell.lock() {
+                if let Some(f) = guard.take() {
+                    f();
+                }
+            }
+        }
         let mtm = MainThreadMarker::new().unwrap();
         let app = NSApplication::sharedApplication(mtm);
         app.terminate(None);

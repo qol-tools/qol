@@ -1,18 +1,24 @@
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(all(unix, not(target_os = "macos")))]
 mod unix;
 #[cfg(windows)]
 mod windows;
 
 #[cfg(unix)]
 pub(super) fn binary_name() -> &'static str {
-    unix::binary_name()
+    "qol-tray"
 }
 #[cfg(windows)]
 pub(super) fn binary_name() -> &'static str {
     windows::binary_name()
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
+pub(super) fn exec_restart(binary: &std::path::Path) -> Result<(), String> {
+    macos::exec_restart(binary)
+}
+#[cfg(all(unix, not(target_os = "macos")))]
 pub(super) fn exec_restart(binary: &std::path::Path) -> Result<(), String> {
     unix::exec_restart(binary)
 }
