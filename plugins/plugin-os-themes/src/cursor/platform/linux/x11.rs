@@ -1,3 +1,4 @@
+use std::ffi::{CStr, CString};
 use std::ptr;
 use std::time::Duration;
 
@@ -27,6 +28,7 @@ pub struct CursorSession {
     display: *mut xlib::Display,
     root: xlib::Window,
     base: BaseCursor,
+    preferred_source_size: u32,
     active_cursor: Option<xlib::Cursor>,
     applied_cursor: Option<CursorImage>,
     current_scale: f32,
@@ -62,6 +64,16 @@ struct BaseCursor {
     yhot: u32,
     pixels: Vec<u32>,
     default_size: u32,
+    source: Option<CursorRaster>,
+}
+
+#[derive(Clone)]
+struct CursorRaster {
+    width: u32,
+    height: u32,
+    xhot: u32,
+    yhot: u32,
+    pixels: Vec<u32>,
 }
 
 #[derive(Clone)]
@@ -72,6 +84,8 @@ struct CursorImage {
     yhot: u32,
     pixels: Vec<u32>,
     default_size: u32,
+    name: Option<String>,
+    source: Option<CursorRaster>,
 }
 
 impl CursorSession {
@@ -89,6 +103,7 @@ impl CursorSession {
         Ok(Self {
             display,
             root,
+            preferred_source_size: preferred_source_size(base.default_size, scale_factor),
             base,
             active_cursor: None,
             applied_cursor: None,
@@ -200,6 +215,9 @@ impl CursorSession {
             self.last_pointer = pointer;
             return false;
         }
+        if self.try_apply_visible_refresh(pointer) {
+            return true;
+        }
         eprintln!(
             "[shake-to-grow] live refresh gate child_changed={child_changed} cursor_notify_pending={cursor_notify_pending} probe_needed=false"
         );
@@ -265,7 +283,14 @@ impl CursorSession {
     }
 
     fn capture_live_cursors(&mut self) {
-        let live_cursor = load_live_cursor_image(self.display, self.base.default_size);
+        let live_cursor = load_live_cursor_image(self.display, self.base.default_size).map(|cursor| {
+            with_best_source(
+                self.display,
+                &self.base,
+                cursor,
+                self.preferred_source_size,
+            )
+        });
         let Some(live_cursor) = live_cursor else {
             eprintln!("[shake-to-grow] failed to capture live cursor at grow-start");
             return;
@@ -399,8 +424,15 @@ impl CursorSession {
             self.base.default_size,
             self.grow_cursor.as_ref(),
             self.applied_cursor.as_ref(),
-        );
-        let sample = sample;
+        )
+        .map(|sample| {
+            with_best_source(
+                self.display,
+                &self.base,
+                sample,
+                self.preferred_source_size,
+            )
+        });
         let Some(sample) = sample else {
             self.last_pointer = settled_pointer;
             self.probe_anchor = settled_pointer;
@@ -461,6 +493,61 @@ impl CursorSession {
         self.reapply_existing_cursor(cursor);
         self.remember_current_cursor_serial();
         false
+    }
+
+    fn try_apply_visible_refresh(&mut self, pointer: Option<PointerState>) -> bool {
+        let sample = load_live_cursor_image(self.display, self.base.default_size).map(|sample| {
+            with_best_source(
+                self.display,
+                &self.base,
+                sample,
+                self.preferred_source_size,
+            )
+        });
+        log_live_refresh_sample_state(
+            "live refresh visible sample",
+            sample.as_ref(),
+            self.grow_cursor.as_ref(),
+            self.applied_cursor.as_ref(),
+            self.restore_cursor.as_ref(),
+        );
+        let Some(sample) = sample else {
+            return false;
+        };
+        if !is_distinct_live_candidate(self.grow_cursor.as_ref(), self.applied_cursor.as_ref(), &sample) {
+            return false;
+        }
+        eprintln!("[shake-to-grow] live refresh fast-path=visible");
+        self.apply_refresh_sample(pointer, sample)
+    }
+
+    fn apply_refresh_sample(&mut self, pointer: Option<PointerState>, sample: CursorImage) -> bool {
+        self.refresh_mode = RefreshMode::None;
+        log_cursor_image("live refresh apply", &sample);
+        self.restore_cursor = Some(sample.clone());
+        self.grow_cursor = Some(sample);
+        let expected_applied_cursor = self.grow_cursor.as_ref().and_then(|image| {
+            scale_cursor_image_for_display(self.display, self.root, image, self.current_scale)
+        });
+        let next_cursor = expected_applied_cursor
+            .as_ref()
+            .and_then(|image| make_cursor_from_image(self.display, image));
+        let Some(next_cursor) = next_cursor else {
+            eprintln!("[shake-to-grow] live refresh failed to build scaled cursor");
+            self.last_pointer = pointer;
+            self.probe_anchor = pointer;
+            return false;
+        };
+        apply_to_tree(self.display, self.root, next_cursor);
+        self.flush();
+        self.applied_cursor = expected_applied_cursor;
+        if let Some(old_cursor) = self.active_cursor.replace(next_cursor) {
+            unsafe { xlib::XFreeCursor(self.display, old_cursor) };
+        }
+        self.last_pointer = pointer;
+        self.probe_anchor = pointer;
+        self.remember_current_cursor_serial();
+        true
     }
 
     fn reapply_existing_cursor(&mut self, cursor: Option<xlib::Cursor>) {
@@ -566,28 +653,19 @@ impl Drop for CursorSession {
 fn load_base_cursor(display: *mut xlib::Display, scale_factor: u32) -> Option<BaseCursor> {
     let raw_size = unsafe { xcursor::XcursorGetDefaultSize(display) };
     let default_size = if raw_size > 0 { raw_size as u32 } else { 24 };
-    let request_size = default_size.saturating_mul(scale_factor.max(1));
-    let theme = unsafe { xcursor::XcursorGetTheme(display) };
-    let images = unsafe {
-        xcursor::XcursorLibraryLoadImages(c"left_ptr".as_ptr(), theme, request_size as i32)
-    };
-    if images.is_null() {
-        return None;
-    }
-
-    let image = unsafe { &**(*images).images };
-    let pixel_count = checked_pixel_count(image.width, image.height)?;
-    let pixels = unsafe { std::slice::from_raw_parts(image.pixels, pixel_count).to_vec() };
+    let logical = load_named_cursor_raster(display, c"left_ptr", default_size)?;
+    let source_size = preferred_source_size(default_size, scale_factor);
+    let source = load_named_cursor_raster(display, c"left_ptr", source_size)
+        .filter(|source| source_improves_cursor(logical.width, logical.height, source));
     let base = BaseCursor {
-        width: image.width,
-        height: image.height,
-        xhot: sanitize_hotspot(image.xhot, image.width),
-        yhot: sanitize_hotspot(image.yhot, image.height),
-        pixels,
+        width: logical.width,
+        height: logical.height,
+        xhot: logical.xhot,
+        yhot: logical.yhot,
+        pixels: logical.pixels,
         default_size,
+        source,
     };
-
-    unsafe { xcursor::XcursorImagesDestroy(images) };
     Some(base)
 }
 
@@ -610,6 +688,19 @@ fn make_cursor_at_scale(
     let width = requested_width.min(max_width.max(1));
     let height = requested_height.min(max_height.max(1));
     let pixel_count = checked_pixel_count(width, height)?;
+    let (source_width, source_height, source_xhot, source_yhot, source_pixels) = base
+        .source
+        .as_ref()
+        .map(|source| {
+            (
+                source.width,
+                source.height,
+                source.xhot,
+                source.yhot,
+                source.pixels.as_slice(),
+            )
+        })
+        .unwrap_or((base.width, base.height, base.xhot, base.yhot, base.pixels.as_slice()));
     let image =
         unsafe { xcursor::XcursorImageCreate(width.try_into().ok()?, height.try_into().ok()?) };
     if image.is_null() {
@@ -617,10 +708,10 @@ fn make_cursor_at_scale(
     }
 
     let cursor = unsafe {
-        (*image).xhot = scaled_hotspot(base.xhot, factor, width);
-        (*image).yhot = scaled_hotspot(base.yhot, factor, height);
+        (*image).xhot = scaled_raster_hotspot(source_xhot, source_width, width);
+        (*image).yhot = scaled_raster_hotspot(source_yhot, source_height, height);
         let pixels = std::slice::from_raw_parts_mut((*image).pixels, pixel_count);
-        scale_bilinear(&base.pixels, base.width, base.height, pixels, width, height);
+        scale_bilinear(source_pixels, source_width, source_height, pixels, width, height);
         let cursor = xcursor::XcursorImageLoadCursor(display, image);
         xcursor::XcursorImageDestroy(image);
         cursor
@@ -729,6 +820,8 @@ fn define_transparent_root_cursor(display: *mut xlib::Display, root: xlib::Windo
         yhot: 0,
         pixels: vec![0],
         default_size: 1,
+        name: None,
+        source: None,
     };
     let Some(cursor) = make_cursor_from_image(display, &transparent) else {
         return;
@@ -783,15 +876,36 @@ fn scale_cursor_image_for_display(
     let width = requested_width.min(max_width.max(1));
     let height = requested_height.min(max_height.max(1));
     let pixel_count = checked_pixel_count(width, height)?;
+    let (source_width, source_height, source_xhot, source_yhot, source_pixels) = image
+        .source
+        .as_ref()
+        .map(|source| {
+            (
+                source.width,
+                source.height,
+                source.xhot,
+                source.yhot,
+                source.pixels.as_slice(),
+            )
+        })
+        .unwrap_or((
+            image.width,
+            image.height,
+            image.xhot,
+            image.yhot,
+            image.pixels.as_slice(),
+        ));
     let mut pixels = vec![0; pixel_count];
-    scale_bilinear(&image.pixels, image.width, image.height, &mut pixels, width, height);
+    scale_bilinear(source_pixels, source_width, source_height, &mut pixels, width, height);
     Some(CursorImage {
         width,
         height,
-        xhot: scaled_hotspot(image.xhot, factor, width),
-        yhot: scaled_hotspot(image.yhot, factor, height),
+        xhot: scaled_raster_hotspot(source_xhot, source_width, width),
+        yhot: scaled_raster_hotspot(source_yhot, source_height, height),
         pixels,
         default_size: image.default_size,
+        name: image.name.clone(),
+        source: None,
     })
 }
 
@@ -818,6 +932,8 @@ fn load_live_cursor_image(display: *mut xlib::Display, default_size: u32) -> Opt
         yhot: sanitize_hotspot(u32::from(image_ref.yhot), height),
         pixels,
         default_size,
+        name: copy_cursor_name(display, image_ref.atom, image_ref.name),
+        source: None,
     };
     unsafe { xlib::XFree(image as *mut _) };
     Some(cursor)
@@ -1484,6 +1600,8 @@ fn log_raw_live_cursor_state(
         yhot: sanitize_hotspot(u32::from(image_ref.yhot), height),
         pixels,
         default_size,
+        name: copy_cursor_name(display, image_ref.atom, image_ref.name),
+        source: None,
     };
     eprintln!(
         "[shake-to-grow] {prefix}: serial={} atom={} size={}x{} hot=({}, {}) hash={:016x} matches_grow={} matches_applied={} matches_restore={}",
@@ -1584,12 +1702,149 @@ fn checked_pixel_count(width: u32, height: u32) -> Option<usize> {
     width.checked_mul(height)
 }
 
+fn preferred_source_size(default_size: u32, scale_factor: u32) -> u32 {
+    default_size
+        .saturating_mul(scale_factor.max(1))
+        .max(default_size)
+}
+
+fn with_best_source(
+    display: *mut xlib::Display,
+    base: &BaseCursor,
+    mut image: CursorImage,
+    preferred_source_size: u32,
+) -> CursorImage {
+    if preferred_source_size <= image.default_size {
+        return image;
+    }
+    let source = named_cursor_source(display, &image, preferred_source_size)
+        .or_else(|| fallback_base_source(base, &image));
+    let Some(source) = source else {
+        return image;
+    };
+    if !source_improves_cursor(image.width, image.height, &source) {
+        return image;
+    }
+    image.source = Some(source);
+    image
+}
+
+fn named_cursor_source(
+    display: *mut xlib::Display,
+    image: &CursorImage,
+    preferred_source_size: u32,
+) -> Option<CursorRaster> {
+    let name = image.name.as_deref()?;
+    let name = CString::new(name).ok()?;
+    load_named_cursor_raster(display, name.as_c_str(), preferred_source_size)
+}
+
+fn fallback_base_source(base: &BaseCursor, image: &CursorImage) -> Option<CursorRaster> {
+    if !matches_base_cursor(base, image) {
+        return None;
+    }
+    base.source.clone()
+}
+
+fn matches_base_cursor(base: &BaseCursor, image: &CursorImage) -> bool {
+    if base.width != image.width {
+        return false;
+    }
+    if base.height != image.height {
+        return false;
+    }
+    if base.xhot != image.xhot {
+        return false;
+    }
+    if base.yhot != image.yhot {
+        return false;
+    }
+    base.pixels == image.pixels
+}
+
+fn source_improves_cursor(width: u32, height: u32, source: &CursorRaster) -> bool {
+    source.width > width || source.height > height
+}
+
+fn load_named_cursor_raster(
+    display: *mut xlib::Display,
+    name: &CStr,
+    request_size: u32,
+) -> Option<CursorRaster> {
+    let theme = unsafe { xcursor::XcursorGetTheme(display) };
+    let images = unsafe {
+        xcursor::XcursorLibraryLoadImages(name.as_ptr(), theme, request_size as i32)
+    };
+    if images.is_null() {
+        return None;
+    }
+    let raster = cursor_raster_from_images(images);
+    unsafe { xcursor::XcursorImagesDestroy(images) };
+    raster
+}
+
+fn cursor_raster_from_images(images: *mut xcursor::XcursorImages) -> Option<CursorRaster> {
+    let images = unsafe { &*images };
+    let image_count = usize::try_from(images.nimage).ok()?;
+    if image_count == 0 {
+        return None;
+    }
+    let image_pointers = unsafe { std::slice::from_raw_parts(images.images, image_count) };
+    let image = image_pointers.iter().copied().find(|image| !image.is_null())?;
+    cursor_raster_from_xcursor_image(unsafe { &*image })
+}
+
+fn cursor_raster_from_xcursor_image(image: &xcursor::XcursorImage) -> Option<CursorRaster> {
+    let pixel_count = checked_pixel_count(image.width, image.height)?;
+    let pixels = unsafe { std::slice::from_raw_parts(image.pixels, pixel_count).to_vec() };
+    Some(CursorRaster {
+        width: image.width,
+        height: image.height,
+        xhot: sanitize_hotspot(image.xhot, image.width),
+        yhot: sanitize_hotspot(image.yhot, image.height),
+        pixels,
+    })
+}
+
+fn copy_cursor_name(
+    display: *mut xlib::Display,
+    atom: xlib::Atom,
+    name: *const libc::c_char,
+) -> Option<String> {
+    if !name.is_null() {
+        return Some(unsafe { CStr::from_ptr(name) }.to_string_lossy().into_owned());
+    }
+    if atom == 0 {
+        return None;
+    }
+    let atom_name = unsafe { xlib::XGetAtomName(display, atom) };
+    if atom_name.is_null() {
+        return None;
+    }
+    let owned = unsafe { CStr::from_ptr(atom_name) }
+        .to_string_lossy()
+        .into_owned();
+    unsafe { xlib::XFree(atom_name as *mut _) };
+    Some(owned)
+}
+
 fn scaled_dimension(base: u32, factor: f32) -> Option<u32> {
     let scaled = (base as f32 * factor).round();
     if !scaled.is_finite() || scaled < 1.0 || scaled > i32::MAX as f32 {
         return None;
     }
     Some((scaled as u32).min(MAX_CURSOR_DIMENSION).max(1))
+}
+
+fn scaled_raster_hotspot(hotspot: u32, source_bound: u32, target_bound: u32) -> u32 {
+    if source_bound == 0 {
+        return 0;
+    }
+    let scaled = hotspot as f32 * target_bound as f32 / source_bound as f32;
+    if !scaled.is_finite() || scaled < 0.0 {
+        return 0;
+    }
+    (scaled.round() as u32).min(target_bound.saturating_sub(1))
 }
 
 fn scaled_hotspot(hotspot: u32, factor: f32, bound: u32) -> u32 {

@@ -140,21 +140,53 @@ fn pixel_corners(request: &ScaleRequest<'_>, source: &SourcePoint) -> [u32; 4] {
 }
 
 fn blend_pixel(corners: [u32; 4], blend: BlendFactors) -> u32 {
-    let mut out = 0u32;
-    for shift in [0u32, 8, 16, 24] {
-        out |= blended_channel(corners, blend, shift) << shift;
+    let weights = bilinear_weights(blend);
+    let alpha = blended_channel(corners, weights, 24);
+    if alpha <= f32::EPSILON {
+        return 0;
     }
-    out
+    let red = blended_premultiplied_channel(corners, weights, 16) * 255.0 / alpha;
+    let green = blended_premultiplied_channel(corners, weights, 8) * 255.0 / alpha;
+    let blue = blended_premultiplied_channel(corners, weights, 0) * 255.0 / alpha;
+    pack_pixel(alpha, red, green, blue)
 }
 
-fn blended_channel(corners: [u32; 4], blend: BlendFactors, shift: u32) -> u32 {
+fn bilinear_weights(blend: BlendFactors) -> [f32; 4] {
+    [
+        (1.0 - blend.tx) * (1.0 - blend.ty),
+        blend.tx * (1.0 - blend.ty),
+        (1.0 - blend.tx) * blend.ty,
+        blend.tx * blend.ty,
+    ]
+}
+
+fn blended_channel(corners: [u32; 4], weights: [f32; 4], shift: u32) -> f32 {
     let [p00, p10, p01, p11] = corners;
+    let [w00, w10, w01, w11] = weights;
     let channel = |pixel: u32| ((pixel >> shift) & 0xFF) as f32;
-    let value = channel(p00) * (1.0 - blend.tx) * (1.0 - blend.ty)
-        + channel(p10) * blend.tx * (1.0 - blend.ty)
-        + channel(p01) * (1.0 - blend.tx) * blend.ty
-        + channel(p11) * blend.tx * blend.ty;
-    value as u32 & 0xFF
+    channel(p00) * w00 + channel(p10) * w10 + channel(p01) * w01 + channel(p11) * w11
+}
+
+fn blended_premultiplied_channel(corners: [u32; 4], weights: [f32; 4], shift: u32) -> f32 {
+    let [p00, p10, p01, p11] = corners;
+    let [w00, w10, w01, w11] = weights;
+    let channel = |pixel: u32| ((pixel >> shift) & 0xFF) as f32;
+    let alpha = |pixel: u32| ((pixel >> 24) & 0xFF) as f32 / 255.0;
+    channel(p00) * alpha(p00) * w00
+        + channel(p10) * alpha(p10) * w10
+        + channel(p01) * alpha(p01) * w01
+        + channel(p11) * alpha(p11) * w11
+}
+
+fn pack_pixel(alpha: f32, red: f32, green: f32, blue: f32) -> u32 {
+    (rounded_byte(alpha) << 24)
+        | (rounded_byte(red) << 16)
+        | (rounded_byte(green) << 8)
+        | rounded_byte(blue)
+}
+
+fn rounded_byte(value: f32) -> u32 {
+    value.round().clamp(0.0, 255.0) as u32
 }
 
 #[cfg(test)]
