@@ -1,5 +1,4 @@
-use std::sync::atomic::{AtomicPtr, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use core_foundation::runloop::CFRunLoop;
 use core_graphics::event::{
@@ -13,50 +12,30 @@ use crate::remap::{
 };
 
 pub struct TapState {
-    config: AtomicPtr<ResolvedConfig>,
+    config: RwLock<Arc<ResolvedConfig>>,
     app_tracker: Arc<AppTracker>,
 }
 
 impl TapState {
     pub fn new(config: ResolvedConfig, app_tracker: Arc<AppTracker>) -> Self {
-        let config = Arc::new(config);
         Self {
-            config: AtomicPtr::new(Arc::into_raw(config) as *mut ResolvedConfig),
+            config: RwLock::new(Arc::new(config)),
             app_tracker,
         }
     }
 
     pub fn swap_config(&self, new_config: ResolvedConfig) {
-        let new_ptr = Arc::into_raw(Arc::new(new_config)) as *mut ResolvedConfig;
-        let old_ptr = self.config.swap(new_ptr, Ordering::AcqRel);
-        if !old_ptr.is_null() {
-            unsafe {
-                drop(Arc::from_raw(old_ptr));
-            }
+        let new = Arc::new(new_config);
+        if let Ok(mut guard) = self.config.write() {
+            *guard = new;
         }
     }
 
     fn config(&self) -> Arc<ResolvedConfig> {
-        let ptr = self.config.load(Ordering::Acquire);
-        assert!(
-            !ptr.is_null(),
-            "TapState config pointer should never be null"
-        );
-        unsafe {
-            Arc::increment_strong_count(ptr);
-            Arc::from_raw(ptr)
-        }
-    }
-}
-
-impl Drop for TapState {
-    fn drop(&mut self) {
-        let ptr = *self.config.get_mut();
-        if !ptr.is_null() {
-            unsafe {
-                drop(Arc::from_raw(ptr));
-            }
-        }
+        self.config
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_else(|p| p.into_inner().clone())
     }
 }
 
@@ -107,7 +86,17 @@ fn run_tap(state: Arc<TapState>) {
         CGEventTapPlacement::HeadInsertEventTap,
         CGEventTapOptions::Default,
         events,
-        move |_proxy, event_type, event| handle_event(&state, event_type, event),
+        move |_proxy, event_type, event| {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                handle_event(&state, event_type, event)
+            })) {
+                Ok(result) => result,
+                Err(_) => {
+                    eprintln!("[keyremap] panic in event callback — passing event through");
+                    CallbackResult::Keep
+                }
+            }
+        },
         || CFRunLoop::run_current(),
     );
 
