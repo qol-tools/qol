@@ -63,14 +63,7 @@ pub(crate) fn activate_or_open_launcher(
         "[launcher] cached_windows={}",
         active.borrow().len()
     );
-    active.borrow_mut().hide_non_target(
-        target,
-        |view: &mut LauncherView, window: &mut Window, _| {
-            view.set_showing(false);
-            window.remove_window();
-        },
-        cx,
-    );
+    active.borrow_mut().destroy_non_target(target, cx);
 
     if try_activate_existing_launcher(active.clone(), current_entries.clone(), target, cx) {
         eprintln!("[launcher] activate_or_open reused existing launcher");
