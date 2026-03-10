@@ -145,7 +145,11 @@ fn fire_action_request(plugin_id: &str, action_id: &str) -> i32 {
         .split_once("\r\n\r\n")
         .map(|(_, b)| b)
         .unwrap_or("");
-    let msg = if body.is_empty() { format!("Request failed (HTTP {})", status) } else { body.to_string() };
+    let msg = if body.is_empty() {
+        format!("Request failed (HTTP {})", status)
+    } else {
+        body.to_string()
+    };
     eprintln!("{}", msg);
     1
 }
