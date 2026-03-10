@@ -1,17 +1,19 @@
-use super::super::StubInput;
+use super::super::LauncherEntry;
 use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-pub(super) fn sync(stubs: &[StubInput], binary_path: &Path) -> Result<()> {
+const DESKTOP_PREFIX: &str = "qol-";
+
+pub(super) fn sync(entries: &[LauncherEntry], binary_path: &Path) -> Result<()> {
     let dir = apps_dir()?;
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("Failed to create applications dir {}", dir.display()))?;
 
-    let expected: HashSet<String> = stubs.iter().map(|s| desktop_filename(s)).collect();
+    let expected: HashSet<String> = entries.iter().map(desktop_filename).collect();
 
-    for stub in stubs {
-        write_desktop_file(&dir, stub, binary_path)?;
+    for entry in entries {
+        write_desktop_file(&dir, entry, binary_path)?;
     }
 
     clean_stale(&dir, &expected)?;
@@ -24,31 +26,29 @@ fn apps_dir() -> Result<PathBuf> {
         .map(|p| p.join("applications"))
 }
 
-fn desktop_filename(stub: &StubInput) -> String {
-    format!("qol-action-{}-{}.desktop", stub.plugin_id, stub.action_id)
+fn desktop_filename(entry: &LauncherEntry) -> String {
+    format!("{}{}.desktop", DESKTOP_PREFIX, entry.file_stem)
 }
 
-fn write_desktop_file(dir: &Path, stub: &StubInput, binary_path: &Path) -> Result<()> {
-    let escaped_path = exec_escape_path(&binary_path.display().to_string());
-    let name = desktop_entry_escape(&stub.action_label);
-    let comment = desktop_entry_escape(&format!(
-        "QoL Tray: {} - {}",
-        stub.plugin_name, stub.action_label
-    ));
+fn write_desktop_file(dir: &Path, entry: &LauncherEntry, binary_path: &Path) -> Result<()> {
+    let escaped_bin = exec_escape_path(&binary_path.display().to_string());
+    let name = desktop_entry_escape(&entry.display_name);
+    let comment = desktop_entry_escape(&entry.description);
+    let args: String = entry.exec_args.join(" ");
 
     let content = format!(
         "[Desktop Entry]\n\
          Type=Application\n\
          Name={}\n\
          Comment={}\n\
-         Exec=\"{}\" exec {} {}\n\
+         Exec=\"{}\" {}\n\
          Terminal=false\n\
          Categories=Utility;\n\
          StartupNotify=false\n",
-        name, comment, escaped_path, stub.plugin_id, stub.action_id
+        name, comment, escaped_bin, args
     );
 
-    let path = dir.join(desktop_filename(stub));
+    let path = dir.join(desktop_filename(entry));
     std::fs::write(&path, content)?;
     Ok(())
 }
@@ -60,10 +60,11 @@ fn clean_stale(dir: &Path, expected: &HashSet<String>) -> Result<()> {
     };
     for entry in entries.flatten() {
         let name = entry.file_name();
-        let Some(name_str) = name.to_str() else {
-            continue;
+        let name_str = match name.to_str() {
+            Some(s) => s,
+            None => continue,
         };
-        if !name_str.starts_with("qol-action-") || !name_str.ends_with(".desktop") {
+        if !name_str.starts_with(DESKTOP_PREFIX) || !name_str.ends_with(".desktop") {
             continue;
         }
         if expected.contains(name_str) {

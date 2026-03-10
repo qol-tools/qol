@@ -1,5 +1,5 @@
 pub(super) fn sync(
-    _stubs: &[super::super::StubInput],
+    _entries: &[super::super::LauncherEntry],
     _binary_path: &std::path::Path,
 ) -> anyhow::Result<()> {
     Ok(())

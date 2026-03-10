@@ -97,13 +97,10 @@ pub(super) fn reload_manager_and_notify(state: &AppState) {
             false
         }
     };
-    if reload_ok && crate::settings::load().export_plugin_actions_to_launcher {
-        let stubs = crate::features::stub_apps::collect_stubs(&manager);
-        drop(manager);
-        crate::features::stub_apps::sync_stubs_background(stubs);
-    } else {
-        drop(manager);
+    if reload_ok {
+        crate::features::launcher_apps::trigger_full_sync(Some(&manager));
     }
+    drop(manager);
     trigger_reload();
     state.daemon.events.send_plugins_changed();
 }

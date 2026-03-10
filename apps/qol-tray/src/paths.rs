@@ -122,6 +122,10 @@ pub fn app_settings_path() -> Result<PathBuf> {
     shared_config_dir().map(|p| p.join("app-settings.json"))
 }
 
+pub fn shortcuts_path() -> Result<PathBuf> {
+    shared_config_dir().map(|p| p.join("shortcuts.json"))
+}
+
 pub fn task_runner_config_path() -> Result<PathBuf> {
     shared_config_dir().map(|p| p.join("task-runner.json"))
 }

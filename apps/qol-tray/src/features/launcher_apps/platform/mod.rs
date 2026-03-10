@@ -13,11 +13,11 @@ use macos as imp;
 use windows as imp;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-compile_error!("stub_apps platform implementation is required for this target OS");
+compile_error!("launcher_apps platform implementation is required for this target OS");
 
 pub(super) fn sync(
-    stubs: &[super::StubInput],
+    entries: &[super::LauncherEntry],
     binary_path: &std::path::Path,
 ) -> anyhow::Result<()> {
-    imp::sync(stubs, binary_path)
+    imp::sync(entries, binary_path)
 }

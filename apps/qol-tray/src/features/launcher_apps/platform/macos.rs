@@ -1,41 +1,41 @@
-use super::super::StubInput;
+use super::super::LauncherEntry;
 use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-pub(super) fn sync(stubs: &[StubInput], binary_path: &Path) -> Result<()> {
-    let dir = stubs_dir()?;
+pub(super) fn sync(entries: &[LauncherEntry], binary_path: &Path) -> Result<()> {
+    let dir = apps_dir()?;
     std::fs::create_dir_all(&dir)
-        .with_context(|| format!("Failed to create stubs dir {}", dir.display()))?;
+        .with_context(|| format!("Failed to create launcher apps dir {}", dir.display()))?;
 
-    let expected: HashSet<String> = stubs.iter().map(app_dirname).collect();
+    let expected: HashSet<String> = entries.iter().map(app_dirname).collect();
 
-    for stub in stubs {
-        let app_dir = dir.join(app_dirname(stub));
-        write_app_bundle(&app_dir, stub, binary_path)?;
+    for entry in entries {
+        let app_dir = dir.join(app_dirname(entry));
+        write_app_bundle(&app_dir, entry, binary_path)?;
     }
 
     clean_stale(&dir, &expected)?;
     Ok(())
 }
 
-fn stubs_dir() -> Result<PathBuf> {
+fn apps_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().context("Could not determine home directory")?;
     Ok(home.join("Applications").join("QoL"))
 }
 
-fn app_dirname(stub: &StubInput) -> String {
-    format!("{}-{}.app", stub.plugin_id, stub.action_id)
+fn app_dirname(entry: &LauncherEntry) -> String {
+    format!("{}.app", entry.file_stem)
 }
 
-fn write_app_bundle(app_dir: &Path, stub: &StubInput, binary_path: &Path) -> Result<()> {
+fn write_app_bundle(app_dir: &Path, entry: &LauncherEntry, binary_path: &Path) -> Result<()> {
     let contents_dir = app_dir.join("Contents");
     let macos_dir = contents_dir.join("MacOS");
     let run_path = macos_dir.join("run");
     let plist_path = contents_dir.join("Info.plist");
 
-    let expected_script = build_script(binary_path, stub);
-    let expected_plist = build_info_plist(stub);
+    let expected_script = build_script(binary_path, entry);
+    let expected_plist = build_info_plist(entry);
 
     let script_ok = run_path
         .is_file()
@@ -65,9 +65,8 @@ fn is_executable(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn build_info_plist(stub: &StubInput) -> String {
-    let name = xml_escape(&stub.action_label);
-    let bundle_id = format!("com.qol-tools.action.{}.{}", stub.plugin_id, stub.action_id);
+fn build_info_plist(entry: &LauncherEntry) -> String {
+    let name = xml_escape(&entry.display_name);
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
@@ -82,7 +81,7 @@ fn build_info_plist(stub: &StubInput) -> String {
          <key>LSUIElement</key><true/>\n\
          </dict>\n\
          </plist>\n",
-        name, bundle_id
+        name, entry.bundle_id
     )
 }
 
@@ -93,12 +92,15 @@ fn write_executable(path: &Path, script: &str) -> Result<()> {
     Ok(())
 }
 
-fn build_script(binary_path: &Path, stub: &StubInput) -> String {
-    let escaped_path = shell_escape_single_quote(&binary_path.display().to_string());
-    format!(
-        "#!/bin/sh\nexec '{}' exec '{}' '{}'\n",
-        escaped_path, stub.plugin_id, stub.action_id
-    )
+fn build_script(binary_path: &Path, entry: &LauncherEntry) -> String {
+    let bin = shell_escape_single_quote(&binary_path.display().to_string());
+    let args: String = entry
+        .exec_args
+        .iter()
+        .map(|a| format!("'{}'", shell_escape_single_quote(a)))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("#!/bin/sh\nexec '{}' {}\n", bin, args)
 }
 
 fn clean_stale(dir: &Path, expected: &HashSet<String>) -> Result<()> {
@@ -108,8 +110,9 @@ fn clean_stale(dir: &Path, expected: &HashSet<String>) -> Result<()> {
     };
     for entry in entries.flatten() {
         let name = entry.file_name();
-        let Some(name_str) = name.to_str() else {
-            continue;
+        let name_str = match name.to_str() {
+            Some(s) => s,
+            None => continue,
         };
         if !name_str.ends_with(".app") {
             continue;
