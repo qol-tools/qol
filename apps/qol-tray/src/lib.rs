@@ -12,6 +12,7 @@ pub mod logging;
 pub mod menu;
 pub mod paths;
 pub mod plugins;
+pub mod settings;
 pub mod process_utils;
 #[cfg(unix)]
 pub mod runtime;
