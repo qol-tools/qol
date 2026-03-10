@@ -4,6 +4,7 @@ const LABELS = {
     plugins: 'Plugins',
     store: 'Store',
     hotkeys: 'Hotkeys',
+    shortcuts: 'Shortcuts',
     'task-runner': 'Task Runner',
     dev: 'Developer'
 };

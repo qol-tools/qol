@@ -5,6 +5,7 @@ mod media_apps_handlers;
 mod media_cover_handlers;
 mod media_icon_handlers;
 mod plugin_config_handlers;
+mod shortcut_handlers;
 
 use axum::{
     routing::{get, post},
@@ -39,4 +40,15 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/github-token", axum::routing::delete(delete_github_token))
         .route("/hotkeys", get(get_hotkeys))
         .route("/hotkeys", axum::routing::put(set_hotkeys))
+        .route("/shortcuts", get(shortcut_handlers::list_shortcuts))
+        .route("/shortcuts", post(shortcut_handlers::create_shortcut))
+        .route(
+            "/shortcuts/{id}",
+            axum::routing::put(shortcut_handlers::update_shortcut),
+        )
+        .route(
+            "/shortcuts/{id}",
+            axum::routing::delete(shortcut_handlers::delete_shortcut),
+        )
+        .route("/shortcuts/{id}/run", post(shortcut_handlers::run_shortcut))
 }
