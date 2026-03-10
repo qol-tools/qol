@@ -127,7 +127,7 @@ function useListActions(d) {
 
     const runById = useCallback(async (id) => {
         if (!id) return;
-        try { await runShortcut(id); } catch (e) { console.error('Failed to run shortcut:', e); }
+        try { await runShortcut(id); } catch (e) { alert(e.message || 'Failed to run shortcut'); }
     }, []);
 
     return { deleteById, runById };

@@ -1,4 +1,4 @@
-import { apiJson, apiResponse, jsonRequest } from '../../api/client.js';
+import { apiJson, apiText, jsonRequest } from '../../api/client.js';
 
 export async function loadShortcuts() {
     return apiJson('/api/shortcuts');
@@ -17,7 +17,7 @@ export async function deleteShortcut(id) {
 }
 
 export async function runShortcut(id) {
-    return apiResponse(`/api/shortcuts/${id}/run`, { method: 'POST' });
+    return apiText(`/api/shortcuts/${id}/run`, { method: 'POST' });
 }
 
 export function emptyShortcut() {
