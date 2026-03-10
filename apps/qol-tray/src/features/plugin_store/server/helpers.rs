@@ -90,8 +90,19 @@ pub(super) fn reload_manager_and_notify(state: &AppState) {
             return;
         }
     };
-    if let Err(e) = manager.reload_plugins() {
-        log::error!("Failed to reload plugins: {}", e);
+    let reload_ok = match manager.reload_plugins() {
+        Ok(()) => true,
+        Err(e) => {
+            log::error!("Failed to reload plugins: {}", e);
+            false
+        }
+    };
+    if reload_ok && crate::settings::load().export_plugin_actions_to_launcher {
+        let stubs = crate::features::stub_apps::collect_stubs(&manager);
+        drop(manager);
+        crate::features::stub_apps::sync_stubs_background(stubs);
+    } else {
+        drop(manager);
     }
     trigger_reload();
     state.daemon.events.send_plugins_changed();

@@ -13,6 +13,10 @@ use tokio::sync::broadcast;
 const DEFAULT_PORT: u16 = 42700;
 
 fn main() -> Result<()> {
+    if let Some(code) = try_exec_subcommand() {
+        std::process::exit(code);
+    }
+
     #[cfg(feature = "dev")]
     let core_log_controls = qol_tray::logging::init_dev_logger();
 
@@ -43,6 +47,80 @@ fn main() -> Result<()> {
 
     #[cfg(not(feature = "dev"))]
     tray::platform::run_app(app_init)
+}
+
+fn try_exec_subcommand() -> Option<i32> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(|s| s.as_str()) != Some("exec") {
+        return None;
+    }
+    if args.len() != 4 {
+        eprintln!("Usage: qol-tray exec <plugin_id> <action_id>");
+        return Some(1);
+    }
+    let plugin_id = &args[2];
+    let action_id = &args[3];
+    if !qol_tray::plugins::manifest::is_valid_action_id(plugin_id) {
+        eprintln!("Invalid plugin id: {}", plugin_id);
+        return Some(1);
+    }
+    if !qol_tray::plugins::manifest::is_valid_action_id(action_id) {
+        eprintln!("Invalid action id: {}", action_id);
+        return Some(1);
+    }
+    Some(fire_action_request(plugin_id, action_id))
+}
+
+fn fire_action_request(plugin_id: &str, action_id: &str) -> i32 {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream};
+
+    let addr: SocketAddr = ([127, 0, 0, 1], DEFAULT_PORT).into();
+    let mut stream = match TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
+        Ok(s) => s,
+        Err(_) => {
+            eprintln!("qol-tray is not running");
+            return 1;
+        }
+    };
+    let timeout = Some(Duration::from_secs(5));
+    let _ = stream.set_read_timeout(timeout);
+    let _ = stream.set_write_timeout(timeout);
+
+    let request = format!(
+        "POST /api/plugins/{}/actions/{} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        plugin_id, action_id, DEFAULT_PORT
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        eprintln!("Failed to send request");
+        return 1;
+    }
+
+    let mut buf = Vec::new();
+    let _ = stream.read_to_end(&mut buf);
+    let response = String::from_utf8_lossy(&buf);
+
+    let status = response
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse::<u16>().ok())
+        .unwrap_or(0);
+
+    if (200..300).contains(&status) {
+        return 0;
+    }
+
+    let body = response
+        .split_once("\r\n\r\n")
+        .map(|(_, b)| b)
+        .unwrap_or("");
+    if !body.is_empty() {
+        eprintln!("{}", body);
+    } else {
+        eprintln!("Request failed (HTTP {})", status);
+    }
+    1
 }
 
 fn is_already_running() -> bool {
@@ -137,6 +215,20 @@ async fn async_init_inner(
     .await?;
     if let Err(e) = hotkeys::start_hotkey_listener(plugin_manager.clone()) {
         log::warn!("Failed to start hotkey listener: {}", e);
+    }
+    if qol_tray::settings::load().export_plugin_actions_to_launcher {
+        let pm_for_stubs = plugin_manager.clone();
+        tokio::task::spawn_blocking(move || {
+            let Ok(binary_path) = std::env::current_exe() else {
+                return;
+            };
+            let Ok(manager) = pm_for_stubs.lock() else {
+                return;
+            };
+            let stubs = features::stub_apps::collect_stubs(&manager);
+            drop(manager);
+            features::stub_apps::sync_stubs(&stubs, &binary_path);
+        });
     }
     Ok(InitResult {
         shutdown_tx,
