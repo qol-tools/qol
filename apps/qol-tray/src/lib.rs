@@ -15,7 +15,6 @@ pub mod plugins;
 pub mod process_utils;
 #[cfg(unix)]
 pub mod runtime;
-pub mod settings;
 pub mod shortcuts;
 pub mod signal;
 pub mod tray;
