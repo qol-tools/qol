@@ -98,7 +98,7 @@ pub(super) fn reload_manager_and_notify(state: &AppState) {
         }
     };
     if reload_ok {
-        crate::features::launcher_apps::trigger_full_sync(Some(&manager));
+        crate::features::launcher_apps::trigger_full_sync();
     }
     drop(manager);
     trigger_reload();

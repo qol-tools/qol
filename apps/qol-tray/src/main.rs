@@ -247,12 +247,7 @@ async fn async_init_inner(
     if let Err(e) = hotkeys::start_hotkey_listener(plugin_manager.clone()) {
         log::warn!("Failed to start hotkey listener: {}", e);
     }
-    {
-        let pm_for_sync = plugin_manager.clone();
-        tokio::task::spawn_blocking(move || {
-            sync_launcher_apps(&pm_for_sync);
-        });
-    }
+    tokio::task::spawn_blocking(sync_launcher_apps);
     Ok(InitResult {
         shutdown_tx,
         shutdown_rx,
@@ -263,9 +258,8 @@ async fn async_init_inner(
     })
 }
 
-fn sync_launcher_apps(pm: &Arc<Mutex<PluginManager>>) {
-    let manager = pm.lock().ok();
-    features::launcher_apps::trigger_full_sync(manager.as_deref());
+fn sync_launcher_apps() {
+    features::launcher_apps::trigger_full_sync();
 }
 
 async fn check_for_updates() -> bool {

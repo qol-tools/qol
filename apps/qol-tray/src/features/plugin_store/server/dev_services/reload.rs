@@ -119,7 +119,7 @@ fn reload_plugins(
         return;
     }
 
-    crate::features::launcher_apps::trigger_full_sync(Some(&manager));
+    crate::features::launcher_apps::trigger_full_sync();
     drop(manager);
     log::info!("Plugins reloaded successfully");
     crate::hotkeys::trigger_reload();
