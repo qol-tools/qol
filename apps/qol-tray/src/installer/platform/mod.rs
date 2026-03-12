@@ -58,14 +58,6 @@ pub(super) fn prepare_atomic_replace(installed_binary: &Path) -> Result<()> {
     imp::prepare_atomic_replace(installed_binary)
 }
 
-pub(super) fn copy_symlink(source: &Path, target: &Path) -> Result<()> {
-    imp::copy_symlink(source, target)
-}
-
-pub(super) fn on_file_copied(source: &Path, target: &Path) -> Result<()> {
-    imp::on_file_copied(source, target)
-}
-
 pub(super) fn bundled_binary_candidates(installer_path: &Path) -> Vec<PathBuf> {
     installer_path
         .parent()

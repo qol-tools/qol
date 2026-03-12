@@ -60,11 +60,3 @@ pub(super) fn set_executable_permissions(path: &Path) -> Result<()> {
 pub(super) fn prepare_atomic_replace(_: &Path) -> Result<()> {
     Ok(())
 }
-
-pub(super) fn copy_symlink(source: &Path, target: &Path) -> Result<()> {
-    super::unix_common::copy_symlink(source, target)
-}
-
-pub(super) fn on_file_copied(source: &Path, target: &Path) -> Result<()> {
-    super::unix_common::on_file_copied(source, target)
-}
