@@ -25,7 +25,7 @@ fn apps_dir() -> Result<PathBuf> {
 }
 
 fn app_dirname(entry: &LauncherEntry) -> String {
-    format!("{}.app", entry.display_name)
+    format!("{}.app", entry.file_stem)
 }
 
 fn write_app_bundle(app_dir: &Path, entry: &LauncherEntry, binary_path: &Path) -> Result<()> {
