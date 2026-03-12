@@ -1,3 +1,5 @@
+import { clampIndex } from '../../utils/collections.js';
+
 const API_BASE = '/api/task-runner';
 
 export { API_BASE };
@@ -55,7 +57,7 @@ export function removeSelectedAction(actions, actionIds, index) {
 }
 
 export function nextSelectedIndex(actionIds, currentIndex) {
-    return Math.min(currentIndex, Math.max(0, actionIds.length - 1));
+    return clampIndex(currentIndex, actionIds.length);
 }
 
 export function extractParams(command) {
