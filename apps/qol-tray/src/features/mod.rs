@@ -1,3 +1,4 @@
+pub mod launcher_apps;
 pub mod plugin_store;
 pub mod stub_apps;
 pub mod task_runner;

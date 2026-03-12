@@ -1,5 +1,6 @@
 import { apiJson, apiResponse, jsonRequest } from '../../api/client.js';
 import { parseInstalledPlugins } from '../../utils/plugins.js';
+import { clampIndex } from '../../utils/collections.js';
 
 const DEFAULT_ACTION = { id: 'run', label: 'Run' };
 
@@ -46,7 +47,7 @@ export function removeHotkeyAtIndex(hotkeys, index) {
 }
 
 export function nextSelectedIndex(hotkeys, currentIndex) {
-    return Math.min(currentIndex, Math.max(0, hotkeys.length - 1));
+    return clampIndex(currentIndex, hotkeys.length);
 }
 
 function hotkeyEntry(modal) {

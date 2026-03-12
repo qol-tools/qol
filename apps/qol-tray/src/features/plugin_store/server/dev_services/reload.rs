@@ -119,13 +119,8 @@ fn reload_plugins(
         return;
     }
 
-    if crate::settings::load().export_plugin_actions_to_launcher {
-        let stubs = crate::features::stub_apps::collect_stubs(&manager);
-        drop(manager);
-        crate::features::stub_apps::sync_stubs_background(stubs);
-    } else {
-        drop(manager);
-    }
+    crate::features::launcher_apps::trigger_full_sync(Some(&manager));
+    drop(manager);
     log::info!("Plugins reloaded successfully");
     crate::hotkeys::trigger_reload();
     events.send_plugins_changed();

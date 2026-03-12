@@ -1,15 +1,12 @@
 import { apiJson } from '../../api/client.js';
 import { parseInstalledPayload } from '../../utils/plugins.js';
-
-export function sortPluginsByName(plugins) {
-    return [...plugins].sort((a, b) => a.name.localeCompare(b.name));
-}
+import { sortByName } from '../../utils/collections.js';
 
 export async function loadInstalledPlugins() {
     const payload = parseInstalledPayload(await apiJson('/api/installed'));
     return {
         revision: payload.revision,
-        plugins: sortPluginsByName(payload.plugins)
+        plugins: sortByName(payload.plugins)
     };
 }
 

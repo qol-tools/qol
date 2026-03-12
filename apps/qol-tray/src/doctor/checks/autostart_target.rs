@@ -71,9 +71,10 @@ fn diagnose(context: ContextData) -> Diagnosis {
 }
 
 fn warn_with_fix(message: String, exe: PathBuf) -> Diagnosis {
-    warn_outcome(
-        ID,
-        message,
-        Some(FixAction::WriteAutostartEntry { binary_path: exe }),
-    )
+    let fix = if cfg!(feature = "dev") {
+        None
+    } else {
+        Some(FixAction::WriteAutostartEntry { binary_path: exe })
+    };
+    warn_outcome(ID, message, fix)
 }

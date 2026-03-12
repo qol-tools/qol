@@ -45,6 +45,12 @@ export function CommandPalette() {
         if (active) inputRef.current?.focus();
     }, [active]);
 
+    const handleBlur = useCallback(() => {
+        setTimeout(() => {
+            if (!inputRef.current?.matches(':focus')) deactivate();
+        }, 0);
+    }, [deactivate]);
+
     const handleInput = useCallback((e) => {
         setQuery(e.target.value);
     }, [setQuery]);
@@ -95,7 +101,7 @@ export function CommandPalette() {
     return html`<div class="command-palette">
         <div class="search-bar">
             <input ref=${inputRef} class="search-input" type="text"
-                value=${query} onInput=${handleInput} onKeyDown=${handleKeyDown}
+                value=${query} onInput=${handleInput} onKeyDown=${handleKeyDown} onBlur=${handleBlur}
                 placeholder=${mode === 'action' ? 'Type a command...' : 'Search...'} />
         </div>
         ${mode === 'action' && commands.length > 0 && html`

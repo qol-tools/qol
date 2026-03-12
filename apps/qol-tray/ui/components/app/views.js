@@ -3,6 +3,7 @@ import { useLayoutEffect, useRef } from 'preact/hooks';
 import { PluginsView } from '../../views/plugins-view.js';
 import { StoreView } from '../../views/store-view.js';
 import { HotkeysView } from '../../views/hotkeys-view.js';
+import { ShortcutsView } from '../../views/shortcuts-view.js';
 import { TaskRunnerView } from '../../views/task-runner-view.js';
 import { DevView } from '../../views/dev/view.js';
 
@@ -10,6 +11,7 @@ export const VIEW_MAP = {
     plugins: PluginsView,
     store: StoreView,
     hotkeys: HotkeysView,
+    shortcuts: ShortcutsView,
     'task-runner': TaskRunnerView,
     dev: DevView
 };
@@ -18,11 +20,12 @@ export const VIEW_LABELS = {
     plugins: 'Plugins',
     store: 'Plugin Store',
     hotkeys: 'Hotkeys',
+    shortcuts: 'Shortcuts',
     'task-runner': 'Task Runner',
     dev: 'Dev'
 };
 
-const BASE_ORDER = ['plugins', 'store', 'hotkeys', 'task-runner'];
+const BASE_ORDER = ['plugins', 'store', 'hotkeys', 'shortcuts', 'task-runner'];
 
 export function buildViewOrder(devEnabled) {
     return devEnabled ? [...BASE_ORDER, 'dev'] : [...BASE_ORDER];
@@ -54,6 +57,7 @@ export function renderMountedViews({
         ${mounted.has('plugins') && html`<${ViewSlot} active=${active('plugins')}><${PluginsView} onOpenPluginConfig=${openPluginConfig} /><//>`}
         ${mounted.has('store') && html`<${ViewSlot} active=${active('store')}><${StoreView} /><//>`}
         ${mounted.has('hotkeys') && html`<${ViewSlot} active=${active('hotkeys')}><${HotkeysView} /><//>`}
+        ${mounted.has('shortcuts') && html`<${ViewSlot} active=${active('shortcuts')}><${ShortcutsView} /><//>`}
         ${mounted.has('task-runner') && html`<${ViewSlot} active=${active('task-runner')}><${TaskRunnerView} /><//>`}
         ${mounted.has('dev') && html`<${ViewSlot} active=${active('dev')}><${DevView} /><//>`}
     `;
