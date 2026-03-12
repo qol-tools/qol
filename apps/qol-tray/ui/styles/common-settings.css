@@ -217,3 +217,54 @@ kbd {
     font-size: 0.85em;
     color: var(--state-info-text);
 }
+
+.shortcuts-list {
+    flex: 1;
+    --table-cols: minmax(0, 1.2fr) 5rem minmax(0, 2fr) 5rem;
+}
+
+.shortcut-header {
+    font-weight: var(--fw-semibold);
+    color: var(--text-muted);
+    font-size: var(--fs-sm);
+    text-transform: uppercase;
+    letter-spacing: var(--ls-xl);
+}
+
+.shortcut-row {
+    background: transparent;
+    cursor: pointer;
+    border-left: var(--border-w-3) solid transparent;
+    box-sizing: border-box;
+}
+
+.shortcut-row[data-enabled="false"] {
+    opacity: 0.5;
+}
+
+.form-group-inline {
+    display: flex;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+}
+
+.form-group-inline select {
+    width: auto;
+    min-width: 8rem;
+}
+
+.form-group-inline input {
+    flex: 1;
+}
+
+.form-group-row {
+    display: flex;
+    gap: var(--space-6);
+}
+
+.form-group-row label {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    cursor: pointer;
+}

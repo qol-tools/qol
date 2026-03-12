@@ -40,7 +40,6 @@ function doOpenSelected(pluginsRef, selectedIndexRef, setFeedback, onOpenPluginC
         return;
     }
     if (plugin.has_ui) {
-        localStorage.setItem('plugins-selected-index', String(selectedIndexRef.current));
         if (onOpenPluginConfig) onOpenPluginConfig(plugin.id);
         return;
     }

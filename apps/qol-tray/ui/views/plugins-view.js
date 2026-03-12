@@ -13,7 +13,7 @@ import { usePluginsModal } from './plugins/use-modal.js';
 import { usePluginActions } from './plugins/use-actions.js';
 import { usePluginsKeyHandler } from './plugins/key-router.js';
 import { useCardClickHandler } from './plugins/click-router.js';
-import { getFilteredPlugins } from './store/reducer.js';
+import { matchesQuery, clampIndex } from '../utils/collections.js';
 
 
 export function PluginsView({ onOpenPluginConfig }) {
@@ -21,13 +21,13 @@ export function PluginsView({ onOpenPluginConfig }) {
     const { searchQuery } = usePaletteContext();
     const list = usePluginsList(setFeedback);
     const filtered = useMemo(
-        () => getFilteredPlugins(list.plugins, searchQuery),
+        () => searchQuery ? list.plugins.filter(p => matchesQuery([p?.name, p?.description], searchQuery)) : list.plugins,
         [list.plugins, searchQuery]
     );
     const filteredRef = useRef(filtered);
     filteredRef.current = filtered;
     useEffect(() => {
-        list.setSelectedIndex(prev => Math.min(prev, Math.max(0, filtered.length - 1)));
+        list.setSelectedIndex(prev => clampIndex(prev, filtered.length));
     }, [filtered.length, list.setSelectedIndex]);
     const filteredList = { ...list, plugins: filtered, pluginsRef: filteredRef };
     const modal = usePluginsModal(filtered);

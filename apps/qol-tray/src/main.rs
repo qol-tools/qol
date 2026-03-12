@@ -54,8 +54,12 @@ fn try_exec_subcommand() -> Option<i32> {
     if args.get(1).map(|s| s.as_str()) != Some("exec") {
         return None;
     }
+    if args.len() == 4 && args[2] == "shortcut" {
+        return Some(exec_shortcut(&args[3]));
+    }
     if args.len() != 4 {
-        eprintln!("Usage: qol-tray exec <plugin_id> <action_id>");
+        eprintln!("Usage: qol-tray exec shortcut <shortcut_id>");
+        eprintln!("       qol-tray exec <plugin_id> <action_id>");
         return Some(1);
     }
     let plugin_id = &args[2];
@@ -69,6 +73,32 @@ fn try_exec_subcommand() -> Option<i32> {
         return Some(1);
     }
     Some(fire_action_request(plugin_id, action_id))
+}
+
+fn exec_shortcut(id: &str) -> i32 {
+    if let Err(e) = qol_tray::shortcuts::validation::validate_id(id) {
+        eprintln!("Invalid shortcut id: {}", e);
+        return 1;
+    }
+    let config = match qol_tray::shortcuts::store::load() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to load shortcuts: {}", e);
+            return 1;
+        }
+    };
+    let shortcut = match qol_tray::shortcuts::store::find_by_id(&config, id) {
+        Some(s) => s,
+        None => {
+            eprintln!("Shortcut '{}' not found", id);
+            return 1;
+        }
+    };
+    if let Err(e) = qol_tray::shortcuts::executor::execute(&shortcut) {
+        eprintln!("Failed to execute shortcut: {}", e);
+        return 1;
+    }
+    0
 }
 
 fn fire_action_request(plugin_id: &str, action_id: &str) -> i32 {
@@ -115,11 +145,12 @@ fn fire_action_request(plugin_id: &str, action_id: &str) -> i32 {
         .split_once("\r\n\r\n")
         .map(|(_, b)| b)
         .unwrap_or("");
-    if !body.is_empty() {
-        eprintln!("{}", body);
+    let msg = if body.is_empty() {
+        format!("Request failed (HTTP {})", status)
     } else {
-        eprintln!("Request failed (HTTP {})", status);
-    }
+        body.to_string()
+    };
+    eprintln!("{}", msg);
     1
 }
 
@@ -216,18 +247,10 @@ async fn async_init_inner(
     if let Err(e) = hotkeys::start_hotkey_listener(plugin_manager.clone()) {
         log::warn!("Failed to start hotkey listener: {}", e);
     }
-    if qol_tray::settings::load().export_plugin_actions_to_launcher {
-        let pm_for_stubs = plugin_manager.clone();
+    {
+        let pm_for_sync = plugin_manager.clone();
         tokio::task::spawn_blocking(move || {
-            let Ok(binary_path) = std::env::current_exe() else {
-                return;
-            };
-            let Ok(manager) = pm_for_stubs.lock() else {
-                return;
-            };
-            let stubs = features::stub_apps::collect_stubs(&manager);
-            drop(manager);
-            features::stub_apps::sync_stubs(&stubs, &binary_path);
+            sync_launcher_apps(&pm_for_sync);
         });
     }
     Ok(InitResult {
@@ -238,6 +261,11 @@ async fn async_init_inner(
         feature_registry,
         events: daemon.events.clone(),
     })
+}
+
+fn sync_launcher_apps(pm: &Arc<Mutex<PluginManager>>) {
+    let manager = pm.lock().ok();
+    features::launcher_apps::trigger_full_sync(manager.as_deref());
 }
 
 async fn check_for_updates() -> bool {
