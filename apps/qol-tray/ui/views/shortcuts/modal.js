@@ -81,10 +81,10 @@ function ActionTypeField({ value, onChange }) {
 
 function ActionFields({ action, onChange }) {
     if (action.type === 'open_url') {
-        return html`<fragment>
+        return html`
             <${UrlField} url=${action.url || ''} onChange=${(v) => onChange({ url: v })} />
             <${BrowserOverrideField} browser=${action.browser_override} onChange=${(v) => onChange({ browser_override: v || undefined })} />
-        </fragment>`;
+        `;
     }
     return html`<${AppRefField} app=${action.app} onChange=${(v) => onChange({ app: v })} />`;
 }
