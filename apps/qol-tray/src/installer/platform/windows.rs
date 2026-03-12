@@ -54,23 +54,3 @@ pub(super) fn prepare_atomic_replace(installed_binary: &Path) -> Result<()> {
     }
     Ok(())
 }
-
-pub(super) fn copy_symlink(source: &Path, target: &Path) -> Result<()> {
-    let link_target = fs::read_link(source)
-        .with_context(|| format!("Failed to read symlink {}", source.display()))?;
-    let resolved = source
-        .canonicalize()
-        .with_context(|| format!("Failed to resolve symlink {}", source.display()))?;
-    if resolved.is_dir() {
-        std::os::windows::fs::symlink_dir(&link_target, target)
-            .with_context(|| format!("Failed to create directory symlink {}", target.display()))?;
-    } else {
-        std::os::windows::fs::symlink_file(&link_target, target)
-            .with_context(|| format!("Failed to create file symlink {}", target.display()))?;
-    }
-    Ok(())
-}
-
-pub(super) fn on_file_copied(_: &Path, _: &Path) -> Result<()> {
-    Ok(())
-}

@@ -71,25 +71,6 @@ pub(super) fn set_executable_permissions(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn copy_symlink(source: &Path, target: &Path) -> Result<()> {
-    let link_target = fs::read_link(source)
-        .with_context(|| format!("Failed to read symlink {}", source.display()))?;
-    std::os::unix::fs::symlink(&link_target, target)
-        .with_context(|| format!("Failed to create symlink {}", target.display()))?;
-    Ok(())
-}
-
-pub(super) fn on_file_copied(source: &Path, target: &Path) -> Result<()> {
-    if source
-        .file_name()
-        .map(|name| name.to_string_lossy() == "run.sh")
-        .unwrap_or(false)
-    {
-        set_executable_permissions(target)?;
-    }
-    Ok(())
-}
-
 #[cfg(target_os = "linux")]
 fn wait_all_pids_exit(pids: &[i32]) -> bool {
     for _ in 0..30 {
