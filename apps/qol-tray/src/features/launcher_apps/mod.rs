@@ -4,6 +4,11 @@ use crate::plugins::manifest::walk_menu_items;
 use crate::plugins::{ActionType, MenuItem, PluginManager};
 use crate::shortcuts::model::Shortcut;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+
+static SYNC_LOCK: Mutex<()> = Mutex::new(());
+static SYNC_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 pub struct LauncherEntry {
     pub file_stem: String,
@@ -74,7 +79,12 @@ pub fn trigger_full_sync(plugin_manager: Option<&PluginManager>) {
             entries.extend(collect_plugin_entries(manager));
         }
     }
+    let gen = SYNC_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     std::thread::spawn(move || {
+        let _guard = SYNC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        if SYNC_GENERATION.load(Ordering::SeqCst) != gen {
+            return;
+        }
         let bin = match std::env::current_exe() {
             Ok(b) => b,
             Err(_) => return,
