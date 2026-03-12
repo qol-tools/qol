@@ -1,6 +1,6 @@
 import { html } from '../../lib/html.js';
 import { useCallback } from 'preact/hooks';
-import { Modal } from '../../components/ModalPreact.js';
+import { Modal, ModalActions } from '../../components/ModalPreact.js';
 
 const ACTION_TYPES = [
     { value: 'open_url', label: 'Open URL' },
@@ -31,7 +31,7 @@ export function ShortcutEditModal({ modal, onChange, onClose, onSave }) {
                     onChange=${(v) => onTypeChange(modal.shortcut, v, onChange)} />
                 <${ActionFields} action=${modal.shortcut.action} onChange=${setAction} />
                 <${OptionsFields} shortcut=${modal.shortcut} onChange=${set} />
-                <${ModalActions} onClose=${onClose} onSave=${onSave} />
+                <${ModalActions} onClose=${onClose} onSave=${onSave} cancelTabIndex="8" saveTabIndex="9" />
             </div>
         <//>
     `;
@@ -176,11 +176,3 @@ function OptionsFields({ shortcut, onChange }) {
     `;
 }
 
-function ModalActions({ onClose, onSave }) {
-    return html`
-        <div class="modal-buttons">
-            <button class="btn btn-ghost modal-cancel" tabindex="8" onClick=${onClose}>Cancel <kbd>Esc</kbd></button>
-            <button class="btn btn-primary modal-save" tabindex="9" onClick=${onSave}>Save <kbd>Ctrl+Enter</kbd></button>
-        </div>
-    `;
-}
