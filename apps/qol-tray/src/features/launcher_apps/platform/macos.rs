@@ -1,6 +1,6 @@
 use super::super::LauncherEntry;
 use anyhow::{Context, Result};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub(super) fn sync(entries: &[LauncherEntry], binary_path: &Path) -> Result<()> {
@@ -8,10 +8,14 @@ pub(super) fn sync(entries: &[LauncherEntry], binary_path: &Path) -> Result<()> 
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("Failed to create launcher apps dir {}", dir.display()))?;
 
-    let expected: HashSet<String> = entries.iter().map(app_dirname).collect();
+    let app_names = app_dirnames(entries);
+    let expected: HashSet<String> = app_names.values().cloned().collect();
 
     for entry in entries {
-        let app_dir = dir.join(app_dirname(entry));
+        let Some(app_name) = app_names.get(&entry.file_stem) else {
+            continue;
+        };
+        let app_dir = dir.join(app_name);
         write_app_bundle(&app_dir, entry, binary_path)?;
     }
 
@@ -24,8 +28,44 @@ fn apps_dir() -> Result<PathBuf> {
     Ok(home.join("Applications").join("QoL"))
 }
 
-fn app_dirname(entry: &LauncherEntry) -> String {
-    format!("{}.app", entry.file_stem)
+fn app_dirnames(entries: &[LauncherEntry]) -> HashMap<String, String> {
+    let mut counts = HashMap::new();
+    for entry in entries {
+        let name = sanitized_display_name(entry);
+        let count = counts.entry(name).or_insert(0usize);
+        *count += 1;
+    }
+
+    let mut names = HashMap::new();
+    for entry in entries {
+        let base = sanitized_display_name(entry);
+        let count = counts.get(&base).copied().unwrap_or(0);
+        if count <= 1 {
+            names.insert(entry.file_stem.clone(), format!("{}.app", base));
+            continue;
+        }
+        let disambiguated = format!("{} ({})", base, entry.file_stem);
+        names.insert(entry.file_stem.clone(), format!("{}.app", disambiguated));
+    }
+    names
+}
+
+fn sanitized_display_name(entry: &LauncherEntry) -> String {
+    let mut name = String::with_capacity(entry.display_name.len());
+    for ch in entry.display_name.chars() {
+        if ch == '/' || ch == ':' || ch.is_control() {
+            name.push(' ');
+            continue;
+        }
+        name.push(ch);
+    }
+
+    let collapsed = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = collapsed.trim().trim_matches('.');
+    if !trimmed.is_empty() {
+        return trimmed.to_string();
+    }
+    entry.file_stem.clone()
 }
 
 fn write_app_bundle(app_dir: &Path, entry: &LauncherEntry, binary_path: &Path) -> Result<()> {
@@ -73,6 +113,7 @@ fn build_info_plist(entry: &LauncherEntry) -> String {
          <plist version=\"1.0\">\n\
          <dict>\n\
          <key>CFBundleExecutable</key><string>run</string>\n\
+         <key>CFBundleDisplayName</key><string>{}</string>\n\
          <key>CFBundleName</key><string>{}</string>\n\
          <key>CFBundleIdentifier</key><string>{}</string>\n\
          <key>CFBundlePackageType</key><string>APPL</string>\n\
@@ -81,7 +122,7 @@ fn build_info_plist(entry: &LauncherEntry) -> String {
          <key>LSUIElement</key><true/>\n\
          </dict>\n\
          </plist>\n",
-        name, entry.bundle_id
+        name, name, entry.bundle_id
     )
 }
 
@@ -137,4 +178,66 @@ fn xml_escape(input: &str) -> String {
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(file_stem: &str, display_name: &str) -> LauncherEntry {
+        LauncherEntry {
+            file_stem: file_stem.to_string(),
+            display_name: display_name.to_string(),
+            description: String::new(),
+            bundle_id: String::new(),
+            exec_args: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn app_dirnames_preserve_friendly_names() {
+        let names = app_dirnames(&[entry("shortcut-browser", "Open Browser")]);
+
+        assert_eq!(
+            names.get("shortcut-browser"),
+            Some(&"Open Browser.app".to_string())
+        );
+    }
+
+    #[test]
+    fn app_dirnames_sanitize_unsafe_display_names() {
+        let names = app_dirnames(&[entry("shortcut-docs", "Docs:/Team\nPortal")]);
+
+        assert_eq!(
+            names.get("shortcut-docs"),
+            Some(&"Docs Team Portal.app".to_string())
+        );
+    }
+
+    #[test]
+    fn app_dirnames_fallback_to_file_stem_when_name_is_empty_after_sanitize() {
+        let names = app_dirnames(&[entry("shortcut-empty", "/:\n\r\t")]);
+
+        assert_eq!(
+            names.get("shortcut-empty"),
+            Some(&"shortcut-empty.app".to_string())
+        );
+    }
+
+    #[test]
+    fn app_dirnames_disambiguate_duplicates() {
+        let names = app_dirnames(&[
+            entry("shortcut-a", "Open Browser"),
+            entry("shortcut-b", "Open Browser"),
+        ]);
+
+        assert_eq!(
+            names.get("shortcut-a"),
+            Some(&"Open Browser (shortcut-a).app".to_string())
+        );
+        assert_eq!(
+            names.get("shortcut-b"),
+            Some(&"Open Browser (shortcut-b).app".to_string())
+        );
+    }
 }
