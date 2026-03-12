@@ -1,3 +1,5 @@
+import { clampIndex, sortByName, matchesQuery } from '../../utils/collections.js';
+
 export function createStoreState() {
     return {
         plugins: [],
@@ -26,24 +28,10 @@ export function normalizeSearchQuery(value) {
 
 export function getFilteredPlugins(plugins, searchQuery) {
     if (!searchQuery) return plugins;
-    return plugins.filter(plugin => {
-        const name = String(plugin?.name ?? '').toLowerCase();
-        const description = String(plugin?.description ?? '').toLowerCase();
-        return name.includes(searchQuery) || description.includes(searchQuery);
-    });
+    return plugins.filter(p => matchesQuery([p?.name, p?.description], searchQuery));
 }
 
-export function clampSelectedIndex(selectedIndex, itemCount) {
-    return Math.min(selectedIndex, Math.max(0, itemCount - 1));
-}
-
-export function sortPluginsByName(plugins) {
-    return [...plugins].sort((a, b) => {
-        const left = String(a?.name ?? '');
-        const right = String(b?.name ?? '');
-        return left.localeCompare(right);
-    });
-}
+export { clampIndex as clampSelectedIndex, sortByName as sortPluginsByName };
 
 export function isRateLimitedWithoutToken(plugins, hasToken) {
     return plugins.length === 0 && !hasToken;

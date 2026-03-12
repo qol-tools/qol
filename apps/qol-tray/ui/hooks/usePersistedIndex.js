@@ -17,3 +17,21 @@ export function usePersistedIndex(storageKey, defaultValue = 0) {
 
     return [value, setValue, ref, markRestored];
 }
+
+export function usePersistedId(storageKey) {
+    const [value, setValue, ref] = useStateRef(() => localStorage.getItem(storageKey));
+    const restoredRef = useRef(false);
+
+    useEffect(() => {
+        if (!restoredRef.current) return;
+        if (value == null) {
+            localStorage.removeItem(storageKey);
+            return;
+        }
+        localStorage.setItem(storageKey, value);
+    }, [value, storageKey]);
+
+    function markRestored() { restoredRef.current = true; }
+
+    return [value, setValue, ref, markRestored];
+}

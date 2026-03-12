@@ -1,22 +1,12 @@
 import { useState, useEffect, useCallback, useMemo } from 'preact/hooks';
 import { useStateRef } from '../../hooks/useStateRef.js';
+import { usePersistedId } from '../../hooks/usePersistedIndex.js';
 import { withShiftVariants, dispatchKey } from '../../utils/keys.js';
+import { matchesQuery } from '../../utils/collections.js';
 import {
     loadShortcuts, createShortcut, updateShortcut,
     deleteShortcut, runShortcut, emptyShortcut
 } from './data.js';
-
-const STORAGE_KEY = 'shortcuts-selected-id';
-
-function filterShortcuts(shortcuts, query) {
-    if (!query) return shortcuts;
-    const q = query.toLowerCase();
-    return shortcuts.filter(s =>
-        s.name.toLowerCase().includes(q)
-        || s.id.toLowerCase().includes(q)
-        || (s.action.url || '').toLowerCase().includes(q)
-    );
-}
 
 export function useShortcuts(searchQuery) {
     const d = useShortcutsData(searchQuery);
@@ -41,11 +31,13 @@ export function useShortcuts(searchQuery) {
 
 function useShortcutsData(searchQuery) {
     const [shortcuts, setShortcuts] = useState([]);
-    const [selectedId, setSelectedId] = useState(() => localStorage.getItem(STORAGE_KEY));
+    const [selectedId, setSelectedId, selectedIdRef, markRestored] = usePersistedId('shortcuts-selected-id');
     const [editModal, setEditModal, editModalRef] = useStateRef(null);
 
     const filtered = useMemo(
-        () => filterShortcuts(shortcuts, searchQuery),
+        () => searchQuery
+            ? shortcuts.filter(s => matchesQuery([s.name, s.id, s.action.url], searchQuery))
+            : shortcuts,
         [shortcuts, searchQuery]
     );
 
@@ -57,19 +49,11 @@ function useShortcutsData(searchQuery) {
     }, [filtered, selectedId]);
 
     useEffect(() => {
-        if (selectedId == null) {
-            localStorage.removeItem(STORAGE_KEY);
-            return;
-        }
-        localStorage.setItem(STORAGE_KEY, selectedId);
-    }, [selectedId]);
-
-    useEffect(() => {
         loadShortcuts().then(config => {
             const list = config.shortcuts || [];
             setShortcuts(list);
-            const restored = localStorage.getItem(STORAGE_KEY);
-            if (!restored || !list.some(s => s.id === restored)) {
+            markRestored();
+            if (!selectedIdRef.current || !list.some(s => s.id === selectedIdRef.current)) {
                 setSelectedId(list[0]?.id ?? null);
             }
         }).catch(e => console.error('Failed to load shortcuts:', e));
