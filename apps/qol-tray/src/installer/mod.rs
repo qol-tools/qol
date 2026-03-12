@@ -35,7 +35,6 @@ pub fn run() -> Result<()> {
     platform::set_executable_permissions(&installed_binary)?;
     let install_id = register_install_id(&installed_binary)?;
     let plugins_dir = files::ensure_plugin_dir()?;
-    seed_example_plugin(&repo_root, &plugins_dir)?;
     platform::write_autostart_entry(&installed_binary)?;
     platform::start_now(&installed_binary)?;
     print_summary(&installed_binary, &install_id, &plugins_dir, &install_dir)
@@ -107,24 +106,6 @@ fn create_install_id() -> String {
         .unwrap_or_default()
         .as_nanos();
     format!("install-{}-{}", ts, std::process::id())
-}
-
-fn seed_example_plugin(repo_root: &Path, plugins_dir: &Path) -> Result<()> {
-    let source = repo_root
-        .join("examples")
-        .join("plugins")
-        .join("screen-recorder");
-    if !source.is_dir() {
-        return Ok(());
-    }
-
-    let target = plugins_dir.join("screen-recorder");
-    if target.exists() {
-        return Ok(());
-    }
-
-    files::copy_dir_recursive(&source, &target)?;
-    Ok(())
 }
 
 fn is_in_path(dir: &Path) -> bool {

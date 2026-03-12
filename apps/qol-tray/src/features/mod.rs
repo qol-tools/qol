@@ -1,6 +1,5 @@
 pub mod launcher_apps;
 pub mod plugin_store;
-pub mod stub_apps;
 pub mod task_runner;
 
 use crate::plugins::MenuItem as PluginMenuItem;
