@@ -1,6 +1,6 @@
 import { html } from '../../lib/html.js';
 import { useEffect } from 'preact/hooks';
-import { Modal } from '../../components/ModalPreact.js';
+import { Modal, ModalActions } from '../../components/ModalPreact.js';
 
 const MODIFIER_KEYS = ['Control', 'Alt', 'Shift', 'Meta'];
 const MODIFIER_NAMES = ['Ctrl', 'Alt', 'Shift', 'Super'];
@@ -27,7 +27,7 @@ export function HotkeyEditModal({ modal, plugins, onPluginChange, onActionChange
                 <${PluginField} modal=${modal} plugins=${plugins} onPluginChange=${onPluginChange} />
                 <${ActionField} modal=${modal} onActionChange=${onActionChange} />
                 <${KeyField} modal=${modal} onStartRecording=${onStartRecording} />
-                <${ModalActions} onClose=${onClose} onSave=${onSave} />
+                <${ModalActions} onClose=${onClose} onSave=${onSave} cancelTabIndex="4" saveTabIndex="5" />
             </div>
         <//>
     `;
@@ -73,15 +73,6 @@ function KeyField({ modal, onStartRecording }) {
                        placeholder=${modal.recording ? 'Press keys... (Esc to cancel)' : 'Press Enter to record'}
                        onClick=${onStartRecording} />
             </div>
-        </div>
-    `;
-}
-
-function ModalActions({ onClose, onSave }) {
-    return html`
-        <div class="modal-buttons">
-            <button class="btn btn-ghost modal-cancel" tabindex="4" onClick=${onClose}>Cancel <kbd>Esc</kbd></button>
-            <button class="btn btn-primary modal-save" tabindex="5" onClick=${onSave}>Save <kbd>Ctrl+Enter</kbd></button>
         </div>
     `;
 }
