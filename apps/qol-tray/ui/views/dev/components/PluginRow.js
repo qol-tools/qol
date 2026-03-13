@@ -22,9 +22,10 @@ function PluginInfo({ plugin, statusToken, ctrl }) {
 }
 
 function makeMenuHandlers(plugin, ctrl) {
-    const close = cb => e => { e.preventDefault(); e.stopPropagation(); ctrl.closeMenus(); cb(); };
+    const close = cb => () => { ctrl.closeMenus(); cb(); };
     return {
-        onToggleMenu: e => { e.preventDefault(); e.stopPropagation(); ctrl.togglePluginMenu(plugin.id); },
+        onToggleMenu: () => ctrl.togglePluginMenu(plugin.id),
+        onCloseMenu: ctrl.closeMenus,
         onToggleLogs: close(() => ctrl.togglePluginLogs(plugin.id)),
         onEditFilters: close(() => ctrl.editPluginLogFilters(plugin.id)),
         onToggleCpu: close(() => ctrl.toggleCpu(plugin.id))

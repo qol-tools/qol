@@ -1,4 +1,5 @@
 import { html } from '../../../lib/html.js';
+import { DropdownMenu } from '../../../components/DropdownMenu.js';
 
 const CORE_SECTIONS = [
     { id: 'runtime', name: 'Runtime', description: 'Socket, state, polling' },
@@ -6,32 +7,24 @@ const CORE_SECTIONS = [
     { id: 'core', name: 'Core', description: 'Tray, hotkeys, menu, updates' }
 ];
 
-function MenuIcon() {
-    return html`
-        <svg class="plugin-menu-trigger-icon" viewBox="0 0 12 20" fill="currentColor" aria-hidden="true" focusable="false">
-            <circle cx="6" cy="3.5" r="1.8" />
-            <circle cx="6" cy="10" r="1.8" />
-            <circle cx="6" cy="16.5" r="1.8" />
-        </svg>
-    `;
-}
-
 function CoreLogMenu({ section, muted, filterCount, menuOpen, ctrl }) {
-    const onToggle = e => { e.preventDefault(); e.stopPropagation(); ctrl.toggleCoreMenu(section.id); };
-    const onMute = e => { e.preventDefault(); e.stopPropagation(); ctrl.closeMenus(); ctrl.toggleCoreLogs(section.id); };
-    const onFilters = e => { e.preventDefault(); e.stopPropagation(); ctrl.closeMenus(); ctrl.editCoreLogFilters(section.id); };
+    const onToggle = () => ctrl.toggleCoreMenu(section.id);
+    const onMute = () => { ctrl.closeMenus(); ctrl.toggleCoreLogs(section.id); };
+    const onFilters = () => { ctrl.closeMenus(); ctrl.editCoreLogFilters(section.id); };
     return html`
-        <button type="button" class="plugin-menu-trigger" onClick=${onToggle} aria-label=${`Log options for ${section.name}`} aria-expanded=${menuOpen ? 'true' : 'false'}>
-            <${MenuIcon} />
-        </button>
-        <div class=${'plugin-context-menu ' + (menuOpen ? 'open' : '')}>
+        <${DropdownMenu}
+            open=${menuOpen}
+            onToggle=${onToggle}
+            onClose=${ctrl.closeMenus}
+            triggerLabel=${`Log options for ${section.name}`}
+        >
             <button type="button" class="context-action" onClick=${onMute} aria-label=${(muted ? 'Unmute' : 'Mute') + ' ' + section.name + ' logs'}>
                 ${muted ? 'Unmute Logs' : 'Mute Logs'}
             </button>
             <button type="button" class="context-action" onClick=${onFilters} aria-label=${`Edit log filters for ${section.name}`}>
                 ${filterCount > 0 ? `Edit Filters (${filterCount})` : 'Edit Filters'}
             </button>
-        </div>
+        </${DropdownMenu}>
     `;
 }
 

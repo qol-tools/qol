@@ -155,8 +155,16 @@ function buildMenuCallbacks(state, ctrl, bump) {
         togglePluginLogs: id => void ctrl.actionsController.togglePluginLogs(id),
         editPluginLogFilters: id => void ctrl.actionsController.editPluginLogFilters(id),
         toggleCpu: id => ctrl.cpuController.toggle(id),
-        toggleCoreMenu: id => { state.openCoreMenuId = state.openCoreMenuId === id ? null : id; bump(); },
-        togglePluginMenu: id => { state.openPluginMenuId = state.openPluginMenuId === id ? null : id; bump(); },
+        toggleCoreMenu: id => {
+            state.openPluginMenuId = null;
+            state.openCoreMenuId = state.openCoreMenuId === id ? null : id;
+            bump();
+        },
+        togglePluginMenu: id => {
+            state.openCoreMenuId = null;
+            state.openPluginMenuId = state.openPluginMenuId === id ? null : id;
+            bump();
+        },
         closeMenus,
         toggleCoreLogs: id => void ctrl.coreLogActions.toggleCoreLogs(id),
         editCoreLogFilters: id => void ctrl.coreLogActions.editCoreLogFilters(id)

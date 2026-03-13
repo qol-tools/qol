@@ -1,14 +1,5 @@
 import { html } from '../../../lib/html.js';
-
-function MenuIcon() {
-    return html`
-        <svg class="plugin-menu-trigger-icon" viewBox="0 0 12 20" fill="currentColor" aria-hidden="true" focusable="false">
-            <circle cx="6" cy="3.5" r="1.8" />
-            <circle cx="6" cy="10" r="1.8" />
-            <circle cx="6" cy="16.5" r="1.8" />
-        </svg>
-    `;
-}
+import { DropdownMenu } from '../../../components/DropdownMenu.js';
 
 function MuteLogsAction({ plugin, pluginId, onToggleLogs }) {
     const label = `${plugin.logs_muted ? 'Unmute logs' : 'Mute logs'} for ${plugin.name}`;
@@ -38,15 +29,17 @@ function CpuAction({ plugin, cpuMonitoring, onToggleCpu }) {
     `;
 }
 
-export function PluginMenu({ plugin, menuOpen, cpuMonitoring, onToggleMenu, onToggleLogs, onEditFilters, onToggleCpu }) {
+export function PluginMenu({ plugin, menuOpen, cpuMonitoring, onToggleMenu, onCloseMenu, onToggleLogs, onEditFilters, onToggleCpu }) {
     return html`
-        <button type="button" class="plugin-menu-trigger" onClick=${onToggleMenu} aria-label=${`Plugin options for ${plugin.name}`} aria-expanded=${menuOpen ? 'true' : 'false'}>
-            <${MenuIcon} />
-        </button>
-        <div class=${'plugin-context-menu ' + (menuOpen ? 'open' : '')}>
+        <${DropdownMenu}
+            open=${menuOpen}
+            onToggle=${onToggleMenu}
+            onClose=${onCloseMenu}
+            triggerLabel=${`Plugin options for ${plugin.name}`}
+        >
             <${MuteLogsAction} plugin=${plugin} onToggleLogs=${onToggleLogs} />
             <${EditFiltersAction} plugin=${plugin} onEditFilters=${onEditFilters} />
             <${CpuAction} plugin=${plugin} cpuMonitoring=${cpuMonitoring} onToggleCpu=${onToggleCpu} />
-        </div>
+        </${DropdownMenu}>
     `;
 }
