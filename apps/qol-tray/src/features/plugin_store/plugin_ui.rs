@@ -85,24 +85,6 @@ async fn validate_file_entry(path: &Path) -> Result<(), Response> {
     Ok(())
 }
 
-async fn verify_plugin_root_allowed(
-    plugins_dir: &Path,
-    _plugin_id: &str,
-    plugin_root: &Path,
-) -> Result<PathBuf, Response> {
-    let canonical_plugins_dir = canonicalize_or_not_found(plugins_dir).await?;
-    let canonical_plugin_root = canonicalize_or_not_found(plugin_root).await?;
-    let under_installed_root = canonical_plugin_root.starts_with(&canonical_plugins_dir);
-    #[cfg(feature = "dev")]
-    let under_dev_link_root = is_dev_link_target(_plugin_id, &canonical_plugin_root);
-    #[cfg(not(feature = "dev"))]
-    let under_dev_link_root = false;
-    if !under_installed_root && !under_dev_link_root {
-        return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
-    }
-    Ok(canonical_plugin_root)
-}
-
 async fn verify_path_chain(
     canonical_plugin_root: &Path,
     ui_root: &Path,
@@ -137,47 +119,20 @@ async fn resolve_safe_ui_file(
         );
         return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
     }
-    let plugin_root = resolve_plugin_root(plugins_dir, plugin_id);
+    let plugin_root = super::plugin_paths::resolve_plugin_root(plugins_dir, plugin_id);
     let ui_root = plugin_root.join("ui");
     let ui_path = ui_root.join(file_path);
     validate_dir_entry(&plugin_root).await?;
     validate_dir_entry(&ui_root).await?;
     validate_file_entry(&ui_path).await?;
-    let canonical_plugin_root =
-        verify_plugin_root_allowed(plugins_dir, plugin_id, &plugin_root).await?;
+    let Some(canonical_plugin_root) = verify_plugin_root_allowed(plugins_dir, plugin_id) else {
+        return Err((StatusCode::FORBIDDEN, "Access denied").into_response());
+    };
     verify_path_chain(&canonical_plugin_root, &ui_root, &ui_path).await
 }
 
-fn resolve_plugin_root(plugins_dir: &Path, plugin_id: &str) -> PathBuf {
-    #[cfg(feature = "dev")]
-    if let Some(dev_path) = resolve_dev_link_path(plugin_id) {
-        return dev_path;
-    }
-
-    let installed_root = plugins_dir.join(plugin_id);
-    if installed_root.exists() {
-        return installed_root;
-    }
-
-    installed_root
-}
-
-#[cfg(feature = "dev")]
-fn resolve_dev_link_path(plugin_id: &str) -> Option<PathBuf> {
-    let config_dir = crate::paths::shared_config_dir().ok()?;
-    let links = crate::dev::load_dev_links(&config_dir);
-    links.get(plugin_id).cloned()
-}
-
-#[cfg(feature = "dev")]
-fn is_dev_link_target(plugin_id: &str, candidate: &Path) -> bool {
-    let Some(dev_path) = resolve_dev_link_path(plugin_id) else {
-        return false;
-    };
-    let Ok(canonical_dev_path) = std::fs::canonicalize(dev_path) else {
-        return false;
-    };
-    candidate == canonical_dev_path
+fn verify_plugin_root_allowed(plugins_dir: &Path, plugin_id: &str) -> Option<PathBuf> {
+    super::plugin_paths::canonical_plugin_root(plugins_dir, plugin_id)
 }
 
 fn is_safe_subpath(path: &str) -> bool {
