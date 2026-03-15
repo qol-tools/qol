@@ -14,6 +14,11 @@ jobs:
       RUSTFLAGS: -D warnings
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: qol-tools/qol-config
+          path: ../qol-config
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -41,6 +46,11 @@ jobs:
       RUSTFLAGS: -D warnings
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: qol-tools/qol-config
+          path: ../qol-config
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
