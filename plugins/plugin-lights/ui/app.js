@@ -261,6 +261,30 @@ function buildControls() {
     ], active);
     grid.appendChild(tempRow);
 
+    const colorRow = document.createElement('div');
+    colorRow.className = 'control-row';
+    const colorLabel = document.createElement('span');
+    colorLabel.className = 'control-label';
+    colorLabel.textContent = 'Color';
+    colorRow.appendChild(colorLabel);
+    const colorPicker = document.createElement('input');
+    colorPicker.type = 'color';
+    colorPicker.className = 'color-picker';
+    colorPicker.value = '#' + (config.live_color_hex || 'ffffff');
+    colorPicker.disabled = !active;
+    colorPicker.addEventListener('input', async function () {
+        const hex = this.value.replace('#', '');
+        config.live_color_hex = hex;
+        await fetch(CONFIG_URL, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config),
+        });
+        sendAction('set-color-main', this);
+    });
+    colorRow.appendChild(colorPicker);
+    grid.appendChild(colorRow);
+
     section.appendChild(grid);
     return section;
 }

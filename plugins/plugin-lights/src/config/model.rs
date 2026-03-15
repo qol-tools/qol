@@ -12,6 +12,8 @@ pub struct PluginConfig {
     pub main_target_id: String,
     #[serde(default)]
     pub devices: HashMap<String, DeviceEntry>,
+    #[serde(default = "default_color")]
+    pub live_color_hex: String,
     pub presets: PresetConfig,
 }
 
@@ -22,6 +24,7 @@ impl Default for PluginConfig {
             main_target_type: "device".into(),
             main_target_id: String::new(),
             devices: HashMap::new(),
+            live_color_hex: default_color(),
             presets: PresetConfig::default(),
         }
     }
@@ -149,6 +152,10 @@ impl PresetSlot {
             mirek: 300,
         }
     }
+}
+
+fn default_color() -> String {
+    "ffffff".into()
 }
 
 fn target_from_parts(target_type: &str, target_id: &str) -> LightTarget {

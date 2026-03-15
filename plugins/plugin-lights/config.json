@@ -6,11 +6,11 @@
     "network_key": "54:57:C2:42:C4:6C:F3:DB:E2:5B:7F:6D:EB:25:FC:58"
   },
   "main_target_type": "device",
-  "main_target_id": "0xFC1B",
+  "main_target_id": "0x1BEA",
   "devices": {
-    "0xFC1B": {
+    "0x1BEA": {
       "ieee_address": "22:53:7E:FE:FF:B6:C6:7C",
-      "name": "Device FC1B",
+      "name": "LED Strip",
       "endpoints": [
         {
           "id": 1,
