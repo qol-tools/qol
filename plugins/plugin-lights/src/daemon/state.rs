@@ -37,8 +37,10 @@ impl DaemonState {
             config.backend.network_key = format_key(backend.network_key());
         }
 
-        for entry in config.devices.values_mut() {
-            entry.online = false;
+        let live_devices = backend.devices();
+        for (key, entry) in config.devices.iter_mut() {
+            let nwk = parse_network_address(key).unwrap_or(0);
+            entry.online = live_devices.iter().any(|d| d.network_address == nwk);
         }
         store::save(&config)?;
 
@@ -139,9 +141,10 @@ impl DaemonState {
 fn load_persisted_devices(config: &PluginConfig) -> Vec<Device> {
     config
         .devices
-        .values()
-        .filter_map(|entry| {
+        .iter()
+        .filter_map(|(key, entry)| {
             let ieee_address = parse_ieee_address(&entry.ieee_address).ok()?;
+            let network_address = parse_network_address(key).unwrap_or(0);
             let endpoints = entry
                 .endpoints
                 .iter()
@@ -151,12 +154,17 @@ fn load_persisted_devices(config: &PluginConfig) -> Vec<Device> {
                 })
                 .collect();
             Some(Device {
-                network_address: 0,
+                network_address,
                 ieee_address,
                 endpoints,
             })
         })
         .collect()
+}
+
+fn parse_network_address(key: &str) -> Option<u16> {
+    let stripped = key.strip_prefix("0x").or_else(|| key.strip_prefix("0X"))?;
+    u16::from_str_radix(stripped, 16).ok()
 }
 
 fn parse_ieee_address(hex: &str) -> Result<[u8; 8], String> {
