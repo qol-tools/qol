@@ -6,6 +6,7 @@ mod state;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use anyhow::{Context, Result};
@@ -42,18 +43,40 @@ pub fn execute_action_once(action: &str) -> Result<()> {
 
 pub fn run(socket_path: &str) -> Result<()> {
     let listener = bind_listener(socket_path)?;
-    let mut state = DaemonState::new()?;
+    listener.set_nonblocking(true)?;
 
-    let events_rx = state.backend().events().clone();
+    let state: Arc<Mutex<Option<DaemonState>>> = Arc::new(Mutex::new(None));
+
+    let init_state = Arc::clone(&state);
     thread::Builder::new()
-        .name("device-monitor".into())
-        .spawn(move || device_monitor_loop(events_rx))
-        .context("failed to spawn device monitor")?;
+        .name("coordinator-init".into())
+        .spawn(move || match DaemonState::new() {
+            Ok(s) => {
+                let events_rx = s.backend().events().clone();
+                *init_state.lock().unwrap() = Some(s);
+                eprintln!("coordinator ready");
+                device_monitor_loop(events_rx);
+            }
+            Err(e) => eprintln!("coordinator init failed: {e:#}"),
+        })
+        .context("failed to spawn coordinator init")?;
 
     loop {
-        let (stream, _) = listener.accept()?;
-        if let Err(error) = handle_stream(&mut state, stream) {
-            eprintln!("{error:#}");
+        match listener.accept() {
+            Ok((stream, _)) => {
+                let mut guard = state.lock().unwrap();
+                if let Some(ref mut s) = *guard {
+                    if let Err(error) = handle_stream(s, stream) {
+                        eprintln!("{error:#}");
+                    }
+                } else {
+                    let _ = write_not_ready(stream);
+                }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(e) => return Err(e.into()),
         }
     }
 }
@@ -95,6 +118,13 @@ fn format_ieee(addr: &[u8; 8]) -> String {
         .map(|b| format!("{:02X}", b))
         .collect::<Vec<_>>()
         .join(":")
+}
+
+fn write_not_ready(mut stream: UnixStream) -> Result<()> {
+    let resp = r#"{"status":"error","message":"coordinator still initializing"}"#;
+    stream.write_all(resp.as_bytes())?;
+    stream.write_all(b"\n")?;
+    Ok(())
 }
 
 fn bind_listener(socket_path: &str) -> Result<UnixListener> {
