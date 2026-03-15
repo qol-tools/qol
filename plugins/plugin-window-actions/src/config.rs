@@ -79,6 +79,7 @@ impl WindowActionsConfig {
         }
     }
 
+    #[cfg(any(target_os = "macos", test))]
     pub fn center_size_for_monitor(&self, monitor_width: f64, monitor_height: f64) -> (f64, f64) {
         let width = self.resolve_center_width(monitor_width);
         let height = self.resolve_center_height(monitor_height);
@@ -88,6 +89,7 @@ impl WindowActionsConfig {
         )
     }
 
+    #[cfg(any(target_os = "macos", test))]
     fn resolve_center_width(&self, monitor_width: f64) -> f64 {
         if self.center_mode == CenterMode::Percent {
             return monitor_width * self.center_width_percent;
@@ -95,6 +97,7 @@ impl WindowActionsConfig {
         self.center_width_px
     }
 
+    #[cfg(any(target_os = "macos", test))]
     fn resolve_center_height(&self, monitor_height: f64) -> f64 {
         if self.center_mode == CenterMode::Percent {
             return monitor_height * self.center_height_percent;
