@@ -61,6 +61,8 @@ pub struct DeviceEntry {
     pub ieee_address: String,
     pub name: String,
     pub endpoints: Vec<EndpointEntry>,
+    #[serde(default)]
+    pub online: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

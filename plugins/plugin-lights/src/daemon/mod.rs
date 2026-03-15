@@ -74,6 +74,7 @@ fn device_monitor_loop(events: crossbeam_channel::Receiver<zigbee_znp::ZigbeeEve
                             clusters: ep.input_clusters.clone(),
                         })
                         .collect(),
+                    online: true,
                 };
                 if let Ok(mut config) = store::load() {
                     config

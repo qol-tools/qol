@@ -3,11 +3,26 @@
     "kind": "zigbee-direct",
     "serial_port": "auto",
     "channel": 11,
-    "network_key": "auto"
+    "network_key": "54:57:C2:42:C4:6C:F3:DB:E2:5B:7F:6D:EB:25:FC:58"
   },
   "main_target_type": "device",
-  "main_target_id": "",
-  "devices": {},
+  "main_target_id": "0xFC1B",
+  "devices": {
+    "0xFC1B": {
+      "ieee_address": "22:53:7E:FE:FF:B6:C6:7C",
+      "name": "Device FC1B",
+      "endpoints": [
+        {
+          "id": 1,
+          "clusters": [
+            6,
+            8,
+            768
+          ]
+        }
+      ]
+    }
+  },
   "presets": {
     "preset_1": {
       "enabled": false,

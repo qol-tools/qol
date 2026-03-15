@@ -35,8 +35,12 @@ impl DaemonState {
 
         if config.backend.network_key == "auto" {
             config.backend.network_key = format_key(backend.network_key());
-            store::save(&config)?;
         }
+
+        for entry in config.devices.values_mut() {
+            entry.online = false;
+        }
+        store::save(&config)?;
 
         let service = LightService::new(backend);
         Ok(Self {

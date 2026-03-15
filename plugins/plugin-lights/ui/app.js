@@ -143,13 +143,16 @@ function buildDeviceRow(id, dev, isMain) {
     row.className = `device-row${isMain ? ' active' : ''}`;
 
     const info = document.createElement('div');
-    const name = document.createElement('div');
-    name.className = 'device-name';
-    name.textContent = dev.name || id;
+    const nameRow = document.createElement('div');
+    nameRow.className = 'device-name';
+    const statusDot = document.createElement('span');
+    statusDot.className = `dot ${dev.online ? 'dot-green' : 'dot-red'}`;
+    const nameText = document.createTextNode(dev.name || id);
+    nameRow.append(statusDot, nameText);
     const addr = document.createElement('div');
     addr.className = 'device-addr';
-    addr.textContent = id;
-    info.append(name, addr);
+    addr.textContent = `${id} ${dev.online ? '' : '(offline)'}`;
+    info.append(nameRow, addr);
 
     const actions = document.createElement('div');
     actions.className = 'device-actions';
