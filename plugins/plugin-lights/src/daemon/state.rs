@@ -48,6 +48,10 @@ impl DaemonState {
         })
     }
 
+    pub fn backend(&self) -> &ZigbeeBackend {
+        self.service.backend()
+    }
+
     pub fn handle_action(&mut self, action: &str) -> DaemonOutcome {
         if action == actions::TOGGLE_MAIN {
             return self.apply(LightCommand::Toggle);

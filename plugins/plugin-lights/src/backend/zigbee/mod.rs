@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use anyhow::{anyhow, Context, Result};
+use crossbeam_channel::Receiver;
 use zigbee_znp::zcl;
-use zigbee_znp::{ControllerConfig, Device, ZigbeeController};
+use zigbee_znp::{ControllerConfig, Device, ZigbeeController, ZigbeeEvent};
 
 use crate::backend::LightBackend;
 use crate::config::model::BackendConfig;
@@ -45,6 +46,14 @@ impl ZigbeeBackend {
 
     pub fn permit_join(&self, duration_secs: u8) -> Result<()> {
         self.controller.permit_join(duration_secs)
+    }
+
+    pub fn events(&self) -> &Receiver<ZigbeeEvent> {
+        self.controller.events()
+    }
+
+    pub fn devices(&self) -> Vec<Device> {
+        self.controller.devices()
     }
 }
 

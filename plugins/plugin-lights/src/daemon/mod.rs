@@ -3,11 +3,16 @@ compile_error!("plugin-lights daemon requires unix domain sockets");
 
 mod state;
 
-use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
+use std::thread;
+
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+
+use crate::config::model::{DeviceEntry, EndpointEntry};
+use crate::config::store;
 
 pub use state::{DaemonOutcome, DaemonState};
 
@@ -39,12 +44,56 @@ pub fn run(socket_path: &str) -> Result<()> {
     let listener = bind_listener(socket_path)?;
     let mut state = DaemonState::new()?;
 
+    let events_rx = state.backend().events().clone();
+    thread::Builder::new()
+        .name("device-monitor".into())
+        .spawn(move || device_monitor_loop(events_rx))
+        .context("failed to spawn device monitor")?;
+
     loop {
         let (stream, _) = listener.accept()?;
         if let Err(error) = handle_stream(&mut state, stream) {
             eprintln!("{error:#}");
         }
     }
+}
+
+fn device_monitor_loop(events: crossbeam_channel::Receiver<zigbee_znp::ZigbeeEvent>) {
+    loop {
+        match events.recv() {
+            Ok(zigbee_znp::ZigbeeEvent::DeviceJoined(device)) => {
+                let ieee = format_ieee(&device.ieee_address);
+                let entry = DeviceEntry {
+                    ieee_address: ieee.clone(),
+                    name: format!("Device {:04X}", device.network_address),
+                    endpoints: device
+                        .endpoints
+                        .iter()
+                        .map(|ep| EndpointEntry {
+                            id: ep.id,
+                            clusters: ep.input_clusters.clone(),
+                        })
+                        .collect(),
+                };
+                if let Ok(mut config) = store::load() {
+                    config
+                        .devices
+                        .insert(format!("0x{:04X}", device.network_address), entry);
+                    let _ = store::save(&config);
+                    eprintln!("device joined: {} ({})", ieee, format!("0x{:04X}", device.network_address));
+                }
+            }
+            Ok(zigbee_znp::ZigbeeEvent::DeviceLeft(_)) => {}
+            Err(_) => break,
+        }
+    }
+}
+
+fn format_ieee(addr: &[u8; 8]) -> String {
+    addr.iter()
+        .map(|b| format!("{:02X}", b))
+        .collect::<Vec<_>>()
+        .join(":")
 }
 
 fn bind_listener(socket_path: &str) -> Result<UnixListener> {
