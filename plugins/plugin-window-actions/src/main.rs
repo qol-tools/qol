@@ -1,3 +1,4 @@
+mod config;
 mod platform;
 mod restore;
 mod state_store;
@@ -5,6 +6,7 @@ mod state_store;
 use std::env;
 use std::process::ExitCode;
 
+use config::load_config;
 use state_store::{default_state_file_path, FileMinimizedStateStore};
 
 fn main() -> ExitCode {
@@ -17,8 +19,9 @@ fn main() -> ExitCode {
     };
 
     let store = FileMinimizedStateStore::new(default_state_file_path());
+    let config = load_config();
 
-    if let Err(error) = platform::execute_action(&action, &store) {
+    if let Err(error) = platform::execute_action(&action, &store, &config) {
         eprintln!("{error}");
         return ExitCode::from(1);
     }

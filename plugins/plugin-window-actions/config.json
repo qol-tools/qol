@@ -1,0 +1,9 @@
+{
+  "center_height_percent": 0.65,
+  "center_height_px": 800,
+  "center_mode": "percent",
+  "center_width_percent": 0.5,
+  "center_width_px": 1152,
+  "reveal_taskbar_after_move": true,
+  "snap_fraction": 0.5
+}

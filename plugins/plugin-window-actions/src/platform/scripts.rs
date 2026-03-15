@@ -1,62 +1,74 @@
-pub const SNAP_LEFT_SCRIPT: &str = r#"
+pub fn snap_left_script(fraction: f64) -> String {
+    format!(
+        r#"
     const win = global.display.focus_window;
-    if (!win) {
+    if (!win) {{
         'ERROR: No focused window';
-    } else {
-        if (win.maximized_horizontally || win.maximized_vertically) {
-            win.unmaximize(3);
-        }
+    }}
+    if (win.maximized_horizontally || win.maximized_vertically) {{
+        win.unmaximize(3);
+    }}
 
-        const workArea = win.get_work_area_current_monitor();
-        const newWidth = Math.floor(workArea.width / 2);
-        const newHeight = workArea.height;
-        const newX = workArea.x;
-        const newY = workArea.y;
+    const workArea = win.get_work_area_current_monitor();
+    const fraction = {fraction};
+    const newWidth = Math.floor(workArea.width * fraction);
+    const newHeight = workArea.height;
+    const newX = workArea.x;
+    const newY = workArea.y;
 
-        win.move_resize_frame(true, newX, newY, newWidth, newHeight);
-        'Snapped to left half';
-    }
-"#;
+    win.move_resize_frame(true, newX, newY, newWidth, newHeight);
+    'Snapped to left region';
+"#
+    )
+}
 
-pub const SNAP_RIGHT_SCRIPT: &str = r#"
+pub fn snap_right_script(fraction: f64) -> String {
+    format!(
+        r#"
     const win = global.display.focus_window;
-    if (!win) {
+    if (!win) {{
         'ERROR: No focused window';
-    } else {
-        if (win.maximized_horizontally || win.maximized_vertically) {
-            win.unmaximize(3);
-        }
+    }}
+    if (win.maximized_horizontally || win.maximized_vertically) {{
+        win.unmaximize(3);
+    }}
 
-        const workArea = win.get_work_area_current_monitor();
-        const newWidth = Math.floor(workArea.width / 2);
-        const newHeight = workArea.height;
-        const newX = workArea.x + Math.floor(workArea.width / 2);
-        const newY = workArea.y;
+    const workArea = win.get_work_area_current_monitor();
+    const fraction = {fraction};
+    const newWidth = Math.floor(workArea.width * fraction);
+    const newHeight = workArea.height;
+    const newX = workArea.x + (workArea.width - newWidth);
+    const newY = workArea.y;
 
-        win.move_resize_frame(true, newX, newY, newWidth, newHeight);
-        'Snapped to right half';
-    }
-"#;
+    win.move_resize_frame(true, newX, newY, newWidth, newHeight);
+    'Snapped to right region';
+"#
+    )
+}
 
-pub const SNAP_BOTTOM_SCRIPT: &str = r#"
+pub fn snap_bottom_script(fraction: f64) -> String {
+    format!(
+        r#"
     const win = global.display.focus_window;
-    if (!win) {
+    if (!win) {{
         'ERROR: No focused window';
-    } else {
-        if (win.maximized_horizontally || win.maximized_vertically) {
-            win.unmaximize(3);
-        }
+    }}
+    if (win.maximized_horizontally || win.maximized_vertically) {{
+        win.unmaximize(3);
+    }}
 
-        const workArea = win.get_work_area_current_monitor();
-        const newWidth = workArea.width;
-        const newHeight = Math.floor(workArea.height / 2);
-        const newX = workArea.x;
-        const newY = workArea.y + Math.floor(workArea.height / 2);
+    const workArea = win.get_work_area_current_monitor();
+    const fraction = {fraction};
+    const newWidth = workArea.width;
+    const newHeight = Math.floor(workArea.height * fraction);
+    const newX = workArea.x;
+    const newY = workArea.y + (workArea.height - newHeight);
 
-        win.move_resize_frame(true, newX, newY, newWidth, newHeight);
-        'Snapped to bottom half';
-    }
-"#;
+    win.move_resize_frame(true, newX, newY, newWidth, newHeight);
+    'Snapped to bottom region';
+"#
+    )
+}
 
 pub const MAXIMIZE_SCRIPT: &str = r#"
     const win = global.display.focus_window;
@@ -68,25 +80,42 @@ pub const MAXIMIZE_SCRIPT: &str = r#"
     }
 "#;
 
-pub const CENTER_SCRIPT: &str = r#"
-    const win = global.display.focus_window;
-    if (!win) {
-        'ERROR: No focused window';
+pub fn center_script(config: &crate::config::WindowActionsConfig) -> String {
+    let width = config.center_width_px.round().max(1.0);
+    let height = config.center_height_px.round().max(1.0);
+    let width_percent = config.center_width_percent.clamp(0.1, 1.0);
+    let height_percent = config.center_height_percent.clamp(0.1, 1.0);
+    let use_percent = if config.center_mode == crate::config::CenterMode::Percent {
+        "true"
     } else {
-        if (win.maximized_horizontally || win.maximized_vertically) {
-            win.unmaximize(3);
-        }
+        "false"
+    };
+    format!(
+        r#"
+    const win = global.display.focus_window;
+    if (!win) {{
+        'ERROR: No focused window';
+    }}
+    if (win.maximized_horizontally || win.maximized_vertically) {{
+        win.unmaximize(3);
+    }}
 
-        const workArea = win.get_work_area_current_monitor();
-        const newWidth = 1152;
-        const newHeight = 892;
-        const newX = workArea.x + Math.floor((workArea.width - newWidth) / 2);
-        const newY = workArea.y + Math.floor((workArea.height - newHeight) / 2);
+    const workArea = win.get_work_area_current_monitor();
+    const usePercent = {use_percent};
+    const newWidth = usePercent
+        ? Math.min(Math.floor(workArea.width * {width_percent}), workArea.width)
+        : Math.min({width}, workArea.width);
+    const newHeight = usePercent
+        ? Math.min(Math.floor(workArea.height * {height_percent}), workArea.height)
+        : Math.min({height}, workArea.height);
+    const newX = workArea.x + Math.floor((workArea.width - newWidth) / 2);
+    const newY = workArea.y + Math.floor((workArea.height - newHeight) / 2);
 
-        win.move_resize_frame(true, newX, newY, newWidth, newHeight);
-        'Centered window';
-    }
-"#;
+    win.move_resize_frame(true, newX, newY, newWidth, newHeight);
+    'Centered window';
+"#
+    )
+}
 
 pub const MOVE_MONITOR_LEFT_SCRIPT: &str = r#"
     const win = global.display.focus_window;

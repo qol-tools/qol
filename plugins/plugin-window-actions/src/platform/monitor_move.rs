@@ -4,8 +4,11 @@ use std::time::Duration;
 
 use super::system::{run_cinnamon_eval, run_status};
 
-pub fn move_monitor(script: &str) -> Result<(), String> {
+pub fn move_monitor(script: &str, reveal_taskbar_after_move: bool) -> Result<(), String> {
     let output = run_cinnamon_eval(script)?;
+    if !reveal_taskbar_after_move {
+        return Ok(());
+    }
     if monitor_changed(&output) && !output.contains("fullscreen=true") {
         reveal_taskbar()?;
     }

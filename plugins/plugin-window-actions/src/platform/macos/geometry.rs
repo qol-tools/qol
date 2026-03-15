@@ -1,5 +1,6 @@
 use super::screen::Rect;
 use super::{ax, screen};
+use crate::config::WindowActionsConfig;
 
 fn frontmost_screen() -> Result<(i32, Rect), String> {
     let pid = ax::frontmost_pid().ok_or("No frontmost application")?;
@@ -46,47 +47,50 @@ fn ax_set(pid: i32, rect: Rect) -> Result<(), String> {
     Ok(())
 }
 
-pub fn snap_left() -> Result<(), String> {
+pub fn snap_left(config: &WindowActionsConfig) -> Result<(), String> {
     #[cfg(debug_assertions)]
     eprintln!("[window-actions:dbg] action: snap_left");
     let (pid, s) = frontmost_screen()?;
+    let width = (s.w * config.snap_fraction).round().clamp(1.0, s.w);
     ax_set(
         pid,
         Rect {
             x: s.x,
             y: s.y,
-            w: s.w / 2.0,
+            w: width,
             h: s.h,
         },
     )
 }
 
-pub fn snap_right() -> Result<(), String> {
+pub fn snap_right(config: &WindowActionsConfig) -> Result<(), String> {
     #[cfg(debug_assertions)]
     eprintln!("[window-actions:dbg] action: snap_right");
     let (pid, s) = frontmost_screen()?;
+    let width = (s.w * config.snap_fraction).round().clamp(1.0, s.w);
     ax_set(
         pid,
         Rect {
-            x: s.x + s.w / 2.0,
+            x: s.x + (s.w - width),
             y: s.y,
-            w: s.w / 2.0,
+            w: width,
             h: s.h,
         },
     )
 }
 
-pub fn snap_bottom() -> Result<(), String> {
+pub fn snap_bottom(config: &WindowActionsConfig) -> Result<(), String> {
     #[cfg(debug_assertions)]
     eprintln!("[window-actions:dbg] action: snap_bottom");
     let (pid, s) = frontmost_screen()?;
+    let height = (s.h * config.snap_fraction).round().clamp(1.0, s.h);
     ax_set(
         pid,
         Rect {
             x: s.x,
-            y: s.y + s.h / 2.0,
+            y: s.y + (s.h - height),
             w: s.w,
-            h: s.h / 2.0,
+            h: height,
         },
     )
 }
@@ -98,12 +102,11 @@ pub fn maximize() -> Result<(), String> {
     ax_set(pid, s)
 }
 
-pub fn center() -> Result<(), String> {
+pub fn center(config: &WindowActionsConfig) -> Result<(), String> {
     #[cfg(debug_assertions)]
     eprintln!("[window-actions:dbg] action: center");
     let (pid, s) = frontmost_screen()?;
-    let w = 1152.0_f64.min(s.w);
-    let h = 892.0_f64.min(s.h);
+    let (w, h) = config.center_size_for_monitor(s.w, s.h);
     let target = Rect {
         x: s.x + (s.w - w) / 2.0,
         y: s.y + (s.h - h) / 2.0,
