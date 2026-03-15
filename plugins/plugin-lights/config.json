@@ -1,0 +1,77 @@
+{
+  "backend": {
+    "kind": "zigbee-direct",
+    "serial_port": "auto",
+    "channel": 11,
+    "network_key": "auto"
+  },
+  "main_target_type": "device",
+  "main_target_id": "",
+  "devices": {},
+  "presets": {
+    "preset_1": {
+      "enabled": false,
+      "name": "Preset 1",
+      "power_on": true,
+      "brightness": 100,
+      "color_hex": "ffffff",
+      "mirek": 300
+    },
+    "preset_2": {
+      "enabled": false,
+      "name": "Preset 2",
+      "power_on": true,
+      "brightness": 100,
+      "color_hex": "ffffff",
+      "mirek": 300
+    },
+    "preset_3": {
+      "enabled": false,
+      "name": "Preset 3",
+      "power_on": true,
+      "brightness": 100,
+      "color_hex": "ffffff",
+      "mirek": 300
+    },
+    "preset_4": {
+      "enabled": false,
+      "name": "Preset 4",
+      "power_on": true,
+      "brightness": 100,
+      "color_hex": "ffffff",
+      "mirek": 300
+    },
+    "preset_5": {
+      "enabled": false,
+      "name": "Preset 5",
+      "power_on": true,
+      "brightness": 100,
+      "color_hex": "ffffff",
+      "mirek": 300
+    },
+    "preset_6": {
+      "enabled": false,
+      "name": "Preset 6",
+      "power_on": true,
+      "brightness": 100,
+      "color_hex": "ffffff",
+      "mirek": 300
+    },
+    "preset_7": {
+      "enabled": false,
+      "name": "Preset 7",
+      "power_on": true,
+      "brightness": 100,
+      "color_hex": "ffffff",
+      "mirek": 300
+    },
+    "preset_8": {
+      "enabled": false,
+      "name": "Preset 8",
+      "power_on": true,
+      "brightness": 100,
+      "color_hex": "ffffff",
+      "mirek": 300
+    }
+  }
+}

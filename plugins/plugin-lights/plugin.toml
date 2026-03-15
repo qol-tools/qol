@@ -1,0 +1,58 @@
+[plugin]
+name = "Lights"
+description = "Control lights through backend adapters"
+version = "0.1.0"
+author = ""
+platforms = ["linux", "macos"]
+
+[runtime]
+command = "plugin-lights"
+
+[runtime.actions]
+toggle-main = ["toggle-main"]
+on-main = ["on-main"]
+off-main = ["off-main"]
+brighter-main = ["brighter-main"]
+dimmer-main = ["dimmer-main"]
+warmer-main = ["warmer-main"]
+cooler-main = ["cooler-main"]
+preset-1 = ["preset-1"]
+preset-2 = ["preset-2"]
+preset-3 = ["preset-3"]
+preset-4 = ["preset-4"]
+preset-5 = ["preset-5"]
+preset-6 = ["preset-6"]
+preset-7 = ["preset-7"]
+preset-8 = ["preset-8"]
+settings = ["settings"]
+
+[daemon]
+enabled = true
+command = "plugin-lights"
+socket = "/tmp/plugin-lights.sock"
+
+[menu]
+label = "Lights"
+items = [
+    { type = "action", id = "toggle-main", label = "Toggle Main Light", action = "run" },
+    { type = "action", id = "on-main", label = "Turn Main Light On", action = "run" },
+    { type = "action", id = "off-main", label = "Turn Main Light Off", action = "run" },
+    { type = "action", id = "brighter-main", label = "Brighten Main Light", action = "run" },
+    { type = "action", id = "dimmer-main", label = "Dim Main Light", action = "run" },
+    { type = "action", id = "warmer-main", label = "Warm Main Light", action = "run" },
+    { type = "action", id = "cooler-main", label = "Cool Main Light", action = "run" },
+    { type = "action", id = "preset-1", label = "Preset 1", action = "run" },
+    { type = "action", id = "preset-2", label = "Preset 2", action = "run" },
+    { type = "action", id = "preset-3", label = "Preset 3", action = "run" },
+    { type = "action", id = "preset-4", label = "Preset 4", action = "run" },
+    { type = "action", id = "preset-5", label = "Preset 5", action = "run" },
+    { type = "action", id = "preset-6", label = "Preset 6", action = "run" },
+    { type = "action", id = "preset-7", label = "Preset 7", action = "run" },
+    { type = "action", id = "preset-8", label = "Preset 8", action = "run" },
+    { type = "action", id = "settings", label = "Settings", action = "settings" },
+]
+
+[[dependencies.binaries]]
+name = "plugin-lights"
+repo = "qol-tools/plugin-lights"
+pattern = "plugin-lights-{os}-{arch}"
