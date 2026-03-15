@@ -15,6 +15,7 @@ pub const PRESET_7: &str = "preset-7";
 pub const PRESET_8: &str = "preset-8";
 pub const SETTINGS: &str = "settings";
 pub const PAIR: &str = "pair";
+pub const SET_COLOR_MAIN: &str = "set-color-main";
 
 pub const RUN_ACTIONS: &[&str] = &[
     TOGGLE_MAIN,
@@ -33,6 +34,7 @@ pub const RUN_ACTIONS: &[&str] = &[
     PRESET_7,
     PRESET_8,
     PAIR,
+    SET_COLOR_MAIN,
 ];
 
 pub const ALL_ACTIONS: &[&str] = &[
@@ -53,6 +55,7 @@ pub const ALL_ACTIONS: &[&str] = &[
     PRESET_8,
     SETTINGS,
     PAIR,
+    SET_COLOR_MAIN,
 ];
 
 pub fn is_run_action(action: &str) -> bool {

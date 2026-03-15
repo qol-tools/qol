@@ -86,6 +86,9 @@ impl DaemonState {
                 Err(error) => DaemonOutcome::Error(error.to_string()),
             };
         }
+        if action == actions::SET_COLOR_MAIN {
+            return self.apply_live_color();
+        }
         if let Some(preset) = self.config.preset_for_action(action) {
             return self.apply_preset(&preset);
         }
@@ -113,6 +116,15 @@ impl DaemonState {
         let new_level = (self.current_brightness as i16 + delta).clamp(0, 100) as u8;
         self.current_brightness = new_level;
         self.apply(LightCommand::SetBrightness { level: new_level })
+    }
+
+    fn apply_live_color(&mut self) -> DaemonOutcome {
+        let config = match store::load() {
+            Ok(c) => c,
+            Err(e) => return DaemonOutcome::Error(e.to_string()),
+        };
+        let color = parse_color(&config.live_color_hex);
+        self.apply(LightCommand::SetColor { color })
     }
 
     fn adjust_mirek(&mut self, delta: i32) -> DaemonOutcome {

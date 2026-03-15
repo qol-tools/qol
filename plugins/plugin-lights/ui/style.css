@@ -77,6 +77,16 @@ body {
     box-shadow: 0 0 6px rgba(248, 113, 113, 0.5);
 }
 
+.color-picker {
+    width: 60px;
+    height: 36px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    background: transparent;
+    padding: 0;
+}
+
 .status-text {
     font-size: 0.9rem;
     color: #ccc;
