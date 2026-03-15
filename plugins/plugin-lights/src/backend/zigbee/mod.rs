@@ -137,12 +137,12 @@ impl LightBackend for ZigbeeBackend {
                 let ep = device
                     .endpoint_for_cluster(zcl::CLUSTER_COLOR)
                     .ok_or_else(|| anyhow!("device has no color cluster"))?;
-                let (hue, sat) = rgb_to_hue_sat(color.red, color.green, color.blue);
+                let (cx, cy) = rgb_to_cie_xy(color.red, color.green, color.blue);
                 self.controller.send_cluster_command(
                     nwk_addr,
                     ep,
                     zcl::CLUSTER_COLOR,
-                    zcl::color::move_to_hue_sat(hue, sat, 10),
+                    zcl::color::move_to_color(cx, cy, 10),
                 )
             }
             LightCommand::SetColorTemperature { mirek } => {
@@ -218,33 +218,28 @@ fn capabilities_from_device(device: &Device) -> LightCapabilities {
     }
 }
 
-fn rgb_to_hue_sat(r: u8, g: u8, b: u8) -> (u8, u8) {
-    let rf = r as f64 / 255.0;
-    let gf = g as f64 / 255.0;
-    let bf = b as f64 / 255.0;
+fn rgb_to_cie_xy(r: u8, g: u8, b: u8) -> (u16, u16) {
+    let gamma = |v: f64| {
+        if v > 0.04045 { ((v + 0.055) / 1.055).powf(2.4) } else { v / 12.92 }
+    };
 
-    let max = rf.max(gf).max(bf);
-    let min = rf.min(gf).min(bf);
-    let delta = max - min;
+    let rf = gamma(r as f64 / 255.0);
+    let gf = gamma(g as f64 / 255.0);
+    let bf = gamma(b as f64 / 255.0);
 
-    if delta < f64::EPSILON {
+    let x = rf * 0.4124 + gf * 0.3576 + bf * 0.1805;
+    let y = rf * 0.2126 + gf * 0.7152 + bf * 0.0722;
+    let z = rf * 0.0193 + gf * 0.1192 + bf * 0.9505;
+
+    let sum = x + y + z;
+    if sum < f64::EPSILON {
         return (0, 0);
     }
 
-    let hue_degrees = if (max - rf).abs() < f64::EPSILON {
-        60.0 * ((gf - bf) / delta) + if gf < bf { 360.0 } else { 0.0 }
-    } else if (max - gf).abs() < f64::EPSILON {
-        60.0 * ((bf - rf) / delta) + 120.0
-    } else {
-        60.0 * ((rf - gf) / delta) + 240.0
-    };
+    let cx = x / sum;
+    let cy = y / sum;
 
-    let saturation = delta / max;
-
-    let hue_zcl = (hue_degrees * 254.0 / 360.0) as u8;
-    let sat_zcl = (saturation * 254.0) as u8;
-
-    (hue_zcl, sat_zcl)
+    ((cx * 65535.0) as u16, (cy * 65535.0) as u16)
 }
 
 fn resolve_target(target: &LightTarget, controller: &ZigbeeController) -> Result<(u16, Device)> {
