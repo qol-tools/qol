@@ -26,6 +26,7 @@ preset-7 = ["preset-7"]
 preset-8 = ["preset-8"]
 settings = ["settings"]
 pair = ["pair"]
+set-color-main = ["set-color-main"]
 
 [daemon]
 enabled = true
