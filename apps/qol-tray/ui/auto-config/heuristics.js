@@ -3,6 +3,7 @@ export const KNOWN_MODS = ['ctrl', 'shift', 'alt', 'cmd', 'ralt', 'altgr'];
 export function prettyLabel(key) {
     return key
         .replace(/_/g, ' ')
+        .replace(/-/g, ' ')
         .replace(/\b\w/g, c => c.toUpperCase());
 }
 

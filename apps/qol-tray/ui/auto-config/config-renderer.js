@@ -19,7 +19,11 @@ import { renderObjectArray } from './object-array-renderer.js';
 
 export function renderConfig(container, obj, state) {
     const renderState = { config: state.config, path: '', depth: 0 };
-    renderEntries(container, obj, renderState);
+    const generalEntries = collectTopLevelFields(obj);
+    if (generalEntries.length > 0) {
+        container.appendChild(renderGeneralSection(generalEntries, renderState));
+    }
+    renderSectionEntries(container, obj, renderState);
 }
 
 function renderEntries(container, obj, renderState) {
@@ -27,6 +31,29 @@ function renderEntries(container, obj, renderState) {
         const nextState = nextRenderState(renderState, key);
         container.appendChild(renderEntry(key, value, nextState));
     }
+}
+
+function renderSectionEntries(container, obj, renderState) {
+    for (const [key, value] of Object.entries(obj)) {
+        if (!isPlainObject(value)) {
+            continue;
+        }
+        const nextState = nextRenderState(renderState, key);
+        container.appendChild(renderSection(key, value, nextState));
+    }
+}
+
+function collectTopLevelFields(obj) {
+    return Object.entries(obj).filter(([, value]) => !isPlainObject(value));
+}
+
+function renderGeneralSection(entries, renderState) {
+    const block = createTopLevelSection('General');
+    for (const [key, value] of entries) {
+        const nextState = nextRenderState(renderState, key);
+        block.section.appendChild(renderEntry(key, value, nextState));
+    }
+    return block.root;
 }
 
 function renderEntry(key, value, renderState) {
@@ -44,16 +71,48 @@ function renderEntry(key, value, renderState) {
 }
 
 function renderSection(key, value, renderState) {
-    const section = createSection(renderState.depth);
-    section.appendChild(createHeading(key, renderState.depth));
-    renderEntries(section, value, nestedState(renderState));
+    if (renderState.depth !== 1) {
+        const section = createNestedSection();
+        section.appendChild(createHeading(key, renderState.depth));
+        renderEntries(section, value, nestedState(renderState));
+        return section;
+    }
+
+    const block = createTopLevelSection(key);
+    renderEntries(block.section, value, nestedState(renderState));
+    return block.root;
+}
+
+function createNestedSection() {
+    const section = document.createElement('section');
+    section.className = 'nested-section config-subsection';
     return section;
 }
 
-function createSection(depth) {
-    const section = document.createElement('section');
-    section.className = depth === 1 ? 'card config-section' : 'nested-section config-subsection';
-    return section;
+function createTopLevelSection(key) {
+    const text = prettyLabel(key);
+
+    const root = document.createElement('section');
+    root.className = 'config-block';
+
+    const header = document.createElement('header');
+    header.className = 'config-block-header';
+    header.appendChild(createTopLevelHeading(text));
+
+    const section = document.createElement('div');
+    section.className = 'config-section';
+
+    root.append(header, section);
+
+    return { root, section };
+}
+
+function createTopLevelHeading(text) {
+    const heading = document.createElement('h2');
+    heading.className = headingClassName(text);
+    heading.textContent = text;
+    heading.title = text;
+    return heading;
 }
 
 function createHeading(key, depth) {

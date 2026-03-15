@@ -7,6 +7,8 @@ use axum::{
 };
 use std::path::{Path, PathBuf};
 
+use crate::plugins::paths as plugin_paths;
+
 pub(super) fn router(plugins_dir: PathBuf) -> Router {
     Router::new()
         .route("/{plugin_id}", get(serve_plugin_index))
@@ -19,11 +21,11 @@ async fn serve_plugin_index(
     AxumPath(plugin_id): AxumPath<String>,
     axum::extract::State(plugins_dir): axum::extract::State<PathBuf>,
 ) -> Response {
-    let result = serve_file(&plugins_dir, &plugin_id, "index.html").await;
-    if result.status() == StatusCode::NOT_FOUND {
-        return super::server::assets::serve_auto_config().into_response();
+    let plugin_root = super::plugin_paths::resolve_plugin_root(&plugins_dir, &plugin_id);
+    if !plugin_paths::has_settings_surface(&plugin_root) {
+        return (StatusCode::NOT_FOUND, "No settings UI available").into_response();
     }
-    result
+    super::server::assets::serve_auto_config().into_response()
 }
 
 async fn serve_plugin_file(

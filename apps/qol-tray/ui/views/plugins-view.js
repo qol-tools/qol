@@ -1,10 +1,9 @@
 import { html } from '../lib/html.js';
 import { useMemo, useEffect, useRef } from 'preact/hooks';
-import { useFeedback } from '../hooks/useFeedback.js';
 import { usePaletteContext } from '../palette/context.js';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
+import { useRegisterViewKeyboard } from '../components/app/view-keyboard-context.js';
 
-import { Feedback } from '../components/FeedbackPreact.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { UninstallConfirmModal } from './plugins/confirm-modal.js';
 import { PluginsGrid } from './plugins/grid.js';
@@ -17,9 +16,8 @@ import { matchesQuery, clampIndex } from '../utils/collections.js';
 
 
 export function PluginsView({ onOpenPluginConfig }) {
-    const { feedback, setFeedback, clearFeedback } = useFeedback();
     const { searchQuery } = usePaletteContext();
-    const list = usePluginsList(setFeedback);
+    const list = usePluginsList();
     const filtered = useMemo(
         () => searchQuery ? list.plugins.filter(p => matchesQuery([p?.name, p?.description], searchQuery)) : list.plugins,
         [list.plugins, searchQuery]
@@ -31,10 +29,9 @@ export function PluginsView({ onOpenPluginConfig }) {
     }, [filtered.length, list.setSelectedIndex]);
     const filteredList = { ...list, plugins: filtered, pluginsRef: filteredRef };
     const modal = usePluginsModal(filtered);
-    const actions = usePluginActions(filteredList, modal, setFeedback, clearFeedback, onOpenPluginConfig);
-
-    PluginsView.handleKey = usePluginsKeyHandler(filteredList, modal, actions);
-    PluginsView.isBlocking = actions.isBlocking;
+    const actions = usePluginActions(filteredList, modal, onOpenPluginConfig);
+    const handleKey = usePluginsKeyHandler(filteredList, modal, actions);
+    useRegisterViewKeyboard('plugins', handleKey, actions.isBlocking);
     const handleCardClick = useCardClickHandler(filteredList, modal, actions);
 
     const modalRef = useRef(modal);
@@ -52,7 +49,6 @@ export function PluginsView({ onOpenPluginConfig }) {
     return html`<div class="view-container" onClick=${modal.closeAll}>
         <${PageHeader} title="Plugins" />
         <div class="view-body">
-            <${Feedback} feedback=${feedback} />
             <${PluginsGrid}
                 plugins=${filtered} ghostPlugins=${list.ghostPlugins}
                 selectedIndex=${list.selectedIndex} contextMenuOpen=${modal.contextMenuOpen}

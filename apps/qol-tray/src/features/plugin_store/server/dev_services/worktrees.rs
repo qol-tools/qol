@@ -4,14 +4,26 @@ use std::path::Path;
 use super::super::types::WorktreeInfo;
 
 pub(super) fn scan(manifest_dir: &Path) -> Vec<WorktreeInfo> {
+    scan_with_branch_resolver(manifest_dir, resolve_git_branch)
+}
+
+fn scan_with_branch_resolver<F>(manifest_dir: &Path, resolve_branch: F) -> Vec<WorktreeInfo>
+where
+    F: Fn(&Path) -> Option<String> + Copy,
+{
     let mut results = vec![];
+    let repo_name = repo_name(manifest_dir);
 
     if let Some(root) = find_dir_in_ancestors(manifest_dir, ".worktrees") {
         results.extend(collect_legacy(&root.join(".worktrees")));
     }
 
     if let Some(root) = find_dir_in_ancestors(manifest_dir, "worktrees") {
-        results.extend(collect_centralized(&root.join("worktrees")));
+        results.extend(collect_centralized(
+            &root.join("worktrees"),
+            repo_name,
+            resolve_branch,
+        ));
     }
 
     results
@@ -50,32 +62,68 @@ fn collect_legacy_recursive(root: &Path, dir: &Path, depth: u8) -> Vec<WorktreeI
         .collect()
 }
 
-fn collect_centralized(worktrees_dir: &Path) -> Vec<WorktreeInfo> {
+fn collect_centralized<F>(
+    worktrees_dir: &Path,
+    repo_name: Option<&str>,
+    resolve_branch: F,
+) -> Vec<WorktreeInfo>
+where
+    F: Fn(&Path) -> Option<String> + Copy,
+{
     read_child_dirs(worktrees_dir)
         .into_iter()
         .filter_map(|feature_dir| {
-            let branch = resolve_git_branch(&feature_dir)?;
-            Some(WorktreeInfo {
-                branch,
-                path: feature_dir.to_string_lossy().into_owned(),
-            })
+            worktree_info_from_feature_dir(&feature_dir, repo_name, resolve_branch)
         })
         .collect()
 }
 
-fn resolve_git_branch(feature_dir: &Path) -> Option<String> {
-    let repo_dir = read_child_dirs(feature_dir)
+fn worktree_info_from_feature_dir<F>(
+    feature_dir: &Path,
+    repo_name: Option<&str>,
+    resolve_branch: F,
+) -> Option<WorktreeInfo>
+where
+    F: Fn(&Path) -> Option<String> + Copy,
+{
+    let repo_dir = resolve_repo_dir(feature_dir, repo_name)?;
+    let branch = resolve_branch(&repo_dir)?;
+    Some(WorktreeInfo {
+        branch,
+        path: repo_dir.to_string_lossy().into_owned(),
+    })
+}
+
+fn resolve_repo_dir(feature_dir: &Path, repo_name: Option<&str>) -> Option<std::path::PathBuf> {
+    if let Some(repo_name) = repo_name {
+        let repo_dir = feature_dir.join(repo_name);
+        if repo_dir.join("Cargo.toml").is_file() {
+            return Some(repo_dir);
+        }
+    }
+
+    read_child_dirs(feature_dir)
         .into_iter()
-        .find(|p| p.join("Cargo.toml").is_file())?;
+        .find(|path| path.join("Cargo.toml").is_file())
+}
+
+fn resolve_git_branch(repo_dir: &Path) -> Option<String> {
+    if !repo_dir.join(".git").exists() {
+        return None;
+    }
 
     std::process::Command::new("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(&repo_dir)
+        .current_dir(repo_dir)
         .output()
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+fn repo_name(manifest_dir: &Path) -> Option<&str> {
+    manifest_dir.file_name().and_then(|name| name.to_str())
 }
 
 fn read_child_dirs(dir: &Path) -> Vec<std::path::PathBuf> {
@@ -93,6 +141,7 @@ fn read_child_dirs(dir: &Path) -> Vec<std::path::PathBuf> {
 #[cfg(all(test, feature = "dev"))]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use std::fs;
     use tempfile::TempDir;
 
@@ -157,5 +206,103 @@ mod tests {
             "branches: {:?}",
             branches
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_finds_repo_specific_centralized_worktrees() {
+        let tmp = TempDir::new().unwrap();
+        let manifest_dir = create_manifest_dir(tmp.path(), "qol-tray");
+        let feature = tmp.path().join("worktrees").join("feat-config-contract-v1");
+        let tray_worktree = create_git_worktree(&feature.join("qol-tray"));
+        let result = scan_with_branch_resolver(&manifest_dir, fake_branch_resolver);
+
+        assert_eq!(result.len(), 1, "result: {:?}", result);
+        assert_eq!(result[0].branch, "feat/config-contract-v1");
+        assert_eq!(result[0].path, tray_worktree.to_string_lossy());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_falls_back_to_single_cargo_repo_when_repo_specific_dir_missing() {
+        let tmp = TempDir::new().unwrap();
+        let manifest_dir = create_manifest_dir(tmp.path(), "qol-tray");
+        let feature = tmp.path().join("worktrees").join("feat-config-contract-v1");
+        let fallback_repo = create_git_worktree(&feature.join("plugin-window-actions"));
+        let result = scan_with_branch_resolver(&manifest_dir, fake_branch_resolver);
+
+        assert_eq!(result.len(), 1, "result: {:?}", result);
+        assert_eq!(result[0].path, fallback_repo.to_string_lossy());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_skips_centralized_feature_without_valid_repo_dir() {
+        let tmp = TempDir::new().unwrap();
+        let manifest_dir = create_manifest_dir(tmp.path(), "qol-tray");
+        let feature = tmp.path().join("worktrees").join("feat-config-contract-v1");
+        fs::create_dir_all(feature.join("plugin-window-actions")).unwrap();
+        let result = scan_with_branch_resolver(&manifest_dir, fake_branch_resolver);
+
+        assert!(result.is_empty(), "result: {:?}", result);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_skips_centralized_repo_without_git_dir() {
+        let tmp = TempDir::new().unwrap();
+        let manifest_dir = create_manifest_dir(tmp.path(), "qol-tray");
+        let feature = tmp.path().join("worktrees").join("feat-config-contract-v1");
+        create_worktree(&feature.join("qol-tray"), false);
+        let result = scan_with_branch_resolver(&manifest_dir, fake_branch_resolver);
+
+        assert!(result.is_empty(), "result: {:?}", result);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        #[test]
+        fn prop_repo_name_uses_manifest_leaf(
+            segments in prop::collection::vec("[a-z0-9_-]{1,12}", 1..6)
+        ) {
+            let mut path = std::path::PathBuf::new();
+            for segment in &segments {
+                path.push(segment);
+            }
+
+            prop_assert_eq!(repo_name(&path), segments.last().map(|segment| segment.as_str()));
+        }
+    }
+
+    #[cfg(unix)]
+    fn create_manifest_dir(root: &Path, repo_name: &str) -> std::path::PathBuf {
+        let manifest_dir = root.join(repo_name);
+        fs::create_dir_all(&manifest_dir).unwrap();
+        fs::create_dir_all(root.join("worktrees")).unwrap();
+        manifest_dir
+    }
+
+    #[cfg(unix)]
+    fn create_git_worktree(path: &Path) -> std::path::PathBuf {
+        create_worktree(path, true)
+    }
+
+    #[cfg(unix)]
+    fn create_worktree(path: &Path, with_git_dir: bool) -> std::path::PathBuf {
+        fs::create_dir_all(path).unwrap();
+        fs::write(path.join("Cargo.toml"), "[package]").unwrap();
+        if with_git_dir {
+            fs::create_dir_all(path.join(".git")).unwrap();
+        }
+        path.to_path_buf()
+    }
+
+    #[cfg(unix)]
+    fn fake_branch_resolver(repo_dir: &Path) -> Option<String> {
+        repo_dir
+            .join(".git")
+            .exists()
+            .then(|| "feat/config-contract-v1".to_string())
     }
 }

@@ -7,7 +7,7 @@ export function buildAddForm(container, schema, arrayPath, state, rerender) {
     const inputs = buildFieldInputs(container, schema);
     const addButton = document.createElement('button');
     addButton.type = 'button';
-    addButton.className = 'btn-add';
+    addButton.className = 'btn btn-ghost btn-sm btn-add';
     addButton.textContent = '+ Add';
     addButton.addEventListener('click', () => handleAdd(inputs, arrayPath, state, rerender));
     container.appendChild(addButton);

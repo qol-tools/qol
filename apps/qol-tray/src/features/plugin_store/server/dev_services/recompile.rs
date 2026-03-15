@@ -3,6 +3,7 @@
 mod restart_schedule;
 mod result;
 mod start;
+mod sync;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

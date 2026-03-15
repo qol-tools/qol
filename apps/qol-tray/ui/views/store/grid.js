@@ -29,13 +29,15 @@ function StoreCard({ plugin, index, selected, installing, onCardClick }) {
     return html`
         <div
             class=${storeCardClassName(plugin, selected, installing)}
+            data-selected-surface=""
+            data-selected=${selected ? 'true' : 'false'}
             data-index=${String(index)}
             data-plugin-id=${plugin.id}
             onClick=${(event) => onCardClick(event, index, plugin.id)}
         >
-            <h3>${plugin.name}</h3>
-            <div class="version${hasUpdate ? ' has-update' : ''}">${versionDisplay}</div>
-            <div class="description">${plugin.description}</div>
+            <h3 data-selected-text="">${plugin.name}</h3>
+            <div class="version${hasUpdate ? ' has-update' : ''}" data-selected-text="">${versionDisplay}</div>
+            <div class="description" data-selected-text="">${plugin.description}</div>
             <div class="button-group">
                 ${storeCardAction(plugin, installing, hasUpdate)}
             </div>

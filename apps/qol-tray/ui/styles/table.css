@@ -7,7 +7,7 @@
     background: var(--bg-elevated);
     border: var(--border-w-1) solid var(--border-subtle);
     border-radius: var(--radius-lg);
-    overflow: hidden;
+    overflow: visible;
 }
 
 .table-list-header {

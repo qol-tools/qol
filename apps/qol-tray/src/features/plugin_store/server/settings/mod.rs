@@ -23,6 +23,7 @@ pub(super) use media_apps_handlers::list_apps;
 pub(super) use media_cover_handlers::serve_cover;
 pub(super) use media_icon_handlers::serve_icon;
 pub(super) use plugin_config_handlers::get_plugin_config;
+pub(super) use plugin_config_handlers::get_plugin_config_form;
 pub(super) use plugin_config_handlers::set_plugin_config;
 
 pub(super) fn routes() -> Router<AppState> {
@@ -31,6 +32,7 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/icon/{bundle_id}", get(serve_icon))
         .route("/apps", get(list_apps))
         .route("/plugins/{id}/config", get(get_plugin_config))
+        .route("/plugins/{id}/config-form", get(get_plugin_config_form))
         .route(
             "/plugins/{id}/config",
             axum::routing::put(set_plugin_config),

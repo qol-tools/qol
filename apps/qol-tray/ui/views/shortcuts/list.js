@@ -40,13 +40,14 @@ export function ShortcutsList({ shortcuts, selectedIndex, onSelect, onEdit }) {
 function ShortcutRow({ shortcut, index, selected, onClick }) {
     return html`
         <div class="shortcut-row table-list-row table-grid"
+             data-selected-surface=""
              data-enabled="${shortcut.enabled ? 'true' : 'false'}"
              data-selected="${selected ? 'true' : 'false'}"
              data-index="${index}" onClick=${onClick}>
-            <span class="col-name table-cell">${shortcut.name || shortcut.id}</span>
-            <span class="col-type table-cell">${TYPE_LABELS[shortcut.action.type] || shortcut.action.type}</span>
-            <span class="col-target table-cell">${actionSummary(shortcut.action)}</span>
-            <span class="col-launcher table-cell">${shortcut.export_to_launcher ? 'Yes' : 'No'}</span>
+            <span class="col-name table-cell" data-selected-text="">${shortcut.name || shortcut.id}</span>
+            <span class="col-type table-cell" data-selected-text="">${TYPE_LABELS[shortcut.action.type] || shortcut.action.type}</span>
+            <span class="col-target table-cell" data-selected-text="">${actionSummary(shortcut.action)}</span>
+            <span class="col-launcher table-cell" data-selected-text="">${shortcut.export_to_launcher ? 'Yes' : 'No'}</span>
         </div>
     `;
 }

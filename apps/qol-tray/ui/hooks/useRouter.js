@@ -1,9 +1,16 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
+import { tryFetchJson } from '../api/client.js';
+import { preloadConfigForm } from '../views/plugin-config/usePluginConfig.js';
 
 const VIEW_STORAGE_KEY = 'qoltray.activeView';
 
-function parseViewFromHash() {
-    return window.location.hash.replace(/^#/, '').trim() || null;
+function parseHashRoute() {
+    const raw = window.location.hash.replace(/^#/, '').trim();
+    const pluginMatch = raw.match(/^plugins\/(.+)$/);
+    if (pluginMatch) {
+        return { viewId: 'plugins', pluginId: pluginMatch[1] };
+    }
+    return { viewId: raw || null, pluginId: null };
 }
 
 function readStoredView() {
@@ -20,26 +27,34 @@ function persistView(viewId, { updateHash = true } = {}) {
 }
 
 function initActiveView() {
-    const fromHash = parseViewFromHash();
+    const fromHash = parseHashRoute().viewId;
     if (fromHash) return fromHash;
     const fromStorage = readStoredView();
     if (fromStorage) return fromStorage;
     return 'plugins';
 }
 
-function initActivePluginId() {
-    const hash = window.location.hash.replace(/^#/, '').trim();
-    const match = hash.match(/^plugins\/(.+)$/);
-    return match ? match[1] : null;
+async function validatePluginConfig(pluginId) {
+    if (!pluginId) return false;
+    const form = await tryFetchJson(`/api/plugins/${pluginId}/config-form`);
+    if (!form?.sections?.some(s => s.fields?.length)) return false;
+    preloadConfigForm(pluginId, form);
+    return true;
 }
 
-function handleHashChange(viewOrder, setActivePluginId, setActiveViewId) {
-    const raw = window.location.hash.replace(/^#/, '').trim();
-    const pluginMatch = raw.match(/^plugins\/(.+)$/);
-    if (pluginMatch) { setActivePluginId(pluginMatch[1]); return; }
+async function handleHashChange(viewOrder, setActivePluginId, setActiveViewId) {
+    const route = parseHashRoute();
+    if (route.pluginId) {
+        if (await validatePluginConfig(route.pluginId)) {
+            setActiveViewId('plugins');
+            setActivePluginId(route.pluginId);
+        }
+        return;
+    }
     setActivePluginId(null);
-    const viewId = parseViewFromHash();
-    if (viewOrder.includes(viewId)) setActiveViewId(viewId);
+    if (route.viewId && viewOrder.includes(route.viewId)) {
+        setActiveViewId(route.viewId);
+    }
 }
 
 function doSwitchView(viewId, viewOrder, setActivePluginId, setActiveViewId) {
@@ -51,16 +66,29 @@ function doSwitchView(viewId, viewOrder, setActivePluginId, setActiveViewId) {
 
 function doClosePluginConfig(setActivePluginId, setActiveViewId) {
     setActivePluginId(null);
-    setActiveViewId(prev => { persistView(prev); return prev; });
+    setActiveViewId(prev => {
+        const viewId = prev || 'plugins';
+        persistView(viewId);
+        return viewId;
+    });
 }
 
 export function useRouter({ viewOrder }) {
     const [activeViewId, setActiveViewId] = useState(initActiveView);
-    const [activePluginId, setActivePluginId] = useState(initActivePluginId);
+    const [activePluginId, setActivePluginId] = useState(null);
     const switchView = useCallback(id => doSwitchView(id, viewOrder, setActivePluginId, setActiveViewId), [viewOrder]);
-    const openPluginConfig = useCallback((pluginId) => {
+    const openPluginConfig = useCallback(async (pluginId) => {
+        if (!await validatePluginConfig(pluginId)) return false;
         setActivePluginId(pluginId);
-        window.history.replaceState(null, '', `#plugins/${pluginId}`);
+        window.history.pushState(null, '', `#plugins/${pluginId}`);
+        return true;
+    }, []);
+    useEffect(() => {
+        const initialPluginId = parseHashRoute().pluginId;
+        if (!initialPluginId) return;
+        validatePluginConfig(initialPluginId).then(valid => {
+            if (valid) setActivePluginId(initialPluginId);
+        });
     }, []);
     const closePluginConfig = useCallback(() => doClosePluginConfig(setActivePluginId, setActiveViewId), []);
     useEffect(() => {

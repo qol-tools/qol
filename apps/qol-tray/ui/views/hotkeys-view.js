@@ -2,6 +2,7 @@ import { html } from '../lib/html.js';
 import { useRef, useMemo } from 'preact/hooks';
 import { usePaletteContext } from '../palette/context.js';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
+import { useRegisterViewKeyboard } from '../components/app/view-keyboard-context.js';
 import { matchesQuery } from '../utils/collections.js';
 
 import { PageHeader } from '../components/PageHeader.js';
@@ -21,9 +22,7 @@ export function HotkeysView() {
             : hk.hotkeys,
         [hk.hotkeys, hk.plugins, searchQuery]
     );
-
-    HotkeysView.handleKey = hk.handleKey;
-    HotkeysView.isBlocking = hk.isBlocking;
+    useRegisterViewKeyboard('hotkeys', hk.handleKey, hk.isBlocking);
 
     const hkRef = useRef(hk);
     hkRef.current = hk;

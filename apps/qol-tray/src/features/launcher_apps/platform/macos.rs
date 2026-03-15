@@ -1,4 +1,5 @@
 use super::super::LauncherEntry;
+use crate::shortcuts::model::{AppRef, ShortcutAction};
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -134,6 +135,9 @@ fn write_executable(path: &Path, script: &str) -> Result<()> {
 }
 
 fn build_script(binary_path: &Path, entry: &LauncherEntry) -> String {
+    if let Some(script) = build_shortcut_script(entry) {
+        return script;
+    }
     let bin = shell_escape_single_quote(&binary_path.display().to_string());
     let args: String = entry
         .exec_args
@@ -142,6 +146,50 @@ fn build_script(binary_path: &Path, entry: &LauncherEntry) -> String {
         .collect::<Vec<_>>()
         .join(" ");
     format!("#!/bin/sh\nexec '{}' {}\n", bin, args)
+}
+
+fn build_shortcut_script(entry: &LauncherEntry) -> Option<String> {
+    let action = entry.shortcut_action.as_ref()?;
+    match action {
+        ShortcutAction::OpenUrl {
+            url,
+            browser_override,
+        } => Some(build_open_script(open_url_args(
+            url,
+            browser_override.as_ref(),
+        ))),
+        ShortcutAction::LaunchApp { app } => Some(build_open_script(open_app_args(app))),
+    }
+}
+
+fn build_open_script(args: Vec<String>) -> String {
+    let args = args
+        .iter()
+        .map(|arg| format!("'{}'", shell_escape_single_quote(arg)))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("#!/bin/sh\nexec /usr/bin/open {}\n", args)
+}
+
+fn open_url_args(url: &str, browser_override: Option<&AppRef>) -> Vec<String> {
+    let mut args = open_target_args(browser_override);
+    args.push(url.to_string());
+    args
+}
+
+fn open_app_args(app: &AppRef) -> Vec<String> {
+    open_target_args(Some(app))
+}
+
+fn open_target_args(app: Option<&AppRef>) -> Vec<String> {
+    let Some(app) = app else {
+        return Vec::new();
+    };
+    match app {
+        AppRef::BundleId { id } => vec!["-b".into(), id.clone()],
+        AppRef::Path { path } => vec!["-a".into(), path.clone()],
+        AppRef::Name { name } => vec!["-a".into(), name.clone()],
+    }
 }
 
 fn clean_stale(dir: &Path, expected: &HashSet<String>) -> Result<()> {
@@ -183,6 +231,8 @@ fn xml_escape(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shortcuts::model::{AppRef, ShortcutAction};
+    use proptest::prelude::*;
 
     fn entry(file_stem: &str, display_name: &str) -> LauncherEntry {
         LauncherEntry {
@@ -191,6 +241,29 @@ mod tests {
             description: String::new(),
             bundle_id: String::new(),
             exec_args: Vec::new(),
+            shortcut_action: None,
+        }
+    }
+
+    fn shortcut_entry(action: ShortcutAction) -> LauncherEntry {
+        LauncherEntry {
+            file_stem: "shortcut-browser".to_string(),
+            display_name: "Open Browser".to_string(),
+            description: String::new(),
+            bundle_id: "com.qol-tools.shortcut.browser".to_string(),
+            exec_args: vec!["exec".into(), "shortcut".into(), "browser".into()],
+            shortcut_action: Some(action),
+        }
+    }
+
+    fn fallback_entry() -> LauncherEntry {
+        LauncherEntry {
+            file_stem: "shortcut-browser".to_string(),
+            display_name: "Open Browser".to_string(),
+            description: String::new(),
+            bundle_id: "com.qol-tools.shortcut.browser".to_string(),
+            exec_args: vec!["exec".into(), "shortcut".into(), "browser".into()],
+            shortcut_action: None,
         }
     }
 
@@ -239,5 +312,114 @@ mod tests {
             names.get("shortcut-b"),
             Some(&"Open Browser (shortcut-b).app".to_string())
         );
+    }
+
+    #[test]
+    fn build_script_generates_direct_open_commands_for_shortcuts() {
+        let binary = Path::new("/Applications/qol-tray.app/Contents/MacOS/qol-tray");
+        let cases = [
+            (
+                ShortcutAction::OpenUrl {
+                    url: "https://example.com".to_string(),
+                    browser_override: None,
+                },
+                "#!/bin/sh\nexec /usr/bin/open 'https://example.com'\n",
+            ),
+            (
+                ShortcutAction::OpenUrl {
+                    url: "https://example.com/docs?q=1".to_string(),
+                    browser_override: Some(AppRef::BundleId {
+                        id: "com.google.Chrome".to_string(),
+                    }),
+                },
+                "#!/bin/sh\nexec /usr/bin/open '-b' 'com.google.Chrome' 'https://example.com/docs?q=1'\n",
+            ),
+            (
+                ShortcutAction::OpenUrl {
+                    url: "https://exa'mple.com/path".to_string(),
+                    browser_override: Some(AppRef::Path {
+                        path: "/Applications/Arc Browser.app".to_string(),
+                    }),
+                },
+                "#!/bin/sh\nexec /usr/bin/open '-a' '/Applications/Arc Browser.app' 'https://exa'\\''mple.com/path'\n",
+            ),
+            (
+                ShortcutAction::OpenUrl {
+                    url: "https://example.com".to_string(),
+                    browser_override: Some(AppRef::Name {
+                        name: "Google Chrome".to_string(),
+                    }),
+                },
+                "#!/bin/sh\nexec /usr/bin/open '-a' 'Google Chrome' 'https://example.com'\n",
+            ),
+            (
+                ShortcutAction::LaunchApp {
+                    app: AppRef::BundleId {
+                        id: "com.apple.Safari".to_string(),
+                    },
+                },
+                "#!/bin/sh\nexec /usr/bin/open '-b' 'com.apple.Safari'\n",
+            ),
+            (
+                ShortcutAction::LaunchApp {
+                    app: AppRef::Path {
+                        path: "/Applications/Visual Studio Code.app".to_string(),
+                    },
+                },
+                "#!/bin/sh\nexec /usr/bin/open '-a' '/Applications/Visual Studio Code.app'\n",
+            ),
+            (
+                ShortcutAction::LaunchApp {
+                    app: AppRef::Name {
+                        name: "iTerm".to_string(),
+                    },
+                },
+                "#!/bin/sh\nexec /usr/bin/open '-a' 'iTerm'\n",
+            ),
+        ];
+
+        for (action, expected) in cases {
+            let script = build_script(binary, &shortcut_entry(action));
+            assert_eq!(script, expected);
+        }
+    }
+
+    #[test]
+    fn build_script_falls_back_to_qol_tray_exec_without_shortcut_action() {
+        let script = build_script(
+            Path::new("/Applications/qol-tray.app/Contents/MacOS/qol-tray"),
+            &fallback_entry(),
+        );
+
+        assert_eq!(
+            script,
+            "#!/bin/sh\nexec '/Applications/qol-tray.app/Contents/MacOS/qol-tray' 'exec' 'shortcut' 'browser'\n"
+        );
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(200))]
+
+        #[test]
+        fn prop_sanitized_display_name_always_returns_safe_non_empty_name(
+            display_name in any::<String>(),
+            file_stem in "[A-Za-z0-9_-]{1,32}"
+        ) {
+            let sanitized = sanitized_display_name(&LauncherEntry {
+                file_stem: file_stem.clone(),
+                display_name,
+                description: String::new(),
+                bundle_id: String::new(),
+                exec_args: Vec::new(),
+                shortcut_action: None,
+            });
+
+            prop_assert!(!sanitized.is_empty());
+            prop_assert!(!sanitized.contains('/'));
+            prop_assert!(!sanitized.contains(':'));
+            prop_assert!(!sanitized.chars().any(|ch| ch.is_control()));
+            prop_assert!(!sanitized.starts_with('.'));
+            prop_assert!(!sanitized.ends_with('.'));
+        }
     }
 }

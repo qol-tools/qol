@@ -8,6 +8,7 @@ use super::super::helpers::validate_plugin_id_bad_request;
 use super::super::types::AppState;
 use super::http_json;
 
+mod form;
 mod io;
 mod notify;
 
@@ -17,6 +18,12 @@ pub(in super::super) async fn get_plugin_config(
     Path(plugin_id): Path<String>,
 ) -> impl IntoResponse {
     get_plugin_config_inner(plugin_id).unwrap_or_else(|response| *response)
+}
+
+pub(in super::super) async fn get_plugin_config_form(
+    Path(plugin_id): Path<String>,
+) -> impl IntoResponse {
+    get_plugin_config_form_inner(plugin_id).unwrap_or_else(|response| *response)
 }
 
 pub(in super::super) async fn set_plugin_config(
@@ -33,6 +40,16 @@ fn get_plugin_config_inner(plugin_id: String) -> HttpResult<Response> {
     Ok(config_json_response(&config))
 }
 
+fn get_plugin_config_form_inner(plugin_id: String) -> HttpResult<Response> {
+    let plugin_id = validated_plugin_id(plugin_id)?;
+    let form = form::load_plugin_config_form(&plugin_id)?;
+    let form = match form {
+        Some(form) => form,
+        None => return Ok(config_form_not_found_response()),
+    };
+    Ok(config_form_json_response(&form))
+}
+
 fn set_plugin_config_inner(
     plugin_id: String,
     state: &AppState,
@@ -40,6 +57,7 @@ fn set_plugin_config_inner(
 ) -> HttpResult<Response> {
     let plugin_id = validated_plugin_id(plugin_id)?;
     let config = io::parse_config_body(body)?;
+    form::validate_plugin_config(&plugin_id, &config)?;
     io::save_plugin_config(&plugin_id, config)?;
     notify::notify_plugin_reload(state, &plugin_id);
     Ok(config_saved_response())
@@ -51,8 +69,17 @@ fn validated_plugin_id(plugin_id: String) -> HttpResult<String> {
 }
 
 fn config_json_response(config: &serde_json::Value) -> Response {
-    let Ok(json) = io::encode_config_json(config) else {
-        return serialize_config_failed_response();
+    let json = match io::encode_config_json(config) {
+        Ok(json) => json,
+        Err(_) => return serialize_config_failed_response(),
+    };
+    http_json::json_response(json)
+}
+
+fn config_form_json_response(config: &qol_config::normalized::ResolvedConfig) -> Response {
+    let json = match http_json::encode_json(config, "Failed to serialize config form") {
+        Ok(json) => json,
+        Err(_) => return serialize_config_form_failed_response(),
     };
     http_json::json_response(json)
 }
@@ -61,10 +88,22 @@ fn config_saved_response() -> Response {
     (StatusCode::OK, "Config saved").into_response()
 }
 
+fn config_form_not_found_response() -> Response {
+    (StatusCode::NOT_FOUND, "Config form not found").into_response()
+}
+
 fn serialize_config_failed_response() -> Response {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         "Failed to serialize config",
+    )
+        .into_response()
+}
+
+fn serialize_config_form_failed_response() -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Failed to serialize config form",
     )
         .into_response()
 }

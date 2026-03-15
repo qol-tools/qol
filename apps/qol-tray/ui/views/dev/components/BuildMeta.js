@@ -18,13 +18,13 @@ function buildMetaParts(plugin) {
 
 export function BuildMeta({ plugin }) {
     if (plugin.status !== 'linked') {
-        return html`<span class="plugin-build-meta plugin-build-meta-placeholder" aria-hidden="true">_</span>`;
+        return html`<span class="plugin-build-meta plugin-build-meta-placeholder" data-selected-text="" aria-hidden="true">_</span>`;
     }
     if (!plugin.supports_platform) {
-        return html`<span class="plugin-build-meta muted">${plugin.rebuild_reason || 'Unsupported platform'}</span>`;
+        return html`<span class="plugin-build-meta muted" data-selected-text="">${plugin.rebuild_reason || 'Unsupported platform'}</span>`;
     }
     if (!plugin.has_cargo) {
-        return html`<span class="plugin-build-meta muted">Not buildable: Cargo.toml missing</span>`;
+        return html`<span class="plugin-build-meta muted" data-selected-text="">Not buildable: Cargo.toml missing</span>`;
     }
-    return html`<span class="plugin-build-meta">${buildMetaParts(plugin).join(' • ')}</span>`;
+    return html`<span class="plugin-build-meta" data-selected-text="">${buildMetaParts(plugin).join(' • ')}</span>`;
 }

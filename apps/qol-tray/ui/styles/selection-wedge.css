@@ -1,0 +1,74 @@
+:root {
+    --selection-wedge-svg: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 28 28'%3E%3Cpath fill='black' d='M2 14 12 4h14l-8 10 8 10H12Z'/%3E%3C/svg%3E");
+    --selection-wedge-default-size: 22px;
+    --selection-wedge-default-top: -20px;
+    --selection-wedge-default-left: -24px;
+    --selection-wedge-fill:
+        linear-gradient(180deg,
+            rgba(255, 255, 255, 0.18) 0%,
+            rgba(255, 255, 255, 0.03) 38%,
+            rgba(0, 0, 0, 0.08) 100%),
+        linear-gradient(90deg,
+            rgba(var(--warning-rgb), 1) 0%,
+            rgba(var(--warning-rgb), 0.92) 52%,
+            rgba(var(--warning-rgb), 0.34) 100%);
+    --selection-wedge-shadow:
+        drop-shadow(0 0 0.5px rgba(var(--ink-rgb), 0.34))
+        drop-shadow(0 0 4px rgba(var(--warning-rgb), 0.18))
+        drop-shadow(0 0 9px rgba(var(--warning-rgb), 0.05));
+}
+
+.selection-wedge-icon {
+    position: absolute;
+    top: var(--selection-wedge-top, 0px);
+    left: var(--selection-wedge-left, 0px);
+    width: var(--selection-wedge-size, var(--selection-wedge-default-size));
+    height: var(--selection-wedge-size, var(--selection-wedge-default-size));
+    pointer-events: none;
+    z-index: var(--selection-wedge-z, 4);
+    opacity: 0;
+    background: var(--selection-wedge-fill);
+    filter: var(--selection-wedge-shadow);
+    -webkit-mask: var(--selection-wedge-svg) center / contain no-repeat;
+    mask: var(--selection-wedge-svg) center / contain no-repeat;
+    transform: translate(-0.16rem, -0.16rem) scaleX(-1) rotate(-45deg);
+    transform-origin: center;
+    transition: opacity 0.08s ease, transform 0.08s ease;
+}
+
+.selection-cursor-overlay .selection-wedge-icon {
+    opacity: 1;
+    transform: scaleX(-1) rotate(-45deg);
+}
+
+.selection-wedge-pseudo-host,
+.selection-wedge-pseudo-anchor {
+    position: relative;
+    overflow: visible;
+}
+
+.selection-wedge-pseudo-host::after,
+.selection-wedge-pseudo-anchor::after {
+    content: "";
+    position: absolute;
+    top: var(--selection-wedge-top, 0px);
+    left: var(--selection-wedge-left, 0px);
+    width: var(--selection-wedge-size, var(--selection-wedge-default-size));
+    height: var(--selection-wedge-size, var(--selection-wedge-default-size));
+    pointer-events: none;
+    z-index: var(--selection-wedge-z, 4);
+    opacity: 0;
+    background: var(--selection-wedge-fill);
+    filter: var(--selection-wedge-shadow);
+    -webkit-mask: var(--selection-wedge-svg) center / contain no-repeat;
+    mask: var(--selection-wedge-svg) center / contain no-repeat;
+    transform: translate(-0.16rem, -0.16rem) scaleX(-1) rotate(-45deg);
+    transform-origin: center;
+    transition: opacity 0.08s ease, transform 0.08s ease;
+}
+
+.selection-wedge-pseudo-host.selection-wedge-visible::after,
+.selection-wedge-pseudo-anchor.selection-wedge-visible::after {
+    opacity: 1;
+    transform: scaleX(-1) rotate(-45deg);
+}

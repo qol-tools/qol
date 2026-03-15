@@ -71,7 +71,7 @@ function buildAddRow(path, state, render) {
     addInput.placeholder = 'Add item...';
     const addButton = document.createElement('button');
     addButton.type = 'button';
-    addButton.className = 'btn-add';
+    addButton.className = 'btn btn-ghost btn-sm btn-add';
     addButton.textContent = '+ Add';
     addButton.addEventListener('click', () => addItem(addInput, path, state, render));
     addInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addItem(addInput, path, state, render); } });

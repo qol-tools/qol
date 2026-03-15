@@ -4,7 +4,6 @@ import { usePaletteContext } from '../../palette/context.js';
 import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
 import { GLOBAL_ID } from '../../palette/registry.js';
 import { useAppBootstrap } from './useAppBootstrap.js';
-import { useAppKeyboardRouting } from './useAppKeyboardRouting.js';
 import { useAppUpdateCoordinator } from './useAppUpdateCoordinator.js';
 import { useMountedViews } from './useMountedViews.js';
 import { useSidebarActions } from './useSidebarActions.js';
@@ -29,12 +28,29 @@ export function useApp({ onDissolve } = {}) {
     const setDefaultWorktree = useCallback(path => {
         const v = path || null;
         defaultWorktreeRef.current = v;
-        try { if (v) localStorage.setItem(WT_KEY, v); else localStorage.removeItem(WT_KEY); } catch {}
+        try {
+            if (v) {
+                localStorage.setItem(WT_KEY, v);
+            }
+            if (!v) {
+                localStorage.removeItem(WT_KEY);
+            }
+        } catch {}
         setDefaultWorktreeState(v);
     }, []);
     useEffect(() => {
         if (!devEnabled) return;
-        fetch('/api/dev/worktrees').then(r => r.ok ? r.json() : []).then(setWorktrees).catch(() => {});
+        fetch('/api/dev/worktrees')
+            .then(r => r.ok ? r.json() : [])
+            .then(nextWorktrees => {
+                setWorktrees(nextWorktrees);
+                const normalized = normalizeDefaultWorktree(defaultWorktreeRef.current, nextWorktrees);
+                if (normalized === defaultWorktreeRef.current) {
+                    return;
+                }
+                setDefaultWorktree(normalized);
+            })
+            .catch(() => {});
     }, [devEnabled]);
     const handleSidebarAction = useSidebarActions({ checkForUpdate, beginSelfUpdate, failSelfUpdate, beginDevRecompile, failDevRecompile, defaultWorktreeRef });
     const palette = usePaletteContext();
@@ -42,7 +58,6 @@ export function useApp({ onDissolve } = {}) {
         palette.setActiveViewId(activeViewId);
         if (palette.active) palette.deactivate();
     }, [activeViewId]);
-    useAppKeyboardRouting({ activePluginId, activeViewId, closePluginConfig, switchView, viewOrder, palette });
     const handleViewClick = useCallback((viewId) => {
         if (activePluginId) closePluginConfig();
         switchView(viewId);
@@ -58,5 +73,27 @@ export function useApp({ onDissolve } = {}) {
     );
     useRegisterCommands(GLOBAL_ID, globalCommands);
 
-    return { devEnabled, appVersion, viewOrder, activeViewId, activePluginId, openPluginConfig, closePluginConfig, mounted, updateState, handleSidebarAction, handleViewClick, worktrees, defaultWorktree, setDefaultWorktree };
+    return { devEnabled, appVersion, viewOrder, activeViewId, activePluginId, switchView, openPluginConfig, closePluginConfig, mounted, updateState, handleSidebarAction, handleViewClick, worktrees, defaultWorktree, setDefaultWorktree };
+}
+
+function normalizeDefaultWorktree(current, worktrees) {
+    if (!current) {
+        return null;
+    }
+    if (worktrees.some(worktree => worktree.path === current)) {
+        return current;
+    }
+    const resolved = worktrees.find(worktree => parentDir(worktree.path) === current);
+    if (resolved) {
+        return resolved.path;
+    }
+    return null;
+}
+
+function parentDir(path) {
+    const separator = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+    if (separator <= 0) {
+        return null;
+    }
+    return path.slice(0, separator);
 }

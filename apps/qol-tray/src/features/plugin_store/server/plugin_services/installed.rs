@@ -1,3 +1,4 @@
+use crate::plugins::paths as plugin_paths;
 use crate::plugins::PluginId;
 use axum::http::StatusCode;
 use std::collections::HashMap;
@@ -78,7 +79,7 @@ fn loaded_plugin_info(
         loaded: true,
         load_error: None,
         has_cover: plugin.path.join("cover.png").exists(),
-        has_ui: plugin.path.join("ui").join("index.html").exists(),
+        has_ui: plugin_paths::has_settings_surface(&plugin.path),
         available_version,
         update_available,
         actions: extract_actions(&plugin.manifest.menu.items),
@@ -119,7 +120,7 @@ fn unloaded_plugin(
         loaded: false,
         load_error,
         has_cover: plugin_dir.join("cover.png").exists(),
-        has_ui: plugin_dir.join("ui").join("index.html").exists(),
+        has_ui: plugin_paths::has_settings_surface(&plugin_dir),
         available_version,
         update_available,
         actions,
@@ -130,13 +131,16 @@ fn unloaded_plugin_details(
     id: &str,
     manifest: Option<&crate::plugins::PluginManifest>,
 ) -> (String, String, String, Vec<PluginAction>) {
-    let Some(manifest) = manifest else {
-        return (
-            id.to_string(),
-            "Plugin manifest could not be parsed".to_string(),
-            "unknown".to_string(),
-            Vec::new(),
-        );
+    let manifest = match manifest {
+        Some(manifest) => manifest,
+        None => {
+            return (
+                id.to_string(),
+                "Plugin manifest could not be parsed".to_string(),
+                "unknown".to_string(),
+                Vec::new(),
+            )
+        }
     };
     (
         manifest.plugin.name.clone(),

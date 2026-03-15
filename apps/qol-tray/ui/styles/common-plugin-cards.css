@@ -30,6 +30,7 @@
     height: 100%;
     object-fit: cover;
     display: block;
+    border-radius: inherit;
 }
 
 .plugin-name {
@@ -42,6 +43,8 @@
     color: var(--text-primary);
     font-weight: var(--fw-medium);
     font-size: var(--fs-base);
+    border-bottom-left-radius: inherit;
+    border-bottom-right-radius: inherit;
 }
 
 .plugin-load-state {
@@ -71,8 +74,8 @@
     transition: border-color var(--transition), box-shadow var(--transition), transform var(--transition);
 }
 
-.plugin-grid-store .plugin-card:hover,
-.plugins-grid .plugin-card:hover {
+.plugin-grid-store .plugin-card:hover:not(.selected),
+.plugins-grid .plugin-card:hover:not(.selected) {
     border-color: var(--border-hover);
     box-shadow: var(--elevation-2);
     transform: translateY(-1px);

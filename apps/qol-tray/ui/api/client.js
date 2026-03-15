@@ -1,3 +1,24 @@
+import { toast } from '../lib/toast.js';
+
+const originalFetch = window.fetch.bind(window);
+window.fetch = async function (url, options) {
+    try {
+        const response = await originalFetch(url, options);
+        if (!response.ok) {
+            const path = extractPath(url);
+            toast('error', `${response.status} — ${path}`);
+        }
+        return response;
+    } catch (error) {
+        toast('error', error.message);
+        throw error;
+    }
+};
+
+function extractPath(url) {
+    try { return new URL(url, location.origin).pathname; } catch { return String(url); }
+}
+
 function buildError(response, message) {
     const error = new Error(message || `Request failed (${response.status})`);
     error.status = response.status;
@@ -33,18 +54,14 @@ export function jsonRequest(method, payload, options = {}) {
 
 export async function apiJson(url, options) {
     const response = await fetch(url, options);
-    if (!response.ok) {
-        throw buildError(response, await readErrorMessage(response));
-    }
+    if (!response.ok) throw buildError(response, await readErrorMessage(response));
     if (response.status === 204) return null;
     return response.json();
 }
 
 export async function apiText(url, options) {
     const response = await fetch(url, options);
-    if (!response.ok) {
-        throw buildError(response, await readErrorMessage(response));
-    }
+    if (!response.ok) throw buildError(response, await readErrorMessage(response));
     return response.text();
 }
 

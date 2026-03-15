@@ -53,9 +53,23 @@ async fn spawn_self_recompile(
     worktree_path: Option<PathBuf>,
 ) -> RecompileResult {
     tokio::task::spawn_blocking(move || {
+        if let Err(message) =
+            super::sync::sync_main_if_needed(Arc::clone(&events), worktree_path.as_deref())
+        {
+            return sync_failed_build(message);
+        }
         dev::build_qol_tray_self_with_progress(worktree_path.as_deref(), |percent, phase| {
             events.send(DaemonEvent::SelfRecompileProgress { percent, phase });
         })
     })
     .await
+}
+
+fn sync_failed_build(message: String) -> crate::dev::BuildResult {
+    crate::dev::BuildResult {
+        plugin_id: "qol-tray".to_string(),
+        success: false,
+        output: message,
+        skipped: false,
+    }
 }
