@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use super::model::PluginConfig;
 
 pub fn load() -> Result<PluginConfig> {
-    let path = config_path()?;
+    let path = best_config_path();
     if !path.is_file() {
         let config = PluginConfig::default();
         save(&config)?;
@@ -16,6 +16,15 @@ pub fn load() -> Result<PluginConfig> {
         .with_context(|| format!("failed to parse {}", path.display()))?;
     super::validation::validate(&config).map_err(Error::msg)?;
     Ok(config)
+}
+
+fn best_config_path() -> PathBuf {
+    if let Some(mirror) = mirror_config_path() {
+        if mirror.is_file() {
+            return mirror;
+        }
+    }
+    config_path().unwrap_or_else(|_| PathBuf::from("config.json"))
 }
 
 pub fn save(config: &PluginConfig) -> Result<()> {
