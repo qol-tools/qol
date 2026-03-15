@@ -1,3 +1,7 @@
+pub mod contract;
+pub mod normalized;
+pub mod validation;
+
 use serde::de::DeserializeOwned;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,8 +14,9 @@ pub fn base_data_dir() -> Option<PathBuf> {
 
 pub fn config_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    let Some(base) = base_data_dir() else {
-        return roots;
+    let base = match base_data_dir() {
+        Some(base) => base,
+        None => return roots,
     };
     if let Some(id) = install_id_from_env() {
         roots.push(base.join("installs").join(id));
@@ -48,8 +53,9 @@ pub fn plugin_config_paths(names: &[&str]) -> Vec<PathBuf> {
 
 pub fn load_plugin_config<T: DeserializeOwned + Default>(names: &[&str]) -> T {
     for path in plugin_config_paths(names) {
-        let Ok(contents) = fs::read_to_string(&path) else {
-            continue;
+        let contents = match fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(_) => continue,
         };
         match serde_json::from_str::<T>(&contents) {
             Ok(config) => {
@@ -67,21 +73,19 @@ pub fn load_plugin_config<T: DeserializeOwned + Default>(names: &[&str]) -> T {
 pub fn install_id_from_env() -> Option<String> {
     let value = std::env::var("QOL_TRAY_INSTALL_ID").ok()?;
     let trimmed = value.trim();
-    if valid_install_id(trimmed) {
-        Some(trimmed.to_string())
-    } else {
-        None
+    if !valid_install_id(trimmed) {
+        return None;
     }
+    Some(trimmed.to_string())
 }
 
 pub fn install_id_from_active_file(base_data_dir: &Path) -> Option<String> {
     let content = fs::read_to_string(base_data_dir.join("active-install-id")).ok()?;
     let trimmed = content.trim();
-    if valid_install_id(trimmed) {
-        Some(trimmed.to_string())
-    } else {
-        None
+    if !valid_install_id(trimmed) {
+        return None;
     }
+    Some(trimmed.to_string())
 }
 
 pub fn valid_install_id(value: &str) -> bool {
