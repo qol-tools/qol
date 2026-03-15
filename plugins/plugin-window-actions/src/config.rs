@@ -82,7 +82,10 @@ impl WindowActionsConfig {
     pub fn center_size_for_monitor(&self, monitor_width: f64, monitor_height: f64) -> (f64, f64) {
         let width = self.resolve_center_width(monitor_width);
         let height = self.resolve_center_height(monitor_height);
-        (width.clamp(1.0, monitor_width), height.clamp(1.0, monitor_height))
+        (
+            width.clamp(1.0, monitor_width),
+            height.clamp(1.0, monitor_height),
+        )
     }
 
     fn resolve_center_width(&self, monitor_width: f64) -> f64 {

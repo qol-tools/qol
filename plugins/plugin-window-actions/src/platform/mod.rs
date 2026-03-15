@@ -13,8 +13,8 @@ compile_error!(
     "plugin-window-actions: unsupported target OS; add src/platform/<os>.rs and wire it in src/platform/mod.rs"
 );
 
-use crate::state_store::FileMinimizedStateStore;
 use crate::config::WindowActionsConfig;
+use crate::state_store::FileMinimizedStateStore;
 
 #[cfg(target_os = "linux")]
 pub fn execute_action(
@@ -26,9 +26,15 @@ pub fn execute_action(
     use system::{run_cinnamon_eval, X11WindowSystem};
     let system = X11WindowSystem;
     match action {
-        "snap-left" => run_cinnamon_eval(&scripts::snap_left_script(config.snap_fraction)).map(|_| ()),
-        "snap-right" => run_cinnamon_eval(&scripts::snap_right_script(config.snap_fraction)).map(|_| ()),
-        "snap-bottom" => run_cinnamon_eval(&scripts::snap_bottom_script(config.snap_fraction)).map(|_| ()),
+        "snap-left" => {
+            run_cinnamon_eval(&scripts::snap_left_script(config.snap_fraction)).map(|_| ())
+        }
+        "snap-right" => {
+            run_cinnamon_eval(&scripts::snap_right_script(config.snap_fraction)).map(|_| ())
+        }
+        "snap-bottom" => {
+            run_cinnamon_eval(&scripts::snap_bottom_script(config.snap_fraction)).map(|_| ())
+        }
         "maximize" => run_cinnamon_eval(scripts::MAXIMIZE_SCRIPT).map(|_| ()),
         "minimize" => restore::minimize_window(&system, store),
         "restore" => restore::restore_window(&system, store),
