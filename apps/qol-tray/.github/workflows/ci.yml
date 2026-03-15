@@ -17,8 +17,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: qol-tools/qol-config
-          path: ../qol-config
+          path: qol-config
           token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Link qol-config as sibling
+        shell: bash
+        run: |
+          if [ ! -e ../qol-config ]; then
+            ln -s "$GITHUB_WORKSPACE/qol-config" ../qol-config 2>/dev/null || cp -r "$GITHUB_WORKSPACE/qol-config" ../qol-config
+          fi
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -49,8 +55,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: qol-tools/qol-config
-          path: ../qol-config
+          path: qol-config
           token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Link qol-config as sibling
+        shell: bash
+        run: |
+          if [ ! -e ../qol-config ]; then
+            ln -s "$GITHUB_WORKSPACE/qol-config" ../qol-config 2>/dev/null || cp -r "$GITHUB_WORKSPACE/qol-config" ../qol-config
+          fi
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
