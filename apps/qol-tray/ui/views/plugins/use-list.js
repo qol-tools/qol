@@ -1,13 +1,20 @@
 import { useRef, useEffect, useCallback } from 'preact/hooks';
 import { useStateRef } from '../../hooks/useStateRef.js';
-import { usePersistedIndex } from '../../hooks/usePersistedIndex.js';
+import { usePersistedId } from '../../hooks/usePersistedIndex.js';
 import { useAsyncToken } from '../../hooks/useAsyncToken.js';
 import { useRefreshOnFocus } from '../../hooks/useRefreshOnFocus.js';
 import { useSSEDebounce } from '../../hooks/useSSEDebounce.js';
 import { useInstalling } from '../../hooks/useInstalling.js';
 import { loadInstalledPlugins, buildGhostPlugins } from './data.js';
+import { toast } from '../../lib/toast.js';
 
-async function doRefresh(opts, nextToken, isCurrentToken, latestRevisionRef, applyPayload, setFeedback) {
+function findPluginIndex(plugins, pluginId) {
+    if (!pluginId) return 0;
+    const idx = plugins.findIndex(p => p.id === pluginId);
+    return idx >= 0 ? idx : 0;
+}
+
+async function doRefresh(opts, nextToken, isCurrentToken, latestRevisionRef, applyPayload) {
     const { showErrorFeedback = false, restoreSelection = false, minRevision = 0 } = opts;
     const token = nextToken();
     try {
@@ -18,7 +25,7 @@ async function doRefresh(opts, nextToken, isCurrentToken, latestRevisionRef, app
         applyPayload(payload.plugins, restoreSelection);
     } catch (error) {
         if (!isCurrentToken(token)) return;
-        if (showErrorFeedback) setFeedback('error', `Failed to load plugins: ${error.message}`);
+        if (showErrorFeedback) toast('error', `Failed to load plugins: ${error.message}`);
     }
 }
 
@@ -32,25 +39,29 @@ function useListEffects(refreshPlugins, latestRevisionRef) {
     }, [refreshPlugins]));
 }
 
-export function usePluginsList(setFeedback) {
+export function usePluginsList() {
     const [plugins, setPlugins, pluginsRef] = useStateRef([]);
-    const [selectedIndex, setSelectedIndex, selectedIndexRef, markRestored] = usePersistedIndex('plugins-selected-index', 0);
+    const [selectedPluginId, setSelectedPluginId, selectedPluginIdRef, markRestored] = usePersistedId('plugins-selected-id');
+    const selectedIndexRef = useRef(0);
     const { items: installingItems } = useInstalling();
     const [nextToken, isCurrentToken] = useAsyncToken();
     const latestRevisionRef = useRef(0);
     const applyPayload = useCallback((items, restore) => {
         setPlugins(items);
-        setSelectedIndex(prev => {
-            if (restore) markRestored();
-            if (prev >= items.length) return 0;
-            return prev;
-        });
+        if (restore) markRestored();
     }, []);
     const refreshPlugins = useCallback(
-        opts => doRefresh(opts || {}, nextToken, isCurrentToken, latestRevisionRef, applyPayload, setFeedback),
-        [setFeedback, applyPayload]
+        opts => doRefresh(opts || {}, nextToken, isCurrentToken, latestRevisionRef, applyPayload),
+        [applyPayload]
     );
     useListEffects(refreshPlugins, latestRevisionRef);
     const ghostPlugins = buildGhostPlugins(plugins, installingItems);
+    const selectedIndex = findPluginIndex(plugins, selectedPluginId);
+    selectedIndexRef.current = selectedIndex;
+    const setSelectedIndex = useCallback((indexOrFn) => {
+        const idx = typeof indexOrFn === 'function' ? indexOrFn(selectedIndexRef.current) : indexOrFn;
+        const plugin = pluginsRef.current[idx];
+        if (plugin) setSelectedPluginId(plugin.id);
+    }, []);
     return { plugins, pluginsRef, selectedIndex, setSelectedIndex, selectedIndexRef, refreshPlugins, ghostPlugins };
 }

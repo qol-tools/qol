@@ -1,6 +1,7 @@
 import { useEffect, useRef, useMemo } from 'preact/hooks';
 import { html } from '../lib/html.js';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
+import { useRegisterViewKeyboard } from '../components/app/view-keyboard-context.js';
 import { PageHeader } from '../components/PageHeader.js';
 
 import { API_BASE, buildApiExample } from './task-runner/data.js';
@@ -44,8 +45,7 @@ export function TaskRunnerView() {
     const edit = useEditModal(data.actionsRef, data.setActions, data.setActionIds, data.setSelectedIndex);
     const test = useTestPanel();
     const { handleKey, isBlocking } = useTaskKeyHandler(data, edit, test);
-    TaskRunnerView.handleKey = handleKey;
-    TaskRunnerView.isBlocking = isBlocking;
+    useRegisterViewKeyboard('task-runner', handleKey, isBlocking);
 
     const editRef = useRef(edit);
     editRef.current = edit;

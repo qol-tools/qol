@@ -10,9 +10,9 @@ function PluginInfo({ plugin, statusToken, ctrl }) {
         <div class="plugin-info table-col">
             <div class="plugin-copy">
                 <div class="plugin-title-row">
-                    <span class="plugin-name">${plugin.name || plugin.id || 'Unknown plugin'}</span>
+                    <span class="plugin-name" data-selected-text="">${plugin.name || plugin.id || 'Unknown plugin'}</span>
                 </div>
-                <span class="plugin-path">${plugin.path || ''}</span>
+                <span class="plugin-path" data-selected-text="">${plugin.path || ''}</span>
                 <${BuildMeta} plugin=${plugin} />
             </div>
             <${StatusBadges} plugin=${plugin} statusToken=${statusToken} />
@@ -57,7 +57,7 @@ export function PluginRow({ plugin, index, ctrl }) {
     const actionDisabled = isBuilding || !!ctrl.linkingId;
     const rebuildActive = plugin.status === 'linked' && plugin.has_cargo && plugin.needs_rebuild;
     return html`
-        <div class=${'plugin-row table-list-row status-' + statusToken + (isSelected ? ' selected' : '') + (isBuilding ? ' is-building' : '') + (isLinking ? ' is-linking' : '')} data-status=${statusToken} data-selected=${isSelected ? 'true' : 'false'} data-index=${index} data-plugin-id=${plugin.id}>
+        <div class=${'plugin-row table-list-row status-' + statusToken + (isSelected ? ' selected' : '') + (isBuilding ? ' is-building' : '') + (isLinking ? ' is-linking' : '')} data-selected-surface="" data-status=${statusToken} data-selected=${isSelected ? 'true' : 'false'} data-index=${index} data-plugin-id=${plugin.id}>
             <div class="plugin-main table-grid">
                 <${PluginInfo} plugin=${plugin} statusToken=${statusToken} ctrl=${ctrl} />
                 <${ActionColumn} plugin=${plugin} index=${index} statusToken=${statusToken} actionDisabled=${actionDisabled} isLinking=${isLinking} rebuildActive=${rebuildActive} ctrl=${ctrl} />

@@ -1,39 +1,34 @@
 @import "./theme-tokens.css";
+@import "./common-controls.css";
+@import "./common-config-primitives.css";
 
 :root {
-    --cfg-bg-glow-1: var(--slate-700);
-    --cfg-bg-glow-2: var(--slate-850);
-    --cfg-bg-1: #0b1018;
-    --cfg-bg-2: var(--slate-950);
-    --cfg-bg-3: #0f141f;
-    --cfg-text-strong: var(--slate-100);
-    --cfg-text-bright: var(--slate-200);
-    --cfg-text-muted: var(--slate-400);
-    --cfg-text-subtle: var(--slate-300);
-    --cfg-text-faint: var(--slate-500);
-    --cfg-heading: var(--blue-300);
-    --cfg-accent: var(--blue-300);
-    --cfg-accent-bg: rgba(63, 120, 223, 0.3);
-    --cfg-accent-bg-hover: rgba(63, 120, 223, 0.5);
-    --cfg-accent-bg-active: rgba(63, 120, 223, 0.4);
-    --cfg-accent-border: rgba(125, 179, 255, 0.3);
-    --cfg-accent-grad-1: var(--blue-600);
-    --cfg-accent-grad-2: var(--blue-700);
-    --cfg-panel-bg: rgba(14, 22, 35, 0.74);
-    --cfg-border-soft: rgba(111, 139, 188, 0.25);
-    --cfg-input-bg: rgba(8, 14, 24, 0.8);
-    --cfg-input-border: rgba(107, 129, 176, 0.3);
-    --cfg-chip-bg: rgba(8, 14, 24, 0.6);
-    --cfg-chip-border: rgba(107, 129, 176, 0.2);
-    --cfg-muted-bg: rgba(107, 129, 176, 0.15);
-    --cfg-muted-border: rgba(107, 129, 176, 0.3);
-    --cfg-muted-border-soft: rgba(107, 129, 176, 0.25);
-    --cfg-muted-bg-soft: rgba(107, 129, 176, 0.1);
-    --cfg-divider: rgba(123, 151, 199, 0.2);
-    --cfg-success: var(--green-300);
-    --cfg-success-bg: rgba(134, 213, 163, 0.2);
-    --cfg-success-border: rgba(134, 213, 163, 0.3);
-    --cfg-danger: var(--red-400);
+    --cfg-text-strong: var(--text-primary);
+    --cfg-text-bright: var(--text-secondary);
+    --cfg-text-muted: var(--text-muted);
+    --cfg-text-subtle: var(--text-secondary);
+    --cfg-text-faint: var(--text-faint);
+    --cfg-heading: var(--text-primary);
+    --cfg-accent: var(--accent);
+    --cfg-accent-bg: rgba(var(--accent-rgb), 0.16);
+    --cfg-accent-bg-hover: rgba(var(--accent-rgb), 0.22);
+    --cfg-accent-bg-active: rgba(var(--accent-rgb), 0.18);
+    --cfg-accent-border: var(--state-info-border-soft);
+    --cfg-panel-bg: transparent;
+    --cfg-border-soft: var(--layer-paper-12);
+    --cfg-input-bg: var(--bg-elevated);
+    --cfg-input-border: var(--border-subtle);
+    --cfg-chip-bg: rgba(var(--accent-rgb), 0.07);
+    --cfg-chip-border: rgba(var(--accent-rgb), 0.18);
+    --cfg-muted-bg: rgba(var(--accent-rgb), 0.06);
+    --cfg-muted-border: rgba(var(--accent-rgb), 0.2);
+    --cfg-muted-border-soft: rgba(var(--accent-rgb), 0.14);
+    --cfg-muted-bg-soft: rgba(var(--accent-rgb), 0.04);
+    --cfg-divider: var(--layer-paper-10);
+    --cfg-success: var(--success);
+    --cfg-success-bg: var(--state-success-bg-faint);
+    --cfg-success-border: var(--state-success-border-soft);
+    --cfg-danger: var(--danger);
 }
 
 * {
@@ -43,11 +38,9 @@
 }
 
 body {
-    min-height: 100vh;
-    background:
-        radial-gradient(circle at 15% 10%, var(--cfg-bg-glow-1) 0%, transparent 34%),
-        radial-gradient(circle at 85% 90%, var(--cfg-bg-glow-2) 0%, transparent 30%),
-        linear-gradient(150deg, var(--cfg-bg-1) 0%, var(--cfg-bg-2) 45%, var(--cfg-bg-3) 100%);
+    height: 100vh;
+    overflow: hidden;
+    background: var(--bg-base);
     color: var(--cfg-text-strong);
     font-family: "Segoe UI", "SF Pro Text", -apple-system, sans-serif;
 }
@@ -55,38 +48,191 @@ body {
 .panel {
     max-width: 760px;
     margin: 0 auto;
-    padding: 2rem 1.2rem 2.6rem;
+    padding: 2.5rem 1.5rem 3rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.8rem;
+}
+
+.config-columns {
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.config-nav {
+    width: 210px;
+    min-width: 210px;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--layer-paper-08);
+    overflow-y: auto;
+}
+
+.config-nav-header {
+    padding: 1.4rem 1.1rem 1rem;
+}
+
+.config-nav-header h1 {
+    font-size: 1.15rem;
+    font-weight: 650;
+    color: var(--cfg-heading);
+    letter-spacing: 0.01em;
+}
+
+.config-nav-header p {
+    color: var(--cfg-text-faint);
+    font-size: 0.82rem;
+    margin-top: 0.3rem;
+    line-height: 1.35;
+}
+
+.config-nav-items {
+    display: flex;
+    flex-direction: column;
+    padding: 0.25rem 0.5rem;
+    gap: 2px;
+}
+
+.config-nav-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 0.55rem 0.75rem;
+    background: none;
+    border: none;
+    border-radius: 4px;
+    color: var(--cfg-text-bright);
+    font-size: 0.92rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.12s;
+    font-family: inherit;
+}
+
+.config-nav-item:hover {
+    background: var(--layer-paper-06);
+}
+
+.config-nav-item.active {
+    background: rgba(var(--accent-rgb), 0.12);
+    color: var(--accent);
+}
+
+
+.config-detail {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1.3rem 1.5rem 2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    position: relative;
+}
+
+.config-detail-header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.config-detail-header h2 {
+    color: var(--cfg-heading);
+    font-size: 1.25rem;
+    font-weight: 650;
+    letter-spacing: 0.01em;
+    margin: 0;
+}
+
+.config-detail-header .section-copy {
+    margin: 0;
+}
+
+.hero {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
 }
 
 .hero h1 {
-    letter-spacing: 0.02em;
-    font-size: 1.8rem;
+    letter-spacing: 0.01em;
+    font-size: 2.2rem;
+    font-weight: 650;
 }
 
 .hero p {
-    margin: 0.45rem 0 0;
+    margin: 0;
     color: var(--cfg-text-muted);
 }
 
 .card {
-    margin-top: 1rem;
-    background: var(--cfg-panel-bg);
-    border: 1px solid var(--cfg-border-soft);
-    border-radius: 14px;
-    padding: 1rem;
-    backdrop-filter: blur(2px);
+    background: var(--layer-paper-04, rgba(255, 255, 255, 0.04));
+    border: 1px solid var(--layer-paper-08);
+    border-radius: 4px;
+    padding: 0.5rem 0;
 }
 
+.config-document {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+.config-block {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    padding: 1rem 1.2rem 1.1rem;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+}
+
+.config-block + .config-block {
+    border-top: 1px solid var(--layer-paper-08);
+}
+
+.config-block-compact {
+    gap: 0.65rem;
+    padding: 0.85rem 1.2rem 0.9rem;
+}
+
+.config-block-variants {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    align-items: stretch;
+}
+
+.config-block-header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.config-block-meta {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.28rem;
+}
+
+.config-block-header h2,
 .card h2 {
-    margin: 0 0 0.3rem;
+    margin: 0 0 0.15rem;
     color: var(--cfg-heading);
-    font-size: 1rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
+    font-size: 1.18rem;
+    font-weight: 650;
+    text-transform: none;
+    letter-spacing: 0.01em;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.config-block-header h2 {
+    margin: 0;
 }
 
 .card > p {
@@ -96,36 +242,50 @@ body {
     line-height: 1.3;
 }
 
-.config-section {
-    padding: 1rem;
-}
-
 .config-subsection {
     margin-top: 0.75rem;
     padding: 0.85rem 0.95rem 0.3rem;
-    background: rgba(3, 13, 33, 0.42);
-    border: 1px solid rgba(82, 122, 191, 0.24);
+    background: var(--layer-paper-03);
+    border: 1px solid var(--layer-paper-08);
     border-radius: 12px;
 }
 
 .config-section,
 .config-subsection {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 0.75rem 1rem;
+    grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr));
+    gap: 1.2rem 1.3rem;
     align-items: start;
+}
+
+.config-section {
+    padding-left: 0;
 }
 
 .config-section > h2,
 .config-subsection > h3,
 .config-section > p,
 .config-subsection > p,
+.config-section > .variant-selector,
 .config-section > .nested-section,
 .config-subsection > .nested-section,
 .config-section > .rules-list,
 .config-subsection > .rules-list,
 .config-section > .add-rule-row,
-.config-subsection > .add-rule-row {
+.config-subsection > .add-rule-row,
+.config-section > .object-array-panel,
+.config-subsection > .object-array-panel,
+.config-section > .variant-panel,
+.config-subsection > .variant-panel,
+.config-section > .toggle-row,
+.config-subsection > .toggle-row,
+.variant-content-branch > .toggle-row,
+.config-section > .field-group:has(.text-input),
+.config-subsection > .field-group:has(.text-input),
+.variant-content-branch > .field-group:has(.text-input),
+.config-section > .field-group:has(.string-list),
+.config-subsection > .field-group:has(.string-list),
+.variant-content-branch > .field-group:has(.string-list) {
     grid-column: 1 / -1;
 }
 
@@ -135,10 +295,11 @@ body {
 
 .config-subsection h3 {
     margin: 0 0 0.8rem;
-    color: var(--cfg-text-bright);
-    font-size: 0.86rem;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
+    color: var(--cfg-text-strong);
+    font-size: 0.95rem;
+    font-weight: 600;
+    text-transform: none;
+    letter-spacing: 0.02em;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -157,7 +318,10 @@ body {
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    padding: 0.5rem 0;
+    padding: 0.55rem 0.75rem;
+    background: rgba(var(--accent-rgb), 0.04);
+    border: 1px solid rgba(var(--accent-rgb), 0.08);
+    border-radius: 4px;
 }
 
 .toggle-row label {
@@ -170,18 +334,25 @@ body {
 
 .toggle-row strong {
     color: var(--cfg-text-strong);
-    font-size: 0.95rem;
+    font-size: 0.92rem;
 }
 
 .field-label {
-    color: var(--cfg-text-subtle);
-    font-size: 0.85rem;
-    margin-bottom: 0.3rem;
+    color: var(--cfg-text-bright);
+    font-size: 0.88rem;
+    font-weight: 500;
+    margin-bottom: 0.45rem;
     min-width: 0;
     line-height: 1.25;
     display: block;
     overflow-wrap: normal;
     word-break: normal;
+}
+
+.field-label-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.22rem;
 }
 
 .field-label-compact {
@@ -192,6 +363,114 @@ body {
     font-size: 0.75rem;
 }
 
+.variant-selector {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    align-self: flex-start;
+    width: fit-content;
+    max-width: 100%;
+}
+
+.variant-selector-card {
+    padding: 0;
+    background: var(--layer-paper-05);
+    border: 1px solid var(--layer-paper-12);
+    border-radius: 4px;
+    width: fit-content;
+    max-width: 100%;
+    overflow: hidden;
+}
+
+.variant-selector-label {
+    color: var(--cfg-text-bright);
+    font-size: 0.88rem;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0.01em;
+}
+
+.variant-panel {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    padding: 1rem 1.1rem;
+    background: rgba(var(--accent-rgb), 0.05);
+    border: 1px solid rgba(var(--accent-rgb), 0.12);
+    border-radius: 6px;
+}
+
+.variant-panel .variant-selector {
+    align-self: flex-start;
+}
+
+.variant-content {
+    display: grid;
+    position: relative;
+    overflow: visible;
+}
+
+.variant-content-branch {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+    gap: 0.6rem 1.2rem;
+}
+
+.variant-content-branch .field-group {
+    width: 100%;
+    justify-self: stretch;
+}
+
+.variant-content-branch.active {
+    display: grid;
+    position: relative;
+    animation: slide-in 0.25s ease-out;
+}
+
+.variant-content-branch:not(.active) {
+    display: none;
+}
+
+.variant-selector-options {
+    grid-template-columns: repeat(var(--variant-option-count), minmax(max-content, 1fr));
+}
+
+.variant-option {
+    padding: 0.7rem 1rem;
+}
+
+.variant-selector-compact .variant-option {
+    font-size: 0.78rem;
+    padding: 0.68rem 0.92rem;
+}
+
+.variant-selector-tight .variant-option {
+    font-size: 0.74rem;
+    padding: 0.62rem 0.82rem;
+}
+
+.field-help,
+.toggle-help {
+    color: var(--cfg-text-faint);
+    font-size: 0.78rem;
+    line-height: 1.35;
+}
+
+.toggle-help {
+    margin-top: 0.35rem;
+}
+
+.section-copy {
+    margin: 0;
+    color: var(--cfg-text-subtle);
+    font-size: 0.84rem;
+    line-height: 1.4;
+    max-width: 42rem;
+}
+
+
+
 .text-input,
 .number-input,
 select.field-select {
@@ -200,12 +479,14 @@ select.field-select {
     border: 1px solid var(--cfg-input-border);
     border-radius: var(--radius-md);
     color: var(--cfg-text-strong);
-    font-family: var(--font-mono);
-    font-size: var(--fs-md-minus);
+    font-family: inherit;
+    font-size: 0.86rem;
 }
 
 .text-input {
     width: 100%;
+    background: rgba(var(--accent-rgb), 0.04);
+    border-color: rgba(var(--accent-rgb), 0.12);
 }
 
 .number-input {
@@ -226,6 +507,8 @@ select.field-select {
 
 select.field-select {
     cursor: pointer;
+    background: rgba(var(--accent-rgb), 0.06);
+    border-color: rgba(var(--accent-rgb), 0.16);
 }
 
 .text-input:focus,
@@ -233,17 +516,17 @@ select.field-select {
 select.field-select:focus {
     outline: none;
     border-color: var(--cfg-accent);
-    box-shadow: 0 0 0 1px rgba(125, 179, 255, 0.25);
+    box-shadow: 0 0 0 1px var(--focus-ring);
 }
 
 .number-input:hover {
-    background: rgba(15, 26, 44, 0.92);
-    border-color: rgba(125, 179, 255, 0.42);
+    background: var(--bg-hover);
+    border-color: var(--border-hover);
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 14' fill='none' stroke='%239bc2ff' stroke-width='1.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 1.5 2.5 4'/%3E%3Cpath d='M5 1.5 7.5 4'/%3E%3Cpath d='M5 12.5 2.5 10'/%3E%3Cpath d='M5 12.5 7.5 10'/%3E%3C/svg%3E");
     background-position: right 0.45rem center;
     background-repeat: no-repeat;
     background-size: 0.55rem 0.8rem;
-    box-shadow: 0 0 0 1px rgba(125, 179, 255, 0.18);
+    box-shadow: 0 0 0 1px var(--layer-paper-16);
 }
 
 .number-input::-webkit-outer-spin-button,
@@ -297,9 +580,8 @@ select.field-select:focus {
     background: var(--cfg-chip-bg);
     border: 1px solid var(--cfg-chip-border);
     border-radius: 8px;
-    font-family: var(--font-mono);
-    font-size: 0.85rem;
-    color: var(--cfg-text-bright);
+    font-size: 0.84rem;
+    color: var(--cfg-text-strong);
 }
 
 .string-item span {
@@ -321,18 +603,7 @@ select.field-select:focus {
 }
 
 .btn-add {
-    padding: 0.45rem 0.8rem;
-    background: var(--cfg-accent-bg);
-    border: 1px solid var(--cfg-accent-border);
-    border-radius: 8px;
-    color: var(--cfg-accent);
-    cursor: pointer;
-    font-size: 0.85rem;
     white-space: nowrap;
-}
-
-.btn-add:hover {
-    background: var(--cfg-accent-bg-hover);
 }
 
 .btn-remove {
@@ -364,7 +635,7 @@ select.field-select:focus {
     display: inline-block;
     padding: 0.2rem 0.45rem;
     background: var(--cfg-muted-bg);
-    border: 1px solid var(--cfg-input-border);
+    border: 1px solid var(--cfg-muted-border-soft);
     border-radius: 5px;
     color: var(--cfg-text-subtle);
     font-size: 0.75rem;
@@ -388,8 +659,8 @@ select.field-select:focus {
 .key-chip {
     display: inline-block;
     padding: 0.15rem 0.4rem;
-    background: var(--cfg-muted-bg);
-    border: 1px solid var(--cfg-muted-border-soft);
+    background: var(--cfg-chip-bg);
+    border: 1px solid var(--cfg-chip-border);
     border-radius: 4px;
     color: var(--cfg-text-strong);
     font-family: var(--font-mono);
@@ -401,7 +672,7 @@ select.field-select:focus {
     font-family: var(--font-mono);
     font-size: 0.85rem;
     padding: 0.15rem 0.4rem;
-    background: var(--cfg-muted-bg-soft);
+    background: var(--cfg-muted-bg);
     border-radius: 4px;
 }
 
@@ -432,6 +703,13 @@ select.field-select:focus {
     flex-direction: column;
     gap: 0.35rem;
     margin-bottom: 0.6rem;
+}
+
+.object-array-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    width: 100%;
 }
 
 .rule-row {
@@ -526,54 +804,95 @@ select.field-select:focus {
 .field-group {
     margin-bottom: 0;
     min-width: 0;
+    width: fit-content;
+    max-width: 100%;
+    justify-self: start;
 }
 
 .field-group-number {
-    width: auto;
-    justify-self: start;
+    width: 100%;
+    max-width: 100%;
+    justify-self: stretch;
     display: flex;
-    flex-direction: column;
-    align-items: flex-start;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    min-width: 0;
+}
+
+.field-group-number .field-label-group {
+    gap: 0.08rem;
+    min-width: 0;
 }
 
 .field-group-number .field-label {
-    max-width: 13rem;
-    margin-bottom: 0.4rem;
+    max-width: none;
+    margin-bottom: 0;
+    font-size: 0.86rem;
+    line-height: 1.2;
+    color: var(--cfg-text-strong);
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0;
+    text-align: left;
+    white-space: nowrap;
+}
+
+.field-group-number .field-help {
+    max-width: none;
+    font-size: 0.7rem;
+    text-align: left;
+}
+
+.field-group-number .number-input {
+    width: 4.5rem;
+    min-width: 4.5rem;
+    padding: 0.5rem 0.25rem;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    text-align: center;
+    box-shadow: none;
+}
+
+.field-group-number .input-adornment {
+    background: rgba(var(--accent-rgb), 0.06);
+    border-color: rgba(var(--accent-rgb), 0.16);
+}
+
+.field-group-number .number-input:focus {
+    box-shadow: none;
 }
 
 .field-group:last-child {
     margin-bottom: 0;
 }
 
-.actions {
-    margin-top: 1rem;
-    display: flex;
-    align-items: center;
-    gap: 0.9rem;
+.field-group:has(.text-input),
+.field-group:has(.string-list),
+.field-group:has(.add-row),
+.field-group:has(.slider-row),
+.field-group.toggle-row {
+    width: 100%;
 }
 
-.save {
-    border: 0;
-    border-radius: 10px;
-    padding: 0.65rem 1.3rem;
-    background: linear-gradient(135deg, var(--cfg-accent-grad-1), var(--cfg-accent-grad-2));
-    color: var(--cfg-text-strong);
-    font-weight: 600;
-    cursor: pointer;
-}
-
-.save:disabled {
-    opacity: 0.7;
-    cursor: default;
-}
-
-#save-status {
+.save-status {
     color: var(--cfg-success);
+    font-size: 0.78rem;
     min-height: 1em;
-    font-size: 0.92rem;
+    padding: 0.5rem 1rem;
+    margin-top: auto;
+    transition: opacity 0.2s;
 }
 
-#save-status.error {
+.save-status:empty {
+    opacity: 0;
+}
+
+.save-status.error {
     color: var(--cfg-danger);
 }
 
@@ -609,7 +928,7 @@ select.field-select:focus {
     }
 
     .hero h1 {
-        font-size: 1.45rem;
+        font-size: 2rem;
     }
 
     .add-rule-row {

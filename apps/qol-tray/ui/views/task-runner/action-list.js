@@ -12,17 +12,17 @@ function ActionCard({ actionId, action, isSelected, index, onSelect, onEdit, tes
     const params = extractParams(action.command);
     const classes = `action-card ${isSelected ? 'selected' : ''} ${testSlot ? 'testing' : ''}`;
     return html`
-        <div key=${actionId} class=${classes} data-index="${index}" data-id="${actionId}"
+        <div key=${actionId} class=${classes} data-selected-surface="" data-selected=${isSelected ? 'true' : 'false'} data-index="${index}" data-id="${actionId}"
              onClick=${e => handleCardClick(e, isSelected, actionId, index, onEdit, onSelect)}>
-            <div class="action-header">
+            <div class="action-header" data-selected-text="">
                 <span class="action-id">${actionId}</span>
                 ${isSelected && html`<span class="action-hints"><kbd>Enter</kbd> edit <kbd>t</kbd> test <kbd>d</kbd> delete</span>`}
             </div>
-            <div class="action-name">${action.name}</div>
-            ${action.description && html`<div class="action-desc">${action.description}</div>`}
-            <div class="action-command">$ ${action.command}</div>
+            <div class="action-name" data-selected-text="">${action.name}</div>
+            ${action.description && html`<div class="action-desc" data-selected-text="">${action.description}</div>`}
+            <div class="action-command" data-selected-text="">$ ${action.command}</div>
             ${params.length > 0 && html`
-                <div class="action-params">Parameters: ${params.map(p => html`<code key=${p}>{{'${p}'}}</code> `)}</div>
+                <div class="action-params" data-selected-text="">Parameters: ${params.map(p => html`<code key=${p}>{{'${p}'}}</code> `)}</div>
             `}
             ${testSlot}
         </div>

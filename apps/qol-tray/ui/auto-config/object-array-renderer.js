@@ -2,24 +2,57 @@ import { getVal } from './config-paths.js';
 import { getObjectArraySchema, guessSchemaFromKey, prettyLabel } from './heuristics.js';
 import { appendStaticModChips } from './primitive-fields.js';
 import { buildAddForm } from './object-array-form.js';
+import { getFieldValue } from './normalized-config.js';
 
 export function renderObjectArray(key, value, path, state) {
-    const card = document.createElement('section');
-    card.className = 'card';
-    const heading = document.createElement('h2');
-    heading.textContent = prettyLabel(key);
-    card.appendChild(heading);
+    return renderObjectArrayBlock({
+        title: prettyLabel(key),
+        value,
+        path,
+        state,
+        embedded: false,
+    });
+}
+
+export function renderEmbeddedObjectArray(field, state) {
+    return renderObjectArrayBlock({
+        title: '',
+        value: getFieldValue(state, field) || [],
+        path: field.config_key || field.id,
+        state,
+        embedded: true,
+    });
+}
+
+function renderObjectArrayBlock(context) {
+    const container = document.createElement(context.embedded ? 'div' : 'section');
+    container.className = context.embedded ? 'object-array-panel' : 'card';
+
+    if (context.title) {
+        const heading = document.createElement('h2');
+        heading.textContent = context.title;
+        container.appendChild(heading);
+    }
+
     const listEl = document.createElement('div');
     listEl.className = 'rules-list';
-    card.appendChild(listEl);
-    const schema = value.length > 0 ? getObjectArraySchema(value) : guessSchemaFromKey(key);
+    container.appendChild(listEl);
+
+    const schema = context.value.length > 0
+        ? getObjectArraySchema(context.value)
+        : guessSchemaFromKey(context.path);
     const addRow = document.createElement('div');
     addRow.className = 'add-rule-row';
-    card.appendChild(addRow);
-    const rerender = () => renderList(listEl, path, state, rerender);
-    buildAddForm(addRow, schema, path, state, rerender);
-    rerender();
-    return card;
+    container.appendChild(addRow);
+
+    const saveAndRender = () => {
+        renderList(listEl, context.path, context.state, saveAndRender);
+        context.state.save();
+    };
+    const renderOnly = () => renderList(listEl, context.path, context.state, saveAndRender);
+    buildAddForm(addRow, schema, context.path, context.state, saveAndRender);
+    renderOnly();
+    return container;
 }
 
 function renderList(listEl, path, state, rerender) {

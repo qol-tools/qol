@@ -1,5 +1,7 @@
 import { html } from '../../lib/html.js';
 
+const brokenCovers = new Set();
+
 const PLACEHOLDER_SVG = 'data:image/svg+xml,' + encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">' +
     '<rect fill="#2f3644" width="300" height="200"/>' +
@@ -31,13 +33,15 @@ function PluginCard({ plugin, index, selectedIndex, contextMenuOpen, updating, o
     return html`
         <div key=${plugin.id}
              class=${cardClassName(plugin, index === selectedIndex)}
+             data-selected-surface=""
+             data-selected=${index === selectedIndex ? 'true' : 'false'}
              data-index="${index}" data-plugin-id="${plugin.id}"
              onClick=${(e) => onCardClick(e, index, plugin.id)}>
-            <img src=${plugin.has_cover ? `/api/cover/${plugin.id}` : PLACEHOLDER_SVG}
+            <img src=${plugin.has_cover && !brokenCovers.has(plugin.id) ? `/api/cover/${plugin.id}` : PLACEHOLDER_SVG}
                  alt=${plugin.name}
-                 onError=${(e) => { e.target.src = PLACEHOLDER_SVG; }} />
-            <div class="plugin-name">${plugin.name}</div>
-            ${plugin.loaded === false && html`<div class="plugin-load-state">Not loaded</div>`}
+                 onError=${(e) => { brokenCovers.add(plugin.id); e.target.src = PLACEHOLDER_SVG; }} />
+            <div class="plugin-name" data-selected-text="">${plugin.name}</div>
+            ${plugin.loaded === false && html`<div class="plugin-load-state" data-selected-text="">Not loaded</div>`}
             ${plugin.update_available && html`<${PluginUpdateButton} plugin=${plugin} updating=${updating} />`}
             <${PluginCogButton} />
             <div class=${contextMenuClassName(contextMenuOpen, index === selectedIndex)}>

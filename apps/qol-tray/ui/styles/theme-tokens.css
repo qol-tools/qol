@@ -147,7 +147,9 @@
 
     --warning: var(--amber-500);
     --warning-bg: var(--state-warning-bg);
-    --focus-ring: rgba(var(--accent-rgb), 0.45);
+    --focus-ring: rgba(var(--accent-rgb), 0.5);
+    --focus-ring-width: 2px;
+    --focus-ring-offset: -2px;
 
     --elevation-1: 0 1px 2px var(--layer-ink-20), 0 6px 16px rgba(var(--ink-rgb), 0.14);
     --elevation-2: 0 3px 8px var(--layer-ink-24), 0 10px 26px rgba(var(--ink-rgb), 0.2);
@@ -262,6 +264,7 @@
     --z-selected: 10;
     --z-row-active: 12;
     --z-control: 20;
+    --z-selection-wedge: 25;
     --z-popover: 30;
     --z-menu: 35;
     --z-menu-trigger: 36;
@@ -307,4 +310,15 @@
     --dur-base: 0.2s;
     --dur-spin: 0.8s;
     --transition: var(--dur-base);
+}
+
+@keyframes slide-in {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }

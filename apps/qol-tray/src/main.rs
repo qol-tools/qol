@@ -1,3 +1,5 @@
+mod already_running_notification;
+
 use anyhow::Result;
 use qol_tray::daemon::Daemon;
 use qol_tray::features::{self, FeatureRegistry};
@@ -25,7 +27,7 @@ fn main() -> Result<()> {
 
     if is_already_running() {
         eprintln!("qol-tray is already running on port {}", DEFAULT_PORT);
-        show_already_running_notification();
+        already_running_notification::show();
         return Ok(());
     }
 
@@ -158,24 +160,6 @@ fn is_already_running() -> bool {
     use std::net::{SocketAddr, TcpStream};
     let addr: SocketAddr = ([127, 0, 0, 1], DEFAULT_PORT).into();
     TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
-}
-
-fn show_already_running_notification() {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = std::process::Command::new("osascript")
-            .args([
-                "-e",
-                "display notification \"Another instance is already running\" with title \"QoL Tray\"",
-            ])
-            .status();
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let _ = std::process::Command::new("notify-send")
-            .args(["QoL Tray", "Another instance is already running"])
-            .status();
-    }
 }
 
 struct InitResult {

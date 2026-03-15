@@ -16,7 +16,8 @@ pub mod process_utils;
 #[cfg(unix)]
 pub mod runtime;
 pub mod shortcuts;
-pub mod signal;
+#[cfg(unix)]
+pub(crate) mod signal;
 pub mod tray;
 pub mod updates;
 pub mod version;

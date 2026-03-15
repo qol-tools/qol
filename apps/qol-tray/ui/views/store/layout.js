@@ -1,6 +1,5 @@
 import { html } from '../../lib/html.js';
 import { formatCacheAge } from './reducer.js';
-import { Feedback } from '../../components/FeedbackPreact.js';
 import { PageHeader } from '../../components/PageHeader.js';
 import { StoreTokenPanel } from './token-panel.js';
 import { StoreGrid } from './grid.js';
@@ -15,7 +14,6 @@ export function StoreLayout({ ctrl }) {
                     rateLimited=${ctrl.rateLimited} tokenInputRef=${ctrl.tokenInputRef}
                     onSave=${ctrl.saveToken} onDelete=${ctrl.deleteToken}
                     onCancel=${ctrl.closeTokenInput} onShow=${ctrl.openTokenInput} />
-                <${Feedback} feedback=${ctrl.feedback} />
                 <${StoreGrid} plugins=${ctrl.filtered} loading=${ctrl.loading}
                     selectedIndex=${ctrl.selectedIndex} isInstalling=${ctrl.isInstalling}
                     onCardClick=${ctrl.handleCardClick} />

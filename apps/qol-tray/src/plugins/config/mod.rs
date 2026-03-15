@@ -5,6 +5,7 @@ mod tests;
 
 use crate::paths;
 use crate::paths::is_safe_path_component;
+use crate::plugins::paths as plugin_paths;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -30,7 +31,8 @@ impl PluginConfigManager {
         if !is_safe_path_component(plugin_id) {
             anyhow::bail!("Invalid plugin ID: {}", plugin_id);
         }
-        paths::plugins_dir().map(|path| path.join(plugin_id).join("config.json"))
+        let plugins_dir = paths::plugins_dir()?;
+        Ok(plugin_paths::config_path(&plugins_dir.join(plugin_id)))
     }
 
     pub fn load_configs(&self) -> Result<PluginConfigs> {
@@ -59,8 +61,9 @@ impl PluginConfigManager {
 
     fn restore_from_backup(&self, plugin_id: &str) -> Result<Option<serde_json::Value>> {
         let configs = self.load_configs()?;
-        let Some(config) = configs.configs.get(plugin_id).cloned() else {
-            return Ok(None);
+        let config = match configs.configs.get(plugin_id).cloned() {
+            Some(config) => config,
+            None => return Ok(None),
         };
         let plugin_path = Self::plugin_config_path(plugin_id)?;
         log::info!("Restoring config for plugin from backup: {}", plugin_id);

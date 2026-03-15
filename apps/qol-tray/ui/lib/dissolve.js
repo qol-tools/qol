@@ -1,134 +1,170 @@
-import { resolveColor } from './canvas.js';
+import {
+    createEvaporateState, activateBatch, drawSolidPixels, processBubbles,
+    evaporateFrame, runDissolve,
+    cancelExistingDissolve, createDissolveCanvas, sampleCompositeBg,
+} from './dissolve-engine.js';
+import { createField, renderField } from './glitch-squares.js';
 
-const DISSOLVE_RATE = 0.09;
-const BUBBLE_FADE = 0.035;
-const BUBBLE_SPEED_MIN = 0.35;
-const BUBBLE_SPEED_RANGE = 0.9;
-const BUBBLE_WOBBLE_AMP = 1.5;
-const BUBBLE_WOBBLE_FREQ = 0.28;
-const RENDER_SCALE = 2;
-const TILE_SIZE = 32;
-const TILE_JITTER = 0.2;
-const SPARK_RATIO = 0.15;
-const SPARK_THRESHOLD = (SPARK_RATIO * 4294967296) >>> 0;
+export { createEvaporateState, evaporateFrame, runDissolve };
 
-function spatialShuffle(total, W) {
-    const H = Math.ceil(total / W);
-    const gw = Math.ceil(W / TILE_SIZE) + 1;
-    const gh = Math.ceil(H / TILE_SIZE) + 1;
-    const grid = new Float32Array(gw * gh);
-    for (let i = 0; i < grid.length; i++) grid[i] = Math.random();
-    const keys = new Float32Array(total);
-    for (let i = 0; i < total; i++) {
-        const gx = (i % W) / TILE_SIZE;
-        const gy = ((i / W) | 0) / TILE_SIZE;
-        const ix = gx | 0;
-        const iy = gy | 0;
-        const fx = gx - ix;
-        const fy = gy - iy;
-        const v0 = grid[iy * gw + ix] + (grid[iy * gw + ix + 1] - grid[iy * gw + ix]) * fx;
-        const v1 = grid[(iy + 1) * gw + ix] + (grid[(iy + 1) * gw + ix + 1] - grid[(iy + 1) * gw + ix]) * fx;
-        keys[i] = v0 + (v1 - v0) * fy + Math.random() * TILE_JITTER;
-    }
-    const indices = Array.from({ length: total }, (_, i) => i);
-    indices.sort((a, b) => keys[a] - keys[b]);
-    return indices;
-}
+export const DISSOLVE_PRESETS = {
+    default: {
+        renderScale: 2, density: 1.0, tileSize: 32,
+        dissolveRate: 0.14, bubbleFade: 0.05, maxBatchRate: 0.04,
+        origin: 'random',
+    },
+    drillDown: {
+        renderScale: 2, density: 1.0, tileSize: 32,
+        dissolveRate: 0.06, bubbleFade: 0.04, maxBatchRate: 0.04, ticksPerFrame: 2,
+        origin: 'center', invert: true,
+        speedMin: 0.02, speedRange: 0.08, wind: 0.01, wobbleAmp: 0, wobbleFreq: 0,
+        colorDrift: -0.6, echoes: 3, sizeGrowth: 14, spread: 0.3, dissolveAccel: -0.8, phiAccelAt: 0.9,
+    },
+    goBack: {
+        renderScale: 2, density: 1.0, tileSize: 32,
+        dissolveRate: 0.1, bubbleFade: 0.06, maxBatchRate: 0.06,
+        origin: 'edges',
+        speedMin: 0.02, speedRange: 0.08, wind: 0.01, wobbleAmp: 0, wobbleFreq: 0, vortexCount: 0,
+        colorDrift: 0.6, echoes: 3, sizeGrowth: 14, spread: 0.3, dissolveAccel: -0.6, phiAccelAt: 0.9, materialize: 16,
+    },
+    variantSwitch: {
+        bleed: 20, edgeFade: 20, renderScale: 2, density: 1.0,
+        tileSize: 128, dissolveRate: 0.12, bubbleFade: 0.065,
+        maxBatchRate: 0.1, origin: 'center',
+    },
+};
 
-export function createEvaporateState(canvas, cssColor, targetCssColor) {
-    const W = Math.ceil(window.innerWidth / RENDER_SCALE);
-    const H = Math.ceil(window.innerHeight / RENDER_SCALE);
-    canvas.width = W;
-    canvas.height = H;
-    const ctx = canvas.getContext('2d');
-    const [r, g, b] = resolveColor(cssColor);
-    const [tr, tg, tb] = targetCssColor ? resolveColor(targetCssColor) : [r, g, b];
-    const total = W * H;
-    const imgData = ctx.createImageData(W, H);
-    const d = imgData.data;
-    for (let i = 0; i < total; i++) {
-        const off = i * 4;
-        d[off] = r; d[off + 1] = g; d[off + 2] = b; d[off + 3] = 255;
-    }
-    ctx.putImageData(imgData, 0, 0);
-    const speeds = new Float32Array(total);
-    const phases = new Float32Array(total);
-    for (let i = 0; i < total; i++) {
-        speeds[i] = (BUBBLE_SPEED_MIN + ((Math.imul(i, 1234567891) >>> 0) / 4294967296) * BUBBLE_SPEED_RANGE) / RENDER_SCALE;
-        phases[i] = ((Math.imul(i, 2654435761) >>> 0) / 4294967296) * Math.PI * 2;
-    }
-    return {
-        ctx, W, H, r, g, b, tr, tg, tb, total, imgData, d, speeds, phases,
-        indices: spatialShuffle(total, W), birthFrame: new Int32Array(total).fill(-1),
-        live: new Int32Array(total), liveCount: 0,
-        cursor: 0, frame: 0
+export function dissolveIn(container, opts = {}) {
+    cancelExistingDissolve(container);
+    const canvas = createDissolveCanvas(container, opts);
+    const bg = sampleCompositeBg(container);
+    runDissolve(canvas, bg, () => canvas.remove(), opts.targetColor ?? 'var(--accent)', {
+        width: container.offsetWidth,
+        height: container.offsetHeight,
+        ...opts,
+    });
+    return () => {
+        if (canvas._dissolveCancel) canvas._dissolveCancel();
+        canvas.remove();
     };
 }
 
-function activateBatch(s) {
-    const batch = Math.max(1, Math.ceil((s.total - s.cursor) * DISSOLVE_RATE));
-    const end = Math.min(s.cursor + batch, s.total);
-    for (let i = s.cursor; i < end; i++) {
-        const idx = s.indices[i];
-        s.birthFrame[idx] = s.frame;
-        s.live[s.liveCount++] = idx;
-    }
-    s.cursor = end;
-}
-
-function drawSolidPixels(s) {
-    for (let i = s.cursor; i < s.total; i++) {
-        const off = s.indices[i] * 4;
-        s.d[off] = s.r; s.d[off + 1] = s.g; s.d[off + 2] = s.b; s.d[off + 3] = 255;
-    }
-}
-
-function processBubbles(s) {
-    const wobbleAmp = BUBBLE_WOBBLE_AMP / RENDER_SCALE;
-    let writeIdx = 0;
-    for (let j = 0; j < s.liveCount; j++) {
-        const i = s.live[j];
-        const age = s.frame - s.birthFrame[i];
-        const alpha = 1 - age * BUBBLE_FADE;
-        const newY = Math.round((i / s.W | 0) - age * s.speeds[i]);
-        if (alpha <= 0 || newY < 0) continue;
-        s.live[writeIdx++] = i;
-        const newX = Math.min(s.W - 1, Math.max(0, Math.round(
-            i % s.W + Math.sin(s.phases[i] + age * BUBBLE_WOBBLE_FREQ) * wobbleAmp
-        )));
-        const noff = (newY * s.W + newX) * 4;
-        const a = (alpha * 255) | 0;
-        if (a <= s.d[noff + 3]) continue;
-        const isSpark = (Math.imul(i, 1103515245) >>> 0) < SPARK_THRESHOLD;
-        s.d[noff] = isSpark ? s.tr : s.r;
-        s.d[noff + 1] = isSpark ? s.tg : s.g;
-        s.d[noff + 2] = isSpark ? s.tb : s.b;
-        s.d[noff + 3] = a;
-    }
-    s.liveCount = writeIdx;
-}
-
-export function evaporateFrame(s) {
-    activateBatch(s);
-    s.d.fill(0);
-    drawSolidPixels(s);
-    processBubbles(s);
-    s.ctx.putImageData(s.imgData, 0, 0);
-    s.frame++;
-    return s.cursor >= s.total && s.liveCount === 0;
-}
-
-export function runDissolve(canvas, cssColor, onComplete, targetCssColor) {
-    const s = createEvaporateState(canvas, cssColor, targetCssColor);
+export function materializeInScatter(container, opts = {}) {
+    if (container._materializeCancel) container._materializeCancel();
+    cancelExistingDissolve(container);
+    const canvas = createDissolveCanvas(container, {});
+    const bg = sampleCompositeBg(container);
+    const mergedOpts = {
+        origin: 'random', density: 0.12, renderScale: 2,
+        dissolveRate: 0.08, bubbleFade: 0.05, maxBatchRate: 0.06,
+        speedMin: 0.3, speedRange: 0.8, wind: 0.1, wobbleAmp: 0, wobbleFreq: 0,
+        vortexCount: 0, convergence: 0,
+        width: container.offsetWidth, height: container.offsetHeight,
+        materialize: 16,
+        ...opts,
+    };
+    const s = createEvaporateState(canvas, bg, opts.targetColor ?? '#4a9eff', mergedOpts);
+    const glowCanvas = document.createElement('canvas');
+    glowCanvas.width = s.W;
+    glowCanvas.height = s.H;
+    glowCanvas.className = 'dissolve-glow';
+    glowCanvas.style.cssText = canvas.style.cssText;
+    glowCanvas.style.filter = 'blur(1px)';
+    glowCanvas.style.zIndex = '3';
+    glowCanvas.style.imageRendering = 'auto';
+    container.appendChild(glowCanvas);
+    const glowCtx = glowCanvas.getContext('2d');
+    const glowFill = `rgb(${s.tr},${s.tg},${s.tb})`;
     let rafId = null;
+    let skipCount = 0;
+    s._glitchFrame = false;
     function tick() {
-        if (evaporateFrame(s)) {
-            rafId = null;
-            if (onComplete) onComplete();
+        skipCount++;
+        const threshold = 1 + ((Math.random() * 3) | 0);
+        s._glitchFrame = skipCount >= threshold;
+        if (s._glitchFrame) skipCount = 0;
+        const progress = s.total > 0 ? s.cursor / s.total : 0;
+        const ticks = Math.max(1, Math.ceil(4 * progress * progress));
+        for (let t = 0; t < ticks; t++) activateBatch(s);
+        s.d.fill(0);
+        drawSolidPixels(s);
+        processBubbles(s);
+        s.ctx.putImageData(s.imgData, 0, 0);
+        glowCtx.clearRect(0, 0, s.W, s.H);
+        if (s._accentRects && s._accentRects.length) {
+            glowCtx.fillStyle = glowFill;
+            for (let i = 0; i < s._accentRects.length; i += 4) {
+                glowCtx.fillRect(s._accentRects[i], s._accentRects[i + 1], s._accentRects[i + 2], s._accentRects[i + 3]);
+            }
+        }
+        s.frame++;
+        if (s.cursor >= s.total) {
+            canvas.remove();
+            glowCanvas.remove();
+            container._materializeCancel = null;
             return;
         }
         rafId = requestAnimationFrame(tick);
     }
+    container._materializeCancel = () => {
+        if (rafId) cancelAnimationFrame(rafId);
+        canvas.remove();
+        glowCanvas.remove();
+        container._materializeCancel = null;
+    };
     rafId = requestAnimationFrame(tick);
-    return () => { if (rafId) cancelAnimationFrame(rafId); };
+}
+
+export function materializeIn(container, opts = {}) {
+    if (container._materializeCancel) container._materializeCancel();
+    cancelExistingDissolve(container);
+    const canvas = createDissolveCanvas(container, {});
+    const bg = sampleCompositeBg(container);
+    const mergedOpts = {
+        origin: 'random', density: 1.0, renderScale: 2,
+        dissolveRate: 0.12, bubbleFade: 0.05, maxBatchRate: 0.08,
+        speedMin: 0.3, speedRange: 0.8, wind: 0.1, wobbleAmp: 0, wobbleFreq: 0,
+        vortexCount: 0, convergence: 0,
+        width: container.offsetWidth, height: container.offsetHeight,
+        materialize: 0,
+        ...opts,
+    };
+    const s = createEvaporateState(canvas, bg, opts.targetColor ?? '#4a9eff', mergedOpts);
+    const glowCanvas = document.createElement('canvas');
+    glowCanvas.width = s.W;
+    glowCanvas.height = s.H;
+    glowCanvas.className = 'dissolve-glow';
+    glowCanvas.style.cssText = canvas.style.cssText;
+    glowCanvas.style.filter = 'blur(1px)';
+    glowCanvas.style.zIndex = '3';
+    glowCanvas.style.imageRendering = 'auto';
+    container.appendChild(glowCanvas);
+    const glowCtx = glowCanvas.getContext('2d');
+    const field = createField(s.W, s.H, `rgb(${s.tr},${s.tg},${s.tb})`, `rgb(${s.r},${s.g},${s.b})`);
+    let rafId = null;
+    function tick() {
+        activateBatch(s);
+        const progress = s.total > 0 ? s.cursor / s.total : 0;
+        if (progress > 0.5) activateBatch(s);
+        if (progress > 0.8) activateBatch(s);
+        s.d.fill(0);
+        drawSolidPixels(s);
+        s.ctx.putImageData(s.imgData, 0, 0);
+        glowCtx.clearRect(0, 0, s.W, s.H);
+        renderField(s.ctx, glowCtx, field, progress);
+        if (s.cursor >= s.total) {
+            canvas.remove();
+            glowCanvas.remove();
+            container._materializeCancel = null;
+            return;
+        }
+        rafId = requestAnimationFrame(tick);
+    }
+    container._materializeCancel = () => {
+        if (rafId) cancelAnimationFrame(rafId);
+        canvas.remove();
+        glowCanvas.remove();
+        container._materializeCancel = null;
+    };
+    rafId = requestAnimationFrame(tick);
 }

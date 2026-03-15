@@ -2,6 +2,7 @@ import { html } from '../lib/html.js';
 import { useMemo } from 'preact/hooks';
 import { usePaletteContext } from '../palette/context.js';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
+import { useRegisterViewKeyboard } from '../components/app/view-keyboard-context.js';
 
 import { PageHeader } from '../components/PageHeader.js';
 import { ShortcutEditModal } from './shortcuts/modal.js';
@@ -11,9 +12,7 @@ import { ShortcutsList } from './shortcuts/list.js';
 export function ShortcutsView() {
     const { searchQuery } = usePaletteContext();
     const sc = useShortcuts(searchQuery);
-
-    ShortcutsView.handleKey = sc.handleKey;
-    ShortcutsView.isBlocking = sc.isBlocking;
+    useRegisterViewKeyboard('shortcuts', sc.handleKey, sc.isBlocking);
 
     const selected = sc.filtered[sc.selectedIndex];
     const commands = useMemo(() => [

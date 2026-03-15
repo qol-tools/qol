@@ -1,0 +1,98 @@
+@import "./theme-tokens.css";
+
+.meta-chip-row {
+    display: flex;
+    align-items: center;
+    gap: 0.28rem;
+    flex-wrap: wrap;
+}
+
+.meta-chip-label {
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    text-transform: none;
+}
+
+.meta-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.2rem 0.5rem;
+    background: var(--state-info-bg-faint);
+    border: 1px solid var(--state-info-border-soft);
+    border-radius: var(--radius-pill);
+    color: var(--state-info-text);
+    font-size: 0.72rem;
+    white-space: nowrap;
+}
+
+.segmented-control {
+    display: inline-grid;
+    gap: 1px;
+    background: rgba(var(--accent-rgb), 0.12);
+}
+
+.segmented-control__option {
+    border: 0;
+    background: transparent;
+    color: var(--text-muted);
+    border-radius: 0;
+    padding: 0.64rem 0.92rem;
+    font-size: 0.8rem;
+    font-family: inherit;
+    font-weight: 600;
+    line-height: 1.2;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color var(--transition), color var(--transition);
+    width: 100%;
+    text-align: center;
+}
+
+.segmented-control__option:hover {
+    background: rgba(var(--accent-rgb), 0.1);
+    color: var(--text-primary);
+}
+
+.segmented-control__option:hover:not(.is-active) {
+    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.3);
+}
+
+.segmented-control__option:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--accent);
+    background: rgba(var(--accent-rgb), 0.15);
+    color: var(--text-primary);
+}
+
+.segmented-control__option.is-active {
+    background: var(--accent);
+    color: var(--text-primary);
+}
+
+.input-adornment {
+    display: inline-grid;
+    grid-template-columns: auto auto;
+    align-items: stretch;
+    gap: 0;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.input-adornment__suffix {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.55rem;
+    padding: 0 0.42rem;
+    background: var(--layer-paper-08);
+    border-left: 1px solid var(--layer-paper-10);
+    border-radius: 0;
+    color: var(--text-default);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}

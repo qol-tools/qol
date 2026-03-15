@@ -157,7 +157,7 @@
 }
 
 @media (max-width: 620px) {
-.dev-content-frame {
+    .dev-content-frame {
         border-radius: var(--radius-xl);
     }
 }

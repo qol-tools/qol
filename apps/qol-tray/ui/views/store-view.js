@@ -1,13 +1,13 @@
 import { html } from '../lib/html.js';
 import { useRef, useMemo } from 'preact/hooks';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
+import { useRegisterViewKeyboard } from '../components/app/view-keyboard-context.js';
 import { useStoreController } from './store/use-controller.js';
 import { StoreLayout } from './store/layout.js';
 
 export function StoreView() {
     const ctrl = useStoreController();
-    StoreView.handleKey = ctrl.handleKey;
-    StoreView.isBlocking = () => false;
+    useRegisterViewKeyboard('store', ctrl.handleKey);
 
     const ctrlRef = useRef(ctrl);
     ctrlRef.current = ctrl;

@@ -29,12 +29,13 @@ export function HotkeysList({ hotkeys, plugins, selectedIndex, onSelect, onEdit 
 function HotkeyRow({ hk, plugin, index, selected, onClick }) {
     return html`
         <div class="hotkey-row table-list-row table-grid"
+             data-selected-surface=""
              data-status="${plugin?.status || 'installed'}"
              data-selected="${selected ? 'true' : 'false'}"
              data-index="${index}" onClick=${onClick}>
-            <span class="col-key table-cell"><kbd>${hk.key}</kbd></span>
-            <span class="col-plugin table-cell">${plugin?.name || hk.plugin_id}</span>
-            <span class="col-action table-cell">${getActionLabel(plugin, hk.action)}</span>
+            <span class="col-key table-cell" data-selected-text=""><kbd>${hk.key}</kbd></span>
+            <span class="col-plugin table-cell" data-selected-text="">${plugin?.name || hk.plugin_id}</span>
+            <span class="col-action table-cell" data-selected-text="">${getActionLabel(plugin, hk.action)}</span>
         </div>
     `;
 }

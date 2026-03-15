@@ -10,6 +10,7 @@ mod execution_contract_tests;
 pub mod loader;
 pub mod manager;
 pub mod manifest;
+pub(crate) mod paths;
 pub mod resolver;
 
 pub use config::PluginConfigManager;

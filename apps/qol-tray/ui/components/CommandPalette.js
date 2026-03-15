@@ -107,9 +107,9 @@ export function CommandPalette() {
         ${mode === 'action' && commands.length > 0 && html`
             <ul class="palette-dropdown">
                 ${commands.map((cmd, i) => html`
-                    <li key=${cmd.id} class="palette-item ${i === clampedIndex ? 'selected' : ''}"
+                    <li key=${cmd.id} class="palette-item ${i === clampedIndex ? 'selected' : ''}" data-selected-surface="" data-selected=${i === clampedIndex ? 'true' : 'false'} data-selected-surface-priority="10" data-scroll-follow-mode="nearest"
                         onMouseDown=${() => executeCommand(cmd)}>
-                        <span class="palette-item-label">${cmd.label}</span>
+                        <span class="palette-item-label" data-selected-text="">${cmd.label}</span>
                     </li>
                 `)}
             </ul>

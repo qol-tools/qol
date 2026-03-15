@@ -7,15 +7,6 @@ import { ShortcutsView } from '../../views/shortcuts-view.js';
 import { TaskRunnerView } from '../../views/task-runner-view.js';
 import { DevView } from '../../views/dev/view.js';
 
-export const VIEW_MAP = {
-    plugins: PluginsView,
-    store: StoreView,
-    hotkeys: HotkeysView,
-    shortcuts: ShortcutsView,
-    'task-runner': TaskRunnerView,
-    dev: DevView
-};
-
 export const VIEW_LABELS = {
     plugins: 'Plugins',
     store: 'Plugin Store',

@@ -1,6 +1,7 @@
 import { html } from '../../lib/html.js';
 import { useEffect, useRef, useMemo } from 'preact/hooks';
 import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
+import { useRegisterViewKeyboard } from '../../components/app/view-keyboard-context.js';
 
 import { useDevController } from './use-controller.js';
 import { DevLayout } from './components/DevLayout.js';
@@ -20,8 +21,7 @@ export function DevViewInner() {
     const ctrl = useDevController(containerRef);
 
     useBuildOverlaySync(ctrl);
-    DevViewInner.handleKey = ctrl.handleKey;
-    DevViewInner.isBlocking = () => false;
+    useRegisterViewKeyboard('dev', ctrl.handleKey);
 
     const ctrlRef = useRef(ctrl);
     ctrlRef.current = ctrl;

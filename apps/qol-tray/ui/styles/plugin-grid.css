@@ -1,6 +1,5 @@
 :root {
     --card-hover-scale: 1.02;
-    --card-active-scale: 1.05;
     --card-hover-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
     --card-active-shadow: 0 4px 12px var(--accent-glow);
     --grid-card-min-width: var(--size-grid-card-min);
@@ -20,7 +19,7 @@
     position: relative;
     border: var(--border-w-1) solid var(--border-subtle);
     border-radius: var(--radius-lg);
-    overflow: hidden;
+    overflow: visible;
     transition: transform var(--transition), border-color var(--transition), box-shadow var(--transition);
     cursor: pointer;
 }
@@ -38,7 +37,6 @@
 
 .grid-cards.grid-cards--zoom .plugin-card.selected,
 .grid-cards.grid-cards--zoom .plugin-card.selected:hover {
-    transform: scale(var(--card-active-scale));
     border-color: var(--accent);
     box-shadow: var(--card-active-shadow);
 }

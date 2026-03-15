@@ -71,6 +71,7 @@ walkdir = "2"
 qol-runtime = { git = "https://github.com/qol-tools/qol-runtime" }
 qol-plugin-api = { git = "https://github.com/qol-tools/qol-plugin-api", default-features = false, features = ["app-icons"] }
 png = "0.17"
+qol-config = { path = "../qol-config" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"

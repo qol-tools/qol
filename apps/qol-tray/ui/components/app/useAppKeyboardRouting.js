@@ -1,6 +1,9 @@
 import { useCallback } from 'preact/hooks';
 import { useKeyboard } from '../../hooks/useKeyboard.js';
-import { VIEW_MAP } from './views.js';
+import { usePluginConfigContext } from '../../views/plugin-config/context.js';
+import { useViewKeyboardContext } from './view-keyboard-context.js';
+
+const PLUGIN_CONFIG_FIELD = '[data-plugin-config-field-id]';
 
 export function useAppKeyboardRouting({
     activePluginId,
@@ -10,6 +13,8 @@ export function useAppKeyboardRouting({
     viewOrder,
     palette
 }) {
+    const pluginConfig = usePluginConfigContext();
+    const { getViewKeyboard } = useViewKeyboardContext();
     const cycleView = useCallback((event) => {
         event.preventDefault();
         const idx = viewOrder.indexOf(activeViewId);
@@ -20,45 +25,484 @@ export function useAppKeyboardRouting({
     }, [activeViewId, switchView, viewOrder]);
 
     useKeyboard(useCallback((event) => {
-        const view = VIEW_MAP[activeViewId];
+        const viewKeyboard = getViewKeyboard(activeViewId);
+        if (handlePaletteToggle(event, palette, activePluginId, viewKeyboard)) return;
+        if (palette.active && event.key !== 'Tab') return;
+        if (activePluginId) return delegateToPluginConfig(event, pluginConfig, closePluginConfig);
+        routeToView(event, viewKeyboard, cycleView);
+    }, [activePluginId, activeViewId, closePluginConfig, cycleView, getViewKeyboard, palette, pluginConfig]));
+}
 
-        if ((event.ctrlKey || event.metaKey) && event.key === 'e') {
+function handlePaletteToggle(event, palette, activePluginId, viewKeyboard) {
+    if (!(event.ctrlKey || event.metaKey) || event.key !== 'e') return false;
+    event.preventDefault();
+    if (!palette.active && !activePluginId && !viewKeyboard?.isBlocking?.()) palette.activate();
+    return true;
+}
+
+function delegateToPluginConfig(event, pluginConfig, closePluginConfig) {
+    const detail = document.querySelector('.plugin-config-detail');
+    if (event.key === 'Escape') {
+        event.preventDefault();
+        if (blurPluginConfigFocus(detail)) return;
+        closePluginConfig();
+        return;
+    }
+    if (!pluginConfig || pluginConfig.loading || pluginConfig.sections.length === 0) return;
+    if (event.key === 'Tab') {
+        event.preventDefault();
+        blurPluginConfigFocus(detail);
+        pluginConfig.navigate(event.shiftKey ? -1 : 1);
+        return;
+    }
+    if (!detail || pluginConfig.visibleFields.length === 0) return;
+    const selectedField = pluginConfig.selectedField;
+    if (!selectedField) return;
+    if (selectedField.kind === 'string_array') {
+        if (handleStringArraySubmode(event, detail, selectedField.id)) return;
+    }
+    if (isPluginConfigEditFocus(detail, document.activeElement)) return;
+    if (handlePluginConfigDirectEdit(event, detail, selectedField)) return;
+    if (handlePluginConfigFieldAction(event, detail, pluginConfig, selectedField)) return;
+    handlePluginConfigMove(event, detail, pluginConfig);
+}
+
+function routeToView(event, viewKeyboard, cycleView) {
+    if (viewKeyboard?.isBlocking?.()) {
+        if (viewKeyboard.handleKey) viewKeyboard.handleKey(event);
+        return;
+    }
+    if (event.key === 'Tab') {
+        cycleView(event);
+        return;
+    }
+    if (viewKeyboard?.handleKey) viewKeyboard.handleKey(event);
+}
+
+function handlePluginConfigDirectEdit(event, detail, field) {
+    if (field.kind === 'string') return startStringFieldEdit(event, detail, field.id);
+    if (field.kind === 'number') return startNumberFieldEdit(event, detail, field.id);
+    return false;
+}
+
+function handlePluginConfigFieldAction(event, detail, pluginConfig, field) {
+    if (field.kind === 'boolean') return handleBooleanFieldAction(event, pluginConfig, field);
+    if (field.kind === 'select') return handleSelectFieldAction(event, detail, pluginConfig, field);
+    if (field.kind === 'string_array') return handleCompositeFieldAction(event, detail, field.id);
+    if (field.kind === 'string') return handleTextFieldActivation(event, detail, field.id);
+    if (field.kind === 'number') return handleNumberFieldActivation(event, detail, field.id);
+    return false;
+}
+
+function isActuallyFocusable(el) {
+    if (!(el instanceof HTMLElement)) return false;
+    if (el.matches(':disabled')) return false;
+    if (el.getAttribute('aria-hidden') === 'true') return false;
+    if (el.tabIndex < 0) return false;
+    if (el.offsetParent === null && getComputedStyle(el).position !== 'fixed') return false;
+    return true;
+}
+
+function blurPluginConfigFocus(detail) {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement)) return false;
+    if (!detail?.contains(active)) return false;
+    if (active === document.body) return false;
+    active.blur();
+    return true;
+}
+
+function isPluginConfigEditFocus(detail, activeElement) {
+    if (!(activeElement instanceof HTMLElement)) return false;
+    if (!detail.contains(activeElement)) return false;
+    if (activeElement.matches('.text-input, .number-edit, textarea')) return true;
+    if (activeElement.matches('.btn-add, .btn-remove')) return true;
+    if (activeElement.closest('.custom-select-list')) return true;
+    return false;
+}
+
+function handleBooleanFieldAction(event, pluginConfig, field) {
+    if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        updatePluginConfigField(pluginConfig, field, false);
+        return true;
+    }
+    if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        updatePluginConfigField(pluginConfig, field, true);
+        return true;
+    }
+    if (event.key !== 'Enter' && event.key !== ' ') return false;
+    event.preventDefault();
+    updatePluginConfigField(pluginConfig, field, !pluginConfig.getFieldValue(field));
+    return true;
+}
+
+function handleSelectFieldAction(event, detail, pluginConfig, field) {
+    if (isVariantSelectorField(detail, field.id)) {
+        if (event.key === 'ArrowLeft') {
             event.preventDefault();
-            if (!palette.active && !activePluginId && !view?.isBlocking?.()) palette.activate();
-            return;
+            cycleSelectField(pluginConfig, field, -1);
+            return true;
         }
+        if (event.key === 'ArrowRight') {
+            event.preventDefault();
+            cycleSelectField(pluginConfig, field, 1);
+            return true;
+        }
+    }
+    if (event.key !== 'Enter' && event.key !== ' ') return false;
+    const trigger = queryFieldElement(detail, field.id)?.querySelector('.custom-select-trigger');
+    if (!isActuallyFocusable(trigger)) return false;
+    event.preventDefault();
+    trigger.click();
+    return true;
+}
 
-        if (palette.active && event.key !== 'Tab') {
-            return;
-        }
+function handleCompositeFieldAction(event, detail, fieldId) {
+    if (event.key !== 'Enter' && event.key !== 'ArrowRight' && event.key !== ' ') return false;
+    event.preventDefault();
+    const fieldElement = queryFieldElement(detail, fieldId);
+    const target = firstStringArrayTarget(fieldElement);
+    if (!isActuallyFocusable(target)) return true;
+    target.focus();
+    return true;
+}
 
-        if (activePluginId) {
-            if (event.key === 'Escape') {
-                event.preventDefault();
-                closePluginConfig();
-                return;
-            }
-            if (event.key === 'Tab') {
-                closePluginConfig();
-                cycleView(event);
-            }
-            return;
-        }
+function handleTextFieldActivation(event, detail, fieldId) {
+    if (event.key !== 'Enter') return false;
+    event.preventDefault();
+    const input = queryFieldElement(detail, fieldId)?.querySelector('.text-input');
+    if (!isActuallyFocusable(input)) return true;
+    input.focus();
+    input.select();
+    return true;
+}
 
-        if (view?.isBlocking?.()) {
-            if (view.handleKey) {
-                view.handleKey(event);
-            }
-            return;
-        }
+function handleNumberFieldActivation(event, detail, fieldId) {
+    if (event.key !== 'Enter') return false;
+    event.preventDefault();
+    const display = queryFieldElement(detail, fieldId)?.querySelector('.number-display');
+    if (!isActuallyFocusable(display)) return true;
+    display.focus();
+    dispatchFieldKey(display, 'Enter');
+    return true;
+}
 
-        if (event.key === 'Tab') {
-            cycleView(event);
-            return;
-        }
+function handlePluginConfigMove(event, detail, pluginConfig) {
+    const direction = keyToDirection(event.key);
+    if (!direction) return false;
+    event.preventDefault();
+    blurPluginConfigFocus(detail);
+    const nextFieldId = nextPluginConfigFieldId(detail, pluginConfig.selectedFieldId, direction);
+    if (!nextFieldId) return true;
+    pluginConfig.setSelectedFieldId(nextFieldId);
+    return true;
+}
 
-        if (view?.handleKey) {
-            view.handleKey(event);
+function keyToDirection(key) {
+    if (key === 'ArrowUp') return 'up';
+    if (key === 'ArrowDown') return 'down';
+    if (key === 'ArrowLeft') return 'left';
+    if (key === 'ArrowRight') return 'right';
+    return null;
+}
+
+function nextPluginConfigFieldId(detail, selectedFieldId, direction) {
+    const fields = getPluginConfigFieldElements(detail);
+    if (fields.length === 0) return null;
+
+    const rows = pluginConfigRows(fields);
+    if (rows.length === 0) return fields[0]?.dataset.pluginConfigFieldId || null;
+
+    const currentFieldId = selectedFieldId || fields[0]?.dataset.pluginConfigFieldId;
+    const rowIndex = rows.findIndex(row => row.some(field => field.id === currentFieldId));
+    if (rowIndex < 0) return fields[0]?.dataset.pluginConfigFieldId || null;
+
+    const columnIndex = rows[rowIndex].findIndex(field => field.id === currentFieldId);
+    if (columnIndex < 0) return rows[rowIndex][0]?.id || null;
+
+    if (direction === 'left') return rows[rowIndex][Math.max(0, columnIndex - 1)].id;
+    if (direction === 'right') return rows[rowIndex][Math.min(rows[rowIndex].length - 1, columnIndex + 1)].id;
+    if (direction === 'up') {
+        const previousRow = rows[rowIndex - 1];
+        if (!previousRow) return rows[rowIndex][columnIndex].id;
+        return previousRow[Math.min(columnIndex, previousRow.length - 1)].id;
+    }
+
+    const nextRow = rows[rowIndex + 1];
+    if (!nextRow) return rows[rowIndex][columnIndex].id;
+    return nextRow[Math.min(columnIndex, nextRow.length - 1)].id;
+}
+
+function getPluginConfigFieldElements(detail) {
+    return Array.from(detail.querySelectorAll(PLUGIN_CONFIG_FIELD))
+        .filter(isActuallyFocusableField)
+        .sort(comparePluginConfigFields);
+}
+
+function isActuallyFocusableField(field) {
+    if (!(field instanceof HTMLElement)) return false;
+    if (field.offsetParent === null && getComputedStyle(field).position !== 'fixed') return false;
+    return true;
+}
+
+function comparePluginConfigFields(left, right) {
+    const leftRect = left.getBoundingClientRect();
+    const rightRect = right.getBoundingClientRect();
+    const topDelta = Math.abs(leftRect.top - rightRect.top);
+    if (topDelta > 6) return leftRect.top - rightRect.top;
+    return leftRect.left - rightRect.left;
+}
+
+function pluginConfigRows(fields) {
+    const rows = [];
+
+    for (const element of fields) {
+        const id = element.dataset.pluginConfigFieldId;
+        if (!id) continue;
+        const rect = element.getBoundingClientRect();
+        const row = rows[rows.length - 1];
+        if (!row) {
+            rows.push([{ id, top: rect.top, left: rect.left }]);
+            continue;
         }
-    }, [activePluginId, activeViewId, closePluginConfig, cycleView, palette]));
+        if (Math.abs(row[0].top - rect.top) > 6) {
+            rows.push([{ id, top: rect.top, left: rect.left }]);
+            continue;
+        }
+        row.push({ id, top: rect.top, left: rect.left });
+    }
+
+    return rows.map(row => row.sort((left, right) => left.left - right.left));
+}
+
+function startStringFieldEdit(event, detail, fieldId) {
+    if (!isStringEditKey(event)) return false;
+    event.preventDefault();
+    const input = queryFieldElement(detail, fieldId)?.querySelector('.text-input');
+    if (!isActuallyFocusable(input)) return true;
+    focusTextInput(input, event.key);
+    return true;
+}
+
+function startNumberFieldEdit(event, detail, fieldId) {
+    if (!isNumberEditKey(event)) return false;
+    event.preventDefault();
+    const display = queryFieldElement(detail, fieldId)?.querySelector('.number-display');
+    if (!isActuallyFocusable(display)) return true;
+    display.focus();
+    dispatchFieldKey(display, event.key);
+    return true;
+}
+
+function handleStringArraySubmode(event, detail, fieldId) {
+    const fieldElement = queryFieldElement(detail, fieldId);
+    if (!(fieldElement instanceof HTMLElement)) return false;
+
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement)) return false;
+    if (!fieldElement.contains(active)) return false;
+
+    if (event.key === 'Escape') {
+        event.preventDefault();
+        active.blur();
+        return true;
+    }
+
+    if ((event.key === 'Delete' || event.key === 'Backspace') && active.matches('.btn-remove')) {
+        event.preventDefault();
+        focusAfterStringArrayRemoval(fieldElement, active);
+        active.click();
+        return true;
+    }
+
+    if (shouldKeepHorizontalCaret(event, active)) return false;
+
+    const direction = keyToDirection(event.key);
+    if (!direction) return false;
+    event.preventDefault();
+    focusStringArrayRelative(fieldElement, active, direction);
+    return true;
+
+}
+
+function isStringEditKey(event) {
+    if (event.ctrlKey || event.metaKey || event.altKey) return false;
+    if (event.key === 'Backspace') return true;
+    return event.key.length === 1;
+}
+
+function isNumberEditKey(event) {
+    if (event.ctrlKey || event.metaKey || event.altKey) return false;
+    if (event.key === 'Backspace') return true;
+    return /^[0-9.\-]$/.test(event.key);
+}
+
+function firstStringArrayTarget(fieldElement) {
+    if (!(fieldElement instanceof HTMLElement)) return null;
+
+    const input = fieldElement.querySelector('.add-row .text-input');
+    if (isActuallyFocusable(input)) return input;
+
+    const removeButton = fieldElement.querySelector('.btn-remove');
+    if (isActuallyFocusable(removeButton)) return removeButton;
+
+    const addButton = fieldElement.querySelector('.btn-add');
+    if (isActuallyFocusable(addButton)) return addButton;
+
+    return null;
+}
+
+function focusStringArrayRelative(fieldElement, active, direction) {
+    const rows = focusGridRows(stringArrayStops(fieldElement));
+    const target = nextFocusGridElement(rows, active, direction);
+    if (!(target instanceof HTMLElement)) return;
+    target.focus();
+}
+
+function stringArrayStops(fieldElement) {
+    if (!(fieldElement instanceof HTMLElement)) return [];
+
+    return Array.from(fieldElement.querySelectorAll('.btn-remove, .add-row .text-input, .btn-add'))
+        .filter(isActuallyFocusable);
+}
+
+function shouldKeepHorizontalCaret(event, active) {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return false;
+    if (!(active instanceof HTMLInputElement) && !(active instanceof HTMLTextAreaElement)) return false;
+    if (active.readOnly || active.disabled) return false;
+    if (active.selectionStart === null || active.selectionEnd === null) return false;
+    if (active.selectionStart !== active.selectionEnd) return true;
+    if (event.key === 'ArrowLeft') return active.selectionStart > 0;
+    return active.selectionEnd < active.value.length;
+}
+
+function focusGridRows(elements) {
+    const positioned = elements
+        .map(element => {
+            const rect = element.getBoundingClientRect();
+            return {
+                element,
+                top: rect.top,
+                left: rect.left,
+            };
+        })
+        .sort((left, right) => {
+            const topDelta = Math.abs(left.top - right.top);
+            if (topDelta > 6) return left.top - right.top;
+            return left.left - right.left;
+        });
+
+    const rows = [];
+    for (const item of positioned) {
+        const row = rows[rows.length - 1];
+        if (!row) {
+            rows.push([item]);
+            continue;
+        }
+        if (Math.abs(row[0].top - item.top) > 6) {
+            rows.push([item]);
+            continue;
+        }
+        row.push(item);
+    }
+
+    return rows;
+}
+
+function nextFocusGridElement(rows, active, direction) {
+    if (rows.length === 0) return null;
+
+    const position = findFocusGridPosition(rows, active);
+    if (!position) return rows[0][0]?.element || null;
+
+    const currentRow = rows[position.row];
+    if (direction === 'left') return currentRow[Math.max(0, position.column - 1)]?.element || null;
+    if (direction === 'right') return currentRow[Math.min(currentRow.length - 1, position.column + 1)]?.element || null;
+    if (direction === 'up') {
+        const previousRow = rows[position.row - 1];
+        if (!previousRow) return currentRow[position.column]?.element || null;
+        return previousRow[Math.min(position.column, previousRow.length - 1)]?.element || null;
+    }
+    const nextRow = rows[position.row + 1];
+    if (!nextRow) return currentRow[position.column]?.element || null;
+    return nextRow[Math.min(position.column, nextRow.length - 1)]?.element || null;
+}
+
+function findFocusGridPosition(rows, active) {
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+        const columnIndex = rows[rowIndex].findIndex(item => item.element === active);
+        if (columnIndex < 0) continue;
+        return {
+            row: rowIndex,
+            column: columnIndex,
+        };
+    }
+    return null;
+}
+
+function focusAfterStringArrayRemoval(fieldElement, active) {
+    const stops = stringArrayStops(fieldElement);
+    const currentIndex = stops.indexOf(active);
+    if (currentIndex < 0) return;
+
+    requestAnimationFrame(() => {
+        const nextStops = stringArrayStops(fieldElement);
+        if (nextStops.length === 0) return;
+
+        const nextIndex = clampIndex(currentIndex, nextStops.length);
+        nextStops[nextIndex]?.focus();
+    });
+}
+
+function clampIndex(index, total) {
+    if (total <= 0) return 0;
+    if (index < 0) return 0;
+    if (index >= total) return total - 1;
+    return index;
+}
+
+function focusTextInput(input, key) {
+    input.focus();
+    const nextValue = key === 'Backspace' ? '' : key;
+    input.value = nextValue;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    const caret = nextValue.length;
+    input.setSelectionRange(caret, caret);
+}
+
+function dispatchFieldKey(target, key) {
+    target.dispatchEvent(new KeyboardEvent('keydown', {
+        key,
+        bubbles: true,
+        cancelable: true,
+    }));
+}
+
+function updatePluginConfigField(pluginConfig, field, value) {
+    pluginConfig.setFieldValue(field, value);
+    pluginConfig.bumpRender();
+    pluginConfig.save();
+}
+
+function cycleSelectField(pluginConfig, field, delta) {
+    const options = field.options || [];
+    if (options.length === 0) return;
+    const currentValue = pluginConfig.getFieldValue(field);
+    const currentIndex = options.indexOf(currentValue);
+    const startIndex = currentIndex < 0 ? 0 : currentIndex;
+    const nextIndex = (startIndex + delta + options.length) % options.length;
+    updatePluginConfigField(pluginConfig, field, options[nextIndex]);
+}
+
+function isVariantSelectorField(detail, fieldId) {
+    const fieldElement = queryFieldElement(detail, fieldId);
+    if (!(fieldElement instanceof HTMLElement)) return false;
+    return fieldElement.classList.contains('variant-selector');
+}
+
+function queryFieldElement(detail, fieldId) {
+    if (!fieldId) return null;
+    return detail.querySelector(`[data-plugin-config-field-id="${CSS.escape(fieldId)}"]`);
 }
