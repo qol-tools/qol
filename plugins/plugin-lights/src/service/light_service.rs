@@ -20,6 +20,10 @@ impl<B: LightBackend> LightService<B> {
         self.backend.list_targets()
     }
 
+    pub fn backend(&self) -> &B {
+        &self.backend
+    }
+
     pub fn apply_command(&mut self, target: &LightTarget, command: &LightCommand) -> Result<()> {
         validate_command(command)?;
         self.backend.apply_command(target, command)

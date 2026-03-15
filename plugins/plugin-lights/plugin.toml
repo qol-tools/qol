@@ -25,6 +25,7 @@ preset-6 = ["preset-6"]
 preset-7 = ["preset-7"]
 preset-8 = ["preset-8"]
 settings = ["settings"]
+pair = ["pair"]
 
 [daemon]
 enabled = true
@@ -50,6 +51,7 @@ items = [
     { type = "action", id = "preset-7", label = "Preset 7", action = "run" },
     { type = "action", id = "preset-8", label = "Preset 8", action = "run" },
     { type = "action", id = "settings", label = "Settings", action = "settings" },
+    { type = "action", id = "pair", label = "Pair Device", action = "run" },
 ]
 
 [[dependencies.binaries]]

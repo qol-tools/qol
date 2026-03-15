@@ -42,6 +42,10 @@ impl ZigbeeBackend {
     pub fn network_key(&self) -> &[u8; 16] {
         &self.resolved_network_key
     }
+
+    pub fn permit_join(&self, duration_secs: u8) -> Result<()> {
+        self.controller.permit_join(duration_secs)
+    }
 }
 
 impl LightBackend for ZigbeeBackend {

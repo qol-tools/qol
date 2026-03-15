@@ -70,6 +70,12 @@ impl DaemonState {
         if action == actions::COOLER_MAIN {
             return self.adjust_mirek(-(MIREK_STEP as i32));
         }
+        if action == actions::PAIR {
+            return match self.service.backend().permit_join(60) {
+                Ok(()) => DaemonOutcome::Handled,
+                Err(error) => DaemonOutcome::Error(error.to_string()),
+            };
+        }
         if let Some(preset) = self.config.preset_for_action(action) {
             return self.apply_preset(&preset);
         }
