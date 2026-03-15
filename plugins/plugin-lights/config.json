@@ -24,6 +24,7 @@
       "online": true
     }
   },
+  "live_color_hex": "ffffff",
   "presets": {
     "preset_1": {
       "enabled": false,

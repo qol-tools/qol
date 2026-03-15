@@ -232,22 +232,16 @@ fn rgb_to_hue_sat(r: u8, g: u8, b: u8) -> (u8, u8) {
     }
 
     let hue_degrees = if (max - rf).abs() < f64::EPSILON {
-        60.0 * (((gf - bf) / delta) % 6.0)
+        60.0 * ((gf - bf) / delta) + if gf < bf { 360.0 } else { 0.0 }
     } else if (max - gf).abs() < f64::EPSILON {
-        60.0 * (((bf - rf) / delta) + 2.0)
+        60.0 * ((bf - rf) / delta) + 120.0
     } else {
-        60.0 * (((rf - gf) / delta) + 4.0)
-    };
-
-    let hue_normalized = if hue_degrees < 0.0 {
-        hue_degrees + 360.0
-    } else {
-        hue_degrees
+        60.0 * ((rf - gf) / delta) + 240.0
     };
 
     let saturation = delta / max;
 
-    let hue_zcl = (hue_normalized * 254.0 / 360.0) as u8;
+    let hue_zcl = (hue_degrees * 254.0 / 360.0) as u8;
     let sat_zcl = (saturation * 254.0) as u8;
 
     (hue_zcl, sat_zcl)
