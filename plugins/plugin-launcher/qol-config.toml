@@ -1,0 +1,8 @@
+schema_version = 1
+title = "Launcher"
+description = "Universal search with action modifiers."
+
+[section.launcher]
+label = "Launcher"
+description = "Launcher currently exposes no plugin-editable settings in qol-tray."
+actions = ["open"]
