@@ -1,0 +1,8 @@
+schema_version = 1
+title = "PointZerver"
+description = "Control your PC from mobile devices."
+
+[section.service]
+label = "Service"
+description = "PointZerver currently exposes no plugin-editable settings in qol-tray."
+actions = ["settings"]
