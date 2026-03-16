@@ -1,0 +1,83 @@
+schema_version = 1
+title = "OS Themes"
+description = "Cursor growth behavior for the shake-to-grow effect."
+
+[section.thresholds]
+label = "Thresholds"
+description = "Motion thresholds that determine when the cursor grows and regrows."
+actions = ["run"]
+
+[field.velocity_threshold]
+type = "number"
+label = "Grow Velocity"
+section = "thresholds"
+default = 4500.0
+min = 100.0
+step = 100.0
+
+[field.shakiness_threshold]
+type = "number"
+label = "Grow Shakiness"
+section = "thresholds"
+default = 75.0
+min = 1.0
+step = 1.0
+
+[field.regrow_velocity_threshold]
+type = "number"
+label = "Regrow Velocity"
+section = "thresholds"
+default = 1500.0
+min = 100.0
+step = 100.0
+
+[field.regrow_shakiness_threshold]
+type = "number"
+label = "Regrow Shakiness"
+section = "thresholds"
+default = 3.0
+min = 0.5
+step = 0.5
+
+[field.post_trigger_threshold]
+type = "number"
+label = "Post Trigger"
+section = "thresholds"
+default = 1000.0
+min = 100.0
+step = 50.0
+
+[section.animation]
+label = "Animation"
+description = "Size and recovery behavior after the cursor grows."
+actions = ["run"]
+
+[field.scale_factor]
+type = "number"
+label = "Scale Factor"
+section = "animation"
+default = 4
+min = 1
+step = 1
+
+[field.calm_duration_ms]
+type = "number"
+label = "Calm Duration"
+section = "animation"
+default = 650
+min = 50
+step = 25
+
+[field.restore_steps]
+type = "number"
+label = "Restore Steps"
+section = "animation"
+default = 18
+min = 1
+step = 1
+
+[field.enable_shape_preserving_growth]
+type = "boolean"
+label = "Shape Preserving Growth"
+section = "animation"
+default = false
