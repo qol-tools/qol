@@ -41,6 +41,11 @@ impl MonitorTracker {
         }
     }
 
+    /// Returns just the ActiveMonitor, dropping the index.
+    pub fn snapshot_monitor(&self) -> Option<ActiveMonitor> {
+        self.snapshot().map(|(monitor, _)| monitor)
+    }
+
     /// Returns (ActiveMonitor, active_monitor_idx) from one GET_STATE call.
     pub fn snapshot(&self) -> Option<(ActiveMonitor, Option<usize>)> {
         let state = self.client.get_state()?;
