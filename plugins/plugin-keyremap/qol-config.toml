@@ -1,0 +1,75 @@
+schema_version = 1
+title = "Key Remap"
+description = "Remap keyboard, mouse, and scroll inputs without relying on per-plugin settings UIs."
+
+[section.general]
+label = "General"
+description = "Global enablement and app-level exclusions."
+
+[field.enabled]
+type = "boolean"
+label = "Enabled"
+section = "general"
+default = true
+
+[field.excluded_apps]
+type = "string_array"
+label = "Excluded Apps"
+description = "Bundle IDs where non-global remaps should be ignored."
+section = "general"
+placeholder = "com.example.app"
+default = [
+  "net.kovidgoyal.kitty",
+  "com.apple.Terminal",
+  "com.googlecode.iterm2",
+  "com.jetbrains.intellij",
+  "com.jetbrains.goland",
+  "com.jetbrains.pycharm",
+  "com.jetbrains.rider",
+  "com.jetbrains.WebStorm",
+  "com.jetbrains.datagrip",
+  "com.jetbrains.clion",
+  "com.jetbrains.rustrover",
+  "com.microsoft.VSCode",
+  "com.todesktop.230313mzl4w4u92",
+]
+
+[section.char_rules]
+label = "Character Rules"
+description = "Translate modifier combinations directly into emitted characters."
+
+[field.char_rules]
+type = "object_array"
+label = "Character Rules"
+section = "char_rules"
+default = []
+
+[section.key_rules]
+label = "Key Rules"
+description = "Translate keys or key groups into other modifier or key combinations."
+
+[field.key_rules]
+type = "object_array"
+label = "Key Rules"
+section = "key_rules"
+default = []
+
+[section.mouse_rules]
+label = "Mouse Rules"
+description = "Apply modifier remaps to mouse button clicks."
+
+[field.mouse_rules]
+type = "object_array"
+label = "Mouse Rules"
+section = "mouse_rules"
+default = []
+
+[section.scroll_rules]
+label = "Scroll Rules"
+description = "Apply modifier remaps to scroll gestures."
+
+[field.scroll_rules]
+type = "object_array"
+label = "Scroll Rules"
+section = "scroll_rules"
+default = []
