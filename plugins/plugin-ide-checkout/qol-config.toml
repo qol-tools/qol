@@ -1,0 +1,47 @@
+schema_version = 1
+title = "Task Runner"
+description = "Application launchers, script definitions, and checkout temp storage."
+
+[section.general]
+label = "General"
+description = "Shared runtime defaults for checkout and execution."
+
+[field.temp_dir]
+type = "string"
+config_key = "tempDir"
+label = "Temp Directory"
+section = "general"
+default = "/tmp/task-runner"
+
+[section.apps]
+label = "Applications"
+description = "Named applications that can open checked-out paths."
+
+[field.apps]
+type = "object_map"
+config_key = "apps"
+key_label = "App ID"
+label = "Applications"
+section = "apps"
+default = {}
+
+[field.apps.entry_fields]
+name = "string"
+paths = "string_array"
+
+[section.scripts]
+label = "Scripts"
+description = "Named scripts that can be executed through the task runner."
+
+[field.scripts]
+type = "object_map"
+config_key = "scripts"
+key_label = "Script ID"
+label = "Scripts"
+section = "scripts"
+default = {}
+
+[field.scripts.entry_fields]
+command = "string"
+cwd = "string"
+timeout = "number"
