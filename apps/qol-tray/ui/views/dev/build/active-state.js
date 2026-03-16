@@ -7,7 +7,6 @@ export function getActivePluginBuildState(state, plugin, mockTesting) {
     if (!progress) return null;
     const status = progress.status || 'building';
     if (!isVisibleStatus(status)) return null;
-    if (!mockTesting && (!plugin.has_cargo || !plugin.needs_rebuild)) return null;
     return formatActiveState(status, progress);
 }
 
