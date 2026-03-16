@@ -1,8 +1,9 @@
 import {
     createEvaporateState, activateBatch, drawSolidPixels, processBubbles,
-    evaporateFrame, runDissolve,
+    evaporateFrame, runDissolve, computeCanvasSize,
     cancelExistingDissolve, createDissolveCanvas, sampleCompositeBg,
 } from './dissolve-engine.js';
+import { resolveColor } from './canvas.js';
 import { createField, renderField } from './glitch-squares.js';
 
 export { createEvaporateState, evaporateFrame, runDissolve };
@@ -86,7 +87,7 @@ export function materializeInScatter(container, opts = {}) {
         const progress = s.total > 0 ? s.cursor / s.total : 0;
         const ticks = Math.max(1, Math.ceil(4 * progress * progress));
         for (let t = 0; t < ticks; t++) activateBatch(s);
-        s.d.fill(0);
+        s.d32.fill(0);
         drawSolidPixels(s);
         processBubbles(s);
         s.ctx.putImageData(s.imgData, 0, 0);
@@ -147,7 +148,7 @@ export function materializeIn(container, opts = {}) {
         const progress = s.total > 0 ? s.cursor / s.total : 0;
         if (progress > 0.5) activateBatch(s);
         if (progress > 0.8) activateBatch(s);
-        s.d.fill(0);
+        s.d32.fill(0);
         drawSolidPixels(s);
         s.ctx.putImageData(s.imgData, 0, 0);
         glowCtx.clearRect(0, 0, s.W, s.H);

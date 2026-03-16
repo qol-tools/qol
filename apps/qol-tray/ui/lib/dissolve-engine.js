@@ -1,4 +1,15 @@
-import { resolveColor } from './canvas.js';
+let resolveColor;
+if (typeof document !== 'undefined') {
+    resolveColor = (cssValue) => {
+        const el = document.createElement('div');
+        el.style.cssText = `display:none;color:${cssValue}`;
+        document.body.appendChild(el);
+        const rgb = getComputedStyle(el).color;
+        document.body.removeChild(el);
+        const m = rgb.match(/\d+/g);
+        return m ? [+m[0], +m[1], +m[2]] : [26, 30, 38];
+    };
+}
 
 const DISSOLVE_RATE = 0.14;
 const BUBBLE_FADE = 0.05;
@@ -20,6 +31,10 @@ const SPARK_THRESHOLD = (SPARK_RATIO * 4294967296) >>> 0;
 const SIN_TABLE_SIZE = 4096;
 const SIN_TABLE = new Float32Array(SIN_TABLE_SIZE);
 for (let i = 0; i < SIN_TABLE_SIZE; i++) SIN_TABLE[i] = Math.sin((i / SIN_TABLE_SIZE) * Math.PI * 2);
+
+function packRGBA(r, g, b, a) {
+    return (a << 24) | (b << 16) | (g << 8) | r;
+}
 
 function fastSin(x) {
     const idx = ((x % (Math.PI * 2) + Math.PI * 2) / (Math.PI * 2) * SIN_TABLE_SIZE) & (SIN_TABLE_SIZE - 1);
@@ -65,31 +80,40 @@ function spatialShuffle(total, W, tileSize = TILE_SIZE, origin = 'random') {
     return indices;
 }
 
-export function createEvaporateState(canvas, cssColor, targetCssColor, opts = {}) {
+export function computeCanvasSize(opts = {}) {
     const bleed = opts.bleed ?? 0;
     const edgeFade = opts.edgeFade ?? 0;
-    const sourceW = opts.width ?? window.innerWidth;
-    const sourceH = opts.height ?? window.innerHeight;
+    const sourceW = opts.width ?? (typeof self !== 'undefined' && self.innerWidth || 1920);
+    const sourceH = opts.height ?? (typeof self !== 'undefined' && self.innerHeight || 1080);
     const requestedScale = opts.renderScale ?? RENDER_SCALE;
     const totalPx = ((sourceW + bleed * 2) / requestedScale) * ((sourceH + bleed * 2) / requestedScale);
     const scale = totalPx > MAX_PIXELS
         ? Math.ceil(Math.sqrt((sourceW + bleed * 2) * (sourceH + bleed * 2) / MAX_PIXELS))
         : requestedScale;
-    const W = Math.ceil((sourceW + bleed * 2) / scale);
-    const H = Math.ceil((sourceH + bleed * 2) / scale);
+    return {
+        W: Math.ceil((sourceW + bleed * 2) / scale),
+        H: Math.ceil((sourceH + bleed * 2) / scale),
+        scale,
+        edgeFade,
+    };
+}
+
+export function createEvaporateState(canvas, cssColor, targetCssColor, opts = {}) {
+    const { W, H, edgeFade, scale } = computeCanvasSize(opts);
     canvas.width = W;
     canvas.height = H;
     const ctx = canvas.getContext('2d');
-    const [r, g, b] = resolveColor(cssColor);
-    const [tr, tg, tb] = targetCssColor ? resolveColor(targetCssColor) : [r, g, b];
+    const [r, g, b] = typeof cssColor === 'string' ? resolveColor(cssColor) : cssColor;
+    const [tr, tg, tb] = targetCssColor
+        ? (typeof targetCssColor === 'string' ? resolveColor(targetCssColor) : targetCssColor)
+        : [r, g, b];
     const total = W * H;
     const imgData = ctx.createImageData(W, H);
     const d = imgData.data;
+    const d32 = new Uint32Array(d.buffer);
+    const bgPacked = packRGBA(r, g, b, 255);
     const fadePx = edgeFade / scale;
-    for (let i = 0; i < total; i++) {
-        const off = i * 4;
-        d[off] = r; d[off + 1] = g; d[off + 2] = b; d[off + 3] = 255;
-    }
+    d32.fill(bgPacked);
     ctx.putImageData(imgData, 0, 0);
     const speeds = new Float32Array(total);
     const phases = new Float32Array(total);
@@ -120,7 +144,7 @@ export function createEvaporateState(canvas, cssColor, targetCssColor, opts = {}
         edgeMap.fill(1);
     }
     return {
-        ctx, W, H, r, g, b, tr, tg, tb, total, imgData, d, speeds, phases,
+        ctx, W, H, r, g, b, tr, tg, tb, total, imgData, d, d32, speeds, phases,
         edgeMap, isParticle, indices: spatialShuffle(total, W, opts.tileSize, opts.origin), birthFrame: new Int32Array(total).fill(-1),
         live: new Int32Array(total), liveCount: 0,
         cursor: 0, frame: 0, fieldX, fieldY,
@@ -224,10 +248,10 @@ export function activateBatch(s) {
 }
 
 function fillUndissolved(s) {
-    for (let i = s.cursor; i < s.total; i++) {
-        const idx = s.indices[i];
-        const off = idx * 4;
-        s.d[off] = s.r; s.d[off + 1] = s.g; s.d[off + 2] = s.b; s.d[off + 3] = (s.edgeMap[idx] * 255 + 0.5) | 0;
+    const { d32, indices, cursor, total, r, g, b, edgeMap } = s;
+    for (let i = cursor; i < total; i++) {
+        const idx = indices[i];
+        d32[idx] = packRGBA(r, g, b, (edgeMap[idx] * 255 + 0.5) | 0);
     }
 }
 
@@ -257,13 +281,15 @@ export function drawSolidPixels(s) {
         const ox = bx + dx - (sz >> 1);
         const oy = by + dy - (sz >> 1);
         s._accentRects.push(ox, oy, sz, sz);
-        for (let py = oy; py < Math.min(oy + sz, s.H); py++) {
-            if (py < 0) continue;
-            for (let px = ox; px < Math.min(ox + sz, s.W); px++) {
-                if (px < 0 || px >= s.W) continue;
-                const off = (py * s.W + px) * 4;
-                s.d[off] = s.tr; s.d[off + 1] = s.tg; s.d[off + 2] = s.tb;
-                s.d[off + 3] = 255;
+        const tPacked = packRGBA(s.tr, s.tg, s.tb, 255);
+        const yStart = Math.max(0, oy);
+        const yEnd = Math.min(oy + sz, s.H);
+        const xStart = Math.max(0, ox);
+        const xEnd = Math.min(ox + sz, s.W);
+        for (let py = yStart; py < yEnd; py++) {
+            const rowOff = py * s.W;
+            for (let px = xStart; px < xEnd; px++) {
+                s.d32[rowOff + px] = tPacked;
             }
         }
     }
@@ -370,16 +396,17 @@ export function processBubbles(s) {
                 : s.sizeGrowth !== 0
                     ? Math.max(1, Math.min(4, 1 + (ss * sizeT * Math.abs(s.sizeGrowth) | 0)))
                     : 1;
+            const packed = packRGBA(cr, cg, cb, a);
             for (let py = 0; py < pxSize; py++) {
                 const ny = ep[1] + py;
                 if (ny >= s.H) break;
+                const rowOff = ny * s.W;
                 for (let px = 0; px < pxSize; px++) {
                     const nx = ep[0] + px;
                     if (nx >= s.W) break;
-                    const noff = (ny * s.W + nx) * 4;
-                    if (a <= s.d[noff + 3]) continue;
-                    s.d[noff] = cr; s.d[noff + 1] = cg; s.d[noff + 2] = cb;
-                    s.d[noff + 3] = a;
+                    const ni = rowOff + nx;
+                    if (a <= s.d[(ni << 2) + 3]) continue;
+                    s.d32[ni] = packed;
                 }
             }
         }
@@ -391,7 +418,7 @@ export function evaporateFrame(s) {
     const progress = s.total > 0 ? s.cursor / s.total : 0;
     const ticks = Math.max(1, Math.ceil(s.ticksPerFrame * progress * 2));
     for (let t = 0; t < ticks; t++) activateBatch(s);
-    s.d.fill(0);
+    s.d32.fill(0);
     drawSolidPixels(s);
     processBubbles(s);
     s.ctx.putImageData(s.imgData, 0, 0);
@@ -399,9 +426,110 @@ export function evaporateFrame(s) {
     return s.cursor >= s.total && s.liveCount === 0;
 }
 
-export function runDissolve(canvas, cssColor, onComplete, targetCssColor, opts) {
-    if (canvas._dissolveCancel) canvas._dissolveCancel();
-    const s = createEvaporateState(canvas, cssColor, targetCssColor, opts);
+function buildParticleBuffer(s, buf) {
+    const wobbleAmp = s.wobbleAmp / RENDER_SCALE;
+    const cx = s.W / 2;
+    const cy = s.H / 2;
+    const progress = s.total > 0 ? s.cursor / s.total : 0;
+    const p = Math.pow(progress, 8);
+    const dir = s.invert ? 1 : -1;
+    let driftR, driftG, driftB;
+    if (s.colorDrift > 0) {
+        driftR = (s.tr + (180 - s.tr) * p * 0.3) / 255;
+        driftG = Math.max(0, (s.tg - s.tg * p * 0.25)) / 255;
+        driftB = Math.max(0, (s.tb - s.tb * p * 0.3)) / 255;
+    } else if (s.colorDrift < 0) {
+        driftR = Math.min(1, (s.tr + (255 - s.tr) * p * 0.25) / 255);
+        driftG = Math.min(1, (s.tg + (255 - s.tg) * p * 0.25) / 255);
+        driftB = Math.min(1, (s.tb + (255 - s.tb) * p * 0.25) / 255);
+    } else {
+        driftR = s.tr / 255; driftG = s.tg / 255; driftB = s.tb / 255;
+    }
+    const bgR = s.r / 255, bgG = s.g / 255, bgB = s.b / 255;
+    let count = 0;
+    let writeIdx = 0;
+    for (let j = 0; j < s.liveCount; j++) {
+        const i = s.live[j];
+        const age = s.frame - s.birthFrame[i];
+        const alpha = 1 - age * s.bubbleFade / s.spread;
+        if (alpha <= 0) continue;
+        const origX = i % s.W;
+        const origY = (i / s.W) | 0;
+        const jitter = 0.4 + ((Math.imul(i, 2654435761) >>> 0) / 4294967296) * 1.2;
+        const dx = s.fieldX[i] * age + fastSin(s.phases[i] + age * s.wobbleFreq) * wobbleAmp;
+        const dy = s.fieldY[i] * age + dir * age * s.speeds[i];
+        let x = origX + dx;
+        let y = origY + dy;
+        if (s.zoomRate !== 1) {
+            const zoom = Math.pow(s.zoomRate, age * jitter);
+            x = cx + (x - cx) * zoom;
+            y = cy + (y - cy) * zoom;
+        }
+        if (x < 0 || x >= s.W || y < 0 || y >= s.H) continue;
+        s.live[writeIdx++] = i;
+        const isSpark = (Math.imul(i, 1103515245) >>> 0) < SPARK_THRESHOLD;
+        const cr = isSpark ? driftR : (bgR + driftR) * 0.5;
+        const cg = isSpark ? driftG : (bgG + driftG) * 0.5;
+        const cb = isSpark ? driftB : (bgB + driftB) * 0.5;
+        const off = count * 6;
+        buf[off] = x;
+        buf[off + 1] = y;
+        buf[off + 2] = cr;
+        buf[off + 3] = cg;
+        buf[off + 4] = cb;
+        buf[off + 5] = alpha;
+        count++;
+    }
+    s.liveCount = writeIdx;
+    return count;
+}
+
+let gpuModule = null;
+try {
+    if (typeof document !== 'undefined') {
+        gpuModule = await import('./dissolve-gpu.js');
+    }
+} catch {}
+
+function tryInitGPU(canvas, s) {
+    if (!gpuModule) return null;
+    try {
+        return gpuModule.initGPU(canvas, s.W, s.H, s.indices, s.total, [s.r, s.g, s.b]);
+    } catch { return null; }
+}
+
+function runDissolveGPU(canvas, bgColor, targetColor, onComplete, opts) {
+    const s = createEvaporateState(canvas, bgColor, targetColor, opts);
+    const gpu = tryInitGPU(canvas, s);
+    if (!gpu) return null;
+    const buf = gpu.particleData;
+    let rafId = null;
+    function cancel() {
+        if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+        canvas._dissolveCancel = null;
+    }
+    function tick() {
+        const progress = s.total > 0 ? s.cursor / s.total : 0;
+        const ticks = Math.max(1, Math.ceil(s.ticksPerFrame * progress * 2));
+        for (let t = 0; t < ticks; t++) activateBatch(s);
+        const particleCount = buildParticleBuffer(s, buf);
+        gpuModule.renderFrame(gpu, progress, particleCount, buf);
+        s.frame++;
+        if (s.cursor >= s.total && s.liveCount === 0) {
+            rafId = null;
+            canvas._dissolveCancel = null;
+            if (onComplete) onComplete();
+            return;
+        }
+        rafId = requestAnimationFrame(tick);
+    }
+    canvas._dissolveCancel = cancel;
+    rafId = requestAnimationFrame(tick);
+    return cancel;
+}
+
+function runDissolveMainThread(canvas, bgColor, targetColor, onComplete, opts) {
+    const s = createEvaporateState(canvas, bgColor, targetColor, opts);
     let rafId = null;
     function cancel() {
         if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
@@ -419,6 +547,67 @@ export function runDissolve(canvas, cssColor, onComplete, targetCssColor, opts) 
     canvas._dissolveCancel = cancel;
     rafId = requestAnimationFrame(tick);
     return cancel;
+}
+
+function runDissolveWorker(canvas, bgColor, targetColor, onComplete, opts) {
+    const mergedOpts = {
+        width: opts?.width ?? window.innerWidth,
+        height: opts?.height ?? window.innerHeight,
+        ...opts,
+    };
+    const { W, H } = computeCanvasSize(mergedOpts);
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    const bufferSize = W * H * 4;
+    let pixelBuffer = new ArrayBuffer(bufferSize);
+    const imgData = ctx.createImageData(W, H);
+    const worker = new Worker('./lib/dissolve-worker.js', { type: 'module' });
+    let rafId = null;
+    function cancel() {
+        if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+        worker.terminate();
+        canvas._dissolveCancel = null;
+    }
+    worker.onmessage = (e) => {
+        const { type, buffer } = e.data;
+        pixelBuffer = buffer;
+        if (type === 'done') {
+            new Uint8Array(imgData.data.buffer).set(new Uint8Array(buffer));
+            ctx.putImageData(imgData, 0, 0);
+            canvas._dissolveCancel = null;
+            worker.terminate();
+            if (onComplete) onComplete();
+            return;
+        }
+        rafId = requestAnimationFrame(() => {
+            rafId = null;
+            new Uint8Array(imgData.data.buffer).set(new Uint8Array(pixelBuffer));
+            ctx.putImageData(imgData, 0, 0);
+            worker.postMessage({ type: 'buffer', buffer: pixelBuffer }, [pixelBuffer]);
+            pixelBuffer = null;
+        });
+    };
+    worker.postMessage({
+        type: 'start', bgColor, targetColor,
+        opts: mergedOpts,
+        pixelBuffer,
+    }, [pixelBuffer]);
+    canvas._dissolveCancel = cancel;
+    return cancel;
+}
+
+const supportsWorker = typeof Worker !== 'undefined';
+
+export function runDissolve(canvas, cssColor, onComplete, targetCssColor, opts) {
+    if (canvas._dissolveCancel) canvas._dissolveCancel();
+    const bgColor = typeof cssColor === 'string' && resolveColor ? resolveColor(cssColor) : cssColor;
+    const targetColor = targetCssColor
+        ? (typeof targetCssColor === 'string' && resolveColor ? resolveColor(targetCssColor) : targetCssColor)
+        : bgColor;
+    const gpuCancel = runDissolveGPU(canvas, bgColor, targetColor, onComplete, opts);
+    if (gpuCancel) return gpuCancel;
+    return runDissolveMainThread(canvas, bgColor, targetColor, onComplete, opts);
 }
 
 export function cancelExistingDissolve(container) {
