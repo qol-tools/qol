@@ -140,7 +140,7 @@ fn run_record_action() -> Result<()> {
         remove_pidfile();
     }
 
-    let config = load_config(plugin_dir().join("config.json"));
+    let config: Config = qol_config::load_plugin_config(&["plugin-screen-recorder"]);
     let mut rect = match platform::select_region()? {
         Some(region) => region,
         None => return Ok(()),
@@ -230,20 +230,6 @@ fn clamp_to_bounds(mut rect: Rect, bounds: Monitor) -> Rect {
         rect.h = bounds.y + bounds.h - rect.y;
     }
     rect
-}
-
-fn plugin_dir() -> PathBuf {
-    env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-}
-
-fn load_config(path: PathBuf) -> Config {
-    let Ok(content) = fs::read_to_string(path) else {
-        return Config::default();
-    };
-    serde_json::from_str::<Config>(&content).unwrap_or_default()
 }
 
 fn read_pid() -> Option<u32> {
