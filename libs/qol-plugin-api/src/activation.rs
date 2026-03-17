@@ -5,7 +5,7 @@ pub fn set_accessory_policy() {
 
     let mtm = MainThreadMarker::new().expect("must be on main thread");
     let app = NSApplication::sharedApplication(mtm);
-    unsafe { app.setActivationPolicy(NSApplicationActivationPolicy::Accessory) };
+    app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 }
 
 #[cfg(not(target_os = "macos"))]
