@@ -98,7 +98,9 @@ pub(crate) fn run_app(
 }
 
 fn picker_window_state() -> PickerWindowState {
-    std::rc::Rc::new(std::cell::RefCell::new(qol_plugin_api::window::ActiveWindows::default()))
+    std::rc::Rc::new(std::cell::RefCell::new(
+        qol_plugin_api::window::ActiveWindows::default(),
+    ))
 }
 
 fn spawn_prewarm_task(cx: &mut App, caches: PickerCaches) {
