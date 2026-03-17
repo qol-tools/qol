@@ -1,6 +1,10 @@
 import { getVal } from './config-paths.js';
 import { createFieldLabel } from './field-label.js';
 
+let _iconUrlFor = (value) => `/api/icon/${encodeURIComponent(value)}`;
+
+export function setIconUrl(fn) { _iconUrlFor = fn; }
+
 export function renderStringList(key, path, state) {
     const div = document.createElement('div');
     div.className = 'field-group';
@@ -42,7 +46,7 @@ function renderItem(item, index, path, state, isApps, render) {
 function createAppIcon(item) {
     const icon = document.createElement('img');
     icon.className = 'app-icon';
-    icon.src = `/api/icon/${encodeURIComponent(item)}`;
+    icon.src = _iconUrlFor(item);
     icon.width = 20;
     icon.height = 20;
     icon.onerror = () => { icon.style.display = 'none'; };
