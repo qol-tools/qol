@@ -66,6 +66,8 @@ pub struct FieldSpec {
     #[serde(default)]
     pub key_label: Option<String>,
     #[serde(default)]
+    pub item: Option<ItemSpec>,
+    #[serde(default)]
     pub entry_fields: IndexMap<String, FieldKind>,
     #[serde(default)]
     pub show_when: Option<ShowWhenSpec>,
@@ -77,6 +79,12 @@ pub struct FieldSpec {
 pub struct ShowWhenSpec {
     pub field: String,
     pub equals: FieldDefault,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
+pub struct ItemSpec {
+    #[serde(default)]
+    pub fields: IndexMap<String, FieldKind>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]

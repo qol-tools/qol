@@ -1,4 +1,4 @@
-use crate::contract::{ConfigSpec, FieldDefault, FieldKind, NumberConstraints};
+use crate::contract::{ConfigSpec, FieldDefault, FieldKind, ItemSpec, NumberConstraints};
 use crate::validation::{validate_field_value, validate_spec_collect, ValidationError};
 use indexmap::IndexMap;
 use serde::Serialize;
@@ -34,8 +34,14 @@ pub struct ResolvedField {
     pub option_labels: std::collections::BTreeMap<String, String>,
     pub key_label: Option<String>,
     pub entry_fields: std::collections::BTreeMap<String, FieldKind>,
+    pub item: Option<ResolvedItemSpec>,
     pub show_when: Option<ResolvedShowWhen>,
     pub number: NumberConstraints,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ResolvedItemSpec {
+    pub fields: std::collections::BTreeMap<String, FieldKind>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -81,6 +87,7 @@ pub fn resolve_config(
                 .iter()
                 .map(|(key, value)| (key.clone(), *value))
                 .collect(),
+            item: resolve_item_spec(field.item.as_ref()),
             show_when: field.show_when.as_ref().map(|show_when| ResolvedShowWhen {
                 field: show_when.field.clone(),
                 equals: show_when.equals.clone(),
@@ -100,6 +107,16 @@ pub fn resolve_config(
         description: spec.description.clone(),
         fields: root_fields,
         sections,
+    })
+}
+
+fn resolve_item_spec(item: Option<&ItemSpec>) -> Option<ResolvedItemSpec> {
+    let item = item?;
+    if item.fields.is_empty() {
+        return None;
+    }
+    Some(ResolvedItemSpec {
+        fields: item.fields.iter().map(|(k, v)| (k.clone(), *v)).collect(),
     })
 }
 

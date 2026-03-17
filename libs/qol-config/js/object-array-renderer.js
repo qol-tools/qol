@@ -21,6 +21,7 @@ export function renderEmbeddedObjectArray(field, state) {
         path: field.config_key || field.id,
         state,
         embedded: true,
+        itemFields: field.item?.fields,
     });
 }
 
@@ -38,9 +39,11 @@ function renderObjectArrayBlock(context) {
     listEl.className = 'rules-list';
     container.appendChild(listEl);
 
-    const schema = context.value.length > 0
-        ? getObjectArraySchema(context.value)
-        : guessSchemaFromKey(context.path);
+    const schema = context.itemFields
+        ? declaredFieldsToSchema(context.itemFields)
+        : context.value.length > 0
+            ? getObjectArraySchema(context.value)
+            : guessSchemaFromKey(context.path);
     const addRow = document.createElement('div');
     addRow.className = 'add-rule-row';
     container.appendChild(addRow);
@@ -53,6 +56,14 @@ function renderObjectArrayBlock(context) {
     buildAddForm(addRow, schema, context.path, context.state, saveAndRender);
     renderOnly();
     return container;
+}
+
+export function declaredFieldsToSchema(itemFields) {
+    const KIND_MAP = { 'string': 'string', 'number': 'number', 'boolean': 'boolean', 'string_array': 'string-array' };
+    return Object.entries(itemFields).map(([key, kind]) => {
+        if (kind === 'string_array' && key.endsWith('_mods')) return [key, 'mods'];
+        return [key, KIND_MAP[kind] || 'string'];
+    });
 }
 
 function renderList(listEl, path, state, rerender) {
