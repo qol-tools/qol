@@ -1,4 +1,4 @@
-.PHONY: build release run dev test check lint lint-fix fmt fmt-check clean contracts install auto-config fx
+.PHONY: build release run dev test check lint lint-fix fmt fmt-check clean install
 
 build: lint
 	cargo build
@@ -87,24 +87,6 @@ fmt-check:
 clean:
 	cargo clean
 
-contracts:
-	python3 scripts/validate_first_party_plugin_contracts.py --plugins-root ../qol-tools
-
 install:
 	cargo build --release --bins
 	target/release/qol-tray-install
-
-auto-config:
-	mkdir -p ui/auto-config
-	cp ../qol-config/js/*.js ui/auto-config/
-
-fx:
-	cp ../qol-fx/src/*.js ui/lib/
-
-wasm:
-	cd ../qol-wasm && wasm-pack build --target web --release
-	mkdir -p ui/wasm
-	cp ../qol-wasm/pkg/qol_wasm.d.ts ui/wasm/
-	cp ../qol-wasm/pkg/qol_wasm_bg.wasm ui/wasm/
-	cp ../qol-wasm/pkg/qol_wasm_bg.wasm.d.ts ui/wasm/
-	cp ../qol-wasm/pkg/qol_wasm.js ui/wasm/
