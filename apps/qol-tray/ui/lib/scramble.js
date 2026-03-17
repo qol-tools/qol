@@ -1,5 +1,13 @@
 import { useState, useEffect } from 'preact/hooks';
-import { shuffle } from './canvas.js';
+
+function shuffle(len) {
+    const arr = Array.from({ length: len }, (_, i) => i);
+    for (let i = len - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+}
 
 const CHARS = '!@#$%&*<>[]{}|/\\^?+=_0123456789';
 

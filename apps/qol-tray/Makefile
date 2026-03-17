@@ -1,4 +1,4 @@
-.PHONY: build release run dev test check lint lint-fix fmt fmt-check clean contracts install auto-config
+.PHONY: build release run dev test check lint lint-fix fmt fmt-check clean contracts install auto-config fx
 
 build: lint
 	cargo build
@@ -97,6 +97,9 @@ install:
 auto-config:
 	mkdir -p ui/auto-config
 	cp ../qol-config/js/*.js ui/auto-config/
+
+fx:
+	cp ../qol-fx/src/*.js ui/lib/
 
 wasm:
 	cd ../qol-wasm && wasm-pack build --target web --release
