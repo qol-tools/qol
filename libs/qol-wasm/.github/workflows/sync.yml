@@ -1,0 +1,17 @@
+name: Sync
+
+on:
+  push:
+    branches: ["main"]
+    paths: ["pkg/**"]
+
+jobs:
+  wasm:
+    uses: qol-tools/qol-cicd/.github/workflows/file-sync.yml@main
+    with:
+      target_repo: qol-tools/qol-tray
+      source_path: pkg
+      target_path: ui/wasm
+      file_glob: "*.wasm *.js *.d.ts"
+      delete_orphaned: true
+    secrets: inherit
