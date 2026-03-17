@@ -11,6 +11,10 @@ import { appendVariantSelectors, renderVariantFields } from './variant-renderer.
 
 export { configFromForm, getDisplaySections };
 
+let _iconUrlFor = (value) => `/api/icon/${encodeURIComponent(value)}`;
+
+export function setIconUrl(fn) { _iconUrlFor = fn; }
+
 export function renderSectionDetail(container, sectionData, form, state) {
     container.appendChild(createDetailHeader(sectionData, form));
     const fieldsContainer = document.createElement('div');
@@ -234,7 +238,7 @@ function showsAppIcon(fieldId) {
 function createAppIcon(value) {
     const icon = document.createElement('img');
     icon.className = 'app-icon';
-    icon.src = `/api/icon/${encodeURIComponent(value)}`;
+    icon.src = _iconUrlFor(value);
     icon.width = 20;
     icon.height = 20;
     icon.onerror = () => {

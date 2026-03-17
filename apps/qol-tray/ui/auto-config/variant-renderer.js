@@ -1,11 +1,14 @@
 import { getFieldValue, setFieldValue } from './normalized-config.js';
-import { dissolveIn } from '../lib/dissolve.js';
 import {
     buildBranchOwnerMap,
     optionLabel,
     selectorDensityClass,
     selectorGridTemplate,
 } from './display-rules.js';
+
+let _dissolveIn = null;
+
+export function setDissolveIn(fn) { _dissolveIn = fn; }
 
 export function appendVariantSelectors(context) {
     if (context.groups.length === 0) {
@@ -168,8 +171,9 @@ function weightedScale() {
 }
 
 function playVariantDissolve(container) {
+    if (!_dissolveIn) return;
     const scale = weightedScale();
-    dissolveIn(container, {
+    _dissolveIn(container, {
         bleed: 20,
         edgeFade: 20,
         filter: `blur(${(scale * 0.4).toFixed(1)}px)`,
