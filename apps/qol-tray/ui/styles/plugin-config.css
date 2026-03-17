@@ -115,7 +115,8 @@
 .config-section > .toggle-row,
 .config-section > .variant-panel,
 .config-section > .field-group:has(.text-input),
-.config-section > .field-group:has(.string-list) {
+.config-section > .field-group:has(.string-list),
+.config-section > .field-group:has(.object-array-panel) {
     grid-column: 1 / -1;
 }
 

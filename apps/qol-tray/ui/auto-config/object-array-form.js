@@ -13,39 +13,80 @@ export function buildAddForm(container, schema, arrayPath, state, rerender) {
     container.appendChild(addButton);
 }
 
-function buildFieldInputs(container, schema) {
-    const inputs = {};
-    for (const [fieldKey, fieldType] of schema) {
-        if (fieldType === 'mods') { inputs[fieldKey] = buildModsInput(container, fieldKey); continue; }
-        if (fieldType === 'boolean') { inputs[fieldKey] = buildBooleanInput(container, fieldKey); continue; }
-        if (fieldType === 'string-array') { inputs[fieldKey] = buildStringArrayInput(container, fieldKey); continue; }
-        inputs[fieldKey] = buildScalarInput(container, fieldKey, fieldType);
-    }
-    return inputs;
+function fieldPrefix(key) {
+    const i = key.indexOf('_');
+    if (i < 0) return null;
+    return key.slice(0, i);
 }
 
-function buildModsInput(container, fieldKey) {
-    const toggles = buildModSide(container, fieldKey);
-    if (fieldKey === 'from_mods') {
+export function groupFields(schema) {
+    const fromFields = [];
+    const toFields = [];
+    const booleans = [];
+    const rest = [];
+
+    for (const [key, type] of schema) {
+        if (type === 'boolean') { booleans.push([key, type]); continue; }
+        const prefix = fieldPrefix(key);
+        if (prefix === 'from') { fromFields.push([key, type]); continue; }
+        if (prefix === 'to') { toFields.push([key, type]); continue; }
+        rest.push([key, type]);
+    }
+
+    return { fromFields, toFields, rest, booleans };
+}
+
+function buildFieldInputs(container, schema) {
+    const { fromFields, toFields, rest, booleans } = groupFields(schema);
+    const inputs = {};
+
+    if (fromFields.length > 0) {
+        const group = createGroup(container, 'add-rule-group');
+        for (const [key, type] of fromFields) appendField(group, key, type, inputs);
+    }
+
+    if (fromFields.length > 0 && toFields.length > 0) {
         const arrow = document.createElement('span');
         arrow.className = 'arrow';
         arrow.textContent = '→';
         container.appendChild(arrow);
     }
-    return { type: 'mods', el: toggles };
+
+    if (toFields.length > 0) {
+        const group = createGroup(container, 'add-rule-group');
+        for (const [key, type] of toFields) appendField(group, key, type, inputs);
+    }
+
+    for (const [key, type] of rest) appendField(container, key, type, inputs);
+    for (const [key, type] of booleans) appendField(container, key, type, inputs);
+
+    return inputs;
 }
 
-function buildModSide(container, fieldKey) {
+function createGroup(parent, className) {
+    const div = document.createElement('div');
+    div.className = className;
+    parent.appendChild(div);
+    return div;
+}
+
+function appendField(container, fieldKey, fieldType, inputs) {
+    if (fieldType === 'mods') { inputs[fieldKey] = buildModsInput(container, fieldKey); return; }
+    if (fieldType === 'boolean') { inputs[fieldKey] = buildBooleanInput(container, fieldKey); return; }
+    if (fieldType === 'string-array') { inputs[fieldKey] = buildStringArrayInput(container, fieldKey); return; }
+    inputs[fieldKey] = buildScalarInput(container, fieldKey, fieldType);
+}
+
+function buildModsInput(container, fieldKey) {
     const side = document.createElement('div');
     side.className = 'rule-side';
     const label = createFieldLabel(fieldKey);
-    label.style.marginRight = '0.25rem';
     label.style.marginBottom = '0';
     side.appendChild(label);
-    const toggles = buildModToggles();
-    side.appendChild(toggles);
+    side.appendChild(buildModToggles());
     container.appendChild(side);
-    return toggles;
+    const toggles = side.querySelector('.mod-toggles');
+    return { type: 'mods', el: toggles };
 }
 
 function buildModToggles() {

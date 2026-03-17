@@ -4,7 +4,6 @@ import { usePluginConfigContext } from '../../views/plugin-config/context.js';
 import { useViewKeyboardContext } from './view-keyboard-context.js';
 
 const PLUGIN_CONFIG_FIELD = '[data-plugin-config-field-id]';
-
 export function useAppKeyboardRouting({
     activePluginId,
     activeViewId,
@@ -42,26 +41,33 @@ function handlePaletteToggle(event, palette, activePluginId, viewKeyboard) {
 
 function delegateToPluginConfig(event, pluginConfig, closePluginConfig) {
     const detail = document.querySelector('.plugin-config-detail');
-    if (event.key === 'Escape') {
-        event.preventDefault();
-        if (blurPluginConfigFocus(detail)) return;
-        closePluginConfig();
+    if (!pluginConfig || pluginConfig.loading || pluginConfig.sections.length === 0) {
+        if (event.key === 'Escape') { event.preventDefault(); closePluginConfig(); }
         return;
     }
-    if (!pluginConfig || pluginConfig.loading || pluginConfig.sections.length === 0) return;
     if (event.key === 'Tab') {
         event.preventDefault();
         blurPluginConfigFocus(detail);
         pluginConfig.navigate(event.shiftKey ? -1 : 1);
         return;
     }
-    if (!detail || pluginConfig.visibleFields.length === 0) return;
-    const selectedField = pluginConfig.selectedField;
-    if (!selectedField) return;
-    if (selectedField.kind === 'string_array') {
-        if (handleStringArraySubmode(event, detail, selectedField.id)) return;
+    if (!detail || pluginConfig.visibleFields.length === 0) {
+        if (event.key === 'Escape') { event.preventDefault(); closePluginConfig(); }
+        return;
     }
-    if (isPluginConfigEditFocus(detail, document.activeElement)) return;
+    const selectedField = pluginConfig.selectedField;
+    if (!selectedField) {
+        if (event.key === 'Escape') { event.preventDefault(); closePluginConfig(); }
+        return;
+    }
+    if (handleFieldSubmode(event, detail, selectedField.id)) return;
+    if (event.key === 'Escape') {
+        event.preventDefault();
+        blurPluginConfigFocus(detail);
+        closePluginConfig();
+        return;
+    }
+    if (isEditingText(detail)) return;
     if (handlePluginConfigDirectEdit(event, detail, selectedField)) return;
     if (handlePluginConfigFieldAction(event, detail, pluginConfig, selectedField)) return;
     handlePluginConfigMove(event, detail, pluginConfig);
@@ -88,10 +94,9 @@ function handlePluginConfigDirectEdit(event, detail, field) {
 function handlePluginConfigFieldAction(event, detail, pluginConfig, field) {
     if (field.kind === 'boolean') return handleBooleanFieldAction(event, pluginConfig, field);
     if (field.kind === 'select') return handleSelectFieldAction(event, detail, pluginConfig, field);
-    if (field.kind === 'string_array') return handleCompositeFieldAction(event, detail, field.id);
     if (field.kind === 'string') return handleTextFieldActivation(event, detail, field.id);
     if (field.kind === 'number') return handleNumberFieldActivation(event, detail, field.id);
-    return false;
+    return handleGenericFieldActivation(event, detail, field.id);
 }
 
 function isActuallyFocusable(el) {
@@ -112,13 +117,15 @@ function blurPluginConfigFocus(detail) {
     return true;
 }
 
-function isPluginConfigEditFocus(detail, activeElement) {
-    if (!(activeElement instanceof HTMLElement)) return false;
-    if (!detail.contains(activeElement)) return false;
-    if (activeElement.matches('.text-input, .number-edit, textarea')) return true;
-    if (activeElement.matches('.btn-add, .btn-remove')) return true;
-    if (activeElement.closest('.custom-select-list')) return true;
-    return false;
+function isTextEditable(el) {
+    return el.matches('input:not([type="checkbox"]):not([type="radio"]):not([type="button"]), textarea, [contenteditable="true"]');
+}
+
+function isEditingText(detail) {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement)) return false;
+    if (!detail?.contains(active)) return false;
+    return active.matches('.text-input, .key-input, .number-edit, textarea');
 }
 
 function handleBooleanFieldAction(event, pluginConfig, field) {
@@ -159,14 +166,22 @@ function handleSelectFieldAction(event, detail, pluginConfig, field) {
     return true;
 }
 
-function handleCompositeFieldAction(event, detail, fieldId) {
+function handleGenericFieldActivation(event, detail, fieldId) {
     if (event.key !== 'Enter' && event.key !== 'ArrowRight' && event.key !== ' ') return false;
     event.preventDefault();
     const fieldElement = queryFieldElement(detail, fieldId);
-    const target = firstStringArrayTarget(fieldElement);
-    if (!isActuallyFocusable(target)) return true;
-    target.focus();
+    const target = firstFieldEntryPoint(fieldElement);
+    if (target instanceof HTMLElement) target.focus();
     return true;
+}
+
+function firstFieldEntryPoint(fieldElement) {
+    if (!(fieldElement instanceof HTMLElement)) return null;
+    const input = fieldElement.querySelector('input:not([type="hidden"]):not(.btn-remove), select, [tabindex="0"]');
+    if (isActuallyFocusable(input)) return input;
+    const button = fieldElement.querySelector('button:not(.btn-remove)');
+    if (isActuallyFocusable(button)) return button;
+    return null;
 }
 
 function handleTextFieldActivation(event, detail, fieldId) {
@@ -296,35 +311,62 @@ function startNumberFieldEdit(event, detail, fieldId) {
     return true;
 }
 
-function handleStringArraySubmode(event, detail, fieldId) {
+function handleFieldSubmode(event, detail, fieldId) {
     const fieldElement = queryFieldElement(detail, fieldId);
     if (!(fieldElement instanceof HTMLElement)) return false;
 
-    const active = document.activeElement;
-    if (!(active instanceof HTMLElement)) return false;
-    if (!fieldElement.contains(active)) return false;
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const target = event.target instanceof HTMLElement ? event.target : active;
+    if (!target) return false;
+    if (target.isConnected && !fieldElement.contains(target) && !(active && fieldElement.contains(active) && active !== fieldElement)) return false;
+    if (!target.isConnected) return true;
+    if (active === fieldElement) return false;
 
     if (event.key === 'Escape') {
         event.preventDefault();
-        active.blur();
+        fieldElement.focus();
         return true;
     }
 
-    if ((event.key === 'Delete' || event.key === 'Backspace') && active.matches('.btn-remove')) {
+    if (event.key === 'Enter' && (isTextEditable(target) || isTextEditable(active))) {
         event.preventDefault();
-        focusAfterStringArrayRemoval(fieldElement, active);
-        active.click();
+        fieldElement.focus();
         return true;
     }
 
-    if (shouldKeepHorizontalCaret(event, active)) return false;
+    const matchesRemove = (el) => el?.matches('.btn-remove');
+    if ((event.key === 'Delete' || event.key === 'Backspace') && (matchesRemove(active) || matchesRemove(target))) {
+        event.preventDefault();
+        const btn = matchesRemove(active) ? active : target;
+        const stops = genericFieldStops(fieldElement);
+        const idx = stops.indexOf(btn);
+        const next = stops[idx + 1] || stops[idx - 1];
+        btn.click();
+        if (next instanceof HTMLElement) requestAnimationFrame(() => next.focus());
+        return true;
+    }
+
+    const matchesInteractive = (el) => el?.matches('button, input[type="checkbox"], [role="switch"]');
+    if ((event.key === 'Enter' || event.key === ' ') && (matchesInteractive(active) || matchesInteractive(target))) {
+        return true;
+    }
+
+    if (active && shouldKeepHorizontalCaret(event, active)) return false;
 
     const direction = keyToDirection(event.key);
     if (!direction) return false;
     event.preventDefault();
-    focusStringArrayRelative(fieldElement, active, direction);
+    const rows = focusGridRows(genericFieldStops(fieldElement));
+    const nextStop = nextFocusGridElement(rows, active || target, direction);
+    if (nextStop instanceof HTMLElement) nextStop.focus();
     return true;
+}
 
+function genericFieldStops(fieldElement) {
+    if (!(fieldElement instanceof HTMLElement)) return [];
+    return Array.from(fieldElement.querySelectorAll(
+        'input:not([type="hidden"]), select, button, [tabindex="0"]'
+    )).filter(isActuallyFocusable);
 }
 
 function isStringEditKey(event) {
@@ -337,35 +379,6 @@ function isNumberEditKey(event) {
     if (event.ctrlKey || event.metaKey || event.altKey) return false;
     if (event.key === 'Backspace') return true;
     return /^[0-9.\-]$/.test(event.key);
-}
-
-function firstStringArrayTarget(fieldElement) {
-    if (!(fieldElement instanceof HTMLElement)) return null;
-
-    const input = fieldElement.querySelector('.add-row .text-input');
-    if (isActuallyFocusable(input)) return input;
-
-    const removeButton = fieldElement.querySelector('.btn-remove');
-    if (isActuallyFocusable(removeButton)) return removeButton;
-
-    const addButton = fieldElement.querySelector('.btn-add');
-    if (isActuallyFocusable(addButton)) return addButton;
-
-    return null;
-}
-
-function focusStringArrayRelative(fieldElement, active, direction) {
-    const rows = focusGridRows(stringArrayStops(fieldElement));
-    const target = nextFocusGridElement(rows, active, direction);
-    if (!(target instanceof HTMLElement)) return;
-    target.focus();
-}
-
-function stringArrayStops(fieldElement) {
-    if (!(fieldElement instanceof HTMLElement)) return [];
-
-    return Array.from(fieldElement.querySelectorAll('.btn-remove, .add-row .text-input, .btn-add'))
-        .filter(isActuallyFocusable);
 }
 
 function shouldKeepHorizontalCaret(event, active) {
@@ -440,20 +453,6 @@ function findFocusGridPosition(rows, active) {
         };
     }
     return null;
-}
-
-function focusAfterStringArrayRemoval(fieldElement, active) {
-    const stops = stringArrayStops(fieldElement);
-    const currentIndex = stops.indexOf(active);
-    if (currentIndex < 0) return;
-
-    requestAnimationFrame(() => {
-        const nextStops = stringArrayStops(fieldElement);
-        if (nextStops.length === 0) return;
-
-        const nextIndex = clampIndex(currentIndex, nextStops.length);
-        nextStops[nextIndex]?.focus();
-    });
 }
 
 function clampIndex(index, total) {

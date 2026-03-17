@@ -3,6 +3,7 @@ import { useCallback } from 'preact/hooks';
 import { usePluginConfigContext } from './context.js';
 import { NumberField } from './fields/NumberField.js';
 import { StringArrayField } from './fields/StringArrayField.js';
+import { ObjectArrayField } from './fields/ObjectArrayField.js';
 import { CustomSelect } from './fields/CustomSelect.js';
 import { FieldLabel } from './fields/FieldLabel.js';
 
@@ -12,6 +13,7 @@ const FIELD_MAP = {
     select: SelectField,
     number: NumberField,
     string_array: StringArrayField,
+    object_array: ObjectArrayField,
 };
 
 export function renderField(field) {
@@ -35,7 +37,8 @@ function BooleanField({ field }) {
 
     return html`<${Toggle} checked=${checked} onChange=${onChange}
         label=${field.label} description=${field.description || ''}
-        selected=${selected} index=${index} onSelect=${onSelect} fieldId=${field.id} />`;
+        selected=${selected} index=${index} onSelect=${onSelect} fieldId=${field.id}
+        surfaceSelected=${selected} />`;
 }
 
 function StringField({ field }) {
@@ -51,13 +54,15 @@ function StringField({ field }) {
     }, [ctx, field.id]);
 
     return html`
-        <div class="field-group selection-wedge-pseudo-host ${fieldSelectionClasses(selected)}"
+        <div tabIndex="-1" class="field-group ${fieldSelectionClasses(selected)}"
             data-plugin-config-field-id=${field.id}
             data-plugin-config-index=${index}
+            data-selected-surface=""
+            data-selected=${selected ? 'true' : 'false'}
             onMouseDown=${onSelect}
             onFocus=${onSelect}>
             <${FieldLabel} text=${field.label} description=${field.description || ''} />
-            <input type="text" class="text-input selection-wedge-pseudo-host" data-wedge-root=""
+            <input type="text" class="text-input" data-wedge-root=""
                 value=${ctx.getFieldValue(field) || ''}
                 placeholder=${field.placeholder || ''}
                 onInput=${onInput} />
@@ -80,9 +85,11 @@ function SelectField({ field }) {
     }, [ctx, field.id]);
 
     return html`
-        <div class="field-group selection-wedge-pseudo-host ${fieldSelectionClasses(selected)}"
+        <div tabIndex="-1" class="field-group ${fieldSelectionClasses(selected)}"
             data-plugin-config-field-id=${field.id}
             data-plugin-config-index=${index}
+            data-selected-surface=""
+            data-selected=${selected ? 'true' : 'false'}
             onMouseDown=${onSelect}
             onFocus=${onSelect}>
             <${FieldLabel} text=${field.label} description=${field.description || ''} />
@@ -92,7 +99,7 @@ function SelectField({ field }) {
     `;
 }
 
-function Toggle({ checked, onChange, label, description, selected, index, onSelect, fieldId }) {
+function Toggle({ checked, onChange, label, description, selected, index, onSelect, fieldId, surfaceSelected }) {
     const toggle = useCallback(() => onChange(!checked), [checked, onChange]);
     const onKeyDown = useCallback((event) => {
         if (event.key !== 'Enter' && event.key !== ' ') return;
@@ -102,9 +109,11 @@ function Toggle({ checked, onChange, label, description, selected, index, onSele
     }, [toggle]);
 
     return html`
-        <div class="toggle-row selection-wedge-pseudo-host ${fieldSelectionClasses(selected)}"
+        <div tabIndex="-1" class="toggle-row ${fieldSelectionClasses(selected)}"
             data-plugin-config-field-id=${fieldId}
             data-plugin-config-index=${index}
+            data-selected-surface=""
+            data-selected=${surfaceSelected ? 'true' : 'false'}
             onClick=${toggle}
             onMouseDown=${onSelect}
             onFocus=${onSelect}>
@@ -120,7 +129,17 @@ function Toggle({ checked, onChange, label, description, selected, index, onSele
     `;
 }
 
-function fieldSelectionClasses(selected) {
+export function fieldSelectionClasses(selected) {
     if (!selected) return '';
-    return 'selected is-selected selection-wedge-visible';
+    return 'selected is-selected';
+}
+
+export function fieldSurfaceAttrs(field, ctx) {
+    const selected = ctx.selectedFieldId === field.id;
+    return {
+        'data-plugin-config-field-id': field.id,
+        'data-plugin-config-index': ctx.fieldIndexById[field.id],
+        'data-selected-surface': '',
+        'data-selected': selected ? 'true' : 'false',
+    };
 }
