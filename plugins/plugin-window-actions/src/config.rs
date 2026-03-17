@@ -1,83 +1,57 @@
-use std::path::{Path, PathBuf};
+use serde::Deserialize;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum CenterMode {
     Pixels,
     Percent,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct WindowActionsConfig {
+    #[serde(default = "default_center_mode")]
     pub center_mode: CenterMode,
+    #[serde(default = "default_center_width_px")]
     pub center_width_px: f64,
+    #[serde(default = "default_center_height_px")]
     pub center_height_px: f64,
+    #[serde(default = "default_center_width_percent")]
     pub center_width_percent: f64,
+    #[serde(default = "default_center_height_percent")]
     pub center_height_percent: f64,
+    #[serde(default = "default_snap_fraction")]
     pub snap_fraction: f64,
+    #[serde(default = "default_reveal_taskbar")]
     pub reveal_taskbar_after_move: bool,
 }
+
+fn default_center_mode() -> CenterMode { CenterMode::Pixels }
+fn default_center_width_px() -> f64 { 1152.0 }
+fn default_center_height_px() -> f64 { 892.0 }
+fn default_center_width_percent() -> f64 { 0.64 }
+fn default_center_height_percent() -> f64 { 0.79 }
+fn default_snap_fraction() -> f64 { 0.5 }
+fn default_reveal_taskbar() -> bool { true }
 
 impl Default for WindowActionsConfig {
     fn default() -> Self {
         Self {
-            center_mode: CenterMode::Pixels,
-            center_width_px: 1152.0,
-            center_height_px: 892.0,
-            center_width_percent: 0.64,
-            center_height_percent: 0.79,
-            snap_fraction: 0.5,
-            reveal_taskbar_after_move: true,
+            center_mode: default_center_mode(),
+            center_width_px: default_center_width_px(),
+            center_height_px: default_center_height_px(),
+            center_width_percent: default_center_width_percent(),
+            center_height_percent: default_center_height_percent(),
+            snap_fraction: default_snap_fraction(),
+            reveal_taskbar_after_move: default_reveal_taskbar(),
         }
     }
 }
 
 pub fn load_config() -> WindowActionsConfig {
-    let Some(path) = config_path() else {
-        return WindowActionsConfig::default();
-    };
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return WindowActionsConfig::default();
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return WindowActionsConfig::default();
-    };
-    WindowActionsConfig::from_json(&value)
+    qol_config::load_plugin_config(&["plugin-window-actions"])
 }
 
 impl WindowActionsConfig {
-    fn from_json(value: &serde_json::Value) -> Self {
-        let defaults = Self::default();
-        Self {
-            center_mode: read_string(value, &["center_mode"])
-                .and_then(parse_center_mode)
-                .unwrap_or(defaults.center_mode),
-            center_width_px: read_number(value, &["center_width_px"])
-                .or_else(|| read_number(value, &["center", "width"]))
-                .unwrap_or(defaults.center_width_px)
-                .max(1.0),
-            center_height_px: read_number(value, &["center_height_px"])
-                .or_else(|| read_number(value, &["center", "height"]))
-                .unwrap_or(defaults.center_height_px)
-                .max(1.0),
-            center_width_percent: read_number(value, &["center_width_percent"])
-                .or_else(|| read_number(value, &["center", "width_percent"]))
-                .unwrap_or(defaults.center_width_percent)
-                .clamp(0.1, 1.0),
-            center_height_percent: read_number(value, &["center_height_percent"])
-                .or_else(|| read_number(value, &["center", "height_percent"]))
-                .unwrap_or(defaults.center_height_percent)
-                .clamp(0.1, 1.0),
-            snap_fraction: read_number(value, &["snap_fraction"])
-                .or_else(|| read_number(value, &["snap", "left_fraction"]))
-                .or_else(|| read_number(value, &["snap", "right_fraction"]))
-                .or_else(|| read_number(value, &["snap", "bottom_fraction"]))
-                .unwrap_or(defaults.snap_fraction)
-                .clamp(0.1, 1.0),
-            reveal_taskbar_after_move: read_bool(value, &["reveal_taskbar_after_move"])
-                .or_else(|| read_bool(value, &["monitor_move", "reveal_taskbar_on_change"]))
-                .unwrap_or(defaults.reveal_taskbar_after_move),
-        }
-    }
 
     #[cfg(any(target_os = "macos", test))]
     pub fn center_size_for_monitor(&self, monitor_width: f64, monitor_height: f64) -> (f64, f64) {
@@ -106,48 +80,6 @@ impl WindowActionsConfig {
     }
 }
 
-fn config_path() -> Option<PathBuf> {
-    let cwd = std::env::current_dir().ok();
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(Path::to_path_buf));
-
-    cwd.into_iter()
-        .chain(exe_dir)
-        .map(|dir| dir.join("config.json"))
-        .find(|path| path.is_file())
-}
-
-fn read_number(value: &serde_json::Value, path: &[&str]) -> Option<f64> {
-    read_value(value, path)?.as_f64()
-}
-
-fn read_string<'a>(value: &'a serde_json::Value, path: &[&str]) -> Option<&'a str> {
-    read_value(value, path)?.as_str()
-}
-
-fn read_bool(value: &serde_json::Value, path: &[&str]) -> Option<bool> {
-    read_value(value, path)?.as_bool()
-}
-
-fn read_value<'a>(value: &'a serde_json::Value, path: &[&str]) -> Option<&'a serde_json::Value> {
-    let mut current = value;
-    for segment in path {
-        current = current.get(*segment)?;
-    }
-    Some(current)
-}
-
-fn parse_center_mode(value: &str) -> Option<CenterMode> {
-    if value == "pixels" {
-        return Some(CenterMode::Pixels);
-    }
-    if value == "percent" {
-        return Some(CenterMode::Percent);
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::{CenterMode, WindowActionsConfig};
@@ -157,7 +89,7 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(200))]
 
         #[test]
-        fn prop_new_contract_values_are_respected(
+        fn prop_deserialized_values_are_respected(
             use_percent in any::<bool>(),
             width in 1.0f64..4000.0,
             height in 1.0f64..4000.0,
@@ -166,7 +98,7 @@ mod tests {
             snap in 0.1f64..1.0,
             reveal in any::<bool>()
         ) {
-            let value = serde_json::json!({
+            let json = serde_json::json!({
                 "center_mode": if use_percent { "percent" } else { "pixels" },
                 "center_width_px": width,
                 "center_height_px": height,
@@ -176,51 +108,12 @@ mod tests {
                 "reveal_taskbar_after_move": reveal
             });
 
-            let config = WindowActionsConfig::from_json(&value);
+            let config: WindowActionsConfig = serde_json::from_value(json).unwrap();
 
             prop_assert_eq!(
                 config.center_mode,
                 if use_percent { CenterMode::Percent } else { CenterMode::Pixels }
             );
-            prop_assert_eq!(config.center_width_px, width);
-            prop_assert_eq!(config.center_height_px, height);
-            prop_assert_eq!(config.center_width_percent, width_percent);
-            prop_assert_eq!(config.center_height_percent, height_percent);
-            prop_assert_eq!(config.snap_fraction, snap);
-            prop_assert_eq!(config.reveal_taskbar_after_move, reveal);
-        }
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(200))]
-
-        #[test]
-        fn prop_legacy_nested_values_are_respected(
-            width in 1.0f64..4000.0,
-            height in 1.0f64..4000.0,
-            width_percent in 0.1f64..1.0,
-            height_percent in 0.1f64..1.0,
-            snap in 0.1f64..1.0,
-            reveal in any::<bool>()
-        ) {
-            let value = serde_json::json!({
-                "center": {
-                    "width": width,
-                    "height": height,
-                    "width_percent": width_percent,
-                    "height_percent": height_percent
-                },
-                "snap": {
-                    "left_fraction": snap
-                },
-                "monitor_move": {
-                    "reveal_taskbar_on_change": reveal
-                }
-            });
-
-            let config = WindowActionsConfig::from_json(&value);
-
-            prop_assert_eq!(config.center_mode, CenterMode::Pixels);
             prop_assert_eq!(config.center_width_px, width);
             prop_assert_eq!(config.center_height_px, height);
             prop_assert_eq!(config.center_width_percent, width_percent);
