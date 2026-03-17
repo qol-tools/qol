@@ -34,26 +34,15 @@ export function CustomSelect({ value, options, labels, onChange }) {
             return;
         }
         if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            e.stopPropagation();
             select(options[highlightIndex]);
-            containerRef.current?.querySelector('.custom-select-trigger')?.focus();
-            return;
-        }
-        if (e.key === 'Escape') {
-            e.preventDefault();
-            e.stopPropagation();
+        } else if (e.key === 'Escape' || e.key === 'Tab') {
             setOpen(false);
-            containerRef.current?.querySelector('.custom-select-trigger')?.focus();
+        } else {
             return;
         }
-        if (e.key === 'Tab') {
-            e.preventDefault();
-            e.stopPropagation();
-            setOpen(false);
-            containerRef.current?.querySelector('.custom-select-trigger')?.focus();
-            return;
-        }
+        e.preventDefault();
+        e.stopPropagation();
+        focusFieldLevel(containerRef.current);
     }, [options, highlightIndex, select]);
 
     const onListBlur = useCallback((e) => {
@@ -111,7 +100,7 @@ export function CustomSelect({ value, options, labels, onChange }) {
 
     return html`
         <div class="custom-select" ref=${containerRef}>
-            <button type="button" class="custom-select-trigger selection-wedge-pseudo-host" data-focus-chrome="parent" data-wedge-root="" onClick=${onTriggerClick}>
+            <button type="button" class="custom-select-trigger" data-focus-chrome="parent" data-wedge-root="" onClick=${onTriggerClick}>
                 <span class="custom-select-value">${selectedLabel}</span>
                 <span class="custom-select-arrow">\u25BE</span>
             </button>
@@ -121,18 +110,27 @@ export function CustomSelect({ value, options, labels, onChange }) {
                         ${options.map((opt, i) => html`
                             <div key=${opt}
                                  class="custom-select-option ${opt === value ? 'selected' : ''} ${i === highlightIndex ? 'highlighted' : ''}"
+                                 data-selected-surface=""
+                                 data-selected-surface-priority="10"
+                                 data-selected=${i === highlightIndex ? 'true' : 'false'}
                                  onClick=${() => select(opt)}
                                  onMouseEnter=${() => setHighlightIndex(i)}>
                                 ${labels?.[opt] || opt}
                             </div>
                         `)}
                     </div>
-                    <div class="custom-select-active-marker selection-wedge-pseudo-anchor selection-wedge-visible"
+                    <div class="custom-select-active-marker"
                         aria-hidden="true" style=${markerStyleState} />
                 </div>
             `}
         </div>
     `;
+}
+
+function focusFieldLevel(el) {
+    const field = el?.closest('[data-plugin-config-field-id]');
+    if (field) { field.focus(); return; }
+    el?.querySelector('.custom-select-trigger')?.focus();
 }
 
 function hiddenMarkerStyle() {

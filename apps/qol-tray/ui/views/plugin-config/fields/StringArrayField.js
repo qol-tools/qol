@@ -33,9 +33,11 @@ export function StringArrayField({ field }) {
     }, [ctx, field.id]);
 
     return html`
-        <div class="field-group selection-wedge-pseudo-host ${fieldSelectionClasses(selected)}"
+        <div tabIndex="-1" class="field-group ${fieldSelectionClasses(selected)}"
             data-plugin-config-field-id=${field.id}
             data-plugin-config-index=${index}
+            data-selected-surface=""
+            data-selected=${selected ? 'true' : 'false'}
             onMouseDown=${onSelect}
             onFocus=${onSelect}>
             <${FieldLabel} text=${field.label} description=${field.description || ''} />
@@ -63,7 +65,7 @@ function StringList({ values, showIcon, remove }) {
         <div class="string-list">
             ${values.length === 0 && html`<div class="field-empty">No items.</div>`}
             ${values.map((v, i) => html`
-                <div key=${`${v}-${i}`} class="string-item selection-wedge-pseudo-host" data-wedge-root="" data-selection-tint-root="">
+                <div key=${`${v}-${i}`} class="string-item" data-wedge-root="" data-selection-tint-root="">
                     ${showIcon && html`<img class="app-icon" src=${`/api/icon/${encodeURIComponent(v)}`}
                         width="20" height="20" onError=${hideIcon} />`}
                     <span>${v}</span>
@@ -78,9 +80,9 @@ function StringList({ values, showIcon, remove }) {
 function AddRow({ inputRef, placeholder, onKeyDown, add }) {
     return html`
         <div class="add-row">
-            <input ref=${inputRef} type="text" class="text-input selection-wedge-pseudo-host" data-wedge-root="" data-selection-tint-root=""
+            <input ref=${inputRef} type="text" class="text-input" data-wedge-root="" data-selection-tint-root=""
                 placeholder=${placeholder || 'Add item...'} onKeyDown=${onKeyDown} />
-            <button type="button" class="btn btn-ghost btn-sm btn-add selection-wedge-pseudo-host" data-wedge-root=""
+            <button type="button" class="btn btn-ghost btn-sm btn-add" data-wedge-root=""
                 onClick=${add}>+ Add</button>
         </div>
     `;
@@ -90,5 +92,5 @@ function hideIcon(e) { e.target.style.display = 'none'; }
 
 function fieldSelectionClasses(selected) {
     if (!selected) return '';
-    return 'selected is-selected selection-wedge-visible';
+    return 'selected is-selected';
 }

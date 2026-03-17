@@ -83,16 +83,18 @@ export function NumberField({ field }) {
     }, [editing]);
 
     return html`
-        <div class="field-group selection-wedge-pseudo-host ${fieldSelectionClasses(selected)}"
+        <div tabIndex="-1" class="field-group ${fieldSelectionClasses(selected)}"
             data-plugin-config-field-id=${field.id}
             data-plugin-config-index=${index}
+            data-selected-surface=""
+            data-selected=${selected ? 'true' : 'false'}
             onMouseDown=${onSelect}
             onFocus=${onSelect}>
             <${FieldLabel} text=${field.label} description=${field.description || ''} />
             ${editing
-                ? html`<input ref=${inputRef} type="text" class="number-edit selection-wedge-pseudo-host" tabIndex="0" data-wedge-root=""
+                ? html`<input ref=${inputRef} type="text" class="number-edit" tabIndex="0" data-wedge-root=""
                     value=${formatValue(value)} onBlur=${commitEdit} onKeyDown=${onEditKeyDown} />`
-                : html`<div ref=${displayRef} class="number-display selection-wedge-pseudo-host" tabIndex="0" data-wedge-root="" onKeyDown=${onKeyDown}
+                : html`<div ref=${displayRef} class="number-display" tabIndex="0" data-wedge-root="" onKeyDown=${onKeyDown}
                     onWheel=${onWheel} onClick=${() => { editInitRef.current = null; setEditing(true); }}>
                     <span class="number-value">${formatValue(value)}</span>
                     ${unit && html`<span class="number-unit">${unit}</span>`}
@@ -121,5 +123,5 @@ function formatValue(v) {
 
 function fieldSelectionClasses(selected) {
     if (!selected) return '';
-    return 'selected is-selected selection-wedge-visible';
+    return 'selected is-selected';
 }

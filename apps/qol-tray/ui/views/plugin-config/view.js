@@ -21,7 +21,7 @@ export function PluginConfigView() {
     if (ctx.sections.length === 0) return html`<div class="plugin-config-loading">No settings available.</div>`;
 
     return html`
-        <div class="plugin-config-detail">
+        <div class="plugin-config-detail" tabIndex="-1">
             ${section && html`
                 <div class="config-detail-content">
                     <header class="config-detail-header">
@@ -83,10 +83,11 @@ function VariantPanel({ group }) {
 
     return html`
         <div class="variant-panel">
-            <div class="variant-selector selection-wedge-pseudo-host ${densityClass} ${fieldSelectionClasses(selected)}"
+            <div tabIndex="-1" class="variant-selector ${densityClass} ${fieldSelectionClasses(selected)}"
                 data-plugin-config-field-id=${group.selector.id}
                 data-plugin-config-index=${index}
-                data-selection-surface=""
+                data-selected-surface=""
+                data-selected=${selected ? 'true' : 'false'}
                 onMouseDown=${onFocusSelector}
                 onFocus=${onFocusSelector}>
                 <div class="variant-selector-label">${group.selector.label}</div>
@@ -118,5 +119,5 @@ function VariantPanel({ group }) {
 
 function fieldSelectionClasses(selected) {
     if (!selected) return '';
-    return 'selected is-selected selection-wedge-visible';
+    return 'selected is-selected';
 }
