@@ -1,4 +1,4 @@
-.PHONY: build release run dev test check lint lint-fix fmt fmt-check clean contracts install
+.PHONY: build release run dev test check lint lint-fix fmt fmt-check clean contracts install auto-config
 
 build: lint
 	cargo build
@@ -93,6 +93,10 @@ contracts:
 install:
 	cargo build --release --bins
 	target/release/qol-tray-install
+
+auto-config:
+	mkdir -p ui/auto-config
+	cp ../qol-config/js/*.js ui/auto-config/
 
 wasm:
 	cd ../qol-wasm && wasm-pack build --target web --release
