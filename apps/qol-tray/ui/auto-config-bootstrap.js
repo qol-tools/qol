@@ -1,9 +1,12 @@
-import { prettyLabel } from './heuristics.js';
-import { renderConfig } from './config-renderer.js';
-import { configFromForm, getDisplaySections, renderSectionDetail } from './normalized-renderer.js';
-import { buildFieldPathIndex } from './normalized-config.js';
-import { dissolveIn } from '../lib/dissolve.js';
-import { installInput } from './config-input.js';
+import { prettyLabel } from './auto-config/heuristics.js';
+import { renderConfig } from './auto-config/config-renderer.js';
+import { configFromForm, getDisplaySections, renderSectionDetail } from './auto-config/normalized-renderer.js';
+import { buildFieldPathIndex } from './auto-config/normalized-config.js';
+import { installInput } from './auto-config/config-input.js';
+import { dissolveIn } from './lib/dissolve.js';
+import { setDissolveIn } from './auto-config/variant-renderer.js';
+
+setDissolveIn(dissolveIn);
 
 const SAVE_DEBOUNCE_MS = 400;
 const DISSOLVE_DEBOUNCE_MS = 120;
