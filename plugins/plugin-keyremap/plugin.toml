@@ -1,7 +1,7 @@
 [plugin]
 name = "Key Remap"
 description = "Remap keyboard and mouse shortcuts (Ctrl->Cmd, etc.)"
-version = "1.0.2"
+version = "1.1.0"
 author = "KMRH47"
 platforms = ["macos"]
 
