@@ -1,0 +1,16 @@
+name: Sync
+
+on:
+  push:
+    branches: ["main"]
+    paths: ["js/**"]
+
+jobs:
+  auto-config:
+    uses: qol-tools/qol-cicd/.github/workflows/file-sync.yml@main
+    with:
+      target_repo: qol-tools/qol-tray
+      source_path: js
+      target_path: ui/auto-config
+      delete_orphaned: true
+    secrets: inherit
