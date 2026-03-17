@@ -44,6 +44,12 @@ label = "Character Rules"
 section = "char_rules"
 default = []
 
+[field.char_rules.item.fields]
+from_mods = "string_array"
+from_key = "string"
+to_char = "string"
+global = "boolean"
+
 [section.key_rules]
 label = "Key Rules"
 description = "Translate keys or key groups into other modifier or key combinations."
@@ -53,6 +59,14 @@ type = "object_array"
 label = "Key Rules"
 section = "key_rules"
 default = []
+
+[field.key_rules.item.fields]
+from_mods = "string_array"
+to_mods = "string_array"
+keys = "string_array"
+from_key = "string"
+to_key = "string"
+global = "boolean"
 
 [section.mouse_rules]
 label = "Mouse Rules"
@@ -64,6 +78,12 @@ label = "Mouse Rules"
 section = "mouse_rules"
 default = []
 
+[field.mouse_rules.item.fields]
+from_mods = "string_array"
+button = "string"
+to_mods = "string_array"
+global = "boolean"
+
 [section.scroll_rules]
 label = "Scroll Rules"
 description = "Apply modifier remaps to scroll gestures."
@@ -73,3 +93,8 @@ type = "object_array"
 label = "Scroll Rules"
 section = "scroll_rules"
 default = []
+
+[field.scroll_rules.item.fields]
+from_mods = "string_array"
+to_mods = "string_array"
+global = "boolean"
