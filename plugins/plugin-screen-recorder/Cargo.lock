@@ -1114,6 +1114,8 @@ checksum = "7714e70437a7dc3ac8eb7e6f8df75fd8eb422675fc7678aff7364301092b1017"
 dependencies = [
  "equivalent",
  "hashbrown",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -1744,11 +1746,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "qol-plugin-api"
-version = "0.1.0"
-source = "git+https://github.com/qol-tools/qol-plugin-api#d78a07d3ef74f7ae8e55f0fe74133bed98814504"
+name = "qol-config"
+version = "1.1.0"
+source = "git+https://github.com/qol-tools/qol-config#8cc77a76abcaa7f0494ed17aa62dc06a01bec403"
 dependencies = [
  "dirs",
+ "indexmap",
+ "serde",
+ "serde_json",
+ "toml 0.9.12+spec-1.1.0",
+]
+
+[[package]]
+name = "qol-plugin-api"
+version = "0.1.0"
+dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-core-graphics",
@@ -1761,7 +1773,6 @@ dependencies = [
 [[package]]
 name = "qol-runtime"
 version = "0.1.0"
-source = "git+https://github.com/qol-tools/qol-runtime#8047a0bebe4493469d328c42156ca929d960c8cd"
 dependencies = [
  "serde",
  "serde_json",
@@ -1769,8 +1780,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "2.5.0"
-source = "git+https://github.com/qol-tools/qol-tray#04860edc824507bba788be747df5b621336b236a"
+version = "3.0.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -1786,6 +1796,7 @@ dependencies = [
  "objc2-foundation",
  "open",
  "png",
+ "qol-config",
  "qol-plugin-api",
  "qol-runtime",
  "reqwest",
@@ -2117,10 +2128,11 @@ dependencies = [
 
 [[package]]
 name = "screen-recorder"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "qol-config",
  "qol-tray",
  "serde",
  "serde_json",
