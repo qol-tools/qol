@@ -25,13 +25,27 @@ pub struct WindowActionsConfig {
     pub reveal_taskbar_after_move: bool,
 }
 
-fn default_center_mode() -> CenterMode { CenterMode::Pixels }
-fn default_center_width_px() -> f64 { 1152.0 }
-fn default_center_height_px() -> f64 { 892.0 }
-fn default_center_width_percent() -> f64 { 0.64 }
-fn default_center_height_percent() -> f64 { 0.79 }
-fn default_snap_fraction() -> f64 { 0.5 }
-fn default_reveal_taskbar() -> bool { true }
+fn default_center_mode() -> CenterMode {
+    CenterMode::Pixels
+}
+fn default_center_width_px() -> f64 {
+    1152.0
+}
+fn default_center_height_px() -> f64 {
+    892.0
+}
+fn default_center_width_percent() -> f64 {
+    0.64
+}
+fn default_center_height_percent() -> f64 {
+    0.79
+}
+fn default_snap_fraction() -> f64 {
+    0.5
+}
+fn default_reveal_taskbar() -> bool {
+    true
+}
 
 impl Default for WindowActionsConfig {
     fn default() -> Self {
@@ -52,7 +66,6 @@ pub fn load_config() -> WindowActionsConfig {
 }
 
 impl WindowActionsConfig {
-
     #[cfg(any(target_os = "macos", test))]
     pub fn center_size_for_monitor(&self, monitor_width: f64, monitor_height: f64) -> (f64, f64) {
         let width = self.resolve_center_width(monitor_width);
