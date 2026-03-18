@@ -1,6 +1,8 @@
 import { useCallback } from 'preact/hooks';
 
 function routeCardClick(e, index, pluginId, list, modal, actions) {
+    const configStrip = e.target.closest('.plugin-config-strip');
+    if (configStrip) { e.stopPropagation(); list.setSelectedIndex(index); actions.openConfig(); return; }
     const updateBtn = e.target.closest('.plugin-update:not([disabled])');
     if (updateBtn) { e.stopPropagation(); actions.updatePlugin(pluginId); return; }
     const cogBtn = e.target.closest('.plugin-cog');
@@ -16,6 +18,6 @@ function routeCardClick(e, index, pluginId, list, modal, actions) {
 export function useCardClickHandler(list, modal, actions) {
     return useCallback(
         (e, i, id) => routeCardClick(e, i, id, list, modal, actions),
-        [actions.updatePlugin, actions.openSelected]
+        [actions.updatePlugin, actions.openSelected, actions.openConfig]
     );
 }

@@ -44,6 +44,9 @@ function PluginCard({ plugin, index, selectedIndex, contextMenuOpen, updating, o
             ${plugin.loaded === false && html`<div class="plugin-load-state" data-selected-text="">Not loaded</div>`}
             ${plugin.update_available && html`<${PluginUpdateButton} plugin=${plugin} updating=${updating} />`}
             <${PluginCogButton} />
+            ${plugin.has_custom_ui && plugin.has_config && html`
+                <button class="plugin-config-strip" data-config="true">Config</button>
+            `}
             <div class=${contextMenuClassName(contextMenuOpen, index === selectedIndex)}>
                 ${plugin.update_available && html`<button class="context-update">Update</button>`}
                 <button class="context-delete">Delete</button>

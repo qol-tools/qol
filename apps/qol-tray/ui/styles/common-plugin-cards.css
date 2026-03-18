@@ -299,3 +299,33 @@
     border-color: var(--success);
     box-shadow: 0 0 12px var(--success-glow);
 }
+
+.plugin-config-strip {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 20%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--layer-ink-45);
+    backdrop-filter: blur(4px);
+    border: none;
+    border-top: 1px solid var(--border-subtle);
+    border-bottom-left-radius: inherit;
+    border-bottom-right-radius: inherit;
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s;
+    z-index: var(--z-control);
+}
+
+.plugin-card:hover .plugin-config-strip,
+.plugin-card.selected .plugin-config-strip {
+    opacity: 1;
+}

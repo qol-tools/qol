@@ -33,12 +33,13 @@ function routeNormalKey(e, list, actions) {
         ArrowLeft: () => actions.navigateInGrid('left'),
         ArrowRight: () => actions.navigateInGrid('right'),
         Enter: actions.openSelected,
+        c: () => actions.openConfig(),
     }));
 }
 
 export function usePluginsKeyHandler(list, modal, actions) {
     return useCallback(
         e => routePluginsKey(e, list, modal, actions),
-        [actions.confirmUninstall, actions.openSelected, actions.navigateInGrid]
+        [actions.confirmUninstall, actions.openSelected, actions.openConfig, actions.navigateInGrid]
     );
 }
