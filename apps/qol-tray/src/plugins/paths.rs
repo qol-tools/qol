@@ -33,20 +33,30 @@ pub(crate) fn config_contract_path(plugin_root: &Path) -> PathBuf {
     plugin_root.join(CONFIG_CONTRACT_FILE_NAME)
 }
 
-pub(crate) fn has_settings_surface(plugin_root: &Path) -> bool {
-    if config_path(plugin_root).exists() {
+pub(crate) fn has_custom_ui(plugin_root: &Path) -> bool {
+    if plugin_root.join("ui/index.html").exists() {
         return true;
     }
+    #[cfg(feature = "dev")]
+    if let Some(id) = plugin_root.file_name().and_then(|n| n.to_str()) {
+        if let Some(wt) = resolve_active_worktree_path(id) {
+            return wt.join("ui/index.html").exists();
+        }
+    }
+    false
+}
+
+pub(crate) fn has_config(plugin_root: &Path) -> bool {
     if config_contract_path(plugin_root).exists() {
         return true;
     }
-    let Some(plugin_id) = plugin_root.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-    let Some(worktree_path) = resolve_active_worktree_path(plugin_id) else {
-        return false;
-    };
-    config_path(&worktree_path).exists() || config_contract_path(&worktree_path).exists()
+    #[cfg(feature = "dev")]
+    if let Some(id) = plugin_root.file_name().and_then(|n| n.to_str()) {
+        if let Some(wt) = resolve_active_worktree_path(id) {
+            return config_contract_path(&wt).exists();
+        }
+    }
+    false
 }
 
 #[cfg(feature = "dev")]
