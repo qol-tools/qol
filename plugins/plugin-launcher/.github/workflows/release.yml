@@ -15,4 +15,4 @@ permissions:
 
 jobs:
   release:
-    uses: qol-tools/qol-cicd/.github/workflows/plugin-release.yml@feature/cicd-consolidation
+    uses: qol-tools/qol-cicd/.github/workflows/plugin-release.yml@main
