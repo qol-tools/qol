@@ -80,7 +80,7 @@ Edit `config.json`:
 
 ## License
 
-MIT
+PolyForm Noncommercial 1.0.0
 
 
 
