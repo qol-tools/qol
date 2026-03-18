@@ -33,4 +33,4 @@ This crate is wrapped by [qol-wasm](https://github.com/qol-tools/qol-wasm) for u
 
 ## License
 
-MIT
+PolyForm Noncommercial 1.0.0

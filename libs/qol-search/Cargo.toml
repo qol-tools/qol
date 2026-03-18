@@ -3,7 +3,7 @@ name = "qol-search"
 version = "0.2.1"
 edition = "2021"
 description = "Fuzzy search algorithm for qol-tools"
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
