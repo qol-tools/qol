@@ -19,4 +19,4 @@ Most plugins should depend on `qol-plugin-api` instead of this crate directly. U
 qol-runtime = { git = "https://github.com/qol-tools/qol-runtime" }
 ```
 
-License: MIT
+License: PolyForm Noncommercial 1.0.0
