@@ -47,4 +47,4 @@ Get one real end-to-end path working:
 
 ## License
 
-MIT
+PolyForm Noncommercial 1.0.0
