@@ -18,4 +18,4 @@ A keyboard and mouse remapping plugin for [QoL Tray](https://github.com/qol-tool
 
 Requires Accessibility permission (System Settings > Privacy & Security > Accessibility).
 
-License: MIT
+License: PolyForm Noncommercial 1.0.0
