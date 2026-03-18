@@ -32,4 +32,4 @@ A keyboard-driven application and file launcher for [QoL Tray](https://github.co
 | macOS | Supported |
 | Linux (X11) | Supported |
 
-License: MIT
+License: PolyForm Noncommercial 1.0.0

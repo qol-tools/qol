@@ -3,7 +3,7 @@ name = "launcher"
 version = "1.4.1"
 edition = "2021"
 description = "Application and file launcher plugin for QoL Tray"
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 
 [dependencies]
 gpui = { version = "0.2", features = ["test-support"] }
