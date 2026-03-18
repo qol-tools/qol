@@ -31,7 +31,15 @@ impl DaemonState {
         let main_target = config.main_target();
         let persisted_devices = load_persisted_devices(&config);
 
-        let backend = ZigbeeBackend::open(&config.backend, persisted_devices)?;
+        let backend = match ZigbeeBackend::open(&config.backend, persisted_devices.clone()) {
+            Ok(b) => b,
+            Err(e) if is_permission_denied(&e) => {
+                eprintln!("serial permission denied, attempting fix");
+                fix_serial_permission()?;
+                ZigbeeBackend::open(&config.backend, persisted_devices)?
+            }
+            Err(e) => return Err(e),
+        };
 
         if config.backend.network_key == "auto" {
             config.backend.network_key = format_key(backend.network_key());
@@ -230,4 +238,30 @@ fn parse_color(color_hex: &str) -> RgbColor {
 
 fn parse_hex_pair(value: &str) -> u8 {
     u8::from_str_radix(value, 16).unwrap_or(0)
+}
+
+fn is_permission_denied(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|e| e.to_string().to_lowercase().contains("permission denied"))
+}
+
+fn fix_serial_permission() -> Result<()> {
+    let user = std::env::var("USER").map_err(|_| anyhow::anyhow!("USER env var not set"))?;
+
+    let _ = std::process::Command::new("pkexec")
+        .args(["usermod", "-aG", "dialout", &user])
+        .status();
+
+    for entry in std::fs::read_dir("/dev").into_iter().flatten().flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if name.starts_with("ttyUSB") || name.starts_with("ttyACM") {
+            let _ = std::process::Command::new("pkexec")
+                .args(["chmod", "660", &entry.path().to_string_lossy()])
+                .status();
+        }
+    }
+
+    Ok(())
 }
