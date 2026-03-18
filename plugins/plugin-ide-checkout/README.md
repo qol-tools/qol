@@ -55,4 +55,4 @@ Edit `config.json` to add custom apps or scripts.
 
 ## License
 
-MIT
+PolyForm Noncommercial 1.0.0
