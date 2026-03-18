@@ -13,6 +13,8 @@ pub struct PluginManifest {
     pub dependencies: Option<Dependencies>,
     #[serde(default)]
     pub runtime: Option<RuntimeConfig>,
+    #[serde(default)]
+    pub capabilities: Capabilities,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -102,4 +104,11 @@ pub struct DaemonConfig {
     pub command: String,
     #[serde(default)]
     pub socket: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Capabilities {
+    #[serde(default)]
+    pub serial: bool,
 }
