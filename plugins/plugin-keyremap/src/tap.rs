@@ -86,15 +86,13 @@ fn run_tap(state: Arc<TapState>) {
         CGEventTapPlacement::HeadInsertEventTap,
         CGEventTapOptions::Default,
         events,
-        move |_proxy, event_type, event| {
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                handle_event(&state, event_type, event)
-            })) {
-                Ok(result) => result,
-                Err(_) => {
-                    eprintln!("[keyremap] panic in event callback — passing event through");
-                    CallbackResult::Keep
-                }
+        move |_proxy, event_type, event| match std::panic::catch_unwind(
+            std::panic::AssertUnwindSafe(|| handle_event(&state, event_type, event)),
+        ) {
+            Ok(result) => result,
+            Err(_) => {
+                eprintln!("[keyremap] panic in event callback — passing event through");
+                CallbackResult::Keep
             }
         },
         || CFRunLoop::run_current(),
