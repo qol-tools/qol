@@ -15,12 +15,13 @@ export function usePluginConfigContext() {
     return useContext(PluginConfigContext);
 }
 
-export function PluginConfigProvider({ pluginId, children }) {
+export function PluginConfigProvider({ pluginId, mode, children }) {
     if (!pluginId) return html`<${PluginConfigContext.Provider} value=${null}>${children}<//>`;
-    return html`<${ActivePluginConfigProvider} pluginId=${pluginId}>${children}<//>`;
+    if (mode === 'ui') return html`<${PluginConfigContext.Provider} value=${{ pluginId, mode }}>${children}<//>`;
+    return html`<${ActivePluginConfigProvider} pluginId=${pluginId} mode=${mode}>${children}<//>`;
 }
 
-function ActivePluginConfigProvider({ pluginId, children }) {
+function ActivePluginConfigProvider({ pluginId, mode, children }) {
     const config = usePluginConfig(pluginId);
     const [activeSectionIndex, setActiveSectionIndex, , markRestored] = usePersistedIndex(
         `plugin-config-section-${pluginId}`, 0,
@@ -70,6 +71,8 @@ function ActivePluginConfigProvider({ pluginId, children }) {
 
     const value = useMemo(() => ({
         ...config,
+        pluginId,
+        mode,
         activeSectionIndex: safeIndex,
         setActiveSectionIndex,
         activeSection,
@@ -81,6 +84,8 @@ function ActivePluginConfigProvider({ pluginId, children }) {
         setSelectedFieldId,
     }), [
         config,
+        pluginId,
+        mode,
         safeIndex,
         activeSection,
         navigate,

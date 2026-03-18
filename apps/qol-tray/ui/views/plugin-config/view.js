@@ -15,6 +15,14 @@ import { dissolveIn, DISSOLVE_PRESETS } from '../../lib/dissolve.js';
 
 export function PluginConfigView() {
     const ctx = usePluginConfigContext();
+
+    if (ctx?.mode === 'ui') {
+        return html`<iframe
+            src=${`/plugins/${ctx.pluginId}/`}
+            class="plugin-custom-ui"
+        />`;
+    }
+
     const section = ctx?.activeSection;
 
     if (!ctx || ctx.loading) return html`<div class="plugin-config-loading">Loading configuration...</div>`;

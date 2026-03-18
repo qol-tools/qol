@@ -1,5 +1,11 @@
 @import "./common-config-primitives.css";
 
+.plugin-custom-ui {
+    width: 100%;
+    height: 100%;
+    border: none;
+}
+
 .config-detail-content {
     display: flex;
     flex-direction: column;

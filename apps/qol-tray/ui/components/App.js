@@ -22,9 +22,9 @@ function AppShell() {
     useScrollFollow();
     const dissolveRef = useRef(null);
     const onDissolve = useCallback((reload) => dissolveRef.current?.(reload), []);
-    const { devEnabled, appVersion, viewOrder, activeViewId, activePluginId, switchView, openPluginConfig, closePluginConfig, mounted, updateState, handleSidebarAction, handleViewClick, worktrees, defaultWorktree, setDefaultWorktree } = useApp({ onDissolve });
+    const { devEnabled, appVersion, viewOrder, activeViewId, activePluginId, activePluginMode, switchView, openPluginConfig, openPluginUi, closePluginConfig, mounted, updateState, handleSidebarAction, handleViewClick, worktrees, defaultWorktree, setDefaultWorktree } = useApp({ onDissolve });
     return html`
-        <${PluginConfigProvider} pluginId=${activePluginId}>
+        <${PluginConfigProvider} pluginId=${activePluginId} mode=${activePluginMode}>
             <${ViewKeyboardProvider}>
                 <${AppKeyboardRouting}
                     activePluginId=${activePluginId}
@@ -39,7 +39,7 @@ function AppShell() {
                             pluginOpen=${!!activePluginId} onViewClick=${handleViewClick} onBack=${closePluginConfig} /></aside>
                         <main id="content">
                             ${activePluginId && html`<${PluginConfigView} />`}
-                            ${renderMountedViews({ mounted, activeViewId, activePluginId, openPluginConfig })}
+                            ${renderMountedViews({ mounted, activeViewId, activePluginId, openPluginConfig, openPluginUi })}
                         </main>
                     </div>
                     <div class="app-footer">
