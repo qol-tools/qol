@@ -27,4 +27,4 @@ Settings are editable via the qol-tray UI under OS Themes.
 
 ## License
 
-MIT
+PolyForm Noncommercial 1.0.0
