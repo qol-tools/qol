@@ -194,7 +194,28 @@ fn parse_minimal_manifest() {
     assert!(manifest.plugin.author.is_none());
     assert!(manifest.plugin.platforms.is_none());
     assert!(manifest.daemon.is_none());
+    assert!(!manifest.capabilities.serial);
     assert!(manifest.menu.items.is_empty());
+}
+
+#[test]
+fn parse_capabilities_section() {
+    let toml = r#"
+        [plugin]
+        name = "Serial Plugin"
+        description = ""
+        version = "0.0.1"
+
+        [menu]
+        label = "M"
+        items = []
+
+        [capabilities]
+        serial = true
+    "#;
+
+    let manifest: PluginManifest = toml::from_str(toml).unwrap();
+    assert!(manifest.capabilities.serial);
 }
 
 #[test]
