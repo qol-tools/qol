@@ -41,7 +41,11 @@ fn should_visit_entry(entry: &DirEntry) -> bool {
     }
 
     let name = entry.file_name().to_string_lossy();
-    !name.starts_with('.') && name != "node_modules" && name != "target" && name != "vendor"
+    !name.starts_with('.')
+        && name != "node_modules"
+        && name != "target"
+        && name != "vendor"
+        && name != "worktrees"
 }
 
 fn is_plugin_dir(path: &Path) -> bool {

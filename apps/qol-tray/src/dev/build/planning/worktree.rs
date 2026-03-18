@@ -27,8 +27,7 @@ fn resolve_plugin_worktree(dev_link_path: &Path, branch: Option<&str>) -> PathBu
         return dev_link_path.to_path_buf();
     }
 
-    #[cfg(feature = "dev")]
-    log::info!(
+    log::debug!(
         "[worktree] resolved {} -> {}",
         dev_link_path.display(),
         match_path.display()
@@ -50,7 +49,7 @@ fn find_git_worktree_by_branch(repo_path: &Path, branch: &str) -> Option<PathBuf
     run_git_worktree_list(repo_path).and_then(|stdout| parse_worktree_for_branch(&stdout, branch))
 }
 
-fn find_git_worktree_base(repo_path: &Path) -> Option<PathBuf> {
+pub fn find_git_worktree_base(repo_path: &Path) -> Option<PathBuf> {
     run_git_worktree_list(repo_path).and_then(|stdout| parse_worktree_base(&stdout))
 }
 
