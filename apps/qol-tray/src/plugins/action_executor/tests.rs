@@ -5,8 +5,8 @@ use super::tracking::{
 };
 use super::*;
 use crate::plugins::manifest::{
-    ActionType, DaemonConfig, MenuConfig, MenuItem, PluginInfo, PluginManifest, RuntimeConfig,
-    CURRENT_MANIFEST_VERSION,
+    ActionType, Capabilities, DaemonConfig, MenuConfig, MenuItem, PluginInfo, PluginManifest,
+    RuntimeConfig, CURRENT_MANIFEST_VERSION,
 };
 use crate::plugins::{Plugin, PluginId};
 use std::collections::HashMap;
@@ -52,6 +52,7 @@ fn make_plugin(
         daemon,
         dependencies: None,
         runtime,
+        capabilities: Capabilities::default(),
     };
 
     Plugin::new(
