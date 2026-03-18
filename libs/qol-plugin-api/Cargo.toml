@@ -3,7 +3,7 @@ name = "qol-plugin-api"
 version = "0.1.0"
 edition = "2021"
 description = "Shared library for QoL Tray plugins"
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 
 [features]
 default = ["gpui"]

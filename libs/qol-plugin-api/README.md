@@ -22,4 +22,4 @@ Optional features:
 - `app-icons` — enable app icon retrieval
 - `gpui` (default) — GPUI integration helpers
 
-License: MIT
+License: PolyForm Noncommercial 1.0.0
