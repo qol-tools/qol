@@ -1,4 +1,4 @@
-name: Rust CI
+name: CI
 
 on:
   push:
@@ -8,4 +8,4 @@ on:
 
 jobs:
   test:
-    uses: qol-tools/qol-cicd/.github/workflows/plugin-ci.yml@main
+    uses: qol-tools/qol-cicd/.github/workflows/lib-ci.yml@main

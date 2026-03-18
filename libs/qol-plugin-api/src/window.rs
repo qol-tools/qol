@@ -55,10 +55,7 @@ impl<T: 'static> ActiveWindows<T> {
     }
 
     pub fn iter(&self) -> Vec<(MonitorKey, WindowHandle<T>)> {
-        self.windows
-            .iter()
-            .map(|(k, v)| (*k, v.clone()))
-            .collect()
+        self.windows.iter().map(|(k, v)| (*k, *v)).collect()
     }
 
     pub fn destroy_non_target(&mut self, target: MonitorKey, cx: &mut App)
