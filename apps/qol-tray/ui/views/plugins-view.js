@@ -15,7 +15,7 @@ import { useCardClickHandler } from './plugins/click-router.js';
 import { matchesQuery, clampIndex } from '../utils/collections.js';
 
 
-export function PluginsView({ onOpenPluginConfig }) {
+export function PluginsView({ onOpenPluginConfig, onOpenPluginUi }) {
     const { searchQuery } = usePaletteContext();
     const list = usePluginsList();
     const filtered = useMemo(
@@ -29,7 +29,7 @@ export function PluginsView({ onOpenPluginConfig }) {
     }, [filtered.length, list.setSelectedIndex]);
     const filteredList = { ...list, plugins: filtered, pluginsRef: filteredRef };
     const modal = usePluginsModal(filtered);
-    const actions = usePluginActions(filteredList, modal, onOpenPluginConfig);
+    const actions = usePluginActions(filteredList, modal, onOpenPluginConfig, onOpenPluginUi);
     const handleKey = usePluginsKeyHandler(filteredList, modal, actions);
     useRegisterViewKeyboard('plugins', handleKey, actions.isBlocking);
     const handleCardClick = useCardClickHandler(filteredList, modal, actions);

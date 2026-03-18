@@ -78,7 +78,7 @@ function PluginCogButton() {
 
 function cardClassName(plugin, selected) {
     const classes = ['plugin-card'];
-    if (!plugin.has_ui) classes.push('no-ui');
+    if (!plugin.has_custom_ui && !plugin.has_config) classes.push('no-ui');
     if (plugin.update_available) classes.push('has-update');
     if (plugin.loaded === false) classes.push('not-loaded');
     if (selected) classes.push('selected');
