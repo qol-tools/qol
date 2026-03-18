@@ -499,7 +499,13 @@ function tryInitGPU(canvas, s) {
 }
 
 function runDissolveGPU(canvas, bgColor, targetColor, onComplete, opts) {
-    const s = createEvaporateState(canvas, bgColor, targetColor, opts);
+    if (!gpuModule) return null;
+    // Compute state on offscreen canvas — keeps main canvas free for WebGL
+    // (browsers only allow one context type per canvas)
+    const offscreen = document.createElement('canvas');
+    const s = createEvaporateState(offscreen, bgColor, targetColor, opts);
+    canvas.width = s.W;
+    canvas.height = s.H;
     const gpu = tryInitGPU(canvas, s);
     if (!gpu) return null;
     const buf = gpu.particleData;
@@ -509,6 +515,11 @@ function runDissolveGPU(canvas, bgColor, targetColor, onComplete, opts) {
         canvas._dissolveCancel = null;
     }
     function tick() {
+        if (gpu.gl.isContextLost()) {
+            cancel();
+            if (onComplete) onComplete();
+            return;
+        }
         const progress = s.total > 0 ? s.cursor / s.total : 0;
         const ticks = Math.max(1, Math.ceil(s.ticksPerFrame * progress * 2));
         for (let t = 0; t < ticks; t++) activateBatch(s);
@@ -611,7 +622,7 @@ export function runDissolve(canvas, cssColor, onComplete, targetCssColor, opts) 
 }
 
 export function cancelExistingDissolve(container) {
-    const old = container.querySelector('.dissolve-canvas');
+    const old = container.querySelector(':scope > .dissolve-canvas');
     if (!old) return;
     if (old._dissolveCancel) old._dissolveCancel();
     old.remove();
