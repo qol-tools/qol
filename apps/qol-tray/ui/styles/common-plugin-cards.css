@@ -300,32 +300,43 @@
     box-shadow: 0 0 12px var(--success-glow);
 }
 
-.plugin-config-strip {
+.plugin-ctrl-overlay {
     position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 20%;
+    inset: 0;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--layer-ink-45);
-    backdrop-filter: blur(4px);
-    border: none;
-    border-top: 1px solid var(--border-subtle);
-    border-bottom-left-radius: inherit;
-    border-bottom-right-radius: inherit;
-    color: var(--text-muted);
-    font-size: var(--text-xs);
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(2px);
+    border-radius: inherit;
+    color: var(--accent);
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-semibold);
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    cursor: pointer;
-    opacity: 0;
-    transition: opacity 0.15s;
-    z-index: var(--z-control);
+    letter-spacing: 0.08em;
+    z-index: var(--z-popover);
+    pointer-events: none;
 }
 
-.plugin-card:hover .plugin-config-strip,
-.plugin-card.selected .plugin-config-strip {
+.plugin-ctrl-overlay.disabled {
+    color: var(--text-disabled);
+}
+
+.context-config {
+    display: block;
+    width: 100%;
+    padding: var(--pad-token-input);
+    border: none;
+    background: transparent;
+    font-size: var(--fs-md);
+    text-align: left;
+    cursor: pointer;
+    transition: background var(--transition);
     opacity: 1;
+    font-weight: var(--fw-semibold);
+    color: var(--text-secondary);
+}
+
+.context-config:hover {
+    background: var(--bg-hover);
 }
