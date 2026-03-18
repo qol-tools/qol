@@ -42,36 +42,20 @@ pub fn execute_action_once(action: &str) -> Result<()> {
 
 pub fn run(socket_path: &str) -> Result<()> {
     let listener = bind_listener(socket_path)?;
-    let mut state: Option<DaemonState> = None;
-    let mut monitor_started = false;
+
+    let mut state = DaemonState::new()?;
+    eprintln!("coordinator ready");
+
+    let events_rx = state.backend().events().clone();
+    thread::Builder::new()
+        .name("device-monitor".into())
+        .spawn(move || device_monitor_loop(events_rx))
+        .context("failed to spawn device monitor")?;
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                let s = match state.as_mut() {
-                    Some(s) => s,
-                    None => match DaemonState::new() {
-                        Ok(s) => {
-                            eprintln!("coordinator ready");
-                            state = Some(s);
-                            state.as_mut().unwrap()
-                        }
-                        Err(e) => {
-                            eprintln!("coordinator init failed: {e:#}");
-                            let _ = write_error(stream, &format!("{e:#}"));
-                            continue;
-                        }
-                    },
-                };
-                if !monitor_started {
-                    let events_rx = s.backend().events().clone();
-                    thread::Builder::new()
-                        .name("device-monitor".into())
-                        .spawn(move || device_monitor_loop(events_rx))
-                        .ok();
-                    monitor_started = true;
-                }
-                if let Err(error) = handle_stream(s, stream) {
+                if let Err(error) = handle_stream(&mut state, stream) {
                     eprintln!("{error:#}");
                 }
             }
@@ -119,16 +103,6 @@ fn format_ieee(addr: &[u8; 8]) -> String {
         .map(|b| format!("{:02X}", b))
         .collect::<Vec<_>>()
         .join(":")
-}
-
-fn write_error(mut stream: UnixStream, message: &str) -> Result<()> {
-    let resp = serde_json::to_string(&DaemonResponse {
-        status: "error",
-        message: Some(message.to_string()),
-    })?;
-    stream.write_all(resp.as_bytes())?;
-    stream.write_all(b"\n")?;
-    Ok(())
 }
 
 fn bind_listener(socket_path: &str) -> Result<UnixListener> {
