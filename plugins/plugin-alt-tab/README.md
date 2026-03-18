@@ -43,4 +43,4 @@ Configured via `config.json` or the QoL Tray settings UI.
 | macOS | Supported |
 | Linux (X11) | Supported |
 
-License: MIT
+License: PolyForm Noncommercial 1.0.0
