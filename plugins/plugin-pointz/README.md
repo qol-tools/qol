@@ -55,4 +55,4 @@ cargo test
 
 ## License
 
-MIT
+PolyForm Noncommercial 1.0.0
