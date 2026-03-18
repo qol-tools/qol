@@ -1,5 +1,32 @@
 use std::cmp::Ordering;
 
+/// Fixed-size byte array with a sentinel prefix. The dev test-update fixture
+/// endpoint locates this sentinel in the binary and overwrites it with a test
+/// version string. At runtime, if the leading bytes are not "@@", the contents
+/// are used as the display version — proving the patched binary is running.
+#[cfg(feature = "dev")]
+#[used]
+#[no_mangle]
+pub static QOL_TEST_VERSION: [u8; 32] = *b"@@QOL_TEST_VER@@\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+
+#[cfg(feature = "dev")]
+const SENTINEL: &[u8] = b"@@QOL_TEST_VER@@";
+
+#[cfg(feature = "dev")]
+pub fn test_version_override() -> Option<&'static str> {
+    // read_volatile prevents the compiler from constant-folding the sentinel
+    // check — the binary may have been patched after compilation.
+    let bytes: [u8; 32] = unsafe { std::ptr::read_volatile(&QOL_TEST_VERSION) };
+    if bytes.starts_with(SENTINEL) {
+        return None;
+    }
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    // SAFETY: the static lives for the program's lifetime; we just verified
+    // the content via the volatile copy so the slice bounds are correct.
+    let slice = unsafe { std::slice::from_raw_parts(QOL_TEST_VERSION.as_ptr(), end) };
+    std::str::from_utf8(slice).ok()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Version {
     parts: Vec<u32>,

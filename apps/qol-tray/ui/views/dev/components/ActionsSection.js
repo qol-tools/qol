@@ -1,5 +1,7 @@
 import { html } from '../../../lib/html.js';
+import { useState } from 'preact/hooks';
 import { BuildResults } from './BuildResults.js';
+import { SELF_UPDATE_EVENT } from '../../../components/app/useSidebarActions.js';
 
 function ReloadCard({ building, buildResults, lastReload, error, reloadPlugins }) {
     return html`
@@ -31,6 +33,55 @@ function MockCard({ mockTesting, triggerMockFlows }) {
     `;
 }
 
+function SelfUpdateCard() {
+    const [result, setResult] = useState(null);
+    const [running, setRunning] = useState(false);
+    async function dryRun() {
+        if (running) return;
+        setRunning(true);
+        setResult(null);
+        try {
+            const res = await fetch('/api/dev/test-self-update', { method: 'POST' });
+            setResult(await res.json());
+        } catch (e) {
+            setResult({ ok: false, steps: [{ step: 'request', ok: false, detail: e.message }] });
+        }
+        setRunning(false);
+    }
+    async function liveTest(e) {
+        e.stopPropagation();
+        if (running) return;
+        try {
+            const res = await fetch('/api/dev/test-self-update?live=1', { method: 'POST' });
+            if (!res.ok) {
+                setResult({ ok: false, steps: [...(result?.steps || []), { step: 'live', ok: false, detail: 'HTTP ' + res.status }] });
+                return;
+            }
+        } catch {
+            setResult({ ok: false, steps: [...(result?.steps || []), { step: 'live', ok: false, detail: 'Failed to configure fixture URL' }] });
+            return;
+        }
+        setResult(null);
+        setRunning(false);
+        document.dispatchEvent(new Event(SELF_UPDATE_EVENT));
+    }
+    const showLive = result?.ok && !running;
+    return html`
+        <div class=${'dev-card' + (result && !result.ok ? ' has-error' : '')} onClick=${dryRun}>
+            <div class="dev-card-content">
+                <h3>${running ? 'Running...' : 'Test Self-Update'}</h3>
+                <p>Dry-run: downloads fixture tarball from itself, extracts, and verifies the binary.</p>
+                ${result && html`<ul class="test-update-steps">
+                    ${result.steps.map(s => html`<li class=${s.ok ? 'step-ok' : 'step-fail'}>
+                        <strong>${s.step}</strong> ${s.ok ? '\u2713' : '\u2717'} ${s.detail}
+                    </li>`)}
+                </ul>`}
+                ${showLive && html`<button class="dev-live-update-btn" onClick=${liveTest}>Install + restart for real</button>`}
+            </div>
+        </div>
+    `;
+}
+
 export function ActionsSection({ ctrl }) {
     return html`
         <section class="dev-section">
@@ -43,6 +94,7 @@ export function ActionsSection({ ctrl }) {
                 reloadPlugins=${ctrl.reloadPlugins}
             />
             <${MockCard} mockTesting=${ctrl.mockTesting} triggerMockFlows=${ctrl.triggerMockFlows} />
+            <${SelfUpdateCard} />
         </section>
     `;
 }

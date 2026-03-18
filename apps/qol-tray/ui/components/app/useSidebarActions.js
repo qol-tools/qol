@@ -1,10 +1,12 @@
-import { useCallback } from 'preact/hooks';
+import { useCallback, useEffect } from 'preact/hooks';
 import { readResponseText } from '../../api/client.js';
 
 const RECOMPILE_ERRORS = {
     404: 'Connected daemon is older than this UI. Stop it and launch the current checkout.',
     409: 'Recompile already in progress'
 };
+
+export const SELF_UPDATE_EVENT = 'qol:self-update';
 
 export function useSidebarActions({
     checkForUpdate,
@@ -14,7 +16,7 @@ export function useSidebarActions({
     failDevRecompile,
     defaultWorktreeRef
 }) {
-    return useCallback(async (action) => {
+    const handler = useCallback(async (action) => {
         if (action === 'check-update') {
             checkForUpdate();
             return;
@@ -61,4 +63,12 @@ export function useSidebarActions({
         failDevRecompile,
         failSelfUpdate
     ]);
+
+    useEffect(() => {
+        const listener = () => handler('self-update');
+        document.addEventListener(SELF_UPDATE_EVENT, listener);
+        return () => document.removeEventListener(SELF_UPDATE_EVENT, listener);
+    }, [handler]);
+
+    return handler;
 }
