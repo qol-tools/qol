@@ -90,3 +90,4 @@ clean:
 install:
 	cargo build --release --bins
 	target/release/qol-tray-install
+

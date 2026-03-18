@@ -21,6 +21,10 @@ pub(super) async fn dev_enabled() -> Json<bool> {
 }
 
 pub(super) async fn get_version() -> &'static str {
+    #[cfg(feature = "dev")]
+    if let Some(v) = crate::version::test_version_override() {
+        return v;
+    }
     env!("CARGO_PKG_VERSION")
 }
 

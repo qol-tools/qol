@@ -68,6 +68,10 @@ semver = "1"
 # Filesystem traversal for dev plugin discovery
 walkdir = "2"
 
+# Archive extraction for self-update
+flate2 = "1"
+tar = "0.4"
+
 qol-runtime = { git = "https://github.com/qol-tools/qol-runtime" }
 qol-plugin-api = { git = "https://github.com/qol-tools/qol-plugin-api", default-features = false, features = ["app-icons"] }
 png = "0.17"

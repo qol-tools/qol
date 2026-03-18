@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::io::Write;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio_stream::StreamExt;
@@ -32,6 +33,7 @@ async fn download_asset(url: &str, dest: &Path, events: &EventBus) -> Result<()>
             last_percent = percent;
         }
     }
+    file.sync_all()?;
     Ok(())
 }
 
@@ -84,22 +86,19 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
     let (url, dest) = resolve_update_url()?;
 
     log::info!("Downloading update from {}", url);
-    download_asset(&url, &dest, &events).await?;
-    events.send(DaemonEvent::UpdateComplete);
+    if let Err(e) = download_asset(&url, &dest, &events).await {
+        let _ = std::fs::remove_file(&dest);
+        return Err(e);
+    }
 
     install_asset(&dest)?;
+    events.send(DaemonEvent::UpdateComplete);
+    // Give SSE time to deliver the event before exiting
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     log::info!("Update installed, restarting...");
-    let restart_binary = std::env::current_exe()
-        .map_err(|e| anyhow::anyhow!("Failed to resolve current executable for restart: {}", e))?;
-    std::process::Command::new(&restart_binary)
-        .spawn()
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to spawn {} for restart: {}",
-                restart_binary.display(),
-                e
-            )
-        })?;
-    std::process::exit(0);
+    let binary = std::env::current_exe()?;
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    let error = std::process::Command::new(&binary).args(&args).exec();
+    anyhow::bail!("exec restart failed: {error}")
 }
