@@ -15,4 +15,4 @@ Returns `None` for invalid input.
 
 ## License
 
-MIT
+PolyForm Noncommercial 1.0.0
