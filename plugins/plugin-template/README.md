@@ -45,4 +45,4 @@ A current binary-first `qol-tray` plugin template for Rust plugins.
 
 ## License
 
-MIT
+PolyForm Noncommercial 1.0.0
