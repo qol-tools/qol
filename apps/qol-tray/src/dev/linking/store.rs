@@ -35,9 +35,13 @@ pub fn create_link(source: &Path, config_dir: &Path) -> Result<String, String> {
         return Err("Already linked".to_string());
     }
 
-    links.insert(plugin_id.clone(), source.to_path_buf());
+    // Always store the canonical (main) repo path — worktree resolution is
+    // applied at runtime based on the active branch.
+    let canonical =
+        crate::dev::find_git_worktree_base(source).unwrap_or_else(|| source.to_path_buf());
+    links.insert(plugin_id.clone(), canonical.clone());
     save_dev_links(config_dir, &links)?;
-    log::info!("Created dev-link: {} -> {:?}", plugin_id, source);
+    log::info!("Created dev-link: {} -> {:?}", plugin_id, canonical);
     Ok(plugin_id)
 }
 

@@ -13,7 +13,7 @@ pub use build::build_linked_plugins_with_progress;
 pub use build::build_qol_tray_self_with_progress;
 pub use build::default_build_application_service;
 pub use build::load_build_fingerprints;
-pub use build::planning::worktree::resolve_worktree_paths;
+pub use build::planning::worktree::{find_git_worktree_base, resolve_worktree_paths};
 pub use build::save_build_fingerprints;
 pub use build::BuildApplicationService;
 pub use build::BuildResult;
