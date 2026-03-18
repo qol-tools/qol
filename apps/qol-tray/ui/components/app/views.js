@@ -41,11 +41,12 @@ export function renderMountedViews({
     mounted,
     activeViewId,
     activePluginId,
-    openPluginConfig
+    openPluginConfig,
+    openPluginUi
 }) {
     const active = (id) => activeViewId === id && !activePluginId;
     return html`
-        ${mounted.has('plugins') && html`<${ViewSlot} active=${active('plugins')}><${PluginsView} onOpenPluginConfig=${openPluginConfig} /><//>`}
+        ${mounted.has('plugins') && html`<${ViewSlot} active=${active('plugins')}><${PluginsView} onOpenPluginConfig=${openPluginConfig} onOpenPluginUi=${openPluginUi} /><//>`}
         ${mounted.has('store') && html`<${ViewSlot} active=${active('store')}><${StoreView} /><//>`}
         ${mounted.has('hotkeys') && html`<${ViewSlot} active=${active('hotkeys')}><${HotkeysView} /><//>`}
         ${mounted.has('shortcuts') && html`<${ViewSlot} active=${active('shortcuts')}><${ShortcutsView} /><//>`}

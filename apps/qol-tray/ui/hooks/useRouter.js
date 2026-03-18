@@ -6,11 +6,15 @@ const VIEW_STORAGE_KEY = 'qoltray.activeView';
 
 function parseHashRoute() {
     const raw = window.location.hash.replace(/^#/, '').trim();
+    const configMatch = raw.match(/^plugins\/(.+)\/config$/);
+    if (configMatch) {
+        return { viewId: 'plugins', pluginId: configMatch[1], mode: 'config' };
+    }
     const pluginMatch = raw.match(/^plugins\/(.+)$/);
     if (pluginMatch) {
-        return { viewId: 'plugins', pluginId: pluginMatch[1] };
+        return { viewId: 'plugins', pluginId: pluginMatch[1], mode: 'ui' };
     }
-    return { viewId: raw || null, pluginId: null };
+    return { viewId: raw || null, pluginId: null, mode: null };
 }
 
 function readStoredView() {
@@ -42,16 +46,24 @@ async function validatePluginConfig(pluginId) {
     return true;
 }
 
-async function handleHashChange(viewOrder, setActivePluginId, setActiveViewId) {
+async function handleHashChange(viewOrder, setActivePluginId, setActiveViewId, setActivePluginMode) {
     const route = parseHashRoute();
     if (route.pluginId) {
+        if (route.mode === 'ui') {
+            setActiveViewId('plugins');
+            setActivePluginId(route.pluginId);
+            setActivePluginMode('ui');
+            return;
+        }
         if (await validatePluginConfig(route.pluginId)) {
             setActiveViewId('plugins');
             setActivePluginId(route.pluginId);
+            setActivePluginMode('config');
         }
         return;
     }
     setActivePluginId(null);
+    setActivePluginMode(null);
     if (route.viewId && viewOrder.includes(route.viewId)) {
         setActiveViewId(route.viewId);
     }
@@ -64,8 +76,9 @@ function doSwitchView(viewId, viewOrder, setActivePluginId, setActiveViewId) {
     persistView(viewId);
 }
 
-function doClosePluginConfig(setActivePluginId, setActiveViewId) {
+function doClosePluginConfig(setActivePluginId, setActiveViewId, setActivePluginMode) {
     setActivePluginId(null);
+    setActivePluginMode(null);
     setActiveViewId(prev => {
         const viewId = prev || 'plugins';
         persistView(viewId);
@@ -76,26 +89,41 @@ function doClosePluginConfig(setActivePluginId, setActiveViewId) {
 export function useRouter({ viewOrder }) {
     const [activeViewId, setActiveViewId] = useState(initActiveView);
     const [activePluginId, setActivePluginId] = useState(null);
+    const [activePluginMode, setActivePluginMode] = useState(null);
     const switchView = useCallback(id => doSwitchView(id, viewOrder, setActivePluginId, setActiveViewId), [viewOrder]);
     const openPluginConfig = useCallback(async (pluginId) => {
         if (!await validatePluginConfig(pluginId)) return false;
         setActivePluginId(pluginId);
-        window.history.pushState(null, '', `#plugins/${pluginId}`);
+        setActivePluginMode('config');
+        window.history.pushState(null, '', `#plugins/${pluginId}/config`);
         return true;
     }, []);
+    const openPluginUi = useCallback((pluginId) => {
+        setActivePluginId(pluginId);
+        setActivePluginMode('ui');
+        window.location.hash = `#plugins/${pluginId}`;
+    }, []);
     useEffect(() => {
-        const initialPluginId = parseHashRoute().pluginId;
-        if (!initialPluginId) return;
-        validatePluginConfig(initialPluginId).then(valid => {
-            if (valid) setActivePluginId(initialPluginId);
+        const route = parseHashRoute();
+        if (!route.pluginId) return;
+        if (route.mode === 'ui') {
+            setActivePluginId(route.pluginId);
+            setActivePluginMode('ui');
+            return;
+        }
+        validatePluginConfig(route.pluginId).then(valid => {
+            if (valid) {
+                setActivePluginId(route.pluginId);
+                setActivePluginMode('config');
+            }
         });
     }, []);
-    const closePluginConfig = useCallback(() => doClosePluginConfig(setActivePluginId, setActiveViewId), []);
+    const closePluginConfig = useCallback(() => doClosePluginConfig(setActivePluginId, setActiveViewId, setActivePluginMode), []);
     useEffect(() => {
-        const handler = () => handleHashChange(viewOrder, setActivePluginId, setActiveViewId);
+        const handler = () => handleHashChange(viewOrder, setActivePluginId, setActiveViewId, setActivePluginMode);
         window.addEventListener('hashchange', handler);
         return () => window.removeEventListener('hashchange', handler);
     }, [viewOrder]);
     useEffect(() => { if (!activePluginId) persistView(activeViewId); }, [activeViewId, activePluginId]);
-    return { activeViewId, activePluginId, switchView, openPluginConfig, closePluginConfig, viewOrder };
+    return { activeViewId, activePluginId, activePluginMode, switchView, openPluginConfig, openPluginUi, closePluginConfig, viewOrder };
 }

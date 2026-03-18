@@ -18,7 +18,7 @@ function readDefaultWorktree() {
 export function useApp({ onDissolve } = {}) {
     const { devEnabled, appVersion } = useAppBootstrap();
     const viewOrder = useMemo(() => buildViewOrder(devEnabled), [devEnabled]);
-    const { activeViewId, activePluginId, switchView, openPluginConfig, closePluginConfig } = useRouter({ viewOrder });
+    const { activeViewId, activePluginId, activePluginMode, switchView, openPluginConfig, openPluginUi, closePluginConfig } = useRouter({ viewOrder });
     const mounted = useMountedViews(activeViewId);
     const { updateState, checkForUpdate, beginSelfUpdate, failSelfUpdate, beginDevRecompile, failDevRecompile } = useAppUpdateCoordinator({ devEnabled, appVersion, onDissolve });
     const [worktrees, setWorktrees] = useState([]);
@@ -73,7 +73,7 @@ export function useApp({ onDissolve } = {}) {
     );
     useRegisterCommands(GLOBAL_ID, globalCommands);
 
-    return { devEnabled, appVersion, viewOrder, activeViewId, activePluginId, switchView, openPluginConfig, closePluginConfig, mounted, updateState, handleSidebarAction, handleViewClick, worktrees, defaultWorktree, setDefaultWorktree };
+    return { devEnabled, appVersion, viewOrder, activeViewId, activePluginId, activePluginMode, switchView, openPluginConfig, openPluginUi, closePluginConfig, mounted, updateState, handleSidebarAction, handleViewClick, worktrees, defaultWorktree, setDefaultWorktree };
 }
 
 function normalizeDefaultWorktree(current, worktrees) {
