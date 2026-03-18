@@ -36,7 +36,9 @@ export function SidebarNav({ activeViewId, viewOrder, pluginOpen, onViewClick, o
         }));
     }, [pluginOpen, ctx, activeViewId, viewOrder, onViewClick]);
 
-    const mode = pluginOpen && ctx?.sections?.length ? 'config' : 'views';
+    const mode = pluginOpen
+        ? (ctx?.sections?.length ? 'config' : ctx?.mode === 'ui' ? 'ui' : 'views')
+        : 'views';
     useEffect(() => {
         if (prevMode !== null && prevMode !== mode && itemsRef.current) {
             materializeIn(itemsRef.current);

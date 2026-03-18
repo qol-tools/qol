@@ -40,8 +40,12 @@ function handlePaletteToggle(event, palette, activePluginId, viewKeyboard) {
 }
 
 function delegateToPluginConfig(event, pluginConfig, closePluginConfig) {
+    if (!pluginConfig || pluginConfig.mode === 'ui') {
+        if (event.key === 'Escape') { event.preventDefault(); closePluginConfig(); }
+        return;
+    }
     const detail = document.querySelector('.plugin-config-detail');
-    if (!pluginConfig || pluginConfig.loading || pluginConfig.sections.length === 0) {
+    if (pluginConfig.loading || !pluginConfig.sections?.length) {
         if (event.key === 'Escape') { event.preventDefault(); closePluginConfig(); }
         return;
     }

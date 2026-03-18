@@ -13,14 +13,22 @@ import {
 import { renderField } from './field-map.js';
 import { dissolveIn, DISSOLVE_PRESETS } from '../../lib/dissolve.js';
 
-export function PluginConfigView() {
+export function PluginConfigView({ onClose }) {
     const ctx = usePluginConfigContext();
 
     if (ctx?.mode === 'ui') {
-        return html`<iframe
-            src=${`/plugins/${ctx.pluginId}/`}
-            class="plugin-custom-ui"
-        />`;
+        return html`
+            <div class="plugin-ui-container">
+                <div class="plugin-ui-toolbar">
+                    <span class="plugin-ui-toolbar-title">${ctx.pluginId}</span>
+                    <button class="plugin-ui-toolbar-close" onClick=${onClose}>\u00d7</button>
+                </div>
+                <iframe
+                    src=${`/plugins/${ctx.pluginId}/`}
+                    class="plugin-custom-ui"
+                />
+            </div>
+        `;
     }
 
     const section = ctx?.activeSection;
