@@ -3,7 +3,7 @@ name = "qol-config"
 version = "1.2.1"
 edition = "2021"
 description = "Versioned plugin configuration contract for qol-tools"
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 
 [dependencies]
 dirs = "6.0"

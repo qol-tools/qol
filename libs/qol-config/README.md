@@ -367,4 +367,4 @@ For the lower-level v1 reference, see [docs/v1.md](./docs/v1.md).
 
 ## License
 
-MIT
+PolyForm Noncommercial 1.0.0
