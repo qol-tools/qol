@@ -27,13 +27,17 @@ function routeContextMenuKey(e, list, modal) {
 }
 
 function routeNormalKey(e, list, actions) {
+    if (e.key === 'Enter' && e.ctrlKey) {
+        e.preventDefault();
+        actions.openConfig();
+        return;
+    }
     dispatchKey(e, withShiftVariants({
         ArrowUp: () => actions.navigateInGrid('up'),
         ArrowDown: () => actions.navigateInGrid('down'),
         ArrowLeft: () => actions.navigateInGrid('left'),
         ArrowRight: () => actions.navigateInGrid('right'),
         Enter: actions.openSelected,
-        c: () => actions.openConfig(),
     }));
 }
 

@@ -1,4 +1,5 @@
 import { html } from '../../lib/html.js';
+import { useModifierState } from '../../hooks/modifier-state-context.js';
 
 const brokenCovers = new Set();
 
@@ -30,11 +31,13 @@ export function PluginsGrid({ plugins, ghostPlugins, selectedIndex, contextMenuO
 }
 
 function PluginCard({ plugin, index, selectedIndex, contextMenuOpen, updating, onCardClick }) {
+    const selected = index === selectedIndex;
+    const { ctrlHeld } = useModifierState();
     return html`
         <div key=${plugin.id}
-             class=${cardClassName(plugin, index === selectedIndex)}
+             class=${cardClassName(plugin, selected)}
              data-selected-surface=""
-             data-selected=${index === selectedIndex ? 'true' : 'false'}
+             data-selected=${selected ? 'true' : 'false'}
              data-index="${index}" data-plugin-id="${plugin.id}"
              onClick=${(e) => onCardClick(e, index, plugin.id)}>
             <img src=${plugin.has_cover && !brokenCovers.has(plugin.id) ? `/api/cover/${plugin.id}` : PLACEHOLDER_SVG}
@@ -44,11 +47,12 @@ function PluginCard({ plugin, index, selectedIndex, contextMenuOpen, updating, o
             ${plugin.loaded === false && html`<div class="plugin-load-state" data-selected-text="">Not loaded</div>`}
             ${plugin.update_available && html`<${PluginUpdateButton} plugin=${plugin} updating=${updating} />`}
             <${PluginCogButton} />
-            ${plugin.has_custom_ui && plugin.has_config && html`
-                <button class="plugin-config-strip" data-config="true">Config</button>
+            ${selected && ctrlHeld && html`
+                <div class="plugin-ctrl-overlay ${plugin.has_config ? '' : 'disabled'}">Config</div>
             `}
-            <div class=${contextMenuClassName(contextMenuOpen, index === selectedIndex)}>
+            <div class=${contextMenuClassName(contextMenuOpen, selected)}>
                 ${plugin.update_available && html`<button class="context-update">Update</button>`}
+                ${plugin.has_config && html`<button class="context-config">Config</button>`}
                 <button class="context-delete">Delete</button>
             </div>
         </div>

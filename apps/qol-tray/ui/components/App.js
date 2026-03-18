@@ -3,6 +3,7 @@ import { useRef, useCallback } from 'preact/hooks';
 import { SidebarNav } from './SidebarNav.js';
 import { SidebarFooter } from './SidebarFooter.js';
 import { PaletteProvider, usePaletteContext } from '../palette/context.js';
+import { ModifierStateProvider } from '../hooks/modifier-state-context.js';
 import { PluginConfigProvider } from '../views/plugin-config/context.js';
 import { useApp } from './app/useApp.js';
 import { useAppKeyboardRouting } from './app/useAppKeyboardRouting.js';
@@ -24,6 +25,7 @@ function AppShell() {
     const onDissolve = useCallback((reload) => dissolveRef.current?.(reload), []);
     const { devEnabled, appVersion, viewOrder, activeViewId, activePluginId, activePluginMode, switchView, openPluginConfig, openPluginUi, closePluginConfig, mounted, updateState, handleSidebarAction, handleViewClick, worktrees, defaultWorktree, setDefaultWorktree } = useApp({ onDissolve });
     return html`
+        <${ModifierStateProvider}>
         <${PluginConfigProvider} pluginId=${activePluginId} mode=${activePluginMode}>
             <${ViewKeyboardProvider}>
                 <${AppKeyboardRouting}
@@ -38,7 +40,7 @@ function AppShell() {
                         <aside id="sidebar"><${SidebarNav} activeViewId=${activeViewId} viewOrder=${viewOrder}
                             pluginOpen=${!!activePluginId} onViewClick=${handleViewClick} onBack=${closePluginConfig} /></aside>
                         <main id="content">
-                            ${activePluginId && html`<${PluginConfigView} />`}
+                            ${activePluginId && html`<${PluginConfigView} onClose=${closePluginConfig} />`}
                             ${renderMountedViews({ mounted, activeViewId, activePluginId, openPluginConfig, openPluginUi })}
                         </main>
                     </div>
@@ -53,6 +55,7 @@ function AppShell() {
                     <${GlobalToast} />
                 </div>
             <//>
+        <//>
         <//>
     `;
 }
