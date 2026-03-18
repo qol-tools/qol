@@ -31,23 +31,25 @@ async function doUninstall(confirmPluginIdRef, clearConfirm, refreshPlugins) {
     }
 }
 
-async function doOpenSelected(pluginsRef, selectedIndexRef, onOpenPluginConfig) {
+async function doOpenSelected(pluginsRef, selectedIndexRef, onOpenPluginConfig, onOpenPluginUi) {
     const plugin = pluginsRef.current[selectedIndexRef.current];
     if (!plugin) return;
     if (plugin.loaded === false) {
-        toast('error', `Plugin ${plugin.name} is not loaded${plugin.load_error ? `: ${plugin.load_error}` : ''}`);
+        toast('error', `${plugin.name} failed to load: ${plugin.load_error}`);
         return;
     }
-    if (!plugin.has_ui) {
-        toast('info', `No settings UI available for ${plugin.name}`);
+    if (plugin.has_custom_ui) {
+        onOpenPluginUi(plugin.id);
         return;
     }
-    if (!onOpenPluginConfig) return;
-    const opened = await onOpenPluginConfig(plugin.id);
-    if (!opened) toast('info', `No configuration available for ${plugin.name}`);
+    if (plugin.has_config) {
+        const opened = await onOpenPluginConfig(plugin.id);
+        if (!opened) toast('info', `No settings available for ${plugin.name}`);
+        return;
+    }
 }
 
-export function usePluginActions(list, modal, onOpenPluginConfig) {
+export function usePluginActions(list, modal, onOpenPluginConfig, onOpenPluginUi) {
     const [updating, setUpdating, updatingRef] = useStateRef(new Set());
     const updatePlugin = useCallback(
         pluginId => doUpdate(pluginId, updatingRef, setUpdating, list.refreshPlugins),
@@ -58,13 +60,18 @@ export function usePluginActions(list, modal, onOpenPluginConfig) {
         [list.refreshPlugins, modal.clearConfirm]
     );
     const openSelected = useCallback(
-        () => doOpenSelected(list.pluginsRef, list.selectedIndexRef, onOpenPluginConfig),
-        [onOpenPluginConfig]
+        () => doOpenSelected(list.pluginsRef, list.selectedIndexRef, onOpenPluginConfig, onOpenPluginUi),
+        [onOpenPluginConfig, onOpenPluginUi]
     );
+    const openConfig = useCallback(() => {
+        const plugin = list.pluginsRef.current?.[list.selectedIndexRef.current];
+        if (!plugin?.has_config) return;
+        onOpenPluginConfig(plugin.id);
+    }, [onOpenPluginConfig]);
     const navigateInGrid = useGridNav('#plugins-grid .plugin-card:not(.ghost)', list.selectedIndexRef, list.setSelectedIndex);
     const isBlocking = useCallback(
         () => modal.confirmPluginIdRef.current !== null || modal.contextMenuOpenRef.current,
         []
     );
-    return { updating, updatePlugin, confirmUninstall, openSelected, navigateInGrid, isBlocking };
+    return { updating, updatePlugin, confirmUninstall, openSelected, openConfig, navigateInGrid, isBlocking };
 }
