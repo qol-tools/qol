@@ -50,4 +50,4 @@ Bind actions to hotkeys in qol-tray settings.
 
 ## License
 
-MIT
+PolyForm Noncommercial 1.0.0
