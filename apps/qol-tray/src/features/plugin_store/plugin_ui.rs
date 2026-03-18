@@ -22,10 +22,13 @@ async fn serve_plugin_index(
     axum::extract::State(plugins_dir): axum::extract::State<PathBuf>,
 ) -> Response {
     let plugin_root = super::plugin_paths::resolve_plugin_root(&plugins_dir, &plugin_id);
-    if !plugin_paths::has_custom_ui(&plugin_root) && !plugin_paths::has_config(&plugin_root) {
-        return (StatusCode::NOT_FOUND, "No settings UI available").into_response();
+    if plugin_paths::has_custom_ui(&plugin_root) {
+        return serve_file(&plugins_dir, &plugin_id, "index.html").await;
     }
-    super::server::assets::serve_auto_config().into_response()
+    if plugin_paths::has_config(&plugin_root) {
+        return super::server::assets::serve_auto_config().into_response();
+    }
+    (StatusCode::NOT_FOUND, "No settings UI available").into_response()
 }
 
 async fn serve_plugin_file(
