@@ -1,5 +1,6 @@
 pub mod action_executor;
 pub mod action_transport;
+pub mod capabilities;
 pub mod config;
 mod daemon_lifecycle;
 #[allow(dead_code)]
