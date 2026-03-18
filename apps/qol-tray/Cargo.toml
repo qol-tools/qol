@@ -3,7 +3,7 @@ name = "qol-tray"
 version = "3.3.0"
 edition = "2021"
 description = "Quality of Life Tray - Pluggable system tray daemon for utility scripts"
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 authors = ["KMRH47"]
 
 [[bin]]

@@ -49,4 +49,4 @@ A plugin is a standalone Rust binary with a `plugin.toml` manifest. It can live 
 
 ## License
 
-MIT
+PolyForm Noncommercial 1.0.0
