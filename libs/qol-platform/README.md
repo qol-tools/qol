@@ -23,4 +23,4 @@ On macOS, all capabilities are reported as available. On Linux, it depends on th
 
 ## License
 
-MIT
+PolyForm Noncommercial 1.0.0

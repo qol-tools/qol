@@ -3,7 +3,7 @@ name = "qol-platform"
 version = "0.2.0"
 edition = "2021"
 description = "Platform detection and capabilities for qol-tools"
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 
 [dependencies]
 dirs = "6.0"
