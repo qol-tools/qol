@@ -4,6 +4,7 @@ use std::process::{Command, Stdio};
 #[cfg(unix)]
 use std::{fs, os::unix::fs::PermissionsExt};
 
+#[cfg(target_os = "linux")]
 pub(super) fn install_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().context("Could not determine home directory")?;
     Ok(home.join(".local").join("bin"))
