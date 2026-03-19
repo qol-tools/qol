@@ -37,7 +37,7 @@ fn set_hotkeys_inner(body: axum::body::Bytes) -> HttpResult<Response> {
 }
 
 fn hotkey_manager() -> HttpResult<HotkeyManager> {
-    HotkeyManager::new().map_err(|_| Box::new(manager_failed_response()))
+    HotkeyManager::new().map_err(|_| Box::new(load_failed_response()))
 }
 
 fn parse_hotkeys(body: axum::body::Bytes) -> HttpResult<HotkeyConfig> {
@@ -57,10 +57,6 @@ fn encode_hotkeys_json(config: &HotkeyConfig) -> HttpResult<Vec<u8>> {
 
 fn hotkeys_saved_response() -> Response {
     (StatusCode::OK, "Hotkeys saved").into_response()
-}
-
-fn manager_failed_response() -> Response {
-    (StatusCode::INTERNAL_SERVER_ERROR, "Failed to load hotkeys").into_response()
 }
 
 fn load_failed_response() -> Response {
