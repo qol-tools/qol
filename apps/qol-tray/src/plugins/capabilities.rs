@@ -1,10 +1,27 @@
 use crate::plugins::manifest::Capabilities;
 use anyhow::{bail, Context, Result};
+use serde::Serialize;
 use std::collections::HashMap;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionState {
+    Granted,
+    Fixable,
+    RequiresLogout,
+    Denied,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PermissionStatus {
+    pub state: PermissionState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+}
 
 struct CapabilityRule {
     name: &'static str,
@@ -258,4 +275,43 @@ fn run_pkexec(command_path: &Path, args: &[String]) -> Result<()> {
         args,
         status
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn permission_state_serializes_as_snake_case() {
+        let cases = [
+            (PermissionState::Granted, "\"granted\""),
+            (PermissionState::Fixable, "\"fixable\""),
+            (PermissionState::RequiresLogout, "\"requires_logout\""),
+            (PermissionState::Denied, "\"denied\""),
+        ];
+        for (state, expected) in cases {
+            let json = serde_json::to_string(&state).unwrap();
+            assert_eq!(json, expected, "state: {:?}", state);
+        }
+    }
+
+    #[test]
+    fn permission_status_omits_null_hint() {
+        let status = PermissionStatus {
+            state: PermissionState::Granted,
+            hint: None,
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        assert_eq!(json, r#"{"state":"granted"}"#);
+    }
+
+    #[test]
+    fn permission_status_includes_hint_when_present() {
+        let status = PermissionStatus {
+            state: PermissionState::Fixable,
+            hint: Some(String::from("foo")),
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        assert_eq!(json, r#"{"state":"fixable","hint":"foo"}"#);
+    }
 }
