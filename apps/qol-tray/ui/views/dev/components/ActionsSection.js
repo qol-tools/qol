@@ -34,49 +34,31 @@ function MockCard({ mockTesting, triggerMockFlows }) {
 }
 
 function SelfUpdateCard() {
-    const [result, setResult] = useState(null);
     const [running, setRunning] = useState(false);
-    async function dryRun() {
+    const [error, setError] = useState(null);
+    async function triggerLiveUpdate() {
         if (running) return;
         setRunning(true);
-        setResult(null);
+        setError(null);
         try {
-            const res = await fetch('/api/dev/test-self-update', { method: 'POST' });
-            setResult(await res.json());
-        } catch (e) {
-            setResult({ ok: false, steps: [{ step: 'request', ok: false, detail: e.message }] });
-        }
-        setRunning(false);
-    }
-    async function liveTest(e) {
-        e.stopPropagation();
-        if (running) return;
-        try {
-            const res = await fetch('/api/dev/test-self-update?live=1', { method: 'POST' });
-            if (!res.ok) {
-                setResult({ ok: false, steps: [...(result?.steps || []), { step: 'live', ok: false, detail: 'HTTP ' + res.status }] });
+            const setup = await fetch('/api/dev/test-self-update?live=1', { method: 'POST' });
+            if (!setup.ok) {
+                setError('Failed to configure fixture URL: HTTP ' + setup.status);
+                setRunning(false);
                 return;
             }
-        } catch {
-            setResult({ ok: false, steps: [...(result?.steps || []), { step: 'live', ok: false, detail: 'Failed to configure fixture URL' }] });
-            return;
+            document.dispatchEvent(new Event(SELF_UPDATE_EVENT));
+        } catch (e) {
+            setError(e.message);
+            setRunning(false);
         }
-        setResult(null);
-        setRunning(false);
-        document.dispatchEvent(new Event(SELF_UPDATE_EVENT));
     }
-    const showLive = result?.ok && !running;
     return html`
-        <div class=${'dev-card' + (result && !result.ok ? ' has-error' : '')} onClick=${dryRun}>
+        <div class=${'dev-card' + (error ? ' has-error' : '')} onClick=${triggerLiveUpdate}>
             <div class="dev-card-content">
-                <h3>${running ? 'Running...' : 'Test Self-Update'}</h3>
-                <p>Dry-run: downloads fixture tarball from itself, extracts, and verifies the binary.</p>
-                ${result && html`<ul class="test-update-steps">
-                    ${result.steps.map(s => html`<li class=${s.ok ? 'step-ok' : 'step-fail'}>
-                        <strong>${s.step}</strong> ${s.ok ? '\u2713' : '\u2717'} ${s.detail}
-                    </li>`)}
-                </ul>`}
-                ${showLive && html`<button class="dev-live-update-btn" onClick=${liveTest}>Install + restart for real</button>`}
+                <h3>${running ? 'Updating...' : 'Test Self-Update'}</h3>
+                <p>${running ? 'Installing fixture binary and restarting...' : 'Builds a test fixture from the running binary, installs it, and restarts.'}</p>
+                ${error && html`<span class="error-msg">${error}</span>`}
             </div>
         </div>
     `;
