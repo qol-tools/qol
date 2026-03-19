@@ -1,11 +1,18 @@
 const PLUGIN_ID = window.location.pathname.split('/').filter(Boolean)[1];
 const CONFIG_URL = `/api/plugins/${PLUGIN_ID}/config`;
+const PERMISSIONS_URL = `/api/plugins/${PLUGIN_ID}/permissions`;
+const REQUEST_PERMISSION_URL = `/api/permissions/serial/request`;
 const ACTION_URL = `/api/plugins/${PLUGIN_ID}/actions`;
 
 let config = null;
+let permissionStatus = { permissions: {} };
+let permissionsLoaded = false;
 let editingPreset = null;
+let ensuringPermissions = false;
 let pairCountdown = 0;
 let pairTimer = null;
+let actionMessage = '';
+let permissionMessage = '';
 let refreshTimer = null;
 
 async function loadConfig() {
@@ -15,6 +22,76 @@ async function loadConfig() {
         config = await res.json();
         render();
     } catch (_) {}
+}
+
+async function loadPermissions() {
+    try {
+        const res = await fetch(PERMISSIONS_URL);
+        if (!res.ok) {
+            permissionsLoaded = true;
+            render();
+            return;
+        }
+        permissionStatus = await res.json();
+        permissionsLoaded = true;
+        render();
+    } catch (_) {
+        permissionsLoaded = true;
+        render();
+    }
+}
+
+async function refreshData() {
+    await Promise.all([
+        loadPermissions(),
+        loadConfig(),
+    ]);
+}
+
+function permissionsBlocked() {
+    if (!permissionsLoaded) return false;
+    return Object.values(permissionStatus.permissions)
+        .some(p => p.state !== 'granted');
+}
+
+function worstPermissionState() {
+    const unmet = Object.values(permissionStatus.permissions)
+        .filter(p => p.state !== 'granted');
+    if (unmet.length === 0) return 'granted';
+    if (unmet.some(p => p.state === 'denied')) return 'denied';
+    if (unmet.some(p => p.state === 'requires_logout')) return 'requires_logout';
+    return 'fixable';
+}
+
+async function requestPermissions() {
+    if (ensuringPermissions) return;
+    ensuringPermissions = true;
+    permissionMessage = '';
+    render();
+
+    try {
+        const res = await fetch(REQUEST_PERMISSION_URL, { method: 'POST' });
+        if (!res.ok) {
+            permissionMessage = res.status === 400
+                ? 'Permission already granted.'
+                : 'Could not request permissions.';
+            return;
+        }
+        const result = await res.json();
+        if (result.state === 'requires_logout') {
+            permissionMessage = result.hint || 'Log out and back in to activate serial access';
+        } else if (result.state === 'denied') {
+            permissionMessage = result.hint || 'Could not configure serial access';
+        } else {
+            permissionMessage = '';
+        }
+        await loadPermissions();
+    } catch (_) {
+        permissionMessage = 'Could not request permissions.';
+    } finally {
+        ensuringPermissions = false;
+        render();
+    }
 }
 
 async function saveConfig(updated) {
@@ -32,9 +109,24 @@ async function saveConfig(updated) {
 
 async function sendAction(action, btn) {
     try {
-        await fetch(`${ACTION_URL}/${action}`, { method: 'POST' });
+        const res = await fetch(`${ACTION_URL}/${action}`, { method: 'POST' });
+        const body = await res.json().catch(() => null);
+        const success = res.ok && body?.success !== false;
+        if (!success) {
+            actionMessage = body?.message || 'Action failed.';
+            render();
+            return false;
+        }
+
+        actionMessage = '';
         if (btn) flashButton(btn);
-    } catch (_) {}
+        render();
+        return true;
+    } catch (_) {
+        actionMessage = 'Action failed.';
+        render();
+        return false;
+    }
 }
 
 function flashButton(el) {
@@ -43,8 +135,10 @@ function flashButton(el) {
     el.classList.add('flash');
 }
 
-function startPairing() {
-    sendAction('pair');
+async function startPairing() {
+    const started = await sendAction('pair');
+    if (!started) return;
+
     pairCountdown = 60;
     if (pairTimer) clearInterval(pairTimer);
     pairTimer = setInterval(() => {
@@ -117,16 +211,24 @@ function escAttr(s) {
 function buildStatusBar() {
     const backend = config.backend || {};
     const hasMain = !!config.main_target_id;
+    const blocked = permissionsBlocked();
     const dot = document.createElement('span');
-    dot.className = `status-dot ${hasMain ? 'connected' : 'warning'}`;
+    dot.className = `status-dot ${!blocked && hasMain ? 'connected' : 'warning'}`;
 
     const text = document.createElement('span');
     text.className = 'status-text';
-    text.textContent = hasMain ? 'Main target configured' : 'No main target set';
+    const worstState = worstPermissionState();
+    text.textContent = blocked
+        ? worstState === 'requires_logout' ? 'Restart required' : 'Permission required'
+        : hasMain ? 'Main target configured' : 'No main target set';
 
     const detail = document.createElement('span');
     detail.className = 'status-detail';
-    detail.textContent = `${backend.kind || 'unknown'} \u00B7 port: ${backend.serial_port || 'auto'} \u00B7 ch ${backend.channel || '?'}`;
+    detail.textContent = blocked
+        ? worstState === 'requires_logout'
+            ? 'Log out and back in to activate serial access'
+            : 'Grant serial access to connect the Zigbee dongle'
+        : `${backend.kind || 'unknown'} \u00B7 port: ${backend.serial_port || 'auto'} \u00B7 ch ${backend.channel || '?'}`;
 
     const bar = document.createElement('div');
     bar.className = 'status-bar';
@@ -135,6 +237,21 @@ function buildStatusBar() {
     const section = document.createElement('div');
     section.className = 'section';
     section.appendChild(bar);
+
+    if (permissionMessage && !blocked) {
+        const note = document.createElement('div');
+        note.className = 'status-note';
+        note.textContent = permissionMessage;
+        section.appendChild(note);
+    }
+
+    if (actionMessage) {
+        const note = document.createElement('div');
+        note.className = 'status-note status-note-error';
+        note.textContent = actionMessage;
+        section.appendChild(note);
+    }
+
     return section;
 }
 
@@ -449,11 +566,80 @@ function buildPresets() {
     return section;
 }
 
+function permissionCopy() {
+    const unmet = Object.entries(permissionStatus.permissions)
+        .filter(([_, p]) => p.state !== 'granted')
+        .map(([name]) => name);
+    const required = unmet.length ? unmet.join(', ') : 'hardware access';
+    return `Lights needs ${required} before it can talk to the Zigbee dongle. The OS prompt only appears after you click below.`;
+}
+
+function buildPermissionBackdrop() {
+    if (!permissionsBlocked()) return null;
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'permission-backdrop';
+
+    const card = document.createElement('div');
+    card.className = 'permission-card';
+
+    const worstState = worstPermissionState();
+
+    const eyebrow = document.createElement('div');
+    eyebrow.className = 'permission-eyebrow';
+    eyebrow.textContent = worstState === 'requires_logout' ? 'Restart required' : 'Permission required';
+
+    const title = document.createElement('h1');
+    title.className = 'permission-title';
+    title.textContent = worstState === 'requires_logout' ? 'Log Out Required' : 'Give Permissions';
+
+    const copy = document.createElement('p');
+    copy.className = 'permission-copy';
+    copy.textContent = worstState === 'requires_logout'
+        ? 'Serial access has been configured but requires a new login session to take effect.'
+        : permissionCopy();
+
+    const meta = document.createElement('div');
+    meta.className = 'permission-meta';
+    const unmet = Object.entries(permissionStatus.permissions)
+        .filter(([_, p]) => p.state !== 'granted');
+    meta.textContent = unmet.length
+        ? `Missing: ${unmet.map(([name]) => name).join(', ')}`
+        : 'Missing access';
+
+    card.append(eyebrow, title, copy, meta);
+
+    if (worstState !== 'requires_logout') {
+        const actionRow = document.createElement('div');
+        actionRow.className = 'permission-actions';
+
+        const button = document.createElement('button');
+        button.className = 'btn btn-accent permission-btn';
+        button.textContent = ensuringPermissions
+            ? 'Requesting...'
+            : worstState === 'denied' ? 'Retry' : 'Give Permissions';
+        button.disabled = ensuringPermissions;
+        button.addEventListener('click', requestPermissions);
+        actionRow.appendChild(button);
+        card.appendChild(actionRow);
+    }
+
+    if (permissionMessage) {
+        const note = document.createElement('div');
+        note.className = 'permission-note';
+        note.textContent = permissionMessage;
+        card.appendChild(note);
+    }
+
+    backdrop.appendChild(card);
+    return backdrop;
+}
+
 function render() {
     const app = document.getElementById('app');
     app.replaceChildren();
 
-    if (!config) {
+    if (!config || !permissionsLoaded) {
         const loading = document.createElement('div');
         loading.className = 'container';
         const sec = document.createElement('div');
@@ -465,7 +651,7 @@ function render() {
     }
 
     const container = document.createElement('div');
-    container.className = 'container';
+    container.className = `container${permissionsBlocked() ? ' page-blocked' : ''}`;
     container.append(
         buildStatusBar(),
         buildDevices(),
@@ -473,7 +659,12 @@ function render() {
         buildPresets(),
     );
     app.appendChild(container);
+
+    const backdrop = buildPermissionBackdrop();
+    if (!backdrop) return;
+
+    app.appendChild(backdrop);
 }
 
-loadConfig();
-refreshTimer = setInterval(loadConfig, 5000);
+refreshData();
+refreshTimer = setInterval(refreshData, 5000);
