@@ -1,55 +1,19 @@
 use anyhow::Result;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio_stream::StreamExt;
 
 use crate::daemon::{DaemonEvent, EventBus};
 
 use super::super::{latest_version, GITHUB_REPO};
-
-async fn download_asset(url: &str, dest: &Path, events: &EventBus) -> Result<()> {
-    let request = crate::features::plugin_store::github::build_github_request(
-        &reqwest::Client::new(),
-        url,
-        None,
-    );
-    let response = crate::features::plugin_store::github::send_checked(request).await?;
-    let total = response.content_length();
-    let mut stream = response.bytes_stream();
-    let mut file = std::fs::File::create(dest)?;
-    let mut downloaded: u64 = 0;
-    let mut last_percent: u8 = 0;
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
-        file.write_all(&chunk)?;
-        downloaded += chunk.len() as u64;
-        let percent = total
-            .map(|t| ((downloaded * 100) / t).min(100) as u8)
-            .unwrap_or(0);
-        if percent != last_percent {
-            events.send(DaemonEvent::UpdateProgress { percent });
-            last_percent = percent;
-        }
-    }
-    file.sync_all()?;
-    Ok(())
-}
-
-fn arch_suffix() -> &'static str {
-    if cfg!(target_arch = "aarch64") {
-        "aarch64"
-    } else {
-        "x86_64"
-    }
-}
+use super::common;
+use super::InstallKind;
 
 fn asset_url(version: &str) -> String {
     format!(
         "https://github.com/{}/releases/download/v{}/qol-tray-macos-{}.tar.gz",
         GITHUB_REPO,
         version,
-        arch_suffix()
+        common::arch_suffix()
     )
 }
 
@@ -75,60 +39,12 @@ fn resolve_update_url() -> Result<(String, PathBuf)> {
     ))
 }
 
-fn extract_binary(archive: &Path) -> Result<PathBuf> {
-    let tar_gz = std::fs::File::open(archive)?;
-    let tar = flate2::read::GzDecoder::new(tar_gz);
-    let mut archive_reader = tar::Archive::new(tar);
-
-    let extract_dir = archive.with_extension("extracted");
-    if extract_dir.exists() {
-        let _ = std::fs::remove_dir_all(&extract_dir);
-    }
-    std::fs::create_dir_all(&extract_dir)?;
-    archive_reader.unpack(&extract_dir)?;
-
-    // Binary is at <extract_dir>/<bundle_name>/qol-tray
-    let binary = find_binary(&extract_dir, "qol-tray")?;
-    Ok(binary)
-}
-
-fn find_binary(dir: &Path, name: &str) -> Result<PathBuf> {
-    for entry in walkdir::WalkDir::new(dir).max_depth(2) {
-        let entry = entry?;
-        if entry.file_type().is_file() && entry.file_name().to_string_lossy() == name {
-            return Ok(entry.into_path());
-        }
-    }
-    anyhow::bail!("Binary '{}' not found in extracted archive", name)
-}
-
-fn install_binary(source: &Path) -> Result<()> {
-    log::info!("Installing update from {}", source.display());
-    let current_exe = std::env::current_exe()?;
-    let staged = current_exe.with_extension("new");
-
-    if staged.exists() {
-        let _ = std::fs::remove_file(&staged);
-    }
-
-    std::fs::copy(source, &staged)?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&staged)?.permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&staged, perms)?;
-    }
-
-    std::fs::rename(&staged, &current_exe)?;
-
-    // Re-sign with ad-hoc signature — patched or downloaded binaries
-    // invalidate the original code signature, and macOS kills unsigned
-    // executables with SIGKILL on exec.
+fn codesign_bundle(exe_path: &Path) {
+    let bundle_path = find_app_bundle(exe_path);
+    let target = bundle_path.as_deref().unwrap_or(exe_path);
     let sign_status = std::process::Command::new("codesign")
         .args(["--force", "--sign", "-"])
-        .arg(&current_exe)
+        .arg(target)
         .output();
     match sign_status {
         Ok(out) if out.status.success() => {}
@@ -138,31 +54,49 @@ fn install_binary(source: &Path) -> Result<()> {
         ),
         Err(e) => log::warn!("codesign not available: {e}"),
     }
-
-    Ok(())
 }
 
-fn cleanup(archive: &Path) {
-    let _ = std::fs::remove_file(archive);
-    let extract_dir = archive.with_extension("extracted");
-    let _ = std::fs::remove_dir_all(&extract_dir);
+fn find_app_bundle(exe_path: &Path) -> Option<PathBuf> {
+    let mut current = exe_path;
+    while let Some(parent) = current.parent() {
+        if let Some(name) = parent.file_name() {
+            if name.to_string_lossy().ends_with(".app") {
+                return Some(parent.to_path_buf());
+            }
+        }
+        current = parent;
+    }
+    None
 }
 
 pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
+    match InstallKind::detect() {
+        InstallKind::SystemWide => {
+            anyhow::bail!("This installation is managed by your system package manager")
+        }
+        InstallKind::Development => {
+            anyhow::bail!("Self-update is disabled in development builds")
+        }
+        InstallKind::UserLocal => {}
+    }
+
     let (url, dest) = resolve_update_url()?;
 
     log::info!("Downloading update from {}", url);
-    if let Err(e) = download_asset(&url, &dest, &events).await {
-        cleanup(&dest);
+    if let Err(e) = common::download_asset(&url, &dest, &events).await {
+        common::cleanup_archive(&dest);
         return Err(e);
     }
 
-    let install_result = extract_binary(&dest).and_then(|binary| install_binary(&binary));
-    cleanup(&dest);
+    let current_exe = std::env::current_exe()?;
+    let install_result = common::extract_tar_gz(&dest, "qol-tray")
+        .and_then(|binary| common::atomic_replace(&binary, &current_exe));
+    common::cleanup_archive(&dest);
     install_result?;
 
+    codesign_bundle(&current_exe);
+
     events.send(DaemonEvent::UpdateComplete);
-    // Give SSE time to deliver the event before exiting
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     log::info!("Update installed, restarting...");
@@ -205,7 +139,32 @@ fn exec_restart_on_main_thread() -> Result<()> {
         dispatch_async_f(&_dispatch_main_q, data, do_exec);
     }
 
-    // Park — the main thread will exec and replace the process.
     std::thread::sleep(std::time::Duration::from_secs(10));
     anyhow::bail!("exec did not happen within expected time")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn find_app_bundle_from_exe_path() {
+        let cases = [
+            (
+                "/a/Applications/Foo.app/Contents/MacOS/foo",
+                Some("/a/Applications/Foo.app"),
+            ),
+            ("/a/.local/bin/foo", None),
+            ("/usr/bin/foo", None),
+        ];
+        for (path, expected) in cases {
+            assert_eq!(
+                find_app_bundle(Path::new(path))
+                    .as_deref()
+                    .map(|p| p.to_str().unwrap()),
+                expected,
+                "path: {path}"
+            );
+        }
+    }
 }
