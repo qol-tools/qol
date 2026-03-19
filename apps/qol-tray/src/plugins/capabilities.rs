@@ -186,6 +186,29 @@ pub(crate) fn resolve_serial_check_state(
     }
 }
 
+pub(crate) fn resolve_serial_request_state(
+    device_accessible: bool,
+    in_persistent_group: bool,
+    in_session_group: bool,
+) -> PermissionStatus {
+    if in_session_group || device_accessible {
+        return PermissionStatus {
+            state: PermissionState::Granted,
+            hint: None,
+        };
+    }
+    if in_persistent_group {
+        return PermissionStatus {
+            state: PermissionState::RequiresLogout,
+            hint: Some("Log out and back in to activate serial access".to_string()),
+        };
+    }
+    PermissionStatus {
+        state: PermissionState::Denied,
+        hint: Some("Could not configure serial access".to_string()),
+    }
+}
+
 fn fix_serial_linux() -> Result<()> {
     let user = std::env::var("USER").context("USER env var not set")?;
     let (group_command, group_args) = serial_group_fix_command(&user)?;
@@ -383,6 +406,24 @@ mod tests {
         for (input, expected) in cases {
             let members: Vec<_> = parse_group_members(input).collect();
             assert_eq!(members, expected, "input: {:?}", input);
+        }
+    }
+
+    #[test]
+    fn request_state_resolution() {
+        let cases = [
+            (true, false, false, PermissionState::Granted),
+            (false, false, true, PermissionState::Granted),
+            (true, true, true, PermissionState::Granted),
+            (false, true, false, PermissionState::RequiresLogout),
+            (false, false, false, PermissionState::Denied),
+        ];
+        for (device_ok, persistent, in_session, expected) in cases {
+            let status = resolve_serial_request_state(device_ok, persistent, in_session);
+            assert_eq!(
+                status.state, expected,
+                "device_ok={device_ok}, persistent={persistent}, in_session={in_session}"
+            );
         }
     }
 
