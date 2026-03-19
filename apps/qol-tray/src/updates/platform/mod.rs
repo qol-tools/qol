@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::daemon::EventBus;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod common;
 
 #[cfg(target_os = "linux")]

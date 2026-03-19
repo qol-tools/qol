@@ -1,6 +1,10 @@
 use super::Plugin;
-use crate::{file_io, paths};
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use crate::file_io;
+use crate::paths;
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 
 pub mod platform;
 
@@ -28,7 +32,7 @@ pub fn save_daemon_pids(pids: &[u32]) {
     let _ = std::fs::write(&path, content);
 }
 
-/// Collect all `.daemon-pids` files from the current config dir and all install directories.
+#[cfg(unix)]
 pub(crate) fn daemon_pid_files() -> Vec<PathBuf> {
     let mut files = Vec::new();
 
@@ -53,7 +57,7 @@ pub(crate) fn daemon_pid_files() -> Vec<PathBuf> {
     files
 }
 
-/// Collect dev-link directories from the shared config, if available.
+#[cfg(unix)]
 pub(crate) fn dev_link_dirs() -> Vec<PathBuf> {
     #[cfg(feature = "dev")]
     return crate::paths::shared_config_dir()
@@ -68,8 +72,7 @@ pub(crate) fn dev_link_dirs() -> Vec<PathBuf> {
     Vec::new()
 }
 
-/// Kill orphan daemons found in PID files, verifying each is a managed plugin binary
-/// via the platform-specific `pid_exe_path`.
+#[cfg(unix)]
 pub(crate) fn kill_from_pid_files() {
     let roots = ManagedRoots::load();
     for path in daemon_pid_files() {
@@ -77,6 +80,7 @@ pub(crate) fn kill_from_pid_files() {
     }
 }
 
+#[cfg(unix)]
 fn process_pid_file(path: &Path, roots: &ManagedRoots) {
     let Ok(content) = std::fs::read_to_string(path) else {
         return;
@@ -87,6 +91,7 @@ fn process_pid_file(path: &Path, roots: &ManagedRoots) {
     let _ = std::fs::remove_file(path);
 }
 
+#[cfg(unix)]
 fn kill_pid_if_managed(line: &str, roots: &ManagedRoots) {
     let Ok(pid) = line.trim().parse::<i32>() else {
         return;
@@ -116,6 +121,7 @@ fn kill_pid_if_managed(line: &str, roots: &ManagedRoots) {
     crate::process_utils::reap_children_nonblocking();
 }
 
+#[cfg(unix)]
 fn resolved_children(dir: &Path) -> Vec<PathBuf> {
     std::fs::read_dir(dir)
         .into_iter()
@@ -125,13 +131,14 @@ fn resolved_children(dir: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Pre-resolved set of directories whose binaries are managed by qol-tray.
+#[cfg(unix)]
 pub(crate) struct ManagedRoots {
     installs_root: Option<PathBuf>,
     shared_plugins_root: Option<PathBuf>,
     dev_link_dirs: Vec<PathBuf>,
 }
 
+#[cfg(unix)]
 impl ManagedRoots {
     pub(crate) fn load() -> Self {
         Self {
