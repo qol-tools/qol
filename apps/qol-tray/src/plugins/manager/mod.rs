@@ -41,6 +41,10 @@ impl PluginManager {
     pub fn restart_running_plugin_daemon(&mut self, plugin_id: &str) -> Result<()> {
         runtime::restart_running_plugin_daemon(self, plugin_id)
     }
+
+    pub fn ensure_plugin_daemon_running(&mut self, plugin_id: &str) -> Result<()> {
+        runtime::ensure_plugin_daemon_running(self, plugin_id)
+    }
 }
 
 impl Default for PluginManager {

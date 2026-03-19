@@ -29,6 +29,16 @@ pub(super) fn restart_running_plugin_daemon(
     Ok(())
 }
 
+pub(super) fn ensure_plugin_daemon_running(
+    manager: &mut PluginManager,
+    plugin_id: &str,
+) -> Result<()> {
+    start_plugin_daemon_if_needed(manager, plugin_id)?;
+    sync_ignore_pids(manager);
+    persist_daemon_pids(manager);
+    Ok(())
+}
+
 pub(super) fn sync_ignore_pids(manager: &PluginManager) {
     for plugin in manager.plugins.values() {
         let Some(pid) = plugin.daemon_pid() else {
@@ -58,6 +68,23 @@ fn stop_plugin_daemon(plugin: &mut Plugin) {
     if let Err(error) = plugin.stop_daemon() {
         log::error!("Failed to stop daemon for plugin {}: {}", plugin.id, error);
     }
+}
+
+fn start_plugin_daemon_if_needed(manager: &mut PluginManager, plugin_id: &str) -> Result<()> {
+    let plugin = plugin_mut(manager, plugin_id)?;
+    if !plugin
+        .manifest
+        .daemon
+        .as_ref()
+        .is_some_and(|daemon| daemon.enabled)
+    {
+        return Ok(());
+    }
+    if plugin.daemon_pid().is_some() {
+        return Ok(());
+    }
+
+    plugin.start_daemon()
 }
 
 pub(super) fn persist_daemon_pids(manager: &PluginManager) {

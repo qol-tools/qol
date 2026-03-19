@@ -105,6 +105,20 @@ pub(super) struct ExecuteActionResult {
     pub(super) message: String,
 }
 
+#[derive(Serialize, Default)]
+pub(super) struct PluginCapabilitiesStatus {
+    pub(super) met: bool,
+    pub(super) required: Vec<String>,
+    pub(super) unmet: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub(super) struct EnsurePluginCapabilitiesResult {
+    pub(super) success: bool,
+    pub(super) message: String,
+    pub(super) status: PluginCapabilitiesStatus,
+}
+
 #[derive(Serialize)]
 pub(super) struct PluginAction {
     pub(super) id: String,
