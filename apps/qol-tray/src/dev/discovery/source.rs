@@ -76,7 +76,7 @@ fn read_source(path: &Path) -> Option<SourceInfo> {
         return None;
     }
 
-    let id = path.file_name()?.to_string_lossy().to_string();
+    let id = path.file_name()?.to_string_lossy().into_owned();
     if id == "plugin-template" {
         return None;
     }

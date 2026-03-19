@@ -44,7 +44,7 @@ impl From<ClassifiedSource> for DiscoveredPlugin {
         Self {
             id: source.id,
             name: source.name,
-            path: source.path.to_string_lossy().to_string(),
+            path: source.path.to_string_lossy().into_owned(),
             already_linked: source.already_linked,
             installed_not_linked: source.installed_not_linked,
         }
