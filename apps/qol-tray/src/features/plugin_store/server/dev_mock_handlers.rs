@@ -204,10 +204,10 @@ fn build_update_fixture() -> anyhow::Result<Vec<u8>> {
 }
 
 fn patch_test_version(binary: &mut [u8]) {
-    let sentinel = b"@@QOL_TEST_VER@@";
+    let full_static: [u8; 32] = *b"@@QOL_TEST_VER@@\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
     let version = format!("{}-test", env!("CARGO_PKG_VERSION"));
-    let Some(pos) = binary.windows(sentinel.len()).position(|w| w == sentinel) else {
-        log::warn!("Test version sentinel not found in binary");
+    let Some(pos) = binary.windows(32).position(|w| w == full_static) else {
+        log::warn!("Test version static not found in binary");
         return;
     };
     let patch = &mut binary[pos..pos + 32];
