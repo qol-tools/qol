@@ -131,6 +131,31 @@ fn user_is_in_group(group: &str) -> bool {
     groups.split_whitespace().any(|current| current == group)
 }
 
+fn parse_group_members(getent_output: &str) -> impl Iterator<Item = &str> {
+    getent_output
+        .split(':')
+        .nth(3)
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+pub(crate) fn user_in_persistent_group(group: &str) -> bool {
+    let output = Command::new("getent").args(["group", group]).output();
+    let Ok(output) = output else { return false };
+    let line = String::from_utf8_lossy(&output.stdout);
+    let Ok(user) = std::env::var("USER") else {
+        return false;
+    };
+    let found = parse_group_members(&line).any(|member| member == user);
+    found
+}
+
+pub(crate) fn pkexec_available() -> bool {
+    pkexec_command_path().is_ok()
+}
+
 fn fix_serial_linux() -> Result<()> {
     let user = std::env::var("USER").context("USER env var not set")?;
     let (group_command, group_args) = serial_group_fix_command(&user)?;
@@ -313,5 +338,21 @@ mod tests {
         };
         let json = serde_json::to_string(&status).unwrap();
         assert_eq!(json, r#"{"state":"fixable","hint":"foo"}"#);
+    }
+
+    #[test]
+    fn parse_group_members_extracts_users() {
+        let cases = [
+            ("dialout:x:20:alice,bob", vec!["alice", "bob"]),
+            ("dialout:x:20:alice", vec!["alice"]),
+            ("dialout:x:20:", vec![]),
+            ("dialout:x:20", vec![]),
+            ("", vec![]),
+            ("short", vec![]),
+        ];
+        for (input, expected) in cases {
+            let members: Vec<_> = parse_group_members(input).collect();
+            assert_eq!(members, expected, "input: {:?}", input);
+        }
     }
 }
