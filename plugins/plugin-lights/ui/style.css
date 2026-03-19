@@ -11,10 +11,22 @@ body {
     min-height: 100vh;
 }
 
+#app {
+    min-height: 100vh;
+    position: relative;
+}
+
 .container {
     max-width: 640px;
     margin: 0 auto;
     padding: 1.5rem;
+}
+
+.page-blocked {
+    filter: blur(10px);
+    opacity: 0.4;
+    pointer-events: none;
+    user-select: none;
 }
 
 .section {
@@ -96,6 +108,83 @@ body {
     font-size: 0.8rem;
     color: #777;
     margin-left: auto;
+}
+
+.status-note {
+    margin-top: 0.9rem;
+    font-size: 0.88rem;
+    color: #fbbf24;
+}
+
+.status-note-error {
+    color: #f87171;
+}
+
+.permission-backdrop {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    background: rgba(6, 8, 18, 0.5);
+    backdrop-filter: blur(14px);
+}
+
+.permission-card {
+    width: min(100%, 460px);
+    padding: 1.75rem;
+    border-radius: 18px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background:
+        linear-gradient(180deg, rgba(233, 69, 96, 0.18), rgba(15, 18, 34, 0.94) 32%),
+        rgba(15, 18, 34, 0.94);
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+}
+
+.permission-eyebrow {
+    font-size: 0.74rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #fbbf24;
+    margin-bottom: 0.85rem;
+}
+
+.permission-title {
+    font-size: clamp(1.8rem, 3vw, 2.4rem);
+    line-height: 1;
+    margin-bottom: 0.85rem;
+}
+
+.permission-copy {
+    font-size: 0.98rem;
+    line-height: 1.55;
+    color: rgba(255, 255, 255, 0.82);
+}
+
+.permission-meta {
+    margin-top: 1rem;
+    font-size: 0.82rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.48);
+}
+
+.permission-actions {
+    margin-top: 1.4rem;
+}
+
+.permission-btn {
+    width: 100%;
+    padding: 0.95rem 1.1rem;
+    font-size: 0.95rem;
+}
+
+.permission-note {
+    margin-top: 0.9rem;
+    font-size: 0.88rem;
+    color: #fbbf24;
 }
 
 .device-list {
