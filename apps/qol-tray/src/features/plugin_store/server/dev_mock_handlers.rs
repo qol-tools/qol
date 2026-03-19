@@ -166,14 +166,21 @@ async fn serve_update_fixture() -> impl IntoResponse {
     }
 }
 
+fn platform_bundle_name() -> String {
+    let os = if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "linux"
+    };
+    format!(
+        "qol-tray-{os}-{}",
+        crate::updates::platform::common::arch_suffix()
+    )
+}
+
 fn build_update_fixture() -> anyhow::Result<Vec<u8>> {
     let current_exe = std::env::current_exe()?;
-    let arch = if cfg!(target_arch = "aarch64") {
-        "aarch64"
-    } else {
-        "x86_64"
-    };
-    let bundle_name = format!("qol-tray-macos-{arch}");
+    let bundle_name = platform_bundle_name();
 
     let mut binary_data = std::fs::read(&current_exe)?;
     patch_test_version(&mut binary_data);
