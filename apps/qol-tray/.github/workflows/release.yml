@@ -50,6 +50,12 @@ jobs:
         run: |
           mkdir -p dist
           cp target/debian/*.deb dist/
+          ARCH=$(uname -m)
+          BUNDLE="qol-tray-linux-${ARCH}"
+          mkdir -p "${BUNDLE}"
+          cp target/release/qol-tray "${BUNDLE}/"
+          tar czf "${BUNDLE}.tar.gz" "${BUNDLE}"
+          cp "${BUNDLE}.tar.gz" dist/
           echo "Built artifacts:"
           ls -lh dist/
 
@@ -57,7 +63,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: linux-deb
-          path: dist/*.deb
+          path: dist/*
           if-no-files-found: error
 
   build_macos:
