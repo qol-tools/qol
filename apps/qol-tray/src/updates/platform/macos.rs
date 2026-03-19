@@ -70,14 +70,21 @@ fn find_app_bundle(exe_path: &Path) -> Option<PathBuf> {
 }
 
 pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
-    match InstallKind::detect() {
-        InstallKind::SystemWide => {
-            anyhow::bail!("This installation is managed by your system package manager")
+    #[cfg(feature = "dev")]
+    let dev_override = std::env::var("QOL_TRAY_DEV_UPDATE_URL").is_ok();
+    #[cfg(not(feature = "dev"))]
+    let dev_override = false;
+
+    if !dev_override {
+        match InstallKind::detect() {
+            InstallKind::SystemWide => {
+                anyhow::bail!("This installation is managed by your system package manager")
+            }
+            InstallKind::Development => {
+                anyhow::bail!("Self-update is disabled in development builds")
+            }
+            InstallKind::UserLocal => {}
         }
-        InstallKind::Development => {
-            anyhow::bail!("Self-update is disabled in development builds")
-        }
-        InstallKind::UserLocal => {}
     }
 
     let (url, dest) = resolve_update_url()?;
