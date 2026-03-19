@@ -10,7 +10,7 @@ import {
     selectorDensityClass,
     selectorGridTemplate,
 } from '../../auto-config/display-rules.js';
-import { renderField } from './field-map.js';
+import { renderField, fieldSelectionClasses } from './field-map.js';
 import { dissolveIn, DISSOLVE_PRESETS } from '../../lib/dissolve.js';
 
 export function PluginConfigView({ onClose }) {
@@ -131,9 +131,4 @@ function VariantPanel({ group }) {
             </div>
         </div>
     `;
-}
-
-function fieldSelectionClasses(selected) {
-    if (!selected) return '';
-    return 'selected is-selected';
 }

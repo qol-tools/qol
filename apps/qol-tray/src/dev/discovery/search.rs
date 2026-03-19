@@ -48,6 +48,6 @@ fn should_visit_entry(entry: &DirEntry) -> bool {
         && name != "worktrees"
 }
 
-fn is_plugin_dir(path: &Path) -> bool {
+pub(super) fn is_plugin_dir(path: &Path) -> bool {
     path.is_dir() && path.join("plugin.toml").exists()
 }
