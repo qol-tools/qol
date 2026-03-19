@@ -1,3 +1,11 @@
+use super::helpers::{validate_plugin_id, validate_plugin_id_bad_request};
+use super::plugin_services;
+use super::types::{
+    AppState, ExecuteActionResult, InstalledPluginsResponse, PluginPermissionsResponse,
+    PluginsQuery, PluginsResponse, UninstallResult,
+};
+use crate::plugins::action_executor::ActionExecutionError;
+use crate::plugins::capabilities::{PermissionState, PermissionStatus};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -5,26 +13,16 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use std::collections::HashMap;
-
-use super::helpers::{validate_plugin_id, validate_plugin_id_bad_request};
-use super::plugin_services;
-use super::types::{
-    AppState, EnsurePluginCapabilitiesResult, ExecuteActionResult, InstalledPluginsResponse,
-    PluginCapabilitiesStatus, PluginsQuery, PluginsResponse, UninstallResult,
-};
-use crate::plugins::action_executor::ActionExecutionError;
-use crate::plugins::manifest::Capabilities;
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
         .route("/plugins", get(list_plugins))
         .route("/installed", get(list_installed))
         .route("/events", get(sse_handler))
-        .route("/plugins/{id}/capabilities", get(get_plugin_capabilities))
+        .route("/plugins/{id}/permissions", get(get_plugin_permissions))
         .route(
-            "/plugins/{id}/capabilities/ensure",
-            post(ensure_plugin_capabilities),
+            "/permissions/{name}/request",
+            post(request_permission_handler),
         )
         .route(
             "/plugins/{id}/actions/{action}",
@@ -99,93 +97,34 @@ pub(super) async fn list_installed(
     plugin_services::list_installed(&state).map(Json)
 }
 
-pub(super) async fn get_plugin_capabilities(
+pub(super) async fn get_plugin_permissions(
     Path(id): Path<String>,
     State(state): State<AppState>,
-) -> Result<Json<PluginCapabilitiesStatus>, StatusCode> {
+) -> Result<Json<PluginPermissionsResponse>, StatusCode> {
     if validate_plugin_id(&id).is_err() {
         return Err(StatusCode::BAD_REQUEST);
     }
-
     let manager = state
         .plugin_manager
         .lock()
         .map_err(plugin_manager_lock_failed)?;
     let plugin = manager.get(&id).ok_or(StatusCode::NOT_FOUND)?;
-    let results =
-        crate::plugins::capabilities::check_capabilities(&[&plugin.manifest.capabilities]);
-    Ok(Json(capability_status(
-        &plugin.manifest.capabilities,
-        &results,
-    )))
+    let permissions =
+        crate::plugins::capabilities::check_plugin_permissions(&plugin.manifest.capabilities);
+    Ok(Json(PluginPermissionsResponse { permissions }))
 }
 
-pub(super) async fn ensure_plugin_capabilities(
-    Path(id): Path<String>,
-    State(state): State<AppState>,
-) -> (StatusCode, Json<EnsurePluginCapabilitiesResult>) {
-    if validate_plugin_id(&id).is_err() {
-        return capability_response(
-            StatusCode::BAD_REQUEST,
-            false,
-            "Invalid plugin ID".to_string(),
-            PluginCapabilitiesStatus::default(),
-        );
+pub(super) async fn request_permission_handler(
+    Path(name): Path<String>,
+) -> Result<Json<PermissionStatus>, StatusCode> {
+    let current =
+        crate::plugins::capabilities::check_permission(&name).ok_or(StatusCode::NOT_FOUND)?;
+    if current.state == PermissionState::Granted {
+        return Err(StatusCode::BAD_REQUEST);
     }
-
-    let mut manager = match state.plugin_manager.lock() {
-        Ok(manager) => manager,
-        Err(error) => {
-            log::error!("Plugin manager mutex poisoned: {}", error);
-            return capability_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                false,
-                "Plugin manager unavailable".to_string(),
-                PluginCapabilitiesStatus::default(),
-            );
-        }
-    };
-    let capabilities = match manager.get(&id) {
-        Some(plugin) => plugin.manifest.capabilities.clone(),
-        None => {
-            return capability_response(
-                StatusCode::NOT_FOUND,
-                false,
-                "Plugin not found".to_string(),
-                PluginCapabilitiesStatus::default(),
-            );
-        }
-    };
-    let results = crate::plugins::capabilities::ensure_capabilities(&[&capabilities]);
-    let status = capability_status(&capabilities, &results);
-    if !status.met {
-        return capability_response(
-            StatusCode::OK,
-            false,
-            "Permissions were not granted".to_string(),
-            status,
-        );
-    }
-    if let Err(error) = manager.ensure_plugin_daemon_running(&id) {
-        log::error!(
-            "Failed to start plugin daemon after capability grant for {}: {}",
-            id,
-            error
-        );
-        return capability_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            false,
-            "Permissions granted, but plugin startup failed".to_string(),
-            status,
-        );
-    }
-
-    capability_response(
-        StatusCode::OK,
-        true,
-        "Permissions granted".to_string(),
-        status,
-    )
+    crate::plugins::capabilities::request_permission(&name)
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
 }
 
 pub(super) async fn sse_handler(State(state): State<AppState>) -> impl IntoResponse {
@@ -227,39 +166,6 @@ fn plugin_manager_lock_failed(
 ) -> StatusCode {
     log::error!("Plugin manager mutex poisoned: {}", error);
     StatusCode::INTERNAL_SERVER_ERROR
-}
-
-fn capability_status(
-    capabilities: &Capabilities,
-    results: &HashMap<&'static str, bool>,
-) -> PluginCapabilitiesStatus {
-    PluginCapabilitiesStatus {
-        met: crate::plugins::capabilities::capabilities_met(capabilities, results),
-        required: crate::plugins::capabilities::required_capability_names(capabilities)
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
-        unmet: crate::plugins::capabilities::unmet_capability_names(capabilities, results)
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
-    }
-}
-
-fn capability_response(
-    status: StatusCode,
-    success: bool,
-    message: String,
-    capability_status: PluginCapabilitiesStatus,
-) -> (StatusCode, Json<EnsurePluginCapabilitiesResult>) {
-    (
-        status,
-        Json(EnsurePluginCapabilitiesResult {
-            success,
-            message,
-            status: capability_status,
-        }),
-    )
 }
 
 fn action_error_response(

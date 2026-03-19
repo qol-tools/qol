@@ -27,8 +27,8 @@ struct CapabilityRule {
     name: &'static str,
     os: &'static str,
     is_required: fn(&Capabilities) -> bool,
-    check: fn() -> bool,
-    fix: fn() -> Result<()>,
+    check: fn() -> PermissionStatus,
+    request: fn() -> PermissionStatus,
 }
 
 const REGISTRY: &[CapabilityRule] = &[CapabilityRule {
@@ -36,76 +36,30 @@ const REGISTRY: &[CapabilityRule] = &[CapabilityRule {
     os: "linux",
     is_required: |c| c.serial,
     check: check_serial_linux,
-    fix: fix_serial_linux,
+    request: request_serial_linux,
 }];
 
-pub fn check_capabilities(capabilities_list: &[&Capabilities]) -> HashMap<&'static str, bool> {
-    evaluate_capabilities(capabilities_list, false)
-}
-
-pub fn ensure_capabilities(capabilities_list: &[&Capabilities]) -> HashMap<&'static str, bool> {
-    evaluate_capabilities(capabilities_list, true)
-}
-
-pub fn required_capability_names(capabilities: &Capabilities) -> Vec<&'static str> {
-    registry_rules_for_current_os()
-        .filter(|rule| (rule.is_required)(capabilities))
-        .map(|rule| rule.name)
-        .collect()
-}
-
-pub fn unmet_capability_names(
-    capabilities: &Capabilities,
-    results: &HashMap<&'static str, bool>,
-) -> Vec<&'static str> {
-    required_capability_names(capabilities)
-        .into_iter()
-        .filter(|name| !results.get(name).copied().unwrap_or(false))
-        .collect()
-}
-
-pub fn capabilities_met(
-    capabilities: &Capabilities,
-    results: &HashMap<&'static str, bool>,
-) -> bool {
-    unmet_capability_names(capabilities, results).is_empty()
-}
-
-fn evaluate_capabilities(
-    capabilities_list: &[&Capabilities],
-    attempt_fix: bool,
-) -> HashMap<&'static str, bool> {
+pub fn check_plugin_permissions(capabilities: &Capabilities) -> HashMap<String, PermissionStatus> {
     let mut results = HashMap::new();
-
     for rule in registry_rules_for_current_os() {
-        let needed = capabilities_list
-            .iter()
-            .any(|capabilities| (rule.is_required)(capabilities));
-        if !needed {
-            results.insert(rule.name, true);
+        if !(rule.is_required)(capabilities) {
             continue;
         }
-        if (rule.check)() {
-            results.insert(rule.name, true);
-            continue;
-        }
-        if !attempt_fix {
-            results.insert(rule.name, false);
-            continue;
-        }
-
-        log::info!("capability '{}' not met, attempting fix", rule.name);
-        let fixed = (rule.fix)().is_ok() && (rule.check)();
-        if fixed {
-            log::info!("capability '{}' fixed", rule.name);
-        }
-        if !fixed {
-            log::warn!("capability '{}' could not be fixed", rule.name);
-        }
-        results.insert(rule.name, fixed);
+        results.insert(rule.name.to_string(), (rule.check)());
     }
-
     results
+}
+
+pub fn check_permission(name: &str) -> Option<PermissionStatus> {
+    registry_rules_for_current_os()
+        .find(|rule| rule.name == name)
+        .map(|rule| (rule.check)())
+}
+
+pub fn request_permission(name: &str) -> Option<PermissionStatus> {
+    registry_rules_for_current_os()
+        .find(|rule| rule.name == name)
+        .map(|rule| (rule.request)())
 }
 
 fn registry_rules_for_current_os() -> impl Iterator<Item = &'static CapabilityRule> {
@@ -114,14 +68,14 @@ fn registry_rules_for_current_os() -> impl Iterator<Item = &'static CapabilityRu
         .filter(|rule| rule.os == std::env::consts::OS)
 }
 
-fn check_serial_linux() -> bool {
-    if user_is_in_group("dialout") {
-        return true;
-    }
-
-    serial_devices()
-        .into_iter()
-        .any(|path| can_access_serial_device(&path))
+fn check_serial_linux() -> PermissionStatus {
+    let in_session = user_is_in_group("dialout");
+    let device_accessible = serial_devices()
+        .iter()
+        .any(|path| can_access_serial_device(path));
+    let persistent = user_in_persistent_group("dialout");
+    let pkexec = pkexec_available();
+    resolve_serial_check_state(in_session, device_accessible, persistent, pkexec)
 }
 
 fn user_is_in_group(group: &str) -> bool {
@@ -141,7 +95,7 @@ fn parse_group_members(getent_output: &str) -> impl Iterator<Item = &str> {
         .filter(|s| !s.is_empty())
 }
 
-pub(crate) fn user_in_persistent_group(group: &str) -> bool {
+fn user_in_persistent_group(group: &str) -> bool {
     let output = Command::new("getent").args(["group", group]).output();
     let Ok(output) = output else { return false };
     let line = String::from_utf8_lossy(&output.stdout);
@@ -152,11 +106,11 @@ pub(crate) fn user_in_persistent_group(group: &str) -> bool {
     found
 }
 
-pub(crate) fn pkexec_available() -> bool {
+fn pkexec_available() -> bool {
     pkexec_command_path().is_ok()
 }
 
-pub(crate) fn resolve_serial_check_state(
+fn resolve_serial_check_state(
     in_session_group: bool,
     device_accessible: bool,
     in_persistent_group: bool,
@@ -186,7 +140,7 @@ pub(crate) fn resolve_serial_check_state(
     }
 }
 
-pub(crate) fn resolve_serial_request_state(
+fn resolve_serial_request_state(
     device_accessible: bool,
     in_persistent_group: bool,
     in_session_group: bool,
@@ -209,20 +163,35 @@ pub(crate) fn resolve_serial_request_state(
     }
 }
 
-fn fix_serial_linux() -> Result<()> {
-    let user = std::env::var("USER").context("USER env var not set")?;
-    let (group_command, group_args) = serial_group_fix_command(&user)?;
-    run_pkexec(&group_command, &group_args)?;
-    let devices = serial_devices();
-    if devices.is_empty() {
-        return Ok(());
+fn request_serial_linux() -> PermissionStatus {
+    let user = match std::env::var("USER") {
+        Ok(user) => user,
+        Err(_) => {
+            return PermissionStatus {
+                state: PermissionState::Denied,
+                hint: Some("USER env var not set".to_string()),
+            }
+        }
+    };
+
+    if !user_in_persistent_group("dialout") {
+        if let Ok((cmd, args)) = serial_group_fix_command(&user) {
+            let _ = run_pkexec(&cmd, &args);
+        }
     }
 
-    let access_command = device_access_fix_command()?;
-    let args = device_access_fix_args(access_command.as_path(), &user, &devices);
-    let _ = run_pkexec(&access_command, &args);
+    let devices = serial_devices();
+    if !devices.is_empty() {
+        if let Ok(cmd) = device_access_fix_command() {
+            let args = device_access_fix_args(&cmd, &user, &devices);
+            let _ = run_pkexec(&cmd, &args);
+        }
+    }
 
-    Ok(())
+    let device_accessible = devices.iter().any(|path| can_access_serial_device(path));
+    let persistent = user_in_persistent_group("dialout");
+    let in_session = user_is_in_group("dialout");
+    resolve_serial_request_state(device_accessible, persistent, in_session)
 }
 
 fn serial_group_fix_command(user: &str) -> Result<(PathBuf, Vec<String>)> {
