@@ -169,13 +169,17 @@ async fn serve_update_fixture() -> impl IntoResponse {
 fn platform_bundle_name() -> String {
     let os = if cfg!(target_os = "macos") {
         "macos"
+    } else if cfg!(target_os = "windows") {
+        "windows"
     } else {
         "linux"
     };
-    format!(
-        "qol-tray-{os}-{}",
-        crate::updates::platform::common::arch_suffix()
-    )
+    let arch = if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
+        "x86_64"
+    };
+    format!("qol-tray-{os}-{arch}")
 }
 
 fn build_update_fixture() -> anyhow::Result<Vec<u8>> {

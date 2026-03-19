@@ -1,4 +1,5 @@
 use crate::plugins::Plugin;
+#[cfg(unix)]
 use std::path::PathBuf;
 
 #[cfg(target_os = "linux")]
@@ -13,18 +14,13 @@ mod socket_cleanup;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 compile_error!("plugins::daemon_tracker::platform is not implemented for this target OS");
 
+#[cfg(unix)]
 pub(super) fn pid_exe_path(pid: i32) -> Option<PathBuf> {
     #[cfg(target_os = "linux")]
     return linux::pid_exe_path(pid);
 
     #[cfg(target_os = "macos")]
     return macos::pid_exe_path(pid);
-
-    #[cfg(target_os = "windows")]
-    {
-        let _ = pid;
-        None
-    }
 }
 
 pub(super) fn kill_orphan_daemons() {
