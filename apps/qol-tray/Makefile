@@ -1,4 +1,4 @@
-.PHONY: build release run dev test check lint lint-fix fmt fmt-check clean install
+.PHONY: build release run dev test check lint lint-fix fmt fmt-check icons clean install
 
 build: lint
 	cargo build
@@ -83,6 +83,9 @@ fmt:
 
 fmt-check:
 	cargo fmt --all --check
+
+icons:
+	bash scripts/generate-icons.sh
 
 clean:
 	cargo clean
