@@ -114,8 +114,13 @@ fn bind_listener(socket_path: &str) -> Result<UnixListener> {
 
 fn handle_stream(state: &mut DaemonState, stream: UnixStream) -> Result<()> {
     let request = read_request(&stream)?;
-    let response = response_line(state.handle_action(&request.action))?;
-    write_response(stream, &response)
+    let ack = response_line(DaemonOutcome::Handled)?;
+    write_response(stream, &ack)?;
+    let outcome = state.handle_action(&request.action);
+    if let DaemonOutcome::Error(msg) = outcome {
+        eprintln!("action '{}' failed: {}", request.action, msg);
+    }
+    Ok(())
 }
 
 fn read_request(stream: &UnixStream) -> Result<DaemonRequest> {
