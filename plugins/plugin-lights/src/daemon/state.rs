@@ -103,10 +103,7 @@ impl DaemonState {
     }
 
     fn apply(&mut self, command: LightCommand) -> DaemonOutcome {
-        match self
-            .service
-            .apply_command(&self.main_target, &command)
-        {
+        match self.service.apply_command(&self.main_target, &command) {
             Ok(()) => DaemonOutcome::Handled,
             Err(error) => DaemonOutcome::Error(error.to_string()),
         }
@@ -182,7 +179,10 @@ fn parse_network_address(key: &str) -> Option<u16> {
 fn parse_ieee_address(hex: &str) -> Result<[u8; 8], String> {
     let parts: Vec<&str> = hex.split(':').collect();
     if parts.len() != 8 {
-        return Err(format!("expected 8 colon-separated hex bytes, got {}", parts.len()));
+        return Err(format!(
+            "expected 8 colon-separated hex bytes, got {}",
+            parts.len()
+        ));
     }
     let mut addr = [0u8; 8];
     for (i, part) in parts.iter().enumerate() {
@@ -208,7 +208,9 @@ fn preset_commands(preset: &PresetSlot) -> Vec<LightCommand> {
         LightCommand::SetColor {
             color: parse_color(&preset.color_hex),
         },
-        LightCommand::SetColorTemperature { mirek: preset.mirek },
+        LightCommand::SetColorTemperature {
+            mirek: preset.mirek,
+        },
     ]
 }
 

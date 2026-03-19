@@ -89,7 +89,7 @@ fn device_monitor_loop(events: crossbeam_channel::Receiver<zigbee_znp::ZigbeeEve
                         .devices
                         .insert(format!("0x{:04X}", device.network_address), entry);
                     let _ = store::save(&config);
-                    eprintln!("device joined: {} ({})", ieee, format!("0x{:04X}", device.network_address));
+                    eprintln!("device joined: {} (0x{:04X})", ieee, device.network_address);
                 }
             }
             Ok(zigbee_znp::ZigbeeEvent::DeviceLeft(_)) => {}

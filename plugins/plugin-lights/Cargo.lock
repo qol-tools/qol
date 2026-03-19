@@ -1767,7 +1767,7 @@ dependencies = [
 [[package]]
 name = "qol-config"
 version = "1.2.1"
-source = "git+https://github.com/qol-tools/qol-config#8d903b2dfbd46eb5ee82ffd79e75e2bb4381bfdd"
+source = "git+https://github.com/qol-tools/qol-config#1146114d1a2efe6b3d80713c2263eba482d3d167"
 dependencies = [
  "dirs",
  "indexmap",
@@ -1799,7 +1799,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.2.0"
+version = "3.4.0"
 dependencies = [
  "anyhow",
  "axum",

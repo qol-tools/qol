@@ -100,15 +100,23 @@ impl LightBackend for ZigbeeBackend {
                 let ep = device
                     .endpoint_for_cluster(zcl::CLUSTER_ON_OFF)
                     .ok_or_else(|| anyhow!("device has no on/off cluster"))?;
-                self.controller
-                    .send_cluster_command(nwk_addr, ep, zcl::CLUSTER_ON_OFF, zcl::on_off::on())
+                self.controller.send_cluster_command(
+                    nwk_addr,
+                    ep,
+                    zcl::CLUSTER_ON_OFF,
+                    zcl::on_off::on(),
+                )
             }
             LightCommand::TurnOff => {
                 let ep = device
                     .endpoint_for_cluster(zcl::CLUSTER_ON_OFF)
                     .ok_or_else(|| anyhow!("device has no on/off cluster"))?;
-                self.controller
-                    .send_cluster_command(nwk_addr, ep, zcl::CLUSTER_ON_OFF, zcl::on_off::off())
+                self.controller.send_cluster_command(
+                    nwk_addr,
+                    ep,
+                    zcl::CLUSTER_ON_OFF,
+                    zcl::on_off::off(),
+                )
             }
             LightCommand::Toggle => {
                 let ep = device
@@ -220,7 +228,11 @@ fn capabilities_from_device(device: &Device) -> LightCapabilities {
 
 fn rgb_to_cie_xy(r: u8, g: u8, b: u8) -> (u16, u16) {
     let gamma = |v: f64| {
-        if v > 0.04045 { ((v + 0.055) / 1.055).powf(2.4) } else { v / 12.92 }
+        if v > 0.04045 {
+            ((v + 0.055) / 1.055).powf(2.4)
+        } else {
+            v / 12.92
+        }
     };
 
     let rf = gamma(r as f64 / 255.0);
