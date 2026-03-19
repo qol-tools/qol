@@ -156,6 +156,36 @@ pub(crate) fn pkexec_available() -> bool {
     pkexec_command_path().is_ok()
 }
 
+pub(crate) fn resolve_serial_check_state(
+    in_session_group: bool,
+    device_accessible: bool,
+    in_persistent_group: bool,
+    pkexec_available: bool,
+) -> PermissionStatus {
+    if in_session_group || device_accessible {
+        return PermissionStatus {
+            state: PermissionState::Granted,
+            hint: None,
+        };
+    }
+    if in_persistent_group {
+        return PermissionStatus {
+            state: PermissionState::RequiresLogout,
+            hint: Some("Log out and back in to activate serial access".to_string()),
+        };
+    }
+    if pkexec_available {
+        return PermissionStatus {
+            state: PermissionState::Fixable,
+            hint: Some("Serial port access requires password prompt".to_string()),
+        };
+    }
+    PermissionStatus {
+        state: PermissionState::Denied,
+        hint: Some("Install policykit to enable serial access".to_string()),
+    }
+}
+
 fn fix_serial_linux() -> Result<()> {
     let user = std::env::var("USER").context("USER env var not set")?;
     let (group_command, group_args) = serial_group_fix_command(&user)?;
@@ -353,6 +383,26 @@ mod tests {
         for (input, expected) in cases {
             let members: Vec<_> = parse_group_members(input).collect();
             assert_eq!(members, expected, "input: {:?}", input);
+        }
+    }
+
+    #[test]
+    fn check_state_resolution() {
+        let cases = [
+            (true, false, false, false, PermissionState::Granted),
+            (false, true, false, false, PermissionState::Granted),
+            (true, true, true, true, PermissionState::Granted),
+            (false, false, true, true, PermissionState::RequiresLogout),
+            (false, false, true, false, PermissionState::RequiresLogout),
+            (false, false, false, true, PermissionState::Fixable),
+            (false, false, false, false, PermissionState::Denied),
+        ];
+        for (in_session, device_ok, persistent, pkexec, expected) in cases {
+            let status = resolve_serial_check_state(in_session, device_ok, persistent, pkexec);
+            assert_eq!(
+                status.state, expected,
+                "in_session={in_session}, device_ok={device_ok}, persistent={persistent}, pkexec={pkexec}"
+            );
         }
     }
 }
