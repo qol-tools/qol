@@ -1,4 +1,3 @@
-use crate::plugins::capabilities;
 use crate::plugins::resolver::PluginSource;
 use crate::plugins::{Plugin, PluginId};
 use std::collections::HashMap;
@@ -11,11 +10,10 @@ pub(super) fn start_plugin_daemons(
     plugins: &mut [Plugin],
     resolved_sources: &HashMap<PluginId, PluginSource>,
 ) -> Vec<u32> {
-    let capability_results = capability_results(plugins);
     let pids = Mutex::new(Vec::new());
     std::thread::scope(|scope| {
         for plugin in plugins {
-            if !should_start_daemon(plugin, resolved_sources, &capability_results) {
+            if !should_start_daemon(plugin, resolved_sources) {
                 continue;
             }
             scope.spawn(|| start_daemon(plugin, &pids));
@@ -24,29 +22,13 @@ pub(super) fn start_plugin_daemons(
     pids.into_inner().unwrap()
 }
 
-fn capability_results(plugins: &[Plugin]) -> HashMap<&'static str, bool> {
-    let capabilities_list: Vec<_> = plugins
-        .iter()
-        .map(|plugin| &plugin.manifest.capabilities)
-        .collect();
-    capabilities::check_capabilities(&capabilities_list)
-}
-
 fn should_start_daemon(
     plugin: &Plugin,
     resolved_sources: &HashMap<PluginId, PluginSource>,
-    capability_results: &HashMap<&'static str, bool>,
 ) -> bool {
     let daemon_enabled = daemon_enabled(plugin);
     if !daemon_enabled {
         return true;
-    }
-    if !capabilities::capabilities_met(&plugin.manifest.capabilities, capability_results) {
-        log::warn!(
-            "Daemon autostart blocked for {}: unmet capabilities",
-            plugin.id
-        );
-        return false;
     }
     let source = resolved_sources.get(&plugin.id);
     should_autostart_daemon_for_source(plugin.id.as_str(), &plugin.path, daemon_enabled, source)
