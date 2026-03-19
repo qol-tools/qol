@@ -30,23 +30,21 @@ fn apps_dir() -> Result<PathBuf> {
 }
 
 fn app_dirnames(entries: &[LauncherEntry]) -> HashMap<String, String> {
+    let sanitized: Vec<String> = entries.iter().map(sanitized_display_name).collect();
+
     let mut counts = HashMap::new();
-    for entry in entries {
-        let name = sanitized_display_name(entry);
-        let count = counts.entry(name).or_insert(0usize);
-        *count += 1;
+    for name in &sanitized {
+        *counts.entry(name.as_str()).or_insert(0usize) += 1;
     }
 
     let mut names = HashMap::new();
-    for entry in entries {
-        let base = sanitized_display_name(entry);
-        let count = counts.get(&base).copied().unwrap_or(0);
-        if count <= 1 {
-            names.insert(entry.file_stem.clone(), format!("{}.app", base));
-            continue;
-        }
-        let disambiguated = format!("{} ({})", base, entry.file_stem);
-        names.insert(entry.file_stem.clone(), format!("{}.app", disambiguated));
+    for (entry, base) in entries.iter().zip(&sanitized) {
+        let app_name = if counts.get(base.as_str()).copied().unwrap_or(0) <= 1 {
+            format!("{}.app", base)
+        } else {
+            format!("{} ({}).app", base, entry.file_stem)
+        };
+        names.insert(entry.file_stem.clone(), app_name);
     }
     names
 }
@@ -78,18 +76,10 @@ fn write_app_bundle(app_dir: &Path, entry: &LauncherEntry, binary_path: &Path) -
     let expected_script = build_script(binary_path, entry);
     let expected_plist = build_info_plist(entry);
 
-    let script_ok = run_path
-        .is_file()
-        .then(|| std::fs::read_to_string(&run_path).ok())
-        .flatten()
-        .is_some_and(|s| s == expected_script);
-    let plist_ok = plist_path
-        .is_file()
-        .then(|| std::fs::read_to_string(&plist_path).ok())
-        .flatten()
-        .is_some_and(|s| s == expected_plist);
-
-    if script_ok && plist_ok && is_executable(&run_path) {
+    if file_matches(&run_path, &expected_script)
+        && file_matches(&plist_path, &expected_plist)
+        && is_executable(&run_path)
+    {
         return Ok(());
     }
 
@@ -97,6 +87,13 @@ fn write_app_bundle(app_dir: &Path, entry: &LauncherEntry, binary_path: &Path) -
     std::fs::write(&plist_path, &expected_plist)?;
     write_executable(&run_path, &expected_script)?;
     Ok(())
+}
+
+fn file_matches(path: &Path, expected: &str) -> bool {
+    path.is_file()
+        && std::fs::read_to_string(path)
+            .ok()
+            .is_some_and(|s| s == expected)
 }
 
 fn is_executable(path: &Path) -> bool {
