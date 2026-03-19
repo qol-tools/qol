@@ -43,6 +43,12 @@ pub(super) fn prepare_atomic_replace(_: &Path) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn register_application(_binary_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+pub(super) fn warn_system_install_conflict() {}
+
 fn xml_escape(input: &str) -> String {
     input
         .replace('&', "&amp;")

@@ -58,6 +58,14 @@ pub(super) fn prepare_atomic_replace(installed_binary: &Path) -> Result<()> {
     imp::prepare_atomic_replace(installed_binary)
 }
 
+pub(super) fn register_application(binary_path: &Path) -> Result<()> {
+    imp::register_application(binary_path)
+}
+
+pub(super) fn warn_system_install_conflict() {
+    imp::warn_system_install_conflict()
+}
+
 pub(super) fn bundled_binary_candidates(installer_path: &Path) -> Vec<PathBuf> {
     installer_path
         .parent()

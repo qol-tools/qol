@@ -54,3 +54,9 @@ pub(super) fn prepare_atomic_replace(installed_binary: &Path) -> Result<()> {
     }
     Ok(())
 }
+
+pub(super) fn register_application(_binary_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+pub(super) fn warn_system_install_conflict() {}
