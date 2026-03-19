@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 pub(super) enum SocketPathPolicy {
     #[cfg(target_os = "linux")]
     StandardUnix,
+    #[cfg(target_os = "macos")]
     MacOs,
 }
 
