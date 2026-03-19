@@ -66,6 +66,11 @@ pub(super) fn warn_system_install_conflict() {
     imp::warn_system_install_conflict()
 }
 
+#[cfg(target_os = "macos")]
+pub(super) fn remove_legacy_install() {
+    imp::remove_legacy_install();
+}
+
 pub(super) fn bundled_binary_candidates(installer_path: &Path) -> Vec<PathBuf> {
     installer_path
         .parent()

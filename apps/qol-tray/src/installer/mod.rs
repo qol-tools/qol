@@ -29,6 +29,8 @@ pub fn run() -> Result<()> {
             install_dir.display()
         )
     })?;
+    #[cfg(target_os = "macos")]
+    platform::remove_legacy_install();
     let installed_binary = install_dir.join(platform::binary_filename());
     platform::stop_running(&installed_binary)?;
     install_binary_atomically(&source_binary, &installed_binary)?;
