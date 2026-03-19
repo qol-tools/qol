@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde::Deserialize;
 use std::sync::OnceLock;
 
-mod platform;
+pub(crate) mod platform;
 
 static LATEST_VERSION: OnceLock<String> = OnceLock::new();
 
