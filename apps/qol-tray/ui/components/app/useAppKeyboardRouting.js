@@ -4,6 +4,7 @@ import { usePluginConfigContext } from '../../views/plugin-config/context.js';
 import { useViewKeyboardContext } from './view-keyboard-context.js';
 
 const PLUGIN_CONFIG_FIELD = '[data-plugin-config-field-id]';
+const ROW_ALIGNMENT_THRESHOLD = 6;
 export function useAppKeyboardRouting({
     activePluginId,
     activeViewId,
@@ -44,11 +45,11 @@ function delegateToPluginConfig(event, pluginConfig, closePluginConfig) {
         if (event.key === 'Escape') { event.preventDefault(); closePluginConfig(); }
         return;
     }
-    const detail = document.querySelector('.plugin-config-detail');
     if (pluginConfig.loading || !pluginConfig.sections?.length) {
         if (event.key === 'Escape') { event.preventDefault(); closePluginConfig(); }
         return;
     }
+    const detail = document.querySelector('.plugin-config-detail');
     if (event.key === 'Tab') {
         event.preventDefault();
         blurPluginConfigFocus(detail);
@@ -358,7 +359,7 @@ function focusGridRows(elements) {
         })
         .sort((left, right) => {
             const topDelta = Math.abs(left.top - right.top);
-            if (topDelta > 6) return left.top - right.top;
+            if (topDelta > ROW_ALIGNMENT_THRESHOLD) return left.top - right.top;
             return left.left - right.left;
         });
 
@@ -369,7 +370,7 @@ function focusGridRows(elements) {
             rows.push([item]);
             continue;
         }
-        if (Math.abs(row[0].top - item.top) > 6) {
+        if (Math.abs(row[0].top - item.top) > ROW_ALIGNMENT_THRESHOLD) {
             rows.push([item]);
             continue;
         }

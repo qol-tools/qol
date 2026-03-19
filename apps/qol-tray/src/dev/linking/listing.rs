@@ -39,7 +39,7 @@ fn build_plugin_entry(
     LinkedPlugin {
         id: id.to_string(),
         name,
-        source: path.to_string_lossy().to_string(),
+        source: path.to_string_lossy().into_owned(),
         has_cargo: plan.map(|p| p.has_cargo).unwrap_or(false),
         supports_platform: plan.map(|p| p.supports_platform).unwrap_or(true),
         needs_rebuild: plan.map(|p| p.needs_rebuild).unwrap_or(false),

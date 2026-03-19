@@ -41,7 +41,7 @@ fn scan_installed(
     };
     for entry in entries.filter_map(|e| e.ok()) {
         let path = entry.path();
-        let raw_id = entry.file_name().to_string_lossy().to_string();
+        let raw_id = entry.file_name().to_string_lossy().into_owned();
         if should_skip(&raw_id, &path, dev_link_targets) {
             continue;
         }

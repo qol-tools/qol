@@ -69,7 +69,7 @@ fn migrate_symlink_entry(
         return;
     };
 
-    let id = entry.file_name().to_string_lossy().to_string();
+    let id = entry.file_name().to_string_lossy().into_owned();
     let abs_target = absolute_target(plugins_dir, target);
     log::info!("Migrating symlink to dev-link: {} -> {:?}", id, abs_target);
     migrated.insert(id, abs_target);
