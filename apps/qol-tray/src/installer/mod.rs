@@ -36,6 +36,8 @@ pub fn run() -> Result<()> {
     let install_id = register_install_id(&installed_binary)?;
     let plugins_dir = files::ensure_plugin_dir()?;
     platform::write_autostart_entry(&installed_binary)?;
+    platform::warn_system_install_conflict();
+    platform::register_application(&installed_binary)?;
     platform::start_now(&installed_binary)?;
     print_summary(&installed_binary, &install_id, &plugins_dir, &install_dir)
 }
