@@ -2,6 +2,7 @@ import { html } from '../../../lib/html.js';
 import { useState, useCallback, useRef } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
 import { FieldLabel } from './FieldLabel.js';
+import { fieldSelectionClasses } from '../field-map.js';
 import { groupFields } from '../../../auto-config/object-array-form.js';
 import { declaredFieldsToSchema } from '../../../auto-config/object-array-renderer.js';
 import { KNOWN_MODS, prettyLabel, getObjectArraySchema, guessSchemaFromKey } from '../../../auto-config/heuristics.js';
@@ -31,7 +32,7 @@ export function ObjectArrayField({ field }) {
     }, [ctx, field.id]);
 
     return html`
-        <div tabIndex="-1" class="field-group ${selClasses(selected)}"
+        <div tabIndex="-1" class="field-group ${fieldSelectionClasses(selected)}"
             data-plugin-config-field-id=${field.id}
             data-plugin-config-index=${index}
             data-selected-surface=""
@@ -236,9 +237,4 @@ function resetForm(form) {
     for (const field of Object.values(form)) {
         if (typeof field.reset === 'function') field.reset();
     }
-}
-
-function selClasses(selected) {
-    if (!selected) return '';
-    return 'selected is-selected';
 }

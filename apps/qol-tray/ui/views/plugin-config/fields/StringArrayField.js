@@ -2,6 +2,7 @@ import { html } from '../../../lib/html.js';
 import { useState, useCallback, useRef } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
 import { FieldLabel } from './FieldLabel.js';
+import { fieldSelectionClasses } from '../field-map.js';
 
 export function StringArrayField({ field }) {
     const ctx = usePluginConfigContext();
@@ -89,8 +90,3 @@ function AddRow({ inputRef, placeholder, onKeyDown, add }) {
 }
 
 function hideIcon(e) { e.target.style.display = 'none'; }
-
-function fieldSelectionClasses(selected) {
-    if (!selected) return '';
-    return 'selected is-selected';
-}

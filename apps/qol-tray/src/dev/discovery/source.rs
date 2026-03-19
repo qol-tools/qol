@@ -98,9 +98,7 @@ fn canonical_path(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
-fn is_plugin_dir(path: &Path) -> bool {
-    path.is_dir() && path.join("plugin.toml").exists()
-}
+use super::search::is_plugin_dir;
 
 fn install_status(link_state: &LinkState<'_>, source: &SourceInfo) -> (bool, bool) {
     let canonical_source = source.path.canonicalize().ok();

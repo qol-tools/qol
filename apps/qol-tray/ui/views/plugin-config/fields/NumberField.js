@@ -2,6 +2,7 @@ import { html } from '../../../lib/html.js';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
 import { FieldLabel } from './FieldLabel.js';
+import { fieldSelectionClasses } from '../field-map.js';
 
 export function NumberField({ field }) {
     const ctx = usePluginConfigContext();
@@ -119,9 +120,4 @@ function inferUnit(field) {
 function formatValue(v) {
     if (Number.isInteger(v)) return `${v}`;
     return `${parseFloat(v.toFixed(4))}`;
-}
-
-function fieldSelectionClasses(selected) {
-    if (!selected) return '';
-    return 'selected is-selected';
 }
