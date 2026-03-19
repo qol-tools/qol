@@ -231,69 +231,20 @@ function nextPluginConfigFieldId(detail, selectedFieldId, direction) {
     const fields = getPluginConfigFieldElements(detail);
     if (fields.length === 0) return null;
 
-    const rows = pluginConfigRows(fields);
-    if (rows.length === 0) return fields[0]?.dataset.pluginConfigFieldId || null;
+    const fallback = fields[0]?.dataset.pluginConfigFieldId || null;
+    const current = selectedFieldId
+        ? fields.find(f => f.dataset.pluginConfigFieldId === selectedFieldId)
+        : fields[0];
 
-    const currentFieldId = selectedFieldId || fields[0]?.dataset.pluginConfigFieldId;
-    const rowIndex = rows.findIndex(row => row.some(field => field.id === currentFieldId));
-    if (rowIndex < 0) return fields[0]?.dataset.pluginConfigFieldId || null;
-
-    const columnIndex = rows[rowIndex].findIndex(field => field.id === currentFieldId);
-    if (columnIndex < 0) return rows[rowIndex][0]?.id || null;
-
-    if (direction === 'left') return rows[rowIndex][Math.max(0, columnIndex - 1)].id;
-    if (direction === 'right') return rows[rowIndex][Math.min(rows[rowIndex].length - 1, columnIndex + 1)].id;
-    if (direction === 'up') {
-        const previousRow = rows[rowIndex - 1];
-        if (!previousRow) return rows[rowIndex][columnIndex].id;
-        return previousRow[Math.min(columnIndex, previousRow.length - 1)].id;
-    }
-
-    const nextRow = rows[rowIndex + 1];
-    if (!nextRow) return rows[rowIndex][columnIndex].id;
-    return nextRow[Math.min(columnIndex, nextRow.length - 1)].id;
+    const rows = focusGridRows(fields);
+    const next = nextFocusGridElement(rows, current, direction);
+    return next?.dataset?.pluginConfigFieldId || fallback;
 }
 
 function getPluginConfigFieldElements(detail) {
     return Array.from(detail.querySelectorAll(PLUGIN_CONFIG_FIELD))
-        .filter(isActuallyFocusableField)
-        .sort(comparePluginConfigFields);
-}
-
-function isActuallyFocusableField(field) {
-    if (!(field instanceof HTMLElement)) return false;
-    if (field.offsetParent === null && getComputedStyle(field).position !== 'fixed') return false;
-    return true;
-}
-
-function comparePluginConfigFields(left, right) {
-    const leftRect = left.getBoundingClientRect();
-    const rightRect = right.getBoundingClientRect();
-    const topDelta = Math.abs(leftRect.top - rightRect.top);
-    if (topDelta > 6) return leftRect.top - rightRect.top;
-    return leftRect.left - rightRect.left;
-}
-
-function pluginConfigRows(fields) {
-    const rows = [];
-
-    for (const element of fields) {
-        const id = element.dataset.pluginConfigFieldId;
-        if (!id) continue;
-        const rect = element.getBoundingClientRect();
-        const row = rows[rows.length - 1];
-        if (!row) {
-            rows.push([{ id, top: rect.top, left: rect.left }]);
-            continue;
-        }
-        if (Math.abs(row[0].top - rect.top) > 6) {
-            rows.push([{ id, top: rect.top, left: rect.left }]);
-            continue;
-        }
-        row.push({ id, top: rect.top, left: rect.left });
-    }
-
-    return rows.map(row => row.sort((left, right) => left.left - right.left));
+        .filter(el => el instanceof HTMLElement
+            && (el.offsetParent !== null || getComputedStyle(el).position === 'fixed'));
 }
 
 function startStringFieldEdit(event, detail, fieldId) {
@@ -457,13 +408,6 @@ function findFocusGridPosition(rows, active) {
         };
     }
     return null;
-}
-
-function clampIndex(index, total) {
-    if (total <= 0) return 0;
-    if (index < 0) return 0;
-    if (index >= total) return total - 1;
-    return index;
 }
 
 function focusTextInput(input, key) {

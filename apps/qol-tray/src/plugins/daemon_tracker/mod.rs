@@ -1,5 +1,5 @@
 use super::Plugin;
-use crate::paths;
+use crate::{file_io, paths};
 use std::path::{Path, PathBuf};
 
 pub mod platform;
@@ -116,16 +116,12 @@ fn kill_pid_if_managed(line: &str, roots: &ManagedRoots) {
     crate::process_utils::reap_children_nonblocking();
 }
 
-fn resolve_path(p: &Path) -> PathBuf {
-    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
-}
-
 fn resolved_children(dir: &Path) -> Vec<PathBuf> {
     std::fs::read_dir(dir)
         .into_iter()
         .flatten()
         .filter_map(|e| e.ok())
-        .map(|e| resolve_path(&e.path()))
+        .map(|e| file_io::canonical_or_original(&e.path()))
         .collect()
 }
 
@@ -147,25 +143,29 @@ impl ManagedRoots {
 
     /// Check if the given binary path belongs to a managed plugin.
     pub(crate) fn contains(&self, target: &Path) -> bool {
-        let target = resolve_path(target);
+        let target = file_io::canonical_or_original(target);
         self.candidate_roots()
             .iter()
             .any(|root| target.starts_with(root))
     }
 
     fn candidate_roots(&self) -> Vec<PathBuf> {
-        let mut roots: Vec<PathBuf> = self.dev_link_dirs.iter().map(|d| resolve_path(d)).collect();
+        let mut roots: Vec<PathBuf> = self
+            .dev_link_dirs
+            .iter()
+            .map(|d| file_io::canonical_or_original(d))
+            .collect();
 
         if let Some(root) = &self.shared_plugins_root {
-            roots.push(resolve_path(root));
+            roots.push(file_io::canonical_or_original(root));
             roots.extend(resolved_children(root));
         }
 
         if let Some(root) = &self.installs_root {
-            roots.push(resolve_path(root));
+            roots.push(file_io::canonical_or_original(root));
             for child in resolved_children(root) {
                 let plugins = child.join("plugins");
-                roots.push(resolve_path(&plugins));
+                roots.push(file_io::canonical_or_original(&plugins));
             }
         }
 

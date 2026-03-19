@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn ensure_parent_dir(path: &Path) -> Result<()> {
     let Some(parent) = path.parent() else {
@@ -30,4 +30,8 @@ pub(crate) fn write_pretty_json<T: Serialize>(path: &Path, value: &T) -> Result<
     let content = serde_json::to_string_pretty(value)?;
     fs::write(path, content)?;
     Ok(())
+}
+
+pub(crate) fn canonical_or_original(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }

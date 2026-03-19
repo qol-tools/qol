@@ -2,6 +2,7 @@ use crate::plugins::Plugin;
 use std::path::{Path, PathBuf};
 
 pub(super) enum SocketPathPolicy {
+    #[cfg(target_os = "linux")]
     StandardUnix,
     MacOs,
 }
@@ -104,11 +105,12 @@ fn is_managed_daemon_socket_path(path: &Path, policy: &SocketPathPolicy) -> bool
         .is_some_and(|runtime_dir| path.starts_with(runtime_dir))
 }
 
-fn starts_in_allowed_temp_root(path: &Path, policy: &SocketPathPolicy) -> bool {
+fn starts_in_allowed_temp_root(path: &Path, _policy: &SocketPathPolicy) -> bool {
     if path.starts_with(std::env::temp_dir()) {
         return true;
     }
-    if matches!(policy, SocketPathPolicy::StandardUnix) {
+    #[cfg(target_os = "linux")]
+    if matches!(_policy, SocketPathPolicy::StandardUnix) {
         return false;
     }
     starts_in_macos_temp_root(path)

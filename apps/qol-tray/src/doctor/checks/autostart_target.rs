@@ -1,7 +1,7 @@
 use super::super::diagnosis::{error_outcome, ok_outcome, warn_outcome, Diagnosis, FixAction};
-use super::super::install_id::canonical_or_original;
 use super::super::platform;
 use super::runtime_prereqs;
+use crate::file_io;
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
@@ -49,8 +49,8 @@ fn diagnose(context: ContextData) -> Diagnosis {
             context.current_exe,
         );
     };
-    let expected = canonical_or_original(&context.current_exe);
-    let actual = canonical_or_original(&target_path);
+    let expected = file_io::canonical_or_original(&context.current_exe);
+    let actual = file_io::canonical_or_original(&target_path);
     if expected == actual {
         return ok_outcome(
             ID,
