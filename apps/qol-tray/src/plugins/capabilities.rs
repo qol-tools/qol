@@ -116,16 +116,35 @@ fn user_is_in_group(group: &str) -> bool {
 
 fn fix_serial_linux() -> Result<()> {
     let user = std::env::var("USER").context("USER env var not set")?;
-    run_pkexec(&["usermod", "-aG", "dialout", &user])?;
-
-    for device in serial_devices() {
-        let Some(path) = device.to_str() else {
-            continue;
-        };
-        let _ = run_pkexec(&["chmod", "660", path]);
+    let (group_command, group_args) = serial_group_fix_command(&user)?;
+    run_pkexec(&group_command, &group_args)?;
+    let devices = serial_devices();
+    if devices.is_empty() {
+        return Ok(());
     }
 
+    let access_command = device_access_fix_command()?;
+    let args = device_access_fix_args(access_command.as_path(), &user, &devices);
+    let _ = run_pkexec(&access_command, &args);
+
     Ok(())
+}
+
+fn serial_group_fix_command(user: &str) -> Result<(PathBuf, Vec<String>)> {
+    if let Some(path) = existing_command_path(&["/usr/sbin/usermod", "/sbin/usermod"]) {
+        return Ok((
+            path,
+            vec![
+                String::from("-aG"),
+                String::from("dialout"),
+                user.to_string(),
+            ],
+        ));
+    }
+
+    let path = existing_command_path(&["/usr/sbin/adduser", "/sbin/adduser"])
+        .context("no adduser/usermod command found")?;
+    Ok((path, vec![user.to_string(), String::from("dialout")]))
 }
 
 fn serial_devices() -> Vec<PathBuf> {
@@ -148,6 +167,67 @@ fn is_serial_device_name(name: &str) -> bool {
     name.starts_with("ttyUSB") || name.starts_with("ttyACM")
 }
 
+fn chmod_command_path() -> Result<PathBuf> {
+    existing_command_path(&["/bin/chmod", "/usr/bin/chmod"]).context("no chmod command found")
+}
+
+fn setfacl_command_path() -> Result<PathBuf> {
+    existing_command_path(&["/bin/setfacl", "/usr/bin/setfacl"]).context("no setfacl command found")
+}
+
+fn pkexec_command_path() -> Result<PathBuf> {
+    existing_command_path(&["/bin/pkexec", "/usr/bin/pkexec"]).context("no pkexec command found")
+}
+
+fn device_access_fix_command() -> Result<PathBuf> {
+    if let Ok(path) = setfacl_command_path() {
+        return Ok(path);
+    }
+
+    chmod_command_path()
+}
+
+fn device_access_fix_args(
+    command_path: &Path,
+    user: &str,
+    device_paths: &[PathBuf],
+) -> Vec<String> {
+    let mut args = Vec::new();
+
+    if is_setfacl_command(command_path) {
+        args.push(String::from("-m"));
+        args.push(format!("u:{}:rw", user));
+        args.extend(
+            device_paths
+                .iter()
+                .filter_map(|path| path.to_str().map(str::to_string)),
+        );
+        return args;
+    }
+
+    args.push(String::from("666"));
+    args.extend(
+        device_paths
+            .iter()
+            .filter_map(|path| path.to_str().map(str::to_string)),
+    );
+    args
+}
+
+fn is_setfacl_command(command_path: &Path) -> bool {
+    command_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "setfacl")
+}
+
+fn existing_command_path(candidates: &[&str]) -> Option<PathBuf> {
+    candidates
+        .iter()
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
+}
+
 #[cfg(unix)]
 fn can_access_serial_device(path: &Path) -> bool {
     let Ok(path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
@@ -161,14 +241,21 @@ fn can_access_serial_device(_path: &Path) -> bool {
     false
 }
 
-fn run_pkexec(args: &[&str]) -> Result<()> {
-    let status = Command::new("pkexec")
+fn run_pkexec(command_path: &Path, args: &[String]) -> Result<()> {
+    let pkexec_path = pkexec_command_path()?;
+    let status = Command::new(pkexec_path)
+        .arg(command_path)
         .args(args)
         .status()
-        .with_context(|| format!("pkexec {:?} failed", args))?;
+        .with_context(|| format!("pkexec {} {:?} failed", command_path.display(), args))?;
     if status.success() {
         return Ok(());
     }
 
-    bail!("pkexec {:?} exited with {}", args, status)
+    bail!(
+        "pkexec {} {:?} exited with {}",
+        command_path.display(),
+        args,
+        status
+    )
 }
