@@ -14,16 +14,11 @@ pub(super) fn plan_registrations(
     config: &HotkeyConfig,
     available_actions: &AvailableActions,
 ) -> Vec<PlannedRegistration> {
-    let mut registrations = Vec::new();
-
-    for binding in &config.hotkeys {
-        let Some(registration) = plan_binding(binding, available_actions) else {
-            continue;
-        };
-        registrations.push(registration);
-    }
-
-    registrations
+    config
+        .hotkeys
+        .iter()
+        .filter_map(|binding| plan_binding(binding, available_actions))
+        .collect()
 }
 
 fn plan_binding(

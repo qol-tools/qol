@@ -13,10 +13,6 @@ export function escapeHtml(value) {
     return String(value).replace(ENTITY_PATTERN, char => ENTITY_MAP[char] || char);
 }
 
-export function escapeAttr(value) {
-    return escapeHtml(value);
-}
-
 export function safeStatusToken(value) {
     const token = String(value || '').toLowerCase();
     if (token === 'linked') return token;
