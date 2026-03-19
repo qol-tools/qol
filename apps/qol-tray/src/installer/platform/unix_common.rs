@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 #[cfg(unix)]
 use std::{fs, os::unix::fs::PermissionsExt};
