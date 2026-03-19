@@ -66,8 +66,9 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
         return Err(e);
     }
 
+    let current_exe = std::env::current_exe()?;
     let install_result = common::extract_tar_gz(&dest, "qol-tray")
-        .and_then(|binary| common::atomic_replace(&binary, &std::env::current_exe()?));
+        .and_then(|binary| common::atomic_replace(&binary, &current_exe));
     common::cleanup_archive(&dest);
     install_result?;
 
@@ -75,8 +76,7 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     log::info!("Update installed, restarting...");
-    let binary = std::env::current_exe()?;
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
-    let error = std::process::Command::new(&binary).args(&args).exec();
+    let error = std::process::Command::new(&current_exe).args(&args).exec();
     anyhow::bail!("exec restart failed: {error}")
 }
