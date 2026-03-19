@@ -1,13 +1,5 @@
 import { cacheRowRefs } from './dom.js';
 
-const LOG_PREFIX = '[qol-dev-loading]';
-const DEBUG_LOADING = false;
-
-function log(event, payload) {
-    if (!DEBUG_LOADING) return;
-    console.info(`${LOG_PREFIX} ${event}`, payload);
-}
-
 export function cancelFrame(ctx) {
     if (ctx.buildSyncFrame === null) return;
     cancelAnimationFrame(ctx.buildSyncFrame);
@@ -16,7 +8,6 @@ export function cancelFrame(ctx) {
 
 export function queueRow(ctx, pluginId, onNeedsFullRender) {
     if (!pluginId) return;
-    log('overlay:queue', { pluginId });
     ctx.pendingBuildRows.add(pluginId);
     if (ctx.buildSyncFrame !== null) return;
     ctx.buildSyncFrame = requestAnimationFrame(() => {
@@ -37,5 +28,4 @@ export function cacheRows(ctx) {
     ctx.rowRefs.clear();
     const nextRows = cacheRowRefs(ctx.getContainer, previousRows, ctx.completion.snapshot);
     for (const [pluginId, rowRef] of nextRows.entries()) ctx.rowRefs.set(pluginId, rowRef);
-    log('overlay:cache-rows', { mappedCount: ctx.rowRefs.size, pluginIds: Array.from(ctx.rowRefs.keys()) });
 }

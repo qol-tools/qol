@@ -3,7 +3,6 @@ pub mod action_transport;
 pub mod capabilities;
 pub mod config;
 mod daemon_lifecycle;
-#[allow(dead_code)]
 pub mod daemon_tracker;
 mod execution_contract;
 #[cfg(test)]

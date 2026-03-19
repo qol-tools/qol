@@ -44,10 +44,6 @@ pub(super) fn write_install_id_file(path: &Path, install_id: &str) -> Result<()>
         .with_context(|| format!("failed to write {}", path.display()))
 }
 
-pub(super) fn canonical_or_original(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
-}
-
 fn valid_install_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64

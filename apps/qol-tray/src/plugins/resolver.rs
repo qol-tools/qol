@@ -1,3 +1,4 @@
+use crate::file_io;
 use crate::plugins::PluginId;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -21,7 +22,7 @@ pub fn resolve_all(
 ) -> Vec<ResolvedPlugin> {
     let dev_link_targets: HashSet<PathBuf> = dev_links
         .values()
-        .map(|p| canonical_or_original(p))
+        .map(|p| file_io::canonical_or_original(p))
         .collect();
     let mut resolved = scan_installed(plugins_dir, &dev_link_targets);
     apply_dev_links(&mut resolved, dev_links);
@@ -58,7 +59,7 @@ fn scan_installed(
 }
 
 fn should_skip(id: &str, path: &Path, dev_link_targets: &HashSet<PathBuf>) -> bool {
-    if dev_link_targets.contains(&canonical_or_original(path)) {
+    if dev_link_targets.contains(&file_io::canonical_or_original(path)) {
         return true;
     }
     if id.starts_with('.') {
@@ -95,10 +96,6 @@ fn apply_dev_links(
             },
         );
     }
-}
-
-fn canonical_or_original(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 #[cfg(test)]
