@@ -6,6 +6,7 @@ pub struct WindowInfo {
     pub title: String,
     pub app_name: String,
     pub preview_path: Option<String>,
+    #[allow(dead_code)] // read on Linux, not on macOS
     pub icon: Option<RgbaImage>,
     pub x: f32,
     pub y: f32,

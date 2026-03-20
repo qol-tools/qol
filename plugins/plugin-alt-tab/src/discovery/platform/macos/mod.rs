@@ -20,7 +20,6 @@ pub(super) struct CgWindow {
     pub app_name: String,
     pub title: String,
     pub has_title: bool,
-    pub sharing_state: i32,
     pub is_onscreen: bool,
     pub x: f32,
     pub y: f32,
@@ -114,7 +113,7 @@ fn fetch_cg_windows(options: u32, own_pid: i32) -> Vec<CgWindow> {
         return Vec::new();
     }
     let result = parse_cg_window_list(list, own_pid);
-    unsafe { CFRelease(list as *const c_void) };
+    unsafe { CFRelease(list) };
     result
 }
 
@@ -159,7 +158,6 @@ fn parse_cg_entry(dict: CFDictionaryRef, own_pid: i32, keys: &CgKeys) -> Option<
         return None;
     }
     let (wx, wy, ww, wh) = ffi::dict_get_rect(dict, keys.bounds).unwrap_or((0.0, 0.0, 0.0, 0.0));
-    let sharing_state = ffi::dict_get_i32(dict, keys.sharing).unwrap_or(0);
     let is_onscreen = ffi::dict_get_bool(dict, keys.onscreen).unwrap_or(false);
     let has_title = !title.is_empty();
     let display_title = if title.is_empty() {
@@ -173,7 +171,6 @@ fn parse_cg_entry(dict: CFDictionaryRef, own_pid: i32, keys: &CgKeys) -> Option<
         app_name,
         title: display_title,
         has_title,
-        sharing_state,
         is_onscreen,
         x: wx as f32,
         y: wy as f32,

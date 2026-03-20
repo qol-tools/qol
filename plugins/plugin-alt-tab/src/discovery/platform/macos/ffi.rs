@@ -46,7 +46,6 @@ pub(crate) const K_CG_NULL_WINDOW_ID: u32 = 0;
 pub(crate) const K_CG_WINDOW_LAYER_NORMAL: i32 = 0;
 
 const K_CF_NUMBER_INT32_TYPE: isize = 3;
-const K_CF_NUMBER_FLOAT64_TYPE: isize = 13;
 const K_CF_NUMBER_SINT64_TYPE: isize = 4;
 const K_CF_STRING_ENCODING_UTF8: u32 = 0x08000100;
 
@@ -126,23 +125,6 @@ pub(crate) fn dict_get_i32(dict: CFDictionaryRef, key: *const c_void) -> Option<
             val,
             K_CF_NUMBER_INT32_TYPE,
             &mut result as *mut i32 as *mut c_void,
-        )
-    };
-    if ok {
-        Some(result)
-    } else {
-        None
-    }
-}
-
-pub(crate) fn dict_get_f64(dict: CFDictionaryRef, key: *const c_void) -> Option<f64> {
-    let val = dict_get_value(dict, key)?;
-    let mut result: f64 = 0.0;
-    let ok = unsafe {
-        CFNumberGetValue(
-            val,
-            K_CF_NUMBER_FLOAT64_TYPE,
-            &mut result as *mut f64 as *mut c_void,
         )
     };
     if ok {

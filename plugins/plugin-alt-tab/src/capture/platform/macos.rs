@@ -43,7 +43,7 @@ fn resolve_app_pids() -> HashMap<String, i32> {
         return HashMap::new();
     }
     let pids = collect_pids_from_list(list, own_pid);
-    unsafe { CFRelease(list as *const c_void) };
+    unsafe { CFRelease(list) };
     pids
 }
 
@@ -60,8 +60,8 @@ fn collect_pids_from_list(list: ffi::CFArrayRef, own_pid: i32) -> HashMap<String
     }
 
     unsafe {
-        CFRelease(key_pid as *const c_void);
-        CFRelease(key_owner as *const c_void);
+        CFRelease(key_pid);
+        CFRelease(key_owner);
     }
     pids
 }

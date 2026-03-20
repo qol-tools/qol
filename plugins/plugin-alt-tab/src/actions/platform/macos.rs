@@ -100,7 +100,7 @@ unsafe fn ax_unminimize(win: *const c_void) {
 unsafe fn ax_raise(win: *const c_void) {
     let action = ffi::cfstr(b"AXRaise");
     let _ = AXUIElementPerformAction(win, action);
-    CFRelease(action as *const c_void);
+    CFRelease(action);
 }
 
 unsafe fn ax_press_button(win: *const c_void, button_attr: &[u8]) {
@@ -112,14 +112,14 @@ unsafe fn ax_press_button(win: *const c_void, button_attr: &[u8]) {
         let _ = AXUIElementPerformAction(button, action);
         CFRelease(button);
     }
-    CFRelease(attr as *const c_void);
-    CFRelease(action as *const c_void);
+    CFRelease(attr);
+    CFRelease(action);
 }
 
 unsafe fn ax_set_bool_attr(win: *const c_void, name: &[u8], val: *const c_void) {
     let attr = ffi::cfstr(name);
     let _ = AXUIElementSetAttributeValue(win, attr, val);
-    CFRelease(attr as *const c_void);
+    CFRelease(attr);
 }
 
 fn cg_window_pid_and_title(window_id: u32) -> Option<(i32, String)> {
@@ -133,7 +133,7 @@ fn cg_window_pid_and_title(window_id: u32) -> Option<(i32, String)> {
         return None;
     }
     let result = find_window_in_list(list, window_id);
-    unsafe { CFRelease(list as *const c_void) };
+    unsafe { CFRelease(list) };
     result
 }
 
@@ -165,9 +165,9 @@ fn find_window_in_list(list: ffi::CFArrayRef, window_id: u32) -> Option<(i32, St
     }
 
     unsafe {
-        CFRelease(key_pid as *const c_void);
-        CFRelease(key_num as *const c_void);
-        CFRelease(key_name as *const c_void);
+        CFRelease(key_pid);
+        CFRelease(key_num);
+        CFRelease(key_name);
     }
     result
 }

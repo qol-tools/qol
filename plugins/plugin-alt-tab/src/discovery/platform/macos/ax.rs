@@ -17,7 +17,6 @@ extern "C" {
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
     static kCFBooleanTrue: *const c_void;
-    static kCFBooleanFalse: *const c_void;
 }
 
 #[derive(Clone)]
@@ -34,7 +33,7 @@ unsafe fn ax_open_window_list(pid: i32) -> *const c_void {
     let attr = ffi::cfstr(b"AXWindows");
     let mut val: *const c_void = std::ptr::null();
     let err = AXUIElementCopyAttributeValue(app, attr, &mut val);
-    CFRelease(attr as *const c_void);
+    CFRelease(attr);
     CFRelease(app);
     if err != 0 || val.is_null() {
         return std::ptr::null();
@@ -200,7 +199,7 @@ pub(super) fn ax_is_window_minimized(pid: i32, cg_window_id: u32, title: &str) -
     }
     let attr = ffi::cfstr(b"AXMinimized");
     let result = unsafe { ax_read_bool(win, attr) };
-    unsafe { CFRelease(attr as *const c_void) };
+    unsafe { CFRelease(attr) };
     unsafe { CFRelease(win) };
     result
 }
@@ -328,8 +327,8 @@ pub(crate) unsafe fn ax_find_window(
         title_attr,
     );
 
-    CFRelease(id_attr as *const c_void);
-    CFRelease(title_attr as *const c_void);
+    CFRelease(id_attr);
+    CFRelease(title_attr);
     CFRelease(wins_val);
     result
 }
@@ -354,15 +353,14 @@ unsafe fn scan_for_match(
         if first_win.is_null() {
             first_win = CFRetain(win);
         }
-        if id_match.is_null() {
-            if ax_read_window_id(win, id_attr) == Some(cg_window_id) {
-                id_match = CFRetain(win);
-            }
+        if id_match.is_null() && ax_read_window_id(win, id_attr) == Some(cg_window_id) {
+            id_match = CFRetain(win);
         }
-        if title_match.is_null() && !title_hint.is_empty() {
-            if ax_read_title(win, title_attr) == title_hint {
-                title_match = CFRetain(win);
-            }
+        if title_match.is_null()
+            && !title_hint.is_empty()
+            && ax_read_title(win, title_attr) == title_hint
+        {
+            title_match = CFRetain(win);
         }
     }
 

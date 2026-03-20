@@ -237,7 +237,7 @@ fn passes_ax_filter(
         if is_other_space_pid {
             return id_map.contains_key(&window.id);
         }
-        return id_map.get(&window.id).map_or(false, |m| m.is_minimized);
+        return id_map.get(&window.id).is_some_and(|m| m.is_minimized);
     }
     if !all_meta.is_empty() {
         return ax_title_match(window, all_meta, is_other_space_pid);
@@ -343,7 +343,7 @@ fn compute_allowed_count(
 
 fn resolve_minimized_budget(ctx: &BudgetContext, window: &CgWindow) -> Option<ResolvedWindow> {
     let ax_has = ctx.ax_meta.is_some();
-    let ax_min = ctx.ax_meta.as_ref().map_or(false, |m| m.is_minimized);
+    let ax_min = ctx.ax_meta.as_ref().is_some_and(|m| m.is_minimized);
     if ctx.known_ids.is_none() && ax_has && !ax_min {
         return None;
     }
