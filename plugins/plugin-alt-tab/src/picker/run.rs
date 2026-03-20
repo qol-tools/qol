@@ -18,7 +18,7 @@ const PREWARM_REFRESH_INTERVAL_MS: u64 = 1200;
 const SMALL_WINDOW_SET_MAX: usize = 2;
 const STABLE_PREVIOUS_MIN: usize = 6;
 
-type WindowCache = Arc<Mutex<Vec<WindowInfo>>>;
+pub(crate) type WindowCache = Arc<Mutex<Vec<WindowInfo>>>;
 
 #[derive(Clone)]
 struct PickerCaches {
@@ -57,6 +57,7 @@ impl PickerState {
             tracker: &self.tracker,
             last_window_count: self.caches.last_window_count.clone(),
             icon_cache: self.caches.icon_cache.clone(),
+            window_cache: self.caches.window_cache.clone(),
             reverse,
         };
         open_picker(&req, cx);

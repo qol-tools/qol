@@ -13,6 +13,7 @@ use crate::{PickerWindowState, SharedIconCache};
 use gather::{gather, spawn_icon_fill, GatheredWindows, IconFillRequest};
 use gpui::*;
 use qol_plugin_api::monitor::MonitorTracker;
+use run::WindowCache;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -28,6 +29,7 @@ pub(crate) struct OpenPickerRequest<'a> {
     pub tracker: &'a MonitorTracker,
     pub last_window_count: Arc<AtomicUsize>,
     pub icon_cache: SharedIconCache,
+    pub window_cache: WindowCache,
     pub reverse: bool,
 }
 
@@ -42,7 +44,7 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
         return;
     }
 
-    let gathered = gather(req.config, &req.icon_cache);
+    let gathered = gather(req.config, &req.icon_cache, &req.window_cache);
     if try_reuse_existing(req, &gathered, cx) {
         return;
     }

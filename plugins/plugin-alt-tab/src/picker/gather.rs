@@ -1,3 +1,4 @@
+use super::run::WindowCache;
 use crate::app::AltTabApp;
 use crate::capture;
 use crate::config::AltTabConfig;
@@ -14,8 +15,12 @@ pub(crate) struct GatheredWindows {
     pub icons: IconMap,
 }
 
-pub(super) fn gather(config: &AltTabConfig, icon_cache: &SharedIconCache) -> GatheredWindows {
-    let windows = recover_small_window_set(config, initial_display_windows(config));
+pub(super) fn gather(
+    config: &AltTabConfig,
+    icon_cache: &SharedIconCache,
+    window_cache: &WindowCache,
+) -> GatheredWindows {
+    let windows = windows_from_cache_or_discovery(config, window_cache);
 
     #[cfg(debug_assertions)]
     {
@@ -38,6 +43,28 @@ pub(super) fn gather(config: &AltTabConfig, icon_cache: &SharedIconCache) -> Gat
         previews: HashMap::new(),
         icons,
     }
+}
+
+fn windows_from_cache_or_discovery(
+    config: &AltTabConfig,
+    window_cache: &WindowCache,
+) -> Vec<WindowInfo> {
+    let cached = window_cache
+        .lock()
+        .ok()
+        .map(|c| c.clone())
+        .unwrap_or_default();
+    if !cached.is_empty() {
+        return apply_minimized_filter(config, cached);
+    }
+    recover_small_window_set(config, initial_display_windows(config))
+}
+
+fn apply_minimized_filter(config: &AltTabConfig, windows: Vec<WindowInfo>) -> Vec<WindowInfo> {
+    if config.display.show_minimized {
+        return windows;
+    }
+    windows.into_iter().filter(|w| !w.is_minimized).collect()
 }
 
 fn initial_display_windows(config: &AltTabConfig) -> Vec<WindowInfo> {
