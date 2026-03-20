@@ -1,3 +1,4 @@
+use super::CacheEvent;
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -12,12 +13,6 @@ const WATCHED_ATOMS: &[&str] = &[
     "_NET_ACTIVE_WINDOW",
     "_NET_CLIENT_LIST",
 ];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CacheEvent {
-    WindowsChanged,
-    Shutdown,
-}
 
 pub struct WatcherHandle {
     shutdown_tx: Option<mpsc::Sender<()>>,

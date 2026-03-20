@@ -15,6 +15,12 @@ pub struct WindowInfo {
     pub is_minimized: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CacheEvent {
+    WindowsChanged,
+    Shutdown,
+}
+
 pub(crate) mod platform;
 #[cfg(target_os = "linux")]
 pub(crate) mod watcher;

@@ -12,9 +12,7 @@ use qol_plugin_api::monitor::MonitorTracker;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
 
-const PREWARM_REFRESH_INTERVAL_MS: u64 = 1200;
 const SMALL_WINDOW_SET_MAX: usize = 2;
 const STABLE_PREVIOUS_MIN: usize = 6;
 
@@ -32,11 +30,6 @@ struct PickerState {
     current: PickerWindowState,
     tracker: MonitorTracker,
     caches: PickerCaches,
-}
-
-struct PrewarmState {
-    first_run: bool,
-    prev_snapshot: Vec<u32>,
 }
 
 impl PickerCaches {
@@ -64,15 +57,6 @@ impl PickerState {
     }
 }
 
-impl PrewarmState {
-    fn new() -> Self {
-        Self {
-            first_run: true,
-            prev_snapshot: Vec::new(),
-        }
-    }
-}
-
 pub(crate) fn run_app(
     config: AltTabConfig,
     rx: mpsc::Receiver<daemon::Command>,
@@ -90,7 +74,14 @@ pub(crate) fn run_app(
             caches: PickerCaches::new(),
         };
 
-        spawn_prewarm_task(cx, state.caches.clone());
+        let (cache_tx, cache_rx) = std::sync::mpsc::channel();
+        #[cfg(target_os = "linux")]
+        let _watcher = crate::discovery::watcher::spawn_watcher(cache_tx);
+        #[cfg(not(target_os = "linux"))]
+        let _ = cache_tx;
+        spawn_cache_updater(cx, cache_rx, state.caches.clone());
+        spawn_initial_cache_fill(cx, state.caches.clone());
+
         if show_on_start {
             state.open_picker(&config, false, cx);
         }
@@ -104,70 +95,53 @@ fn picker_window_state() -> PickerWindowState {
     ))
 }
 
-fn spawn_prewarm_task(cx: &mut App, caches: PickerCaches) {
-    cx.spawn(async move |cx: &mut AsyncApp| run_prewarm_loop(cx, caches).await)
-        .detach();
+fn spawn_cache_updater(
+    cx: &mut App,
+    rx: std::sync::mpsc::Receiver<discovery::CacheEvent>,
+    caches: PickerCaches,
+) {
+    let rx = Arc::new(Mutex::new(rx));
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let executor = cx.background_executor().clone();
+        loop {
+            let rx = rx.clone();
+            let event = executor
+                .spawn(async move { rx.lock().ok()?.recv().ok() })
+                .await;
+            match event {
+                Some(discovery::CacheEvent::WindowsChanged) => {
+                    if !picker_visible() {
+                        refresh_cache(&executor, &caches).await;
+                    }
+                }
+                _ => break,
+            }
+        }
+    })
+    .detach();
 }
 
-async fn run_prewarm_loop(cx: &mut AsyncApp, caches: PickerCaches) {
-    let executor = cx.background_executor().clone();
-    let mut state = PrewarmState::new();
-
-    loop {
-        wait_for_prewarm_tick(&executor, &mut state.first_run).await;
-        if picker_visible() {
-            continue;
-        }
-        if should_skip_prewarm_refresh(&executor, &mut state.prev_snapshot, &caches.window_cache)
-            .await
-        {
-            continue;
-        }
-
-        let Some(windows) = load_stable_windows(&executor, &caches.window_cache).await else {
-            continue;
-        };
-
-        caches
-            .last_window_count
-            .store(windows.len().max(1), Ordering::Relaxed);
-        refresh_icon_cache(&executor, &windows, &caches.icon_cache).await;
-        replace_window_cache(&caches.window_cache, windows);
-    }
+fn spawn_initial_cache_fill(cx: &mut App, caches: PickerCaches) {
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let executor = cx.background_executor().clone();
+        refresh_cache(&executor, &caches).await;
+    })
+    .detach();
 }
 
-async fn wait_for_prewarm_tick(executor: &gpui::BackgroundExecutor, first_run: &mut bool) {
-    if *first_run {
-        *first_run = false;
+async fn refresh_cache(executor: &gpui::BackgroundExecutor, caches: &PickerCaches) {
+    let Some(windows) = load_stable_windows(executor, &caches.window_cache).await else {
         return;
-    }
-    executor
-        .timer(Duration::from_millis(PREWARM_REFRESH_INTERVAL_MS))
-        .await;
+    };
+    caches
+        .last_window_count
+        .store(windows.len().max(1), Ordering::Relaxed);
+    refresh_icon_cache(executor, &windows, &caches.icon_cache).await;
+    replace_window_cache(&caches.window_cache, windows);
 }
 
 fn picker_visible() -> bool {
     PICKER_VISIBLE.load(Ordering::Relaxed)
-}
-
-async fn should_skip_prewarm_refresh(
-    executor: &gpui::BackgroundExecutor,
-    prev_snapshot: &mut Vec<u32>,
-    window_cache: &WindowCache,
-) -> bool {
-    let snapshot = executor
-        .spawn(async { discovery::on_screen_window_ids() })
-        .await;
-    let cached_len = cached_window_len(window_cache);
-    if should_skip_refresh(&snapshot, prev_snapshot, cached_len) {
-        return true;
-    }
-    *prev_snapshot = snapshot;
-    false
-}
-
-fn cached_window_len(window_cache: &WindowCache) -> usize {
-    window_cache.lock().ok().map(|c| c.len()).unwrap_or(0)
 }
 
 fn read_window_cache(window_cache: &WindowCache) -> Vec<WindowInfo> {
@@ -301,26 +275,6 @@ fn shutdown_daemon(cx: &AsyncApp) {
     #[cfg(debug_assertions)]
     eprintln!("[alt-tab/daemon] shutting down");
     cx.update(|app_cx| app_cx.quit()).ok();
-}
-
-fn should_skip_refresh(snapshot: &[u32], prev_snapshot: &[u32], cached_len: usize) -> bool {
-    snapshot == prev_snapshot && cached_len > SMALL_WINDOW_SET_MAX
-}
-
-#[cfg(test)]
-mod tests {
-    use super::should_skip_refresh;
-
-    #[test]
-    fn skip_refresh_only_when_snapshot_is_identical() {
-        assert!(should_skip_refresh(&[11, 7, 3], &[11, 7, 3], 5));
-        assert!(!should_skip_refresh(&[7, 11, 3], &[11, 7, 3], 5));
-    }
-
-    #[test]
-    fn small_caches_still_refresh_even_with_same_snapshot() {
-        assert!(!should_skip_refresh(&[11, 7], &[11, 7], 2));
-    }
 }
 
 fn should_retry_small_result(current_len: usize, previous_len: usize) -> bool {
