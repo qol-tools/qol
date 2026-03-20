@@ -25,10 +25,6 @@ pub(crate) mod platform;
 #[cfg(target_os = "linux")]
 pub(crate) mod watcher;
 
-pub fn on_screen_window_ids() -> Vec<u32> {
-    platform::on_screen_window_ids()
-}
-
 pub fn get_open_windows() -> Vec<WindowInfo> {
     platform::get_open_windows()
 }

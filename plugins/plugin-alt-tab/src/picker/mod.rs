@@ -81,7 +81,6 @@ fn try_reuse_existing(req: &OpenPickerRequest, gathered: &GatheredWindows, cx: &
             None => return false,
         },
     };
-    let monitor = req.tracker.snapshot().map(|(m, _)| m);
     let source_origin = point(px(source_key.x as f32), px(source_key.y as f32));
     let input = reuse::LayoutInput {
         config: req.config,
