@@ -168,7 +168,7 @@ fn push_updates(
     let delegate = delegate.clone();
     let this = this.clone();
     let _ = cx.update(|app_cx| {
-        let _ = delegate.update(app_cx, |state, _cx| {
+        delegate.update(app_cx, |state, _cx| {
             for (wid, img) in updates {
                 state.live_previews.insert(wid, img);
             }

@@ -21,8 +21,7 @@ pub fn preferred_column_count(window_count: usize, max_columns: usize) -> usize 
     // Respect the user's max_columns preference.
     // If they want a thin rectangle, this bounds the width.
     let max_cols = max_columns.max(2);
-    let cols = count.min(max_cols);
-    cols
+    count.min(max_cols)
 }
 
 pub fn picker_dimensions(
@@ -66,7 +65,7 @@ fn cols_for_width(width: f32, max_items: usize) -> usize {
 pub fn picker_height_for(window_count: usize, columns: usize) -> f32 {
     let count = window_count.max(1);
     let cols = columns.max(1);
-    let rows = (count + cols - 1) / cols;
+    let rows = count.div_ceil(cols);
     RENDER_PAD_Y + rows as f32 * GRID_CARD_HEIGHT + rows.saturating_sub(1) as f32 * RENDER_GAP
 }
 

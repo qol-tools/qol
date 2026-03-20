@@ -23,6 +23,7 @@ pub fn is_modifier_held() -> bool {
     alt_l_held || alt_r_held
 }
 
+#[allow(dead_code)]
 pub fn is_shift_held() -> bool {
     let Ok((conn, _)) = x11rb::connect(None) else {
         return false;

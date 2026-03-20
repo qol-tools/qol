@@ -8,7 +8,6 @@ use qol_plugin_api::monitor::{ActiveMonitor, MonitorTracker};
 pub(crate) struct ReuseLayout {
     pub bounds: Bounds<Pixels>,
     pub size: Size<Pixels>,
-    pub origin: Point<Pixels>,
     pub monitor_changed: bool,
 }
 
@@ -44,12 +43,10 @@ pub(super) fn compute_layout(input: &LayoutInput, cx: &mut App) -> ReuseLayout {
     let monitor = input.tracker.snapshot().map(|(m, _)| m);
     let size = picker_size(input, &monitor);
     let bounds = centered_bounds(&monitor, size, cx);
-    let origin = monitor_origin(&monitor);
-    let monitor_changed = origin_diverged(input.created_on_origin, origin);
+    let monitor_changed = origin_diverged(input.created_on_origin, monitor_origin(&monitor));
     ReuseLayout {
         bounds,
         size,
-        origin,
         monitor_changed,
     }
 }

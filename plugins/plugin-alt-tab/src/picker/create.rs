@@ -34,13 +34,12 @@ pub(super) fn create_new(req: &CreateRequest, gathered: GatheredWindows, cx: &mu
             width: 0,
             height: 0,
         });
-    req.current.borrow_mut().insert(target, handle.clone());
+    req.current.borrow_mut().insert(target, handle);
     post.finalize(handle, req.icon_cache.clone(), cx);
 }
 
 struct CreateLayout {
     bounds: Bounds<Pixels>,
-    origin: Point<Pixels>,
 }
 
 fn compute_create_layout(
@@ -51,8 +50,7 @@ fn compute_create_layout(
     let monitor = req.tracker.snapshot().map(|(m, _)| m);
     let size = estimate_picker_size(req, gathered, &monitor);
     let bounds = super::reuse::centered_bounds(&monitor, size, cx);
-    let origin = super::reuse::monitor_origin(&monitor);
-    CreateLayout { bounds, origin }
+    CreateLayout { bounds }
 }
 
 fn estimate_picker_size(

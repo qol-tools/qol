@@ -424,7 +424,7 @@ pub(crate) mod state {
             let cols = columns.max(1).min(total);
             Self {
                 cols,
-                rows: (total + cols - 1) / cols,
+                rows: total.div_ceil(cols),
                 total,
             }
         }

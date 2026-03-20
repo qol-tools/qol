@@ -47,6 +47,7 @@ pub fn reposition_picker_window(x: f64, y: f64) -> bool {
 pub fn is_modifier_held() -> bool {
     imp::is_modifier_held()
 }
+#[allow(dead_code)]
 pub fn is_shift_held() -> bool {
     imp::is_shift_held()
 }

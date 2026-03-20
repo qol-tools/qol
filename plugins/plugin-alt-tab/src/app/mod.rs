@@ -112,7 +112,7 @@ impl AltTabApp {
     }
 
     fn apply_reuse_windows(&mut self, req: &crate::picker::ReuseRequest, cx: &mut Context<Self>) {
-        self.apply_gathered(&req.gathered, req.config.reset_selection_on_open, cx);
+        self.apply_gathered(req.gathered, req.config.reset_selection_on_open, cx);
         if req.config.open_behavior != crate::config::OpenBehavior::CycleOnce {
             return;
         }
@@ -185,7 +185,7 @@ async fn alt_poll_loop(
 
     let _ = cx.update(|cx| {
         if let Some(entity) = this.upgrade() {
-            let _ = entity.update(cx, |app, _| {
+            entity.update(cx, |app, _| {
                 app._alt_poll_task = None;
             });
         }
