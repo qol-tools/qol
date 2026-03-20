@@ -39,6 +39,7 @@ async function hydrateCpu(state, update, onNeedsRender, skipUpdate) {
 
 function pruneSamples(state, mergedList, persist, queueSync, onMissingMenuPlugin) {
     const linkedIds = new Set(mergedList.filter(p => p.status === 'linked').map(p => p.id));
+    if (linkedIds.size === 0) return;
     let monitoringChanged = false;
 
     for (const id of Object.keys(state.cpuMonitoring)) {
