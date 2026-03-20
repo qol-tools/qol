@@ -18,7 +18,6 @@ pub struct WindowInfo {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CacheEvent {
     WindowsChanged,
-    Shutdown,
 }
 
 pub(crate) mod platform;

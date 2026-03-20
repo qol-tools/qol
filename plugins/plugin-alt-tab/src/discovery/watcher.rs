@@ -1,12 +1,9 @@
 use super::CacheEvent;
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{ChangeWindowAttributesAux, ConnectionExt as _, EventMask};
 use x11rb::protocol::Event;
-
-const POLL_SLEEP: Duration = Duration::from_millis(50);
 
 const WATCHED_ATOMS: &[&str] = &[
     "_NET_CLIENT_LIST_STACKING",
@@ -15,60 +12,37 @@ const WATCHED_ATOMS: &[&str] = &[
 ];
 
 pub struct WatcherHandle {
-    shutdown_tx: Option<mpsc::Sender<()>>,
-    thread: Option<JoinHandle<()>>,
-}
-
-impl WatcherHandle {
-    pub fn stop(&mut self) {
-        drop(self.shutdown_tx.take());
-        if let Some(handle) = self.thread.take() {
-            let _ = handle.join();
-        }
-    }
+    _thread: Option<JoinHandle<()>>,
 }
 
 impl Drop for WatcherHandle {
-    fn drop(&mut self) {
-        self.stop();
-    }
+    fn drop(&mut self) {}
 }
 
 pub fn spawn_watcher(on_change: mpsc::Sender<CacheEvent>) -> Option<WatcherHandle> {
-    let (shutdown_tx, shutdown_rx) = mpsc::channel();
     let thread = thread::Builder::new()
         .name("x11-watcher".into())
-        .spawn(move || watcher_loop(on_change, shutdown_rx))
+        .spawn(move || watcher_loop(on_change))
         .ok()?;
     Some(WatcherHandle {
-        shutdown_tx: Some(shutdown_tx),
-        thread: Some(thread),
+        _thread: Some(thread),
     })
 }
 
-fn watcher_loop(on_change: mpsc::Sender<CacheEvent>, shutdown_rx: mpsc::Receiver<()>) {
+fn watcher_loop(on_change: mpsc::Sender<CacheEvent>) {
     let Some((conn, atoms)) = connect_and_subscribe() else {
         return;
     };
     loop {
-        match shutdown_rx.try_recv() {
-            Ok(()) | Err(mpsc::TryRecvError::Disconnected) => {
-                let _ = on_change.send(CacheEvent::Shutdown);
+        let event = match conn.wait_for_event() {
+            Ok(event) => event,
+            Err(_) => return,
+        };
+        if is_watched_property(&event, &atoms) {
+            drain_pending(&conn);
+            if on_change.send(CacheEvent::WindowsChanged).is_err() {
                 return;
             }
-            Err(mpsc::TryRecvError::Empty) => {}
-        }
-        match conn.poll_for_event() {
-            Ok(Some(event)) => {
-                if is_watched_property(&event, &atoms) {
-                    drain_pending(&conn);
-                    if on_change.send(CacheEvent::WindowsChanged).is_err() {
-                        return;
-                    }
-                }
-            }
-            Ok(None) => thread::sleep(POLL_SLEEP),
-            Err(_) => return,
         }
     }
 }
