@@ -46,6 +46,10 @@ impl<T: 'static> ActiveWindows<T> {
         self.windows.get(&target).cloned()
     }
 
+    pub fn any_existing(&self) -> Option<(MonitorKey, WindowHandle<T>)> {
+        self.windows.iter().next().map(|(k, v)| (*k, *v))
+    }
+
     pub fn insert(&mut self, target: MonitorKey, handle: WindowHandle<T>) {
         self.windows.insert(target, handle);
     }
