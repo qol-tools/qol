@@ -93,7 +93,7 @@ proptest! {
     fn prop_no_match_missing_char(
         base in "[a-e]{1,5}",
     ) {
-        let candidate = base.replace('a', "").replace('b', "").replace('c', "");
+        let candidate = base.replace(&['a', 'b', 'c'][..], "");
         let query = format!("{}z", base);
         if !candidate.to_lowercase().contains('z') {
             let result = fuzzy_match(&query, &candidate);
