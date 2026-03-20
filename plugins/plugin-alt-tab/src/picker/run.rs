@@ -307,6 +307,22 @@ fn should_skip_refresh(snapshot: &[u32], prev_snapshot: &[u32], cached_len: usiz
     snapshot == prev_snapshot && cached_len > SMALL_WINDOW_SET_MAX
 }
 
+#[cfg(test)]
+mod tests {
+    use super::should_skip_refresh;
+
+    #[test]
+    fn skip_refresh_only_when_snapshot_is_identical() {
+        assert!(should_skip_refresh(&[11, 7, 3], &[11, 7, 3], 5));
+        assert!(!should_skip_refresh(&[7, 11, 3], &[11, 7, 3], 5));
+    }
+
+    #[test]
+    fn small_caches_still_refresh_even_with_same_snapshot() {
+        assert!(!should_skip_refresh(&[11, 7], &[11, 7], 2));
+    }
+}
+
 fn should_retry_small_result(current_len: usize, previous_len: usize) -> bool {
     current_len <= SMALL_WINDOW_SET_MAX && previous_len >= STABLE_PREVIOUS_MIN
 }

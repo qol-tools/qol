@@ -74,17 +74,20 @@ fn try_reuse_existing(req: &OpenPickerRequest, gathered: &GatheredWindows, cx: &
         Some(m) => qol_plugin_api::window::MonitorKey::from_bounds(&m.0.bounds()),
         None => return false,
     };
-    let existing = req.current.borrow().existing(target);
-    let Some(handle) = existing else {
-        return false;
+    let (handle, source_key) = match req.current.borrow().existing(target) {
+        Some(h) => (h, target),
+        None => match req.current.borrow().any_existing() {
+            Some((key, h)) => (h, key),
+            None => return false,
+        },
     };
     let monitor = req.tracker.snapshot().map(|(m, _)| m);
-    let origin = reuse::monitor_origin(&monitor);
+    let source_origin = point(px(source_key.x as f32), px(source_key.y as f32));
     let input = reuse::LayoutInput {
         config: req.config,
         window_count: gathered.windows.len(),
         tracker: req.tracker,
-        created_on_origin: origin,
+        created_on_origin: source_origin,
     };
     let layout = reuse::compute_layout(&input, cx);
     let reuse_req = reuse::ReuseRequest {
@@ -94,10 +97,14 @@ fn try_reuse_existing(req: &OpenPickerRequest, gathered: &GatheredWindows, cx: &
         gathered,
     };
     if reuse::try_reuse(&reuse_req, cx) {
+        if source_key != target {
+            req.current.borrow_mut().remove(source_key);
+            req.current.borrow_mut().insert(target, handle);
+        }
         finalize_reuse(handle, gathered, &req.icon_cache, cx);
         return true;
     }
-    discard_old_window(req, target, handle, cx);
+    discard_old_window(req, source_key, handle, cx);
     false
 }
 

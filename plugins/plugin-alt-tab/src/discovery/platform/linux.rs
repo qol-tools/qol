@@ -5,9 +5,102 @@ use x11rb::protocol::xproto::ConnectionExt as _;
 use x11rb::protocol::xproto::*;
 
 pub fn on_screen_window_ids() -> Vec<u32> {
-    let mut ids: Vec<u32> = get_open_windows().iter().map(|w| w.id).collect();
-    ids.sort_unstable();
-    ids
+    let Ok((conn, screen_num)) = x11rb::connect(None) else {
+        return Vec::new();
+    };
+    let root = conn.setup().roots[screen_num].root;
+    let atoms = intern_atoms(&conn);
+    let ids = fetch_window_ids(&conn, root, &atoms);
+    if ids.is_empty() {
+        return Vec::new();
+    }
+    let normal = filter_normal_windows(&conn, &ids, &atoms);
+    let mut result = visible_ids_reversed(&conn, &normal, &atoms);
+    promote_active_id(&conn, root, &atoms, &mut result);
+
+    #[cfg(debug_assertions)]
+    eprintln!("[x11/snapshot] visible_ids (topmost-first): {:?}", result);
+
+    result
+}
+
+fn visible_ids_reversed(conn: &impl Connection, ids: &[u32], atoms: &AtomMap) -> Vec<u32> {
+    let state_atom = atoms.get("_NET_WM_STATE").copied();
+    let hidden_atom = atoms.get("_NET_WM_STATE_HIDDEN").copied().unwrap_or(0);
+    let cookies: Vec<_> = ids
+        .iter()
+        .map(|&id| {
+            state_atom.and_then(|a| conn.get_property(false, id, a, AtomEnum::ATOM, 0, 64).ok())
+        })
+        .collect();
+    let states: Vec<_> = cookies
+        .into_iter()
+        .map(|c| c.and_then(|c| c.reply().ok()))
+        .collect();
+    ids.iter()
+        .enumerate()
+        .rev()
+        .filter(|(i, _)| !has_hidden_state(&states[*i], hidden_atom))
+        .map(|(_, &id)| id)
+        .collect()
+}
+
+fn has_hidden_state(state: &Option<GetPropertyReply>, hidden_atom: u32) -> bool {
+    state
+        .as_ref()
+        .and_then(|r| {
+            r.value32()
+                .map(|atoms| atoms.into_iter().any(|a| a == hidden_atom))
+        })
+        .unwrap_or(false)
+}
+
+fn promote_active_id(conn: &impl Connection, root: u32, atoms: &AtomMap, ids: &mut Vec<u32>) {
+    let Some(active) = read_active_window(conn, root, atoms) else {
+        return;
+    };
+    let Some(pos) = ids.iter().position(|&id| id == active) else {
+        return;
+    };
+    if pos > 0 {
+        let id = ids.remove(pos);
+        ids.insert(0, id);
+    }
+}
+
+fn promote_active_info(
+    conn: &impl Connection,
+    root: u32,
+    atoms: &AtomMap,
+    windows: &mut Vec<WindowInfo>,
+) {
+    let Some(active) = read_active_window(conn, root, atoms) else {
+        return;
+    };
+    let Some(pos) = windows.iter().position(|w| w.id == active) else {
+        return;
+    };
+    if pos > 0 {
+        let w = windows.remove(pos);
+        windows.insert(0, w);
+    }
+}
+
+fn read_active_window(conn: &impl Connection, root: u32, atoms: &AtomMap) -> Option<u32> {
+    let atom = atoms.get("_NET_ACTIVE_WINDOW").copied()?;
+    let reply = conn
+        .get_property(false, root, atom, AtomEnum::WINDOW, 0, 1)
+        .ok()?
+        .reply()
+        .ok()?;
+    reply.value32().and_then(|mut iter| {
+        let id = iter.next()?;
+        if id == 0 {
+            None
+        } else {
+            Some(id)
+        }
+    })
 }
 
 type AtomMap = std::collections::HashMap<&'static str, u32>;
@@ -23,6 +116,7 @@ const ATOM_NAMES: &[&str] = &[
     "_NET_WM_STATE_HIDDEN",
     "WM_CLASS",
     "_NET_WM_ICON",
+    "_NET_ACTIVE_WINDOW",
 ];
 
 pub fn get_open_windows() -> Vec<WindowInfo> {
@@ -36,7 +130,8 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
         return Vec::new();
     }
     let filtered = filter_normal_windows(&conn, &ids, &atoms);
-    let windows = collect_window_info(&conn, &filtered, &atoms);
+    let mut windows = collect_window_info(&conn, &filtered, &atoms);
+    promote_active_info(&conn, root, &atoms, &mut windows);
 
     #[cfg(debug_assertions)]
     eprintln!("[x11] get_open_windows total results: {}", windows.len());
@@ -256,6 +351,9 @@ fn resolve_minimized(idx: usize, props: &mut ResolvedProps, hidden_atom: u32) ->
 
 pub fn get_on_screen_windows() -> Vec<WindowInfo> {
     get_open_windows()
+        .into_iter()
+        .filter(|w| !w.is_minimized)
+        .collect()
 }
 
 fn extract_x11_icon(reply: &GetPropertyReply) -> Option<RgbaImage> {

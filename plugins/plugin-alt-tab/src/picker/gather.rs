@@ -54,10 +54,42 @@ fn windows_from_cache_or_discovery(
         .ok()
         .map(|c| c.clone())
         .unwrap_or_default();
-    if !cached.is_empty() {
+    if !cached.is_empty() && cache_snapshot_matches(&cached) {
         return apply_minimized_filter(config, cached);
     }
     recover_small_window_set(config, initial_display_windows(config))
+}
+
+fn cache_snapshot_matches(cached: &[WindowInfo]) -> bool {
+    let snapshot = discovery::on_screen_window_ids();
+    if snapshot.is_empty() {
+        return true;
+    }
+    let matches = snapshot_matches_cached_visible_ids(&snapshot, cached);
+
+    #[cfg(debug_assertions)]
+    {
+        let cached_vis: Vec<u32> = cached
+            .iter()
+            .filter(|w| !w.is_minimized)
+            .map(|w| w.id)
+            .collect();
+        eprintln!(
+            "[alt-tab/cache] snapshot={:?} cached={:?} hit={}",
+            snapshot, cached_vis, matches
+        );
+    }
+
+    matches
+}
+
+fn snapshot_matches_cached_visible_ids(snapshot: &[u32], cached: &[WindowInfo]) -> bool {
+    let cached_visible: Vec<u32> = cached
+        .iter()
+        .filter(|w| !w.is_minimized)
+        .map(|w| w.id)
+        .collect();
+    snapshot == cached_visible
 }
 
 fn apply_minimized_filter(config: &AltTabConfig, windows: Vec<WindowInfo>) -> Vec<WindowInfo> {
@@ -154,4 +186,38 @@ pub(crate) fn build_icon_cache(raw_icons: HashMap<String, crate::discovery::Rgba
         }
     }
     cache
+}
+
+#[cfg(test)]
+mod tests {
+    use super::snapshot_matches_cached_visible_ids;
+    use crate::discovery::WindowInfo;
+
+    fn window(id: u32, is_minimized: bool) -> WindowInfo {
+        WindowInfo {
+            id,
+            title: String::new(),
+            app_name: String::new(),
+            preview_path: None,
+            icon: None,
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+            is_minimized,
+        }
+    }
+
+    #[test]
+    fn snapshot_match_ignores_minimized_tail_but_keeps_order() {
+        let cached = vec![window(11, false), window(7, false), window(3, true)];
+        assert!(snapshot_matches_cached_visible_ids(&[11, 7], &cached));
+        assert!(!snapshot_matches_cached_visible_ids(&[7, 11], &cached));
+    }
+
+    #[test]
+    fn minimized_windows_do_not_break_snapshot_match() {
+        let cached = vec![window(11, false), window(7, false), window(3, true)];
+        assert!(snapshot_matches_cached_visible_ids(&[11, 7], &cached));
+    }
 }

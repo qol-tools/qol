@@ -182,10 +182,10 @@ fn parse_cg_entry(dict: CFDictionaryRef, own_pid: i32, keys: &CgKeys) -> Option<
 pub fn on_screen_window_ids() -> Vec<u32> {
     let own_pid = std::process::id() as i32;
     let opts = K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
-    let parsed = fetch_cg_windows(opts, own_pid);
-    let mut ids: Vec<u32> = parsed.into_iter().map(|w| w.id).collect();
-    ids.sort_unstable();
-    ids
+    fetch_cg_windows(opts, own_pid)
+        .into_iter()
+        .map(|w| w.id)
+        .collect()
 }
 
 pub fn get_open_windows() -> Vec<WindowInfo> {
