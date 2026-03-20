@@ -27,7 +27,7 @@ impl IndexingState {
         let q = query.to_lowercase();
         let indexed_slice = &self.items[..self.indexed];
         self.results = if query.is_empty() {
-            indexed_slice.iter().cloned().collect()
+            indexed_slice.to_vec()
         } else {
             indexed_slice
                 .iter()
