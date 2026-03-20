@@ -27,6 +27,8 @@ preset-8 = ["preset-8"]
 settings = ["settings"]
 pair = ["pair"]
 set-color-main = ["set-color-main"]
+set-brightness-main = ["set-brightness-main"]
+set-colortemp-main = ["set-colortemp-main"]
 
 [capabilities]
 serial = true
