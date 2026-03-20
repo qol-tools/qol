@@ -35,16 +35,9 @@ struct FrequencyEntry {
     last_accessed: u64,
 }
 
+#[derive(Default)]
 struct FrequencyData {
     entries: HashMap<String, FrequencyEntry>,
-}
-
-impl Default for FrequencyData {
-    fn default() -> Self {
-        Self {
-            entries: HashMap::new(),
-        }
-    }
 }
 
 struct SearchResult {
