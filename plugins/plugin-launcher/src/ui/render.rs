@@ -135,7 +135,11 @@ impl Render for LauncherView {
                 }
             }))
             .child(view::search_bar(
-                self.state.mode.label(),
+                if self.state.boost_adjusting {
+                    "Boost"
+                } else {
+                    self.state.mode.label()
+                },
                 self.state.fuzziness.label(),
                 &self.state.query,
                 self.state.cursor,

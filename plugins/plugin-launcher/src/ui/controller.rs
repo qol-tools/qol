@@ -26,10 +26,15 @@ impl LauncherView {
             return;
         }
         let result_count = self.store.result_count();
-        match self
+        let effect = self
             .state
-            .apply_key(key, secondary, shift, alt, result_count)
-        {
+            .apply_key(key, secondary, shift, alt, result_count);
+
+        if !matches!(effect, InputEffect::BoostUp | InputEffect::BoostDown) {
+            self.state.boost_adjusting = false;
+        }
+
+        match effect {
             InputEffect::Ignore => {}
             InputEffect::Navigate => {
                 self.store.ensure_filtered(
@@ -43,6 +48,22 @@ impl LauncherView {
             InputEffect::QueryChanged => {
                 self.state.reset_results_position();
                 self.schedule_query_render(cx);
+            }
+            InputEffect::BoostUp | InputEffect::BoostDown => {
+                let delta = if matches!(effect, InputEffect::BoostUp) {
+                    25
+                } else {
+                    -25
+                };
+                self.state.boost_adjusting = true;
+                self.adjust_selected_boost(delta);
+                self.store.invalidate_cache();
+                self.store.ensure_filtered(
+                    &self.state.query,
+                    self.state.mode,
+                    self.state.fuzziness,
+                );
+                cx.notify();
             }
             InputEffect::Launch => self.launch_selected(window, cx),
             InputEffect::Dismiss => {
@@ -109,6 +130,17 @@ impl LauncherView {
             self.state.reset_results_position();
             cx.notify();
         }
+    }
+
+    fn adjust_selected_boost(&mut self, delta: i32) {
+        let Some(scored) = self.store.get(self.state.selected) else {
+            return;
+        };
+        if !matches!(scored.source, crate::discovery::search::ResultSource::App) {
+            return;
+        }
+        let name = self.store.name(scored).to_string();
+        self.store.adjust_boost(&name, delta);
     }
 
     fn launch_selected(&mut self, window: &mut gpui::Window, _cx: &mut Context<Self>) {

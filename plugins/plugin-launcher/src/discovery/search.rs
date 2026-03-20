@@ -1,6 +1,7 @@
 use crate::discovery::{AppEntry, FileEntry};
 use crate::frecency::FrequencyData;
 use crate::{fuzzy_match, FuzzyMatch};
+use std::collections::HashMap;
 use std::path::Path;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,6 +83,7 @@ pub struct Scored {
     pub m: FuzzyMatch,
     pub match_kind: MatchKind,
     pub frecency_bonus: i32,
+    pub manual_boost: i32,
 }
 
 pub fn filtered(
@@ -97,13 +99,15 @@ pub fn filtered(
     }
     let hint = extension_hint(query);
 
+    let boosts = frecency.map(|f| f.boosts).unwrap_or(&*EMPTY_BOOSTS);
     let results: Vec<Scored> = match mode {
         SearchMode::Apps => app_entries
             .iter()
             .enumerate()
             .filter_map(|(index, entry)| {
                 let bonus = frecency_bonus_for(&entry.name, query, frecency);
-                score_app(index, &entry.name, query, bonus)
+                let boost = manual_boost(&entry.name, boosts);
+                score_app(index, &entry.name, query, bonus, boost)
             })
             .collect(),
         SearchMode::Files => file_entries
@@ -130,15 +134,19 @@ pub fn filtered_from_candidates(
     let hint = extension_hint(query);
 
     let results: Vec<Scored> = match mode {
-        SearchMode::Apps => candidates
-            .iter()
-            .filter(|candidate| matches!(candidate.source, ResultSource::App))
-            .filter_map(|candidate| {
-                let entry = app_entries.get(candidate.index)?;
-                let bonus = frecency_bonus_for(&entry.name, query, frecency);
-                score_app(candidate.index, &entry.name, query, bonus)
-            })
-            .collect(),
+        SearchMode::Apps => {
+            let boosts = frecency.map(|f| f.boosts).unwrap_or(&*EMPTY_BOOSTS);
+            candidates
+                .iter()
+                .filter(|candidate| matches!(candidate.source, ResultSource::App))
+                .filter_map(|candidate| {
+                    let entry = app_entries.get(candidate.index)?;
+                    let bonus = frecency_bonus_for(&entry.name, query, frecency);
+                    let boost = manual_boost(&entry.name, boosts);
+                    score_app(candidate.index, &entry.name, query, bonus, boost)
+                })
+                .collect()
+        }
         SearchMode::Files => candidates
             .iter()
             .filter(|candidate| matches!(candidate.source, ResultSource::File))
@@ -156,6 +164,7 @@ pub struct FrecencyConfig<'a> {
     pub now: u64,
     pub half_life_days: f64,
     pub bonus_weight: i32,
+    pub boosts: &'a HashMap<String, i32>,
 }
 
 fn frecency_bonus_for(name: &str, query: &str, config: Option<&FrecencyConfig>) -> i32 {
@@ -171,17 +180,32 @@ fn frecency_bonus_for(name: &str, query: &str, config: Option<&FrecencyConfig>) 
     cap_frecency_bonus(raw, name, query)
 }
 
-fn score_app(index: usize, name: &str, query: &str, frecency_bonus: i32) -> Option<Scored> {
+static EMPTY_BOOSTS: std::sync::LazyLock<HashMap<String, i32>> =
+    std::sync::LazyLock::new(HashMap::new);
+
+fn score_app(
+    index: usize,
+    name: &str,
+    query: &str,
+    frecency_bonus: i32,
+    manual_boost: i32,
+) -> Option<Scored> {
     let mut m = fuzzy_match(query, name)?;
     let match_kind = classify_match(name, query);
-    m.score -= frecency_bonus;
+    m.score -= frecency_bonus + manual_boost;
     Some(Scored {
         source: ResultSource::App,
         index,
         m,
         match_kind,
         frecency_bonus,
+        manual_boost,
     })
+}
+
+fn manual_boost(name: &str, boosts: &HashMap<String, i32>) -> i32 {
+    let key = name.to_lowercase();
+    boosts.get(&key).copied().unwrap_or(0)
 }
 
 fn score_file(
@@ -200,6 +224,7 @@ fn score_file(
         m,
         match_kind,
         frecency_bonus: 0,
+        manual_boost: 0,
     })
 }
 
@@ -243,7 +268,7 @@ fn cap_frecency_bonus(raw_bonus: i32, name: &str, query: &str) -> i32 {
     }
 
     let name = name.to_lowercase();
-    let base_cap = (query.chars().count() as i32 * 20).clamp(40, 180);
+    let base_cap = (query.chars().count() as i32 * 40).clamp(80, 240);
     let cap = if name.starts_with(&query) || contains_at_word_boundary(&name, &query) {
         base_cap
     } else if name.contains(&query) {
@@ -360,27 +385,29 @@ mod tests {
 
     #[test]
     fn frecency_bonus_is_strongly_capped_for_non_contiguous_matches() {
+        // "ter" fuzzy in "Update Manager": base_cap = (3*40).clamp(80,240) = 120, /3 = 40
         let capped = cap_frecency_bonus(2000, "Update Manager", "ter");
-        assert_eq!(capped, 20);
+        assert_eq!(capped, 40);
     }
 
     #[test]
     fn frecency_bonus_allows_more_for_prefix_matches() {
+        // "ter" prefix of "Terminal": base_cap = 120
         let capped = cap_frecency_bonus(2000, "Terminal", "ter");
-        assert_eq!(capped, 60);
+        assert_eq!(capped, 120);
     }
 
     #[test]
     fn frecency_cap_word_boundary_gets_full_cap() {
         let capped = cap_frecency_bonus(2000, "Visual Studio Code", "code");
-        let base_cap = (4 * 20_i32).clamp(40, 180);
+        let base_cap = (4 * 40_i32).clamp(80, 240);
         assert_eq!(capped, base_cap);
     }
 
     #[test]
     fn frecency_cap_mid_word_gets_halved() {
         let capped = cap_frecency_bonus(2000, "Barcode", "code");
-        let base_cap = (4 * 20_i32).clamp(40, 180);
+        let base_cap = (4 * 40_i32).clamp(80, 240);
         assert_eq!(capped, base_cap / 2);
     }
 }

@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -26,6 +27,7 @@ pub struct EntryStore {
     filter_history: Vec<(FilterKey, Vec<Scored>)>,
     frecency: FrequencyData,
     frecency_path: PathBuf,
+    boosts: HashMap<String, i32>,
 }
 
 impl EntryStore {
@@ -35,6 +37,7 @@ impl EntryStore {
     ) -> Self {
         let frecency_path = frecency::default_store_path("qol-launcher");
         let frecency = frecency::load(&frecency_path);
+        let boosts = load_boosts(&frecency_path);
         Self {
             app_entries,
             file_entries,
@@ -43,6 +46,7 @@ impl EntryStore {
             filter_history: Vec::new(),
             frecency,
             frecency_path,
+            boosts,
         }
     }
 
@@ -144,6 +148,24 @@ impl EntryStore {
             && next.query.starts_with(&previous.query)
     }
 
+    pub fn adjust_boost(&mut self, name: &str, delta: i32) {
+        let key = name.to_lowercase();
+        let current = self.boosts.get(&key).copied().unwrap_or(0);
+        let new_val = (current + delta).max(0);
+        if new_val == 0 {
+            self.boosts.remove(&key);
+        } else {
+            self.boosts.insert(key, new_val);
+        }
+        save_boosts(&self.frecency_path, &self.boosts);
+    }
+
+    pub fn invalidate_cache(&mut self) {
+        self.cache.clear();
+        self.cache_key = None;
+        self.filter_history.clear();
+    }
+
     pub fn record_launch(&mut self, name: &str) {
         let key = name.to_lowercase();
         let now = now_secs();
@@ -158,6 +180,7 @@ impl EntryStore {
             now: now_secs(),
             half_life_days: HALF_LIFE_DAYS,
             bonus_weight: FREQUENCY_BONUS,
+            boosts: &self.boosts,
         }
     }
 
@@ -179,4 +202,36 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+fn load_boosts(frecency_path: &Path) -> HashMap<String, i32> {
+    let boosts_path = frecency_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("qol-launcher-boosts.toml");
+    let Ok(content) = std::fs::read_to_string(&boosts_path) else {
+        return HashMap::new();
+    };
+    let Ok(table) = content.parse::<toml::Table>() else {
+        return HashMap::new();
+    };
+    table
+        .into_iter()
+        .filter_map(|(k, v)| Some((k.to_lowercase(), v.as_integer()? as i32)))
+        .collect()
+}
+
+fn save_boosts(frecency_path: &Path, boosts: &HashMap<String, i32>) {
+    let boosts_path = frecency_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("qol-launcher-boosts.toml");
+    let table: toml::Table = boosts
+        .iter()
+        .map(|(k, v)| (k.clone(), toml::Value::Integer(*v as i64)))
+        .collect();
+    let Ok(content) = toml::to_string(&table) else {
+        return;
+    };
+    let _ = std::fs::write(&boosts_path, content);
 }
