@@ -82,6 +82,8 @@ pub(crate) fn run_app(
         spawn_cache_updater(cx, cache_rx, state.caches.clone());
         spawn_initial_cache_fill(cx, state.caches.clone());
 
+        super::create::pre_create_offscreen(&config, &state.current, cx);
+
         if show_on_start {
             state.open_picker(&config, false, cx);
         }

@@ -6,6 +6,7 @@ use crate::shared::layout::*;
 use crate::{IconMap, PickerWindowState, PreviewMap, SharedIconCache};
 use gpui::*;
 use qol_plugin_api::monitor::{ActiveMonitor, MonitorTracker};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -15,6 +16,34 @@ pub(super) struct CreateRequest<'a> {
     pub last_window_count: Arc<AtomicUsize>,
     pub icon_cache: SharedIconCache,
     pub current: &'a PickerWindowState,
+}
+
+pub(crate) fn pre_create_offscreen(
+    config: &AltTabConfig,
+    current: &PickerWindowState,
+    cx: &mut App,
+) {
+    let gathered = super::GatheredWindows {
+        windows: Vec::new(),
+        previews: HashMap::new(),
+        icons: HashMap::new(),
+    };
+    let init = PickerInit::new(config, gathered);
+    let offscreen = Bounds {
+        origin: point(px(-5000.0), px(-5000.0)),
+        size: size(px(600.0), px(400.0)),
+    };
+    let Some(handle) = open_picker_window(offscreen, init, cx) else {
+        return;
+    };
+    let sentinel = qol_plugin_api::window::MonitorKey {
+        x: -5000,
+        y: -5000,
+        width: 600,
+        height: 400,
+    };
+    current.borrow_mut().insert(sentinel, handle);
+    let _ = handle.update(cx, |_, window, _| window.minimize_window());
 }
 
 pub(super) fn create_new(req: &CreateRequest, gathered: GatheredWindows, cx: &mut App) {
