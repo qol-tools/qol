@@ -189,32 +189,32 @@ pub(super) unsafe fn msg_ptr(obj: *mut c_void, sel: *mut c_void) -> *mut c_void 
 
 pub(super) unsafe fn msg_i32(obj: *mut c_void, sel: *mut c_void) -> i32 {
     let f: unsafe extern "C" fn(*mut c_void, *mut c_void) -> i32 =
-        std::mem::transmute(objc_msgSend as usize);
+        std::mem::transmute(objc_msgSend as *const ());
     f(obj, sel)
 }
 
 pub(super) unsafe fn msg_usize(obj: *mut c_void, sel: *mut c_void) -> usize {
     let f: unsafe extern "C" fn(*mut c_void, *mut c_void) -> usize =
-        std::mem::transmute(objc_msgSend as usize);
+        std::mem::transmute(objc_msgSend as *const ());
     f(obj, sel)
 }
 
 pub(super) unsafe fn msg_ptr_usize(obj: *mut c_void, sel: *mut c_void, arg: usize) -> *mut c_void {
     let f: unsafe extern "C" fn(*mut c_void, *mut c_void, usize) -> *mut c_void =
-        std::mem::transmute(objc_msgSend as usize);
+        std::mem::transmute(objc_msgSend as *const ());
     f(obj, sel, arg)
 }
 
 pub(super) unsafe fn msg_bool_usize(obj: *mut c_void, sel: *mut c_void, arg: usize) -> bool {
     let f: unsafe extern "C" fn(*mut c_void, *mut c_void, usize) -> i8 =
-        std::mem::transmute(objc_msgSend as usize);
+        std::mem::transmute(objc_msgSend as *const ());
     f(obj, sel, arg) != 0
 }
 
 #[cfg(target_arch = "aarch64")]
 pub(super) unsafe fn msg_rect(obj: *mut c_void, sel: *mut c_void) -> CGRect {
     let f: unsafe extern "C" fn(*mut c_void, *mut c_void) -> CGRect =
-        std::mem::transmute(objc_msgSend as usize);
+        std::mem::transmute(objc_msgSend as *const ());
     f(obj, sel)
 }
 

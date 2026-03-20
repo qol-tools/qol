@@ -19,7 +19,7 @@ struct FrontTarget {
 }
 
 fn front_target(pid: i32) -> Option<FrontTarget> {
-    let app = CfGuard::new(unsafe { AXUIElementCreateApplication(pid) as *mut c_void })?;
+    let app = CfGuard::new(unsafe { AXUIElementCreateApplication(pid) })?;
     if let Some(focused) = ax_attr(app.as_ptr(), "AXFocusedWindow") {
         let win = focused.as_ptr();
         return Some(FrontTarget {
@@ -161,7 +161,7 @@ pub(super) fn find_normal_window_pid() -> Option<i32> {
     let frontmost = frontmost_pid();
     #[cfg(debug_assertions)]
     eprintln!("[window-actions:dbg] find_normal_window_pid: frontmost={frontmost:?}");
-    if frontmost.is_some_and(|pid| is_normal_window(pid)) {
+    if frontmost.is_some_and(is_normal_window) {
         #[cfg(debug_assertions)]
         eprintln!("[window-actions:dbg] find_normal_window_pid: fast path");
         return frontmost;
@@ -276,9 +276,11 @@ pub(super) fn set_position_and_size(pid: i32, rect: super::screen::Rect) -> bool
     }
 }
 
-/// Hide the app (AXHidden=true). Instant, no animation.
-/// Dock click natively unhides. Equivalent to Cmd+H.
-/// Java apps fall back to plain AXMinimized (AXHidden doesn't mask their animations).
+/// Minimize the focused window. Strategy depends on window count:
+///   - Single visible window: AXHidden=true on the app (instant, no animation).
+///   - Multiple visible windows: AXMinimized=true on the focused window only (animated but fine-grained).
+///
+/// Java apps always use plain AXMinimized (AXHidden doesn't mask their animations).
 pub(super) fn instant_minimize(pid: i32) -> bool {
     if is_java_app(pid) {
         let Some(ft) = front_target(pid) else {
@@ -288,19 +290,41 @@ pub(super) fn instant_minimize(pid: i32) -> bool {
         return true;
     }
 
-    let Some(app) = CfGuard::new(unsafe { AXUIElementCreateApplication(pid) as *mut c_void })
-    else {
+    let Some(ft) = front_target(pid) else {
         return false;
     };
+
+    if visible_window_count(ft.app.as_ptr()) > 1 {
+        plain_minimize(ft.win);
+        return true;
+    }
+
     let ax_hidden = CfGuard::new(cfstr("AXHidden")).unwrap();
     unsafe {
-        AXUIElementSetAttributeValue(app.as_ptr(), ax_hidden.as_const(), cf_boolean_true());
+        AXUIElementSetAttributeValue(ft.app.as_ptr(), ax_hidden.as_const(), cf_boolean_true());
     }
     true
 }
 
+fn visible_window_count(app: *const c_void) -> usize {
+    let Some(windows) = ax_attr(app, "AXWindows") else {
+        return 0;
+    };
+    let count = unsafe { CFArrayGetCount(windows.as_ptr()) };
+    let mut visible = 0;
+    for i in 0..count {
+        let win = unsafe { CFArrayGetValueAtIndex(windows.as_ptr(), i) };
+        let minimized = ax_attr(win, "AXMinimized")
+            .is_some_and(|v| std::ptr::eq(v.as_ptr(), cf_boolean_true() as *mut c_void));
+        if !minimized {
+            visible += 1;
+        }
+    }
+    visible
+}
+
 pub(super) fn unminimize_and_raise(pid: i32) -> bool {
-    let app = CfGuard::new(unsafe { AXUIElementCreateApplication(pid) as *mut c_void });
+    let app = CfGuard::new(unsafe { AXUIElementCreateApplication(pid) });
     let Some(app) = app else {
         return false;
     };
@@ -321,7 +345,7 @@ pub(super) fn unminimize_and_raise(pid: i32) -> bool {
             let Some(val) = ax_attr(win, "AXMinimized") else {
                 continue;
             };
-            if val.as_ptr() != cf_boolean_true() as *mut c_void {
+            if !std::ptr::eq(val.as_ptr(), cf_boolean_true() as *mut c_void) {
                 continue;
             }
             unsafe {
