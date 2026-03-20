@@ -17,7 +17,6 @@ const TEXT_SELECTED: u32 = 0xf5f7ff;
 const TEXT_DIM: u32 = 0x8f96b3;
 const TEXT_MUTED: u32 = 0x6d738c;
 const TEXT_FAINT: u32 = 0x585d72;
-const TEXT_TRAIL: u32 = 0x8188a2;
 const HIGHLIGHT: u32 = 0xf9e2af;
 const HIGHLIGHT_WARM: u32 = 0xf7dc9f;
 const HIGHLIGHT_HOT: u32 = 0xfde5b8;
@@ -42,6 +41,7 @@ const SEMANTIC_CONTAINS: u32 = 0x7c709e;
 const SEMANTIC_FUZZY: u32 = 0x5f6276;
 const SEMANTIC_FREQ: u32 = 0x7d5f7f;
 
+#[allow(clippy::too_many_arguments)]
 pub fn search_bar(
     mode_label: &'static str,
     fuzziness_label: &'static str,
@@ -332,18 +332,6 @@ fn overflow_badge(direction: &str, count: usize) -> Div {
         .child(format!("{direction} {count}"))
 }
 
-fn trail_badge(depth: u8) -> Div {
-    div()
-        .h(px(18.))
-        .w(px(20.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_color(rgb(TEXT_TRAIL))
-        .text_size(px(12.))
-        .child(format!("<{}", depth))
-}
-
 fn edge_badge(direction: &str) -> Div {
     div()
         .h(px(18.))
@@ -358,7 +346,7 @@ fn edge_badge(direction: &str) -> Div {
 
 fn confidence_bar(confidence_pct: u8, selected: bool) -> Div {
     let slots = 6usize;
-    let filled = ((confidence_pct as usize * slots) + 99) / 100;
+    let filled = (confidence_pct as usize * slots).div_ceil(100);
     let filled = filled.min(slots);
     let label = format!("[{}{}]", "=".repeat(filled), ".".repeat(slots - filled));
     div()
@@ -510,9 +498,7 @@ fn row_text_color(selected: bool, previous_selected: bool, trail_depth: u8) -> g
         rgb(TEXT_SELECTED)
     } else if trail_depth >= 2 {
         rgb(TEXT_DIM)
-    } else if trail_depth == 1 {
-        rgb(TEXT_MUTED)
-    } else if previous_selected {
+    } else if trail_depth == 1 || previous_selected {
         rgb(TEXT_MUTED)
     } else {
         rgb(TEXT_FAINT)

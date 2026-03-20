@@ -111,7 +111,7 @@ impl LauncherView {
         }
     }
 
-    fn launch_selected(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
+    fn launch_selected(&mut self, window: &mut gpui::Window, _cx: &mut Context<Self>) {
         self.store
             .ensure_filtered(&self.state.query, self.state.mode, self.state.fuzziness);
         let Some(scored) = self.store.get(self.state.selected) else {

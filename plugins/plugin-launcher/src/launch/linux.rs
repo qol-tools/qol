@@ -6,7 +6,7 @@ pub fn launch_app(_path: &Path, exec: &[String]) -> bool {
     let Some((cmd, args)) = exec.split_first() else {
         return false;
     };
-    let args_ref: Vec<&OsStr> = args.iter().map(|a| OsStr::new(a)).collect();
+    let args_ref: Vec<&OsStr> = args.iter().map(OsStr::new).collect();
     try_spawn_detached(cmd, &args_ref)
 }
 

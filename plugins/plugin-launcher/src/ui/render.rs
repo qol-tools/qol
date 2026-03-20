@@ -108,7 +108,7 @@ impl Render for LauncherView {
         let rows_us = t1.elapsed().as_micros();
         let total_us = render_start.elapsed().as_micros();
         let n = RENDER_COUNT.fetch_add(1, Ordering::Relaxed);
-        if n % 10 == 0 {
+        if n.is_multiple_of(10) {
             eprintln!(
                 "[render #{n}] total={total_us}us filter={filter_us}us rows={rows_us}us gap={gap_us}us visible={visible} results={result_count} q={:?}",
                 &self.state.query
@@ -195,6 +195,7 @@ impl LauncherView {
         None
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_visible_rows(
         &self,
         scroll_offset: usize,
