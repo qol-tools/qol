@@ -106,21 +106,25 @@ fn spawn_cache_updater(
     cx.spawn(async move |cx: &mut AsyncApp| {
         let executor = cx.background_executor().clone();
         loop {
-            let rx = rx.clone();
+            let rx_clone = rx.clone();
             let event = executor
-                .spawn(async move { rx.lock().ok()?.recv().ok() })
+                .spawn(async move { rx_clone.lock().ok()?.recv().ok() })
                 .await;
-            match event {
-                Some(discovery::CacheEvent::WindowsChanged) => {
-                    if !picker_visible() {
-                        refresh_cache(&executor, &caches).await;
-                    }
-                }
-                _ => break,
+            if event.is_none() {
+                break;
+            }
+            drain_cache_events(&rx);
+            if !picker_visible() {
+                refresh_cache(&executor, &caches).await;
             }
         }
     })
     .detach();
+}
+
+fn drain_cache_events(rx: &Arc<Mutex<std::sync::mpsc::Receiver<discovery::CacheEvent>>>) {
+    let Ok(rx) = rx.lock() else { return };
+    while rx.try_recv().is_ok() {}
 }
 
 fn spawn_initial_cache_fill(cx: &mut App, caches: PickerCaches) {

@@ -53,13 +53,9 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
 }
 
 fn try_cycle_existing(req: &OpenPickerRequest, cx: &mut App) -> bool {
-    let target = match req.tracker.snapshot() {
-        Some(m) => qol_plugin_api::window::MonitorKey::from_bounds(&m.0.bounds()),
+    let handle = match req.current.borrow().any_existing() {
+        Some((_, h)) => h,
         None => return false,
-    };
-    let existing = req.current.borrow().existing(target);
-    let Some(handle) = existing else {
-        return false;
     };
     if !try_cycle_selection(&handle, req.reverse, cx) {
         return false;
