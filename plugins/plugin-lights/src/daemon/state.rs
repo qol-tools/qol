@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use anyhow::Result;
 use zigbee_znp::{Device, Endpoint};
 
@@ -18,7 +20,7 @@ pub enum DaemonOutcome {
 }
 
 pub struct DaemonState {
-    service: LightService<ZigbeeBackend>,
+    service: Arc<Mutex<LightService<ZigbeeBackend>>>,
     config: PluginConfig,
     main_target: LightTarget,
     current_brightness: u8,
@@ -44,18 +46,28 @@ impl DaemonState {
         }
         store::save(&config)?;
 
-        let service = LightService::new(backend);
+        let initial_brightness = config.live_brightness;
+        let initial_mirek = config.live_mirek;
+        let service = Arc::new(Mutex::new(LightService::new(backend)));
         Ok(Self {
             service,
             config,
             main_target,
-            current_brightness: 50,
-            current_mirek: 300,
+            current_brightness: initial_brightness,
+            current_mirek: initial_mirek,
         })
     }
 
-    pub fn backend(&self) -> &ZigbeeBackend {
-        self.service.backend()
+    pub fn shared_service(&self) -> Arc<Mutex<LightService<ZigbeeBackend>>> {
+        self.service.clone()
+    }
+
+    pub fn main_target(&self) -> &LightTarget {
+        &self.main_target
+    }
+
+    pub fn events(&self) -> crossbeam_channel::Receiver<zigbee_znp::ZigbeeEvent> {
+        self.service.lock().unwrap().backend().events().clone()
     }
 
     pub fn handle_action(&mut self, action: &str) -> DaemonOutcome {
@@ -81,13 +93,19 @@ impl DaemonState {
             return self.adjust_mirek(-(MIREK_STEP as i32));
         }
         if action == actions::PAIR {
-            return match self.service.backend().permit_join(60) {
+            return match self.service.lock().unwrap().backend().permit_join(60) {
                 Ok(()) => DaemonOutcome::Handled,
-                Err(error) => DaemonOutcome::Error(error.to_string()),
+                Err(e) => DaemonOutcome::Error(e.to_string()),
             };
         }
         if action == actions::SET_COLOR_MAIN {
             return self.apply_live_color();
+        }
+        if action == actions::SET_BRIGHTNESS_MAIN {
+            return self.apply_live_brightness();
+        }
+        if action == actions::SET_COLORTEMP_MAIN {
+            return self.apply_live_colortemp();
         }
         if let Some(preset) = self.config.preset_for_action(action) {
             return self.apply_preset(&preset);
@@ -103,7 +121,12 @@ impl DaemonState {
     }
 
     fn apply(&mut self, command: LightCommand) -> DaemonOutcome {
-        match self.service.apply_command(&self.main_target, &command) {
+        match self
+            .service
+            .lock()
+            .unwrap()
+            .apply_command(&self.main_target, &command)
+        {
             Ok(()) => DaemonOutcome::Handled,
             Err(error) => DaemonOutcome::Error(error.to_string()),
         }
@@ -124,6 +147,33 @@ impl DaemonState {
         self.apply(LightCommand::SetColor { color })
     }
 
+    fn apply_live_brightness(&mut self) -> DaemonOutcome {
+        let config = match store::load() {
+            Ok(c) => c,
+            Err(e) => return DaemonOutcome::Error(e.to_string()),
+        };
+        self.current_brightness = config.live_brightness;
+        let result = self.apply(LightCommand::SetBrightness {
+            level: config.live_brightness,
+        });
+        if matches!(result, DaemonOutcome::Handled) {
+            let color = parse_color(&config.live_color_hex);
+            self.apply(LightCommand::SetColor { color });
+        }
+        result
+    }
+
+    fn apply_live_colortemp(&mut self) -> DaemonOutcome {
+        let config = match store::load() {
+            Ok(c) => c,
+            Err(e) => return DaemonOutcome::Error(e.to_string()),
+        };
+        self.current_mirek = config.live_mirek;
+        self.apply(LightCommand::SetColorTemperature {
+            mirek: config.live_mirek,
+        })
+    }
+
     fn adjust_mirek(&mut self, delta: i32) -> DaemonOutcome {
         let new_mirek = (self.current_mirek as i32 + delta).clamp(153, 500) as u16;
         self.current_mirek = new_mirek;
@@ -136,9 +186,9 @@ impl DaemonState {
         }
 
         let commands = preset_commands(preset);
+        let mut svc = self.service.lock().unwrap();
         for command in commands {
-            let result = self.service.apply_command(&self.main_target, &command);
-            if let Err(error) = result {
+            if let Err(error) = svc.apply_command(&self.main_target, &command) {
                 return DaemonOutcome::Error(error.to_string());
             }
         }

@@ -1,3 +1,5 @@
+import { createHueWheel, hexToHueSat } from './components/hue-wheel.js';
+
 const PLUGIN_ID = window.location.pathname.split('/').filter(Boolean)[1];
 const CONFIG_URL = `/api/plugins/${PLUGIN_ID}/config`;
 const PERMISSIONS_URL = `/api/plugins/${PLUGIN_ID}/permissions`;
@@ -7,13 +9,15 @@ const ACTION_URL = `/api/plugins/${PLUGIN_ID}/actions`;
 let config = null;
 let permissionStatus = { permissions: {} };
 let permissionsLoaded = false;
-let editingPreset = null;
 let ensuringPermissions = false;
 let pairCountdown = 0;
 let pairTimer = null;
 let actionMessage = '';
 let permissionMessage = '';
 let refreshTimer = null;
+let hueWheelInstance = null;
+let controlsSection = null;
+let controlsDeviceId = null;
 
 async function loadConfig() {
     try {
@@ -107,6 +111,17 @@ async function saveConfig(updated) {
     } catch (_) {}
 }
 
+async function silentSaveConfig(updated) {
+    try {
+        const res = await fetch(CONFIG_URL, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updated),
+        });
+        if (res.ok) config = updated;
+    } catch (_) {}
+}
+
 async function sendAction(action, btn) {
     try {
         const res = await fetch(`${ACTION_URL}/${action}`, { method: 'POST' });
@@ -162,51 +177,6 @@ function setMainDevice(deviceId) {
     saveConfig({ ...config, main_target_id: deviceId });
 }
 
-function triggerPreset(n, e) {
-    const preset = config.presets[`preset_${n}`];
-    if (!preset?.enabled) return;
-    sendAction(`preset-${n}`, e.currentTarget);
-}
-
-function togglePresetEditor(n, e) {
-    e.stopPropagation();
-    editingPreset = editingPreset === n ? null : n;
-    render();
-}
-
-function savePreset(n) {
-    const key = `preset_${n}`;
-    const form = document.getElementById(`preset-form-${n}`);
-    if (!form) return;
-
-    const updated = {
-        ...config,
-        presets: {
-            ...config.presets,
-            [key]: {
-                enabled: form.querySelector('[data-field="enabled"]').checked,
-                name: form.querySelector('[data-field="name"]').value,
-                power_on: config.presets[key].power_on,
-                brightness: parseInt(form.querySelector('[data-field="brightness"]').value, 10) || 100,
-                color_hex: form.querySelector('[data-field="color_hex"]').value.replace('#', ''),
-                mirek: parseInt(form.querySelector('[data-field="mirek"]').value, 10) || 300,
-            },
-        },
-    };
-    editingPreset = null;
-    saveConfig(updated);
-}
-
-function escHtml(s) {
-    const el = document.createElement('span');
-    el.textContent = s;
-    return el.innerHTML;
-}
-
-function escAttr(s) {
-    return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
 
 function buildStatusBar() {
     const backend = config.backend || {};
@@ -339,6 +309,19 @@ function buildDevices() {
 }
 
 function buildControls() {
+    const active = !!config.main_target_id;
+
+    if (controlsSection && controlsDeviceId === config.main_target_id) {
+        return controlsSection;
+    }
+
+    if (hueWheelInstance) {
+        hueWheelInstance.destroy();
+        hueWheelInstance = null;
+    }
+
+    controlsDeviceId = config.main_target_id;
+
     const section = document.createElement('div');
     section.className = 'section';
 
@@ -347,224 +330,47 @@ function buildControls() {
     title.textContent = 'Controls';
     section.appendChild(title);
 
-    const active = !!config.main_target_id;
-
     if (!active) {
         const hint = document.createElement('div');
         hint.className = 'controls-hint';
         hint.textContent = 'Set a main device to enable controls';
         section.appendChild(hint);
+        controlsSection = section;
+        return section;
     }
 
     const grid = document.createElement('div');
-    grid.className = `controls-grid${active ? '' : ' controls-disabled'}`;
+    grid.className = 'controls-grid';
 
     const toggleBtn = document.createElement('button');
     toggleBtn.className = 'btn btn-accent toggle-btn';
     toggleBtn.textContent = 'Toggle';
-    toggleBtn.disabled = !active;
     toggleBtn.addEventListener('click', function () { sendAction('toggle-main', this); });
     grid.appendChild(toggleBtn);
 
-    const brightnessRow = buildControlRow('Brightness', [
-        { label: '\u2212 Dimmer', action: 'dimmer-main' },
-        { label: '+ Brighter', action: 'brighter-main' },
-    ], active);
-    grid.appendChild(brightnessRow);
+    const wheelContainer = document.createElement('div');
+    grid.appendChild(wheelContainer);
 
-    const tempRow = buildControlRow('Color Temp', [
-        { label: 'Warmer', action: 'warmer-main' },
-        { label: 'Cooler', action: 'cooler-main' },
-    ], active);
-    grid.appendChild(tempRow);
+    const { hue, saturation } = hexToHueSat(config.live_color_hex || 'ffffff');
 
-    const colorRow = document.createElement('div');
-    colorRow.className = 'control-row';
-    const colorLabel = document.createElement('span');
-    colorLabel.className = 'control-label';
-    colorLabel.textContent = 'Color';
-    colorRow.appendChild(colorLabel);
-    const colorPicker = document.createElement('input');
-    colorPicker.type = 'color';
-    colorPicker.className = 'color-picker';
-    colorPicker.value = '#' + (config.live_color_hex || 'ffffff');
-    colorPicker.disabled = !active;
-    colorPicker.addEventListener('input', async function () {
-        const hex = this.value.replace('#', '');
-        config.live_color_hex = hex;
-        await fetch(CONFIG_URL, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(config),
-        });
-        sendAction('set-color-main', this);
+    hueWheelInstance = createHueWheel(wheelContainer, {
+        onRelease({ hex, brightness: level }) {
+            config.live_color_hex = hex;
+            config.live_brightness = level;
+            silentSaveConfig(config);
+        },
+        initialState: {
+            hue,
+            saturation,
+            brightness: config.live_brightness ?? 100,
+        },
     });
-    colorRow.appendChild(colorPicker);
-    grid.appendChild(colorRow);
 
     section.appendChild(grid);
+    controlsSection = section;
     return section;
 }
 
-function buildControlRow(labelText, buttons, active) {
-    const row = document.createElement('div');
-    row.className = 'control-row';
-
-    const label = document.createElement('span');
-    label.className = 'control-label';
-    label.textContent = labelText;
-    row.appendChild(label);
-
-    const group = document.createElement('div');
-    group.className = 'btn-group';
-
-    buttons.forEach(({ label: btnLabel, action }) => {
-        const btn = document.createElement('button');
-        btn.className = 'btn btn-primary';
-        btn.textContent = btnLabel;
-        btn.disabled = !active;
-        btn.addEventListener('click', function () { sendAction(action, this); });
-        group.appendChild(btn);
-    });
-
-    row.appendChild(group);
-    return row;
-}
-
-function buildPresetCard(n) {
-    const key = `preset_${n}`;
-    const preset = config.presets?.[key];
-    if (!preset) return null;
-
-    const isEditing = editingPreset === n;
-
-    const card = document.createElement('div');
-    card.className = `preset-card${preset.enabled ? '' : ' disabled'}`;
-    card.addEventListener('click', (e) => triggerPreset(n, e));
-
-    const header = document.createElement('div');
-    header.className = 'preset-header';
-
-    const nameEl = document.createElement('span');
-    nameEl.className = 'preset-name';
-    nameEl.textContent = preset.name;
-
-    const editBtn = document.createElement('button');
-    editBtn.className = 'preset-edit-btn';
-    editBtn.innerHTML = '&#x21B5;';
-    editBtn.title = 'Edit preset';
-    editBtn.addEventListener('click', (e) => togglePresetEditor(n, e));
-
-    header.append(nameEl, editBtn);
-    card.appendChild(header);
-
-    const info = document.createElement('div');
-    info.className = 'preset-info';
-
-    const swatch = document.createElement('span');
-    swatch.className = 'preset-swatch';
-    swatch.style.background = `#${preset.color_hex || 'ffffff'}`;
-
-    const meta = document.createElement('span');
-    meta.textContent = `${preset.brightness}% \u00B7 ${preset.mirek}K`;
-
-    info.append(swatch, meta);
-    card.appendChild(info);
-
-    if (isEditing) {
-        card.appendChild(buildPresetEditor(n, preset));
-    }
-
-    return card;
-}
-
-function buildPresetEditor(n, preset) {
-    const editor = document.createElement('div');
-    editor.className = 'preset-editor';
-    editor.id = `preset-form-${n}`;
-    editor.addEventListener('click', (e) => e.stopPropagation());
-
-    const fields = [
-        { label: 'Name', field: 'name', type: 'text', value: preset.name },
-        { label: 'Brightness', field: 'brightness', type: 'number', value: preset.brightness, min: 0, max: 100 },
-        { label: 'Color', field: 'color_hex', type: 'text', value: preset.color_hex, placeholder: 'ffffff' },
-        { label: 'Mirek', field: 'mirek', type: 'number', value: preset.mirek, min: 153, max: 500 },
-    ];
-
-    fields.forEach(({ label, field, type, value, min, max, placeholder }) => {
-        const row = document.createElement('div');
-        row.className = 'field-row';
-
-        const lbl = document.createElement('span');
-        lbl.className = 'field-label';
-        lbl.textContent = label;
-
-        const input = document.createElement('input');
-        input.type = type;
-        input.dataset.field = field;
-        input.value = value;
-        if (min !== undefined) input.min = min;
-        if (max !== undefined) input.max = max;
-        if (placeholder) input.placeholder = placeholder;
-
-        row.append(lbl, input);
-        editor.appendChild(row);
-    });
-
-    const toggleRow = document.createElement('div');
-    toggleRow.className = 'toggle-row';
-
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.id = `preset-enabled-${n}`;
-    checkbox.dataset.field = 'enabled';
-    checkbox.checked = preset.enabled;
-
-    const toggleLabel = document.createElement('label');
-    toggleLabel.htmlFor = `preset-enabled-${n}`;
-    toggleLabel.textContent = 'Enabled';
-
-    toggleRow.append(checkbox, toggleLabel);
-    editor.appendChild(toggleRow);
-
-    const actions = document.createElement('div');
-    actions.className = 'editor-actions';
-
-    const saveBtn = document.createElement('button');
-    saveBtn.className = 'btn btn-sm btn-primary';
-    saveBtn.textContent = 'Save';
-    saveBtn.addEventListener('click', () => savePreset(n));
-
-    const cancelBtn = document.createElement('button');
-    cancelBtn.className = 'btn btn-sm btn-ghost';
-    cancelBtn.textContent = 'Cancel';
-    cancelBtn.addEventListener('click', (e) => togglePresetEditor(n, e));
-
-    actions.append(saveBtn, cancelBtn);
-    editor.appendChild(actions);
-    return editor;
-}
-
-function buildPresets() {
-    const section = document.createElement('div');
-    section.className = 'section';
-
-    const title = document.createElement('div');
-    title.className = 'section-title';
-    title.textContent = 'Presets';
-    section.appendChild(title);
-
-    const grid = document.createElement('div');
-    grid.className = 'preset-grid';
-
-    for (let i = 1; i <= 8; i++) {
-        const card = buildPresetCard(i);
-        if (card) grid.appendChild(card);
-    }
-
-    section.appendChild(grid);
-    return section;
-}
 
 function permissionCopy() {
     const unmet = Object.entries(permissionStatus.permissions)
@@ -656,7 +462,6 @@ function render() {
         buildStatusBar(),
         buildDevices(),
         buildControls(),
-        buildPresets(),
     );
     app.appendChild(container);
 

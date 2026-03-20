@@ -2,6 +2,7 @@
 compile_error!("plugin-lights daemon requires unix domain sockets");
 
 mod state;
+pub mod ws;
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -46,11 +47,18 @@ pub fn run(socket_path: &str) -> Result<()> {
     let mut state = DaemonState::new()?;
     eprintln!("coordinator ready");
 
-    let events_rx = state.backend().events().clone();
+    let events_rx = state.events();
     thread::Builder::new()
         .name("device-monitor".into())
         .spawn(move || device_monitor_loop(events_rx))
         .context("failed to spawn device monitor")?;
+
+    let ws_buffer = ws::CommandBuffer::default();
+    ws::start(
+        ws_buffer,
+        state.shared_service(),
+        state.main_target().clone(),
+    );
 
     for stream in listener.incoming() {
         match stream {
