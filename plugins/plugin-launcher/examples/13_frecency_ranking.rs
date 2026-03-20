@@ -94,9 +94,7 @@ impl FrecencyView {
         let n = name.to_lowercase();
         let q = self.query.to_lowercase();
 
-        let match_penalty = if q.is_empty() {
-            0
-        } else if n == q {
+        let match_penalty = if q.is_empty() || n == q {
             0
         } else if n.starts_with(&q) {
             100
