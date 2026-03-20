@@ -6,6 +6,8 @@ pub enum InputEffect {
     QueryChanged,
     Launch,
     Dismiss,
+    BoostUp,
+    BoostDown,
 }
 
 impl LauncherState {
@@ -17,6 +19,10 @@ impl LauncherState {
         alt: bool,
         result_count: usize,
     ) -> InputEffect {
+        #[cfg(debug_assertions)]
+        if matches!(key, "left" | "right") {
+            eprintln!("[input] key={key:?} ctrl={ctrl} shift={shift} alt={alt}");
+        }
         match key {
             "escape" | "esc" => InputEffect::Dismiss,
             "up" if ctrl => {
@@ -37,6 +43,8 @@ impl LauncherState {
                 self.cycle_mode(shift);
                 InputEffect::QueryChanged
             }
+            "left" if alt => InputEffect::BoostDown,
+            "right" if alt => InputEffect::BoostUp,
             "left" => {
                 self.move_left(shift);
                 InputEffect::Navigate

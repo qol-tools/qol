@@ -40,6 +40,7 @@ const SEMANTIC_PREFIX: u32 = 0x6a8bc6;
 const SEMANTIC_CONTAINS: u32 = 0x7c709e;
 const SEMANTIC_FUZZY: u32 = 0x5f6276;
 const SEMANTIC_FREQ: u32 = 0x7d5f7f;
+const BOOST_BG: u32 = 0x4a6741;
 
 #[allow(clippy::too_many_arguments)]
 pub fn search_bar(
@@ -215,7 +216,7 @@ pub fn result_row(scored: &Scored, name: &str, cues: RowWindowCue, row_height: f
     );
 
     if !cues.selected {
-        return div()
+        let mut row = div()
             .h(px(row_height))
             .w_full()
             .flex()
@@ -225,6 +226,10 @@ pub fn result_row(scored: &Scored, name: &str, cues: RowWindowCue, row_height: f
             .text_color(base_color)
             .text_size(px(14.))
             .child(name.to_owned());
+        if scored.manual_boost > 0 {
+            row = row.child(boost_badge(scored.manual_boost, false));
+        }
+        return row;
     }
 
     let positions = &scored.m.positions;
@@ -265,6 +270,9 @@ pub fn result_row(scored: &Scored, name: &str, cues: RowWindowCue, row_height: f
             .child(styled_name),
     );
 
+    if scored.manual_boost > 0 {
+        row = row.child(boost_badge(scored.manual_boost, true));
+    }
     row = row.child(semantic_badge(
         scored.match_kind,
         scored.frecency_bonus > 0,
@@ -374,6 +382,22 @@ fn cluster_badge() -> Div {
         .text_color(rgb(TEXT_DIM))
         .text_size(px(10.))
         .child("gap")
+}
+
+fn boost_badge(boost: i32, selected: bool) -> Div {
+    div()
+        .h(px(18.))
+        .px_2()
+        .flex()
+        .items_center()
+        .bg(if selected { rgb(BOOST_BG) } else { rgb(BG) })
+        .text_color(if selected {
+            rgb(TEXT_SELECTED)
+        } else {
+            rgb(TEXT_FAINT)
+        })
+        .text_size(px(10.))
+        .child(format!("+{boost}"))
 }
 
 fn semantic_badge(kind: MatchKind, freq_bonus: bool, selected: bool) -> Div {

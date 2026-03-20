@@ -43,6 +43,7 @@ pub struct LauncherState {
     pub last_nav_at: Option<Instant>,
     pub scroll_offset: usize,
     pub window_height: f32,
+    pub boost_adjusting: bool,
 }
 
 impl LauncherState {
@@ -62,6 +63,7 @@ impl LauncherState {
             last_nav_at: None,
             scroll_offset: 0,
             window_height: HEADER_HEIGHT,
+            boost_adjusting: false,
         }
     }
 

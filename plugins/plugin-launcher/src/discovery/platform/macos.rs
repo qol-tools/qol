@@ -30,6 +30,7 @@ pub fn load_app_entries() -> Vec<AppEntry> {
     for dir in &dirs {
         collect_apps(dir, 0, &mut entries);
     }
+    entries.retain(|e| !is_excluded_launcher(&e.name));
     entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     entries.dedup_by(|a, b| a.name.to_lowercase() == b.name.to_lowercase());
     entries
@@ -47,6 +48,13 @@ pub fn file_watch_roots() -> Vec<PathBuf> {
 }
 
 const APP_MAX_DEPTH: usize = 1;
+const EXCLUDED_LAUNCHERS: &[&str] = &["Spotlight", "Launchpad"];
+
+fn is_excluded_launcher(name: &str) -> bool {
+    EXCLUDED_LAUNCHERS
+        .iter()
+        .any(|e| e.eq_ignore_ascii_case(name))
+}
 
 fn spotlight_entries(dirs: &[PathBuf]) -> Vec<AppEntry> {
     let mut command = Command::new("mdfind");
