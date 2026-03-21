@@ -3,9 +3,12 @@ mod control;
 mod filter;
 pub(crate) mod relay;
 
+pub use control::LogControl;
+
+#[cfg(feature = "dev")]
 pub use control::{
     load_all_plugin_controls, load_plugin_control, load_plugin_control_from_shared_config,
-    save_all_plugin_controls, upsert_plugin_control, LogControl,
+    save_all_plugin_controls, upsert_plugin_control,
 };
 
 #[cfg(feature = "dev")]

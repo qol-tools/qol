@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "dev")]
 use std::collections::HashMap;
+#[cfg(feature = "dev")]
 use std::path::Path;
-
-const LOG_CONTROL_STATE_FILE: &str = "dev-plugin-log-controls.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct LogControl {
@@ -12,12 +12,17 @@ pub struct LogControl {
     pub suppress_patterns: Vec<String>,
 }
 
+#[cfg(feature = "dev")]
+const LOG_CONTROL_STATE_FILE: &str = "dev/plugin-log-controls.json";
+
+#[cfg(feature = "dev")]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct PluginLogControlFile {
     #[serde(default)]
     plugins: HashMap<String, LogControl>,
 }
 
+#[cfg(feature = "dev")]
 pub fn load_all_plugin_controls(config_dir: &Path) -> HashMap<String, LogControl> {
     let state_path = config_dir.join(LOG_CONTROL_STATE_FILE);
     let Ok(content) = std::fs::read_to_string(&state_path) else {
@@ -29,6 +34,7 @@ pub fn load_all_plugin_controls(config_dir: &Path) -> HashMap<String, LogControl
         .unwrap_or_default()
 }
 
+#[cfg(feature = "dev")]
 pub fn save_all_plugin_controls(
     config_dir: &Path,
     controls: &HashMap<String, LogControl>,
@@ -39,20 +45,21 @@ pub fn save_all_plugin_controls(
     save_controls_file(config_dir, LOG_CONTROL_STATE_FILE, &state)
 }
 
+#[cfg(feature = "dev")]
 fn save_controls_file(
     config_dir: &Path,
     filename: &str,
     state: &impl Serialize,
 ) -> Result<(), String> {
-    std::fs::create_dir_all(config_dir).map_err(|e| {
+    std::fs::create_dir_all(config_dir.join("dev")).map_err(|e| {
         format!(
-            "Failed to create config directory {}: {}",
+            "Failed to create dev directory {}: {}",
             config_dir.display(),
             e
         )
     })?;
     let path = config_dir.join(filename);
-    let tmp_path = config_dir.join(format!(".{}.tmp", filename));
+    let tmp_path = config_dir.join(format!("dev/.{}.tmp", filename.trim_start_matches("dev/")));
     let content = serde_json::to_string_pretty(state)
         .map_err(|e| format!("Failed to serialize {}: {}", filename, e))?;
     std::fs::write(&tmp_path, &content)
@@ -60,12 +67,14 @@ fn save_controls_file(
     std::fs::rename(&tmp_path, &path).map_err(|e| format!("Failed to finalize {}: {}", filename, e))
 }
 
+#[cfg(feature = "dev")]
 pub fn load_plugin_control(config_dir: &Path, plugin_id: &str) -> LogControl {
     load_all_plugin_controls(config_dir)
         .remove(plugin_id)
         .unwrap_or_default()
 }
 
+#[cfg(feature = "dev")]
 pub fn load_plugin_control_from_shared_config(plugin_id: &str) -> LogControl {
     let Ok(config_dir) = crate::paths::shared_config_dir() else {
         return LogControl::default();
@@ -73,6 +82,7 @@ pub fn load_plugin_control_from_shared_config(plugin_id: &str) -> LogControl {
     load_plugin_control(&config_dir, plugin_id)
 }
 
+#[cfg(feature = "dev")]
 pub fn upsert_plugin_control(
     config_dir: &Path,
     plugin_id: &str,
@@ -83,6 +93,7 @@ pub fn upsert_plugin_control(
     save_all_plugin_controls(config_dir, &controls)
 }
 
+#[cfg(feature = "dev")]
 fn upsert_control_entry(
     controls: &mut HashMap<String, LogControl>,
     key: &str,
@@ -96,6 +107,7 @@ fn upsert_control_entry(
     controls.insert(key.to_string(), control);
 }
 
+#[cfg(feature = "dev")]
 fn normalize_patterns(patterns: Vec<String>) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     patterns
@@ -108,7 +120,7 @@ fn normalize_patterns(patterns: Vec<String>) -> Vec<String> {
 }
 
 #[cfg(feature = "dev")]
-const CORE_LOG_CONTROL_STATE_FILE: &str = "dev-core-log-controls.json";
+const CORE_LOG_CONTROL_STATE_FILE: &str = "dev/core-log-controls.json";
 
 #[cfg(feature = "dev")]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -159,6 +171,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    #[cfg(feature = "dev")]
     #[test]
     fn upsert_plugin_control_roundtrip_and_clear() {
         let tmp = TempDir::new().unwrap();

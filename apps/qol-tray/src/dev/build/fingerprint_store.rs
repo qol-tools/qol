@@ -38,15 +38,16 @@ pub fn save_build_fingerprints(
     config_dir: &Path,
     fingerprints: &HashMap<String, String>,
 ) -> Result<(), String> {
-    std::fs::create_dir_all(config_dir).map_err(|e| {
+    let dev_dir = config_dir.join("dev");
+    std::fs::create_dir_all(&dev_dir).map_err(|e| {
         format!(
-            "Failed to create config directory {}: {}",
-            config_dir.display(),
+            "Failed to create dev directory {}: {}",
+            dev_dir.display(),
             e
         )
     })?;
     let state_path = config_dir.join(DEV_BUILD_STATE_FILE);
-    let tmp_path = config_dir.join(".dev-build-fingerprints.tmp");
+    let tmp_path = config_dir.join("dev/.build-fingerprints.tmp");
     let state = BuildFingerprintState {
         fingerprints: fingerprints.clone(),
     };

@@ -15,7 +15,13 @@ pub(super) fn enabled_daemon(plugin: &Plugin) -> Option<&DaemonConfig> {
 pub(super) fn spawn_daemon(plugin: &Plugin, daemon_config: &DaemonConfig) -> Result<Child> {
     let daemon_path = daemon_path(plugin, daemon_config)?;
     let mut command = daemon_command(plugin, daemon_config, &daemon_path);
+    #[cfg(feature = "dev")]
     let relay_patterns = configure_log_relay(plugin, &mut command);
+    #[cfg(not(feature = "dev"))]
+    let relay_patterns: Vec<String> = {
+        command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+        Vec::new()
+    };
     let mut child = command.spawn()?;
     crate::logging::relay::attach(
         plugin.id.as_str(),
@@ -80,6 +86,7 @@ fn apply_process_group(_command: &mut Command) {
     }
 }
 
+#[cfg(feature = "dev")]
 fn configure_log_relay(plugin: &Plugin, command: &mut Command) -> Vec<String> {
     let log_control = crate::logging::load_plugin_control_from_shared_config(plugin.id.as_str());
     if log_control.muted {
