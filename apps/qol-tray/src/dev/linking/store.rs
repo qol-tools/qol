@@ -6,7 +6,29 @@ pub fn load_dev_links(config_dir: &Path) -> HashMap<String, PathBuf> {
     let Ok(content) = std::fs::read_to_string(&path) else {
         return HashMap::new();
     };
-    serde_json::from_str(&content).unwrap_or_default()
+    let links: HashMap<String, PathBuf> = serde_json::from_str(&content).unwrap_or_default();
+    canonicalize_stale_worktree_paths(config_dir, links)
+}
+
+fn canonicalize_stale_worktree_paths(
+    config_dir: &Path,
+    mut links: HashMap<String, PathBuf>,
+) -> HashMap<String, PathBuf> {
+    let mut changed = false;
+    for (id, path) in links.iter_mut() {
+        let Some(canonical) = crate::dev::find_git_worktree_base(path) else {
+            continue;
+        };
+        if canonical != *path {
+            log::info!("Auto-healed dev-link {}: {:?} -> {:?}", id, path, canonical);
+            *path = canonical;
+            changed = true;
+        }
+    }
+    if changed {
+        let _ = save_dev_links(config_dir, &links);
+    }
+    links
 }
 
 pub fn set_active_worktree_branch(config_dir: &Path, branch: Option<&str>) -> Result<(), String> {
@@ -35,8 +57,6 @@ pub fn create_link(source: &Path, config_dir: &Path) -> Result<String, String> {
         return Err("Already linked".to_string());
     }
 
-    // Always store the canonical (main) repo path — worktree resolution is
-    // applied at runtime based on the active branch.
     let canonical =
         crate::dev::find_git_worktree_base(source).unwrap_or_else(|| source.to_path_buf());
     links.insert(plugin_id.clone(), canonical.clone());
