@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use crate::dev::core::BuildStatus;
 
-pub(crate) const DEV_BUILD_STATE_FILE: &str = "dev-build-fingerprints.json";
+pub(crate) const DEV_BUILD_STATE_FILE: &str = "dev/build-fingerprints.json";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BuildResult {

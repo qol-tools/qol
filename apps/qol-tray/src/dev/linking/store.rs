@@ -96,6 +96,9 @@ fn validate_link_source(source: &Path) -> Result<String, String> {
 }
 
 fn save_dev_links(config_dir: &Path, links: &HashMap<String, PathBuf>) -> Result<(), String> {
+    let dev_dir = config_dir.join("dev");
+    std::fs::create_dir_all(&dev_dir)
+        .map_err(|e| format!("Failed to create dev directory: {}", e))?;
     let path = dev_links_path(config_dir);
     let tmp_path = temp_dev_links_path(config_dir);
     let content = serde_json::to_string_pretty(links)
@@ -108,9 +111,9 @@ fn save_dev_links(config_dir: &Path, links: &HashMap<String, PathBuf>) -> Result
 }
 
 fn dev_links_path(config_dir: &Path) -> PathBuf {
-    config_dir.join("dev-links.json")
+    config_dir.join("dev/links.json")
 }
 
 fn temp_dev_links_path(config_dir: &Path) -> PathBuf {
-    config_dir.join(".dev-links.json.tmp")
+    config_dir.join("dev/.links.json.tmp")
 }
