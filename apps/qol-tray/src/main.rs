@@ -23,10 +23,9 @@ fn main() -> Result<()> {
     let core_log_controls = qol_tray::logging::init_dev_logger();
 
     #[cfg(not(feature = "dev"))]
-    {
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-        qol_tray::logging::prod::init();
-    }
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
+    qol_tray::logging::prod::init();
 
     if is_already_running() {
         eprintln!("qol-tray is already running on port {}", DEFAULT_PORT);
@@ -230,7 +229,6 @@ async fn async_init_inner(
     let mut plugin_manager = PluginManager::new();
     plugin_manager.load_plugins()?;
     let plugin_manager = Arc::new(Mutex::new(plugin_manager));
-    #[cfg(not(feature = "dev"))]
     {
         let startup_info = build_startup_info(&plugin_manager);
         qol_tray::logging::prod::log_startup(&startup_info);
@@ -264,7 +262,6 @@ fn sync_launcher_apps() {
     features::launcher_apps::trigger_full_sync();
 }
 
-#[cfg(not(feature = "dev"))]
 fn build_startup_info(
     pm: &std::sync::Arc<std::sync::Mutex<qol_tray::plugins::PluginManager>>,
 ) -> String {
@@ -274,8 +271,10 @@ fn build_startup_info(
             .map(|p| {
                 let id = &p.id;
                 let version = &p.manifest.plugin.version;
-                let commit = p.manifest.build.commit.as_deref().unwrap_or("?");
-                format!("{}@{}@{}", id, version, commit)
+                match p.manifest.build.commit.as_deref() {
+                    Some(c) => format!("{}@{}@{}", id, version, c),
+                    None => format!("{}@{}", id, version),
+                }
             })
             .collect::<Vec<_>>()
             .join(", "),
