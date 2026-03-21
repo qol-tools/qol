@@ -6,6 +6,7 @@ import { HotkeysView } from '../../views/hotkeys-view.js';
 import { ShortcutsView } from '../../views/shortcuts-view.js';
 import { TaskRunnerView } from '../../views/task-runner-view.js';
 import { DevView } from '../../views/dev/view.js';
+import { LogsView } from '../../views/logs-view.js';
 
 export const VIEW_LABELS = {
     plugins: 'Plugins',
@@ -13,10 +14,11 @@ export const VIEW_LABELS = {
     hotkeys: 'Hotkeys',
     shortcuts: 'Shortcuts',
     'task-runner': 'Task Runner',
+    logs: 'Logs',
     dev: 'Dev'
 };
 
-const BASE_ORDER = ['plugins', 'store', 'hotkeys', 'shortcuts', 'task-runner'];
+const BASE_ORDER = ['plugins', 'store', 'hotkeys', 'shortcuts', 'task-runner', 'logs'];
 
 export function buildViewOrder(devEnabled) {
     return devEnabled ? [...BASE_ORDER, 'dev'] : [...BASE_ORDER];
@@ -51,6 +53,7 @@ export function renderMountedViews({
         ${mounted.has('hotkeys') && html`<${ViewSlot} active=${active('hotkeys')}><${HotkeysView} /><//>`}
         ${mounted.has('shortcuts') && html`<${ViewSlot} active=${active('shortcuts')}><${ShortcutsView} /><//>`}
         ${mounted.has('task-runner') && html`<${ViewSlot} active=${active('task-runner')}><${TaskRunnerView} /><//>`}
+        ${mounted.has('logs') && html`<${ViewSlot} active=${active('logs')}><${LogsView} /><//>`}
         ${mounted.has('dev') && html`<${ViewSlot} active=${active('dev')}><${DevView} /><//>`}
     `;
 }
