@@ -70,3 +70,46 @@ fn should_suppress(line: &str, patterns: Option<&[String]>) -> bool {
     };
     super::control::matches_any_pattern(line.trim_end(), patterns)
 }
+
+pub(crate) fn attach_with_prod_log(
+    plugin_id: &str,
+    plugin_version: &str,
+    plugin_commit: Option<&str>,
+    stderr: Option<impl Read + Send + 'static>,
+) {
+    let Some(stderr) = stderr else { return };
+    let source = build_source(plugin_id, plugin_version, plugin_commit);
+    let key = format!("plugin.{}.daemon_stderr", plugin_id);
+    let id = plugin_id.to_string();
+    std::thread::spawn(move || {
+        let mut buf = BufReader::new(stderr);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let n = buf.read_line(&mut line).unwrap_or(0);
+            if n == 0 {
+                break;
+            }
+            let trimmed = line.trim_end();
+            if is_error_line(trimmed) {
+                crate::log_error!(&key, source = source, "[{}] {}", id, trimmed);
+            }
+            eprint!("{}", line);
+        }
+    });
+}
+
+fn build_source(plugin_id: &str, version: &str, commit: Option<&str>) -> String {
+    match commit {
+        Some(c) => format!("plugin:{}@{}@{}", plugin_id, version, c),
+        None => format!("plugin:{}@{}", plugin_id, version),
+    }
+}
+
+fn is_error_line(line: &str) -> bool {
+    line.contains("ERROR")
+        || line.contains("error")
+        || line.contains("FATAL")
+        || line.contains("panic")
+        || line.contains("PANIC")
+}
