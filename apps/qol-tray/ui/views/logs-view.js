@@ -1,6 +1,9 @@
 import { html } from '../lib/html.js';
-import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
+import { usePaletteContext } from '../palette/context.js';
+import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../components/app/view-keyboard-context.js';
+import { matchesQuery } from '../utils/collections.js';
 import { PageHeader } from '../components/PageHeader.js';
 
 const TABS = [
@@ -16,6 +19,7 @@ export function LogsView({ active }) {
     const [suppressed, setSuppressed] = useState({});
     const [selectedIndex, setSelectedIndex] = useState(0);
     const contentRef = useRef(null);
+    const { searchQuery } = usePaletteContext();
 
     const fetchEntries = useCallback(async () => {
         try {
@@ -39,9 +43,31 @@ export function LogsView({ active }) {
         return () => clearInterval(id);
     }, [active, fetchEntries, fetchSuppressed]);
 
+    const filteredEntries = useMemo(
+        () => searchQuery
+            ? entries.filter(e => matchesQuery([e.msg, e.src, e.key, e.level], searchQuery))
+            : entries,
+        [entries, searchQuery]
+    );
+
+    const suppressedKeys = useMemo(() => Object.keys(suppressed), [suppressed]);
+    const filteredSuppressedKeys = useMemo(
+        () => searchQuery
+            ? suppressedKeys.filter(k => {
+                const e = suppressed[k];
+                return matchesQuery([k, e?.last_message, e?.source, e?.src], searchQuery);
+            })
+            : suppressedKeys,
+        [suppressedKeys, suppressed, searchQuery]
+    );
+
+    const itemCount = activeTab === 'live'
+        ? filteredEntries.length
+        : filteredSuppressedKeys.length;
+
     useEffect(() => {
         setSelectedIndex(0);
-    }, [activeTab]);
+    }, [activeTab, searchQuery]);
 
     const unsuppress = useCallback(async (key) => {
         try {
@@ -55,10 +81,6 @@ export function LogsView({ active }) {
         const next = (idx + direction + TABS.length) % TABS.length;
         setActiveTab(TABS[next].id);
     }, [activeTab]);
-
-    const itemCount = activeTab === 'live'
-        ? entries.length
-        : Object.keys(suppressed).length;
 
     const handleKey = useCallback((event) => {
         switch (event.key) {
@@ -83,14 +105,21 @@ export function LogsView({ active }) {
             case 'Enter':
                 if (activeTab === 'suppressed') {
                     event.preventDefault();
-                    const keys = Object.keys(suppressed);
-                    if (keys[selectedIndex]) unsuppress(keys[selectedIndex]);
+                    const key = filteredSuppressedKeys[selectedIndex];
+                    if (key) unsuppress(key);
                 }
                 break;
         }
-    }, [switchTab, itemCount, activeTab, suppressed, selectedIndex, unsuppress]);
+    }, [switchTab, itemCount, activeTab, filteredSuppressedKeys, selectedIndex, unsuppress]);
 
     useRegisterViewKeyboard('logs', handleKey);
+
+    const commands = useMemo(() => [
+        { id: 'refresh', label: 'Refresh Logs', action: () => { fetchEntries(); fetchSuppressed(); } },
+        { id: 'live-tab', label: 'Show Live Log', action: () => setActiveTab('live') },
+        { id: 'suppressed-tab', label: 'Show Suppressed', action: () => setActiveTab('suppressed') },
+    ], [fetchEntries, fetchSuppressed]);
+    useRegisterCommands('logs', commands);
 
     useEffect(() => {
         const el = contentRef.current;
@@ -114,8 +143,13 @@ export function LogsView({ active }) {
             `)}
         </div>
         <div class="logs-content" ref=${contentRef} role="tabpanel">
-            ${activeTab === 'live' && html`<${LiveLog} entries=${entries} selectedIndex=${selectedIndex} />`}
-            ${activeTab === 'suppressed' && html`<${SuppressedList} items=${suppressed} onUnsuppress=${unsuppress} selectedIndex=${selectedIndex} />`}
+            ${activeTab === 'live' && html`<${LiveLog} entries=${filteredEntries} selectedIndex=${selectedIndex} />`}
+            ${activeTab === 'suppressed' && html`<${SuppressedList}
+                keys=${filteredSuppressedKeys}
+                items=${suppressed}
+                onUnsuppress=${unsuppress}
+                selectedIndex=${selectedIndex}
+            />`}
         </div>
     `;
 }
@@ -149,8 +183,7 @@ function LogEntryRow({ entry, selected }) {
     `;
 }
 
-function SuppressedList({ items, onUnsuppress, selectedIndex }) {
-    const keys = Object.keys(items);
+function SuppressedList({ keys, items, onUnsuppress, selectedIndex }) {
     if (keys.length === 0) {
         return html`<div class="logs-empty">No suppressed errors</div>`;
     }
