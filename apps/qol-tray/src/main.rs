@@ -230,6 +230,11 @@ async fn async_init_inner(
     let mut plugin_manager = PluginManager::new();
     plugin_manager.load_plugins()?;
     let plugin_manager = Arc::new(Mutex::new(plugin_manager));
+    #[cfg(not(feature = "dev"))]
+    {
+        let startup_info = build_startup_info(&plugin_manager);
+        qol_tray::logging::prod::log_startup(&startup_info);
+    }
     let daemon = Daemon::new();
     let mut feature_registry = FeatureRegistry::new();
     feature_registry.register(Box::new(features::plugin_store::Plugins::new()));
@@ -257,6 +262,28 @@ async fn async_init_inner(
 
 fn sync_launcher_apps() {
     features::launcher_apps::trigger_full_sync();
+}
+
+#[cfg(not(feature = "dev"))]
+fn build_startup_info(
+    pm: &std::sync::Arc<std::sync::Mutex<qol_tray::plugins::PluginManager>>,
+) -> String {
+    let plugins_desc = match pm.lock() {
+        Ok(manager) => manager
+            .plugins()
+            .map(|p| {
+                let id = &p.id;
+                let version = &p.manifest.plugin.version;
+                let commit = p.manifest.build.commit.as_deref().unwrap_or("?");
+                format!("{}@{}@{}", id, version, commit)
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
+        Err(_) => "unknown".to_string(),
+    };
+
+    let os_info = std::env::consts::OS;
+    format!("{}, plugins: [{}]", os_info, plugins_desc)
 }
 
 async fn check_for_updates() -> bool {
