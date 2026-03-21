@@ -28,6 +28,7 @@ fn base_manifest() -> PluginManifest {
         dependencies: None,
         runtime: None,
         capabilities: Capabilities::default(),
+        build: BuildInfo::default(),
     }
 }
 

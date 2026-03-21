@@ -7,8 +7,8 @@ mod schema_tests;
 mod validation_tests;
 
 pub use schema::{
-    ActionType, BinaryDependency, Capabilities, DaemonConfig, Dependencies, MenuConfig, MenuItem,
-    PluginInfo, PluginManifest, RuntimeConfig,
+    ActionType, BinaryDependency, BuildInfo, Capabilities, DaemonConfig, Dependencies, MenuConfig,
+    MenuItem, PluginInfo, PluginManifest, RuntimeConfig,
 };
 pub use validation::{is_valid_action_id, is_valid_command_basename};
 
