@@ -3,6 +3,7 @@ mod control;
 mod filter;
 pub(crate) mod platform;
 pub(crate) mod relay;
+pub(crate) mod writer;
 
 pub use control::LogControl;
 
