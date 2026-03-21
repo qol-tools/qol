@@ -115,7 +115,7 @@ pub fn github_token_path() -> Result<PathBuf> {
 }
 
 pub fn plugin_cache_path() -> Result<PathBuf> {
-    shared_config_dir().map(|p| p.join(".plugin-cache.json"))
+    Ok(runtime_cache_dir().join("plugin-cache.json"))
 }
 
 pub fn shortcuts_path() -> Result<PathBuf> {
@@ -191,7 +191,6 @@ mod tests {
             (hotkeys_path(), "hotkeys.json"),
             (plugin_configs_path(), "plugin-configs.json"),
             (github_token_path(), ".github-token"),
-            (plugin_cache_path(), ".plugin-cache.json"),
         ];
 
         let config_path = config_dir().unwrap();
@@ -237,6 +236,16 @@ mod tests {
                 suffix
             );
         }
+    }
+
+    #[test]
+    fn plugin_cache_path_is_under_runtime() {
+        let path = plugin_cache_path().unwrap();
+        assert!(
+            path.starts_with("/tmp/qol-tray"),
+            "cache path {:?} should be under /tmp/qol-tray",
+            path
+        );
     }
 
     #[test]
