@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::file_io;
 
@@ -131,6 +131,36 @@ pub fn dev_config_path() -> Result<PathBuf> {
     shared_config_dir().map(|p| p.join("dev.json"))
 }
 
+const RUNTIME_DIR: &str = "/tmp/qol-tray";
+
+pub fn runtime_dir() -> PathBuf {
+    PathBuf::from(RUNTIME_DIR)
+}
+
+pub fn runtime_pids_dir() -> PathBuf {
+    runtime_dir().join("pids")
+}
+
+pub fn runtime_cache_dir() -> PathBuf {
+    runtime_dir().join("cache")
+}
+
+pub fn init_runtime_dirs() -> Result<()> {
+    init_runtime_dirs_at(&runtime_dir())
+}
+
+fn init_runtime_dirs_at(base: &Path) -> Result<()> {
+    if base.exists() {
+        fs::remove_dir_all(base)
+            .with_context(|| format!("Failed to wipe runtime dir {}", base.display()))?;
+    }
+    for subdir in ["pids", "cache"] {
+        fs::create_dir_all(base.join(subdir))
+            .with_context(|| format!("Failed to create runtime subdir {}", subdir))?;
+    }
+    Ok(())
+}
+
 pub fn open_url(url: &str) -> Result<()> {
     open::that(url)?;
     Ok(())
@@ -183,6 +213,52 @@ mod tests {
                 assert!(path.to_string_lossy().contains("qol-tray"));
             }
         }
+    }
+
+    #[test]
+    fn runtime_dir_is_under_tmp() {
+        let dir = runtime_dir();
+        assert!(
+            dir.starts_with("/tmp"),
+            "runtime dir {:?} should be under /tmp",
+            dir
+        );
+        assert!(dir.ends_with("qol-tray"));
+    }
+
+    #[test]
+    fn runtime_subdirs_have_correct_suffixes() {
+        let cases = [(runtime_pids_dir(), "pids"), (runtime_cache_dir(), "cache")];
+        for (path, suffix) in cases {
+            assert!(
+                path.ends_with(suffix),
+                "path {:?} should end with {}",
+                path,
+                suffix
+            );
+        }
+    }
+
+    #[test]
+    fn init_runtime_dirs_creates_fresh_structure() {
+        let test_dir = PathBuf::from("/tmp/qol-tray-test-init");
+        let pids = test_dir.join("pids");
+        let cache = test_dir.join("cache");
+
+        let _ = std::fs::remove_dir_all(&test_dir);
+        std::fs::create_dir_all(&pids).unwrap();
+        std::fs::write(pids.join("stale.pid"), "999").unwrap();
+
+        init_runtime_dirs_at(&test_dir).unwrap();
+
+        assert!(pids.is_dir(), "pids dir should exist");
+        assert!(cache.is_dir(), "cache dir should exist");
+        assert!(
+            !pids.join("stale.pid").exists(),
+            "stale files should be wiped"
+        );
+
+        let _ = std::fs::remove_dir_all(&test_dir);
     }
 
     #[test]
