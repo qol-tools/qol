@@ -59,7 +59,14 @@ fn set_plugin_config_inner(
     let config = io::parse_config_body(body)?;
     form::validate_plugin_config(&plugin_id, &config)?;
     io::save_plugin_config(&plugin_id, config)?;
-    notify::notify_plugin_reload(state, &plugin_id);
+    if let Err(error) = notify::notify_plugin_reload(state, &plugin_id) {
+        log::error!(
+            "Config saved for {}, but daemon refresh failed: {}",
+            plugin_id,
+            error
+        );
+        return Err(Box::new(config_refresh_failed_response()));
+    }
     Ok(config_saved_response())
 }
 
@@ -86,6 +93,14 @@ fn config_form_json_response(config: &qol_config::normalized::ResolvedConfig) ->
 
 fn config_saved_response() -> Response {
     (StatusCode::OK, "Config saved").into_response()
+}
+
+fn config_refresh_failed_response() -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Config saved but live daemon refresh failed",
+    )
+        .into_response()
 }
 
 fn config_form_not_found_response() -> Response {
