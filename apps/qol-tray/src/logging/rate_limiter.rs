@@ -28,20 +28,21 @@ pub(crate) enum CheckResult {
     Rejected,
 }
 
+#[cfg(test)]
 impl CheckResult {
-    pub(crate) fn is_allowed(&self) -> bool {
+    fn is_allowed(&self) -> bool {
         matches!(self, Self::Allowed { .. })
     }
 
-    pub(crate) fn is_suppressed(&self) -> bool {
+    fn is_suppressed(&self) -> bool {
         matches!(self, Self::Suppressed { .. })
     }
 
-    pub(crate) fn is_rejected(&self) -> bool {
+    fn is_rejected(&self) -> bool {
         matches!(self, Self::Rejected)
     }
 
-    pub(crate) fn count(&self) -> u32 {
+    fn count(&self) -> u32 {
         match self {
             Self::Allowed { count } | Self::Suppressed { count } => *count,
             Self::Rejected => SUPPRESS_THRESHOLD,
@@ -50,6 +51,7 @@ impl CheckResult {
 }
 
 impl RateLimiter {
+    #[cfg(test)]
     pub(crate) fn new(version: String) -> Self {
         Self {
             version,

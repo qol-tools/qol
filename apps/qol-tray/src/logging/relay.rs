@@ -71,6 +71,7 @@ fn should_suppress(line: &str, patterns: Option<&[String]>) -> bool {
     super::control::matches_any_pattern(line.trim_end(), patterns)
 }
 
+#[cfg(not(feature = "dev"))]
 pub(crate) fn attach_with_prod_log(
     plugin_id: &str,
     plugin_version: &str,
@@ -99,6 +100,7 @@ pub(crate) fn attach_with_prod_log(
     });
 }
 
+#[cfg(not(feature = "dev"))]
 fn build_source(plugin_id: &str, version: &str, commit: Option<&str>) -> String {
     match commit {
         Some(c) => format!("plugin:{}@{}@{}", plugin_id, version, c),
@@ -106,6 +108,7 @@ fn build_source(plugin_id: &str, version: &str, commit: Option<&str>) -> String 
     }
 }
 
+#[cfg(not(feature = "dev"))]
 fn is_error_line(line: &str) -> bool {
     line.contains("ERROR")
         || line.contains("error")

@@ -7,7 +7,7 @@ mod windows;
 
 use std::path::PathBuf;
 
-pub fn log_dir() -> PathBuf {
+pub(crate) fn log_dir() -> PathBuf {
     #[cfg(target_os = "linux")]
     return linux::log_dir();
     #[cfg(target_os = "macos")]
