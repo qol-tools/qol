@@ -19,15 +19,14 @@ struct ResolutionContext {
 
 struct LoadedPlugins {
     plugins: Vec<Plugin>,
-    pids: Vec<u32>,
 }
 
 fn load_all_plugins() -> Result<LoadedPlugins> {
     let context = resolution_context()?;
     let mut plugins = PluginLoader::load_resolved(&context.resolved)?;
     super::super::daemon_tracker::clean_stale_sockets(&plugins);
-    let pids = autostart::start_plugin_daemons(&mut plugins, &context.resolved_sources);
-    Ok(LoadedPlugins { plugins, pids })
+    autostart::start_plugin_daemons(&mut plugins, &context.resolved_sources);
+    Ok(LoadedPlugins { plugins })
 }
 
 fn resolution_context() -> Result<ResolutionContext> {
@@ -66,7 +65,7 @@ fn resolved_sources(resolved: &[ResolvedPlugin]) -> HashMap<PluginId, PluginSour
 
 fn finalize_load(manager: &mut PluginManager, loaded: LoadedPlugins) {
     register_plugins(manager, loaded.plugins);
-    super::super::daemon_tracker::save_daemon_pids(&loaded.pids);
+    runtime::persist_daemon_pids(manager);
     runtime::sync_ignore_pids(manager);
 }
 

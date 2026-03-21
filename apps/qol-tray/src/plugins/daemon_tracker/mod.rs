@@ -2,13 +2,13 @@ use super::Plugin;
 #[cfg(unix)]
 use crate::file_io;
 use crate::paths;
-#[cfg(unix)]
 use std::path::Path;
 use std::path::PathBuf;
 
 pub mod platform;
 
-pub(super) fn daemon_pids_path() -> Option<PathBuf> {
+#[cfg(unix)]
+fn legacy_daemon_pids_path() -> Option<PathBuf> {
     paths::config_dir().ok().map(|p| p.join(".daemon-pids"))
 }
 
@@ -20,23 +20,49 @@ pub fn clean_stale_sockets(plugins: &[Plugin]) {
     platform::clean_stale_sockets(plugins);
 }
 
-pub fn save_daemon_pids(pids: &[u32]) {
-    let Some(path) = daemon_pids_path() else {
+pub fn save_plugin_pid(pids_dir: &Path, plugin_id: &str, pid: u32) {
+    let path = pids_dir.join(format!("{}.pid", plugin_id));
+    let _ = std::fs::write(&path, pid.to_string());
+}
+
+pub fn remove_plugin_pid(pids_dir: &Path, plugin_id: &str) {
+    let path = pids_dir.join(format!("{}.pid", plugin_id));
+    let _ = std::fs::remove_file(&path);
+}
+
+pub fn list_tracked_pids(pids_dir: &Path) -> impl Iterator<Item = (String, u32)> {
+    std::fs::read_dir(pids_dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension()?.to_str()? != "pid" {
+                return None;
+            }
+            let id = path.file_stem()?.to_str()?.to_string();
+            let pid: u32 = std::fs::read_to_string(&path).ok()?.trim().parse().ok()?;
+            Some((id, pid))
+        })
+}
+
+pub fn clear_all_pids(pids_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(pids_dir) else {
         return;
     };
-    let content = pids
-        .iter()
-        .map(|p| p.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let _ = std::fs::write(&path, content);
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "pid") {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
 }
 
 #[cfg(unix)]
-pub(crate) fn daemon_pid_files() -> Vec<PathBuf> {
+fn legacy_pid_files() -> Vec<PathBuf> {
     let mut files = Vec::new();
 
-    if let Some(current) = daemon_pids_path() {
+    if let Some(current) = legacy_daemon_pids_path() {
         files.push(current);
     }
 
@@ -75,8 +101,16 @@ pub(crate) fn dev_link_dirs() -> Vec<PathBuf> {
 #[cfg(unix)]
 pub(crate) fn kill_from_pid_files() {
     let roots = ManagedRoots::load();
-    for path in daemon_pid_files() {
-        process_pid_file(&path, &roots);
+    let pids_dir = crate::paths::runtime_pids_dir();
+    for (_, pid) in list_tracked_pids(&pids_dir) {
+        kill_pid_if_managed(&(pid as i32).to_string(), &roots);
+    }
+    clear_all_pids(&pids_dir);
+
+    for path in legacy_pid_files() {
+        if path.exists() {
+            process_pid_file(&path, &roots);
+        }
     }
 }
 
@@ -148,7 +182,6 @@ impl ManagedRoots {
         }
     }
 
-    /// Check if the given binary path belongs to a managed plugin.
     pub(crate) fn contains(&self, target: &Path) -> bool {
         let target = file_io::canonical_or_original(target);
         self.candidate_roots()
@@ -177,5 +210,71 @@ impl ManagedRoots {
         }
 
         roots
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn save_and_load_pid_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        save_plugin_pid(tmp.path(), "foo", 12345);
+
+        let pid_file = tmp.path().join("foo.pid");
+        assert!(pid_file.exists());
+
+        let content = std::fs::read_to_string(&pid_file).unwrap();
+        assert_eq!(content.trim(), "12345");
+    }
+
+    #[test]
+    fn remove_plugin_pid_deletes_file() {
+        let tmp = TempDir::new().unwrap();
+        save_plugin_pid(tmp.path(), "foo", 12345);
+        remove_plugin_pid(tmp.path(), "foo");
+        assert!(!tmp.path().join("foo.pid").exists());
+    }
+
+    #[test]
+    fn remove_plugin_pid_noop_when_missing() {
+        let tmp = TempDir::new().unwrap();
+        remove_plugin_pid(tmp.path(), "nonexistent");
+    }
+
+    #[test]
+    fn list_tracked_pids_returns_all_entries() {
+        let tmp = TempDir::new().unwrap();
+        save_plugin_pid(tmp.path(), "a", 111);
+        save_plugin_pid(tmp.path(), "b", 222);
+
+        let mut pids: Vec<_> = list_tracked_pids(tmp.path()).collect();
+        pids.sort_by_key(|(id, _)| id.clone());
+
+        assert_eq!(pids.len(), 2);
+        assert_eq!(pids[0], ("a".to_string(), 111));
+        assert_eq!(pids[1], ("b".to_string(), 222));
+    }
+
+    #[test]
+    fn list_tracked_pids_skips_corrupt_files() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("bad.pid"), "not-a-number").unwrap();
+        save_plugin_pid(tmp.path(), "good", 42);
+
+        let pids: Vec<_> = list_tracked_pids(tmp.path()).collect();
+        assert_eq!(pids.len(), 1);
+        assert_eq!(pids[0], ("good".to_string(), 42));
+    }
+
+    #[test]
+    fn clear_all_pids_removes_all_pid_files() {
+        let tmp = TempDir::new().unwrap();
+        save_plugin_pid(tmp.path(), "a", 1);
+        save_plugin_pid(tmp.path(), "b", 2);
+        clear_all_pids(tmp.path());
+        assert!(list_tracked_pids(tmp.path()).next().is_none());
     }
 }
