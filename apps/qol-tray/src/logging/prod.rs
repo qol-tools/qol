@@ -1,119 +1,102 @@
 use serde::Serialize;
+use std::io::Write;
 use std::sync::OnceLock;
+use tracing_appender::non_blocking::WorkerGuard;
 
 use super::rate_limiter::{CheckResult, RateLimiter};
-use super::writer::{self, LogWriter};
 
-struct ProdLogger {
-    inner: Box<dyn log::Log>,
-    writer: LogWriter,
+struct ProdState {
+    writer: std::sync::Mutex<tracing_appender::non_blocking::NonBlocking>,
+    _guard: WorkerGuard,
     limiter: RateLimiter,
     version: String,
     commit: String,
 }
 
-unsafe impl Sync for ProdLogger {}
+static STATE: OnceLock<ProdState> = OnceLock::new();
 
-static LOGGER: OnceLock<ProdLogger> = OnceLock::new();
-
-pub fn init_with_inner(inner: Box<dyn log::Log>, max_level: log::LevelFilter) {
+pub fn init() {
     let version = env!("CARGO_PKG_VERSION").to_string();
     let commit = env!("GIT_COMMIT_HASH").to_string();
     let log_dir = super::platform::log_dir();
     let suppressed_path = crate::paths::suppressed_errors_path()
         .unwrap_or_else(|_| log_dir.join("suppressed-errors.json"));
 
-    writer::rotate_old_logs(&log_dir, 7);
-
     let version_tag = format!("v{}@{}", version, commit);
     let limiter = RateLimiter::load(&suppressed_path, version_tag);
-    let file_writer = LogWriter::new(log_dir);
 
-    let logger = ProdLogger {
-        inner,
-        writer: file_writer,
+    let file_appender = tracing_appender::rolling::RollingFileAppender::builder()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix("qol-tray")
+        .filename_suffix("log")
+        .max_log_files(7)
+        .build(&log_dir)
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to create log file appender: {}", e);
+            tracing_appender::rolling::RollingFileAppender::builder()
+                .rotation(tracing_appender::rolling::Rotation::DAILY)
+                .filename_prefix("qol-tray")
+                .filename_suffix("log")
+                .max_log_files(7)
+                .build("/tmp/qol-tray/logs")
+                .expect("fallback log dir also failed")
+        });
+
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+
+    let _ = STATE.set(ProdState {
+        writer: std::sync::Mutex::new(non_blocking),
+        _guard: guard,
         limiter,
         version,
         commit,
-    };
-
-    let _ = LOGGER.set(logger);
-    let prod = LOGGER.get().unwrap();
-    log::set_logger(prod).expect("logger already initialized");
-    log::set_max_level(max_level);
+    });
 }
 
-impl log::Log for ProdLogger {
-    fn enabled(&self, metadata: &log::Metadata) -> bool {
-        self.inner.enabled(metadata)
-    }
-
-    fn log(&self, record: &log::Record) {
-        if self.inner.enabled(record.metadata()) {
-            self.inner.log(record);
-        }
-
-        if record.level() <= log::Level::Error {
-            self.capture_to_file(record);
-        }
-    }
-
-    fn flush(&self) {
-        self.inner.flush();
-    }
-}
-
-impl ProdLogger {
-    fn capture_to_file(&self, record: &log::Record) {
-        let file = record.file().unwrap_or("unknown");
-        let line = record.line().unwrap_or(0);
-        let key = format!("{}:{}:{}", record.target(), file, line);
-        let message = record.args().to_string();
-
-        let result = self.limiter.check(&key);
-        let (count, suppressed) = match result {
-            CheckResult::Rejected => return,
-            CheckResult::Allowed { count } => (count, false),
-            CheckResult::Suppressed { count } => (count, true),
-        };
-
-        let src = simplify_target(record.target());
-        let entry = LogEntry {
-            ts: now_iso(),
-            level: "error",
-            v: &self.version,
-            commit: &self.commit,
-            src: &src,
-            key: &key,
-            msg: &message,
-            count,
-            suppressed,
-            loc: &format!("{}:{}", file, line),
-        };
-        write_jsonl(&self.writer, &entry);
-
-        if suppressed {
-            save_suppressed(&self.limiter);
-        }
-
-        self.limiter
-            .update_entry_context(&key, &message, &src, &format!("{}:{}", file, line));
-    }
-}
-
-fn simplify_target(target: &str) -> String {
-    target
-        .strip_prefix("qol_tray::")
-        .unwrap_or(target)
-        .to_string()
-}
-
-pub fn log_entry(key: &str, source: &str, message: &str, file: &str, line: u32) {
-    let Some(logger) = LOGGER.get() else {
+pub fn on_error_event(target: &str, message: &str, file: &str, line: u32) {
+    let Some(state) = STATE.get() else {
         return;
     };
 
-    let result = logger.limiter.check(key);
+    let key = format!("{}:{}:{}", target, file, line);
+    let result = state.limiter.check(&key);
+    let (count, suppressed) = match result {
+        CheckResult::Rejected => return,
+        CheckResult::Allowed { count } => (count, false),
+        CheckResult::Suppressed { count } => (count, true),
+    };
+
+    let src = target.strip_prefix("qol_tray::").unwrap_or(target);
+
+    let entry = LogEntry {
+        ts: now_iso(),
+        level: "error",
+        v: &state.version,
+        commit: &state.commit,
+        src,
+        key: &key,
+        msg: message,
+        count,
+        suppressed,
+        loc: &format!("{}:{}", file, line),
+    };
+    write_jsonl(state, &entry);
+
+    if suppressed {
+        save_suppressed(&state.limiter);
+    }
+
+    state
+        .limiter
+        .update_entry_context(&key, message, src, &format!("{}:{}", file, line));
+}
+
+pub fn log_entry(key: &str, source: &str, message: &str, file: &str, line: u32) {
+    let Some(state) = STATE.get() else {
+        return;
+    };
+
+    let result = state.limiter.check(key);
     let (count, suppressed) = match result {
         CheckResult::Rejected => return,
         CheckResult::Allowed { count } => (count, false),
@@ -123,8 +106,8 @@ pub fn log_entry(key: &str, source: &str, message: &str, file: &str, line: u32) 
     let entry = LogEntry {
         ts: now_iso(),
         level: "error",
-        v: &logger.version,
-        commit: &logger.commit,
+        v: &state.version,
+        commit: &state.commit,
         src: source,
         key,
         msg: message,
@@ -132,26 +115,26 @@ pub fn log_entry(key: &str, source: &str, message: &str, file: &str, line: u32) 
         suppressed,
         loc: &format!("{}:{}", file, line),
     };
-    write_jsonl(&logger.writer, &entry);
+    write_jsonl(state, &entry);
 
     if suppressed {
-        save_suppressed(&logger.limiter);
+        save_suppressed(&state.limiter);
     }
 
-    logger
+    state
         .limiter
         .update_entry_context(key, message, source, &format!("{}:{}", file, line));
 }
 
 pub fn log_startup(info: &str) {
-    let Some(logger) = LOGGER.get() else {
+    let Some(state) = STATE.get() else {
         return;
     };
     let entry = LogEntry {
         ts: now_iso(),
         level: "startup",
-        v: &logger.version,
-        commit: &logger.commit,
+        v: &state.version,
+        commit: &state.commit,
         src: "core",
         key: "startup",
         msg: info,
@@ -159,7 +142,7 @@ pub fn log_startup(info: &str) {
         suppressed: false,
         loc: "",
     };
-    write_jsonl(&logger.writer, &entry);
+    write_jsonl(state, &entry);
 }
 
 #[derive(Serialize)]
@@ -176,12 +159,15 @@ struct LogEntry<'a> {
     loc: &'a str,
 }
 
-fn write_jsonl(writer: &LogWriter, entry: &LogEntry<'_>) {
+fn write_jsonl(state: &ProdState, entry: &LogEntry<'_>) {
     let Ok(mut json) = serde_json::to_string(entry) else {
         return;
     };
     json.push('\n');
-    writer.write(&json);
+    let Ok(mut writer) = state.writer.lock() else {
+        return;
+    };
+    let _ = writer.write_all(json.as_bytes());
 }
 
 fn now_iso() -> String {
