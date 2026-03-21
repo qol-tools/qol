@@ -10,6 +10,7 @@ pub mod hotkeys;
 pub mod installer;
 pub mod logging;
 pub mod menu;
+pub mod migration;
 pub mod paths;
 pub mod plugins;
 pub mod process_utils;
