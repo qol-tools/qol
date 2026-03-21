@@ -30,7 +30,7 @@ pub fn shared_config_dir() -> Result<PathBuf> {
     legacy_config_dir()
 }
 
-fn base_data_dir() -> Result<PathBuf> {
+pub(crate) fn base_data_dir() -> Result<PathBuf> {
     dirs::data_local_dir()
         .or_else(dirs::data_dir)
         .context("Could not determine local data directory")
