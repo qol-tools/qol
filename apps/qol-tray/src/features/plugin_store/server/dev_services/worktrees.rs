@@ -95,6 +95,10 @@ where
 }
 
 fn resolve_repo_dir(feature_dir: &Path, repo_name: Option<&str>) -> Option<std::path::PathBuf> {
+    if feature_dir.join("Cargo.toml").is_file() {
+        return Some(feature_dir.to_path_buf());
+    }
+
     if let Some(repo_name) = repo_name {
         let repo_dir = feature_dir.join(repo_name);
         if repo_dir.join("Cargo.toml").is_file() {
@@ -245,6 +249,22 @@ mod tests {
         let result = scan_with_branch_resolver(&manifest_dir, fake_branch_resolver);
 
         assert!(result.is_empty(), "result: {:?}", result);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_finds_flat_worktree_with_cargo_toml_at_root() {
+        let tmp = TempDir::new().unwrap();
+        let manifest_dir = create_manifest_dir(tmp.path(), "qol-tray");
+        let flat_wt = tmp
+            .path()
+            .join("worktrees")
+            .join("qol-tray-state-lifecycle");
+        create_git_worktree(&flat_wt);
+        let result = scan_with_branch_resolver(&manifest_dir, fake_branch_resolver);
+
+        assert_eq!(result.len(), 1, "result: {:?}", result);
+        assert_eq!(result[0].path, flat_wt.to_string_lossy());
     }
 
     #[cfg(unix)]
