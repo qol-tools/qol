@@ -21,6 +21,7 @@ mod dev_state_handlers;
 #[cfg(feature = "dev")]
 mod dev_validation;
 mod helpers;
+mod logs_handlers;
 mod meta_handlers;
 mod plugin_handlers;
 mod plugin_services;
@@ -93,7 +94,8 @@ fn schedule_post_restart_rebuild(app_state: &AppState) {
 fn api_router(app_state: AppState) -> Router {
     let api = plugin_handlers::routes()
         .merge(settings::routes())
-        .merge(meta_handlers::routes());
+        .merge(meta_handlers::routes())
+        .merge(logs_handlers::routes());
     #[cfg(feature = "dev")]
     let api = api
         .merge(dev_handlers::routes())
