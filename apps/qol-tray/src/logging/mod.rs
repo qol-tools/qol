@@ -1,11 +1,11 @@
 mod control;
+mod error_capture;
 #[cfg(feature = "dev")]
 mod filter;
 pub(crate) mod platform;
 pub mod prod;
 pub(crate) mod rate_limiter;
 pub(crate) mod relay;
-pub(crate) mod writer;
 
 pub use control::LogControl;
 
@@ -23,19 +23,47 @@ pub use filter::CoreControlsHandle;
 
 #[cfg(feature = "dev")]
 pub fn init_logger() -> CoreControlsHandle {
+    use tracing_subscriber::prelude::*;
+    use tracing_subscriber::EnvFilter;
+
     let controls = load_core_controls_from_shared_config();
     let handle = std::sync::Arc::new(std::sync::RwLock::new(controls));
-    let (inner, max_level) = filter::build(handle.clone());
-    prod::init_with_inner(inner, max_level);
+
+    prod::init();
+
+    let dev_controls = handle.clone();
+    let stderr_layer = tracing_subscriber::fmt::layer()
+        .with_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
+        .with_filter(tracing_subscriber::filter::filter_fn(move |metadata| {
+            !filter::is_suppressed(&dev_controls, metadata.target(), "")
+        }));
+
+    tracing_subscriber::registry()
+        .with(stderr_layer)
+        .with(error_capture::ErrorCaptureLayer)
+        .init();
+
+    tracing_log::LogTracer::init().ok();
+
     handle
 }
 
 #[cfg(not(feature = "dev"))]
 pub fn init_logger() {
-    let inner =
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).build();
-    let max_level = inner.filter();
-    prod::init_with_inner(Box::new(inner), max_level);
+    use tracing_subscriber::prelude::*;
+    use tracing_subscriber::EnvFilter;
+
+    prod::init();
+
+    let stderr_layer = tracing_subscriber::fmt::layer()
+        .with_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()));
+
+    tracing_subscriber::registry()
+        .with(stderr_layer)
+        .with(error_capture::ErrorCaptureLayer)
+        .init();
+
+    tracing_log::LogTracer::init().ok();
 }
 
 #[cfg(feature = "dev")]
