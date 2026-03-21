@@ -11,7 +11,9 @@ export function LogsView() {
     const [activeTab, setActiveTab] = useState('live');
     const [entries, setEntries] = useState([]);
     const [suppressed, setSuppressed] = useState({});
+    const [selectedIndex, setSelectedIndex] = useState(0);
     const intervalRef = useRef(null);
+    const contentRef = useRef(null);
 
     const fetchEntries = useCallback(async () => {
         try {
@@ -34,6 +36,10 @@ export function LogsView() {
         return () => clearInterval(intervalRef.current);
     }, [fetchEntries, fetchSuppressed]);
 
+    useEffect(() => {
+        setSelectedIndex(0);
+    }, [activeTab]);
+
     const unsuppress = useCallback(async (key) => {
         try {
             await fetch(`/api/logs/unsuppress/${encodeURIComponent(key)}`, { method: 'POST' });
@@ -41,73 +47,143 @@ export function LogsView() {
         } catch (_) {}
     }, [fetchSuppressed]);
 
+    const switchTab = useCallback((direction) => {
+        const currentIdx = TABS.findIndex(t => t.id === activeTab);
+        const next = (currentIdx + direction + TABS.length) % TABS.length;
+        setActiveTab(TABS[next].id);
+    }, [activeTab]);
+
+    const itemCount = activeTab === 'live'
+        ? entries.length
+        : Object.keys(suppressed).length;
+
+    const onKeyDown = useCallback((e) => {
+        switch (e.key) {
+            case 'ArrowLeft':
+                e.preventDefault();
+                switchTab(-1);
+                break;
+            case 'ArrowRight':
+                e.preventDefault();
+                switchTab(1);
+                break;
+            case 'ArrowUp':
+            case 'k':
+                e.preventDefault();
+                setSelectedIndex(i => Math.max(0, i - 1));
+                break;
+            case 'ArrowDown':
+            case 'j':
+                e.preventDefault();
+                setSelectedIndex(i => Math.min(itemCount - 1, i + 1));
+                break;
+            case 'Enter':
+                if (activeTab === 'suppressed') {
+                    const keys = Object.keys(suppressed);
+                    if (keys[selectedIndex]) unsuppress(keys[selectedIndex]);
+                }
+                break;
+        }
+    }, [switchTab, itemCount, activeTab, suppressed, selectedIndex, unsuppress]);
+
+    useEffect(() => {
+        const el = contentRef.current;
+        if (!el) return;
+        const selected = el.querySelector('[data-selected="true"]');
+        if (selected) selected.scrollIntoView({ block: 'nearest' });
+    }, [selectedIndex]);
+
     return html`
         <${PageHeader} title="Logs" subtitle="Production error log" />
-        <div class="logs-tabs">
-            ${TABS.map(tab => html`
+        <div class="logs-tabs" role="tablist">
+            ${TABS.map((tab, i) => html`
                 <button
                     key=${tab.id}
                     class="logs-tab ${activeTab === tab.id ? 'active' : ''}"
+                    role="tab"
+                    aria-selected=${activeTab === tab.id}
+                    tabIndex=${activeTab === tab.id ? 0 : -1}
                     onClick=${() => setActiveTab(tab.id)}
+                    onKeyDown=${(e) => {
+                        if (e.key === 'ArrowLeft') { e.preventDefault(); switchTab(-1); }
+                        if (e.key === 'ArrowRight') { e.preventDefault(); switchTab(1); }
+                    }}
                 >${tab.label}</button>
             `)}
         </div>
-        <div class="logs-content">
-            ${activeTab === 'live' && html`<${LiveLog} entries=${entries} />`}
-            ${activeTab === 'suppressed' && html`<${SuppressedList} items=${suppressed} onUnsuppress=${unsuppress} />`}
+        <div
+            class="logs-content"
+            ref=${contentRef}
+            tabIndex="0"
+            onKeyDown=${onKeyDown}
+            role="tabpanel"
+        >
+            ${activeTab === 'live' && html`<${LiveLog} entries=${entries} selectedIndex=${selectedIndex} />`}
+            ${activeTab === 'suppressed' && html`<${SuppressedList} items=${suppressed} onUnsuppress=${unsuppress} selectedIndex=${selectedIndex} />`}
         </div>
     `;
 }
 
-function LiveLog({ entries }) {
+function LiveLog({ entries, selectedIndex }) {
     const reversed = [...entries].reverse();
     if (reversed.length === 0) {
         return html`<div class="logs-empty">No log entries for today</div>`;
     }
     return html`
-        <div class="logs-entries">
-            ${reversed.map((entry, i) => html`<${LogEntryRow} key=${i} entry=${entry} />`)}
+        <div class="logs-entries" role="list">
+            ${reversed.map((entry, i) => html`<${LogEntryRow} key=${i} entry=${entry} selected=${i === selectedIndex} />`)}
         </div>
     `;
 }
 
-function LogEntryRow({ entry }) {
+function LogEntryRow({ entry, selected }) {
     const time = entry.ts ? entry.ts.split('T')[1] || entry.ts : '';
     const levelClass = entry.level === 'startup' ? 'level-startup' : entry.suppressed ? 'level-suppressed' : 'level-error';
+    const loc = entry.loc && entry.loc !== 'unknown:0' && entry.loc !== ':0' ? entry.loc : '';
     return html`
-        <div class="log-entry ${levelClass}">
+        <div class="log-entry ${levelClass} ${selected ? 'selected' : ''}" role="listitem" data-selected=${selected}>
             <span class="log-time">${time}</span>
             <span class="log-level">${entry.level?.toUpperCase()}</span>
             <span class="log-src">${entry.src}</span>
             <span class="log-msg">${entry.msg}</span>
             ${entry.count > 1 && html`<span class="log-count">${'\u00d7'}${entry.count}</span>`}
             ${entry.suppressed && html`<span class="log-badge-suppressed">suppressed</span>`}
-            ${entry.loc && html`<span class="log-loc">${entry.loc}</span>`}
+            ${loc && html`<span class="log-loc">${loc}</span>`}
         </div>
     `;
 }
 
-function SuppressedList({ items, onUnsuppress }) {
+function SuppressedList({ items, onUnsuppress, selectedIndex }) {
     const keys = Object.keys(items);
     if (keys.length === 0) {
         return html`<div class="logs-empty">No suppressed errors</div>`;
     }
     return html`
-        <div class="logs-suppressed-list">
-            ${keys.map(key => html`
-                <${SuppressedRow} key=${key} sigKey=${key} entry=${items[key]} onUnsuppress=${onUnsuppress} />
+        <div class="logs-suppressed-list" role="list">
+            ${keys.map((key, i) => html`
+                <${SuppressedRow}
+                    key=${key}
+                    sigKey=${key}
+                    entry=${items[key]}
+                    onUnsuppress=${onUnsuppress}
+                    selected=${i === selectedIndex}
+                />
             `)}
         </div>
     `;
 }
 
-function SuppressedRow({ sigKey, entry, onUnsuppress }) {
+function SuppressedRow({ sigKey, entry, onUnsuppress, selected }) {
     return html`
-        <div class="suppressed-entry">
+        <div class="suppressed-entry ${selected ? 'selected' : ''}" role="listitem" data-selected=${selected}>
             <div class="suppressed-header">
                 <span class="suppressed-src">${entry.source || entry.src || '?'}</span>
                 <span class="suppressed-count">${'\u00d7'}${entry.count}</span>
-                <button class="suppressed-unsuppress" onClick=${() => onUnsuppress(sigKey)}>Unsuppress</button>
+                <button
+                    class="suppressed-unsuppress"
+                    tabIndex=${selected ? 0 : -1}
+                    onClick=${() => onUnsuppress(sigKey)}
+                >Unsuppress</button>
             </div>
             <div class="suppressed-msg">${entry.last_message || ''}</div>
             <div class="suppressed-meta">
