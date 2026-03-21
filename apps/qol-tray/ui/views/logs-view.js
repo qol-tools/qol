@@ -1,5 +1,6 @@
 import { html } from '../lib/html.js';
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
+import { useRegisterViewKeyboard } from '../components/app/view-keyboard-context.js';
 import { PageHeader } from '../components/PageHeader.js';
 
 const TABS = [
@@ -39,12 +40,6 @@ export function LogsView({ active }) {
     }, [active, fetchEntries, fetchSuppressed]);
 
     useEffect(() => {
-        if (active && contentRef.current) {
-            contentRef.current.focus();
-        }
-    }, [active]);
-
-    useEffect(() => {
         setSelectedIndex(0);
     }, [activeTab]);
 
@@ -65,34 +60,37 @@ export function LogsView({ active }) {
         ? entries.length
         : Object.keys(suppressed).length;
 
-    const onKeyDown = useCallback((e) => {
-        switch (e.key) {
+    const handleKey = useCallback((event) => {
+        switch (event.key) {
             case 'ArrowLeft':
-                e.preventDefault();
+                event.preventDefault();
                 switchTab(-1);
                 break;
             case 'ArrowRight':
-                e.preventDefault();
+                event.preventDefault();
                 switchTab(1);
                 break;
             case 'ArrowUp':
             case 'k':
-                e.preventDefault();
+                event.preventDefault();
                 setSelectedIndex(i => Math.max(0, i - 1));
                 break;
             case 'ArrowDown':
             case 'j':
-                e.preventDefault();
+                event.preventDefault();
                 setSelectedIndex(i => Math.min(itemCount - 1, i + 1));
                 break;
             case 'Enter':
                 if (activeTab === 'suppressed') {
+                    event.preventDefault();
                     const keys = Object.keys(suppressed);
                     if (keys[selectedIndex]) unsuppress(keys[selectedIndex]);
                 }
                 break;
         }
     }, [switchTab, itemCount, activeTab, suppressed, selectedIndex, unsuppress]);
+
+    useRegisterViewKeyboard('logs', handleKey);
 
     useEffect(() => {
         const el = contentRef.current;
@@ -109,23 +107,13 @@ export function LogsView({ active }) {
                     key=${tab.id}
                     class="logs-tab ${activeTab === tab.id ? 'active' : ''}"
                     role="tab"
+                    tabIndex="-1"
                     aria-selected=${activeTab === tab.id}
-                    tabIndex=${activeTab === tab.id ? 0 : -1}
                     onClick=${() => setActiveTab(tab.id)}
-                    onKeyDown=${(e) => {
-                        if (e.key === 'ArrowLeft') { e.preventDefault(); switchTab(-1); }
-                        if (e.key === 'ArrowRight') { e.preventDefault(); switchTab(1); }
-                    }}
                 >${tab.label}</button>
             `)}
         </div>
-        <div
-            class="logs-content"
-            ref=${contentRef}
-            tabIndex="0"
-            onKeyDown=${onKeyDown}
-            role="tabpanel"
-        >
+        <div class="logs-content" ref=${contentRef} role="tabpanel">
             ${activeTab === 'live' && html`<${LiveLog} entries=${entries} selectedIndex=${selectedIndex} />`}
             ${activeTab === 'suppressed' && html`<${SuppressedList} items=${suppressed} onUnsuppress=${unsuppress} selectedIndex=${selectedIndex} />`}
         </div>
@@ -189,7 +177,7 @@ function SuppressedRow({ sigKey, entry, onUnsuppress, selected }) {
                 <span class="suppressed-count">${'\u00d7'}${entry.count}</span>
                 <button
                     class="suppressed-unsuppress"
-                    tabIndex=${selected ? 0 : -1}
+                    tabIndex="-1"
                     onClick=${() => onUnsuppress(sigKey)}
                 >Unsuppress</button>
             </div>
