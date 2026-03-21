@@ -18,18 +18,31 @@ pub(super) fn spawn_daemon(plugin: &Plugin, daemon_config: &DaemonConfig) -> Res
     #[cfg(feature = "dev")]
     let relay_patterns = configure_log_relay(plugin, &mut command);
     #[cfg(not(feature = "dev"))]
-    let relay_patterns: Vec<String> = {
-        command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
-        Vec::new()
-    };
-    let mut child = command.spawn()?;
-    crate::logging::relay::attach(
-        plugin.id.as_str(),
-        child.stdout.take(),
-        child.stderr.take(),
-        relay_patterns,
-    );
-    Ok(child)
+    {
+        command.stdout(Stdio::inherit());
+        command.stderr(Stdio::piped());
+        let mut child = command.spawn()?;
+        let version = plugin.manifest.plugin.version.clone();
+        let commit = plugin.manifest.build.commit.clone();
+        crate::logging::relay::attach_with_prod_log(
+            plugin.id.as_str(),
+            &version,
+            commit.as_deref(),
+            child.stderr.take(),
+        );
+        return Ok(child);
+    }
+    #[cfg(feature = "dev")]
+    {
+        let mut child = command.spawn()?;
+        crate::logging::relay::attach(
+            plugin.id.as_str(),
+            child.stdout.take(),
+            child.stderr.take(),
+            relay_patterns,
+        );
+        Ok(child)
+    }
 }
 
 fn daemon_path(plugin: &Plugin, daemon_config: &DaemonConfig) -> Result<PathBuf> {
