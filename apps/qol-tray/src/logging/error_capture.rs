@@ -1,4 +1,5 @@
 use tracing::Subscriber;
+use tracing_subscriber::layer::Filter;
 use tracing_subscriber::Layer;
 
 pub(crate) struct ErrorCaptureLayer;
@@ -9,10 +10,6 @@ impl<S: Subscriber> Layer<S> for ErrorCaptureLayer {
         event: &tracing::Event<'_>,
         _ctx: tracing_subscriber::layer::Context<'_, S>,
     ) {
-        if *event.metadata().level() != tracing::Level::ERROR {
-            return;
-        }
-
         let mut visitor = MessageVisitor::default();
         event.record(&mut visitor);
 
@@ -21,6 +18,18 @@ impl<S: Subscriber> Layer<S> for ErrorCaptureLayer {
         let target = event.metadata().target();
 
         super::prod::on_error_event(target, &visitor.message, file, line);
+    }
+}
+
+pub(crate) struct ErrorOnlyFilter;
+
+impl<S: Subscriber> Filter<S> for ErrorOnlyFilter {
+    fn enabled(
+        &self,
+        metadata: &tracing::Metadata<'_>,
+        _cx: &tracing_subscriber::layer::Context<'_, S>,
+    ) -> bool {
+        *metadata.level() <= tracing::Level::ERROR
     }
 }
 
