@@ -31,6 +31,16 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    if let Err(e) = qol_tray::paths::init_runtime_dirs() {
+        log::error!("Failed to initialize runtime directories: {}", e);
+    }
+
+    if let Ok(config_dir) = qol_tray::paths::shared_config_dir() {
+        if let Err(e) = qol_tray::migration::run_migration(&config_dir) {
+            log::error!("Migration failed: {}", e);
+        }
+    }
+
     let startup_doctor = qol_tray::doctor::auto_fix_startup();
     println!(
         "[doctor] startup summary: attempted={}, applied={}, failures={}, ok={}, warn={}, error={}",
