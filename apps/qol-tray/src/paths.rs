@@ -114,6 +114,10 @@ pub fn github_token_path() -> Result<PathBuf> {
     shared_config_dir().map(|p| p.join(".github-token"))
 }
 
+pub fn suppressed_errors_path() -> Result<PathBuf> {
+    shared_config_dir().map(|p| p.join("suppressed-errors.json"))
+}
+
 pub fn plugin_cache_path() -> Result<PathBuf> {
     Ok(runtime_cache_dir().join("plugin-cache.json"))
 }
