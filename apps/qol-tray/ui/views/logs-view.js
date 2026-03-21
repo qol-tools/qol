@@ -13,6 +13,17 @@ const TABS = [
 
 const POLL_INTERVAL = 5000;
 
+const LEVEL_CONFIG = {
+    startup: { label: 'STARTUP', cls: 'level-startup' },
+    error: { label: 'ERROR', cls: 'level-error' },
+};
+
+function levelInfo(entry) {
+    if (entry.level === 'startup') return LEVEL_CONFIG.startup;
+    if (entry.suppressed) return { label: 'SUPPRESSED', cls: 'level-suppressed' };
+    return LEVEL_CONFIG[entry.level] || { label: (entry.level || '').toUpperCase(), cls: 'level-error' };
+}
+
 export function LogsView({ active }) {
     const [activeTab, setActiveTab] = useState('live');
     const [entries, setEntries] = useState([]);
@@ -128,8 +139,13 @@ export function LogsView({ active }) {
         if (selected) selected.scrollIntoView({ block: 'nearest' });
     }, [selectedIndex]);
 
+    const tabCounts = {
+        live: filteredEntries.length,
+        suppressed: filteredSuppressedKeys.length,
+    };
+
     return html`
-        <${PageHeader} title="Logs" subtitle="Production error log" />
+        <${PageHeader} title="Logs" subtitle="Error log and suppression management" />
         <div class="logs-tabs" role="tablist">
             ${TABS.map(tab => html`
                 <button
@@ -139,7 +155,10 @@ export function LogsView({ active }) {
                     tabIndex="-1"
                     aria-selected=${activeTab === tab.id}
                     onClick=${() => setActiveTab(tab.id)}
-                >${tab.label}</button>
+                >
+                    ${tab.label}
+                    ${tabCounts[tab.id] > 0 && html`<span class="logs-tab-count">${tabCounts[tab.id]}</span>`}
+                </button>
             `)}
         </div>
         <div class="logs-content" ref=${contentRef} role="tabpanel">
@@ -157,7 +176,7 @@ export function LogsView({ active }) {
 function LiveLog({ entries, selectedIndex }) {
     const reversed = [...entries].reverse();
     if (reversed.length === 0) {
-        return html`<div class="logs-empty">No log entries for today</div>`;
+        return html`<${EmptyState} message="No log entries for today" hint="Errors will appear here when they occur" />`;
     }
     return html`
         <div class="logs-entries" role="list">
@@ -168,24 +187,23 @@ function LiveLog({ entries, selectedIndex }) {
 
 function LogEntryRow({ entry, selected }) {
     const time = entry.ts ? entry.ts.split('T')[1] || entry.ts : '';
-    const levelClass = entry.level === 'startup' ? 'level-startup' : entry.suppressed ? 'level-suppressed' : 'level-error';
+    const { label, cls } = levelInfo(entry);
     const loc = entry.loc && entry.loc !== 'unknown:0' && entry.loc !== ':0' ? entry.loc : '';
     return html`
-        <div class="log-entry ${levelClass} ${selected ? 'selected' : ''}" role="listitem" data-selected=${selected}>
+        <div class="log-entry ${selected ? 'selected' : ''}" role="listitem" data-selected=${selected}>
             <span class="log-time">${time}</span>
-            <span class="log-level">${entry.level?.toUpperCase()}</span>
-            <span class="log-src">${entry.src}</span>
+            <span class="log-level-badge ${cls}">${label}</span>
+            <span class="log-src">${entry.src || ''}</span>
             <span class="log-msg">${entry.msg}</span>
-            ${entry.count > 1 && html`<span class="log-count">${'\u00d7'}${entry.count}</span>`}
-            ${entry.suppressed && html`<span class="log-badge-suppressed">suppressed</span>`}
-            ${loc && html`<span class="log-loc">${loc}</span>`}
+            <span class="log-count">${entry.count > 1 ? `\u00d7${entry.count}` : ''}</span>
+            <span class="log-loc">${loc}</span>
         </div>
     `;
 }
 
 function SuppressedList({ keys, items, onUnsuppress, selectedIndex }) {
     if (keys.length === 0) {
-        return html`<div class="logs-empty">No suppressed errors</div>`;
+        return html`<${EmptyState} message="No suppressed errors" hint="Errors that repeat ${'\u2265'}5 times are auto-suppressed" />`;
     }
     return html`
         <div class="logs-suppressed-list" role="list">
@@ -206,18 +224,49 @@ function SuppressedRow({ sigKey, entry, onUnsuppress, selected }) {
     return html`
         <div class="suppressed-entry ${selected ? 'selected' : ''}" role="listitem" data-selected=${selected}>
             <div class="suppressed-header">
-                <span class="suppressed-src">${entry.source || entry.src || '?'}</span>
-                <span class="suppressed-count">${'\u00d7'}${entry.count}</span>
+                <span class="suppressed-key">${sigKey}</span>
+                <span class="suppressed-count-badge">${'\u00d7'}${entry.count}</span>
                 <button
-                    class="suppressed-unsuppress"
+                    class="btn btn-sm suppressed-unsuppress"
                     tabIndex="-1"
                     onClick=${() => onUnsuppress(sigKey)}
                 >Unsuppress</button>
             </div>
-            <div class="suppressed-msg">${entry.last_message || ''}</div>
+            ${entry.last_message && html`<div class="suppressed-msg">${entry.last_message}</div>`}
             <div class="suppressed-meta">
-                First: ${entry.first_seen || '?'} · Last: ${entry.last_seen || '?'} · ${entry.version || ''}
+                <span class="suppressed-meta-item">
+                    <span class="suppressed-meta-label">First</span>
+                    <span>${formatTimestamp(entry.first_seen)}</span>
+                </span>
+                <span class="suppressed-meta-sep">${'\u00b7'}</span>
+                <span class="suppressed-meta-item">
+                    <span class="suppressed-meta-label">Last</span>
+                    <span>${formatTimestamp(entry.last_seen)}</span>
+                </span>
+                ${entry.version && html`
+                    <span class="suppressed-meta-sep">${'\u00b7'}</span>
+                    <span class="suppressed-version">${entry.version}</span>
+                `}
             </div>
         </div>
     `;
+}
+
+function EmptyState({ message, hint }) {
+    return html`
+        <div class="logs-empty-state">
+            <div class="logs-empty-icon">
+                <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M9 12h6M12 9v6M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
+                </svg>
+            </div>
+            <div class="logs-empty-message">${message}</div>
+            ${hint && html`<div class="logs-empty-hint">${hint}</div>`}
+        </div>
+    `;
+}
+
+function formatTimestamp(ts) {
+    if (!ts) return '?';
+    return ts.replace('T', ' ');
 }
