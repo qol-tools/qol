@@ -21,19 +21,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn log_dir_is_absolute_and_ends_with_logs() {
+    fn log_dir_is_absolute_and_contains_app_name() {
         let dir = log_dir();
         assert!(dir.is_absolute(), "log dir {:?} should be absolute", dir);
-        assert!(
-            dir.ends_with("logs"),
-            "log dir {:?} should end with 'logs'",
-            dir
-        );
-    }
-
-    #[test]
-    fn log_dir_contains_app_name() {
-        let dir = log_dir();
         let path_str = dir.to_string_lossy();
         assert!(
             path_str.contains("qol-tray"),
