@@ -125,6 +125,14 @@ impl RateLimiter {
         }
     }
 
+    pub(crate) fn unsuppress(&self, key: &str) {
+        let mut state = match self.state.lock() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        state.remove(key);
+    }
+
     pub(crate) fn save(&self, path: &Path) {
         let state = match self.state.lock() {
             Ok(s) => s,
@@ -230,6 +238,49 @@ mod tests {
 
         let rl2 = RateLimiter::load(&path, "1.0.0".to_string());
         assert!(rl2.check("err.key").is_rejected());
+    }
+
+    #[test]
+    fn unsuppress_allows_key_again() {
+        let rl = limiter("1.0.0");
+        for _ in 0..6 {
+            rl.check("err.key");
+        }
+        assert!(rl.check("err.key").is_rejected());
+
+        rl.unsuppress("err.key");
+        assert!(
+            rl.check("err.key").is_allowed(),
+            "unsuppressed key should be allowed"
+        );
+    }
+
+    #[test]
+    fn unsuppress_persists_removal_to_disk() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("suppressed.json");
+
+        let rl = limiter("1.0.0");
+        for _ in 0..5 {
+            rl.check("err.key");
+        }
+        for _ in 0..5 {
+            rl.check("other.key");
+        }
+        rl.save(&path);
+
+        rl.unsuppress("err.key");
+        rl.save(&path);
+
+        let rl2 = RateLimiter::load(&path, "1.0.0".to_string());
+        assert!(
+            rl2.check("err.key").is_allowed(),
+            "removed key should be fresh"
+        );
+        assert!(
+            rl2.check("other.key").is_rejected(),
+            "other key should still be suppressed"
+        );
     }
 
     #[test]

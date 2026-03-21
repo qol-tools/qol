@@ -32,8 +32,10 @@ fn canonicalize_stale_worktree_paths(
 }
 
 pub fn set_active_worktree_branch(config_dir: &Path, branch: Option<&str>) -> Result<(), String> {
-    let path = config_dir.join("active-worktree.txt");
+    let path = config_dir.join("dev/active-worktree.txt");
     if let Some(branch) = branch {
+        std::fs::create_dir_all(config_dir.join("dev"))
+            .map_err(|e| format!("Failed to create dev directory: {}", e))?;
         return std::fs::write(&path, branch.trim()).map_err(|e| format!("Failed to write: {}", e));
     }
 
@@ -42,7 +44,7 @@ pub fn set_active_worktree_branch(config_dir: &Path, branch: Option<&str>) -> Re
 }
 
 pub fn get_active_worktree_branch(config_dir: &Path) -> Option<String> {
-    let path = config_dir.join("active-worktree.txt");
+    let path = config_dir.join("dev/active-worktree.txt");
     std::fs::read_to_string(&path)
         .ok()
         .map(|s| s.trim().to_string())

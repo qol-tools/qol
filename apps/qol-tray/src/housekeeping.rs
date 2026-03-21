@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::path::Path;
 
-pub fn run_migration(config_dir: &Path) -> Result<()> {
+pub fn run_startup_cleanup(config_dir: &Path) -> Result<()> {
     migrate_dev_files(config_dir);
     clean_legacy_ephemeral(config_dir);
     clean_stale_staging(config_dir);
@@ -17,8 +17,14 @@ fn migrate_dev_files(config_dir: &Path) {
         ("dev-plugin-log-controls.json", "plugin-log-controls.json"),
     ];
 
+    let extra = [
+        ("dev.json", "config.json"),
+        ("active-worktree.txt", "active-worktree.txt"),
+    ];
+
     let any_exists = migrations
         .iter()
+        .chain(extra.iter())
         .any(|(old, _)| config_dir.join(old).exists());
 
     if !any_exists {
@@ -27,7 +33,7 @@ fn migrate_dev_files(config_dir: &Path) {
 
     let _ = std::fs::create_dir_all(&dev_dir);
 
-    for (old_name, new_name) in migrations {
+    for (old_name, new_name) in migrations.iter().chain(extra.iter()) {
         let old = config_dir.join(old_name);
         let new = dev_dir.join(new_name);
         if old.exists() && !new.exists() {
@@ -75,7 +81,7 @@ mod tests {
         std::fs::write(cfg.join("dev-links.json"), "{}").unwrap();
         std::fs::write(cfg.join("dev-build-fingerprints.json"), "{}").unwrap();
 
-        run_migration(cfg).unwrap();
+        run_startup_cleanup(cfg).unwrap();
 
         assert!(!cfg.join("dev-links.json").exists());
         assert!(cfg.join("dev/links.json").exists());
@@ -91,7 +97,7 @@ mod tests {
         std::fs::write(cfg.join("dev-links.json"), r#"{"old": true}"#).unwrap();
         std::fs::write(cfg.join("dev/links.json"), r#"{"new": true}"#).unwrap();
 
-        run_migration(cfg).unwrap();
+        run_startup_cleanup(cfg).unwrap();
 
         let content = std::fs::read_to_string(cfg.join("dev/links.json")).unwrap();
         assert!(content.contains("new"), "should not overwrite existing");
@@ -103,8 +109,8 @@ mod tests {
         let cfg = tmp.path();
         std::fs::write(cfg.join("dev-links.json"), "{}").unwrap();
 
-        run_migration(cfg).unwrap();
-        run_migration(cfg).unwrap();
+        run_startup_cleanup(cfg).unwrap();
+        run_startup_cleanup(cfg).unwrap();
 
         assert!(cfg.join("dev/links.json").exists());
     }
@@ -116,7 +122,7 @@ mod tests {
         std::fs::write(cfg.join(".daemon-pids"), "123").unwrap();
         std::fs::write(cfg.join(".plugin-cache.json"), "{}").unwrap();
 
-        run_migration(cfg).unwrap();
+        run_startup_cleanup(cfg).unwrap();
 
         assert!(!cfg.join(".daemon-pids").exists());
         assert!(!cfg.join(".plugin-cache.json").exists());
@@ -134,12 +140,30 @@ mod tests {
         std::fs::create_dir_all(plugins.join(".baz.backup.111.222")).unwrap();
         std::fs::create_dir_all(plugins.join("real-plugin")).unwrap();
 
-        run_migration(cfg).unwrap();
+        run_startup_cleanup(cfg).unwrap();
 
         assert!(!plugins.join(".foo.installing.123.456").exists());
         assert!(!plugins.join(".bar.updating.789.012").exists());
         assert!(!plugins.join(".baz.backup.111.222").exists());
         assert!(plugins.join("real-plugin").exists());
+    }
+
+    #[test]
+    fn migrate_dev_json_and_active_worktree() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = tmp.path();
+        std::fs::write(cfg.join("dev.json"), r#"{"search_paths":[]}"#).unwrap();
+        std::fs::write(cfg.join("active-worktree.txt"), "feature-x").unwrap();
+
+        run_startup_cleanup(cfg).unwrap();
+
+        assert!(!cfg.join("dev.json").exists());
+        assert!(cfg.join("dev/config.json").exists());
+        assert!(!cfg.join("active-worktree.txt").exists());
+        assert!(cfg.join("dev/active-worktree.txt").exists());
+
+        let content = std::fs::read_to_string(cfg.join("dev/active-worktree.txt")).unwrap();
+        assert_eq!(content, "feature-x");
     }
 
     #[test]

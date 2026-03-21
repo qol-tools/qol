@@ -132,7 +132,7 @@ pub fn task_runner_config_path() -> Result<PathBuf> {
 
 #[cfg(feature = "dev")]
 pub fn dev_config_path() -> Result<PathBuf> {
-    shared_config_dir().map(|p| p.join("dev.json"))
+    shared_config_dir().map(|p| p.join("dev/config.json"))
 }
 
 const RUNTIME_DIR: &str = "/tmp/qol-tray";

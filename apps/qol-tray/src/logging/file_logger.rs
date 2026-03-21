@@ -5,7 +5,7 @@ use tracing_appender::non_blocking::WorkerGuard;
 
 use super::rate_limiter::{CheckResult, RateLimiter};
 
-struct ProdState {
+struct FileLoggerState {
     writer: std::sync::Mutex<tracing_appender::non_blocking::NonBlocking>,
     _guard: WorkerGuard,
     limiter: RateLimiter,
@@ -13,7 +13,7 @@ struct ProdState {
     commit: String,
 }
 
-static STATE: OnceLock<ProdState> = OnceLock::new();
+static STATE: OnceLock<FileLoggerState> = OnceLock::new();
 
 pub fn init() {
     let version = env!("CARGO_PKG_VERSION").to_string();
@@ -44,7 +44,7 @@ pub fn init() {
 
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
-    let _ = STATE.set(ProdState {
+    let _ = STATE.set(FileLoggerState {
         writer: std::sync::Mutex::new(non_blocking),
         _guard: guard,
         limiter,
@@ -159,7 +159,7 @@ struct LogEntry<'a> {
     loc: &'a str,
 }
 
-fn write_jsonl(state: &ProdState, entry: &LogEntry<'_>) {
+fn write_jsonl(state: &FileLoggerState, entry: &LogEntry<'_>) {
     let Ok(mut json) = serde_json::to_string(entry) else {
         return;
     };
@@ -174,6 +174,14 @@ fn now_iso() -> String {
     chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string()
 }
 
+pub fn unsuppress_key(key: &str) {
+    let Some(state) = STATE.get() else {
+        return;
+    };
+    state.limiter.unsuppress(key);
+    save_suppressed(&state.limiter);
+}
+
 fn save_suppressed(limiter: &RateLimiter) {
     if let Ok(path) = crate::paths::suppressed_errors_path() {
         limiter.save(&path);
@@ -183,7 +191,7 @@ fn save_suppressed(limiter: &RateLimiter) {
 #[macro_export]
 macro_rules! log_error {
     ($key:expr, source = $source:expr, $($arg:tt)+) => {
-        $crate::logging::prod::log_entry(
+        $crate::logging::file_logger::log_entry(
             $key,
             &$source,
             &format!($($arg)+),
@@ -192,7 +200,7 @@ macro_rules! log_error {
         )
     };
     ($key:expr, $($arg:tt)+) => {
-        $crate::logging::prod::log_entry(
+        $crate::logging::file_logger::log_entry(
             $key,
             "core",
             &format!($($arg)+),

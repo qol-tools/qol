@@ -5,7 +5,6 @@ use axum::{
     Json, Router,
 };
 use serde::Deserialize;
-use std::collections::HashMap;
 
 use super::types::AppState;
 
@@ -60,30 +59,9 @@ async fn suppressed() -> Result<Json<serde_json::Value>, StatusCode> {
     Ok(Json(value))
 }
 
-async fn unsuppress(Path(key): Path<String>) -> Result<StatusCode, StatusCode> {
-    let path =
-        crate::paths::suppressed_errors_path().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(StatusCode::OK),
-        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
-    };
-
-    let mut map: HashMap<String, serde_json::Value> =
-        serde_json::from_str(&content).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    map.remove(&key);
-
-    if map.is_empty() {
-        let _ = std::fs::remove_file(&path);
-    } else {
-        let updated =
-            serde_json::to_string_pretty(&map).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        std::fs::write(&path, updated).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
-
-    Ok(StatusCode::OK)
+async fn unsuppress(Path(key): Path<String>) -> StatusCode {
+    crate::logging::file_logger::unsuppress_key(&key);
+    StatusCode::OK
 }
 
 fn today_str() -> String {
