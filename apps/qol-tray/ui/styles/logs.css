@@ -51,6 +51,9 @@
 .log-entry.level-error { border-left: 3px solid rgba(var(--danger-rgb), 0.6); }
 .log-entry.level-startup { border-left: 3px solid rgba(var(--accent-rgb), 0.6); }
 .log-entry.level-suppressed { opacity: 0.5; border-left: 3px solid rgba(var(--danger-rgb), 0.3); }
+.log-entry.selected { background: var(--bg-selected); border-color: rgba(var(--accent-rgb), 0.4); }
+
+.logs-content:focus { outline: none; }
 
 .log-time { color: var(--text-muted); white-space: nowrap; min-width: 60px; }
 .log-level { color: var(--text-muted); min-width: 60px; font-weight: var(--fw-semibold); text-transform: uppercase; font-size: var(--fs-caption); }
@@ -86,6 +89,7 @@
     border-radius: var(--radius-md);
     border-left: 3px solid rgba(var(--danger-rgb), 0.4);
 }
+.suppressed-entry.selected { background: var(--bg-selected); border-color: rgba(var(--accent-rgb), 0.4); }
 
 .suppressed-header {
     display: flex;
