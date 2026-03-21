@@ -15,6 +15,14 @@ pub struct PluginManifest {
     pub runtime: Option<RuntimeConfig>,
     #[serde(default)]
     pub capabilities: Capabilities,
+    #[serde(default)]
+    pub build: BuildInfo,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct BuildInfo {
+    #[serde(default)]
+    pub commit: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -143,7 +143,9 @@ impl PluginMetadata {
 mod tests {
     use super::*;
     use crate::features::plugin_store::github::cache::CachedPlugin;
-    use crate::plugins::manifest::{Capabilities, MenuConfig, PluginInfo, PluginManifest};
+    use crate::plugins::manifest::{
+        BuildInfo, Capabilities, MenuConfig, PluginInfo, PluginManifest,
+    };
 
     fn make_repo(name: &str) -> GitHubRepo {
         GitHubRepo {
@@ -171,6 +173,7 @@ mod tests {
             dependencies: None,
             runtime: None,
             capabilities: Capabilities::default(),
+            build: BuildInfo::default(),
         }
     }
 
