@@ -5,15 +5,18 @@ use super::rate_limiter::{CheckResult, RateLimiter};
 use super::writer::{self, LogWriter};
 
 struct ProdLogger {
+    inner: Box<dyn log::Log>,
     writer: LogWriter,
     limiter: RateLimiter,
     version: String,
     commit: String,
 }
 
+unsafe impl Sync for ProdLogger {}
+
 static LOGGER: OnceLock<ProdLogger> = OnceLock::new();
 
-pub fn init() {
+pub fn init_with_inner(inner: Box<dyn log::Log>, max_level: log::LevelFilter) {
     let version = env!("CARGO_PKG_VERSION").to_string();
     let commit = env!("GIT_COMMIT_HASH").to_string();
     let log_dir = super::platform::log_dir();
@@ -24,14 +27,85 @@ pub fn init() {
 
     let version_tag = format!("v{}@{}", version, commit);
     let limiter = RateLimiter::load(&suppressed_path, version_tag);
-    let writer = LogWriter::new(log_dir);
+    let file_writer = LogWriter::new(log_dir);
 
-    let _ = LOGGER.set(ProdLogger {
-        writer,
+    let logger = ProdLogger {
+        inner,
+        writer: file_writer,
         limiter,
         version,
         commit,
-    });
+    };
+
+    let _ = LOGGER.set(logger);
+    let prod = LOGGER.get().unwrap();
+    log::set_logger(prod).expect("logger already initialized");
+    log::set_max_level(max_level);
+}
+
+impl log::Log for ProdLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        self.inner.enabled(metadata)
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.inner.enabled(record.metadata()) {
+            self.inner.log(record);
+        }
+
+        if record.level() <= log::Level::Error {
+            self.capture_to_file(record);
+        }
+    }
+
+    fn flush(&self) {
+        self.inner.flush();
+    }
+}
+
+impl ProdLogger {
+    fn capture_to_file(&self, record: &log::Record) {
+        let file = record.file().unwrap_or("unknown");
+        let line = record.line().unwrap_or(0);
+        let key = format!("{}:{}:{}", record.target(), file, line);
+        let message = record.args().to_string();
+
+        let result = self.limiter.check(&key);
+        let (count, suppressed) = match result {
+            CheckResult::Rejected => return,
+            CheckResult::Allowed { count } => (count, false),
+            CheckResult::Suppressed { count } => (count, true),
+        };
+
+        let src = simplify_target(record.target());
+        let entry = LogEntry {
+            ts: now_iso(),
+            level: "error",
+            v: &self.version,
+            commit: &self.commit,
+            src: &src,
+            key: &key,
+            msg: &message,
+            count,
+            suppressed,
+            loc: &format!("{}:{}", file, line),
+        };
+        write_jsonl(&self.writer, &entry);
+
+        if suppressed {
+            save_suppressed(&self.limiter);
+        }
+
+        self.limiter
+            .update_entry_context(&key, &message, &src, &format!("{}:{}", file, line));
+    }
+}
+
+fn simplify_target(target: &str) -> String {
+    target
+        .strip_prefix("qol_tray::")
+        .unwrap_or(target)
+        .to_string()
 }
 
 pub fn log_entry(key: &str, source: &str, message: &str, file: &str, line: u32) {

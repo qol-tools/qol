@@ -80,11 +80,10 @@ impl FilterableLogger {
     }
 }
 
-pub(super) fn init(controls: CoreControlsHandle) {
+pub(super) fn build(controls: CoreControlsHandle) -> (Box<dyn log::Log>, log::LevelFilter) {
     let inner =
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).build();
     let max_level = inner.filter();
     let logger = FilterableLogger { inner, controls };
-    log::set_boxed_logger(Box::new(logger)).expect("Logger already initialized");
-    log::set_max_level(max_level);
+    (Box::new(logger), max_level)
 }
