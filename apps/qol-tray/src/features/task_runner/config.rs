@@ -90,7 +90,8 @@ fn serialize_config(new_config: &TaskRunnerConfig) -> Result<String, String> {
 }
 
 fn write_config(path: &Path, content: &str) -> Result<(), String> {
-    std::fs::write(path, content).map_err(|error| format!("Failed to write config: {error}"))
+    crate::file_io::atomic_write(path, content.as_bytes())
+        .map_err(|error| format!("Failed to write config: {error}"))
 }
 
 pub(super) async fn replace_config(state: &TaskRunnerState, new_config: TaskRunnerConfig) {

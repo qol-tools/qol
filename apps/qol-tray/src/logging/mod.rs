@@ -1,9 +1,9 @@
 mod control;
 mod error_capture;
+pub mod file_logger;
 #[cfg(feature = "dev")]
 mod filter;
 pub(crate) mod platform;
-pub mod prod;
 pub(crate) mod rate_limiter;
 pub(crate) mod relay;
 
@@ -29,7 +29,7 @@ pub fn init_logger() -> CoreControlsHandle {
     let controls = load_core_controls_from_shared_config();
     let handle = std::sync::Arc::new(std::sync::RwLock::new(controls));
 
-    prod::init();
+    file_logger::init();
 
     let dev_controls = handle.clone();
     let stderr_layer = tracing_subscriber::fmt::layer()
@@ -53,7 +53,7 @@ pub fn init_logger() {
     use tracing_subscriber::prelude::*;
     use tracing_subscriber::EnvFilter;
 
-    prod::init();
+    file_logger::init();
 
     let stderr_layer = tracing_subscriber::fmt::layer()
         .with_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()));

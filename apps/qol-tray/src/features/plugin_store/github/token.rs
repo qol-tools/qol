@@ -70,7 +70,7 @@ pub(crate) fn store_token(token: &str) -> Result<()> {
         anyhow::bail!("Could not determine token path");
     };
     ensure_token_dir(&path)?;
-    std::fs::write(&path, token.trim())?;
+    crate::file_io::atomic_write(&path, token.trim().as_bytes())?;
     log::info!("Stored GitHub token to {:?}", path);
     Ok(())
 }

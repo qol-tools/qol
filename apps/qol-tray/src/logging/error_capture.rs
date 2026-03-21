@@ -21,7 +21,7 @@ impl<S: Subscriber> Layer<S> for ErrorCaptureLayer {
         let line = visitor.log_line.or(event.metadata().line()).unwrap_or(0);
         let target = event.metadata().target();
 
-        super::prod::on_error_event(target, &visitor.message, file, line);
+        super::file_logger::on_error_event(target, &visitor.message, file, line);
     }
 }
 

@@ -36,7 +36,7 @@ fn main() -> Result<()> {
     }
 
     if let Ok(config_dir) = qol_tray::paths::shared_config_dir() {
-        if let Err(e) = qol_tray::migration::run_migration(&config_dir) {
+        if let Err(e) = qol_tray::housekeeping::run_startup_cleanup(&config_dir) {
             log::error!("Migration failed: {}", e);
         }
     }
@@ -229,7 +229,7 @@ async fn async_init_inner(
     let plugin_manager = Arc::new(Mutex::new(plugin_manager));
     {
         let startup_info = build_startup_info(&plugin_manager);
-        qol_tray::logging::prod::log_startup(&startup_info);
+        qol_tray::logging::file_logger::log_startup(&startup_info);
     }
     let daemon = Daemon::new();
     let mut feature_registry = FeatureRegistry::new();

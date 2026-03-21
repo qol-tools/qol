@@ -28,8 +28,18 @@ pub(crate) fn load_json_or_default<T: DeserializeOwned + Default>(path: &Path) -
 pub(crate) fn write_pretty_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     ensure_parent_dir(path)?;
     let content = serde_json::to_string_pretty(value)?;
-    fs::write(path, content)?;
-    Ok(())
+    atomic_write(path, content.as_bytes())
+}
+
+pub(crate) fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
+    let tmp = tmp_sibling(path);
+    fs::write(&tmp, content).with_context(|| format!("Failed to write {}", tmp.display()))?;
+    fs::rename(&tmp, path).with_context(|| format!("Failed to finalize {}", path.display()))
+}
+
+fn tmp_sibling(path: &Path) -> PathBuf {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    path.with_file_name(format!(".{}.tmp", name))
 }
 
 pub(crate) fn canonical_or_original(path: &Path) -> PathBuf {
