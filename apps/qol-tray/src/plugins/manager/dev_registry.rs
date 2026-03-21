@@ -20,7 +20,7 @@ pub(super) fn migrate_symlinks_to_registry(plugins_dir: &Path) {
         return;
     };
 
-    let dev_links_path = config_dir.join("dev-links.json");
+    let dev_links_path = config_dir.join("dev/links.json");
     if dev_links_path.exists() {
         return;
     }
@@ -86,11 +86,14 @@ fn absolute_target(plugins_dir: &Path, target: PathBuf) -> PathBuf {
 
 #[cfg(feature = "dev")]
 fn write_dev_links(dev_links_path: &Path, migrated: &HashMap<String, PathBuf>) {
+    if let Some(parent) = dev_links_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     let Ok(content) = serde_json::to_string_pretty(migrated) else {
         return;
     };
     let _ = std::fs::write(dev_links_path, content);
-    log::info!("Migrated {} symlinks to dev-links.json", migrated.len());
+    log::info!("Migrated {} symlinks to dev/links.json", migrated.len());
 }
 
 #[cfg(feature = "dev")]
