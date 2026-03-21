@@ -23,7 +23,10 @@ fn main() -> Result<()> {
     let core_log_controls = qol_tray::logging::init_dev_logger();
 
     #[cfg(not(feature = "dev"))]
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    {
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+        qol_tray::logging::prod::init();
+    }
 
     if is_already_running() {
         eprintln!("qol-tray is already running on port {}", DEFAULT_PORT);
