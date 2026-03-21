@@ -19,8 +19,12 @@ export function SidebarNav({ activeViewId, viewOrder, pluginOpen, onViewClick, o
     const ctx = usePluginConfigContext();
     const itemsRef = useRef(null);
 
+    const isPluginConfig = pluginOpen && ctx?.sections?.length > 0;
+    const isPluginUi = pluginOpen && ctx?.mode === 'ui';
+    const mode = isPluginConfig ? 'config' : isPluginUi ? 'ui' : 'views';
+
     const items = useMemo(() => {
-        if (pluginOpen && ctx?.sections?.length) {
+        if (mode === 'config') {
             return ctx.sections.map((s, i) => ({
                 key: s.id,
                 label: s.label || prettyLabel(s.id),
@@ -28,20 +32,18 @@ export function SidebarNav({ activeViewId, viewOrder, pluginOpen, onViewClick, o
                 onClick: () => ctx.setActiveSectionIndex(i),
             }));
         }
+        if (mode === 'ui') return [];
         return viewOrder.map(id => ({
             key: id,
             label: VIEW_LABELS[id] || id,
             active: id === activeViewId,
             onClick: () => onViewClick(id),
         }));
-    }, [pluginOpen, ctx, activeViewId, viewOrder, onViewClick]);
-
-    const mode = pluginOpen
-        ? (ctx?.sections?.length ? 'config' : ctx?.mode === 'ui' ? 'ui' : 'views')
-        : 'views';
+    }, [mode, ctx, activeViewId, viewOrder, onViewClick]);
     useEffect(() => {
-        if (prevMode !== null && prevMode !== mode && itemsRef.current) {
-            materializeIn(itemsRef.current);
+        const el = itemsRef.current;
+        if (prevMode !== null && prevMode !== mode && el?.offsetHeight > 0) {
+            materializeIn(el);
         }
         prevMode = mode;
     });
