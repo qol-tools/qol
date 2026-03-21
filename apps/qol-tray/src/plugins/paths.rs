@@ -34,16 +34,24 @@ pub(crate) fn config_contract_path(plugin_root: &Path) -> PathBuf {
 }
 
 pub(crate) fn has_custom_ui(plugin_root: &Path) -> bool {
-    if plugin_root.join("ui/index.html").exists() {
+    if is_real_custom_ui(&plugin_root.join("ui/index.html")) {
         return true;
     }
     #[cfg(feature = "dev")]
     if let Some(id) = plugin_root.file_name().and_then(|n| n.to_str()) {
         if let Some(wt) = resolve_active_worktree_path(id) {
-            return wt.join("ui/index.html").exists();
+            return is_real_custom_ui(&wt.join("ui/index.html"));
         }
     }
     false
+}
+
+fn is_real_custom_ui(index_path: &Path) -> bool {
+    let content = match std::fs::read_to_string(index_path) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    !content.contains("initAutoConfigPage")
 }
 
 pub(crate) fn has_config(plugin_root: &Path) -> bool {
@@ -120,4 +128,47 @@ fn resolve_dev_link_path(_plugin_id: &str) -> Option<PathBuf> {
 #[cfg(not(feature = "dev"))]
 fn resolve_active_worktree_path(_plugin_id: &str) -> Option<PathBuf> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_plugin_ui(root: &Path, html: &str) {
+        let ui_dir = root.join("ui");
+        std::fs::create_dir_all(&ui_dir).unwrap();
+        std::fs::write(ui_dir.join("index.html"), html).unwrap();
+    }
+
+    #[test]
+    fn has_custom_ui_rejects_auto_config_template() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let auto_config_html = r#"<script type="module">
+import { initAutoConfigPage } from '/auto-config-bootstrap.js';
+initAutoConfigPage();
+</script>"#;
+
+        let real_ui_html = r#"<!DOCTYPE html>
+<html><head><title>My Plugin</title></head>
+<body><script type="module" src="./app.js"></script></body>
+</html>"#;
+
+        let cases = [
+            ("auto-config template", auto_config_html, false),
+            ("real custom UI", real_ui_html, true),
+        ];
+
+        for (label, html, expected) in cases {
+            let plugin_root = dir.path().join(label);
+            write_plugin_ui(&plugin_root, html);
+            assert_eq!(has_custom_ui(&plugin_root), expected, "case: {label}");
+        }
+    }
+
+    #[test]
+    fn has_custom_ui_false_when_no_ui_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!has_custom_ui(dir.path()));
+    }
 }
