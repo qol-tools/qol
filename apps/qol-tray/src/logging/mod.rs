@@ -40,7 +40,7 @@ pub fn init_logger() -> CoreControlsHandle {
 
     tracing_subscriber::registry()
         .with(stderr_layer)
-        .with(error_capture::ErrorCaptureLayer)
+        .with(error_capture::ErrorCaptureLayer.with_filter(error_capture::ErrorOnlyFilter))
         .init();
 
     tracing_log::LogTracer::init().ok();
@@ -60,7 +60,7 @@ pub fn init_logger() {
 
     tracing_subscriber::registry()
         .with(stderr_layer)
-        .with(error_capture::ErrorCaptureLayer)
+        .with(error_capture::ErrorCaptureLayer.with_filter(error_capture::ErrorOnlyFilter))
         .init();
 
     tracing_log::LogTracer::init().ok();
