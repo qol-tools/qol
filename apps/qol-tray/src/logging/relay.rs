@@ -1,6 +1,8 @@
 use std::io::{BufRead, BufReader, Read};
+#[cfg(feature = "dev")]
 use std::sync::Arc;
 
+#[cfg(feature = "dev")]
 pub(crate) fn attach(
     label: &str,
     stdout: Option<impl Read + Send + 'static>,
@@ -16,6 +18,7 @@ pub(crate) fn attach(
     }
 }
 
+#[cfg(feature = "dev")]
 fn active_patterns(patterns: Vec<String>) -> Option<Arc<Vec<String>>> {
     let active: Vec<String> = patterns.into_iter().filter(|p| !p.is_empty()).collect();
     if active.is_empty() {
@@ -24,6 +27,7 @@ fn active_patterns(patterns: Vec<String>) -> Option<Arc<Vec<String>>> {
     Some(Arc::new(active))
 }
 
+#[cfg(feature = "dev")]
 fn spawn_relay<R: Read + Send + 'static>(
     label: String,
     stream_name: &'static str,
@@ -42,6 +46,7 @@ fn spawn_relay<R: Read + Send + 'static>(
     });
 }
 
+#[cfg(feature = "dev")]
 fn relay_lines(reader: impl Read, prefix: &str, suppress: Option<&[String]>, to_stderr: bool) {
     let write: fn(&str) = match to_stderr {
         true => |l| eprint!("{}", l),
@@ -64,6 +69,7 @@ fn relay_lines(reader: impl Read, prefix: &str, suppress: Option<&[String]>, to_
     }
 }
 
+#[cfg(feature = "dev")]
 fn should_suppress(line: &str, patterns: Option<&[String]>) -> bool {
     let Some(patterns) = patterns else {
         return false;

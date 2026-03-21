@@ -162,6 +162,7 @@ pub fn upsert_core_control(
     save_all_core_controls(config_dir, &controls)
 }
 
+#[cfg(feature = "dev")]
 pub(crate) fn matches_any_pattern(text: &str, patterns: &[String]) -> bool {
     patterns.iter().any(|p| text.contains(p.as_str()))
 }
