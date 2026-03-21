@@ -53,7 +53,7 @@ export function renderMountedViews({
         ${mounted.has('hotkeys') && html`<${ViewSlot} active=${active('hotkeys')}><${HotkeysView} /><//>`}
         ${mounted.has('shortcuts') && html`<${ViewSlot} active=${active('shortcuts')}><${ShortcutsView} /><//>`}
         ${mounted.has('task-runner') && html`<${ViewSlot} active=${active('task-runner')}><${TaskRunnerView} /><//>`}
-        ${mounted.has('logs') && html`<${ViewSlot} active=${active('logs')}><${LogsView} /><//>`}
+        ${mounted.has('logs') && html`<${ViewSlot} active=${active('logs')}><${LogsView} active=${active('logs')} /><//>`}
         ${mounted.has('dev') && html`<${ViewSlot} active=${active('dev')}><${DevView} /><//>`}
     `;
 }

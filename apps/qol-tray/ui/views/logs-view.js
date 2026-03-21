@@ -7,12 +7,13 @@ const TABS = [
     { id: 'suppressed', label: 'Suppressed' },
 ];
 
-export function LogsView() {
+const POLL_INTERVAL = 5000;
+
+export function LogsView({ active }) {
     const [activeTab, setActiveTab] = useState('live');
     const [entries, setEntries] = useState([]);
     const [suppressed, setSuppressed] = useState({});
     const [selectedIndex, setSelectedIndex] = useState(0);
-    const intervalRef = useRef(null);
     const contentRef = useRef(null);
 
     const fetchEntries = useCallback(async () => {
@@ -30,11 +31,18 @@ export function LogsView() {
     }, []);
 
     useEffect(() => {
+        if (!active) return;
         fetchEntries();
         fetchSuppressed();
-        intervalRef.current = setInterval(fetchEntries, 3000);
-        return () => clearInterval(intervalRef.current);
-    }, [fetchEntries, fetchSuppressed]);
+        const id = setInterval(fetchEntries, POLL_INTERVAL);
+        return () => clearInterval(id);
+    }, [active, fetchEntries, fetchSuppressed]);
+
+    useEffect(() => {
+        if (active && contentRef.current) {
+            contentRef.current.focus();
+        }
+    }, [active]);
 
     useEffect(() => {
         setSelectedIndex(0);
@@ -48,8 +56,8 @@ export function LogsView() {
     }, [fetchSuppressed]);
 
     const switchTab = useCallback((direction) => {
-        const currentIdx = TABS.findIndex(t => t.id === activeTab);
-        const next = (currentIdx + direction + TABS.length) % TABS.length;
+        const idx = TABS.findIndex(t => t.id === activeTab);
+        const next = (idx + direction + TABS.length) % TABS.length;
         setActiveTab(TABS[next].id);
     }, [activeTab]);
 
@@ -96,7 +104,7 @@ export function LogsView() {
     return html`
         <${PageHeader} title="Logs" subtitle="Production error log" />
         <div class="logs-tabs" role="tablist">
-            ${TABS.map((tab, i) => html`
+            ${TABS.map(tab => html`
                 <button
                     key=${tab.id}
                     class="logs-tab ${activeTab === tab.id ? 'active' : ''}"
