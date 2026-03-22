@@ -1,6 +1,6 @@
 import { html } from '../../lib/html.js';
 import { useEffect, useCallback, useRef } from 'preact/hooks';
-import { Modal } from '../../components/ModalPreact.js';
+import { Modal, ModalActions } from '../../components/ModalPreact.js';
 
 export function TestPanel({ actionId, params, testParams, onParamChange, onRun, onClose, running, result }) {
     const panelRef = useRef(null);
@@ -51,58 +51,40 @@ function TestResult({ result }) {
     `;
 }
 
-export function ActionEditModal({ modal, onUpdate, onClose, onSave }) {
+export function ActionEditModal({ modal, fieldProps, onUpdate, onClose, onSave }) {
     const title = modal.isNew ? 'New Action' : 'Edit Action';
-    useEffect(() => {
-        const targetId = modal.isNew ? 'action-id' : 'action-name';
-        setTimeout(() => document.getElementById(targetId)?.focus(), 0);
-    }, []);
+    let fi = 0;
     return html`
         <${Modal} open=${true} onClose=${onClose} className="edit-modal">
             <div class="edit-modal-content">
                 <h3>${title}</h3>
-                <${ActionBasicFields} modal=${modal} onUpdate=${onUpdate} />
-                <${ActionCommandFields} modal=${modal} onUpdate=${onUpdate} />
-                <div class="modal-buttons">
-                    <button class="modal-cancel" onClick=${onClose}>Cancel</button>
-                    <button class="modal-save" onClick=${onSave}>Save</button>
+                <div class="form-group" ...${fieldProps(fi++)}>
+                    <label>ID <span class="hint">(used in API calls)</span></label>
+                    <input type="text" value=${modal.actionId} placeholder="e.g., open-vscode"
+                           disabled=${!modal.isNew} onInput=${(e) => onUpdate('actionId', e.target.value)} />
                 </div>
+                <div class="form-group" ...${fieldProps(fi++)}>
+                    <label>Name</label>
+                    <input type="text" value=${modal.name} placeholder="e.g., Open in VS Code"
+                           onInput=${(e) => onUpdate('name', e.target.value)} />
+                </div>
+                <div class="form-group" ...${fieldProps(fi++)}>
+                    <label>Description <span class="hint">(optional)</span></label>
+                    <input type="text" value=${modal.description} placeholder="e.g., Opens a path in Visual Studio Code"
+                           onInput=${(e) => onUpdate('description', e.target.value)} />
+                </div>
+                <div class="form-group" ...${fieldProps(fi++)}>
+                    <label>Command <span class="hint">(use ${'{{'}param${'}}'}  for parameters)</span></label>
+                    <input type="text" value=${modal.command} placeholder="e.g., code {{path}}"
+                           onInput=${(e) => onUpdate('command', e.target.value)} />
+                </div>
+                <div class="form-group" ...${fieldProps(fi++)}>
+                    <label>Timeout <span class="hint">(seconds)</span></label>
+                    <input type="number" value=${modal.timeout} min="1" max="3600"
+                           onInput=${(e) => onUpdate('timeout', parseInt(e.target.value, 10) || 60)} />
+                </div>
+                <${ModalActions} onClose=${onClose} onSave=${onSave} />
             </div>
         <//>
-    `;
-}
-
-function ActionBasicFields({ modal, onUpdate }) {
-    return html`
-        <div class="form-group">
-            <label>ID <span class="hint">(used in API calls)</span></label>
-            <input type="text" id="action-id" value=${modal.actionId} placeholder="e.g., open-vscode"
-                   disabled=${!modal.isNew} onInput=${(e) => onUpdate('actionId', e.target.value)} />
-        </div>
-        <div class="form-group">
-            <label>Name</label>
-            <input type="text" id="action-name" value=${modal.name} placeholder="e.g., Open in VS Code"
-                   onInput=${(e) => onUpdate('name', e.target.value)} />
-        </div>
-        <div class="form-group">
-            <label>Description <span class="hint">(optional)</span></label>
-            <input type="text" id="action-desc" value=${modal.description} placeholder="e.g., Opens a path in Visual Studio Code"
-                   onInput=${(e) => onUpdate('description', e.target.value)} />
-        </div>
-    `;
-}
-
-function ActionCommandFields({ modal, onUpdate }) {
-    return html`
-        <div class="form-group">
-            <label>Command <span class="hint">(use ${'{{'}param${'}}'}  for parameters)</span></label>
-            <input type="text" id="action-command" value=${modal.command} placeholder="e.g., code {{path}}"
-                   onInput=${(e) => onUpdate('command', e.target.value)} />
-        </div>
-        <div class="form-group">
-            <label>Timeout <span class="hint">(seconds)</span></label>
-            <input type="number" id="action-timeout" value=${modal.timeout} min="1" max="3600"
-                   onInput=${(e) => onUpdate('timeout', parseInt(e.target.value, 10) || 60)} />
-        </div>
     `;
 }
