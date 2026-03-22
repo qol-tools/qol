@@ -1,5 +1,6 @@
 use super::catalog::AvailableActions;
 use super::planning::{plan_registrations, PlannedRegistration};
+use super::registration_status::{self, RegistrationError};
 use super::store;
 use super::{HotkeyAction, HotkeyConfig};
 use anyhow::Result;
@@ -53,9 +54,13 @@ impl HotkeyManager {
 
     fn apply_registration_plan(&mut self, registrations: Vec<PlannedRegistration>) -> Result<()> {
         let manager = GlobalHotKeyManager::new()?;
+        let mut errors = Vec::new();
         for registration in registrations {
-            self.register_planned_hotkey(&manager, registration);
+            if let Some(error) = self.register_planned_hotkey(&manager, registration) {
+                errors.push(error);
+            }
         }
+        registration_status::set_registration_errors(errors);
         self.manager = Some(manager);
         Ok(())
     }
@@ -71,16 +76,21 @@ impl HotkeyManager {
         &mut self,
         manager: &GlobalHotKeyManager,
         registration: PlannedRegistration,
-    ) {
+    ) -> Option<RegistrationError> {
         if let Err(error) = manager.register(registration.hotkey) {
+            let msg = error.to_string();
             log::error!(
                 "Failed to register hotkey {}: {}",
                 registration.binding_key,
-                error
+                msg
             );
-            return;
+            return Some(RegistrationError {
+                key: registration.binding_key,
+                error: msg,
+            });
         }
         self.store_registration(registration);
+        None
     }
 
     fn store_registration(&mut self, registration: PlannedRegistration) {

@@ -13,6 +13,7 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/logs/entries", get(entries))
         .route("/logs/suppressed", get(suppressed))
         .route("/logs/unsuppress/{key}", post(unsuppress))
+        .route("/logs/open-dir", post(open_dir))
 }
 
 #[derive(Deserialize, Default)]
@@ -62,6 +63,25 @@ async fn suppressed() -> Result<Json<serde_json::Value>, StatusCode> {
 async fn unsuppress(Path(key): Path<String>) -> StatusCode {
     crate::logging::file_logger::unsuppress_key(&key);
     StatusCode::OK
+}
+
+async fn open_dir() -> StatusCode {
+    let dir = crate::logging::platform::log_dir();
+    if !dir.exists() {
+        return StatusCode::NOT_FOUND;
+    }
+
+    #[cfg(target_os = "linux")]
+    let result = std::process::Command::new("xdg-open").arg(&dir).spawn();
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open").arg(&dir).spawn();
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("explorer").arg(&dir).spawn();
+
+    match result {
+        Ok(_) => StatusCode::OK,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
 
 fn today_str() -> String {
