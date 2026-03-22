@@ -60,7 +60,7 @@ export function TaskRunnerView() {
     ], []);
     useRegisterCommands('task-runner', commands);
 
-    return html`<div class="view-container">
+    return html`<div class="view-container content-shell">
         <${PageHeader} title="Task Runner" subtitle="HTTP API for browser extensions to run local commands" />
         <div class="view-body">
             <${ApiUsage} actions=${data.actions} actionIds=${data.actionIds} copyApiExample=${data.copyApiExample} />

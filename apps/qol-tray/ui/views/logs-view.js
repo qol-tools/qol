@@ -224,11 +224,11 @@ export function LogsView({ active }) {
         suppressed: filteredSuppressedKeys.length,
     };
 
-    return html`<div class="view-container logs-shell">
+    return html`<div class="view-container content-shell">
         <${PageHeader} title="Logs" subtitle="Error log and suppression management" />
-        <div class="view-body logs-view-body">
-            <div class="logs-view-content">
-                <div class="logs-frame">
+        <div class="view-body content-shell-body">
+            <div class="content-shell-inner">
+                <div class="content-frame logs-frame">
                     <div class="logs-tabs" role="tablist">
                         ${TABS.map((tab, i) => html`
                             <button
