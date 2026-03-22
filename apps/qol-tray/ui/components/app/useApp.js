@@ -29,12 +29,8 @@ export function useApp({ onDissolve } = {}) {
         const v = path || null;
         defaultWorktreeRef.current = v;
         try {
-            if (v) {
-                localStorage.setItem(WT_KEY, v);
-            }
-            if (!v) {
-                localStorage.removeItem(WT_KEY);
-            }
+            if (v) localStorage.setItem(WT_KEY, v);
+            if (!v) localStorage.removeItem(WT_KEY);
         } catch {}
         setDefaultWorktreeState(v);
     }, []);
@@ -45,9 +41,7 @@ export function useApp({ onDissolve } = {}) {
             .then(nextWorktrees => {
                 setWorktrees(nextWorktrees);
                 const normalized = normalizeDefaultWorktree(defaultWorktreeRef.current, nextWorktrees);
-                if (normalized === defaultWorktreeRef.current) {
-                    return;
-                }
+                if (normalized === defaultWorktreeRef.current) return;
                 setDefaultWorktree(normalized);
             })
             .catch(() => {});
@@ -63,37 +57,66 @@ export function useApp({ onDissolve } = {}) {
         switchView(viewId);
     }, [activePluginId, closePluginConfig, switchView]);
 
-    const globalCommands = useMemo(() =>
-        viewOrder.map(id => ({
+    const globalCommands = useMemo(() => [
+        ...viewOrder.map(id => ({
             id: `nav:${id}`,
             label: `Go to ${VIEW_LABELS[id] || id}`,
             run: () => switchView(id)
         })),
-        [viewOrder, switchView]
-    );
+        { id: 'config:export', label: 'Export configuration', run: exportConfig },
+        { id: 'config:import', label: 'Import configuration', run: importConfig },
+    ], [viewOrder, switchView]);
     useRegisterCommands(GLOBAL_ID, globalCommands);
 
     return { devEnabled, appVersion, viewOrder, activeViewId, activePluginId, activePluginMode, switchView, openPluginConfig, openPluginUi, closePluginConfig, mounted, updateState, handleSidebarAction, handleViewClick, worktrees, defaultWorktree, setDefaultWorktree };
 }
 
 function normalizeDefaultWorktree(current, worktrees) {
-    if (!current) {
-        return null;
-    }
-    if (worktrees.some(worktree => worktree.path === current)) {
-        return current;
-    }
+    if (!current) return null;
+    if (worktrees.some(worktree => worktree.path === current)) return current;
     const resolved = worktrees.find(worktree => parentDir(worktree.path) === current);
-    if (resolved) {
-        return resolved.path;
-    }
+    if (resolved) return resolved.path;
     return null;
 }
 
 function parentDir(path) {
     const separator = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
-    if (separator <= 0) {
-        return null;
-    }
+    if (separator <= 0) return null;
     return path.slice(0, separator);
+}
+
+async function exportConfig() {
+    try {
+        const res = await fetch('/api/config/export');
+        if (!res.ok) return;
+        const bundle = await res.json();
+        const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `qol-tray-config-${bundle.exported_at?.slice(0, 10) || 'export'}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch (_) {}
+}
+
+async function importConfig() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        try {
+            const text = await file.text();
+            JSON.parse(text);
+            await fetch('/api/config/import', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: text,
+            });
+            window.location.reload();
+        } catch (_) {}
+    };
+    input.click();
 }

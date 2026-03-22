@@ -3,6 +3,7 @@ import { useState, useCallback, useRef } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
 import { FieldLabel } from './FieldLabel.js';
 import { fieldSelectionClasses } from '../field-map.js';
+import { ToggleSwitch } from '../../../components/ToggleSwitch.js';
 import { groupFields } from '../../../auto-config/object-array-form.js';
 import { declaredFieldsToSchema } from '../../../auto-config/object-array-renderer.js';
 import { KNOWN_MODS, prettyLabel, getObjectArraySchema, guessSchemaFromKey } from '../../../auto-config/heuristics.js';
@@ -208,12 +209,7 @@ function ScalarInput({ fieldKey, fieldType, formRef }) {
 function BooleanToggle({ fieldKey, formRef }) {
     const [checked, setChecked] = useState(false);
     formRef.current[fieldKey] = { type: 'boolean', get: () => checked, reset: () => setChecked(false) };
-    return html`
-        <label class="global-toggle" data-wedge-root="">
-            <input type="checkbox" checked=${checked} onChange=${(e) => setChecked(e.target.checked)} />
-            <span>${prettyLabel(fieldKey)}</span>
-        </label>
-    `;
+    return html`<${ToggleSwitch} checked=${checked} onChange=${setChecked} label=${prettyLabel(fieldKey)} />`;
 }
 
 function collectFormValues(form) {

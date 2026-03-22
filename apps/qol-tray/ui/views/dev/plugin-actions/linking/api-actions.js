@@ -11,7 +11,7 @@ export function createLinkingApiActions({ state, discoveryController, onNeedsRen
 
 async function confirmLink(linkInputState, triggerReload, discoveryController) {
     const path = linkInputState.readLinkPath();
-    if (!path) { return; }
+    if (!path) return;
     try {
         const response = await postLink({ path });
         if (!response.ok) { linkInputState.failLink(await readResponseText(response)); return; }
@@ -50,12 +50,12 @@ async function deleteLink(state, onNeedsRender, id, triggerReload, discoveryCont
 }
 
 async function runWithLinkingId(state, onNeedsRender, id, beforeStart, task) {
-    if (state.linkingId) { return; }
+    if (state.linkingId) return;
     state.linkingId = id;
-    if (typeof beforeStart === 'function') { beforeStart(); }
+    if (beforeStart) beforeStart();
     onNeedsRender(true);
     try {
-        if (typeof task === 'function') { await task(); }
+        if (task) await task();
     } finally {
         state.linkingId = null;
         onNeedsRender(true);
