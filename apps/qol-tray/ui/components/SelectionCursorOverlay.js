@@ -41,17 +41,29 @@ export function SelectionCursorOverlay() {
             setStyle(cursorStyle(app, nextTarget, shouldTeleport));
         };
 
-        const observer = new MutationObserver(sync);
+        const setInputMode = (mode) => { app.dataset.inputMode = mode; };
+        const onKey = () => setInputMode('keyboard');
+        const onMouse = () => setInputMode('mouse');
+        setInputMode('keyboard');
+
+        const observer = new MutationObserver((mutations) => {
+            ensureSurfacesFocusable(mutations);
+            sync();
+        });
         observer.observe(document.body, {
             attributes: true,
             attributeFilter: ATTRIBUTES,
             childList: true,
             subtree: true,
         });
+        ensureSurfacesFocusable();
 
         document.addEventListener('scroll', sync, true);
         document.addEventListener('focusin', sync, true);
         document.addEventListener('focusout', sync, true);
+        document.addEventListener('keydown', onKey, true);
+        document.addEventListener('mousedown', onMouse, true);
+        document.addEventListener('mousemove', onMouse, { capture: true, passive: true });
         window.addEventListener('resize', sync);
         sync();
         readyFrameRef.current = requestAnimationFrame(() => {
@@ -64,6 +76,9 @@ export function SelectionCursorOverlay() {
             document.removeEventListener('scroll', sync, true);
             document.removeEventListener('focusin', sync, true);
             document.removeEventListener('focusout', sync, true);
+            document.removeEventListener('keydown', onKey, true);
+            document.removeEventListener('mousedown', onMouse, true);
+            document.removeEventListener('mousemove', onMouse, true);
             window.removeEventListener('resize', sync);
             if (readyFrameRef.current) cancelAnimationFrame(readyFrameRef.current);
             if (!resizeObserverRef.current) return;
@@ -98,10 +113,7 @@ function trackTarget(target, sync, resizeObserverRef, appRef, targetRef) {
 
 function markCursorTarget(target, active) {
     if (!(target instanceof HTMLElement)) return;
-    if (!active) {
-        target.removeAttribute('data-selection-cursor-active');
-        return;
-    }
+    if (!active) { target.removeAttribute('data-selection-cursor-active'); return; }
     if (!hasSelectedSurfaceState(target)) return;
     target.setAttribute('data-selection-cursor-active', 'true');
 }
@@ -147,15 +159,11 @@ function hiddenStyle(previous = null) {
 }
 
 function readVar(style, name, fallback) {
-    const value = style.getPropertyValue(name).trim();
-    if (value) return value;
-    return fallback;
+    return style.getPropertyValue(name).trim() || fallback;
 }
 
 function selectedSurfaceMotion(target) {
-    const attr = target.getAttribute('data-selected-surface-motion');
-    if (attr) return attr;
-    return 'glide';
+    return target.getAttribute('data-selected-surface-motion') || 'glide';
 }
 
 function selectedSurfaceMaxGlide(target) {
@@ -221,4 +229,31 @@ function needsTeleport(prevRect, nextRect, maxGlideDistance) {
     const dy = nextRect.top - prevRect.top;
     const distance = Math.hypot(dx, dy);
     return distance > maxGlideDistance;
+}
+
+function ensureSurfacesFocusable(mutations) {
+    const targets = mutations
+        ? collectNewSurfaces(mutations)
+        : document.querySelectorAll('[data-selected-surface]');
+
+    for (const el of targets) {
+        if (el.tabIndex >= 0) continue;
+        if (el.hasAttribute('tabindex')) continue;
+        el.tabIndex = -1;
+    }
+}
+
+function collectNewSurfaces(mutations) {
+    const surfaces = [];
+    for (const mutation of mutations) {
+        if (mutation.type !== 'childList') continue;
+        for (const node of mutation.addedNodes) {
+            if (!(node instanceof HTMLElement)) continue;
+            if (node.hasAttribute('data-selected-surface')) surfaces.push(node);
+            for (const child of node.querySelectorAll('[data-selected-surface]')) {
+                surfaces.push(child);
+            }
+        }
+    }
+    return surfaces;
 }

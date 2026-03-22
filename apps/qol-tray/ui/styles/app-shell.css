@@ -555,6 +555,10 @@ body {
     transition: opacity 0.08s ease;
 }
 
+[data-selected-surface][data-selected="true"] {
+    border-color: var(--accent);
+}
+
 .app-container [data-selected-surface] [data-selected-text] {
     transition: color var(--transition);
 }
