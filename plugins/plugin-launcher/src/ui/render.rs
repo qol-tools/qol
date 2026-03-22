@@ -4,7 +4,6 @@ use std::time::Duration;
 use gpui::*;
 
 use super::layout::{resize_for_visible_rows, MAX_VISIBLE, ROW_HEIGHT};
-use super::platform;
 use super::state::{EdgeHit, NavDirection};
 use super::view;
 use super::window_ops::hide;
@@ -199,7 +198,7 @@ impl LauncherView {
                 continue;
             }
             let has_focus = cx
-                .background_spawn(async { platform::has_process_focus() })
+                .background_spawn(async { qol_plugin_api::focus::has_process_focus() })
                 .await;
             if has_focus {
                 let still_showing = this
