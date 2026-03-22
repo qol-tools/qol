@@ -1,5 +1,5 @@
-const RETARGET_INTERVAL = 5000;
-const SPEED = 0.04;
+const RETARGET_INTERVAL = 12000;
+const SPEED = 0.004;
 
 function rand(min, max) {
     return min + Math.random() * (max - min);
@@ -7,8 +7,8 @@ function rand(min, max) {
 
 function newTarget() {
     return {
-        x1: rand(5, 45), y1: rand(-25, 15),
-        x2: rand(55, 95), y2: rand(-20, 20),
+        x1: rand(12, 28), y1: rand(-10, 5),
+        x2: rand(70, 88), y2: rand(-8, 6),
     };
 }
 
