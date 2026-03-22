@@ -224,41 +224,43 @@ export function LogsView({ active }) {
         suppressed: filteredSuppressedKeys.length,
     };
 
-    return html`
+    return html`<div class="view-container">
         <${PageHeader} title="Logs" subtitle="Error log and suppression management" />
-        <div class="logs-tabs" role="tablist">
-            ${TABS.map((tab, i) => html`
-                <button
-                    key=${tab.id}
-                    class="logs-tab ${activeTab === tab.id ? 'active' : ''}"
-                    role="tab"
-                    data-selected-surface=""
-                    data-selected=${zone === 'tabs' && tabCursorIndex === i ? 'true' : 'false'}
-                    aria-selected=${activeTab === tab.id}
-                    onClick=${() => { setActiveTab(tab.id); enterContent(); }}
-                >
-                    ${tab.label}
-                    ${tabCounts[tab.id] > 0 && html`<span class="logs-tab-count">${tabCounts[tab.id]}</span>`}
-                </button>
-            `)}
-            <button class="btn btn-sm btn-ghost logs-action-btn" data-selected-surface=""
-                data-selected=${zone === 'tabs' && tabCursorIndex === TABS.length ? 'true' : 'false'}
-                onClick=${openLogDir}>Open log folder</button>
-        </div>
-        <div class="logs-content" ref=${contentRef} role="tabpanel">
-            ${activeTab === 'live' && html`<${LiveLog} entries=${collapsedEntries} selectedIndex=${zone === 'content' ? selectedIndex : -1}
-                onEntryClick=${(entry) => { document.activeElement?.blur(); setDetailEntry(entry); setZone('detail'); }} />`}
-            ${activeTab === 'suppressed' && html`<${SuppressedList}
-                keys=${filteredSuppressedKeys}
-                items=${suppressed}
-                onUnsuppress=${unsuppress}
-                selectedIndex=${zone === 'content' ? selectedIndex : -1}
-                expandedKeys=${expandedKeys}
-                onToggleExpand=${toggleExpand}
-            />`}
+        <div class="view-body">
+            <div class="logs-tabs" role="tablist">
+                ${TABS.map((tab, i) => html`
+                    <button
+                        key=${tab.id}
+                        class="logs-tab ${activeTab === tab.id ? 'active' : ''}"
+                        role="tab"
+                        data-selected-surface=""
+                        data-selected=${zone === 'tabs' && tabCursorIndex === i ? 'true' : 'false'}
+                        aria-selected=${activeTab === tab.id}
+                        onClick=${() => { setActiveTab(tab.id); enterContent(); }}
+                    >
+                        ${tab.label}
+                        ${tabCounts[tab.id] > 0 && html`<span class="logs-tab-count">${tabCounts[tab.id]}</span>`}
+                    </button>
+                `)}
+                <button class="btn btn-sm btn-ghost logs-action-btn" data-selected-surface=""
+                    data-selected=${zone === 'tabs' && tabCursorIndex === TABS.length ? 'true' : 'false'}
+                    onClick=${openLogDir}>Open log folder</button>
+            </div>
+            <div class="logs-content" ref=${contentRef} role="tabpanel">
+                ${activeTab === 'live' && html`<${LiveLog} entries=${collapsedEntries} selectedIndex=${zone === 'content' ? selectedIndex : -1}
+                    onEntryClick=${(entry) => { document.activeElement?.blur(); setDetailEntry(entry); setZone('detail'); }} />`}
+                ${activeTab === 'suppressed' && html`<${SuppressedList}
+                    keys=${filteredSuppressedKeys}
+                    items=${suppressed}
+                    onUnsuppress=${unsuppress}
+                    selectedIndex=${zone === 'content' ? selectedIndex : -1}
+                    expandedKeys=${expandedKeys}
+                    onToggleExpand=${toggleExpand}
+                />`}
+            </div>
         </div>
         ${detailEntry && html`<${LogDetailModal} entry=${detailEntry} onClose=${closeDetail} />`}
-    `;
+    </div>`;
 }
 
 function collapseEntries(entries) {
@@ -284,7 +286,15 @@ function LiveLog({ entries, selectedIndex, onEntryClick }) {
         return html`<${EmptyState} message="No log entries for today" hint="Errors will appear here when they occur" />`;
     }
     return html`
-        <div class="logs-entries" role="list">
+        <div class="logs-table table-list" role="list">
+            <div class="table-list-header table-grid logs-grid">
+                <span class="table-cell">Time</span>
+                <span class="table-cell">Level</span>
+                <span class="table-cell">Source</span>
+                <span class="table-cell">Message</span>
+                <span class="table-cell table-cell--right">Count</span>
+                <span class="table-cell table-cell--right">Location</span>
+            </div>
             ${entries.map((entry, i) => html`<${LogEntryRow} key=${entry.key || i} entry=${entry} selected=${i === selectedIndex} onClick=${() => onEntryClick(entry)} />`)}
         </div>
     `;
@@ -303,15 +313,15 @@ function LogEntryRow({ entry, selected, onClick }) {
     const loc = entry.loc && entry.loc !== 'unknown:0' && entry.loc !== ':0' ? entry.loc : '';
     const severity = entry.level === 'error' ? countSeverity(entry.count) : '';
     return html`
-        <div class="log-entry ${selected ? 'selected' : ''}" role="listitem"
+        <div class="table-list-row table-grid logs-grid" role="listitem"
              data-selected-surface="" data-selected=${selected ? 'true' : 'false'} data-severity=${severity || undefined}
              onClick=${onClick}>
-            <span class="log-time">${time}</span>
-            <span class="log-level-badge ${cls}">${label}</span>
-            <span class="log-src">${entry.src || ''}</span>
-            <span class="log-msg">${entry.msg}</span>
-            <span class="log-count">${entry.count > 1 ? `\u00d7${entry.count}` : ''}</span>
-            <span class="log-loc">${loc}</span>
+            <span class="table-cell log-time">${time}</span>
+            <span class="table-cell log-level-badge ${cls}">${label}</span>
+            <span class="table-cell log-src" data-selected-text="">${entry.src || ''}</span>
+            <span class="table-cell log-msg" data-selected-text="">${entry.msg}</span>
+            <span class="table-cell log-count table-cell--right">${entry.count > 1 ? `\u00d7${entry.count}` : ''}</span>
+            <span class="table-cell log-loc table-cell--right">${loc}</span>
         </div>
     `;
 }
