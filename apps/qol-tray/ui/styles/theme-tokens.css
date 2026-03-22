@@ -234,7 +234,9 @@
     --size-row-md: 64px;
     --size-card-min-h: 160px;
     --size-modal-sm: 400px;
-    --size-modal-md: 450px;
+    --size-modal-md: 500px;
+    --size-modal-lg: 800px;
+    --size-modal-xl: 1140px;
     --size-action-col-sm: 84px;
     --size-action-col-md: 110px;
     --size-control-sm: 2rem;

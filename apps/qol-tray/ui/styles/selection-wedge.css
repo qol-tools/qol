@@ -72,3 +72,14 @@
     opacity: 1;
     transform: scaleX(-1) rotate(-45deg);
 }
+
+.app-container[data-input-mode="mouse"] .selection-cursor-overlay {
+    opacity: 0 !important;
+    pointer-events: none;
+    transition: opacity 0.08s ease;
+}
+
+.app-container[data-input-mode="mouse"] .selection-wedge-pseudo-host.selection-wedge-visible::after,
+.app-container[data-input-mode="mouse"] .selection-wedge-pseudo-anchor.selection-wedge-visible::after {
+    opacity: 0;
+}
