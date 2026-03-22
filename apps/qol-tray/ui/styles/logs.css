@@ -43,6 +43,11 @@
     color: rgba(var(--accent-rgb), 0.9);
 }
 
+.logs-action-btn {
+    margin-left: auto;
+    align-self: center;
+}
+
 .logs-content {
     flex: 1;
     min-height: 0;
@@ -51,8 +56,6 @@
 }
 
 .logs-content:focus { outline: none; }
-
-/* --- Live Log entries --- */
 
 .logs-entries {
     display: flex;
@@ -152,6 +155,36 @@
     background: var(--layer-paper-06);
 }
 
+.log-entry[data-severity="moderate"] {
+    border-left: 2px solid rgba(var(--danger-rgb), 0.25);
+}
+
+.log-entry[data-severity="moderate"] .log-count {
+    background: rgba(var(--danger-rgb), 0.1);
+    color: rgba(var(--danger-rgb), 0.7);
+}
+
+.log-entry[data-severity="high"] {
+    border-left: 2px solid rgba(var(--danger-rgb), 0.45);
+    background: rgba(var(--danger-rgb), 0.03);
+}
+
+.log-entry[data-severity="high"] .log-count {
+    background: rgba(var(--danger-rgb), 0.15);
+    color: rgba(var(--danger-rgb), 0.85);
+}
+
+.log-entry[data-severity="critical"] {
+    border-left: 3px solid rgba(var(--danger-rgb), 0.7);
+    background: rgba(var(--danger-rgb), 0.06);
+}
+
+.log-entry[data-severity="critical"] .log-count {
+    background: rgba(var(--danger-rgb), 0.2);
+    color: rgba(var(--danger-rgb), 0.95);
+    font-weight: var(--fw-bold);
+}
+
 .log-loc {
     color: var(--text-faint);
     font-size: var(--fs-caption);
@@ -162,8 +195,6 @@
     text-overflow: ellipsis;
     text-align: right;
 }
-
-/* --- Suppressed entries --- */
 
 .logs-suppressed-list {
     display: flex;
@@ -274,6 +305,45 @@
     font-weight: var(--fw-semibold);
 }
 
+.suppressed-expand-icon {
+    color: var(--text-faint);
+    font-size: var(--fs-xs);
+    width: 1rem;
+    flex-shrink: 0;
+    text-align: center;
+    transition: color var(--dur-fast);
+}
+
+.suppressed-entry.expanded .suppressed-expand-icon { color: var(--text-muted); }
+
+.suppressed-entry { cursor: pointer; }
+
+.suppressed-detail {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1-5);
+    padding: var(--space-2) var(--space-3);
+    margin-bottom: var(--space-2);
+    background: var(--layer-ink-18);
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-xs);
+}
+
+.suppressed-detail-row {
+    display: flex;
+    gap: var(--space-2);
+    align-items: baseline;
+}
+
+.suppressed-detail-value {
+    color: var(--text-secondary);
+    word-break: break-word;
+}
+
+.suppressed-detail-value.mono {
+    font-family: var(--font-mono);
+}
+
 .suppressed-meta-sep { color: var(--text-faint); }
 
 .suppressed-version {
@@ -281,8 +351,6 @@
     font-size: var(--fs-caption);
     color: var(--text-faint);
 }
-
-/* --- Empty state --- */
 
 .logs-empty-state {
     display: flex;

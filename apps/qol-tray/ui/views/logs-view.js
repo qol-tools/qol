@@ -1,10 +1,14 @@
 import { html } from '../lib/html.js';
-import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'preact/hooks';
 import { usePaletteContext } from '../palette/context.js';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../components/app/view-keyboard-context.js';
+import { useListKeyboard } from '../hooks/useListKeyboard.js';
 import { matchesQuery } from '../utils/collections.js';
 import { PageHeader } from '../components/PageHeader.js';
+import { Modal, ModalFooter } from '../components/ModalPreact.js';
+import { CodeBlock } from '../components/CodeBlock.js';
+import { toast } from '../lib/toast.js';
 
 const TABS = [
     { id: 'live', label: 'Live Log' },
@@ -29,6 +33,10 @@ export function LogsView({ active }) {
     const [entries, setEntries] = useState([]);
     const [suppressed, setSuppressed] = useState({});
     const [selectedIndex, setSelectedIndex] = useState(0);
+    const [expandedKeys, setExpandedKeys] = useState(new Set());
+    const [zone, setZone] = useState('tabs');
+    const [tabCursorIndex, setTabCursorIndex] = useState(0);
+    const [detailEntry, setDetailEntry] = useState(null);
     const contentRef = useRef(null);
     const { searchQuery } = usePaletteContext();
 
@@ -61,6 +69,8 @@ export function LogsView({ active }) {
         [entries, searchQuery]
     );
 
+    const collapsedEntries = useMemo(() => collapseEntries(filteredEntries), [filteredEntries]);
+
     const suppressedKeys = useMemo(() => Object.keys(suppressed), [suppressed]);
     const filteredSuppressedKeys = useMemo(
         () => searchQuery
@@ -73,7 +83,7 @@ export function LogsView({ active }) {
     );
 
     const itemCount = activeTab === 'live'
-        ? filteredEntries.length
+        ? collapsedEntries.length
         : filteredSuppressedKeys.length;
 
     useEffect(() => {
@@ -87,50 +97,120 @@ export function LogsView({ active }) {
         } catch (_) {}
     }, [fetchSuppressed]);
 
-    const switchTab = useCallback((direction) => {
-        const idx = TABS.findIndex(t => t.id === activeTab);
-        const next = (idx + direction + TABS.length) % TABS.length;
-        setActiveTab(TABS[next].id);
-    }, [activeTab]);
+    const toggleExpand = useCallback((key) => {
+        setExpandedKeys(prev => {
+            const next = new Set(prev);
+            if (next.has(key)) next.delete(key);
+            else next.add(key);
+            return next;
+        });
+    }, []);
+
+    const TAB_BAR_COUNT = TABS.length + 1;
+
+    const openLogDir = useCallback(async () => {
+        try { await fetch('/api/logs/open-dir', { method: 'POST' }); } catch (_) {}
+    }, []);
+
+    const enterContent = useCallback(() => {
+        setZone('content');
+        setSelectedIndex(0);
+    }, []);
+
+    const activateTabItem = useCallback((index) => {
+        if (index >= TABS.length) {
+            openLogDir();
+            return;
+        }
+        const tabId = TABS[index].id;
+        setActiveTab(tabId);
+        const count = tabId === 'live' ? filteredEntries.length : filteredSuppressedKeys.length;
+        if (count > 0) enterContent();
+    }, [openLogDir, enterContent, filteredEntries.length, filteredSuppressedKeys.length]);
+
+    const onEdit = useCallback(() => {
+        if (activeTab === 'live') {
+            const entry = collapsedEntries[selectedIndex];
+            if (entry) {
+                document.activeElement?.blur();
+                setDetailEntry(entry);
+                setZone('detail');
+            }
+        }
+        if (activeTab === 'suppressed') {
+            const key = filteredSuppressedKeys[selectedIndex];
+            if (key) toggleExpand(key);
+        }
+    }, [activeTab, collapsedEntries, filteredSuppressedKeys, selectedIndex, toggleExpand]);
+
+    const listHandler = useListKeyboard({
+        itemCount,
+        selectedIndex,
+        setSelectedIndex,
+        onEdit,
+    });
+
+    const closeDetail = useCallback(() => {
+        setDetailEntry(null);
+        setZone('content');
+    }, []);
 
     const handleKey = useCallback((event) => {
-        switch (event.key) {
-            case 'ArrowLeft':
+        if (zone === 'detail') {
+            if (event.key === 'Escape') { event.preventDefault(); closeDetail(); return; }
+            if (event.key === 'c' || event.key === 'C') {
                 event.preventDefault();
-                switchTab(-1);
-                break;
-            case 'ArrowRight':
-                event.preventDefault();
-                switchTab(1);
-                break;
-            case 'ArrowUp':
-            case 'k':
-                event.preventDefault();
-                setSelectedIndex(i => Math.max(0, i - 1));
-                break;
-            case 'ArrowDown':
-            case 'j':
-                event.preventDefault();
-                setSelectedIndex(i => Math.min(itemCount - 1, i + 1));
-                break;
-            case 'Enter':
-                if (activeTab === 'suppressed') {
-                    event.preventDefault();
-                    const key = filteredSuppressedKeys[selectedIndex];
-                    if (key) unsuppress(key);
+                if (detailEntry) {
+                    navigator.clipboard.writeText(formatLogDetail(detailEntry));
+                    toast('success', 'Copied to clipboard');
                 }
-                break;
+                return;
+            }
+            return;
         }
-    }, [switchTab, itemCount, activeTab, filteredSuppressedKeys, selectedIndex, unsuppress]);
+        if (zone === 'tabs') {
+            if (event.key === 'ArrowLeft' || event.key === 'h') {
+                event.preventDefault();
+                setTabCursorIndex(i => Math.max(0, i - 1));
+                return;
+            }
+            if (event.key === 'ArrowRight' || event.key === 'l') {
+                event.preventDefault();
+                setTabCursorIndex(i => Math.min(TAB_BAR_COUNT - 1, i + 1));
+                return;
+            }
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                activateTabItem(tabCursorIndex);
+                return;
+            }
+            return;
+        }
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            setZone('tabs');
+            setTabCursorIndex(TABS.findIndex(t => t.id === activeTab));
+            return;
+        }
+        listHandler(event);
+    }, [zone, tabCursorIndex, activeTab, activateTabItem, listHandler, TAB_BAR_COUNT]);
 
-    useRegisterViewKeyboard('logs', handleKey);
+    const isBlocking = useCallback(() => zone === 'detail', [zone]);
+    useRegisterViewKeyboard('logs', handleKey, isBlocking);
 
     const commands = useMemo(() => [
         { id: 'refresh', label: 'Refresh Logs', action: () => { fetchEntries(); fetchSuppressed(); } },
+        { id: 'open-dir', label: 'Open Log Directory', action: openLogDir },
         { id: 'live-tab', label: 'Show Live Log', action: () => setActiveTab('live') },
         { id: 'suppressed-tab', label: 'Show Suppressed', action: () => setActiveTab('suppressed') },
-    ], [fetchEntries, fetchSuppressed]);
+    ], [fetchEntries, fetchSuppressed, openLogDir]);
     useRegisterCommands('logs', commands);
+
+    useLayoutEffect(() => {
+        if (zone !== 'content') return;
+        const surface = contentRef.current?.querySelector('[data-selected-surface][data-selected="true"]');
+        if (surface) surface.focus();
+    }, [zone, selectedIndex]);
 
     useEffect(() => {
         const el = contentRef.current;
@@ -140,57 +220,92 @@ export function LogsView({ active }) {
     }, [selectedIndex]);
 
     const tabCounts = {
-        live: filteredEntries.length,
+        live: collapsedEntries.length,
         suppressed: filteredSuppressedKeys.length,
     };
 
     return html`
         <${PageHeader} title="Logs" subtitle="Error log and suppression management" />
         <div class="logs-tabs" role="tablist">
-            ${TABS.map(tab => html`
+            ${TABS.map((tab, i) => html`
                 <button
                     key=${tab.id}
                     class="logs-tab ${activeTab === tab.id ? 'active' : ''}"
                     role="tab"
-                    tabIndex="-1"
+                    data-selected-surface=""
+                    data-selected=${zone === 'tabs' && tabCursorIndex === i ? 'true' : 'false'}
                     aria-selected=${activeTab === tab.id}
-                    onClick=${() => setActiveTab(tab.id)}
+                    onClick=${() => { setActiveTab(tab.id); enterContent(); }}
                 >
                     ${tab.label}
                     ${tabCounts[tab.id] > 0 && html`<span class="logs-tab-count">${tabCounts[tab.id]}</span>`}
                 </button>
             `)}
+            <button class="btn btn-sm btn-ghost logs-action-btn" data-selected-surface=""
+                data-selected=${zone === 'tabs' && tabCursorIndex === TABS.length ? 'true' : 'false'}
+                onClick=${openLogDir}>Open log folder</button>
         </div>
         <div class="logs-content" ref=${contentRef} role="tabpanel">
-            ${activeTab === 'live' && html`<${LiveLog} entries=${filteredEntries} selectedIndex=${selectedIndex} />`}
+            ${activeTab === 'live' && html`<${LiveLog} entries=${collapsedEntries} selectedIndex=${zone === 'content' ? selectedIndex : -1}
+                onEntryClick=${(entry) => { document.activeElement?.blur(); setDetailEntry(entry); setZone('detail'); }} />`}
             ${activeTab === 'suppressed' && html`<${SuppressedList}
                 keys=${filteredSuppressedKeys}
                 items=${suppressed}
                 onUnsuppress=${unsuppress}
-                selectedIndex=${selectedIndex}
+                selectedIndex=${zone === 'content' ? selectedIndex : -1}
+                expandedKeys=${expandedKeys}
+                onToggleExpand=${toggleExpand}
             />`}
         </div>
+        ${detailEntry && html`<${LogDetailModal} entry=${detailEntry} onClose=${closeDetail} />`}
     `;
 }
 
-function LiveLog({ entries, selectedIndex }) {
-    const reversed = [...entries].reverse();
-    if (reversed.length === 0) {
+function collapseEntries(entries) {
+    const seen = new Map();
+    const result = [];
+    for (let i = entries.length - 1; i >= 0; i--) {
+        const entry = entries[i];
+        const key = entry.key || `${entry.src}:${entry.msg}`;
+        const existing = seen.get(key);
+        if (existing) {
+            existing.count = Math.max(existing.count, entry.count || 1);
+            continue;
+        }
+        const collapsed = { ...entry, count: entry.count || 1 };
+        seen.set(key, collapsed);
+        result.push(collapsed);
+    }
+    return result;
+}
+
+function LiveLog({ entries, selectedIndex, onEntryClick }) {
+    if (entries.length === 0) {
         return html`<${EmptyState} message="No log entries for today" hint="Errors will appear here when they occur" />`;
     }
     return html`
         <div class="logs-entries" role="list">
-            ${reversed.map((entry, i) => html`<${LogEntryRow} key=${i} entry=${entry} selected=${i === selectedIndex} />`)}
+            ${entries.map((entry, i) => html`<${LogEntryRow} key=${entry.key || i} entry=${entry} selected=${i === selectedIndex} onClick=${() => onEntryClick(entry)} />`)}
         </div>
     `;
 }
 
-function LogEntryRow({ entry, selected }) {
+function countSeverity(count) {
+    if (count >= 25) return 'critical';
+    if (count >= 10) return 'high';
+    if (count >= 3) return 'moderate';
+    return '';
+}
+
+function LogEntryRow({ entry, selected, onClick }) {
     const time = entry.ts ? entry.ts.split('T')[1] || entry.ts : '';
     const { label, cls } = levelInfo(entry);
     const loc = entry.loc && entry.loc !== 'unknown:0' && entry.loc !== ':0' ? entry.loc : '';
+    const severity = entry.level === 'error' ? countSeverity(entry.count) : '';
     return html`
-        <div class="log-entry ${selected ? 'selected' : ''}" role="listitem" data-selected=${selected}>
+        <div class="log-entry ${selected ? 'selected' : ''}" role="listitem"
+             data-selected-surface="" data-selected=${selected ? 'true' : 'false'} data-severity=${severity || undefined}
+             onClick=${onClick}>
             <span class="log-time">${time}</span>
             <span class="log-level-badge ${cls}">${label}</span>
             <span class="log-src">${entry.src || ''}</span>
@@ -201,7 +316,7 @@ function LogEntryRow({ entry, selected }) {
     `;
 }
 
-function SuppressedList({ keys, items, onUnsuppress, selectedIndex }) {
+function SuppressedList({ keys, items, onUnsuppress, selectedIndex, expandedKeys, onToggleExpand }) {
     if (keys.length === 0) {
         return html`<${EmptyState} message="No suppressed errors" hint="Errors that repeat ${'\u2265'}5 times are auto-suppressed" />`;
     }
@@ -214,40 +329,60 @@ function SuppressedList({ keys, items, onUnsuppress, selectedIndex }) {
                     entry=${items[key]}
                     onUnsuppress=${onUnsuppress}
                     selected=${i === selectedIndex}
+                    expanded=${expandedKeys.has(key)}
+                    onToggle=${() => onToggleExpand(key)}
                 />
             `)}
         </div>
     `;
 }
 
-function SuppressedRow({ sigKey, entry, onUnsuppress, selected }) {
+function SuppressedRow({ sigKey, entry, onUnsuppress, selected, expanded, onToggle }) {
     return html`
-        <div class="suppressed-entry ${selected ? 'selected' : ''}" role="listitem" data-selected=${selected}>
+        <div class="suppressed-entry ${selected ? 'selected' : ''} ${expanded ? 'expanded' : ''}"
+             role="listitem" data-selected-surface="" data-selected=${selected ? 'true' : 'false'} onClick=${onToggle}>
             <div class="suppressed-header">
+                <span class="suppressed-expand-icon">${expanded ? '\u25be' : '\u25b8'}</span>
                 <span class="suppressed-key">${sigKey}</span>
                 <span class="suppressed-count-badge">${'\u00d7'}${entry.count}</span>
                 <button
                     class="btn btn-sm suppressed-unsuppress"
                     tabIndex="-1"
-                    onClick=${() => onUnsuppress(sigKey)}
+                    onClick=${(e) => { e.stopPropagation(); onUnsuppress(sigKey); }}
                 >Unsuppress</button>
             </div>
-            ${entry.last_message && html`<div class="suppressed-msg">${entry.last_message}</div>`}
-            <div class="suppressed-meta">
-                <span class="suppressed-meta-item">
-                    <span class="suppressed-meta-label">First</span>
-                    <span>${formatTimestamp(entry.first_seen)}</span>
-                </span>
-                <span class="suppressed-meta-sep">${'\u00b7'}</span>
-                <span class="suppressed-meta-item">
-                    <span class="suppressed-meta-label">Last</span>
-                    <span>${formatTimestamp(entry.last_seen)}</span>
-                </span>
-                ${entry.version && html`
+            ${expanded && html`
+                ${entry.last_message && html`<div class="suppressed-msg">${entry.last_message}</div>`}
+                <div class="suppressed-detail">
+                    ${entry.source && html`
+                        <div class="suppressed-detail-row">
+                            <span class="suppressed-meta-label">Source</span>
+                            <span class="suppressed-detail-value">${entry.source}</span>
+                        </div>
+                    `}
+                    ${entry.location && html`
+                        <div class="suppressed-detail-row">
+                            <span class="suppressed-meta-label">Location</span>
+                            <span class="suppressed-detail-value mono">${entry.location}</span>
+                        </div>
+                    `}
+                </div>
+                <div class="suppressed-meta">
+                    <span class="suppressed-meta-item">
+                        <span class="suppressed-meta-label">First</span>
+                        <span>${formatTimestamp(entry.first_seen)}</span>
+                    </span>
                     <span class="suppressed-meta-sep">${'\u00b7'}</span>
-                    <span class="suppressed-version">${entry.version}</span>
-                `}
-            </div>
+                    <span class="suppressed-meta-item">
+                        <span class="suppressed-meta-label">Last</span>
+                        <span>${formatTimestamp(entry.last_seen)}</span>
+                    </span>
+                    ${entry.version && html`
+                        <span class="suppressed-meta-sep">${'\u00b7'}</span>
+                        <span class="suppressed-version">${entry.version}</span>
+                    `}
+                </div>
+            `}
         </div>
     `;
 }
@@ -269,4 +404,39 @@ function EmptyState({ message, hint }) {
 function formatTimestamp(ts) {
     if (!ts) return '?';
     return ts.replace('T', ' ');
+}
+
+function formatLogDetail(entry) {
+    const lines = [];
+    if (entry.ts) lines.push(`Time:     ${entry.ts.replace('T', ' ')}`);
+    if (entry.level) lines.push(`Level:    ${entry.level.toUpperCase()}`);
+    if (entry.src) lines.push(`Source:   ${entry.src}`);
+    if (entry.key) lines.push(`Key:      ${entry.key}`);
+    if (entry.loc && entry.loc !== 'unknown:0' && entry.loc !== ':0') lines.push(`Location: ${entry.loc}`);
+    if (entry.count > 1) lines.push(`Count:    ${entry.count}`);
+    if (entry.v) lines.push(`Version:  ${entry.v}`);
+    if (entry.commit) lines.push(`Commit:   ${entry.commit}`);
+    lines.push('');
+    lines.push(entry.msg || '');
+    return lines.join('\n');
+}
+
+function LogDetailModal({ entry, onClose }) {
+    const copy = useCallback(() => {
+        navigator.clipboard.writeText(formatLogDetail(entry));
+        toast('success', 'Copied to clipboard');
+    }, [entry]);
+
+    return html`
+        <${Modal} open=${true} onClose=${onClose} size="xl" dismissOnBackdrop=${true} className="edit-modal">
+            <div class="edit-modal-content" tabIndex="-1">
+                <h3>Log Entry</h3>
+                <${CodeBlock} text=${formatLogDetail(entry)} />
+                <${ModalFooter} actions=${[
+                    { label: 'Close', kbd: 'Esc', onClick: onClose },
+                    { label: 'Copy', kbd: 'C', variant: 'btn-primary', onClick: copy },
+                ]} />
+            </div>
+        <//>
+    `;
 }
