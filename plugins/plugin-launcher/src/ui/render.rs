@@ -1,12 +1,16 @@
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use gpui::*;
 
 use super::layout::{resize_for_visible_rows, MAX_VISIBLE, ROW_HEIGHT};
+use super::platform;
 use super::state::{EdgeHit, NavDirection};
 use super::view;
 use super::window_ops::hide;
 use super::LauncherView;
+
+const FOCUS_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 static LAST_RENDER_US: AtomicU64 = AtomicU64::new(0);
 static RENDER_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -19,6 +23,12 @@ impl Focusable for LauncherView {
 
 impl Render for LauncherView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.dismiss_requested {
+            self.dismiss_requested = false;
+            self.set_showing(false);
+            hide(window);
+        }
+
         if self.blur_sub.is_none() {
             self.blur_sub = Some(cx.on_blur(&self.focus_handle, window, |this, window, _cx| {
                 if !this.is_showing {
@@ -46,6 +56,18 @@ impl Render for LauncherView {
                         hide(window);
                     }
                 }));
+        }
+
+        if self.is_showing && !self.focus_poll_running {
+            self.focus_poll_running = true;
+            let guard_until = self.blur_guard_until;
+            cx.spawn(move |this: WeakEntity<LauncherView>, cx: &mut AsyncApp| {
+                let mut async_cx = cx.clone();
+                async move {
+                    Self::focus_poll_loop(this, guard_until, &mut async_cx).await;
+                }
+            })
+            .detach();
         }
 
         let render_start = std::time::Instant::now();
@@ -166,6 +188,52 @@ impl Render for LauncherView {
 }
 
 impl LauncherView {
+    async fn focus_poll_loop(
+        this: WeakEntity<Self>,
+        guard_until: std::time::Instant,
+        cx: &mut AsyncApp,
+    ) {
+        loop {
+            cx.background_executor().timer(FOCUS_POLL_INTERVAL).await;
+            if std::time::Instant::now() < guard_until {
+                continue;
+            }
+            let has_focus = cx
+                .background_spawn(async { platform::has_process_focus() })
+                .await;
+            if has_focus {
+                let still_showing = this
+                    .update(cx, |view, cx| {
+                        let _ = cx;
+                        view.is_showing
+                    })
+                    .unwrap_or(false);
+                if !still_showing {
+                    break;
+                }
+                continue;
+            }
+            let requested = this
+                .update(cx, |view, cx| {
+                    if !view.is_showing {
+                        return false;
+                    }
+                    view.dismiss_requested = true;
+                    cx.notify();
+                    true
+                })
+                .unwrap_or(false);
+            if requested {
+                eprintln!("[launcher] focus poll: dismiss requested (X11 focus lost)");
+            }
+            break;
+        }
+        this.update(cx, |view, _cx| {
+            view.focus_poll_running = false;
+        })
+        .ok();
+    }
+
     fn apply_focus_gravity_if_idle(
         &mut self,
         result_count: usize,
