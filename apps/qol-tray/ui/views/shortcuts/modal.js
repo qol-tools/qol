@@ -1,11 +1,14 @@
 import { html } from '../../lib/html.js';
-import { useCallback } from 'preact/hooks';
 import { Modal, ModalActions } from '../../components/ModalPreact.js';
+import { ToggleSwitch } from '../../components/ToggleSwitch.js';
+import { CustomSelect } from '../plugin-config/fields/CustomSelect.js';
 
 const ACTION_TYPES = [
     { value: 'open_url', label: 'Open URL' },
     { value: 'launch_app', label: 'Launch App' },
 ];
+const ACTION_TYPE_OPTIONS = ACTION_TYPES.map(t => t.value);
+const ACTION_TYPE_LABELS = Object.fromEntries(ACTION_TYPES.map(t => [t.value, t.label]));
 
 const APP_REF_TYPES = [
     { value: 'bundle_id', label: 'Bundle ID' },
@@ -13,25 +16,51 @@ const APP_REF_TYPES = [
     { value: 'name', label: 'Name' },
 ];
 
-export function ShortcutEditModal({ modal, onChange, onClose, onSave }) {
+const APP_REF_OPTIONS = APP_REF_TYPES.map(t => t.value);
+const APP_REF_LABELS = Object.fromEntries(APP_REF_TYPES.map(t => [t.value, t.label]));
+
+function refKey(type) {
+    return type === 'bundle_id' ? 'id' : type;
+}
+
+function extractRefValue(ref) {
+    if (!ref) return '';
+    return ref.id || ref.path || ref.name || '';
+}
+
+export function ShortcutEditModal({ modal, fieldProps, onChange, onClose, onSave }) {
     const title = modal.editing ? 'Edit Shortcut' : 'Add Shortcut';
-    const nameRef = useCallback((el) => { if (el) el.focus(); }, []);
 
     const set = (key, value) => onChange({ ...modal.shortcut, [key]: value });
     const setAction = (patch) => onChange({ ...modal.shortcut, action: { ...modal.shortcut.action, ...patch } });
+    const isUrl = modal.shortcut.action.type === 'open_url';
+    let fi = 0;
 
     return html`
         <${Modal} open=${true} onClose=${onClose} className="edit-modal">
             <div class="edit-modal-content">
                 <h3>${title}</h3>
                 <${IdField} value=${modal.shortcut.id} disabled=${modal.editing}
-                    onChange=${(v) => set('id', v)} />
-                <${NameField} value=${modal.shortcut.name} onChange=${(v) => set('name', v)} inputRef=${nameRef} />
+                    onChange=${(v) => set('id', v)} fp=${fieldProps(fi++)} />
+                <${NameField} value=${modal.shortcut.name} onChange=${(v) => set('name', v)} fp=${fieldProps(fi++)} />
                 <${ActionTypeField} value=${modal.shortcut.action.type}
-                    onChange=${(v) => onTypeChange(modal.shortcut, v, onChange)} />
-                <${ActionFields} action=${modal.shortcut.action} onChange=${setAction} />
-                <${OptionsFields} shortcut=${modal.shortcut} onChange=${set} />
-                <${ModalActions} onClose=${onClose} onSave=${onSave} cancelTabIndex="8" saveTabIndex="9" />
+                    onChange=${(v) => onTypeChange(modal.shortcut, v, onChange)} fp=${fieldProps(fi++)} />
+                ${isUrl && html`
+                    <${UrlField} url=${modal.shortcut.action.url || ''} onChange=${(v) => setAction({ url: v })} fp=${fieldProps(fi++)} />
+                    <${BrowserOverrideToggle} browser=${modal.shortcut.action.browser_override} onChange=${(v) => setAction({ browser_override: v || undefined })} fp=${fieldProps(fi++)} />
+                    ${modal.shortcut.action.browser_override && html`
+                        <div class="form-group-children">
+                            <${BrowserOverrideType} browser=${modal.shortcut.action.browser_override} onChange=${(v) => setAction({ browser_override: v || undefined })} fp=${fieldProps(fi++)} />
+                            <${BrowserOverrideValue} browser=${modal.shortcut.action.browser_override} onChange=${(v) => setAction({ browser_override: v || undefined })} fp=${fieldProps(fi++)} />
+                        </div>
+                    `}
+                `}
+                ${!isUrl && html`
+                    <${AppRefType} app=${modal.shortcut.action.app} onChange=${(v) => setAction({ app: v })} fp=${fieldProps(fi++)} />
+                    <${AppRefValue} app=${modal.shortcut.action.app} onChange=${(v) => setAction({ app: v })} fp=${fieldProps(fi++)} />
+                `}
+                <${OptionsFields} shortcut=${modal.shortcut} onChange=${set} fp1=${fieldProps(fi++)} fp2=${fieldProps(fi++)} />
+                <${ModalActions} onClose=${onClose} onSave=${onSave} />
             </div>
         <//>
     `;
@@ -45,134 +74,117 @@ function onTypeChange(shortcut, type, onChange) {
     onChange({ ...shortcut, action: { type: 'launch_app', app: { type: 'path', path: '' } } });
 }
 
-function IdField({ value, disabled, onChange }) {
+function IdField({ value, disabled, onChange, fp }) {
     return html`
-        <div class="form-group">
+        <div class="form-group" ...${fp}>
             <label>ID</label>
-            <input type="text" id="shortcut-id" tabindex="1" value=${value}
+            <input type="text" value=${value}
                    disabled=${disabled} placeholder="my-shortcut"
                    onInput=${(e) => onChange(e.target.value)} />
         </div>
     `;
 }
 
-function NameField({ value, onChange, inputRef }) {
+function NameField({ value, onChange, fp }) {
     return html`
-        <div class="form-group">
+        <div class="form-group" ...${fp}>
             <label>Name</label>
-            <input type="text" ref=${inputRef} tabindex="2" value=${value}
+            <input type="text" value=${value}
                    placeholder="My Shortcut"
                    onInput=${(e) => onChange(e.target.value)} />
         </div>
     `;
 }
 
-function ActionTypeField({ value, onChange }) {
+function ActionTypeField({ value, onChange, fp }) {
     return html`
-        <div class="form-group">
+        <div class="form-group" ...${fp}>
             <label>Type</label>
-            <select tabindex="3" value=${value}
-                    onChange=${(e) => onChange(e.target.value)}>
-                ${ACTION_TYPES.map(t => html`<option key=${t.value} value=${t.value}>${t.label}</option>`)}
-            </select>
+            <${CustomSelect} value=${value} options=${ACTION_TYPE_OPTIONS} labels=${ACTION_TYPE_LABELS} onChange=${onChange} />
         </div>
     `;
 }
 
-function ActionFields({ action, onChange }) {
-    if (action.type === 'open_url') {
-        return html`
-            <${UrlField} url=${action.url || ''} onChange=${(v) => onChange({ url: v })} />
-            <${BrowserOverrideField} browser=${action.browser_override} onChange=${(v) => onChange({ browser_override: v || undefined })} />
-        `;
-    }
-    return html`<${AppRefField} app=${action.app} onChange=${(v) => onChange({ app: v })} />`;
-}
-
-function UrlField({ url, onChange }) {
+function UrlField({ url, onChange, fp }) {
     return html`
-        <div class="form-group">
+        <div class="form-group" ...${fp}>
             <label>URL</label>
-            <input type="text" tabindex="4" value=${url}
+            <input type="text" value=${url}
                    placeholder="https://example.com"
                    onInput=${(e) => onChange(e.target.value)} />
         </div>
     `;
 }
 
-function BrowserOverrideField({ browser, onChange }) {
-    const hasOverride = !!browser;
-    const refType = browser?.type || 'bundle_id';
-    const refValue = browser ? (browser.id || browser.path || browser.name || '') : '';
-
+function BrowserOverrideToggle({ browser, onChange, fp }) {
     const toggle = () => {
-        if (hasOverride) return onChange(null);
+        if (browser) return onChange(null);
         onChange({ type: 'bundle_id', id: '' });
     };
-
-    const setRef = (type, value) => {
-        const key = type === 'bundle_id' ? 'id' : type;
-        onChange({ type, [key]: value });
-    };
-
     return html`
-        <div class="form-group">
-            <label>
-                <input type="checkbox" checked=${hasOverride} onChange=${toggle} />
-                ${' '}Browser override
-            </label>
-            ${hasOverride && html`
-                <div class="form-group-inline">
-                    <select value=${refType} onChange=${(e) => setRef(e.target.value, refValue)}>
-                        ${APP_REF_TYPES.map(t => html`<option key=${t.value} value=${t.value}>${t.label}</option>`)}
-                    </select>
-                    <input type="text" tabindex="5" value=${refValue}
-                           placeholder=${refType === 'bundle_id' ? 'com.google.Chrome' : refType === 'path' ? '/Applications/Firefox.app' : 'Firefox'}
-                           onInput=${(e) => setRef(refType, e.target.value)} />
-                </div>
-            `}
+        <div class="form-group" ...${fp}>
+            <${ToggleSwitch} checked=${!!browser} onChange=${toggle} label="Browser override" />
         </div>
     `;
 }
 
-function AppRefField({ app, onChange }) {
-    const refType = app?.type || 'path';
-    const refValue = app ? (app.id || app.path || app.name || '') : '';
-
-    const setRef = (type, value) => {
-        const key = type === 'bundle_id' ? 'id' : type;
-        onChange({ type, [key]: value });
-    };
-
+function BrowserOverrideType({ browser, onChange, fp }) {
+    const type = browser?.type || 'bundle_id';
+    const value = extractRefValue(browser);
     return html`
-        <div class="form-group">
-            <label>Application</label>
-            <div class="form-group-inline">
-                <select tabindex="4" value=${refType} onChange=${(e) => setRef(e.target.value, refValue)}>
-                    ${APP_REF_TYPES.map(t => html`<option key=${t.value} value=${t.value}>${t.label}</option>`)}
-                </select>
-                <input type="text" tabindex="5" value=${refValue}
-                       placeholder=${refType === 'bundle_id' ? 'com.apple.Safari' : refType === 'path' ? '/Applications/App.app' : 'App Name'}
-                       onInput=${(e) => setRef(refType, e.target.value)} />
-            </div>
+        <div class="form-group" ...${fp}>
+            <label>Browser type</label>
+            <${CustomSelect} value=${type} options=${APP_REF_OPTIONS} labels=${APP_REF_LABELS}
+                onChange=${(t) => onChange({ type: t, [refKey(t)]: value })} />
         </div>
     `;
 }
 
-function OptionsFields({ shortcut, onChange }) {
+function BrowserOverrideValue({ browser, onChange, fp }) {
+    const type = browser?.type || 'bundle_id';
     return html`
-        <div class="form-group form-group-row">
-            <label>
-                <input type="checkbox" checked=${shortcut.enabled}
-                       onChange=${(e) => onChange('enabled', e.target.checked)} />
-                ${' '}Enabled
-            </label>
-            <label>
-                <input type="checkbox" checked=${shortcut.export_to_launcher}
-                       onChange=${(e) => onChange('export_to_launcher', e.target.checked)} />
-                ${' '}Export to launcher
-            </label>
+        <div class="form-group" ...${fp}>
+            <label>Browser value</label>
+            <input type="text" value=${extractRefValue(browser)}
+                   placeholder=${type === 'bundle_id' ? 'com.google.Chrome' : type === 'path' ? '/Applications/Firefox.app' : 'Firefox'}
+                   onInput=${(e) => onChange({ type, [refKey(type)]: e.target.value })} />
         </div>
     `;
 }
 
+function AppRefType({ app, onChange, fp }) {
+    const type = app?.type || 'path';
+    const value = extractRefValue(app);
+    return html`
+        <div class="form-group" ...${fp}>
+            <label>App type</label>
+            <${CustomSelect} value=${type} options=${APP_REF_OPTIONS} labels=${APP_REF_LABELS}
+                onChange=${(t) => onChange({ type: t, [refKey(t)]: value })} />
+        </div>
+    `;
+}
+
+function AppRefValue({ app, onChange, fp }) {
+    const type = app?.type || 'path';
+    return html`
+        <div class="form-group" ...${fp}>
+            <label>App value</label>
+            <input type="text" value=${extractRefValue(app)}
+                   placeholder=${type === 'bundle_id' ? 'com.apple.Safari' : type === 'path' ? '/Applications/App.app' : 'App Name'}
+                   onInput=${(e) => onChange({ type, [refKey(type)]: e.target.value })} />
+        </div>
+    `;
+}
+
+function OptionsFields({ shortcut, onChange, fp1, fp2 }) {
+    return html`
+        <div class="form-group" ...${fp1}>
+            <${ToggleSwitch} checked=${shortcut.enabled}
+                onChange=${(v) => onChange('enabled', v)} label="Enabled" />
+        </div>
+        <div class="form-group" ...${fp2}>
+            <${ToggleSwitch} checked=${shortcut.export_to_launcher}
+                onChange=${(v) => onChange('export_to_launcher', v)} label="Export to launcher" />
+        </div>
+    `;
+}

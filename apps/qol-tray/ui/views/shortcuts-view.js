@@ -30,7 +30,7 @@ export function ShortcutsView() {
                 <${ShortcutsList} shortcuts=${sc.filtered}
                     selectedIndex=${sc.selectedIndex} onSelect=${sc.setSelectedId} onEdit=${sc.openEditModal} />
             </div>
-            ${sc.editModal && html`<${ShortcutEditModal} modal=${sc.editModal}
+            ${sc.editModal && html`<${ShortcutEditModal} modal=${sc.editModal} fieldProps=${sc.fieldProps}
                 onChange=${sc.handleModalChange} onClose=${sc.closeModal} onSave=${sc.saveShortcut} />`}
         </div>
     `;

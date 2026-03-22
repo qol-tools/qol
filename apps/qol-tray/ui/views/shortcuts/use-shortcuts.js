@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'preact/hooks';
 import { useStateRef } from '../../hooks/useStateRef.js';
 import { usePersistedId } from '../../hooks/usePersistedIndex.js';
-import { withShiftVariants, dispatchKey } from '../../utils/keys.js';
+import { useListKeyboard } from '../../hooks/useListKeyboard.js';
+import { useModalKeyboard } from '../../hooks/useModalKeyboard.js';
 import { matchesQuery } from '../../utils/collections.js';
 import {
     loadShortcuts, createShortcut, updateShortcut,
@@ -12,12 +13,13 @@ export function useShortcuts(searchQuery) {
     const d = useShortcutsData(searchQuery);
     const m = useModalActions(d);
     const { deleteById, runById } = useListActions(d);
-    const { handleKey, isBlocking } = useKeyboard(d, m, deleteById, runById);
+    const { handleKey, isBlocking, modalNav } = useKeyboard(d, m, deleteById, runById);
     return {
         filtered: d.filtered,
         selectedIndex: d.selectedIndex,
         setSelectedId: d.setSelectedId,
         editModal: d.editModal,
+        fieldProps: modalNav.fieldProps,
         openEditModal: m.openEditModal,
         handleModalChange: m.handleChange,
         closeModal: m.closeModal,
@@ -120,23 +122,43 @@ function useListActions(d) {
 function useKeyboard(d, m, deleteById, runById) {
     const { filtered, selectedIndex, setSelectedId } = d;
 
+    const setSelectedIndex = useCallback((idxOrFn) => {
+        const idx = typeof idxOrFn === 'function' ? idxOrFn(d.selectedIndex) : idxOrFn;
+        const item = filtered[idx];
+        if (item) setSelectedId(item.id);
+    }, [filtered, d.selectedIndex, setSelectedId]);
+
+    const selected = filtered[selectedIndex];
+
+    const modalNav = useModalKeyboard({
+        onSave: m.save,
+        onClose: m.closeModal,
+    });
+
+    const listHandler = useListKeyboard({
+        itemCount: filtered.length,
+        selectedIndex,
+        setSelectedIndex,
+        onAdd: m.openEditModal,
+        onDelete: useCallback(() => { if (selected) deleteById(selected.id); }, [selected, deleteById]),
+        onEdit: useCallback(() => { if (selected) m.openEditModal(selected); }, [selected, m.openEditModal]),
+    });
+
     const handleKey = useCallback((e) => {
         if (d.editModalRef.current) {
-            if (e.key === 'Escape') { e.preventDefault(); m.closeModal(); return; }
-            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); m.save(); return; }
+            modalNav.handleKey(e);
             return;
         }
-        const selected = filtered[selectedIndex];
-        dispatchKey(e, withShiftVariants({
-            ArrowUp: () => { const prev = filtered[selectedIndex - 1]; if (prev) setSelectedId(prev.id); },
-            ArrowDown: () => { const next = filtered[selectedIndex + 1]; if (next) setSelectedId(next.id); },
-            Enter: () => { if (selected) m.openEditModal(selected); },
-            a: () => m.openEditModal(),
-            r: () => { if (selected) runById(selected.id); },
-            Delete: () => { if (selected) deleteById(selected.id); },
-            Backspace: () => { if (selected) deleteById(selected.id); },
-        }));
-    }, [filtered, selectedIndex, setSelectedId, m.save, m.openEditModal, deleteById, runById]);
+        if (e.key === 'r' || e.key === 'R') {
+            if (selected) { e.preventDefault(); runById(selected.id); }
+            return;
+        }
+        listHandler(e);
+    }, [listHandler, modalNav.handleKey, selected, runById]);
 
-    return { handleKey, isBlocking: useCallback(() => d.editModalRef.current !== null, []) };
+    return {
+        handleKey,
+        isBlocking: useCallback(() => d.editModalRef.current !== null, []),
+        modalNav,
+    };
 }
