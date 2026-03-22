@@ -1,11 +1,15 @@
 import { useEffect, useCallback } from 'preact/hooks';
 import { useStateRef } from '../../hooks/useStateRef.js';
 import { usePersistedIndex } from '../../hooks/usePersistedIndex.js';
-import { withShiftVariants, dispatchKey } from '../../utils/keys.js';
+import { useSSEDebounce } from '../../hooks/useSSEDebounce.js';
+import { useListKeyboard } from '../../hooks/useListKeyboard.js';
+import { useModalKeyboard } from '../../hooks/useModalKeyboard.js';
 import {
     buildSavedHotkeys,
     getAvailableActions as resolveAvailableActions,
     loadHotkeysViewData,
+    loadPlugins,
+    loadRegistrationErrors,
     nextSelectedIndex,
     persistHotkeys,
     removeHotkeyAtIndex
@@ -14,20 +18,20 @@ import {
     applyRecordingKey,
     changeEditModalPlugin,
     createEditModalState,
-    nextEditModalState
 } from './modal.js';
-import { resolveModalKeyAction, applyModalAction } from './keys.js';
 
 export function useHotkeys() {
     const d = useHotkeysData();
     const m = useModalActions(d);
     const { deleteSelected } = useListActions(d);
-    const { handleKey, isBlocking } = useKeyboard(d, m, deleteSelected);
+    const { handleKey, isBlocking, modalNav } = useKeyboard(d, m, deleteSelected);
     return {
         hotkeys: d.hotkeys,
         plugins: d.plugins,
+        registrationErrors: d.registrationErrors,
         selectedIndex: d.selectedIndex,
         editModal: d.editModal,
+        fieldProps: modalNav.fieldProps,
         setSelectedIndex: d.setSelectedIndex,
         openEditModal: m.openEditModal,
         handlePluginChange: m.handlePluginChange,
@@ -44,16 +48,19 @@ export function useHotkeys() {
 function useHotkeysData() {
     const [hotkeys, setHotkeys, hotkeysRef] = useStateRef([]);
     const [plugins, setPlugins] = useStateRef([]);
+    const [registrationErrors, setRegistrationErrors] = useStateRef([]);
     const [selectedIndex, setSelectedIndex, selectedIndexRef, markRestored] = usePersistedIndex('hotkeys-selected-index', -1);
     const [editModal, setEditModal, editModalRef] = useStateRef(null);
-    const [modalFieldIndex, setModalFieldIndex, modalFieldIndexRef] = useStateRef(0);
     useEffect(() => { loadInitialData(setHotkeys, setPlugins, setSelectedIndex, markRestored); }, []);
+    const refreshPlugins = useCallback(() => { loadPlugins().then(setPlugins).catch(() => {}); }, []);
+    const refreshErrors = useCallback(() => { loadRegistrationErrors().then(setRegistrationErrors).catch(() => {}); }, []);
+    useSSEDebounce('plugins_changed', refreshPlugins);
+    useEffect(() => { refreshErrors(); }, []);
     return {
         hotkeys, setHotkeys, hotkeysRef,
-        plugins,
+        plugins, registrationErrors, refreshErrors,
         selectedIndex, setSelectedIndex, selectedIndexRef,
         editModal, setEditModal, editModalRef,
-        modalFieldIndex, setModalFieldIndex, modalFieldIndexRef
     };
 }
 
@@ -76,7 +83,6 @@ function useModalActions(d) {
     );
     const openEditModal = useCallback((hotkey = null, keepPlugin = null) => {
         d.setEditModal(createEditModalState(hotkey, keepPlugin, getActions));
-        d.setModalFieldIndex(0);
     }, [getActions]);
     const saveHotkey = useCallback(() => executeSave(d, getActions), [getActions]);
     const handlePluginChange = useCallback((id) => d.setEditModal(prev => changeEditModalPlugin(prev, id, getActions)), [getActions]);
@@ -90,13 +96,23 @@ function executeSave(d, getActions) {
     const modal = d.editModalRef.current;
     if (!modal?.key || !modal?.pluginId || !modal?.action) return;
     const nextHotkeys = buildSavedHotkeys(d.hotkeysRef.current, modal);
-    const savedId = modal.hotkey?.id || nextHotkeys[nextHotkeys.length - 1]?.id;
     d.setHotkeys(nextHotkeys);
-    void persistHotkeys(nextHotkeys);
-    if (modal.hotkey) { d.setEditModal(null); return; }
+    d.hotkeysRef.current = nextHotkeys;
+    persistHotkeys(nextHotkeys).then(() => setTimeout(d.refreshErrors, 200));
+    if (modal.hotkey) {
+        d.setEditModal(null);
+        return;
+    }
     d.setSelectedIndex(nextHotkeys.length - 1);
-    d.setEditModal(prev => nextEditModalState(prev, savedId, getActions));
-    d.setModalFieldIndex(1);
+    const remaining = getActions(modal.pluginId);
+    d.setEditModal({
+        ...modal,
+        hotkey: null,
+        key: '',
+        action: remaining[0]?.id || '',
+        recording: false,
+        availableActions: remaining,
+    });
 }
 
 function useListActions(d) {
@@ -108,12 +124,29 @@ function useListActions(d) {
             const next = removeHotkeyAtIndex(hks, idx);
             d.setHotkeys(next);
             d.setSelectedIndex(nextSelectedIndex(next, idx));
-            void persistHotkeys(next);
+            persistHotkeys(next).then(() => setTimeout(d.refreshErrors, 200));
         }, [])
     };
 }
 
 function useKeyboard(d, m, deleteSelected) {
+    const modalNav = useModalKeyboard({
+        onSave: m.saveHotkey,
+        onClose: m.closeModal,
+    });
+
+    const listHandler = useListKeyboard({
+        itemCount: d.hotkeys.length,
+        selectedIndex: d.selectedIndex,
+        setSelectedIndex: d.setSelectedIndex,
+        onAdd: m.openEditModal,
+        onDelete: deleteSelected,
+        onEdit: useCallback(() => {
+            const hk = d.hotkeysRef.current[d.selectedIndexRef.current];
+            if (hk) m.openEditModal(hk);
+        }, [m.openEditModal]),
+    });
+
     const handleKey = useCallback((e) => {
         const modal = d.editModalRef.current;
         if (modal) {
@@ -122,24 +155,17 @@ function useKeyboard(d, m, deleteSelected) {
                 e.stopPropagation();
                 const result = applyRecordingKey(modal, e);
                 d.setEditModal(result.modal);
-                if (result.advance) d.setModalFieldIndex(prev => prev + 1);
                 return;
             }
-            const action = resolveModalKeyAction(e, document.activeElement);
-            if (action) applyModalAction(action, e, d.setEditModal, m.saveHotkey, d.modalFieldIndexRef, d.setModalFieldIndex);
+            modalNav.handleKey(e);
             return;
         }
-        dispatchListKey(e, d, m.openEditModal);
-    }, [m.saveHotkey, m.openEditModal]);
-    return { handleKey, isBlocking: useCallback(() => d.editModalRef.current !== null, []) };
-}
+        listHandler(e);
+    }, [listHandler, modalNav.handleKey]);
 
-function dispatchListKey(e, d, openEditModal) {
-    const hks = d.hotkeysRef.current;
-    const idx = d.selectedIndexRef.current;
-    dispatchKey(e, withShiftVariants({
-        ArrowUp: () => d.setSelectedIndex(i => Math.max(0, i - 1)),
-        ArrowDown: () => d.setSelectedIndex(i => Math.min(hks.length - 1, i + 1)),
-        Enter: () => { if (hks.length > 0 && idx >= 0) openEditModal(hks[idx]); },
-    }));
+    return {
+        handleKey,
+        isBlocking: useCallback(() => d.editModalRef.current !== null, []),
+        modalNav,
+    };
 }

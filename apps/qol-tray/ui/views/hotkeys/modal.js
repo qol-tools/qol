@@ -1,6 +1,7 @@
 import { html } from '../../lib/html.js';
-import { useEffect } from 'preact/hooks';
+import { useMemo } from 'preact/hooks';
 import { Modal, ModalActions } from '../../components/ModalPreact.js';
+import { CustomSelect } from '../plugin-config/fields/CustomSelect.js';
 
 const MODIFIER_KEYS = ['Control', 'Alt', 'Shift', 'Meta'];
 const MODIFIER_NAMES = ['Ctrl', 'Alt', 'Shift', 'Super'];
@@ -15,64 +16,63 @@ const NAV_KEY_MAP = {
     PrintScreen: 'PrintScreen', Pause: 'Pause'
 };
 
-export function HotkeyEditModal({ modal, plugins, onPluginChange, onActionChange, onStartRecording, onClose, onSave }) {
+export function HotkeyEditModal({ modal, plugins, fieldProps, onPluginChange, onActionChange, onStartRecording, onClose, onSave }) {
     const title = modal.hotkey ? 'Edit Hotkey' : 'Add Hotkey';
-    useEffect(() => {
-        setTimeout(() => document.getElementById('hotkey-plugin')?.focus(), 0);
-    }, []);
+    const exhausted = modal.availableActions.length === 0;
+
     return html`
         <${Modal} open=${true} onClose=${onClose} className="edit-modal">
             <div class="edit-modal-content">
                 <h3>${title}</h3>
-                <${PluginField} modal=${modal} plugins=${plugins} onPluginChange=${onPluginChange} />
-                <${ActionField} modal=${modal} onActionChange=${onActionChange} />
-                <${KeyField} modal=${modal} onStartRecording=${onStartRecording} />
-                <${ModalActions} onClose=${onClose} onSave=${onSave} cancelTabIndex="4" saveTabIndex="5" />
+                <div class="form-group" ...${fieldProps(0)}>
+                    <label>Plugin</label>
+                    <${PluginSelect} modal=${modal} plugins=${plugins} onChange=${onPluginChange} />
+                </div>
+                <div class="form-group" ...${fieldProps(1)}>
+                    <label>Action</label>
+                    <${ActionSelect} modal=${modal} onChange=${onActionChange} disabled=${exhausted} />
+                </div>
+                <div class="form-group" ...${fieldProps(2)}>
+                    <label>Shortcut <span class="hint">(Enter to record)</span></label>
+                    <${KeyInput} modal=${modal} onStartRecording=${onStartRecording} disabled=${exhausted} />
+                </div>
+                <${ModalActions} onClose=${onClose} onSave=${onSave} disabled=${exhausted} />
             </div>
         <//>
     `;
 }
 
-function PluginField({ modal, plugins, onPluginChange }) {
-    return html`
-        <div class="form-group">
-            <label>Plugin</label>
-            <select id="hotkey-plugin" tabindex="1"
-                    value=${modal.pluginId}
-                    onChange=${(e) => onPluginChange(e.target.value)}>
-                <option value="">Select plugin...</option>
-                ${plugins.map(p => html`<option key=${p.id} value=${p.id}>${p.name}</option>`)}
-            </select>
-        </div>
-    `;
+function PluginSelect({ modal, plugins, onChange }) {
+    const options = useMemo(() => plugins.map(p => p.id), [plugins]);
+    const labels = useMemo(() => Object.fromEntries(plugins.map(p => [p.id, p.name])), [plugins]);
+    return html`<${CustomSelect} value=${modal.pluginId} options=${options} labels=${labels} onChange=${onChange} />`;
 }
 
-function ActionField({ modal, onActionChange }) {
-    return html`
-        <div class="form-group">
-            <label>Action</label>
-            <select id="hotkey-action" tabindex="2"
-                    value=${modal.action}
-                    onChange=${(e) => onActionChange(e.target.value)}>
-                ${modal.availableActions.length === 0
-                    ? html`<option value="">All actions assigned</option>`
-                    : modal.availableActions.map(a => html`<option key=${a.id} value=${a.id}>${a.label}</option>`)}
-            </select>
-        </div>
-    `;
-}
+function ActionSelect({ modal, onChange, disabled }) {
+    const options = useMemo(() => modal.availableActions.map(a => a.id), [modal.availableActions]);
+    const labels = useMemo(() => Object.fromEntries(modal.availableActions.map(a => [a.id, a.label])), [modal.availableActions]);
 
-function KeyField({ modal, onStartRecording }) {
-    return html`
-        <div class="form-group">
-            <label>Shortcut <span class="hint">(Enter to record)</span></label>
-            <div class="key-input-row">
-                <input type="text" id="hotkey-key" tabindex="3"
-                       value=${modal.key} readonly
-                       class=${modal.recording ? 'recording' : ''}
-                       placeholder=${modal.recording ? 'Press keys... (Esc to cancel)' : 'Press Enter to record'}
-                       onClick=${onStartRecording} />
+    if (disabled) {
+        return html`
+            <div class="custom-select">
+                <button type="button" class="custom-select-trigger" disabled>
+                    <span class="custom-select-value" style="opacity: 0.5">All actions assigned</span>
+                    <span class="custom-select-arrow">${'\u25BE'}</span>
+                </button>
             </div>
+        `;
+    }
+    return html`<${CustomSelect} value=${modal.action} options=${options} labels=${labels} onChange=${onChange} />`;
+}
+
+function KeyInput({ modal, onStartRecording, disabled }) {
+    return html`
+        <div class="key-input-row">
+            <input type="text" id="hotkey-key"
+                   value=${modal.key} readonly disabled=${disabled}
+                   class=${modal.recording ? 'recording' : ''}
+                   placeholder=${modal.recording ? 'Press keys... (Esc to cancel)' : 'Press Enter to record'}
+                   onClick=${!disabled ? onStartRecording : undefined} />
         </div>
     `;
 }
@@ -91,10 +91,7 @@ export function createEditModalState(hotkey, keepPlugin, getAvailableActions) {
 }
 
 export function changeEditModalPlugin(previous, pluginId, getAvailableActions) {
-    if (!previous) {
-        return previous;
-    }
-
+    if (!previous) return previous;
     const availableActions = getAvailableActions(pluginId, previous.hotkey?.id);
     return {
         ...previous,
@@ -104,32 +101,13 @@ export function changeEditModalPlugin(previous, pluginId, getAvailableActions) {
     };
 }
 
-export function nextEditModalState(previous, entryId, getAvailableActions) {
-    if (previous.hotkey) {
-        return null;
-    }
-
-    const availableActions = getAvailableActions(previous.pluginId, entryId);
-    if (availableActions.length === 0) {
-        return null;
-    }
-
-    return {
-        ...previous,
-        hotkey: null,
-        key: '',
-        action: availableActions[0]?.id || '',
-        recording: false,
-        availableActions
-    };
-}
-
 export function applyRecordingKey(modal, event) {
     if (event.key === 'Escape') {
-        return { modal: stopRecording(modal), advance: false };
+        return { modal: { ...modal, recording: false }, advance: false };
     }
     if (MODIFIER_KEYS.includes(event.key)) {
-        return { modal: updateRecordedKey(modal, formatKeyEvent(event)), advance: false };
+        const key = formatKeyEvent(event);
+        return { modal: key ? { ...modal, key } : modal, advance: false };
     }
 
     const key = formatKeyEvent(event);
@@ -138,30 +116,8 @@ export function applyRecordingKey(modal, event) {
     }
 
     return {
-        modal: {
-            ...modal,
-            key,
-            recording: false
-        },
+        modal: { ...modal, key, recording: false },
         advance: true
-    };
-}
-
-function stopRecording(modal) {
-    return {
-        ...modal,
-        recording: false
-    };
-}
-
-function updateRecordedKey(modal, key) {
-    if (!key) {
-        return modal;
-    }
-
-    return {
-        ...modal,
-        key
     };
 }
 

@@ -10,6 +10,19 @@ import { HotkeyEditModal } from './hotkeys/modal.js';
 import { useHotkeys } from './hotkeys/use-hotkeys.js';
 import { HotkeysList } from './hotkeys/list.js';
 
+function RegistrationWarnings({ errors }) {
+    return html`
+        <div class="hotkeys-warnings">
+            ${errors.map(err => html`
+                <div key=${err.key} class="hotkeys-warning-item">
+                    <kbd>${err.key}</kbd>
+                    <span>${err.error}</span>
+                </div>
+            `)}
+        </div>
+    `;
+}
+
 export function HotkeysView() {
     const hk = useHotkeys();
     const { searchQuery } = usePaletteContext();
@@ -38,12 +51,13 @@ export function HotkeysView() {
     return html`
         <div class="view-container">
             <${PageHeader} title="Hotkeys" subtitle="Configure global keyboard shortcuts for plugin actions" />
+            ${hk.registrationErrors.length > 0 && html`<${RegistrationWarnings} errors=${hk.registrationErrors} />`}
             <div class="view-body">
                 <${HotkeysList} hotkeys=${filtered} plugins=${hk.plugins}
                     selectedIndex=${hk.selectedIndex} onSelect=${hk.setSelectedIndex} onEdit=${hk.openEditModal} />
             </div>
             ${hk.editModal && html`<${HotkeyEditModal} modal=${hk.editModal} plugins=${hk.plugins}
-                onPluginChange=${hk.handlePluginChange} onActionChange=${hk.handleActionChange}
+                fieldProps=${hk.fieldProps} onPluginChange=${hk.handlePluginChange} onActionChange=${hk.handleActionChange}
                 onStartRecording=${hk.startRecording} onClose=${hk.closeModal} onSave=${hk.saveHotkey} />`}
         </div>
     `;

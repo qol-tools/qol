@@ -16,6 +16,14 @@ export async function loadHotkeysViewData() {
     };
 }
 
+export async function loadPlugins() {
+    return parseInstalledPlugins(await apiJson('/api/installed'));
+}
+
+export async function loadRegistrationErrors() {
+    return apiJson('/api/hotkeys/errors');
+}
+
 export async function persistHotkeys(hotkeys) {
     await apiResponse('/api/hotkeys', jsonRequest('PUT', { hotkeys }));
 }
