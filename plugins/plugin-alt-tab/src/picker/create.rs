@@ -33,7 +33,7 @@ pub(crate) fn pre_create_offscreen(
         origin: point(px(-5000.0), px(-5000.0)),
         size: size(px(600.0), px(400.0)),
     };
-    let Some(handle) = open_picker_window(offscreen, init, cx) else {
+    let Some(handle) = open_picker_window_silent(offscreen, init, cx) else {
         return;
     };
     let sentinel = qol_plugin_api::window::MonitorKey {
@@ -139,6 +139,19 @@ impl PickerInit {
     pub(crate) fn into_app(self, window: &mut Window, cx: &mut Context<AltTabApp>) -> AltTabApp {
         AltTabApp::new(self, window, cx)
     }
+}
+
+fn open_picker_window_silent(
+    bounds: Bounds<Pixels>,
+    init: PickerInit,
+    cx: &mut App,
+) -> Option<WindowHandle<AltTabApp>> {
+    let opts = picker_window_options(bounds, init.transparent_bg);
+    cx.open_window(opts, move |window, cx| {
+        window.set_window_title("qol-alt-tab-picker");
+        cx.new(|cx| init.into_app(window, cx))
+    })
+    .ok()
 }
 
 fn open_picker_window(
