@@ -14,11 +14,16 @@ export function StoreTokenPanel({
         return [
             html`
                 <div class="token-input-container">
-                    <input ref=${tokenInputRef} type="password" id="github-token-input"
-                           placeholder="Paste GitHub token (no scopes needed)" />
-                    <button class="btn btn-primary" onClick=${onSave}>Save</button>
-                    ${hasToken && html`<button class="btn btn-ghost" onClick=${onDelete}>Remove Token</button>`}
-                    <button class="btn btn-ghost" onClick=${onCancel}>Cancel</button>
+                    <div class="form-group">
+                        <label>GitHub Token</label>
+                        <input ref=${tokenInputRef} type="password" id="github-token-input"
+                               placeholder="Paste GitHub token (no scopes needed)" />
+                    </div>
+                    <div class="modal-buttons">
+                        <button class="btn btn-ghost" onClick=${onCancel}>Cancel</button>
+                        ${hasToken && html`<button class="btn btn-ghost" onClick=${onDelete}>Remove</button>`}
+                        <button class="btn btn-primary" onClick=${onSave}>Save</button>
+                    </div>
                 </div>
             `,
             html`

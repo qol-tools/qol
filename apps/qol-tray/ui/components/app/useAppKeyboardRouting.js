@@ -1,4 +1,4 @@
-import { useCallback } from 'preact/hooks';
+import { useCallback, useLayoutEffect, useRef } from 'preact/hooks';
 import { useKeyboard } from '../../hooks/useKeyboard.js';
 import { usePluginConfigContext } from '../../views/plugin-config/context.js';
 import { useViewKeyboardContext } from './view-keyboard-context.js';
@@ -23,6 +23,18 @@ export function useAppKeyboardRouting({
             : (idx + 1) % viewOrder.length;
         switchView(viewOrder[next]);
     }, [activeViewId, switchView, viewOrder]);
+
+    const prevPluginIdRef = useRef(activePluginId);
+    useLayoutEffect(() => {
+        const wasOpen = prevPluginIdRef.current;
+        prevPluginIdRef.current = activePluginId;
+        if (wasOpen && !activePluginId) {
+            const surface = document.querySelector('#content [data-selected-surface][data-selected="true"]');
+            if (surface) { surface.focus(); return; }
+            const fallback = document.querySelector('#content [data-selected-surface]');
+            if (fallback) fallback.focus();
+        }
+    }, [activePluginId]);
 
     useKeyboard(useCallback((event) => {
         const viewKeyboard = getViewKeyboard(activeViewId);
@@ -275,7 +287,7 @@ function handleFieldSubmode(event, detail, fieldId) {
     const target = event.target instanceof HTMLElement ? event.target : active;
     if (!target) return false;
     if (target.isConnected && !fieldElement.contains(target) && !(active && fieldElement.contains(active) && active !== fieldElement)) return false;
-    if (!target.isConnected) return true;
+    if (!target.isConnected) return false;
     if (active === fieldElement) return false;
 
     if (event.key === 'Escape') {

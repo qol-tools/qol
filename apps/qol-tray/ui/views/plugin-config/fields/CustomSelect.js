@@ -33,13 +33,9 @@ export function CustomSelect({ value, options, labels, onChange }) {
             setHighlightIndex(i => (i - 1 + options.length) % options.length);
             return;
         }
-        if (e.key === 'Enter' || e.key === ' ') {
-            select(options[highlightIndex]);
-        } else if (e.key === 'Escape' || e.key === 'Tab') {
-            setOpen(false);
-        } else {
-            return;
-        }
+        if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Escape' && e.key !== 'Tab') return;
+        if (e.key === 'Enter' || e.key === ' ') select(options[highlightIndex]);
+        if (e.key === 'Escape' || e.key === 'Tab') setOpen(false);
         e.preventDefault();
         e.stopPropagation();
         focusFieldLevel(containerRef.current);
@@ -130,6 +126,8 @@ export function CustomSelect({ value, options, labels, onChange }) {
 function focusFieldLevel(el) {
     const field = el?.closest('[data-plugin-config-field-id]');
     if (field) { field.focus(); return; }
+    const surface = el?.closest('[data-selected-surface]');
+    if (surface) { surface.focus(); return; }
     el?.querySelector('.custom-select-trigger')?.focus();
 }
 
