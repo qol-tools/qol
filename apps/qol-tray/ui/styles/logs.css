@@ -1,37 +1,4 @@
-.view-container.logs-shell {
-    background:
-        radial-gradient(circle at 18% -12%, var(--accent-glow-soft), transparent 42%),
-        radial-gradient(circle at 92% 0%, var(--state-success-bg-faint), transparent 36%);
-}
-
-.view-body.logs-view-body {
-    max-width: none;
-    margin: 0;
-    width: 100%;
-    flex: 1;
-    padding-left: 0;
-    padding-right: 0;
-}
-
-.logs-view-content {
-    max-width: var(--size-content-max);
-    margin: 0 auto;
-    width: 100%;
-    padding: var(--space-4) var(--space-7) var(--space-5);
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    flex: 1;
-}
-
 .logs-frame {
-    border: var(--border-w-1) solid var(--layer-paper-22);
-    border-radius: var(--radius-2xl);
-    padding: var(--space-5);
-    background:
-        linear-gradient(180deg, var(--layer-paper-05), var(--layer-paper-02)),
-        var(--layer-overlay-surface-62);
-    box-shadow: inset 0 1px 0 var(--layer-paper-06), 0 14px 42px var(--layer-ink-28);
     display: flex;
     flex-direction: column;
     min-height: 0;

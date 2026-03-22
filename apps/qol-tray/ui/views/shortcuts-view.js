@@ -24,11 +24,15 @@ export function ShortcutsView() {
     useRegisterCommands('shortcuts', commands);
 
     return html`
-        <div class="view-container">
+        <div class="view-container content-shell">
             <${PageHeader} title="Shortcuts" subtitle="User-defined launcher shortcuts for URLs and apps" />
-            <div class="view-body">
-                <${ShortcutsList} shortcuts=${sc.filtered}
-                    selectedIndex=${sc.selectedIndex} onSelect=${sc.setSelectedId} onEdit=${sc.openEditModal} />
+            <div class="view-body content-shell-body">
+                <div class="content-shell-inner">
+                    <div class="content-frame">
+                        <${ShortcutsList} shortcuts=${sc.filtered}
+                            selectedIndex=${sc.selectedIndex} onSelect=${sc.setSelectedId} onEdit=${sc.openEditModal} />
+                    </div>
+                </div>
             </div>
             ${sc.editModal && html`<${ShortcutEditModal} modal=${sc.editModal} fieldProps=${sc.fieldProps}
                 onChange=${sc.handleModalChange} onClose=${sc.closeModal} onSave=${sc.saveShortcut} />`}

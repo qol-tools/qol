@@ -1797,6 +1797,7 @@ dependencies = [
  "qol-runtime",
  "serde",
  "serde_json",
+ "x11rb",
 ]
 
 [[package]]

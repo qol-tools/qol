@@ -46,7 +46,7 @@ export function PluginsView({ onOpenPluginConfig, onOpenPluginUi }) {
     ], []);
     useRegisterCommands('plugins', commands);
 
-    return html`<div class="view-container" onClick=${modal.closeAll}>
+    return html`<div class="view-container content-shell" onClick=${modal.closeAll}>
         <${PageHeader} title="Plugins" />
         <div class="view-body">
             <${PluginsGrid}

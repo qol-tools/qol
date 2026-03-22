@@ -6,7 +6,7 @@ import { StoreGrid } from './grid.js';
 
 export function StoreLayout({ ctrl }) {
     return html`
-        <div class="view-container">
+        <div class="view-container content-shell">
             <${PageHeader} title="Plugin Store" subtitle="Browse and install plugins for QoL Tray"
                 badge=${html`<${StoreBadge} ...${ctrl} />`} />
             <div class="view-body">
