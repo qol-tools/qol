@@ -41,6 +41,7 @@ pub fn run() -> Result<()> {
     platform::warn_system_install_conflict();
     platform::register_application(&installed_binary)?;
     platform::start_now(&installed_binary)?;
+    open_ui_after_start();
     print_summary(&installed_binary, &install_id, &plugins_dir, &install_dir)
 }
 
@@ -110,6 +111,19 @@ fn create_install_id() -> String {
         .unwrap_or_default()
         .as_nanos();
     format!("install-{}-{}", ts, std::process::id())
+}
+
+fn open_ui_after_start() {
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let url = "http://localhost:42700";
+    #[cfg(target_os = "linux")]
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("cmd")
+        .args(["/c", "start", url])
+        .spawn();
 }
 
 fn is_in_path(dir: &Path) -> bool {

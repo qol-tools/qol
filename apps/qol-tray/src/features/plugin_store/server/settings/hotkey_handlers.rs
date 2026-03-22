@@ -3,7 +3,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use crate::hotkeys::{trigger_reload, HotkeyConfig, HotkeyManager};
+use crate::hotkeys::{get_registration_errors, trigger_reload, HotkeyConfig, HotkeyManager};
 
 use super::super::types::MAX_CONFIG_SIZE;
 use super::http_json;
@@ -65,6 +65,10 @@ fn load_failed_response() -> Response {
 
 fn save_failed_response() -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save hotkeys").into_response()
+}
+
+pub(in super::super) async fn get_hotkey_errors() -> impl IntoResponse {
+    axum::Json(get_registration_errors())
 }
 
 fn serialize_failed_response() -> Response {

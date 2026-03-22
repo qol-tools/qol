@@ -214,6 +214,9 @@ fn app_init_inner(
         init.events,
     )?;
     log::info!("QoL Tray daemon started successfully");
+    if is_first_run() {
+        std::thread::spawn(show_first_run_welcome);
+    }
     Ok((tray, init.plugin_manager))
 }
 
@@ -281,6 +284,53 @@ fn build_startup_info(
 
     let os_info = std::env::consts::OS;
     format!("{}, plugins: [{}]", os_info, plugins_desc)
+}
+
+fn first_run_marker_path() -> Option<std::path::PathBuf> {
+    qol_tray::paths::shared_config_dir()
+        .ok()
+        .map(|d| d.join(".first-run-done"))
+}
+
+fn is_first_run() -> bool {
+    first_run_marker_path()
+        .map(|p| !p.exists())
+        .unwrap_or(false)
+}
+
+fn show_first_run_welcome() {
+    if let Some(path) = first_run_marker_path() {
+        let _ = std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new("/")));
+        let _ = std::fs::write(&path, "");
+    }
+
+    #[cfg(target_os = "linux")]
+    let _ = std::process::Command::new("notify-send")
+        .args([
+            "--icon=qol-tray",
+            "QoL Tray",
+            "QoL Tray is running. Click the tray icon or visit http://localhost:42700 to get started.",
+        ])
+        .status();
+
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("osascript")
+        .args([
+            "-e",
+            "display notification \"QoL Tray is running. Click the menu bar icon to get started.\" with title \"QoL Tray\"",
+        ])
+        .status();
+
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    #[cfg(target_os = "linux")]
+    let _ = std::process::Command::new("xdg-open")
+        .arg("http://localhost:42700")
+        .spawn();
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open")
+        .arg("http://localhost:42700")
+        .spawn();
 }
 
 async fn check_for_updates() -> bool {
