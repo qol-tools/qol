@@ -63,8 +63,8 @@ export function TaskRunnerView() {
     return html`<div class="view-container">
         <${PageHeader} title="Task Runner" subtitle="HTTP API for browser extensions to run local commands" />
         <div class="view-body">
-            <${ActionList} data=${data} edit=${edit} test=${test} />
             <${ApiUsage} actions=${data.actions} actionIds=${data.actionIds} copyApiExample=${data.copyApiExample} />
+            <${ActionList} data=${data} edit=${edit} test=${test} />
         </div>
         ${edit.editModal && html`<${ActionEditModal}
             modal=${edit.editModal} fieldProps=${modalNav.fieldProps} onUpdate=${edit.updateField}
