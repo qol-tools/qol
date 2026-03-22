@@ -4,7 +4,10 @@ export function useGridNav(selector, selectedIndexRef, setSelectedIndex) {
     return useCallback((direction) => {
         const current = selectedIndexRef.current;
         const next = navigateGrid(selector, current, direction);
-        if (next !== current) setSelectedIndex(next);
+        if (next === current) return;
+        setSelectedIndex(next);
+        const card = document.querySelector(`${selector}[data-index="${next}"]`);
+        if (card) card.focus();
     }, [selector, setSelectedIndex]);
 }
 
