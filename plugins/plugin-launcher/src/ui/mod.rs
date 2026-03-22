@@ -34,6 +34,8 @@ pub(crate) struct LauncherView {
     blur_sub: Option<Subscription>,
     activation_sub: Option<Subscription>,
     trail_decay_task_running: bool,
+    focus_poll_running: bool,
+    pub(super) dismiss_requested: bool,
     pub(crate) is_showing: bool,
     blur_guard_until: Instant,
 }
@@ -47,6 +49,8 @@ impl LauncherView {
             blur_sub: None,
             activation_sub: None,
             trail_decay_task_running: false,
+            focus_poll_running: false,
+            dismiss_requested: false,
             is_showing: true,
             blur_guard_until: Instant::now() + Duration::from_millis(BLUR_GUARD_MS),
         }
@@ -64,6 +68,8 @@ impl LauncherView {
         let should_resize = (self.state.window_height - HEADER_HEIGHT).abs() > f32::EPSILON;
         self.state = LauncherState::new();
         self.trail_decay_task_running = false;
+        self.focus_poll_running = false;
+        self.dismiss_requested = false;
         self.set_showing(true);
         self.blur_guard_until = Instant::now() + Duration::from_millis(BLUR_GUARD_MS);
         should_resize

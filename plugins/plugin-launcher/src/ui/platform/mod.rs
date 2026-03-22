@@ -23,4 +23,15 @@ pub fn set_activation_policy() {
     imp::set_activation_policy()
 }
 
+pub fn has_process_focus() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        imp::has_process_focus()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
+}
+
 pub use qol_platform::current_capabilities;
