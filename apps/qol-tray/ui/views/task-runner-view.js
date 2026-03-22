@@ -14,7 +14,6 @@ import { ActionList } from './task-runner/action-list.js';
 
 const CSS_ID = 'task-runner-css';
 
-
 function ensureCssLoaded() {
     if (document.getElementById(CSS_ID)) return;
     const link = document.createElement('link');
@@ -44,7 +43,7 @@ export function TaskRunnerView() {
     const data = useTaskData();
     const edit = useEditModal(data.actionsRef, data.setActions, data.setActionIds, data.setSelectedIndex);
     const test = useTestPanel();
-    const { handleKey, isBlocking } = useTaskKeyHandler(data, edit, test);
+    const { handleKey, isBlocking, modalNav } = useTaskKeyHandler(data, edit, test);
     useRegisterViewKeyboard('task-runner', handleKey, isBlocking);
 
     const editRef = useRef(edit);
@@ -68,7 +67,7 @@ export function TaskRunnerView() {
             <${ApiUsage} actions=${data.actions} actionIds=${data.actionIds} copyApiExample=${data.copyApiExample} />
         </div>
         ${edit.editModal && html`<${ActionEditModal}
-            modal=${edit.editModal} onUpdate=${edit.updateField}
+            modal=${edit.editModal} fieldProps=${modalNav.fieldProps} onUpdate=${edit.updateField}
             onClose=${edit.close} onSave=${edit.saveAction} />`}
     </div>`;
 }
