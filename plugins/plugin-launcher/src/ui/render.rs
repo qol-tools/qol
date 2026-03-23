@@ -57,7 +57,10 @@ impl Render for LauncherView {
                 }));
         }
 
-        if self.is_showing && !self.focus_poll_running {
+        if self.is_showing
+            && !self.focus_poll_running
+            && qol_plugin_api::focus::should_poll_process_focus()
+        {
             self.focus_poll_running = true;
             let guard_until = self.blur_guard_until;
             cx.spawn(move |this: WeakEntity<LauncherView>, cx: &mut AsyncApp| {
