@@ -66,16 +66,13 @@ fn read_pixmap_pixels(
     width: u16,
     height: u16,
 ) -> Option<(Vec<u8>, u8)> {
-    conn.composite_redirect_window(wid, Redirect::AUTOMATIC)
-        .ok()?
-        .check()
+    let redirect = conn
+        .composite_redirect_window(wid, Redirect::AUTOMATIC)
         .ok()?;
     let pixmap = conn.generate_id().ok()?;
-    let name_ok = conn
-        .composite_name_window_pixmap(wid, pixmap)
-        .ok()
-        .and_then(|c| c.check().ok());
-    if name_ok.is_none() {
+    let name = conn.composite_name_window_pixmap(wid, pixmap).ok()?;
+    redirect.check().ok()?;
+    if name.check().is_err() {
         let _ = conn.composite_unredirect_window(wid, Redirect::AUTOMATIC);
         return None;
     }

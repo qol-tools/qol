@@ -4,18 +4,12 @@ use crate::picker::state::PickerState;
 use crate::shared::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
 use crate::shared::preview::{bgra_to_render_image, fast_pixel_hash};
 use gpui::{AsyncApp, Entity, RenderImage, Task, WeakEntity};
-use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const TICK_MS: u64 = 100;
-const SELECTED_INTERVAL: Duration = Duration::from_millis(200);
-const NEIGHBOR_INTERVAL: Duration = Duration::from_millis(500);
-const REST_INTERVAL: Duration = Duration::from_millis(2000);
-const NEIGHBOR_RADIUS: usize = 3;
-const MAX_BATCH: usize = 4;
-const MIN_NOTIFY_INTERVAL: Duration = Duration::from_millis(200);
+const TICK_MS: u64 = 200;
+const CAPTURE_INTERVAL: Duration = Duration::from_millis(500);
 
 pub(crate) fn spawn(delegate: Entity<PickerState>, cx: &mut gpui::Context<AltTabApp>) -> Task<()> {
     cx.spawn(move |this: WeakEntity<AltTabApp>, cx: &mut AsyncApp| {
@@ -24,22 +18,10 @@ pub(crate) fn spawn(delegate: Entity<PickerState>, cx: &mut gpui::Context<AltTab
     })
 }
 
-struct LoopState {
-    prev_hashes: HashMap<u32, u64>,
-    last_captured: HashMap<u32, Instant>,
-    last_notified: Instant,
-    pending_updates: Vec<(u32, Arc<RenderImage>)>,
-}
-
 async fn preview_loop(delegate: Entity<PickerState>, this: WeakEntity<AltTabApp>, cx: AsyncApp) {
     let executor = cx.background_executor().clone();
-    let now = Instant::now();
-    let mut state = LoopState {
-        prev_hashes: HashMap::new(),
-        last_captured: HashMap::new(),
-        last_notified: now,
-        pending_updates: Vec::new(),
-    };
+    let mut prev_hash: Option<(u32, u64)> = None;
+    let mut last_captured = Instant::now() - CAPTURE_INTERVAL;
 
     while PICKER_VISIBLE.load(Ordering::Relaxed) {
         executor.timer(Duration::from_millis(TICK_MS)).await;
@@ -47,31 +29,32 @@ async fn preview_loop(delegate: Entity<PickerState>, this: WeakEntity<AltTabApp>
             break;
         }
         let snap = read_snapshot(&delegate, &cx);
-        if snap.all_ids.is_empty() {
-            flush_pending(&mut state, &delegate, &this, &cx);
+        let Some(selected) = snap.selected_target() else {
+            continue;
+        };
+        let now = Instant::now();
+        if now.duration_since(last_captured) < CAPTURE_INTERVAL {
             continue;
         }
-        let now = Instant::now();
-        let batch = build_batch(&snap, &state.last_captured, now);
-        if !batch.is_empty() {
-            let captured = run_capture(&batch, &executor).await;
-            let updates = diff_and_update(
-                captured,
-                &batch,
-                &mut state.prev_hashes,
-                &mut state.last_captured,
-                now,
-            );
-            state.pending_updates.extend(updates);
-        }
-        if !state.pending_updates.is_empty()
-            && now.duration_since(state.last_notified) >= MIN_NOTIFY_INTERVAL
+        last_captured = now;
+        let target = vec![selected];
+        let captured = run_capture(&target, &executor).await;
+        let Some((_, Some(rgba))) = captured.into_iter().next() else {
+            continue;
+        };
+        let hash = fast_pixel_hash(&rgba.data);
+        if prev_hash
+            .as_ref()
+            .is_some_and(|&(id, h)| id == selected.1 && h == hash)
         {
-            flush_pending(&mut state, &delegate, &this, &cx);
+            continue;
         }
+        prev_hash = Some((selected.1, hash));
+        let Some(img) = bgra_to_render_image(rgba.data, rgba.width, rgba.height) else {
+            continue;
+        };
+        push_updates(vec![(selected.1, img)], &delegate, &this, &cx);
     }
-
-    flush_pending(&mut state, &delegate, &this, &cx);
 
     let _ = cx.update(|app_cx| {
         let Some(entity) = this.upgrade() else {
@@ -84,76 +67,27 @@ async fn preview_loop(delegate: Entity<PickerState>, this: WeakEntity<AltTabApp>
 }
 
 struct Snapshot {
-    all_ids: Vec<(usize, u32)>,
-    selected_idx: Option<usize>,
+    selected: Option<(usize, u32)>,
+}
+
+impl Snapshot {
+    fn selected_target(&self) -> Option<(usize, u32)> {
+        self.selected
+    }
 }
 
 fn read_snapshot(delegate: &Entity<PickerState>, cx: &AsyncApp) -> Snapshot {
     cx.update(|app_cx| {
         let state = delegate.read(app_cx);
-        let all_ids = state
+        let idx = state.selected_index.unwrap_or(0);
+        let selected = state
             .windows
-            .iter()
-            .enumerate()
-            .filter(|(_, w)| !w.is_minimized)
-            .map(|(i, w)| (i, w.id))
-            .collect();
-        Snapshot {
-            all_ids,
-            selected_idx: state.selected_index,
-        }
+            .get(idx)
+            .filter(|w| !w.is_minimized)
+            .map(|w| (idx, w.id));
+        Snapshot { selected }
     })
-    .unwrap_or_else(|_| Snapshot {
-        all_ids: Vec::new(),
-        selected_idx: None,
-    })
-}
-
-fn build_batch(
-    snap: &Snapshot,
-    last_captured: &HashMap<u32, Instant>,
-    now: Instant,
-) -> Vec<(usize, u32)> {
-    let mut batch = Vec::with_capacity(MAX_BATCH);
-    let selected = snap.selected_idx.unwrap_or(0);
-
-    // Sort by priority: selected first, then neighbors by distance, then rest
-    let mut sorted: Vec<&(usize, u32)> = snap.all_ids.iter().collect();
-    sorted.sort_by_key(|(idx, _)| {
-        let d = idx.abs_diff(selected);
-        if d == 0 {
-            0
-        } else if d <= NEIGHBOR_RADIUS {
-            d
-        } else {
-            NEIGHBOR_RADIUS + 1 + d
-        }
-    });
-
-    for &&(idx, wid) in &sorted {
-        let interval = tier_interval(idx, selected);
-        let elapsed = last_captured
-            .get(&wid)
-            .map(|t| now.duration_since(*t))
-            .unwrap_or(Duration::MAX);
-        if elapsed >= interval {
-            batch.push((idx, wid));
-            if batch.len() >= MAX_BATCH {
-                break;
-            }
-        }
-    }
-    batch
-}
-
-fn tier_interval(idx: usize, selected: usize) -> Duration {
-    if idx == selected {
-        return SELECTED_INTERVAL;
-    }
-    if idx.abs_diff(selected) <= NEIGHBOR_RADIUS {
-        return NEIGHBOR_INTERVAL;
-    }
-    REST_INTERVAL
+    .unwrap_or(Snapshot { selected: None })
 }
 
 async fn run_capture(
@@ -166,47 +100,6 @@ async fn run_capture(
             capture::capture_previews_cg(&owned, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT)
         })
         .await
-}
-
-fn diff_and_update(
-    captured: Vec<(usize, Option<qol_plugin_api::app_icon::RgbaImage>)>,
-    targets: &[(usize, u32)],
-    prev_hashes: &mut HashMap<u32, u64>,
-    last_captured: &mut HashMap<u32, Instant>,
-    now: Instant,
-) -> Vec<(u32, Arc<RenderImage>)> {
-    let id_map: HashMap<usize, u32> = targets.iter().copied().collect();
-    let mut updates = Vec::new();
-    for (idx, rgba) in captured {
-        let Some(rgba) = rgba else { continue };
-        let Some(&wid) = id_map.get(&idx) else {
-            continue;
-        };
-        last_captured.insert(wid, now);
-        let hash = fast_pixel_hash(&rgba.data);
-        if prev_hashes.get(&wid) == Some(&hash) {
-            continue;
-        }
-        prev_hashes.insert(wid, hash);
-        if let Some(img) = bgra_to_render_image(rgba.data, rgba.width, rgba.height) {
-            updates.push((wid, img));
-        }
-    }
-    updates
-}
-
-fn flush_pending(
-    state: &mut LoopState,
-    delegate: &Entity<PickerState>,
-    this: &WeakEntity<AltTabApp>,
-    cx: &AsyncApp,
-) {
-    if state.pending_updates.is_empty() {
-        return;
-    }
-    let updates = std::mem::take(&mut state.pending_updates);
-    state.last_notified = Instant::now();
-    push_updates(updates, delegate, this, cx);
 }
 
 fn push_updates(
