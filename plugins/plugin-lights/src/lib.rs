@@ -5,3 +5,4 @@ pub mod domain;
 pub mod platform;
 pub mod runtime;
 pub mod service;
+pub mod znp;

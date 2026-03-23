@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use anyhow::{anyhow, Context, Result};
 use crossbeam_channel::Receiver;
-use zigbee_znp::zcl;
-use zigbee_znp::{ControllerConfig, Device, ZigbeeController, ZigbeeEvent};
+use crate::znp::zcl;
+use crate::znp::{ControllerConfig, Device, ZigbeeController, ZigbeeEvent};
 
 use crate::backend::LightBackend;
 use crate::config::model::BackendConfig;
@@ -170,7 +170,7 @@ impl LightBackend for ZigbeeBackend {
 
 fn resolve_serial_port(configured: &str) -> Result<String> {
     if configured == "auto" {
-        return zigbee_znp::detect_sonoff()
+        return crate::znp::detect_sonoff()
             .ok_or_else(|| anyhow!("no Sonoff dongle detected; set serial_port manually"));
     }
     Ok(configured.to_string())

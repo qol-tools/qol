@@ -74,10 +74,10 @@ pub fn run(socket_path: &str) -> Result<()> {
     Ok(())
 }
 
-fn device_monitor_loop(events: crossbeam_channel::Receiver<zigbee_znp::ZigbeeEvent>) {
+fn device_monitor_loop(events: crossbeam_channel::Receiver<crate::znp::ZigbeeEvent>) {
     loop {
         match events.recv() {
-            Ok(zigbee_znp::ZigbeeEvent::DeviceJoined(device)) => {
+            Ok(crate::znp::ZigbeeEvent::DeviceJoined(device)) => {
                 let ieee = format_ieee(&device.ieee_address);
                 let entry = DeviceEntry {
                     ieee_address: ieee.clone(),
@@ -100,7 +100,7 @@ fn device_monitor_loop(events: crossbeam_channel::Receiver<zigbee_znp::ZigbeeEve
                     eprintln!("device joined: {} (0x{:04X})", ieee, device.network_address);
                 }
             }
-            Ok(zigbee_znp::ZigbeeEvent::DeviceLeft(_)) => {}
+            Ok(crate::znp::ZigbeeEvent::DeviceLeft(_)) => {}
             Err(_) => break,
         }
     }
