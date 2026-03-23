@@ -216,7 +216,6 @@ pub(crate) mod state {
     pub(crate) struct PickerState {
         pub(crate) windows: Vec<WindowInfo>,
         pub(crate) selected_index: Option<usize>,
-        pub(crate) hovered_index: Option<usize>,
         pub(crate) label_config: LabelConfig,
         pub(crate) transparent_background: bool,
         pub(crate) card_bg_color: u32,
@@ -237,7 +236,6 @@ pub(crate) mod state {
             Self {
                 windows: init.windows,
                 selected_index,
-                hovered_index: None,
                 label_config: init.label_config,
                 transparent_background: init.transparent_bg,
                 card_bg_color: init.card_color,
