@@ -15,7 +15,6 @@ const NEIGHBOR_INTERVAL: Duration = Duration::from_millis(250);
 const REST_INTERVAL: Duration = Duration::from_millis(2000);
 const NEIGHBOR_RADIUS: usize = 5;
 const MAX_BATCH: usize = 10;
-const VISIBILITY_POLL_MS: u64 = 16;
 
 pub(crate) fn spawn(delegate: Entity<PickerState>, cx: &mut gpui::Context<AltTabApp>) -> Task<()> {
     cx.spawn(move |this: WeakEntity<AltTabApp>, cx: &mut AsyncApp| {
@@ -36,42 +35,41 @@ async fn preview_loop(delegate: Entity<PickerState>, this: WeakEntity<AltTabApp>
         last_captured: HashMap::new(),
     };
 
-    loop {
-        while !PICKER_VISIBLE.load(Ordering::Relaxed) {
-            executor
-                .timer(Duration::from_millis(VISIBILITY_POLL_MS))
-                .await;
+    while PICKER_VISIBLE.load(Ordering::Relaxed) {
+        executor.timer(Duration::from_millis(TICK_MS)).await;
+        if !PICKER_VISIBLE.load(Ordering::Relaxed) {
+            break;
         }
-        state.prev_hashes.clear();
-        state.last_captured.clear();
-
-        while PICKER_VISIBLE.load(Ordering::Relaxed) {
-            executor.timer(Duration::from_millis(TICK_MS)).await;
-            if !PICKER_VISIBLE.load(Ordering::Relaxed) {
-                break;
-            }
-            let snap = read_snapshot(&delegate, &cx);
-            if snap.all_ids.is_empty() {
-                continue;
-            }
-            let now = Instant::now();
-            let batch = build_batch(&snap, &state.last_captured, now);
-            if batch.is_empty() {
-                continue;
-            }
-            let captured = run_capture(&batch, &executor).await;
-            let updates = diff_and_update(
-                captured,
-                &batch,
-                &mut state.prev_hashes,
-                &mut state.last_captured,
-                now,
-            );
-            if !updates.is_empty() {
-                push_updates(updates, &delegate, &this, &cx);
-            }
+        let snap = read_snapshot(&delegate, &cx);
+        if snap.all_ids.is_empty() {
+            continue;
+        }
+        let now = Instant::now();
+        let batch = build_batch(&snap, &state.last_captured, now);
+        if batch.is_empty() {
+            continue;
+        }
+        let captured = run_capture(&batch, &executor).await;
+        let updates = diff_and_update(
+            captured,
+            &batch,
+            &mut state.prev_hashes,
+            &mut state.last_captured,
+            now,
+        );
+        if !updates.is_empty() {
+            push_updates(updates, &delegate, &this, &cx);
         }
     }
+
+    let _ = cx.update(|app_cx| {
+        let Some(entity) = this.upgrade() else {
+            return;
+        };
+        entity.update(app_cx, |app, _| {
+            app._live_preview_task = None;
+        });
+    });
 }
 
 struct Snapshot {

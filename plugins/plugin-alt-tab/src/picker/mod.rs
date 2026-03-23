@@ -154,6 +154,7 @@ fn try_cycle_selection(handle: &WindowHandle<AltTabApp>, reverse: bool, cx: &mut
             if view.action_mode != ActionMode::HoldToSwitch {
                 return false;
             }
+            view.ensure_live_preview(cx);
             if view._alt_poll_task.is_none() {
                 view.start_alt_poll(window.window_handle(), cx);
             }
@@ -179,7 +180,9 @@ fn finalize_reuse(
     cx: &mut App,
 ) {
     let previews = gathered.previews.clone();
+    PICKER_VISIBLE.store(true, Ordering::Relaxed);
     let _ = handle.update(cx, |view, _window, cx| {
+        view.ensure_live_preview(cx);
         view.delegate
             .update(cx, |state, _| state.insert_previews(previews));
         cx.notify();
@@ -190,7 +193,6 @@ fn finalize_reuse(
         icon_cache: icon_cache.clone(),
     };
     spawn_icon_fill(icon_req, &gathered.icons, cx);
-    PICKER_VISIBLE.store(true, Ordering::Relaxed);
     cx.activate(true);
 }
 

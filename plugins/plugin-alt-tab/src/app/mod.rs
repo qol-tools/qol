@@ -47,7 +47,7 @@ impl AltTabApp {
 
         let mut app = Self {
             _focus_out_sub: subscribe_focus_out(&focus_handle, window, cx),
-            _live_preview_task: Some(live_preview::spawn(delegate.clone(), cx)),
+            _live_preview_task: None,
             delegate,
             focus_handle,
             action_mode: action_mode.clone(),
@@ -165,6 +165,13 @@ impl AltTabApp {
         self.delegate
             .update(cx, |state, _| state.insert_icons(icons));
         cx.notify();
+    }
+
+    pub(crate) fn ensure_live_preview(&mut self, cx: &mut Context<Self>) {
+        if self._live_preview_task.is_some() {
+            return;
+        }
+        self._live_preview_task = Some(live_preview::spawn(self.delegate.clone(), cx));
     }
 
     pub(crate) fn start_alt_poll(

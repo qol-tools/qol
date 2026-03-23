@@ -12,15 +12,12 @@ use qol_plugin_api::monitor::MonitorTracker;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
 
 const SMALL_WINDOW_SET_MAX: usize = 2;
 const STABLE_PREVIOUS_MIN: usize = 6;
 
 pub(crate) type WindowCache = Arc<Mutex<Vec<WindowInfo>>>;
 pub(crate) type SharedPreviewCache = Arc<Mutex<crate::PreviewMap>>;
-
-const PREWARM_INTERVAL_SECS: u64 = 3;
 
 #[derive(Clone)]
 struct PickerCaches {
@@ -88,9 +85,6 @@ pub(crate) fn run_app(
         let _ = cache_tx;
         spawn_cache_updater(cx, cache_rx, state.caches.clone());
         spawn_initial_cache_fill(cx, state.caches.clone());
-        spawn_prewarm_loop(cx, state.caches.clone());
-
-        super::create::pre_create_offscreen(&config, &state.current, cx);
 
         if show_on_start {
             state.open_picker(&config, false, cx);
@@ -135,31 +129,27 @@ fn drain_cache_events(rx: &Arc<Mutex<std::sync::mpsc::Receiver<discovery::CacheE
     while rx.try_recv().is_ok() {}
 }
 
-fn spawn_prewarm_loop(cx: &mut App, caches: PickerCaches) {
-    cx.spawn(async move |cx: &mut AsyncApp| {
-        let executor = cx.background_executor().clone();
-        loop {
-            executor
-                .timer(Duration::from_secs(PREWARM_INTERVAL_SECS))
-                .await;
-            if picker_visible() {
-                continue;
-            }
-            refresh_cache(&executor, &caches).await;
-        }
-    })
-    .detach();
-}
-
 fn spawn_initial_cache_fill(cx: &mut App, caches: PickerCaches) {
     cx.spawn(async move |cx: &mut AsyncApp| {
         let executor = cx.background_executor().clone();
-        refresh_cache(&executor, &caches).await;
+        refresh_cache_with_previews(&executor, &caches).await;
     })
     .detach();
 }
 
 async fn refresh_cache(executor: &gpui::BackgroundExecutor, caches: &PickerCaches) {
+    refresh_cache_inner(executor, caches, false).await;
+}
+
+async fn refresh_cache_with_previews(executor: &gpui::BackgroundExecutor, caches: &PickerCaches) {
+    refresh_cache_inner(executor, caches, true).await;
+}
+
+async fn refresh_cache_inner(
+    executor: &gpui::BackgroundExecutor,
+    caches: &PickerCaches,
+    include_previews: bool,
+) {
     let Some(windows) = load_stable_windows(executor, &caches.window_cache).await else {
         return;
     };
@@ -167,7 +157,12 @@ async fn refresh_cache(executor: &gpui::BackgroundExecutor, caches: &PickerCache
         .last_window_count
         .store(windows.len().max(1), Ordering::Relaxed);
     refresh_icon_cache(executor, &windows, &caches.icon_cache).await;
-    refresh_preview_cache(executor, &windows, &caches.preview_cache).await;
+    if include_previews {
+        refresh_preview_cache(executor, &windows, &caches.preview_cache).await;
+    }
+    if !include_previews {
+        retain_active_previews(&caches.preview_cache, &windows);
+    }
     replace_window_cache(&caches.window_cache, windows);
 }
 
@@ -306,6 +301,14 @@ fn replace_window_cache(window_cache: &WindowCache, windows: Vec<WindowInfo>) {
         return;
     };
     *cache = windows;
+}
+
+fn retain_active_previews(preview_cache: &SharedPreviewCache, windows: &[WindowInfo]) {
+    let active_ids: HashSet<u32> = windows.iter().map(|w| w.id).collect();
+    let Ok(mut cache) = preview_cache.lock() else {
+        return;
+    };
+    cache.retain(|id, _| active_ids.contains(id));
 }
 
 fn spawn_daemon_loop(cx: &mut App, rx: mpsc::Receiver<daemon::Command>, state: PickerState) {
