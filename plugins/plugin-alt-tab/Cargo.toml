@@ -23,6 +23,7 @@ x11rb = { version = "0.13", features = [
   "allow-unsafe-code",
   "xinput",
   "composite",
+  "render",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
