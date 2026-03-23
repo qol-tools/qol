@@ -1,31 +1,48 @@
 use crate::discovery::WindowInfo;
 use qol_plugin_api::app_icon::RgbaImage;
+use std::sync::{Mutex, OnceLock};
 use x11rb::connection::Connection;
 use x11rb::protocol::composite::{ConnectionExt as _, Redirect};
 use x11rb::protocol::xproto::{ConnectionExt as _, ImageFormat};
 use x11rb::rust_connection::RustConnection;
+
+fn capture_conn() -> &'static Mutex<Option<RustConnection>> {
+    static CONN: OnceLock<Mutex<Option<RustConnection>>> = OnceLock::new();
+    CONN.get_or_init(|| Mutex::new(connect_with_composite()))
+}
+
+fn connect_with_composite() -> Option<RustConnection> {
+    let (conn, _) = x11rb::connect(None).ok()?;
+    conn.composite_query_version(0, 4).ok()?.reply().ok()?;
+    Some(conn)
+}
 
 pub fn capture_previews_cg(
     targets: &[(usize, u32)],
     max_w: usize,
     max_h: usize,
 ) -> Vec<(usize, Option<RgbaImage>)> {
-    let Ok((conn, _)) = x11rb::connect(None) else {
+    let Ok(mut guard) = capture_conn().lock() else {
         return targets.iter().map(|&(idx, _)| (idx, None)).collect();
     };
-    if init_composite(&conn).is_none() {
-        return targets.iter().map(|&(idx, _)| (idx, None)).collect();
+    let conn = match &*guard {
+        Some(c) => c,
+        None => {
+            *guard = connect_with_composite();
+            match &*guard {
+                Some(c) => c,
+                None => return targets.iter().map(|&(idx, _)| (idx, None)).collect(),
+            }
+        }
+    };
+    let results: Vec<_> = targets
+        .iter()
+        .map(|&(idx, wid)| (idx, capture_window(conn, wid, max_w, max_h)))
+        .collect();
+    if results.iter().all(|(_, r)| r.is_none()) && !targets.is_empty() {
+        *guard = connect_with_composite();
     }
-    std::thread::scope(|s| {
-        let handles: Vec<_> = targets
-            .iter()
-            .map(|&(idx, wid)| {
-                let conn = &conn;
-                s.spawn(move || (idx, capture_window(conn, wid, max_w, max_h)))
-            })
-            .collect();
-        handles.into_iter().filter_map(|h| h.join().ok()).collect()
-    })
+    results
 }
 
 fn capture_window(
@@ -41,11 +58,6 @@ fn capture_window(
     }
     let (raw, depth) = read_pixmap_pixels(conn, wid, geom.width, geom.height)?;
     Some(scale_bgra(&raw, src_w, src_h, max_w, max_h, depth < 32))
-}
-
-fn init_composite(conn: &impl Connection) -> Option<()> {
-    conn.composite_query_version(0, 4).ok()?.reply().ok()?;
-    Some(())
 }
 
 fn read_pixmap_pixels(
