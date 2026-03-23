@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 const TICK_MS: u64 = 200;
 const CAPTURE_INTERVAL: Duration = Duration::from_millis(500);
+const SELECTION_SETTLE: Duration = Duration::from_millis(300);
 
 pub(crate) fn spawn(delegate: Entity<PickerState>, cx: &mut gpui::Context<AltTabApp>) -> Task<()> {
     cx.spawn(move |this: WeakEntity<AltTabApp>, cx: &mut AsyncApp| {
@@ -22,6 +23,8 @@ async fn preview_loop(delegate: Entity<PickerState>, this: WeakEntity<AltTabApp>
     let executor = cx.background_executor().clone();
     let mut prev_hash: Option<(u32, u64)> = None;
     let mut last_captured = Instant::now() - CAPTURE_INTERVAL;
+    let mut last_selection: Option<u32> = None;
+    let mut selection_changed_at = Instant::now();
 
     while PICKER_VISIBLE.load(Ordering::Relaxed) {
         executor.timer(Duration::from_millis(TICK_MS)).await;
@@ -33,6 +36,14 @@ async fn preview_loop(delegate: Entity<PickerState>, this: WeakEntity<AltTabApp>
             continue;
         };
         let now = Instant::now();
+        if last_selection != Some(selected.1) {
+            last_selection = Some(selected.1);
+            selection_changed_at = now;
+            continue;
+        }
+        if now.duration_since(selection_changed_at) < SELECTION_SETTLE {
+            continue;
+        }
         if now.duration_since(last_captured) < CAPTURE_INTERVAL {
             continue;
         }
