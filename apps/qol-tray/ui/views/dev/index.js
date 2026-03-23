@@ -32,9 +32,5 @@ export function DevViewInner() {
     ], []);
     useRegisterCommands('dev', commands);
 
-    return html`
-        <div ref=${containerRef} style="flex:1;min-height:0;display:flex;flex-direction:column">
-            <${DevLayout} ctrl=${ctrl} />
-        </div>
-    `;
+    return html`<${DevLayout} ctrl=${ctrl} containerRef=${containerRef} />`;
 }
