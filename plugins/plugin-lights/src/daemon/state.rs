@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use zigbee_znp::{Device, Endpoint};
+use crate::znp::{Device, Endpoint};
 
 use crate::backend::zigbee::ZigbeeBackend;
 use crate::config::model::{PluginConfig, PresetSlot};
@@ -66,7 +66,7 @@ impl DaemonState {
         &self.main_target
     }
 
-    pub fn events(&self) -> crossbeam_channel::Receiver<zigbee_znp::ZigbeeEvent> {
+    pub fn events(&self) -> crossbeam_channel::Receiver<crate::znp::ZigbeeEvent> {
         self.service.lock().unwrap().backend().events().clone()
     }
 
