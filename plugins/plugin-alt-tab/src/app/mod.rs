@@ -71,7 +71,7 @@ impl AltTabApp {
         if !self.reposition_if_needed(req) {
             return false;
         }
-        self.apply_reuse_config(req, cx);
+        self.apply_reuse_config(req, window, cx);
         self.sync_alt_poll(window, cx);
         self.apply_reuse_windows(req, cx);
         true
@@ -94,7 +94,27 @@ impl AltTabApp {
         )
     }
 
-    fn apply_reuse_config(&mut self, req: &crate::picker::ReuseRequest, cx: &mut Context<Self>) {
+    fn apply_reuse_config(
+        &mut self,
+        req: &crate::picker::ReuseRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let was_transparent =
+            self.delegate.read(cx).transparent_background;
+        let now_transparent = req.config.display.transparent_background;
+        if was_transparent != now_transparent {
+            let appearance = if now_transparent {
+                WindowBackgroundAppearance::Transparent
+            } else {
+                WindowBackgroundAppearance::Opaque
+            };
+            window.set_background_appearance(appearance);
+            if now_transparent {
+                picker::platform::disable_window_shadow();
+            }
+        }
+
         let (card_color, card_opacity) = crate::picker::resolve_card_bg(&req.config.display);
         self.action_mode = req.config.action_mode.clone();
         self.alt_was_held = true;

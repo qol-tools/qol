@@ -273,8 +273,21 @@ fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     let state = state.clone();
     let _ = cx.update(move |app_cx| {
         let config = crate::config::load_alt_tab_config();
+        refresh_cache_for_show(&config, &state.caches);
         state.open_picker(&config, reverse, app_cx);
     });
+}
+
+fn refresh_cache_for_show(config: &AltTabConfig, caches: &PickerCaches) {
+    let windows = if config.display.show_minimized {
+        discovery::get_open_windows()
+    } else {
+        discovery::get_on_screen_windows()
+    };
+    caches
+        .last_window_count
+        .store(windows.len().max(1), Ordering::Relaxed);
+    replace_window_cache(&caches.window_cache, windows);
 }
 
 fn shutdown_daemon(cx: &AsyncApp) {
