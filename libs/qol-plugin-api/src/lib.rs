@@ -1,4 +1,5 @@
 pub mod activation;
+pub mod focus;
 
 #[cfg(feature = "app-icons")]
 pub mod app_icon;
