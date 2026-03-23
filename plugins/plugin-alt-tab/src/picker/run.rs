@@ -278,6 +278,9 @@ fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     });
 }
 
+/// Synchronously refresh the window cache before opening the picker.
+/// This ensures MRU order reflects current z-order from CoreGraphics,
+/// even on macOS where no background cache watcher exists.
 fn refresh_cache_for_show(config: &AltTabConfig, caches: &PickerCaches) {
     let windows = if config.display.show_minimized {
         discovery::get_open_windows()

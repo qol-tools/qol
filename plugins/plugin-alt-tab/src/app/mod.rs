@@ -94,6 +94,9 @@ impl AltTabApp {
         )
     }
 
+    /// Apply config changes to a reused picker window. Handles window-level
+    /// properties (background appearance, shadow) that survive across opens,
+    /// plus delegate-level config (colors, labels, hotkey hints).
     fn apply_reuse_config(
         &mut self,
         req: &crate::picker::ReuseRequest,
