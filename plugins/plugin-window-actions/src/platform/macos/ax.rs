@@ -256,9 +256,10 @@ pub(super) fn set_position_and_size(pid: i32, rect: super::screen::Rect) -> bool
     }
 }
 
-/// Minimize the focused window. Strategy depends on window count:
-///   - Single visible window: AXHidden=true on the app (instant, no animation).
-///   - Multiple visible windows: AXMinimized=true on the focused window only (animated but fine-grained).
+/// Minimize the focused window. Strategy depends on visible window count:
+///   - Single visible window: `AXHidden=true` on the app (instant, no animation).
+///   - Multiple visible windows: `AXMinimized=true` on the focused window only
+///     (animated, but only affects that window — other windows stay in place).
 pub(super) fn instant_minimize(pid: i32) -> bool {
     let Some(ft) = front_target(pid) else {
         return false;
@@ -293,6 +294,10 @@ fn visible_window_count(app: *const c_void) -> usize {
     visible
 }
 
+/// Restore a previously minimized window. Matches the strategy used by `instant_minimize`:
+///   - If the app was hidden (`AXHidden`): unhide and activate all windows.
+///   - If an individual window was minimized (`AXMinimized`): unminimize only the
+///     first minimized window and raise it, without bringing other app windows forward.
 pub(super) fn unminimize_and_raise(pid: i32) -> bool {
     let app = CfGuard::new(unsafe { AXUIElementCreateApplication(pid) });
     let Some(app) = app else {

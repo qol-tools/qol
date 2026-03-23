@@ -11,9 +11,13 @@ pub struct MinimizedWindowRecord {
     pub saved_rect: Option<[f64; 4]>,
 }
 
+/// Stack of minimized window records. Minimize pushes, restore pops.
 pub trait MinimizedStateStore {
+    /// Read the most recently minimized window without removing it.
     fn peek(&self) -> Result<Option<MinimizedWindowRecord>, String>;
+    /// Push a newly minimized window onto the stack.
     fn push(&self, record: &MinimizedWindowRecord);
+    /// Pop the most recently minimized window from the stack.
     fn pop(&self) -> Result<Option<MinimizedWindowRecord>, String>;
 }
 
