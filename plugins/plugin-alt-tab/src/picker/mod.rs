@@ -46,7 +46,12 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
         return;
     }
 
-    let gathered = gather(req.config, &req.icon_cache, &req.window_cache, &req.preview_cache);
+    let gathered = gather(
+        req.config,
+        &req.icon_cache,
+        &req.window_cache,
+        &req.preview_cache,
+    );
     if try_reuse_existing(req, &gathered, cx) {
         return;
     }

@@ -39,10 +39,7 @@ pub(super) fn gather(
     }
 
     let icons = icon_cache.lock().map(|c| c.clone()).unwrap_or_default();
-    let previews = preview_cache
-        .lock()
-        .map(|c| c.clone())
-        .unwrap_or_default();
+    let previews = preview_cache.lock().map(|c| c.clone()).unwrap_or_default();
     GatheredWindows {
         windows,
         previews,

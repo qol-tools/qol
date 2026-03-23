@@ -103,8 +103,7 @@ impl AltTabApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let was_transparent =
-            self.delegate.read(cx).transparent_background;
+        let was_transparent = self.delegate.read(cx).transparent_background;
         let now_transparent = req.config.display.transparent_background;
         if was_transparent != now_transparent {
             let appearance = if now_transparent {
