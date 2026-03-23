@@ -13,6 +13,7 @@ use crate::{PickerWindowState, SharedIconCache};
 use gather::{gather, spawn_icon_fill, GatheredWindows, IconFillRequest};
 use gpui::*;
 use qol_plugin_api::monitor::MonitorTracker;
+use qol_plugin_api::window::MonitorKey;
 use run::WindowCache;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -53,7 +54,7 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
 }
 
 fn try_cycle_existing(req: &OpenPickerRequest, cx: &mut App) -> bool {
-    let handle = match req.current.borrow().any_existing() {
+    let handle = match any_existing(req.current) {
         Some((_, h)) => h,
         None => return false,
     };
@@ -72,7 +73,7 @@ fn try_reuse_existing(req: &OpenPickerRequest, gathered: &GatheredWindows, cx: &
     };
     let (handle, source_key) = match req.current.borrow().existing(target) {
         Some(h) => (h, target),
-        None => match req.current.borrow().any_existing() {
+        None => match any_existing(req.current) {
             Some((key, h)) => (h, key),
             None => return false,
         },
@@ -101,6 +102,10 @@ fn try_reuse_existing(req: &OpenPickerRequest, gathered: &GatheredWindows, cx: &
     }
     discard_old_window(req, source_key, handle, cx);
     false
+}
+
+fn any_existing(current: &PickerWindowState) -> Option<(MonitorKey, WindowHandle<AltTabApp>)> {
+    current.borrow().iter().into_iter().next()
 }
 
 fn destroy_non_target_windows(req: &OpenPickerRequest, cx: &mut App) {
