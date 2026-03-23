@@ -1,5 +1,5 @@
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::AtomEnum;
+use x11rb::protocol::xproto::*;
 
 pub fn should_poll_process_focus() -> bool {
     matches!(
