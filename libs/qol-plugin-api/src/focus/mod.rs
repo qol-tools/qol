@@ -1,12 +1,12 @@
-#[cfg(target_os = "linux")]
-mod linux;
 #[cfg(not(target_os = "linux"))]
 mod fallback;
-
 #[cfg(target_os = "linux")]
-use linux as imp;
+mod linux;
+
 #[cfg(not(target_os = "linux"))]
 use fallback as imp;
+#[cfg(target_os = "linux")]
+use linux as imp;
 
 pub fn should_poll_process_focus() -> bool {
     imp::should_poll_process_focus()
