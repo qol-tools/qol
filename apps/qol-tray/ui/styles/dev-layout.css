@@ -7,9 +7,6 @@
 }
 
 .view-container.dev-view-shell {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
     background:
         radial-gradient(circle at 18% -12%, var(--accent-glow-soft), transparent 42%),
         radial-gradient(circle at 92% 0%, var(--state-success-bg-faint), transparent 36%);

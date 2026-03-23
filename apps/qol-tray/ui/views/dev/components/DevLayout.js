@@ -4,9 +4,9 @@ import { PluginsSection } from './PluginsSection.js';
 import { CoreLogSection } from './CoreLogSection.js';
 import { ActionsSection } from './ActionsSection.js';
 
-export function DevLayout({ ctrl }) {
+export function DevLayout({ ctrl, containerRef }) {
     return html`
-        <div class="view-container dev-view-shell">
+        <div ref=${containerRef} class="view-container dev-view-shell">
             <${PageHeader} title="Developer Control" scramble />
             <div class="view-body dev-view-body">
                 <div class="dev-view-content">
