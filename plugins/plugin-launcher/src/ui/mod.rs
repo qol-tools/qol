@@ -37,6 +37,7 @@ pub(crate) struct LauncherView {
     focus_poll_running: bool,
     pub(super) dismiss_requested: bool,
     pub(crate) is_showing: bool,
+    pub(crate) showing_flag: Arc<std::sync::atomic::AtomicBool>,
     blur_guard_until: Instant,
 }
 
@@ -52,12 +53,15 @@ impl LauncherView {
             focus_poll_running: false,
             dismiss_requested: false,
             is_showing: true,
+            showing_flag: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             blur_guard_until: Instant::now() + Duration::from_millis(BLUR_GUARD_MS),
         }
     }
 
     pub(crate) fn set_showing(&mut self, showing: bool) {
         self.is_showing = showing;
+        self.showing_flag
+            .store(showing, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub(super) fn schedule_query_render(&mut self, cx: &mut Context<Self>) {

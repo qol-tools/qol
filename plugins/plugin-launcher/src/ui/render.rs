@@ -63,10 +63,11 @@ impl Render for LauncherView {
         {
             self.focus_poll_running = true;
             let guard_until = self.blur_guard_until;
+            let flag = self.showing_flag.clone();
             cx.spawn(move |this: WeakEntity<LauncherView>, cx: &mut AsyncApp| {
                 let mut async_cx = cx.clone();
                 async move {
-                    Self::focus_poll_loop(this, guard_until, &mut async_cx).await;
+                    Self::focus_poll_loop(this, flag, guard_until, &mut async_cx).await;
                 }
             })
             .detach();
@@ -192,6 +193,7 @@ impl Render for LauncherView {
 impl LauncherView {
     async fn focus_poll_loop(
         this: WeakEntity<Self>,
+        showing_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
         guard_until: std::time::Instant,
         cx: &mut AsyncApp,
     ) {
@@ -200,19 +202,13 @@ impl LauncherView {
             if std::time::Instant::now() < guard_until {
                 continue;
             }
+            if !showing_flag.load(Ordering::Relaxed) {
+                break;
+            }
             let has_focus = cx
                 .background_spawn(async { qol_plugin_api::focus::has_process_focus() })
                 .await;
             if has_focus {
-                let still_showing = this
-                    .update(cx, |view, cx| {
-                        let _ = cx;
-                        view.is_showing
-                    })
-                    .unwrap_or(false);
-                if !still_showing {
-                    break;
-                }
                 continue;
             }
             let requested = this
