@@ -110,9 +110,9 @@ impl AltTabApp {
                 WindowBackgroundAppearance::Opaque
             };
             window.set_background_appearance(appearance);
-            if now_transparent {
-                picker::platform::disable_window_shadow();
-            }
+        }
+        if now_transparent {
+            picker::platform::disable_window_shadow();
         }
 
         let (card_color, card_opacity) = crate::picker::resolve_card_bg(&req.config.display);

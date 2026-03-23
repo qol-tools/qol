@@ -43,6 +43,9 @@ pub(crate) fn pre_create_offscreen(
         height: 400,
     };
     current.borrow_mut().insert(sentinel, handle);
+    if config.display.transparent_background {
+        super::platform::disable_window_shadow();
+    }
     let _ = handle.update(cx, |_, window, _| window.minimize_window());
 }
 
