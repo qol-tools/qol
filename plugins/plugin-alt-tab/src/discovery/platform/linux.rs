@@ -1,8 +1,28 @@
 use crate::discovery::WindowInfo;
 use qol_plugin_api::app_icon::RgbaImage;
+use std::sync::{Mutex, OnceLock};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::ConnectionExt as _;
 use x11rb::protocol::xproto::*;
+use x11rb::rust_connection::RustConnection;
+
+struct DiscoverySession {
+    conn: RustConnection,
+    root: u32,
+    atoms: AtomMap,
+}
+
+fn discovery_session() -> &'static Mutex<Option<DiscoverySession>> {
+    static SESSION: OnceLock<Mutex<Option<DiscoverySession>>> = OnceLock::new();
+    SESSION.get_or_init(|| Mutex::new(connect_session()))
+}
+
+fn connect_session() -> Option<DiscoverySession> {
+    let (conn, screen_num) = x11rb::connect(None).ok()?;
+    let root = conn.setup().roots[screen_num].root;
+    let atoms = intern_atoms(&conn);
+    Some(DiscoverySession { conn, root, atoms })
+}
 
 fn promote_active_info(
     conn: &impl Connection,
@@ -56,18 +76,34 @@ const ATOM_NAMES: &[&str] = &[
 ];
 
 pub fn get_open_windows() -> Vec<WindowInfo> {
-    let Ok((conn, screen_num)) = x11rb::connect(None) else {
+    let Ok(mut guard) = discovery_session().lock() else {
         return Vec::new();
     };
-    let root = conn.setup().roots[screen_num].root;
-    let atoms = intern_atoms(&conn);
-    let ids = fetch_window_ids(&conn, root, &atoms);
+    let session = match &*guard {
+        Some(s) => s,
+        None => {
+            *guard = connect_session();
+            match &*guard {
+                Some(s) => s,
+                None => return Vec::new(),
+            }
+        }
+    };
+    let result = get_open_windows_with(session);
+    if result.is_empty() {
+        *guard = connect_session();
+    }
+    result
+}
+
+fn get_open_windows_with(session: &DiscoverySession) -> Vec<WindowInfo> {
+    let ids = fetch_window_ids(&session.conn, session.root, &session.atoms);
     if ids.is_empty() {
         return Vec::new();
     }
-    let filtered = filter_normal_windows(&conn, &ids, &atoms);
-    let mut windows = collect_window_info(&conn, &filtered, &atoms);
-    promote_active_info(&conn, root, &atoms, &mut windows);
+    let filtered = filter_normal_windows(&session.conn, &ids, &session.atoms);
+    let mut windows = collect_window_info(&session.conn, &filtered, &session.atoms);
+    promote_active_info(&session.conn, session.root, &session.atoms, &mut windows);
 
     #[cfg(debug_assertions)]
     eprintln!("[x11] get_open_windows total results: {}", windows.len());
