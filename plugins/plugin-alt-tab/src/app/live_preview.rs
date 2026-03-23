@@ -9,12 +9,13 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const TICK_MS: u64 = 33;
-const SELECTED_INTERVAL: Duration = Duration::from_millis(33);
-const NEIGHBOR_INTERVAL: Duration = Duration::from_millis(250);
+const TICK_MS: u64 = 100;
+const SELECTED_INTERVAL: Duration = Duration::from_millis(200);
+const NEIGHBOR_INTERVAL: Duration = Duration::from_millis(500);
 const REST_INTERVAL: Duration = Duration::from_millis(2000);
-const NEIGHBOR_RADIUS: usize = 5;
-const MAX_BATCH: usize = 10;
+const NEIGHBOR_RADIUS: usize = 3;
+const MAX_BATCH: usize = 4;
+const MIN_NOTIFY_INTERVAL: Duration = Duration::from_millis(200);
 
 pub(crate) fn spawn(delegate: Entity<PickerState>, cx: &mut gpui::Context<AltTabApp>) -> Task<()> {
     cx.spawn(move |this: WeakEntity<AltTabApp>, cx: &mut AsyncApp| {
@@ -26,13 +27,18 @@ pub(crate) fn spawn(delegate: Entity<PickerState>, cx: &mut gpui::Context<AltTab
 struct LoopState {
     prev_hashes: HashMap<u32, u64>,
     last_captured: HashMap<u32, Instant>,
+    last_notified: Instant,
+    pending_updates: Vec<(u32, Arc<RenderImage>)>,
 }
 
 async fn preview_loop(delegate: Entity<PickerState>, this: WeakEntity<AltTabApp>, cx: AsyncApp) {
     let executor = cx.background_executor().clone();
+    let now = Instant::now();
     let mut state = LoopState {
         prev_hashes: HashMap::new(),
         last_captured: HashMap::new(),
+        last_notified: now,
+        pending_updates: Vec::new(),
     };
 
     while PICKER_VISIBLE.load(Ordering::Relaxed) {
@@ -42,25 +48,30 @@ async fn preview_loop(delegate: Entity<PickerState>, this: WeakEntity<AltTabApp>
         }
         let snap = read_snapshot(&delegate, &cx);
         if snap.all_ids.is_empty() {
+            flush_pending(&mut state, &delegate, &this, &cx);
             continue;
         }
         let now = Instant::now();
         let batch = build_batch(&snap, &state.last_captured, now);
-        if batch.is_empty() {
-            continue;
+        if !batch.is_empty() {
+            let captured = run_capture(&batch, &executor).await;
+            let updates = diff_and_update(
+                captured,
+                &batch,
+                &mut state.prev_hashes,
+                &mut state.last_captured,
+                now,
+            );
+            state.pending_updates.extend(updates);
         }
-        let captured = run_capture(&batch, &executor).await;
-        let updates = diff_and_update(
-            captured,
-            &batch,
-            &mut state.prev_hashes,
-            &mut state.last_captured,
-            now,
-        );
-        if !updates.is_empty() {
-            push_updates(updates, &delegate, &this, &cx);
+        if !state.pending_updates.is_empty()
+            && now.duration_since(state.last_notified) >= MIN_NOTIFY_INTERVAL
+        {
+            flush_pending(&mut state, &delegate, &this, &cx);
         }
     }
+
+    flush_pending(&mut state, &delegate, &this, &cx);
 
     let _ = cx.update(|app_cx| {
         let Some(entity) = this.upgrade() else {
@@ -182,6 +193,20 @@ fn diff_and_update(
         }
     }
     updates
+}
+
+fn flush_pending(
+    state: &mut LoopState,
+    delegate: &Entity<PickerState>,
+    this: &WeakEntity<AltTabApp>,
+    cx: &AsyncApp,
+) {
+    if state.pending_updates.is_empty() {
+        return;
+    }
+    let updates = std::mem::take(&mut state.pending_updates);
+    state.last_notified = Instant::now();
+    push_updates(updates, delegate, this, cx);
 }
 
 fn push_updates(
