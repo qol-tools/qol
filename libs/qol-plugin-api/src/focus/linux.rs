@@ -53,7 +53,16 @@ pub fn has_process_focus() -> bool {
         return false;
     }
 
-    owns_window(guard.as_ref().unwrap(), focus, std::process::id())
+    static KNOWN_OWNED_WINDOW: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    if focus == KNOWN_OWNED_WINDOW.load(std::sync::atomic::Ordering::Relaxed) {
+        return true;
+    }
+
+    let owns = owns_window(guard.as_ref().unwrap(), focus, std::process::id());
+    if owns {
+        KNOWN_OWNED_WINDOW.store(focus, std::sync::atomic::Ordering::Relaxed);
+    }
+    owns
 }
 
 fn owns_window(conn: &impl Connection, mut window: u32, target_pid: u32) -> bool {
@@ -76,13 +85,19 @@ fn owns_window(conn: &impl Connection, mut window: u32, target_pid: u32) -> bool
     }
 }
 
+fn get_pid_atom(conn: &impl Connection) -> Option<u32> {
+    static PID_ATOM: OnceLock<Option<u32>> = OnceLock::new();
+    *PID_ATOM.get_or_init(|| {
+        conn.intern_atom(false, b"_NET_WM_PID")
+            .ok()?
+            .reply()
+            .ok()
+            .map(|r| r.atom)
+    })
+}
+
 fn window_pid(conn: &impl Connection, window: u32) -> Option<u32> {
-    let atom = conn
-        .intern_atom(false, b"_NET_WM_PID")
-        .ok()?
-        .reply()
-        .ok()?
-        .atom;
+    let atom = get_pid_atom(conn)?;
     let prop = conn
         .get_property(false, window, atom, AtomEnum::CARDINAL, 0, 1)
         .ok()?
