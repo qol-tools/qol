@@ -19,6 +19,7 @@ pub(super) fn gather(
     config: &AltTabConfig,
     icon_cache: &SharedIconCache,
     window_cache: &WindowCache,
+    preview_cache: &super::run::SharedPreviewCache,
 ) -> GatheredWindows {
     let windows = windows_from_cache_or_discovery(config, window_cache);
 
@@ -38,9 +39,13 @@ pub(super) fn gather(
     }
 
     let icons = icon_cache.lock().map(|c| c.clone()).unwrap_or_default();
+    let previews = preview_cache
+        .lock()
+        .map(|c| c.clone())
+        .unwrap_or_default();
     GatheredWindows {
         windows,
-        previews: HashMap::new(),
+        previews,
         icons,
     }
 }

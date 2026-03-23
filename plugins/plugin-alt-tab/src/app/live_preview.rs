@@ -4,12 +4,17 @@ use crate::picker::state::PickerState;
 use crate::shared::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
 use crate::shared::preview::{bgra_to_render_image, fast_pixel_hash};
 use gpui::{AsyncApp, Entity, RenderImage, Task, WeakEntity};
-use qol_plugin_api::app_icon::RgbaImage;
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-const LIVE_PREVIEW_INTERVAL_MS: u64 = 500;
+const TICK_MS: u64 = 33;
+const SELECTED_INTERVAL: Duration = Duration::from_millis(33);
+const NEIGHBOR_INTERVAL: Duration = Duration::from_millis(250);
+const REST_INTERVAL: Duration = Duration::from_millis(2000);
+const NEIGHBOR_RADIUS: usize = 5;
+const MAX_BATCH: usize = 10;
 const VISIBILITY_POLL_MS: u64 = 16;
 
 pub(crate) fn spawn(delegate: Entity<PickerState>, cx: &mut gpui::Context<AltTabApp>) -> Task<()> {
@@ -21,55 +26,52 @@ pub(crate) fn spawn(delegate: Entity<PickerState>, cx: &mut gpui::Context<AltTab
 
 struct LoopState {
     prev_hashes: HashMap<u32, u64>,
-    skip_timer: bool,
-    round_robin_pos: usize,
+    last_captured: HashMap<u32, Instant>,
 }
 
 async fn preview_loop(delegate: Entity<PickerState>, this: WeakEntity<AltTabApp>, cx: AsyncApp) {
     let executor = cx.background_executor().clone();
     let mut state = LoopState {
         prev_hashes: HashMap::new(),
-        skip_timer: true,
-        round_robin_pos: 0,
+        last_captured: HashMap::new(),
     };
 
     loop {
-        if !wait_for_visible(&executor, &mut state).await {
-            continue;
-        }
-        let snapshot = read_snapshot(&delegate, &cx);
-        if snapshot.all_ids.is_empty() {
-            continue;
-        }
-        let targets = pick_targets(&snapshot, &mut state.round_robin_pos);
-        let captured = run_capture(&targets, &executor).await;
-        let updates = diff_captures(captured, &targets, &mut state.prev_hashes);
-        if !updates.is_empty() {
-            push_updates(updates, &delegate, &this, &cx);
-        }
-    }
-}
-
-async fn wait_for_visible(executor: &gpui::BackgroundExecutor, state: &mut LoopState) -> bool {
-    if state.skip_timer {
         while !PICKER_VISIBLE.load(Ordering::Relaxed) {
             executor
                 .timer(Duration::from_millis(VISIBILITY_POLL_MS))
                 .await;
         }
-        state.skip_timer = false;
-        return true;
-    }
-    executor
-        .timer(Duration::from_millis(LIVE_PREVIEW_INTERVAL_MS))
-        .await;
-    if !PICKER_VISIBLE.load(Ordering::Relaxed) {
         state.prev_hashes.clear();
-        state.skip_timer = true;
-        state.round_robin_pos = 0;
-        return false;
+        state.last_captured.clear();
+
+        while PICKER_VISIBLE.load(Ordering::Relaxed) {
+            executor.timer(Duration::from_millis(TICK_MS)).await;
+            if !PICKER_VISIBLE.load(Ordering::Relaxed) {
+                break;
+            }
+            let snap = read_snapshot(&delegate, &cx);
+            if snap.all_ids.is_empty() {
+                continue;
+            }
+            let now = Instant::now();
+            let batch = build_batch(&snap, &state.last_captured, now);
+            if batch.is_empty() {
+                continue;
+            }
+            let captured = run_capture(&batch, &executor).await;
+            let updates = diff_and_update(
+                captured,
+                &batch,
+                &mut state.prev_hashes,
+                &mut state.last_captured,
+                now,
+            );
+            if !updates.is_empty() {
+                push_updates(updates, &delegate, &this, &cx);
+            }
+        }
     }
-    true
 }
 
 struct Snapshot {
@@ -98,32 +100,57 @@ fn read_snapshot(delegate: &Entity<PickerState>, cx: &AsyncApp) -> Snapshot {
     })
 }
 
-fn pick_targets(snap: &Snapshot, round_robin_pos: &mut usize) -> Vec<(usize, u32)> {
-    let mut t = Vec::with_capacity(2);
-    if let Some(sel) = snap.selected_idx {
-        if let Some(&entry) = snap.all_ids.iter().find(|(i, _)| *i == sel) {
-            t.push(entry);
+fn build_batch(
+    snap: &Snapshot,
+    last_captured: &HashMap<u32, Instant>,
+    now: Instant,
+) -> Vec<(usize, u32)> {
+    let mut batch = Vec::with_capacity(MAX_BATCH);
+    let selected = snap.selected_idx.unwrap_or(0);
+
+    // Sort by priority: selected first, then neighbors by distance, then rest
+    let mut sorted: Vec<&(usize, u32)> = snap.all_ids.iter().collect();
+    sorted.sort_by_key(|(idx, _)| {
+        let d = idx.abs_diff(selected);
+        if d == 0 {
+            0
+        } else if d <= NEIGHBOR_RADIUS {
+            d
+        } else {
+            NEIGHBOR_RADIUS + 1 + d
+        }
+    });
+
+    for &&(idx, wid) in &sorted {
+        let interval = tier_interval(idx, selected);
+        let elapsed = last_captured
+            .get(&wid)
+            .map(|t| now.duration_since(*t))
+            .unwrap_or(Duration::MAX);
+        if elapsed >= interval {
+            batch.push((idx, wid));
+            if batch.len() >= MAX_BATCH {
+                break;
+            }
         }
     }
-    let non_selected: Vec<(usize, u32)> = snap
-        .all_ids
-        .iter()
-        .filter(|(i, _)| Some(*i) != snap.selected_idx)
-        .copied()
-        .collect();
-    if non_selected.is_empty() {
-        return t;
+    batch
+}
+
+fn tier_interval(idx: usize, selected: usize) -> Duration {
+    if idx == selected {
+        return SELECTED_INTERVAL;
     }
-    *round_robin_pos %= non_selected.len();
-    t.push(non_selected[*round_robin_pos]);
-    *round_robin_pos += 1;
-    t
+    if idx.abs_diff(selected) <= NEIGHBOR_RADIUS {
+        return NEIGHBOR_INTERVAL;
+    }
+    REST_INTERVAL
 }
 
 async fn run_capture(
     targets: &[(usize, u32)],
     executor: &gpui::BackgroundExecutor,
-) -> Vec<(usize, Option<RgbaImage>)> {
+) -> Vec<(usize, Option<qol_plugin_api::app_icon::RgbaImage>)> {
     let owned = targets.to_vec();
     executor
         .spawn(async move {
@@ -132,35 +159,35 @@ async fn run_capture(
         .await
 }
 
-fn diff_captures(
-    captured: Vec<(usize, Option<RgbaImage>)>,
+fn diff_and_update(
+    captured: Vec<(usize, Option<qol_plugin_api::app_icon::RgbaImage>)>,
     targets: &[(usize, u32)],
     prev_hashes: &mut HashMap<u32, u64>,
-) -> Vec<(u32, std::sync::Arc<RenderImage>)> {
-    captured
-        .into_iter()
-        .filter_map(|(idx, rgba)| diff_one(idx, rgba?, targets, prev_hashes))
-        .collect()
-}
-
-fn diff_one(
-    idx: usize,
-    rgba: RgbaImage,
-    targets: &[(usize, u32)],
-    prev_hashes: &mut HashMap<u32, u64>,
-) -> Option<(u32, std::sync::Arc<RenderImage>)> {
-    let &(_, wid) = targets.iter().find(|(i, _)| *i == idx)?;
-    let hash = fast_pixel_hash(&rgba.data);
-    if prev_hashes.get(&wid) == Some(&hash) {
-        return None;
+    last_captured: &mut HashMap<u32, Instant>,
+    now: Instant,
+) -> Vec<(u32, Arc<RenderImage>)> {
+    let id_map: HashMap<usize, u32> = targets.iter().copied().collect();
+    let mut updates = Vec::new();
+    for (idx, rgba) in captured {
+        let Some(rgba) = rgba else { continue };
+        let Some(&wid) = id_map.get(&idx) else {
+            continue;
+        };
+        last_captured.insert(wid, now);
+        let hash = fast_pixel_hash(&rgba.data);
+        if prev_hashes.get(&wid) == Some(&hash) {
+            continue;
+        }
+        prev_hashes.insert(wid, hash);
+        if let Some(img) = bgra_to_render_image(rgba.data, rgba.width, rgba.height) {
+            updates.push((wid, img));
+        }
     }
-    prev_hashes.insert(wid, hash);
-    let img = bgra_to_render_image(rgba.data, rgba.width, rgba.height)?;
-    Some((wid, img))
+    updates
 }
 
 fn push_updates(
-    updates: Vec<(u32, std::sync::Arc<RenderImage>)>,
+    updates: Vec<(u32, Arc<RenderImage>)>,
     delegate: &Entity<PickerState>,
     this: &WeakEntity<AltTabApp>,
     cx: &AsyncApp,

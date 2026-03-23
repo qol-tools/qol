@@ -12,17 +12,22 @@ use qol_plugin_api::monitor::MonitorTracker;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 
 const SMALL_WINDOW_SET_MAX: usize = 2;
 const STABLE_PREVIOUS_MIN: usize = 6;
 
 pub(crate) type WindowCache = Arc<Mutex<Vec<WindowInfo>>>;
+pub(crate) type SharedPreviewCache = Arc<Mutex<crate::PreviewMap>>;
+
+const PREWARM_INTERVAL_SECS: u64 = 3;
 
 #[derive(Clone)]
 struct PickerCaches {
     last_window_count: Arc<AtomicUsize>,
     window_cache: WindowCache,
     icon_cache: SharedIconCache,
+    preview_cache: SharedPreviewCache,
 }
 
 #[derive(Clone)]
@@ -38,6 +43,7 @@ impl PickerCaches {
             last_window_count: Arc::new(AtomicUsize::new(super::default_estimated_window_count())),
             window_cache: Arc::new(Mutex::new(Vec::new())),
             icon_cache: Arc::new(Mutex::new(HashMap::new())),
+            preview_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -51,6 +57,7 @@ impl PickerState {
             last_window_count: self.caches.last_window_count.clone(),
             icon_cache: self.caches.icon_cache.clone(),
             window_cache: self.caches.window_cache.clone(),
+            preview_cache: self.caches.preview_cache.clone(),
             reverse,
         };
         open_picker(&req, cx);
@@ -81,6 +88,7 @@ pub(crate) fn run_app(
         let _ = cache_tx;
         spawn_cache_updater(cx, cache_rx, state.caches.clone());
         spawn_initial_cache_fill(cx, state.caches.clone());
+        spawn_prewarm_loop(cx, state.caches.clone());
 
         super::create::pre_create_offscreen(&config, &state.current, cx);
 
@@ -127,6 +135,22 @@ fn drain_cache_events(rx: &Arc<Mutex<std::sync::mpsc::Receiver<discovery::CacheE
     while rx.try_recv().is_ok() {}
 }
 
+fn spawn_prewarm_loop(cx: &mut App, caches: PickerCaches) {
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let executor = cx.background_executor().clone();
+        loop {
+            executor
+                .timer(Duration::from_secs(PREWARM_INTERVAL_SECS))
+                .await;
+            if picker_visible() {
+                continue;
+            }
+            refresh_cache(&executor, &caches).await;
+        }
+    })
+    .detach();
+}
+
 fn spawn_initial_cache_fill(cx: &mut App, caches: PickerCaches) {
     cx.spawn(async move |cx: &mut AsyncApp| {
         let executor = cx.background_executor().clone();
@@ -143,6 +167,7 @@ async fn refresh_cache(executor: &gpui::BackgroundExecutor, caches: &PickerCache
         .last_window_count
         .store(windows.len().max(1), Ordering::Relaxed);
     refresh_icon_cache(executor, &windows, &caches.icon_cache).await;
+    refresh_preview_cache(executor, &windows, &caches.preview_cache).await;
     replace_window_cache(&caches.window_cache, windows);
 }
 
@@ -230,6 +255,50 @@ fn retain_active_icons(icon_cache: &SharedIconCache, windows: &[WindowInfo]) {
         return;
     };
     cache.retain(|name, _| active.contains(name.as_str()));
+}
+
+async fn refresh_preview_cache(
+    executor: &gpui::BackgroundExecutor,
+    windows: &[WindowInfo],
+    preview_cache: &SharedPreviewCache,
+) {
+    use crate::shared::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
+    use crate::shared::preview::bgra_to_render_image;
+
+    let targets: Vec<(usize, u32)> = windows
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| !w.is_minimized)
+        .map(|(i, w)| (i, w.id))
+        .collect();
+    if targets.is_empty() {
+        return;
+    }
+    let id_for_idx: HashMap<usize, u32> = targets.iter().copied().collect();
+    let captured = executor
+        .spawn(async move {
+            capture::capture_previews_cg(&targets, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT)
+        })
+        .await;
+    let mut new_previews = crate::PreviewMap::new();
+    for (idx, rgba) in captured {
+        let Some(rgba) = rgba else { continue };
+        let Some(&wid) = id_for_idx.get(&idx) else {
+            continue;
+        };
+        if let Some(img) = bgra_to_render_image(rgba.data, rgba.width, rgba.height) {
+            new_previews.insert(wid, img);
+        }
+    }
+    if new_previews.is_empty() {
+        return;
+    }
+    let Ok(mut cache) = preview_cache.lock() else {
+        return;
+    };
+    let active_ids: HashSet<u32> = windows.iter().map(|w| w.id).collect();
+    cache.extend(new_previews);
+    cache.retain(|id, _| active_ids.contains(id));
 }
 
 fn replace_window_cache(window_cache: &WindowCache, windows: Vec<WindowInfo>) {
