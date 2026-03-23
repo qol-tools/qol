@@ -1,5 +1,24 @@
+use std::sync::{Mutex, OnceLock};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::*;
+use x11rb::rust_connection::RustConnection;
+
+fn keymap_conn() -> &'static Mutex<Option<RustConnection>> {
+    static CONN: OnceLock<Mutex<Option<RustConnection>>> = OnceLock::new();
+    CONN.get_or_init(|| Mutex::new(x11rb::connect(None).map(|(c, _)| c).ok()))
+}
+
+fn query_keymap_keys() -> Option<[u8; 32]> {
+    let mut guard = keymap_conn().lock().ok()?;
+    let keys = {
+        let conn = guard.as_ref()?;
+        conn.query_keymap().ok()?.reply().ok().map(|r| r.keys)
+    };
+    if keys.is_none() {
+        *guard = x11rb::connect(None).map(|(c, _)| c).ok();
+    }
+    keys
+}
 
 pub fn picker_window_kind() -> gpui::WindowKind {
     gpui::WindowKind::PopUp
@@ -10,33 +29,21 @@ pub fn dismiss_picker(window: &mut gpui::Window) {
 }
 
 pub fn is_modifier_held() -> bool {
-    let Ok((conn, _)) = x11rb::connect(None) else {
+    let Some(keys) = query_keymap_keys() else {
         return false;
     };
-    let Ok(reply) = conn.query_keymap() else {
-        return false;
-    };
-    let Ok(keymap) = reply.reply() else {
-        return false;
-    };
-    let alt_l_held = keymap.keys[64 / 8] & (1 << (64 % 8)) != 0;
-    let alt_r_held = keymap.keys[108 / 8] & (1 << (108 % 8)) != 0;
+    let alt_l_held = keys[64 / 8] & (1 << (64 % 8)) != 0;
+    let alt_r_held = keys[108 / 8] & (1 << (108 % 8)) != 0;
     alt_l_held || alt_r_held
 }
 
 #[allow(dead_code)]
 pub fn is_shift_held() -> bool {
-    let Ok((conn, _)) = x11rb::connect(None) else {
+    let Some(keys) = query_keymap_keys() else {
         return false;
     };
-    let Ok(reply) = conn.query_keymap() else {
-        return false;
-    };
-    let Ok(keymap) = reply.reply() else {
-        return false;
-    };
-    let shift_l = keymap.keys[50 / 8] & (1 << (50 % 8)) != 0;
-    let shift_r = keymap.keys[62 / 8] & (1 << (62 % 8)) != 0;
+    let shift_l = keys[50 / 8] & (1 << (50 % 8)) != 0;
+    let shift_r = keys[62 / 8] & (1 << (62 % 8)) != 0;
     shift_l || shift_r
 }
 
