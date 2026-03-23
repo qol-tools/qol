@@ -76,7 +76,13 @@ pub fn load_file_entries() -> Vec<FileEntry> {
 
 pub fn watch_roots() -> Vec<PathBuf> {
     let mut roots = platform::app_watch_roots();
-    roots.extend(platform::file_watch_roots());
+
+    // We explicitly do NOT watch `file_watch_roots()` with inotify!
+    // file_scan is cached statically for 15 minutes anyway. Watching `~/.config` or
+    // `~/Downloads` recursively just bombards the process with thousands of
+    // filesystem events, causing an aggressive 2% idle CPU loop that re-parses the
+    // static 15-min cache file continuously without actually updating anything.
+
     roots.sort();
     roots.dedup();
     roots.retain(|r| r.is_dir());
