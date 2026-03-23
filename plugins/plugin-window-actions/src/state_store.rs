@@ -18,37 +18,34 @@ impl FileMinimizedStateStore {
 }
 
 impl MinimizedStateStore for FileMinimizedStateStore {
-    fn read(&self) -> Result<Option<MinimizedWindowRecord>, String> {
-        match fs::read_to_string(&self.path) {
-            Ok(value) => {
-                let parsed = parse_minimized_window_record(&value);
-                if parsed.is_none() && !value.trim().is_empty() {
-                    self.clear();
-                }
-                Ok(parsed)
-            }
-            Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(format!("Failed to read minimized window state: {error}")),
+    fn peek(&self) -> Result<Option<MinimizedWindowRecord>, String> {
+        let lines = match read_lines(&self.path) {
+            Ok(l) => l,
+            Err(None) => return Ok(None),
+            Err(Some(e)) => return Err(e),
+        };
+        Ok(lines.last().and_then(|l| parse_record(l)))
+    }
+
+    fn push(&self, record: &MinimizedWindowRecord) {
+        let mut lines = read_lines(&self.path).unwrap_or_default();
+        lines.push(serialize_record(record));
+        write_lines(&self.path, &lines);
+    }
+
+    fn pop(&self) -> Result<Option<MinimizedWindowRecord>, String> {
+        let mut lines = match read_lines(&self.path) {
+            Ok(l) => l,
+            Err(None) => return Ok(None),
+            Err(Some(e)) => return Err(e),
+        };
+        let last = lines.pop().and_then(|l| parse_record(&l));
+        if lines.is_empty() {
+            let _ = fs::remove_file(&self.path);
+        } else {
+            write_lines(&self.path, &lines);
         }
-    }
-
-    fn write(&self, record: &MinimizedWindowRecord) {
-        let rect_str = record.saved_rect.map_or_else(String::new, |r| {
-            format!("|{},{},{},{}", r[0], r[1], r[2], r[3])
-        });
-        let line = format!(
-            "{}|{}|{}|{}{}\n",
-            record.window_id,
-            record.pid,
-            record.process_start_ticks,
-            record.saved_at_unix_secs,
-            rect_str,
-        );
-        let _ = fs::write(&self.path, line.as_bytes());
-    }
-
-    fn clear(&self) {
-        let _ = fs::remove_file(&self.path);
+        Ok(last)
     }
 }
 
@@ -64,7 +61,45 @@ pub fn default_state_file_path() -> PathBuf {
     base.join(LAST_MINIMIZED_WINDOW_FILE_NAME)
 }
 
-fn parse_minimized_window_record(raw: &str) -> Option<MinimizedWindowRecord> {
+fn read_lines(path: &PathBuf) -> Result<Vec<String>, Option<String>> {
+    match fs::read_to_string(path) {
+        Ok(content) => {
+            let lines: Vec<String> = content
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(String::from)
+                .collect();
+            if lines.is_empty() {
+                Err(None)
+            } else {
+                Ok(lines)
+            }
+        }
+        Err(e) if e.kind() == ErrorKind::NotFound => Err(None),
+        Err(e) => Err(Some(format!("Failed to read minimized window state: {e}"))),
+    }
+}
+
+fn write_lines(path: &PathBuf, lines: &[String]) {
+    let content = lines.join("\n") + "\n";
+    let _ = fs::write(path, content.as_bytes());
+}
+
+fn serialize_record(record: &MinimizedWindowRecord) -> String {
+    let rect_str = record.saved_rect.map_or_else(String::new, |r| {
+        format!("|{},{},{},{}", r[0], r[1], r[2], r[3])
+    });
+    format!(
+        "{}|{}|{}|{}{}",
+        record.window_id,
+        record.pid,
+        record.process_start_ticks,
+        record.saved_at_unix_secs,
+        rect_str,
+    )
+}
+
+fn parse_record(raw: &str) -> Option<MinimizedWindowRecord> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return None;

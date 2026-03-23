@@ -100,26 +100,6 @@ fn plain_minimize(win: *const c_void) {
     }
 }
 
-/// Check if the app uses a non-native rendering pipeline (Java, etc.)
-fn is_java_app(pid: i32) -> bool {
-    unsafe {
-        let ns_app = msg_ptr_usize(
-            cls("NSRunningApplication"),
-            sel("runningApplicationWithProcessIdentifier:"),
-            pid as usize,
-        );
-        if ns_app.is_null() {
-            return false;
-        }
-        let bundle = msg_ptr(ns_app, sel("bundleIdentifier"));
-        if bundle.is_null() {
-            return false;
-        }
-        let id = cfstring_to_string(bundle);
-        matches!(id.as_deref(), Some(s) if s.contains("jetbrains") || s.contains("java") || s.contains("eclipse"))
-    }
-}
-
 /// Returns true for real application windows (standard windows and dialogs),
 /// false for transient overlays, badges, floating panels, etc.
 pub(super) fn is_normal_window(pid: i32) -> bool {
@@ -279,17 +259,7 @@ pub(super) fn set_position_and_size(pid: i32, rect: super::screen::Rect) -> bool
 /// Minimize the focused window. Strategy depends on window count:
 ///   - Single visible window: AXHidden=true on the app (instant, no animation).
 ///   - Multiple visible windows: AXMinimized=true on the focused window only (animated but fine-grained).
-///
-/// Java apps always use plain AXMinimized (AXHidden doesn't mask their animations).
 pub(super) fn instant_minimize(pid: i32) -> bool {
-    if is_java_app(pid) {
-        let Some(ft) = front_target(pid) else {
-            return false;
-        };
-        plain_minimize(ft.win);
-        return true;
-    }
-
     let Some(ft) = front_target(pid) else {
         return false;
     };
@@ -329,13 +299,21 @@ pub(super) fn unminimize_and_raise(pid: i32) -> bool {
         return false;
     };
 
-    // Unhide app if hidden.
-    let ax_hidden = CfGuard::new(cfstr("AXHidden")).unwrap();
-    unsafe {
-        AXUIElementSetAttributeValue(app.as_ptr(), ax_hidden.as_const(), cf_boolean_false());
+    // Check if app was hidden (AXHidden) vs individual window minimized (AXMinimized).
+    let was_hidden = ax_attr(app.as_ptr(), "AXHidden")
+        .is_some_and(|v| std::ptr::eq(v.as_ptr(), cf_boolean_true() as *mut c_void));
+
+    if was_hidden {
+        // App-level hide: unhide and activate all windows (they were all hidden together).
+        let ax_hidden = CfGuard::new(cfstr("AXHidden")).unwrap();
+        unsafe {
+            AXUIElementSetAttributeValue(app.as_ptr(), ax_hidden.as_const(), cf_boolean_false());
+        }
+        activate_app(pid, 3); // IgnoringOtherApps | AllWindows
+        return true;
     }
 
-    // Also unminimize any actually-minimized windows (Java apps, legacy state).
+    // Individual window minimize: only restore one window.
     if let Some(windows) = ax_attr(app.as_ptr(), "AXWindows") {
         let ax_minimized = CfGuard::new(cfstr("AXMinimized")).unwrap();
         let ax_raise = CfGuard::new(cfstr("AXRaise")).unwrap();
@@ -353,9 +331,11 @@ pub(super) fn unminimize_and_raise(pid: i32) -> bool {
                 AXUIElementPerformAction(win, ax_raise.as_const());
             }
             nudge_position(win);
+            break;
         }
     }
 
-    activate_app(pid, 3); // IgnoringOtherApps | AllWindows
+    // Only raise the restored window, not all app windows.
+    activate_app(pid, 2); // IgnoringOtherApps (without AllWindows)
     true
 }

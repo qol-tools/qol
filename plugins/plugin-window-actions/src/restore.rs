@@ -12,9 +12,9 @@ pub struct MinimizedWindowRecord {
 }
 
 pub trait MinimizedStateStore {
-    fn read(&self) -> Result<Option<MinimizedWindowRecord>, String>;
-    fn write(&self, record: &MinimizedWindowRecord);
-    fn clear(&self);
+    fn peek(&self) -> Result<Option<MinimizedWindowRecord>, String>;
+    fn push(&self, record: &MinimizedWindowRecord);
+    fn pop(&self) -> Result<Option<MinimizedWindowRecord>, String>;
 }
 
 pub trait WindowSystem {
@@ -51,7 +51,7 @@ pub fn minimize_window<S: WindowSystem, T: MinimizedStateStore>(
         return Err("Failed to minimize window".to_string());
     }
 
-    track_last_minimized_window(system, store, &window_id, saved_rect);
+    push_minimized_window(system, store, &window_id, saved_rect);
     Ok(())
 }
 
@@ -76,17 +76,17 @@ fn restore_last_minimized_window<S: WindowSystem, T: MinimizedStateStore>(
     system: &S,
     store: &T,
 ) -> Result<bool, String> {
-    let Some(record) = store.read()? else {
+    let Some(record) = store.peek()? else {
         return Ok(false);
     };
 
     if is_record_expired(&record) {
-        store.clear();
+        store.pop().ok();
         return Ok(false);
     }
 
     if !is_record_current(system, &record)? {
-        store.clear();
+        store.pop().ok();
         return Ok(false);
     }
 
@@ -95,13 +95,13 @@ fn restore_last_minimized_window<S: WindowSystem, T: MinimizedStateStore>(
             if let Some(rect) = record.saved_rect {
                 let _ = system.restore_rect(&record.window_id, rect);
             }
-            store.clear();
+            store.pop().ok();
             return Ok(true);
         }
         RestoreAttempt::Skipped => {}
     }
 
-    store.clear();
+    store.pop().ok();
     Ok(false)
 }
 
@@ -145,24 +145,21 @@ fn query_or(value: Result<bool, String>, fallback: bool) -> bool {
     value.unwrap_or(fallback)
 }
 
-fn track_last_minimized_window<S: WindowSystem, T: MinimizedStateStore>(
+fn push_minimized_window<S: WindowSystem, T: MinimizedStateStore>(
     system: &S,
     store: &T,
     window_id: &str,
     saved_rect: Option<[f64; 4]>,
 ) {
     let Some(window_id) = system.normalize_window_id(window_id) else {
-        store.clear();
         return;
     };
 
     let Some(pid) = system.window_pid(&window_id).ok().flatten() else {
-        store.clear();
         return;
     };
 
     let Some(process_start_ticks) = system.process_start_ticks(pid) else {
-        store.clear();
         return;
     };
 
@@ -174,7 +171,7 @@ fn track_last_minimized_window<S: WindowSystem, T: MinimizedStateStore>(
         saved_rect,
     };
 
-    store.write(&record);
+    store.push(&record);
 }
 
 fn is_record_expired(record: &MinimizedWindowRecord) -> bool {
