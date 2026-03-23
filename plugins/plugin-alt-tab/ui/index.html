@@ -104,11 +104,11 @@
                 </span>
             </label>
 
-            <div class="slider-control" id="card-bg-group">
+            <div class="slider-control slider-control--card-bg" id="card-bg-group">
                 <label class="mode-copy"><small>Card background color</small></label>
-                <div style="display:flex;align-items:center;gap:8px;">
-                    <input type="color" id="card-bg-color" value="#1a1e2a" style="width:36px;height:28px;border:none;cursor:pointer;">
-                    <input type="range" id="card-bg-opacity" min="0" max="100" value="85" style="flex:1;">
+                <div class="color-controls">
+                    <input type="color" id="card-bg-color" class="color-input" value="#1a1e2a">
+                    <input type="range" id="card-bg-opacity" class="color-opacity-slider" min="0" max="100" value="85">
                     <span id="card-bg-opacity-value">85%</span>
                 </div>
             </div>
@@ -188,9 +188,9 @@
                     <input type="range" id="preview-fps" name="preview-fps" min="0" max="60" value="10">
                     <span id="preview-fps-value">10</span>
                 </div>
-                <div class="slider-labels" style="display:flex;justify-content:space-between;margin-top:0.3rem;">
-                    <small style="color:#9fb1cf;">Static</small>
-                    <small style="color:#9fb1cf;">60 FPS</small>
+                <div class="slider-labels">
+                    <small>Static</small>
+                    <small>60 FPS</small>
                 </div>
             </div>
         </section>
@@ -244,7 +244,7 @@
                 id="save-btn"
                 class="save"
             >Save Settings</button>
-            <span id="save-status"></span>
+            <span id="save-status" class="save-status"></span>
         </footer>
     </main>
 
