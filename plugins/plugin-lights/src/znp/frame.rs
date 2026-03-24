@@ -130,7 +130,7 @@ impl ZnpFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::subsystem;
+    use crate::znp::subsystem;
 
     #[test]
     fn encode_empty_frame() {
@@ -257,7 +257,7 @@ mod tests {
 
     #[test]
     fn subsystem_extraction() {
-        let cases = [
+        let cases: [(ZnpFrame, u8); 4] = [
             (ZnpFrame::sreq(subsystem::SYS, 0x01, vec![]), subsystem::SYS),
             (ZnpFrame::sreq(subsystem::AF, 0x01, vec![]), subsystem::AF),
             (ZnpFrame::areq(subsystem::ZDO, 0x80, vec![]), subsystem::ZDO),
