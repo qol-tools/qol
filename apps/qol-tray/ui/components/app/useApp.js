@@ -3,7 +3,7 @@ import { useRouter } from '../../hooks/useRouter.js';
 import { usePaletteContext } from '../../palette/context.js';
 import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
 import { GLOBAL_ID } from '../../palette/registry.js';
-import { registerModeSwitchCommands, saveModePath, clearModePath } from '../../palette/commands/mode-switch.js';
+import { buildModeSwitchCommand, saveModePath, clearModePath } from '../../palette/commands/mode-switch.js';
 import { useAppBootstrap } from './useAppBootstrap.js';
 import { useAppUpdateCoordinator } from './useAppUpdateCoordinator.js';
 import { useMountedViews } from './useMountedViews.js';
@@ -108,23 +108,20 @@ export function useApp({ onDissolve } = {}) {
         startModeSwitch(target, path);
     }, [modeSwitchPrompt, startModeSwitch]);
 
-    useEffect(() => {
-        registerModeSwitchCommands({
-            isDevMode: devEnabled,
-            onNeedPath: (target) => setModeSwitchPrompt({ target }),
-            onStartSwitch: startModeSwitch,
-        });
-    }, [devEnabled, startModeSwitch]);
-
     const globalCommands = useMemo(() => [
         ...viewOrder.map(id => ({
             id: `nav:${id}`,
             label: `Go to ${VIEW_LABELS[id] || id}`,
             run: () => switchView(id)
         })),
+        buildModeSwitchCommand({
+            isDevMode: devEnabled,
+            onNeedPath: (target) => setModeSwitchPrompt({ target }),
+            onStartSwitch: startModeSwitch,
+        }),
         { id: 'config:export', label: 'Export configuration', run: exportConfig },
         { id: 'config:import', label: 'Import configuration', run: importConfig },
-    ], [viewOrder, switchView]);
+    ], [viewOrder, switchView, devEnabled, startModeSwitch]);
     useRegisterCommands(GLOBAL_ID, globalCommands);
 
     return {
