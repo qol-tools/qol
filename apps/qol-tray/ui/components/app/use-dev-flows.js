@@ -5,6 +5,7 @@ import {
     FLOW_STATE,
     initDevFlows,
     resolveDevSidebarState,
+    startModeSwitchFlow,
     startRecompileFlow,
     startUpdateFlow
 } from './dev-flows.js';
@@ -65,5 +66,11 @@ export function useDevFlows(setUpdateState) {
         syncSidebar();
         return restartedFlow;
     }, [syncSidebar]);
-    return { applyDevFlowTransition, beginUpdateFlow, beginRecompileFlow, completeReconnect };
+    const beginModeSwitchFlow = useCallback(() => {
+        const flows = devFlowsRef.current;
+        doClearTimer(flows, 'mode_switch');
+        startModeSwitchFlow(flows);
+        syncSidebar();
+    }, [syncSidebar]);
+    return { applyDevFlowTransition, beginUpdateFlow, beginRecompileFlow, beginModeSwitchFlow, completeReconnect };
 }

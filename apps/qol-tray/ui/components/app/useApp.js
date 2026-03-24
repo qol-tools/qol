@@ -3,6 +3,7 @@ import { useRouter } from '../../hooks/useRouter.js';
 import { usePaletteContext } from '../../palette/context.js';
 import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
 import { GLOBAL_ID } from '../../palette/registry.js';
+import { registerModeSwitchCommands, saveModePath, clearModePath } from '../../palette/commands/mode-switch.js';
 import { useAppBootstrap } from './useAppBootstrap.js';
 import { useAppUpdateCoordinator } from './useAppUpdateCoordinator.js';
 import { useMountedViews } from './useMountedViews.js';
@@ -79,6 +80,42 @@ export function useApp({ onDissolve } = {}) {
         switchView(viewId);
     }, [activePluginId, closePluginConfig, switchView]);
 
+    const [modeSwitchPrompt, setModeSwitchPrompt] = useState(null);
+    const startModeSwitch = useCallback(async (target, path) => {
+        const res = await fetch('/api/mode/validate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target, path }),
+        });
+        const valid = await res.json();
+        if (!valid) {
+            clearModePath(target);
+            window.dispatchEvent(new CustomEvent('app-toast', { detail: { message: `Invalid ${target} path: ${path}`, type: 'error' } }));
+            return;
+        }
+        fetch('/api/mode/switch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target, path }),
+        });
+    }, []);
+
+    const handleModeSwitchSubmit = useCallback((path) => {
+        if (!modeSwitchPrompt) return;
+        saveModePath(modeSwitchPrompt.target, path);
+        const target = modeSwitchPrompt.target;
+        setModeSwitchPrompt(null);
+        startModeSwitch(target, path);
+    }, [modeSwitchPrompt, startModeSwitch]);
+
+    useEffect(() => {
+        registerModeSwitchCommands({
+            isDevMode: devEnabled,
+            onNeedPath: (target) => setModeSwitchPrompt({ target }),
+            onStartSwitch: startModeSwitch,
+        });
+    }, [devEnabled, startModeSwitch]);
+
     const globalCommands = useMemo(() => [
         ...viewOrder.map(id => ({
             id: `nav:${id}`,
@@ -111,6 +148,9 @@ export function useApp({ onDissolve } = {}) {
         syncStatus,
         setSyncStatus,
         refreshSyncStatus,
+        modeSwitchPrompt,
+        setModeSwitchPrompt,
+        handleModeSwitchSubmit,
     };
 }
 
