@@ -192,7 +192,9 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
     if !dev_override {
         match InstallKind::detect() {
             InstallKind::SystemWide => {
-                anyhow::bail!("This installation is managed by your system package manager")
+                log::warn!(
+                    "Updating a system-wide installation — binary will be replaced in place"
+                );
             }
             InstallKind::Development => {
                 anyhow::bail!("Self-update is disabled in development builds")
