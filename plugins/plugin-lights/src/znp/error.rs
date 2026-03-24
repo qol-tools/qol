@@ -16,8 +16,16 @@ impl fmt::Display for ZnpError {
             Self::FrameDecode(msg) => write!(f, "frame decode error: {}", msg),
             Self::Timeout => write!(f, "ZNP request timed out"),
             Self::NotConnected => write!(f, "not connected to coordinator"),
-            Self::CommandFailed { subsystem, cmd, status } => {
-                write!(f, "command failed: subsystem=0x{:02X} cmd=0x{:02X} status=0x{:02X}", subsystem, cmd, status)
+            Self::CommandFailed {
+                subsystem,
+                cmd,
+                status,
+            } => {
+                write!(
+                    f,
+                    "command failed: subsystem=0x{:02X} cmd=0x{:02X} status=0x{:02X}",
+                    subsystem, cmd, status
+                )
             }
         }
     }

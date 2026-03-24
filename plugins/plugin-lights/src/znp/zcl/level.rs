@@ -27,10 +27,19 @@ mod tests {
         for (level, trans) in cases {
             let frame = move_to_level(*level, *trans);
             let encoded = frame.encode();
-            assert_eq!(encoded[3], *level, "level={level} trans={trans}: level byte");
+            assert_eq!(
+                encoded[3], *level,
+                "level={level} trans={trans}: level byte"
+            );
             let trans_bytes = trans.to_le_bytes();
-            assert_eq!(encoded[4], trans_bytes[0], "level={level} trans={trans}: low byte");
-            assert_eq!(encoded[5], trans_bytes[1], "level={level} trans={trans}: high byte");
+            assert_eq!(
+                encoded[4], trans_bytes[0],
+                "level={level} trans={trans}: low byte"
+            );
+            assert_eq!(
+                encoded[5], trans_bytes[1],
+                "level={level} trans={trans}: high byte"
+            );
         }
     }
 }

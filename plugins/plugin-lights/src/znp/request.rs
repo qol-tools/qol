@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use anyhow::{Result, anyhow};
-use crossbeam_channel::{Receiver, Sender, bounded};
+use anyhow::{anyhow, Result};
+use crossbeam_channel::{bounded, Receiver, Sender};
 
 use super::frame::{MessageType, ZnpFrame};
 use super::transport::Transport;
@@ -17,14 +17,24 @@ pub struct RequestEngine {
 impl RequestEngine {
     pub fn new(transport: Transport) -> Self {
         let (events_tx, events_rx) = bounded(128);
-        Self { transport, events_tx, events_rx }
+        Self {
+            transport,
+            events_tx,
+            events_rx,
+        }
     }
 
     pub fn sreq(&self, subsystem: u8, cmd1: u8, data: Vec<u8>) -> Result<ZnpFrame> {
         self.sreq_timeout(subsystem, cmd1, data, DEFAULT_TIMEOUT)
     }
 
-    pub fn sreq_timeout(&self, subsystem: u8, cmd1: u8, data: Vec<u8>, timeout: Duration) -> Result<ZnpFrame> {
+    pub fn sreq_timeout(
+        &self,
+        subsystem: u8,
+        cmd1: u8,
+        data: Vec<u8>,
+        timeout: Duration,
+    ) -> Result<ZnpFrame> {
         let frame = ZnpFrame::sreq(subsystem, cmd1, data);
         self.transport.send(&frame)?;
 
@@ -32,7 +42,11 @@ impl RequestEngine {
         loop {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             if remaining.is_zero() {
-                return Err(anyhow!("SRSP timeout: subsystem=0x{:02X} cmd=0x{:02X}", subsystem, cmd1));
+                return Err(anyhow!(
+                    "SRSP timeout: subsystem=0x{:02X} cmd=0x{:02X}",
+                    subsystem,
+                    cmd1
+                ));
             }
 
             let response = self.transport.recv(remaining)?;
@@ -63,7 +77,11 @@ impl RequestEngine {
         loop {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             if remaining.is_zero() {
-                return Err(anyhow!("AREQ timeout: subsystem=0x{:02X} cmd=0x{:02X}", subsystem, cmd1));
+                return Err(anyhow!(
+                    "AREQ timeout: subsystem=0x{:02X} cmd=0x{:02X}",
+                    subsystem,
+                    cmd1
+                ));
             }
 
             let frame = self.transport.recv(remaining)?;

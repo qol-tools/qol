@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{ensure, Context, Result};
 
 use super::request::RequestEngine;
 use super::subsystem::*;
@@ -36,8 +36,8 @@ impl Default for NetworkConfig {
             pan_id: 0x1A62,
             channel: 11,
             network_key: [
-                0x01, 0x03, 0x05, 0x07, 0x09, 0x0B, 0x0D, 0x0F,
-                0x00, 0x02, 0x04, 0x06, 0x08, 0x0A, 0x0C, 0x0D,
+                0x01, 0x03, 0x05, 0x07, 0x09, 0x0B, 0x0D, 0x0F, 0x00, 0x02, 0x04, 0x06, 0x08, 0x0A,
+                0x0C, 0x0D,
             ],
         }
     }
@@ -55,7 +55,10 @@ pub fn startup(engine: &RequestEngine, config: &NetworkConfig) -> Result<Network
     reset(engine).context("reset")?;
     eprintln!("[znp] ping...");
     ping(engine).context("ping")?;
-    eprintln!("[znp] configuring (channel={}, pan=0x{:04X})...", config.channel, config.pan_id);
+    eprintln!(
+        "[znp] configuring (channel={}, pan=0x{:04X})...",
+        config.channel, config.pan_id
+    );
     configure(engine, config).context("configure")?;
     eprintln!("[znp] registering endpoint...");
     register_endpoint(engine).context("register_endpoint")?;
@@ -69,7 +72,11 @@ pub fn startup(engine: &RequestEngine, config: &NetworkConfig) -> Result<Network
 
 pub fn get_device_info(engine: &RequestEngine) -> Result<NetworkInfo> {
     let resp = engine.sreq(UTIL, util::GET_DEVICE_INFO, vec![])?;
-    ensure!(resp.data.len() >= 10, "GET_DEVICE_INFO response too short: {} bytes", resp.data.len());
+    ensure!(
+        resp.data.len() >= 10,
+        "GET_DEVICE_INFO response too short: {} bytes",
+        resp.data.len()
+    );
 
     let mut ieee_address = [0u8; 8];
     ieee_address.copy_from_slice(&resp.data[0..8]);
@@ -110,10 +117,12 @@ pub fn send_zcl_command(
     let trans_seq = next_af_trans_seq();
 
     let mut data = vec![
-        dest_lo, dest_hi,
+        dest_lo,
+        dest_hi,
         dest_endpoint,
         ENDPOINT_1,
-        cluster_lo, cluster_hi,
+        cluster_lo,
+        cluster_hi,
         trans_seq,
         AF_OPTIONS,
         DEFAULT_RADIUS,
@@ -142,7 +151,9 @@ fn wait_for_data_confirm(engine: &RequestEngine, trans_seq: u8) -> Result<()> {
             return Err(anyhow::anyhow!("AF_DATA_CONFIRM missing status byte"));
         };
         let Some(confirm_trans_seq) = confirm.data.get(2).copied() else {
-            return Err(anyhow::anyhow!("AF_DATA_CONFIRM missing transaction sequence"));
+            return Err(anyhow::anyhow!(
+                "AF_DATA_CONFIRM missing transaction sequence"
+            ));
         };
         if confirm_trans_seq != trans_seq {
             continue;
@@ -208,8 +219,10 @@ fn register_endpoint(engine: &RequestEngine) -> Result<()> {
 
     let mut data = vec![
         ENDPOINT_1,
-        profile_lo, profile_hi,
-        device_lo, device_hi,
+        profile_lo,
+        profile_hi,
+        device_lo,
+        device_hi,
         DEVICE_VERSION,
         LATENCY_NO_LATENCY,
         input_clusters.len() as u8,

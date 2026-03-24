@@ -4,7 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use crossbeam_channel::{Receiver, Sender, bounded};
+use crossbeam_channel::{bounded, Receiver, Sender};
 
 use super::frame::ZnpFrame;
 
@@ -137,8 +137,8 @@ fn drain_frames(buf: &mut Vec<u8>, tx: &Sender<ZnpFrame>) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::subsystem;
+    use super::*;
     use crossbeam_channel::bounded;
 
     fn make_channel() -> (Sender<ZnpFrame>, Receiver<ZnpFrame>) {
