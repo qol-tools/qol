@@ -59,6 +59,7 @@ function AppShell() {
                     closePluginConfig=${closePluginConfig}
                     switchView=${switchView}
                     viewOrder=${viewOrder}
+                    modalOpen=${modeSwitchPrompt !== null}
                 />
                 <div class="app-container">
                     <div class="app-main">
@@ -103,8 +104,8 @@ function AppShell() {
     `;
 }
 
-function AppKeyboardRouting({ activePluginId, activeViewId, closePluginConfig, switchView, viewOrder }) {
+function AppKeyboardRouting({ activePluginId, activeViewId, closePluginConfig, switchView, viewOrder, modalOpen }) {
     const palette = usePaletteContext();
-    useAppKeyboardRouting({ activePluginId, activeViewId, closePluginConfig, switchView, viewOrder, palette });
+    useAppKeyboardRouting({ activePluginId, activeViewId, closePluginConfig, switchView, viewOrder, palette, modalOpen });
     return null;
 }

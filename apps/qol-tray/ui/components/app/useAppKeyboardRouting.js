@@ -11,7 +11,8 @@ export function useAppKeyboardRouting({
     closePluginConfig,
     switchView,
     viewOrder,
-    palette
+    palette,
+    modalOpen
 }) {
     const pluginConfig = usePluginConfigContext();
     const { getViewKeyboard } = useViewKeyboardContext();
@@ -37,12 +38,13 @@ export function useAppKeyboardRouting({
     }, [activePluginId]);
 
     useKeyboard(useCallback((event) => {
+        if (modalOpen) return;
         const viewKeyboard = getViewKeyboard(activeViewId);
         if (handlePaletteToggle(event, palette, activePluginId, viewKeyboard)) return;
         if (palette.active && event.key !== 'Tab') return;
         if (activePluginId) return delegateToPluginConfig(event, pluginConfig, closePluginConfig);
         routeToView(event, viewKeyboard, cycleView);
-    }, [activePluginId, activeViewId, closePluginConfig, cycleView, getViewKeyboard, palette, pluginConfig]));
+    }, [activePluginId, activeViewId, closePluginConfig, cycleView, getViewKeyboard, modalOpen, palette, pluginConfig]));
 }
 
 function handlePaletteToggle(event, palette, activePluginId, viewKeyboard) {

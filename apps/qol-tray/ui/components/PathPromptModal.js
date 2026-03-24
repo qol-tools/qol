@@ -1,6 +1,6 @@
 import { html } from '../lib/html.js';
 import { useState, useCallback, useRef, useEffect } from 'preact/hooks';
-import { Modal, ModalActions } from './ModalPreact.js';
+import { Modal, ModalFooter } from './ModalPreact.js';
 
 export function PathPromptModal({ open, onClose, onSubmit, title, placeholder, hint }) {
     const [value, setValue] = useState('');
@@ -16,33 +16,29 @@ export function PathPromptModal({ open, onClose, onSubmit, title, placeholder, h
     }, [value, onSubmit]);
 
     const handleKeyDown = useCallback((e) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            handleSubmit();
-        }
-    }, [handleSubmit]);
+        if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
+        if (e.key === 'Enter') { e.preventDefault(); handleSubmit(); }
+    }, [handleSubmit, onClose]);
 
     return html`
-        <${Modal} open=${open} onClose=${onClose} size="sm">
-            <div class="modal-body" style="padding: 16px;">
-                <h3 style="margin: 0 0 8px;">${title}</h3>
-                ${hint && html`<p class="text-muted" style="margin: 0 0 8px; font-size: 13px;">${hint}</p>`}
-                <input
-                    ref=${inputRef}
-                    type="text"
-                    class="input"
-                    value=${value}
-                    onInput=${(e) => setValue(e.target.value)}
-                    onKeyDown=${handleKeyDown}
-                    placeholder=${placeholder}
-                    style="width: 100%;"
-                />
+        <${Modal} open=${open} onClose=${onClose} className="edit-modal">
+            <div class="edit-modal-content" onKeyDown=${handleKeyDown}>
+                <h3>${title}</h3>
+                <div class="form-group">
+                    <label>${hint || 'Path'}</label>
+                    <input
+                        ref=${inputRef}
+                        type="text"
+                        value=${value}
+                        onInput=${(e) => setValue(e.target.value)}
+                        placeholder=${placeholder}
+                    />
+                </div>
+                <${ModalFooter} actions=${[
+                    { label: 'Cancel', kbd: 'Esc', onClick: onClose },
+                    { label: 'Confirm', kbd: 'Enter', variant: 'btn-primary', onClick: handleSubmit, disabled: !value.trim() },
+                ]} />
             </div>
-            <${ModalActions}
-                onClose=${onClose}
-                onSave=${handleSubmit}
-                disabled=${!value.trim()}
-            />
         <//>
     `;
 }

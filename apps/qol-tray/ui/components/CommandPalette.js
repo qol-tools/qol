@@ -4,9 +4,10 @@ import { usePaletteContext } from '../palette/context.js';
 import { getCommands } from '../palette/registry.js';
 import init, { fuzzy_match as wasmFuzzyMatch } from '../wasm/qol_wasm.js';
 
-function filterCommands(commands, query) {
-    if (!query) return commands;
-    return commands
+function filterCommands(commands, query, hidden) {
+    const pool = commands.filter(c => hidden ? c.hidden : !c.hidden);
+    if (!query) return pool;
+    return pool
         .map(c => ({ cmd: c, match: wasmFuzzyMatch(query, c.label) }))
         .filter(({ match }) => match !== null)
         .sort((a, b) => a.match.score - b.match.score)
@@ -32,9 +33,12 @@ export function CommandPalette() {
         };
     }, []);
 
+    const isHiddenMode = mode === 'action' && actionQuery.startsWith('>');
+    const effectiveQuery = isHiddenMode ? actionQuery.slice(1) : actionQuery;
+
     const commands = useMemo(
-        () => mode === 'action' && wasmLoaded ? filterCommands(getCommands(activeViewId), actionQuery) : [],
-        [mode, activeViewId, actionQuery, wasmLoaded]
+        () => mode === 'action' && wasmLoaded ? filterCommands(getCommands(activeViewId), effectiveQuery, isHiddenMode) : [],
+        [mode, activeViewId, effectiveQuery, isHiddenMode, wasmLoaded]
     );
 
     useEffect(() => {
@@ -67,7 +71,14 @@ export function CommandPalette() {
             deactivate();
             return;
         }
-        if (mode !== 'action' || commands.length === 0) return;
+        if (mode !== 'action') return;
+        if (isHiddenMode && e.key === 'Enter' && commands.length > 0) {
+            e.preventDefault();
+            e.stopPropagation();
+            executeCommand(commands[0]);
+            return;
+        }
+        if (commands.length === 0) return;
         if (e.key === 'ArrowDown') {
             e.preventDefault();
             setSelectedIndex(i => i + 1 >= commands.length ? 0 : i + 1);
@@ -84,7 +95,7 @@ export function CommandPalette() {
             const cmd = commands[selectedIndex];
             if (cmd) executeCommand(cmd);
         }
-    }, [mode, commands, selectedIndex, deactivate, executeCommand]);
+    }, [mode, commands, selectedIndex, isHiddenMode, deactivate, executeCommand]);
 
     const handleClick = useCallback(() => {
         if (!active) activate();
@@ -104,7 +115,7 @@ export function CommandPalette() {
                 value=${query} onInput=${handleInput} onKeyDown=${handleKeyDown} onBlur=${handleBlur}
                 placeholder=${mode === 'action' ? 'Type a command...' : 'Search...'} />
         </div>
-        ${mode === 'action' && commands.length > 0 && html`
+        ${mode === 'action' && !isHiddenMode && commands.length > 0 && html`
             <ul class="palette-dropdown">
                 ${commands.map((cmd, i) => html`
                     <li key=${cmd.id} class="palette-item ${i === clampedIndex ? 'selected' : ''}" data-selected-surface="" data-selected=${i === clampedIndex ? 'true' : 'false'} data-selected-surface-priority="10" data-scroll-follow-mode="nearest"

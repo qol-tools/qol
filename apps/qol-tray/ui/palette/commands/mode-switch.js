@@ -1,40 +1,23 @@
-import { GLOBAL_ID, registerCommands } from '../registry.js';
-
 const DEV_PATH_KEY = 'qol:dev-path';
 const PROD_PATH_KEY = 'qol:prod-path';
 
-export function registerModeSwitchCommands({ isDevMode, onNeedPath, onStartSwitch }) {
-    const commands = [];
-
-    if (isDevMode) {
-        commands.push({
-            id: 'mode:switch-to-prod',
-            label: 'Switch to Prod',
-            run: () => {
-                const saved = localStorage.getItem(PROD_PATH_KEY);
-                if (saved) {
-                    onStartSwitch('prod', saved);
-                } else {
-                    onNeedPath('prod');
-                }
-            },
-        });
-    } else {
-        commands.push({
-            id: 'mode:switch-to-dev',
-            label: 'Switch to Dev',
-            run: () => {
-                const saved = localStorage.getItem(DEV_PATH_KEY);
-                if (saved) {
-                    onStartSwitch('dev', saved);
-                } else {
-                    onNeedPath('dev');
-                }
-            },
-        });
-    }
-
-    registerCommands(GLOBAL_ID, commands);
+export function buildModeSwitchCommand({ isDevMode, onNeedPath, onStartSwitch }) {
+    const target = isDevMode ? 'prod' : 'dev';
+    const key = target === 'dev' ? DEV_PATH_KEY : PROD_PATH_KEY;
+    const label = isDevMode ? 'Switch to Prod' : 'Switch to Dev';
+    return {
+        id: 'mode:switch',
+        label,
+        hidden: true,
+        run: () => {
+            const saved = localStorage.getItem(key);
+            if (saved) {
+                onStartSwitch(target, saved);
+            } else {
+                onNeedPath(target);
+            }
+        },
+    };
 }
 
 export function saveModePath(target, path) {
