@@ -3,7 +3,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use crossbeam_channel::{Receiver, Sender, bounded};
+use crossbeam_channel::{bounded, Receiver, Sender};
 
 use super::coordinator::{self, NetworkConfig};
 use super::device::{Device, DeviceRegistry, Endpoint};
@@ -29,8 +29,8 @@ impl Default for ControllerConfig {
             serial_port: String::new(),
             baud_rate: 115_200,
             network_key: [
-                0x01, 0x03, 0x05, 0x07, 0x09, 0x0B, 0x0D, 0x0F,
-                0x00, 0x02, 0x04, 0x06, 0x08, 0x0A, 0x0C, 0x0D,
+                0x01, 0x03, 0x05, 0x07, 0x09, 0x0B, 0x0D, 0x0F, 0x00, 0x02, 0x04, 0x06, 0x08, 0x0A,
+                0x0C, 0x0D,
             ],
             channel: 11,
             pan_id: 0x1A62,
@@ -68,7 +68,9 @@ impl ZigbeeController {
         };
         coordinator::startup(&engine, &network_config).context("coordinator startup failed")?;
 
-        let registry = Arc::new(Mutex::new(DeviceRegistry::from_persisted(persisted_devices)));
+        let registry = Arc::new(Mutex::new(DeviceRegistry::from_persisted(
+            persisted_devices,
+        )));
         let (events_tx, events_rx) = bounded(64);
 
         let loop_engine = Arc::clone(&engine);
@@ -105,8 +107,17 @@ impl ZigbeeController {
         zcl_frame: ZclFrame,
     ) -> Result<()> {
         let payload = zcl_frame.encode();
-        eprintln!("[znp] send ZCL: addr=0x{:04X} ep={} cluster=0x{:04X} payload={:02X?}", network_address, endpoint, cluster_id, payload);
-        coordinator::send_zcl_command(&self.engine, network_address, endpoint, cluster_id, &payload)
+        eprintln!(
+            "[znp] send ZCL: addr=0x{:04X} ep={} cluster=0x{:04X} payload={:02X?}",
+            network_address, endpoint, cluster_id, payload
+        );
+        coordinator::send_zcl_command(
+            &self.engine,
+            network_address,
+            endpoint,
+            cluster_id,
+            &payload,
+        )
     }
 
     pub fn events(&self) -> &Receiver<ZigbeeEvent> {
@@ -125,7 +136,8 @@ fn run_event_loop(
             Err(_) => break,
         };
 
-        if frame.subsystem() == subsystem::ZDO && frame.cmd1 == subsystem::zdo::END_DEVICE_ANNCE_IND {
+        if frame.subsystem() == subsystem::ZDO && frame.cmd1 == subsystem::zdo::END_DEVICE_ANNCE_IND
+        {
             handle_device_announce(&engine, &registry, &events_tx, &frame);
         }
     }
@@ -170,9 +182,16 @@ fn handle_device_announce(
         reg.register(updated_device.clone());
     }
 
-    eprintln!("[znp] device joined: addr=0x{:04X} ieee={:02X?} endpoints={:?}",
-        updated_device.network_address, updated_device.ieee_address,
-        updated_device.endpoints.iter().map(|e| e.id).collect::<Vec<_>>());
+    eprintln!(
+        "[znp] device joined: addr=0x{:04X} ieee={:02X?} endpoints={:?}",
+        updated_device.network_address,
+        updated_device.ieee_address,
+        updated_device
+            .endpoints
+            .iter()
+            .map(|e| e.id)
+            .collect::<Vec<_>>()
+    );
     let _ = events_tx.send(ZigbeeEvent::DeviceJoined(updated_device));
 }
 
@@ -180,9 +199,17 @@ fn query_endpoints(engine: &RequestEngine, nwk_addr: u16) -> Result<Vec<Endpoint
     let addr_lo = (nwk_addr & 0xFF) as u8;
     let addr_hi = ((nwk_addr >> 8) & 0xFF) as u8;
 
-    engine.sreq(subsystem::ZDO, subsystem::zdo::ACTIVE_EP_REQ, vec![addr_lo, addr_hi, addr_lo, addr_hi])?;
+    engine.sreq(
+        subsystem::ZDO,
+        subsystem::zdo::ACTIVE_EP_REQ,
+        vec![addr_lo, addr_hi, addr_lo, addr_hi],
+    )?;
 
-    let rsp = engine.wait_for_areq(subsystem::ZDO, subsystem::zdo::ACTIVE_EP_RSP, EVENT_LOOP_TIMEOUT)?;
+    let rsp = engine.wait_for_areq(
+        subsystem::ZDO,
+        subsystem::zdo::ACTIVE_EP_RSP,
+        EVENT_LOOP_TIMEOUT,
+    )?;
 
     if rsp.data.len() < 6 {
         return Ok(vec![]);
@@ -215,17 +242,27 @@ fn query_simple_desc(engine: &RequestEngine, nwk_addr: u16, endpoint_id: u8) -> 
         vec![addr_lo, addr_hi, addr_lo, addr_hi, endpoint_id],
     )?;
 
-    let rsp = engine.wait_for_areq(subsystem::ZDO, subsystem::zdo::SIMPLE_DESC_RSP, EVENT_LOOP_TIMEOUT)?;
+    let rsp = engine.wait_for_areq(
+        subsystem::ZDO,
+        subsystem::zdo::SIMPLE_DESC_RSP,
+        EVENT_LOOP_TIMEOUT,
+    )?;
 
     if rsp.data.len() < 13 {
-        return Ok(Endpoint { id: endpoint_id, input_clusters: vec![] });
+        return Ok(Endpoint {
+            id: endpoint_id,
+            input_clusters: vec![],
+        });
     }
 
     let num_in_clusters = rsp.data[12] as usize;
     let clusters_start = 13;
     let clusters_end = clusters_start + num_in_clusters * 2;
     if rsp.data.len() < clusters_end {
-        return Ok(Endpoint { id: endpoint_id, input_clusters: vec![] });
+        return Ok(Endpoint {
+            id: endpoint_id,
+            input_clusters: vec![],
+        });
     }
 
     let input_clusters = (0..num_in_clusters)
@@ -235,7 +272,13 @@ fn query_simple_desc(engine: &RequestEngine, nwk_addr: u16, endpoint_id: u8) -> 
         })
         .collect();
 
-    eprintln!("[znp] endpoint {} clusters: {:?}", endpoint_id, input_clusters);
+    eprintln!(
+        "[znp] endpoint {} clusters: {:?}",
+        endpoint_id, input_clusters
+    );
 
-    Ok(Endpoint { id: endpoint_id, input_clusters })
+    Ok(Endpoint {
+        id: endpoint_id,
+        input_clusters,
+    })
 }

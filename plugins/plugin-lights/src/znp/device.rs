@@ -28,7 +28,9 @@ pub struct DeviceRegistry {
 
 impl DeviceRegistry {
     pub fn new() -> Self {
-        Self { devices: Vec::new() }
+        Self {
+            devices: Vec::new(),
+        }
     }
 
     pub fn from_persisted(devices: Vec<Device>) -> Self {
@@ -36,7 +38,11 @@ impl DeviceRegistry {
     }
 
     pub fn register(&mut self, device: Device) {
-        if let Some(existing) = self.devices.iter_mut().find(|d| d.ieee_address == device.ieee_address) {
+        if let Some(existing) = self
+            .devices
+            .iter_mut()
+            .find(|d| d.ieee_address == device.ieee_address)
+        {
             existing.network_address = device.network_address;
             if !device.endpoints.is_empty() {
                 existing.endpoints = device.endpoints;
@@ -71,7 +77,10 @@ mod tests {
         Device {
             network_address,
             ieee_address: [0, 0, 0, 0, 0, 0, 0, ieee_last_byte],
-            endpoints: vec![Endpoint { id: 1, input_clusters: vec![0x0006] }],
+            endpoints: vec![Endpoint {
+                id: 1,
+                input_clusters: vec![0x0006],
+            }],
         }
     }
 
@@ -90,7 +99,11 @@ mod tests {
         let mut registry = DeviceRegistry::new();
         registry.register(make_device(0x1234, 1));
         registry.register(make_device(0x5678, 1));
-        assert_eq!(registry.devices().len(), 1, "expected single device after update");
+        assert_eq!(
+            registry.devices().len(),
+            1,
+            "expected single device after update"
+        );
         assert_eq!(registry.devices()[0].network_address, 0x5678);
     }
 
@@ -98,11 +111,19 @@ mod tests {
     fn remove_device() {
         let mut registry = DeviceRegistry::new();
         let ieee = [0u8; 8];
-        let device = Device { network_address: 0x0001, ieee_address: ieee, endpoints: vec![] };
+        let device = Device {
+            network_address: 0x0001,
+            ieee_address: ieee,
+            endpoints: vec![],
+        };
         registry.register(device);
         assert_eq!(registry.devices().len(), 1);
         registry.remove(&ieee);
-        assert_eq!(registry.devices().len(), 0, "expected empty registry after remove");
+        assert_eq!(
+            registry.devices().len(),
+            0,
+            "expected empty registry after remove"
+        );
     }
 
     #[test]
@@ -120,8 +141,14 @@ mod tests {
             network_address: 0x0001,
             ieee_address: [0u8; 8],
             endpoints: vec![
-                Endpoint { id: 1, input_clusters: vec![0x0006, 0x0008] },
-                Endpoint { id: 2, input_clusters: vec![0x0300] },
+                Endpoint {
+                    id: 1,
+                    input_clusters: vec![0x0006, 0x0008],
+                },
+                Endpoint {
+                    id: 2,
+                    input_clusters: vec![0x0300],
+                },
             ],
         };
 

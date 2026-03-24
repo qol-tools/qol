@@ -103,13 +103,21 @@ impl ZnpFrame {
         let data_len = buf[1] as usize;
         let expected_len = MIN_FRAME_LEN + data_len;
         if buf.len() < expected_len {
-            bail!("truncated frame: expected {} bytes, got {}", expected_len, buf.len());
+            bail!(
+                "truncated frame: expected {} bytes, got {}",
+                expected_len,
+                buf.len()
+            );
         }
         let fcs_input = &buf[1..1 + 3 + data_len];
         let expected_fcs = calculate_fcs(fcs_input);
         let actual_fcs = buf[1 + 3 + data_len];
         if actual_fcs != expected_fcs {
-            bail!("FCS mismatch: expected 0x{:02X}, got 0x{:02X}", expected_fcs, actual_fcs);
+            bail!(
+                "FCS mismatch: expected 0x{:02X}, got 0x{:02X}",
+                expected_fcs,
+                actual_fcs
+            );
         }
         Ok(Self {
             cmd0: buf[2],
@@ -177,13 +185,13 @@ mod tests {
 
     #[test]
     fn decode_rejects_truncated_input() {
-        let cases: &[&[u8]] = &[
-            &[],
-            &[0xFE],
-            &[0xFE, 0x05, 0x21, 0x01],
-        ];
+        let cases: &[&[u8]] = &[&[], &[0xFE], &[0xFE, 0x05, 0x21, 0x01]];
         for &buf in cases {
-            assert!(ZnpFrame::decode(buf).is_err(), "truncated input {:?} must fail", buf);
+            assert!(
+                ZnpFrame::decode(buf).is_err(),
+                "truncated input {:?} must fail",
+                buf
+            );
         }
     }
 
@@ -192,7 +200,11 @@ mod tests {
         let cases = [
             ZnpFrame::sreq(subsystem::SYS, subsystem::sys::PING, vec![]),
             ZnpFrame::areq(subsystem::ZDO, subsystem::zdo::STATE_CHANGE_IND, vec![0x09]),
-            ZnpFrame::sreq(subsystem::AF, subsystem::af::DATA_REQUEST, vec![0xAA, 0xBB, 0xCC]),
+            ZnpFrame::sreq(
+                subsystem::AF,
+                subsystem::af::DATA_REQUEST,
+                vec![0xAA, 0xBB, 0xCC],
+            ),
         ];
         for frame in &cases {
             let encoded = frame.encode();
@@ -216,15 +228,30 @@ mod tests {
     #[test]
     fn message_type_extraction() {
         let cases = [
-            (ZnpFrame::sreq(subsystem::SYS, 0x01, vec![]), MessageType::Sreq),
-            (ZnpFrame::areq(subsystem::ZDO, 0x80, vec![]), MessageType::Areq),
             (
-                ZnpFrame { cmd0: build_cmd0(MessageType::Srsp, subsystem::SYS), cmd1: 0x01, data: vec![] },
+                ZnpFrame::sreq(subsystem::SYS, 0x01, vec![]),
+                MessageType::Sreq,
+            ),
+            (
+                ZnpFrame::areq(subsystem::ZDO, 0x80, vec![]),
+                MessageType::Areq,
+            ),
+            (
+                ZnpFrame {
+                    cmd0: build_cmd0(MessageType::Srsp, subsystem::SYS),
+                    cmd1: 0x01,
+                    data: vec![],
+                },
                 MessageType::Srsp,
             ),
         ];
         for (frame, expected) in &cases {
-            assert_eq!(frame.message_type(), *expected, "message_type for cmd0=0x{:02X}", frame.cmd0);
+            assert_eq!(
+                frame.message_type(),
+                *expected,
+                "message_type for cmd0=0x{:02X}",
+                frame.cmd0
+            );
         }
     }
 
@@ -234,10 +261,18 @@ mod tests {
             (ZnpFrame::sreq(subsystem::SYS, 0x01, vec![]), subsystem::SYS),
             (ZnpFrame::sreq(subsystem::AF, 0x01, vec![]), subsystem::AF),
             (ZnpFrame::areq(subsystem::ZDO, 0x80, vec![]), subsystem::ZDO),
-            (ZnpFrame::sreq(subsystem::UTIL, 0x00, vec![]), subsystem::UTIL),
+            (
+                ZnpFrame::sreq(subsystem::UTIL, 0x00, vec![]),
+                subsystem::UTIL,
+            ),
         ];
         for (frame, expected) in &cases {
-            assert_eq!(frame.subsystem(), *expected, "subsystem for cmd0=0x{:02X}", frame.cmd0);
+            assert_eq!(
+                frame.subsystem(),
+                *expected,
+                "subsystem for cmd0=0x{:02X}",
+                frame.cmd0
+            );
         }
     }
 }

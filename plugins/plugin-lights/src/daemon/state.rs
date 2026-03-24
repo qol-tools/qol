@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
-use anyhow::Result;
 use crate::znp::{Device, Endpoint};
+use anyhow::Result;
 
 use crate::backend::zigbee::ZigbeeBackend;
 use crate::config::model::{PluginConfig, PresetSlot};

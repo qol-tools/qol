@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use anyhow::{anyhow, Context, Result};
-use crossbeam_channel::Receiver;
 use crate::znp::zcl;
 use crate::znp::{ControllerConfig, Device, ZigbeeController, ZigbeeEvent};
+use anyhow::{anyhow, Context, Result};
+use crossbeam_channel::Receiver;
 
 use crate::backend::LightBackend;
 use crate::config::model::BackendConfig;
