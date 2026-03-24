@@ -14,6 +14,7 @@ import { RecompileDissolve } from './RecompileDissolve.js';
 import { PluginConfigView } from '../views/plugin-config/view.js';
 import { GlobalToast } from './ApiErrorToast.js';
 import { SelectionCursorOverlay } from './SelectionCursorOverlay.js';
+import { PathPromptModal } from './PathPromptModal.js';
 
 export function App() {
     return html`<${PaletteProvider}><${AppShell} /><//>`;
@@ -44,6 +45,9 @@ function AppShell() {
         syncStatus,
         setSyncStatus,
         refreshSyncStatus,
+        modeSwitchPrompt,
+        setModeSwitchPrompt,
+        handleModeSwitchSubmit,
     } = useApp({ onDissolve });
     return html`
         <${ModifierStateProvider}>
@@ -84,6 +88,14 @@ function AppShell() {
                     <${SelectionCursorOverlay} />
                     <${RecompileDissolve} triggerRef=${dissolveRef} />
                     <${GlobalToast} />
+                    <${PathPromptModal}
+                        open=${modeSwitchPrompt !== null}
+                        onClose=${() => setModeSwitchPrompt(null)}
+                        title=${modeSwitchPrompt?.target === 'dev' ? 'Dev repo path' : 'Prod binary path'}
+                        placeholder=${modeSwitchPrompt?.target === 'dev' ? '/path/to/qol-tray' : '/path/to/qol-tray-binary'}
+                        hint=${modeSwitchPrompt?.target === 'dev' ? 'Path to the qol-tray repo root (contains Cargo.toml)' : 'Path to the installed qol-tray binary'}
+                        onSubmit=${handleModeSwitchSubmit}
+                    />
                 </div>
             <//>
         <//>

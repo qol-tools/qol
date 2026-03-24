@@ -67,7 +67,7 @@ fn switch_to_dev(state: AppState, repo_path: PathBuf) -> impl IntoResponse {
         match result {
             Ok(Ok(binary)) => {
                 events.send(crate::daemon::DaemonEvent::ModeSwitchComplete);
-                plugin_manager.lock().await.shutdown();
+                plugin_manager.lock().unwrap().shutdown();
                 exec_restart(&binary);
             }
             Ok(Err(e)) => {
@@ -102,7 +102,7 @@ fn switch_to_prod(state: AppState, binary_path: PathBuf) -> impl IntoResponse {
             percent: 50,
             phase: "Switching to production".into(),
         });
-        plugin_manager.lock().await.shutdown();
+        plugin_manager.lock().unwrap().shutdown();
         events.send(crate::daemon::DaemonEvent::ModeSwitchComplete);
         exec_restart(&binary_path);
     });
