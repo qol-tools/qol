@@ -137,8 +137,8 @@ fn drain_frames(buf: &mut Vec<u8>, tx: &Sender<ZnpFrame>) {
 
 #[cfg(test)]
 mod tests {
-    use super::subsystem;
     use super::*;
+    use crate::znp::subsystem;
     use crossbeam_channel::bounded;
 
     fn make_channel() -> (Sender<ZnpFrame>, Receiver<ZnpFrame>) {
