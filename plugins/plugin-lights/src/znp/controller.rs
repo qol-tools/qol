@@ -130,12 +130,7 @@ fn run_event_loop(
     registry: Arc<Mutex<DeviceRegistry>>,
     events_tx: Sender<ZigbeeEvent>,
 ) {
-    loop {
-        let frame = match engine.events().recv() {
-            Ok(f) => f,
-            Err(_) => break,
-        };
-
+    while let Ok(frame) = engine.events().recv() {
         if frame.subsystem() == subsystem::ZDO && frame.cmd1 == subsystem::zdo::END_DEVICE_ANNCE_IND
         {
             handle_device_announce(&engine, &registry, &events_tx, &frame);

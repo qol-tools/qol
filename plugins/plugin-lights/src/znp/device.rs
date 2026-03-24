@@ -26,6 +26,12 @@ pub struct DeviceRegistry {
     devices: Vec<Device>,
 }
 
+impl Default for DeviceRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DeviceRegistry {
     pub fn new() -> Self {
         Self {
