@@ -16,9 +16,11 @@ pub fn toggle() -> ZclFrame {
 mod tests {
     use super::*;
 
+    type OnOffCase = (&'static str, fn() -> ZclFrame, u8);
+
     #[test]
     fn on_off_commands() {
-        let cases: &[(&str, fn() -> ZclFrame, u8)] = &[
+        let cases: &[OnOffCase] = &[
             ("off", off, 0x00),
             ("on", on, 0x01),
             ("toggle", toggle, 0x02),
