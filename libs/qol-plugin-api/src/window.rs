@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use gpui::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+use crate::monitor::ActiveMonitor;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct MonitorKey {
     pub x: i32,
     pub y: i32,
@@ -19,6 +21,13 @@ impl MonitorKey {
             height: bounds.size.height.to_f64().round() as i32,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct WindowPlacement {
+    pub target: MonitorKey,
+    pub bounds: Bounds<Pixels>,
+    pub display_id: Option<DisplayId>,
 }
 
 pub struct ActiveWindows<T> {
@@ -95,4 +104,49 @@ where
         window.activate_window();
         view
     })
+}
+
+pub fn target_monitor_key(monitor: Option<&ActiveMonitor>) -> MonitorKey {
+    let Some(monitor) = monitor else {
+        return MonitorKey::default();
+    };
+    MonitorKey::from_bounds(&monitor.bounds())
+}
+
+pub fn centered_window_placement(
+    monitor: Option<&ActiveMonitor>,
+    win_size: Size<Pixels>,
+    cx: &App,
+) -> WindowPlacement {
+    let bounds = match monitor {
+        Some(active) => active.centered_bounds(win_size),
+        None => Bounds::centered(None, win_size, cx),
+    };
+    WindowPlacement {
+        target: target_monitor_key(monitor),
+        bounds,
+        display_id: display_id_for_monitor(monitor, cx),
+    }
+}
+
+fn display_id_for_monitor(monitor: Option<&ActiveMonitor>, cx: &App) -> Option<DisplayId> {
+    let monitor = monitor?;
+    let target_bounds = monitor.bounds();
+    cx.displays()
+        .into_iter()
+        .find(|display| bounds_match(&display.bounds(), &target_bounds))
+        .map(|display| display.id())
+}
+
+fn bounds_match(a: &Bounds<Pixels>, b: &Bounds<Pixels>) -> bool {
+    let a = MonitorKey::from_bounds(a);
+    let b = MonitorKey::from_bounds(b);
+    coord_diff(a.x, b.x)
+        && coord_diff(a.y, b.y)
+        && coord_diff(a.width, b.width)
+        && coord_diff(a.height, b.height)
+}
+
+fn coord_diff(a: i32, b: i32) -> bool {
+    (a - b).abs() <= 4
 }
