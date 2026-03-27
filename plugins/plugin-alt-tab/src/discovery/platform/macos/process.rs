@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::sync::{Mutex, OnceLock};
 
-#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub(super) struct ProcessIdentity {
     pub pid: i32,
     pub start_time_us: u64,

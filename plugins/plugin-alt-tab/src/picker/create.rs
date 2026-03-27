@@ -6,6 +6,7 @@ use crate::shared::layout::*;
 use crate::{IconMap, PickerWindowState, PreviewMap, SharedIconCache};
 use gpui::*;
 use qol_plugin_api::monitor::{ActiveMonitor, MonitorTracker};
+use qol_plugin_api::window::centered_window_placement;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -20,26 +21,23 @@ pub(super) struct CreateRequest<'a> {
 pub(super) fn create_new(req: &CreateRequest, gathered: GatheredWindows, cx: &mut App) {
     let layout = compute_create_layout(req, &gathered, cx);
     let post = PostCreateData::new(req.config, &gathered);
-    let handle = open_picker_window(layout.bounds, PickerInit::new(req.config, gathered), cx);
+    let handle = open_picker_window(
+        layout.bounds,
+        layout.display_id,
+        PickerInit::new(req.config, gathered),
+        cx,
+    );
     let Some(handle) = handle else {
         return on_open_failure();
     };
-    let target = req
-        .tracker
-        .snapshot()
-        .map(|m| qol_plugin_api::window::MonitorKey::from_bounds(&m.0.bounds()))
-        .unwrap_or(qol_plugin_api::window::MonitorKey {
-            x: 0,
-            y: 0,
-            width: 0,
-            height: 0,
-        });
-    req.current.borrow_mut().insert(target, handle);
+    req.current.borrow_mut().insert(layout.target, handle);
     post.finalize(handle, req.icon_cache.clone(), cx);
 }
 
 struct CreateLayout {
+    target: qol_plugin_api::window::MonitorKey,
     bounds: Bounds<Pixels>,
+    display_id: Option<DisplayId>,
 }
 
 fn compute_create_layout(
@@ -49,8 +47,12 @@ fn compute_create_layout(
 ) -> CreateLayout {
     let monitor = req.tracker.snapshot().map(|(m, _)| m);
     let size = estimate_picker_size(req, gathered, &monitor);
-    let bounds = super::reuse::centered_bounds(&monitor, size, cx);
-    CreateLayout { bounds }
+    let placement = centered_window_placement(monitor.as_ref(), size, cx);
+    CreateLayout {
+        target: placement.target,
+        bounds: placement.bounds,
+        display_id: placement.display_id,
+    }
 }
 
 fn estimate_picker_size(
@@ -111,10 +113,11 @@ impl PickerInit {
 
 fn open_picker_window(
     bounds: Bounds<Pixels>,
+    display_id: Option<DisplayId>,
     init: PickerInit,
     cx: &mut App,
 ) -> Option<WindowHandle<AltTabApp>> {
-    let opts = picker_window_options(bounds, init.transparent_bg);
+    let opts = picker_window_options(bounds, display_id, init.transparent_bg);
     cx.open_window(opts, move |window, cx| {
         window.set_window_title("qol-alt-tab-picker");
         let view = cx.new(|cx| init.into_app(window, cx));
@@ -125,7 +128,11 @@ fn open_picker_window(
     .ok()
 }
 
-fn picker_window_options(bounds: Bounds<Pixels>, transparent: bool) -> WindowOptions {
+fn picker_window_options(
+    bounds: Bounds<Pixels>,
+    display_id: Option<DisplayId>,
+    transparent: bool,
+) -> WindowOptions {
     let bg = if transparent {
         WindowBackgroundAppearance::Transparent
     } else {
@@ -138,6 +145,7 @@ fn picker_window_options(bounds: Bounds<Pixels>, transparent: bool) -> WindowOpt
     };
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
+        display_id,
         titlebar: None,
         window_decorations: Some(decor),
         kind: super::platform::picker_window_kind(),

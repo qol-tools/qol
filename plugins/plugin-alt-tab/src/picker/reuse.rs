@@ -4,11 +4,11 @@ use crate::config::AltTabConfig;
 use crate::shared::layout::*;
 use gpui::*;
 use qol_plugin_api::monitor::{ActiveMonitor, MonitorTracker};
+use qol_plugin_api::window::centered_window_placement;
 
 pub(crate) struct ReuseLayout {
     pub bounds: Bounds<Pixels>,
     pub size: Size<Pixels>,
-    pub monitor_changed: bool,
 }
 
 pub(crate) struct ReuseRequest<'a> {
@@ -22,7 +22,6 @@ pub(super) struct LayoutInput<'a> {
     pub config: &'a AltTabConfig,
     pub window_count: usize,
     pub tracker: &'a MonitorTracker,
-    pub created_on_origin: Point<Pixels>,
 }
 
 pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
@@ -42,12 +41,10 @@ pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
 pub(super) fn compute_layout(input: &LayoutInput, cx: &mut App) -> ReuseLayout {
     let monitor = input.tracker.snapshot().map(|(m, _)| m);
     let size = picker_size(input, &monitor);
-    let bounds = centered_bounds(&monitor, size, cx);
-    let monitor_changed = origin_diverged(input.created_on_origin, monitor_origin(&monitor));
+    let placement = centered_window_placement(monitor.as_ref(), size, cx);
     ReuseLayout {
-        bounds,
+        bounds: placement.bounds,
         size,
-        monitor_changed,
     }
 }
 
@@ -63,25 +60,7 @@ fn picker_size(input: &LayoutInput, monitor: &Option<ActiveMonitor>) -> Size<Pix
     size(px(w), px(h))
 }
 
-pub(super) fn centered_bounds(
-    monitor: &Option<ActiveMonitor>,
-    win_size: Size<Pixels>,
-    cx: &mut App,
-) -> Bounds<Pixels> {
-    match monitor.as_ref() {
-        Some(active) => active.centered_bounds(win_size),
-        None => Bounds::centered(None, win_size, cx),
-    }
-}
-
-pub(super) fn monitor_origin(monitor: &Option<ActiveMonitor>) -> Point<Pixels> {
-    monitor
-        .as_ref()
-        .map(|m| m.bounds().origin)
-        .unwrap_or(point(px(0.0), px(0.0)))
-}
-
-fn origin_diverged(a: Point<Pixels>, b: Point<Pixels>) -> bool {
+pub(crate) fn origin_diverged(a: Point<Pixels>, b: Point<Pixels>) -> bool {
     const TOLERANCE_PX: f64 = 6.0;
     let dx = (a.x.to_f64() - b.x.to_f64()).abs();
     let dy = (a.y.to_f64() - b.y.to_f64()).abs();

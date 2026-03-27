@@ -5,6 +5,24 @@ use super::process::{
 use super::{ax, CgWindow};
 use crate::discovery::WindowInfo;
 use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, OnceLock};
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+struct StableWindowKey {
+    identity: ProcessIdentity,
+    window_id: u32,
+}
+
+struct StableWindow {
+    key: Option<StableWindowKey>,
+    window: CgWindow,
+}
+
+static STABLE_WINDOW_ORDER: OnceLock<Mutex<Vec<StableWindowKey>>> = OnceLock::new();
+
+fn stable_window_order() -> &'static Mutex<Vec<StableWindowKey>> {
+    STABLE_WINDOW_ORDER.get_or_init(|| Mutex::new(Vec::new()))
+}
 
 #[derive(Default)]
 pub(super) struct WindowEnumeration {
@@ -105,12 +123,171 @@ pub(super) fn collect_on_screen_windows(
         );
     }
     let deduped = ax::dedup_by_ax(filtered, ax_cache);
+    let deduped = stabilize_on_screen_order(deduped, tracker);
     #[cfg(debug_assertions)]
     eprintln!("[alt-tab/enum] post-dedup: {} windows", deduped.len());
     for window in deduped {
         tracker.remember_window(window.pid, window.id);
         state.push_on_screen(window);
     }
+}
+
+fn stabilize_on_screen_order(
+    windows: Vec<CgWindow>,
+    tracker: &mut KnownWindowTracker,
+) -> Vec<CgWindow> {
+    if windows.len() <= 1 {
+        persist_stable_window_order(current_stable_keys(&windows, tracker));
+        return windows;
+    }
+
+    let stable_windows = windows
+        .into_iter()
+        .map(|window| StableWindow {
+            key: stable_window_key(&window, tracker),
+            window,
+        })
+        .collect::<Vec<_>>();
+    let ordered_keys = merge_stable_window_order(&stable_windows);
+    let ordered = apply_stable_window_order(stable_windows, &ordered_keys);
+    persist_stable_window_order(ordered_keys);
+    ordered
+}
+
+fn stable_window_key(
+    window: &CgWindow,
+    tracker: &mut KnownWindowTracker,
+) -> Option<StableWindowKey> {
+    let identity = tracker.identity_for_pid(window.pid)?;
+    Some(StableWindowKey {
+        identity,
+        window_id: window.id,
+    })
+}
+
+fn current_stable_keys(
+    windows: &[CgWindow],
+    tracker: &mut KnownWindowTracker,
+) -> Vec<StableWindowKey> {
+    windows
+        .iter()
+        .filter_map(|window| stable_window_key(window, tracker))
+        .collect()
+}
+
+fn merge_stable_window_order(stable_windows: &[StableWindow]) -> Vec<StableWindowKey> {
+    let current = stable_windows
+        .iter()
+        .filter_map(|window| window.key)
+        .collect::<Vec<_>>();
+    if current.is_empty() {
+        return Vec::new();
+    }
+
+    let previous = stable_window_order()
+        .lock()
+        .ok()
+        .map(|order| order.clone())
+        .unwrap_or_default();
+    let focused = stable_windows.first().and_then(|window| window.key);
+    merge_stable_keys(focused, &previous, &current)
+}
+
+fn merge_stable_keys(
+    focused: Option<StableWindowKey>,
+    previous: &[StableWindowKey],
+    current: &[StableWindowKey],
+) -> Vec<StableWindowKey> {
+    let current_set = current.iter().copied().collect::<HashSet<_>>();
+    let mut result = Vec::with_capacity(current.len());
+    let mut seen = HashSet::new();
+
+    if let Some(focused) = focused.filter(|key| current_set.contains(key)) {
+        push_unique_key(&mut result, &mut seen, focused);
+    }
+    for &key in previous {
+        if !current_set.contains(&key) {
+            continue;
+        }
+        push_unique_key(&mut result, &mut seen, key);
+    }
+    for &key in current {
+        push_unique_key(&mut result, &mut seen, key);
+    }
+    result
+}
+
+fn push_unique_key(
+    result: &mut Vec<StableWindowKey>,
+    seen: &mut HashSet<StableWindowKey>,
+    key: StableWindowKey,
+) {
+    if !seen.insert(key) {
+        return;
+    }
+    result.push(key);
+}
+
+fn apply_stable_window_order(
+    stable_windows: Vec<StableWindow>,
+    ordered_keys: &[StableWindowKey],
+) -> Vec<CgWindow> {
+    let mut stable_windows = stable_windows.into_iter();
+    let Some(focused) = stable_windows.next() else {
+        return Vec::new();
+    };
+
+    let mut by_key = HashMap::new();
+    let mut remaining_keys = Vec::new();
+    let mut unknown = Vec::new();
+
+    for stable in stable_windows {
+        let Some(key) = stable.key else {
+            unknown.push(stable.window);
+            continue;
+        };
+        remaining_keys.push(key);
+        by_key.insert(key, stable.window);
+    }
+
+    let mut result = Vec::with_capacity(ordered_keys.len() + unknown.len() + 1);
+    let mut seen = HashSet::new();
+    if let Some(key) = focused.key {
+        seen.insert(key);
+    }
+    result.push(focused.window);
+
+    for &key in ordered_keys {
+        if seen.contains(&key) {
+            continue;
+        }
+        let Some(window) = by_key.remove(&key) else {
+            continue;
+        };
+        seen.insert(key);
+        result.push(window);
+    }
+
+    for key in remaining_keys {
+        if seen.contains(&key) {
+            continue;
+        }
+        let Some(window) = by_key.remove(&key) else {
+            continue;
+        };
+        seen.insert(key);
+        result.push(window);
+    }
+
+    result.extend(unknown);
+    result
+}
+
+fn persist_stable_window_order(order: Vec<StableWindowKey>) {
+    let Ok(mut cached) = stable_window_order().lock() else {
+        return;
+    };
+    *cached = order;
 }
 
 fn register_on_screen(parsed: &[CgWindow], state: &mut WindowEnumeration) -> HashMap<i32, bool> {
@@ -453,4 +630,49 @@ fn try_accept_minimized(
     }
     *count += 1;
     Some(resolved)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(pid: i32, start_time_us: u64, window_id: u32) -> StableWindowKey {
+        StableWindowKey {
+            identity: ProcessIdentity { pid, start_time_us },
+            window_id,
+        }
+    }
+
+    #[test]
+    fn merge_stable_keys_keeps_non_focused_windows_in_prior_slots() {
+        let a1 = key(10, 1, 101);
+        let a2 = key(10, 1, 102);
+        let a3 = key(10, 1, 103);
+        let b1 = key(20, 2, 201);
+        let c1 = key(30, 3, 301);
+
+        let previous = vec![a1, b1, a2, c1, a3];
+        let current = vec![a2, a1, a3, b1, c1];
+
+        assert_eq!(
+            merge_stable_keys(Some(a2), &previous, &current),
+            vec![a2, a1, b1, c1, a3]
+        );
+    }
+
+    #[test]
+    fn merge_stable_keys_appends_new_windows_after_known_ones() {
+        let a1 = key(10, 1, 101);
+        let b1 = key(20, 2, 201);
+        let c1 = key(30, 3, 301);
+        let d1 = key(40, 4, 401);
+
+        let previous = vec![a1, b1];
+        let current = vec![b1, c1, a1, d1];
+
+        assert_eq!(
+            merge_stable_keys(Some(b1), &previous, &current),
+            vec![b1, a1, c1, d1]
+        );
+    }
 }

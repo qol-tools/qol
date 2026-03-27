@@ -5,7 +5,7 @@ mod reuse;
 pub(crate) mod run;
 
 pub use platform::{dismiss_picker, is_modifier_held};
-pub(crate) use reuse::ReuseRequest;
+pub(crate) use reuse::{origin_diverged, ReuseRequest};
 
 use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::config::{parse_hex_color, ActionMode, AltTabConfig, DisplayConfig};
@@ -13,7 +13,7 @@ use crate::{PickerWindowState, SharedIconCache};
 use gather::{gather, spawn_icon_fill, GatheredWindows, IconFillRequest};
 use gpui::*;
 use qol_plugin_api::monitor::MonitorTracker;
-use qol_plugin_api::window::MonitorKey;
+use qol_plugin_api::window::{target_monitor_key, MonitorKey};
 use run::{SharedPreviewCache, WindowCache};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -73,10 +73,11 @@ fn try_cycle_existing(req: &OpenPickerRequest, cx: &mut App) -> bool {
 }
 
 fn try_reuse_existing(req: &OpenPickerRequest, gathered: &GatheredWindows, cx: &mut App) -> bool {
-    let target = match req.tracker.snapshot() {
-        Some(m) => qol_plugin_api::window::MonitorKey::from_bounds(&m.0.bounds()),
-        None => return false,
+    let monitor = req.tracker.snapshot().map(|(monitor, _)| monitor);
+    let Some(target_monitor) = monitor.as_ref() else {
+        return false;
     };
+    let target = target_monitor_key(Some(target_monitor));
     let (handle, source_key) = match req.current.borrow().existing(target) {
         Some(h) => (h, target),
         None => match any_existing(req.current) {
@@ -84,12 +85,10 @@ fn try_reuse_existing(req: &OpenPickerRequest, gathered: &GatheredWindows, cx: &
             None => return false,
         },
     };
-    let source_origin = point(px(source_key.x as f32), px(source_key.y as f32));
     let input = reuse::LayoutInput {
         config: req.config,
         window_count: gathered.windows.len(),
         tracker: req.tracker,
-        created_on_origin: source_origin,
     };
     let layout = reuse::compute_layout(&input, cx);
     let reuse_req = reuse::ReuseRequest {
@@ -115,10 +114,11 @@ fn any_existing(current: &PickerWindowState) -> Option<(MonitorKey, WindowHandle
 }
 
 fn destroy_non_target_windows(req: &OpenPickerRequest, cx: &mut App) {
-    let target = match req.tracker.snapshot() {
-        Some(m) => qol_plugin_api::window::MonitorKey::from_bounds(&m.0.bounds()),
-        None => return,
+    let monitor = req.tracker.snapshot().map(|(monitor, _)| monitor);
+    let Some(target_monitor) = monitor.as_ref() else {
+        return;
     };
+    let target = target_monitor_key(Some(target_monitor));
     req.current.borrow_mut().destroy_non_target(target, cx);
 }
 
