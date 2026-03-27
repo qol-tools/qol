@@ -233,8 +233,7 @@ pub fn diff_key_rules(old: &[ResolvedKeyRule], new: &[ResolvedKeyRule]) -> Vec<S
             .iter()
             .find(|r| r.from_mods == old_rule.from_mods && r.from_key == old_rule.from_key);
         match new_match {
-            Some(new_rule) if !same_target(&new_rule.to, &old_rule.to) =>
-            {
+            Some(new_rule) if !same_target(&new_rule.to, &old_rule.to) => {
                 warnings.push(format!(
                     "rule changed — {}: was {}, now {}",
                     rule_label(&old_rule.from_mods, old_rule.from_key),
@@ -642,9 +641,7 @@ mod tests {
                 None,
                 "com.apple.Safari",
             ),
-            KeyAction::Char {
-                text: "$".into(),
-            }
+            KeyAction::Char { text: "$".into() }
         );
     }
 
@@ -663,14 +660,26 @@ mod tests {
 
         // "<" becomes "$"
         assert_eq!(
-            process_key_event(&config, Modifiers::NONE, 0x0A, Some("<"), "com.apple.Safari"),
+            process_key_event(
+                &config,
+                Modifiers::NONE,
+                0x0A,
+                Some("<"),
+                "com.apple.Safari"
+            ),
             KeyAction::Char { text: "$".into() }
         );
         // "$" becomes "<"
         assert_eq!(
             process_key_event(
                 &config,
-                Modifiers { ctrl: false, shift: true, alt: false, cmd: false, ralt: false },
+                Modifiers {
+                    ctrl: false,
+                    shift: true,
+                    alt: false,
+                    cmd: false,
+                    ralt: false
+                },
                 crate::keycode::ANSI_4,
                 Some("$"),
                 "com.apple.Safari",
@@ -679,12 +688,24 @@ mod tests {
         );
         // unrelated key passes through
         assert_eq!(
-            process_key_event(&config, Modifiers::NONE, crate::keycode::ANSI_A, Some("a"), "com.apple.Safari"),
+            process_key_event(
+                &config,
+                Modifiers::NONE,
+                crate::keycode::ANSI_A,
+                Some("a"),
+                "com.apple.Safari"
+            ),
             KeyAction::Passthrough
         );
         // char_swaps are always global — bypass excluded apps
         assert_eq!(
-            process_key_event(&config, Modifiers::NONE, 0x0A, Some("<"), "com.excluded.app"),
+            process_key_event(
+                &config,
+                Modifiers::NONE,
+                0x0A,
+                Some("<"),
+                "com.excluded.app"
+            ),
             KeyAction::Char { text: "$".into() }
         );
     }

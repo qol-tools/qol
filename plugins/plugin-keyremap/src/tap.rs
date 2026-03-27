@@ -1,11 +1,11 @@
 use std::sync::{Arc, RwLock};
 
 use core_foundation::runloop::CFRunLoop;
-use foreign_types_shared::ForeignType;
 use core_graphics::event::{
     CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
     CGEventType, CallbackResult, EventField,
 };
+use foreign_types_shared::ForeignType;
 
 use crate::app_tracker::AppTracker;
 use crate::remap::{
