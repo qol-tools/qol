@@ -1,6 +1,6 @@
 [package]
 name = "alt-tab"
-version = "0.12.4"
+version = "0.10.7"
 edition = "2021"
 description = "Alt-Tab window switcher plugin for QoL Tray"
 license = "PolyForm-Noncommercial-1.0.0"
