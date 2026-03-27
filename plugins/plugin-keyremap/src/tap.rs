@@ -1,6 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 use core_foundation::runloop::CFRunLoop;
+use foreign_types_shared::ForeignType;
 use core_graphics::event::{
     CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
     CGEventType, CallbackResult, EventField,
@@ -95,7 +96,7 @@ fn run_tap(state: Arc<TapState>) {
                 CallbackResult::Keep
             }
         },
-        || CFRunLoop::run_current(),
+        CFRunLoop::run_current,
     );
 
     if result.is_err() {
@@ -141,6 +142,31 @@ fn handle_event(
     }
 }
 
+fn event_character(event: &core_graphics::event::CGEvent) -> Option<String> {
+    extern "C" {
+        fn CGEventKeyboardGetUnicodeString(
+            event: core_graphics::sys::CGEventRef,
+            max_len: core::ffi::c_ulong,
+            actual_len: *mut core::ffi::c_ulong,
+            buf: *mut u16,
+        );
+    }
+    let mut buf = [0u16; 4];
+    let mut len: core::ffi::c_ulong = 0;
+    unsafe {
+        CGEventKeyboardGetUnicodeString(
+            event.as_ptr(),
+            buf.len() as core::ffi::c_ulong,
+            &mut len,
+            buf.as_mut_ptr(),
+        );
+    }
+    if len == 0 {
+        return None;
+    }
+    String::from_utf16(&buf[..len as usize]).ok()
+}
+
 fn handle_key_event(
     config: &ResolvedConfig,
     event: &core_graphics::event::CGEvent,
@@ -149,8 +175,13 @@ fn handle_key_event(
     let flags = event.get_flags();
     let mods = extract_modifiers(flags);
     let keycode = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
+    let event_char = if config.char_swap_rules.is_empty() {
+        None
+    } else {
+        event_character(event)
+    };
 
-    let action = remap::process_key_event(config, mods, keycode, bundle_id);
+    let action = remap::process_key_event(config, mods, keycode, event_char.as_deref(), bundle_id);
 
     #[cfg(debug_assertions)]
     if !matches!(action, KeyAction::Passthrough) || config.excluded_apps.contains(bundle_id) {

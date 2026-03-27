@@ -7,6 +7,7 @@ const VALID_MODS = new Set(['ctrl', 'shift', 'alt', 'cmd', 'ralt', 'altgr']);
 const DEFAULT_CONFIG = {
     enabled: true,
     excluded_apps: [],
+    char_swaps: [],
     char_rules: [],
     key_rules: [],
     mouse_rules: [],
@@ -41,6 +42,10 @@ function normalizeConfig(raw) {
         enabled: typeof raw?.enabled === 'boolean' ? raw.enabled : true,
         excluded_apps: Array.isArray(raw?.excluded_apps)
             ? raw.excluded_apps.filter(a => typeof a === 'string' && a.length > 0)
+            : [],
+        char_swaps: Array.isArray(raw?.char_swaps)
+            ? raw.char_swaps.filter(s => Array.isArray(s) && s.length === 2 && s[0] && s[1])
+                .map(([a, b]) => [String(a), String(b)])
             : [],
         char_rules: Array.isArray(raw?.char_rules)
             ? raw.char_rules.filter(r => r?.from_key && r?.to_char).map(r => ({

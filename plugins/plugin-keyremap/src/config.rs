@@ -8,6 +8,7 @@ pub struct RemapConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     pub excluded_apps: Vec<String>,
+    pub char_swaps: Vec<(String, String)>,
     pub char_rules: Vec<CharRule>,
     pub key_rules: Vec<KeyRule>,
     pub mouse_rules: Vec<MouseRule>,
@@ -24,27 +25,41 @@ fn builtin_defaults() -> RemapConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CharRule {
-    pub from_mods: Vec<String>,
-    pub from_key: String,
-    pub to_char: String,
-    #[serde(default)]
-    pub global: bool,
+#[serde(untagged)]
+pub enum CharRule {
+    ByKey {
+        #[serde(default)]
+        from_mods: Vec<String>,
+        from_key: String,
+        to_char: String,
+        #[serde(default)]
+        global: bool,
+    },
+    ByChar {
+        from_char: String,
+        to_char: String,
+        #[serde(default)]
+        global: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum KeyRule {
     Batch {
+        #[serde(default)]
         from_mods: Vec<String>,
+        #[serde(default)]
         to_mods: Vec<String>,
         keys: Vec<String>,
         #[serde(default)]
         global: bool,
     },
     Single {
+        #[serde(default)]
         from_mods: Vec<String>,
         from_key: String,
+        #[serde(default)]
         to_mods: Vec<String>,
         to_key: String,
         #[serde(default)]
@@ -54,8 +69,10 @@ pub enum KeyRule {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MouseRule {
+    #[serde(default)]
     pub from_mods: Vec<String>,
     pub button: String,
+    #[serde(default)]
     pub to_mods: Vec<String>,
     #[serde(default)]
     pub global: bool,
@@ -63,7 +80,9 @@ pub struct MouseRule {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScrollRule {
+    #[serde(default)]
     pub from_mods: Vec<String>,
+    #[serde(default)]
     pub to_mods: Vec<String>,
     #[serde(default)]
     pub global: bool,
@@ -161,11 +180,33 @@ mod tests {
     }
 
     #[test]
+    fn parse_single_rule_without_modifiers() {
+        let json = r#"{ "from_key": "a", "to_key": "b" }"#;
+        let rule: KeyRule = serde_json::from_str(json).expect("bare key rule should parse");
+        match rule {
+            KeyRule::Single {
+                from_mods,
+                to_mods,
+                from_key,
+                to_key,
+                ..
+            } => {
+                assert!(from_mods.is_empty());
+                assert!(to_mods.is_empty());
+                assert_eq!(from_key, "a");
+                assert_eq!(to_key, "b");
+            }
+            _ => panic!("expected Single variant"),
+        }
+    }
+
+    #[test]
     fn roundtrip_batch_rule() {
         let rule = KeyRule::Batch {
             from_mods: vec!["ctrl".into()],
             to_mods: vec!["cmd".into()],
             keys: vec!["c".into(), "v".into()],
+            global: false,
         };
         let json = serde_json::to_string(&rule).unwrap();
         let parsed: KeyRule = serde_json::from_str(&json).unwrap();

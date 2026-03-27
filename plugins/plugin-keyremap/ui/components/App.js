@@ -5,6 +5,7 @@ import { useApps } from '../hooks/useApps.js';
 import { EnableToggle } from './EnableToggle.js';
 import { ExcludedApps } from './ExcludedApps.js';
 import { KeyRules } from './KeyRules.js';
+import { CharSwaps } from './CharSwaps.js';
 import { CharRules } from './CharRules.js';
 import { MouseRules } from './MouseRules.js';
 import { ScrollRules } from './ScrollRules.js';
@@ -54,6 +55,11 @@ export function App() {
                 rules=${config.key_rules}
                 onChange=${(v) => updateField('key_rules', v)}
                 onClearWarnings=${clearWarnings}
+            />
+
+            <${CharSwaps}
+                swaps=${config.char_swaps || []}
+                onChange=${(v) => updateField('char_swaps', v)}
             />
 
             <${CharRules}

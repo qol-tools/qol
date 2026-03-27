@@ -87,7 +87,7 @@ export function KeyRules({ rules, onChange, onClearWarnings }) {
     return html`
         <section class="card">
             <h2>Key Rules</h2>
-            <p>Remap keyboard shortcuts. First matching rule wins.</p>
+            <p>Remap keyboard shortcuts or bare keys. Leave modifiers empty for plain-key remaps. Single rules can also emit a literal character like <code>$</code>. First matching rule wins.</p>
             <div class="rules-list">
                 ${rules.length === 0 && html`<div class="empty-state">No key rules defined.</div>`}
                 ${rules.map((rule, i) => html`

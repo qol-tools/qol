@@ -153,7 +153,7 @@ pub fn parse_key(name: &str) -> Option<u16> {
         "." | "period" => Some(ANSI_PERIOD),
         "/" | "slash" => Some(ANSI_SLASH),
         "`" | "grave" => Some(ANSI_GRAVE),
-        "section" | "iso" => Some(ISO_SECTION),
+        "section" | "iso" | "<" | ">" => Some(ISO_SECTION),
         _ => None,
     }
 }
