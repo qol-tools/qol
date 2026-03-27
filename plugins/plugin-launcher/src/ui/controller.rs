@@ -18,7 +18,8 @@ impl LauncherView {
         cx: &mut Context<Self>,
     ) {
         let key = event.keystroke.key.as_str();
-        let secondary = event.keystroke.modifiers.secondary() || event.keystroke.modifiers.control;
+        let secondary = event.keystroke.modifiers.secondary();
+        let control = event.keystroke.modifiers.control;
         let shift = event.keystroke.modifiers.shift;
         let alt = event.keystroke.modifiers.alt;
 
@@ -28,7 +29,7 @@ impl LauncherView {
         let result_count = self.store.result_count();
         let effect = self
             .state
-            .apply_key(key, secondary, shift, alt, result_count);
+            .apply_key(key, secondary, control, shift, alt, result_count);
 
         if !matches!(effect, InputEffect::BoostUp | InputEffect::BoostDown) {
             self.state.boost_adjusting = false;
