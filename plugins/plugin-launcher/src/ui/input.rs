@@ -1,5 +1,6 @@
 use super::state::{EdgeHit, LauncherState, NavDirection};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputEffect {
     Ignore,
     Navigate,
@@ -14,25 +15,29 @@ impl LauncherState {
     pub fn apply_key(
         &mut self,
         key: &str,
-        ctrl: bool,
+        secondary: bool,
+        control: bool,
         shift: bool,
         alt: bool,
         result_count: usize,
     ) -> InputEffect {
+        let boost = secondary || control || alt;
         #[cfg(debug_assertions)]
         if matches!(key, "left" | "right") {
-            eprintln!("[input] key={key:?} ctrl={ctrl} shift={shift} alt={alt}");
+            eprintln!(
+                "[input] key={key:?} secondary={secondary} control={control} shift={shift} alt={alt}"
+            );
         }
         match key {
             "escape" | "esc" => InputEffect::Dismiss,
-            "up" if ctrl => {
+            "up" if secondary => {
                 if self.decrease_fuzziness() {
                     InputEffect::QueryChanged
                 } else {
                     InputEffect::Navigate
                 }
             }
-            "down" if ctrl => {
+            "down" if secondary => {
                 if self.increase_fuzziness() {
                     InputEffect::QueryChanged
                 } else {
@@ -43,8 +48,8 @@ impl LauncherState {
                 self.cycle_mode(shift);
                 InputEffect::QueryChanged
             }
-            "left" if alt => InputEffect::BoostDown,
-            "right" if alt => InputEffect::BoostUp,
+            "left" if boost => InputEffect::BoostDown,
+            "right" if boost => InputEffect::BoostUp,
             "left" => {
                 self.move_left(shift);
                 InputEffect::Navigate
@@ -61,11 +66,11 @@ impl LauncherState {
                 self.move_end(shift);
                 InputEffect::Navigate
             }
-            "up" if !ctrl => {
+            "up" if !secondary => {
                 self.move_up();
                 InputEffect::Navigate
             }
-            "down" if !ctrl => {
+            "down" if !secondary => {
                 self.move_down(result_count);
                 InputEffect::Navigate
             }
@@ -84,16 +89,16 @@ impl LauncherState {
                     InputEffect::Navigate
                 }
             }
-            "a" if ctrl => {
+            "a" if secondary => {
                 self.select_all();
                 InputEffect::Navigate
             }
-            "space" if !ctrl => {
+            "space" if !secondary && !control => {
                 self.insert_char(' ');
                 InputEffect::QueryChanged
             }
             _ => {
-                if ctrl || alt {
+                if secondary || control || alt {
                     return InputEffect::Ignore;
                 }
                 let Some(ch) = key_to_input_char(key, shift) else {
@@ -229,4 +234,60 @@ pub fn key_to_input_char(key: &str, shift: bool) -> Option<char> {
         .next()
         .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')?;
     Some(if shift { ch.to_ascii_uppercase() } else { ch })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::discovery::search::Fuzziness;
+
+    #[test]
+    fn control_arrow_right_boosts() {
+        let mut state = LauncherState::new();
+
+        assert_eq!(
+            state.apply_key("right", false, true, false, false, 0),
+            InputEffect::BoostUp
+        );
+    }
+
+    #[test]
+    fn secondary_arrow_right_boosts() {
+        let mut state = LauncherState::new();
+
+        assert_eq!(
+            state.apply_key("right", true, false, false, false, 0),
+            InputEffect::BoostUp
+        );
+    }
+
+    #[test]
+    fn alt_arrow_right_still_boosts() {
+        let mut state = LauncherState::new();
+
+        assert_eq!(
+            state.apply_key("right", false, false, false, true, 0),
+            InputEffect::BoostUp
+        );
+    }
+
+    #[test]
+    fn secondary_shortcuts_still_work() {
+        let mut state = LauncherState::new();
+        state.query = "abc".to_string();
+        state.cursor = 1;
+
+        assert_eq!(
+            state.apply_key("a", true, false, false, false, 0),
+            InputEffect::Navigate
+        );
+        assert_eq!(state.selected_range(), Some((0, 3)));
+
+        assert_eq!(state.fuzziness, Fuzziness::Balanced);
+        assert_eq!(
+            state.apply_key("down", true, false, false, false, 0),
+            InputEffect::QueryChanged
+        );
+        assert_eq!(state.fuzziness, Fuzziness::Loose);
+    }
 }
