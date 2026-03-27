@@ -148,7 +148,27 @@ fn stabilize_on_screen_order(
             window,
         })
         .collect::<Vec<_>>();
-    let ordered_keys = merge_stable_window_order(&stable_windows);
+    let current = stable_windows
+        .iter()
+        .filter_map(|window| window.key)
+        .collect::<Vec<_>>();
+    if current.is_empty() {
+        persist_stable_window_order(Vec::new());
+        return stable_windows
+            .into_iter()
+            .map(|window| window.window)
+            .collect();
+    }
+    let previous = read_stable_window_order();
+    let focused = stable_windows.first().and_then(|window| window.key);
+    if use_current_window_order(focused, &previous) {
+        persist_stable_window_order(current);
+        return stable_windows
+            .into_iter()
+            .map(|window| window.window)
+            .collect();
+    }
+    let ordered_keys = merge_stable_keys(focused, &previous, &current);
     let ordered = apply_stable_window_order(stable_windows, &ordered_keys);
     persist_stable_window_order(ordered_keys);
     ordered
@@ -175,22 +195,22 @@ fn current_stable_keys(
         .collect()
 }
 
-fn merge_stable_window_order(stable_windows: &[StableWindow]) -> Vec<StableWindowKey> {
-    let current = stable_windows
-        .iter()
-        .filter_map(|window| window.key)
-        .collect::<Vec<_>>();
-    if current.is_empty() {
-        return Vec::new();
-    }
-
-    let previous = stable_window_order()
+fn read_stable_window_order() -> Vec<StableWindowKey> {
+    stable_window_order()
         .lock()
         .ok()
         .map(|order| order.clone())
-        .unwrap_or_default();
-    let focused = stable_windows.first().and_then(|window| window.key);
-    merge_stable_keys(focused, &previous, &current)
+        .unwrap_or_default()
+}
+
+fn use_current_window_order(
+    focused: Option<StableWindowKey>,
+    previous: &[StableWindowKey],
+) -> bool {
+    let Some(focused) = focused else {
+        return true;
+    };
+    previous.first().copied() != Some(focused)
 }
 
 fn merge_stable_keys(
@@ -674,5 +694,23 @@ mod tests {
             merge_stable_keys(Some(b1), &previous, &current),
             vec![b1, a1, c1, d1]
         );
+    }
+
+    #[test]
+    fn use_current_window_order_when_frontmost_changes() {
+        let a1 = key(10, 1, 101);
+        let b1 = key(20, 2, 201);
+        let c1 = key(30, 3, 301);
+
+        assert!(use_current_window_order(Some(b1), &[a1, c1, b1]));
+    }
+
+    #[test]
+    fn keeps_stable_order_when_frontmost_is_unchanged() {
+        let a1 = key(10, 1, 101);
+        let b1 = key(20, 2, 201);
+        let c1 = key(30, 3, 301);
+
+        assert!(!use_current_window_order(Some(a1), &[a1, b1, c1]));
     }
 }

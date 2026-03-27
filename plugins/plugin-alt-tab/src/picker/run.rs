@@ -19,12 +19,27 @@ const STABLE_PREVIOUS_MIN: usize = 6;
 pub(crate) type WindowCache = Arc<Mutex<Vec<WindowInfo>>>;
 pub(crate) type SharedPreviewCache = Arc<Mutex<crate::PreviewMap>>;
 
+#[cfg(target_os = "macos")]
+type SharedFocusHistory = Arc<Mutex<FocusHistory>>;
+
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct FocusHistory {
+    last_window_id: Option<u32>,
+    window_ids: Vec<u32>,
+}
+
+#[cfg(target_os = "macos")]
+const FOCUS_HISTORY_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
 #[derive(Clone)]
 struct PickerCaches {
     last_window_count: Arc<AtomicUsize>,
     window_cache: WindowCache,
     icon_cache: SharedIconCache,
     preview_cache: SharedPreviewCache,
+    #[cfg(target_os = "macos")]
+    focus_history: SharedFocusHistory,
 }
 
 #[derive(Clone)]
@@ -41,6 +56,8 @@ impl PickerCaches {
             window_cache: Arc::new(Mutex::new(Vec::new())),
             icon_cache: Arc::new(Mutex::new(HashMap::new())),
             preview_cache: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(target_os = "macos")]
+            focus_history: Arc::new(Mutex::new(FocusHistory::default())),
         }
     }
 }
@@ -85,6 +102,8 @@ pub(crate) fn run_app(
         let _ = cache_tx;
         spawn_cache_updater(cx, cache_rx, state.caches.clone());
         spawn_initial_cache_fill(cx, state.caches.clone());
+        #[cfg(target_os = "macos")]
+        spawn_focus_history_tracker(cx, state.caches.clone());
 
         if show_on_start {
             state.open_picker(&config, false, cx);
@@ -137,6 +156,32 @@ fn spawn_initial_cache_fill(cx: &mut App, caches: PickerCaches) {
     .detach();
 }
 
+#[cfg(target_os = "macos")]
+fn spawn_focus_history_tracker(cx: &mut App, caches: PickerCaches) {
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let executor = cx.background_executor().clone();
+        loop {
+            executor.timer(FOCUS_HISTORY_POLL_INTERVAL).await;
+            if picker_visible() {
+                continue;
+            }
+            let focused = read_focused_window_id(&executor).await;
+            let Some(focused) = focused else {
+                continue;
+            };
+            if !remember_focused_window(&caches.focus_history, focused) {
+                continue;
+            }
+            let windows = apply_focus_history(
+                read_window_cache(&caches.window_cache),
+                &caches.focus_history,
+            );
+            replace_window_cache(&caches.window_cache, windows);
+        }
+    })
+    .detach();
+}
+
 async fn refresh_cache(executor: &gpui::BackgroundExecutor, caches: &PickerCaches) {
     refresh_cache_inner(executor, caches, false).await;
 }
@@ -153,6 +198,8 @@ async fn refresh_cache_inner(
     let Some(windows) = load_stable_windows(executor, &caches.window_cache).await else {
         return;
     };
+    #[cfg(target_os = "macos")]
+    let windows = apply_focus_history(windows, &caches.focus_history);
     caches
         .last_window_count
         .store(windows.len().max(1), Ordering::Relaxed);
@@ -296,6 +343,106 @@ async fn refresh_preview_cache(
     cache.retain(|id, _| active_ids.contains(id));
 }
 
+#[cfg(target_os = "macos")]
+async fn read_focused_window_id(executor: &gpui::BackgroundExecutor) -> Option<u32> {
+    executor
+        .spawn(async move { crate::discovery::platform::macos::ax::focused_window_id() })
+        .await
+}
+
+#[cfg(target_os = "macos")]
+fn sync_focus_history(caches: &PickerCaches) {
+    let Some(window_id) = crate::discovery::platform::macos::ax::focused_window_id() else {
+        return;
+    };
+    let _ = remember_focused_window(&caches.focus_history, window_id);
+}
+
+#[cfg(target_os = "macos")]
+fn remember_focused_window(focus_history: &SharedFocusHistory, window_id: u32) -> bool {
+    let Ok(mut history) = focus_history.lock() else {
+        return false;
+    };
+    if history.last_window_id == Some(window_id) {
+        return false;
+    }
+    history.last_window_id = Some(window_id);
+    true
+}
+
+#[cfg(target_os = "macos")]
+fn apply_focus_history(
+    windows: Vec<WindowInfo>,
+    focus_history: &SharedFocusHistory,
+) -> Vec<WindowInfo> {
+    let order = {
+        let active_ids = windows
+            .iter()
+            .map(|window| window.id)
+            .collect::<HashSet<_>>();
+        let Ok(mut history) = focus_history.lock() else {
+            return windows;
+        };
+        if let Some(window_id) = history
+            .last_window_id
+            .filter(|window_id| active_ids.contains(window_id))
+        {
+            move_window_id_to_front(&mut history.window_ids, window_id);
+        }
+        history
+            .window_ids
+            .retain(|window_id| active_ids.contains(window_id));
+        history.window_ids.clone()
+    };
+    reorder_windows_by_ids(windows, &order)
+}
+
+#[cfg(target_os = "macos")]
+fn move_window_id_to_front(window_ids: &mut Vec<u32>, window_id: u32) {
+    if let Some(index) = window_ids
+        .iter()
+        .position(|existing| *existing == window_id)
+    {
+        window_ids.remove(index);
+    }
+    window_ids.insert(0, window_id);
+}
+
+#[cfg(target_os = "macos")]
+fn reorder_windows_by_ids(windows: Vec<WindowInfo>, order: &[u32]) -> Vec<WindowInfo> {
+    if order.is_empty() {
+        return windows;
+    }
+    let mut by_id = HashMap::with_capacity(windows.len());
+    let mut original_ids = Vec::with_capacity(windows.len());
+    for window in windows {
+        original_ids.push(window.id);
+        by_id.insert(window.id, window);
+    }
+
+    let mut result = Vec::with_capacity(original_ids.len());
+    let mut seen = HashSet::new();
+    for window_id in order {
+        if !seen.insert(*window_id) {
+            continue;
+        }
+        let Some(window) = by_id.remove(window_id) else {
+            continue;
+        };
+        result.push(window);
+    }
+    for window_id in original_ids {
+        if !seen.insert(window_id) {
+            continue;
+        }
+        let Some(window) = by_id.remove(&window_id) else {
+            continue;
+        };
+        result.push(window);
+    }
+    result
+}
+
 fn replace_window_cache(window_cache: &WindowCache, windows: Vec<WindowInfo>) {
     let Ok(mut cache) = window_cache.lock() else {
         return;
@@ -350,15 +497,16 @@ fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     });
 }
 
-/// Synchronously refresh the window cache before opening the picker.
-/// This ensures MRU order reflects current z-order from CoreGraphics,
-/// even on macOS where no background cache watcher exists.
 fn refresh_cache_for_show(config: &AltTabConfig, caches: &PickerCaches) {
+    #[cfg(target_os = "macos")]
+    sync_focus_history(caches);
     let windows = if config.display.show_minimized {
         discovery::get_open_windows()
     } else {
         discovery::get_on_screen_windows()
     };
+    #[cfg(target_os = "macos")]
+    let windows = apply_focus_history(windows, &caches.focus_history);
     caches
         .last_window_count
         .store(windows.len().max(1), Ordering::Relaxed);
