@@ -61,14 +61,10 @@ pub(super) fn should_bootstrap_current_install(binary_path: &Path) -> Result<boo
         Ok(path) => path,
         Err(_) => return Ok(false),
     };
-    if bundle_root.starts_with(Path::new("/Applications")) {
-        return Ok(true);
-    }
-
-    let Some(home) = dirs::home_dir() else {
-        return Ok(false);
-    };
-    Ok(bundle_root.starts_with(home.join("Applications")))
+    Ok(bootstrap_allowed_for_bundle_root(
+        &bundle_root,
+        dirs::home_dir().as_deref(),
+    ))
 }
 
 pub(super) fn warn_system_install_conflict() {}
@@ -108,12 +104,40 @@ pub(super) fn prepare_atomic_replace(_: &Path) -> Result<()> {
 }
 
 fn bundle_root_from_binary(binary_path: &Path) -> Result<PathBuf> {
-    binary_path
+    let macos = binary_path
         .parent()
-        .and_then(|macos| macos.parent())
-        .and_then(|contents| contents.parent())
-        .map(|root| root.to_path_buf())
-        .context("Binary path is not inside an .app bundle")
+        .context("Binary path is not inside an .app bundle")?;
+    let contents = macos
+        .parent()
+        .context("Binary path is not inside an .app bundle")?;
+    let bundle_root = contents
+        .parent()
+        .context("Binary path is not inside an .app bundle")?;
+    if macos.file_name().and_then(|name| name.to_str()) != Some("MacOS") {
+        anyhow::bail!("Binary path is not inside an .app bundle");
+    }
+    if contents.file_name().and_then(|name| name.to_str()) != Some("Contents") {
+        anyhow::bail!("Binary path is not inside an .app bundle");
+    }
+    if !bundle_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".app"))
+    {
+        anyhow::bail!("Binary path is not inside an .app bundle");
+    }
+    Ok(bundle_root.to_path_buf())
+}
+
+fn bootstrap_allowed_for_bundle_root(bundle_root: &Path, home: Option<&Path>) -> bool {
+    if bundle_root.starts_with(Path::new("/Applications")) {
+        return true;
+    }
+
+    let Some(home) = home else {
+        return false;
+    };
+    bundle_root.starts_with(home.join("Applications"))
 }
 
 fn write_info_plist(bundle_root: &Path) -> Result<()> {
@@ -173,4 +197,59 @@ fn xml_escape(input: &str) -> String {
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bootstrap_current_install_only_allows_installed_app_locations() {
+        let home = Path::new("/Users/tester");
+        let cases = [
+            ("/Applications/QoL Tray.app", true),
+            ("/Applications/Utilities/QoL Tray.app", true),
+            ("/Users/tester/Applications/QoL Tray.app", true),
+            ("/Users/tester/Applications/Utilities/QoL Tray.app", true),
+            ("/Users/other/Applications/QoL Tray.app", false),
+            ("/Volumes/QoL Tray/QoL Tray.app", false),
+            ("/private/tmp/QoL Tray.app", false),
+            ("/Users/tester/Downloads/QoL Tray.app", false),
+        ];
+
+        for (bundle_root, expected) in cases {
+            assert_eq!(
+                bootstrap_allowed_for_bundle_root(Path::new(bundle_root), Some(home)),
+                expected,
+                "bundle_root: {bundle_root}"
+            );
+        }
+    }
+
+    #[test]
+    fn bootstrap_current_install_requires_home_for_user_applications() {
+        assert!(!bootstrap_allowed_for_bundle_root(
+            Path::new("/Users/tester/Applications/QoL Tray.app"),
+            None
+        ));
+        assert!(bootstrap_allowed_for_bundle_root(
+            Path::new("/Applications/QoL Tray.app"),
+            None
+        ));
+    }
+
+    #[test]
+    fn bundle_root_from_binary_rejects_non_bundle_paths() {
+        let cases = [
+            "/tmp/qol-tray",
+            "/Applications/QoL Tray.app",
+            "/usr/local/bin/qol-tray",
+        ];
+        for path in cases {
+            assert!(
+                bundle_root_from_binary(Path::new(path)).is_err(),
+                "path: {path}"
+            );
+        }
+    }
 }

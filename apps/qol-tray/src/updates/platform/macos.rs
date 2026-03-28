@@ -271,6 +271,17 @@ fn exec_restart_on_main_thread() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
+    fn create_app_bundle(root: &Path, contents: &[(&str, &str)]) -> PathBuf {
+        let app = root.join(APP_BUNDLE_NAME);
+        for (relative, body) in contents {
+            let path = app.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+        app
+    }
 
     #[test]
     fn find_app_bundle_from_exe_path() {
@@ -291,5 +302,75 @@ mod tests {
                 "path: {path}"
             );
         }
+    }
+
+    #[test]
+    fn macos_release_asset_contract_is_stable() {
+        let cases = [
+            (
+                "1.2.3",
+                "qol-tray-macos-universal.tar.gz",
+                "https://github.com/qol-tools/qol-tray/releases/download/v1.2.3/qol-tray-macos-universal.tar.gz",
+            ),
+            (
+                "9.9.9-beta.1",
+                "qol-tray-macos-universal.tar.gz",
+                "https://github.com/qol-tools/qol-tray/releases/download/v9.9.9-beta.1/qol-tray-macos-universal.tar.gz",
+            ),
+        ];
+
+        for (version, expected_name, expected_url) in cases {
+            assert_eq!(asset_filename(version), expected_name, "version: {version}");
+            assert_eq!(asset_url(version), expected_url, "version: {version}");
+        }
+    }
+
+    #[test]
+    fn replace_app_bundle_replaces_existing_bundle_contents() {
+        let root = TempDir::new().unwrap();
+        let source = create_app_bundle(
+            root.path().join("source").as_path(),
+            &[
+                ("Contents/MacOS/qol-tray", "new-binary"),
+                ("Contents/Info.plist", "new-plist"),
+            ],
+        );
+        let target = create_app_bundle(
+            root.path().join("target").as_path(),
+            &[
+                ("Contents/MacOS/qol-tray", "old-binary"),
+                ("Contents/Resources/old.txt", "old-resource"),
+            ],
+        );
+
+        replace_app_bundle(&source, &target).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(target.join("Contents/MacOS/qol-tray")).unwrap(),
+            "new-binary"
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.join("Contents/Info.plist")).unwrap(),
+            "new-plist"
+        );
+        assert!(!target.join("Contents/Resources/old.txt").exists());
+    }
+
+    #[test]
+    fn replace_app_bundle_installs_when_target_is_missing() {
+        let root = TempDir::new().unwrap();
+        let source = create_app_bundle(
+            root.path().join("source").as_path(),
+            &[("Contents/MacOS/qol-tray", "new-binary")],
+        );
+        let target = root.path().join("Applications").join(APP_BUNDLE_NAME);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+
+        replace_app_bundle(&source, &target).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(target.join("Contents/MacOS/qol-tray")).unwrap(),
+            "new-binary"
+        );
     }
 }
