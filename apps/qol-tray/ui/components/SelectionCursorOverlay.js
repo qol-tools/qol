@@ -21,6 +21,13 @@ export function SelectionCursorOverlay() {
         appRef.current = app;
 
         const sync = () => {
+            if (app.dataset.inputMode === 'mouse') {
+                trackTarget(null, sync, resizeObserverRef, appRef, targetRef);
+                rectRef.current = null;
+                setStyle(previous => hiddenStyle(previous));
+                return;
+            }
+
             const nextTarget = findActiveSelectedSurface({ currentTarget: targetRef.current });
             trackTarget(nextTarget, sync, resizeObserverRef, appRef, targetRef);
 
@@ -43,7 +50,8 @@ export function SelectionCursorOverlay() {
 
         const setInputMode = (mode) => { app.dataset.inputMode = mode; };
         const onKey = () => setInputMode('keyboard');
-        const onMouse = () => setInputMode('mouse');
+        const onPointer = () => setInputMode('mouse');
+        const onWheel = () => setInputMode('mouse');
         setInputMode('keyboard');
 
         const observer = new MutationObserver((mutations) => {
@@ -62,8 +70,9 @@ export function SelectionCursorOverlay() {
         document.addEventListener('focusin', sync, true);
         document.addEventListener('focusout', sync, true);
         document.addEventListener('keydown', onKey, true);
-        document.addEventListener('mousedown', onMouse, true);
-        document.addEventListener('mousemove', onMouse, { capture: true, passive: true });
+        document.addEventListener('pointerdown', onPointer, true);
+        document.addEventListener('mousemove', onPointer, { capture: true, passive: true });
+        document.addEventListener('wheel', onWheel, { capture: true, passive: true });
         window.addEventListener('resize', sync);
         sync();
         readyFrameRef.current = requestAnimationFrame(() => {
@@ -77,8 +86,9 @@ export function SelectionCursorOverlay() {
             document.removeEventListener('focusin', sync, true);
             document.removeEventListener('focusout', sync, true);
             document.removeEventListener('keydown', onKey, true);
-            document.removeEventListener('mousedown', onMouse, true);
-            document.removeEventListener('mousemove', onMouse, true);
+            document.removeEventListener('pointerdown', onPointer, true);
+            document.removeEventListener('mousemove', onPointer, true);
+            document.removeEventListener('wheel', onWheel, true);
             window.removeEventListener('resize', sync);
             if (readyFrameRef.current) cancelAnimationFrame(readyFrameRef.current);
             if (!resizeObserverRef.current) return;
