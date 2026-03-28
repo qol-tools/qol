@@ -67,6 +67,11 @@ impl AppState {
             #[cfg(feature = "dev")]
             core_log_controls,
         };
+        if let Ok(manager) = state.plugin_manager.lock() {
+            if let Err(error) = crate::profile::sync_plugins_lock_from_plugins(manager.plugins()) {
+                log::error!("Failed to sync profile plugins lock on startup: {}", error);
+            }
+        }
         Ok((state, plugins_dir))
     }
 }
