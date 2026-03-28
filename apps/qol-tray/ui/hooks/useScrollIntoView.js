@@ -78,8 +78,29 @@ export function useScrollFollow() {
     const keyboardScrollPendingRef = useRef(false);
     const scheduledSelectionRef = useRef(false);
     const selectionTargetRef = useRef(null);
+    const programmaticScrollRef = useRef(false);
+    const programmaticScrollFrameRef = useRef(0);
 
     useEffect(() => {
+        const setInputMode = (mode) => {
+            const app = document.querySelector('.app-container');
+            if (!(app instanceof HTMLElement)) {
+                return;
+            }
+            app.dataset.inputMode = mode;
+        };
+
+        const markProgrammaticScroll = () => {
+            programmaticScrollRef.current = true;
+            if (programmaticScrollFrameRef.current) {
+                cancelAnimationFrame(programmaticScrollFrameRef.current);
+            }
+            programmaticScrollFrameRef.current = requestAnimationFrame(() => {
+                programmaticScrollFrameRef.current = 0;
+                programmaticScrollRef.current = false;
+            });
+        };
+
         function scrollSelectedSurface() {
             scheduledSelectionRef.current = false;
             if (!navKeyPressedRef.current) return;
@@ -92,6 +113,7 @@ export function useScrollFollow() {
 
             selectionTargetRef.current = target;
             navKeyPressedRef.current = false;
+            markProgrammaticScroll();
             scrollForKeyboardSelection(target);
         }
 
@@ -103,13 +125,26 @@ export function useScrollFollow() {
         }
 
         const onKeyDown = (e) => {
+            setInputMode('keyboard');
             if (NAV_KEYS.has(e.key)) navKeyPressedRef.current = true;
             if (!FOCUS_SCROLL_KEYS.has(e.key)) return;
             keyboardScrollPendingRef.current = true;
         };
         const onPointerDown = () => {
+            setInputMode('mouse');
             keyboardScrollPendingRef.current = false;
             navKeyPressedRef.current = false;
+        };
+        const onWheel = () => {
+            setInputMode('mouse');
+            keyboardScrollPendingRef.current = false;
+            navKeyPressedRef.current = false;
+        };
+        const onScroll = () => {
+            if (programmaticScrollRef.current) {
+                return;
+            }
+            setInputMode('mouse');
         };
         const onFocusIn = (e) => {
             if (!keyboardScrollPendingRef.current) return;
@@ -125,6 +160,8 @@ export function useScrollFollow() {
         });
         document.addEventListener('keydown', onKeyDown, true);
         document.addEventListener('pointerdown', onPointerDown, true);
+        document.addEventListener('wheel', onWheel, { capture: true, passive: true });
+        document.addEventListener('scroll', onScroll, true);
         document.addEventListener('focusin', onFocusIn, true);
         observer.observe(document.body, {
             attributes: true,
@@ -135,8 +172,13 @@ export function useScrollFollow() {
         return () => {
             document.removeEventListener('keydown', onKeyDown, true);
             document.removeEventListener('pointerdown', onPointerDown, true);
+            document.removeEventListener('wheel', onWheel, true);
+            document.removeEventListener('scroll', onScroll, true);
             document.removeEventListener('focusin', onFocusIn, true);
             observer.disconnect();
+            if (programmaticScrollFrameRef.current) {
+                cancelAnimationFrame(programmaticScrollFrameRef.current);
+            }
         };
     }, []);
 }
