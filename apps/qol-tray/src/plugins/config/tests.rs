@@ -6,9 +6,8 @@ use tempfile::TempDir;
 fn setup_test_env() -> (PluginConfigManager, TempDir, TempDir) {
     let temp_base = TempDir::new().unwrap();
     let temp_plugins = TempDir::new().unwrap();
-    let global_config_path = temp_base.path().join("plugin-configs.json");
     let manager = PluginConfigManager {
-        config_path: global_config_path,
+        configs_dir: temp_base.path().join("plugin-configs"),
     };
     (manager, temp_base, temp_plugins)
 }
@@ -37,7 +36,17 @@ fn load_configs_parses_valid_json() {
         "plugin1": {"enabled": true},
         "plugin2": {"value": 42}
     });
-    fs::write(&manager.config_path, test_data.to_string()).unwrap();
+    fs::create_dir_all(&manager.configs_dir).unwrap();
+    fs::write(
+        manager.configs_dir.join("plugin1.json"),
+        serde_json::to_string(&test_data["plugin1"]).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        manager.configs_dir.join("plugin2.json"),
+        serde_json::to_string(&test_data["plugin2"]).unwrap(),
+    )
+    .unwrap();
     let result = manager.load_configs().unwrap();
     assert_eq!(result.configs.len(), 2);
     assert_eq!(
@@ -56,7 +65,7 @@ fn save_configs_creates_parent_directory() {
     let configs = PluginConfigs::default();
     let result = manager.save_configs(&configs);
     assert!(result.is_ok());
-    assert!(manager.config_path.exists());
+    assert!(manager.configs_dir.exists());
 }
 
 #[test]
@@ -67,9 +76,8 @@ fn save_configs_writes_pretty_json() {
         .configs
         .insert("test".to_string(), json!({"key": "value"}));
     manager.save_configs(&configs).unwrap();
-    let content = fs::read_to_string(&manager.config_path).unwrap();
+    let content = fs::read_to_string(manager.configs_dir.join("test.json")).unwrap();
     assert!(content.contains('\n'));
-    assert!(content.contains("test"));
     assert!(content.contains("key"));
     assert!(content.contains("value"));
 }

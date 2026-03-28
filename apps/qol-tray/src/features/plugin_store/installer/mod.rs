@@ -18,6 +18,12 @@ const LOCKFILE_MAX_AGE: Duration = Duration::from_secs(30);
 #[cfg(not(unix))]
 const LOCKFILE_MAX_AGE: Duration = Duration::from_secs(300);
 
+#[derive(Debug, Clone)]
+pub(super) enum InstallSource {
+    Latest,
+    TaggedVersion(String),
+}
+
 pub(super) struct PluginInstaller {
     plugins_dir: PathBuf,
 }
@@ -31,14 +37,62 @@ impl PluginInstaller {
         validate_plugin_id(plugin_id)?;
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
         operations::ensure_no_dev_link_conflict(plugin_id)?;
-        operations::install(&self.plugins_dir, repo_url, plugin_id).await
+        operations::install(
+            &self.plugins_dir,
+            repo_url,
+            plugin_id,
+            InstallSource::Latest,
+        )
+        .await
+    }
+
+    pub(super) async fn install_exact(
+        &self,
+        repo_url: &str,
+        plugin_id: &str,
+        version: &str,
+    ) -> Result<()> {
+        validate_plugin_id(plugin_id)?;
+        let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
+        operations::ensure_no_dev_link_conflict(plugin_id)?;
+        operations::install(
+            &self.plugins_dir,
+            repo_url,
+            plugin_id,
+            InstallSource::TaggedVersion(version.to_string()),
+        )
+        .await
     }
 
     pub(super) async fn update(&self, repo_url: &str, plugin_id: &str) -> Result<()> {
         validate_plugin_id(plugin_id)?;
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
         operations::ensure_no_dev_link_conflict(plugin_id)?;
-        operations::update(&self.plugins_dir, repo_url, plugin_id).await
+        operations::update(
+            &self.plugins_dir,
+            repo_url,
+            plugin_id,
+            InstallSource::Latest,
+        )
+        .await
+    }
+
+    pub(super) async fn update_exact(
+        &self,
+        repo_url: &str,
+        plugin_id: &str,
+        version: &str,
+    ) -> Result<()> {
+        validate_plugin_id(plugin_id)?;
+        let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
+        operations::ensure_no_dev_link_conflict(plugin_id)?;
+        operations::update(
+            &self.plugins_dir,
+            repo_url,
+            plugin_id,
+            InstallSource::TaggedVersion(version.to_string()),
+        )
+        .await
     }
 
     pub(super) async fn uninstall(&self, plugin_id: &str) -> Result<()> {

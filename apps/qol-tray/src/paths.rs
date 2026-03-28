@@ -106,12 +106,35 @@ pub fn plugins_dir() -> Result<PathBuf> {
     shared_config_dir().map(|p| p.join("plugins"))
 }
 
-pub fn hotkeys_path() -> Result<PathBuf> {
-    shared_config_dir().map(|p| p.join("hotkeys.json"))
+pub fn profile_dir() -> Result<PathBuf> {
+    shared_config_dir().map(|p| p.join("profile"))
 }
 
-pub fn plugin_configs_path() -> Result<PathBuf> {
-    shared_config_dir().map(|p| p.join("plugin-configs.json"))
+pub fn profile_manifest_path() -> Result<PathBuf> {
+    profile_dir().map(|p| p.join("manifest.json"))
+}
+
+pub fn profile_core_dir() -> Result<PathBuf> {
+    profile_dir().map(|p| p.join("core"))
+}
+
+pub fn profile_plugins_lock_path() -> Result<PathBuf> {
+    profile_dir().map(|p| p.join("plugins.lock.json"))
+}
+
+pub fn profile_plugin_configs_dir() -> Result<PathBuf> {
+    profile_dir().map(|p| p.join("plugin-configs"))
+}
+
+pub fn profile_plugin_config_path(plugin_id: &str) -> Result<PathBuf> {
+    if !is_safe_path_component(plugin_id) {
+        return Err(anyhow!("invalid plugin id"));
+    }
+    profile_plugin_configs_dir().map(|p| p.join(format!("{}.json", plugin_id)))
+}
+
+pub fn hotkeys_path() -> Result<PathBuf> {
+    preferred_profile_path(profile_core_dir()?.join("hotkeys.json"), "hotkeys.json")
 }
 
 pub fn github_token_path() -> Result<PathBuf> {
@@ -127,11 +150,14 @@ pub fn plugin_cache_path() -> Result<PathBuf> {
 }
 
 pub fn shortcuts_path() -> Result<PathBuf> {
-    shared_config_dir().map(|p| p.join("shortcuts.json"))
+    preferred_profile_path(profile_core_dir()?.join("shortcuts.json"), "shortcuts.json")
 }
 
 pub fn task_runner_config_path() -> Result<PathBuf> {
-    shared_config_dir().map(|p| p.join("task-runner.json"))
+    preferred_profile_path(
+        profile_core_dir()?.join("task-runner.json"),
+        "task-runner.json",
+    )
 }
 
 #[cfg(feature = "dev")]
@@ -188,6 +214,17 @@ pub fn repo_root_from_manifest_dir() -> PathBuf {
     }
 }
 
+fn preferred_profile_path(profile_path: PathBuf, legacy_name: &str) -> Result<PathBuf> {
+    if profile_path.exists() {
+        return Ok(profile_path);
+    }
+    let legacy_path = shared_config_dir()?.join(legacy_name);
+    if legacy_path.exists() {
+        return Ok(legacy_path);
+    }
+    Ok(profile_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,8 +233,10 @@ mod tests {
     fn paths_have_correct_suffixes() {
         let cases: Vec<(Result<PathBuf>, &str)> = vec![
             (plugins_dir(), "plugins"),
+            (profile_dir(), "profile"),
             (hotkeys_path(), "hotkeys.json"),
-            (plugin_configs_path(), "plugin-configs.json"),
+            (profile_plugins_lock_path(), "plugins.lock.json"),
+            (profile_plugin_configs_dir(), "plugin-configs"),
             (github_token_path(), ".github-token"),
         ];
 

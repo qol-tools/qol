@@ -83,6 +83,14 @@ pub(super) fn read_plugin_version(plugin_dir: &std::path::Path) -> Result<String
 }
 
 pub(super) fn reload_manager_and_notify(state: &AppState) {
+    reload_manager_and_notify_inner(state, true);
+}
+
+pub(super) fn reload_manager_and_notify_without_profile_sync(state: &AppState) {
+    reload_manager_and_notify_inner(state, false);
+}
+
+fn reload_manager_and_notify_inner(state: &AppState, sync_profile: bool) {
     let mut manager = match state.plugin_manager.lock() {
         Ok(m) => m,
         Err(e) => {
@@ -98,6 +106,11 @@ pub(super) fn reload_manager_and_notify(state: &AppState) {
         }
     };
     if reload_ok {
+        if sync_profile {
+            if let Err(error) = crate::profile::sync_plugins_lock_from_plugins(manager.plugins()) {
+                log::error!("Failed to sync profile plugins lock: {}", error);
+            }
+        }
         crate::features::launcher_apps::trigger_full_sync();
     }
     drop(manager);
