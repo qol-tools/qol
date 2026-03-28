@@ -56,6 +56,21 @@ pub(super) fn register_application(binary_path: &Path) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn should_bootstrap_current_install(binary_path: &Path) -> Result<bool> {
+    let bundle_root = match bundle_root_from_binary(binary_path) {
+        Ok(path) => path,
+        Err(_) => return Ok(false),
+    };
+    if bundle_root.starts_with(Path::new("/Applications")) {
+        return Ok(true);
+    }
+
+    let Some(home) = dirs::home_dir() else {
+        return Ok(false);
+    };
+    Ok(bundle_root.starts_with(home.join("Applications")))
+}
+
 pub(super) fn warn_system_install_conflict() {}
 
 pub(super) fn remove_legacy_install() {

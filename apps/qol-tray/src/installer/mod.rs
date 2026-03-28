@@ -18,6 +18,24 @@ pub fn write_autostart_entry(binary_path: &Path) -> Result<()> {
     platform::write_autostart_entry(binary_path)
 }
 
+pub fn bootstrap_current_install() -> Result<()> {
+    let current_exe = env::current_exe().context("Failed to determine current executable")?;
+    if !platform::should_bootstrap_current_install(&current_exe)? {
+        return Ok(());
+    }
+    if has_install_marker(&current_exe) {
+        return Ok(());
+    }
+    if crate::paths::has_active_install_id() {
+        return Ok(());
+    }
+
+    let install_id = create_install_id();
+    crate::paths::set_active_install_id(&install_id)?;
+    files::ensure_plugin_dir()?;
+    platform::write_autostart_entry(&current_exe)
+}
+
 pub fn run() -> Result<()> {
     println!("Installing QoL Tray...");
     let repo_root = env::current_dir().context("Failed to determine current directory")?;
@@ -103,6 +121,13 @@ fn write_install_id_marker(installed_binary: &Path, install_id: &str) -> Result<
     let marker_path = parent.join(INSTALL_ID_FILE);
     fs::write(&marker_path, format!("{}\n", install_id))
         .with_context(|| format!("Failed to write install marker {}", marker_path.display()))
+}
+
+fn has_install_marker(installed_binary: &Path) -> bool {
+    let Some(parent) = installed_binary.parent() else {
+        return false;
+    };
+    parent.join(INSTALL_ID_FILE).exists()
 }
 
 fn create_install_id() -> String {

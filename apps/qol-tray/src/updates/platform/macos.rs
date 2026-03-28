@@ -1,6 +1,8 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::daemon::{DaemonEvent, EventBus};
 
@@ -8,17 +10,18 @@ use super::super::{latest_version, GITHUB_REPO};
 use super::common;
 use super::InstallKind;
 
+const APP_BUNDLE_NAME: &str = "QoL Tray.app";
+const MACOS_RELEASE_ASSET: &str = "qol-tray-macos-universal.tar.gz";
+
 fn asset_url(version: &str) -> String {
     format!(
-        "https://github.com/{}/releases/download/v{}/qol-tray-macos-{}.tar.gz",
-        GITHUB_REPO,
-        version,
-        common::arch_suffix()
+        "https://github.com/{}/releases/download/v{}/{}",
+        GITHUB_REPO, version, MACOS_RELEASE_ASSET
     )
 }
 
-fn asset_filename(version: &str) -> String {
-    format!("qol-tray-macos-{}.tar.gz", version)
+fn asset_filename(_: &str) -> String {
+    MACOS_RELEASE_ASSET.to_string()
 }
 
 fn resolve_update_url() -> Result<(String, PathBuf)> {
@@ -39,12 +42,10 @@ fn resolve_update_url() -> Result<(String, PathBuf)> {
     ))
 }
 
-fn codesign_bundle(exe_path: &Path) {
-    let bundle_path = find_app_bundle(exe_path);
-    let target = bundle_path.as_deref().unwrap_or(exe_path);
+fn ad_hoc_codesign_bundle(bundle_path: &Path) {
     let sign_status = std::process::Command::new("codesign")
         .args(["--force", "--sign", "-"])
-        .arg(target)
+        .arg(bundle_path)
         .output();
     match sign_status {
         Ok(out) if out.status.success() => {}
@@ -67,6 +68,119 @@ fn find_app_bundle(exe_path: &Path) -> Option<PathBuf> {
         current = parent;
     }
     None
+}
+
+fn replace_app_bundle(source_bundle: &Path, target_bundle: &Path) -> Result<()> {
+    let parent = target_bundle
+        .parent()
+        .context("Current app bundle has no parent directory")?;
+    let staging = staged_bundle_path(parent, target_bundle)?;
+    let backup = backup_bundle_path(parent, target_bundle)?;
+
+    cleanup_dir_if_exists(&staging);
+    cleanup_dir_if_exists(&backup);
+    copy_bundle_dir(source_bundle, &staging)?;
+
+    if !target_bundle.exists() {
+        fs::rename(&staging, target_bundle).with_context(|| {
+            format!(
+                "Failed to move staged bundle {} into place at {}",
+                staging.display(),
+                target_bundle.display()
+            )
+        })?;
+        return Ok(());
+    }
+
+    fs::rename(target_bundle, &backup).with_context(|| {
+        format!(
+            "Failed to move current bundle {} to backup {}",
+            target_bundle.display(),
+            backup.display()
+        )
+    })?;
+
+    let swap_result = fs::rename(&staging, target_bundle);
+    if let Err(error) = swap_result {
+        let rollback_result = fs::rename(&backup, target_bundle);
+        if let Err(rollback_error) = rollback_result {
+            anyhow::bail!(
+                "Failed to replace app bundle: {}; rollback failed: {}",
+                error,
+                rollback_error
+            );
+        }
+        anyhow::bail!("Failed to replace app bundle: {}", error);
+    }
+
+    cleanup_dir_if_exists(&backup);
+    Ok(())
+}
+
+fn staged_bundle_path(parent: &Path, target_bundle: &Path) -> Result<PathBuf> {
+    let name = target_bundle
+        .file_name()
+        .context("Current app bundle has no file name")?
+        .to_string_lossy();
+    Ok(parent.join(format!(".{}.updating.{}", name, unique_suffix())))
+}
+
+fn backup_bundle_path(parent: &Path, target_bundle: &Path) -> Result<PathBuf> {
+    let name = target_bundle
+        .file_name()
+        .context("Current app bundle has no file name")?
+        .to_string_lossy();
+    Ok(parent.join(format!(".{}.backup.{}", name, unique_suffix())))
+}
+
+fn unique_suffix() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{}.{}", std::process::id(), nanos)
+}
+
+fn cleanup_dir_if_exists(path: &Path) {
+    if !path.exists() {
+        return;
+    }
+    let _ = fs::remove_dir_all(path);
+}
+
+fn copy_bundle_dir(source: &Path, destination: &Path) -> Result<()> {
+    fs::create_dir_all(destination)
+        .with_context(|| format!("Failed to create {}", destination.display()))?;
+
+    for entry in walkdir::WalkDir::new(source) {
+        let entry = entry?;
+        let Ok(relative) = entry.path().strip_prefix(source) else {
+            continue;
+        };
+        if relative.as_os_str().is_empty() {
+            continue;
+        }
+
+        let target = destination.join(relative);
+        if entry.file_type().is_dir() {
+            fs::create_dir_all(&target)
+                .with_context(|| format!("Failed to create {}", target.display()))?;
+            continue;
+        }
+
+        fs::copy(entry.path(), &target).with_context(|| {
+            format!(
+                "Failed to copy {} to {}",
+                entry.path().display(),
+                target.display()
+            )
+        })?;
+        let permissions = fs::metadata(entry.path())?.permissions();
+        fs::set_permissions(&target, permissions)
+            .with_context(|| format!("Failed to set permissions on {}", target.display()))?;
+    }
+
+    Ok(())
 }
 
 pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
@@ -96,12 +210,16 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
     }
 
     let current_exe = std::env::current_exe()?;
-    let install_result = common::extract_tar_gz(&dest, "qol-tray")
-        .and_then(|binary| common::atomic_replace(&binary, &current_exe));
+    let current_bundle =
+        find_app_bundle(&current_exe).context("Current executable is not inside an app bundle")?;
+    let install_result = super::common::extract_tar_gz_dir(&dest, APP_BUNDLE_NAME)
+        .and_then(|bundle| replace_app_bundle(&bundle, &current_bundle));
     common::cleanup_archive(&dest);
     install_result?;
 
-    codesign_bundle(&current_exe);
+    if dev_override {
+        ad_hoc_codesign_bundle(&current_bundle);
+    }
 
     events.send(DaemonEvent::UpdateComplete);
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;

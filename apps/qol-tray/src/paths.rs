@@ -98,6 +98,10 @@ pub fn set_active_install_id(install_id: &str) -> Result<()> {
         .with_context(|| format!("Failed to write active install marker {}", path.display()))
 }
 
+pub fn has_active_install_id() -> bool {
+    install_id_from_active_file().is_some()
+}
+
 pub fn plugins_dir() -> Result<PathBuf> {
     shared_config_dir().map(|p| p.join("plugins"))
 }

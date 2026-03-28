@@ -25,6 +25,10 @@ fn main() -> Result<()> {
     #[cfg(not(feature = "dev"))]
     qol_tray::logging::init_logger();
 
+    if let Err(e) = qol_tray::installer::bootstrap_current_install() {
+        log::error!("Failed to bootstrap current install: {}", e);
+    }
+
     if is_already_running() {
         eprintln!("qol-tray is already running on port {}", DEFAULT_PORT);
         already_running_notification::show();

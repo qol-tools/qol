@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub(super) fn read_autostart_target() -> Result<Option<PathBuf>> {
     let path = crate::installer::autostart_path()?;
@@ -10,6 +10,12 @@ pub(super) fn read_autostart_target() -> Result<Option<PathBuf>> {
     let content = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read {}", path.display()))?;
     Ok(parse_program_argument(&content).map(PathBuf::from))
+}
+
+pub(super) fn install_marker_required(current_exe: &Path) -> bool {
+    !current_exe
+        .to_string_lossy()
+        .contains(".app/Contents/MacOS/")
 }
 
 fn parse_program_argument(content: &str) -> Option<String> {

@@ -58,6 +58,16 @@ pub(super) fn prepare_atomic_replace(installed_binary: &Path) -> Result<()> {
     imp::prepare_atomic_replace(installed_binary)
 }
 
+pub(super) fn should_bootstrap_current_install(binary_path: &Path) -> Result<bool> {
+    #[cfg(target_os = "macos")]
+    {
+        return imp::should_bootstrap_current_install(binary_path);
+    }
+
+    let _ = binary_path;
+    Ok(false)
+}
+
 pub(super) fn register_application(binary_path: &Path) -> Result<()> {
     imp::register_application(binary_path)
 }
