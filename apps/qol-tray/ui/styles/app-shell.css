@@ -294,6 +294,39 @@ body {
     background: transparent;
 }
 
+.sidebar-item-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+}
+
+.sidebar-divider {
+    height: 1px;
+    margin: var(--space-2) var(--space-4);
+    background: linear-gradient(90deg, transparent, var(--border-subtle), transparent);
+}
+
+.sidebar-status-dot {
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 999px;
+    background: var(--text-disabled);
+    flex-shrink: 0;
+}
+
+.sidebar-status-dot[data-health="healthy"] {
+    background: rgba(var(--success-rgb), 1);
+}
+
+.sidebar-status-dot[data-health="attention"] {
+    background: rgba(var(--warning-rgb), 1);
+}
+
+.sidebar-status-dot[data-health="error"] {
+    background: rgba(var(--danger-rgb), 1);
+}
+
 .sidebar-item:hover {
     background: var(--bg-surface);
 }

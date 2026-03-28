@@ -21,6 +21,7 @@ pub mod runtime;
 pub mod shortcuts;
 #[cfg(unix)]
 pub(crate) mod signal;
+pub mod sync;
 pub mod tray;
 pub mod updates;
 pub mod version;

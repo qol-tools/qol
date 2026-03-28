@@ -49,14 +49,17 @@ use types::*;
 pub(crate) async fn start_ui_server(
     plugin_manager: Arc<Mutex<PluginManager>>,
     daemon: &Daemon,
+    sync_service: Arc<crate::sync::SyncService>,
     #[cfg(feature = "dev")] core_log_controls: crate::logging::CoreControlsHandle,
 ) -> Result<u16> {
     let (app_state, plugins_dir) = AppState::new(
         plugin_manager,
         daemon,
+        sync_service,
         #[cfg(feature = "dev")]
         core_log_controls,
     )?;
+    start_sync_loop(&app_state);
     #[cfg(feature = "dev")]
     start_dev_discovery(&app_state);
     #[cfg(feature = "dev")]
@@ -122,6 +125,26 @@ fn assemble_app(app_state: AppState, plugins_dir: PathBuf) -> Router {
         .route("/", get(assets::serve_embedded_index))
         .route("/{*path}", get(assets::serve_embedded))
         .layer(no_cache)
+}
+
+fn start_sync_loop(app_state: &AppState) {
+    let state = app_state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(crate::sync::SyncService::auto_push_interval());
+        loop {
+            interval.tick().await;
+            let result = match state.sync_service.auto_push_if_dirty().await {
+                Ok(result) => result,
+                Err(error) => {
+                    log::error!("Cloud sync auto-push failed: {error:#}");
+                    continue;
+                }
+            };
+            if result.applied_remote {
+                helpers::reload_manager_and_notify_without_profile_sync(&state);
+            }
+        }
+    });
 }
 
 #[cfg(feature = "dev")]

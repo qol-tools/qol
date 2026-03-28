@@ -1,5 +1,5 @@
 pub(crate) mod github;
-mod installer;
+pub(crate) mod installer;
 mod plugin_paths;
 mod plugin_ui;
 mod release_assets;
@@ -37,12 +37,14 @@ impl Plugins {
     pub async fn start_server(
         plugin_manager: Arc<Mutex<PluginManager>>,
         daemon: &Daemon,
+        sync_service: Arc<crate::sync::SyncService>,
         #[cfg(feature = "dev")] core_log_controls: crate::logging::CoreControlsHandle,
     ) -> Result<()> {
         log::info!("Starting plugin server with embedded UI");
         let port = server::start_ui_server(
             plugin_manager,
             daemon,
+            sync_service,
             #[cfg(feature = "dev")]
             core_log_controls,
         )

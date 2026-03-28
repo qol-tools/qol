@@ -8,10 +8,15 @@ import { useAppUpdateCoordinator } from './useAppUpdateCoordinator.js';
 import { useMountedViews } from './useMountedViews.js';
 import { useSidebarActions } from './useSidebarActions.js';
 import { buildViewOrder, VIEW_LABELS } from './views.js';
-import { exportProfile, promptImportProfile } from '../../views/profile/actions.js';
+import {
+    exportProfile,
+    fetchSyncStatus,
+    promptImportProfile,
+} from '../../views/profile/actions.js';
 import { toast } from '../../lib/toast.js';
 
 const WT_KEY = 'dev.recompile.defaultWorktree';
+const SYNC_STATUS_POLL_MS = 5000;
 
 function readDefaultWorktree() {
     try { return localStorage.getItem(WT_KEY) || null; } catch { return null; }
@@ -25,6 +30,7 @@ export function useApp({ onDissolve } = {}) {
     const { updateState, checkForUpdate, beginSelfUpdate, failSelfUpdate, beginDevRecompile, failDevRecompile } = useAppUpdateCoordinator({ devEnabled, appVersion, onDissolve });
     const [worktrees, setWorktrees] = useState([]);
     const [defaultWorktree, setDefaultWorktreeState] = useState(readDefaultWorktree);
+    const [syncStatus, setSyncStatus] = useState(defaultSyncStatus);
     const defaultWorktreeRef = useRef(defaultWorktree);
     defaultWorktreeRef.current = defaultWorktree;
     const setDefaultWorktree = useCallback(path => {
@@ -48,6 +54,20 @@ export function useApp({ onDissolve } = {}) {
             })
             .catch(() => {});
     }, [devEnabled]);
+    const refreshSyncStatus = useCallback(async () => {
+        try {
+            const nextStatus = await fetchSyncStatus();
+            setSyncStatus(nextStatus);
+            return nextStatus;
+        } catch {
+            return null;
+        }
+    }, []);
+    useEffect(() => {
+        refreshSyncStatus();
+        const timer = window.setInterval(refreshSyncStatus, SYNC_STATUS_POLL_MS);
+        return () => window.clearInterval(timer);
+    }, [refreshSyncStatus]);
     const handleSidebarAction = useSidebarActions({ checkForUpdate, beginSelfUpdate, failSelfUpdate, beginDevRecompile, failDevRecompile, defaultWorktreeRef });
     const palette = usePaletteContext();
     useEffect(() => {
@@ -70,7 +90,28 @@ export function useApp({ onDissolve } = {}) {
     ], [viewOrder, switchView]);
     useRegisterCommands(GLOBAL_ID, globalCommands);
 
-    return { devEnabled, appVersion, viewOrder, activeViewId, activePluginId, activePluginMode, switchView, openPluginConfig, openPluginUi, closePluginConfig, mounted, updateState, handleSidebarAction, handleViewClick, worktrees, defaultWorktree, setDefaultWorktree };
+    return {
+        devEnabled,
+        appVersion,
+        viewOrder,
+        activeViewId,
+        activePluginId,
+        activePluginMode,
+        switchView,
+        openPluginConfig,
+        openPluginUi,
+        closePluginConfig,
+        mounted,
+        updateState,
+        handleSidebarAction,
+        handleViewClick,
+        worktrees,
+        defaultWorktree,
+        setDefaultWorktree,
+        syncStatus,
+        setSyncStatus,
+        refreshSyncStatus,
+    };
 }
 
 function normalizeDefaultWorktree(current, worktrees) {
@@ -104,4 +145,26 @@ async function importConfig() {
             toast('error', `Failed to import profile: ${error.message}`);
         },
     });
+}
+
+function defaultSyncStatus() {
+    return {
+        configured: false,
+        provider: null,
+        provider_label: null,
+        health: 'not_configured',
+        repo_url: null,
+        branch: null,
+        path: null,
+        commit_message: null,
+        pull_on_launch: true,
+        push_on_change: true,
+        has_github_token: false,
+        last_sync_at: null,
+        incident: null,
+        last_error: null,
+        backups_dir: null,
+        backup_count: 0,
+        latest_backup_file: null,
+    };
 }
