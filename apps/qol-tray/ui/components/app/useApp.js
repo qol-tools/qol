@@ -8,6 +8,8 @@ import { useAppUpdateCoordinator } from './useAppUpdateCoordinator.js';
 import { useMountedViews } from './useMountedViews.js';
 import { useSidebarActions } from './useSidebarActions.js';
 import { buildViewOrder, VIEW_LABELS } from './views.js';
+import { exportProfile, promptImportProfile } from '../../views/profile/actions.js';
+import { toast } from '../../lib/toast.js';
 
 const WT_KEY = 'dev.recompile.defaultWorktree';
 
@@ -87,36 +89,19 @@ function parentDir(path) {
 
 async function exportConfig() {
     try {
-        const res = await fetch('/api/config/export');
-        if (!res.ok) return;
-        const bundle = await res.json();
-        const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `qol-tray-config-${bundle.exported_at?.slice(0, 10) || 'export'}.json`;
-        a.click();
-        URL.revokeObjectURL(url);
-    } catch (_) {}
+        await exportProfile();
+    } catch (error) {
+        toast('error', `Failed to export profile: ${error.message}`);
+    }
 }
 
 async function importConfig() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json';
-    input.onchange = async () => {
-        const file = input.files?.[0];
-        if (!file) return;
-        try {
-            const text = await file.text();
-            JSON.parse(text);
-            await fetch('/api/config/import', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: text,
-            });
-            window.location.reload();
-        } catch (_) {}
-    };
-    input.click();
+    promptImportProfile({
+        onImported: () => {
+            toast('info', 'Profile imported. Reload the dashboard to refresh visible state.');
+        },
+        onError: (error) => {
+            toast('error', `Failed to import profile: ${error.message}`);
+        },
+    });
 }
