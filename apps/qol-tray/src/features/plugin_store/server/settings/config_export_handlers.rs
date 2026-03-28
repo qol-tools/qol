@@ -1,6 +1,6 @@
 use axum::{extract::State, http::StatusCode, response::IntoResponse, response::Response, Json};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use super::super::helpers::reload_manager_and_notify_without_profile_sync;
 use super::super::types::AppState;
@@ -25,8 +25,8 @@ pub(in super::super) async fn export_config(State(state): State<AppState>) -> im
     let bundle = crate::profile::ProfileExportBundle {
         version: crate::profile::CURRENT_PROFILE_VERSION,
         exported_at: chrono::Local::now().to_rfc3339(),
-        hotkeys: read_json_file_or_default(crate::paths::hotkeys_path()),
-        shortcuts: read_json_file_or_default(crate::paths::shortcuts_path()),
+        hotkeys: read_wrapped_json_array(crate::paths::hotkeys_path(), "hotkeys"),
+        shortcuts: read_wrapped_json_array(crate::paths::shortcuts_path(), "shortcuts"),
         task_runner: read_json_file_or_default(crate::paths::task_runner_config_path()),
         plugin_configs: crate::profile::read_plugin_configs().unwrap_or_default(),
         plugins,
@@ -95,10 +95,16 @@ fn export_plugins(state: &AppState) -> Vec<crate::profile::PluginLockEntry> {
 
 fn write_core_settings(bundle: &crate::profile::ProfileImportBundle) -> anyhow::Result<()> {
     if let Some(hotkeys) = &bundle.hotkeys {
-        write_json_config(crate::paths::hotkeys_path()?, hotkeys)?;
+        write_json_config(
+            crate::paths::hotkeys_path()?,
+            &wrap_core_list_for_storage("hotkeys", hotkeys),
+        )?;
     }
     if let Some(shortcuts) = &bundle.shortcuts {
-        write_json_config(crate::paths::shortcuts_path()?, shortcuts)?;
+        write_json_config(
+            crate::paths::shortcuts_path()?,
+            &wrap_core_list_for_storage("shortcuts", shortcuts),
+        )?;
     }
     if let Some(task_runner) = &bundle.task_runner {
         write_json_config(crate::paths::task_runner_config_path()?, task_runner)?;
@@ -242,6 +248,35 @@ fn read_json_file_or_default(path: anyhow::Result<std::path::PathBuf>) -> Value 
     }
 }
 
+fn read_wrapped_json_array(
+    path: anyhow::Result<std::path::PathBuf>,
+    field_name: &str,
+) -> Vec<Value> {
+    read_wrapped_json_array_value(read_json_file_or_default(path), field_name)
+}
+
+fn read_wrapped_json_array_value(value: Value, field_name: &str) -> Vec<Value> {
+    if value.is_null() {
+        return Vec::new();
+    }
+    if let Value::Array(items) = value {
+        return items;
+    }
+    if let Value::Object(mut object) = value {
+        let Some(items) = object.remove(field_name) else {
+            return Vec::new();
+        };
+        if let Value::Array(items) = items {
+            return items;
+        }
+    }
+    Vec::new()
+}
+
+fn wrap_core_list_for_storage(field_name: &str, items: &[Value]) -> Value {
+    json!({ field_name: items })
+}
+
 fn write_json_config(path: std::path::PathBuf, value: &Value) -> anyhow::Result<()> {
     let content = serde_json::to_vec_pretty(value)?;
     crate::file_io::ensure_parent_dir(&path)?;
@@ -254,4 +289,72 @@ fn server_error(error: anyhow::Error) -> Response {
         format!("Failed to import profile: {error:#}"),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn read_wrapped_json_array_value_cases() {
+        struct Case {
+            name: &'static str,
+            value: Value,
+            field_name: &'static str,
+            expected: Vec<Value>,
+        }
+
+        let cases = vec![
+            Case {
+                name: "flat array is preserved",
+                value: json!([{"id": "a"}]),
+                field_name: "hotkeys",
+                expected: vec![json!({"id": "a"})],
+            },
+            Case {
+                name: "legacy wrapped object is flattened",
+                value: json!({"hotkeys": [{"id": "a"}]}),
+                field_name: "hotkeys",
+                expected: vec![json!({"id": "a"})],
+            },
+            Case {
+                name: "null becomes empty",
+                value: Value::Null,
+                field_name: "hotkeys",
+                expected: Vec::new(),
+            },
+            Case {
+                name: "missing wrapper field becomes empty",
+                value: json!({"shortcuts": [{"id": "a"}]}),
+                field_name: "hotkeys",
+                expected: Vec::new(),
+            },
+            Case {
+                name: "non array wrapper becomes empty",
+                value: json!({"hotkeys": {}}),
+                field_name: "hotkeys",
+                expected: Vec::new(),
+            },
+        ];
+
+        for case in cases {
+            let actual = read_wrapped_json_array_value(case.value, case.field_name);
+            assert_eq!(actual, case.expected, "case: {}", case.name);
+        }
+    }
+
+    #[test]
+    fn wrap_core_list_for_storage_uses_legacy_on_disk_shape() {
+        let items = vec![json!({"id": "a"}), json!({"id": "b"})];
+
+        assert_eq!(
+            wrap_core_list_for_storage("hotkeys", &items),
+            json!({"hotkeys": [{"id": "a"}, {"id": "b"}]})
+        );
+        assert_eq!(
+            wrap_core_list_for_storage("shortcuts", &items),
+            json!({"shortcuts": [{"id": "a"}, {"id": "b"}]})
+        );
+    }
 }
