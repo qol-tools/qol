@@ -40,10 +40,12 @@ pub(crate) fn extract_tar_gz(archive: &Path, binary_name: &str) -> Result<PathBu
     extract_tar_gz_entry(archive, binary_name, false)
 }
 
+#[cfg(any(test, target_os = "macos"))]
 pub(crate) fn extract_tar_gz_dir(archive: &Path, dir_name: &str) -> Result<PathBuf> {
     extract_tar_gz_entry(archive, dir_name, true)
 }
 
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
 fn extract_tar_gz_entry(archive: &Path, name: &str, want_dir: bool) -> Result<PathBuf> {
     let tar_gz = std::fs::File::open(archive)?;
     let tar = flate2::read::GzDecoder::new(tar_gz);
