@@ -34,6 +34,14 @@ pub(crate) async fn download_asset(url: &str, dest: &Path, events: &EventBus) ->
 }
 
 pub(crate) fn extract_tar_gz(archive: &Path, binary_name: &str) -> Result<PathBuf> {
+    extract_tar_gz_entry(archive, binary_name, false)
+}
+
+pub(crate) fn extract_tar_gz_dir(archive: &Path, dir_name: &str) -> Result<PathBuf> {
+    extract_tar_gz_entry(archive, dir_name, true)
+}
+
+fn extract_tar_gz_entry(archive: &Path, name: &str, want_dir: bool) -> Result<PathBuf> {
     let tar_gz = std::fs::File::open(archive)?;
     let tar = flate2::read::GzDecoder::new(tar_gz);
     let mut reader = tar::Archive::new(tar);
@@ -47,11 +55,20 @@ pub(crate) fn extract_tar_gz(archive: &Path, binary_name: &str) -> Result<PathBu
 
     for entry in walkdir::WalkDir::new(&extract_dir).max_depth(2) {
         let entry = entry?;
-        if entry.file_type().is_file() && entry.file_name().to_string_lossy() == binary_name {
+        if want_dir && entry.file_type().is_dir() && entry.file_name().to_string_lossy() == name {
+            return Ok(entry.into_path());
+        }
+        if !want_dir && entry.file_type().is_file() && entry.file_name().to_string_lossy() == name
+        {
             return Ok(entry.into_path());
         }
     }
-    anyhow::bail!("Binary '{binary_name}' not found in archive")
+
+    if want_dir {
+        anyhow::bail!("Directory '{name}' not found in archive");
+    }
+
+    anyhow::bail!("Binary '{name}' not found in archive")
 }
 
 pub(crate) fn atomic_replace(source: &Path, target: &Path) -> Result<()> {
@@ -135,6 +152,26 @@ mod tests {
         archive_path
     }
 
+    fn create_test_tar_gz_dir(dir: &Path, bundle_name: &str, dir_name: &str) -> PathBuf {
+        let archive_path = dir.join("dir-test.tar.gz");
+        let buf = Vec::new();
+        let encoder = flate2::write::GzEncoder::new(buf, flate2::Compression::fast());
+        let mut tar = tar::Builder::new(encoder);
+
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Directory);
+        header.set_mode(0o755);
+        header.set_size(0);
+        header.set_cksum();
+        tar.append_data(&mut header, format!("{bundle_name}/{dir_name}/"), std::io::empty())
+            .unwrap();
+
+        let encoder = tar.into_inner().unwrap();
+        let bytes = encoder.finish().unwrap();
+        std::fs::write(&archive_path, bytes).unwrap();
+        archive_path
+    }
+
     #[test]
     fn extract_finds_binary_at_depth_one() {
         let dir = tempfile::tempdir().unwrap();
@@ -153,6 +190,17 @@ mod tests {
         let result = extract_tar_gz(&archive, "qol-tray");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn extract_finds_directory_at_depth_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = create_test_tar_gz_dir(dir.path(), "bundle", "QoL Tray.app");
+        let result = extract_tar_gz_dir(&archive, "QoL Tray.app");
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+        let path = result.unwrap();
+        assert_eq!(path.file_name().unwrap(), "QoL Tray.app");
+        assert!(path.is_dir());
     }
 
     #[test]
