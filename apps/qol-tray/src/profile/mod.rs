@@ -492,7 +492,12 @@ mod tests {
         for case in cases {
             let bundle: ProfileImportBundle = serde_json::from_value(case.input).unwrap();
 
-            assert_eq!(bundle.hotkeys, Some(vec![json!({"id": "hk-1"})]), "case: {}", case.name);
+            assert_eq!(
+                bundle.hotkeys,
+                Some(vec![json!({"id": "hk-1"})]),
+                "case: {}",
+                case.name
+            );
             assert_eq!(
                 bundle.shortcuts,
                 Some(vec![json!({"id": "sc-1"})]),
