@@ -1,5 +1,5 @@
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
@@ -35,8 +35,10 @@ pub struct ProfileExportBundle {
     #[serde(default = "default_profile_version")]
     pub version: u32,
     pub exported_at: String,
-    pub hotkeys: Value,
-    pub shortcuts: Value,
+    #[serde(default)]
+    pub hotkeys: Vec<Value>,
+    #[serde(default)]
+    pub shortcuts: Vec<Value>,
     pub task_runner: Value,
     #[serde(default)]
     pub plugin_configs: HashMap<String, Value>,
@@ -46,10 +48,10 @@ pub struct ProfileExportBundle {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct ProfileImportBundle {
-    #[serde(default)]
-    pub hotkeys: Option<Value>,
-    #[serde(default)]
-    pub shortcuts: Option<Value>,
+    #[serde(default, deserialize_with = "deserialize_hotkeys_field")]
+    pub hotkeys: Option<Vec<Value>>,
+    #[serde(default, deserialize_with = "deserialize_shortcuts_field")]
+    pub shortcuts: Option<Vec<Value>>,
     #[serde(default)]
     pub task_runner: Option<Value>,
     #[serde(default)]
@@ -62,6 +64,59 @@ pub struct ProfileImportBundle {
 
 fn default_profile_version() -> u32 {
     CURRENT_PROFILE_VERSION
+}
+
+fn deserialize_hotkeys_field<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Vec<Value>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_wrapped_array_field(deserializer, "hotkeys")
+}
+
+fn deserialize_shortcuts_field<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Vec<Value>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_wrapped_array_field(deserializer, "shortcuts")
+}
+
+fn deserialize_wrapped_array_field<'de, D>(
+    deserializer: D,
+    field_name: &str,
+) -> std::result::Result<Option<Vec<Value>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    normalize_wrapped_array_field(value, field_name).map_err(serde::de::Error::custom)
+}
+
+fn normalize_wrapped_array_field(
+    value: Option<Value>,
+    field_name: &str,
+) -> std::result::Result<Option<Vec<Value>>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    if let Value::Array(items) = value {
+        return Ok(Some(items));
+    }
+    if let Value::Object(mut object) = value {
+        let Some(items) = object.remove(field_name) else {
+            return Err(format!("profile {field_name} must be an array"));
+        };
+        if let Value::Array(items) = items {
+            return Ok(Some(items));
+        }
+    }
+    Err(format!("profile {field_name} must be an array"))
 }
 
 pub fn ensure_profile_dirs() -> Result<()> {
@@ -408,6 +463,74 @@ mod tests {
             "https://github.com/qol-tools/plugin-test.git"
         );
         assert!(plugins[0].version.is_empty());
+    }
+
+    #[test]
+    fn profile_import_bundle_accepts_flat_and_legacy_list_shapes() {
+        struct Case {
+            name: &'static str,
+            input: Value,
+        }
+
+        let cases = vec![
+            Case {
+                name: "flat arrays",
+                input: json!({
+                    "hotkeys": [{"id": "hk-1"}],
+                    "shortcuts": [{"id": "sc-1"}]
+                }),
+            },
+            Case {
+                name: "legacy wrapped objects",
+                input: json!({
+                    "hotkeys": {"hotkeys": [{"id": "hk-1"}]},
+                    "shortcuts": {"shortcuts": [{"id": "sc-1"}]}
+                }),
+            },
+        ];
+
+        for case in cases {
+            let bundle: ProfileImportBundle = serde_json::from_value(case.input).unwrap();
+
+            assert_eq!(bundle.hotkeys, Some(vec![json!({"id": "hk-1"})]), "case: {}", case.name);
+            assert_eq!(
+                bundle.shortcuts,
+                Some(vec![json!({"id": "sc-1"})]),
+                "case: {}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn profile_import_bundle_rejects_non_array_hotkeys_and_shortcuts() {
+        let cases = vec![
+            json!({"hotkeys": {"hotkeys": {}}}),
+            json!({"shortcuts": {"shortcuts": {}}}),
+        ];
+
+        for input in cases {
+            let result = serde_json::from_value::<ProfileImportBundle>(input);
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    fn profile_export_bundle_serializes_flat_hotkeys_and_shortcuts() {
+        let bundle = ProfileExportBundle {
+            version: CURRENT_PROFILE_VERSION,
+            exported_at: "2026-03-28T00:00:00+00:00".to_string(),
+            hotkeys: vec![json!({"id": "hk-1"})],
+            shortcuts: vec![json!({"id": "sc-1"})],
+            task_runner: json!({"actions": {}}),
+            plugin_configs: HashMap::new(),
+            plugins: Vec::new(),
+        };
+
+        let value = serde_json::to_value(bundle).unwrap();
+
+        assert_eq!(value["hotkeys"], json!([{"id": "hk-1"}]));
+        assert_eq!(value["shortcuts"], json!([{"id": "sc-1"}]));
     }
 
     #[test]
