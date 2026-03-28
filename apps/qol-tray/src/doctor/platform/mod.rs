@@ -22,12 +22,12 @@ pub(super) fn read_autostart_target() -> Result<Option<PathBuf>> {
     imp::read_autostart_target()
 }
 
+#[cfg(target_os = "macos")]
 pub(super) fn install_marker_required(current_exe: &Path) -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        return imp::install_marker_required(current_exe);
-    }
+    imp::install_marker_required(current_exe)
+}
 
-    let _ = current_exe;
+#[cfg(not(target_os = "macos"))]
+pub(super) fn install_marker_required(_current_exe: &Path) -> bool {
     true
 }

@@ -62,10 +62,7 @@ fn diagnose_marker_only(marker: String) -> Diagnosis {
 
 fn diagnose_active_only(context: &Context, active: String) -> Diagnosis {
     if !context.marker_required {
-        return ok_outcome(
-            ID,
-            format!("active install id is present ({})", active),
-        );
+        return ok_outcome(ID, format!("active install id is present ({})", active));
     }
 
     warn_outcome(
@@ -97,6 +94,7 @@ fn diagnose(context: Context) -> Diagnosis {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::doctor::OutcomeStatus;
 
     #[test]
     fn active_install_id_is_ok_without_marker_for_app_bundle_installs() {
@@ -108,7 +106,7 @@ mod tests {
         };
 
         let diagnosis = diagnose(context);
-        assert_eq!(diagnosis.outcome.status, super::super::OutcomeStatus::Ok);
+        assert_eq!(diagnosis.outcome.status, OutcomeStatus::Ok);
         assert!(!diagnosis.outcome.fix_available);
     }
 
@@ -122,7 +120,7 @@ mod tests {
         };
 
         let diagnosis = diagnose(context);
-        assert_eq!(diagnosis.outcome.status, super::super::OutcomeStatus::Warn);
+        assert_eq!(diagnosis.outcome.status, OutcomeStatus::Warn);
         assert!(diagnosis.outcome.fix_available);
     }
 }

@@ -1,4 +1,6 @@
-use anyhow::{Context, Result};
+#[cfg(any(test, target_os = "linux"))]
+use anyhow::Context;
+use anyhow::Result;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use tokio_stream::StreamExt;
@@ -33,6 +35,7 @@ pub(crate) async fn download_asset(url: &str, dest: &Path, events: &EventBus) ->
     Ok(())
 }
 
+#[cfg(any(test, target_os = "linux"))]
 pub(crate) fn extract_tar_gz(archive: &Path, binary_name: &str) -> Result<PathBuf> {
     extract_tar_gz_entry(archive, binary_name, false)
 }
@@ -58,8 +61,7 @@ fn extract_tar_gz_entry(archive: &Path, name: &str, want_dir: bool) -> Result<Pa
         if want_dir && entry.file_type().is_dir() && entry.file_name().to_string_lossy() == name {
             return Ok(entry.into_path());
         }
-        if !want_dir && entry.file_type().is_file() && entry.file_name().to_string_lossy() == name
-        {
+        if !want_dir && entry.file_type().is_file() && entry.file_name().to_string_lossy() == name {
             return Ok(entry.into_path());
         }
     }
@@ -71,6 +73,7 @@ fn extract_tar_gz_entry(archive: &Path, name: &str, want_dir: bool) -> Result<Pa
     anyhow::bail!("Binary '{name}' not found in archive")
 }
 
+#[cfg(any(test, target_os = "linux"))]
 pub(crate) fn atomic_replace(source: &Path, target: &Path) -> Result<()> {
     let staged = target.with_extension("new");
     let result = atomic_replace_inner(source, target, &staged);
@@ -80,6 +83,7 @@ pub(crate) fn atomic_replace(source: &Path, target: &Path) -> Result<()> {
     result
 }
 
+#[cfg(any(test, target_os = "linux"))]
 fn atomic_replace_inner(source: &Path, target: &Path, staged: &Path) -> Result<()> {
     if staged.exists() {
         let _ = std::fs::remove_file(staged);
@@ -111,6 +115,7 @@ pub(crate) fn cleanup_archive(archive: &Path) {
     let _ = std::fs::remove_dir_all(&extract_dir);
 }
 
+#[cfg(target_os = "linux")]
 pub(crate) fn arch_suffix() -> &'static str {
     #[cfg(target_arch = "x86_64")]
     {
@@ -163,8 +168,12 @@ mod tests {
         header.set_mode(0o755);
         header.set_size(0);
         header.set_cksum();
-        tar.append_data(&mut header, format!("{bundle_name}/{dir_name}/"), std::io::empty())
-            .unwrap();
+        tar.append_data(
+            &mut header,
+            format!("{bundle_name}/{dir_name}/"),
+            std::io::empty(),
+        )
+        .unwrap();
 
         let encoder = tar.into_inner().unwrap();
         let bytes = encoder.finish().unwrap();
