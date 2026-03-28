@@ -10,6 +10,7 @@ const VIEW_LABELS = {
     hotkeys: 'Hotkeys',
     shortcuts: 'Shortcuts',
     'task-runner': 'Task Runner',
+    profile: 'Profile',
     logs: 'Logs',
     dev: 'Developer'
 };
