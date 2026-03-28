@@ -1787,6 +1787,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-platform"
+version = "0.2.0"
+source = "git+https://github.com/qol-tools/qol-platform#3be7dbb82f2af69e636d3ea149cc91cc0b0bcedd"
+dependencies = [
+ "dirs",
+]
+
+[[package]]
 name = "qol-plugin-api"
 version = "0.1.0"
 dependencies = [
@@ -1794,6 +1802,7 @@ dependencies = [
  "objc2-app-kit",
  "objc2-core-graphics",
  "objc2-foundation",
+ "qol-platform",
  "qol-runtime",
  "serde",
  "serde_json",
@@ -1814,6 +1823,7 @@ version = "3.7.1"
 dependencies = [
  "anyhow",
  "axum",
+ "base64",
  "chrono",
  "dirs",
  "flate2",
@@ -1836,6 +1846,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "sha2",
  "tar",
  "tempfile",
  "tokio",

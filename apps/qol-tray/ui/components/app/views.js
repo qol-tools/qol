@@ -46,7 +46,10 @@ export function renderMountedViews({
     activeViewId,
     activePluginId,
     openPluginConfig,
-    openPluginUi
+    openPluginUi,
+    syncStatus,
+    onSyncStatusChange,
+    refreshSyncStatus,
 }) {
     const active = (id) => activeViewId === id && !activePluginId;
     return html`
@@ -55,7 +58,8 @@ export function renderMountedViews({
         ${mounted.has('hotkeys') && html`<${ViewSlot} active=${active('hotkeys')}><${HotkeysView} /><//>`}
         ${mounted.has('shortcuts') && html`<${ViewSlot} active=${active('shortcuts')}><${ShortcutsView} /><//>`}
         ${mounted.has('task-runner') && html`<${ViewSlot} active=${active('task-runner')}><${TaskRunnerView} /><//>`}
-        ${mounted.has('profile') && html`<${ViewSlot} active=${active('profile')}><${ProfileView} /><//>`}
+        ${mounted.has('profile') && html`<${ViewSlot} active=${active('profile')}><${ProfileView} syncStatus=${syncStatus}
+            onSyncStatusChange=${onSyncStatusChange} refreshSyncStatus=${refreshSyncStatus} /><//>`}
         ${mounted.has('logs') && html`<${ViewSlot} active=${active('logs')}><${LogsView} active=${active('logs')} /><//>`}
         ${mounted.has('dev') && html`<${ViewSlot} active=${active('dev')}><${DevView} /><//>`}
     `;

@@ -7,6 +7,7 @@ mod media_cover_handlers;
 mod media_icon_handlers;
 mod plugin_config_handlers;
 mod shortcut_handlers;
+mod sync_handlers;
 
 use axum::{
     routing::{get, post},
@@ -60,5 +61,15 @@ pub(super) fn routes() -> Router<AppState> {
         .route(
             "/config/import",
             post(config_export_handlers::import_config),
+        )
+        .route("/sync/status", get(sync_handlers::get_sync_status))
+        .route("/sync/connect", post(sync_handlers::connect_sync))
+        .route("/sync/pull", post(sync_handlers::pull_sync))
+        .route("/sync/push", post(sync_handlers::push_sync))
+        .route("/sync/disconnect", post(sync_handlers::disconnect_sync))
+        .route("/sync/acknowledge", post(sync_handlers::acknowledge_sync))
+        .route(
+            "/sync/backups/open-dir",
+            post(sync_handlers::open_sync_backups_dir),
         )
 }

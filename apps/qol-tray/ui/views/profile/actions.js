@@ -1,4 +1,4 @@
-import { apiJson } from '../../api/client.js';
+import { apiJson, apiResponse, jsonRequest, readResponseText } from '../../api/client.js';
 import { toast } from '../../lib/toast.js';
 
 export async function exportProfile() {
@@ -6,6 +6,50 @@ export async function exportProfile() {
     downloadBundle(bundle);
     toast('success', 'Profile exported');
     return bundle;
+}
+
+export async function fetchSyncStatus() {
+    return apiJson('/api/sync/status');
+}
+
+export async function connectProfileSync(payload) {
+    const result = await apiJson('/api/sync/connect', jsonRequest('POST', payload));
+    toast(syncToastKind(result.status?.health), result.message);
+    return result;
+}
+
+export async function pullProfileSync() {
+    const result = await apiJson('/api/sync/pull', { method: 'POST' });
+    toast(syncToastKind(result.status?.health), result.message);
+    return result;
+}
+
+export async function pushProfileSync() {
+    const result = await apiJson('/api/sync/push', { method: 'POST' });
+    toast(syncToastKind(result.status?.health), result.message);
+    return result;
+}
+
+export async function disconnectProfileSync() {
+    const result = await apiJson('/api/sync/disconnect', { method: 'POST' });
+    toast('info', result.message);
+    return result;
+}
+
+export async function acknowledgeProfileSync() {
+    const result = await apiJson('/api/sync/acknowledge', { method: 'POST' });
+    toast('success', result.message);
+    return result;
+}
+
+export async function openProfileBackupsDir() {
+    const response = await apiResponse('/api/sync/backups/open-dir', { method: 'POST' });
+    if (response.ok) {
+        toast('success', 'Opened backups folder');
+        return;
+    }
+    const message = (await readResponseText(response)) || 'Failed to open backups folder';
+    throw new Error(message);
 }
 
 export async function importProfileFile(file) {
@@ -79,6 +123,12 @@ export function importSummary(result) {
 
 function defaultImportError(error) {
     toast('error', `Failed to import profile: ${error.message}`);
+}
+
+function syncToastKind(health) {
+    if (health === 'error') return 'error';
+    if (health === 'attention') return 'info';
+    return 'success';
 }
 
 function downloadBundle(bundle) {

@@ -23,7 +23,28 @@ function AppShell() {
     useScrollFollow();
     const dissolveRef = useRef(null);
     const onDissolve = useCallback((reload) => dissolveRef.current?.(reload), []);
-    const { devEnabled, appVersion, viewOrder, activeViewId, activePluginId, activePluginMode, switchView, openPluginConfig, openPluginUi, closePluginConfig, mounted, updateState, handleSidebarAction, handleViewClick, worktrees, defaultWorktree, setDefaultWorktree } = useApp({ onDissolve });
+    const {
+        devEnabled,
+        appVersion,
+        viewOrder,
+        activeViewId,
+        activePluginId,
+        activePluginMode,
+        switchView,
+        openPluginConfig,
+        openPluginUi,
+        closePluginConfig,
+        mounted,
+        updateState,
+        handleSidebarAction,
+        handleViewClick,
+        worktrees,
+        defaultWorktree,
+        setDefaultWorktree,
+        syncStatus,
+        setSyncStatus,
+        refreshSyncStatus,
+    } = useApp({ onDissolve });
     return html`
         <${ModifierStateProvider}>
         <${PluginConfigProvider} pluginId=${activePluginId} mode=${activePluginMode}>
@@ -38,10 +59,20 @@ function AppShell() {
                 <div class="app-container">
                     <div class="app-main">
                         <aside id="sidebar"><${SidebarNav} activeViewId=${activeViewId} viewOrder=${viewOrder}
-                            pluginOpen=${!!activePluginId} onViewClick=${handleViewClick} onBack=${closePluginConfig} /></aside>
+                            pluginOpen=${!!activePluginId} onViewClick=${handleViewClick}
+                            onBack=${closePluginConfig} profileSyncHealth=${syncStatus.health} /></aside>
                         <main id="content">
                             ${activePluginId && html`<${PluginConfigView} onClose=${closePluginConfig} />`}
-                            ${renderMountedViews({ mounted, activeViewId, activePluginId, openPluginConfig, openPluginUi })}
+                            ${renderMountedViews({
+                                mounted,
+                                activeViewId,
+                                activePluginId,
+                                openPluginConfig,
+                                openPluginUi,
+                                syncStatus,
+                                onSyncStatusChange: setSyncStatus,
+                                refreshSyncStatus,
+                            })}
                         </main>
                     </div>
                     <div class="app-footer">

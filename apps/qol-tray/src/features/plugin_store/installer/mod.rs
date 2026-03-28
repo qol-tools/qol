@@ -24,16 +24,16 @@ pub(super) enum InstallSource {
     TaggedVersion(String),
 }
 
-pub(super) struct PluginInstaller {
+pub(crate) struct PluginInstaller {
     plugins_dir: PathBuf,
 }
 
 impl PluginInstaller {
-    pub(super) fn new(plugins_dir: PathBuf) -> Self {
+    pub(crate) fn new(plugins_dir: PathBuf) -> Self {
         Self { plugins_dir }
     }
 
-    pub(super) async fn install(&self, repo_url: &str, plugin_id: &str) -> Result<()> {
+    pub(crate) async fn install(&self, repo_url: &str, plugin_id: &str) -> Result<()> {
         validate_plugin_id(plugin_id)?;
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
         operations::ensure_no_dev_link_conflict(plugin_id)?;
@@ -46,7 +46,7 @@ impl PluginInstaller {
         .await
     }
 
-    pub(super) async fn install_exact(
+    pub(crate) async fn install_exact(
         &self,
         repo_url: &str,
         plugin_id: &str,
@@ -64,7 +64,7 @@ impl PluginInstaller {
         .await
     }
 
-    pub(super) async fn update(&self, repo_url: &str, plugin_id: &str) -> Result<()> {
+    pub(crate) async fn update(&self, repo_url: &str, plugin_id: &str) -> Result<()> {
         validate_plugin_id(plugin_id)?;
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
         operations::ensure_no_dev_link_conflict(plugin_id)?;
@@ -77,7 +77,7 @@ impl PluginInstaller {
         .await
     }
 
-    pub(super) async fn update_exact(
+    pub(crate) async fn update_exact(
         &self,
         repo_url: &str,
         plugin_id: &str,
@@ -95,7 +95,7 @@ impl PluginInstaller {
         .await
     }
 
-    pub(super) async fn uninstall(&self, plugin_id: &str) -> Result<()> {
+    pub(crate) async fn uninstall(&self, plugin_id: &str) -> Result<()> {
         validate_plugin_id(plugin_id)?;
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
         operations::uninstall(&self.plugins_dir, plugin_id).await

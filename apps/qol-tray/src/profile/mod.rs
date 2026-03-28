@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 pub const CURRENT_PROFILE_VERSION: u32 = 1;
@@ -46,6 +46,21 @@ pub struct ProfileExportBundle {
     pub plugins: Vec<PluginLockEntry>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileSyncDocument {
+    #[serde(default = "default_profile_version")]
+    pub version: u32,
+    #[serde(default)]
+    pub hotkeys: Vec<Value>,
+    #[serde(default)]
+    pub shortcuts: Vec<Value>,
+    pub task_runner: Value,
+    #[serde(default)]
+    pub plugin_configs: BTreeMap<String, Value>,
+    #[serde(default)]
+    pub plugins: Vec<PluginLockEntry>,
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct ProfileImportBundle {
     #[serde(default, deserialize_with = "deserialize_hotkeys_field")]
@@ -60,6 +75,19 @@ pub struct ProfileImportBundle {
     pub plugins: Vec<PluginLockEntry>,
     #[serde(default)]
     pub installed_plugins: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ImportPluginResult {
+    pub id: String,
+    pub status: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ApplyProfileResult {
+    pub success: bool,
+    pub plugins: Vec<ImportPluginResult>,
 }
 
 fn default_profile_version() -> u32 {
@@ -191,6 +219,71 @@ pub fn replace_plugin_configs(configs: &HashMap<String, Value>) -> Result<()> {
     replace_plugin_configs_in_dir(&crate::paths::profile_plugin_configs_dir()?, configs)
 }
 
+pub fn build_export_bundle(
+    exported_at: String,
+    plugins: Vec<PluginLockEntry>,
+) -> Result<ProfileExportBundle> {
+    Ok(ProfileExportBundle {
+        version: CURRENT_PROFILE_VERSION,
+        exported_at,
+        hotkeys: read_hotkeys_list(),
+        shortcuts: read_shortcuts_list(),
+        task_runner: read_task_runner_value(),
+        plugin_configs: read_plugin_configs()?,
+        plugins,
+    })
+}
+
+pub fn build_export_bundle_json(
+    exported_at: String,
+    plugins: Vec<PluginLockEntry>,
+) -> Result<String> {
+    serde_json::to_string_pretty(&build_export_bundle(exported_at, plugins)?).map_err(Into::into)
+}
+
+pub fn build_sync_document(plugins: Vec<PluginLockEntry>) -> Result<ProfileSyncDocument> {
+    Ok(ProfileSyncDocument {
+        version: CURRENT_PROFILE_VERSION,
+        hotkeys: read_hotkeys_list(),
+        shortcuts: read_shortcuts_list(),
+        task_runner: read_task_runner_value(),
+        plugin_configs: read_plugin_configs()?.into_iter().collect(),
+        plugins,
+    })
+}
+
+pub fn build_sync_document_json(plugins: Vec<PluginLockEntry>) -> Result<String> {
+    serde_json::to_string_pretty(&build_sync_document(plugins)?).map_err(Into::into)
+}
+
+pub async fn apply_import_bundle(
+    plugins_dir: &Path,
+    bundle: &ProfileImportBundle,
+) -> Result<ApplyProfileResult> {
+    ensure_profile_dirs()?;
+    write_core_settings(bundle)?;
+    if let Some(plugin_configs) = &bundle.plugin_configs {
+        replace_plugin_configs(plugin_configs)?;
+    }
+
+    let plugins = import_plugins(bundle);
+    save_plugins_lock(&PluginsLock {
+        version: CURRENT_PROFILE_VERSION,
+        plugins: plugins.clone(),
+    })?;
+
+    let plugin_results = reconcile_plugins(plugins_dir, &plugins).await;
+    project_plugin_configs_to_dir(plugins_dir, bundle.plugin_configs.as_ref())?;
+    let success = plugin_results
+        .iter()
+        .all(|result| result.status != "failed");
+
+    Ok(ApplyProfileResult {
+        success,
+        plugins: plugin_results,
+    })
+}
+
 pub fn import_plugins(bundle: &ProfileImportBundle) -> Vec<PluginLockEntry> {
     if !bundle.plugins.is_empty() {
         return bundle.plugins.clone();
@@ -220,6 +313,215 @@ pub fn sync_plugins_lock_from_plugins<'a>(
     let lock = build_plugins_lock(plugins, &existing, &cached_urls);
     save_plugins_lock(&lock)?;
     Ok(lock)
+}
+
+pub fn read_hotkeys_list() -> Vec<Value> {
+    read_wrapped_json_array(crate::paths::hotkeys_path(), "hotkeys")
+}
+
+pub fn read_shortcuts_list() -> Vec<Value> {
+    read_wrapped_json_array(crate::paths::shortcuts_path(), "shortcuts")
+}
+
+pub fn read_task_runner_value() -> Value {
+    read_json_file_or_default(crate::paths::task_runner_config_path())
+}
+
+fn write_core_settings(bundle: &ProfileImportBundle) -> Result<()> {
+    if let Some(hotkeys) = &bundle.hotkeys {
+        write_json_config(
+            crate::paths::hotkeys_path()?,
+            &serde_json::json!({ "hotkeys": hotkeys }),
+        )?;
+    }
+    if let Some(shortcuts) = &bundle.shortcuts {
+        write_json_config(
+            crate::paths::shortcuts_path()?,
+            &serde_json::json!({ "shortcuts": shortcuts }),
+        )?;
+    }
+    if let Some(task_runner) = &bundle.task_runner {
+        write_json_config(crate::paths::task_runner_config_path()?, task_runner)?;
+    }
+    Ok(())
+}
+
+async fn reconcile_plugins(
+    plugins_dir: &Path,
+    plugins: &[PluginLockEntry],
+) -> Vec<ImportPluginResult> {
+    let installer =
+        crate::features::plugin_store::installer::PluginInstaller::new(plugins_dir.to_path_buf());
+    let mut results = Vec::new();
+
+    for plugin in plugins {
+        if !crate::plugins::manifest::supports_current_platform(&plugin.platforms) {
+            results.push(ImportPluginResult {
+                id: plugin.id.clone(),
+                status: "skipped".to_string(),
+                message: "unsupported on this platform".to_string(),
+            });
+            continue;
+        }
+
+        let plugin_dir = plugins_dir.join(&plugin.id);
+        let current_version = read_plugin_version(&plugin_dir).ok();
+        if current_version.as_deref() == Some(plugin.version.as_str()) && !plugin.version.is_empty()
+        {
+            results.push(ImportPluginResult {
+                id: plugin.id.clone(),
+                status: "kept".to_string(),
+                message: format!("already at {}", plugin.version),
+            });
+            continue;
+        }
+
+        results.push(restore_plugin(&installer, &plugin_dir, plugin).await);
+    }
+
+    results
+}
+
+async fn restore_plugin(
+    installer: &crate::features::plugin_store::installer::PluginInstaller,
+    plugin_dir: &Path,
+    plugin: &PluginLockEntry,
+) -> ImportPluginResult {
+    let exists = plugin_dir.exists();
+    let action = action_for_install(exists);
+    let result = if plugin.version.is_empty() {
+        restore_latest(installer, &plugin.repo_url, &plugin.id, exists).await
+    } else {
+        restore_exact(
+            installer,
+            &plugin.repo_url,
+            &plugin.id,
+            &plugin.version,
+            exists,
+        )
+        .await
+    };
+
+    if let Some(error) = result.err() {
+        return ImportPluginResult {
+            id: plugin.id.clone(),
+            status: "failed".to_string(),
+            message: format!("{action} failed: {error:#}"),
+        };
+    }
+
+    ImportPluginResult {
+        id: plugin.id.clone(),
+        status: action.to_string(),
+        message: plugin_restore_message(plugin, action),
+    }
+}
+
+fn action_for_install(exists: bool) -> &'static str {
+    if exists {
+        return "update";
+    }
+    "install"
+}
+
+async fn restore_latest(
+    installer: &crate::features::plugin_store::installer::PluginInstaller,
+    repo_url: &str,
+    plugin_id: &str,
+    exists: bool,
+) -> Result<()> {
+    if exists {
+        return installer.update(repo_url, plugin_id).await;
+    }
+    installer.install(repo_url, plugin_id).await
+}
+
+async fn restore_exact(
+    installer: &crate::features::plugin_store::installer::PluginInstaller,
+    repo_url: &str,
+    plugin_id: &str,
+    version: &str,
+    exists: bool,
+) -> Result<()> {
+    if exists {
+        return installer.update_exact(repo_url, plugin_id, version).await;
+    }
+    installer.install_exact(repo_url, plugin_id, version).await
+}
+
+fn plugin_restore_message(plugin: &PluginLockEntry, action: &str) -> String {
+    let verb = if action == "update" {
+        "updated"
+    } else {
+        "installed"
+    };
+    if plugin.version.is_empty() {
+        return format!("{verb} latest available version");
+    }
+    format!("{verb} {}", plugin.version)
+}
+
+fn project_plugin_configs_to_dir(
+    plugins_dir: &Path,
+    plugin_configs: Option<&HashMap<String, Value>>,
+) -> Result<()> {
+    let Some(plugin_configs) = plugin_configs else {
+        return Ok(());
+    };
+    let manager = crate::plugins::PluginConfigManager::new()?;
+    for (plugin_id, config) in plugin_configs {
+        if !plugins_dir.join(plugin_id).is_dir() {
+            continue;
+        }
+        manager.set_config(plugin_id, config.clone())?;
+    }
+    Ok(())
+}
+
+fn read_plugin_version(plugin_dir: &Path) -> std::result::Result<String, ()> {
+    let manifest_path = plugin_dir.join("plugin.toml");
+    let content = std::fs::read_to_string(&manifest_path).map_err(|_| ())?;
+    let manifest: crate::plugins::PluginManifest = toml::from_str(&content).map_err(|_| ())?;
+    Ok(manifest.plugin.version)
+}
+
+fn read_wrapped_json_array(path: Result<std::path::PathBuf>, field_name: &str) -> Vec<Value> {
+    read_wrapped_json_array_value(read_json_file_or_default(path), field_name)
+}
+
+fn read_wrapped_json_array_value(value: Value, field_name: &str) -> Vec<Value> {
+    if value.is_null() {
+        return Vec::new();
+    }
+    if let Value::Array(items) = value {
+        return items;
+    }
+    if let Value::Object(mut object) = value {
+        let Some(items) = object.remove(field_name) else {
+            return Vec::new();
+        };
+        if let Value::Array(items) = items {
+            return items;
+        }
+    }
+    Vec::new()
+}
+
+fn read_json_file_or_default(path: Result<std::path::PathBuf>) -> Value {
+    let Ok(path) = path else {
+        return Value::Null;
+    };
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(_) => return Value::Null,
+    };
+    serde_json::from_str(&content).unwrap_or(Value::Null)
+}
+
+fn write_json_config(path: std::path::PathBuf, value: &Value) -> Result<()> {
+    let content = serde_json::to_vec_pretty(value)?;
+    crate::file_io::ensure_parent_dir(&path)?;
+    crate::file_io::atomic_write(&path, &content)
 }
 
 fn cached_repo_urls() -> HashMap<String, String> {

@@ -141,6 +141,18 @@ pub fn github_token_path() -> Result<PathBuf> {
     shared_config_dir().map(|p| p.join(".github-token"))
 }
 
+pub fn sync_dir() -> Result<PathBuf> {
+    shared_config_dir().map(|p| p.join("sync"))
+}
+
+pub fn sync_state_path() -> Result<PathBuf> {
+    sync_dir().map(|p| p.join("state.json"))
+}
+
+pub fn sync_backups_dir() -> Result<PathBuf> {
+    sync_dir().map(|p| p.join("backups"))
+}
+
 pub fn suppressed_errors_path() -> Result<PathBuf> {
     shared_config_dir().map(|p| p.join("suppressed-errors.json"))
 }
@@ -238,6 +250,9 @@ mod tests {
             (profile_plugins_lock_path(), "plugins.lock.json"),
             (profile_plugin_configs_dir(), "plugin-configs"),
             (github_token_path(), ".github-token"),
+            (sync_dir(), "sync"),
+            (sync_state_path(), "state.json"),
+            (sync_backups_dir(), "backups"),
         ];
 
         let config_path = config_dir().unwrap();
