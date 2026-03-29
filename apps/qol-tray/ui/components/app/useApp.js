@@ -8,8 +8,16 @@ import { useAppUpdateCoordinator } from './useAppUpdateCoordinator.js';
 import { useMountedViews } from './useMountedViews.js';
 import { useSidebarActions } from './useSidebarActions.js';
 import { buildViewOrder, VIEW_LABELS } from './views.js';
+import {
+    exportProfile,
+    fetchSyncProviders,
+    fetchSyncStatus,
+    promptImportProfile,
+} from '../../views/profile/actions.js';
+import { toast } from '../../lib/toast.js';
 
 const WT_KEY = 'dev.recompile.defaultWorktree';
+const SYNC_STATUS_POLL_MS = 5000;
 
 function readDefaultWorktree() {
     try { return localStorage.getItem(WT_KEY) || null; } catch { return null; }
@@ -23,6 +31,8 @@ export function useApp({ onDissolve } = {}) {
     const { updateState, checkForUpdate, beginSelfUpdate, failSelfUpdate, beginDevRecompile, failDevRecompile } = useAppUpdateCoordinator({ devEnabled, appVersion, onDissolve });
     const [worktrees, setWorktrees] = useState([]);
     const [defaultWorktree, setDefaultWorktreeState] = useState(readDefaultWorktree);
+    const [syncStatus, setSyncStatus] = useState(defaultSyncStatus);
+    const [syncProviders, setSyncProviders] = useState([]);
     const defaultWorktreeRef = useRef(defaultWorktree);
     defaultWorktreeRef.current = defaultWorktree;
     const setDefaultWorktree = useCallback(path => {
@@ -46,6 +56,25 @@ export function useApp({ onDissolve } = {}) {
             })
             .catch(() => {});
     }, [devEnabled]);
+    const refreshSyncStatus = useCallback(async () => {
+        try {
+            const nextStatus = await fetchSyncStatus();
+            setSyncStatus(nextStatus);
+            return nextStatus;
+        } catch {
+            return null;
+        }
+    }, []);
+    useEffect(() => {
+        refreshSyncStatus();
+        const timer = window.setInterval(refreshSyncStatus, SYNC_STATUS_POLL_MS);
+        return () => window.clearInterval(timer);
+    }, [refreshSyncStatus]);
+    useEffect(() => {
+        fetchSyncProviders()
+            .then(nextProviders => setSyncProviders(Array.isArray(nextProviders) ? nextProviders : []))
+            .catch(() => {});
+    }, []);
     const handleSidebarAction = useSidebarActions({ checkForUpdate, beginSelfUpdate, failSelfUpdate, beginDevRecompile, failDevRecompile, defaultWorktreeRef });
     const palette = usePaletteContext();
     useEffect(() => {
@@ -68,7 +97,29 @@ export function useApp({ onDissolve } = {}) {
     ], [viewOrder, switchView]);
     useRegisterCommands(GLOBAL_ID, globalCommands);
 
-    return { devEnabled, appVersion, viewOrder, activeViewId, activePluginId, activePluginMode, switchView, openPluginConfig, openPluginUi, closePluginConfig, mounted, updateState, handleSidebarAction, handleViewClick, worktrees, defaultWorktree, setDefaultWorktree };
+    return {
+        devEnabled,
+        appVersion,
+        viewOrder,
+        activeViewId,
+        activePluginId,
+        activePluginMode,
+        switchView,
+        openPluginConfig,
+        openPluginUi,
+        closePluginConfig,
+        mounted,
+        updateState,
+        handleSidebarAction,
+        handleViewClick,
+        worktrees,
+        defaultWorktree,
+        setDefaultWorktree,
+        syncStatus,
+        syncProviders,
+        setSyncStatus,
+        refreshSyncStatus,
+    };
 }
 
 function normalizeDefaultWorktree(current, worktrees) {
@@ -87,36 +138,43 @@ function parentDir(path) {
 
 async function exportConfig() {
     try {
-        const res = await fetch('/api/config/export');
-        if (!res.ok) return;
-        const bundle = await res.json();
-        const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `qol-tray-config-${bundle.exported_at?.slice(0, 10) || 'export'}.json`;
-        a.click();
-        URL.revokeObjectURL(url);
-    } catch (_) {}
+        await exportProfile();
+    } catch (error) {
+        toast('error', `Failed to export profile: ${error.message}`);
+    }
 }
 
 async function importConfig() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json';
-    input.onchange = async () => {
-        const file = input.files?.[0];
-        if (!file) return;
-        try {
-            const text = await file.text();
-            JSON.parse(text);
-            await fetch('/api/config/import', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: text,
-            });
-            window.location.reload();
-        } catch (_) {}
+    promptImportProfile({
+        onImported: () => {
+            toast('info', 'Profile imported. Reload the dashboard to refresh visible state.');
+        },
+        onError: (error) => {
+            toast('error', `Failed to import profile: ${error.message}`);
+        },
+    });
+}
+
+function defaultSyncStatus() {
+    return {
+        configured: false,
+        provider: null,
+        provider_label: null,
+        target_summary: null,
+        health: 'not_configured',
+        repo_url: null,
+        folder_path: null,
+        branch: null,
+        path: null,
+        commit_message: null,
+        pull_on_launch: true,
+        push_on_change: true,
+        has_github_token: false,
+        last_sync_at: null,
+        incident: null,
+        last_error: null,
+        backups_dir: null,
+        backup_count: 0,
+        latest_backup_file: null,
     };
-    input.click();
 }

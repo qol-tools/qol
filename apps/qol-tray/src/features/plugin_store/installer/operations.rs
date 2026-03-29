@@ -3,18 +3,29 @@ use super::source::{clone_plugin_repo, prepare_update_repo};
 use super::staging::{
     cleanup_temp_dir, install_staging_dir, swap_plugin_dirs, update_backup_dir, update_staging_dir,
 };
+use super::InstallSource;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-pub(super) async fn install(plugins_dir: &Path, repo_url: &str, plugin_id: &str) -> Result<()> {
-    let plan = InstallPlan::new(plugins_dir, repo_url, plugin_id);
+pub(super) async fn install(
+    plugins_dir: &Path,
+    repo_url: &str,
+    plugin_id: &str,
+    install_source: InstallSource,
+) -> Result<()> {
+    let plan = InstallPlan::new(plugins_dir, repo_url, plugin_id, install_source);
     ensure_not_installed(&plan.target_dir, plugin_id)?;
     let result = install_plugin(&plan).await;
     finish_with_cleanup(&plan.staging_dir, result).await
 }
 
-pub(super) async fn update(plugins_dir: &Path, repo_url: &str, plugin_id: &str) -> Result<()> {
-    let plan = UpdatePlan::new(plugins_dir, repo_url, plugin_id);
+pub(super) async fn update(
+    plugins_dir: &Path,
+    repo_url: &str,
+    plugin_id: &str,
+    install_source: InstallSource,
+) -> Result<()> {
+    let plan = UpdatePlan::new(plugins_dir, repo_url, plugin_id, install_source);
     ensure_installed(&plan.plugin_dir, plugin_id)?;
     let result = update_plugin(&plan).await;
     finish_with_cleanup(&plan.staging_dir, result).await
@@ -50,15 +61,22 @@ pub(super) fn ensure_no_dev_link_conflict(_plugin_id: &str) -> Result<()> {
 struct InstallPlan<'a> {
     repo_url: &'a str,
     plugin_id: &'a str,
+    install_source: InstallSource,
     staging_dir: PathBuf,
     target_dir: PathBuf,
 }
 
 impl<'a> InstallPlan<'a> {
-    fn new(plugins_dir: &Path, repo_url: &'a str, plugin_id: &'a str) -> Self {
+    fn new(
+        plugins_dir: &Path,
+        repo_url: &'a str,
+        plugin_id: &'a str,
+        install_source: InstallSource,
+    ) -> Self {
         Self {
             repo_url,
             plugin_id,
+            install_source,
             staging_dir: install_staging_dir(plugins_dir, plugin_id),
             target_dir: plugins_dir.join(plugin_id),
         }
@@ -68,16 +86,23 @@ impl<'a> InstallPlan<'a> {
 struct UpdatePlan<'a> {
     repo_url: &'a str,
     plugin_id: &'a str,
+    install_source: InstallSource,
     plugin_dir: PathBuf,
     staging_dir: PathBuf,
     backup_dir: PathBuf,
 }
 
 impl<'a> UpdatePlan<'a> {
-    fn new(plugins_dir: &Path, repo_url: &'a str, plugin_id: &'a str) -> Self {
+    fn new(
+        plugins_dir: &Path,
+        repo_url: &'a str,
+        plugin_id: &'a str,
+        install_source: InstallSource,
+    ) -> Self {
         Self {
             repo_url,
             plugin_id,
+            install_source,
             plugin_dir: plugins_dir.join(plugin_id),
             staging_dir: update_staging_dir(plugins_dir, plugin_id),
             backup_dir: update_backup_dir(plugins_dir, plugin_id),
@@ -86,8 +111,8 @@ impl<'a> UpdatePlan<'a> {
 }
 
 async fn install_plugin(plan: &InstallPlan<'_>) -> Result<()> {
-    clone_plugin_repo(plan.repo_url, &plan.staging_dir).await?;
-    install_dependencies(plan.plugin_id, &plan.staging_dir).await?;
+    clone_plugin_repo(plan.repo_url, &plan.staging_dir, &plan.install_source).await?;
+    install_dependencies(plan.plugin_id, &plan.staging_dir, &plan.install_source).await?;
     finalize_install(&plan.staging_dir, &plan.target_dir).await?;
     log::info!("Plugin {} installed successfully", plan.plugin_id);
     Ok(())
@@ -95,8 +120,13 @@ async fn install_plugin(plan: &InstallPlan<'_>) -> Result<()> {
 
 async fn update_plugin(plan: &UpdatePlan<'_>) -> Result<()> {
     log::info!("Updating plugin {} from {}", plan.plugin_id, plan.repo_url);
-    prepare_update_repo(&plan.staging_dir, plan.repo_url).await?;
-    install_dependencies(plan.plugin_id, &plan.staging_dir).await?;
+    prepare_update_repo(
+        plan.staging_dir.as_path(),
+        plan.repo_url,
+        &plan.install_source,
+    )
+    .await?;
+    install_dependencies(plan.plugin_id, &plan.staging_dir, &plan.install_source).await?;
     swap_plugin_dirs(&plan.plugin_dir, &plan.staging_dir, &plan.backup_dir).await?;
     log::info!("Plugin {} updated successfully", plan.plugin_id);
     Ok(())

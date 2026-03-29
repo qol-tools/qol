@@ -1,3 +1,4 @@
+pub mod credentials;
 pub mod daemon;
 #[cfg(unix)]
 pub(crate) mod desktop_state;
@@ -14,11 +15,15 @@ pub mod menu;
 pub mod paths;
 pub mod plugins;
 pub mod process_utils;
+pub mod profile;
 #[cfg(unix)]
 pub mod runtime;
 pub mod shortcuts;
 #[cfg(unix)]
 pub(crate) mod signal;
+pub mod sync;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod tray;
 pub mod updates;
 pub mod version;

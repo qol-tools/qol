@@ -5,6 +5,7 @@ import { StoreView } from '../../views/store-view.js';
 import { HotkeysView } from '../../views/hotkeys-view.js';
 import { ShortcutsView } from '../../views/shortcuts-view.js';
 import { TaskRunnerView } from '../../views/task-runner-view.js';
+import { ProfileView } from '../../views/profile/view.js';
 import { DevView } from '../../views/dev/view.js';
 import { LogsView } from '../../views/logs-view.js';
 
@@ -14,11 +15,12 @@ export const VIEW_LABELS = {
     hotkeys: 'Hotkeys',
     shortcuts: 'Shortcuts',
     'task-runner': 'Task Runner',
+    profile: 'Profile',
     logs: 'Logs',
     dev: 'Dev'
 };
 
-const BASE_ORDER = ['plugins', 'store', 'hotkeys', 'shortcuts', 'task-runner', 'logs'];
+const BASE_ORDER = ['plugins', 'store', 'hotkeys', 'shortcuts', 'task-runner', 'profile', 'logs'];
 
 export function buildViewOrder(devEnabled) {
     return devEnabled ? [...BASE_ORDER, 'dev'] : [...BASE_ORDER];
@@ -44,7 +46,11 @@ export function renderMountedViews({
     activeViewId,
     activePluginId,
     openPluginConfig,
-    openPluginUi
+    openPluginUi,
+    syncStatus,
+    syncProviders,
+    onSyncStatusChange,
+    refreshSyncStatus,
 }) {
     const active = (id) => activeViewId === id && !activePluginId;
     return html`
@@ -53,6 +59,8 @@ export function renderMountedViews({
         ${mounted.has('hotkeys') && html`<${ViewSlot} active=${active('hotkeys')}><${HotkeysView} /><//>`}
         ${mounted.has('shortcuts') && html`<${ViewSlot} active=${active('shortcuts')}><${ShortcutsView} /><//>`}
         ${mounted.has('task-runner') && html`<${ViewSlot} active=${active('task-runner')}><${TaskRunnerView} /><//>`}
+        ${mounted.has('profile') && html`<${ViewSlot} active=${active('profile')}><${ProfileView} syncStatus=${syncStatus}
+            syncProviders=${syncProviders} onSyncStatusChange=${onSyncStatusChange} refreshSyncStatus=${refreshSyncStatus} /><//>`}
         ${mounted.has('logs') && html`<${ViewSlot} active=${active('logs')}><${LogsView} active=${active('logs')} /><//>`}
         ${mounted.has('dev') && html`<${ViewSlot} active=${active('dev')}><${DevView} /><//>`}
     `;

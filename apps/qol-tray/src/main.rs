@@ -231,6 +231,11 @@ async fn async_init_inner(
     let (shutdown_tx, shutdown_rx) = broadcast::channel::<()>(1);
     #[cfg(unix)]
     let _state_server = qol_tray::runtime::RuntimeServer::start();
+    let plugins_dir = qol_tray::plugins::PluginLoader::ensure_plugin_dir()?;
+    let sync_service = Arc::new(qol_tray::sync::SyncService::new(plugins_dir)?);
+    if let Err(error) = sync_service.pull_on_launch().await {
+        log::error!("Failed to pull cloud profile on launch: {error:#}");
+    }
     let mut plugin_manager = PluginManager::new();
     plugin_manager.load_plugins()?;
     let plugin_manager = Arc::new(Mutex::new(plugin_manager));
@@ -245,6 +250,7 @@ async fn async_init_inner(
     features::plugin_store::Plugins::start_server(
         plugin_manager.clone(),
         &daemon,
+        sync_service,
         #[cfg(feature = "dev")]
         core_log_controls,
     )

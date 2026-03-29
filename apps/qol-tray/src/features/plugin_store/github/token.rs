@@ -1,10 +1,4 @@
-use crate::paths;
 use anyhow::Result;
-use std::path::PathBuf;
-
-fn token_path() -> Option<PathBuf> {
-    paths::github_token_path().ok()
-}
 
 #[derive(Debug)]
 pub(crate) enum TokenValidationError {
@@ -48,39 +42,11 @@ pub(crate) async fn send_checked(request: reqwest::RequestBuilder) -> Result<req
 }
 
 pub(crate) fn get_stored_token() -> Option<String> {
-    let path = token_path()?;
-    let metadata = std::fs::symlink_metadata(&path).ok()?;
-    if metadata.file_type().is_symlink() {
-        log::warn!("Token file is a symlink, rejecting: {:?}", path);
-        return None;
-    }
-
-    let token = std::fs::read_to_string(&path).ok()?;
-    let token = token.trim();
-    if token.is_empty() {
-        return None;
-    }
-
-    log::info!("Loaded GitHub token from {:?}", path);
-    Some(token.to_string())
+    crate::credentials::github_bearer_token()
 }
 
 pub(crate) fn store_token(token: &str) -> Result<()> {
-    let Some(path) = token_path() else {
-        anyhow::bail!("Could not determine token path");
-    };
-    ensure_token_dir(&path)?;
-    crate::file_io::atomic_write(&path, token.trim().as_bytes())?;
-    log::info!("Stored GitHub token to {:?}", path);
-    Ok(())
-}
-
-fn ensure_token_dir(path: &std::path::Path) -> Result<()> {
-    let Some(parent) = path.parent() else {
-        return Ok(());
-    };
-    std::fs::create_dir_all(parent)?;
-    Ok(())
+    crate::credentials::store_github_token(token)
 }
 
 pub(crate) async fn validate_token(token: &str) -> std::result::Result<(), TokenValidationError> {
@@ -131,11 +97,5 @@ fn invalid_status(status: reqwest::StatusCode) -> bool {
 }
 
 pub(crate) fn delete_token() -> Result<()> {
-    let Some(path) = token_path() else {
-        return Ok(());
-    };
-    if path.exists() {
-        std::fs::remove_file(&path)?;
-    }
-    Ok(())
+    crate::credentials::delete_github_token()
 }
