@@ -30,7 +30,7 @@ pub(super) fn spawn_daemon(plugin: &Plugin, daemon_config: &DaemonConfig) -> Res
             commit.as_deref(),
             child.stderr.take(),
         );
-        return Ok(child);
+        Ok(child)
     }
     #[cfg(feature = "dev")]
     {
