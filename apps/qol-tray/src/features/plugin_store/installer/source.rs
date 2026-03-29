@@ -1,17 +1,30 @@
 use super::command::{run_git, run_git_checked};
+use super::InstallSource;
 use anyhow::Result;
 use std::path::Path;
 use std::time::Duration;
 
-pub(super) async fn clone_plugin_repo(repo_url: &str, staging_dir: &Path) -> Result<()> {
+pub(super) async fn clone_plugin_repo(
+    repo_url: &str,
+    staging_dir: &Path,
+    install_source: &InstallSource,
+) -> Result<()> {
     let staging_str = path_utf8(staging_dir)?;
     log::info!("Cloning plugin from {} to {:?}", repo_url, staging_dir);
     run_git_checked(["clone", repo_url, staging_str], None, "clone").await?;
+    checkout_install_source(staging_dir, install_source).await?;
     Ok(())
 }
 
-pub(super) async fn prepare_update_repo(staging_dir: &Path, repo_url: &str) -> Result<()> {
-    clone_plugin_repo(repo_url, staging_dir).await?;
+pub(super) async fn prepare_update_repo(
+    staging_dir: &Path,
+    repo_url: &str,
+    install_source: &InstallSource,
+) -> Result<()> {
+    clone_plugin_repo(repo_url, staging_dir, install_source).await?;
+    if matches!(install_source, InstallSource::TaggedVersion(_)) {
+        return Ok(());
+    }
     let branch = get_default_branch(staging_dir).await?;
     reset_to_origin_head(staging_dir, &branch).await
 }
@@ -97,6 +110,38 @@ async fn reset_to_branch(plugin_dir: &Path, branch: &str) -> Result<std::process
     .await
 }
 
+async fn checkout_install_source(plugin_dir: &Path, install_source: &InstallSource) -> Result<()> {
+    let InstallSource::TaggedVersion(version) = install_source else {
+        return Ok(());
+    };
+    let tag = version_tag(version)?;
+    run_git_checked(
+        ["checkout", "--detach", tag.as_str()],
+        Some(plugin_dir),
+        "checkout-version",
+    )
+    .await
+    .map(|_| ())
+}
+
+fn version_tag(version: &str) -> Result<String> {
+    if !is_safe_ref_component(version) {
+        anyhow::bail!("invalid plugin version ref: {}", version);
+    }
+    Ok(format!("v{}", version))
+}
+
+fn is_safe_ref_component(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.chars().all(|ch| {
+            ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' || ch == '_' || ch == '+'
+        })
+        && !value.starts_with('-')
+        && !value.starts_with('.')
+        && !value.contains("..")
+}
+
 fn is_safe_branch_name(branch: &str) -> bool {
     !branch.is_empty()
         && branch.len() <= 256
@@ -144,6 +189,19 @@ mod tests {
                 "should be invalid: {:?}",
                 branch
             );
+        }
+    }
+
+    #[test]
+    fn version_tag_cases() {
+        let valid = [("1.2.3", "v1.2.3"), ("1.2.3-beta.1", "v1.2.3-beta.1")];
+        for (input, expected) in valid {
+            assert_eq!(version_tag(input).unwrap(), expected);
+        }
+
+        let invalid = ["", "../x", "has space", ".hidden", "-leading"];
+        for input in invalid {
+            assert!(version_tag(input).is_err(), "input: {input}");
         }
     }
 }

@@ -6,7 +6,7 @@ use std::path::Path;
 pub(super) async fn download_dependency_binary(plan: &DependencyPlan<'_>) -> Result<bool> {
     log::info!("Fetching {} from {}", plan.asset_name, plan.dependency.repo);
 
-    let release = match fetch_latest_release(&plan.dependency.repo).await {
+    let release = match fetch_release(&plan.dependency.repo, plan.release_tag.as_deref()).await {
         Ok(release) => release,
         Err(error) => return release_fetch_fallback(plan, &error),
     };
@@ -53,10 +53,20 @@ struct GitHubAsset {
     browser_download_url: String,
 }
 
-async fn fetch_latest_release(repo: &str) -> Result<GitHubRelease> {
-    let url = format!("https://api.github.com/repos/{}/releases/latest", repo);
+async fn fetch_release(repo: &str, release_tag: Option<&str>) -> Result<GitHubRelease> {
+    let url = release_url(repo, release_tag);
     let response = github_request(&url).await?;
     Ok(response.json().await?)
+}
+
+fn release_url(repo: &str, release_tag: Option<&str>) -> String {
+    let Some(release_tag) = release_tag else {
+        return format!("https://api.github.com/repos/{}/releases/latest", repo);
+    };
+    format!(
+        "https://api.github.com/repos/{}/releases/tags/{}",
+        repo, release_tag
+    )
 }
 
 async fn download_asset(url: &str, dest: &Path) -> Result<()> {
@@ -68,7 +78,7 @@ async fn download_asset(url: &str, dest: &Path) -> Result<()> {
 
 async fn github_request(url: &str) -> Result<reqwest::Response> {
     let client = reqwest::Client::new();
-    let token = super::super::super::github::get_stored_token();
+    let token = crate::credentials::github_bearer_token();
     let request = super::super::super::github::build_github_request(&client, url, token.as_deref());
     super::super::super::github::send_checked(request).await
 }

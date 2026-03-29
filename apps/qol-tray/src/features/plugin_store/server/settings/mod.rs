@@ -1,4 +1,3 @@
-mod config_export_handlers;
 mod github_token_handlers;
 mod hotkey_handlers;
 mod http_json;
@@ -56,9 +55,5 @@ pub(super) fn routes() -> Router<AppState> {
             axum::routing::delete(shortcut_handlers::delete_shortcut),
         )
         .route("/shortcuts/{id}/run", post(shortcut_handlers::run_shortcut))
-        .route("/config/export", get(config_export_handlers::export_config))
-        .route(
-            "/config/import",
-            post(config_export_handlers::import_config),
-        )
+        .merge(crate::features::profile::http::routes())
 }
