@@ -1,20 +1,15 @@
-const DEFAULT_BRANCH = 'main';
 const DEFAULT_PROVIDER = 'github';
 const FIELD_SECTION_BASIC = 'basic';
 const FIELD_SECTION_ADVANCED = 'advanced';
 const FIELD_KIND_SELECT = 'select';
 const FIELD_KIND_PASSWORD = 'password';
-const FIELD_OPTIONS_GITHUB_BRANCHES = 'github_branches';
 
 export function createSyncForm(syncStatus) {
     return {
         provider: syncStatus?.provider || DEFAULT_PROVIDER,
-        token: '',
-        repo_url: syncStatus?.repo_url || '',
+        gist_id: syncStatus?.gist_id || '',
         folder_path: syncStatus?.folder_path || '',
-        branch: syncStatus?.branch || DEFAULT_BRANCH,
         path: syncStatus?.path || '',
-        commit_message: syncStatus?.commit_message || '',
         pull_on_launch: syncStatus?.pull_on_launch ?? true,
         push_on_change: syncStatus?.push_on_change ?? true,
     };
@@ -41,13 +36,6 @@ export function providerFields(provider, section) {
         return [];
     }
     return provider.fields.filter(field => field.section === section);
-}
-
-export function providerUsesBranchOptions(provider) {
-    if (!provider?.fields) {
-        return false;
-    }
-    return provider.fields.some(field => field.options_source === FIELD_OPTIONS_GITHUB_BRANCHES);
 }
 
 export function providerFallbackLabel(kind) {
@@ -86,16 +74,10 @@ export function fieldHint(field) {
 }
 
 export function fieldPlaceholder(field, syncStatus) {
-    if (field.key === 'token' && syncStatus?.has_github_token) {
-        return 'Stored PAT on file';
-    }
     return field.placeholder || '';
 }
 
-export function fieldOptions(field, form, branchOptions) {
-    if (field.options_source === FIELD_OPTIONS_GITHUB_BRANCHES) {
-        return branchOptions;
-    }
+export function fieldOptions(field, form) {
     const value = fieldValue(form, field.key);
     if (value) {
         return [value];
@@ -103,10 +85,7 @@ export function fieldOptions(field, form, branchOptions) {
     return [];
 }
 
-export function fieldLabels(field, options, form) {
-    if (field.options_source === FIELD_OPTIONS_GITHUB_BRANCHES) {
-        return branchLabels(options, fieldValue(form, field.key));
-    }
+export function fieldLabels(field, options) {
     return Object.fromEntries(options.map(option => [option, option]));
 }
 
@@ -125,63 +104,9 @@ export function buildConnectPayload(form, provider) {
     return payload;
 }
 
-export function defaultBranchOptions(...values) {
-    const next = [];
-    for (const value of values) {
-        const trimmed = typeof value === 'string' ? value.trim() : '';
-        if (!trimmed) {
-            continue;
-        }
-        if (next.includes(trimmed)) {
-            continue;
-        }
-        next.push(trimmed);
-    }
-    if (next.length > 0) {
-        return next;
-    }
-    return [DEFAULT_BRANCH];
-}
-
-export function branchLabels(options, selectedBranch) {
-    const defaultBranch = options[0] || DEFAULT_BRANCH;
-    return Object.fromEntries(options.map((branch) => {
-        if (branch === defaultBranch) {
-            return [branch, `${branch} · default`];
-        }
-        if (branch === selectedBranch) {
-            return [branch, `${branch}`];
-        }
-        return [branch, branch];
-    }));
-}
-
-export function adoptDefaultBranch(current, defaultBranch, syncStatus) {
-    if (syncStatus?.configured) {
-        return current;
-    }
-    const nextBranch = defaultBranch?.trim();
-    if (!nextBranch) {
-        return current;
-    }
-    const currentBranch = current.branch?.trim();
-    if (currentBranch && currentBranch !== DEFAULT_BRANCH) {
-        return current;
-    }
-    if (currentBranch === nextBranch) {
-        return current;
-    }
-    return {
-        ...current,
-        branch: nextBranch,
-    };
-}
-
 export {
-    DEFAULT_BRANCH,
     FIELD_KIND_PASSWORD,
     FIELD_KIND_SELECT,
-    FIELD_OPTIONS_GITHUB_BRANCHES,
     FIELD_SECTION_ADVANCED,
     FIELD_SECTION_BASIC,
 };

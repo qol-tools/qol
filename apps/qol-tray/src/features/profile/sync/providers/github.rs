@@ -1,17 +1,18 @@
 use anyhow::{anyhow, Result};
-use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 use super::{ProviderError, RemoteDocument};
-use crate::features::profile::sync::{GitHubSyncConnection, SyncBranchList};
+use crate::features::profile::sync::GitHubSyncConnection;
+
+const PROFILE_FILENAME: &str = "qol-tray-profile.json";
+const GIST_DESCRIPTION: &str = "QoL Tray Profile Sync";
 
 pub(super) fn validate_connection(connection: &GitHubSyncConnection) -> Result<()> {
-    parse_github_repo(&connection.repo_url)?;
-    if !is_safe_branch(&connection.branch) {
-        anyhow::bail!("Invalid branch");
+    if connection.gist_id.is_empty() {
+        anyhow::bail!("Gist ID is required");
     }
-    if !super::is_safe_remote_path(&connection.path) {
-        anyhow::bail!("Invalid remote path");
+    if !is_safe_gist_id(&connection.gist_id) {
+        anyhow::bail!("Invalid gist ID");
     }
     Ok(())
 }
@@ -27,174 +28,17 @@ pub(super) fn resolve_github_token(github_token: Option<&str>) -> Result<String>
         return Ok(token.to_string());
     }
     crate::credentials::github_bearer_token()
-        .ok_or_else(|| anyhow!("GitHub credential is not configured"))
+        .ok_or_else(|| anyhow!("GitHub account is not connected"))
 }
 
-pub(super) fn normalize_repo_url(repo_url: &str) -> Result<String> {
-    let trimmed = repo_url.trim();
-    if trimmed.is_empty() {
-        anyhow::bail!("Repo URL cannot be empty");
-    }
-    parse_github_repo(trimmed)?;
-    Ok(trimmed.to_string())
-}
-
-pub(super) fn normalize_requested_branch(branch: &str) -> Result<Option<String>> {
-    let trimmed = branch.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-    if !is_safe_branch(trimmed) {
-        anyhow::bail!("Invalid branch");
-    }
-    Ok(Some(trimmed.to_string()))
-}
-
-pub(super) fn parse_github_repo(repo_url: &str) -> Result<(String, String)> {
-    if let Some(rest) = repo_url.strip_prefix("https://github.com/") {
-        return parse_owner_repo(rest);
-    }
-    if let Some(rest) = repo_url.strip_prefix("http://github.com/") {
-        return parse_owner_repo(rest);
-    }
-    if let Some(rest) = repo_url.strip_prefix("git@github.com:") {
-        return parse_owner_repo(rest);
-    }
-    if let Some(rest) = repo_url.strip_prefix("ssh://git@github.com/") {
-        return parse_owner_repo(rest);
-    }
-    if let Some(rest) = repo_url.strip_prefix("ssh://git@ssh.github.com:443/") {
-        return parse_owner_repo(rest);
-    }
-    anyhow::bail!("Repo URL must point to a GitHub repository")
-}
-
-pub(super) async fn fetch_github_default_branch(
+pub(crate) async fn ensure_profile_gist(
     client: &reqwest::Client,
-    repo_url: &str,
     token: &str,
 ) -> std::result::Result<String, ProviderError> {
-    let (owner, repo) =
-        parse_github_repo(repo_url).map_err(|error| ProviderError::Invalid(error.to_string()))?;
-    let url = format!("https://api.github.com/repos/{owner}/{repo}");
-
-    #[derive(Deserialize)]
-    struct ResponseBody {
-        default_branch: String,
+    if let Some(gist_id) = find_profile_gist(client, token).await? {
+        return Ok(gist_id);
     }
-
-    let response = client
-        .get(url)
-        .header("User-Agent", "qol-tray")
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
-        .await
-        .map_err(|error| ProviderError::Upstream(error.to_string()))?;
-
-    let status = response.status();
-    if status == reqwest::StatusCode::NOT_FOUND {
-        return Err(ProviderError::Invalid(
-            "GitHub repository was not found".to_string(),
-        ));
-    }
-    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        let body = response.text().await.unwrap_or_default();
-        return Err(ProviderError::Auth(format!(
-            "GitHub authentication failed: {} {}",
-            status, body
-        )));
-    }
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(ProviderError::Upstream(format!(
-            "GitHub returned {}: {}",
-            status, body
-        )));
-    }
-
-    let body: ResponseBody = response
-        .json()
-        .await
-        .map_err(|error| ProviderError::Upstream(error.to_string()))?;
-    if !is_safe_branch(&body.default_branch) {
-        return Err(ProviderError::Invalid(
-            "GitHub repository returned an invalid default branch".to_string(),
-        ));
-    }
-    Ok(body.default_branch)
-}
-
-pub(super) async fn fetch_github_branches(
-    client: &reqwest::Client,
-    repo_url: &str,
-    token: &str,
-) -> std::result::Result<SyncBranchList, ProviderError> {
-    let default_branch = fetch_github_default_branch(client, repo_url, token).await?;
-    let (owner, repo) =
-        parse_github_repo(repo_url).map_err(|error| ProviderError::Invalid(error.to_string()))?;
-    let url = format!("https://api.github.com/repos/{owner}/{repo}/branches");
-
-    #[derive(Deserialize)]
-    struct ResponseBody {
-        name: String,
-    }
-
-    let response = client
-        .get(url)
-        .query(&[("per_page", "100")])
-        .header("User-Agent", "qol-tray")
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
-        .await
-        .map_err(|error| ProviderError::Upstream(error.to_string()))?;
-
-    let status = response.status();
-    if status == reqwest::StatusCode::NOT_FOUND {
-        return Err(ProviderError::Invalid(
-            "GitHub repository was not found".to_string(),
-        ));
-    }
-    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        let body = response.text().await.unwrap_or_default();
-        return Err(ProviderError::Auth(format!(
-            "GitHub authentication failed: {} {}",
-            status, body
-        )));
-    }
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(ProviderError::Upstream(format!(
-            "GitHub returned {}: {}",
-            status, body
-        )));
-    }
-
-    let body: Vec<ResponseBody> = response
-        .json()
-        .await
-        .map_err(|error| ProviderError::Upstream(error.to_string()))?;
-    let mut branches = body
-        .into_iter()
-        .filter_map(|branch| {
-            if !is_safe_branch(&branch.name) {
-                return None;
-            }
-            Some(branch.name)
-        })
-        .collect::<Vec<_>>();
-    if !branches.iter().any(|branch| branch == &default_branch) {
-        branches.push(default_branch.clone());
-    }
-    branches.sort();
-    if let Some(index) = branches.iter().position(|branch| branch == &default_branch) {
-        let branch = branches.remove(index);
-        branches.insert(0, branch);
-    }
-
-    Ok(SyncBranchList {
-        default_branch,
-        branches,
-    })
+    create_profile_gist(client, token).await
 }
 
 pub(super) async fn fetch_remote_document(
@@ -202,15 +46,9 @@ pub(super) async fn fetch_remote_document(
     connection: &GitHubSyncConnection,
     token: &str,
 ) -> std::result::Result<Option<RemoteDocument>, ProviderError> {
-    let (owner, repo) = parse_github_repo(&connection.repo_url)
-        .map_err(|error| ProviderError::Invalid(error.to_string()))?;
-    let url = format!(
-        "https://api.github.com/repos/{owner}/{repo}/contents/{}",
-        connection.path
-    );
+    let url = format!("https://api.github.com/gists/{}", connection.gist_id);
     let response = client
         .get(url)
-        .query(&[("ref", connection.branch.as_str())])
         .header("User-Agent", "qol-tray")
         .header("Authorization", format!("Bearer {}", token))
         .send()
@@ -236,32 +74,17 @@ pub(super) async fn fetch_remote_document(
         )));
     }
 
-    #[derive(Deserialize)]
-    struct ResponseBody {
-        sha: String,
-        content: String,
-        encoding: String,
-    }
-
-    let body: ResponseBody = response
+    let body: GistResponse = response
         .json()
         .await
         .map_err(|error| ProviderError::Upstream(error.to_string()))?;
-    if body.encoding != "base64" {
-        return Err(ProviderError::Invalid(format!(
-            "Unsupported GitHub content encoding: {}",
-            body.encoding
-        )));
-    }
-    let decoded = base64::engine::general_purpose::STANDARD
-        .decode(body.content.replace('\n', ""))
-        .map_err(|error| ProviderError::Invalid(error.to_string()))?;
-    let content =
-        String::from_utf8(decoded).map_err(|error| ProviderError::Invalid(error.to_string()))?;
-    Ok(Some(RemoteDocument {
-        revision: body.sha,
-        content,
-    }))
+
+    let Some(file) = body.files.get(PROFILE_FILENAME) else {
+        return Ok(None);
+    };
+    let content = file.content.clone().unwrap_or_default();
+    let revision = gist_revision(&body.history);
+    Ok(Some(RemoteDocument { revision, content }))
 }
 
 pub(super) async fn push_remote_document(
@@ -271,42 +94,27 @@ pub(super) async fn push_remote_document(
     content: &str,
     remote_revision: Option<&str>,
 ) -> std::result::Result<String, ProviderError> {
-    let (owner, repo) = parse_github_repo(&connection.repo_url)
-        .map_err(|error| ProviderError::Invalid(error.to_string()))?;
-    let url = format!(
-        "https://api.github.com/repos/{owner}/{repo}/contents/{}",
-        connection.path
-    );
-
-    #[derive(Serialize)]
-    struct RequestBody<'a> {
-        message: &'a str,
-        content: String,
-        branch: &'a str,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        sha: Option<&'a str>,
+    if let Some(expected) = remote_revision {
+        let current = fetch_current_revision(client, &connection.gist_id, token).await?;
+        if current != expected {
+            return Err(ProviderError::Conflict(
+                "Gist was modified since last sync".to_string(),
+            ));
+        }
     }
 
-    #[derive(Deserialize)]
-    struct ResponseBody {
-        content: ContentBody,
-    }
-
-    #[derive(Deserialize)]
-    struct ContentBody {
-        sha: String,
-    }
-
+    let url = format!("https://api.github.com/gists/{}", connection.gist_id);
     let response = client
-        .put(url)
+        .patch(url)
         .header("User-Agent", "qol-tray")
         .header("Authorization", format!("Bearer {}", token))
-        .json(&RequestBody {
-            message: &connection.commit_message,
-            content: base64::engine::general_purpose::STANDARD.encode(content.as_bytes()),
-            branch: &connection.branch,
-            sha: remote_revision,
-        })
+        .json(&serde_json::json!({
+            "files": {
+                PROFILE_FILENAME: {
+                    "content": content,
+                }
+            }
+        }))
         .send()
         .await
         .map_err(|error| ProviderError::Upstream(error.to_string()))?;
@@ -319,11 +127,142 @@ pub(super) async fn push_remote_document(
             status, body
         )));
     }
-    if status == reqwest::StatusCode::CONFLICT {
+    if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        return Err(ProviderError::Conflict(format!(
-            "GitHub reported a sync conflict: {}",
-            body
+        return Err(ProviderError::Upstream(format!(
+            "GitHub returned {}: {}",
+            status, body
+        )));
+    }
+
+    let body: GistResponse = response
+        .json()
+        .await
+        .map_err(|error| ProviderError::Upstream(error.to_string()))?;
+    Ok(gist_revision(&body.history))
+}
+
+async fn find_profile_gist(
+    client: &reqwest::Client,
+    token: &str,
+) -> std::result::Result<Option<String>, ProviderError> {
+    for page in 1..=3 {
+        let response = client
+            .get("https://api.github.com/gists")
+            .query(&[("per_page", "100"), ("page", &page.to_string())])
+            .header("User-Agent", "qol-tray")
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+            .map_err(|error| ProviderError::Upstream(error.to_string()))?;
+
+        let gists: Vec<GistListEntry> = parse_github_response(response).await?;
+        if gists.is_empty() {
+            break;
+        }
+        for gist in &gists {
+            if gist.files.contains_key(PROFILE_FILENAME) {
+                return Ok(Some(gist.id.clone()));
+            }
+        }
+    }
+    Ok(None)
+}
+
+async fn create_profile_gist(
+    client: &reqwest::Client,
+    token: &str,
+) -> std::result::Result<String, ProviderError> {
+    #[derive(Serialize)]
+    struct RequestBody {
+        description: &'static str,
+        public: bool,
+        files: std::collections::HashMap<&'static str, FileContent>,
+    }
+
+    #[derive(Serialize)]
+    struct FileContent {
+        content: &'static str,
+    }
+
+    let mut files = std::collections::HashMap::new();
+    files.insert(PROFILE_FILENAME, FileContent { content: "{}" });
+
+    let response = client
+        .post("https://api.github.com/gists")
+        .header("User-Agent", "qol-tray")
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&RequestBody {
+            description: GIST_DESCRIPTION,
+            public: false,
+            files,
+        })
+        .send()
+        .await
+        .map_err(|error| ProviderError::Upstream(error.to_string()))?;
+
+    let body: GistResponse = parse_github_response(response).await?;
+    Ok(body.id)
+}
+
+async fn fetch_current_revision(
+    client: &reqwest::Client,
+    gist_id: &str,
+    token: &str,
+) -> std::result::Result<String, ProviderError> {
+    let url = format!("https://api.github.com/gists/{gist_id}");
+    let response = client
+        .get(url)
+        .header("User-Agent", "qol-tray")
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|error| ProviderError::Upstream(error.to_string()))?;
+
+    let body: GistResponse = parse_github_response(response).await?;
+    Ok(gist_revision(&body.history))
+}
+
+#[derive(Deserialize)]
+struct GistResponse {
+    id: String,
+    files: std::collections::HashMap<String, GistFile>,
+    #[serde(default)]
+    history: Vec<GistHistoryEntry>,
+}
+
+#[derive(Deserialize)]
+struct GistFile {
+    content: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GistHistoryEntry {
+    version: String,
+}
+
+#[derive(Deserialize)]
+struct GistListEntry {
+    id: String,
+    files: std::collections::HashMap<String, serde_json::Value>,
+}
+
+fn gist_revision(history: &[GistHistoryEntry]) -> String {
+    history
+        .first()
+        .map(|entry| entry.version.clone())
+        .unwrap_or_default()
+}
+
+async fn parse_github_response<T: serde::de::DeserializeOwned>(
+    response: reqwest::Response,
+) -> std::result::Result<T, ProviderError> {
+    let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        let body = response.text().await.unwrap_or_default();
+        return Err(ProviderError::Auth(format!(
+            "GitHub authentication failed: {} {}",
+            status, body
         )));
     }
     if !status.is_success() {
@@ -333,46 +272,78 @@ pub(super) async fn push_remote_document(
             status, body
         )));
     }
-
-    let body: ResponseBody = response
+    response
         .json()
         .await
-        .map_err(|error| ProviderError::Upstream(error.to_string()))?;
-    Ok(body.content.sha)
+        .map_err(|error| ProviderError::Upstream(error.to_string()))
 }
 
-fn parse_owner_repo(raw: &str) -> Result<(String, String)> {
-    let trimmed = raw.trim_matches('/');
-    let trimmed = trimmed.strip_suffix(".git").unwrap_or(trimmed);
-    let mut parts = trimmed.split('/');
-    let owner = parts.next().unwrap_or_default();
-    let repo = parts.next().unwrap_or_default();
-    if parts.next().is_some() {
-        anyhow::bail!("Repo URL must only include owner and repo");
-    }
-    if !is_safe_repo_part(owner) || !is_safe_repo_part(repo) {
-        anyhow::bail!("Repo URL contains an invalid owner or repo");
-    }
-    Ok((owner.to_string(), repo.to_string()))
+fn is_safe_gist_id(value: &str) -> bool {
+    !value.is_empty() && value.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
-fn is_safe_repo_part(value: &str) -> bool {
-    if value.is_empty() {
-        return false;
-    }
-    value
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.')
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
 
-fn is_safe_branch(value: &str) -> bool {
-    if value.is_empty() {
-        return false;
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(200))]
+
+        #[test]
+        fn prop_safe_gist_id_accepts_hex(id in "[0-9a-fA-F]{1,40}") {
+            assert!(is_safe_gist_id(&id));
+        }
+
+        #[test]
+        fn prop_safe_gist_id_rejects_non_hex(id in "[^0-9a-fA-F]+") {
+            assert!(!is_safe_gist_id(&id));
+        }
+
+        #[test]
+        fn prop_validate_connection_rejects_empty_gist_id(
+            pull in proptest::bool::ANY,
+            push in proptest::bool::ANY,
+        ) {
+            let connection = GitHubSyncConnection {
+                gist_id: String::new(),
+                pull_on_launch: pull,
+                push_on_change: push,
+            };
+            assert!(validate_connection(&connection).is_err());
+        }
+
+        #[test]
+        fn prop_validate_connection_accepts_valid_gist_id(
+            id in "[0-9a-f]{20,40}",
+            pull in proptest::bool::ANY,
+            push in proptest::bool::ANY,
+        ) {
+            let connection = GitHubSyncConnection {
+                gist_id: id,
+                pull_on_launch: pull,
+                push_on_change: push,
+            };
+            assert!(validate_connection(&connection).is_ok());
+        }
     }
-    if value.contains("..") || value.contains('\\') {
-        return false;
+
+    #[test]
+    fn safe_gist_id_edge_cases() {
+        let cases = [
+            ("", false),
+            ("a", true),
+            ("0", true),
+            ("abc123def456", true),
+            ("ABC123", true),
+            ("abc 123", false),
+            ("abc\n", false),
+            ("abc/def", false),
+            ("abc..def", false),
+            ("ghijkl", false), // g-z are not hex
+        ];
+        for (input, expected) in cases {
+            assert_eq!(is_safe_gist_id(input), expected, "input: {input:?}");
+        }
     }
-    value
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '/' || ch == '.')
 }

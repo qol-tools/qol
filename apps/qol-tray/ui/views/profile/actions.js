@@ -17,8 +17,10 @@ export async function fetchSyncProviders() {
     return apiJson('/api/sync/providers');
 }
 
-export async function fetchProfileBranches(payload) {
-    return apiJson('/api/sync/github/branches', jsonRequest('POST', payload));
+export async function bootstrapGitHubProfileSync() {
+    const result = await apiJson('/api/sync/github/bootstrap', { method: 'POST' });
+    toast(syncToastKind(result.status?.health), result.message);
+    return result;
 }
 
 export async function connectProfileSync(payload) {

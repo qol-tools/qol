@@ -68,7 +68,7 @@ export function useSurfaceNav({
             });
         }
         add('connect', 'action', {
-            label: connectActionLabel(configured),
+            label: connectActionLabel(configured, form.provider),
             variant: 'btn-primary',
             run: syncBusy ? null : handleConnect,
         });
@@ -160,7 +160,7 @@ export function useSurfaceNav({
         }
         next.unshift({
             id: 'profile:connect',
-            label: configured ? 'Save cloud sync' : 'Connect cloud sync',
+            label: connectActionLabel(configured, form.provider),
             run: handleConnect,
         });
         return next;
@@ -174,6 +174,7 @@ export function useSurfaceNav({
         handlePull,
         handlePush,
         incident,
+        form.provider,
     ]);
 
     return {

@@ -33,10 +33,7 @@ where
         .route("/config/import", post(import_export::import_config))
         .route("/sync/providers", get(sync::get_sync_providers))
         .route("/sync/status", get(sync::get_sync_status))
-        .route(
-            "/sync/github/branches",
-            post(sync::list_sync_github_branches),
-        )
+        .route("/sync/github/bootstrap", post(sync::bootstrap_sync_github))
         .route("/sync/connect", post(sync::connect_sync))
         .route("/sync/pull", post(sync::pull_sync))
         .route("/sync/push", post(sync::push_sync))

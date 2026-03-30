@@ -6,9 +6,8 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use super::platform::open_dir;
 use super::providers::{
-    fetch_github_branches, fetch_github_default_branch, normalize_commit_message,
-    normalize_folder_path, normalize_path, normalize_repo_url, normalize_requested_branch,
-    sync_provider_definitions, validate_github_token, ProviderError, RemoteDocument,
+    ensure_profile_gist, normalize_folder_path, normalize_path, sync_provider_definitions,
+    validate_github_token, ProviderError, RemoteDocument,
 };
 use super::state::{
     backup_file_path, build_status, ensure_sync_dirs, filename_string, hash_text, incident_kind,
@@ -16,8 +15,8 @@ use super::state::{
     sanitize_reason, save_state_file, PullMode, SyncStateFile,
 };
 use super::types::{
-    GitHubSyncConnection, SyncActionResult, SyncBackupEntry, SyncBackupPreview, SyncBranchList,
-    SyncBranchListRequest, SyncConnectRequest, SyncConnection, SyncProviderDefinition,
+    SyncActionResult, SyncBackupEntry, SyncBackupPreview, SyncConnectRequest, SyncConnection,
+    SyncProviderDefinition,
 };
 use super::AUTO_PUSH_INTERVAL_SECS;
 
@@ -25,26 +24,12 @@ impl SyncConnectRequest {
     async fn prepare(self, service: &SyncService) -> Result<PreparedSyncConnectRequest> {
         match self {
             Self::Github {
-                token,
-                repo_url,
-                branch,
-                path,
-                commit_message,
+                gist_id,
                 pull_on_launch,
                 push_on_change,
             } => {
                 service
-                    .prepare_github_connect(
-                        token,
-                        GitHubSyncConnection {
-                            repo_url,
-                            branch,
-                            path,
-                            commit_message,
-                            pull_on_launch,
-                            push_on_change,
-                        },
-                    )
+                    .prepare_github_connect(gist_id, pull_on_launch, push_on_change)
                     .await
             }
             Self::Folder {
@@ -61,8 +46,6 @@ impl SyncConnectRequest {
 struct PreparedSyncConnectRequest {
     connection: SyncConnection,
     github_token: Option<String>,
-    persist_github_token: Option<String>,
-    previous_github_token: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -142,6 +125,20 @@ impl SyncService {
         }
     }
 
+    pub async fn bootstrap_github_connect(&self) -> Result<SyncActionResult> {
+        let token = crate::features::github_auth::oauth_access_token()
+            .context("GitHub account is not connected")?;
+        let gist_id = ensure_profile_gist(&self.client, &token)
+            .await
+            .map_err(|error| anyhow!(error.to_string()))?;
+        self.connect(SyncConnectRequest::Github {
+            gist_id,
+            pull_on_launch: true,
+            push_on_change: true,
+        })
+        .await
+    }
+
     pub async fn disconnect(&self) -> Result<SyncActionResult> {
         let _operation = self.operation_lock.lock().await;
         {
@@ -204,17 +201,15 @@ impl SyncService {
                 .state
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if state.incident.is_some() {
-                return Ok(self.noop("Cloud sync is waiting for acknowledgement"));
+            if state.incident.is_some() || state.last_error.is_some() {
+                false
+            } else {
+                state
+                    .connection
+                    .as_ref()
+                    .map(SyncConnection::push_on_change)
+                    .unwrap_or(false)
             }
-            if state.last_error.is_some() {
-                return Ok(self.noop("Cloud sync is blocked by an error"));
-            }
-            state
-                .connection
-                .as_ref()
-                .map(SyncConnection::push_on_change)
-                .unwrap_or(false)
         };
         if !enabled {
             return Ok(self.noop("Cloud sync auto-push is disabled"));
@@ -222,14 +217,15 @@ impl SyncService {
 
         let _operation = self.operation_lock.lock().await;
         let current_hash = self.current_sync_hash()?;
-        {
+        let already_synced = {
             let state = self
                 .state
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if state.last_synced_hash.as_deref() == Some(current_hash.as_str()) {
-                return Ok(self.noop("Cloud sync is already up to date"));
-            }
+            state.last_synced_hash.as_deref() == Some(current_hash.as_str())
+        };
+        if already_synced {
+            return Ok(self.noop("Cloud sync is already up to date"));
         }
 
         match self.push_current_document(None, None).await {
@@ -286,18 +282,6 @@ impl SyncService {
         })
     }
 
-    pub async fn list_github_branches(
-        &self,
-        request: SyncBranchListRequest,
-    ) -> Result<SyncBranchList> {
-        let repo_url = normalize_repo_url(&request.repo_url)?;
-        let token = self.github_auth_token(&request.token)?;
-        match fetch_github_branches(&self.client, &repo_url, &token).await {
-            Ok(branches) => Ok(branches),
-            Err(error) => Err(anyhow!(error)),
-        }
-    }
-
     fn noop(&self, message: &str) -> SyncActionResult {
         SyncActionResult {
             message: message.to_string(),
@@ -306,56 +290,31 @@ impl SyncService {
         }
     }
 
-    fn github_auth_token(&self, request_token: &str) -> Result<String> {
-        let trimmed = request_token.trim();
-        if !trimmed.is_empty() {
-            return Ok(trimmed.to_string());
-        }
-        crate::credentials::github_bearer_token().context("GitHub PAT is required")
-    }
-
     async fn prepare_github_connect(
         &self,
-        request_token: String,
-        connection: GitHubSyncConnection,
+        gist_id: String,
+        pull_on_launch: bool,
+        push_on_change: bool,
     ) -> Result<PreparedSyncConnectRequest> {
-        let GitHubSyncConnection {
-            repo_url,
-            branch,
-            path,
-            commit_message,
-            pull_on_launch,
-            push_on_change,
-        } = connection;
-        let persist_github_token = if request_token.trim().is_empty() {
-            None
-        } else {
-            Some(request_token.trim().to_string())
-        };
-        let previous_github_token = crate::credentials::github_bearer_token();
-        let token = self.github_auth_token(&request_token)?;
+        let token =
+            crate::credentials::github_bearer_token().context("GitHub account is not connected")?;
         if let Err(error) = validate_github_token(&token).await {
             anyhow::bail!(error.to_string());
         }
-        let repo_url = normalize_repo_url(&repo_url)?;
-        let branch = match normalize_requested_branch(&branch)? {
-            Some(branch) => branch,
-            None => fetch_github_default_branch(&self.client, &repo_url, &token)
+        let gist_id = if gist_id.trim().is_empty() {
+            ensure_profile_gist(&self.client, &token)
                 .await
-                .map_err(|error| anyhow!(error.to_string()))?,
+                .map_err(|error| anyhow!(error.to_string()))?
+        } else {
+            gist_id.trim().to_string()
         };
         Ok(PreparedSyncConnectRequest {
             connection: SyncConnection::Github(super::types::GitHubSyncConnection {
-                repo_url,
-                branch,
-                path: normalize_path(&path)?,
-                commit_message: normalize_commit_message(&commit_message),
+                gist_id,
                 pull_on_launch,
                 push_on_change,
             }),
-            github_token: Some(token.clone()),
-            persist_github_token,
-            previous_github_token,
+            github_token: Some(token),
         })
     }
 
@@ -374,8 +333,6 @@ impl SyncService {
                 push_on_change,
             }),
             github_token: None,
-            persist_github_token: None,
-            previous_github_token: None,
         })
     }
 
@@ -548,27 +505,7 @@ impl SyncService {
         prepared: PreparedSyncConnectRequest,
         outcome: SyncOperationOutcome,
     ) -> Result<SyncActionResult> {
-        let PreparedSyncConnectRequest {
-            connection,
-            persist_github_token,
-            previous_github_token,
-            ..
-        } = prepared;
-        if let Some(token) = persist_github_token.as_deref() {
-            crate::credentials::store_github_token(token)?;
-        }
-        if let Err(error) = self.persist_operation_state(Some(connection.clone()), &outcome, None) {
-            if persist_github_token.is_some() {
-                if let Err(restore_error) =
-                    restore_previous_github_token(previous_github_token.as_deref())
-                {
-                    return Err(anyhow!(
-                        "Failed to persist sync state: {error}; failed to restore GitHub credential: {restore_error}"
-                    ));
-                }
-            }
-            return Err(error);
-        }
+        self.persist_operation_state(Some(prepared.connection), &outcome, None)?;
         Ok(self.operation_result(&outcome))
     }
 
@@ -707,13 +644,6 @@ fn should_resolve_push_conflict(
         return false;
     }
     remote_revision != stored_revision
-}
-
-fn restore_previous_github_token(previous_github_token: Option<&str>) -> Result<()> {
-    if let Some(token) = previous_github_token {
-        return crate::credentials::store_github_token(token);
-    }
-    crate::credentials::delete_github_token()
 }
 
 #[cfg(test)]

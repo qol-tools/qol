@@ -34,6 +34,15 @@ pub(crate) async fn connect_sync(
     }
 }
 
+pub(crate) async fn bootstrap_sync_github(
+    State(state): State<super::ProfileHttpState>,
+) -> impl IntoResponse {
+    match state.sync_service.bootstrap_github_connect().await {
+        Ok(result) => sync_result_response(&state, result),
+        Err(error) => sync_error_response(error),
+    }
+}
+
 pub(crate) async fn pull_sync(State(state): State<super::ProfileHttpState>) -> impl IntoResponse {
     match state.sync_service.manual_pull().await {
         Ok(result) => sync_result_response(&state, result),
@@ -94,22 +103,6 @@ pub(crate) async fn preview_sync_backup(
     }
 }
 
-pub(crate) async fn list_sync_github_branches(
-    State(state): State<super::ProfileHttpState>,
-    body: Bytes,
-) -> impl IntoResponse {
-    let request =
-        match super::parse_json_body::<crate::features::profile::sync::SyncBranchListRequest>(body)
-        {
-            Ok(request) => request,
-            Err(response) => return *response,
-        };
-    match state.sync_service.list_github_branches(request).await {
-        Ok(branches) => Json(branches).into_response(),
-        Err(error) => sync_error_response(error),
-    }
-}
-
 fn sync_result_response(
     state: &super::ProfileHttpState,
     result: crate::features::profile::sync::SyncActionResult,
@@ -137,6 +130,7 @@ fn looks_like_bad_request(message: &str) -> bool {
     normalized.contains("required")
         || normalized.contains("invalid")
         || normalized.contains("not configured")
+        || normalized.contains("not connected")
         || normalized.contains("cannot be empty")
         || normalized.contains("unsupported")
 }

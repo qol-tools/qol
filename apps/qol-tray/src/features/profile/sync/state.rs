@@ -21,7 +21,7 @@ pub(crate) struct SyncStateFile {
     pub(crate) last_error: Option<String>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum PullMode {
     Launch,
     Manual,
@@ -50,24 +50,16 @@ pub(crate) fn build_status(state: &SyncStateFile) -> SyncStatus {
             .map(super::types::SyncConnection::target_summary)
             .filter(|value| !value.is_empty()),
         health,
-        repo_url: connection
-            .and_then(super::types::SyncConnection::repo_url)
+        gist_id: connection
+            .and_then(super::types::SyncConnection::gist_id)
             .map(str::to_string)
             .filter(|value| !value.is_empty()),
         folder_path: connection
             .and_then(super::types::SyncConnection::folder_path)
             .map(str::to_string)
             .filter(|value| !value.is_empty()),
-        branch: connection
-            .and_then(super::types::SyncConnection::branch)
-            .map(str::to_string)
-            .filter(|value| !value.is_empty()),
         path: connection
-            .map(super::types::SyncConnection::path)
-            .map(str::to_string)
-            .filter(|value| !value.is_empty()),
-        commit_message: connection
-            .and_then(super::types::SyncConnection::commit_message)
+            .and_then(super::types::SyncConnection::path)
             .map(str::to_string)
             .filter(|value| !value.is_empty()),
         pull_on_launch: connection
@@ -252,11 +244,11 @@ pub(crate) fn incident_kind(mode: PullMode) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::features::profile::sync::DEFAULT_PATH;
     use crate::features::profile::sync::{
         GitHubSyncConnection, LocalFolderSyncConnection, SyncConnection, SyncHealth, SyncIncident,
         SyncProviderKind,
     };
-    use crate::features::profile::sync::{DEFAULT_COMMIT_MESSAGE, DEFAULT_PATH};
 
     #[test]
     fn build_status_uses_gray_green_yellow_red_model() {
@@ -265,10 +257,7 @@ mod tests {
 
         let healthy = SyncStateFile {
             connection: Some(SyncConnection::Github(GitHubSyncConnection {
-                repo_url: "https://github.com/qol-tools/qol-tray".to_string(),
-                branch: "main".to_string(),
-                path: DEFAULT_PATH.to_string(),
-                commit_message: DEFAULT_COMMIT_MESSAGE.to_string(),
+                gist_id: "abc123def456".to_string(),
                 pull_on_launch: true,
                 push_on_change: true,
             })),
@@ -317,9 +306,169 @@ mod tests {
             status.target_summary.as_deref(),
             Some(target_string.as_str())
         );
-        assert_eq!(status.repo_url, None);
-        assert_eq!(status.branch, None);
-        assert_eq!(status.commit_message, None);
+        assert_eq!(status.gist_id, None);
         assert_eq!(status.folder_path.as_deref(), Some(folder_string.as_str()));
+    }
+
+    #[test]
+    fn build_status_health_priority_error_overrides_incident() {
+        let state = SyncStateFile {
+            connection: Some(SyncConnection::Github(GitHubSyncConnection {
+                gist_id: "abc123".to_string(),
+                pull_on_launch: true,
+                push_on_change: true,
+            })),
+            incident: Some(SyncIncident {
+                kind: "review".to_string(),
+                message: "needs review".to_string(),
+                backup_file: None,
+                created_at: now_rfc3339(),
+            }),
+            last_error: Some("something broke".to_string()),
+            ..SyncStateFile::default()
+        };
+        assert_eq!(build_status(&state).health, SyncHealth::Error);
+    }
+
+    #[test]
+    fn build_status_configured_matches_connection_presence() {
+        let no_connection = SyncStateFile::default();
+        let with_connection = SyncStateFile {
+            connection: Some(SyncConnection::Github(GitHubSyncConnection {
+                gist_id: "abc123".to_string(),
+                pull_on_launch: true,
+                push_on_change: true,
+            })),
+            ..SyncStateFile::default()
+        };
+        assert!(!build_status(&no_connection).configured);
+        assert!(build_status(&with_connection).configured);
+    }
+
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(200))]
+
+            #[test]
+            fn prop_sanitize_reason_never_empty(input in ".*") {
+                let result = sanitize_reason(&input);
+                assert!(!result.is_empty());
+            }
+
+            #[test]
+            fn prop_sanitize_reason_only_alphanumeric_or_hyphen(input in ".*") {
+                let result = sanitize_reason(&input);
+                if result != "backup" {
+                    assert!(result.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-'));
+                }
+            }
+
+            #[test]
+            fn prop_sanitize_reason_preserves_alphanumeric(input in "[a-zA-Z0-9]+") {
+                assert_eq!(sanitize_reason(&input), input);
+            }
+
+            #[test]
+            fn prop_hash_text_is_64_char_hex(input in ".*") {
+                let hash = hash_text(&input);
+                assert_eq!(hash.len(), 64);
+                assert!(hash.chars().all(|ch| ch.is_ascii_hexdigit()));
+            }
+
+            #[test]
+            fn prop_hash_text_is_deterministic(input in ".*") {
+                assert_eq!(hash_text(&input), hash_text(&input));
+            }
+
+            #[test]
+            fn prop_hash_text_is_lowercase(input in ".*") {
+                let hash = hash_text(&input);
+                assert_eq!(hash, hash.to_lowercase());
+            }
+        }
+    }
+
+    #[test]
+    fn hash_text_different_inputs_produce_different_hashes() {
+        let cases = ["", "a", "ab", "abc", "{}", "null", " ", "\n"];
+        let hashes: Vec<_> = cases.iter().map(|input| hash_text(input)).collect();
+        for (i, a) in hashes.iter().enumerate() {
+            for b in &hashes[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
+    }
+
+    #[test]
+    fn sanitize_reason_edge_cases() {
+        let cases = [
+            ("", "backup"),
+            ("clean", "clean"),
+            ("has spaces", "has-spaces"),
+            ("special!@#$", "special----"),
+            ("123", "123"),
+            ("a", "a"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(sanitize_reason(input), expected, "input: {input:?}");
+        }
+    }
+
+    #[test]
+    fn pull_success_message_covers_all_branches() {
+        let cases = [
+            (PullMode::Connect, true, true, "applied during setup. Local"),
+            (
+                PullMode::Connect,
+                true,
+                false,
+                "applied during setup with warnings",
+            ),
+            (
+                PullMode::Manual,
+                true,
+                true,
+                "applied. Local profile was backed up",
+            ),
+            (
+                PullMode::Manual,
+                true,
+                false,
+                "applied with warnings. Local",
+            ),
+            (PullMode::Launch, false, true, "pulled successfully"),
+            (PullMode::Manual, false, false, "pulled with warnings"),
+        ];
+        for (mode, dirty, success, expected_substring) in cases {
+            let msg = pull_success_message(mode, dirty, success);
+            assert!(
+                msg.contains(expected_substring),
+                "mode={mode:?} dirty={dirty} success={success}: {msg:?} missing {expected_substring:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn incident_kind_maps_all_modes() {
+        assert_eq!(incident_kind(PullMode::Launch), "launch_pull_review");
+        assert_eq!(incident_kind(PullMode::Manual), "manual_pull_review");
+        assert_eq!(incident_kind(PullMode::Connect), "connect_pull_review");
+    }
+
+    #[test]
+    fn pull_noop_message_unique_per_mode() {
+        let messages: Vec<_> = [PullMode::Launch, PullMode::Manual, PullMode::Connect]
+            .iter()
+            .map(|mode| pull_noop_message(*mode))
+            .collect();
+        for (i, a) in messages.iter().enumerate() {
+            assert!(!a.is_empty());
+            for b in &messages[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
     }
 }

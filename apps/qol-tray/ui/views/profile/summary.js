@@ -78,7 +78,10 @@ export function profileRemoteSummary(syncStatus) {
     return `${syncStatus.provider_label || 'Cloud'} · ${syncStatus.target_summary}`;
 }
 
-export function connectActionLabel(configured) {
+export function connectActionLabel(configured, providerKind) {
+    if (providerKind === 'github' && !configured) {
+        return 'Connect GitHub';
+    }
     if (configured) {
         return 'Save and Sync';
     }

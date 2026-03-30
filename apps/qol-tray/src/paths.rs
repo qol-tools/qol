@@ -141,6 +141,10 @@ pub fn github_token_path() -> Result<PathBuf> {
     shared_config_dir().map(|p| p.join(".github-token"))
 }
 
+pub fn github_auth_path() -> Result<PathBuf> {
+    shared_config_dir().map(|p| p.join(".github-auth.json"))
+}
+
 pub fn sync_dir() -> Result<PathBuf> {
     shared_config_dir().map(|p| p.join("sync"))
 }
@@ -250,6 +254,7 @@ mod tests {
             (profile_plugins_lock_path(), "plugins.lock.json"),
             (profile_plugin_configs_dir(), "plugin-configs"),
             (github_token_path(), ".github-token"),
+            (github_auth_path(), ".github-auth.json"),
             (sync_dir(), "sync"),
             (sync_state_path(), "state.json"),
             (sync_backups_dir(), "backups"),
