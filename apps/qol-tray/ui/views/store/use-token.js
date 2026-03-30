@@ -1,55 +1,51 @@
 import { useCallback } from 'preact/hooks';
 import { useStateRef } from '../../hooks/useStateRef.js';
-import { saveStoreToken, deleteStoreToken } from './data.js';
+import { disconnectGitHubAuth, startGitHubAuth, waitForGitHubAuth } from '../../features/github-auth/actions.js';
 import { looksLikeGithubAuthFailure } from './reducer.js';
 import { toast } from '../../lib/toast.js';
 
-export function useTokenOps(tokenInputRef, loadRef) {
+export function useTokenOps(loadRef) {
     const [hasToken, setHasToken, hasTokenRef] = useStateRef(false);
     const [showTokenInput, setShowTokenInput, showTokenInputRef] = useStateRef(false);
     const [rateLimited, setRateLimited] = useStateRef(false);
-    const focusToken = useCallback(() => setTimeout(() => tokenInputRef.current?.focus(), 0), []);
-    const openTokenInput = useCallback(() => { setShowTokenInput(true); focusToken(); }, [focusToken]);
-    const closeTokenInput = useCallback(() => setShowTokenInput(false), []);
-    const saveToken = useSaveToken(tokenInputRef, loadRef, setHasToken, setShowTokenInput, setRateLimited);
-    const deleteToken = useDeleteToken(setHasToken, setShowTokenInput);
-    const onLoadResult = useLoadResultHandler(setShowTokenInput, setRateLimited, openTokenInput);
-    return {
-        hasTokenRef, setHasToken, showTokenInputRef, onLoadResult,
-        view: { hasToken, showTokenInput, rateLimited, openTokenInput, closeTokenInput, saveToken, deleteToken }
-    };
-}
-
-function useSaveToken(tokenInputRef, loadRef, setHasToken, setShowTokenInput, setRateLimited) {
-    return useCallback(async () => {
-        const input = tokenInputRef.current;
-        const value = input?.value?.trim();
-        if (!value) { toast('error', 'Token cannot be empty'); return; }
+    const openTokenInput = useCallback(async () => {
         try {
-            await saveStoreToken(value);
-            setHasToken(true); setShowTokenInput(false); setRateLimited(false);
-            toast('success', 'GitHub token saved');
+            const start = await startGitHubAuth();
+            try { await navigator.clipboard.writeText(start.user_code); } catch (_) {}
+            toast('info', `Code: ${start.user_code} — paste it on GitHub`);
+            window.open(start.verification_uri, '_blank');
+            await waitForGitHubAuth(start.session_id, start.interval);
+            setHasToken(true);
+            setShowTokenInput(false);
+            setRateLimited(false);
+            toast('success', 'GitHub connected');
             loadRef.current?.({ hasToken: true });
         } catch (error) {
-            toast('error', `Failed to save token: ${error.message}`);
-            input?.focus(); input?.select();
+            toast('error', `Failed to connect GitHub: ${error.message}`);
         }
-    }, [tokenInputRef, loadRef, setHasToken, setShowTokenInput, setRateLimited]);
+    }, [loadRef, setHasToken, setRateLimited, setShowTokenInput]);
+    const closeTokenInput = useCallback(() => setShowTokenInput(false), []);
+    const deleteToken = useDeleteToken(setHasToken, setShowTokenInput);
+    const onLoadResult = useLoadResultHandler(setShowTokenInput, setRateLimited);
+    return {
+        hasTokenRef, setHasToken, showTokenInputRef, onLoadResult,
+        view: { hasToken, showTokenInput, rateLimited, openTokenInput, closeTokenInput, saveToken: openTokenInput, deleteToken }
+    };
 }
 
 function useDeleteToken(setHasToken, setShowTokenInput) {
     return useCallback(async () => {
         try {
-            await deleteStoreToken();
+            await disconnectGitHubAuth();
             setHasToken(false); setShowTokenInput(false);
-            toast('success', 'GitHub token removed');
+            toast('success', 'GitHub disconnected');
         } catch (error) {
-            toast('error', `Failed to delete token: ${error.message}`);
+            toast('error', `Failed to disconnect GitHub: ${error.message}`);
         }
     }, [setHasToken, setShowTokenInput]);
 }
 
-function useLoadResultHandler(setShowTokenInput, setRateLimited, openTokenInput) {
+function useLoadResultHandler(setShowTokenInput, setRateLimited) {
     return useCallback(result => {
         if (result.data) {
             setRateLimited(result.data.rateLimited);
@@ -58,9 +54,8 @@ function useLoadResultHandler(setShowTokenInput, setRateLimited, openTokenInput)
         if (result.error) {
             if (looksLikeGithubAuthFailure(result.error?.message)) {
                 setRateLimited(true);
-                openTokenInput();
             }
             toast('error', `Failed to load plugins: ${result.error.message}`);
         }
-    }, [setShowTokenInput, setRateLimited, openTokenInput]);
+    }, [setShowTokenInput, setRateLimited]);
 }

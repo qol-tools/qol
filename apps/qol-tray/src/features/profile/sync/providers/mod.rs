@@ -4,11 +4,10 @@ mod folder;
 mod github;
 
 use super::types::{
-    SyncBranchList, SyncConnection, SyncProviderDefinition, SyncProviderFieldDefinition,
-    SyncProviderFieldKey, SyncProviderFieldKind, SyncProviderFieldOptionsSource,
-    SyncProviderFieldSection, SyncProviderKind,
+    SyncConnection, SyncProviderDefinition, SyncProviderFieldDefinition, SyncProviderFieldKey,
+    SyncProviderFieldKind, SyncProviderFieldSection, SyncProviderKind,
 };
-use super::{DEFAULT_COMMIT_MESSAGE, DEFAULT_PATH};
+use super::DEFAULT_PATH;
 
 #[derive(Debug, Clone)]
 pub(crate) struct RemoteDocument {
@@ -20,6 +19,7 @@ pub(crate) struct RemoteDocument {
 pub(crate) enum ProviderError {
     Auth(String),
     Conflict(String),
+    #[expect(dead_code)]
     Invalid(String),
     Upstream(String),
 }
@@ -54,16 +54,16 @@ impl SyncConnection {
 
     pub(crate) fn target_summary(&self) -> String {
         match self {
-            Self::Github(connection) => connection.repo_url.clone(),
+            Self::Github(connection) => format!("gist:{}", truncate_id(&connection.gist_id)),
             Self::Folder(connection) => folder::folder_sync_target_path(connection)
                 .display()
                 .to_string(),
         }
     }
 
-    pub(crate) fn repo_url(&self) -> Option<&str> {
+    pub(crate) fn gist_id(&self) -> Option<&str> {
         if let Self::Github(connection) = self {
-            return Some(connection.repo_url.as_str());
+            return Some(connection.gist_id.as_str());
         }
         None
     }
@@ -75,23 +75,9 @@ impl SyncConnection {
         None
     }
 
-    pub(crate) fn branch(&self) -> Option<&str> {
-        if let Self::Github(connection) = self {
-            return Some(connection.branch.as_str());
-        }
-        None
-    }
-
-    pub(crate) fn path(&self) -> &str {
-        match self {
-            Self::Github(connection) => connection.path.as_str(),
-            Self::Folder(connection) => connection.path.as_str(),
-        }
-    }
-
-    pub(crate) fn commit_message(&self) -> Option<&str> {
-        if let Self::Github(connection) = self {
-            return Some(connection.commit_message.as_str());
+    pub(crate) fn path(&self) -> Option<&str> {
+        if let Self::Folder(connection) = self {
+            return Some(connection.path.as_str());
         }
         None
     }
@@ -158,58 +144,15 @@ pub(crate) fn sync_provider_definitions() -> Vec<SyncProviderDefinition> {
         SyncProviderDefinition {
             kind: SyncProviderKind::Github,
             label: "GitHub".to_string(),
-            fields: vec![
-                SyncProviderFieldDefinition {
-                    key: SyncProviderFieldKey::RepoUrl,
-                    label: "Repo URL".to_string(),
-                    field_kind: SyncProviderFieldKind::Text,
-                    section: SyncProviderFieldSection::Basic,
-                    placeholder: Some("https://github.com/owner/repo".to_string()),
-                    hint: None,
-                    options_source: None,
-                    full_width: true,
-                },
-                SyncProviderFieldDefinition {
-                    key: SyncProviderFieldKey::Token,
-                    label: "GitHub PAT".to_string(),
-                    field_kind: SyncProviderFieldKind::Password,
-                    section: SyncProviderFieldSection::Basic,
-                    placeholder: Some("Paste PAT".to_string()),
-                    hint: Some("leave blank to keep the stored PAT".to_string()),
-                    options_source: None,
-                    full_width: true,
-                },
-                SyncProviderFieldDefinition {
-                    key: SyncProviderFieldKey::Path,
-                    label: "Profile path".to_string(),
-                    field_kind: SyncProviderFieldKind::Text,
-                    section: SyncProviderFieldSection::Basic,
-                    placeholder: Some(DEFAULT_PATH.to_string()),
-                    hint: None,
-                    options_source: None,
-                    full_width: true,
-                },
-                SyncProviderFieldDefinition {
-                    key: SyncProviderFieldKey::Branch,
-                    label: "Branch".to_string(),
-                    field_kind: SyncProviderFieldKind::Select,
-                    section: SyncProviderFieldSection::Advanced,
-                    placeholder: None,
-                    hint: None,
-                    options_source: Some(SyncProviderFieldOptionsSource::GithubBranches),
-                    full_width: false,
-                },
-                SyncProviderFieldDefinition {
-                    key: SyncProviderFieldKey::CommitMessage,
-                    label: "Commit message".to_string(),
-                    field_kind: SyncProviderFieldKind::Text,
-                    section: SyncProviderFieldSection::Advanced,
-                    placeholder: Some(DEFAULT_COMMIT_MESSAGE.to_string()),
-                    hint: None,
-                    options_source: None,
-                    full_width: false,
-                },
-            ],
+            fields: vec![SyncProviderFieldDefinition {
+                key: SyncProviderFieldKey::GistId,
+                label: "Gist ID".to_string(),
+                field_kind: SyncProviderFieldKind::Text,
+                section: SyncProviderFieldSection::Advanced,
+                placeholder: Some("Leave blank to auto-create".to_string()),
+                hint: Some("leave blank to auto-create a private gist".to_string()),
+                full_width: true,
+            }],
         },
         SyncProviderDefinition {
             kind: SyncProviderKind::Folder,
@@ -222,7 +165,6 @@ pub(crate) fn sync_provider_definitions() -> Vec<SyncProviderDefinition> {
                     section: SyncProviderFieldSection::Basic,
                     placeholder: Some("Absolute folder path".to_string()),
                     hint: None,
-                    options_source: None,
                     full_width: true,
                 },
                 SyncProviderFieldDefinition {
@@ -232,7 +174,6 @@ pub(crate) fn sync_provider_definitions() -> Vec<SyncProviderDefinition> {
                     section: SyncProviderFieldSection::Basic,
                     placeholder: Some(DEFAULT_PATH.to_string()),
                     hint: None,
-                    options_source: None,
                     full_width: true,
                 },
             ],
@@ -244,32 +185,15 @@ pub(crate) async fn validate_github_token(token: &str) -> Result<()> {
     github::validate_github_token(token).await
 }
 
-pub(crate) async fn fetch_github_default_branch(
+pub(crate) async fn ensure_profile_gist(
     client: &reqwest::Client,
-    repo_url: &str,
     token: &str,
 ) -> std::result::Result<String, ProviderError> {
-    github::fetch_github_default_branch(client, repo_url, token).await
-}
-
-pub(crate) async fn fetch_github_branches(
-    client: &reqwest::Client,
-    repo_url: &str,
-    token: &str,
-) -> std::result::Result<SyncBranchList, ProviderError> {
-    github::fetch_github_branches(client, repo_url, token).await
-}
-
-pub(crate) fn normalize_repo_url(repo_url: &str) -> Result<String> {
-    github::normalize_repo_url(repo_url)
+    github::ensure_profile_gist(client, token).await
 }
 
 pub(crate) fn normalize_folder_path(folder_path: &str) -> Result<String> {
     folder::normalize_folder_path(folder_path)
-}
-
-pub(crate) fn normalize_requested_branch(branch: &str) -> Result<Option<String>> {
-    github::normalize_requested_branch(branch)
 }
 
 pub(crate) fn normalize_path(path: &str) -> Result<String> {
@@ -281,14 +205,6 @@ pub(crate) fn normalize_path(path: &str) -> Result<String> {
         anyhow::bail!("Invalid remote path");
     }
     Ok(trimmed.to_string())
-}
-
-pub(crate) fn normalize_commit_message(message: &str) -> String {
-    let trimmed = message.trim();
-    if trimmed.is_empty() {
-        return DEFAULT_COMMIT_MESSAGE.to_string();
-    }
-    trimmed.to_string()
 }
 
 fn is_safe_remote_path(value: &str) -> bool {
@@ -303,47 +219,20 @@ fn is_safe_remote_path(value: &str) -> bool {
         .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '/' || ch == '.')
 }
 
+fn truncate_id(id: &str) -> &str {
+    if id.len() <= 8 {
+        return id;
+    }
+    let mut end = 8;
+    while !id.is_char_boundary(end) && end > 0 {
+        end -= 1;
+    }
+    &id[..end]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::features::profile::sync::{
-        SyncProviderFieldKey, SyncProviderFieldOptionsSource, SyncProviderKind,
-    };
-
-    #[test]
-    fn parse_github_repo_accepts_supported_url_shapes() {
-        let cases = vec![
-            (
-                "https://github.com/example-owner/example.repo",
-                Some(("example-owner", "example.repo")),
-            ),
-            (
-                "https://github.com/example-owner/example.repo.git",
-                Some(("example-owner", "example.repo")),
-            ),
-            (
-                "git@github.com:example-owner/example.repo.git",
-                Some(("example-owner", "example.repo")),
-            ),
-            (
-                "ssh://git@ssh.github.com:443/example-owner/example.repo.git",
-                Some(("example-owner", "example.repo")),
-            ),
-            (
-                "ssh://git@github.com/example-owner/example.repo.git",
-                Some(("example-owner", "example.repo")),
-            ),
-            ("git@host-alias:example-owner/example.repo.git", None),
-            ("ssh://git@host-alias/example-owner/example.repo.git", None),
-            ("https://example.com/example-owner/example.repo", None),
-        ];
-
-        for (input, expected) in cases {
-            let parsed = github::parse_github_repo(input).ok();
-            let expected = expected.map(|(owner, repo)| (owner.to_string(), repo.to_string()));
-            assert_eq!(parsed, expected, "input: {input}");
-        }
-    }
 
     #[test]
     fn normalize_path_cases() {
@@ -379,13 +268,7 @@ mod tests {
                 .iter()
                 .map(|field| field.key)
                 .collect::<Vec<_>>(),
-            vec![
-                SyncProviderFieldKey::RepoUrl,
-                SyncProviderFieldKey::Token,
-                SyncProviderFieldKey::Path,
-                SyncProviderFieldKey::Branch,
-                SyncProviderFieldKey::CommitMessage,
-            ]
+            vec![SyncProviderFieldKey::GistId]
         );
         assert_eq!(
             folder
@@ -395,13 +278,93 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![SyncProviderFieldKey::FolderPath, SyncProviderFieldKey::Path]
         );
-        assert_eq!(
-            github
-                .fields
-                .iter()
-                .find(|field| field.key == SyncProviderFieldKey::Branch)
-                .and_then(|field| field.options_source),
-            Some(SyncProviderFieldOptionsSource::GithubBranches)
-        );
+    }
+
+    #[test]
+    fn normalize_path_expanded_cases() {
+        let cases = [
+            ("   ", Some(DEFAULT_PATH.to_string())),
+            ("///foo.json", Some("foo.json".to_string())),
+            ("a/b/c.json", Some("a/b/c.json".to_string())),
+            ("foo/", None),
+            ("foo/..", None),
+            ("a..b.json", None),
+            ("a\\b", None),
+            (
+                "valid-name_v2/config.json",
+                Some("valid-name_v2/config.json".to_string()),
+            ),
+            ("UPPER.json", Some("UPPER.json".to_string())),
+            ("has space", None),
+            ("has!bang", None),
+        ];
+        for (input, expected) in cases {
+            let actual = normalize_path(input).ok();
+            assert_eq!(actual, expected, "input: {input:?}");
+        }
+    }
+
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(200))]
+
+            #[test]
+            fn prop_safe_remote_path_rejects_empty(input in " *") {
+                let trimmed = input.trim();
+                if trimmed.is_empty() {
+                    assert!(!is_safe_remote_path(trimmed));
+                }
+            }
+
+            #[test]
+            fn prop_safe_remote_path_rejects_dotdot(
+                prefix in "[a-z]{0,5}",
+                suffix in "[a-z]{0,5}",
+            ) {
+                let path = format!("{prefix}..{suffix}");
+                assert!(!is_safe_remote_path(&path));
+            }
+
+            #[test]
+            fn prop_safe_remote_path_rejects_backslash(
+                prefix in "[a-z]{1,5}",
+                suffix in "[a-z]{1,5}",
+            ) {
+                let path = format!("{prefix}\\{suffix}");
+                assert!(!is_safe_remote_path(&path));
+            }
+
+            #[test]
+            fn prop_safe_remote_path_rejects_trailing_slash(
+                base in "[a-z]{1,10}",
+            ) {
+                assert!(!is_safe_remote_path(&format!("{base}/")));
+            }
+
+            #[test]
+            fn prop_safe_remote_path_accepts_valid_chars(
+                path in "[a-zA-Z0-9/_.-]{1,30}"
+            ) {
+                let accepted = !path.contains("..")
+                    && !path.contains('\\')
+                    && !path.ends_with('/');
+                assert_eq!(is_safe_remote_path(&path), accepted, "path: {path:?}");
+            }
+
+            #[test]
+            fn prop_truncate_id_never_panics(input in ".*") {
+                let result = truncate_id(&input);
+                assert!(result.len() <= 8);
+                assert!(input.starts_with(result));
+            }
+
+            #[test]
+            fn prop_truncate_id_preserves_short_ascii(input in "[a-f0-9]{0,8}") {
+                assert_eq!(truncate_id(&input), input.as_str());
+            }
+        }
     }
 }

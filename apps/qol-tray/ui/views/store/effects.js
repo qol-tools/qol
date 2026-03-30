@@ -1,28 +1,13 @@
-import { apiJson, apiResponse, jsonRequest, readResponseText } from '../../api/client.js';
-
-async function throwIfNotOk(response, fallback) {
-    if (response.ok) return;
-    const message = (await readResponseText(response)) || fallback;
-    throw new Error(message);
-}
+import { apiJson } from '../../api/client.js';
+import { fetchGitHubAuthStatus } from '../../features/github-auth/actions.js';
 
 export async function fetchTokenStatus() {
     try {
-        const data = await apiJson('/api/github-token');
-        return Boolean(data.has_token);
+        const data = await fetchGitHubAuthStatus();
+        return Boolean(data.connected);
     } catch (e) {
         return false;
     }
-}
-
-export async function saveTokenRequest(token) {
-    const response = await apiResponse('/api/github-token', jsonRequest('POST', { token }));
-    await throwIfNotOk(response, 'Failed to save token');
-}
-
-export async function deleteTokenRequest() {
-    const response = await apiResponse('/api/github-token', { method: 'DELETE' });
-    await throwIfNotOk(response, 'Failed to delete token');
 }
 
 export async function fetchPluginsRequest(forceRefresh = false) {

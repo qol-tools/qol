@@ -176,7 +176,6 @@ export function renderProviderField({
     field,
     form,
     syncStatus,
-    branchOptions,
     selectedIndex,
     setSelectedIndex,
     surface,
@@ -188,7 +187,7 @@ export function renderProviderField({
     const className = field.full_width ? 'profile-row-full' : '';
     const key = field.key;
     if (field.field_kind === FIELD_KIND_SELECT) {
-        const options = fieldOptions(field, form, branchOptions);
+        const options = fieldOptions(field, form);
         return html`
             <${ProfileSelectField}
                 key=${key}
@@ -196,7 +195,7 @@ export function renderProviderField({
                 hint=${field.hint || ''}
                 value=${fieldValue(form, key)}
                 options=${options}
-                labels=${fieldLabels(field, options, form)}
+                labels=${fieldLabels(field, options)}
                 className=${className}
                 surface=${surface}
                 selectedIndex=${selectedIndex}
@@ -285,11 +284,26 @@ export function ProfileBackupRow({ backup, incident, surface, selectedIndex, set
     `;
 }
 
-export function BackupPreviewModal({ preview, onClose }) {
+export function BackupPreviewModal({ preview, incident, onAcknowledge, onClose }) {
+    const isIncidentBackup = incident?.backup_file === preview.file_name;
     const copy = useCallback(() => {
         navigator.clipboard.writeText(preview.content);
         toast('success', 'Copied to clipboard');
     }, [preview]);
+    const acknowledge = useCallback(() => {
+        onAcknowledge?.();
+        onClose();
+    }, [onAcknowledge, onClose]);
+
+    const actions = [
+        { label: 'Close', kbd: 'Esc', onClick: onClose },
+        { label: 'Copy', kbd: 'C', onClick: copy },
+    ];
+    if (isIncidentBackup) {
+        actions.push({ label: 'Looks Good', kbd: 'Enter', variant: 'btn-primary', onClick: acknowledge });
+    } else {
+        actions[1].variant = 'btn-primary';
+    }
 
     return html`
         <${Modal} open=${true} onClose=${onClose} size="xl" dismissOnBackdrop=${true} className="edit-modal">
@@ -299,10 +313,7 @@ export function BackupPreviewModal({ preview, onClose }) {
                     text=${formatBackupPreview(preview.content)}
                     onCopy=${() => toast('success', 'Copied to clipboard')}
                 />
-                <${ModalFooter} actions=${[
-                    { label: 'Close', kbd: 'Esc', onClick: onClose },
-                    { label: 'Copy', kbd: 'C', variant: 'btn-primary', onClick: copy },
-                ]} />
+                <${ModalFooter} actions=${actions} />
             </div>
         <//>
     `;

@@ -16,10 +16,7 @@ pub enum SyncConnection {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GitHubSyncConnection {
-    pub repo_url: String,
-    pub branch: String,
-    pub path: String,
-    pub commit_message: String,
+    pub gist_id: String,
     #[serde(default = "default_true")]
     pub pull_on_launch: bool,
     #[serde(default = "default_true")]
@@ -65,15 +62,11 @@ pub struct SyncStatus {
     pub target_summary: Option<String>,
     pub health: SyncHealth,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub repo_url: Option<String>,
+    pub gist_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub folder_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub branch: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub commit_message: Option<String>,
     pub pull_on_launch: bool,
     pub push_on_change: bool,
     pub has_github_token: bool,
@@ -93,12 +86,9 @@ pub struct SyncStatus {
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SyncProviderFieldKey {
-    RepoUrl,
-    Token,
+    GistId,
     FolderPath,
     Path,
-    Branch,
-    CommitMessage,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -116,12 +106,6 @@ pub enum SyncProviderFieldSection {
     Advanced,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SyncProviderFieldOptionsSource {
-    GithubBranches,
-}
-
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct SyncProviderFieldDefinition {
     pub key: SyncProviderFieldKey,
@@ -132,8 +116,6 @@ pub struct SyncProviderFieldDefinition {
     pub placeholder: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub options_source: Option<SyncProviderFieldOptionsSource>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub full_width: bool,
 }
@@ -165,32 +147,12 @@ pub struct SyncActionResult {
     pub status: SyncStatus,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct SyncBranchList {
-    pub default_branch: String,
-    pub branches: Vec<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct SyncBranchListRequest {
-    pub repo_url: String,
-    #[serde(default)]
-    pub token: String,
-}
-
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(tag = "provider", rename_all = "snake_case")]
 pub enum SyncConnectRequest {
     Github {
         #[serde(default)]
-        token: String,
-        repo_url: String,
-        #[serde(default)]
-        branch: String,
-        #[serde(default)]
-        path: String,
-        #[serde(default)]
-        commit_message: String,
+        gist_id: String,
         #[serde(default = "default_true")]
         pull_on_launch: bool,
         #[serde(default = "default_true")]
@@ -223,11 +185,7 @@ mod tests {
     fn sync_connect_request_deserializes_github_payload() {
         let request: SyncConnectRequest = serde_json::from_value(serde_json::json!({
             "provider": "github",
-            "token": "secret",
-            "repo_url": "https://github.com/qol-tools/qol-tray.git",
-            "branch": "main",
-            "path": "profiles/main.json",
-            "commit_message": "chore: sync",
+            "gist_id": "abc123",
             "pull_on_launch": true,
             "push_on_change": false
         }))
@@ -236,11 +194,7 @@ mod tests {
         assert_eq!(
             request,
             SyncConnectRequest::Github {
-                token: "secret".to_string(),
-                repo_url: "https://github.com/qol-tools/qol-tray.git".to_string(),
-                branch: "main".to_string(),
-                path: "profiles/main.json".to_string(),
-                commit_message: "chore: sync".to_string(),
+                gist_id: "abc123".to_string(),
                 pull_on_launch: true,
                 push_on_change: false,
             }
@@ -248,7 +202,24 @@ mod tests {
     }
 
     #[test]
-    fn sync_connect_request_deserializes_folder_payload_without_repo_url() {
+    fn sync_connect_request_deserializes_github_payload_without_gist_id() {
+        let request: SyncConnectRequest = serde_json::from_value(serde_json::json!({
+            "provider": "github",
+        }))
+        .unwrap();
+
+        assert_eq!(
+            request,
+            SyncConnectRequest::Github {
+                gist_id: String::new(),
+                pull_on_launch: true,
+                push_on_change: true,
+            }
+        );
+    }
+
+    #[test]
+    fn sync_connect_request_deserializes_folder_payload() {
         let request: SyncConnectRequest = serde_json::from_value(serde_json::json!({
             "provider": "folder",
             "folder_path": std::env::temp_dir().join("qol-sync"),
@@ -267,15 +238,5 @@ mod tests {
                 push_on_change: true,
             }
         );
-    }
-
-    #[test]
-    fn sync_connect_request_rejects_folder_payload_without_folder_path() {
-        let request = serde_json::from_value::<SyncConnectRequest>(serde_json::json!({
-            "provider": "folder",
-            "path": "profiles/main.json"
-        }));
-
-        assert!(request.is_err());
     }
 }

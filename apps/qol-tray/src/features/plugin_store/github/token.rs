@@ -45,10 +45,6 @@ pub(crate) fn get_stored_token() -> Option<String> {
     crate::credentials::github_bearer_token()
 }
 
-pub(crate) fn store_token(token: &str) -> Result<()> {
-    crate::credentials::store_github_token(token)
-}
-
 pub(crate) async fn validate_token(token: &str) -> std::result::Result<(), TokenValidationError> {
     let trimmed = token.trim();
     if trimmed.is_empty() {
@@ -94,8 +90,4 @@ async fn token_validation_result(
 
 fn invalid_status(status: reqwest::StatusCode) -> bool {
     status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN
-}
-
-pub(crate) fn delete_token() -> Result<()> {
-    crate::credentials::delete_github_token()
 }

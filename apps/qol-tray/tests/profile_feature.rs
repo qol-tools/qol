@@ -294,6 +294,14 @@ async fn folder_sync_connect_applies_remote_profile_and_creates_backup() {
             json!({ "actions": { "local": {} } })
         );
     }
+
+    let ack_result = {
+        let _ctx = local.enter();
+        service.acknowledge_incident().await.unwrap()
+    };
+
+    assert_eq!(ack_result.status.health, SyncHealth::Healthy);
+    assert!(ack_result.status.incident.is_none());
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -393,4 +401,27 @@ async fn folder_sync_push_conflict_backs_up_local_changes_and_applies_remote() {
         read_remote_profile(remote_dir.path())["task_runner"],
         json!({ "actions": { "machine_a": {} } })
     );
+
+    let ack_result = {
+        let _ctx = machine_b.enter();
+        service_b.acknowledge_incident().await.unwrap()
+    };
+    assert_eq!(ack_result.status.health, SyncHealth::Healthy);
+    assert!(ack_result.status.incident.is_none());
+
+    let disconnect_result = {
+        let _ctx = machine_b.enter();
+        service_b.disconnect().await.unwrap()
+    };
+    assert_eq!(disconnect_result.status.health, SyncHealth::NotConfigured);
+    assert!(!disconnect_result.status.configured);
+
+    let reconnect_result = {
+        let _ctx = machine_b.enter();
+        service_b
+            .connect(sync_request(remote_dir.path()))
+            .await
+            .unwrap()
+    };
+    assert!(reconnect_result.status.configured);
 }

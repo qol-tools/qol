@@ -1,3 +1,4 @@
+pub mod github_auth;
 pub mod launcher_apps;
 pub mod plugin_store;
 pub mod profile;

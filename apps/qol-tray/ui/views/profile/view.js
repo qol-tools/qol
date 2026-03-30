@@ -1,4 +1,5 @@
 import { html } from '../../lib/html.js';
+import { useState } from 'preact/hooks';
 import { PageHeader } from '../../components/PageHeader.js';
 import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../../components/app/view-keyboard-context.js';
@@ -24,6 +25,7 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
     });
     useRegisterViewKeyboard('profile', ctrl.handleKey, ctrl.isBlocking);
     useRegisterCommands('profile', ctrl.commands);
+    const [showAdvanced, setShowAdvanced] = useState(ctrl.configured);
 
     return html`
         <div id="profile-page" class="view-container content-shell profile-view-shell">
@@ -53,68 +55,84 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                                         ${ctrl.syncStatus.last_error}
                                     </div>
                                 `}
-                                <div class="profile-sync-grid">
-                                    <${ProfileSelectField}
-                                        label="Target"
-                                        value=${ctrl.form.provider}
-                                        options=${ctrl.providerOptions.map(provider => provider.kind)}
-                                        labels=${ctrl.providerLabels}
-                                        className="profile-row-full"
-                                        surface=${ctrl.surfaceById.get('provider')}
-                                        selectedIndex=${ctrl.selectedIndex}
-                                        setSelectedIndex=${ctrl.setSelectedIndex}
-                                        onChange=${(value) => ctrl.updateForm('provider', value)}
+                                ${ctrl.authPrompt ? html`
+                                    <${DeviceCodePrompt}
+                                        userCode=${ctrl.authPrompt.userCode}
+                                        copied=${ctrl.authPrompt.copied}
+                                        onOpenGitHub=${ctrl.openAuthLink}
                                     />
-                                    ${ctrl.basicProviderFields.map(field => renderProviderField({
-                                        field,
-                                        form: ctrl.form,
-                                        syncStatus: ctrl.syncStatus,
-                                        branchOptions: ctrl.branchOptions,
-                                        selectedIndex: ctrl.selectedIndex,
-                                        setSelectedIndex: ctrl.setSelectedIndex,
-                                        surface: ctrl.surfaceById.get(providerFieldSurfaceId(field.key)),
-                                        updateForm: ctrl.updateForm,
-                                    }))}
-                                </div>
-                                <div class="profile-subsection">
-                                    <div class="profile-subsection-header">
-                                        <div class="profile-subsection-label">Advanced</div>
-                                        <div class="profile-inline-options">
-                                            <div class="profile-toggle-row">
-                                                <${ProfileToggleField}
-                                                    label="Pull on launch"
-                                                    checked=${ctrl.form.pull_on_launch}
-                                                    onChange=${(value) => ctrl.updateForm('pull_on_launch', value)}
-                                                    surface=${ctrl.surfaceById.get('pull-on-launch')}
-                                                    selectedIndex=${ctrl.selectedIndex}
-                                                    setSelectedIndex=${ctrl.setSelectedIndex}
-                                                />
-                                                <${ProfileToggleField}
-                                                    label="Push on local changes"
-                                                    checked=${ctrl.form.push_on_change}
-                                                    onChange=${(value) => ctrl.updateForm('push_on_change', value)}
-                                                    surface=${ctrl.surfaceById.get('push-on-change')}
-                                                    selectedIndex=${ctrl.selectedIndex}
-                                                    setSelectedIndex=${ctrl.setSelectedIndex}
-                                                />
-                                            </div>
-                                        </div>
+                                ` : html`
+                                    <div class="profile-sync-grid">
+                                        <${ProfileSelectField}
+                                            label="Target"
+                                            value=${ctrl.form.provider}
+                                            options=${ctrl.providerOptions.map(provider => provider.kind)}
+                                            labels=${ctrl.providerLabels}
+                                            className="profile-row-full"
+                                            surface=${ctrl.surfaceById.get('provider')}
+                                            selectedIndex=${ctrl.selectedIndex}
+                                            setSelectedIndex=${ctrl.setSelectedIndex}
+                                            onChange=${(value) => ctrl.updateForm('provider', value)}
+                                        />
+                                        ${ctrl.basicProviderFields.map(field => renderProviderField({
+                                            field,
+                                            form: ctrl.form,
+                                            syncStatus: ctrl.syncStatus,
+
+                                            selectedIndex: ctrl.selectedIndex,
+                                            setSelectedIndex: ctrl.setSelectedIndex,
+                                            surface: ctrl.surfaceById.get(providerFieldSurfaceId(field.key)),
+                                            updateForm: ctrl.updateForm,
+                                        }))}
                                     </div>
-                                    ${ctrl.advancedProviderFields.length > 0 && html`
-                                        <div class="profile-sync-grid">
-                                            ${ctrl.advancedProviderFields.map(field => renderProviderField({
-                                                field,
-                                                form: ctrl.form,
-                                                syncStatus: ctrl.syncStatus,
-                                                branchOptions: ctrl.branchOptions,
-                                                selectedIndex: ctrl.selectedIndex,
-                                                setSelectedIndex: ctrl.setSelectedIndex,
-                                                surface: ctrl.surfaceById.get(providerFieldSurfaceId(field.key)),
-                                                updateForm: ctrl.updateForm,
-                                            }))}
+                                `}
+                                ${!ctrl.authPrompt && html`
+                                    <div class="profile-subsection">
+                                        <div class="profile-subsection-header"
+                                             onClick=${() => setShowAdvanced(!showAdvanced)}
+                                             style="cursor: pointer; user-select: none;">
+                                            <div class="profile-subsection-label">
+                                                ${showAdvanced ? '▾' : '▸'} Advanced
+                                            </div>
+                                            ${showAdvanced && html`
+                                                <div class="profile-inline-options">
+                                                    <div class="profile-toggle-row">
+                                                        <${ProfileToggleField}
+                                                            label="Pull on launch"
+                                                            checked=${ctrl.form.pull_on_launch}
+                                                            onChange=${(value) => ctrl.updateForm('pull_on_launch', value)}
+                                                            surface=${ctrl.surfaceById.get('pull-on-launch')}
+                                                            selectedIndex=${ctrl.selectedIndex}
+                                                            setSelectedIndex=${ctrl.setSelectedIndex}
+                                                        />
+                                                        <${ProfileToggleField}
+                                                            label="Push on local changes"
+                                                            checked=${ctrl.form.push_on_change}
+                                                            onChange=${(value) => ctrl.updateForm('push_on_change', value)}
+                                                            surface=${ctrl.surfaceById.get('push-on-change')}
+                                                            selectedIndex=${ctrl.selectedIndex}
+                                                            setSelectedIndex=${ctrl.setSelectedIndex}
+                                                        />
+                                                    </div>
+                                                </div>
+                                            `}
                                         </div>
-                                    `}
-                                </div>
+                                        ${showAdvanced && ctrl.advancedProviderFields.length > 0 && html`
+                                            <div class="profile-sync-grid">
+                                                ${ctrl.advancedProviderFields.map(field => renderProviderField({
+                                                    field,
+                                                    form: ctrl.form,
+                                                    syncStatus: ctrl.syncStatus,
+        
+                                                    selectedIndex: ctrl.selectedIndex,
+                                                    setSelectedIndex: ctrl.setSelectedIndex,
+                                                    surface: ctrl.surfaceById.get(providerFieldSurfaceId(field.key)),
+                                                    updateForm: ctrl.updateForm,
+                                                }))}
+                                            </div>
+                                        `}
+                                    </div>
+                                `}
                                 <div class="profile-actions-footer">
                                     <${ProfileActionButton} surface=${ctrl.surfaceById.get('disconnect')} selectedIndex=${ctrl.selectedIndex} setSelectedIndex=${ctrl.setSelectedIndex} />
                                     <${ProfileActionButton} surface=${ctrl.surfaceById.get('pull')} selectedIndex=${ctrl.selectedIndex} setSelectedIndex=${ctrl.setSelectedIndex} />
@@ -161,6 +179,37 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                 </div>
             </div>
         </div>
-        ${ctrl.backupPreview && html`<${BackupPreviewModal} preview=${ctrl.backupPreview} onClose=${() => ctrl.setBackupPreview(null)} />`}
+        ${ctrl.backupPreview && html`<${BackupPreviewModal}
+            preview=${ctrl.backupPreview}
+            incident=${ctrl.incident}
+            onAcknowledge=${ctrl.handleAcknowledge}
+            onClose=${() => ctrl.setBackupPreview(null)}
+        />`}
+    `;
+}
+
+function DeviceCodePrompt({ userCode, copied, onOpenGitHub }) {
+    const [justCopied, setJustCopied] = useState(copied);
+
+    const handleCopy = async () => {
+        try {
+            await navigator.clipboard.writeText(userCode);
+            setJustCopied(true);
+            setTimeout(() => setJustCopied(false), 2000);
+        } catch (_) {}
+    };
+
+    return html`
+        <div class="profile-device-auth">
+            <div class="profile-device-code" onClick=${handleCopy} title="Click to copy">
+                ${userCode}
+            </div>
+            <p class="profile-device-hint">
+                ${justCopied ? 'Copied!' : 'Click code to copy'} — then paste it on GitHub
+            </p>
+            <button class="btn btn-primary" onClick=${onOpenGitHub}>
+                Open GitHub
+            </button>
+        </div>
     `;
 }

@@ -31,6 +31,7 @@ pub(super) struct AppState {
     pub(super) plugins_dir: PathBuf,
     pub(super) plugin_manager: Arc<Mutex<PluginManager>>,
     pub(super) daemon: Daemon,
+    pub(super) github_auth_service: Arc<crate::features::github_auth::GitHubAuthService>,
     pub(super) sync_service: Arc<crate::features::profile::sync::SyncService>,
     #[cfg(feature = "dev")]
     pub(super) dev_state: Arc<crate::dev::state::DevState>,
@@ -49,6 +50,7 @@ impl AppState {
     pub(super) fn new(
         plugin_manager: Arc<Mutex<PluginManager>>,
         daemon: &Daemon,
+        github_auth_service: Arc<crate::features::github_auth::GitHubAuthService>,
         sync_service: Arc<crate::features::profile::sync::SyncService>,
         #[cfg(feature = "dev")] core_log_controls: Arc<
             std::sync::RwLock<HashMap<String, crate::logging::LogControl>>,
@@ -61,6 +63,7 @@ impl AppState {
             plugin_cpu: DevPluginCpuService::start(plugin_manager.clone(), daemon.events.clone()),
             plugin_manager,
             daemon: daemon.clone(),
+            github_auth_service,
             sync_service,
             #[cfg(feature = "dev")]
             dev_state: Arc::new(crate::dev::state::DevState::new()),
@@ -89,6 +92,14 @@ impl FromRef<AppState> for crate::features::profile::http::ProfileHttpState {
             plugin_manager: state.plugin_manager.clone(),
             daemon: state.daemon.clone(),
             sync_service: state.sync_service.clone(),
+        }
+    }
+}
+
+impl FromRef<AppState> for crate::features::github_auth::GitHubAuthHttpState {
+    fn from_ref(state: &AppState) -> Self {
+        Self {
+            github_auth_service: state.github_auth_service.clone(),
         }
     }
 }
@@ -160,16 +171,6 @@ pub(super) struct InstalledPlugin {
 pub(super) struct InstalledPluginsResponse {
     pub(super) revision: u64,
     pub(super) plugins: Vec<InstalledPlugin>,
-}
-
-#[derive(Deserialize)]
-pub(super) struct TokenRequest {
-    pub(super) token: String,
-}
-
-#[derive(Serialize)]
-pub(super) struct TokenStatus {
-    pub(super) has_token: bool,
 }
 
 #[cfg(feature = "dev")]

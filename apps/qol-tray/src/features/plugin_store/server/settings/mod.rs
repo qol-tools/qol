@@ -1,4 +1,3 @@
-mod github_token_handlers;
 mod hotkey_handlers;
 mod http_json;
 mod media_apps_handlers;
@@ -14,9 +13,6 @@ use axum::{
 
 use super::types::AppState;
 
-pub(super) use github_token_handlers::delete_github_token;
-pub(super) use github_token_handlers::get_token_status;
-pub(super) use github_token_handlers::set_github_token;
 pub(super) use hotkey_handlers::get_hotkey_errors;
 pub(super) use hotkey_handlers::get_hotkeys;
 pub(super) use hotkey_handlers::set_hotkeys;
@@ -38,9 +34,6 @@ pub(super) fn routes() -> Router<AppState> {
             "/plugins/{id}/config",
             axum::routing::put(set_plugin_config),
         )
-        .route("/github-token", get(get_token_status))
-        .route("/github-token", post(set_github_token))
-        .route("/github-token", axum::routing::delete(delete_github_token))
         .route("/hotkeys", get(get_hotkeys))
         .route("/hotkeys", axum::routing::put(set_hotkeys))
         .route("/hotkeys/errors", get(get_hotkey_errors))

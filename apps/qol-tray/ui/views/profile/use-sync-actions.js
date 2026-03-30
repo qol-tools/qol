@@ -1,7 +1,9 @@
 import { useCallback, useState } from 'preact/hooks';
 import { toast } from '../../lib/toast.js';
+import { fetchGitHubAuthStatus, startGitHubAuth, waitForGitHubAuth } from '../../features/github-auth/actions.js';
 import {
     acknowledgeProfileSync,
+    bootstrapGitHubProfileSync,
     connectProfileSync,
     disconnectProfileSync,
     exportProfile,
@@ -19,8 +21,15 @@ export function useSyncActions({
 }) {
     const [busyAction, setBusyAction] = useState('');
     const [lastImport, setLastImport] = useState(null);
+    const [authPrompt, setAuthPrompt] = useState(null);
     const syncBusy = isSyncBusy(busyAction);
     const importBusy = isImportBusy(busyAction);
+
+    const openAuthLink = useCallback(() => {
+        if (authPrompt?.verificationUri) {
+            window.open(authPrompt.verificationUri, '_blank');
+        }
+    }, [authPrompt]);
 
     const handleExport = useCallback(async () => {
         setBusyAction('export');
@@ -53,9 +62,30 @@ export function useSyncActions({
     const handleConnect = useCallback(async () => {
         setBusyAction('connect');
         try {
+            const providerKind = activeProvider?.kind || form?.provider || '';
+            if (providerKind === 'github') {
+                const authStatus = await fetchGitHubAuthStatus();
+                if (!authStatus?.connected || authStatus?.source !== 'oauth') {
+                    const start = await startGitHubAuth();
+                    try { await navigator.clipboard.writeText(start.user_code); } catch (_) {}
+                    setAuthPrompt({
+                        userCode: start.user_code,
+                        verificationUri: start.verification_uri,
+                        copied: true,
+                    });
+                    await waitForGitHubAuth(start.session_id, start.interval);
+                    setAuthPrompt(null);
+                }
+                const result = await bootstrapGitHubProfileSync();
+                applySyncStatus(result.status);
+                refreshSyncStatus?.();
+                setBusyAction('');
+                return;
+            }
             const result = await connectProfileSync(buildConnectPayload(form, activeProvider));
             applySyncStatus(result.status);
         } catch (error) {
+            setAuthPrompt(null);
             toast('error', `Failed to save cloud sync: ${error.message}`);
             refreshSyncStatus?.();
         }
@@ -107,6 +137,7 @@ export function useSyncActions({
     }, [applySyncStatus]);
 
     return {
+        authPrompt,
         handleAcknowledge,
         handleConnect,
         handleDisconnect,
@@ -116,6 +147,7 @@ export function useSyncActions({
         handlePush,
         importBusy,
         lastImport,
+        openAuthLink,
         syncBusy,
     };
 }
