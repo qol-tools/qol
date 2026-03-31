@@ -52,7 +52,7 @@ export function PluginsView({ onOpenPluginConfig, onOpenPluginUi }) {
             <${PluginsGrid}
                 plugins=${filtered} ghostPlugins=${list.ghostPlugins}
                 selectedIndex=${list.selectedIndex} contextMenuOpen=${modal.contextMenuOpen}
-                updating=${actions.updating} onCardClick=${handleCardClick} />
+                updating=${actions.updating} onCardClick=${handleCardClick} onSelect=${list.setSelectedIndex} />
         </div>
         <${UninstallConfirmModal} plugin=${modal.confirmPlugin} pluginId=${modal.confirmPluginId}
             onClose=${modal.clearConfirm} onConfirm=${actions.confirmUninstall} />

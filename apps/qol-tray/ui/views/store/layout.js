@@ -12,7 +12,7 @@ export function StoreLayout({ ctrl }) {
                 <${StoreCredentialBanner} rateLimited=${ctrl.rateLimited} hasToken=${ctrl.hasToken} />
                 <${StoreGrid} plugins=${ctrl.filtered} loading=${ctrl.loading}
                     selectedIndex=${ctrl.selectedIndex} isInstalling=${ctrl.isInstalling}
-                    onCardClick=${ctrl.handleCardClick} />
+                    onCardClick=${ctrl.handleCardClick} onSelect=${ctrl.setSelectedIndex} />
             </div>
         </div>
     `;

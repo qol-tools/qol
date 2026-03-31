@@ -31,19 +31,19 @@ export function ShortcutsList({ shortcuts, selectedIndex, onSelect, onEdit }) {
         </div>
         ${shortcuts.map((s, i) => html`
             <${ShortcutRow} key=${s.id} shortcut=${s} index=${i}
-                selected=${i === selectedIndex}
+                selected=${i === selectedIndex} onSelect=${onSelect}
                 onClick=${() => i !== selectedIndex ? onSelect(s.id) : onEdit(s)} />
         `)}
     </div>`;
 }
 
-function ShortcutRow({ shortcut, index, selected, onClick }) {
+function ShortcutRow({ shortcut, index, selected, onSelect, onClick }) {
     return html`
         <div class="shortcut-row table-list-row table-grid"
              data-selected-surface=""
              data-enabled="${shortcut.enabled ? 'true' : 'false'}"
              data-selected="${selected ? 'true' : 'false'}"
-             data-index="${index}" onClick=${onClick}>
+             data-index="${index}" onFocus=${() => onSelect(shortcut.id)} onClick=${onClick}>
             <span class="col-name table-cell" data-selected-text="">${shortcut.name || shortcut.id}</span>
             <span class="col-type table-cell" data-selected-text="">${TYPE_LABELS[shortcut.action.type] || shortcut.action.type}</span>
             <span class="col-target table-cell" data-selected-text="">${actionSummary(shortcut.action)}</span>

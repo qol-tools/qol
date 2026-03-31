@@ -57,7 +57,7 @@ export function PluginRow({ plugin, index, ctrl }) {
     const actionDisabled = isBuilding || !!ctrl.linkingId;
     const rebuildActive = plugin.status === 'linked' && plugin.has_cargo && plugin.needs_rebuild;
     return html`
-        <div class=${'plugin-row table-list-row status-' + statusToken + (isSelected ? ' selected' : '') + (isBuilding ? ' is-building' : '') + (isLinking ? ' is-linking' : '')} data-selected-surface="" data-status=${statusToken} data-selected=${isSelected ? 'true' : 'false'} data-index=${index} data-plugin-id=${plugin.id}>
+        <div class=${'plugin-row table-list-row status-' + statusToken + (isSelected ? ' selected' : '') + (isBuilding ? ' is-building' : '') + (isLinking ? ' is-linking' : '')} data-selected-surface="" data-status=${statusToken} data-selected=${isSelected ? 'true' : 'false'} data-index=${index} data-plugin-id=${plugin.id} onFocus=${() => ctrl.setSelectedIndex(index)}>
             <div class="plugin-main table-grid">
                 <${PluginInfo} plugin=${plugin} statusToken=${statusToken} ctrl=${ctrl} />
                 <${ActionColumn} plugin=${plugin} index=${index} statusToken=${statusToken} actionDisabled=${actionDisabled} isLinking=${isLinking} rebuildActive=${rebuildActive} ctrl=${ctrl} />

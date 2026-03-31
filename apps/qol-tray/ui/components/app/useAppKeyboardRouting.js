@@ -104,53 +104,122 @@ function routeToView(event, viewKeyboard, cycleView) {
     if (!event.defaultPrevented) globalSurfaceNav(event);
 }
 
+import {
+    activateSurface,
+    activeContainer,
+    directSurfaces,
+    firstChildContainer,
+    parentContainer,
+    surfaceContainsChildContainer,
+} from '../../lib/surface-traits.js';
+
 const NAV_KEYS = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', h: 'left', j: 'down', k: 'up', l: 'right' };
 
 function globalSurfaceNav(event) {
+    if (event.key === 'Escape') {
+        if (ascendLayer()) { event.preventDefault(); }
+        return;
+    }
     const direction = NAV_KEYS[event.key];
     if (direction) {
         event.preventDefault();
-        navigateVisibleSurfaces(direction);
+        navigateInActiveContainer(direction);
         return;
     }
     if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
-        activateSelectedSurface();
+        activateAndMaybeDescend();
     }
 }
 
-function navigateVisibleSurfaces(direction) {
-    const surfaces = visibleSurfaceElements();
+function findSelectedSurface() {
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && focused !== document.body) {
+        const surface = focused.closest('[data-selected-surface]');
+        if (surface?.getClientRects().length > 0) return surface;
+    }
+    for (const container of document.querySelectorAll('[data-surface-container]')) {
+        if (container.getClientRects().length === 0) continue;
+        for (const el of directSurfaces(container)) {
+            if (el.getAttribute('data-selected') === 'true') return el;
+        }
+    }
+    return null;
+}
+
+function navigateInActiveContainer(direction) {
+    const current = findSelectedSurface();
+    if (!current) {
+        const fallback = document.querySelector('#content [data-selected-surface]');
+        if (fallback?.getClientRects().length > 0) fallback.focus();
+        return;
+    }
+    const container = activeContainer(current);
+    if (!container) return;
+
+    const surfaces = directSurfaces(container);
     if (surfaces.length === 0) return;
 
-    const current = surfaces.find(el => el.getAttribute('data-selected') === 'true');
     const rows = buildSurfaceGrid(surfaces);
     if (rows.length === 0) return;
 
-    const pos = current ? findGridPosition(rows, current) : null;
+    const pos = findGridPosition(rows, current);
     const next = pos ? gridStep(rows, pos, direction) : rows[0][0];
     if (!next || next === current) return;
 
-    for (const el of surfaces) el.setAttribute('data-selected', 'false');
-    next.setAttribute('data-selected', 'true');
     next.focus();
 }
 
-function activateSelectedSurface() {
-    const surfaces = visibleSurfaceElements();
-    const current = surfaces.find(el => el.getAttribute('data-selected') === 'true');
-    if (current) current.click();
+function activateAndMaybeDescend() {
+    const current = findSelectedSurface();
+    if (!current) return;
+
+    // Tabs handle their own descent via useEffect after content renders
+    if (current.getAttribute('role') === 'tab') {
+        activateSurface(current);
+        return;
+    }
+
+    if (surfaceContainsChildContainer(current)) {
+        activateSurface(current);
+        requestAnimationFrame(() => descendIntoChild(current));
+        return;
+    }
+
+    const container = activeContainer(current);
+    activateSurface(current);
+
+    requestAnimationFrame(() => {
+        const child = container ? firstChildContainer(container) : null;
+        if (child) descendInto(child);
+    });
 }
 
-function visibleSurfaceElements() {
-    const surfaces = [];
-    for (const container of document.querySelectorAll('[data-surface-container]')) {
-        if (container.getClientRects().length === 0) continue;
-        for (const el of container.querySelectorAll('[data-selected-surface]')) {
-            if (el.getClientRects().length > 0) surfaces.push(el);
-        }
-    }
-    return surfaces;
+function descendIntoChild(surface) {
+    const child = surface.querySelector('[data-surface-container]');
+    if (child && child.getClientRects().length > 0) descendInto(child);
+}
+
+function descendInto(container) {
+    const surfaces = directSurfaces(container);
+    if (surfaces.length === 0) return;
+    surfaces[0].focus();
+}
+
+function ascendLayer() {
+    const current = findSelectedSurface();
+    const container = current ? activeContainer(current) : null;
+    if (!container) return false;
+
+    const parent = parentContainer(container);
+    if (!parent) return false;
+
+    const parentSurfaces = directSurfaces(parent);
+    const anchor = parentSurfaces.find(el => el.contains(container)) || parentSurfaces[0];
+    if (!anchor) return false;
+
+    anchor.focus();
+    return true;
 }
 
 function buildSurfaceGrid(elements) {

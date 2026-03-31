@@ -15,17 +15,25 @@ const TABS = [
 export function DevLayout({ ctrl, containerRef }) {
     const vtRef = useRef(null);
 
+    const onTabActivate = useCallback(() => {
+        ctrl.setSelectedIndex(0);
+    }, [ctrl.setSelectedIndex]);
+
+    const onContentBlur = useCallback(() => {
+        ctrl.setSelectedIndex(-1);
+    }, [ctrl.setSelectedIndex]);
+
     const handleKey = useCallback((event) => {
-        const vt = vtRef.current;
-        if (vt?.handleKey(event)) return;
-        if (vt?.activeTab === 'dev') ctrl.handleKey(event);
+        if (document.activeElement?.closest('[role="tablist"]')) return;
+        if (vtRef.current?.activeTab === 'dev') ctrl.handleKey(event);
     }, [ctrl.handleKey]);
 
     useRegisterViewKeyboard('dev', handleKey);
 
     return html`
         <${ViewTabs} title="Developer Control" scramble=${true}
-            tabs=${TABS} vtRef=${vtRef} className="dev-view-shell" containerRef=${containerRef}>
+            tabs=${TABS} vtRef=${vtRef} className="dev-view-shell" containerRef=${containerRef}
+            onActivate=${onTabActivate} onContentBlur=${onContentBlur}>
             ${(vt) => html`
                 ${vt.activeTab === 'dev' && html`
                     <${PluginsSection} ctrl=${ctrl} />

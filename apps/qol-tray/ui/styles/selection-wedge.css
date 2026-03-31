@@ -73,6 +73,71 @@
     transform: scaleX(-1) rotate(-45deg);
 }
 
+/* Depth badge */
+.selection-wedge-depth {
+    position: absolute;
+    top: -4px;
+    left: -6px;
+    min-width: 13px;
+    height: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 8px;
+    font-weight: 700;
+    font-family: var(--font-mono, monospace);
+    line-height: 1;
+    color: var(--slate-975, #0e1015);
+    background: rgba(var(--warning-rgb), 0.9);
+    border-radius: 99px;
+    pointer-events: none;
+    transform: scaleX(-1) rotate(45deg);
+    z-index: 1;
+}
+
+/* Depth color shifts — warmer at deeper levels */
+.selection-cursor-overlay[data-depth="2"] .selection-wedge-icon {
+    --selection-wedge-fill:
+        linear-gradient(180deg,
+            rgba(255, 255, 255, 0.18) 0%,
+            rgba(255, 255, 255, 0.03) 38%,
+            rgba(0, 0, 0, 0.08) 100%),
+        linear-gradient(90deg,
+            rgba(var(--accent-rgb), 1) 0%,
+            rgba(var(--accent-rgb), 0.92) 52%,
+            rgba(var(--accent-rgb), 0.34) 100%);
+    --selection-wedge-shadow:
+        drop-shadow(0 0 0.5px rgba(var(--ink-rgb), 0.34))
+        drop-shadow(0 0 4px rgba(var(--accent-rgb), 0.18))
+        drop-shadow(0 0 9px rgba(var(--accent-rgb), 0.05));
+}
+
+.selection-cursor-overlay[data-depth="2"] .selection-wedge-depth {
+    background: rgba(var(--accent-rgb), 0.9);
+}
+
+.selection-cursor-overlay[data-depth="3"] .selection-wedge-icon,
+.selection-cursor-overlay[data-depth="4"] .selection-wedge-icon {
+    --selection-wedge-fill:
+        linear-gradient(180deg,
+            rgba(255, 255, 255, 0.18) 0%,
+            rgba(255, 255, 255, 0.03) 38%,
+            rgba(0, 0, 0, 0.08) 100%),
+        linear-gradient(90deg,
+            rgba(var(--success-rgb), 1) 0%,
+            rgba(var(--success-rgb), 0.92) 52%,
+            rgba(var(--success-rgb), 0.34) 100%);
+    --selection-wedge-shadow:
+        drop-shadow(0 0 0.5px rgba(var(--ink-rgb), 0.34))
+        drop-shadow(0 0 4px rgba(var(--success-rgb), 0.18))
+        drop-shadow(0 0 9px rgba(var(--success-rgb), 0.05));
+}
+
+.selection-cursor-overlay[data-depth="3"] .selection-wedge-depth,
+.selection-cursor-overlay[data-depth="4"] .selection-wedge-depth {
+    background: rgba(var(--success-rgb), 0.9);
+}
+
 .app-container[data-input-mode="mouse"] .selection-cursor-overlay {
     opacity: 0 !important;
     pointer-events: none;

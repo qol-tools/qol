@@ -79,13 +79,13 @@ export function LogsView({ active }) {
         [suppressedKeys, suppressed, searchQuery]
     );
 
-    const onTabActivate = useCallback((tabId) => {
-        const count = tabId === 'live' ? filteredEntries.length : filteredSuppressedKeys.length;
-        if (count > 0) {
-            setSelectedIndex(0);
-            requestAnimationFrame(() => focusContentSurface(0));
-        }
-    }, [filteredEntries.length, filteredSuppressedKeys.length]);
+    const onTabActivate = useCallback(() => {
+        setSelectedIndex(0);
+    }, []);
+
+    const onContentBlur = useCallback(() => {
+        setSelectedIndex(-1);
+    }, []);
 
     const vtRef = useRef(null);
 
@@ -117,7 +117,6 @@ export function LogsView({ active }) {
             if (entry) {
                 document.activeElement?.blur();
                 setDetailEntry(entry);
-                vt.setZone('detail');
             }
         }
         if (vt.activeTab === 'suppressed') {
@@ -133,22 +132,17 @@ export function LogsView({ active }) {
     });
 
     const listHandler = useListKeyboard({
-        surfaceSelector: '.logs-content [data-selected-surface]',
         itemCount,
         selectedIndex,
-        setSelectedIndex,
         onEdit,
     });
 
     const closeDetail = useCallback(() => {
         setDetailEntry(null);
-        vtRef.current?.setZone('content');
     }, []);
 
     const handleKey = useCallback((event) => {
-        const vt = vtRef.current;
-        if (vt?.zone === 'detail') return;
-        if (vt?.handleKey(event)) return;
+        if (document.activeElement?.closest('[role="tablist"]')) return;
         listHandler(event);
     }, [listHandler]);
 
@@ -175,16 +169,18 @@ export function LogsView({ active }) {
 
     return html`
         <${ViewTabs} title="Logs" subtitle="Error log and suppression management"
-            tabs=${tabsWithCounts} onActivate=${onTabActivate} trailing=${trailingTab} vtRef=${vtRef}>
+            tabs=${tabsWithCounts} onActivate=${onTabActivate} onContentBlur=${onContentBlur} trailing=${trailingTab} vtRef=${vtRef}>
             ${(vt) => html`
                 <div class="logs-content" ref=${contentRef}>
-                    ${vt.activeTab === 'live' && html`<${LiveLog} entries=${collapsedEntries} selectedIndex=${vt.zone === 'content' ? selectedIndex : -1}
-                        onEntryClick=${(entry) => { document.activeElement?.blur(); setDetailEntry(entry); vt.setZone('detail'); }} />`}
+                    ${vt.activeTab === 'live' && html`<${LiveLog} entries=${collapsedEntries} selectedIndex=${selectedIndex}
+                        setSelectedIndex=${setSelectedIndex}
+                        onEntryClick=${(entry) => { document.activeElement?.blur(); setDetailEntry(entry); }} />`}
                     ${vt.activeTab === 'suppressed' && html`<${SuppressedList}
                         keys=${filteredSuppressedKeys}
                         items=${suppressed}
                         onUnsuppress=${unsuppress}
-                        selectedIndex=${vt.zone === 'content' ? selectedIndex : -1}
+                        selectedIndex=${selectedIndex}
+                        setSelectedIndex=${setSelectedIndex}
                         expandedKeys=${expandedKeys}
                         onToggleExpand=${toggleExpand}
                     />`}
@@ -193,11 +189,6 @@ export function LogsView({ active }) {
         <//>
         ${detailEntry && html`<${LogDetailModal} entry=${detailEntry} onClose=${closeDetail} />`}
     `;
-}
-
-function focusContentSurface(index) {
-    const el = document.querySelector(`.logs-content [data-selected-surface][data-index="${index}"]`);
-    if (el) el.focus();
 }
 
 function collapseEntries(entries) {
@@ -218,13 +209,13 @@ function collapseEntries(entries) {
     return result;
 }
 
-function LiveLog({ entries, selectedIndex, onEntryClick }) {
+function LiveLog({ entries, selectedIndex, setSelectedIndex, onEntryClick }) {
     if (entries.length === 0) {
         return html`<${EmptyState} message="No log entries for today" hint="Errors will appear here when they occur" />`;
     }
     return html`
         <div class="logs-list" role="list">
-            ${entries.map((entry, i) => html`<${LogEntryRow} key=${entry.key || i} entry=${entry} index=${i} selected=${i === selectedIndex} onClick=${() => onEntryClick(entry)} />`)}
+            ${entries.map((entry, i) => html`<${LogEntryRow} key=${entry.key || i} entry=${entry} index=${i} selected=${i === selectedIndex} onSelect=${setSelectedIndex} onClick=${() => onEntryClick(entry)} />`)}
         </div>
     `;
 }
@@ -236,7 +227,7 @@ function countSeverity(count) {
     return '';
 }
 
-function LogEntryRow({ entry, index, selected, onClick }) {
+function LogEntryRow({ entry, index, selected, onSelect, onClick }) {
     const time = entry.ts ? entry.ts.split('T')[1] || entry.ts : '';
     const { label, cls } = levelInfo(entry);
     const loc = entry.loc && entry.loc !== 'unknown:0' && entry.loc !== ':0' ? entry.loc : '';
@@ -246,6 +237,7 @@ function LogEntryRow({ entry, index, selected, onClick }) {
              data-selected-surface="" data-selected=${selected ? 'true' : 'false'}
              data-index=${String(index)}
              data-level=${cls} data-severity=${severity || undefined}
+             onFocus=${() => onSelect(index)}
              onClick=${onClick}>
             <div class="log-row-top">
                 <span class="log-time">${time}</span>
@@ -261,7 +253,7 @@ function LogEntryRow({ entry, index, selected, onClick }) {
     `;
 }
 
-function SuppressedList({ keys, items, onUnsuppress, selectedIndex, expandedKeys, onToggleExpand }) {
+function SuppressedList({ keys, items, onUnsuppress, selectedIndex, setSelectedIndex, expandedKeys, onToggleExpand }) {
     if (keys.length === 0) {
         return html`<${EmptyState} message="No suppressed errors" hint="Errors that repeat ${'\u2265'}5 times are auto-suppressed" />`;
     }
@@ -275,6 +267,7 @@ function SuppressedList({ keys, items, onUnsuppress, selectedIndex, expandedKeys
                     index=${i}
                     onUnsuppress=${onUnsuppress}
                     selected=${i === selectedIndex}
+                    onSelect=${setSelectedIndex}
                     expanded=${expandedKeys.has(key)}
                     onToggle=${() => onToggleExpand(key)}
                 />
@@ -283,10 +276,10 @@ function SuppressedList({ keys, items, onUnsuppress, selectedIndex, expandedKeys
     `;
 }
 
-function SuppressedRow({ sigKey, entry, index, onUnsuppress, selected, expanded, onToggle }) {
+function SuppressedRow({ sigKey, entry, index, onUnsuppress, selected, onSelect, expanded, onToggle }) {
     return html`
         <div class="suppressed-entry ${selected ? 'selected' : ''} ${expanded ? 'expanded' : ''}"
-             role="listitem" data-selected-surface="" data-selected=${selected ? 'true' : 'false'} data-index=${String(index)} onClick=${onToggle}>
+             role="listitem" data-selected-surface="" data-selected=${selected ? 'true' : 'false'} data-index=${String(index)} onFocus=${() => onSelect(index)} onClick=${onToggle}>
             <div class="suppressed-header">
                 <span class="suppressed-expand-icon">${expanded ? '\u25be' : '\u25b8'}</span>
                 <span class="suppressed-key">${sigKey}</span>

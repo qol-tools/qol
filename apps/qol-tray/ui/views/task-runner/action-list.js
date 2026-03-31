@@ -13,6 +13,7 @@ function ActionCard({ actionId, action, isSelected, index, onSelect, onEdit, tes
     const classes = `action-card ${isSelected ? 'selected' : ''} ${testSlot ? 'testing' : ''}`;
     return html`
         <div key=${actionId} class=${classes} data-selected-surface="" data-selected=${isSelected ? 'true' : 'false'} data-index="${index}" data-id="${actionId}"
+             onFocus=${() => onSelect(index)}
              onClick=${e => handleCardClick(e, isSelected, actionId, index, onEdit, onSelect)}>
             <div class="action-header" data-selected-text="">
                 <span class="action-id">${actionId}</span>
