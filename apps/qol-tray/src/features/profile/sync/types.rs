@@ -89,6 +89,8 @@ pub enum SyncProviderFieldKey {
     GistId,
     FolderPath,
     Path,
+    PullOnLaunch,
+    PushOnChange,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -97,6 +99,7 @@ pub enum SyncProviderFieldKind {
     Text,
     Password,
     Select,
+    Boolean,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]

@@ -28,7 +28,7 @@ export function ShortcutsView() {
             <${PageHeader} title="Shortcuts" subtitle="User-defined launcher shortcuts for URLs and apps" />
             <div class="view-body content-shell-body">
                 <div class="content-shell-inner">
-                    <div class="content-frame">
+                    <div class="content-frame" data-surface-container="">
                         <${ShortcutsList} shortcuts=${sc.filtered}
                             selectedIndex=${sc.selectedIndex} onSelect=${sc.setSelectedId} onEdit=${sc.openEditModal} />
                     </div>

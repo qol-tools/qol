@@ -5,6 +5,18 @@ import { connectActionLabel } from './summary.js';
 
 export const PROFILE_SURFACE_SELECTOR = '#profile-page [data-selected-surface]';
 
+export function surfaceProps(surface, selectedIndex, setSelectedIndex) {
+    if (!surface) return null;
+    const selected = surface.index === selectedIndex;
+    return {
+        'data-selected-surface': '',
+        'data-selected': selected ? 'true' : 'false',
+        'data-index': String(surface.index),
+        onMouseDown: () => setSelectedIndex(surface.index),
+        onFocus: () => setSelectedIndex(surface.index),
+    };
+}
+
 export function useSurfaceNav({
     advancedProviderFields,
     backups,
@@ -36,27 +48,8 @@ export function useSurfaceNav({
             next.push({ id, kind, index: next.length, ...extra });
         };
 
-        add('export', 'action', {
-            label: 'Export Profile',
-            variant: 'btn-ghost',
-            run: importBusy ? null : handleExport,
-        });
-        add('import', 'action', {
-            label: 'Import Profile',
-            variant: 'btn-ghost',
-            run: importBusy ? null : handleImport,
-        });
-        add('provider', 'field');
-        basicProviderFields.forEach(field => add(providerFieldSurfaceId(field.key), 'field'));
-        advancedProviderFields.forEach(field => add(providerFieldSurfaceId(field.key), 'field'));
-        add('pull-on-launch', 'toggle', {
-            run: () => updateForm('pull_on_launch', !form.pull_on_launch),
-        });
-        add('push-on-change', 'toggle', {
-            run: () => updateForm('push_on_change', !form.push_on_change),
-        });
+        // Connected: action row surfaces
         if (configured) {
-            add('disconnect', 'action', { label: 'Disconnect', run: syncBusy ? null : handleDisconnect });
             add('pull', 'action', { label: 'Pull Now', run: syncBusy ? null : handlePull });
             add('push', 'action', { label: 'Push Now', run: syncBusy ? null : handlePush });
         }
@@ -67,12 +60,35 @@ export function useSurfaceNav({
                 run: syncBusy ? null : handleAcknowledge,
             });
         }
-        add('connect', 'action', {
-            label: connectActionLabel(configured, form.provider),
-            variant: 'btn-primary',
-            run: syncBusy ? null : handleConnect,
+        if (configured) {
+            add('disconnect', 'action', { label: 'Disconnect', variant: 'btn-ghost', run: syncBusy ? null : handleDisconnect });
+        }
+        // Not connected: connect button
+        if (!configured) {
+            add('connect', 'action', {
+                label: connectActionLabel(configured, form.provider),
+                variant: 'btn-primary',
+                run: syncBusy ? null : handleConnect,
+            });
+        }
+        // Settings expander toggle
+        add('settings', 'toggle', { run: null });
+        // Settings expander surfaces
+        add('provider', 'field');
+        basicProviderFields.forEach(field => add(providerFieldSurfaceId(field.key), 'field'));
+        advancedProviderFields.forEach(field => add(providerFieldSurfaceId(field.key), 'field'));
+        // Backups section
+        add('export', 'action', {
+            label: 'Export',
+            variant: 'btn-ghost',
+            run: importBusy ? null : handleExport,
         });
-        add('open-backups', 'action', { label: 'Open Backups Folder', run: handleOpenBackups });
+        add('import', 'action', {
+            label: 'Import',
+            variant: 'btn-ghost',
+            run: importBusy ? null : handleImport,
+        });
+        add('open-backups', 'action', { label: 'Open Folder', run: handleOpenBackups });
         backups.forEach(backup => {
             add(`backup:${backup.file_name}`, 'action', {
                 label: backup.file_name,
@@ -113,17 +129,11 @@ export function useSurfaceNav({
     );
 
     useEffect(() => {
-        if (didInitSelectionRef.current) {
-            return;
-        }
-        const firstField = basicProviderFields[0];
-        const initial = surfaceById.get('provider') || (firstField ? surfaceById.get(providerFieldSurfaceId(firstField.key)) : null);
-        if (!initial) {
-            return;
-        }
+        if (didInitSelectionRef.current) return;
+        if (surfaces.length === 0) return;
         didInitSelectionRef.current = true;
-        setSelectedIndex(initial.index);
-    }, [basicProviderFields, surfaceById]);
+        setSelectedIndex(0);
+    }, [surfaces.length]);
 
     const navigateInGrid = useGridNav(PROFILE_SURFACE_SELECTOR, selectedIndexRef, setSelectedIndex);
 
@@ -133,7 +143,9 @@ export function useSurfaceNav({
             return;
         }
         if (surface.kind === 'action' || surface.kind === 'toggle') {
-            surface.run?.();
+            if (surface.run) { surface.run(); return; }
+            const el = surfaceElement(surface.index);
+            if (el) el.click();
             return;
         }
         enterSurfaceEditor(surface.index);
@@ -191,20 +203,15 @@ export function useSurfaceNav({
 
 function enterSurfaceEditor(index) {
     const container = surfaceElement(index);
-    if (!(container instanceof HTMLElement)) {
-        return;
-    }
+    if (!(container instanceof HTMLElement)) return;
     const trigger = container.querySelector('.custom-select-trigger');
-    if (trigger instanceof HTMLButtonElement) {
-        trigger.focus();
-        trigger.click();
-        return;
-    }
+    if (trigger instanceof HTMLButtonElement) { trigger.focus(); trigger.click(); return; }
     const input = container.querySelector('[data-profile-editable]');
-    if (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement) {
-        input.focus();
-        input.select?.();
-    }
+    if (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement) { input.focus(); input.select?.(); return; }
+    const link = container.querySelector('a[href]');
+    if (link instanceof HTMLAnchorElement) { link.click(); return; }
+    const button = container.querySelector('button');
+    if (button instanceof HTMLButtonElement) { button.click(); return; }
 }
 
 function focusSurface(index) {

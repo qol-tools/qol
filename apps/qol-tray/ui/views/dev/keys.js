@@ -22,6 +22,8 @@ function handleArrowKey(event, state, delta, bump) {
     event.preventDefault();
     state.selectedIndex = nextSelectedIndex(state.selectedIndex, total, delta);
     bump();
+    const el = document.querySelector(`.plugin-list [data-selected-surface][data-index="${state.selectedIndex}"]`);
+    if (el) el.focus();
 }
 
 export function handleDevKey(event, state, ctrl, bump) {

@@ -136,6 +136,7 @@ function useKeyboard(d, m, deleteById, runById) {
     });
 
     const listHandler = useListKeyboard({
+        surfaceSelector: '.shortcuts-list [data-selected-surface]',
         itemCount: filtered.length,
         selectedIndex,
         setSelectedIndex,

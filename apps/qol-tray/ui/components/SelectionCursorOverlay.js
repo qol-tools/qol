@@ -31,7 +31,7 @@ export function SelectionCursorOverlay() {
             const nextTarget = findActiveSelectedSurface({ currentTarget: targetRef.current });
             trackTarget(nextTarget, sync, resizeObserverRef, appRef, targetRef);
 
-            if (!(nextTarget instanceof HTMLElement)) {
+            if (!(nextTarget instanceof HTMLElement) || isObscuredByModal(nextTarget)) {
                 rectRef.current = null;
                 setStyle(previous => hiddenStyle(previous));
                 return;
@@ -49,7 +49,7 @@ export function SelectionCursorOverlay() {
         };
 
         const setInputMode = (mode) => { app.dataset.inputMode = mode; };
-        const onKey = () => setInputMode('keyboard');
+        const onKey = () => { setInputMode('keyboard'); sync(); };
         const onPointer = () => setInputMode('mouse');
         const onWheel = () => setInputMode('mouse');
         setInputMode('keyboard');
@@ -251,6 +251,14 @@ function ensureSurfacesFocusable(mutations) {
         if (el.hasAttribute('tabindex')) continue;
         el.tabIndex = -1;
     }
+}
+
+function isObscuredByModal(target) {
+    if (target.closest('.edit-modal, .confirm-modal')) return false;
+    const modal = document.querySelector('.edit-modal, .confirm-modal');
+    if (!modal) return false;
+    const rect = modal.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
 }
 
 function collectNewSurfaces(mutations) {

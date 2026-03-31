@@ -54,7 +54,7 @@ function StringField({ field }) {
     }, [ctx, field.id]);
 
     return html`
-        <div tabIndex="-1" class="field-group ${fieldSelectionClasses(selected)}"
+        <div class="field-group ${fieldSelectionClasses(selected)}"
             data-plugin-config-field-id=${field.id}
             data-plugin-config-index=${index}
             data-selected-surface=""
@@ -85,7 +85,7 @@ function SelectField({ field }) {
     }, [ctx, field.id]);
 
     return html`
-        <div tabIndex="-1" class="field-group ${fieldSelectionClasses(selected)}"
+        <div class="field-group ${fieldSelectionClasses(selected)}"
             data-plugin-config-field-id=${field.id}
             data-plugin-config-index=${index}
             data-selected-surface=""
@@ -109,7 +109,7 @@ function Toggle({ checked, onChange, label, description, selected, index, onSele
     }, [toggle]);
 
     return html`
-        <div tabIndex="-1" class="toggle-row ${fieldSelectionClasses(selected)}"
+        <div class="toggle-row ${fieldSelectionClasses(selected)}"
             data-plugin-config-field-id=${fieldId}
             data-plugin-config-index=${index}
             data-selected-surface=""

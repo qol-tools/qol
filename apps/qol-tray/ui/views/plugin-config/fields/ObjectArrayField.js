@@ -33,7 +33,7 @@ export function ObjectArrayField({ field }) {
     }, [ctx, field.id]);
 
     return html`
-        <div tabIndex="-1" class="field-group ${fieldSelectionClasses(selected)}"
+        <div class="field-group ${fieldSelectionClasses(selected)}"
             data-plugin-config-field-id=${field.id}
             data-plugin-config-index=${index}
             data-selected-surface=""

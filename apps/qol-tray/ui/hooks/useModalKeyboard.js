@@ -36,7 +36,6 @@ export function useModalKeyboard({ onSave, onClose }) {
             return;
         }
 
-        if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
         if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); onSave(); return; }
 
         if (e.key === 'ArrowDown' || e.key === 'j') {

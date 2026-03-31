@@ -14,8 +14,7 @@ function routePluginsKey(e, list, modal, actions) {
 }
 
 function routeConfirmKey(e, clearConfirm, confirmUninstall) {
-    if (e.key === 'Escape') { e.preventDefault(); clearConfirm(); }
-    else if (e.key === 'Enter') { e.preventDefault(); confirmUninstall(); }
+    if (e.key === 'Enter') { e.preventDefault(); confirmUninstall(); }
 }
 
 function routeContextMenuKey(e, list, modal) {

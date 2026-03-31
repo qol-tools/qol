@@ -89,13 +89,9 @@ export function SidebarNav({
                             <div
                                 key=${item.key}
                                 class="sidebar-item ${item.active ? 'active' : ''}"
-                                data-selected-surface=""
-                                data-selected=${item.active ? 'true' : 'false'}
-                                data-selected-surface-edge-highlight="none"
-                                data-selected-surface-priority="-1"
                                 onClick=${item.onClick}>
                                 <div class="sidebar-item-inner">
-                                    <span data-selected-text="">${item.label}</span>
+                                    <span>${item.label}</span>
                                     ${item.trailing}
                                 </div>
                             </div>

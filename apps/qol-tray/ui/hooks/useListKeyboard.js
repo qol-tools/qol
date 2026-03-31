@@ -14,7 +14,7 @@ const STANDARD_KEYS = {
     Backspace: 'delete',
 };
 
-export function useListKeyboard({ itemCount, selectedIndex, setSelectedIndex, onAdd, onDelete, onEdit }) {
+export function useListKeyboard({ surfaceSelector, itemCount, selectedIndex, setSelectedIndex, onAdd, onDelete, onEdit }) {
     return useCallback((e) => {
         const action = STANDARD_KEYS[e.key];
         if (!action) return;
@@ -22,11 +22,15 @@ export function useListKeyboard({ itemCount, selectedIndex, setSelectedIndex, on
         e.preventDefault();
 
         if (action === 'up') {
-            setSelectedIndex(i => Math.max(0, i - 1));
+            const next = Math.max(0, selectedIndex - 1);
+            setSelectedIndex(next);
+            focusSurface(surfaceSelector, next);
             return;
         }
         if (action === 'down') {
-            setSelectedIndex(i => Math.min(itemCount - 1, i + 1));
+            const next = Math.min(itemCount - 1, selectedIndex + 1);
+            setSelectedIndex(next);
+            focusSurface(surfaceSelector, next);
             return;
         }
         if (action === 'add' && onAdd) {
@@ -41,5 +45,11 @@ export function useListKeyboard({ itemCount, selectedIndex, setSelectedIndex, on
             onEdit();
             return;
         }
-    }, [itemCount, selectedIndex, setSelectedIndex, onAdd, onDelete, onEdit]);
+    }, [surfaceSelector, itemCount, selectedIndex, setSelectedIndex, onAdd, onDelete, onEdit]);
+}
+
+function focusSurface(selector, index) {
+    if (!selector) return;
+    const el = document.querySelector(`${selector}[data-index="${index}"]`);
+    if (el) el.focus();
 }

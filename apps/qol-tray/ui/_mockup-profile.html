@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Button System + Profile Page</title>
+<style>
+:root {
+    --slate-950: #161920; --slate-900: #1a1e26; --slate-850: #20252f;
+    --slate-800: #272d38; --slate-750: #2f3644; --slate-700: #394257;
+    --slate-600: #4d5870; --slate-500: #67748f; --slate-400: #8a97ae;
+    --slate-300: #b8c0d0; --slate-200: #d6deeb; --slate-100: #edf2fb;
+    --blue-500: #4a9eff; --green-400: #4ade80; --amber-500: #ffc107; --red-500: #ff6b6b;
+    --accent-rgb: 74, 158, 255; --success-rgb: 74, 222, 128;
+    --warning-rgb: 255, 193, 7; --danger-rgb: 255, 107, 107;
+    --ink-rgb: 0, 0, 0; --paper-rgb: 255, 255, 255;
+    --layer-paper-05: rgba(255,255,255,0.05); --layer-paper-06: rgba(255,255,255,0.06);
+    --layer-ink-18: rgba(0,0,0,0.18);
+    --radius-md: 6px; --radius-lg: 8px; --radius-xl: 12px;
+    --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 24px;
+    --fs-xs: 0.7rem; --fs-sm: 0.8rem; --fs-base: 0.875rem;
+    --fw-semibold: 600;
+    --font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: var(--fs-base); color: var(--slate-300); background: var(--slate-950);
+    padding: 24px 16px;
+}
+
+/* ===================================================================
+   BUTTON CONTRACT
+
+   All interactive triggers share:
+   - Same padding, radius, font, transition
+   - Icon slot (start), label, hint slot (end)
+   - Variants: primary, secondary (default), ghost, danger
+   - Behaviors: normal (click), dropdown (▾), expander (chevron)
+   - Sizes: default, sm
+   =================================================================== */
+
+.btn {
+    /* Base contract */
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 12px; border-radius: var(--radius-md);
+    font-family: inherit; font-size: var(--fs-sm);
+    cursor: pointer; user-select: none;
+    text-align: left; white-space: nowrap;
+    transition: background 0.1s, border-color 0.1s, color 0.1s;
+
+    /* Default variant: secondary */
+    border: 1px solid var(--slate-700);
+    background: var(--slate-800);
+    color: var(--slate-300);
+}
+.btn:hover {
+    background: var(--slate-750);
+    border-color: var(--slate-600);
+    color: var(--slate-200);
+}
+
+/* --- Variants --- */
+.btn-primary {
+    background: rgba(var(--accent-rgb), 0.18);
+    border-color: rgba(var(--accent-rgb), 0.4);
+    color: var(--slate-100);
+}
+.btn-primary:hover {
+    background: rgba(var(--accent-rgb), 0.28);
+    border-color: rgba(var(--accent-rgb), 0.5);
+}
+
+.btn-ghost {
+    border-color: transparent;
+    background: transparent;
+    color: var(--slate-500);
+}
+.btn-ghost:hover {
+    color: var(--slate-300);
+    background: var(--layer-paper-05);
+}
+
+.btn-danger {
+    border-color: rgba(var(--danger-rgb), 0.25);
+    background: rgba(var(--danger-rgb), 0.08);
+    color: rgba(var(--danger-rgb), 0.8);
+}
+.btn-danger:hover {
+    background: rgba(var(--danger-rgb), 0.15);
+    border-color: rgba(var(--danger-rgb), 0.4);
+    color: var(--red-500);
+}
+
+/* Active state (for toggleable buttons like Settings when expanded) */
+.btn.is-active {
+    border-color: rgba(var(--accent-rgb), 0.3);
+    background: rgba(var(--accent-rgb), 0.08);
+    color: var(--slate-200);
+}
+
+/* --- Sizes --- */
+.btn-sm { padding: 3px 9px; font-size: var(--fs-xs); }
+.btn-sm .btn-icon { font-size: 0.6rem; }
+
+/* --- Slots --- */
+.btn-icon {
+    flex-shrink: 0; font-size: 0.7rem; line-height: 1;
+    color: inherit; opacity: 0.6;
+    transition: transform 0.15s ease;
+}
+.btn-hint {
+    margin-left: auto; flex-shrink: 0;
+    font-size: 0.65rem; opacity: 0.45;
+    font-family: var(--font-mono);
+}
+
+/* --- Behavior: expander ---
+   Collapsed: looks exactly like a normal .btn.
+   Expanded: the button morphs — its border stretches to wrap children. */
+.btn-expander {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 0;
+    overflow: hidden;
+}
+.btn-expander .btn-expander-trigger {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 12px;
+}
+.btn-expander .btn-icon-chevron {
+    font-size: 0.55rem;
+    opacity: 0.5;
+}
+.btn-expander[aria-expanded="true"] .btn-icon-chevron { transform: rotate(90deg); }
+.btn-expander .btn-expander-body {
+    display: none;
+}
+.btn-expander[aria-expanded="true"] .btn-expander-body {
+    display: flex; flex-direction: column; gap: var(--space-3);
+    padding: var(--space-3);
+    border-top: 1px solid var(--slate-750);
+    background: var(--slate-850);
+    cursor: default;
+    font-size: var(--fs-sm); text-transform: none; letter-spacing: normal; font-weight: normal;
+}
+/* non-expander fallback */
+.btn[aria-expanded="true"]:not(.btn-expander) .btn-icon-chevron { transform: rotate(90deg); }
+
+/* --- Behavior: dropdown ---
+   Displays a current value, not a command. Dashed border signals
+   "this is a changeable selection". Opens a popover on click. */
+.btn-dropdown {
+    border-style: dashed;
+    border-color: var(--slate-600);
+    color: var(--slate-200);
+}
+.btn-dropdown:hover {
+    border-color: var(--slate-500);
+    border-style: dashed;
+}
+.btn-dropdown[aria-expanded="true"] {
+    border-style: solid;
+    border-color: rgba(var(--accent-rgb), 0.5);
+    background: rgba(var(--accent-rgb), 0.12);
+    color: var(--slate-100);
+}
+
+/* Dropdown popover menu */
+.dropdown-anchor { position: relative; display: inline-flex; }
+.dropdown-menu {
+    display: none;
+    position: absolute; top: calc(100% + 4px); left: 0; min-width: 100%;
+    background: var(--slate-800); border: 1px solid var(--slate-700);
+    border-radius: var(--radius-md); padding: 4px 0;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 10;
+}
+.dropdown-anchor:has(.btn-dropdown[aria-expanded="true"]) .dropdown-menu { display: block; }
+.dropdown-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 12px; color: var(--slate-300);
+    font-size: var(--fs-sm); cursor: pointer; white-space: nowrap;
+    transition: background 0.08s;
+}
+.dropdown-item:hover { background: var(--layer-paper-05); color: var(--slate-100); }
+.dropdown-item.is-active { color: var(--blue-500); }
+.dropdown-item .check { width: 14px; text-align: center; font-size: 0.65rem; }
+
+/* --- Behavior: full-width trigger --- */
+.btn-block { width: 100%; justify-content: flex-start; }
+
+/* --- Keyboard shortcut badge --- */
+.btn kbd {
+    font-family: var(--font-mono); font-size: 0.65rem; opacity: 0.4;
+    padding: 1px 4px; border-radius: 3px; background: rgba(255,255,255,0.06);
+}
+
+
+/* ===================================================================
+   LAYOUT COMPONENTS
+   =================================================================== */
+
+.page-header { margin-bottom: var(--space-4); }
+.page-header h1 { color: var(--slate-100); font-size: 1.1rem; margin-bottom: 2px; }
+.page-header p { color: var(--slate-500); font-size: var(--fs-sm); }
+
+.section {
+    display: flex; flex-direction: column; gap: var(--space-3);
+    padding: var(--space-4); border: 1px solid var(--slate-750); border-radius: var(--radius-xl);
+    background: var(--slate-800); box-shadow: inset 0 1px 0 var(--layer-paper-06), 0 8px 24px var(--layer-ink-18);
+}
+.section-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.section-header h2 { color: var(--slate-100); font-size: var(--fs-base); font-weight: var(--fw-semibold); }
+.section-actions { display: flex; align-items: center; gap: var(--space-2); }
+.actions-row { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+
+.dot {
+    width: 8px; height: 8px; border-radius: 99px; flex-shrink: 0;
+    background: var(--slate-600); box-shadow: 0 0 0 1px rgba(255,255,255,0.08);
+}
+.dot.ok { background: var(--green-400); box-shadow: 0 0 0 4px rgba(var(--success-rgb),0.14); }
+.dot.warn { background: var(--amber-500); box-shadow: 0 0 0 4px rgba(var(--warning-rgb),0.14); }
+.badge {
+    display: inline-flex; padding: 2px 8px; border-radius: var(--radius-md);
+    font-size: var(--fs-xs); font-weight: var(--fw-semibold);
+    border: 1px solid rgba(var(--accent-rgb),0.24); background: rgba(var(--accent-rgb),0.12); color: var(--slate-100);
+}
+.meta { color: var(--slate-500); font-size: var(--fs-sm); }
+.empty { color: var(--slate-500); font-size: var(--fs-sm); }
+.spacer { flex: 1; }
+
+/* Settings panel */
+.panel {
+    padding: var(--space-3); border-radius: var(--radius-md);
+    border: 1px solid var(--slate-750); background: var(--slate-850);
+    display: flex; flex-direction: column; gap: var(--space-3);
+}
+.field-row { display: flex; flex-direction: column; gap: 3px; }
+.field-row-inline { display: flex; align-items: center; gap: var(--space-2); }
+.field-row-inline .field-label { min-width: 5rem; }
+.field-label { color: var(--slate-500); font-size: var(--fs-xs); }
+.field-value { color: var(--slate-300); font-family: var(--font-mono); font-size: var(--fs-sm); word-break: break-all; }
+.field-link { color: rgba(var(--accent-rgb),0.65); text-decoration: none; font-family: var(--font-mono); font-size: var(--fs-sm); }
+.field-link:hover { color: var(--blue-500); text-decoration: underline; }
+.toggle-row { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.toggle-row label { display: flex; align-items: center; gap: 6px; color: var(--slate-400); font-size: var(--fs-sm); cursor: pointer; }
+.panel-divider { border: none; border-top: 1px solid var(--slate-750); margin: 0; }
+
+/* Backup rows */
+.backup-list { background: var(--slate-850); border: 1px solid var(--slate-750); border-radius: var(--radius-lg); overflow: hidden; }
+.backup-row {
+    display: flex; align-items: center; gap: var(--space-3); padding: 8px 12px;
+    border-bottom: 1px solid var(--slate-750); border-left: 3px solid rgba(var(--accent-rgb),0.28); cursor: pointer; transition: background 0.1s;
+}
+.backup-row:hover { background: var(--slate-800); }
+.backup-row:last-child { border-bottom: none; }
+.backup-file { color: var(--slate-300); font-family: var(--font-mono); font-size: var(--fs-sm); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.backup-meta { margin-left: auto; color: var(--slate-600); font-size: var(--fs-xs); white-space: nowrap; }
+
+/* Device code */
+.device-auth { display: flex; flex-direction: column; align-items: center; gap: var(--space-3); padding: var(--space-4) 0; }
+.device-code {
+    font-size: 1.6rem; font-weight: 700; font-family: var(--font-mono);
+    letter-spacing: 0.15em; padding: 8px 20px; border-radius: var(--radius-md);
+    border: 1px dashed var(--slate-600); color: var(--slate-100); cursor: pointer; user-select: all;
+}
+.device-code:hover { border-color: var(--blue-500); background: rgba(var(--accent-rgb),0.05); }
+.device-hint { font-size: var(--fs-sm); color: var(--slate-500); }
+
+.hidden { display: none !important; }
+
+/* Page layout */
+.demo-grid { display: flex; flex-wrap: wrap; gap: 32px; justify-content: center; }
+.demo-card {
+    width: 480px; flex-shrink: 0;
+    border: 1px solid var(--slate-750); border-radius: var(--radius-xl);
+    background: var(--slate-900); overflow: hidden;
+}
+.demo-card-label {
+    padding: 10px 16px; background: var(--slate-850); border-bottom: 1px solid var(--slate-750);
+    color: var(--slate-400); font-size: var(--fs-xs); font-weight: var(--fw-semibold);
+    letter-spacing: 0.1em; text-transform: uppercase;
+}
+.demo-card-body { padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-4); }
+
+/* Button showcase */
+.showcase { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-4); }
+.showcase-group { display: flex; flex-direction: column; gap: var(--space-2); }
+.showcase-group-label { color: var(--slate-500); font-size: var(--fs-xs); font-weight: var(--fw-semibold); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 2px; }
+.showcase-row { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+</style>
+</head>
+<body>
+
+<!-- ===================================================================
+     PART 1: BUTTON SYSTEM SHOWCASE
+     =================================================================== -->
+
+<div style="text-align:center; margin-bottom:24px;">
+    <h1 style="color:var(--slate-100); font-size:1.1rem;">Button System</h1>
+    <p class="meta">One contract, three behaviors, four variants</p>
+</div>
+
+<div class="demo-grid" style="margin-bottom:48px;">
+
+<div class="demo-card" style="width:600px;">
+    <div class="demo-card-label">Button contract</div>
+    <div class="showcase">
+
+        <div class="showcase-group">
+            <div class="showcase-group-label">Variants</div>
+            <div class="showcase-row">
+                <button class="btn">Secondary</button>
+                <button class="btn btn-primary">Primary</button>
+                <button class="btn btn-ghost">Ghost</button>
+                <button class="btn btn-danger">Danger</button>
+                <button class="btn is-active">Active</button>
+            </div>
+            <div class="showcase-row">
+                <button class="btn btn-sm">Secondary sm</button>
+                <button class="btn btn-sm btn-primary">Primary sm</button>
+                <button class="btn btn-sm btn-ghost">Ghost sm</button>
+            </div>
+        </div>
+
+        <div class="showcase-group">
+            <div class="showcase-group-label">With icons</div>
+            <div class="showcase-row">
+                <button class="btn"><span class="btn-icon">↓</span> Pull</button>
+                <button class="btn"><span class="btn-icon">↑</span> Push</button>
+                <button class="btn btn-primary"><span class="btn-icon">⚡</span> Connect GitHub</button>
+                <button class="btn btn-danger"><span class="btn-icon">✕</span> Disconnect</button>
+            </div>
+        </div>
+
+        <div class="showcase-group">
+            <div class="showcase-group-label">Behavior: Normal (click action)</div>
+            <div class="showcase-row">
+                <button class="btn"><span class="btn-icon">↓</span> Pull <kbd>P</kbd></button>
+                <button class="btn"><span class="btn-icon">↑</span> Push</button>
+                <button class="btn"><span class="btn-icon">📂</span> Open Folder</button>
+            </div>
+        </div>
+
+        <div class="showcase-group">
+            <div class="showcase-group-label">Behavior: Dropdown (spawns popover)</div>
+            <div class="showcase-row" style="align-items:flex-start;">
+                <div class="dropdown-anchor">
+                    <button class="btn btn-dropdown" onclick="let ex=this.getAttribute('aria-expanded')==='true'?'false':'true'; this.setAttribute('aria-expanded',ex)">GitHub</button>
+                    <div class="dropdown-menu">
+                        <div class="dropdown-item is-active"><span class="check">✓</span> GitHub</div>
+                        <div class="dropdown-item"><span class="check"></span> Folder</div>
+                    </div>
+                </div>
+                <div class="dropdown-anchor">
+                    <button class="btn btn-dropdown" aria-expanded="true" onclick="let ex=this.getAttribute('aria-expanded')==='true'?'false':'true'; this.setAttribute('aria-expanded',ex)">GitHub</button>
+                    <div class="dropdown-menu">
+                        <div class="dropdown-item is-active"><span class="check">✓</span> GitHub</div>
+                        <div class="dropdown-item"><span class="check"></span> Folder</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="showcase-group">
+            <div class="showcase-group-label">Behavior: Expander (button morphs into container)</div>
+            <div class="showcase-row" style="align-items:flex-start;">
+                <button class="btn btn-expander" aria-expanded="false" onclick="let ex=this.getAttribute('aria-expanded')==='true'?'false':'true'; this.setAttribute('aria-expanded',ex)">
+                    <div class="btn-expander-trigger"><span class="btn-icon btn-icon-chevron">▶</span> Settings</div>
+                    <div class="btn-expander-body">
+                        <span class="meta">Provider, sync options, etc.</span>
+                    </div>
+                </button>
+                <button class="btn btn-expander" aria-expanded="true" onclick="let ex=this.getAttribute('aria-expanded')==='true'?'false':'true'; this.setAttribute('aria-expanded',ex)">
+                    <div class="btn-expander-trigger"><span class="btn-icon btn-icon-chevron">▶</span> Settings</div>
+                    <div class="btn-expander-body">
+                        <span class="meta">Provider, sync options, etc.</span>
+                    </div>
+                </button>
+            </div>
+        </div>
+
+    </div>
+</div>
+</div>
+
+<!-- ===================================================================
+     PART 2: PROFILE PAGE — PROVIDER-AWARE DESIGN EXPLORATIONS
+     =================================================================== -->
+
+<div style="text-align:center; margin-bottom:24px;">
+    <h1 style="color:var(--slate-100); font-size:1.1rem;">Profile Page — Provider-Aware UX</h1>
+    <p class="meta">Cloud providers have connections. Local providers have paths.</p>
+</div>
+
+<div style="text-align:center; margin-bottom:16px;">
+    <p class="meta" style="font-size:var(--fs-base); color:var(--slate-400);">Approach A — Two distinct sections, provider drives everything</p>
+</div>
+
+<div class="demo-grid">
+
+<!-- ~~~ APPROACH A: Separate sections, provider owns everything ~~~ -->
+
+<!-- A: GitHub — connected -->
+<div class="demo-card">
+    <div class="demo-card-label">A · GitHub — Connected</div>
+    <div class="demo-card-body">
+        <section class="section">
+            <div class="section-header">
+                <div style="display:flex; align-items:center; gap:var(--space-2);">
+                    <span class="dot ok"></span>
+                    <h2>Cloud Sync</h2>
+                </div>
+                <span class="meta">synced 2 min ago</span>
+            </div>
+            <div class="actions-row">
+                <button class="btn"><span class="btn-icon">↓</span> Pull</button>
+                <button class="btn"><span class="btn-icon">↑</span> Push</button>
+                <span class="spacer"></span>
+                <button class="btn btn-ghost">Disconnect</button>
+            </div>
+            <div class="btn btn-expander" aria-expanded="false" onclick="if(event.target.closest('.btn-expander-body'))return; let ex=this.getAttribute('aria-expanded')==='true'?'false':'true'; this.setAttribute('aria-expanded',ex)">
+                <div class="btn-expander-trigger"><span class="btn-icon btn-icon-chevron">▶</span> Settings</div>
+                <div class="btn-expander-body" onclick="event.stopPropagation()">
+                    <div class="field-row">
+                        <span class="field-label">Gist</span>
+                        <a href="#" class="field-link">a523f249116b988515d1aa2df998443b ↗</a>
+                    </div>
+                    <hr class="panel-divider">
+                    <div class="toggle-row">
+                        <label><input type="checkbox" checked> Pull on launch</label>
+                        <label><input type="checkbox" checked> Push on changes</label>
+                    </div>
+                </div>
+            </div>
+        </section>
+        <section class="section">
+            <div class="section-header">
+                <h2>Backups</h2>
+                <div class="section-actions">
+                    <span class="badge">2</span>
+                    <button class="btn btn-sm"><span class="btn-icon">↗</span> Export</button>
+                    <button class="btn btn-sm"><span class="btn-icon">↙</span> Import</button>
+                </div>
+            </div>
+            <div class="backup-list">
+                <div class="backup-row"><span class="backup-file">20260330-113031-remote-applied.json</span><span class="backup-meta">1.2 KB</span></div>
+                <div class="backup-row"><span class="backup-file">20260329-094512-connect.json</span><span class="backup-meta">0.8 KB</span></div>
+            </div>
+        </section>
+    </div>
+</div>
+
+<!-- A: GitHub — not connected -->
+<div class="demo-card">
+    <div class="demo-card-label">A · GitHub — Not connected</div>
+    <div class="demo-card-body">
+        <section class="section">
+            <div class="section-header">
+                <div style="display:flex; align-items:center; gap:var(--space-2);">
+                    <span class="dot"></span>
+                    <h2>Cloud Sync</h2>
+                </div>
+            </div>
+            <p class="empty">Sync your profile to a private GitHub Gist. Changes push automatically.</p>
+            <div class="actions-row" style="justify-content:center; padding:var(--space-2) 0;">
+                <button class="btn btn-primary" style="padding:8px 24px;"><span class="btn-icon">⚡</span> Connect GitHub</button>
+            </div>
+        </section>
+        <section class="section">
+            <div class="section-header">
+                <h2>Backups</h2>
+                <div class="section-actions">
+                    <button class="btn btn-sm"><span class="btn-icon">↗</span> Export</button>
+                    <button class="btn btn-sm"><span class="btn-icon">↙</span> Import</button>
+                </div>
+            </div>
+            <p class="empty">No sync backups yet.</p>
+        </section>
+    </div>
+</div>
+
+<!-- A: Folder — configured -->
+<div class="demo-card">
+    <div class="demo-card-label">A · Folder — Configured</div>
+    <div class="demo-card-body">
+        <section class="section">
+            <div class="section-header">
+                <h2>Local Storage</h2>
+                <span class="meta">last written 5 min ago</span>
+            </div>
+            <div class="panel">
+                <div class="field-row">
+                    <span class="field-label">Location</span>
+                    <span class="field-value">/home/user/Dropbox/qol-sync/qol-tray-profile.json</span>
+                </div>
+            </div>
+            <div class="actions-row">
+                <button class="btn"><span class="btn-icon">↓</span> Read</button>
+                <button class="btn"><span class="btn-icon">↑</span> Write</button>
+                <button class="btn btn-sm"><span class="btn-icon">📂</span> Open</button>
+                <span class="spacer"></span>
+                <button class="btn btn-ghost">Remove</button>
+            </div>
+        </section>
+        <section class="section">
+            <div class="section-header">
+                <h2>Backups</h2>
+                <div class="section-actions">
+                    <span class="badge">1</span>
+                    <button class="btn btn-sm"><span class="btn-icon">↗</span> Export</button>
+                    <button class="btn btn-sm"><span class="btn-icon">↙</span> Import</button>
+                </div>
+            </div>
+            <div class="backup-list">
+                <div class="backup-row"><span class="backup-file">20260329-094512-connect.json</span><span class="backup-meta">0.8 KB</span></div>
+            </div>
+        </section>
+    </div>
+</div>
+
+<!-- A: Folder — not configured -->
+<div class="demo-card">
+    <div class="demo-card-label">A · Folder — Not configured</div>
+    <div class="demo-card-body">
+        <section class="section">
+            <div class="section-header">
+                <h2>Local Storage</h2>
+            </div>
+            <p class="empty">Save your profile to a local or synced folder (Dropbox, iCloud, etc).</p>
+            <div class="panel">
+                <div class="field-row">
+                    <span class="field-label">Folder</span>
+                    <input type="text" placeholder="Absolute folder path" style="flex:1; padding:4px 8px; border:1px solid var(--slate-700); border-radius:var(--radius-md); background:var(--slate-900); color:var(--slate-200); font-family:var(--font-mono); font-size:var(--fs-sm);">
+                </div>
+                <div class="field-row">
+                    <span class="field-label">Filename</span>
+                    <input type="text" placeholder="qol-tray-profile.json" style="flex:1; padding:4px 8px; border:1px solid var(--slate-700); border-radius:var(--radius-md); background:var(--slate-900); color:var(--slate-200); font-family:var(--font-mono); font-size:var(--fs-sm);">
+                </div>
+            </div>
+            <div class="actions-row" style="justify-content:flex-end;">
+                <button class="btn btn-primary"><span class="btn-icon">💾</span> Save</button>
+            </div>
+        </section>
+        <section class="section">
+            <div class="section-header">
+                <h2>Backups</h2>
+                <div class="section-actions">
+                    <button class="btn btn-sm"><span class="btn-icon">↗</span> Export</button>
+                    <button class="btn btn-sm"><span class="btn-icon">↙</span> Import</button>
+                </div>
+            </div>
+            <p class="empty">No sync backups yet.</p>
+        </section>
+    </div>
+</div>
+
+</div><!-- /demo-grid A -->
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+<div style="text-align:center; margin:48px 0 16px;">
+    <p class="meta" style="font-size:var(--fs-base); color:var(--slate-400);">Approach B — One section, provider switcher at top, content morphs</p>
+</div>
+
+<div class="demo-grid">
+
+<!-- B: GitHub connected -->
+<div class="demo-card">
+    <div class="demo-card-label">B · GitHub — Connected</div>
+    <div class="demo-card-body">
+        <section class="section">
+            <div style="display:flex; align-items:center; gap:var(--space-2); margin-bottom:var(--space-2);">
+                <button class="btn btn-dropdown btn-sm" style="border-color:rgba(var(--accent-rgb),0.3); color:var(--slate-200);">GitHub</button>
+                <span class="spacer"></span>
+                <span class="dot ok"></span>
+                <span class="meta">synced 2 min ago</span>
+            </div>
+            <div class="actions-row">
+                <button class="btn"><span class="btn-icon">↓</span> Pull</button>
+                <button class="btn"><span class="btn-icon">↑</span> Push</button>
+                <span class="spacer"></span>
+                <button class="btn btn-ghost">Disconnect</button>
+            </div>
+            <div class="btn btn-expander" aria-expanded="false" onclick="if(event.target.closest('.btn-expander-body'))return; let ex=this.getAttribute('aria-expanded')==='true'?'false':'true'; this.setAttribute('aria-expanded',ex)">
+                <div class="btn-expander-trigger"><span class="btn-icon btn-icon-chevron">▶</span> Settings</div>
+                <div class="btn-expander-body" onclick="event.stopPropagation()">
+                    <div class="field-row">
+                        <span class="field-label">Gist</span>
+                        <a href="#" class="field-link">a523f249116b988515d1aa2df998443b ↗</a>
+                    </div>
+                    <hr class="panel-divider">
+                    <div class="toggle-row">
+                        <label><input type="checkbox" checked> Pull on launch</label>
+                        <label><input type="checkbox" checked> Push on changes</label>
+                    </div>
+                </div>
+            </div>
+        </section>
+        <section class="section">
+            <div class="section-header"><h2>Backups</h2><div class="section-actions"><span class="badge">2</span><button class="btn btn-sm"><span class="btn-icon">↗</span> Export</button><button class="btn btn-sm"><span class="btn-icon">↙</span> Import</button></div></div>
+            <div class="backup-list">
+                <div class="backup-row"><span class="backup-file">20260330-113031-remote-applied.json</span><span class="backup-meta">1.2 KB</span></div>
+                <div class="backup-row"><span class="backup-file">20260329-094512-connect.json</span><span class="backup-meta">0.8 KB</span></div>
+            </div>
+        </section>
+    </div>
+</div>
+
+<!-- B: Folder configured -->
+<div class="demo-card">
+    <div class="demo-card-label">B · Folder — Configured</div>
+    <div class="demo-card-body">
+        <section class="section">
+            <div style="display:flex; align-items:center; gap:var(--space-2); margin-bottom:var(--space-2);">
+                <button class="btn btn-dropdown btn-sm" style="border-color:rgba(var(--accent-rgb),0.3); color:var(--slate-200);">Folder</button>
+                <span class="spacer"></span>
+                <span class="meta">last written 5 min ago</span>
+            </div>
+            <div class="panel">
+                <div class="field-row">
+                    <span class="field-label">Location</span>
+                    <span class="field-value">/home/user/Dropbox/qol-sync/qol-tray-profile.json</span>
+                </div>
+            </div>
+            <div class="actions-row">
+                <button class="btn"><span class="btn-icon">↓</span> Read</button>
+                <button class="btn"><span class="btn-icon">↑</span> Write</button>
+                <button class="btn btn-sm"><span class="btn-icon">📂</span> Open</button>
+                <span class="spacer"></span>
+                <button class="btn btn-ghost">Remove</button>
+            </div>
+        </section>
+        <section class="section">
+            <div class="section-header"><h2>Backups</h2><div class="section-actions"><span class="badge">1</span><button class="btn btn-sm"><span class="btn-icon">↗</span> Export</button><button class="btn btn-sm"><span class="btn-icon">↙</span> Import</button></div></div>
+            <div class="backup-list">
+                <div class="backup-row"><span class="backup-file">20260329-094512-connect.json</span><span class="backup-meta">0.8 KB</span></div>
+            </div>
+        </section>
+    </div>
+</div>
+
+<!-- B: Nothing configured -->
+<div class="demo-card">
+    <div class="demo-card-label">B · Nothing configured</div>
+    <div class="demo-card-body">
+        <section class="section">
+            <div style="display:flex; align-items:center; gap:var(--space-2); margin-bottom:var(--space-2);">
+                <button class="btn btn-dropdown btn-sm">None</button>
+                <span class="spacer"></span>
+            </div>
+            <p class="empty">Choose a sync method to keep your profile backed up across machines.</p>
+        </section>
+        <section class="section">
+            <div class="section-header"><h2>Backups</h2><div class="section-actions"><button class="btn btn-sm"><span class="btn-icon">↗</span> Export</button><button class="btn btn-sm"><span class="btn-icon">↙</span> Import</button></div></div>
+            <p class="empty">No backups yet.</p>
+        </section>
+    </div>
+</div>
+
+<!-- B: Folder not configured -->
+<div class="demo-card">
+    <div class="demo-card-label">B · Folder — Not configured</div>
+    <div class="demo-card-body">
+        <section class="section">
+            <div style="display:flex; align-items:center; gap:var(--space-2); margin-bottom:var(--space-2);">
+                <button class="btn btn-dropdown btn-sm" style="border-color:rgba(var(--accent-rgb),0.3); color:var(--slate-200);">Folder</button>
+                <span class="spacer"></span>
+            </div>
+            <div class="panel">
+                <div class="field-row">
+                    <span class="field-label">Folder</span>
+                    <input type="text" placeholder="/path/to/sync/folder" style="flex:1; padding:4px 8px; border:1px solid var(--slate-700); border-radius:var(--radius-md); background:var(--slate-900); color:var(--slate-200); font-family:var(--font-mono); font-size:var(--fs-sm);">
+                </div>
+                <div class="field-row">
+                    <span class="field-label">Filename</span>
+                    <input type="text" placeholder="qol-tray-profile.json" style="flex:1; padding:4px 8px; border:1px solid var(--slate-700); border-radius:var(--radius-md); background:var(--slate-900); color:var(--slate-200); font-family:var(--font-mono); font-size:var(--fs-sm);">
+                </div>
+            </div>
+            <div class="actions-row" style="justify-content:flex-end;">
+                <button class="btn btn-primary"><span class="btn-icon">💾</span> Save</button>
+            </div>
+        </section>
+        <section class="section">
+            <div class="section-header"><h2>Backups</h2><div class="section-actions"><button class="btn btn-sm"><span class="btn-icon">↗</span> Export</button><button class="btn btn-sm"><span class="btn-icon">↙</span> Import</button></div></div>
+            <p class="empty">No backups yet.</p>
+        </section>
+    </div>
+</div>
+
+</div><!-- /demo-grid B -->
+
+</body>
+</html>

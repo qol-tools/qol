@@ -95,11 +95,98 @@ function routeToView(event, viewKeyboard, cycleView) {
         if (viewKeyboard.handleKey) viewKeyboard.handleKey(event);
         return;
     }
+    if (hasVisibleModal()) return;
     if (event.key === 'Tab') {
         cycleView(event);
         return;
     }
     if (viewKeyboard?.handleKey) viewKeyboard.handleKey(event);
+    if (!event.defaultPrevented) globalSurfaceNav(event);
+}
+
+const NAV_KEYS = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', h: 'left', j: 'down', k: 'up', l: 'right' };
+
+function globalSurfaceNav(event) {
+    const direction = NAV_KEYS[event.key];
+    if (direction) {
+        event.preventDefault();
+        navigateVisibleSurfaces(direction);
+        return;
+    }
+    if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        activateSelectedSurface();
+    }
+}
+
+function navigateVisibleSurfaces(direction) {
+    const surfaces = visibleSurfaceElements();
+    if (surfaces.length === 0) return;
+
+    const current = surfaces.find(el => el.getAttribute('data-selected') === 'true');
+    const rows = buildSurfaceGrid(surfaces);
+    if (rows.length === 0) return;
+
+    const pos = current ? findGridPosition(rows, current) : null;
+    const next = pos ? gridStep(rows, pos, direction) : rows[0][0];
+    if (!next || next === current) return;
+
+    for (const el of surfaces) el.setAttribute('data-selected', 'false');
+    next.setAttribute('data-selected', 'true');
+    next.focus();
+}
+
+function activateSelectedSurface() {
+    const surfaces = visibleSurfaceElements();
+    const current = surfaces.find(el => el.getAttribute('data-selected') === 'true');
+    if (current) current.click();
+}
+
+function visibleSurfaceElements() {
+    const surfaces = [];
+    for (const container of document.querySelectorAll('[data-surface-container]')) {
+        if (container.getClientRects().length === 0) continue;
+        for (const el of container.querySelectorAll('[data-selected-surface]')) {
+            if (el.getClientRects().length > 0) surfaces.push(el);
+        }
+    }
+    return surfaces;
+}
+
+function buildSurfaceGrid(elements) {
+    const positioned = elements
+        .map(el => ({ el, top: el.getBoundingClientRect().top, left: el.getBoundingClientRect().left }))
+        .sort((a, b) => Math.abs(a.top - b.top) > 6 ? a.top - b.top : a.left - b.left);
+    const rows = [];
+    for (const item of positioned) {
+        const last = rows[rows.length - 1];
+        if (!last || Math.abs(last[0].top - item.top) > 6) {
+            rows.push([item]);
+        } else {
+            last.push(item);
+        }
+    }
+    return rows.map(row => row.map(item => item.el));
+}
+
+function findGridPosition(rows, target) {
+    for (let r = 0; r < rows.length; r++) {
+        const c = rows[r].indexOf(target);
+        if (c >= 0) return { r, c };
+    }
+    return null;
+}
+
+function gridStep(rows, pos, direction) {
+    const { r, c } = pos;
+    if (direction === 'left') return rows[r][Math.max(0, c - 1)];
+    if (direction === 'right') return rows[r][Math.min(rows[r].length - 1, c + 1)];
+    if (direction === 'up') {
+        const prev = rows[r - 1];
+        return prev ? prev[Math.min(c, prev.length - 1)] : rows[r][c];
+    }
+    const next = rows[r + 1];
+    return next ? next[Math.min(c, next.length - 1)] : rows[r][c];
 }
 
 function handlePluginConfigDirectEdit(event, detail, field) {
@@ -465,4 +552,11 @@ function isVariantSelectorField(detail, fieldId) {
 function queryFieldElement(detail, fieldId) {
     if (!fieldId) return null;
     return detail.querySelector(`[data-plugin-config-field-id="${CSS.escape(fieldId)}"]`);
+}
+
+function hasVisibleModal() {
+    const modal = document.querySelector('.edit-modal, .confirm-modal');
+    if (!modal) return false;
+    const rect = modal.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
 }

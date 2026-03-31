@@ -28,7 +28,7 @@ function ApiUsage({ actions, actionIds, copyApiExample }) {
     return html`<div class="api-usage">
         <div class="api-usage-header">
             <span>API Usage</span>
-            <button class="btn-copy" onClick=${copyApiExample}>Copy</button>
+            <button class="btn btn-ghost btn-sm" onClick=${copyApiExample}>Copy</button>
         </div>
         <div class="api-usage-content">
             <code>POST ${API_BASE}/execute</code>
@@ -62,7 +62,7 @@ export function TaskRunnerView() {
 
     return html`<div class="view-container content-shell">
         <${PageHeader} title="Task Runner" subtitle="HTTP API for browser extensions to run local commands" />
-        <div class="view-body">
+        <div class="view-body" data-surface-container="">
             <${ApiUsage} actions=${data.actions} actionIds=${data.actionIds} copyApiExample=${data.copyApiExample} />
             <${ActionList} data=${data} edit=${edit} test=${test} />
         </div>
