@@ -1,6 +1,7 @@
 import { html } from '../lib/html.js';
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { findActiveSelectedSurface, hasSelectedSurfaceState } from '../lib/selected-surface.js';
+import { surfaceDepth } from '../lib/surface-traits.js';
 import { SelectionWedgeGlyph } from './SelectionWedgeGlyph.js';
 
 const ATTRIBUTES = ['data-selected', 'data-selected-surface', 'data-selected-surface-motion', 'data-selected-surface-priority'];
@@ -8,6 +9,7 @@ const MAX_GLIDE_DISTANCE = 120;
 
 export function SelectionCursorOverlay() {
     const [style, setStyle] = useState(hiddenStyle());
+    const [depth, setDepth] = useState(0);
     const [ready, setReady] = useState(false);
     const resizeObserverRef = useRef(null);
     const appRef = useRef(null);
@@ -45,6 +47,7 @@ export function SelectionCursorOverlay() {
             const viewportTeleport = needsViewportTeleport(nextTarget);
             const shouldTeleport = persistentTeleport || viewportTeleport || needsTeleport(rectRef.current, nextRect, maxGlideDistance);
             rectRef.current = nextRect;
+            setDepth(surfaceDepth(nextTarget));
             setStyle(cursorStyle(app, nextTarget, shouldTeleport));
         };
 
@@ -98,8 +101,8 @@ export function SelectionCursorOverlay() {
     }, []);
 
     return html`
-        <div class="selection-cursor-overlay ${ready ? 'is-ready' : ''}" style=${style} aria-hidden="true">
-            <${SelectionWedgeGlyph} />
+        <div class="selection-cursor-overlay ${ready ? 'is-ready' : ''}" style=${style} aria-hidden="true" data-depth=${depth}>
+            <${SelectionWedgeGlyph} depth=${depth} />
         </div>
     `;
 }

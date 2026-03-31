@@ -144,7 +144,7 @@ function buildLinkCallbacks(state, ctrl, bump) {
         confirmLink: () => void ctrl.actionsController.confirmLink(),
         cancelLink: () => { ctrl.actionsController.cancelLink(); bump(); },
         handleItemActivation: () => ctrl.actionsController.handleItemActivation(),
-        setSelectedIndex: index => { state.selectedIndex = index; },
+        setSelectedIndex: index => { state.selectedIndex = index; bump(); },
         onLinkInput: value => { state.linkPath = value; }
     };
 }

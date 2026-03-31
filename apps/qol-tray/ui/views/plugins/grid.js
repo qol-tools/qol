@@ -10,7 +10,7 @@ const PLACEHOLDER_SVG = 'data:image/svg+xml,' + encodeURIComponent(
     '</svg>'
 );
 
-export function PluginsGrid({ plugins, ghostPlugins, selectedIndex, contextMenuOpen, updating, onCardClick }) {
+export function PluginsGrid({ plugins, ghostPlugins, selectedIndex, contextMenuOpen, updating, onCardClick, onSelect }) {
     return html`
         <div id="plugins-grid" class="plugin-grid-media grid-cards grid-cards--zoom">
             ${plugins.length === 0 && ghostPlugins.length === 0 && html`
@@ -24,13 +24,13 @@ export function PluginsGrid({ plugins, ghostPlugins, selectedIndex, contextMenuO
             `)}
             ${plugins.map((plugin, index) => html`
                 <${PluginCard} plugin=${plugin} index=${index} selectedIndex=${selectedIndex}
-                    contextMenuOpen=${contextMenuOpen} updating=${updating} onCardClick=${onCardClick} />
+                    contextMenuOpen=${contextMenuOpen} updating=${updating} onCardClick=${onCardClick} onSelect=${onSelect} />
             `)}
         </div>
     `;
 }
 
-function PluginCard({ plugin, index, selectedIndex, contextMenuOpen, updating, onCardClick }) {
+function PluginCard({ plugin, index, selectedIndex, contextMenuOpen, updating, onCardClick, onSelect }) {
     const selected = index === selectedIndex;
     const { ctrlHeld } = useModifierState();
     return html`
@@ -39,6 +39,7 @@ function PluginCard({ plugin, index, selectedIndex, contextMenuOpen, updating, o
              data-selected-surface=""
              data-selected=${selected ? 'true' : 'false'}
              data-index="${index}" data-plugin-id="${plugin.id}"
+             onFocus=${() => onSelect(index)}
              onClick=${(e) => onCardClick(e, index, plugin.id)}>
             <img src=${plugin.has_cover && !brokenCovers.has(plugin.id) ? `/api/cover/${plugin.id}` : PLACEHOLDER_SVG}
                  alt=${plugin.name}

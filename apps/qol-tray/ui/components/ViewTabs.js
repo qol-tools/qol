@@ -1,4 +1,5 @@
 import { html } from '../lib/html.js';
+import { useCallback } from 'preact/hooks';
 import { useViewTabs } from '../hooks/useViewTabs.js';
 import { PageHeader } from './PageHeader.js';
 import { SurfaceContainer } from './SurfaceContainer.js';
@@ -15,12 +16,20 @@ import { SurfaceContainer } from './SurfaceContainer.js';
  *       `}
  *   <//>
  */
-export function ViewTabs({ title, subtitle, scramble, tabs, onActivate, trailing, children, vtRef, className, containerRef }) {
+export function ViewTabs({ title, subtitle, scramble, tabs, onActivate, onContentBlur, trailing, children, vtRef, className, containerRef }) {
     const vt = useViewTabs(tabs, { onActivate });
 
     if (vtRef) vtRef.current = vt;
 
     const shellClass = ['view-container content-shell', className].filter(Boolean).join(' ');
+
+    const handleContentFocusOut = useCallback((e) => {
+        if (!onContentBlur) return;
+        const content = e.currentTarget;
+        if (!e.relatedTarget || !content.contains(e.relatedTarget)) {
+            onContentBlur();
+        }
+    }, [onContentBlur]);
 
     return html`
         <div class=${shellClass} ref=${containerRef}>
@@ -28,14 +37,14 @@ export function ViewTabs({ title, subtitle, scramble, tabs, onActivate, trailing
             <div class="view-body content-shell-body">
                 <div class="content-shell-inner">
                     <${SurfaceContainer} className="content-frame">
-                        <div class="view-tabs" role="tablist">
+                        <div class="view-tabs" role="tablist" ref=${vt.rootRef}>
                             ${tabs.map((tab, i) => html`
                                 <button
                                     key=${tab.id}
                                     class="view-tab ${vt.activeTab === tab.id ? 'active' : ''}"
                                     role="tab"
                                     data-selected-surface=""
-                                    data-selected=${vt.zone === 'tabs' && vt.tabCursor === i ? 'true' : 'false'}
+                                    data-selected=${vt.activeTab === tab.id ? 'true' : 'false'}
                                     data-tab-id=${tab.id}
                                     aria-selected=${vt.activeTab === tab.id}
                                     onClick=${() => vt.activateTab(i)}
@@ -46,9 +55,10 @@ export function ViewTabs({ title, subtitle, scramble, tabs, onActivate, trailing
                             `)}
                             ${trailing}
                         </div>
-                        <div class="view-tab-content" role="tabpanel">
+                        <${SurfaceContainer} className="view-tab-content" role="tabpanel"
+                            onFocusOut=${handleContentFocusOut}>
                             ${typeof children === 'function' ? children(vt) : children}
-                        </div>
+                        <//>
                     <//>
                 </div>
             </div>

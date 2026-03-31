@@ -1,7 +1,7 @@
 import { html } from '../../lib/html.js';
 import { isStoreUpdateAvailable } from './reducer.js';
 
-export function StoreGrid({ plugins, loading, selectedIndex, isInstalling, onCardClick }) {
+export function StoreGrid({ plugins, loading, selectedIndex, isInstalling, onCardClick, onSelect }) {
     return html`
         <div id="store-list" class="plugin-grid-store grid-cards grid-cards--zoom">
             ${loading && plugins.length === 0 && html`<div class="loading">Loading plugins...</div>`}
@@ -14,13 +14,14 @@ export function StoreGrid({ plugins, loading, selectedIndex, isInstalling, onCar
                     selected=${index === selectedIndex}
                     installing=${isInstalling(plugin.id)}
                     onCardClick=${onCardClick}
+                    onSelect=${onSelect}
                 />
             `)}
         </div>
     `;
 }
 
-function StoreCard({ plugin, index, selected, installing, onCardClick }) {
+function StoreCard({ plugin, index, selected, installing, onCardClick, onSelect }) {
     const hasUpdate = isStoreUpdateAvailable(plugin);
     const versionDisplay = hasUpdate
         ? `v${plugin.installed_version} → v${plugin.version}`
@@ -33,6 +34,7 @@ function StoreCard({ plugin, index, selected, installing, onCardClick }) {
             data-selected=${selected ? 'true' : 'false'}
             data-index=${String(index)}
             data-plugin-id=${plugin.id}
+            onFocus=${() => onSelect(index)}
             onClick=${(event) => onCardClick(event, index, plugin.id)}
         >
             <h3 data-selected-text="">${plugin.name}</h3>

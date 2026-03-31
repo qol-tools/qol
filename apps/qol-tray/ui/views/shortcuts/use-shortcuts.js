@@ -136,10 +136,8 @@ function useKeyboard(d, m, deleteById, runById) {
     });
 
     const listHandler = useListKeyboard({
-        surfaceSelector: '.shortcuts-list [data-selected-surface]',
         itemCount: filtered.length,
         selectedIndex,
-        setSelectedIndex,
         onAdd: m.openEditModal,
         onDelete: useCallback(() => { if (selected) deleteById(selected.id); }, [selected, deleteById]),
         onEdit: useCallback(() => { if (selected) m.openEditModal(selected); }, [selected, m.openEditModal]),

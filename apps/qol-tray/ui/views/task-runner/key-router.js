@@ -8,10 +8,8 @@ export function useTaskKeyHandler(data, edit, test) {
     });
 
     const listHandler = useListKeyboard({
-        surfaceSelector: '.actions-list [data-selected-surface]',
         itemCount: data.actionIds.length,
         selectedIndex: data.selectedIndex,
-        setSelectedIndex: data.setSelectedIndex,
         onAdd: edit.openEditModal,
         onDelete: data.deleteAction,
         onEdit: useCallback(() => {
