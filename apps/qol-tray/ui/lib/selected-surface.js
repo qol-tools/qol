@@ -31,6 +31,7 @@ function focusedSurfaceTarget() {
 
     const surface = focused.closest(SURFACE_SELECTOR);
     if (!surface || !isVisibleSurface(surface)) return null;
+    if (surface.getAttribute('data-selected') !== 'true') return null;
 
     const override = highPriorityChildSurface(surface);
     if (override) return override;

@@ -567,19 +567,6 @@
 }
 
 .add-row .text-input { flex: 1; }
-.btn-add { white-space: nowrap; }
-
-.btn-remove {
-    background: none;
-    border: none;
-    color: var(--danger);
-    cursor: pointer;
-    font-size: 1.1rem;
-    padding: 0 0.35rem;
-    opacity: 0.6;
-}
-
-.btn-remove:hover { opacity: 1; }
 
 .btn-remove:focus-visible,
 .btn-add:focus-visible {

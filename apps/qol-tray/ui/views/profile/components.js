@@ -5,6 +5,7 @@ import { Modal, ModalFooter } from '../../components/ModalPreact.js';
 import { CustomSelect } from '../plugin-config/fields/CustomSelect.js';
 import { toast } from '../../lib/toast.js';
 import {
+    FIELD_KIND_BOOLEAN,
     FIELD_KIND_PASSWORD,
     FIELD_KIND_SELECT,
     fieldHint,
@@ -14,157 +15,64 @@ import {
     fieldValue,
     providerFieldInputId,
 } from './form.js';
+import { surfaceProps } from './use-surface-nav.js';
 import {
     buildBadges,
     formatBackupPreview,
     formatBytes,
     importCounts,
     importSummary,
-    profileHealthLabel,
-    profileLastSyncSummary,
-    profileRemoteSummary,
 } from './summary.js';
 
 export function ProfileActionButton({ surface, selectedIndex, setSelectedIndex }) {
-    if (!surface) {
-        return null;
-    }
+    const sp = surfaceProps(surface, selectedIndex, setSelectedIndex);
+    if (!sp) return null;
     const selected = surface.index === selectedIndex;
-    const classes = ['btn', surface.variant || 'btn-ghost', 'profile-action-btn', 'profile-nav-surface'];
-    if (selected) {
-        classes.push('is-selected');
-    }
+    const classes = ['btn', surface.variant || 'btn-ghost', 'profile-action-btn'];
+    if (selected) classes.push('is-selected');
     return html`
-        <button
-            type="button"
-            class=${classes.join(' ')}
-            data-selected-surface=""
-            data-selected=${selected ? 'true' : 'false'}
-            data-index=${String(surface.index)}
-            onFocus=${() => setSelectedIndex(surface.index)}
-            onClick=${() => {
-                setSelectedIndex(surface.index);
-                surface.run?.();
-            }}>
+        <button type="button" class=${classes.join(' ')} ...${sp}
+            onClick=${() => { setSelectedIndex(surface.index); surface.run?.(); }}>
             ${surface.label}
         </button>
     `;
 }
 
-function ProfileInputField({
-    id,
-    label,
-    hint = '',
-    value,
-    placeholder,
-    type = 'text',
-    className = '',
-    surface,
-    selectedIndex,
-    setSelectedIndex,
-    onInput,
-}) {
-    if (!surface) {
-        return null;
-    }
-    const selected = surface.index === selectedIndex;
+function ProfileInputField({ id, label, hint = '', value, placeholder, type = 'text', className = '', surface, selectedIndex, setSelectedIndex, onInput }) {
+    const sp = surfaceProps(surface, selectedIndex, setSelectedIndex);
+    if (!sp) return null;
     const classes = ['form-group', 'profile-input-surface', className].filter(Boolean).join(' ');
     return html`
-        <div
-            tabIndex="-1"
-            class=${classes}
-            data-selected-surface=""
-            data-selected=${selected ? 'true' : 'false'}
-            data-index=${String(surface.index)}
-            onMouseDown=${() => setSelectedIndex(surface.index)}
-            onFocus=${() => setSelectedIndex(surface.index)}>
-            <label for=${id}>
-                ${label}
-                ${hint && html`<span class="hint"> ${hint}</span>`}
-            </label>
-            <input
-                id=${id}
-                type=${type}
-                class="profile-field-input"
-                value=${value}
-                placeholder=${placeholder}
-                data-profile-editable=""
-                onInput=${onInput}
-            />
+        <div class=${classes} ...${sp}>
+            <label for=${id}>${label}${hint && html`<span class="hint"> ${hint}</span>`}</label>
+            <input id=${id} type=${type} class="profile-field-input" value=${value} placeholder=${placeholder} data-profile-editable="" onInput=${onInput} />
         </div>
     `;
 }
 
-export function ProfileSelectField({
-    label,
-    hint = '',
-    value,
-    options,
-    labels,
-    className = '',
-    surface,
-    selectedIndex,
-    setSelectedIndex,
-    onChange,
-}) {
-    if (!surface) {
-        return null;
+export function ProfileSelectField({ label, hint = '', value, options, labels, className = '', surface, selectedIndex, setSelectedIndex, onChange, compact = false }) {
+    const sp = surfaceProps(surface, selectedIndex, setSelectedIndex);
+    if (!sp) return null;
+    if (compact) {
+        return html`<div class="profile-select-surface profile-select-compact" ...${sp}>
+            <${CustomSelect} value=${value} options=${options} labels=${labels} onChange=${onChange} />
+        </div>`;
     }
-    const selected = surface.index === selectedIndex;
-    const classes = ['form-group', 'profile-input-surface', 'profile-select-surface', className]
-        .filter(Boolean)
-        .join(' ');
+    const classes = ['form-group', 'profile-input-surface', 'profile-select-surface', className].filter(Boolean).join(' ');
     return html`
-        <div
-            tabIndex="-1"
-            class=${classes}
-            data-selected-surface=""
-            data-selected=${selected ? 'true' : 'false'}
-            data-index=${String(surface.index)}
-            onMouseDown=${() => setSelectedIndex(surface.index)}
-            onFocus=${() => setSelectedIndex(surface.index)}>
-            <label>
-                ${label}
-                ${hint && html`<span class="hint"> ${hint}</span>`}
-            </label>
-            <${CustomSelect}
-                value=${value}
-                options=${options}
-                labels=${labels}
-                onChange=${onChange}
-            />
+        <div class=${classes} ...${sp}>
+            <label>${label}${hint && html`<span class="hint"> ${hint}</span>`}</label>
+            <${CustomSelect} value=${value} options=${options} labels=${labels} onChange=${onChange} />
         </div>
     `;
 }
 
-export function ProfileToggleField({
-    label,
-    checked,
-    onChange,
-    surface,
-    selectedIndex,
-    setSelectedIndex,
-}) {
-    if (!surface) {
-        return null;
-    }
-    const selected = surface.index === selectedIndex;
-    const toggle = () => onChange(!checked);
+export function ProfileToggleField({ label, checked, onChange, surface, selectedIndex, setSelectedIndex }) {
+    const sp = surfaceProps(surface, selectedIndex, setSelectedIndex);
+    if (!sp) return null;
     return html`
-        <div
-            tabIndex="-1"
-            class="toggle-inline profile-toggle-inline profile-toggle-surface"
-            data-selected-surface=""
-            data-selected=${selected ? 'true' : 'false'}
-            data-index=${String(surface.index)}
-            onMouseDown=${() => setSelectedIndex(surface.index)}
-            onFocus=${() => setSelectedIndex(surface.index)}
-            onClick=${toggle}>
-            <div
-                class=${`toggle-track ${checked ? 'on' : ''} profile-toggle-track`}
-                tabIndex="-1"
-                role="switch"
-                aria-checked=${checked}>
+        <div class="toggle-inline profile-toggle-inline profile-toggle-surface" ...${sp} onClick=${() => onChange(!checked)}>
+            <div class=${`toggle-track ${checked ? 'on' : ''} profile-toggle-track`} tabIndex="-1" role="switch" aria-checked=${checked}>
                 <div class="toggle-thumb"></div>
             </div>
             <span class="toggle-inline-label">${label}</span>
@@ -186,6 +94,19 @@ export function renderProviderField({
     }
     const className = field.full_width ? 'profile-row-full' : '';
     const key = field.key;
+    if (field.field_kind === FIELD_KIND_BOOLEAN) {
+        return html`
+            <${ProfileToggleField}
+                key=${key}
+                label=${field.label}
+                checked=${form?.[key] ?? true}
+                onChange=${(value) => updateForm(key, value)}
+                surface=${surface}
+                selectedIndex=${selectedIndex}
+                setSelectedIndex=${setSelectedIndex}
+            />
+        `;
+    }
     if (field.field_kind === FIELD_KIND_SELECT) {
         const options = fieldOptions(field, form);
         return html`
@@ -257,21 +178,11 @@ export function ImportFeedback({ lastImport }) {
 }
 
 export function ProfileBackupRow({ backup, incident, surface, selectedIndex, setSelectedIndex, onOpen }) {
-    if (!surface) {
-        return null;
-    }
-    const selected = surface.index === selectedIndex;
+    const sp = surfaceProps(surface, selectedIndex, setSelectedIndex);
+    if (!sp) return null;
     const review = incident?.backup_file === backup.file_name;
     return html`
-        <div
-            class="profile-backup-row"
-            role="listitem"
-            data-selected-surface=""
-            data-selected=${selected ? 'true' : 'false'}
-            data-index=${String(surface.index)}
-            onMouseDown=${() => setSelectedIndex(surface.index)}
-            onFocus=${() => setSelectedIndex(surface.index)}
-            onClick=${onOpen}>
+        <div class="profile-backup-row" role="listitem" ...${sp} onClick=${onOpen}>
             <div class="profile-backup-row-top">
                 <span class="profile-backup-time">${backup.created_at}</span>
                 ${review && html`<span class="badge profile-badge profile-badge-skipped">Review backup</span>`}

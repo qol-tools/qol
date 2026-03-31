@@ -3,6 +3,7 @@ const FIELD_SECTION_BASIC = 'basic';
 const FIELD_SECTION_ADVANCED = 'advanced';
 const FIELD_KIND_SELECT = 'select';
 const FIELD_KIND_PASSWORD = 'password';
+const FIELD_KIND_BOOLEAN = 'boolean';
 
 export function createSyncForm(syncStatus) {
     return {
@@ -105,6 +106,7 @@ export function buildConnectPayload(form, provider) {
 }
 
 export {
+    FIELD_KIND_BOOLEAN,
     FIELD_KIND_PASSWORD,
     FIELD_KIND_SELECT,
     FIELD_SECTION_ADVANCED,

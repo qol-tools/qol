@@ -54,7 +54,7 @@ export function HotkeysView() {
             ${hk.registrationErrors.length > 0 && html`<${RegistrationWarnings} errors=${hk.registrationErrors} />`}
             <div class="view-body content-shell-body">
                 <div class="content-shell-inner">
-                    <div class="content-frame">
+                    <div class="content-frame" data-surface-container="">
                         <${HotkeysList} hotkeys=${filtered} plugins=${hk.plugins}
                             selectedIndex=${hk.selectedIndex} onSelect=${hk.setSelectedIndex} onEdit=${hk.openEditModal} />
                     </div>

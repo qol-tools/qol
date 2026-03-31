@@ -1,11 +1,11 @@
 import { html } from '../lib/html.js';
-import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'preact/hooks';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
 import { usePaletteContext } from '../palette/context.js';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../components/app/view-keyboard-context.js';
 import { useListKeyboard } from '../hooks/useListKeyboard.js';
 import { matchesQuery } from '../utils/collections.js';
-import { PageHeader } from '../components/PageHeader.js';
+import { ViewTabs } from '../components/ViewTabs.js';
 import { Modal, ModalFooter } from '../components/ModalPreact.js';
 import { CodeBlock } from '../components/CodeBlock.js';
 import { toast } from '../lib/toast.js';
@@ -29,13 +29,10 @@ function levelInfo(entry) {
 }
 
 export function LogsView({ active }) {
-    const [activeTab, setActiveTab] = useState('live');
     const [entries, setEntries] = useState([]);
     const [suppressed, setSuppressed] = useState({});
     const [selectedIndex, setSelectedIndex] = useState(0);
     const [expandedKeys, setExpandedKeys] = useState(new Set());
-    const [zone, setZone] = useState('tabs');
-    const [tabCursorIndex, setTabCursorIndex] = useState(0);
     const [detailEntry, setDetailEntry] = useState(null);
     const contentRef = useRef(null);
     const { searchQuery } = usePaletteContext();
@@ -82,13 +79,15 @@ export function LogsView({ active }) {
         [suppressedKeys, suppressed, searchQuery]
     );
 
-    const itemCount = activeTab === 'live'
-        ? collapsedEntries.length
-        : filteredSuppressedKeys.length;
+    const onTabActivate = useCallback((tabId) => {
+        const count = tabId === 'live' ? filteredEntries.length : filteredSuppressedKeys.length;
+        if (count > 0) {
+            setSelectedIndex(0);
+            requestAnimationFrame(() => focusContentSurface(0));
+        }
+    }, [filteredEntries.length, filteredSuppressedKeys.length]);
 
-    useEffect(() => {
-        setSelectedIndex(0);
-    }, [activeTab, searchQuery]);
+    const vtRef = useRef(null);
 
     const unsuppress = useCallback(async (key) => {
         try {
@@ -106,44 +105,35 @@ export function LogsView({ active }) {
         });
     }, []);
 
-    const TAB_BAR_COUNT = TABS.length + 1;
-
     const openLogDir = useCallback(async () => {
         try { await fetch('/api/logs/open-dir', { method: 'POST' }); } catch (_) {}
     }, []);
 
-    const enterContent = useCallback(() => {
-        setZone('content');
-        setSelectedIndex(0);
-    }, []);
-
-    const activateTabItem = useCallback((index) => {
-        if (index >= TABS.length) {
-            openLogDir();
-            return;
-        }
-        const tabId = TABS[index].id;
-        setActiveTab(tabId);
-        const count = tabId === 'live' ? filteredEntries.length : filteredSuppressedKeys.length;
-        if (count > 0) enterContent();
-    }, [openLogDir, enterContent, filteredEntries.length, filteredSuppressedKeys.length]);
-
     const onEdit = useCallback(() => {
-        if (activeTab === 'live') {
+        const vt = vtRef.current;
+        if (!vt) return;
+        if (vt.activeTab === 'live') {
             const entry = collapsedEntries[selectedIndex];
             if (entry) {
                 document.activeElement?.blur();
                 setDetailEntry(entry);
-                setZone('detail');
+                vt.setZone('detail');
             }
         }
-        if (activeTab === 'suppressed') {
+        if (vt.activeTab === 'suppressed') {
             const key = filteredSuppressedKeys[selectedIndex];
             if (key) toggleExpand(key);
         }
-    }, [activeTab, collapsedEntries, filteredSuppressedKeys, selectedIndex, toggleExpand]);
+    }, [collapsedEntries, filteredSuppressedKeys, selectedIndex, toggleExpand]);
+
+    const itemCount = useMemo(() => {
+        const vt = vtRef.current;
+        const tab = vt?.activeTab || 'live';
+        return tab === 'live' ? collapsedEntries.length : filteredSuppressedKeys.length;
+    });
 
     const listHandler = useListKeyboard({
+        surfaceSelector: '.logs-content [data-selected-surface]',
         itemCount,
         selectedIndex,
         setSelectedIndex,
@@ -152,119 +142,62 @@ export function LogsView({ active }) {
 
     const closeDetail = useCallback(() => {
         setDetailEntry(null);
-        setZone('content');
+        vtRef.current?.setZone('content');
     }, []);
 
     const handleKey = useCallback((event) => {
-        if (zone === 'detail') {
-            if (event.key === 'Escape') { event.preventDefault(); closeDetail(); return; }
-            if (event.key === 'c' || event.key === 'C') {
-                event.preventDefault();
-                if (detailEntry) {
-                    navigator.clipboard.writeText(formatLogDetail(detailEntry));
-                    toast('success', 'Copied to clipboard');
-                }
-                return;
-            }
-            return;
-        }
-        if (zone === 'tabs') {
-            if (event.key === 'ArrowLeft' || event.key === 'h') {
-                event.preventDefault();
-                setTabCursorIndex(i => Math.max(0, i - 1));
-                return;
-            }
-            if (event.key === 'ArrowRight' || event.key === 'l') {
-                event.preventDefault();
-                setTabCursorIndex(i => Math.min(TAB_BAR_COUNT - 1, i + 1));
-                return;
-            }
-            if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                activateTabItem(tabCursorIndex);
-                return;
-            }
-            return;
-        }
-        if (event.key === 'Escape') {
-            event.preventDefault();
-            setZone('tabs');
-            setTabCursorIndex(TABS.findIndex(t => t.id === activeTab));
-            return;
-        }
+        const vt = vtRef.current;
+        if (vt?.zone === 'detail') return;
+        if (vt?.handleKey(event)) return;
         listHandler(event);
-    }, [zone, tabCursorIndex, activeTab, activateTabItem, listHandler, TAB_BAR_COUNT]);
+    }, [listHandler]);
 
-    const isBlocking = useCallback(() => zone === 'detail', [zone]);
+    const isBlocking = useCallback(() => false, []);
     useRegisterViewKeyboard('logs', handleKey, isBlocking);
 
     const commands = useMemo(() => [
         { id: 'refresh', label: 'Refresh Logs', action: () => { fetchEntries(); fetchSuppressed(); } },
         { id: 'open-dir', label: 'Open Log Directory', action: openLogDir },
-        { id: 'live-tab', label: 'Show Live Log', action: () => setActiveTab('live') },
-        { id: 'suppressed-tab', label: 'Show Suppressed', action: () => setActiveTab('suppressed') },
+        { id: 'live-tab', label: 'Show Live Log', action: () => vtRef.current?.switchTab('live') },
+        { id: 'suppressed-tab', label: 'Show Suppressed', action: () => vtRef.current?.switchTab('suppressed') },
     ], [fetchEntries, fetchSuppressed, openLogDir]);
     useRegisterCommands('logs', commands);
 
-    useLayoutEffect(() => {
-        if (zone !== 'content') return;
-        const surface = contentRef.current?.querySelector('[data-selected-surface][data-selected="true"]');
-        if (surface) surface.focus();
-    }, [zone, selectedIndex]);
+    const trailingTab = html`
+        <button class="btn btn-sm btn-ghost logs-action-btn" data-selected-surface=""
+            data-selected="false" onClick=${openLogDir}>Open log folder</button>
+    `;
 
-    useEffect(() => {
-        const el = contentRef.current;
-        if (!el) return;
-        const selected = el.querySelector('[data-selected="true"]');
-        if (selected) selected.scrollIntoView({ block: 'nearest' });
-    }, [selectedIndex]);
+    const tabsWithCounts = useMemo(() => TABS.map(tab => ({
+        ...tab,
+        count: tab.id === 'live' ? collapsedEntries.length : filteredSuppressedKeys.length,
+    })), [collapsedEntries.length, filteredSuppressedKeys.length]);
 
-    const tabCounts = {
-        live: collapsedEntries.length,
-        suppressed: filteredSuppressedKeys.length,
-    };
-
-    return html`<div class="view-container content-shell">
-        <${PageHeader} title="Logs" subtitle="Error log and suppression management" />
-        <div class="view-body content-shell-body">
-            <div class="content-shell-inner">
-                <div class="content-frame logs-frame">
-                    <div class="logs-tabs" role="tablist">
-                        ${TABS.map((tab, i) => html`
-                            <button
-                                key=${tab.id}
-                                class="logs-tab ${activeTab === tab.id ? 'active' : ''}"
-                                role="tab"
-                                data-selected-surface=""
-                                data-selected=${zone === 'tabs' && tabCursorIndex === i ? 'true' : 'false'}
-                                aria-selected=${activeTab === tab.id}
-                                onClick=${() => { setActiveTab(tab.id); enterContent(); }}
-                            >
-                                ${tab.label}
-                                ${tabCounts[tab.id] > 0 && html`<span class="logs-tab-count">${tabCounts[tab.id]}</span>`}
-                            </button>
-                        `)}
-                        <button class="btn btn-sm btn-ghost logs-action-btn" data-selected-surface=""
-                            data-selected=${zone === 'tabs' && tabCursorIndex === TABS.length ? 'true' : 'false'}
-                            onClick=${openLogDir}>Open log folder</button>
-                    </div>
-                    <div class="logs-content" ref=${contentRef} role="tabpanel">
-                        ${activeTab === 'live' && html`<${LiveLog} entries=${collapsedEntries} selectedIndex=${zone === 'content' ? selectedIndex : -1}
-                            onEntryClick=${(entry) => { document.activeElement?.blur(); setDetailEntry(entry); setZone('detail'); }} />`}
-                        ${activeTab === 'suppressed' && html`<${SuppressedList}
-                            keys=${filteredSuppressedKeys}
-                            items=${suppressed}
-                            onUnsuppress=${unsuppress}
-                            selectedIndex=${zone === 'content' ? selectedIndex : -1}
-                            expandedKeys=${expandedKeys}
-                            onToggleExpand=${toggleExpand}
-                        />`}
-                    </div>
+    return html`
+        <${ViewTabs} title="Logs" subtitle="Error log and suppression management"
+            tabs=${tabsWithCounts} onActivate=${onTabActivate} trailing=${trailingTab} vtRef=${vtRef}>
+            ${(vt) => html`
+                <div class="logs-content" ref=${contentRef}>
+                    ${vt.activeTab === 'live' && html`<${LiveLog} entries=${collapsedEntries} selectedIndex=${vt.zone === 'content' ? selectedIndex : -1}
+                        onEntryClick=${(entry) => { document.activeElement?.blur(); setDetailEntry(entry); vt.setZone('detail'); }} />`}
+                    ${vt.activeTab === 'suppressed' && html`<${SuppressedList}
+                        keys=${filteredSuppressedKeys}
+                        items=${suppressed}
+                        onUnsuppress=${unsuppress}
+                        selectedIndex=${vt.zone === 'content' ? selectedIndex : -1}
+                        expandedKeys=${expandedKeys}
+                        onToggleExpand=${toggleExpand}
+                    />`}
                 </div>
-            </div>
-        </div>
+            `}
+        <//>
         ${detailEntry && html`<${LogDetailModal} entry=${detailEntry} onClose=${closeDetail} />`}
-    </div>`;
+    `;
+}
+
+function focusContentSurface(index) {
+    const el = document.querySelector(`.logs-content [data-selected-surface][data-index="${index}"]`);
+    if (el) el.focus();
 }
 
 function collapseEntries(entries) {
@@ -291,7 +224,7 @@ function LiveLog({ entries, selectedIndex, onEntryClick }) {
     }
     return html`
         <div class="logs-list" role="list">
-            ${entries.map((entry, i) => html`<${LogEntryRow} key=${entry.key || i} entry=${entry} selected=${i === selectedIndex} onClick=${() => onEntryClick(entry)} />`)}
+            ${entries.map((entry, i) => html`<${LogEntryRow} key=${entry.key || i} entry=${entry} index=${i} selected=${i === selectedIndex} onClick=${() => onEntryClick(entry)} />`)}
         </div>
     `;
 }
@@ -303,7 +236,7 @@ function countSeverity(count) {
     return '';
 }
 
-function LogEntryRow({ entry, selected, onClick }) {
+function LogEntryRow({ entry, index, selected, onClick }) {
     const time = entry.ts ? entry.ts.split('T')[1] || entry.ts : '';
     const { label, cls } = levelInfo(entry);
     const loc = entry.loc && entry.loc !== 'unknown:0' && entry.loc !== ':0' ? entry.loc : '';
@@ -311,6 +244,7 @@ function LogEntryRow({ entry, selected, onClick }) {
     return html`
         <div class="log-row" role="listitem"
              data-selected-surface="" data-selected=${selected ? 'true' : 'false'}
+             data-index=${String(index)}
              data-level=${cls} data-severity=${severity || undefined}
              onClick=${onClick}>
             <div class="log-row-top">
@@ -338,6 +272,7 @@ function SuppressedList({ keys, items, onUnsuppress, selectedIndex, expandedKeys
                     key=${key}
                     sigKey=${key}
                     entry=${items[key]}
+                    index=${i}
                     onUnsuppress=${onUnsuppress}
                     selected=${i === selectedIndex}
                     expanded=${expandedKeys.has(key)}
@@ -348,10 +283,10 @@ function SuppressedList({ keys, items, onUnsuppress, selectedIndex, expandedKeys
     `;
 }
 
-function SuppressedRow({ sigKey, entry, onUnsuppress, selected, expanded, onToggle }) {
+function SuppressedRow({ sigKey, entry, index, onUnsuppress, selected, expanded, onToggle }) {
     return html`
         <div class="suppressed-entry ${selected ? 'selected' : ''} ${expanded ? 'expanded' : ''}"
-             role="listitem" data-selected-surface="" data-selected=${selected ? 'true' : 'false'} onClick=${onToggle}>
+             role="listitem" data-selected-surface="" data-selected=${selected ? 'true' : 'false'} data-index=${String(index)} onClick=${onToggle}>
             <div class="suppressed-header">
                 <span class="suppressed-expand-icon">${expanded ? '\u25be' : '\u25b8'}</span>
                 <span class="suppressed-key">${sigKey}</span>

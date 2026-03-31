@@ -8,7 +8,7 @@ export function StoreLayout({ ctrl }) {
         <div class="view-container content-shell">
             <${PageHeader} title="Plugin Store" subtitle="Browse and install plugins for QoL Tray"
                 badge=${html`<${StoreBadge} ...${ctrl} />`} />
-            <div class="view-body">
+            <div class="view-body" data-surface-container="">
                 <${StoreCredentialBanner} rateLimited=${ctrl.rateLimited} hasToken=${ctrl.hasToken} />
                 <${StoreGrid} plugins=${ctrl.filtered} loading=${ctrl.loading}
                     selectedIndex=${ctrl.selectedIndex} isInstalling=${ctrl.isInstalling}

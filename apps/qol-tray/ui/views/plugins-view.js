@@ -48,7 +48,7 @@ export function PluginsView({ onOpenPluginConfig, onOpenPluginUi }) {
 
     return html`<div class="view-container content-shell" onClick=${modal.closeAll}>
         <${PageHeader} title="Plugins" />
-        <div class="view-body">
+        <div class="view-body" data-surface-container="">
             <${PluginsGrid}
                 plugins=${filtered} ghostPlugins=${list.ghostPlugins}
                 selectedIndex=${list.selectedIndex} contextMenuOpen=${modal.contextMenuOpen}

@@ -37,7 +37,7 @@ export function PluginConfigView({ onClose }) {
     if (ctx.sections.length === 0) return html`<div class="plugin-config-loading">No settings available.</div>`;
 
     return html`
-        <div class="plugin-config-detail" tabIndex="-1">
+        <div class="plugin-config-detail" tabIndex="-1" data-surface-container="">
             ${section && html`
                 <div class="config-detail-content">
                     <header class="config-detail-header">
@@ -99,7 +99,7 @@ function VariantPanel({ group }) {
 
     return html`
         <div class="variant-panel">
-            <div tabIndex="-1" class="variant-selector ${densityClass} ${fieldSelectionClasses(selected)}"
+            <div class="variant-selector ${densityClass} ${fieldSelectionClasses(selected)}"
                 data-plugin-config-field-id=${group.selector.id}
                 data-plugin-config-index=${index}
                 data-selected-surface=""

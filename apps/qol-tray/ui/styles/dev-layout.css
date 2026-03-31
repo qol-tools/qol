@@ -29,6 +29,101 @@
     padding: var(--space-4) var(--space-7) var(--space-5);
 }
 
+/* Component catalog */
+.catalog {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+    padding-bottom: var(--space-5);
+}
+
+.catalog-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.catalog-section-label {
+    color: var(--text-faint);
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-semibold);
+    letter-spacing: var(--ls-lg);
+    text-transform: uppercase;
+}
+
+.catalog-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.catalog-row-label {
+    color: var(--text-muted);
+    font-size: var(--fs-sm);
+}
+
+.catalog-row-content {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: var(--space-2);
+}
+
+.catalog-input {
+    padding: var(--space-2) var(--space-3);
+    border: var(--border-w-1) solid var(--border-default);
+    border-radius: var(--radius-md);
+    background: var(--bg-base);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    min-width: 200px;
+}
+
+.catalog-input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.catalog-status-row {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--text-secondary);
+    font-size: var(--fs-sm);
+}
+
+.catalog-dropdown-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    min-width: 100%;
+    background: var(--bg-surface);
+    border: var(--border-w-1) solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: 4px 0;
+    box-shadow: var(--elevation-3);
+    z-index: 10;
+}
+
+.catalog-dropdown-item {
+    padding: var(--space-2) var(--space-3);
+    color: var(--text-secondary);
+    font-size: var(--fs-sm);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background var(--dur-fast);
+}
+
+.catalog-dropdown-item:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.catalog-dropdown-item.is-active {
+    color: var(--accent);
+}
+
 .dev-content-frame {
     border: var(--border-w-1) solid var(--layer-paper-22);
     border-radius: var(--radius-2xl);

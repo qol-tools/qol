@@ -144,15 +144,19 @@ pub(crate) fn sync_provider_definitions() -> Vec<SyncProviderDefinition> {
         SyncProviderDefinition {
             kind: SyncProviderKind::Github,
             label: "GitHub".to_string(),
-            fields: vec![SyncProviderFieldDefinition {
-                key: SyncProviderFieldKey::GistId,
-                label: "Gist ID".to_string(),
-                field_kind: SyncProviderFieldKind::Text,
-                section: SyncProviderFieldSection::Advanced,
-                placeholder: Some("Leave blank to auto-create".to_string()),
-                hint: Some("leave blank to auto-create a private gist".to_string()),
-                full_width: true,
-            }],
+            fields: vec![
+                SyncProviderFieldDefinition {
+                    key: SyncProviderFieldKey::GistId,
+                    label: "Gist ID".to_string(),
+                    field_kind: SyncProviderFieldKind::Text,
+                    section: SyncProviderFieldSection::Advanced,
+                    placeholder: Some("Leave blank to auto-create".to_string()),
+                    hint: Some("leave blank to auto-create a private gist".to_string()),
+                    full_width: true,
+                },
+                pull_on_launch_field(),
+                push_on_change_field(),
+            ],
         },
         SyncProviderDefinition {
             kind: SyncProviderKind::Folder,
@@ -176,9 +180,35 @@ pub(crate) fn sync_provider_definitions() -> Vec<SyncProviderDefinition> {
                     hint: None,
                     full_width: true,
                 },
+                pull_on_launch_field(),
+                push_on_change_field(),
             ],
         },
     ]
+}
+
+fn pull_on_launch_field() -> SyncProviderFieldDefinition {
+    SyncProviderFieldDefinition {
+        key: SyncProviderFieldKey::PullOnLaunch,
+        label: "Pull on launch".to_string(),
+        field_kind: SyncProviderFieldKind::Boolean,
+        section: SyncProviderFieldSection::Advanced,
+        placeholder: None,
+        hint: None,
+        full_width: false,
+    }
+}
+
+fn push_on_change_field() -> SyncProviderFieldDefinition {
+    SyncProviderFieldDefinition {
+        key: SyncProviderFieldKey::PushOnChange,
+        label: "Push on changes".to_string(),
+        field_kind: SyncProviderFieldKind::Boolean,
+        section: SyncProviderFieldSection::Advanced,
+        placeholder: None,
+        hint: None,
+        full_width: false,
+    }
 }
 
 pub(crate) async fn validate_github_token(token: &str) -> Result<()> {
@@ -268,7 +298,11 @@ mod tests {
                 .iter()
                 .map(|field| field.key)
                 .collect::<Vec<_>>(),
-            vec![SyncProviderFieldKey::GistId]
+            vec![
+                SyncProviderFieldKey::GistId,
+                SyncProviderFieldKey::PullOnLaunch,
+                SyncProviderFieldKey::PushOnChange,
+            ]
         );
         assert_eq!(
             folder
@@ -276,7 +310,12 @@ mod tests {
                 .iter()
                 .map(|field| field.key)
                 .collect::<Vec<_>>(),
-            vec![SyncProviderFieldKey::FolderPath, SyncProviderFieldKey::Path]
+            vec![
+                SyncProviderFieldKey::FolderPath,
+                SyncProviderFieldKey::Path,
+                SyncProviderFieldKey::PullOnLaunch,
+                SyncProviderFieldKey::PushOnChange,
+            ]
         );
     }
 
