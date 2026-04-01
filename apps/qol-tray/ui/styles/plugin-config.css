@@ -395,34 +395,13 @@
 }
 
 .custom-select-trigger {
-    display: flex;
-    align-items: center;
     justify-content: space-between;
     gap: 0.6rem;
-    width: 100%;
-    padding: 0.45rem 0.7rem;
-    background: rgba(var(--accent-rgb), 0.06);
-    border: none;
-    border-radius: 6px;
-    color: var(--plugin-config-value-color);
-    font-family: inherit;
-    font-size: 0.88rem;
-    cursor: pointer;
     text-align: left;
 }
 
-.custom-select-trigger:hover {
-    background: rgba(var(--accent-rgb), 0.1);
-}
-
-.custom-select-trigger:focus-visible,
-.custom-select:focus-within .custom-select-trigger {
-    background: rgba(var(--accent-rgb), 0.08);
-    box-shadow: none;
-}
-
 .custom-select-arrow {
-    color: var(--plugin-config-muted-color);
+    color: var(--text-faint);
     font-size: 0.72rem;
 }
 

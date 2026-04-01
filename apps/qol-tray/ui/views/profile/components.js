@@ -2,7 +2,8 @@ import { html } from '../../lib/html.js';
 import { useCallback } from 'preact/hooks';
 import { CodeBlock } from '../../components/CodeBlock.js';
 import { Modal, ModalFooter } from '../../components/ModalPreact.js';
-import { CustomSelect } from '../plugin-config/fields/CustomSelect.js';
+import { CustomSelect } from '../../components/CustomSelect.js';
+import { Badge, HealthDot } from '../../components/StatusIndicators.js';
 import { toast } from '../../lib/toast.js';
 import {
     FIELD_KIND_BOOLEAN,
@@ -157,7 +158,7 @@ export function ImportFeedback({ lastImport }) {
             </div>
             <div class="profile-badge-row">
                 ${badges.map(badge => html`
-                    <span key=${badge.label} class=${`badge profile-badge ${badge.className}`}>${badge.label}</span>
+                    <${Badge} key=${badge.label} className=${`profile-badge ${badge.className}`}>${badge.label}<//>
                 `)}
             </div>
             ${lastImport.result.plugins?.length > 0 && html`
@@ -166,7 +167,7 @@ export function ImportFeedback({ lastImport }) {
                         <div key=${plugin.id} class="profile-result-row" data-status=${plugin.status}>
                             <div class="profile-result-id">${plugin.id}</div>
                             <div class="profile-result-status">
-                                <span class=${`badge profile-badge profile-badge-${plugin.status}`}>${plugin.status}</span>
+                                <${Badge} className=${`profile-badge profile-badge-${plugin.status}`}>${plugin.status}<//>
                             </div>
                             <div class="profile-result-message">${plugin.message}</div>
                         </div>
@@ -185,7 +186,7 @@ export function ProfileBackupRow({ backup, incident, surface, selectedIndex, set
         <div class="profile-backup-row" role="listitem" ...${sp} onClick=${onOpen}>
             <div class="profile-backup-row-top">
                 <span class="profile-backup-time">${backup.created_at}</span>
-                ${review && html`<span class="badge profile-badge profile-badge-skipped">Review backup</span>`}
+                ${review && html`<${Badge} className="profile-badge profile-badge-skipped">Review backup<//>`}
                 <span class="profile-backup-size">${formatBytes(backup.size_bytes)}</span>
             </div>
             <div class="profile-backup-row-bottom">
@@ -236,7 +237,7 @@ export function ProfileStatusStrip({ syncStatus, surfaceById, selectedIndex, set
         <div class="profile-toolbar">
             <div class="profile-status-strip" data-health=${health}>
                 <div class="profile-status-strip-main">
-                    <span class="profile-health-dot" data-health=${health}></span>
+                    <${HealthDot} health=${health} />
                     <span class="profile-status-strip-text">${profileHealthLabel(syncStatus)}</span>
                 </div>
                 <div class="profile-status-strip-meta">

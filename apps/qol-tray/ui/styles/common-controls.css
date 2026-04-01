@@ -148,7 +148,8 @@
 }
 
 .btn-icon-chevron {
-    font-size: 0.6em;
+    display: inline-flex;
+    transition: transform 0.12s ease;
 }
 
 .btn[aria-expanded="true"] .btn-icon-chevron {
