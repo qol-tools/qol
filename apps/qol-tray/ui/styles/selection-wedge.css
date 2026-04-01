@@ -139,9 +139,7 @@
 }
 
 .app-container[data-input-mode="mouse"] .selection-cursor-overlay {
-    opacity: 0 !important;
     pointer-events: none;
-    transition: opacity 0.08s ease;
 }
 
 .app-container[data-input-mode="mouse"] .selection-wedge-pseudo-host.selection-wedge-visible::after,

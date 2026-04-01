@@ -24,10 +24,13 @@ export function SelectionCursorOverlay() {
 
         const sync = () => {
             if (app.dataset.inputMode === 'mouse') {
-                trackTarget(null, sync, resizeObserverRef, appRef, targetRef);
-                rectRef.current = null;
-                setStyle(previous => hiddenStyle(previous));
-                return;
+                if (!hasFocusedSurface()) {
+                    trackTarget(null, sync, resizeObserverRef, appRef, targetRef);
+                    rectRef.current = null;
+                    setStyle(previous => hiddenStyle(previous));
+                    return;
+                }
+                app.dataset.inputMode = 'keyboard';
             }
 
             const nextTarget = findActiveSelectedSurface({ currentTarget: targetRef.current });
@@ -74,7 +77,6 @@ export function SelectionCursorOverlay() {
         document.addEventListener('focusout', sync, true);
         document.addEventListener('keydown', onKey, true);
         document.addEventListener('pointerdown', onPointer, true);
-        document.addEventListener('mousemove', onPointer, { capture: true, passive: true });
         document.addEventListener('wheel', onWheel, { capture: true, passive: true });
         window.addEventListener('resize', sync);
         sync();
@@ -90,7 +92,6 @@ export function SelectionCursorOverlay() {
             document.removeEventListener('focusout', sync, true);
             document.removeEventListener('keydown', onKey, true);
             document.removeEventListener('pointerdown', onPointer, true);
-            document.removeEventListener('mousemove', onPointer, true);
             document.removeEventListener('wheel', onWheel, true);
             window.removeEventListener('resize', sync);
             if (readyFrameRef.current) cancelAnimationFrame(readyFrameRef.current);
@@ -242,6 +243,12 @@ function needsTeleport(prevRect, nextRect, maxGlideDistance) {
     const dy = nextRect.top - prevRect.top;
     const distance = Math.hypot(dx, dy);
     return distance > maxGlideDistance;
+}
+
+function hasFocusedSurface() {
+    const focused = document.activeElement;
+    if (!(focused instanceof HTMLElement) || focused === document.body) return false;
+    return focused.closest('[data-selected-surface]') !== null;
 }
 
 function ensureSurfacesFocusable(mutations) {
