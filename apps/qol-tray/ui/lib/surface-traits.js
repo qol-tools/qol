@@ -35,7 +35,10 @@ export function surfaceDepth(el) {
     let node = el;
     while (node) {
         node = node.parentElement?.closest('[data-surface-container]');
-        if (node) depth++;
+        if (!node) break;
+        const base = Number(node.getAttribute('data-surface-depth-base'));
+        if (base > 0) depth += base;
+        depth++;
     }
     return depth;
 }

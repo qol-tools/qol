@@ -36,7 +36,7 @@ export function SelectionCursorOverlay() {
             const nextTarget = findActiveSelectedSurface({ currentTarget: targetRef.current });
             trackTarget(nextTarget, sync, resizeObserverRef, appRef, targetRef);
 
-            if (!(nextTarget instanceof HTMLElement) || isObscuredByModal(nextTarget)) {
+            if (!(nextTarget instanceof HTMLElement)) {
                 rectRef.current = null;
                 setStyle(previous => hiddenStyle(previous));
                 return;
@@ -263,13 +263,6 @@ function ensureSurfacesFocusable(mutations) {
     }
 }
 
-function isObscuredByModal(target) {
-    if (target.closest('.edit-modal, .confirm-modal')) return false;
-    const modal = document.querySelector('.edit-modal, .confirm-modal');
-    if (!modal) return false;
-    const rect = modal.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
-}
 
 function collectNewSurfaces(mutations) {
     const surfaces = [];

@@ -124,18 +124,18 @@
             rgba(255, 255, 255, 0.03) 38%,
             rgba(0, 0, 0, 0.08) 100%),
         linear-gradient(90deg,
-            rgba(var(--success-rgb), 1) 0%,
-            rgba(var(--success-rgb), 0.92) 52%,
-            rgba(var(--success-rgb), 0.34) 100%);
+            rgba(var(--danger-rgb), 1) 0%,
+            rgba(var(--danger-rgb), 0.92) 52%,
+            rgba(var(--danger-rgb), 0.34) 100%);
     --selection-wedge-shadow:
         drop-shadow(0 0 0.5px rgba(var(--ink-rgb), 0.34))
-        drop-shadow(0 0 4px rgba(var(--success-rgb), 0.18))
-        drop-shadow(0 0 9px rgba(var(--success-rgb), 0.05));
+        drop-shadow(0 0 4px rgba(var(--danger-rgb), 0.18))
+        drop-shadow(0 0 9px rgba(var(--danger-rgb), 0.05));
 }
 
 .selection-cursor-overlay[data-depth="3"] .selection-wedge-depth,
 .selection-cursor-overlay[data-depth="4"] .selection-wedge-depth {
-    background: rgba(var(--success-rgb), 0.9);
+    background: rgba(var(--danger-rgb), 0.9);
 }
 
 .app-container[data-input-mode="mouse"] .selection-cursor-overlay {

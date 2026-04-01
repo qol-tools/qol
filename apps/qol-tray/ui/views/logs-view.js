@@ -31,7 +31,7 @@ function levelInfo(entry) {
 export function LogsView({ active }) {
     const [entries, setEntries] = useState([]);
     const [suppressed, setSuppressed] = useState({});
-    const [selectedIndex, setSelectedIndex] = useState(0);
+    const [selectedIndex, setSelectedIndex] = useState(-1);
     const [expandedKeys, setExpandedKeys] = useState(new Set());
     const [detailEntry, setDetailEntry] = useState(null);
     const contentRef = useRef(null);
@@ -114,10 +114,7 @@ export function LogsView({ active }) {
         if (!vt) return;
         if (vt.activeTab === 'live') {
             const entry = collapsedEntries[selectedIndex];
-            if (entry) {
-                document.activeElement?.blur();
-                setDetailEntry(entry);
-            }
+            if (entry) setDetailEntry(entry);
         }
         if (vt.activeTab === 'suppressed') {
             const key = filteredSuppressedKeys[selectedIndex];
@@ -174,7 +171,7 @@ export function LogsView({ active }) {
                 <div class="logs-content" ref=${contentRef}>
                     ${vt.activeTab === 'live' && html`<${LiveLog} entries=${collapsedEntries} selectedIndex=${selectedIndex}
                         setSelectedIndex=${setSelectedIndex}
-                        onEntryClick=${(entry) => { document.activeElement?.blur(); setDetailEntry(entry); }} />`}
+                        onEntryClick=${(entry) => setDetailEntry(entry)} />`}
                     ${vt.activeTab === 'suppressed' && html`<${SuppressedList}
                         keys=${filteredSuppressedKeys}
                         items=${suppressed}

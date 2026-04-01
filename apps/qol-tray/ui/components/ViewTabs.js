@@ -26,9 +26,7 @@ export function ViewTabs({ title, subtitle, scramble, tabs, onActivate, onConten
     const handleContentFocusOut = useCallback((e) => {
         if (!onContentBlur) return;
         const content = e.currentTarget;
-        if (!e.relatedTarget || !content.contains(e.relatedTarget)) {
-            onContentBlur();
-        }
+        if (!e.relatedTarget || !content.contains(e.relatedTarget)) onContentBlur();
     }, [onContentBlur]);
 
     return html`
