@@ -26,7 +26,10 @@ export function ViewTabs({ title, subtitle, scramble, tabs, onActivate, onConten
     const handleContentFocusOut = useCallback((e) => {
         if (!onContentBlur) return;
         const content = e.currentTarget;
-        if (!e.relatedTarget || !content.contains(e.relatedTarget)) onContentBlur();
+        if (!e.relatedTarget || !content.contains(e.relatedTarget)) {
+            if (e.relatedTarget?.closest('.edit-modal, .confirm-modal')) return;
+            onContentBlur();
+        }
     }, [onContentBlur]);
 
     return html`

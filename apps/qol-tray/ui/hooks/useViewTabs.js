@@ -15,7 +15,7 @@ export function useViewTabs(tabs, { onActivate } = {}) {
         if (!child) return;
         const surfaces = directSurfaces(child);
         if (surfaces.length === 0) return;
-        surfaces[0].focus();
+        surfaces[0].focus({ preventScroll: true });
     }, []);
 
     const activateTab = useCallback((index) => {

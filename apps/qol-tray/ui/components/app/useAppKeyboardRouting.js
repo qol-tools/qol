@@ -30,9 +30,9 @@ export function useAppKeyboardRouting({
         prevPluginIdRef.current = activePluginId;
         if (wasOpen && !activePluginId) {
             const surface = document.querySelector('#content [data-selected-surface][data-selected="true"]');
-            if (surface) { surface.focus(); return; }
+            if (surface) { surface.focus({ preventScroll: true }); return; }
             const fallback = document.querySelector('#content [data-selected-surface]');
-            if (fallback) fallback.focus();
+            if (fallback) fallback.focus({ preventScroll: true });
         }
     }, [activePluginId]);
 
@@ -153,7 +153,7 @@ function navigateInActiveContainer(direction) {
     const current = findSelectedSurface();
     if (!current) {
         const fallback = document.querySelector('#content [data-selected-surface]');
-        if (fallback?.getClientRects().length > 0) fallback.focus();
+        if (fallback?.getClientRects().length > 0) fallback.focus({ preventScroll: true });
         return;
     }
     const container = activeContainer(current);
@@ -169,32 +169,23 @@ function navigateInActiveContainer(direction) {
     const next = pos ? gridStep(rows, pos, direction) : rows[0][0];
     if (!next || next === current) return;
 
-    next.focus();
+    next.focus({ preventScroll: true });
 }
 
 function activateAndMaybeDescend() {
     const current = findSelectedSurface();
     if (!current) return;
 
-    // Tabs handle their own descent via useEffect after content renders
     if (current.getAttribute('role') === 'tab') {
         activateSurface(current);
         return;
     }
 
-    if (surfaceContainsChildContainer(current)) {
-        activateSurface(current);
-        requestAnimationFrame(() => descendIntoChild(current));
-        return;
-    }
-
-    const container = activeContainer(current);
     activateSurface(current);
 
-    requestAnimationFrame(() => {
-        const child = container ? firstChildContainer(container) : null;
-        if (child) descendInto(child);
-    });
+    if (surfaceContainsChildContainer(current)) {
+        requestAnimationFrame(() => descendIntoChild(current));
+    }
 }
 
 function descendIntoChild(surface) {
@@ -205,13 +196,14 @@ function descendIntoChild(surface) {
 function descendInto(container) {
     const surfaces = directSurfaces(container);
     if (surfaces.length === 0) return;
-    surfaces[0].focus();
+    surfaces[0].focus({ preventScroll: true });
 }
 
 function ascendLayer() {
     const current = findSelectedSurface();
     const container = current ? activeContainer(current) : null;
     if (!container) return false;
+    if (container.closest('.edit-modal, .confirm-modal')) return false;
 
     const parent = parentContainer(container);
     if (!parent) return false;
@@ -222,7 +214,7 @@ function ascendLayer() {
         || parentSurfaces[0];
     if (!anchor) return false;
 
-    anchor.focus();
+    anchor.focus({ preventScroll: true });
     return true;
 }
 
