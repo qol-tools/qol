@@ -100,8 +100,8 @@
     font-weight: 700;
     font-family: var(--font-mono, monospace);
     line-height: 1;
-    color: var(--slate-975, #0e1015);
-    background: hsl(var(--wedge-hue, 50) 85% 55% / 0.9);
+    color: var(--wedge-badge-color, #000);
+    background: hsl(var(--wedge-hue, 50) 80% 38% / 0.95);
     border-radius: 99px;
     pointer-events: none;
     z-index: var(--selection-wedge-z, 4);
