@@ -33,8 +33,40 @@
 .catalog {
     display: flex;
     flex-direction: column;
-    gap: var(--space-5);
+    gap: var(--space-6, 1.5rem);
     padding-bottom: var(--space-5);
+}
+
+.catalog-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.catalog-group-label {
+    color: var(--text-faint);
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-semibold);
+    letter-spacing: var(--ls-lg);
+    text-transform: uppercase;
+    border-bottom: var(--border-w-1) solid var(--border-subtle);
+    padding-bottom: var(--space-2);
+}
+
+.catalog-group-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.catalog-group-inline {
+    flex-direction: row;
+    flex-wrap: wrap;
+}
+
+.catalog-group-inline > .catalog-section {
+    min-width: 200px;
+    flex: 1;
 }
 
 .catalog-section {
@@ -44,11 +76,9 @@
 }
 
 .catalog-section-label {
-    color: var(--text-faint);
-    font-size: var(--fs-xs);
+    color: var(--text-secondary);
+    font-size: var(--fs-sm);
     font-weight: var(--fw-semibold);
-    letter-spacing: var(--ls-lg);
-    text-transform: uppercase;
 }
 
 .catalog-row {

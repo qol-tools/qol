@@ -391,12 +391,14 @@
 
 .custom-select {
     position: relative;
-    width: 100%;
+    display: inline-flex;
+    flex-direction: column;
 }
 
 .custom-select-trigger {
     justify-content: space-between;
     gap: 0.6rem;
+    min-width: 140px;
     text-align: left;
 }
 

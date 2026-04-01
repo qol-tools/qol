@@ -11,13 +11,24 @@ import { Badge, HealthDot, Alert } from '../../../components/StatusIndicators.js
 export function ComponentsCatalog() {
     return html`
         <div class="catalog">
-            <${ButtonShowcase} />
-            <${DropdownShowcase} />
-            <${ExpanderShowcase} />
-            <${FormShowcase} />
-            <${StatusShowcase} />
-            <${ModalShowcase} />
-            <${DepthDiver} />
+            <${CatalogGroup} title="Display" inline=${true}>
+                <${ButtonShowcase} />
+                <${StatusShowcase} />
+            <//>
+            <${CatalogGroup} title="Interactive">
+                <${InputShowcase} />
+                <${ModalShowcase} />
+                <${DepthDiver} />
+            <//>
+        </div>
+    `;
+}
+
+function CatalogGroup({ title, inline, children }) {
+    return html`
+        <div class="catalog-group">
+            <div class="catalog-group-label">${title}</div>
+            <div class=${`catalog-group-body${inline ? ' catalog-group-inline' : ''}`}>${children}</div>
         </div>
     `;
 }
@@ -65,30 +76,27 @@ function ButtonShowcase() {
     `;
 }
 
-function DropdownShowcase() {
+function InputShowcase() {
     const options = ['github', 'folder', 'local'];
     const labels = { github: 'GitHub', folder: 'Folder', local: 'Local' };
     const [value1, setValue1] = useState('github');
     const [value2, setValue2] = useState('folder');
-    return html`
-        <${CatalogSection} title="Dropdown">
-            <${CatalogRow} label="Normal">
-                <${CustomSelect} value=${value1} options=${options} labels=${labels} onChange=${setValue1} />
-            <//>
-            <${CatalogRow} label="Compact">
-                <${CustomSelect} value=${value2} options=${options} labels=${labels} onChange=${setValue2} compact=${true} />
-            <//>
-        <//>
-    `;
-}
-
-function ExpanderShowcase() {
     const [open1, setOpen1] = useState(false);
     const [open2, setOpen2] = useState(true);
+    const [toggle1, setToggle1] = useState(true);
+    const [toggle2, setToggle2] = useState(false);
     return html`
-        <${CatalogSection} title="Expander">
-            <${CatalogRow}>
-                <div style="display:flex; gap:var(--space-3); align-items:flex-start; flex-wrap:wrap;">
+        <div class="catalog-group-inline">
+            <${CatalogSection} title="Dropdown">
+                <${CatalogRow} label="Normal">
+                    <${CustomSelect} value=${value1} options=${options} labels=${labels} onChange=${setValue1} />
+                <//>
+                <${CatalogRow} label="Compact">
+                    <${CustomSelect} value=${value2} options=${options} labels=${labels} onChange=${setValue2} compact=${true} />
+                <//>
+            <//>
+            <${CatalogSection} title="Expander">
+                <${CatalogRow}>
                     <${Expander} open=${open1} onToggle=${() => setOpen1(!open1)}>
                         <${ExpanderTrigger}>Collapsed<//>
                         <${ExpanderBody}><span style="color:var(--text-muted); font-size:var(--fs-sm);">Content here.</span><//>
@@ -97,37 +105,30 @@ function ExpanderShowcase() {
                         <${ExpanderTrigger}>Expanded<//>
                         <${ExpanderBody}><span style="color:var(--text-muted); font-size:var(--fs-sm);">Content here.</span><//>
                     <//>
-                </div>
+                <//>
             <//>
-        <//>
-    `;
-}
-
-function FormShowcase() {
-    const [toggle1, setToggle1] = useState(true);
-    const [toggle2, setToggle2] = useState(false);
-    return html`
-        <${CatalogSection} title="Form primitives">
-            <${CatalogRow} label="ToggleSwitch">
-                <span data-selected-surface="" onClick=${() => setToggle1(!toggle1)}>
-                    <${ToggleSwitch} checked=${toggle1} onChange=${setToggle1} label="Enabled" />
-                </span>
-                <span data-selected-surface="" onClick=${() => setToggle2(!toggle2)}>
-                    <${ToggleSwitch} checked=${toggle2} onChange=${setToggle2} label="Disabled" />
-                </span>
+            <${CatalogSection} title="Toggle">
+                <${CatalogRow}>
+                    <span data-selected-surface="" onClick=${() => setToggle1(!toggle1)}>
+                        <${ToggleSwitch} checked=${toggle1} onChange=${setToggle1} label="Enabled" />
+                    </span>
+                    <span data-selected-surface="" onClick=${() => setToggle2(!toggle2)}>
+                        <${ToggleSwitch} checked=${toggle2} onChange=${setToggle2} label="Disabled" />
+                    </span>
+                <//>
             <//>
-            <${CatalogRow} label="Badge">
-                <${Badge}>3<//>
-                <${Badge} style=${{ background: 'rgba(var(--success-rgb),0.14)', borderColor: 'rgba(var(--success-rgb),0.26)' }}>OK<//>
-                <${Badge} style=${{ background: 'rgba(var(--warning-rgb),0.16)', borderColor: 'rgba(var(--warning-rgb),0.3)' }}>Review<//>
-            <//>
-        <//>
+        </div>
     `;
 }
 
 function StatusShowcase() {
     return html`
-        <${CatalogSection} title="Status indicators">
+        <${CatalogSection} title="Status">
+            <${CatalogRow} label="Badge">
+                <${Badge}>3<//>
+                <${Badge} style=${{ background: 'rgba(var(--success-rgb),0.14)', borderColor: 'rgba(var(--success-rgb),0.26)' }}>OK<//>
+                <${Badge} style=${{ background: 'rgba(var(--warning-rgb),0.16)', borderColor: 'rgba(var(--warning-rgb),0.3)' }}>Review<//>
+            <//>
             <${CatalogRow} label="Health dots">
                 <span class="catalog-status-row"><${HealthDot} /> Not configured</span>
                 <span class="catalog-status-row"><${HealthDot} health="healthy" /> Healthy</span>
