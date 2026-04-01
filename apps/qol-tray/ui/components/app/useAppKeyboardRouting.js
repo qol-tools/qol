@@ -95,13 +95,12 @@ function routeToView(event, viewKeyboard, cycleView) {
         if (viewKeyboard.handleKey) viewKeyboard.handleKey(event);
         return;
     }
-    if (hasVisibleModal()) return;
     if (event.key === 'Tab') {
-        cycleView(event);
+        if (!hasVisibleModal()) cycleView(event);
         return;
     }
     const active = document.activeElement;
-    if (active && active !== document.body) {
+    if (active && active !== document.body && !active.closest('.edit-modal, .confirm-modal')) {
         if (viewKeyboard?.handleKey) viewKeyboard.handleKey(event);
     }
     if (!event.defaultPrevented) globalSurfaceNav(event);

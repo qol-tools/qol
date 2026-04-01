@@ -1,5 +1,6 @@
 import { html } from '../lib/html.js';
-import { useCallback, useEffect, useLayoutEffect, useRef } from 'preact/hooks';
+import { useCallback, useEffect, useRef } from 'preact/hooks';
+import { surfaceDepth } from '../lib/surface-traits.js';
 
 const FOCUSABLE = 'input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), .custom-select-trigger:not([disabled]), [tabindex]:not([disabled]):not([tabindex="-1"])';
 
@@ -10,15 +11,18 @@ export function Modal({ open, onClose, dismissOnBackdrop, size, className, child
         if (dismissOnBackdrop && e.target === e.currentTarget) onClose();
     }, [onClose, dismissOnBackdrop]);
 
-    useLayoutEffect(() => {
-        if (!open) return;
+    useEffect(() => {
+        const prev = document.activeElement instanceof HTMLElement && document.activeElement !== document.body
+            ? document.activeElement : null;
         const el = containerRef.current;
-        if (!el) return;
-        const surface = el.querySelector('[data-selected-surface][data-selected="true"]');
-        if (surface) { surface.focus(); return; }
-        const first = el.querySelector(FOCUSABLE);
-        first?.focus();
-    }, [open]);
+        if (el) {
+            if (prev) el.setAttribute('data-surface-depth-base', String(surfaceDepth(prev)));
+            const surface = el.querySelector('[data-selected-surface]');
+            if (surface) surface.focus();
+            else el.querySelector(FOCUSABLE)?.focus();
+        }
+        return () => { if (prev?.isConnected) prev.focus(); };
+    }, []);
 
     useEffect(() => {
         if (!open || !onClose) return;
@@ -40,7 +44,7 @@ export function Modal({ open, onClose, dismissOnBackdrop, size, className, child
     if (!open) return null;
     const sizeClass = size ? `modal-${size}` : '';
     const cls = [className, sizeClass].filter(Boolean).join(' ');
-    return html`<div class=${cls} ref=${containerRef} onClick=${handleBackdrop}>${children}</div>`;
+    return html`<div class=${cls} ref=${containerRef} data-surface-container="" onClick=${handleBackdrop}>${children}</div>`;
 }
 
 export function modalFields(container) {
@@ -76,6 +80,7 @@ export function ModalFooter({ actions }) {
         <div class="modal-footer-actions" ref=${ref}>
             ${actions.map(a => html`
                 <button key=${a.label} class="btn ${a.variant || 'btn-ghost'}"
+                    data-selected-surface=""
                     onClick=${a.onClick} disabled=${a.disabled}>
                     ${a.label}${a.kbd && html` <kbd>${a.kbd}</kbd>`}
                 </button>
