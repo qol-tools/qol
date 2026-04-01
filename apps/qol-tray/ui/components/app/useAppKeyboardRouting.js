@@ -100,7 +100,10 @@ function routeToView(event, viewKeyboard, cycleView) {
         cycleView(event);
         return;
     }
-    if (viewKeyboard?.handleKey) viewKeyboard.handleKey(event);
+    const active = document.activeElement;
+    if (active && active !== document.body) {
+        if (viewKeyboard?.handleKey) viewKeyboard.handleKey(event);
+    }
     if (!event.defaultPrevented) globalSurfaceNav(event);
 }
 
