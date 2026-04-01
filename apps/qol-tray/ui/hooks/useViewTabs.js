@@ -37,6 +37,14 @@ export function useViewTabs(tabs, { onActivate } = {}) {
         descendToContent();
     }, [activeTab, descendToContent]);
 
+    const previewTab = useCallback((index) => {
+        if (index < 0 || index >= tabs.length) return;
+        const tabId = tabs[index].id;
+        if (tabId === activeTab) return;
+        setActiveTab(tabId);
+        if (onActivate) onActivate(tabId, index);
+    }, [tabs, onActivate, activeTab]);
+
     const switchTab = useCallback((tabId) => {
         const idx = tabs.findIndex(t => t.id === tabId);
         if (idx >= 0) activateTab(idx);
@@ -45,6 +53,7 @@ export function useViewTabs(tabs, { onActivate } = {}) {
     return {
         activeTab,
         activateTab,
+        previewTab,
         switchTab,
         rootRef,
     };

@@ -48,6 +48,7 @@ export function ViewTabs({ title, subtitle, scramble, tabs, onActivate, onConten
                                     data-selected=${vt.activeTab === tab.id ? 'true' : 'false'}
                                     data-tab-id=${tab.id}
                                     aria-selected=${vt.activeTab === tab.id}
+                                    onFocus=${() => vt.previewTab(i)}
                                     onClick=${() => vt.activateTab(i)}
                                 >
                                     ${tab.label}

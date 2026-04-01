@@ -276,6 +276,10 @@
     color: var(--text-faint);
 }
 
+.profile-select-surface .custom-select {
+    width: 100%;
+}
+
 .profile-select-surface .custom-select-trigger {
     padding: var(--space-3) var(--space-4);
     border: var(--border-w-1) solid var(--border-default);
