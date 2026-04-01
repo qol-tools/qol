@@ -24,7 +24,7 @@ export function SelectionCursorOverlay() {
 
         const sync = () => {
             if (app.dataset.inputMode === 'mouse') {
-                if (!hasFocusedSurface()) {
+                if (pointerActive || !hasFocusedSurface()) {
                     trackTarget(null, sync, resizeObserverRef, appRef, targetRef);
                     rectRef.current = null;
                     setStyle(previous => hiddenStyle(previous));
@@ -55,9 +55,10 @@ export function SelectionCursorOverlay() {
             setStyle(cursorStyle(app, nextTarget, shouldTeleport));
         };
 
+        let pointerActive = false;
         const setInputMode = (mode) => { app.dataset.inputMode = mode; };
-        const onKey = () => { setInputMode('keyboard'); sync(); };
-        const onPointer = () => setInputMode('mouse');
+        const onKey = () => { pointerActive = false; setInputMode('keyboard'); sync(); };
+        const onPointer = () => { pointerActive = true; setInputMode('mouse'); };
         const onWheel = () => setInputMode('mouse');
         setInputMode('keyboard');
 

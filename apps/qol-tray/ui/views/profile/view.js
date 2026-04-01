@@ -1,6 +1,8 @@
 import { html } from '../../lib/html.js';
 import { useState } from 'preact/hooks';
 import { PageHeader } from '../../components/PageHeader.js';
+import { Expander, ExpanderTrigger, ExpanderBody } from '../../components/Expander.js';
+import { Badge, HealthDot, Alert } from '../../components/StatusIndicators.js';
 import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../../components/app/view-keyboard-context.js';
 import { useProfileController } from './use-controller.js';
@@ -45,7 +47,7 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                             <section class="profile-section">
                                 <!-- Status line -->
                                 <div class="profile-status-line">
-                                    <span class="profile-health-dot" data-health=${health}></span>
+                                    <${HealthDot} health=${health} />
                                     <span class="profile-status-label">${profileHealthLabel(ctrl.syncStatus)}</span>
                                     ${ctrl.configured && html`
                                         <span class="profile-status-meta">${'\u00b7'} ${profileLastSyncSummary(ctrl.syncStatus)}</span>
@@ -54,14 +56,10 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
 
                                 <!-- Alerts -->
                                 ${ctrl.syncStatus?.incident && html`
-                                    <div class="profile-sync-alert" data-variant="warning">
-                                        ${ctrl.syncStatus.incident.message}
-                                    </div>
+                                    <${Alert} variant="warning">${ctrl.syncStatus.incident.message}<//>
                                 `}
                                 ${ctrl.syncStatus?.last_error && html`
-                                    <div class="profile-sync-alert" data-variant="error">
-                                        ${ctrl.syncStatus.last_error}
-                                    </div>
+                                    <${Alert} variant="error">${ctrl.syncStatus.last_error}<//>
                                 `}
 
                                 <!-- Device code flow -->
@@ -93,18 +91,13 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
 
                                 <!-- Settings expander -->
                                 ${!ctrl.authPrompt && html`
-                                    <${SettingsExpander}
+                                    <${Expander}
                                         open=${showSettings}
-                                        onToggle=${() => setShowSettings(!showSettings)}
-                                        surface=${ctrl.surfaceById.get('settings')}
-                                        selectedIndex=${ctrl.selectedIndex}
-                                        setSelectedIndex=${ctrl.setSelectedIndex}
+                                        onToggle=${() => { ctrl.setSelectedIndex(ctrl.surfaceById.get('settings')?.index); setShowSettings(!showSettings); }}
+                                        ...${surfaceProps(ctrl.surfaceById.get('settings'), ctrl.selectedIndex, ctrl.setSelectedIndex)}
                                     >
-                                        <div class="btn-expander-trigger">
-                                            <span class="btn-icon btn-icon-chevron">${'\u25b6'}</span>
-                                            Settings
-                                        </div>
-                                        <div class="btn-expander-body" onClick=${(e) => e.stopPropagation()}>
+                                        <${ExpanderTrigger}>Settings<//>
+                                        <${ExpanderBody}>
                                             <div class="profile-settings-field">
                                                 <span class="profile-settings-label">Provider</span>
                                                 <${ProfileSelectField}
@@ -130,7 +123,7 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                                                     updateForm: ctrl.updateForm,
                                                 })
                                             )}
-                                        </div>
+                                        <//>
                                     <//>
                                 `}
                             </section>
@@ -140,10 +133,10 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                                     <h2>Backups</h2>
                                     <div class="section-actions">
                                         ${ctrl.backups.length > 0 && html`
-                                            <span class="badge profile-backup-count">${ctrl.backups.length}</span>
+                                            <${Badge} className="profile-backup-count">${ctrl.backups.length}<//>
                                         `}
                                         ${ctrl.incident?.backup_file && html`
-                                            <span class="badge profile-badge profile-badge-skipped">${ctrl.incident.backup_file}</span>
+                                            <${Badge} className="profile-badge profile-badge-skipped">${ctrl.incident.backup_file}<//>
                                         `}
                                         <${ProfileActionButton} surface=${ctrl.surfaceById.get('export')} selectedIndex=${ctrl.selectedIndex} setSelectedIndex=${ctrl.setSelectedIndex} />
                                         <${ProfileActionButton} surface=${ctrl.surfaceById.get('import')} selectedIndex=${ctrl.selectedIndex} setSelectedIndex=${ctrl.setSelectedIndex} />
@@ -219,22 +212,6 @@ function SettingsInfoField({ label, surface, selectedIndex, setSelectedIndex, ch
         <div class="profile-settings-field" ...${sp}>
             <span class="profile-settings-label">${label}</span>
             <span class="profile-settings-value">${children}</span>
-        </div>
-    `;
-}
-
-function SettingsExpander({ open, onToggle, surface, selectedIndex, setSelectedIndex, children }) {
-    const sp = surfaceProps(surface, selectedIndex, setSelectedIndex);
-    if (!sp) return null;
-    return html`
-        <div class="btn btn-ghost btn-expander" ...${sp}
-            aria-expanded=${open ? 'true' : 'false'}
-            onClick=${(e) => {
-                if (e.target.closest('.btn-expander-body')) return;
-                setSelectedIndex(surface.index);
-                onToggle();
-            }}>
-            ${children}
         </div>
     `;
 }

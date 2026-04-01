@@ -3,8 +3,10 @@ import { useCallback, useState } from 'preact/hooks';
 import { SurfaceContainer } from '../../../components/SurfaceContainer.js';
 import { directSurfaces } from '../../../lib/surface-traits.js';
 import { Modal, ModalFooter } from '../../../components/ModalPreact.js';
-import { CodeBlock } from '../../../components/CodeBlock.js';
 import { ToggleSwitch } from '../../../components/ToggleSwitch.js';
+import { CustomSelect } from '../../../components/CustomSelect.js';
+import { Expander, ExpanderTrigger, ExpanderBody } from '../../../components/Expander.js';
+import { Badge, HealthDot, Alert } from '../../../components/StatusIndicators.js';
 
 export function ComponentsCatalog() {
     return html`
@@ -15,7 +17,6 @@ export function ComponentsCatalog() {
             <${FormShowcase} />
             <${StatusShowcase} />
             <${ModalShowcase} />
-            <${CodeBlockShowcase} />
             <${DepthDiver} />
         </div>
     `;
@@ -65,22 +66,17 @@ function ButtonShowcase() {
 }
 
 function DropdownShowcase() {
-    const [open, setOpen] = useState(false);
+    const options = ['github', 'folder', 'local'];
+    const labels = { github: 'GitHub', folder: 'Folder', local: 'Local' };
+    const [value1, setValue1] = useState('github');
+    const [value2, setValue2] = useState('folder');
     return html`
         <${CatalogSection} title="Dropdown">
-            <${CatalogRow} label="Click to toggle">
-                <div style="position:relative; display:inline-flex;">
-                    <button class="btn btn-dropdown" data-selected-surface=""
-                        aria-expanded=${open ? 'true' : 'false'}
-                        onClick=${() => setOpen(!open)}>GitHub</button>
-                    ${open && html`
-                        <div class="catalog-dropdown-menu" onClick=${() => setOpen(false)}>
-                            <div class="catalog-dropdown-item is-active">${'\u2713'} GitHub</div>
-                            <div class="catalog-dropdown-item">${'\u00a0\u00a0'} Folder</div>
-                        </div>
-                    `}
-                </div>
-                <button class="btn btn-dropdown" data-selected-surface="">Folder</button>
+            <${CatalogRow} label="Normal">
+                <${CustomSelect} value=${value1} options=${options} labels=${labels} onChange=${setValue1} />
+            <//>
+            <${CatalogRow} label="Compact">
+                <${CustomSelect} value=${value2} options=${options} labels=${labels} onChange=${setValue2} compact=${true} />
             <//>
         <//>
     `;
@@ -93,22 +89,14 @@ function ExpanderShowcase() {
         <${CatalogSection} title="Expander">
             <${CatalogRow}>
                 <div style="display:flex; gap:var(--space-3); align-items:flex-start; flex-wrap:wrap;">
-                    <div class="btn btn-ghost btn-expander" data-selected-surface=""
-                        aria-expanded=${open1 ? 'true' : 'false'}
-                        onClick=${(e) => { if (e.target.closest('.btn-expander-body')) return; setOpen1(!open1); }}>
-                        <div class="btn-expander-trigger"><span class="btn-icon btn-icon-chevron">${'\u25b6'}</span> Collapsed</div>
-                        <div class="btn-expander-body" onClick=${(e) => e.stopPropagation()}>
-                            <span style="color:var(--text-muted); font-size:var(--fs-sm);">Content here.</span>
-                        </div>
-                    </div>
-                    <div class="btn btn-ghost btn-expander" data-selected-surface=""
-                        aria-expanded=${open2 ? 'true' : 'false'}
-                        onClick=${(e) => { if (e.target.closest('.btn-expander-body')) return; setOpen2(!open2); }}>
-                        <div class="btn-expander-trigger"><span class="btn-icon btn-icon-chevron">${'\u25b6'}</span> Expanded</div>
-                        <div class="btn-expander-body" onClick=${(e) => e.stopPropagation()}>
-                            <span style="color:var(--text-muted); font-size:var(--fs-sm);">Content here.</span>
-                        </div>
-                    </div>
+                    <${Expander} open=${open1} onToggle=${() => setOpen1(!open1)}>
+                        <${ExpanderTrigger}>Collapsed<//>
+                        <${ExpanderBody}><span style="color:var(--text-muted); font-size:var(--fs-sm);">Content here.</span><//>
+                    <//>
+                    <${Expander} open=${open2} onToggle=${() => setOpen2(!open2)}>
+                        <${ExpanderTrigger}>Expanded<//>
+                        <${ExpanderBody}><span style="color:var(--text-muted); font-size:var(--fs-sm);">Content here.</span><//>
+                    <//>
                 </div>
             <//>
         <//>
@@ -129,9 +117,9 @@ function FormShowcase() {
                 </span>
             <//>
             <${CatalogRow} label="Badge">
-                <span class="badge" data-selected-surface="">3</span>
-                <span class="badge" data-selected-surface="" style="background:rgba(var(--success-rgb),0.14); border-color:rgba(var(--success-rgb),0.26);">OK</span>
-                <span class="badge" data-selected-surface="" style="background:rgba(var(--warning-rgb),0.16); border-color:rgba(var(--warning-rgb),0.3);">Review</span>
+                <${Badge}>3<//>
+                <${Badge} style=${{ background: 'rgba(var(--success-rgb),0.14)', borderColor: 'rgba(var(--success-rgb),0.26)' }}>OK<//>
+                <${Badge} style=${{ background: 'rgba(var(--warning-rgb),0.16)', borderColor: 'rgba(var(--warning-rgb),0.3)' }}>Review<//>
             <//>
         <//>
     `;
@@ -141,22 +129,14 @@ function StatusShowcase() {
     return html`
         <${CatalogSection} title="Status indicators">
             <${CatalogRow} label="Health dots">
-                <span class="catalog-status-row" data-selected-surface="">
-                    <span class="profile-health-dot"></span> Not configured
-                </span>
-                <span class="catalog-status-row" data-selected-surface="">
-                    <span class="profile-health-dot" data-health="healthy"></span> Healthy
-                </span>
-                <span class="catalog-status-row" data-selected-surface="">
-                    <span class="profile-health-dot" data-health="attention"></span> Attention
-                </span>
-                <span class="catalog-status-row" data-selected-surface="">
-                    <span class="profile-health-dot" data-health="error"></span> Error
-                </span>
+                <span class="catalog-status-row"><${HealthDot} /> Not configured</span>
+                <span class="catalog-status-row"><${HealthDot} health="healthy" /> Healthy</span>
+                <span class="catalog-status-row"><${HealthDot} health="attention" /> Attention</span>
+                <span class="catalog-status-row"><${HealthDot} health="error" /> Error</span>
             <//>
             <${CatalogRow} label="Alerts">
-                <div class="profile-sync-alert" data-selected-surface="" data-variant="warning" style="font-size:var(--fs-sm); padding:var(--space-2) var(--space-3);">Warning alert</div>
-                <div class="profile-sync-alert" data-selected-surface="" data-variant="error" style="font-size:var(--fs-sm); padding:var(--space-2) var(--space-3);">Error alert</div>
+                <${Alert} variant="warning">Warning alert<//>
+                <${Alert} variant="error">Error alert<//>
             <//>
         <//>
     `;
@@ -179,7 +159,6 @@ function ModalShowcase() {
                         This modal is a surface layer. The wedge should appear here.
                         Arrow keys navigate between buttons. ESC returns to the previous layer.
                     </p>
-                    <${CodeBlock} text=${"Layer depth test\nThis is inside a modal"} />
                     <${ModalFooter} actions=${[
                         { label: 'Close', kbd: 'Esc', onClick: close },
                         { label: 'Action', variant: 'btn-primary', onClick: () => {} },
@@ -187,18 +166,6 @@ function ModalShowcase() {
                 </div>
             <//>
         `}
-    `;
-}
-
-function CodeBlockShowcase() {
-    return html`
-        <${CatalogSection} title="CodeBlock">
-            <${CatalogRow} label="Click to copy">
-                <div data-selected-surface="" style="flex:1;">
-                    <${CodeBlock} text=${"const x = 42;\nconsole.log(x);"} />
-                </div>
-            <//>
-        <//>
     `;
 }
 
