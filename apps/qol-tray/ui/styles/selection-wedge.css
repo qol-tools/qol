@@ -39,6 +39,19 @@
 .selection-cursor-overlay .selection-wedge-icon {
     opacity: 1;
     transform: scaleX(-1) rotate(-45deg);
+    background:
+        linear-gradient(180deg,
+            rgba(255, 255, 255, 0.18) 0%,
+            rgba(255, 255, 255, 0.03) 38%,
+            rgba(0, 0, 0, 0.08) 100%),
+        linear-gradient(90deg,
+            hsl(var(--wedge-hue, 50) 85% 55%) 0%,
+            hsl(var(--wedge-hue, 50) 85% 55% / 0.92) 52%,
+            hsl(var(--wedge-hue, 50) 85% 55% / 0.34) 100%);
+    filter:
+        drop-shadow(0 0 0.5px rgba(var(--ink-rgb), 0.34))
+        drop-shadow(0 0 4px hsl(var(--wedge-hue, 50) 85% 55% / 0.18))
+        drop-shadow(0 0 9px hsl(var(--wedge-hue, 50) 85% 55% / 0.05));
 }
 
 .selection-wedge-pseudo-host,
@@ -73,11 +86,11 @@
     transform: scaleX(-1) rotate(-45deg);
 }
 
-/* Depth badge */
-.selection-wedge-depth {
+/* Depth badge — sibling of the masked icon, positioned relative to overlay */
+.selection-cursor-overlay > .selection-wedge-depth {
     position: absolute;
-    top: -4px;
-    left: -6px;
+    top: calc(var(--selection-wedge-top, -20px) - 4px);
+    left: calc(var(--selection-wedge-left, -24px) - 6px);
     min-width: 13px;
     height: 13px;
     display: flex;
@@ -88,54 +101,10 @@
     font-family: var(--font-mono, monospace);
     line-height: 1;
     color: var(--slate-975, #0e1015);
-    background: rgba(var(--warning-rgb), 0.9);
+    background: hsl(var(--wedge-hue, 50) 85% 55% / 0.9);
     border-radius: 99px;
     pointer-events: none;
-    transform: scaleX(-1) rotate(45deg);
-    z-index: 1;
-}
-
-/* Depth color shifts — warmer at deeper levels */
-.selection-cursor-overlay[data-depth="2"] .selection-wedge-icon {
-    --selection-wedge-fill:
-        linear-gradient(180deg,
-            rgba(255, 255, 255, 0.18) 0%,
-            rgba(255, 255, 255, 0.03) 38%,
-            rgba(0, 0, 0, 0.08) 100%),
-        linear-gradient(90deg,
-            rgba(var(--accent-rgb), 1) 0%,
-            rgba(var(--accent-rgb), 0.92) 52%,
-            rgba(var(--accent-rgb), 0.34) 100%);
-    --selection-wedge-shadow:
-        drop-shadow(0 0 0.5px rgba(var(--ink-rgb), 0.34))
-        drop-shadow(0 0 4px rgba(var(--accent-rgb), 0.18))
-        drop-shadow(0 0 9px rgba(var(--accent-rgb), 0.05));
-}
-
-.selection-cursor-overlay[data-depth="2"] .selection-wedge-depth {
-    background: rgba(var(--accent-rgb), 0.9);
-}
-
-.selection-cursor-overlay[data-depth="3"] .selection-wedge-icon,
-.selection-cursor-overlay[data-depth="4"] .selection-wedge-icon {
-    --selection-wedge-fill:
-        linear-gradient(180deg,
-            rgba(255, 255, 255, 0.18) 0%,
-            rgba(255, 255, 255, 0.03) 38%,
-            rgba(0, 0, 0, 0.08) 100%),
-        linear-gradient(90deg,
-            rgba(var(--danger-rgb), 1) 0%,
-            rgba(var(--danger-rgb), 0.92) 52%,
-            rgba(var(--danger-rgb), 0.34) 100%);
-    --selection-wedge-shadow:
-        drop-shadow(0 0 0.5px rgba(var(--ink-rgb), 0.34))
-        drop-shadow(0 0 4px rgba(var(--danger-rgb), 0.18))
-        drop-shadow(0 0 9px rgba(var(--danger-rgb), 0.05));
-}
-
-.selection-cursor-overlay[data-depth="3"] .selection-wedge-depth,
-.selection-cursor-overlay[data-depth="4"] .selection-wedge-depth {
-    background: rgba(var(--danger-rgb), 0.9);
+    z-index: var(--selection-wedge-z, 4);
 }
 
 .app-container[data-input-mode="mouse"] .selection-cursor-overlay {
