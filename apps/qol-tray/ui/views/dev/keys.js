@@ -15,5 +15,5 @@ export function handleDevKey(event, state, ctrl, bump) {
     }
     if (event.ctrlKey || event.altKey || event.metaKey) return;
     if (event.key === 'Escape') { handleEscapeKey(event, state, bump); return; }
-    if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); ctrl.actionsController.handleItemActivation(); return; }
+    if ((event.key === ' ' || event.key === 'Enter') && state.selectedIndex >= 0) { event.preventDefault(); ctrl.actionsController.handleItemActivation(); return; }
 }
