@@ -209,11 +209,12 @@ function ascendLayer() {
     if (!parent) return false;
 
     const parentSurfaces = directSurfaces(parent);
-    const anchor = parentSurfaces.find(el => el.contains(container))
-        || parentSurfaces.find(el => el.getAttribute('data-selected') === 'true')
+    const anchor = parentSurfaces.find(el => el.getAttribute('data-selected') === 'true')
+        || parentSurfaces.find(el => el.contains(container))
         || parentSurfaces[0];
     if (!anchor) return false;
 
+    for (const s of parentSurfaces) s.removeAttribute('data-selected');
     anchor.focus({ preventScroll: true });
     return true;
 }

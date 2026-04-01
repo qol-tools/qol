@@ -124,6 +124,10 @@
     color: var(--accent);
 }
 
+.depth-level-entry {
+    flex: 1;
+}
+
 .depth-level {
     display: flex;
     flex-wrap: wrap;

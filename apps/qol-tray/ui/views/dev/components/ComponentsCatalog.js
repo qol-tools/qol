@@ -1,6 +1,7 @@
 import { html } from '../../../lib/html.js';
 import { useCallback, useState } from 'preact/hooks';
 import { SurfaceContainer } from '../../../components/SurfaceContainer.js';
+import { directSurfaces } from '../../../lib/surface-traits.js';
 import { Modal, ModalFooter } from '../../../components/ModalPreact.js';
 import { CodeBlock } from '../../../components/CodeBlock.js';
 import { ToggleSwitch } from '../../../components/ToggleSwitch.js';
@@ -205,18 +206,31 @@ function DepthDiver() {
     return html`
         <${CatalogSection} title="Depth diver">
             <${CatalogRow} label="Enter to descend, ESC to ascend">
-                <${DepthLevel} level=${1} />
+                <div class="depth-level-entry" data-selected-surface="">
+                    <${DepthLevel} level=${1} />
+                </div>
             <//>
         <//>
     `;
+}
+
+function depthDive(e) {
+    const btn = e.currentTarget;
+    const container = btn.closest('[data-surface-container]');
+    const child = container?.querySelector('[data-surface-container]');
+    if (!child) return;
+    for (const s of directSurfaces(container)) s.setAttribute('data-selected', 'false');
+    btn.setAttribute('data-selected', 'true');
+    const surface = child.querySelector('[data-selected-surface]');
+    if (surface) surface.focus({ preventScroll: true });
 }
 
 function DepthLevel({ level }) {
     const label = `Level ${level}`;
     return html`
         <${SurfaceContainer} className="depth-level">
-            <button class="btn btn-sm" data-selected-surface="">${label} - A</button>
-            <button class="btn btn-sm" data-selected-surface="">${label} - B</button>
+            <button class="btn btn-sm" data-selected-surface="" onClick=${depthDive}>${label} - A</button>
+            <button class="btn btn-sm" data-selected-surface="" onClick=${depthDive}>${label} - B</button>
             ${level < 6 && html`
                 <div class="depth-level-child" data-selected-surface="">
                     <span class="depth-level-label">${'\u25b6'} ${label} - Dive deeper</span>
