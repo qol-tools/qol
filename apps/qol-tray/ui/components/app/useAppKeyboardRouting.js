@@ -36,6 +36,18 @@ export function useAppKeyboardRouting({
         }
     }, [activePluginId]);
 
+    const prevViewIdRef = useRef(activeViewId);
+    useLayoutEffect(() => {
+        const prev = prevViewIdRef.current;
+        prevViewIdRef.current = activeViewId;
+        if (prev === activeViewId) return;
+        requestAnimationFrame(() => {
+            const target = firstVisibleSurface('#content [data-selected-surface][data-selected="true"]')
+                || firstVisibleSurface('#content [data-selected-surface]');
+            if (target) target.focus({ preventScroll: true });
+        });
+    }, [activeViewId]);
+
     useKeyboard(useCallback((event) => {
         const viewKeyboard = getViewKeyboard(activeViewId);
         if (handlePaletteToggle(event, palette, activePluginId, viewKeyboard)) return;
@@ -620,6 +632,13 @@ function isVariantSelectorField(detail, fieldId) {
 function queryFieldElement(detail, fieldId) {
     if (!fieldId) return null;
     return detail.querySelector(`[data-plugin-config-field-id="${CSS.escape(fieldId)}"]`);
+}
+
+function firstVisibleSurface(selector) {
+    for (const el of document.querySelectorAll(selector)) {
+        if (el.getClientRects().length > 0) return el;
+    }
+    return null;
 }
 
 function hasVisibleModal() {
