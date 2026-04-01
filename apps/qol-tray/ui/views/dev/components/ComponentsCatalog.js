@@ -219,8 +219,8 @@ function depthDive(e) {
     const container = btn.closest('[data-surface-container]');
     const child = container?.querySelector('[data-surface-container]');
     if (!child) return;
-    for (const s of directSurfaces(container)) s.setAttribute('data-selected', 'false');
-    btn.setAttribute('data-selected', 'true');
+    for (const s of directSurfaces(container)) s.removeAttribute('data-dive-source');
+    btn.setAttribute('data-dive-source', '');
     const surface = child.querySelector('[data-selected-surface]');
     if (surface) surface.focus({ preventScroll: true });
 }
@@ -232,8 +232,7 @@ function DepthLevel({ level }) {
             <button class="btn btn-sm" data-selected-surface="" onClick=${depthDive}>${label} - A</button>
             <button class="btn btn-sm" data-selected-surface="" onClick=${depthDive}>${label} - B</button>
             ${level < 6 && html`
-                <div class="depth-level-child" data-selected-surface="">
-                    <span class="depth-level-label">${'\u25b6'} ${label} - Dive deeper</span>
+                <div class="depth-level-child">
                     <${DepthLevel} level=${level + 1} />
                 </div>
             `}

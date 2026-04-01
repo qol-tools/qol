@@ -209,12 +209,14 @@ function ascendLayer() {
     if (!parent) return false;
 
     const parentSurfaces = directSurfaces(parent);
-    const anchor = parentSurfaces.find(el => el.getAttribute('data-selected') === 'true')
+    const diveSource = parentSurfaces.find(el => el.hasAttribute('data-dive-source'));
+    if (diveSource) diveSource.removeAttribute('data-dive-source');
+    const anchor = diveSource
+        || parentSurfaces.find(el => el.getAttribute('data-selected') === 'true')
         || parentSurfaces.find(el => el.contains(container))
         || parentSurfaces[0];
     if (!anchor) return false;
 
-    for (const s of parentSurfaces) s.removeAttribute('data-selected');
     anchor.focus({ preventScroll: true });
     return true;
 }

@@ -103,7 +103,8 @@ export function SelectionCursorOverlay() {
     }, []);
 
     const wedgeHue = Math.min(275, 50 + Math.max(0, depth - 1) * 45);
-    const overlayStyle = { ...style, '--wedge-hue': String(wedgeHue) };
+    const badgeText = hslLuminance(wedgeHue, 80, 38) > 0.18 ? '#000' : '#fff';
+    const overlayStyle = { ...style, '--wedge-hue': String(wedgeHue), '--wedge-badge-color': badgeText };
 
     return html`
         <div class="selection-cursor-overlay ${ready ? 'is-ready' : ''}" style=${overlayStyle} aria-hidden="true" data-depth=${depth}>
@@ -269,6 +270,17 @@ function ensureSurfacesFocusable(mutations) {
     }
 }
 
+
+function hslLuminance(h, s, l) {
+    s /= 100; l /= 100;
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const hp = h / 60;
+    const x = c * (1 - Math.abs(hp % 2 - 1));
+    const m = l - c / 2;
+    const [r, g, b] = (hp < 1 ? [c, x, 0] : hp < 2 ? [x, c, 0] : hp < 3 ? [0, c, x] : hp < 4 ? [0, x, c] : hp < 5 ? [x, 0, c] : [c, 0, x]).map(v => v + m);
+    const lin = v => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+}
 
 function collectNewSurfaces(mutations) {
     const surfaces = [];
