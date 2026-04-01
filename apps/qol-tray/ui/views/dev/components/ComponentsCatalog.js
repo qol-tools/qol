@@ -1,5 +1,9 @@
 import { html } from '../../../lib/html.js';
-import { useState } from 'preact/hooks';
+import { useCallback, useState } from 'preact/hooks';
+import { SurfaceContainer } from '../../../components/SurfaceContainer.js';
+import { Modal, ModalFooter } from '../../../components/ModalPreact.js';
+import { CodeBlock } from '../../../components/CodeBlock.js';
+import { ToggleSwitch } from '../../../components/ToggleSwitch.js';
 
 export function ComponentsCatalog() {
     return html`
@@ -9,6 +13,9 @@ export function ComponentsCatalog() {
             <${ExpanderShowcase} />
             <${FormShowcase} />
             <${StatusShowcase} />
+            <${ModalShowcase} />
+            <${CodeBlockShowcase} />
+            <${DepthDiver} />
         </div>
     `;
 }
@@ -31,30 +38,26 @@ function CatalogRow({ label, children }) {
     `;
 }
 
-function S(props) {
-    return html`<span data-selected-surface="" data-selected="false" ...${props} />`;
-}
-
 function ButtonShowcase() {
     return html`
         <${CatalogSection} title="Buttons">
             <${CatalogRow} label="Variants">
-                <button class="btn" data-selected-surface="" data-selected="false">Secondary</button>
-                <button class="btn btn-primary" data-selected-surface="" data-selected="false">Primary</button>
-                <button class="btn btn-ghost" data-selected-surface="" data-selected="false">Ghost</button>
-                <button class="btn btn-danger" data-selected-surface="" data-selected="false">Danger</button>
-                <button class="btn" data-selected-surface="" data-selected="false" disabled>Disabled</button>
+                <button class="btn" data-selected-surface="">Secondary</button>
+                <button class="btn btn-primary" data-selected-surface="">Primary</button>
+                <button class="btn btn-ghost" data-selected-surface="">Ghost</button>
+                <button class="btn btn-danger" data-selected-surface="">Danger</button>
+                <button class="btn" data-selected-surface="" disabled>Disabled</button>
             <//>
             <${CatalogRow} label="Small">
-                <button class="btn btn-sm" data-selected-surface="" data-selected="false">Secondary</button>
-                <button class="btn btn-sm btn-primary" data-selected-surface="" data-selected="false">Primary</button>
-                <button class="btn btn-sm btn-ghost" data-selected-surface="" data-selected="false">Ghost</button>
+                <button class="btn btn-sm" data-selected-surface="">Secondary</button>
+                <button class="btn btn-sm btn-primary" data-selected-surface="">Primary</button>
+                <button class="btn btn-sm btn-ghost" data-selected-surface="">Ghost</button>
             <//>
             <${CatalogRow} label="With icons">
-                <button class="btn" data-selected-surface="" data-selected="false"><span class="btn-icon">${'\u2193'}</span> Pull</button>
-                <button class="btn" data-selected-surface="" data-selected="false"><span class="btn-icon">${'\u2191'}</span> Push</button>
-                <button class="btn btn-primary" data-selected-surface="" data-selected="false"><span class="btn-icon">${'\u26a1'}</span> Connect</button>
-                <button class="btn btn-ghost" data-selected-surface="" data-selected="false">Disconnect</button>
+                <button class="btn" data-selected-surface=""><span class="btn-icon">${'\u2193'}</span> Pull</button>
+                <button class="btn" data-selected-surface=""><span class="btn-icon">${'\u2191'}</span> Push</button>
+                <button class="btn btn-primary" data-selected-surface=""><span class="btn-icon">${'\u26a1'}</span> Connect</button>
+                <button class="btn btn-ghost" data-selected-surface="">Disconnect</button>
             <//>
         <//>
     `;
@@ -66,7 +69,7 @@ function DropdownShowcase() {
         <${CatalogSection} title="Dropdown">
             <${CatalogRow} label="Click to toggle">
                 <div style="position:relative; display:inline-flex;">
-                    <button class="btn btn-dropdown" data-selected-surface="" data-selected="false"
+                    <button class="btn btn-dropdown" data-selected-surface=""
                         aria-expanded=${open ? 'true' : 'false'}
                         onClick=${() => setOpen(!open)}>GitHub</button>
                     ${open && html`
@@ -76,7 +79,7 @@ function DropdownShowcase() {
                         </div>
                     `}
                 </div>
-                <button class="btn btn-dropdown" data-selected-surface="" data-selected="false">Folder</button>
+                <button class="btn btn-dropdown" data-selected-surface="">Folder</button>
             <//>
         <//>
     `;
@@ -89,7 +92,7 @@ function ExpanderShowcase() {
         <${CatalogSection} title="Expander">
             <${CatalogRow}>
                 <div style="display:flex; gap:var(--space-3); align-items:flex-start; flex-wrap:wrap;">
-                    <div class="btn btn-ghost btn-expander" data-selected-surface="" data-selected="false"
+                    <div class="btn btn-ghost btn-expander" data-selected-surface=""
                         aria-expanded=${open1 ? 'true' : 'false'}
                         onClick=${(e) => { if (e.target.closest('.btn-expander-body')) return; setOpen1(!open1); }}>
                         <div class="btn-expander-trigger"><span class="btn-icon btn-icon-chevron">${'\u25b6'}</span> Collapsed</div>
@@ -97,7 +100,7 @@ function ExpanderShowcase() {
                             <span style="color:var(--text-muted); font-size:var(--fs-sm);">Content here.</span>
                         </div>
                     </div>
-                    <div class="btn btn-ghost btn-expander" data-selected-surface="" data-selected="false"
+                    <div class="btn btn-ghost btn-expander" data-selected-surface=""
                         aria-expanded=${open2 ? 'true' : 'false'}
                         onClick=${(e) => { if (e.target.closest('.btn-expander-body')) return; setOpen2(!open2); }}>
                         <div class="btn-expander-trigger"><span class="btn-icon btn-icon-chevron">${'\u25b6'}</span> Expanded</div>
@@ -116,20 +119,18 @@ function FormShowcase() {
     const [toggle2, setToggle2] = useState(false);
     return html`
         <${CatalogSection} title="Form primitives">
-            <${CatalogRow} label="Toggle">
-                <div class="toggle-inline" data-selected-surface="" data-selected="false" onClick=${() => setToggle1(!toggle1)}>
-                    <div class=${`toggle-track ${toggle1 ? 'on' : ''}`} role="switch" aria-checked=${toggle1}><div class="toggle-thumb"></div></div>
-                    <span class="toggle-inline-label">Enabled</span>
-                </div>
-                <div class="toggle-inline" data-selected-surface="" data-selected="false" onClick=${() => setToggle2(!toggle2)}>
-                    <div class=${`toggle-track ${toggle2 ? 'on' : ''}`} role="switch" aria-checked=${toggle2}><div class="toggle-thumb"></div></div>
-                    <span class="toggle-inline-label">Disabled</span>
-                </div>
+            <${CatalogRow} label="ToggleSwitch">
+                <span data-selected-surface="" onClick=${() => setToggle1(!toggle1)}>
+                    <${ToggleSwitch} checked=${toggle1} onChange=${setToggle1} label="Enabled" />
+                </span>
+                <span data-selected-surface="" onClick=${() => setToggle2(!toggle2)}>
+                    <${ToggleSwitch} checked=${toggle2} onChange=${setToggle2} label="Disabled" />
+                </span>
             <//>
             <${CatalogRow} label="Badge">
-                <span class="badge" data-selected-surface="" data-selected="false">3</span>
-                <span class="badge" data-selected-surface="" data-selected="false" style="background:rgba(var(--success-rgb),0.14); border-color:rgba(var(--success-rgb),0.26);">OK</span>
-                <span class="badge" data-selected-surface="" data-selected="false" style="background:rgba(var(--warning-rgb),0.16); border-color:rgba(var(--warning-rgb),0.3);">Review</span>
+                <span class="badge" data-selected-surface="">3</span>
+                <span class="badge" data-selected-surface="" style="background:rgba(var(--success-rgb),0.14); border-color:rgba(var(--success-rgb),0.26);">OK</span>
+                <span class="badge" data-selected-surface="" style="background:rgba(var(--warning-rgb),0.16); border-color:rgba(var(--warning-rgb),0.3);">Review</span>
             <//>
         <//>
     `;
@@ -139,23 +140,89 @@ function StatusShowcase() {
     return html`
         <${CatalogSection} title="Status indicators">
             <${CatalogRow} label="Health dots">
-                <span class="catalog-status-row" data-selected-surface="" data-selected="false">
+                <span class="catalog-status-row" data-selected-surface="">
                     <span class="profile-health-dot"></span> Not configured
                 </span>
-                <span class="catalog-status-row" data-selected-surface="" data-selected="false">
+                <span class="catalog-status-row" data-selected-surface="">
                     <span class="profile-health-dot" data-health="healthy"></span> Healthy
                 </span>
-                <span class="catalog-status-row" data-selected-surface="" data-selected="false">
+                <span class="catalog-status-row" data-selected-surface="">
                     <span class="profile-health-dot" data-health="attention"></span> Attention
                 </span>
-                <span class="catalog-status-row" data-selected-surface="" data-selected="false">
+                <span class="catalog-status-row" data-selected-surface="">
                     <span class="profile-health-dot" data-health="error"></span> Error
                 </span>
             <//>
             <${CatalogRow} label="Alerts">
-                <div class="profile-sync-alert" data-selected-surface="" data-selected="false" data-variant="warning" style="font-size:var(--fs-sm); padding:var(--space-2) var(--space-3);">Warning alert</div>
-                <div class="profile-sync-alert" data-selected-surface="" data-selected="false" data-variant="error" style="font-size:var(--fs-sm); padding:var(--space-2) var(--space-3);">Error alert</div>
+                <div class="profile-sync-alert" data-selected-surface="" data-variant="warning" style="font-size:var(--fs-sm); padding:var(--space-2) var(--space-3);">Warning alert</div>
+                <div class="profile-sync-alert" data-selected-surface="" data-variant="error" style="font-size:var(--fs-sm); padding:var(--space-2) var(--space-3);">Error alert</div>
             <//>
         <//>
+    `;
+}
+
+function ModalShowcase() {
+    const [open, setOpen] = useState(false);
+    const close = useCallback(() => setOpen(false), []);
+    return html`
+        <${CatalogSection} title="Modal">
+            <${CatalogRow} label="Open modal">
+                <button class="btn" data-selected-surface="" onClick=${() => setOpen(true)}>Open test modal</button>
+            <//>
+        <//>
+        ${open && html`
+            <${Modal} open=${true} onClose=${close} dismissOnBackdrop=${true} className="edit-modal">
+                <div class="edit-modal-content">
+                    <h3>Test Modal</h3>
+                    <p style="color:var(--text-secondary); margin:var(--space-3) 0;">
+                        This modal is a surface layer. The wedge should appear here.
+                        Arrow keys navigate between buttons. ESC returns to the previous layer.
+                    </p>
+                    <${CodeBlock} text=${"Layer depth test\nThis is inside a modal"} />
+                    <${ModalFooter} actions=${[
+                        { label: 'Close', kbd: 'Esc', onClick: close },
+                        { label: 'Action', variant: 'btn-primary', onClick: () => {} },
+                    ]} />
+                </div>
+            <//>
+        `}
+    `;
+}
+
+function CodeBlockShowcase() {
+    return html`
+        <${CatalogSection} title="CodeBlock">
+            <${CatalogRow} label="Click to copy">
+                <div data-selected-surface="" style="flex:1;">
+                    <${CodeBlock} text=${"const x = 42;\nconsole.log(x);"} />
+                </div>
+            <//>
+        <//>
+    `;
+}
+
+function DepthDiver() {
+    return html`
+        <${CatalogSection} title="Depth diver">
+            <${CatalogRow} label="Enter to descend, ESC to ascend">
+                <${DepthLevel} level=${1} />
+            <//>
+        <//>
+    `;
+}
+
+function DepthLevel({ level }) {
+    const label = `Level ${level}`;
+    return html`
+        <${SurfaceContainer} className="depth-level">
+            <button class="btn btn-sm" data-selected-surface="">${label} - A</button>
+            <button class="btn btn-sm" data-selected-surface="">${label} - B</button>
+            ${level < 6 && html`
+                <div class="depth-level-child" data-selected-surface="">
+                    <span class="depth-level-label">${'\u25b6'} ${label} - Dive deeper</span>
+                    <${DepthLevel} level=${level + 1} />
+                </div>
+            `}
+        </${SurfaceContainer}>
     `;
 }

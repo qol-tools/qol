@@ -34,6 +34,7 @@ export function SelectionCursorOverlay() {
             }
 
             const nextTarget = findActiveSelectedSurface({ currentTarget: targetRef.current });
+            const targetChanged = targetRef.current !== nextTarget;
             trackTarget(nextTarget, sync, resizeObserverRef, appRef, targetRef);
 
             if (!(nextTarget instanceof HTMLElement)) {
@@ -42,7 +43,7 @@ export function SelectionCursorOverlay() {
                 return;
             }
 
-            revealSurface(nextTarget);
+            // if (targetChanged) revealSurface(nextTarget);
             const nextRect = nextTarget.getBoundingClientRect();
             const motion = selectedSurfaceMotion(nextTarget);
             const persistentTeleport = motion === 'teleport';
@@ -221,6 +222,7 @@ function findScrollParent(target) {
     let current = target.parentElement;
 
     while (current && current !== document.body) {
+        if (getComputedStyle(current).position === 'fixed') return null;
         if (isScrollable(current)) return current;
         current = current.parentElement;
     }

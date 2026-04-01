@@ -1,27 +1,5 @@
-/**
- * Surface trait registry. Maps surface elements to Enter behaviors.
- *
- * Traits are checked in order — first match wins. New traits are added
- * via registerSurfaceTrait(). Built-in traits infer behavior from HTML
- * semantics: element type, role, and DOM structure.
- */
-
-const traits = [];
-
-export function registerSurfaceTrait(trait) {
-    traits.push(trait);
-}
-
 export function activateSurface(el) {
-    if (!(el instanceof HTMLElement)) return 'none';
-    for (const trait of traits) {
-        if (trait.test(el)) {
-            trait.activate(el);
-            return trait.id;
-        }
-    }
-    el.click();
-    return 'action';
+    if (el instanceof HTMLElement) el.click();
 }
 
 export function surfaceContainsChildContainer(el) {
@@ -70,46 +48,3 @@ export function firstChildContainer(container) {
     }
     return null;
 }
-
-registerSurfaceTrait({
-    id: 'container',
-    test: surfaceContainsChildContainer,
-    activate: (el) => el.click(),
-});
-
-registerSurfaceTrait({
-    id: 'toggle',
-    test: (el) =>
-        el.getAttribute('role') === 'switch'
-        || el.querySelector('[role="switch"], input[type="checkbox"]') !== null,
-    activate: (el) => el.click(),
-});
-
-registerSurfaceTrait({
-    id: 'input',
-    test: (el) => {
-        if (el.matches('input, select, textarea')) return true;
-        return el.querySelector('input:not([type="hidden"]):not([type="checkbox"]), select, textarea, [contenteditable="true"]') !== null;
-    },
-    activate: (el) => {
-        const target = el.matches('input, select, textarea')
-            ? el
-            : el.querySelector('input:not([type="hidden"]):not([type="checkbox"]), select, textarea, [contenteditable="true"]');
-        if (target) { target.focus(); target.select?.(); }
-    },
-});
-
-registerSurfaceTrait({
-    id: 'link',
-    test: (el) => el.matches('a[href]') || el.querySelector('a[href]') !== null,
-    activate: (el) => {
-        const link = el.matches('a[href]') ? el : el.querySelector('a[href]');
-        if (link) link.click();
-    },
-});
-
-registerSurfaceTrait({
-    id: 'action',
-    test: () => true,
-    activate: (el) => el.click(),
-});

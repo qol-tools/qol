@@ -1,31 +1,38 @@
 import { html } from '../lib/html.js';
-import { useCallback, useEffect, useRef } from 'preact/hooks';
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { surfaceDepth } from '../lib/surface-traits.js';
 
 const FOCUSABLE = 'input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), .custom-select-trigger:not([disabled]), [tabindex]:not([disabled]):not([tabindex="-1"])';
 
 export function Modal({ open, onClose, dismissOnBackdrop, size, className, children }) {
     const containerRef = useRef(null);
+    const prevFocusRef = useRef(null);
+
+    const close = useCallback(() => {
+        const prev = prevFocusRef.current;
+        onClose();
+        if (prev?.isConnected) requestAnimationFrame(() => prev.focus({ preventScroll: true }));
+    }, [onClose]);
 
     const handleBackdrop = useCallback((e) => {
-        if (dismissOnBackdrop && e.target === e.currentTarget) onClose();
-    }, [onClose, dismissOnBackdrop]);
+        if (dismissOnBackdrop && e.target === e.currentTarget) close();
+    }, [close, dismissOnBackdrop]);
 
     useEffect(() => {
-        const prev = document.activeElement instanceof HTMLElement && document.activeElement !== document.body
+        prevFocusRef.current = document.activeElement instanceof HTMLElement && document.activeElement !== document.body
             ? document.activeElement : null;
         const el = containerRef.current;
         if (el) {
+            const prev = prevFocusRef.current;
             if (prev) el.setAttribute('data-surface-depth-base', String(surfaceDepth(prev)));
             const surface = el.querySelector('[data-selected-surface]');
-            if (surface) surface.focus();
-            else el.querySelector(FOCUSABLE)?.focus();
+            if (surface) surface.focus({ preventScroll: true });
+            else el.querySelector(FOCUSABLE)?.focus({ preventScroll: true });
         }
-        return () => { if (prev?.isConnected) prev.focus(); };
     }, []);
 
     useEffect(() => {
-        if (!open || !onClose) return;
+        if (!open || !close) return;
         const handler = (e) => {
             if (e.key !== 'Escape' || e.defaultPrevented) return;
             const el = containerRef.current;
@@ -35,11 +42,26 @@ export function Modal({ open, onClose, dismissOnBackdrop, size, className, child
             }
             e.preventDefault();
             e.stopPropagation();
-            onClose();
+            close();
         };
         window.addEventListener('keydown', handler);
         return () => window.removeEventListener('keydown', handler);
-    }, [open, onClose]);
+    }, [open, close]);
+
+    useLayoutEffect(() => {
+        if (!open) return;
+        const vb = containerRef.current?.closest('.view-body');
+        if (!vb) return;
+        const savedOverflow = vb.style.overflowY;
+        const savedScroll = vb.scrollTop;
+        vb.style.overflowY = 'hidden';
+        return () => {
+            vb.style.overflowY = savedOverflow;
+            vb.scrollTop = savedScroll;
+            const prev = prevFocusRef.current;
+            if (prev?.isConnected) requestAnimationFrame(() => prev.focus({ preventScroll: true }));
+        };
+    }, [open]);
 
     if (!open) return null;
     const sizeClass = size ? `modal-${size}` : '';
@@ -130,3 +152,4 @@ function isEditing() {
     if (a.contentEditable === 'true') return true;
     return false;
 }
+

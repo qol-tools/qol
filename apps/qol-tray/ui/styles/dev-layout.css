@@ -124,6 +124,28 @@
     color: var(--accent);
 }
 
+.depth-level {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    border: var(--border-w-1) solid var(--border-subtle);
+    border-radius: var(--radius-md);
+}
+
+.depth-level-child {
+    flex-basis: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.depth-level-label {
+    color: var(--text-faint);
+    font-size: var(--fs-xs);
+}
+
 .dev-content-frame {
     border: var(--border-w-1) solid var(--layer-paper-22);
     border-radius: var(--radius-2xl);
