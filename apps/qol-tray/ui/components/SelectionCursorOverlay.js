@@ -102,9 +102,13 @@ export function SelectionCursorOverlay() {
         };
     }, []);
 
+    const wedgeHue = Math.min(275, 50 + Math.max(0, depth - 1) * 45);
+    const overlayStyle = { ...style, '--wedge-hue': String(wedgeHue) };
+
     return html`
-        <div class="selection-cursor-overlay ${ready ? 'is-ready' : ''}" style=${style} aria-hidden="true" data-depth=${depth}>
+        <div class="selection-cursor-overlay ${ready ? 'is-ready' : ''}" style=${overlayStyle} aria-hidden="true" data-depth=${depth}>
             <${SelectionWedgeGlyph} depth=${depth} />
+            ${depth > 1 && html`<span class="selection-wedge-depth">${depth}</span>`}
         </div>
     `;
 }
