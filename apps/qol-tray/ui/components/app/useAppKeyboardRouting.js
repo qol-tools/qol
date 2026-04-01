@@ -215,7 +215,9 @@ function ascendLayer() {
     if (!parent) return false;
 
     const parentSurfaces = directSurfaces(parent);
-    const anchor = parentSurfaces.find(el => el.contains(container)) || parentSurfaces[0];
+    const anchor = parentSurfaces.find(el => el.contains(container))
+        || parentSurfaces.find(el => el.getAttribute('data-selected') === 'true')
+        || parentSurfaces[0];
     if (!anchor) return false;
 
     anchor.focus();
