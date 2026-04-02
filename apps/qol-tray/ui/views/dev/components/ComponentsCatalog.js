@@ -11,12 +11,14 @@ import { Badge, HealthDot, Alert } from '../../../components/StatusIndicators.js
 export function ComponentsCatalog() {
     return html`
         <div class="catalog">
-            <${CatalogGroup} title="Display" inline=${true}>
+            <${CatalogGroup} title="Display">
                 <${ButtonShowcase} />
                 <${StatusShowcase} />
             <//>
             <${CatalogGroup} title="Interactive">
-                <${InputShowcase} />
+                <${DropdownShowcase} />
+                <${ExpanderShowcase} />
+                <${ToggleShowcase} />
                 <${ModalShowcase} />
                 <${DepthDiver} />
             <//>
@@ -24,11 +26,11 @@ export function ComponentsCatalog() {
     `;
 }
 
-function CatalogGroup({ title, inline, children }) {
+function CatalogGroup({ title, children }) {
     return html`
         <div class="catalog-group">
             <div class="catalog-group-label">${title}</div>
-            <div class=${`catalog-group-body${inline ? ' catalog-group-inline' : ''}`}>${children}</div>
+            <div class="catalog-group-body">${children}</div>
         </div>
     `;
 }
@@ -76,48 +78,56 @@ function ButtonShowcase() {
     `;
 }
 
-function InputShowcase() {
+function DropdownShowcase() {
     const options = ['github', 'folder', 'local'];
     const labels = { github: 'GitHub', folder: 'Folder', local: 'Local' };
     const [value1, setValue1] = useState('github');
     const [value2, setValue2] = useState('folder');
+    return html`
+        <${CatalogSection} title="Dropdown">
+            <${CatalogRow} label="Normal">
+                <${CustomSelect} value=${value1} options=${options} labels=${labels} onChange=${setValue1} />
+            <//>
+            <${CatalogRow} label="Compact">
+                <${CustomSelect} value=${value2} options=${options} labels=${labels} onChange=${setValue2} compact=${true} />
+            <//>
+        <//>
+    `;
+}
+
+function ExpanderShowcase() {
     const [open1, setOpen1] = useState(false);
     const [open2, setOpen2] = useState(true);
+    return html`
+        <${CatalogSection} title="Expander">
+            <${CatalogRow}>
+                <${Expander} open=${open1} onToggle=${() => setOpen1(!open1)}>
+                    <${ExpanderTrigger}>Collapsed<//>
+                    <${ExpanderBody}><span style="color:var(--text-muted); font-size:var(--fs-sm);">Content here.</span><//>
+                <//>
+                <${Expander} open=${open2} onToggle=${() => setOpen2(!open2)}>
+                    <${ExpanderTrigger}>Expanded<//>
+                    <${ExpanderBody}><span style="color:var(--text-muted); font-size:var(--fs-sm);">Content here.</span><//>
+                <//>
+            <//>
+        <//>
+    `;
+}
+
+function ToggleShowcase() {
     const [toggle1, setToggle1] = useState(true);
     const [toggle2, setToggle2] = useState(false);
     return html`
-        <div class="catalog-group-inline">
-            <${CatalogSection} title="Dropdown">
-                <${CatalogRow} label="Normal">
-                    <${CustomSelect} value=${value1} options=${options} labels=${labels} onChange=${setValue1} />
-                <//>
-                <${CatalogRow} label="Compact">
-                    <${CustomSelect} value=${value2} options=${options} labels=${labels} onChange=${setValue2} compact=${true} />
-                <//>
+        <${CatalogSection} title="Toggle">
+            <${CatalogRow}>
+                <span data-selected-surface="" onClick=${() => setToggle1(!toggle1)}>
+                    <${ToggleSwitch} checked=${toggle1} onChange=${setToggle1} label="Enabled" />
+                </span>
+                <span data-selected-surface="" onClick=${() => setToggle2(!toggle2)}>
+                    <${ToggleSwitch} checked=${toggle2} onChange=${setToggle2} label="Disabled" />
+                </span>
             <//>
-            <${CatalogSection} title="Expander">
-                <${CatalogRow}>
-                    <${Expander} open=${open1} onToggle=${() => setOpen1(!open1)}>
-                        <${ExpanderTrigger}>Collapsed<//>
-                        <${ExpanderBody}><span style="color:var(--text-muted); font-size:var(--fs-sm);">Content here.</span><//>
-                    <//>
-                    <${Expander} open=${open2} onToggle=${() => setOpen2(!open2)}>
-                        <${ExpanderTrigger}>Expanded<//>
-                        <${ExpanderBody}><span style="color:var(--text-muted); font-size:var(--fs-sm);">Content here.</span><//>
-                    <//>
-                <//>
-            <//>
-            <${CatalogSection} title="Toggle">
-                <${CatalogRow}>
-                    <span data-selected-surface="" onClick=${() => setToggle1(!toggle1)}>
-                        <${ToggleSwitch} checked=${toggle1} onChange=${setToggle1} label="Enabled" />
-                    </span>
-                    <span data-selected-surface="" onClick=${() => setToggle2(!toggle2)}>
-                        <${ToggleSwitch} checked=${toggle2} onChange=${setToggle2} label="Disabled" />
-                    </span>
-                <//>
-            <//>
-        </div>
+        <//>
     `;
 }
 

@@ -4,7 +4,6 @@ import { usePluginConfigContext } from '../../views/plugin-config/context.js';
 import { useViewKeyboardContext } from './view-keyboard-context.js';
 
 const PLUGIN_CONFIG_FIELD = '[data-plugin-config-field-id]';
-const ROW_ALIGNMENT_THRESHOLD = 6;
 export function useAppKeyboardRouting({
     activePluginId,
     activeViewId,
@@ -164,21 +163,15 @@ function findSelectedSurface() {
 function navigateInActiveContainer(direction) {
     const current = findSelectedSurface();
     if (!current) {
-        const fallback = document.querySelector('#content [data-selected-surface]');
-        if (fallback?.getClientRects().length > 0) fallback.focus({ preventScroll: true });
+        const fallback = firstVisibleSurface('#content [data-selected-surface]');
+        if (fallback) fallback.focus({ preventScroll: true });
         return;
     }
     const container = activeContainer(current);
     if (!container) return;
 
     const surfaces = directSurfaces(container);
-    if (surfaces.length === 0) return;
-
-    const rows = buildSurfaceGrid(surfaces);
-    if (rows.length === 0) return;
-
-    const pos = findGridPosition(rows, current);
-    const next = pos ? gridStep(rows, pos, direction) : rows[0][0];
+    const next = nearestSurfaceInDirection(surfaces, current, direction);
     if (!next || next === current) return;
 
     next.focus({ preventScroll: true });
@@ -233,40 +226,35 @@ function ascendLayer() {
     return true;
 }
 
-function buildSurfaceGrid(elements) {
-    const positioned = elements
-        .map(el => ({ el, top: el.getBoundingClientRect().top, left: el.getBoundingClientRect().left }))
-        .sort((a, b) => Math.abs(a.top - b.top) > 6 ? a.top - b.top : a.left - b.left);
-    const rows = [];
-    for (const item of positioned) {
-        const last = rows[rows.length - 1];
-        if (!last || Math.abs(last[0].top - item.top) > 6) {
-            rows.push([item]);
-        } else {
-            last.push(item);
-        }
-    }
-    return rows.map(row => row.map(item => item.el));
+function nearestSurfaceInDirection(surfaces, current, direction) {
+    const result = spatialSearch(surfaces, current, direction, true);
+    if (result) return result;
+    return spatialSearch(surfaces, current, direction, false);
 }
 
-function findGridPosition(rows, target) {
-    for (let r = 0; r < rows.length; r++) {
-        const c = rows[r].indexOf(target);
-        if (c >= 0) return { r, c };
+function spatialSearch(surfaces, current, direction, useCone) {
+    const rect = current.getBoundingClientRect();
+    const cx = rect.left;
+    const cy = rect.top;
+    const horizontal = direction === 'left' || direction === 'right';
+    let best = null;
+    let bestDist = Infinity;
+    for (const el of surfaces) {
+        if (el === current) continue;
+        const r = el.getBoundingClientRect();
+        const dx = r.left - cx;
+        const dy = r.top - cy;
+        if (direction === 'up' && dy >= 0) continue;
+        if (direction === 'down' && dy <= 0) continue;
+        if (direction === 'left' && dx >= 0) continue;
+        if (direction === 'right' && dx <= 0) continue;
+        const primary = horizontal ? Math.abs(dx) : Math.abs(dy);
+        const cross = horizontal ? Math.abs(dy) : Math.abs(dx);
+        if (useCone && horizontal && cross > primary / 2) continue;
+        const dist = horizontal ? primary + cross * 5 : primary * 3 + cross;
+        if (dist < bestDist) { best = el; bestDist = dist; }
     }
-    return null;
-}
-
-function gridStep(rows, pos, direction) {
-    const { r, c } = pos;
-    if (direction === 'left') return rows[r][Math.max(0, c - 1)];
-    if (direction === 'right') return rows[r][Math.min(rows[r].length - 1, c + 1)];
-    if (direction === 'up') {
-        const prev = rows[r - 1];
-        return prev ? prev[Math.min(c, prev.length - 1)] : rows[r][c];
-    }
-    const next = rows[r + 1];
-    return next ? next[Math.min(c, next.length - 1)] : rows[r][c];
+    return best;
 }
 
 function handlePluginConfigDirectEdit(event, detail, field) {
