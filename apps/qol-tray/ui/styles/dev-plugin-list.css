@@ -51,6 +51,34 @@
     border-left-color: var(--success);
 }
 
+.plugin-row.status-debug-on {
+    border-left-color: var(--success);
+}
+
+.plugin-row.status-debug-off {
+    border-left-color: var(--warning);
+}
+
+.plugin-row.status-debug-on .plugin-action-zone {
+    background: rgba(var(--success-rgb), 0.08);
+}
+
+.plugin-row.status-debug-off .plugin-action-zone {
+    background: rgba(var(--warning-rgb), 0.06);
+}
+
+.debug-toggle-label {
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-semibold);
+    letter-spacing: var(--ls-lg);
+    text-transform: uppercase;
+    color: var(--text-faint);
+}
+
+.plugin-row.status-debug-on .debug-toggle-label {
+    color: var(--success);
+}
+
 .plugin-row.status-local {
     border-left-color: var(--warning);
 }

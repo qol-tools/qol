@@ -2,7 +2,9 @@ import { useCallback, useLayoutEffect, useRef } from 'preact/hooks';
 import { useKeyboard } from '../../hooks/useKeyboard.js';
 import { usePluginConfigContext } from '../../views/plugin-config/context.js';
 import { useViewKeyboardContext } from './view-keyboard-context.js';
+import { createDebug } from '../../lib/debug.js';
 
+const log = createDebug('qol:nav');
 const PLUGIN_CONFIG_FIELD = '[data-plugin-config-field-id]';
 
 export function useAppKeyboardRouting({
@@ -172,10 +174,28 @@ function navigateInActiveContainer(direction) {
     if (!container) return;
 
     const surfaces = directSurfaces(container);
+    const cr = current.getBoundingClientRect();
+    log(direction, 'from', surfaceLabel(current),
+        'at (' + Math.round(cr.left) + ',' + Math.round(cr.top) + ')',
+        '| surfaces:', surfaces.length);
     const next = nearestSurfaceInDirection(surfaces, current, direction);
-    if (!next || next === current) return;
-
+    if (!next || next === current) {
+        log('  → no match');
+        return;
+    }
+    const nr = next.getBoundingClientRect();
+    log('  → RESULT:', surfaceLabel(next),
+        'at (' + Math.round(nr.left) + ',' + Math.round(nr.top) + ')');
     next.focus({ preventScroll: true });
+}
+
+function surfaceLabel(el) {
+    for (const node of el.childNodes) {
+        if (node.nodeType === 3) { const t = node.textContent.trim(); if (t) return t.slice(0, 20); }
+    }
+    const first = el.querySelector('.btn, .plugin-name, .custom-select-value, span');
+    if (first) { const t = first.textContent?.trim(); if (t) return t.slice(0, 20); }
+    return el.className?.split(' ')[0] || el.tagName;
 }
 
 function activateAndMaybeDescend() {
@@ -252,7 +272,14 @@ function spatialSearch(surfaces, current, direction, useCone) {
         const primary = horizontal ? Math.abs(dx) : Math.abs(dy);
         const cross = horizontal ? Math.abs(dy) : Math.abs(dx);
         if (useCone && horizontal && cross > primary / 2) continue;
+        if (useCone && !horizontal && cross > primary * 3) continue;
         const dist = horizontal ? primary + cross * 5 : primary * 3 + cross;
+        log('  candidate', surfaceLabel(el),
+            'pos=(' + Math.round(r.left) + ',' + Math.round(r.top) + ')',
+            'dx=' + Math.round(dx), 'dy=' + Math.round(dy),
+            'pri=' + Math.round(primary), 'cross=' + Math.round(cross),
+            'dist=' + Math.round(dist),
+            dist < bestDist ? '← best' : '');
         if (dist < bestDist) { best = el; bestDist = dist; }
     }
     return best;

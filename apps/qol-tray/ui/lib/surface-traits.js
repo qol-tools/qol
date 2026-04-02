@@ -35,6 +35,7 @@ export function directSurfaces(container) {
         .filter(el =>
             el.closest('[data-surface-container]') === container
             && el.getClientRects().length > 0
+            && !el.disabled
         );
 }
 
