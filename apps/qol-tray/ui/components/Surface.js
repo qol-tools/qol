@@ -1,13 +1,14 @@
 import { html } from '../lib/html.js';
 import { useRef } from 'preact/hooks';
 
-export function useSurface({ index, selected, onSelect, onActivate } = {}) {
+export function useSurface({ index, selected, onSelect, onActivate, selectValue } = {}) {
+    const focusValue = selectValue !== undefined ? selectValue : index;
     return {
         attrs: {
             'data-selected-surface': '',
             'data-selected': selected != null ? (selected ? 'true' : 'false') : undefined,
             'data-index': index != null ? String(index) : undefined,
-            onFocus: onSelect ? () => onSelect(index) : undefined,
+            onFocus: onSelect ? () => onSelect(focusValue) : undefined,
             onClick: onActivate,
         },
     };
@@ -19,8 +20,8 @@ export function useInputSurface(opts) {
     return { ref, ...surface };
 }
 
-export function Surface({ as = 'div', index, selected, onSelect, onActivate, className, children, ...rest }) {
-    const { attrs } = useSurface({ index, selected, onSelect, onActivate });
+export function Surface({ as = 'div', index, selected, onSelect, onActivate, selectValue, className, children, ...rest }) {
+    const { attrs } = useSurface({ index, selected, onSelect, onActivate, selectValue });
     return html`
         <${as} class=${className} ...${attrs} ...${rest}>
             ${children}

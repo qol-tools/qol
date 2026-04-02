@@ -20,6 +20,7 @@ import { SuppressedRow } from '../../../components/rows/SuppressedRow.js';
 import { BackupRow } from '../../../components/rows/BackupRow.js';
 import { HotkeyRow } from '../../../components/rows/HotkeyRow.js';
 import { ShortcutRow } from '../../../components/rows/ShortcutRow.js';
+import { DevPluginRow } from '../../../components/rows/DevPluginRow.js';
 import { StoreCard, StoreCardGrid } from '../../../components/rows/StoreCard.js';
 
 export function ComponentsCatalog() {
@@ -40,6 +41,7 @@ export function ComponentsCatalog() {
                 <${DepthDiver} />
             <//>
             <${CatalogGroup} title="Rows" inline=${false}>
+                <${DevPluginRowShowcase} />
                 <${PluginRowShowcase} />
                 <${LogRowShowcase} />
                 <${SuppressedRowShowcase} />
@@ -147,11 +149,16 @@ function ExpanderShowcase() {
 function ToggleShowcase() {
     const [toggle1, setToggle1] = useState(true);
     const [toggle2, setToggle2] = useState(false);
+    const [toggle3, setToggle3] = useState(true);
     return html`
         <${CatalogSection} title="Toggle">
-            <${CatalogRow}>
+            <${CatalogRow} label="Basic">
                 <${ToggleSwitch} checked=${toggle1} onChange=${setToggle1} label="Enabled" />
                 <${ToggleSwitch} checked=${toggle2} onChange=${setToggle2} label="Disabled" />
+            <//>
+            <${CatalogRow} label="With description">
+                <${ToggleSwitch} checked=${toggle3} onChange=${setToggle3}
+                    label="Push on change" description="Automatically sync when profile changes" />
             <//>
         <//>
     `;
@@ -245,6 +252,32 @@ function DepthLevel({ level }) {
     `;
 }
 
+function DevPluginRowShowcase() {
+    const sel = useListSelection();
+    const [linked, setLinked] = useState({ 0: true, 1: false });
+    const toggleLink = (i) => () => setLinked(prev => ({ ...prev, [i]: !prev[i] }));
+    const actionCol = html`<button type="button" class="plugin-action-zone">
+        <img class="list-row-action-icon" src="assets/qol-tray.png?v=1" alt="" />
+    </button>`;
+    return html`
+        <${CatalogSection} title="Dev plugin row">
+            <div class="plugin-list">
+                <${DevPluginRow} name="qol-window-actions" path="~/repos/qol-tools/qol-window-actions"
+                    status=${linked[0] ? 'linked' : 'discovered'} pluginId="plugin-window-actions"
+                    index=${0} selected=${sel.selected(0)} onSelect=${sel.select} onActivate=${toggleLink(0)}
+                    badges=${html`<${Badge} style=${{ background: 'rgba(var(--success-rgb),0.14)', borderColor: 'rgba(var(--success-rgb),0.26)' }}>v1.2.0<//>`}
+                    meta=${html`<span style="font-size:var(--fs-xs); color:var(--text-faint)">Built 2m ago</span>`}
+                    action=${actionCol} />
+                <${DevPluginRow} name="qol-alt-tab" path="~/repos/qol-tools/qol-alt-tab"
+                    status="local" pluginId="plugin-alt-tab"
+                    index=${1} selected=${sel.selected(1)} onSelect=${sel.select} onActivate=${toggleLink(1)}
+                    badges=${html`<${Badge} style=${{ background: 'rgba(var(--warning-rgb),0.16)', borderColor: 'rgba(var(--warning-rgb),0.3)' }}>Local<//>`}
+                    action=${actionCol} />
+            </div>
+        <//>
+    `;
+}
+
 function PluginRowShowcase() {
     const sel = useListSelection();
     const [linked, setLinked] = useState({ 0: true, 1: false, 2: false });
@@ -275,7 +308,7 @@ function LogRowShowcase() {
                 <${LogRow} time="14:32:01" level="startup" src="qol-window-actions" msg="Plugin initialized successfully"
                     index=${0} selected=${sel.selected(0)} onSelect=${sel.select}
                     onActivate=${openDetail('qol-window-actions', 'Plugin initialized successfully')} />
-                <${LogRow} time="14:32:05" level="error" src="qol-alt-tab" loc="src/main.rs:42" count=${3}
+                <${LogRow} time="14:32:05" level="error" src="qol-alt-tab" loc="src/main.rs:42" count=${3} severity="warning"
                     msg="Failed to register hotkey: already registered by another process"
                     index=${1} selected=${sel.selected(1)} onSelect=${sel.select}
                     onActivate=${openDetail('qol-alt-tab', 'Failed to register hotkey: already registered by another process', 'src/main.rs:42')} />
@@ -295,9 +328,28 @@ function SuppressedRowShowcase() {
         <${CatalogSection} title="Card-style">
             <${ListGroup} className="list-group-cards" onDeselect=${sel.deselect}>
                 <${SuppressedRow} sigKey="qol-alt-tab::hotkey_register_failed" count=${12}
-                    msg="Failed to register hotkey: already registered by another process"
                     expanded=${expanded} onToggle=${() => setExpanded(!expanded)} onUnsuppress=${() => {}}
-                    index=${0} selected=${sel.selected(0)} onSelect=${sel.select} />
+                    index=${0} selected=${sel.selected(0)} onSelect=${sel.select}
+                    detail=${html`
+                        <div style="font-family:var(--font-mono); font-size:var(--fs-sm); color:var(--text-muted); padding:0 var(--space-2)">
+                            Failed to register hotkey: already registered by another process
+                        </div>
+                        <div style="display:flex; flex-direction:column; gap:var(--space-1); padding:0 var(--space-2)">
+                            <div style="display:flex; gap:var(--space-3)">
+                                <span style="color:var(--text-faint); font-size:var(--fs-xs); width:4rem">Source</span>
+                                <span style="font-size:var(--fs-sm)">qol-alt-tab</span>
+                            </div>
+                            <div style="display:flex; gap:var(--space-3)">
+                                <span style="color:var(--text-faint); font-size:var(--fs-xs); width:4rem">Location</span>
+                                <span style="font-family:var(--font-mono); font-size:var(--fs-sm)">src/main.rs:42</span>
+                            </div>
+                        </div>
+                        <div style="display:flex; gap:var(--space-2); font-size:var(--fs-sm); color:var(--text-faint); padding:0 var(--space-2)">
+                            <span>First: 2026-04-02 14:30:01</span>
+                            <span>${'\u00b7'}</span>
+                            <span>Last: 2026-04-02 14:32:05</span>
+                        </div>
+                    `} />
                 <${SuppressedRow} sigKey="qol-fx::vsync_miss" count=${47}
                     index=${1} selected=${sel.selected(1)} onSelect=${sel.select} onUnsuppress=${() => {}} />
                 <${SuppressedRow} sigKey="qol-alt-tab::event_loop_stall" count=${312}
@@ -371,11 +423,11 @@ function HotkeyTableShowcase() {
                     <${TableCell}>Plugin<//>
                     <${TableCell}>Action<//>
                 <//>
-                <${HotkeyRow} shortcut="Alt+Tab" pluginName="qol-alt-tab" actionLabel="Open switcher"
+                <${HotkeyRow} shortcut="Alt+Tab" pluginName="qol-alt-tab" actionLabel="Open switcher" status="linked"
                     index=${0} selected=${sel.selected(0)} onSelect=${sel.select} accent="accent" />
-                <${HotkeyRow} shortcut="Super+E" pluginName="qol-launcher" actionLabel="Open launcher"
+                <${HotkeyRow} shortcut="Super+E" pluginName="qol-launcher" actionLabel="Open launcher" status="installed"
                     index=${1} selected=${sel.selected(1)} onSelect=${sel.select} accent="accent" />
-                <${HotkeyRow} shortcut="Print" pluginName="qol-screen-recorder" actionLabel="Screenshot"
+                <${HotkeyRow} shortcut="Print" pluginName="qol-screen-recorder" actionLabel="Screenshot" status="local"
                     index=${2} selected=${sel.selected(2)} onSelect=${sel.select} accent="warning" />
             <//>
         <//>
@@ -394,11 +446,11 @@ function ShortcutTableShowcase() {
                     <${TableCell}>Launcher<//>
                 <//>
                 <${ShortcutRow} name="GitHub" type="URL" target="https://github.com" launcher=${true} enabled=${true}
-                    index=${0} selected=${sel.selected(0)} onSelect=${sel.select} />
+                    selectValue="github" index=${0} selected=${sel.selected('github')} onSelect=${sel.select} />
                 <${ShortcutRow} name="Terminal" type="App" target="com.apple.Terminal" launcher=${true} enabled=${true}
-                    index=${1} selected=${sel.selected(1)} onSelect=${sel.select} />
+                    selectValue="terminal" index=${1} selected=${sel.selected('terminal')} onSelect=${sel.select} />
                 <${ShortcutRow} name="Notes" type="App" target="/usr/bin/notes" launcher=${false} enabled=${false}
-                    index=${2} selected=${sel.selected(2)} onSelect=${sel.select} />
+                    selectValue="notes" index=${2} selected=${sel.selected('notes')} onSelect=${sel.select} />
             <//>
         <//>
     `;
@@ -410,13 +462,13 @@ function StoreCardShowcase() {
         <${CatalogSection} title="Store cards">
             <${StoreCardGrid} onDeselect=${sel.deselect}>
                 <${StoreCard} name="Alt Tab" version=${{ current: '1.2.0' }} description="Window switcher with live previews"
-                    installed=${true} index=${0} selected=${sel.selected(0)} onSelect=${sel.select} />
+                    installed=${true} data-plugin-id="plugin-alt-tab" index=${0} selected=${sel.selected(0)} onSelect=${sel.select} />
                 <${StoreCard} name="Launcher" version=${{ from: '2.0.1', to: '2.1.0' }} description="App launcher with fuzzy search"
-                    installed=${true} hasUpdate=${true} index=${1} selected=${sel.selected(1)} onSelect=${sel.select} />
+                    installed=${true} hasUpdate=${true} data-plugin-id="plugin-launcher" index=${1} selected=${sel.selected(1)} onSelect=${sel.select} />
                 <${StoreCard} name="Screen Recorder" version=${{ current: '0.3.0' }} description="Record screen, window, or region"
-                    index=${2} selected=${sel.selected(2)} onSelect=${sel.select} />
+                    data-plugin-id="plugin-screen-recorder" index=${2} selected=${sel.selected(2)} onSelect=${sel.select} />
                 <${StoreCard} name="Window Actions" version=${{ current: '1.0.0' }} description="Minimize, restore, move between monitors"
-                    installing=${true} index=${3} selected=${sel.selected(3)} onSelect=${sel.select} />
+                    installing=${true} data-plugin-id="plugin-window-actions" index=${3} selected=${sel.selected(3)} onSelect=${sel.select} />
             <//>
         <//>
     `;
