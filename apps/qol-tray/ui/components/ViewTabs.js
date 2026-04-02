@@ -3,6 +3,7 @@ import { useCallback } from 'preact/hooks';
 import { useViewTabs } from '../hooks/useViewTabs.js';
 import { MODAL_SELECTOR } from '../lib/surface-traits.js';
 import { PageHeader } from './PageHeader.js';
+import { Surface } from './Surface.js';
 import { SurfaceContainer } from './SurfaceContainer.js';
 
 /**
@@ -41,20 +42,17 @@ export function ViewTabs({ title, subtitle, scramble, tabs, onActivate, onConten
                     <${SurfaceContainer} className="content-frame">
                         <div class="view-tabs" role="tablist" ref=${vt.rootRef}>
                             ${tabs.map((tab, i) => html`
-                                <button
-                                    key=${tab.id}
-                                    class="view-tab ${vt.activeTab === tab.id ? 'active' : ''}"
+                                <${Surface} as="button" key=${tab.id}
+                                    className="view-tab ${vt.activeTab === tab.id ? 'active' : ''}"
                                     role="tab"
-                                    data-selected-surface=""
-                                    data-selected=${vt.activeTab === tab.id ? 'true' : 'false'}
+                                    selected=${vt.activeTab === tab.id}
                                     data-tab-id=${tab.id}
                                     aria-selected=${vt.activeTab === tab.id}
-                                    onFocus=${() => vt.previewTab(i)}
-                                    onClick=${() => vt.activateTab(i)}
-                                >
+                                    onSelect=${() => vt.previewTab(i)}
+                                    onActivate=${() => vt.activateTab(i)}>
                                     ${tab.label}
                                     ${tab.count > 0 ? html`<span class="view-tab-count">${tab.count}</span>` : null}
-                                </button>
+                                <//>
                             `)}
                             ${trailing}
                         </div>
