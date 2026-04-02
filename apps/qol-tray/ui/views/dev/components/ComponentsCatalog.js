@@ -7,6 +7,7 @@ import { ToggleSwitch } from '../../../components/ToggleSwitch.js';
 import { CustomSelect } from '../../../components/CustomSelect.js';
 import { Expander, ExpanderTrigger, ExpanderBody } from '../../../components/Expander.js';
 import { Badge, HealthDot, Alert } from '../../../components/StatusIndicators.js';
+import { ListGroup, ListRow, ListRowHeader, ListRowBody, ListRowTitle, ListRowText } from '../../../components/ListRow.js';
 
 export function ComponentsCatalog() {
     return html`
@@ -22,15 +23,21 @@ export function ComponentsCatalog() {
                 <${ModalShowcase} />
                 <${DepthDiver} />
             <//>
+            <${CatalogGroup} title="Rows" inline=${false}>
+                <${PluginRowShowcase} />
+                <${LogRowShowcase} />
+                <${SuppressedRowShowcase} />
+                <${BackupRowShowcase} />
+            <//>
         </div>
     `;
 }
 
-function CatalogGroup({ title, children }) {
+function CatalogGroup({ title, inline = true, children }) {
     return html`
         <div class="catalog-group">
             <div class="catalog-group-label">${title}</div>
-            <div class="catalog-group-body">${children}</div>
+            <div class=${inline ? 'catalog-group-body' : 'catalog-group-stack'}>${children}</div>
         </div>
     `;
 }
@@ -215,5 +222,124 @@ function DepthLevel({ level }) {
                 </div>
             `}
         </${SurfaceContainer}>
+    `;
+}
+
+function PluginRowShowcase() {
+    const [sel, setSel] = useState(-1);
+    return html`
+        <${CatalogSection} title="Plugin-style">
+            <${ListGroup} onDeselect=${() => setSel(-1)}>
+                <${ListRow} index=${0} selected=${sel === 0} onSelect=${setSel} accent="success">
+                    <${ListRowHeader}>
+                        <${ListRowTitle}>qol-window-actions<//>
+                    <//>
+                    <${ListRowBody}>
+                        <${ListRowText} mono>~/repos/qol-tools/qol-window-actions<//>
+                    <//>
+                <//>
+                <${ListRow} index=${1} selected=${sel === 1} onSelect=${setSel} accent="warning">
+                    <${ListRowHeader}>
+                        <${ListRowTitle}>qol-alt-tab<//>
+                    <//>
+                    <${ListRowBody}>
+                        <${ListRowText} mono>~/repos/qol-tools/qol-alt-tab<//>
+                    <//>
+                <//>
+            <//>
+        <//>
+    `;
+}
+
+function LogRowShowcase() {
+    const [sel, setSel] = useState(-1);
+    return html`
+        <${CatalogSection} title="Log-style">
+            <${ListGroup} onDeselect=${() => setSel(-1)}>
+                <${ListRow} index=${0} selected=${sel === 0} onSelect=${setSel} accent="accent">
+                    <${ListRowHeader}>
+                        <span class="list-row-label" style="width:5.5rem">14:32:01</span>
+                        <span class="log-level-badge level-startup" style="width:5.8rem; flex-shrink:0">STARTUP</span>
+                        <${ListRowTitle} mono>qol-window-actions<//>
+                    <//>
+                    <${ListRowBody}>
+                        <${ListRowText}>Plugin initialized successfully<//>
+                    <//>
+                <//>
+                <${ListRow} index=${1} selected=${sel === 1} onSelect=${setSel} accent="danger">
+                    <${ListRowHeader}>
+                        <span class="list-row-label" style="width:5.5rem">14:32:05</span>
+                        <span class="log-level-badge level-error" style="width:5.8rem; flex-shrink:0">ERROR</span>
+                        <${ListRowTitle} mono>qol-alt-tab<//>
+                        <span class="list-row-label" style="font-family:var(--font-mono); font-size:var(--fs-sm)">src/main.rs:42</span>
+                    <//>
+                    <${ListRowBody}>
+                        <${ListRowText}>Failed to register hotkey: already registered by another process<//>
+                    <//>
+                <//>
+            <//>
+        <//>
+    `;
+}
+
+function SuppressedRowShowcase() {
+    const [sel, setSel] = useState(-1);
+    const [expanded, setExpanded] = useState(false);
+    return html`
+        <${CatalogSection} title="Card-style">
+            <${ListGroup} className="list-group-cards" onDeselect=${() => setSel(-1)}>
+                <${ListRow} index=${0} selected=${sel === 0} onSelect=${setSel} accent="danger-soft"
+                    onClick=${() => setExpanded(!expanded)}>
+                    <${ListRowHeader}>
+                        <span class="list-row-label" style="width:1rem">${expanded ? '\u25be' : '\u25b8'}</span>
+                        <${ListRowTitle} mono>qol-alt-tab::hotkey_register_failed<//>
+                        <${Badge} style=${{ background: 'rgba(var(--danger-rgb),0.14)', borderColor: 'rgba(var(--danger-rgb),0.26)' }}>${'\u00d7'}12<//>
+                        <button class="btn btn-sm" tabIndex="-1" onClick=${(e) => e.stopPropagation()}>Unsuppress</button>
+                    <//>
+                    ${expanded && html`
+                        <${ListRowBody}>
+                            <${ListRowText} mono>Failed to register hotkey: already registered by another process<//>
+                        <//>
+                    `}
+                <//>
+                <${ListRow} index=${1} selected=${sel === 1} onSelect=${setSel} accent="danger-soft">
+                    <${ListRowHeader}>
+                        <span class="list-row-label" style="width:1rem">${'\u25b8'}</span>
+                        <${ListRowTitle} mono>qol-fx::vsync_miss<//>
+                        <${Badge} style=${{ background: 'rgba(var(--danger-rgb),0.14)', borderColor: 'rgba(var(--danger-rgb),0.26)' }}>${'\u00d7'}47<//>
+                        <button class="btn btn-sm" tabIndex="-1" onClick=${(e) => e.stopPropagation()}>Unsuppress</button>
+                    <//>
+                <//>
+            <//>
+        <//>
+    `;
+}
+
+function BackupRowShowcase() {
+    const [sel, setSel] = useState(-1);
+    return html`
+        <${CatalogSection} title="Backup-style">
+            <${ListGroup} onDeselect=${() => setSel(-1)}>
+                <${ListRow} index=${0} selected=${sel === 0} onSelect=${setSel} accent="accent-soft">
+                    <${ListRowHeader}>
+                        <span class="list-row-label" style="width:9rem">2026-04-02 14:30</span>
+                        <${Badge} className="profile-badge profile-badge-skipped">Review backup<//>
+                        <span class="list-row-meta">2.4 KB</span>
+                    <//>
+                    <${ListRowBody}>
+                        <${ListRowText} mono>profile-backup-2026-04-02T143001.toml<//>
+                    <//>
+                <//>
+                <${ListRow} index=${1} selected=${sel === 1} onSelect=${setSel} accent="accent-soft">
+                    <${ListRowHeader}>
+                        <span class="list-row-label" style="width:9rem">2026-04-01 09:15</span>
+                        <span class="list-row-meta">1.8 KB</span>
+                    <//>
+                    <${ListRowBody}>
+                        <${ListRowText} mono>profile-backup-2026-04-01T091500.toml<//>
+                    <//>
+                <//>
+            <//>
+        <//>
     `;
 }
