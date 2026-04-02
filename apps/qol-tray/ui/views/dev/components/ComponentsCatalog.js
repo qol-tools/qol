@@ -228,20 +228,30 @@ function DepthLevel({ level }) {
 
 function PluginRowShowcase() {
     const [sel, setSel] = useState(-1);
+    const [linked, setLinked] = useState({ 0: true, 1: false });
+    const toggleLink = (i) => setLinked(prev => ({ ...prev, [i]: !prev[i] }));
     return html`
         <${CatalogSection} title="Plugin-style">
             <${ListGroup} onDeselect=${() => setSel(-1)}>
-                <${ListRow} index=${0} selected=${sel === 0} onSelect=${setSel} accent="success">
+                <${ListRow} index=${0} selected=${sel === 0} onSelect=${setSel}
+                    accent=${linked[0] ? 'success' : undefined}
+                    onActivate=${() => toggleLink(0)}
+                    action=${html`<button type="button"><img class="list-row-action-icon" src="assets/qol-tray.png?v=1" alt="" /></button>`}>
                     <${ListRowHeader}>
                         <${ListRowTitle}>qol-window-actions<//>
+                        ${linked[0] && html`<${Badge} style=${{ background: 'rgba(var(--success-rgb),0.14)', borderColor: 'rgba(var(--success-rgb),0.26)' }}>Linked<//>`}
                     <//>
                     <${ListRowBody}>
                         <${ListRowText} mono>~/repos/qol-tools/qol-window-actions<//>
                     <//>
                 <//>
-                <${ListRow} index=${1} selected=${sel === 1} onSelect=${setSel} accent="warning">
+                <${ListRow} index=${1} selected=${sel === 1} onSelect=${setSel}
+                    accent=${linked[1] ? 'success' : undefined}
+                    onActivate=${() => toggleLink(1)}
+                    action=${html`<button type="button"><img class="list-row-action-icon" src="assets/qol-tray.png?v=1" alt="" /></button>`}>
                     <${ListRowHeader}>
                         <${ListRowTitle}>qol-alt-tab<//>
+                        ${linked[1] && html`<${Badge} style=${{ background: 'rgba(var(--success-rgb),0.14)', borderColor: 'rgba(var(--success-rgb),0.26)' }}>Linked<//>`}
                     <//>
                     <${ListRowBody}>
                         <${ListRowText} mono>~/repos/qol-tools/qol-alt-tab<//>

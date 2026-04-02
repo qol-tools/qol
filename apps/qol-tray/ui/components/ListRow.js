@@ -9,11 +9,16 @@ export function ListGroup({ className, onDeselect, children, ...rest }) {
     return html`<div class=${cls} onFocusOut=${onFocusOut} ...${rest}>${children}</div>`;
 }
 
-export function ListRow({ accent, className, children, ...rest }) {
-    const cls = ['list-row', className].filter(Boolean).join(' ');
+export function ListRow({ accent, action, className, children, ...rest }) {
+    const hasAction = action != null;
+    const cls = ['list-row', hasAction && 'list-row-with-action', className].filter(Boolean).join(' ');
+    if (!hasAction) {
+        return html`<${Surface} className=${cls} data-accent=${accent} ...${rest}>${children}<//>`;
+    }
     return html`
         <${Surface} className=${cls} data-accent=${accent} ...${rest}>
-            ${children}
+            <div class="list-row-content">${children}</div>
+            <div class="list-row-action">${action}</div>
         <//>
     `;
 }
