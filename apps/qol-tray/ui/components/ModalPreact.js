@@ -1,7 +1,7 @@
 import { html } from '../lib/html.js';
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { surfaceDepth } from '../lib/surface-traits.js';
-import { Surface } from './Surface.js';
+import { Button } from './Button.js';
 
 const FOCUSABLE = 'input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), .custom-select-trigger:not([disabled]), [tabindex]:not([disabled]):not([tabindex="-1"])';
 
@@ -102,7 +102,7 @@ export function ModalFooter({ actions }) {
     return html`
         <div class="modal-footer-actions" ref=${ref}>
             ${actions.map(a => html`
-                <${Surface} as="button" key=${a.label} className="btn ${a.variant || 'btn-ghost'}"
+                <${Button} key=${a.label} variant=${a.variant || 'btn-ghost'}
                     onActivate=${a.onClick} disabled=${a.disabled}>
                     ${a.label}${a.kbd && html` <kbd>${a.kbd}</kbd>`}
                 <//>

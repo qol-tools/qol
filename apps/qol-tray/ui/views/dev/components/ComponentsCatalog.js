@@ -10,6 +10,7 @@ import { Badge, HealthDot, Alert } from '../../../components/StatusIndicators.js
 import { ListGroup } from '../../../components/ListRow.js';
 import { Table, TableHeader, TableCell } from '../../../components/TableRow.js';
 import { Surface } from '../../../components/Surface.js';
+import { Button, RefreshButton } from '../../../components/Button.js';
 import { EmptyState } from '../../../components/EmptyState.js';
 import { DropdownMenu } from '../../../components/DropdownMenu.js';
 import { useListSelection } from '../../../hooks/useListSelection.js';
@@ -86,22 +87,22 @@ function ButtonShowcase() {
     return html`
         <${CatalogSection} title="Buttons">
             <${CatalogRow} label="Variants">
-                <${Surface} as="button" className="btn">Secondary<//>
-                <${Surface} as="button" className="btn btn-primary">Primary<//>
-                <${Surface} as="button" className="btn btn-ghost">Ghost<//>
-                <${Surface} as="button" className="btn btn-danger">Danger<//>
-                <${Surface} as="button" className="btn" disabled>Disabled<//>
+                <${Button}>Secondary<//>
+                <${Button} variant="btn-primary">Primary<//>
+                <${Button} variant="btn-ghost">Ghost<//>
+                <${Button} variant="btn-danger">Danger<//>
+                <${Button} disabled>Disabled<//>
             <//>
             <${CatalogRow} label="Small">
-                <${Surface} as="button" className="btn btn-sm">Secondary<//>
-                <${Surface} as="button" className="btn btn-sm btn-primary">Primary<//>
-                <${Surface} as="button" className="btn btn-sm btn-ghost">Ghost<//>
+                <${Button} small>Secondary<//>
+                <${Button} small variant="btn-primary">Primary<//>
+                <${Button} small variant="btn-ghost">Ghost<//>
             <//>
             <${CatalogRow} label="With icons">
-                <${Surface} as="button" className="btn"><span class="btn-icon">${'\u2193'}</span> Pull<//>
-                <${Surface} as="button" className="btn"><span class="btn-icon">${'\u2191'}</span> Push<//>
-                <${Surface} as="button" className="btn btn-primary"><span class="btn-icon">${'\u26a1'}</span> Connect<//>
-                <${Surface} as="button" className="btn btn-ghost">Disconnect<//>
+                <${Button}><span class="btn-icon">${'\u2193'}</span> Pull<//>
+                <${Button}><span class="btn-icon">${'\u2191'}</span> Push<//>
+                <${Button} variant="btn-primary"><span class="btn-icon">${'\u26a1'}</span> Connect<//>
+                <${Button} variant="btn-ghost">Disconnect<//>
             <//>
         <//>
     `;
@@ -149,12 +150,8 @@ function ToggleShowcase() {
     return html`
         <${CatalogSection} title="Toggle">
             <${CatalogRow}>
-                <${Surface} as="span" onActivate=${() => setToggle1(!toggle1)}>
-                    <${ToggleSwitch} checked=${toggle1} onChange=${setToggle1} label="Enabled" />
-                <//>
-                <${Surface} as="span" onActivate=${() => setToggle2(!toggle2)}>
-                    <${ToggleSwitch} checked=${toggle2} onChange=${setToggle2} label="Disabled" />
-                <//>
+                <${ToggleSwitch} checked=${toggle1} onChange=${setToggle1} label="Enabled" />
+                <${ToggleSwitch} checked=${toggle2} onChange=${setToggle2} label="Disabled" />
             <//>
         <//>
     `;
@@ -188,7 +185,7 @@ function ModalShowcase() {
     return html`
         <${CatalogSection} title="Modal">
             <${CatalogRow} label="Open modal">
-                <${Surface} as="button" className="btn" onActivate=${() => setOpen(true)}>Open test modal<//>
+                <${Button} onActivate=${() => setOpen(true)}>Open test modal<//>
             <//>
         <//>
         ${open && html`
@@ -216,6 +213,7 @@ function DepthDiver() {
                 <${Surface} className="depth-level-entry">
                     <${DepthLevel} level=${1} />
                 <//>
+
             <//>
         <//>
     `;
@@ -236,8 +234,8 @@ function DepthLevel({ level }) {
     const label = `Level ${level}`;
     return html`
         <${SurfaceContainer} className="depth-level">
-            <${Surface} as="button" className="btn btn-sm" onActivate=${depthDive}>${label} - A<//>
-            <${Surface} as="button" className="btn btn-sm" onActivate=${depthDive}>${label} - B<//>
+            <${Button} small onActivate=${depthDive}>${label} - A<//>
+            <${Button} small onActivate=${depthDive}>${label} - B<//>
             ${level < 6 && html`
                 <div class="depth-level-child">
                     <${DepthLevel} level=${level + 1} />
@@ -324,12 +322,11 @@ function BackupRowShowcase() {
 }
 
 function SpinnerShowcase() {
-    const [spinning, setSpinning] = useState(false);
     return html`
         <${CatalogSection} title="Spinner">
             <${CatalogRow} label="States">
-                <${Surface} as="button" className="refresh-btn" onActivate=${() => setSpinning(!spinning)} />
-                <button class="refresh-btn spinning" disabled></button>
+                <${RefreshButton} />
+                <${RefreshButton} spinning />
             <//>
         <//>
     `;
