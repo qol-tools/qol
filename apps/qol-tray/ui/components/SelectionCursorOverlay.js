@@ -56,9 +56,27 @@ export function SelectionCursorOverlay() {
         };
 
         let pointerActive = false;
+        let lastSurface = null;
         const setInputMode = (mode) => { app.dataset.inputMode = mode; };
-        const onKey = () => { pointerActive = false; setInputMode('keyboard'); sync(); };
-        const onPointer = () => { pointerActive = true; setInputMode('mouse'); };
+        const onKey = () => {
+            if (pointerActive && lastSurface?.isConnected) {
+                lastSurface.focus({ preventScroll: true });
+            }
+            lastSurface = null;
+            pointerActive = false;
+            setInputMode('keyboard');
+            sync();
+        };
+        const onPointer = () => {
+            if (!pointerActive) {
+                const focused = document.activeElement;
+                if (focused instanceof HTMLElement && focused !== document.body) {
+                    lastSurface = focused.closest('[data-selected-surface]');
+                }
+            }
+            pointerActive = true;
+            setInputMode('mouse');
+        };
         const onWheel = () => setInputMode('mouse');
         setInputMode('keyboard');
 
