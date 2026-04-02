@@ -2,6 +2,7 @@ import { html } from '../lib/html.js';
 import { useState, useCallback, useRef, useEffect, useLayoutEffect } from 'preact/hooks';
 import { SurfaceContainer } from './SurfaceContainer.js';
 import { Surface, useInputSurface } from './Surface.js';
+import { Button } from './Button.js';
 import { useClickOutside } from '../hooks/useClickOutside.js';
 import { useScrollFollow } from '../hooks/useScrollFollow.js';
 
@@ -86,12 +87,11 @@ export function CustomSelect({ value, options, labels, onChange, compact = false
         setMarkerStyleState(settledMarkerStyle(list, item));
     }, [open, highlightIndex, options.length, value]);
 
-    const triggerCls = compact ? 'btn btn-sm btn-dropdown custom-select-trigger' : 'btn btn-dropdown custom-select-trigger';
-
     return html`
         <div class=${`custom-select${compact ? ' custom-select-compact' : ''}`} ref=${containerRef}>
-            <${Surface} as="button" className=${triggerCls} onActivate=${onTriggerClick}
-                type="button" aria-haspopup="listbox" aria-expanded=${open ? 'true' : 'false'}>
+            <${Button} variant="btn-dropdown" small=${compact} className="custom-select-trigger"
+                onActivate=${onTriggerClick} type="button"
+                aria-haspopup="listbox" aria-expanded=${open ? 'true' : 'false'}>
                 <span class="custom-select-value">${selectedLabel}</span>
                 <span class="custom-select-arrow">${'\u25BE'}</span>
             <//>
