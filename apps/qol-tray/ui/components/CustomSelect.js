@@ -1,13 +1,15 @@
 import { html } from '../lib/html.js';
 import { useState, useCallback, useRef, useEffect, useLayoutEffect } from 'preact/hooks';
 import { SurfaceContainer } from './SurfaceContainer.js';
-import { Surface } from './Surface.js';
+import { Surface, useInputSurface } from './Surface.js';
+import { useClickOutside } from '../hooks/useClickOutside.js';
+import { useScrollFollow } from '../hooks/useScrollFollow.js';
 
 export function CustomSelect({ value, options, labels, onChange, compact = false }) {
     const [open, setOpen] = useState(false);
     const [highlightIndex, setHighlightIndex] = useState(() => Math.max(0, options.indexOf(value)));
     const containerRef = useRef(null);
-    const listRef = useRef(null);
+    const listSurface = useInputSurface();
     const [markerStyleState, setMarkerStyleState] = useState(hiddenMarkerStyle());
 
     const selectedLabel = (labels?.[value] || value) ?? '';
@@ -48,30 +50,18 @@ export function CustomSelect({ value, options, labels, onChange, compact = false
         setOpen(false);
     }, []);
 
-    useEffect(() => {
-        if (!open) return;
-        const onPointerDown = (e) => {
-            if (containerRef.current?.contains(e.target)) return;
-            setOpen(false);
-        };
-        document.addEventListener('pointerdown', onPointerDown);
-        return () => document.removeEventListener('pointerdown', onPointerDown);
-    }, [open]);
+    const closeList = useCallback(() => setOpen(false), []);
+    useClickOutside(containerRef, open, closeList);
+    useScrollFollow(containerRef, open, highlightIndex, '.custom-select-option');
 
     useEffect(() => {
         if (!open) return;
         containerRef.current?.querySelector('.custom-select-list')?.focus();
     }, [open]);
 
-    useLayoutEffect(() => {
-        if (!open) return;
-        const items = containerRef.current?.querySelectorAll('.custom-select-option');
-        items?.[highlightIndex]?.scrollIntoView({ block: 'nearest' });
-    }, [open, highlightIndex]);
-
     useEffect(() => {
         if (!open) return;
-        const list = listRef.current;
+        const list = listSurface.ref.current;
         if (!(list instanceof HTMLElement)) return;
         const syncMarker = () => {
             const item = list.querySelector('.custom-select-option.highlighted');
@@ -87,7 +77,7 @@ export function CustomSelect({ value, options, labels, onChange, compact = false
             setMarkerStyleState(hiddenMarkerStyle());
             return;
         }
-        const list = listRef.current;
+        const list = listSurface.ref.current;
         const item = list?.querySelector('.custom-select-option.highlighted');
         if (!(list instanceof HTMLElement) || !(item instanceof HTMLElement)) {
             setMarkerStyleState(hiddenMarkerStyle());
@@ -107,7 +97,7 @@ export function CustomSelect({ value, options, labels, onChange, compact = false
             <//>
             ${open && html`
                 <${SurfaceContainer} className="custom-select-popover">
-                    <${Surface} className="custom-select-list" ref=${listRef} tabIndex="-1" onKeyDown=${onListKeyDown} onBlur=${onListBlur}>
+                    <div class="custom-select-list" ref=${listSurface.ref} tabIndex="-1" onKeyDown=${onListKeyDown} onBlur=${onListBlur} ...${listSurface.attrs}>
                         ${options.map((opt, i) => html`
                             <${Surface} key=${opt}
                                  className="custom-select-option ${opt === value ? 'selected' : ''} ${i === highlightIndex ? 'highlighted' : ''}"
