@@ -6,7 +6,11 @@ export function useViewTabs(tabs, { onActivate } = {}) {
     const pendingDescentRef = useRef(false);
     const rootRef = useRef(null);
 
+    const isKeyboardMode = () =>
+        document.querySelector('.app-container')?.dataset.inputMode !== 'mouse';
+
     const descendToContent = useCallback(() => {
+        if (!isKeyboardMode()) return;
         const root = rootRef.current;
         if (!root) return;
         const container = root.closest('[data-surface-container]');
@@ -23,11 +27,13 @@ export function useViewTabs(tabs, { onActivate } = {}) {
         const tabId = tabs[index].id;
         const changed = tabId !== activeTab;
         setActiveTab(tabId);
-        if (onActivate) onActivate(tabId, index);
-        if (changed) {
-            pendingDescentRef.current = true;
-        } else {
-            descendToContent();
+        if (isKeyboardMode()) {
+            if (onActivate) onActivate(tabId, index);
+            if (changed) {
+                pendingDescentRef.current = true;
+            } else {
+                descendToContent();
+            }
         }
     }, [tabs, onActivate, activeTab, descendToContent]);
 
@@ -42,7 +48,7 @@ export function useViewTabs(tabs, { onActivate } = {}) {
         const tabId = tabs[index].id;
         if (tabId === activeTab) return;
         setActiveTab(tabId);
-        if (onActivate) onActivate(tabId, index);
+        if (isKeyboardMode() && onActivate) onActivate(tabId, index);
     }, [tabs, onActivate, activeTab]);
 
     const switchTab = useCallback((tabId) => {
