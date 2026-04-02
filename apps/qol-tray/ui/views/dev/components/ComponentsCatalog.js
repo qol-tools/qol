@@ -252,18 +252,25 @@ function DepthLevel({ level }) {
 function DevPluginRowShowcase() {
     const sel = useListSelection();
     const [linked, setLinked] = useState({ 0: true, 1: false });
-    const toggleLink = (i) => () => setLinked(prev => ({ ...prev, [i]: !prev[i] }));
+    const toggleLink = (i) => setLinked(prev => ({ ...prev, [i]: !prev[i] }));
+    const makeActions = (i) => [
+        { label: linked[i] ? 'Unlink' : 'Link', run: () => toggleLink(i) },
+        { label: 'Toggle logs', run: () => {} },
+        { label: 'Edit filters', run: () => {} },
+    ];
     return html`
         <${CatalogSection} title="Dev plugin row">
             <div class="plugin-list">
                 <${DevPluginRow} name="qol-window-actions" path="~/repos/qol-tools/qol-window-actions"
                     status=${linked[0] ? 'linked' : 'discovered'} pluginId="plugin-window-actions"
-                    index=${0} selected=${sel.selected(0)} onSelect=${sel.select} onActivate=${toggleLink(0)}
+                    index=${0} selected=${sel.selected(0)} onSelect=${sel.select}
+                    actions=${makeActions(0)}
                     badges=${html`<${Badge} style=${{ background: 'rgba(var(--success-rgb),0.14)', borderColor: 'rgba(var(--success-rgb),0.26)' }}>v1.2.0<//>`}
                     meta=${html`<span style="font-size:var(--fs-xs); color:var(--text-faint)">Built 2m ago</span>`} />
                 <${DevPluginRow} name="qol-alt-tab" path="~/repos/qol-tools/qol-alt-tab"
                     status="local" pluginId="plugin-alt-tab"
-                    index=${1} selected=${sel.selected(1)} onSelect=${sel.select} onActivate=${toggleLink(1)}
+                    index=${1} selected=${sel.selected(1)} onSelect=${sel.select}
+                    actions=${makeActions(1)}
                     badges=${html`<${Badge} style=${{ background: 'rgba(var(--warning-rgb),0.16)', borderColor: 'rgba(var(--warning-rgb),0.3)' }}>Local<//>`} />
             </div>
         <//>
