@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { directSurfaces, firstChildContainer } from '../lib/surface-traits.js';
+import { isKeyboardMode } from '../lib/input-mode.js';
 
 export function useViewTabs(tabs, { onActivate } = {}) {
     const [activeTab, setActiveTab] = useState(tabs[0]?.id ?? '');
     const pendingDescentRef = useRef(false);
     const rootRef = useRef(null);
-
-    const isKeyboardMode = () =>
-        document.querySelector('.app-container')?.dataset.inputMode !== 'mouse';
 
     const descendToContent = useCallback(() => {
         if (!isKeyboardMode()) return;

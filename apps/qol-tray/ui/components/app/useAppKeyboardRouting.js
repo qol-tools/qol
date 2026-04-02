@@ -3,9 +3,22 @@ import { useKeyboard } from '../../hooks/useKeyboard.js';
 import { usePluginConfigContext } from '../../views/plugin-config/context.js';
 import { useViewKeyboardContext } from './view-keyboard-context.js';
 import { createDebug } from '../../lib/debug.js';
+import {
+    activateSurface,
+    activeContainer,
+    directSurfaces,
+    isVisible,
+    MODAL_SELECTOR,
+    parentContainer,
+    surfaceContainsChildContainer,
+} from '../../lib/surface-traits.js';
+import { nearestSurfaceInDirection, surfaceLabel } from '../../lib/spatial-nav.js';
+import { focusGridRows, nextFocusGridElement } from '../../lib/focus-grid.js';
 
 const log = createDebug('qol:nav');
 const PLUGIN_CONFIG_FIELD = '[data-plugin-config-field-id]';
+const NAV_KEYS = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
+const NAV_KEYS_EXTENDED = { ...NAV_KEYS, h: 'left', j: 'down', k: 'up', l: 'right' };
 
 export function useAppKeyboardRouting({
     activePluginId,
@@ -66,6 +79,142 @@ function handlePaletteToggle(event, palette, activePluginId, viewKeyboard) {
     return true;
 }
 
+function routeToView(event, viewKeyboard, cycleView) {
+    if (viewKeyboard?.isBlocking?.()) {
+        if (viewKeyboard.handleKey) viewKeyboard.handleKey(event);
+        return;
+    }
+    if (event.key === 'Tab') {
+        if (!hasVisibleModal()) cycleView(event);
+        return;
+    }
+    const active = document.activeElement;
+    if (active && active !== document.body && !active.closest(MODAL_SELECTOR)) {
+        if (viewKeyboard?.handleKey) viewKeyboard.handleKey(event);
+    }
+    if (!event.defaultPrevented) globalSurfaceNav(event);
+}
+
+// ---------------------------------------------------------------------------
+// Global surface navigation
+// ---------------------------------------------------------------------------
+
+function globalSurfaceNav(event) {
+    if (event.key === 'Escape') {
+        if (ascendLayer()) { event.preventDefault(); }
+        return;
+    }
+    const direction = NAV_KEYS_EXTENDED[event.key];
+    if (direction) {
+        event.preventDefault();
+        navigateInActiveContainer(direction);
+        return;
+    }
+    if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        activateAndMaybeDescend();
+    }
+}
+
+function findSelectedSurface() {
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && focused !== document.body) {
+        const surface = focused.closest('[data-selected-surface]');
+        if (surface && isVisible(surface)) return surface;
+    }
+    for (const container of document.querySelectorAll('[data-surface-container]')) {
+        if (!isVisible(container)) continue;
+        for (const el of directSurfaces(container)) {
+            if (el.getAttribute('data-selected') === 'true') return el;
+        }
+    }
+    return null;
+}
+
+function navigateInActiveContainer(direction) {
+    const current = findSelectedSurface();
+    if (!current) {
+        const fallback = firstVisibleSurface('#content [data-selected-surface]');
+        if (fallback) fallback.focus({ preventScroll: true });
+        return;
+    }
+    const container = activeContainer(current);
+    if (!container) return;
+
+    const surfaces = directSurfaces(container);
+    const cr = current.getBoundingClientRect();
+    log(direction, 'from', surfaceLabel(current),
+        'at (' + Math.round(cr.left) + ',' + Math.round(cr.top) + ')',
+        '| surfaces:', surfaces.length);
+    const next = nearestSurfaceInDirection(surfaces, current, direction);
+    if (!next || next === current) {
+        log('  -> no match. All surfaces:');
+        for (const el of surfaces) {
+            if (el === current) continue;
+            const r = el.getBoundingClientRect();
+            log('    ', surfaceLabel(el), '(' + Math.round(r.left) + ',' + Math.round(r.top) + ')');
+        }
+        return;
+    }
+    const nr = next.getBoundingClientRect();
+    log('  -> RESULT:', surfaceLabel(next),
+        'at (' + Math.round(nr.left) + ',' + Math.round(nr.top) + ')');
+    next.focus({ preventScroll: true });
+}
+
+function activateAndMaybeDescend() {
+    const current = findSelectedSurface();
+    if (!current) return;
+
+    if (current.getAttribute('role') === 'tab') {
+        activateSurface(current);
+        return;
+    }
+
+    activateSurface(current);
+
+    if (surfaceContainsChildContainer(current)) {
+        requestAnimationFrame(() => descendIntoChild(current));
+    }
+}
+
+function descendIntoChild(surface) {
+    const child = surface.querySelector('[data-surface-container]');
+    if (child && isVisible(child)) descendInto(child);
+}
+
+function descendInto(container) {
+    const surfaces = directSurfaces(container);
+    if (surfaces.length === 0) return;
+    surfaces[0].focus({ preventScroll: true });
+}
+
+function ascendLayer() {
+    const current = findSelectedSurface();
+    const container = current ? activeContainer(current) : null;
+    if (!container) return false;
+    if (container.closest(MODAL_SELECTOR)) return false;
+
+    const parent = parentContainer(container);
+    if (!parent) return false;
+
+    const parentSurfaces = directSurfaces(parent);
+    const diveSource = parentSurfaces.find(el => el.hasAttribute('data-dive-source'));
+    if (diveSource) diveSource.removeAttribute('data-dive-source');
+    const anchor = diveSource
+        || parentSurfaces.find(el => el.getAttribute('data-selected') === 'true')
+        || parentSurfaces.find(el => el.contains(container))
+        || parentSurfaces[0];
+    if (!anchor) return false;
+
+    anchor.focus({ preventScroll: true });
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Plugin config keyboard handling
+// ---------------------------------------------------------------------------
+
 function delegateToPluginConfig(event, pluginConfig, closePluginConfig) {
     if (!pluginConfig || pluginConfig.mode === 'ui') {
         if (event.key === 'Escape') { event.preventDefault(); closePluginConfig(); }
@@ -102,193 +251,6 @@ function delegateToPluginConfig(event, pluginConfig, closePluginConfig) {
     if (handlePluginConfigDirectEdit(event, detail, selectedField)) return;
     if (handlePluginConfigFieldAction(event, detail, pluginConfig, selectedField)) return;
     handlePluginConfigMove(event, detail, pluginConfig);
-}
-
-function routeToView(event, viewKeyboard, cycleView) {
-    if (viewKeyboard?.isBlocking?.()) {
-        if (viewKeyboard.handleKey) viewKeyboard.handleKey(event);
-        return;
-    }
-    if (event.key === 'Tab') {
-        if (!hasVisibleModal()) cycleView(event);
-        return;
-    }
-    const active = document.activeElement;
-    if (active && active !== document.body && !active.closest('.edit-modal, .confirm-modal')) {
-        if (viewKeyboard?.handleKey) viewKeyboard.handleKey(event);
-    }
-    if (!event.defaultPrevented) globalSurfaceNav(event);
-}
-
-import {
-    activateSurface,
-    activeContainer,
-    directSurfaces,
-    firstChildContainer,
-    parentContainer,
-    surfaceContainsChildContainer,
-} from '../../lib/surface-traits.js';
-
-const NAV_KEYS = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', h: 'left', j: 'down', k: 'up', l: 'right' };
-
-function globalSurfaceNav(event) {
-    if (event.key === 'Escape') {
-        if (ascendLayer()) { event.preventDefault(); }
-        return;
-    }
-    const direction = NAV_KEYS[event.key];
-    if (direction) {
-        event.preventDefault();
-        navigateInActiveContainer(direction);
-        return;
-    }
-    if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        activateAndMaybeDescend();
-    }
-}
-
-function findSelectedSurface() {
-    const focused = document.activeElement;
-    if (focused instanceof HTMLElement && focused !== document.body) {
-        const surface = focused.closest('[data-selected-surface]');
-        if (surface?.getClientRects().length > 0) return surface;
-    }
-    for (const container of document.querySelectorAll('[data-surface-container]')) {
-        if (container.getClientRects().length === 0) continue;
-        for (const el of directSurfaces(container)) {
-            if (el.getAttribute('data-selected') === 'true') return el;
-        }
-    }
-    return null;
-}
-
-function navigateInActiveContainer(direction) {
-    const current = findSelectedSurface();
-    if (!current) {
-        const fallback = firstVisibleSurface('#content [data-selected-surface]');
-        if (fallback) fallback.focus({ preventScroll: true });
-        return;
-    }
-    const container = activeContainer(current);
-    if (!container) return;
-
-    const surfaces = directSurfaces(container);
-    const cr = current.getBoundingClientRect();
-    log(direction, 'from', surfaceLabel(current),
-        'at (' + Math.round(cr.left) + ',' + Math.round(cr.top) + ')',
-        '| surfaces:', surfaces.length);
-    const next = nearestSurfaceInDirection(surfaces, current, direction);
-    if (!next || next === current) {
-        log('  → no match. All surfaces:');
-        for (const el of surfaces) {
-            if (el === current) continue;
-            const r = el.getBoundingClientRect();
-            log('    ', surfaceLabel(el), '(' + Math.round(r.left) + ',' + Math.round(r.top) + ')');
-        }
-        return;
-    }
-    const nr = next.getBoundingClientRect();
-    log('  → RESULT:', surfaceLabel(next),
-        'at (' + Math.round(nr.left) + ',' + Math.round(nr.top) + ')');
-    next.focus({ preventScroll: true });
-}
-
-function surfaceLabel(el) {
-    for (const node of el.childNodes) {
-        if (node.nodeType === 3) { const t = node.textContent.trim(); if (t) return t.slice(0, 20); }
-    }
-    const first = el.querySelector('.btn, .plugin-name, .custom-select-value, span');
-    if (first) { const t = first.textContent?.trim(); if (t) return t.slice(0, 20); }
-    return el.className?.split(' ')[0] || el.tagName;
-}
-
-function activateAndMaybeDescend() {
-    const current = findSelectedSurface();
-    if (!current) return;
-
-    if (current.getAttribute('role') === 'tab') {
-        activateSurface(current);
-        return;
-    }
-
-    activateSurface(current);
-
-    if (surfaceContainsChildContainer(current)) {
-        requestAnimationFrame(() => descendIntoChild(current));
-    }
-}
-
-function descendIntoChild(surface) {
-    const child = surface.querySelector('[data-surface-container]');
-    if (child && child.getClientRects().length > 0) descendInto(child);
-}
-
-function descendInto(container) {
-    const surfaces = directSurfaces(container);
-    if (surfaces.length === 0) return;
-    surfaces[0].focus({ preventScroll: true });
-}
-
-function ascendLayer() {
-    const current = findSelectedSurface();
-    const container = current ? activeContainer(current) : null;
-    if (!container) return false;
-    if (container.closest('.edit-modal, .confirm-modal')) return false;
-
-    const parent = parentContainer(container);
-    if (!parent) return false;
-
-    const parentSurfaces = directSurfaces(parent);
-    const diveSource = parentSurfaces.find(el => el.hasAttribute('data-dive-source'));
-    if (diveSource) diveSource.removeAttribute('data-dive-source');
-    const anchor = diveSource
-        || parentSurfaces.find(el => el.getAttribute('data-selected') === 'true')
-        || parentSurfaces.find(el => el.contains(container))
-        || parentSurfaces[0];
-    if (!anchor) return false;
-
-    anchor.focus({ preventScroll: true });
-    return true;
-}
-
-function nearestSurfaceInDirection(surfaces, current, direction) {
-    const horizontal = direction === 'left' || direction === 'right';
-    const result = spatialSearch(surfaces, current, direction, true);
-    if (result || horizontal) return result;
-    return spatialSearch(surfaces, current, direction, false);
-}
-
-function spatialSearch(surfaces, current, direction, useCone) {
-    const rect = current.getBoundingClientRect();
-    const cx = rect.left;
-    const cy = rect.top;
-    const horizontal = direction === 'left' || direction === 'right';
-    let best = null;
-    let bestDist = Infinity;
-    for (const el of surfaces) {
-        if (el === current) continue;
-        const r = el.getBoundingClientRect();
-        const dx = r.left - cx;
-        const dy = r.top - cy;
-        if (direction === 'up' && dy >= 0) continue;
-        if (direction === 'down' && dy <= 0) continue;
-        if (direction === 'left' && dx >= 0) continue;
-        if (direction === 'right' && dx <= 0) continue;
-        const primary = horizontal ? Math.abs(dx) : Math.abs(dy);
-        const cross = horizontal ? Math.abs(dy) : Math.abs(dx);
-        if (useCone && horizontal && (cross > primary / 4 || cross > 100)) continue;
-        if (useCone && !horizontal && cross > primary * 3) continue;
-        const dist = horizontal ? primary + cross * 5 : primary * 3 + cross;
-        log('  candidate', surfaceLabel(el),
-            'pos=(' + Math.round(r.left) + ',' + Math.round(r.top) + ')',
-            'dx=' + Math.round(dx), 'dy=' + Math.round(dy),
-            'pri=' + Math.round(primary), 'cross=' + Math.round(cross),
-            'dist=' + Math.round(dist),
-            dist < bestDist ? '← best' : '');
-        if (dist < bestDist) { best = el; bestDist = dist; }
-    }
-    return best;
 }
 
 function handlePluginConfigDirectEdit(event, detail, field) {
@@ -411,7 +373,7 @@ function handleNumberFieldActivation(event, detail, fieldId) {
 }
 
 function handlePluginConfigMove(event, detail, pluginConfig) {
-    const direction = keyToDirection(event.key);
+    const direction = NAV_KEYS[event.key];
     if (!direction) return false;
     event.preventDefault();
     blurPluginConfigFocus(detail);
@@ -419,14 +381,6 @@ function handlePluginConfigMove(event, detail, pluginConfig) {
     if (!nextFieldId) return true;
     pluginConfig.setSelectedFieldId(nextFieldId);
     return true;
-}
-
-function keyToDirection(key) {
-    if (key === 'ArrowUp') return 'up';
-    if (key === 'ArrowDown') return 'down';
-    if (key === 'ArrowLeft') return 'left';
-    if (key === 'ArrowRight') return 'right';
-    return null;
 }
 
 function nextPluginConfigFieldId(detail, selectedFieldId, direction) {
@@ -510,7 +464,7 @@ function handleFieldSubmode(event, detail, fieldId) {
 
     if (active && shouldKeepHorizontalCaret(event, active)) return false;
 
-    const direction = keyToDirection(event.key);
+    const direction = NAV_KEYS[event.key];
     if (!direction) return false;
     event.preventDefault();
     const rows = focusGridRows(genericFieldStops(fieldElement));
@@ -548,69 +502,9 @@ function shouldKeepHorizontalCaret(event, active) {
     return active.selectionEnd < active.value.length;
 }
 
-function focusGridRows(elements) {
-    const positioned = elements
-        .map(element => {
-            const rect = element.getBoundingClientRect();
-            return {
-                element,
-                top: rect.top,
-                left: rect.left,
-            };
-        })
-        .sort((left, right) => {
-            const topDelta = Math.abs(left.top - right.top);
-            if (topDelta > ROW_ALIGNMENT_THRESHOLD) return left.top - right.top;
-            return left.left - right.left;
-        });
-
-    const rows = [];
-    for (const item of positioned) {
-        const row = rows[rows.length - 1];
-        if (!row) {
-            rows.push([item]);
-            continue;
-        }
-        if (Math.abs(row[0].top - item.top) > ROW_ALIGNMENT_THRESHOLD) {
-            rows.push([item]);
-            continue;
-        }
-        row.push(item);
-    }
-
-    return rows;
-}
-
-function nextFocusGridElement(rows, active, direction) {
-    if (rows.length === 0) return null;
-
-    const position = findFocusGridPosition(rows, active);
-    if (!position) return rows[0][0]?.element || null;
-
-    const currentRow = rows[position.row];
-    if (direction === 'left') return currentRow[Math.max(0, position.column - 1)]?.element || null;
-    if (direction === 'right') return currentRow[Math.min(currentRow.length - 1, position.column + 1)]?.element || null;
-    if (direction === 'up') {
-        const previousRow = rows[position.row - 1];
-        if (!previousRow) return currentRow[position.column]?.element || null;
-        return previousRow[Math.min(position.column, previousRow.length - 1)]?.element || null;
-    }
-    const nextRow = rows[position.row + 1];
-    if (!nextRow) return currentRow[position.column]?.element || null;
-    return nextRow[Math.min(position.column, nextRow.length - 1)]?.element || null;
-}
-
-function findFocusGridPosition(rows, active) {
-    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
-        const columnIndex = rows[rowIndex].findIndex(item => item.element === active);
-        if (columnIndex < 0) continue;
-        return {
-            row: rowIndex,
-            column: columnIndex,
-        };
-    }
-    return null;
-}
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 function focusTextInput(input, key) {
     input.focus();
@@ -658,13 +552,13 @@ function queryFieldElement(detail, fieldId) {
 
 function firstVisibleSurface(selector) {
     for (const el of document.querySelectorAll(selector)) {
-        if (el.getClientRects().length > 0) return el;
+        if (isVisible(el)) return el;
     }
     return null;
 }
 
 function hasVisibleModal() {
-    const modal = document.querySelector('.edit-modal, .confirm-modal');
+    const modal = document.querySelector(MODAL_SELECTOR);
     if (!modal) return false;
     const rect = modal.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;

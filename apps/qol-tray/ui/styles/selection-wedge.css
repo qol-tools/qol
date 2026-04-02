@@ -54,14 +54,12 @@
         drop-shadow(0 0 9px hsl(var(--wedge-hue, 50) 85% 55% / 0.05));
 }
 
-.selection-wedge-pseudo-host,
-.selection-wedge-pseudo-anchor {
+.selection-wedge-pseudo {
     position: relative;
     overflow: visible;
 }
 
-.selection-wedge-pseudo-host::after,
-.selection-wedge-pseudo-anchor::after {
+.selection-wedge-pseudo::after {
     content: "";
     position: absolute;
     top: var(--selection-wedge-top, 0px);
@@ -80,8 +78,7 @@
     transition: opacity 0.08s ease, transform 0.08s ease;
 }
 
-.selection-wedge-pseudo-host.selection-wedge-visible::after,
-.selection-wedge-pseudo-anchor.selection-wedge-visible::after {
+.selection-wedge-pseudo.selection-wedge-visible::after {
     opacity: 1;
     transform: scaleX(-1) rotate(-45deg);
 }
@@ -111,7 +108,6 @@
     pointer-events: none;
 }
 
-.app-container[data-input-mode="mouse"] .selection-wedge-pseudo-host.selection-wedge-visible::after,
-.app-container[data-input-mode="mouse"] .selection-wedge-pseudo-anchor.selection-wedge-visible::after {
+.app-container[data-input-mode="mouse"] .selection-wedge-pseudo.selection-wedge-visible::after {
     opacity: 0;
 }

@@ -456,7 +456,7 @@
         opacity 140ms ease;
 }
 
-.field-group.selection-wedge-pseudo-host.selection-wedge-visible:has(.custom-select-list)::after {
+.field-group.selection-wedge-pseudo.selection-wedge-visible:has(.custom-select-list)::after {
     opacity: 0;
 }
 
