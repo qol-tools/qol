@@ -1,10 +1,9 @@
 import { html } from '../../lib/html.js';
 import { Surface } from '../Surface.js';
-import { SurfaceContainer } from '../SurfaceContainer.js';
 
 const STATUS_ACCENT = { linked: 'success', local: 'warning', installed: 'accent' };
 
-export function DevPluginRow({ name, path, status, pluginId, badges, meta, action, overlay, index, selected, onSelect, onActivate, ...rest }) {
+export function DevPluginRow({ name, path, status, pluginId, badges, meta, actionIcon, overlay, index, selected, onSelect, onActivate, ...rest }) {
     const statusCls = status ? `status-${status}` : '';
     const cls = ['plugin-row table-list-row', statusCls].filter(Boolean).join(' ');
     return html`
@@ -22,11 +21,11 @@ export function DevPluginRow({ name, path, status, pluginId, badges, meta, actio
                     </div>
                     ${badges}
                 </div>
-                ${action && html`
-                    <${SurfaceContainer} className="plugin-action-column table-col">
-                        ${action}
-                    <//>
-                `}
+                <div class="plugin-action-column table-col">
+                    <div class="plugin-action-zone">
+                        ${actionIcon || html`<img class="list-row-action-icon" src="assets/qol-tray.png?v=1" alt="" />`}
+                    </div>
+                </div>
             </div>
             ${overlay && html`<div class="plugin-build-overlay-host">${overlay}</div>`}
         <//>

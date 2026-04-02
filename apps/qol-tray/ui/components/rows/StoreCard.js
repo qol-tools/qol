@@ -2,7 +2,7 @@ import { html } from '../../lib/html.js';
 import { Surface } from '../Surface.js';
 
 export function StoreCardGrid({ className, onDeselect, children, ...rest }) {
-    const cls = ['grid-cards grid-cards--zoom', className].filter(Boolean).join(' ');
+    const cls = ['plugin-grid-store grid-cards grid-cards--zoom', className].filter(Boolean).join(' ');
     const onFocusOut = onDeselect ? (e) => {
         if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget)) onDeselect();
     } : undefined;
