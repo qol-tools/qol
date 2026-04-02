@@ -61,6 +61,12 @@
     gap: var(--space-4) var(--space-5);
 }
 
+.catalog-group-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+}
+
 .catalog-group-body > .catalog-section,
 .catalog-group-inline > .catalog-section {
     min-width: calc(50% - var(--space-5) / 2);
