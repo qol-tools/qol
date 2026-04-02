@@ -1,6 +1,7 @@
 import { html } from '../lib/html.js';
 import { useState, useCallback, useRef, useEffect, useLayoutEffect } from 'preact/hooks';
 import { SurfaceContainer } from './SurfaceContainer.js';
+import { Surface } from './Surface.js';
 
 export function CustomSelect({ value, options, labels, onChange, compact = false }) {
     const [open, setOpen] = useState(false);
@@ -99,26 +100,25 @@ export function CustomSelect({ value, options, labels, onChange, compact = false
 
     return html`
         <div class=${`custom-select${compact ? ' custom-select-compact' : ''}`} ref=${containerRef}>
-            <button type="button" class=${triggerCls} data-selected-surface="" onClick=${onTriggerClick}
-                aria-haspopup="listbox" aria-expanded=${open ? 'true' : 'false'}>
+            <${Surface} as="button" className=${triggerCls} onActivate=${onTriggerClick}
+                type="button" aria-haspopup="listbox" aria-expanded=${open ? 'true' : 'false'}>
                 <span class="custom-select-value">${selectedLabel}</span>
                 <span class="custom-select-arrow">${'\u25BE'}</span>
-            </button>
+            <//>
             ${open && html`
                 <${SurfaceContainer} className="custom-select-popover">
-                    <div class="custom-select-list" ref=${listRef} tabIndex="-1" data-selected-surface="" onKeyDown=${onListKeyDown} onBlur=${onListBlur}>
+                    <${Surface} className="custom-select-list" ref=${listRef} tabIndex="-1" onKeyDown=${onListKeyDown} onBlur=${onListBlur}>
                         ${options.map((opt, i) => html`
-                            <div key=${opt}
-                                 class="custom-select-option ${opt === value ? 'selected' : ''} ${i === highlightIndex ? 'highlighted' : ''}"
-                                 data-selected-surface=""
+                            <${Surface} key=${opt}
+                                 className="custom-select-option ${opt === value ? 'selected' : ''} ${i === highlightIndex ? 'highlighted' : ''}"
                                  data-selected-surface-priority="10"
-                                 data-selected=${i === highlightIndex ? 'true' : 'false'}
-                                 onClick=${() => select(opt)}
+                                 selected=${i === highlightIndex}
+                                 onActivate=${() => select(opt)}
                                  onMouseEnter=${() => setHighlightIndex(i)}>
                                 ${labels?.[opt] || opt}
-                            </div>
+                            <//>
                         `)}
-                    </div>
+                    <//>
                     <div class="custom-select-active-marker"
                         aria-hidden="true" style=${markerStyleState} />
                 <//>

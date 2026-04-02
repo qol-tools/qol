@@ -1,17 +1,18 @@
 import { html } from '../lib/html.js';
 import { IconChevron } from '../assets/icon-chevron.js';
+import { Surface } from './Surface.js';
 
 export function Expander({ open, onToggle, className, children, ...rest }) {
     const cls = ['btn btn-ghost btn-expander', className].filter(Boolean).join(' ');
     return html`
-        <div class=${cls} data-selected-surface="" ...${rest}
+        <${Surface} className=${cls} ...${rest}
             aria-expanded=${open ? 'true' : 'false'}
-            onClick=${(e) => {
+            onActivate=${(e) => {
                 if (e.target.closest('.btn-expander-body')) return;
                 onToggle();
             }}>
             ${children}
-        </div>
+        <//>
     `;
 }
 

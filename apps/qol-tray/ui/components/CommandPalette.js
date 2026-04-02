@@ -3,6 +3,7 @@ import { useRef, useState, useEffect, useMemo, useCallback } from 'preact/hooks'
 import { usePaletteContext } from '../palette/context.js';
 import { getCommands } from '../palette/registry.js';
 import init, { fuzzy_match as wasmFuzzyMatch } from '../wasm/qol_wasm.js';
+import { Surface } from './Surface.js';
 
 function filterCommands(commands, query) {
     if (!query) return commands;
@@ -107,10 +108,14 @@ export function CommandPalette() {
         ${mode === 'action' && commands.length > 0 && html`
             <ul class="palette-dropdown">
                 ${commands.map((cmd, i) => html`
-                    <li key=${cmd.id} class="palette-item ${i === clampedIndex ? 'selected' : ''}" data-selected-surface="" data-selected=${i === clampedIndex ? 'true' : 'false'} data-selected-surface-priority="10" data-scroll-follow-mode="nearest"
+                    <${Surface} as="li" key=${cmd.id}
+                        className="palette-item ${i === clampedIndex ? 'selected' : ''}"
+                        selected=${i === clampedIndex}
+                        data-selected-surface-priority="10"
+                        data-scroll-follow-mode="nearest"
                         onMouseDown=${() => executeCommand(cmd)}>
                         <span class="palette-item-label" data-selected-text="">${cmd.label}</span>
-                    </li>
+                    <//>
                 `)}
             </ul>
         `}

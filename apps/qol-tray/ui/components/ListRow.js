@@ -1,4 +1,5 @@
 import { html } from '../lib/html.js';
+import { Surface } from './Surface.js';
 
 export function ListGroup({ className, onDeselect, children, ...rest }) {
     const cls = ['list-group', className].filter(Boolean).join(' ');
@@ -8,19 +9,12 @@ export function ListGroup({ className, onDeselect, children, ...rest }) {
     return html`<div class=${cls} onFocusOut=${onFocusOut} ...${rest}>${children}</div>`;
 }
 
-export function ListRow({ index, selected, onSelect, accent, onClick, className, children, ...rest }) {
+export function ListRow({ accent, className, children, ...rest }) {
     const cls = ['list-row', className].filter(Boolean).join(' ');
     return html`
-        <div class=${cls}
-            data-selected-surface=""
-            data-selected=${selected ? 'true' : 'false'}
-            data-index=${String(index)}
-            data-accent=${accent}
-            onFocus=${() => onSelect(index)}
-            onClick=${onClick}
-            ...${rest}>
+        <${Surface} className=${cls} data-accent=${accent} ...${rest}>
             ${children}
-        </div>
+        <//>
     `;
 }
 

@@ -8,6 +8,7 @@ import { CustomSelect } from '../../../components/CustomSelect.js';
 import { Expander, ExpanderTrigger, ExpanderBody } from '../../../components/Expander.js';
 import { Badge, HealthDot, Alert } from '../../../components/StatusIndicators.js';
 import { ListGroup, ListRow, ListRowHeader, ListRowBody, ListRowTitle, ListRowText } from '../../../components/ListRow.js';
+import { Surface } from '../../../components/Surface.js';
 
 export function ComponentsCatalog() {
     return html`
@@ -64,22 +65,22 @@ function ButtonShowcase() {
     return html`
         <${CatalogSection} title="Buttons">
             <${CatalogRow} label="Variants">
-                <button class="btn" data-selected-surface="">Secondary</button>
-                <button class="btn btn-primary" data-selected-surface="">Primary</button>
-                <button class="btn btn-ghost" data-selected-surface="">Ghost</button>
-                <button class="btn btn-danger" data-selected-surface="">Danger</button>
-                <button class="btn" data-selected-surface="" disabled>Disabled</button>
+                <${Surface} as="button" className="btn">Secondary<//>
+                <${Surface} as="button" className="btn btn-primary">Primary<//>
+                <${Surface} as="button" className="btn btn-ghost">Ghost<//>
+                <${Surface} as="button" className="btn btn-danger">Danger<//>
+                <${Surface} as="button" className="btn" disabled>Disabled<//>
             <//>
             <${CatalogRow} label="Small">
-                <button class="btn btn-sm" data-selected-surface="">Secondary</button>
-                <button class="btn btn-sm btn-primary" data-selected-surface="">Primary</button>
-                <button class="btn btn-sm btn-ghost" data-selected-surface="">Ghost</button>
+                <${Surface} as="button" className="btn btn-sm">Secondary<//>
+                <${Surface} as="button" className="btn btn-sm btn-primary">Primary<//>
+                <${Surface} as="button" className="btn btn-sm btn-ghost">Ghost<//>
             <//>
             <${CatalogRow} label="With icons">
-                <button class="btn" data-selected-surface=""><span class="btn-icon">${'\u2193'}</span> Pull</button>
-                <button class="btn" data-selected-surface=""><span class="btn-icon">${'\u2191'}</span> Push</button>
-                <button class="btn btn-primary" data-selected-surface=""><span class="btn-icon">${'\u26a1'}</span> Connect</button>
-                <button class="btn btn-ghost" data-selected-surface="">Disconnect</button>
+                <${Surface} as="button" className="btn"><span class="btn-icon">${'\u2193'}</span> Pull<//>
+                <${Surface} as="button" className="btn"><span class="btn-icon">${'\u2191'}</span> Push<//>
+                <${Surface} as="button" className="btn btn-primary"><span class="btn-icon">${'\u26a1'}</span> Connect<//>
+                <${Surface} as="button" className="btn btn-ghost">Disconnect<//>
             <//>
         <//>
     `;
@@ -127,12 +128,12 @@ function ToggleShowcase() {
     return html`
         <${CatalogSection} title="Toggle">
             <${CatalogRow}>
-                <span data-selected-surface="" onClick=${() => setToggle1(!toggle1)}>
+                <${Surface} as="span" onActivate=${() => setToggle1(!toggle1)}>
                     <${ToggleSwitch} checked=${toggle1} onChange=${setToggle1} label="Enabled" />
-                </span>
-                <span data-selected-surface="" onClick=${() => setToggle2(!toggle2)}>
+                <//>
+                <${Surface} as="span" onActivate=${() => setToggle2(!toggle2)}>
                     <${ToggleSwitch} checked=${toggle2} onChange=${setToggle2} label="Disabled" />
-                </span>
+                <//>
             <//>
         <//>
     `;
@@ -166,7 +167,7 @@ function ModalShowcase() {
     return html`
         <${CatalogSection} title="Modal">
             <${CatalogRow} label="Open modal">
-                <button class="btn" data-selected-surface="" onClick=${() => setOpen(true)}>Open test modal</button>
+                <${Surface} as="button" className="btn" onActivate=${() => setOpen(true)}>Open test modal<//>
             <//>
         <//>
         ${open && html`
@@ -191,9 +192,9 @@ function DepthDiver() {
     return html`
         <${CatalogSection} title="Depth diver">
             <${CatalogRow} label="Enter to descend, ESC to ascend">
-                <div class="depth-level-entry" data-selected-surface="">
+                <${Surface} className="depth-level-entry">
                     <${DepthLevel} level=${1} />
-                </div>
+                <//>
             <//>
         <//>
     `;
@@ -214,8 +215,8 @@ function DepthLevel({ level }) {
     const label = `Level ${level}`;
     return html`
         <${SurfaceContainer} className="depth-level">
-            <button class="btn btn-sm" data-selected-surface="" onClick=${depthDive}>${label} - A</button>
-            <button class="btn btn-sm" data-selected-surface="" onClick=${depthDive}>${label} - B</button>
+            <${Surface} as="button" className="btn btn-sm" onActivate=${depthDive}>${label} - A<//>
+            <${Surface} as="button" className="btn btn-sm" onActivate=${depthDive}>${label} - B<//>
             ${level < 6 && html`
                 <div class="depth-level-child">
                     <${DepthLevel} level=${level + 1} />
@@ -253,10 +254,13 @@ function PluginRowShowcase() {
 
 function LogRowShowcase() {
     const [sel, setSel] = useState(-1);
+    const [modalEntry, setModalEntry] = useState(null);
+    const close = useCallback(() => setModalEntry(null), []);
     return html`
         <${CatalogSection} title="Log-style">
             <${ListGroup} onDeselect=${() => setSel(-1)}>
-                <${ListRow} index=${0} selected=${sel === 0} onSelect=${setSel} accent="accent">
+                <${ListRow} index=${0} selected=${sel === 0} onSelect=${setSel} accent="accent"
+                    onActivate=${() => setModalEntry({ src: 'qol-window-actions', msg: 'Plugin initialized successfully' })}>
                     <${ListRowHeader}>
                         <span class="list-row-label" style="width:5.5rem">14:32:01</span>
                         <span class="log-level-badge level-startup" style="width:5.8rem; flex-shrink:0">STARTUP</span>
@@ -266,7 +270,8 @@ function LogRowShowcase() {
                         <${ListRowText}>Plugin initialized successfully<//>
                     <//>
                 <//>
-                <${ListRow} index=${1} selected=${sel === 1} onSelect=${setSel} accent="danger">
+                <${ListRow} index=${1} selected=${sel === 1} onSelect=${setSel} accent="danger"
+                    onActivate=${() => setModalEntry({ src: 'qol-alt-tab', msg: 'Failed to register hotkey: already registered by another process', loc: 'src/main.rs:42' })}>
                     <${ListRowHeader}>
                         <span class="list-row-label" style="width:5.5rem">14:32:05</span>
                         <span class="log-level-badge level-error" style="width:5.8rem; flex-shrink:0">ERROR</span>
@@ -279,6 +284,16 @@ function LogRowShowcase() {
                 <//>
             <//>
         <//>
+        ${modalEntry && html`
+            <${Modal} open=${true} onClose=${close} dismissOnBackdrop=${true} className="edit-modal">
+                <div class="edit-modal-content">
+                    <h3>${modalEntry.src}</h3>
+                    <p style="color:var(--text-secondary); margin:var(--space-2) 0; font-family:var(--font-mono); font-size:var(--fs-sm)">${modalEntry.msg}</p>
+                    ${modalEntry.loc && html`<p style="color:var(--text-faint); font-size:var(--fs-sm)">${modalEntry.loc}</p>`}
+                    <${ModalFooter} actions=${[{ label: 'Close', kbd: 'Esc', onClick: close }]} />
+                </div>
+            <//>
+        `}
     `;
 }
 
@@ -289,7 +304,7 @@ function SuppressedRowShowcase() {
         <${CatalogSection} title="Card-style">
             <${ListGroup} className="list-group-cards" onDeselect=${() => setSel(-1)}>
                 <${ListRow} index=${0} selected=${sel === 0} onSelect=${setSel} accent="danger-soft"
-                    onClick=${() => setExpanded(!expanded)}>
+                    onActivate=${() => setExpanded(!expanded)}>
                     <${ListRowHeader}>
                         <span class="list-row-label" style="width:1rem">${expanded ? '\u25be' : '\u25b8'}</span>
                         <${ListRowTitle} mono>qol-alt-tab::hotkey_register_failed<//>
