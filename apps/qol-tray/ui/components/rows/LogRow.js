@@ -9,12 +9,13 @@ import { toast } from '../../lib/toast.js';
 const LEVEL_ACCENT = { startup: 'accent', error: 'danger', suppressed: 'muted' };
 const DANGER_BADGE = { background: 'rgba(var(--danger-rgb),0.14)', borderColor: 'rgba(var(--danger-rgb),0.26)' };
 
-export function LogRow({ time, level, src, msg, loc, count, index, selected, onSelect, onActivate, ...rest }) {
+export function LogRow({ time, level, src, msg, loc, count, severity, index, selected, onSelect, onActivate, ...rest }) {
     const levelCls = `level-${level}`;
     const label = level.toUpperCase();
     return html`
         <${ListRow} index=${index} selected=${selected} onSelect=${onSelect}
-            accent=${LEVEL_ACCENT[level]} onActivate=${onActivate} ...${rest}>
+            accent=${LEVEL_ACCENT[level]} onActivate=${onActivate}
+            data-level=${levelCls} data-severity=${severity || undefined} ...${rest}>
             <${ListRowHeader}>
                 <span class="list-row-label" style="width:5.5rem">${time}</span>
                 <span class="log-level-badge ${levelCls}" style="width:5.8rem; flex-shrink:0">${label}</span>
@@ -55,8 +56,11 @@ function formatLogDetail(entry) {
     if (entry.time) lines.push(`Time:     ${entry.time}`);
     if (entry.level) lines.push(`Level:    ${entry.level.toUpperCase()}`);
     if (entry.src) lines.push(`Source:   ${entry.src}`);
+    if (entry.key) lines.push(`Key:      ${entry.key}`);
     if (entry.loc) lines.push(`Location: ${entry.loc}`);
     if (entry.count > 1) lines.push(`Count:    ${entry.count}`);
+    if (entry.v) lines.push(`Version:  ${entry.v}`);
+    if (entry.commit) lines.push(`Commit:   ${entry.commit}`);
     lines.push('');
     lines.push(entry.msg || '');
     return lines.join('\n');

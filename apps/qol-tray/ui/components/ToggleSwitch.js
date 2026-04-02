@@ -2,7 +2,7 @@ import { html } from '../lib/html.js';
 import { useCallback } from 'preact/hooks';
 import { Surface } from './Surface.js';
 
-export function ToggleSwitch({ checked, onChange, label, ...rest }) {
+export function ToggleSwitch({ checked, onChange, label, description, ...rest }) {
     const toggle = useCallback(() => onChange(!checked), [checked, onChange]);
 
     return html`
@@ -11,7 +11,10 @@ export function ToggleSwitch({ checked, onChange, label, ...rest }) {
             <div class="toggle-track ${checked ? 'on' : ''}">
                 <div class="toggle-thumb" />
             </div>
-            <span class="toggle-inline-label">${label}</span>
+            <div class="toggle-inline-content">
+                <span class="toggle-inline-label">${label}</span>
+                ${description && html`<span class="toggle-help">${description}</span>`}
+            </div>
         <//>
     `;
 }
