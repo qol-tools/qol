@@ -1,5 +1,6 @@
 import { html } from '../../lib/html.js';
 import { Surface } from '../Surface.js';
+import { SurfaceContainer } from '../SurfaceContainer.js';
 
 const STATUS_ACCENT = { linked: 'success', local: 'warning', installed: 'accent' };
 
@@ -21,7 +22,11 @@ export function DevPluginRow({ name, path, status, pluginId, badges, meta, actio
                     </div>
                     ${badges}
                 </div>
-                ${action && html`<div class="plugin-action-column table-col">${action}</div>`}
+                ${action && html`
+                    <${SurfaceContainer} className="plugin-action-column table-col">
+                        ${action}
+                    <//>
+                `}
             </div>
             ${overlay && html`<div class="plugin-build-overlay-host">${overlay}</div>`}
         <//>

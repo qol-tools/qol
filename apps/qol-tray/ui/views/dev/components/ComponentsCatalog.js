@@ -20,6 +20,7 @@ import { BackupRow } from '../../../components/rows/BackupRow.js';
 import { HotkeyRow } from '../../../components/rows/HotkeyRow.js';
 import { ShortcutRow } from '../../../components/rows/ShortcutRow.js';
 import { DevPluginRow } from '../../../components/rows/DevPluginRow.js';
+import { DropdownMenuIcon } from '../../../components/DropdownMenu.js';
 import { StoreCard, StoreCardGrid } from '../../../components/rows/StoreCard.js';
 
 export function ComponentsCatalog() {
@@ -253,9 +254,14 @@ function DevPluginRowShowcase() {
     const sel = useListSelection();
     const [linked, setLinked] = useState({ 0: true, 1: false });
     const toggleLink = (i) => () => setLinked(prev => ({ ...prev, [i]: !prev[i] }));
-    const actionCol = html`<button type="button" class="plugin-action-zone">
-        <img class="list-row-action-icon" src="assets/qol-tray.png?v=1" alt="" />
-    </button>`;
+    const actionCol = html`
+        <${Button} className="plugin-action-zone" style="flex:1">
+            <img class="list-row-action-icon" src="assets/qol-tray.png?v=1" alt="" />
+        <//>
+        <${Button} variant="btn-ghost" className="plugin-menu-trigger" style="padding:0 var(--space-2); align-self:stretch; display:flex; align-items:center">
+            <${DropdownMenuIcon} />
+        <//>
+    `;
     return html`
         <${CatalogSection} title="Dev plugin row">
             <div class="plugin-list">
