@@ -1,0 +1,51 @@
+import { createDebug } from './debug.js';
+
+const log = createDebug('qol:spatial');
+
+export function nearestSurfaceInDirection(surfaces, current, direction) {
+    const horizontal = direction === 'left' || direction === 'right';
+    const result = spatialSearch(surfaces, current, direction, true);
+    if (result || horizontal) return result;
+    return spatialSearch(surfaces, current, direction, false);
+}
+
+function spatialSearch(surfaces, current, direction, useCone) {
+    const rect = current.getBoundingClientRect();
+    const cx = rect.left;
+    const cy = rect.top;
+    const horizontal = direction === 'left' || direction === 'right';
+    let best = null;
+    let bestDist = Infinity;
+    for (const el of surfaces) {
+        if (el === current) continue;
+        const r = el.getBoundingClientRect();
+        const dx = r.left - cx;
+        const dy = r.top - cy;
+        if (direction === 'up' && dy >= 0) continue;
+        if (direction === 'down' && dy <= 0) continue;
+        if (direction === 'left' && dx >= 0) continue;
+        if (direction === 'right' && dx <= 0) continue;
+        const primary = horizontal ? Math.abs(dx) : Math.abs(dy);
+        const cross = horizontal ? Math.abs(dy) : Math.abs(dx);
+        if (useCone && horizontal && (cross > primary / 4 || cross > 100)) continue;
+        if (useCone && !horizontal && cross > primary * 3) continue;
+        const dist = horizontal ? primary + cross * 5 : primary * 3 + cross;
+        log('  candidate', surfaceLabel(el),
+            'pos=(' + Math.round(r.left) + ',' + Math.round(r.top) + ')',
+            'dx=' + Math.round(dx), 'dy=' + Math.round(dy),
+            'pri=' + Math.round(primary), 'cross=' + Math.round(cross),
+            'dist=' + Math.round(dist),
+            dist < bestDist ? '<- best' : '');
+        if (dist < bestDist) { best = el; bestDist = dist; }
+    }
+    return best;
+}
+
+export function surfaceLabel(el) {
+    for (const node of el.childNodes) {
+        if (node.nodeType === 3) { const t = node.textContent.trim(); if (t) return t.slice(0, 20); }
+    }
+    const first = el.querySelector('.btn, .plugin-name, .custom-select-value, span');
+    if (first) { const t = first.textContent?.trim(); if (t) return t.slice(0, 20); }
+    return el.className?.split(' ')[0] || el.tagName;
+}

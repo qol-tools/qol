@@ -1,7 +1,7 @@
 import { html } from '../../lib/html.js';
 import { Modal, ModalActions } from '../../components/ModalPreact.js';
 import { ToggleSwitch } from '../../components/ToggleSwitch.js';
-import { CustomSelect } from '../plugin-config/fields/CustomSelect.js';
+import { CustomSelect } from '../../components/CustomSelect.js';
 
 const ACTION_TYPES = [
     { value: 'open_url', label: 'Open URL' },

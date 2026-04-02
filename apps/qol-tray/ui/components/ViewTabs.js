@@ -1,6 +1,7 @@
 import { html } from '../lib/html.js';
 import { useCallback } from 'preact/hooks';
 import { useViewTabs } from '../hooks/useViewTabs.js';
+import { MODAL_SELECTOR } from '../lib/surface-traits.js';
 import { PageHeader } from './PageHeader.js';
 import { SurfaceContainer } from './SurfaceContainer.js';
 
@@ -27,7 +28,7 @@ export function ViewTabs({ title, subtitle, scramble, tabs, onActivate, onConten
         if (!onContentBlur) return;
         const content = e.currentTarget;
         if (!e.relatedTarget || !content.contains(e.relatedTarget)) {
-            if (e.relatedTarget?.closest('.edit-modal, .confirm-modal')) return;
+            if (e.relatedTarget?.closest(MODAL_SELECTOR)) return;
             onContentBlur();
         }
     }, [onContentBlur]);

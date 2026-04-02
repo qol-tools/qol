@@ -1,3 +1,9 @@
+export const MODAL_SELECTOR = '.edit-modal, .confirm-modal';
+
+export function isVisible(el) {
+    return el.getClientRects().length > 0;
+}
+
 export function activateSurface(el) {
     if (el instanceof HTMLElement) el.click();
 }
@@ -5,7 +11,7 @@ export function activateSurface(el) {
 export function surfaceContainsChildContainer(el) {
     if (!(el instanceof HTMLElement)) return false;
     const child = el.querySelector('[data-surface-container]');
-    return child !== null && child.getClientRects().length > 0;
+    return child !== null && isVisible(child);
 }
 
 export function surfaceDepth(el) {
@@ -34,7 +40,7 @@ export function directSurfaces(container) {
     return Array.from(container.querySelectorAll('[data-selected-surface]'))
         .filter(el =>
             el.closest('[data-surface-container]') === container
-            && el.getClientRects().length > 0
+            && isVisible(el)
             && !el.disabled
         );
 }
@@ -43,7 +49,7 @@ export function firstChildContainer(container) {
     if (!(container instanceof HTMLElement)) return null;
     for (const child of container.querySelectorAll('[data-surface-container]')) {
         if (child.parentElement?.closest('[data-surface-container]') !== container) continue;
-        if (child.getClientRects().length === 0) continue;
+        if (!isVisible(child)) continue;
         if (directSurfaces(child).length === 0) continue;
         return child;
     }

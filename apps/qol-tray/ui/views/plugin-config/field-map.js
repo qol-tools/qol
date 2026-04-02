@@ -4,7 +4,7 @@ import { usePluginConfigContext } from './context.js';
 import { NumberField } from './fields/NumberField.js';
 import { StringArrayField } from './fields/StringArrayField.js';
 import { ObjectArrayField } from './fields/ObjectArrayField.js';
-import { CustomSelect } from './fields/CustomSelect.js';
+import { CustomSelect } from '../../components/CustomSelect.js';
 import { FieldLabel } from './fields/FieldLabel.js';
 
 const FIELD_MAP = {

@@ -1,7 +1,7 @@
 import { html } from '../../lib/html.js';
 import { useMemo } from 'preact/hooks';
 import { Modal, ModalActions } from '../../components/ModalPreact.js';
-import { CustomSelect } from '../plugin-config/fields/CustomSelect.js';
+import { CustomSelect } from '../../components/CustomSelect.js';
 
 const MODIFIER_KEYS = ['Control', 'Alt', 'Shift', 'Meta'];
 const MODIFIER_NAMES = ['Ctrl', 'Alt', 'Shift', 'Super'];

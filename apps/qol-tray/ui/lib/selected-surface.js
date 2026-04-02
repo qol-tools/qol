@@ -1,3 +1,5 @@
+import { isVisible } from './surface-traits.js';
+
 const SURFACE_SELECTOR = '[data-selected-surface]';
 
 export function findActiveSelectedSurface({ currentTarget = null, includeFocus = true } = {}) {
@@ -60,7 +62,7 @@ function highPriorityChildSurface(parent) {
 export function isVisibleSurface(surface) {
     if (!(surface instanceof HTMLElement)) return false;
     if (!surface.isConnected) return false;
-    return surface.getClientRects().length > 0;
+    return isVisible(surface);
 }
 
 export function hasSelectedSurfaceState(surface, includeFocus = true) {
