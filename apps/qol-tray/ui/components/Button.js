@@ -7,7 +7,6 @@ export function Button({ variant, small, className, children, ...rest }) {
 }
 
 export function RefreshButton({ spinning, className, ...rest }) {
-    if (spinning) return html`<button class="refresh-btn spinning" disabled></button>`;
-    const cls = ['refresh-btn', className].filter(Boolean).join(' ');
-    return html`<${Surface} as="button" className=${cls} ...${rest} />`;
+    const cls = ['refresh-btn', spinning && 'spinning', className].filter(Boolean).join(' ');
+    return html`<button class=${cls} disabled=${spinning} ...${rest}></button>`;
 }

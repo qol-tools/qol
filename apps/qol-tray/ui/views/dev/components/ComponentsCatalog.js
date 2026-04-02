@@ -12,7 +12,6 @@ import { Table, TableHeader, TableCell } from '../../../components/TableRow.js';
 import { Surface } from '../../../components/Surface.js';
 import { Button, RefreshButton } from '../../../components/Button.js';
 import { EmptyState } from '../../../components/EmptyState.js';
-import { DropdownMenu } from '../../../components/DropdownMenu.js';
 import { useListSelection } from '../../../hooks/useListSelection.js';
 import { PluginRow } from '../../../components/rows/PluginRow.js';
 import { LogRow, LogDetailModal } from '../../../components/rows/LogRow.js';
@@ -34,7 +33,6 @@ export function ComponentsCatalog() {
             <//>
             <${CatalogGroup} title="Interactive">
                 <${DropdownShowcase} />
-                <${ContextMenuShowcase} />
                 <${ExpanderShowcase} />
                 <${ToggleShowcase} />
                 <${ModalShowcase} />
@@ -42,7 +40,6 @@ export function ComponentsCatalog() {
             <//>
             <${CatalogGroup} title="Rows" inline=${false}>
                 <${DevPluginRowShowcase} />
-                <${PluginRowShowcase} />
                 <${LogRowShowcase} />
                 <${SuppressedRowShowcase} />
                 <${BackupRowShowcase} />
@@ -389,25 +386,6 @@ function EmptyStateShowcase() {
         <${CatalogSection} title="Empty state">
             <${CatalogRow}>
                 <${EmptyState} message="No items found" hint="Try adjusting your filters or adding new items" />
-            <//>
-        <//>
-    `;
-}
-
-function ContextMenuShowcase() {
-    const [open, setOpen] = useState(false);
-    return html`
-        <${CatalogSection} title="Context menu">
-            <${CatalogRow} label="Dropdown menu">
-                <div style="position:relative; display:inline-block">
-                    <${DropdownMenu} open=${open}
-                        onToggle=${() => setOpen(true)} onClose=${() => setOpen(false)}
-                        triggerLabel="Actions">
-                        <button class="context-action" onClick=${() => setOpen(false)}>Enable logging</button>
-                        <button class="context-action" onClick=${() => setOpen(false)}>Edit filters</button>
-                        <button class="context-action" onClick=${() => setOpen(false)}>Monitor CPU</button>
-                    <//>
-                </div>
             <//>
         <//>
     `;

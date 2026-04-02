@@ -139,6 +139,11 @@
     padding: 4px 0;
     box-shadow: var(--elevation-3);
     z-index: 10;
+    display: none;
+}
+
+.catalog-dropdown-menu.open {
+    display: block;
 }
 
 .catalog-dropdown-item {
