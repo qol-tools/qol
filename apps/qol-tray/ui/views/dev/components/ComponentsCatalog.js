@@ -11,7 +11,7 @@ import { ListGroup } from '../../../components/ListRow.js';
 import { Surface } from '../../../components/Surface.js';
 import { useListSelection } from '../../../hooks/useListSelection.js';
 import { PluginRow } from '../../../components/rows/PluginRow.js';
-import { LogRow } from '../../../components/rows/LogRow.js';
+import { LogRow, LogDetailModal } from '../../../components/rows/LogRow.js';
 import { SuppressedRow } from '../../../components/rows/SuppressedRow.js';
 import { BackupRow } from '../../../components/rows/BackupRow.js';
 
@@ -270,16 +270,7 @@ function LogRowShowcase() {
                     onActivate=${openDetail('qol-fx', 'Animation frame dropped (vsync miss)')} />
             <//>
         <//>
-        ${modalEntry && html`
-            <${Modal} open=${true} onClose=${close} dismissOnBackdrop=${true} className="edit-modal">
-                <div class="edit-modal-content">
-                    <h3>${modalEntry.src}</h3>
-                    <p style="color:var(--text-secondary); margin:var(--space-2) 0; font-family:var(--font-mono); font-size:var(--fs-sm)">${modalEntry.msg}</p>
-                    ${modalEntry.loc && html`<p style="color:var(--text-faint); font-size:var(--fs-sm)">${modalEntry.loc}</p>`}
-                    <${ModalFooter} actions=${[{ label: 'Close', kbd: 'Esc', onClick: close }]} />
-                </div>
-            <//>
-        `}
+        ${modalEntry && html`<${LogDetailModal} entry=${modalEntry} onClose=${close} />`}
     `;
 }
 
