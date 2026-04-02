@@ -4,6 +4,7 @@ import { usePluginConfigContext } from '../../views/plugin-config/context.js';
 import { useViewKeyboardContext } from './view-keyboard-context.js';
 
 const PLUGIN_CONFIG_FIELD = '[data-plugin-config-field-id]';
+
 export function useAppKeyboardRouting({
     activePluginId,
     activeViewId,
