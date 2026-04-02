@@ -8,12 +8,18 @@ import { CustomSelect } from '../../../components/CustomSelect.js';
 import { Expander, ExpanderTrigger, ExpanderBody } from '../../../components/Expander.js';
 import { Badge, HealthDot, Alert } from '../../../components/StatusIndicators.js';
 import { ListGroup } from '../../../components/ListRow.js';
+import { Table, TableHeader, TableCell } from '../../../components/TableRow.js';
 import { Surface } from '../../../components/Surface.js';
+import { EmptyState } from '../../../components/EmptyState.js';
+import { DropdownMenu } from '../../../components/DropdownMenu.js';
 import { useListSelection } from '../../../hooks/useListSelection.js';
 import { PluginRow } from '../../../components/rows/PluginRow.js';
 import { LogRow, LogDetailModal } from '../../../components/rows/LogRow.js';
 import { SuppressedRow } from '../../../components/rows/SuppressedRow.js';
 import { BackupRow } from '../../../components/rows/BackupRow.js';
+import { HotkeyRow } from '../../../components/rows/HotkeyRow.js';
+import { ShortcutRow } from '../../../components/rows/ShortcutRow.js';
+import { StoreCard, StoreCardGrid } from '../../../components/rows/StoreCard.js';
 
 export function ComponentsCatalog() {
     return html`
@@ -21,9 +27,12 @@ export function ComponentsCatalog() {
             <${CatalogGroup} title="Display">
                 <${ButtonShowcase} />
                 <${StatusShowcase} />
+                <${SpinnerShowcase} />
+                <${EmptyStateShowcase} />
             <//>
             <${CatalogGroup} title="Interactive">
                 <${DropdownShowcase} />
+                <${ContextMenuShowcase} />
                 <${ExpanderShowcase} />
                 <${ToggleShowcase} />
                 <${ModalShowcase} />
@@ -34,6 +43,13 @@ export function ComponentsCatalog() {
                 <${LogRowShowcase} />
                 <${SuppressedRowShowcase} />
                 <${BackupRowShowcase} />
+            <//>
+            <${CatalogGroup} title="Tables" inline=${false}>
+                <${HotkeyTableShowcase} />
+                <${ShortcutTableShowcase} />
+            <//>
+            <${CatalogGroup} title="Cards">
+                <${StoreCardShowcase} />
             <//>
         </div>
     `;
@@ -302,6 +318,108 @@ function BackupRowShowcase() {
                     index=${0} selected=${sel.selected(0)} onSelect=${sel.select} />
                 <${BackupRow} time="2026-04-01 09:15" fileName="profile-backup-2026-04-01T091500.toml" size="1.8 KB"
                     index=${1} selected=${sel.selected(1)} onSelect=${sel.select} />
+            <//>
+        <//>
+    `;
+}
+
+function SpinnerShowcase() {
+    const [spinning, setSpinning] = useState(false);
+    return html`
+        <${CatalogSection} title="Spinner">
+            <${CatalogRow} label="States">
+                <${Surface} as="button" className="refresh-btn" onActivate=${() => setSpinning(!spinning)} />
+                <button class="refresh-btn spinning" disabled></button>
+            <//>
+        <//>
+    `;
+}
+
+function EmptyStateShowcase() {
+    return html`
+        <${CatalogSection} title="Empty state">
+            <${CatalogRow}>
+                <${EmptyState} message="No items found" hint="Try adjusting your filters or adding new items" />
+            <//>
+        <//>
+    `;
+}
+
+function ContextMenuShowcase() {
+    const [open, setOpen] = useState(false);
+    return html`
+        <${CatalogSection} title="Context menu">
+            <${CatalogRow} label="Dropdown menu">
+                <div style="position:relative; display:inline-block">
+                    <${DropdownMenu} open=${open}
+                        onToggle=${() => setOpen(true)} onClose=${() => setOpen(false)}
+                        triggerLabel="Actions">
+                        <button class="context-action" onClick=${() => setOpen(false)}>Enable logging</button>
+                        <button class="context-action" onClick=${() => setOpen(false)}>Edit filters</button>
+                        <button class="context-action" onClick=${() => setOpen(false)}>Monitor CPU</button>
+                    <//>
+                </div>
+            <//>
+        <//>
+    `;
+}
+
+function HotkeyTableShowcase() {
+    const sel = useListSelection();
+    return html`
+        <${CatalogSection} title="Hotkey table">
+            <${Table} columns="8rem 1fr 1fr" onDeselect=${sel.deselect}>
+                <${TableHeader}>
+                    <${TableCell}>Shortcut<//>
+                    <${TableCell}>Plugin<//>
+                    <${TableCell}>Action<//>
+                <//>
+                <${HotkeyRow} shortcut="Alt+Tab" pluginName="qol-alt-tab" actionLabel="Open switcher"
+                    index=${0} selected=${sel.selected(0)} onSelect=${sel.select} accent="accent" />
+                <${HotkeyRow} shortcut="Super+E" pluginName="qol-launcher" actionLabel="Open launcher"
+                    index=${1} selected=${sel.selected(1)} onSelect=${sel.select} accent="accent" />
+                <${HotkeyRow} shortcut="Print" pluginName="qol-screen-recorder" actionLabel="Screenshot"
+                    index=${2} selected=${sel.selected(2)} onSelect=${sel.select} accent="warning" />
+            <//>
+        <//>
+    `;
+}
+
+function ShortcutTableShowcase() {
+    const sel = useListSelection();
+    return html`
+        <${CatalogSection} title="Shortcut table">
+            <${Table} columns="1fr 5rem 1fr 5rem" onDeselect=${sel.deselect}>
+                <${TableHeader}>
+                    <${TableCell}>Name<//>
+                    <${TableCell}>Type<//>
+                    <${TableCell}>Target<//>
+                    <${TableCell}>Launcher<//>
+                <//>
+                <${ShortcutRow} name="GitHub" type="URL" target="https://github.com" launcher=${true} enabled=${true}
+                    index=${0} selected=${sel.selected(0)} onSelect=${sel.select} />
+                <${ShortcutRow} name="Terminal" type="App" target="com.apple.Terminal" launcher=${true} enabled=${true}
+                    index=${1} selected=${sel.selected(1)} onSelect=${sel.select} />
+                <${ShortcutRow} name="Notes" type="App" target="/usr/bin/notes" launcher=${false} enabled=${false}
+                    index=${2} selected=${sel.selected(2)} onSelect=${sel.select} />
+            <//>
+        <//>
+    `;
+}
+
+function StoreCardShowcase() {
+    const sel = useListSelection();
+    return html`
+        <${CatalogSection} title="Store cards">
+            <${StoreCardGrid} onDeselect=${sel.deselect}>
+                <${StoreCard} name="Alt Tab" version=${{ current: '1.2.0' }} description="Window switcher with live previews"
+                    installed=${true} index=${0} selected=${sel.selected(0)} onSelect=${sel.select} />
+                <${StoreCard} name="Launcher" version=${{ from: '2.0.1', to: '2.1.0' }} description="App launcher with fuzzy search"
+                    installed=${true} hasUpdate=${true} index=${1} selected=${sel.selected(1)} onSelect=${sel.select} />
+                <${StoreCard} name="Screen Recorder" version=${{ current: '0.3.0' }} description="Record screen, window, or region"
+                    index=${2} selected=${sel.selected(2)} onSelect=${sel.select} />
+                <${StoreCard} name="Window Actions" version=${{ current: '1.0.0' }} description="Minimize, restore, move between monitors"
+                    installing=${true} index=${3} selected=${sel.selected(3)} onSelect=${sel.select} />
             <//>
         <//>
     `;
