@@ -248,8 +248,9 @@ function ascendLayer() {
 }
 
 function nearestSurfaceInDirection(surfaces, current, direction) {
+    const horizontal = direction === 'left' || direction === 'right';
     const result = spatialSearch(surfaces, current, direction, true);
-    if (result) return result;
+    if (result || horizontal) return result;
     return spatialSearch(surfaces, current, direction, false);
 }
 
@@ -271,7 +272,7 @@ function spatialSearch(surfaces, current, direction, useCone) {
         if (direction === 'right' && dx <= 0) continue;
         const primary = horizontal ? Math.abs(dx) : Math.abs(dy);
         const cross = horizontal ? Math.abs(dy) : Math.abs(dx);
-        if (useCone && horizontal && cross > primary / 2) continue;
+        if (useCone && horizontal && cross > primary / 6) continue;
         if (useCone && !horizontal && cross > primary * 3) continue;
         const dist = horizontal ? primary + cross * 5 : primary * 3 + cross;
         log('  candidate', surfaceLabel(el),
