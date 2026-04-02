@@ -180,7 +180,12 @@ function navigateInActiveContainer(direction) {
         '| surfaces:', surfaces.length);
     const next = nearestSurfaceInDirection(surfaces, current, direction);
     if (!next || next === current) {
-        log('  → no match');
+        log('  → no match. All surfaces:');
+        for (const el of surfaces) {
+            if (el === current) continue;
+            const r = el.getBoundingClientRect();
+            log('    ', surfaceLabel(el), '(' + Math.round(r.left) + ',' + Math.round(r.top) + ')');
+        }
         return;
     }
     const nr = next.getBoundingClientRect();
@@ -272,7 +277,7 @@ function spatialSearch(surfaces, current, direction, useCone) {
         if (direction === 'right' && dx <= 0) continue;
         const primary = horizontal ? Math.abs(dx) : Math.abs(dy);
         const cross = horizontal ? Math.abs(dy) : Math.abs(dx);
-        if (useCone && horizontal && cross > primary / 6) continue;
+        if (useCone && horizontal && (cross > primary / 4 || cross > 100)) continue;
         if (useCone && !horizontal && cross > primary * 3) continue;
         const dist = horizontal ? primary + cross * 5 : primary * 3 + cross;
         log('  candidate', surfaceLabel(el),
