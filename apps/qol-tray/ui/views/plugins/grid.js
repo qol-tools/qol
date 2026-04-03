@@ -1,5 +1,6 @@
 import { html } from '../../lib/html.js';
 import { useModifierState } from '../../hooks/modifier-state-context.js';
+import { Card, CardGrid } from '../../components/Card.js';
 
 const brokenCovers = new Set();
 
@@ -12,7 +13,7 @@ const PLACEHOLDER_SVG = 'data:image/svg+xml,' + encodeURIComponent(
 
 export function PluginsGrid({ plugins, ghostPlugins, selectedIndex, contextMenuOpen, updating, onCardClick, onSelect }) {
     return html`
-        <div id="plugins-grid" class="plugin-grid-media grid-cards grid-cards--zoom">
+        <${CardGrid} id="plugins-grid" className="plugin-grid-media grid-cards--zoom">
             ${plugins.length === 0 && ghostPlugins.length === 0 && html`
                 <div class="empty">No plugins installed. Press Tab to open the store.</div>
             `}
@@ -23,24 +24,23 @@ export function PluginsGrid({ plugins, ghostPlugins, selectedIndex, contextMenuO
                 </div>
             `)}
             ${plugins.map((plugin, index) => html`
-                <${PluginCard} plugin=${plugin} index=${index} selectedIndex=${selectedIndex}
-                    contextMenuOpen=${contextMenuOpen} updating=${updating} onCardClick=${onCardClick} onSelect=${onSelect} />
+                <${PluginCard} key=${plugin.id} plugin=${plugin} index=${index}
+                    selected=${index === selectedIndex}
+                    contextMenuOpen=${contextMenuOpen && index === selectedIndex}
+                    updating=${updating} onCardClick=${onCardClick} onSelect=${onSelect} />
             `)}
-        </div>
+        <//>
     `;
 }
 
-function PluginCard({ plugin, index, selectedIndex, contextMenuOpen, updating, onCardClick, onSelect }) {
-    const selected = index === selectedIndex;
+function PluginCard({ plugin, index, selected, contextMenuOpen, updating, onCardClick, onSelect }) {
     const { ctrlHeld } = useModifierState();
+    const cls = cardClassName(plugin);
     return html`
-        <div key=${plugin.id}
-             class=${cardClassName(plugin, selected)}
-             data-selected-surface="" tabIndex="-1"
-             data-selected=${selected ? 'true' : 'false'}
-             data-index="${index}" data-plugin-id="${plugin.id}"
-             onFocus=${() => onSelect(index)}
-             onClick=${(e) => onCardClick(e, index, plugin.id)}>
+        <${Card} className=${cls}
+             index=${index} selected=${selected} onSelect=${onSelect}
+             onActivate=${(e) => onCardClick(e, index, plugin.id)}
+             data-plugin-id=${plugin.id}>
             <img src=${plugin.has_cover && !brokenCovers.has(plugin.id) ? `/api/cover/${plugin.id}` : PLACEHOLDER_SVG}
                  alt=${plugin.name}
                  onError=${(e) => { brokenCovers.add(plugin.id); e.target.src = PLACEHOLDER_SVG; }} />
@@ -51,12 +51,12 @@ function PluginCard({ plugin, index, selectedIndex, contextMenuOpen, updating, o
             ${selected && ctrlHeld && html`
                 <div class="plugin-ctrl-overlay ${plugin.has_config ? '' : 'disabled'}">Config</div>
             `}
-            <div class=${contextMenuClassName(contextMenuOpen, selected)}>
+            <div class=${contextMenuOpen ? 'plugin-context-menu open' : 'plugin-context-menu'}>
                 ${plugin.update_available && html`<button class="context-update">Update</button>`}
                 ${plugin.has_config && html`<button class="context-config">Config</button>`}
                 <button class="context-delete">Delete</button>
             </div>
-        </div>
+        <//>
     `;
 }
 
@@ -84,16 +84,10 @@ function PluginCogButton() {
     `;
 }
 
-function cardClassName(plugin, selected) {
+function cardClassName(plugin) {
     const classes = ['plugin-card'];
     if (!plugin.has_custom_ui && !plugin.has_config) classes.push('no-ui');
     if (plugin.update_available) classes.push('has-update');
     if (plugin.loaded === false) classes.push('not-loaded');
-    if (selected) classes.push('selected');
     return classes.join(' ');
-}
-
-function contextMenuClassName(contextMenuOpen, selected) {
-    if (contextMenuOpen && selected) return 'plugin-context-menu open';
-    return 'plugin-context-menu';
 }

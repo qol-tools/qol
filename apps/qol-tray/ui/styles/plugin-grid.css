@@ -24,19 +24,19 @@
     cursor: pointer;
 }
 
-.grid-cards .plugin-card.selected {
+.grid-cards .plugin-card[data-selected="true"] {
     border-color: var(--accent);
     z-index: var(--z-selected);
 }
 
-.grid-cards.grid-cards--zoom .plugin-card:hover:not(.selected) {
+.grid-cards.grid-cards--zoom .plugin-card:hover:not([data-selected="true"]) {
     transform: scale(var(--card-hover-scale));
     border-color: var(--border-hover);
     box-shadow: var(--card-hover-shadow);
 }
 
-.grid-cards.grid-cards--zoom .plugin-card.selected,
-.grid-cards.grid-cards--zoom .plugin-card.selected:hover {
+.grid-cards.grid-cards--zoom .plugin-card[data-selected="true"],
+.grid-cards.grid-cards--zoom .plugin-card[data-selected="true"]:hover {
     border-color: var(--accent);
     box-shadow: var(--card-active-shadow);
 }

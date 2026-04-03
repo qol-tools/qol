@@ -19,8 +19,8 @@
     border-color: var(--warning);
 }
 
-.plugin-grid-media .plugin-card.not-loaded.selected,
-.plugin-grid .plugin-card.not-loaded.selected {
+.plugin-grid-media .plugin-card.not-loaded[data-selected="true"],
+.plugin-grid .plugin-card.not-loaded[data-selected="true"] {
     box-shadow: 0 0 10px var(--warning-glow-soft);
 }
 
@@ -294,8 +294,8 @@
     border-color: var(--success);
 }
 
-.plugin-grid-media .plugin-card.has-update.selected,
-.plugin-grid .plugin-card.has-update.selected {
+.plugin-grid-media .plugin-card.has-update[data-selected="true"],
+.plugin-grid .plugin-card.has-update[data-selected="true"] {
     border-color: var(--success);
     box-shadow: 0 0 12px var(--success-glow);
 }
