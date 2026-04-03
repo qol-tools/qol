@@ -5,7 +5,8 @@ function getSurfaces() {
     const container = document.querySelector('.edit-modal');
     if (!container) return [];
     return Array.from(container.querySelectorAll('[data-selected-surface]'))
-        .filter(el => !el.parentElement?.closest('[data-selected-surface]'));
+        .filter(el => !el.parentElement?.closest('[data-selected-surface]'))
+        .filter(el => !el.closest('.modal-footer-actions'));
 }
 
 export function useModalKeyboard({ onSave, onClose }) {
