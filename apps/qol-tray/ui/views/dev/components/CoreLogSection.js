@@ -1,5 +1,6 @@
 import { html } from '../../../lib/html.js';
 import { useState } from 'preact/hooks';
+import { TableRow } from '../../../components/TableRow.js';
 import { DropdownMenu } from '../../../components/DropdownMenu.js';
 import { isDebugEnabled, setDebugEnabled } from '../../../lib/debug.js';
 
@@ -30,32 +31,24 @@ function CoreLogMenu({ section, muted, filterCount, menuOpen, ctrl }) {
     `;
 }
 
-function CoreLogInfo({ section, muted }) {
-    return html`
-        <div class="plugin-info table-col">
-            <div class="plugin-copy">
-                <div class="plugin-title-row"><span class="plugin-name">${section.name}</span></div>
-                <span class="plugin-path">${section.description}</span>
-            </div>
-            ${muted && html`<div class="plugin-status-badges"><span class="status-badge badge-muted">Muted</span></div>`}
-        </div>
-    `;
-}
-
 function CoreLogRow({ section, ctrl }) {
     const control = ctrl.coreLogControls[section.id] || {};
     const muted = !!control.muted;
     const patterns = Array.isArray(control.suppress_patterns) ? control.suppress_patterns : [];
     const menuOpen = ctrl.openCoreMenuId === section.id;
     return html`
-        <div class="plugin-row table-list-row status-linked core-log-row" data-core-section=${section.id}>
-            <div class="plugin-main table-grid">
-                <${CoreLogInfo} section=${section} muted=${muted} />
-                <div class="plugin-action-column table-col">
-                    <${CoreLogMenu} section=${section} muted=${muted} filterCount=${patterns.length} menuOpen=${menuOpen} ctrl=${ctrl} />
+        <${TableRow} className="plugin-row status-linked core-log-row" accent="success" data-core-section=${section.id}>
+            <div class="plugin-info">
+                <div class="plugin-copy">
+                    <div class="plugin-title-row"><span class="plugin-name">${section.name}</span></div>
+                    <span class="plugin-path">${section.description}</span>
                 </div>
+                ${muted && html`<div class="plugin-status-badges"><span class="status-badge badge-muted">Muted</span></div>`}
             </div>
-        </div>
+            <div class="plugin-action-column">
+                <${CoreLogMenu} section=${section} muted=${muted} filterCount=${patterns.length} menuOpen=${menuOpen} ctrl=${ctrl} />
+            </div>
+        <//>
     `;
 }
 
@@ -64,32 +57,31 @@ function FrontendDebugToggle() {
     const [menuOpen, setMenuOpen] = useState(false);
     const toggle = () => { const next = !on; setDebugEnabled(next); setOn(next); };
     return html`
-        <div class=${`plugin-row table-list-row core-log-row ${on ? 'status-debug-on' : 'status-debug-off'}`}>
-            <div class="plugin-main table-grid">
-                <div class="plugin-info table-col">
-                    <div class="plugin-copy">
-                        <div class="plugin-title-row"><span class="plugin-name">Frontend Debug</span></div>
-                        <span class="plugin-path">Console logging for UI navigation, focus, surface</span>
-                    </div>
-                </div>
-                <div class="plugin-action-column table-col">
-                    <button type="button" class="plugin-action-zone" onClick=${toggle}
-                        aria-label=${on ? 'Disable frontend debug' : 'Enable frontend debug'}>
-                        <span class="debug-toggle-label">${on ? 'ON' : 'OFF'}</span>
-                    </button>
-                    <${DropdownMenu}
-                        open=${menuOpen}
-                        onToggle=${() => setMenuOpen(!menuOpen)}
-                        onClose=${() => setMenuOpen(false)}
-                        triggerLabel="Frontend debug filter options"
-                    >
-                        <button type="button" class="context-action" onClick=${() => setMenuOpen(false)}>
-                            Edit Filters
-                        </button>
-                    <//>
+        <${TableRow} className=${`plugin-row core-log-row ${on ? 'status-debug-on' : 'status-debug-off'}`}
+            onActivate=${toggle}>
+            <div class="plugin-info">
+                <div class="plugin-copy">
+                    <div class="plugin-title-row"><span class="plugin-name">Frontend Debug</span></div>
+                    <span class="plugin-path">Console logging for UI navigation, focus, surface</span>
                 </div>
             </div>
-        </div>
+            <div class="plugin-action-column">
+                <button type="button" class="plugin-action-zone" onClick=${toggle} tabIndex="-1"
+                    aria-label=${on ? 'Disable frontend debug' : 'Enable frontend debug'}>
+                    <span class="debug-toggle-label">${on ? 'ON' : 'OFF'}</span>
+                </button>
+                <${DropdownMenu}
+                    open=${menuOpen}
+                    onToggle=${() => setMenuOpen(!menuOpen)}
+                    onClose=${() => setMenuOpen(false)}
+                    triggerLabel="Frontend debug filter options"
+                >
+                    <button type="button" class="context-action" onClick=${() => setMenuOpen(false)}>
+                        Edit Filters
+                    </button>
+                <//>
+            </div>
+        <//>
     `;
 }
 

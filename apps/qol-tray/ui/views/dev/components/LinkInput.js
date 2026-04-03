@@ -1,4 +1,5 @@
 import { html } from '../../../lib/html.js';
+import { Button } from '../../../components/Button.js';
 
 export function LinkInput({ showLinkInput, linkPath, linkError, onInput, onConfirm, onCancel }) {
     if (!showLinkInput) return null;
@@ -13,8 +14,8 @@ export function LinkInput({ showLinkInput, linkPath, linkError, onInput, onConfi
             <div class="link-input-row">
                 <input type="text" id="link-path" placeholder="/path/to/plugin" value=${linkPath}
                     onInput=${e => onInput(e.target.value)} onKeyDown=${onKeyDown} />
-                <button class="btn btn-sm btn-primary" onClick=${onConfirm}>Link</button>
-                <button class="btn btn-sm btn-ghost" onClick=${onCancel}>Cancel</button>
+                <${Button} variant="btn-primary" small onActivate=${onConfirm}>Link<//>
+                <${Button} variant="btn-ghost" small onActivate=${onCancel}>Cancel<//>
             </div>
             ${linkError && html`<p class="error-msg">${linkError}</p>`}
         </div>

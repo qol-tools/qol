@@ -1,4 +1,6 @@
 import { html } from '../../../lib/html.js';
+import { RefreshButton } from '../../../components/Button.js';
+import { Button } from '../../../components/Button.js';
 import { PluginRow } from './PluginRow.js';
 import { LinkInput } from './LinkInput.js';
 
@@ -7,8 +9,8 @@ function PluginsSectionHeader({ ctrl }) {
         <div class="section-header">
             <h2>Plugins</h2>
             <div class="section-actions">
-                <button class=${'refresh-btn ' + (ctrl.discovering ? 'spinning' : '')} onClick=${ctrl.triggerDiscovery} title="Rescan" aria-label="Rescan"></button>
-                <button class="btn btn-sm btn-ghost" onClick=${ctrl.openLinkInput}>+ Link Path</button>
+                <${RefreshButton} spinning=${ctrl.discovering} onClick=${ctrl.triggerDiscovery} title="Rescan" aria-label="Rescan" />
+                <${Button} variant="btn-ghost" small onActivate=${ctrl.openLinkInput}>+ Link Path<//>
             </div>
         </div>
     `;
