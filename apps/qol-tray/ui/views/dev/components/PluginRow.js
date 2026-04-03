@@ -1,56 +1,9 @@
 import { html } from '../../../lib/html.js';
 import { safeStatusToken } from '../../../utils/escape-html.js';
-import { TableRow } from '../../../components/TableRow.js';
+import { DevPluginRow } from '../../../components/rows/DevPluginRow.js';
 import { BuildMeta } from './BuildMeta.js';
 import { StatusBadges } from './StatusBadges.js';
 import { CpuStrip } from './CpuStrip.js';
-import { PluginMenu } from './PluginMenu.js';
-
-const STATUS_ACCENT = { linked: 'success', local: 'warning', installed: 'accent' };
-
-function PluginInfo({ plugin, statusToken, ctrl }) {
-    return html`
-        <div class="plugin-info">
-            <div class="plugin-copy">
-                <div class="plugin-title-row">
-                    <span class="plugin-name" data-selected-text="">${plugin.name || plugin.id || 'Unknown plugin'}</span>
-                </div>
-                <span class="plugin-path" data-selected-text="">${plugin.path || ''}</span>
-                <${BuildMeta} plugin=${plugin} />
-            </div>
-            <${StatusBadges} plugin=${plugin} statusToken=${statusToken} />
-            <${CpuStrip} plugin=${plugin} cpuMonitoring=${ctrl.cpuMonitoring} cpuByPlugin=${ctrl.cpuByPlugin} />
-        </div>
-    `;
-}
-
-function makeMenuHandlers(plugin, ctrl) {
-    const close = cb => () => { ctrl.closeMenus(); cb(); };
-    return {
-        onToggleMenu: () => ctrl.togglePluginMenu(plugin.id),
-        onCloseMenu: ctrl.closeMenus,
-        onToggleLogs: close(() => ctrl.togglePluginLogs(plugin.id)),
-        onEditFilters: close(() => ctrl.editPluginLogFilters(plugin.id)),
-        onToggleCpu: close(() => ctrl.toggleCpu(plugin.id))
-    };
-}
-
-function ActionColumn({ plugin, index, statusToken, actionDisabled, isLinking, rebuildActive, ctrl }) {
-    const menuOpen = ctrl.openPluginMenuId === plugin.id;
-    const icon = isLinking
-        ? html`<span class="refresh-btn spinning" aria-hidden="true"></span>`
-        : html`<img class="plugin-action-rebuild-icon" src="assets/qol-tray.png?v=1" alt="" aria-hidden="true" />`;
-    const onToggleLink = () => { ctrl.setSelectedIndex(index); ctrl.handleItemActivation(); };
-    const menuHandlers = makeMenuHandlers(plugin, ctrl);
-    return html`
-        <div class="plugin-action-column">
-            <button type="button" class=${'plugin-action-zone ' + (actionDisabled ? 'is-disabled' : '') + ' ' + (rebuildActive ? 'has-rebuild' : 'rebuild-idle')} onClick=${onToggleLink} aria-label=${(statusToken === 'linked' ? 'Unlink' : 'Link') + ' ' + (plugin.name || plugin.id)} disabled=${actionDisabled}>
-                ${icon}
-            </button>
-            <${PluginMenu} plugin=${plugin} menuOpen=${menuOpen} cpuMonitoring=${ctrl.cpuMonitoring} ...${menuHandlers} />
-        </div>
-    `;
-}
 
 export function PluginRow({ plugin, index, ctrl }) {
     const isSelected = ctrl.selectedIndex === index;
@@ -59,15 +12,52 @@ export function PluginRow({ plugin, index, ctrl }) {
     const isLinking = ctrl.linkingId === plugin.id;
     const actionDisabled = isBuilding || !!ctrl.linkingId;
     const rebuildActive = plugin.status === 'linked' && plugin.has_cargo && plugin.needs_rebuild;
-    const cls = ['plugin-row', 'status-' + statusToken, isBuilding && 'is-building', isLinking && 'is-linking'].filter(Boolean).join(' ');
+
+    const actions = buildActions(plugin, statusToken, index, ctrl);
+
+    const icon = isLinking
+        ? html`<span class="refresh-btn spinning" aria-hidden="true"></span>`
+        : html`<img class="plugin-action-rebuild-icon ${rebuildActive ? 'has-rebuild' : 'rebuild-idle'}" src="assets/qol-tray.png?v=1" alt="" aria-hidden="true" />`;
+
     return html`
-        <${TableRow} className=${cls} accent=${STATUS_ACCENT[statusToken]}
-            index=${index} selected=${isSelected} onSelect=${ctrl.setSelectedIndex}
-            onActivate=${ctrl.handleItemActivation}
-            data-status=${statusToken} data-plugin-id=${plugin.id}>
-            <${PluginInfo} plugin=${plugin} statusToken=${statusToken} ctrl=${ctrl} />
-            <${ActionColumn} plugin=${plugin} index=${index} statusToken=${statusToken} actionDisabled=${actionDisabled} isLinking=${isLinking} rebuildActive=${rebuildActive} ctrl=${ctrl} />
-            <div class="plugin-build-overlay-host"></div>
-        <//>
+        <${DevPluginRow}
+            name=${plugin.name || plugin.id || 'Unknown plugin'}
+            path=${plugin.path || ''}
+            status=${statusToken}
+            pluginId=${plugin.id}
+            index=${index}
+            selected=${isSelected}
+            onSelect=${ctrl.setSelectedIndex}
+            actions=${actionDisabled ? [] : actions}
+            actionIcon=${icon}
+            className=${[isBuilding && 'is-building', isLinking && 'is-linking'].filter(Boolean).join(' ') || undefined}
+            badges=${html`<${StatusBadges} plugin=${plugin} statusToken=${statusToken} />`}
+            meta=${html`<${BuildMeta} plugin=${plugin} /><${CpuStrip} plugin=${plugin} cpuMonitoring=${ctrl.cpuMonitoring} cpuByPlugin=${ctrl.cpuByPlugin} />`}
+        />
     `;
+}
+
+function buildActions(plugin, statusToken, index, ctrl) {
+    const actions = [];
+    actions.push({
+        label: statusToken === 'linked' ? 'Unlink' : 'Link',
+        run: () => { ctrl.setSelectedIndex(index); ctrl.handleItemActivation(); },
+    });
+    actions.push({
+        label: plugin.logs_muted ? 'Unmute Logs' : 'Mute Logs',
+        run: () => { ctrl.closeMenus(); ctrl.togglePluginLogs(plugin.id); },
+    });
+    const filterCount = Array.isArray(plugin.suppressed_log_patterns) ? plugin.suppressed_log_patterns.length : 0;
+    actions.push({
+        label: filterCount > 0 ? `Edit Filters (${filterCount})` : 'Edit Filters',
+        run: () => { ctrl.closeMenus(); ctrl.editPluginLogFilters(plugin.id); },
+    });
+    if (plugin.status === 'linked') {
+        const enabled = !!ctrl.cpuMonitoring[plugin.id];
+        actions.push({
+            label: enabled ? 'Disable CPU Monitor' : 'Enable CPU Monitor',
+            run: () => { ctrl.closeMenus(); ctrl.toggleCpu(plugin.id); },
+        });
+    }
+    return actions;
 }
