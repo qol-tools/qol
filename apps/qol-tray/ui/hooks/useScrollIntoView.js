@@ -73,7 +73,7 @@ function clamp(value, min, max) {
     return value;
 }
 
-export function useScrollFollow() {
+export function useScrollIntoView() {
     const navKeyPressedRef = useRef(false);
     const keyboardScrollPendingRef = useRef(false);
     const scheduledSelectionRef = useRef(false);

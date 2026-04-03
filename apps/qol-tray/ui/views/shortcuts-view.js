@@ -5,6 +5,7 @@ import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../components/app/view-keyboard-context.js';
 
 import { PageHeader } from '../components/PageHeader.js';
+import { SurfaceContainer } from '../components/SurfaceContainer.js';
 import { ShortcutEditModal } from './shortcuts/modal.js';
 import { useShortcuts } from './shortcuts/use-shortcuts.js';
 import { ShortcutsList } from './shortcuts/list.js';
@@ -28,10 +29,10 @@ export function ShortcutsView() {
             <${PageHeader} title="Shortcuts" subtitle="User-defined launcher shortcuts for URLs and apps" />
             <div class="view-body content-shell-body">
                 <div class="content-shell-inner">
-                    <div class="content-frame" data-surface-container="">
+                    <${SurfaceContainer} className="content-frame">
                         <${ShortcutsList} shortcuts=${sc.filtered}
                             selectedIndex=${sc.selectedIndex} onSelect=${sc.setSelectedId} onEdit=${sc.openEditModal} />
-                    </div>
+                    <//>
                 </div>
             </div>
             ${sc.editModal && html`<${ShortcutEditModal} modal=${sc.editModal} fieldProps=${sc.fieldProps}

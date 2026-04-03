@@ -9,7 +9,7 @@ import { useApp } from './app/useApp.js';
 import { useAppKeyboardRouting } from './app/useAppKeyboardRouting.js';
 import { ViewKeyboardProvider } from './app/view-keyboard-context.js';
 import { renderMountedViews } from './app/views.js';
-import { useScrollFollow } from '../hooks/useScrollIntoView.js';
+import { useScrollIntoView } from '../hooks/useScrollIntoView.js';
 import { RecompileDissolve } from './RecompileDissolve.js';
 import { PluginConfigView } from '../views/plugin-config/view.js';
 import { GlobalToast } from './ApiErrorToast.js';
@@ -20,7 +20,7 @@ export function App() {
 }
 
 function AppShell() {
-    useScrollFollow();
+    useScrollIntoView();
     const dissolveRef = useRef(null);
     const onDissolve = useCallback((reload) => dissolveRef.current?.(reload), []);
     const {

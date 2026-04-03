@@ -6,6 +6,7 @@ import { useRegisterViewKeyboard } from '../components/app/view-keyboard-context
 import { matchesQuery } from '../utils/collections.js';
 
 import { PageHeader } from '../components/PageHeader.js';
+import { SurfaceContainer } from '../components/SurfaceContainer.js';
 import { HotkeyEditModal } from './hotkeys/modal.js';
 import { useHotkeys } from './hotkeys/use-hotkeys.js';
 import { HotkeysList } from './hotkeys/list.js';
@@ -54,10 +55,10 @@ export function HotkeysView() {
             ${hk.registrationErrors.length > 0 && html`<${RegistrationWarnings} errors=${hk.registrationErrors} />`}
             <div class="view-body content-shell-body">
                 <div class="content-shell-inner">
-                    <div class="content-frame" data-surface-container="">
+                    <${SurfaceContainer} className="content-frame">
                         <${HotkeysList} hotkeys=${filtered} plugins=${hk.plugins}
                             selectedIndex=${hk.selectedIndex} onSelect=${hk.setSelectedIndex} onEdit=${hk.openEditModal} />
-                    </div>
+                    <//>
                 </div>
             </div>
             ${hk.editModal && html`<${HotkeyEditModal} modal=${hk.editModal} plugins=${hk.plugins}

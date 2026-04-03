@@ -148,29 +148,6 @@
     gap: var(--space-2);
 }
 
-.profile-health-dot {
-    width: 0.55rem;
-    height: 0.55rem;
-    border-radius: 999px;
-    background: var(--text-faint);
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
-    flex-shrink: 0;
-}
-
-.profile-health-dot[data-health="healthy"] {
-    background: rgba(var(--success-rgb), 1);
-    box-shadow: 0 0 0 4px rgba(var(--success-rgb), 0.14);
-}
-
-.profile-health-dot[data-health="attention"] {
-    background: rgba(var(--warning-rgb), 1);
-    box-shadow: 0 0 0 4px rgba(var(--warning-rgb), 0.14);
-}
-
-.profile-health-dot[data-health="error"] {
-    background: rgba(var(--danger-rgb), 1);
-    box-shadow: 0 0 0 4px rgba(var(--danger-rgb), 0.14);
-}
 
 .profile-sync-alert {
     padding: var(--space-3);

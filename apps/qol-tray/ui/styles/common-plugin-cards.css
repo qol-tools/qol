@@ -74,8 +74,8 @@
     transition: border-color var(--transition), box-shadow var(--transition), transform var(--transition);
 }
 
-.plugin-grid-store .plugin-card:hover:not(.selected),
-.plugins-grid .plugin-card:hover:not(.selected) {
+.plugin-grid-store .plugin-card:hover:not([data-selected="true"]),
+.plugins-grid .plugin-card:hover:not([data-selected="true"]) {
     border-color: var(--border-hover);
     box-shadow: var(--elevation-2);
     transform: translateY(-1px);
