@@ -5,6 +5,7 @@ import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../components/app/view-keyboard-context.js';
 
 import { PageHeader } from '../components/PageHeader.js';
+import { SurfaceContainer } from '../components/SurfaceContainer.js';
 import { UninstallConfirmModal } from './plugins/confirm-modal.js';
 import { PluginsGrid } from './plugins/grid.js';
 import { usePluginsList } from './plugins/use-list.js';
@@ -48,12 +49,12 @@ export function PluginsView({ onOpenPluginConfig, onOpenPluginUi }) {
 
     return html`<div class="view-container content-shell" onClick=${modal.closeAll}>
         <${PageHeader} title="Plugins" />
-        <div class="view-body" data-surface-container="">
+        <${SurfaceContainer} className="view-body">
             <${PluginsGrid}
                 plugins=${filtered} ghostPlugins=${list.ghostPlugins}
                 selectedIndex=${list.selectedIndex} contextMenuOpen=${modal.contextMenuOpen}
                 updating=${actions.updating} onCardClick=${handleCardClick} onSelect=${list.setSelectedIndex} />
-        </div>
+        <//>
         <${UninstallConfirmModal} plugin=${modal.confirmPlugin} pluginId=${modal.confirmPluginId}
             onClose=${modal.clearConfirm} onConfirm=${actions.confirmUninstall} />
     </div>`;

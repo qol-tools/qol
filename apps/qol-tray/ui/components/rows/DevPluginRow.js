@@ -1,6 +1,7 @@
 import { html } from '../../lib/html.js';
 import { useState, useCallback, useEffect, useRef } from 'preact/hooks';
 import { TableRow } from '../TableRow.js';
+import { SurfaceContainer } from '../SurfaceContainer.js';
 import { Button } from '../Button.js';
 import { useClickOutside } from '../../hooks/useClickOutside.js';
 
@@ -53,14 +54,14 @@ export function DevPluginRow({ name, path, status, pluginId, badges, meta, actio
                 ${overlay && html`<div class="plugin-build-overlay-host">${overlay}</div>`}
             <//>
             ${menuOpen && actions?.length > 0 && html`
-                <div ref=${menuRef} class="dev-plugin-row-actions" data-surface-container="">
+                <${SurfaceContainer} ref=${menuRef} className="dev-plugin-row-actions">
                     ${actions.map(a => html`
                         <${Button} key=${a.label} variant="btn-ghost"
                             onActivate=${() => { close(); a.run?.(); }}>
                             ${a.label}
                         <//>
                     `)}
-                </div>
+                <//>
             `}
         </div>
     `;

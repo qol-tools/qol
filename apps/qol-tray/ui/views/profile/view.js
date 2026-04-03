@@ -1,6 +1,7 @@
 import { html } from '../../lib/html.js';
 import { useState } from 'preact/hooks';
 import { PageHeader } from '../../components/PageHeader.js';
+import { SurfaceContainer } from '../../components/SurfaceContainer.js';
 import { Expander, ExpanderTrigger, ExpanderBody } from '../../components/Expander.js';
 import { Badge, HealthDot, Alert } from '../../components/StatusIndicators.js';
 import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
@@ -41,7 +42,7 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
             <div class="view-body content-shell-body">
                 <div class="content-shell-inner">
                     <div class="profile-page-stack">
-                        <div id="profile-sections" class="content-frame profile-frame" data-surface-container="">
+                        <${SurfaceContainer} id="profile-sections" className="content-frame profile-frame">
                             ${ctrl.lastImport && html`<${ImportFeedback} lastImport=${ctrl.lastImport} />`}
 
                             <section class="profile-section">
@@ -164,7 +165,7 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                                     </p>
                                 `}
                             </section>
-                        </div>
+                        <//>
                     </div>
                 </div>
             </div>

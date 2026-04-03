@@ -3,6 +3,7 @@ import { html } from '../lib/html.js';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../components/app/view-keyboard-context.js';
 import { PageHeader } from '../components/PageHeader.js';
+import { SurfaceContainer } from '../components/SurfaceContainer.js';
 
 import { API_BASE, buildApiExample } from './task-runner/data.js';
 import { ActionEditModal } from './task-runner/panels.js';
@@ -62,10 +63,10 @@ export function TaskRunnerView() {
 
     return html`<div class="view-container content-shell">
         <${PageHeader} title="Task Runner" subtitle="HTTP API for browser extensions to run local commands" />
-        <div class="view-body" data-surface-container="">
+        <${SurfaceContainer} className="view-body">
             <${ApiUsage} actions=${data.actions} actionIds=${data.actionIds} copyApiExample=${data.copyApiExample} />
             <${ActionList} data=${data} edit=${edit} test=${test} />
-        </div>
+        <//>
         ${edit.editModal && html`<${ActionEditModal}
             modal=${edit.editModal} fieldProps=${modalNav.fieldProps} onUpdate=${edit.updateField}
             onClose=${edit.close} onSave=${edit.saveAction} />`}

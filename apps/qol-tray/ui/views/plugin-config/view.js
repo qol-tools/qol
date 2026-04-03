@@ -12,6 +12,7 @@ import {
 } from '../../auto-config/display-rules.js';
 import { renderField, fieldSelectionClasses } from './field-map.js';
 import { dissolveIn, DISSOLVE_PRESETS } from '../../lib/dissolve.js';
+import { SurfaceContainer } from '../../components/SurfaceContainer.js';
 
 export function PluginConfigView({ onClose }) {
     const ctx = usePluginConfigContext();
@@ -37,7 +38,7 @@ export function PluginConfigView({ onClose }) {
     if (ctx.sections.length === 0) return html`<div class="plugin-config-loading">No settings available.</div>`;
 
     return html`
-        <div class="plugin-config-detail" tabIndex="-1" data-surface-container="">
+        <${SurfaceContainer} className="plugin-config-detail" tabIndex="-1">
             ${section && html`
                 <div class="config-detail-content">
                     <header class="config-detail-header">
@@ -47,7 +48,7 @@ export function PluginConfigView({ onClose }) {
                     <${ConfigSection} fields=${section.fields} />
                 </div>
             `}
-        </div>
+        <//>
     `;
 }
 
