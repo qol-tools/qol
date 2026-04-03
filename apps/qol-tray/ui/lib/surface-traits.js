@@ -38,11 +38,14 @@ export function parentContainer(container) {
 export function directSurfaces(container) {
     if (!(container instanceof HTMLElement)) return [];
     return Array.from(container.querySelectorAll('[data-selected-surface]'))
-        .filter(el =>
-            el.closest('[data-surface-container]') === container
-            && isVisible(el)
-            && !el.disabled
-        );
+        .filter(el => {
+            if (el.closest('[data-surface-container]') !== container) return false;
+            if (!isVisible(el)) return false;
+            if (el.disabled) return false;
+            const parentSurface = el.parentElement?.closest('[data-selected-surface]');
+            if (parentSurface && parentSurface.closest('[data-surface-container]') === container) return false;
+            return true;
+        });
 }
 
 export function firstChildContainer(container) {
