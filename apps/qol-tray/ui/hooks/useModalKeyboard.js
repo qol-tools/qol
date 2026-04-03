@@ -23,7 +23,8 @@ export function useModalKeyboard({ onSave, onClose }) {
         const surfaces = getSurfaces();
         if (surfaces.length === 0) return;
 
-        const surface = surfaces.find(s => s.getAttribute('data-selected') === 'true');
+        const surface = surfaces.find(s => s === document.activeElement || s.contains(document.activeElement))
+            || surfaces.find(s => s.getAttribute('data-selected') === 'true');
         const active = document.activeElement;
 
         if (active?.closest('.custom-select-list')) return;
