@@ -2,6 +2,7 @@ import { html } from '../../lib/html.js';
 import { formatCacheAge } from './reducer.js';
 import { PageHeader } from '../../components/PageHeader.js';
 import { SurfaceContainer } from '../../components/SurfaceContainer.js';
+import { Button, RefreshButton } from '../../components/Button.js';
 import { StoreGrid } from './grid.js';
 
 export function StoreLayout({ ctrl }) {
@@ -22,8 +23,8 @@ export function StoreLayout({ ctrl }) {
 function StoreBadge({ cacheAgeSecs, loading, refreshPlugins }) {
     return html`
         <span class="cache-age">${formatCacheAge(cacheAgeSecs)}</span>
-        <button class="refresh-btn ${loading ? 'spinning' : ''}" title="Refresh (r)"
-                aria-label="Refresh" disabled=${loading} onClick=${refreshPlugins}></button>
+        <${RefreshButton} spinning=${loading} title="Refresh (r)"
+                aria-label="Refresh" onClick=${refreshPlugins} />
     `;
 }
 
@@ -37,7 +38,7 @@ function StoreCredentialBanner({ rateLimited, hasToken }) {
                 GitHub rate limiting is hiding store results. Connect GitHub sync on the
                 Profile page to reuse its credential here.
             </span>
-            <button class="btn btn-ghost btn-sm" onClick=${openProfileView}>Open Profile</button>
+            <${Button} variant="btn-ghost" small onActivate=${openProfileView}>Open Profile<//>
         </div>
     `;
 }
