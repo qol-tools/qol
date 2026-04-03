@@ -1,31 +1,29 @@
 import { html } from '../../lib/html.js';
 import { useCallback } from 'preact/hooks';
-import { ListRow, ListRowHeader, ListRowBody, ListRowTitle, ListRowText } from '../ListRow.js';
-import { Badge } from '../StatusIndicators.js';
+import { ListRow } from '../ListRow.js';
 import { Modal, ModalFooter } from '../ModalPreact.js';
 import { CodeBlock } from '../CodeBlock.js';
 import { toast } from '../../lib/toast.js';
 
 const LEVEL_ACCENT = { startup: 'accent', error: 'danger', suppressed: 'muted' };
-const DANGER_BADGE = { background: 'rgba(var(--danger-rgb),0.14)', borderColor: 'rgba(var(--danger-rgb),0.26)' };
 
 export function LogRow({ time, level, src, msg, loc, count, severity, index, selected, onSelect, onActivate, ...rest }) {
     const levelCls = `level-${level}`;
     const label = level.toUpperCase();
     return html`
-        <${ListRow} index=${index} selected=${selected} onSelect=${onSelect}
+        <${ListRow} className="log-row" index=${index} selected=${selected} onSelect=${onSelect}
             accent=${LEVEL_ACCENT[level]} onActivate=${onActivate}
             data-level=${levelCls} data-severity=${severity || undefined} ...${rest}>
-            <${ListRowHeader}>
-                <span class="list-row-label" style="width:5.5rem">${time}</span>
-                <span class="log-level-badge ${levelCls}" style="width:5.8rem; flex-shrink:0">${label}</span>
-                <${ListRowTitle} mono>${src}<//>
-                ${loc && html`<span class="list-row-label" style="font-family:var(--font-mono); font-size:var(--fs-sm)">${loc}</span>`}
-                ${count > 1 && html`<${Badge} style=${DANGER_BADGE}>${'\u00d7'}${count}<//>`}
-            <//>
-            <${ListRowBody}>
-                <${ListRowText}>${msg}<//>
-            <//>
+            <div class="log-row-top">
+                <span class="log-time">${time}</span>
+                <span class="log-level-badge ${levelCls}">${label}</span>
+                <span class="log-src" data-selected-text="">${src || ''}</span>
+                ${loc && html`<span class="log-loc">${loc}</span>`}
+                ${count > 1 && html`<span class="log-count">${'\u00d7'}${count}</span>`}
+            </div>
+            <div class="log-row-bottom">
+                <span class="log-msg" data-selected-text="">${msg}</span>
+            </div>
         <//>
     `;
 }
@@ -53,11 +51,12 @@ export function LogDetailModal({ entry, onClose }) {
 
 function formatLogDetail(entry) {
     const lines = [];
-    if (entry.time) lines.push(`Time:     ${entry.time}`);
+    const ts = entry.time || entry.ts;
+    if (ts) lines.push(`Time:     ${ts.includes?.('T') ? ts.replace('T', ' ') : ts}`);
     if (entry.level) lines.push(`Level:    ${entry.level.toUpperCase()}`);
     if (entry.src) lines.push(`Source:   ${entry.src}`);
     if (entry.key) lines.push(`Key:      ${entry.key}`);
-    if (entry.loc) lines.push(`Location: ${entry.loc}`);
+    if (entry.loc && entry.loc !== 'unknown:0' && entry.loc !== ':0') lines.push(`Location: ${entry.loc}`);
     if (entry.count > 1) lines.push(`Count:    ${entry.count}`);
     if (entry.v) lines.push(`Version:  ${entry.v}`);
     if (entry.commit) lines.push(`Commit:   ${entry.commit}`);

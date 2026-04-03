@@ -1,29 +1,57 @@
 import { html } from '../../lib/html.js';
-import { ListRow, ListRowHeader, ListRowBody, ListRowTitle, ListRowText } from '../ListRow.js';
-import { Badge } from '../StatusIndicators.js';
+import { Surface } from '../Surface.js';
 
-const DANGER_BADGE = { background: 'rgba(var(--danger-rgb),0.14)', borderColor: 'rgba(var(--danger-rgb),0.26)' };
-const DANGER_BADGE_HIGH = { background: 'rgba(var(--danger-rgb),0.22)', borderColor: 'rgba(var(--danger-rgb),0.4)' };
-const SEVERITY_THRESHOLD = 100;
+function formatTimestamp(ts) {
+    if (!ts) return '?';
+    return ts.replace('T', ' ');
+}
 
-export function SuppressedRow({ sigKey, count, msg, detail, expanded, index, selected, onSelect, onToggle, onUnsuppress, ...rest }) {
-    const highSeverity = count >= SEVERITY_THRESHOLD;
+export function SuppressedRow({ sigKey, entry, expanded, index, selected, onSelect, onToggle, onUnsuppress, ...rest }) {
+    const cls = ['suppressed-entry', expanded && 'expanded'].filter(Boolean).join(' ');
     return html`
-        <${ListRow} index=${index} selected=${selected} onSelect=${onSelect}
-            accent=${highSeverity ? 'danger' : 'danger-soft'}
-            onActivate=${onToggle} ...${rest}>
-            <${ListRowHeader}>
-                <span class="list-row-label" style="width:1rem">${expanded ? '\u25be' : '\u25b8'}</span>
-                <${ListRowTitle} mono>${sigKey}<//>
-                <${Badge} style=${highSeverity ? DANGER_BADGE_HIGH : DANGER_BADGE}>${'\u00d7'}${count}<//>
-                ${onUnsuppress && html`<button class="btn btn-sm" tabIndex="-1"
+        <${Surface} className=${cls} role="listitem"
+            index=${index} selected=${selected} onSelect=${onSelect} onActivate=${onToggle} ...${rest}>
+            <div class="suppressed-header">
+                <span class="suppressed-expand-icon">${expanded ? '\u25be' : '\u25b8'}</span>
+                <span class="suppressed-key">${sigKey}</span>
+                <span class="suppressed-count-badge">${'\u00d7'}${entry.count}</span>
+                ${onUnsuppress && html`<button class="btn btn-sm suppressed-unsuppress" tabIndex="-1"
                     onClick=${(e) => { e.stopPropagation(); onUnsuppress(sigKey); }}>Unsuppress</button>`}
-            <//>
-            ${expanded && (detail || (msg && html`
-                <${ListRowBody}>
-                    <${ListRowText} mono>${msg}<//>
-                <//>
-            `))}
+            </div>
+            ${expanded && html`
+                ${entry.last_message && html`<div class="suppressed-msg">${entry.last_message}</div>`}
+                ${(entry.source || entry.location) && html`
+                    <div class="suppressed-detail">
+                        ${entry.source && html`
+                            <div class="suppressed-detail-row">
+                                <span class="suppressed-meta-label">Source</span>
+                                <span class="suppressed-detail-value">${entry.source}</span>
+                            </div>
+                        `}
+                        ${entry.location && html`
+                            <div class="suppressed-detail-row">
+                                <span class="suppressed-meta-label">Location</span>
+                                <span class="suppressed-detail-value mono">${entry.location}</span>
+                            </div>
+                        `}
+                    </div>
+                `}
+                <div class="suppressed-meta">
+                    <span class="suppressed-meta-item">
+                        <span class="suppressed-meta-label">First</span>
+                        <span>${formatTimestamp(entry.first_seen)}</span>
+                    </span>
+                    <span class="suppressed-meta-sep">${'\u00b7'}</span>
+                    <span class="suppressed-meta-item">
+                        <span class="suppressed-meta-label">Last</span>
+                        <span>${formatTimestamp(entry.last_seen)}</span>
+                    </span>
+                    ${entry.version && html`
+                        <span class="suppressed-meta-sep">${'\u00b7'}</span>
+                        <span class="suppressed-version">${entry.version}</span>
+                    `}
+                </div>
+            `}
         <//>
     `;
 }

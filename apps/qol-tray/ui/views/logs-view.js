@@ -6,9 +6,11 @@ import { useRegisterViewKeyboard } from '../components/app/view-keyboard-context
 import { useListKeyboard } from '../hooks/useListKeyboard.js';
 import { matchesQuery } from '../utils/collections.js';
 import { ViewTabs } from '../components/ViewTabs.js';
-import { Modal, ModalFooter } from '../components/ModalPreact.js';
-import { CodeBlock } from '../components/CodeBlock.js';
-import { toast } from '../lib/toast.js';
+import { Button } from '../components/Button.js';
+import { EmptyState } from '../components/EmptyState.js';
+import { ListGroup } from '../components/ListRow.js';
+import { LogRow, LogDetailModal } from '../components/rows/LogRow.js';
+import { SuppressedRow } from '../components/rows/SuppressedRow.js';
 
 const TABS = [
     { id: 'live', label: 'Live Log' },
@@ -17,15 +19,25 @@ const TABS = [
 
 const POLL_INTERVAL = 5000;
 
-const LEVEL_CONFIG = {
-    startup: { label: 'STARTUP', cls: 'level-startup' },
-    error: { label: 'ERROR', cls: 'level-error' },
-};
+function extractTime(entry) {
+    return entry.ts ? entry.ts.split('T')[1] || entry.ts : '';
+}
 
-function levelInfo(entry) {
-    if (entry.level === 'startup') return LEVEL_CONFIG.startup;
-    if (entry.suppressed) return { label: 'SUPPRESSED', cls: 'level-suppressed' };
-    return LEVEL_CONFIG[entry.level] || { label: (entry.level || '').toUpperCase(), cls: 'level-error' };
+function extractLoc(entry) {
+    return entry.loc && entry.loc !== 'unknown:0' && entry.loc !== ':0' ? entry.loc : '';
+}
+
+function levelName(entry) {
+    if (entry.level === 'startup') return 'startup';
+    if (entry.suppressed) return 'suppressed';
+    return entry.level || 'error';
+}
+
+function countSeverity(count) {
+    if (count >= 25) return 'critical';
+    if (count >= 10) return 'high';
+    if (count >= 3) return 'moderate';
+    return '';
 }
 
 export function LogsView({ active }) {
@@ -154,10 +166,7 @@ export function LogsView({ active }) {
     ], [fetchEntries, fetchSuppressed, openLogDir]);
     useRegisterCommands('logs', commands);
 
-    const trailingTab = html`
-        <button class="btn btn-sm btn-ghost logs-action-btn" data-selected-surface="" tabIndex="-1"
-            data-selected="false" onClick=${openLogDir}>Open log folder</button>
-    `;
+    const trailingTab = html`<${Button} variant="btn-ghost" small className="logs-action-btn" onActivate=${openLogDir}>Open log folder<//>`;
 
     const tabsWithCounts = useMemo(() => TABS.map(tab => ({
         ...tab,
@@ -211,42 +220,16 @@ function LiveLog({ entries, selectedIndex, setSelectedIndex, onEntryClick }) {
         return html`<${EmptyState} message="No log entries for today" hint="Errors will appear here when they occur" />`;
     }
     return html`
-        <div class="logs-list" role="list">
-            ${entries.map((entry, i) => html`<${LogEntryRow} key=${entry.key || i} entry=${entry} index=${i} selected=${i === selectedIndex} onSelect=${setSelectedIndex} onClick=${() => onEntryClick(entry)} />`)}
-        </div>
-    `;
-}
-
-function countSeverity(count) {
-    if (count >= 25) return 'critical';
-    if (count >= 10) return 'high';
-    if (count >= 3) return 'moderate';
-    return '';
-}
-
-function LogEntryRow({ entry, index, selected, onSelect, onClick }) {
-    const time = entry.ts ? entry.ts.split('T')[1] || entry.ts : '';
-    const { label, cls } = levelInfo(entry);
-    const loc = entry.loc && entry.loc !== 'unknown:0' && entry.loc !== ':0' ? entry.loc : '';
-    const severity = entry.level === 'error' ? countSeverity(entry.count) : '';
-    return html`
-        <div class="log-row" role="listitem"
-             data-selected-surface="" tabIndex="-1" data-selected=${selected ? 'true' : 'false'}
-             data-index=${String(index)}
-             data-level=${cls} data-severity=${severity || undefined}
-             onFocus=${() => onSelect(index)}
-             onClick=${onClick}>
-            <div class="log-row-top">
-                <span class="log-time">${time}</span>
-                <span class="log-level-badge ${cls}">${label}</span>
-                <span class="log-src" data-selected-text="">${entry.src || ''}</span>
-                ${loc && html`<span class="log-loc">${loc}</span>`}
-                ${entry.count > 1 && html`<span class="log-count">${'\u00d7'}${entry.count}</span>`}
-            </div>
-            <div class="log-row-bottom">
-                <span class="log-msg" data-selected-text="">${entry.msg}</span>
-            </div>
-        </div>
+        <${ListGroup} className="logs-list" role="list">
+            ${entries.map((entry, i) => {
+                const level = levelName(entry);
+                return html`<${LogRow} key=${entry.key || i}
+                    time=${extractTime(entry)} level=${level} src=${entry.src} msg=${entry.msg}
+                    loc=${extractLoc(entry)} count=${entry.count} severity=${entry.level === 'error' ? countSeverity(entry.count) : ''}
+                    index=${i} selected=${i === selectedIndex} onSelect=${setSelectedIndex}
+                    onActivate=${() => onEntryClick(entry)} />`;
+            })}
+        <//>
     `;
 }
 
@@ -261,118 +244,14 @@ function SuppressedList({ keys, items, onUnsuppress, selectedIndex, setSelectedI
                     key=${key}
                     sigKey=${key}
                     entry=${items[key]}
+                    expanded=${expandedKeys.has(key)}
                     index=${i}
-                    onUnsuppress=${onUnsuppress}
                     selected=${i === selectedIndex}
                     onSelect=${setSelectedIndex}
-                    expanded=${expandedKeys.has(key)}
                     onToggle=${() => onToggleExpand(key)}
+                    onUnsuppress=${onUnsuppress}
                 />
             `)}
         </div>
-    `;
-}
-
-function SuppressedRow({ sigKey, entry, index, onUnsuppress, selected, onSelect, expanded, onToggle }) {
-    return html`
-        <div class="suppressed-entry ${selected ? 'selected' : ''} ${expanded ? 'expanded' : ''}"
-             role="listitem" data-selected-surface="" tabIndex="-1" data-selected=${selected ? 'true' : 'false'} data-index=${String(index)} onFocus=${() => onSelect(index)} onClick=${onToggle}>
-            <div class="suppressed-header">
-                <span class="suppressed-expand-icon">${expanded ? '\u25be' : '\u25b8'}</span>
-                <span class="suppressed-key">${sigKey}</span>
-                <span class="suppressed-count-badge">${'\u00d7'}${entry.count}</span>
-                <button
-                    class="btn btn-sm suppressed-unsuppress"
-                    tabIndex="-1"
-                    onClick=${(e) => { e.stopPropagation(); onUnsuppress(sigKey); }}
-                >Unsuppress</button>
-            </div>
-            ${expanded && html`
-                ${entry.last_message && html`<div class="suppressed-msg">${entry.last_message}</div>`}
-                <div class="suppressed-detail">
-                    ${entry.source && html`
-                        <div class="suppressed-detail-row">
-                            <span class="suppressed-meta-label">Source</span>
-                            <span class="suppressed-detail-value">${entry.source}</span>
-                        </div>
-                    `}
-                    ${entry.location && html`
-                        <div class="suppressed-detail-row">
-                            <span class="suppressed-meta-label">Location</span>
-                            <span class="suppressed-detail-value mono">${entry.location}</span>
-                        </div>
-                    `}
-                </div>
-                <div class="suppressed-meta">
-                    <span class="suppressed-meta-item">
-                        <span class="suppressed-meta-label">First</span>
-                        <span>${formatTimestamp(entry.first_seen)}</span>
-                    </span>
-                    <span class="suppressed-meta-sep">${'\u00b7'}</span>
-                    <span class="suppressed-meta-item">
-                        <span class="suppressed-meta-label">Last</span>
-                        <span>${formatTimestamp(entry.last_seen)}</span>
-                    </span>
-                    ${entry.version && html`
-                        <span class="suppressed-meta-sep">${'\u00b7'}</span>
-                        <span class="suppressed-version">${entry.version}</span>
-                    `}
-                </div>
-            `}
-        </div>
-    `;
-}
-
-function EmptyState({ message, hint }) {
-    return html`
-        <div class="logs-empty-state">
-            <div class="logs-empty-icon">
-                <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5">
-                    <path d="M9 12h6M12 9v6M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
-                </svg>
-            </div>
-            <div class="logs-empty-message">${message}</div>
-            ${hint && html`<div class="logs-empty-hint">${hint}</div>`}
-        </div>
-    `;
-}
-
-function formatTimestamp(ts) {
-    if (!ts) return '?';
-    return ts.replace('T', ' ');
-}
-
-function formatLogDetail(entry) {
-    const lines = [];
-    if (entry.ts) lines.push(`Time:     ${entry.ts.replace('T', ' ')}`);
-    if (entry.level) lines.push(`Level:    ${entry.level.toUpperCase()}`);
-    if (entry.src) lines.push(`Source:   ${entry.src}`);
-    if (entry.key) lines.push(`Key:      ${entry.key}`);
-    if (entry.loc && entry.loc !== 'unknown:0' && entry.loc !== ':0') lines.push(`Location: ${entry.loc}`);
-    if (entry.count > 1) lines.push(`Count:    ${entry.count}`);
-    if (entry.v) lines.push(`Version:  ${entry.v}`);
-    if (entry.commit) lines.push(`Commit:   ${entry.commit}`);
-    lines.push('');
-    lines.push(entry.msg || '');
-    return lines.join('\n');
-}
-
-function LogDetailModal({ entry, onClose }) {
-    const copy = useCallback(() => {
-        navigator.clipboard.writeText(formatLogDetail(entry));
-        toast('success', 'Copied to clipboard');
-    }, [entry]);
-
-    return html`
-        <${Modal} open=${true} onClose=${onClose} size="xl" dismissOnBackdrop=${true} className="edit-modal">
-            <div class="edit-modal-content" tabIndex="-1">
-                <h3>Log Entry</h3>
-                <${CodeBlock} text=${formatLogDetail(entry)} />
-                <${ModalFooter} actions=${[
-                    { label: 'Close', kbd: 'Esc', onClick: onClose },
-                    { label: 'Copy', kbd: 'C', variant: 'btn-primary', onClick: copy },
-                ]} />
-            </div>
-        <//>
     `;
 }
