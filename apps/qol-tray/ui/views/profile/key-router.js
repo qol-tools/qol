@@ -1,30 +1,17 @@
 import { useCallback } from 'preact/hooks';
 
-export function useProfileKeyHandler({
-    activateSelected,
-    focusSelectedSurface,
-}) {
+export function useProfileKeyHandler() {
     const handleKey = useCallback((event) => {
         const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-        if (isTextSurface(active)) {
-            if (event.key === 'Escape' || event.key === 'Enter') {
-                event.preventDefault();
-                focusSelectedSurface();
-            }
-            return;
-        }
-        if (event.key === 'Enter' || event.key === ' ') {
+        if (isTextSurface(active) && (event.key === 'Escape' || event.key === 'Enter')) {
             event.preventDefault();
-            activateSelected();
+            active.closest('[data-selected-surface]')?.focus();
         }
-    }, [activateSelected, focusSelectedSurface]);
+    }, []);
 
     const isBlocking = useCallback(() => isTextSurface(document.activeElement), []);
 
-    return {
-        handleKey,
-        isBlocking,
-    };
+    return { handleKey, isBlocking };
 }
 
 function isTextSurface(element) {

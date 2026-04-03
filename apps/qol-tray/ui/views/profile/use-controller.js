@@ -45,7 +45,7 @@ export function useProfileController({
         syncBusy: syncActions.syncBusy,
         updateForm: syncForm.updateForm,
     });
-    const keyHandler = useProfileKeyHandler(surfaceNav);
+    const { handleKey, isBlocking } = useProfileKeyHandler();
 
     return {
         advancedProviderFields: syncForm.advancedProviderFields,
@@ -57,10 +57,10 @@ export function useProfileController({
         configured: syncForm.configured,
         form: syncForm.form,
         handleAcknowledge: syncActions.handleAcknowledge,
-        handleKey: keyHandler.handleKey,
+        handleKey,
         handlePreviewBackup: backups.handlePreviewBackup,
         incident: syncForm.incident,
-        isBlocking: keyHandler.isBlocking,
+        isBlocking,
         lastImport: syncActions.lastImport,
         openAuthLink: syncActions.openAuthLink,
         providerLabels: syncForm.providerLabels,
