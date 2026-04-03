@@ -1,13 +1,16 @@
 import { html } from '../../../lib/html.js';
 import { safeStatusToken } from '../../../utils/escape-html.js';
+import { TableRow } from '../../../components/TableRow.js';
 import { BuildMeta } from './BuildMeta.js';
 import { StatusBadges } from './StatusBadges.js';
 import { CpuStrip } from './CpuStrip.js';
 import { PluginMenu } from './PluginMenu.js';
 
+const STATUS_ACCENT = { linked: 'success', local: 'warning', installed: 'accent' };
+
 function PluginInfo({ plugin, statusToken, ctrl }) {
     return html`
-        <div class="plugin-info table-col">
+        <div class="plugin-info">
             <div class="plugin-copy">
                 <div class="plugin-title-row">
                     <span class="plugin-name" data-selected-text="">${plugin.name || plugin.id || 'Unknown plugin'}</span>
@@ -40,7 +43,7 @@ function ActionColumn({ plugin, index, statusToken, actionDisabled, isLinking, r
     const onToggleLink = () => { ctrl.setSelectedIndex(index); ctrl.handleItemActivation(); };
     const menuHandlers = makeMenuHandlers(plugin, ctrl);
     return html`
-        <div class="plugin-action-column table-col">
+        <div class="plugin-action-column">
             <button type="button" class=${'plugin-action-zone ' + (actionDisabled ? 'is-disabled' : '') + ' ' + (rebuildActive ? 'has-rebuild' : 'rebuild-idle')} onClick=${onToggleLink} aria-label=${(statusToken === 'linked' ? 'Unlink' : 'Link') + ' ' + (plugin.name || plugin.id)} disabled=${actionDisabled}>
                 ${icon}
             </button>
@@ -56,13 +59,15 @@ export function PluginRow({ plugin, index, ctrl }) {
     const isLinking = ctrl.linkingId === plugin.id;
     const actionDisabled = isBuilding || !!ctrl.linkingId;
     const rebuildActive = plugin.status === 'linked' && plugin.has_cargo && plugin.needs_rebuild;
+    const cls = ['plugin-row', 'status-' + statusToken, isBuilding && 'is-building', isLinking && 'is-linking'].filter(Boolean).join(' ');
     return html`
-        <div class=${'plugin-row table-list-row status-' + statusToken + (isSelected ? ' selected' : '') + (isBuilding ? ' is-building' : '') + (isLinking ? ' is-linking' : '')} data-selected-surface="" tabIndex="-1" data-status=${statusToken} data-selected=${isSelected ? 'true' : 'false'} data-index=${index} data-plugin-id=${plugin.id} onFocus=${() => ctrl.setSelectedIndex(index)}>
-            <div class="plugin-main table-grid">
-                <${PluginInfo} plugin=${plugin} statusToken=${statusToken} ctrl=${ctrl} />
-                <${ActionColumn} plugin=${plugin} index=${index} statusToken=${statusToken} actionDisabled=${actionDisabled} isLinking=${isLinking} rebuildActive=${rebuildActive} ctrl=${ctrl} />
-            </div>
+        <${TableRow} className=${cls} accent=${STATUS_ACCENT[statusToken]}
+            index=${index} selected=${isSelected} onSelect=${ctrl.setSelectedIndex}
+            onActivate=${ctrl.handleItemActivation}
+            data-status=${statusToken} data-plugin-id=${plugin.id}>
+            <${PluginInfo} plugin=${plugin} statusToken=${statusToken} ctrl=${ctrl} />
+            <${ActionColumn} plugin=${plugin} index=${index} statusToken=${statusToken} actionDisabled=${actionDisabled} isLinking=${isLinking} rebuildActive=${rebuildActive} ctrl=${ctrl} />
             <div class="plugin-build-overlay-host"></div>
-        </div>
+        <//>
     `;
 }
