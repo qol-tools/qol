@@ -2,8 +2,10 @@ import { html } from '../../lib/html.js';
 import { useState } from 'preact/hooks';
 import { PageHeader } from '../../components/PageHeader.js';
 import { SurfaceContainer } from '../../components/SurfaceContainer.js';
+import { Surface } from '../../components/Surface.js';
 import { Expander, ExpanderTrigger, ExpanderBody } from '../../components/Expander.js';
 import { Badge, HealthDot, Alert } from '../../components/StatusIndicators.js';
+import { Button } from '../../components/Button.js';
 import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../../components/app/view-keyboard-context.js';
 import { useProfileController } from './use-controller.js';
@@ -17,7 +19,6 @@ import {
     renderProviderField,
 } from './components.js';
 import { providerFieldSurfaceId } from './form.js';
-import { surfaceProps } from './use-surface-nav.js';
 import {
     profileHealthLabel,
     profileLastSyncSummary,
@@ -35,6 +36,7 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
     const [showSettings, setShowSettings] = useState(false);
 
     const health = ctrl.syncStatus?.health || 'not_configured';
+    const settingsSurface = ctrl.surfaceById.get('settings');
 
     return html`
         <div id="profile-page" class="view-container content-shell profile-view-shell">
@@ -75,18 +77,18 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                                 <!-- Connected: action buttons -->
                                 ${!ctrl.authPrompt && ctrl.configured && html`
                                     <div class="profile-actions-row">
-                                        <${ProfileActionButton} surface=${ctrl.surfaceById.get('pull')} selectedIndex=${ctrl.selectedIndex} setSelectedIndex=${ctrl.setSelectedIndex} />
-                                        <${ProfileActionButton} surface=${ctrl.surfaceById.get('push')} selectedIndex=${ctrl.selectedIndex} setSelectedIndex=${ctrl.setSelectedIndex} />
-                                        <${ProfileActionButton} surface=${ctrl.surfaceById.get('acknowledge')} selectedIndex=${ctrl.selectedIndex} setSelectedIndex=${ctrl.setSelectedIndex} />
+                                        <${ProfileActionButton} id="pull" ctrl=${ctrl} />
+                                        <${ProfileActionButton} id="push" ctrl=${ctrl} />
+                                        <${ProfileActionButton} id="acknowledge" ctrl=${ctrl} />
                                         <span class="profile-actions-spacer"></span>
-                                        <${ProfileActionButton} surface=${ctrl.surfaceById.get('disconnect')} selectedIndex=${ctrl.selectedIndex} setSelectedIndex=${ctrl.setSelectedIndex} />
+                                        <${ProfileActionButton} id="disconnect" ctrl=${ctrl} />
                                     </div>
                                 `}
 
                                 <!-- Not connected: centered connect button -->
                                 ${!ctrl.authPrompt && !ctrl.configured && html`
                                     <div class="profile-connect-row">
-                                        <${ProfileActionButton} surface=${ctrl.surfaceById.get('connect')} selectedIndex=${ctrl.selectedIndex} setSelectedIndex=${ctrl.setSelectedIndex} />
+                                        <${ProfileActionButton} id="connect" ctrl=${ctrl} />
                                     </div>
                                 `}
 
@@ -94,8 +96,10 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                                 ${!ctrl.authPrompt && html`
                                     <${Expander}
                                         open=${showSettings}
-                                        onToggle=${() => { ctrl.setSelectedIndex(ctrl.surfaceById.get('settings')?.index); setShowSettings(!showSettings); }}
-                                        ...${surfaceProps(ctrl.surfaceById.get('settings'), ctrl.selectedIndex, ctrl.setSelectedIndex)}
+                                        onToggle=${() => { ctrl.setSelectedIndex(settingsSurface?.index); setShowSettings(!showSettings); }}
+                                        index=${settingsSurface?.index}
+                                        selected=${settingsSurface?.index === ctrl.selectedIndex}
+                                        onSelect=${ctrl.setSelectedIndex}
                                     >
                                         <${ExpanderTrigger}>Settings<//>
                                         <${ExpanderBody}>
@@ -105,9 +109,7 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                                                     value=${ctrl.form.provider}
                                                     options=${ctrl.providerOptions.map(p => p.kind)}
                                                     labels=${ctrl.providerLabels}
-                                                    surface=${ctrl.surfaceById.get('provider')}
-                                                    selectedIndex=${ctrl.selectedIndex}
-                                                    setSelectedIndex=${ctrl.setSelectedIndex}
+                                                    ctrl=${ctrl} fieldId="provider"
                                                     onChange=${(value) => ctrl.updateForm('provider', value)}
                                                     compact=${true}
                                                 />
@@ -118,9 +120,7 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                                                     form: ctrl.form,
                                                     syncStatus: ctrl.syncStatus,
                                                     configured: ctrl.configured,
-                                                    selectedIndex: ctrl.selectedIndex,
-                                                    setSelectedIndex: ctrl.setSelectedIndex,
-                                                    surface: ctrl.surfaceById.get(providerFieldSurfaceId(field.key)),
+                                                    ctrl,
                                                     updateForm: ctrl.updateForm,
                                                 })
                                             )}
@@ -139,9 +139,9 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                                         ${ctrl.incident?.backup_file && html`
                                             <${Badge} className="profile-badge profile-badge-skipped">${ctrl.incident.backup_file}<//>
                                         `}
-                                        <${ProfileActionButton} surface=${ctrl.surfaceById.get('export')} selectedIndex=${ctrl.selectedIndex} setSelectedIndex=${ctrl.setSelectedIndex} />
-                                        <${ProfileActionButton} surface=${ctrl.surfaceById.get('import')} selectedIndex=${ctrl.selectedIndex} setSelectedIndex=${ctrl.setSelectedIndex} />
-                                        <${ProfileActionButton} surface=${ctrl.surfaceById.get('open-backups')} selectedIndex=${ctrl.selectedIndex} setSelectedIndex=${ctrl.setSelectedIndex} />
+                                        <${ProfileActionButton} id="export" ctrl=${ctrl} />
+                                        <${ProfileActionButton} id="import" ctrl=${ctrl} />
+                                        <${ProfileActionButton} id="open-backups" ctrl=${ctrl} />
                                     </div>
                                 </div>
                                 ${ctrl.backups.length > 0 && html`
@@ -151,9 +151,7 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                                                 key=${backup.file_name}
                                                 backup=${backup}
                                                 incident=${ctrl.incident}
-                                                surface=${ctrl.surfaceById.get(`backup:${backup.file_name}`)}
-                                                selectedIndex=${ctrl.selectedIndex}
-                                                setSelectedIndex=${ctrl.setSelectedIndex}
+                                                ctrl=${ctrl}
                                                 onOpen=${() => ctrl.handlePreviewBackup(backup.file_name)}
                                             />
                                         `)}
@@ -179,23 +177,18 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
     `;
 }
 
-function renderSettingsField({ field, form, syncStatus, configured, selectedIndex, setSelectedIndex, surface, updateForm }) {
+function renderSettingsField({ field, form, syncStatus, configured, ctrl, updateForm }) {
     const configuredValue = syncStatus?.[field.key];
     const sameProvider = form?.provider === syncStatus?.provider;
 
-    // Field has a configured value from the active connection → read-only info
     if (configured && sameProvider && configuredValue) {
-        return html`<${SettingsInfoField}
-            key=${field.key}
-            label=${field.label}
-            surface=${surface}
-            selectedIndex=${selectedIndex}
-            setSelectedIndex=${setSelectedIndex}
+        const sel = ctrl.surfaceById.get(providerFieldSurfaceId(field.key));
+        return html`<${SettingsInfoField} key=${field.key} label=${field.label}
+            index=${sel?.index} selected=${sel?.index === ctrl.selectedIndex} onSelect=${ctrl.setSelectedIndex}
         >${fieldInfoValue(field.key, configuredValue)}<//>`;
     }
 
-    // Otherwise → editable input
-    return renderProviderField({ field, form, syncStatus, selectedIndex, setSelectedIndex, surface, updateForm });
+    return renderProviderField({ field, form, syncStatus, ctrl, updateForm });
 }
 
 function fieldInfoValue(key, value) {
@@ -206,14 +199,12 @@ function fieldInfoValue(key, value) {
     return value;
 }
 
-function SettingsInfoField({ label, surface, selectedIndex, setSelectedIndex, children }) {
-    const sp = surfaceProps(surface, selectedIndex, setSelectedIndex);
-    if (!sp) return null;
+function SettingsInfoField({ label, index, selected, onSelect, children }) {
     return html`
-        <div class="profile-settings-field" ...${sp}>
+        <${Surface} className="profile-settings-field" index=${index} selected=${selected} onSelect=${onSelect}>
             <span class="profile-settings-label">${label}</span>
             <span class="profile-settings-value">${children}</span>
-        </div>
+        <//>
     `;
 }
 
@@ -236,9 +227,7 @@ function DeviceCodePrompt({ userCode, copied, onOpenGitHub }) {
             <p class="profile-device-hint">
                 ${justCopied ? 'Copied!' : 'Click code to copy'} — then paste it on GitHub
             </p>
-            <button class="btn btn-primary" onClick=${onOpenGitHub}>
-                Open GitHub
-            </button>
+            <${Button} variant="btn-primary" onActivate=${onOpenGitHub}>Open GitHub<//>
         </div>
     `;
 }
