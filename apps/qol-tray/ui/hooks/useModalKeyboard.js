@@ -56,6 +56,7 @@ function activateFieldContent(e) {
     const fields = modalFields(el);
     const target = fields[0];
     if (!target) return;
+    if (target.readOnly) { target.click(); return; }
     target.focus();
     if (target.tagName === 'INPUT' && target.select) target.select();
 }
