@@ -10,7 +10,6 @@ const STATUS_ACCENT = { linked: 'success', local: 'warning', installed: 'accent'
 export function DevPluginRow({ name, path, status, pluginId, badges, meta, actions, actionIcon, overlay, index, selected, onSelect, ...rest }) {
     const [menuOpen, setMenuOpen] = useState(false);
     const containerRef = useRef(null);
-    const menuRef = useRef(null);
     const close = useCallback(() => {
         setMenuOpen(false);
         const row = containerRef.current?.querySelector('[data-selected-surface]');
@@ -20,7 +19,7 @@ export function DevPluginRow({ name, path, status, pluginId, badges, meta, actio
 
     useEffect(() => {
         if (!menuOpen) return;
-        const first = menuRef.current?.querySelector('[data-selected-surface]');
+        const first = containerRef.current?.querySelector('.dev-plugin-row-actions [data-selected-surface]');
         if (first) first.focus({ preventScroll: true });
     }, [menuOpen]);
 
@@ -54,7 +53,7 @@ export function DevPluginRow({ name, path, status, pluginId, badges, meta, actio
                 ${overlay && html`<div class="plugin-build-overlay-host">${overlay}</div>`}
             <//>
             ${menuOpen && actions?.length > 0 && html`
-                <${SurfaceContainer} ref=${menuRef} className="dev-plugin-row-actions">
+                <${SurfaceContainer} className="dev-plugin-row-actions">
                     ${actions.map(a => html`
                         <${Button} key=${a.label} variant="btn-ghost"
                             onActivate=${() => { close(); a.run?.(); }}>
