@@ -77,6 +77,7 @@ function navigate(surfaces, delta, setSelectedIndex) {
 
 function activate(surface) {
     if (!surface) return;
+    if (surface.tagName === 'BUTTON') { surface.click(); return; }
     const toggle = surface.querySelector('[role="switch"]');
     if (toggle) { toggle.click(); return; }
     const fields = modalFields(surface);
