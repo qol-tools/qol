@@ -43,7 +43,7 @@
     border-bottom-right-radius: var(--radius-lg);
 }
 
-.plugin-row.selected {
+.plugin-row[data-selected="true"] {
     background: var(--bg-selected);
 }
 
@@ -344,8 +344,8 @@
     visibility: hidden;
 }
 
-.plugin-row.is-building .plugin-main,
-.plugin-row.is-linking .plugin-main {
+.plugin-row.is-building .plugin-info,
+.plugin-row.is-linking .plugin-info {
     opacity: 0.72;
 }
 
