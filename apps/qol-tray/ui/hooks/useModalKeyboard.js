@@ -1,4 +1,4 @@
-import { useState, useCallback, useLayoutEffect, useRef } from 'preact/hooks';
+import { useState, useCallback, useLayoutEffect } from 'preact/hooks';
 import { modalFields } from '../components/ModalPreact.js';
 
 function getSurfaces() {
@@ -10,20 +10,26 @@ function getSurfaces() {
 
 export function useModalKeyboard({ onSave, onClose }) {
     const [selectedIndex, setSelectedIndex] = useState(0);
-    const prevIndexRef = useRef(-1);
-
+    // Set data-selected on every render — Preact's diff removes it from
+    // Button surfaces (which render data-selected: undefined), so we must
+    // re-apply imperatively after each commit.
     useLayoutEffect(() => {
         const surfaces = getSurfaces();
         if (surfaces.length === 0) return;
-        for (const s of surfaces) s.setAttribute('data-selected', 'false');
         const clamped = Math.min(selectedIndex, surfaces.length - 1);
-        const surface = surfaces[clamped];
-        if (!surface) return;
-        surface.setAttribute('data-selected', 'true');
-        if (prevIndexRef.current !== clamped || !surface.contains(document.activeElement)) {
+        for (let i = 0; i < surfaces.length; i++) {
+            surfaces[i].setAttribute('data-selected', i === clamped ? 'true' : 'false');
+        }
+    });
+
+    // Focus only when selectedIndex changes — prevents jumps from unrelated re-renders.
+    useLayoutEffect(() => {
+        const surfaces = getSurfaces();
+        if (surfaces.length === 0) return;
+        const surface = surfaces[Math.min(selectedIndex, surfaces.length - 1)];
+        if (surface && !surface.contains(document.activeElement)) {
             surface.focus({ preventScroll: true });
         }
-        prevIndexRef.current = clamped;
     }, [selectedIndex]);
 
     const handleKey = useCallback((e) => {
