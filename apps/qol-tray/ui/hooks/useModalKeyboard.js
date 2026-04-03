@@ -58,6 +58,7 @@ export function useModalKeyboard({ onSave, onClose }) {
     const fieldProps = useCallback((index) => ({
         'data-selected-surface': '',
         'data-selected': index === selectedIndex ? 'true' : 'false',
+        tabIndex: -1,
         onMouseDown: () => setSelectedIndex(index),
         onFocus: () => setSelectedIndex(index),
     }), [selectedIndex]);

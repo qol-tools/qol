@@ -36,7 +36,7 @@ function PluginCard({ plugin, index, selectedIndex, contextMenuOpen, updating, o
     return html`
         <div key=${plugin.id}
              class=${cardClassName(plugin, selected)}
-             data-selected-surface=""
+             data-selected-surface="" tabIndex="-1"
              data-selected=${selected ? 'true' : 'false'}
              data-index="${index}" data-plugin-id="${plugin.id}"
              onFocus=${() => onSelect(index)}

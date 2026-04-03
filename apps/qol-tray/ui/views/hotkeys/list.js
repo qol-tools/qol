@@ -29,7 +29,7 @@ export function HotkeysList({ hotkeys, plugins, selectedIndex, onSelect, onEdit 
 function HotkeyRow({ hk, plugin, index, selected, onSelect, onClick }) {
     return html`
         <div class="hotkey-row table-list-row table-grid"
-             data-selected-surface=""
+             data-selected-surface="" tabIndex="-1"
              data-status="${plugin?.status || 'installed'}"
              data-selected="${selected ? 'true' : 'false'}"
              data-index="${index}" onFocus=${() => onSelect(index)} onClick=${onClick}>

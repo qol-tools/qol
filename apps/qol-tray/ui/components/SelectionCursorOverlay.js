@@ -82,17 +82,13 @@ export function SelectionCursorOverlay() {
         const onWheel = () => setInputMode('mouse');
         setInputMode('keyboard');
 
-        const observer = new MutationObserver((mutations) => {
-            ensureSurfacesFocusable(mutations);
-            sync();
-        });
+        const observer = new MutationObserver(() => sync());
         observer.observe(document.body, {
             attributes: true,
             attributeFilter: ATTRIBUTES,
             childList: true,
             subtree: true,
         });
-        ensureSurfacesFocusable();
 
         document.addEventListener('scroll', sync, true);
         document.addEventListener('focusin', sync, true);
@@ -268,29 +264,3 @@ function hasFocusedSurface() {
     return focused.closest('[data-selected-surface]') !== null;
 }
 
-function ensureSurfacesFocusable(mutations) {
-    const targets = mutations
-        ? collectNewSurfaces(mutations)
-        : document.querySelectorAll('[data-selected-surface]');
-
-    for (const el of targets) {
-        if (el.tabIndex >= 0) continue;
-        if (el.hasAttribute('tabindex')) continue;
-        el.tabIndex = -1;
-    }
-}
-
-function collectNewSurfaces(mutations) {
-    const surfaces = [];
-    for (const mutation of mutations) {
-        if (mutation.type !== 'childList') continue;
-        for (const node of mutation.addedNodes) {
-            if (!(node instanceof HTMLElement)) continue;
-            if (node.hasAttribute('data-selected-surface')) surfaces.push(node);
-            for (const child of node.querySelectorAll('[data-selected-surface]')) {
-                surfaces.push(child);
-            }
-        }
-    }
-    return surfaces;
-}

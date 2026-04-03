@@ -36,7 +36,7 @@ export function ObjectArrayField({ field }) {
         <div class="field-group ${fieldSelectionClasses(selected)}"
             data-plugin-config-field-id=${field.id}
             data-plugin-config-index=${index}
-            data-selected-surface=""
+            data-selected-surface="" tabIndex="-1"
             data-selected=${selected ? 'true' : 'false'}
             onMouseDown=${onSelect}
             onFocus=${onSelect}>

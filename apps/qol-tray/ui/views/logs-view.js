@@ -155,7 +155,7 @@ export function LogsView({ active }) {
     useRegisterCommands('logs', commands);
 
     const trailingTab = html`
-        <button class="btn btn-sm btn-ghost logs-action-btn" data-selected-surface=""
+        <button class="btn btn-sm btn-ghost logs-action-btn" data-selected-surface="" tabIndex="-1"
             data-selected="false" onClick=${openLogDir}>Open log folder</button>
     `;
 
@@ -231,7 +231,7 @@ function LogEntryRow({ entry, index, selected, onSelect, onClick }) {
     const severity = entry.level === 'error' ? countSeverity(entry.count) : '';
     return html`
         <div class="log-row" role="listitem"
-             data-selected-surface="" data-selected=${selected ? 'true' : 'false'}
+             data-selected-surface="" tabIndex="-1" data-selected=${selected ? 'true' : 'false'}
              data-index=${String(index)}
              data-level=${cls} data-severity=${severity || undefined}
              onFocus=${() => onSelect(index)}
@@ -276,7 +276,7 @@ function SuppressedList({ keys, items, onUnsuppress, selectedIndex, setSelectedI
 function SuppressedRow({ sigKey, entry, index, onUnsuppress, selected, onSelect, expanded, onToggle }) {
     return html`
         <div class="suppressed-entry ${selected ? 'selected' : ''} ${expanded ? 'expanded' : ''}"
-             role="listitem" data-selected-surface="" data-selected=${selected ? 'true' : 'false'} data-index=${String(index)} onFocus=${() => onSelect(index)} onClick=${onToggle}>
+             role="listitem" data-selected-surface="" tabIndex="-1" data-selected=${selected ? 'true' : 'false'} data-index=${String(index)} onFocus=${() => onSelect(index)} onClick=${onToggle}>
             <div class="suppressed-header">
                 <span class="suppressed-expand-icon">${expanded ? '\u25be' : '\u25b8'}</span>
                 <span class="suppressed-key">${sigKey}</span>

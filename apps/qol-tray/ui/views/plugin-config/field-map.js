@@ -57,7 +57,7 @@ function StringField({ field }) {
         <div class="field-group ${fieldSelectionClasses(selected)}"
             data-plugin-config-field-id=${field.id}
             data-plugin-config-index=${index}
-            data-selected-surface=""
+            data-selected-surface="" tabIndex="-1"
             data-selected=${selected ? 'true' : 'false'}
             onMouseDown=${onSelect}
             onFocus=${onSelect}>
@@ -88,7 +88,7 @@ function SelectField({ field }) {
         <div class="field-group ${fieldSelectionClasses(selected)}"
             data-plugin-config-field-id=${field.id}
             data-plugin-config-index=${index}
-            data-selected-surface=""
+            data-selected-surface="" tabIndex="-1"
             data-selected=${selected ? 'true' : 'false'}
             onMouseDown=${onSelect}
             onFocus=${onSelect}>
@@ -112,7 +112,7 @@ function Toggle({ checked, onChange, label, description, selected, index, onSele
         <div class="toggle-row ${fieldSelectionClasses(selected)}"
             data-plugin-config-field-id=${fieldId}
             data-plugin-config-index=${index}
-            data-selected-surface=""
+            data-selected-surface="" tabIndex="-1"
             data-selected=${surfaceSelected ? 'true' : 'false'}
             onClick=${toggle}
             onMouseDown=${onSelect}
@@ -141,5 +141,6 @@ export function fieldSurfaceAttrs(field, ctx) {
         'data-plugin-config-index': ctx.fieldIndexById[field.id],
         'data-selected-surface': '',
         'data-selected': selected ? 'true' : 'false',
+        tabIndex: -1,
     };
 }

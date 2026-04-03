@@ -103,7 +103,7 @@ function VariantPanel({ group }) {
             <div class="variant-selector ${densityClass} ${fieldSelectionClasses(selected)}"
                 data-plugin-config-field-id=${group.selector.id}
                 data-plugin-config-index=${index}
-                data-selected-surface=""
+                data-selected-surface="" tabIndex="-1"
                 data-selected=${selected ? 'true' : 'false'}
                 onMouseDown=${onFocusSelector}
                 onFocus=${onFocusSelector}>
