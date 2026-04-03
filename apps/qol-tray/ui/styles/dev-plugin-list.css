@@ -87,6 +87,16 @@
     border-left-color: var(--accent);
 }
 
+/* When used via TableRow (table-grid on the row itself) */
+.plugin-row.table-grid {
+    display: grid;
+    --table-cols: minmax(0, 1fr) var(--size-action-col-md);
+    --table-col-gap: 0;
+    padding: 0;
+    align-items: stretch;
+}
+
+/* Production two-level layout (plugin-main as inner grid) */
 .plugin-row .plugin-main {
     flex: 1 1 auto;
     min-width: 0;
@@ -547,6 +557,7 @@
         right: var(--size-action-col-sm);
     }
 
+    .plugin-row.table-grid,
     .plugin-row .plugin-main {
         --table-cols: minmax(0, 1fr) var(--size-action-col-sm);
     }
