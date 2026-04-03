@@ -56,17 +56,22 @@ function ProfileInputField({ id, fieldId, label, hint = '', value, placeholder, 
     `;
 }
 
+function activateSelect(e) {
+    if (e.target?.closest('.custom-select-trigger')) return;
+    e.currentTarget?.querySelector('.custom-select-trigger')?.click();
+}
+
 export function ProfileSelectField({ label, hint = '', value, options, labels, className = '', ctrl, fieldId, onChange, compact = false }) {
     const sel = surfaceSel(ctrl, fieldId);
     if (!sel) return null;
     if (compact) {
-        return html`<${Surface} className="profile-select-surface profile-select-compact" ...${sel}>
+        return html`<${Surface} className="profile-select-surface profile-select-compact" ...${sel} onActivate=${activateSelect}>
             <${CustomSelect} value=${value} options=${options} labels=${labels} onChange=${onChange} />
         <//>`;
     }
     const cls = ['form-group', 'profile-input-surface', 'profile-select-surface', className].filter(Boolean).join(' ');
     return html`
-        <${Surface} className=${cls} ...${sel}>
+        <${Surface} className=${cls} ...${sel} onActivate=${activateSelect}>
             <label>${label}${hint && html`<span class="hint"> ${hint}</span>`}</label>
             <${CustomSelect} value=${value} options=${options} labels=${labels} onChange=${onChange} />
         <//>
