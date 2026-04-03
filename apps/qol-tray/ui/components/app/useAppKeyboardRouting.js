@@ -161,6 +161,7 @@ function navigateInActiveContainer(direction) {
     log('  -> RESULT:', surfaceLabel(next),
         'at (' + Math.round(nr.left) + ',' + Math.round(nr.top) + ')');
     next.focus({ preventScroll: true });
+    next.scrollIntoView({ behavior: 'auto', block: 'nearest' });
 }
 
 function activateAndMaybeDescend() {
