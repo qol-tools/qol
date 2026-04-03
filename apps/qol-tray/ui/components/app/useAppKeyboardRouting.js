@@ -161,7 +161,24 @@ function navigateInActiveContainer(direction) {
     log('  -> RESULT:', surfaceLabel(next),
         'at (' + Math.round(nr.left) + ',' + Math.round(nr.top) + ')');
     next.focus({ preventScroll: true });
-    next.scrollIntoView({ behavior: 'auto', block: 'nearest' });
+    scrollSurfaceIntoView(next);
+}
+
+function scrollSurfaceIntoView(el) {
+    let scroller = el.parentElement;
+    while (scroller && scroller !== document.body) {
+        const style = getComputedStyle(scroller);
+        if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && scroller.scrollHeight > scroller.clientHeight + 1) break;
+        scroller = scroller.parentElement;
+    }
+    if (!scroller || scroller === document.body) return;
+    const sr = scroller.getBoundingClientRect();
+    const er = el.getBoundingClientRect();
+    if (er.top < sr.top) {
+        scroller.scrollTop += er.top - sr.top - 8;
+    } else if (er.bottom > sr.bottom) {
+        scroller.scrollTop += er.bottom - sr.bottom + 8;
+    }
 }
 
 function activateAndMaybeDescend() {
