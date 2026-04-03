@@ -7,7 +7,6 @@ import { Badge } from '../../components/StatusIndicators.js';
 import { Button } from '../../components/Button.js';
 import { ToggleSwitch } from '../../components/ToggleSwitch.js';
 import { Surface } from '../../components/Surface.js';
-import { SurfaceContainer } from '../../components/SurfaceContainer.js';
 import { BackupRow } from '../../components/rows/BackupRow.js';
 import { toast } from '../../lib/toast.js';
 import {
@@ -67,18 +66,14 @@ export function ProfileSelectField({ label, hint = '', value, options, labels, c
     if (!sel) return null;
     if (compact) {
         return html`<${Surface} className="profile-select-surface profile-select-compact" ...${sel} onActivate=${activateSelect}>
-            <${SurfaceContainer}>
-                <${CustomSelect} value=${value} options=${options} labels=${labels} onChange=${onChange} />
-            <//>
+            <${CustomSelect} value=${value} options=${options} labels=${labels} onChange=${onChange} />
         <//>`;
     }
     const cls = ['form-group', 'profile-input-surface', 'profile-select-surface', className].filter(Boolean).join(' ');
     return html`
         <${Surface} className=${cls} ...${sel} onActivate=${activateSelect}>
             <label>${label}${hint && html`<span class="hint"> ${hint}</span>`}</label>
-            <${SurfaceContainer}>
-                <${CustomSelect} value=${value} options=${options} labels=${labels} onChange=${onChange} />
-            <//>
+            <${CustomSelect} value=${value} options=${options} labels=${labels} onChange=${onChange} />
         <//>
     `;
 }

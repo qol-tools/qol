@@ -1,37 +1,21 @@
-import { useCallback, useLayoutEffect } from 'preact/hooks';
+import { useCallback, useLayoutEffect, useState } from 'preact/hooks';
 import { modalFields } from '../components/ModalPreact.js';
 
-function getSurfaces() {
-    const container = document.querySelector('.edit-modal');
-    if (!container) return [];
-    return Array.from(container.querySelectorAll('[data-selected-surface]'))
-        .filter(el => !el.parentElement?.closest('[data-selected-surface]'));
-}
-
 export function useModalKeyboard({ onSave }) {
-    // Sync data-selected with focus. Runs on every render to counteract
-    // Preact removing data-selected from Button surfaces, and listens for
-    // focusin to track when globalSurfaceNav moves focus via .focus().
+    const [selectedIndex, setSelectedIndex] = useState(0);
+
     useLayoutEffect(() => {
         const container = document.querySelector('.edit-modal');
         if (!container) return;
-        const sync = () => {
-            const surfaces = getSurfaces();
-            for (const s of surfaces) {
-                const focused = s === document.activeElement || s.contains(document.activeElement);
-                s.setAttribute('data-selected', focused ? 'true' : 'false');
-            }
-        };
-        sync();
-        container.addEventListener('focusin', sync);
-        return () => container.removeEventListener('focusin', sync);
-    });
+        const surfaces = getModalSurfaces(container);
+        const surface = surfaces[Math.min(selectedIndex, surfaces.length - 1)];
+        if (surface && !surface.contains(document.activeElement)) {
+            surface.focus({ preventScroll: true });
+        }
+    }, [selectedIndex]);
 
-    // Modal-specific key handling. Arrow keys are NOT handled here —
-    // globalSurfaceNav provides spatial navigation automatically.
     const handleKey = useCallback((e) => {
         const active = document.activeElement;
-
         if (active?.closest('.custom-select-list')) return;
 
         if (isEditing(active)) {
@@ -44,35 +28,34 @@ export function useModalKeyboard({ onSave }) {
         }
 
         if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); onSave(); return; }
-
-        if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            const surface = active?.closest('[data-selected-surface]');
-            activate(surface);
-            return;
-        }
     }, [onSave]);
 
-    const fieldProps = useCallback((_index) => ({
+    const fieldProps = useCallback((index) => ({
         'data-selected-surface': '',
+        'data-selected': index === selectedIndex ? 'true' : 'false',
         tabIndex: -1,
-    }), []);
+        onFocus: () => setSelectedIndex(index),
+        onClick: activateFieldContent,
+    }), [selectedIndex]);
 
     return { handleKey, fieldProps };
 }
 
-function activate(surface) {
-    if (!surface) return;
-    if (surface.tagName === 'BUTTON') { surface.click(); return; }
-    const toggle = surface.querySelector('[role="switch"]');
+function getModalSurfaces(container) {
+    return Array.from(container.querySelectorAll('[data-selected-surface]'))
+        .filter(el => !el.parentElement?.closest('[data-selected-surface]'));
+}
+
+function activateFieldContent(e) {
+    if (e.target !== e.currentTarget) return;
+    const el = e.currentTarget;
+    const toggle = el.querySelector('[role="switch"]');
     if (toggle) { toggle.click(); return; }
-    const fields = modalFields(surface);
+    const trigger = el.querySelector('.custom-select-trigger');
+    if (trigger) { trigger.click(); return; }
+    const fields = modalFields(el);
     const target = fields[0];
     if (!target) return;
-    if (target.classList.contains('custom-select-trigger') || target.readOnly) {
-        target.click();
-        return;
-    }
     target.focus();
     if (target.tagName === 'INPUT' && target.select) target.select();
 }
