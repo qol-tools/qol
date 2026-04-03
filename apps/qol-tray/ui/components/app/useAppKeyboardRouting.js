@@ -82,6 +82,7 @@ function handlePaletteToggle(event, palette, activePluginId, viewKeyboard) {
 function routeToView(event, viewKeyboard, cycleView) {
     if (viewKeyboard?.isBlocking?.()) {
         if (viewKeyboard.handleKey) viewKeyboard.handleKey(event);
+        if (!event.defaultPrevented) globalSurfaceNav(event);
         return;
     }
     if (event.key === 'Tab') {

@@ -1,4 +1,4 @@
-import { useState, useCallback, useLayoutEffect } from 'preact/hooks';
+import { useCallback, useLayoutEffect } from 'preact/hooks';
 import { modalFields } from '../components/ModalPreact.js';
 
 function getSurfaces() {
@@ -8,36 +8,28 @@ function getSurfaces() {
         .filter(el => !el.parentElement?.closest('[data-selected-surface]'));
 }
 
-export function useModalKeyboard({ onSave, onClose }) {
-    const [selectedIndex, setSelectedIndex] = useState(0);
-    // Set data-selected on every render — Preact's diff removes it from
-    // Button surfaces (which render data-selected: undefined), so we must
-    // re-apply imperatively after each commit.
+export function useModalKeyboard({ onSave }) {
+    // Sync data-selected with focus. Runs on every render to counteract
+    // Preact removing data-selected from Button surfaces, and listens for
+    // focusin to track when globalSurfaceNav moves focus via .focus().
     useLayoutEffect(() => {
-        const surfaces = getSurfaces();
-        if (surfaces.length === 0) return;
-        const clamped = Math.min(selectedIndex, surfaces.length - 1);
-        for (let i = 0; i < surfaces.length; i++) {
-            surfaces[i].setAttribute('data-selected', i === clamped ? 'true' : 'false');
-        }
+        const container = document.querySelector('.edit-modal');
+        if (!container) return;
+        const sync = () => {
+            const surfaces = getSurfaces();
+            for (const s of surfaces) {
+                const focused = s === document.activeElement || s.contains(document.activeElement);
+                s.setAttribute('data-selected', focused ? 'true' : 'false');
+            }
+        };
+        sync();
+        container.addEventListener('focusin', sync);
+        return () => container.removeEventListener('focusin', sync);
     });
 
-    // Focus only when selectedIndex changes — prevents jumps from unrelated re-renders.
-    useLayoutEffect(() => {
-        const surfaces = getSurfaces();
-        if (surfaces.length === 0) return;
-        const surface = surfaces[Math.min(selectedIndex, surfaces.length - 1)];
-        if (surface && !surface.contains(document.activeElement)) {
-            surface.focus({ preventScroll: true });
-        }
-    }, [selectedIndex]);
-
+    // Modal-specific key handling. Arrow keys are NOT handled here —
+    // globalSurfaceNav provides spatial navigation automatically.
     const handleKey = useCallback((e) => {
-        const surfaces = getSurfaces();
-        if (surfaces.length === 0) return;
-
-        const surface = surfaces.find(s => s === document.activeElement || s.contains(document.activeElement))
-            || surfaces.find(s => s.getAttribute('data-selected') === 'true');
         const active = document.activeElement;
 
         if (active?.closest('.custom-select-list')) return;
@@ -45,7 +37,7 @@ export function useModalKeyboard({ onSave, onClose }) {
         if (isEditing(active)) {
             if (e.key === 'Escape' || e.key === 'Enter') {
                 e.preventDefault();
-                surface?.focus();
+                active.closest('[data-selected-surface]')?.focus();
             }
             if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); onSave(); }
             return;
@@ -53,39 +45,20 @@ export function useModalKeyboard({ onSave, onClose }) {
 
         if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); onSave(); return; }
 
-        if (e.key === 'ArrowDown' || e.key === 'j') {
-            e.preventDefault();
-            navigate(surfaces, 1, setSelectedIndex);
-            return;
-        }
-        if (e.key === 'ArrowUp' || e.key === 'k') {
-            e.preventDefault();
-            navigate(surfaces, -1, setSelectedIndex);
-            return;
-        }
         if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
+            const surface = active?.closest('[data-selected-surface]');
             activate(surface);
             return;
         }
-    }, [onSave, onClose]);
+    }, [onSave]);
 
-    const fieldProps = useCallback((index) => ({
+    const fieldProps = useCallback((_index) => ({
         'data-selected-surface': '',
         tabIndex: -1,
-        onMouseDown: () => setSelectedIndex(index),
-        onFocus: () => setSelectedIndex(index),
     }), []);
 
-    return { selectedIndex, setSelectedIndex, handleKey, fieldProps };
-}
-
-function navigate(surfaces, delta, setSelectedIndex) {
-    setSelectedIndex(prev => {
-        const next = Math.max(0, Math.min(surfaces.length - 1, prev + delta));
-        surfaces[next]?.focus({ preventScroll: true });
-        return next;
-    });
+    return { handleKey, fieldProps };
 }
 
 function activate(surface) {
