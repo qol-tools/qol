@@ -4,9 +4,15 @@ const log = createDebug('qol:spatial');
 
 export function nearestSurfaceInDirection(surfaces, current, direction) {
     const horizontal = direction === 'left' || direction === 'right';
-    const result = spatialSearch(surfaces, current, direction, true);
-    if (result || horizontal) return result;
-    return spatialSearch(surfaces, current, direction, false);
+    const coneResult = spatialSearch(surfaces, current, direction, true);
+    if (horizontal) return coneResult;
+    const openResult = spatialSearch(surfaces, current, direction, false);
+    if (!coneResult) return openResult;
+    if (!openResult) return coneResult;
+    const cr = current.getBoundingClientRect();
+    const cdy = Math.abs(coneResult.getBoundingClientRect().top - cr.top);
+    const ody = Math.abs(openResult.getBoundingClientRect().top - cr.top);
+    return ody < cdy ? openResult : coneResult;
 }
 
 function spatialSearch(surfaces, current, direction, useCone) {
