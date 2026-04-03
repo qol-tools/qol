@@ -300,40 +300,34 @@ function LogRowShowcase() {
     `;
 }
 
+const SUPPRESSED_ENTRIES = {
+    'qol-alt-tab::hotkey_register_failed': {
+        count: 12, last_message: 'Failed to register hotkey: already registered by another process',
+        source: 'qol-alt-tab', location: 'src/main.rs:42',
+        first_seen: '2026-04-02T14:30:01', last_seen: '2026-04-02T14:32:05',
+    },
+    'qol-fx::vsync_miss': { count: 47, last_message: 'Animation frame dropped (vsync miss)', source: 'qol-fx', first_seen: '2026-04-02T12:00:00', last_seen: '2026-04-02T14:30:00' },
+    'qol-alt-tab::event_loop_stall': { count: 312, source: 'qol-alt-tab', first_seen: '2026-04-01T08:00:00', last_seen: '2026-04-02T14:32:00' },
+};
+
 function SuppressedRowShowcase() {
     const sel = useListSelection();
-    const [expanded, setExpanded] = useState(false);
+    const [expandedKeys, setExpandedKeys] = useState(new Set());
+    const toggle = (key) => setExpandedKeys(prev => {
+        const next = new Set(prev);
+        if (next.has(key)) next.delete(key); else next.add(key);
+        return next;
+    });
+    const keys = Object.keys(SUPPRESSED_ENTRIES);
     return html`
         <${CatalogSection} title="Card-style">
-            <${ListGroup} className="list-group-cards" onDeselect=${sel.deselect}>
-                <${SuppressedRow} sigKey="qol-alt-tab::hotkey_register_failed" count=${12}
-                    expanded=${expanded} onToggle=${() => setExpanded(!expanded)} onUnsuppress=${() => {}}
-                    index=${0} selected=${sel.selected(0)} onSelect=${sel.select}
-                    detail=${html`
-                        <div style="font-family:var(--font-mono); font-size:var(--fs-sm); color:var(--text-muted); padding:0 var(--space-2)">
-                            Failed to register hotkey: already registered by another process
-                        </div>
-                        <div style="display:flex; flex-direction:column; gap:var(--space-1); padding:0 var(--space-2)">
-                            <div style="display:flex; gap:var(--space-3)">
-                                <span style="color:var(--text-faint); font-size:var(--fs-xs); width:4rem">Source</span>
-                                <span style="font-size:var(--fs-sm)">qol-alt-tab</span>
-                            </div>
-                            <div style="display:flex; gap:var(--space-3)">
-                                <span style="color:var(--text-faint); font-size:var(--fs-xs); width:4rem">Location</span>
-                                <span style="font-family:var(--font-mono); font-size:var(--fs-sm)">src/main.rs:42</span>
-                            </div>
-                        </div>
-                        <div style="display:flex; gap:var(--space-2); font-size:var(--fs-sm); color:var(--text-faint); padding:0 var(--space-2)">
-                            <span>First: 2026-04-02 14:30:01</span>
-                            <span>${'\u00b7'}</span>
-                            <span>Last: 2026-04-02 14:32:05</span>
-                        </div>
-                    `} />
-                <${SuppressedRow} sigKey="qol-fx::vsync_miss" count=${47}
-                    index=${1} selected=${sel.selected(1)} onSelect=${sel.select} onUnsuppress=${() => {}} />
-                <${SuppressedRow} sigKey="qol-alt-tab::event_loop_stall" count=${312}
-                    index=${2} selected=${sel.selected(2)} onSelect=${sel.select} onUnsuppress=${() => {}} />
-            <//>
+            <div class="logs-suppressed-list">
+                ${keys.map((key, i) => html`
+                    <${SuppressedRow} key=${key} sigKey=${key} entry=${SUPPRESSED_ENTRIES[key]}
+                        expanded=${expandedKeys.has(key)} index=${i} selected=${sel.selected(i)}
+                        onSelect=${sel.select} onToggle=${() => toggle(key)} onUnsuppress=${() => {}} />
+                `)}
+            </div>
         <//>
     `;
 }
