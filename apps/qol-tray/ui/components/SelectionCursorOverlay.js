@@ -211,11 +211,8 @@ function selectedSurfaceMaxGlide(target) {
 }
 
 function needsViewportTeleport(target) {
-    if (target.getAttribute('data-scroll-follow-mode') !== 'nearest') return false;
-
     const scroller = findScrollParent(target);
     if (!(scroller instanceof HTMLElement)) return false;
-
     return !isFullyVisibleWithin(target, scroller);
 }
 
