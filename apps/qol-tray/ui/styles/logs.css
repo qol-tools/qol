@@ -174,7 +174,7 @@
     border-left-color: rgba(var(--danger-rgb), 0.5);
 }
 
-.suppressed-entry.selected {
+.suppressed-entry[data-selected="true"] {
     background: var(--bg-selected);
     border-color: rgba(var(--accent-rgb), 0.4);
     border-left-color: rgba(var(--accent-rgb), 0.6);
