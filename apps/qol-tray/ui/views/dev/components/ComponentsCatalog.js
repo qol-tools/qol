@@ -13,7 +13,6 @@ import { Surface } from '../../../components/Surface.js';
 import { Button, RefreshButton } from '../../../components/Button.js';
 import { EmptyState } from '../../../components/EmptyState.js';
 import { useListSelection } from '../../../hooks/useListSelection.js';
-import { PluginRow } from '../../../components/rows/PluginRow.js';
 import { LogRow, LogDetailModal } from '../../../components/rows/LogRow.js';
 import { SuppressedRow } from '../../../components/rows/SuppressedRow.js';
 import { BackupRow } from '../../../components/rows/BackupRow.js';
@@ -273,25 +272,6 @@ function DevPluginRowShowcase() {
                     actions=${makeActions(1)}
                     badges=${html`<${Badge} style=${{ background: 'rgba(var(--warning-rgb),0.16)', borderColor: 'rgba(var(--warning-rgb),0.3)' }}>Local<//>`} />
             </div>
-        <//>
-    `;
-}
-
-function PluginRowShowcase() {
-    const sel = useListSelection();
-    const [linked, setLinked] = useState({ 0: true, 1: false, 2: false });
-    const toggleLink = (i) => () => setLinked(prev => ({ ...prev, [i]: !prev[i] }));
-    const status = (i) => linked[i] ? 'linked' : (i === 1 ? 'local' : undefined);
-    return html`
-        <${CatalogSection} title="Plugin-style">
-            <${ListGroup} onDeselect=${sel.deselect}>
-                <${PluginRow} name="qol-window-actions" path="~/repos/qol-tools/qol-window-actions"
-                    status=${status(0)} index=${0} selected=${sel.selected(0)} onSelect=${sel.select} onActivate=${toggleLink(0)} />
-                <${PluginRow} name="qol-alt-tab" path="~/repos/qol-tools/qol-alt-tab"
-                    status=${status(1)} index=${1} selected=${sel.selected(1)} onSelect=${sel.select} onActivate=${toggleLink(1)} />
-                <${PluginRow} name="qol-fx" path="~/repos/qol-tools/qol-fx"
-                    status=${status(2)} index=${2} selected=${sel.selected(2)} onSelect=${sel.select} onActivate=${toggleLink(2)} />
-            <//>
         <//>
     `;
 }
