@@ -12,7 +12,7 @@ export function DevPluginRow({ name, path, status, pluginId, badges, meta, actio
     const containerRef = useRef(null);
     const close = useCallback(() => {
         setMenuOpen(false);
-        const row = containerRef.current?.querySelector('[data-selected-surface]');
+        const row = containerRef.current?.querySelector('.plugin-row[data-selected-surface]');
         if (row) requestAnimationFrame(() => row.focus({ preventScroll: true }));
     }, []);
     useClickOutside(containerRef, menuOpen, close);
