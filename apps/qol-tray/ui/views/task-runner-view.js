@@ -25,11 +25,12 @@ function ensureCssLoaded() {
 }
 
 function ApiUsage({ actions, actionIds, copyApiExample }) {
+    const hasActions = actionIds.length > 0;
     const exampleJson = buildApiExample(actions, actionIds).json;
     return html`<div class="api-usage">
         <div class="api-usage-header">
             <span>API Usage</span>
-            <button class="btn btn-ghost btn-sm" onClick=${copyApiExample}>Copy</button>
+            ${hasActions && html`<button class="btn btn-ghost btn-sm" onClick=${copyApiExample}>Copy</button>`}
         </div>
         <div class="api-usage-content">
             <code>POST ${API_BASE}/execute</code>
