@@ -1,24 +1,30 @@
-import { useState, useCallback, useLayoutEffect } from 'preact/hooks';
+import { useState, useCallback, useLayoutEffect, useRef } from 'preact/hooks';
 import { modalFields } from '../components/ModalPreact.js';
 
 function getSurfaces() {
     const container = document.querySelector('.edit-modal');
     if (!container) return [];
     return Array.from(container.querySelectorAll('[data-selected-surface]'))
-        .filter(el => !el.parentElement?.closest('[data-selected-surface]'))
-        .filter(el => !el.closest('.modal-footer-actions'));
+        .filter(el => !el.parentElement?.closest('[data-selected-surface]'));
 }
 
 export function useModalKeyboard({ onSave, onClose }) {
     const [selectedIndex, setSelectedIndex] = useState(0);
+    const prevIndexRef = useRef(-1);
 
     useLayoutEffect(() => {
         const surfaces = getSurfaces();
-        const surface = surfaces[selectedIndex];
+        if (surfaces.length === 0) return;
+        for (const s of surfaces) s.setAttribute('data-selected', 'false');
+        const clamped = Math.min(selectedIndex, surfaces.length - 1);
+        const surface = surfaces[clamped];
         if (!surface) return;
-        if (surface.contains(document.activeElement)) return;
-        surface.focus();
-    });
+        surface.setAttribute('data-selected', 'true');
+        if (prevIndexRef.current !== clamped || !surface.contains(document.activeElement)) {
+            surface.focus({ preventScroll: true });
+        }
+        prevIndexRef.current = clamped;
+    }, [selectedIndex]);
 
     const handleKey = useCallback((e) => {
         const surfaces = getSurfaces();
@@ -60,11 +66,10 @@ export function useModalKeyboard({ onSave, onClose }) {
 
     const fieldProps = useCallback((index) => ({
         'data-selected-surface': '',
-        'data-selected': index === selectedIndex ? 'true' : 'false',
         tabIndex: -1,
         onMouseDown: () => setSelectedIndex(index),
         onFocus: () => setSelectedIndex(index),
-    }), [selectedIndex]);
+    }), []);
 
     return { selectedIndex, setSelectedIndex, handleKey, fieldProps };
 }
@@ -72,7 +77,7 @@ export function useModalKeyboard({ onSave, onClose }) {
 function navigate(surfaces, delta, setSelectedIndex) {
     setSelectedIndex(prev => {
         const next = Math.max(0, Math.min(surfaces.length - 1, prev + delta));
-        surfaces[next]?.focus();
+        surfaces[next]?.focus({ preventScroll: true });
         return next;
     });
 }
