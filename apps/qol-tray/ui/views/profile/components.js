@@ -19,6 +19,7 @@ import {
     fieldPlaceholder,
     fieldValue,
     providerFieldInputId,
+    providerFieldSurfaceId,
 } from './form.js';
 import {
     buildBadges,
