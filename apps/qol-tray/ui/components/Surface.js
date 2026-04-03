@@ -8,6 +8,7 @@ export function useSurface({ index, selected, onSelect, onActivate, selectValue 
             'data-selected-surface': '',
             'data-selected': selected != null ? (selected ? 'true' : 'false') : undefined,
             'data-index': index != null ? String(index) : undefined,
+            tabIndex: -1,
             onFocus: onSelect ? () => onSelect(focusValue) : undefined,
             onClick: onActivate,
         },

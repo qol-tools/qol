@@ -12,6 +12,7 @@ export function surfaceProps(surface, selectedIndex, setSelectedIndex) {
         'data-selected-surface': '',
         'data-selected': selected ? 'true' : 'false',
         'data-index': String(surface.index),
+        tabIndex: -1,
         onMouseDown: () => setSelectedIndex(surface.index),
         onFocus: () => setSelectedIndex(surface.index),
     };

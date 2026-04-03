@@ -30,7 +30,7 @@ function StoreCard({ plugin, index, selected, installing, onCardClick, onSelect 
     return html`
         <div
             class=${storeCardClassName(plugin, selected, installing)}
-            data-selected-surface=""
+            data-selected-surface="" tabIndex="-1"
             data-selected=${selected ? 'true' : 'false'}
             data-index=${String(index)}
             data-plugin-id=${plugin.id}

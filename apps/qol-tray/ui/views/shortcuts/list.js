@@ -40,7 +40,7 @@ export function ShortcutsList({ shortcuts, selectedIndex, onSelect, onEdit }) {
 function ShortcutRow({ shortcut, index, selected, onSelect, onClick }) {
     return html`
         <div class="shortcut-row table-list-row table-grid"
-             data-selected-surface=""
+             data-selected-surface="" tabIndex="-1"
              data-enabled="${shortcut.enabled ? 'true' : 'false'}"
              data-selected="${selected ? 'true' : 'false'}"
              data-index="${index}" onFocus=${() => onSelect(shortcut.id)} onClick=${onClick}>
