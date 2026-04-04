@@ -54,7 +54,7 @@ Each view has a world-space entry:
 ...
 ```
 
-Default layout: horizontal strip with 200px gaps. The layout engine assigns positions — views do not choose their own.
+Architecture is freeform — views have `{ x, y }` coordinates, not grid slots. Default layout: horizontal strip with gaps. The layout engine assigns initial positions — views do not choose their own. User rearrangement comes in edit-mode (future milestone).
 
 ### Spatial Index
 
@@ -77,11 +77,13 @@ Everything inside the world is interactive normally. Click buttons, type in inpu
 
 Keyboard arrow navigation moves between surfaces (unchanged). When focus moves to an element outside the viewport, the camera pans smoothly to show it — replacing the old `scrollForKeyboardSelection`.
 
-### Edge Panning — Ambient Discovery
+### Grab to Pan — Primary Spatial Navigation
 
-When the mouse cursor reaches the viewport edges, the camera pans in that direction. Speed scales with proximity to the edge (closer = faster). No click needed.
+Click and drag the world background to pan. Cursor shows `grab` (open hand) by default, `grabbing` (closed hand) while dragging. If the mousedown target is interactive content (buttons, rows, inputs), it's a normal click — drag only activates on the world background or non-interactive areas.
 
-Only active when the world extends beyond the viewport in that direction. Dead zone = everything except the edge strip (~20px from edge).
+### Trackpad Panning
+
+Two-finger scroll (wheel events) maps directly to camera translation. `deltaX` → horizontal pan, `deltaY` → vertical pan. No modifier needed — trackpad scroll is the natural panning gesture.
 
 ### CTRL Mode — Explicit Viewport Control
 
@@ -171,7 +173,7 @@ On refresh, the router reads the hash, looks up the target view's world coordina
 
 ## Milestone Boundaries
 
-**A (this spec):** Camera + viewport, view positioning, edge panning, CTRL panning, auto-follow focus, command palette landmarks (view + region level), region labels, minimap, zoom-to-fit. No sidebar.
+**A (this spec):** Camera + viewport, view positioning, grab-to-pan, trackpad panning, CTRL panning, auto-follow focus, command palette landmarks (view + region level), region labels, minimap, zoom-to-fit. No sidebar.
 
 **B (future):** Jump navigation with landing strategies (center, top-left, etc.), element-level and state-level landmarks, CTRL contextual overlays (action hints, jump target previews).
 
@@ -183,7 +185,7 @@ On refresh, the router reads the hash, looks up the target view's world coordina
 
 | File | Change |
 |------|--------|
-| `ui/components/app/world-camera.js` | New — camera state, panTo, panSmooth, edge panning, CTRL mode |
+| `ui/components/app/world-camera.js` | New — camera state, panTo, panSmooth, grab-to-pan, trackpad pan, CTRL mode |
 | `ui/components/app/world-registry.js` | New — view positions, spatial index, landmark registry |
 | `ui/components/app/WorldViewport.js` | New — #viewport + #world DOM, camera wiring, content-visibility |
 | `ui/components/app/Minimap.js` | New — corner minimap overlay |
