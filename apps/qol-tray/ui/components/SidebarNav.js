@@ -3,18 +3,23 @@ import { useEffect, useRef } from 'preact/hooks';
 import { useSidebarContext } from './app/sidebar-context.js';
 import { materializeIn } from '../lib/dissolve.js';
 
-let prevItemsRef = null;
+function itemSetKey(items) {
+    return items.map(i => i.key || i.id || '').join('\0');
+}
+
+let prevSetKey = null;
 
 export function SidebarNav() {
     const { items, header } = useSidebarContext();
     const itemsRef = useRef(null);
+    const setKey = itemSetKey(items);
 
     useEffect(() => {
         const el = itemsRef.current;
-        if (prevItemsRef !== null && prevItemsRef !== items && el?.offsetHeight > 0) {
+        if (prevSetKey !== null && prevSetKey !== setKey && el?.offsetHeight > 0) {
             materializeIn(el);
         }
-        prevItemsRef = items;
+        prevSetKey = setKey;
     });
 
     return html`

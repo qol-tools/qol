@@ -19,14 +19,28 @@ export function useSidebarProvider({ defaultItems, defaultHeader }) {
     }, []);
 
     const items = override || defaultItems;
+    const isOverridden = override !== null;
+
+    const cycleItem = useCallback((direction) => {
+        const clickable = items.filter(i => i.type !== 'divider' && i.onClick);
+        if (clickable.length === 0) return;
+        const activeIdx = clickable.findIndex(i => i.active);
+        if (activeIdx < 0) { clickable[0].onClick(); return; }
+        const next = direction > 0
+            ? (activeIdx + 1) % clickable.length
+            : (activeIdx - 1 + clickable.length) % clickable.length;
+        clickable[next].onClick();
+    }, [items]);
+
     const value = useMemo(() => ({
         items,
         setItems,
         header: header !== null ? header : defaultHeader,
         setHeader,
         resetSidebar,
-        isOverridden: override !== null,
-    }), [items, header, defaultHeader, defaultItems, setItems, setHeader, resetSidebar, override]);
+        isOverridden,
+        cycleItem,
+    }), [items, header, defaultHeader, defaultItems, setItems, setHeader, resetSidebar, isOverridden, cycleItem]);
 
     return { SidebarContext, value };
 }
