@@ -1,7 +1,6 @@
 function handleEscapeKey(event, state, bump) {
-    if (!state.openPluginMenuId && !state.openCoreMenuId) return;
+    if (!state.openCoreMenuId) return;
     event.preventDefault();
-    state.openPluginMenuId = null;
     state.openCoreMenuId = null;
     bump();
 }

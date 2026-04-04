@@ -13,7 +13,7 @@ export function PluginRow({ plugin, index, ctrl }) {
     const actionDisabled = isBuilding || !!ctrl.linkingId;
     const rebuildActive = plugin.status === 'linked' && plugin.has_cargo && plugin.needs_rebuild;
 
-    const actions = buildActions(plugin, statusToken, index, ctrl);
+    const actions = buildActions(plugin, statusToken, index, ctrl, rebuildActive);
 
     const icon = isLinking
         ? html`<span class="refresh-btn spinning" aria-hidden="true"></span>`
@@ -37,10 +37,11 @@ export function PluginRow({ plugin, index, ctrl }) {
     `;
 }
 
-function buildActions(plugin, statusToken, index, ctrl) {
+function buildActions(plugin, statusToken, index, ctrl, rebuildActive) {
     const actions = [];
+    const linkLabel = rebuildActive ? 'Rebuild' : statusToken === 'linked' ? 'Unlink' : 'Link';
     actions.push({
-        label: statusToken === 'linked' ? 'Unlink' : 'Link',
+        label: linkLabel,
         run: () => { ctrl.setSelectedIndex(index); ctrl.handleItemActivation(); },
     });
     actions.push({

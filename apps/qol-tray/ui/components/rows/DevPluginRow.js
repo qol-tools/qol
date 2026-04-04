@@ -21,7 +21,12 @@ export function DevPluginRow({ name, path, status, pluginId, badges, meta, actio
         if (!menuOpen) return;
         const first = containerRef.current?.querySelector('.dev-plugin-row-actions [data-selected-surface]');
         if (first) first.focus({ preventScroll: true });
-    }, [menuOpen]);
+        const onKey = (e) => {
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+        };
+        document.addEventListener('keydown', onKey, true);
+        return () => document.removeEventListener('keydown', onKey, true);
+    }, [menuOpen, close]);
 
     const activate = useCallback(() => {
         if (!actions?.length) return;
