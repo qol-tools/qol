@@ -14,7 +14,8 @@ function parseHashRoute() {
     if (pluginMatch) {
         return { viewId: 'plugins', pluginId: pluginMatch[1], mode: 'ui' };
     }
-    return { viewId: raw || null, pluginId: null, mode: null };
+    const viewId = raw.split('/')[0] || null;
+    return { viewId, pluginId: null, mode: null };
 }
 
 function readStoredView() {

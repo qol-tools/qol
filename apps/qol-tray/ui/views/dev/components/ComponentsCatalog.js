@@ -1,5 +1,5 @@
 import { html } from '../../../lib/html.js';
-import { useCallback, useState } from 'preact/hooks';
+import { useCallback, useRef, useState } from 'preact/hooks';
 import { SurfaceContainer } from '../../../components/SurfaceContainer.js';
 import { directSurfaces } from '../../../lib/surface-traits.js';
 import { Modal, ModalFooter } from '../../../components/ModalPreact.js';
@@ -56,6 +56,15 @@ function CatalogSection({ title, children }) {
 
 function StateLabel({ children }) {
     return html`<div class="catalog-state-label">${children}</div>`;
+}
+
+function MockControls({ actions }) {
+    if (!actions?.length) return null;
+    return html`
+        <div class="catalog-mock-controls">
+            ${actions.map(a => html`<${Button} key=${a.label} small variant="btn-ghost" onActivate=${a.run}>${a.label}<//>`)}
+        </div>
+    `;
 }
 
 // ---------------------------------------------------------------------------
@@ -289,31 +298,39 @@ function DevPluginRowShowcase() {
     const sel = useListSelection();
     const [linked, setLinked] = useState(false);
     const [needsRebuild, setNeedsRebuild] = useState(false);
-    const [busy, setBusy] = useState(false);
+    const [busyType, setBusyType] = useState(null);
     const builtRef = useRef(false);
     const doLink = useCallback(() => {
-        setBusy(true);
-        setTimeout(() => { setLinked(true); setNeedsRebuild(!builtRef.current); setBusy(false); }, 600);
+        setBusyType('linking');
+        setTimeout(() => { setLinked(true); setNeedsRebuild(!builtRef.current); setBusyType(null); }, 600);
     }, []);
     const doRebuild = useCallback(() => {
-        setBusy(true);
-        setTimeout(() => { builtRef.current = true; setNeedsRebuild(false); setBusy(false); }, 600);
+        setBusyType('building');
+        setTimeout(() => { builtRef.current = true; setNeedsRebuild(false); setBusyType(null); }, 600);
     }, []);
     const doUnlink = useCallback(() => { setLinked(false); setNeedsRebuild(false); }, []);
+    const doReset = useCallback(() => { setLinked(false); setNeedsRebuild(false); builtRef.current = false; }, []);
     const rebuildActive = linked && needsRebuild;
+    const busy = busyType !== null;
     const rebuildIcon = (cls) => html`<img class="plugin-action-rebuild-icon ${cls}" src="assets/qol-tray.png?v=1" alt="" aria-hidden="true" />`;
-    const dirtySource = useCallback(() => setNeedsRebuild(true), []);
     const linkLabel = rebuildActive ? 'Rebuild' : linked ? 'Unlink' : 'Link';
     const linkRun = rebuildActive ? doRebuild : linked ? doUnlink : doLink;
     const actions = busy ? [] : [
         { label: linkLabel, run: linkRun },
         ...(linked ? [{ label: 'Mute Logs', run: () => {} }, { label: 'Edit Filters', run: () => {} }] : []),
-        ...(linked && !needsRebuild ? [{ label: 'Dirty source (mock)', run: dirtySource }] : []),
     ];
     const icon = busy
         ? html`<span class="refresh-btn spinning" aria-hidden="true"></span>`
         : rebuildIcon(rebuildActive ? 'has-rebuild' : 'rebuild-idle');
     const status = linked ? 'linked' : 'local';
+    const badgeText = busy ? (busyType === 'linking' ? 'Linking...' : 'Building...') : rebuildActive ? 'Needs rebuild' : linked ? 'Linked' : 'Local';
+    const badgeColor = (!busy && linked && !needsRebuild) ? 'success' : 'warning';
+    const badgeStyle = badgeColor === 'success'
+        ? { background: 'rgba(var(--success-rgb),0.14)', borderColor: 'rgba(var(--success-rgb),0.26)' }
+        : { background: 'rgba(var(--warning-rgb),0.16)', borderColor: 'rgba(var(--warning-rgb),0.3)' };
+    const mockActions = [];
+    if (linked && !needsRebuild && !busy) mockActions.push({ label: 'Dirty source', run: () => setNeedsRebuild(true) });
+    if ((linked || builtRef.current) && !busy) mockActions.push({ label: 'Reset', run: doReset });
 
     return html`
         <${CatalogSection} title="Dev plugin row">
@@ -325,15 +342,10 @@ function DevPluginRowShowcase() {
                             index=${0} selected=${sel.selected(0)} onSelect=${sel.select}
                             actions=${actions} actionIcon=${icon}
                             className=${busy ? 'is-linking' : undefined}
-                            badges=${busy
-                                ? html`<${Badge} style=${{ background: 'rgba(var(--warning-rgb),0.16)', borderColor: 'rgba(var(--warning-rgb),0.3)' }}>Building...<//>`
-                                : rebuildActive
-                                ? html`<${Badge} style=${{ background: 'rgba(var(--warning-rgb),0.16)', borderColor: 'rgba(var(--warning-rgb),0.3)' }}>Needs rebuild<//>`
-                                : linked
-                                ? html`<${Badge} style=${{ background: 'rgba(var(--success-rgb),0.14)', borderColor: 'rgba(var(--success-rgb),0.26)' }}>Linked<//>`
-                                : html`<${Badge} style=${{ background: 'rgba(var(--warning-rgb),0.16)', borderColor: 'rgba(var(--warning-rgb),0.3)' }}>Local<//>`}
+                            badges=${html`<${Badge} style=${badgeStyle}>${badgeText}<//>`}
                             meta=${html`<span style="font-size:var(--fs-xs); color:var(--text-faint)">${busy ? 'Compiling...' : rebuildActive ? 'Source changed • fp a3b2c1d0' : linked ? 'fp a3b2c1d0 • Built 2m ago' : ''}</span>`} />
                     </div>
+                    <${MockControls} actions=${mockActions} />
                 </div>
                 <div class="catalog-states" inert>
                     <${StateLabel}>linked (idle)<//>
@@ -498,6 +510,7 @@ function StoreCardShowcase() {
     const [installed, setInstalled] = useState(false);
     const [installing, setInstalling] = useState(false);
     const [hasUpdate, setHasUpdate] = useState(false);
+    const [ver, setVer] = useState('1.2.0');
     const doInstall = useCallback(() => {
         setInstalling(true);
         setTimeout(() => { setInstalling(false); setInstalled(true); }, 800);
@@ -505,14 +518,16 @@ function StoreCardShowcase() {
     const doUninstall = useCallback(() => { setInstalled(false); setHasUpdate(false); }, []);
     const doUpdate = useCallback(() => {
         setInstalling(true);
-        setTimeout(() => { setInstalling(false); setHasUpdate(false); }, 800);
-    }, []);
+        const next = ver.replace(/(\d+)$/, m => String(Number(m) + 1));
+        setTimeout(() => { setInstalling(false); setHasUpdate(false); setVer(next); }, 800);
+    }, [ver]);
     const mockUpdate = useCallback(() => setHasUpdate(true), []);
     const onActivate = installing ? undefined
         : !installed ? doInstall
         : hasUpdate ? doUpdate
         : undefined;
-    const version = hasUpdate ? { from: '1.2.0', to: '1.3.0' } : { current: '1.2.0' };
+    const nextVer = ver.replace(/(\d+)$/, m => String(Number(m) + 1));
+    const version = hasUpdate ? { from: ver, to: nextVer } : { current: ver };
     return html`
         <${CatalogSection} title="Store cards">
             <div class="catalog-showcase">
@@ -522,12 +537,11 @@ function StoreCardShowcase() {
                             installed=${installed} installing=${installing} hasUpdate=${hasUpdate}
                             index=${0} selected=${sel.selected(0)} onSelect=${sel.select} onActivate=${onActivate} />
                     <//>
-                    ${installed && !hasUpdate && !installing && html`
-                        <div style="margin-top:var(--space-2); display:flex; gap:var(--space-2)">
-                            <${Button} small variant="btn-ghost" onActivate=${mockUpdate}>Mock update available<//>
-                            <${Button} small variant="btn-ghost" onActivate=${doUninstall}>Uninstall<//>
-                        </div>
-                    `}
+                    <${MockControls} actions=${[
+                        ...(installed && !hasUpdate && !installing ? [{ label: 'Mock update', run: mockUpdate }] : []),
+                        ...(installed && !installing ? [{ label: 'Uninstall', run: doUninstall }] : []),
+                        ...(installed || installing ? [{ label: 'Reset', run: () => { setInstalled(false); setInstalling(false); setHasUpdate(false); setVer('1.2.0'); } }] : []),
+                    ]} />
                 </div>
                 <div class="catalog-states" inert>
                     <${StateLabel}>not installed<//>

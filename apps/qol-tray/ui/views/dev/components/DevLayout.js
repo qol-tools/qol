@@ -6,6 +6,7 @@ import { PluginsSection } from './PluginsSection.js';
 import { CoreLogSection } from './CoreLogSection.js';
 import { ActionsSection } from './ActionsSection.js';
 import { useSidebarContext } from '../../../components/app/sidebar-context.js';
+import { useHashSubPath } from '../../../hooks/useHashSubPath.js';
 import { ComponentsCatalog } from './ComponentsCatalog.js';
 
 const TABS = [
@@ -35,15 +36,23 @@ const CATALOG_ITEMS = [
 export function DevLayout({ ctrl, containerRef }) {
     const vtRef = useRef(null);
     const { setItems, resetSidebar } = useSidebarContext();
-    const [catalogId, setCatalogId] = useState('buttons');
-    const [activeTab, setActiveTab] = useState('dev');
+    const [subPath, setSubPath] = useHashSubPath('dev');
+    const [activeTab, setActiveTab] = useState(subPath[0] === 'components' ? 'components' : 'dev');
+    const [catalogId, setCatalogIdRaw] = useState(subPath[1] || 'buttons');
     const tokenRef = useRef(0);
+
+    const setCatalogId = useCallback((id) => {
+        setCatalogIdRaw(id);
+        setSubPath(['components', id]);
+    }, [setSubPath]);
 
     useEffect(() => {
         if (activeTab !== 'components') {
             resetSidebar(tokenRef.current);
+            setSubPath([]);
             return;
         }
+        setSubPath(['components', catalogId]);
         tokenRef.current = setItems(CATALOG_ITEMS.map(item => ({
             type: 'item',
             key: item.id,
@@ -53,12 +62,13 @@ export function DevLayout({ ctrl, containerRef }) {
             onClick: () => setCatalogId(item.id),
         })));
         return () => resetSidebar(tokenRef.current);
-    }, [activeTab, catalogId, setItems, resetSidebar]);
+    }, [activeTab, catalogId, setItems, resetSidebar, setSubPath]);
 
     const onTabActivate = useCallback((tabId) => {
         setActiveTab(tabId);
+        if (tabId !== 'components') setSubPath([]);
         ctrl.setSelectedIndex(0);
-    }, [ctrl.setSelectedIndex]);
+    }, [ctrl.setSelectedIndex, setSubPath]);
 
     const onContentBlur = useCallback(() => {
         ctrl.setSelectedIndex(-1);
@@ -74,7 +84,7 @@ export function DevLayout({ ctrl, containerRef }) {
     return html`
         <${ViewTabs} title="Developer Control" scramble=${true}
             tabs=${TABS} vtRef=${vtRef} className="dev-view-shell" containerRef=${containerRef}
-            onActivate=${onTabActivate} onContentBlur=${onContentBlur}>
+            initialTab=${activeTab} onActivate=${onTabActivate} onContentBlur=${onContentBlur}>
             ${(vt) => html`
                 ${vt.activeTab === 'dev' && html`
                     <${PluginsSection} ctrl=${ctrl} />

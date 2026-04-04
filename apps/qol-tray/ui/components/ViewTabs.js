@@ -18,8 +18,8 @@ import { SurfaceContainer } from './SurfaceContainer.js';
  *       `}
  *   <//>
  */
-export function ViewTabs({ title, subtitle, scramble, tabs, onActivate, onContentBlur, trailing, children, vtRef, className, containerRef }) {
-    const vt = useViewTabs(tabs, { onActivate });
+export function ViewTabs({ title, subtitle, scramble, tabs, onActivate, onContentBlur, trailing, children, vtRef, className, containerRef, initialTab }) {
+    const vt = useViewTabs(tabs, { onActivate, initialTab });
 
     if (vtRef) vtRef.current = vt;
 
