@@ -160,24 +160,23 @@ function navigateInActiveContainer(direction) {
     const nr = next.getBoundingClientRect();
     log('  -> RESULT:', surfaceLabel(next),
         'at (' + Math.round(nr.left) + ',' + Math.round(nr.top) + ')');
-    next.focus({ preventScroll: true });
-    scrollSurfaceIntoView(next);
+    focusWithoutScroll(next);
 }
 
-function scrollSurfaceIntoView(el) {
-    let scroller = el.parentElement;
-    while (scroller && scroller !== document.body) {
-        const style = getComputedStyle(scroller);
-        if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && scroller.scrollHeight > scroller.clientHeight + 1) break;
-        scroller = scroller.parentElement;
+function focusWithoutScroll(el) {
+    const saved = [];
+    let parent = el.parentElement;
+    while (parent && parent !== document.body) {
+        const style = getComputedStyle(parent);
+        const oy = style.overflowY;
+        if ((oy === 'auto' || oy === 'scroll') && parent.scrollHeight > parent.clientHeight + 1) {
+            saved.push({ el: parent, top: parent.scrollTop });
+        }
+        parent = parent.parentElement;
     }
-    if (!scroller || scroller === document.body) return;
-    const sr = scroller.getBoundingClientRect();
-    const er = el.getBoundingClientRect();
-    if (er.top < sr.top) {
-        scroller.scrollTop += er.top - sr.top - 8;
-    } else if (er.bottom > sr.bottom) {
-        scroller.scrollTop += er.bottom - sr.bottom + 8;
+    el.focus({ preventScroll: true });
+    for (const s of saved) {
+        if (s.el.scrollTop !== s.top) s.el.scrollTop = s.top;
     }
 }
 
