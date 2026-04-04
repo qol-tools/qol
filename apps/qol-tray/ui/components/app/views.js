@@ -1,5 +1,4 @@
 import { html } from '../../lib/html.js';
-import { useLayoutEffect, useRef } from 'preact/hooks';
 import { PluginsView } from '../../views/plugins-view.js';
 import { StoreView } from '../../views/store-view.js';
 import { HotkeysView } from '../../views/hotkeys-view.js';
@@ -26,42 +25,22 @@ export function buildViewOrder(devEnabled) {
     return devEnabled ? [...BASE_ORDER, 'dev'] : [...BASE_ORDER];
 }
 
-function ViewSlot({ active, children }) {
-    const ref = useRef(null);
-    useLayoutEffect(() => {
-        if (!active || !ref.current) return;
-        const el = ref.current;
-        el.style.animation = 'none';
-        void el.offsetWidth;
-        el.style.animation = '';
-    }, [active]);
-    const style = active
-        ? 'flex:1;min-height:0;display:flex;flex-direction:column'
-        : 'display:none';
-    return html`<div class="view-slot" ref=${ref} style=${style}>${children}</div>`;
+function WorldViewSlot({ entry, children }) {
+    if (!entry) return null;
+    const style = `position:absolute; left:${entry.x}px; top:${entry.y}px; width:${entry.width}px; content-visibility:auto; contain-intrinsic-size:auto ${entry.width}px ${entry.height}px;`;
+    return html`<div class="world-view-slot" style=${style}>${children}</div>`;
 }
 
-export function renderMountedViews({
-    mounted,
-    activeViewId,
-    activePluginId,
-    openPluginConfig,
-    openPluginUi,
-    syncStatus,
-    syncProviders,
-    onSyncStatusChange,
-    refreshSyncStatus,
-}) {
-    const active = (id) => activeViewId === id && !activePluginId;
+export function renderWorldViews({ registry, openPluginConfig, openPluginUi, syncStatus, syncProviders, onSyncStatusChange, refreshSyncStatus }) {
     return html`
-        ${mounted.has('plugins') && html`<${ViewSlot} active=${active('plugins')}><${PluginsView} onOpenPluginConfig=${openPluginConfig} onOpenPluginUi=${openPluginUi} /><//>`}
-        ${mounted.has('store') && html`<${ViewSlot} active=${active('store')}><${StoreView} /><//>`}
-        ${mounted.has('hotkeys') && html`<${ViewSlot} active=${active('hotkeys')}><${HotkeysView} /><//>`}
-        ${mounted.has('shortcuts') && html`<${ViewSlot} active=${active('shortcuts')}><${ShortcutsView} /><//>`}
-        ${mounted.has('task-runner') && html`<${ViewSlot} active=${active('task-runner')}><${TaskRunnerView} /><//>`}
-        ${mounted.has('profile') && html`<${ViewSlot} active=${active('profile')}><${ProfileView} syncStatus=${syncStatus}
-            syncProviders=${syncProviders} onSyncStatusChange=${onSyncStatusChange} refreshSyncStatus=${refreshSyncStatus} /><//>`}
-        ${mounted.has('logs') && html`<${ViewSlot} active=${active('logs')}><${LogsView} active=${active('logs')} /><//>`}
-        ${mounted.has('dev') && html`<${ViewSlot} active=${active('dev')}><${DevView} /><//>`}
+        <${WorldViewSlot} entry=${registry.getEntry('plugins')}><${PluginsView} onOpenPluginConfig=${openPluginConfig} onOpenPluginUi=${openPluginUi} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('store')}><${StoreView} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('hotkeys')}><${HotkeysView} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('shortcuts')}><${ShortcutsView} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('task-runner')}><${TaskRunnerView} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('profile')}><${ProfileView} syncStatus=${syncStatus}
+            syncProviders=${syncProviders} onSyncStatusChange=${onSyncStatusChange} refreshSyncStatus=${refreshSyncStatus} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('logs')}><${LogsView} active=${true} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('dev')}><${DevView} /><//>
     `;
 }
