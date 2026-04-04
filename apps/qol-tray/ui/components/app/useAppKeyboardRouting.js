@@ -1,8 +1,7 @@
-import { useCallback, useLayoutEffect, useRef } from 'preact/hooks';
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { useKeyboard } from '../../hooks/useKeyboard.js';
 import { usePluginConfigContext } from '../../views/plugin-config/context.js';
 import { useViewKeyboardContext } from './view-keyboard-context.js';
-import { useSidebarContext } from './sidebar-context.js';
 import { createDebug } from '../../lib/debug.js';
 import {
     activateSurface,
@@ -20,10 +19,13 @@ const log = createDebug('qol:nav');
 const PLUGIN_CONFIG_FIELD = '[data-plugin-config-field-id]';
 const NAV_KEYS = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
 const NAV_KEYS_EXTENDED = { ...NAV_KEYS, h: 'left', j: 'down', k: 'up', l: 'right' };
+let _cameraRef = { current: null };
+let _viewportElRef = { current: null };
 
 export function useAppKeyboardRouting({
     activePluginId,
     activeViewId,
+    camera,
     closePluginConfig,
     switchView,
     viewOrder,
@@ -31,19 +33,16 @@ export function useAppKeyboardRouting({
 }) {
     const pluginConfig = usePluginConfigContext();
     const { getViewKeyboard } = useViewKeyboardContext();
-    const sidebar = useSidebarContext();
+    _cameraRef.current = camera;
+    useEffect(() => { _viewportElRef.current = document.getElementById('viewport'); }, []);
     const cycleView = useCallback((event) => {
         event.preventDefault();
-        if (sidebar?.isOverridden) {
-            sidebar.cycleItem(event.shiftKey ? -1 : 1);
-            return;
-        }
         const idx = viewOrder.indexOf(activeViewId);
         const next = event.shiftKey
             ? (idx - 1 + viewOrder.length) % viewOrder.length
             : (idx + 1) % viewOrder.length;
         switchView(viewOrder[next]);
-    }, [activeViewId, switchView, viewOrder, sidebar]);
+    }, [activeViewId, switchView, viewOrder]);
 
     const prevPluginIdRef = useRef(activePluginId);
     useLayoutEffect(() => {
@@ -167,6 +166,16 @@ function navigateInActiveContainer(direction) {
     log('  -> RESULT:', surfaceLabel(next),
         'at (' + Math.round(nr.left) + ',' + Math.round(nr.top) + ')');
     focusWithoutScroll(next);
+    if (_cameraRef.current && _viewportElRef.current) {
+        const vr = _viewportElRef.current.getBoundingClientRect();
+        const fr = next.getBoundingClientRect();
+        if (fr.top < vr.top || fr.bottom > vr.bottom || fr.left < vr.left || fr.right > vr.right) {
+            const cam = _cameraRef.current;
+            const worldX = cam.x + (fr.left + fr.width / 2 - vr.left) - vr.width / 2;
+            const worldY = cam.y + (fr.top + fr.height / 2 - vr.top) - vr.height / 2;
+            cam.panSmooth(worldX, worldY, 150);
+        }
+    }
 }
 
 function focusWithoutScroll(el) {
