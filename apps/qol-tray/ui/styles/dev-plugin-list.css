@@ -170,20 +170,20 @@
     transition: opacity var(--transition), transform var(--transition), filter var(--transition);
 }
 
-.plugin-row .plugin-action-zone.has-rebuild .plugin-action-rebuild-icon {
+.plugin-row .plugin-action-rebuild-icon.has-rebuild {
     opacity: 0.9;
     filter: none;
     box-shadow: 0 0 0 1px var(--layer-paper-16), 0 0 10px var(--accent-glow-faint);
 }
 
-.plugin-row .plugin-action-zone.has-rebuild:not(.is-disabled):hover .plugin-action-rebuild-icon,
-.plugin-row .plugin-action-zone.has-rebuild.is-hovered:not(.is-disabled) .plugin-action-rebuild-icon {
+.plugin-row .plugin-action-zone:not(.is-disabled):hover .plugin-action-rebuild-icon.has-rebuild,
+.plugin-row .plugin-action-zone.is-hovered:not(.is-disabled) .plugin-action-rebuild-icon.has-rebuild {
     opacity: 0.92;
     transform: scale(1.04);
 }
 
-.plugin-row .plugin-action-zone.rebuild-idle:not(.is-disabled):hover .plugin-action-rebuild-icon,
-.plugin-row .plugin-action-zone.rebuild-idle.is-hovered:not(.is-disabled) .plugin-action-rebuild-icon {
+.plugin-row .plugin-action-zone:not(.is-disabled):hover .plugin-action-rebuild-icon.rebuild-idle,
+.plugin-row .plugin-action-zone.is-hovered:not(.is-disabled) .plugin-action-rebuild-icon.rebuild-idle {
     opacity: 0.3;
 }
 

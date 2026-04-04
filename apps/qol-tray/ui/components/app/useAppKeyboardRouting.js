@@ -2,6 +2,7 @@ import { useCallback, useLayoutEffect, useRef } from 'preact/hooks';
 import { useKeyboard } from '../../hooks/useKeyboard.js';
 import { usePluginConfigContext } from '../../views/plugin-config/context.js';
 import { useViewKeyboardContext } from './view-keyboard-context.js';
+import { useSidebarContext } from './sidebar-context.js';
 import { createDebug } from '../../lib/debug.js';
 import {
     activateSurface,
@@ -30,14 +31,19 @@ export function useAppKeyboardRouting({
 }) {
     const pluginConfig = usePluginConfigContext();
     const { getViewKeyboard } = useViewKeyboardContext();
+    const sidebar = useSidebarContext();
     const cycleView = useCallback((event) => {
         event.preventDefault();
+        if (sidebar?.isOverridden) {
+            sidebar.cycleItem(event.shiftKey ? -1 : 1);
+            return;
+        }
         const idx = viewOrder.indexOf(activeViewId);
         const next = event.shiftKey
             ? (idx - 1 + viewOrder.length) % viewOrder.length
             : (idx + 1) % viewOrder.length;
         switchView(viewOrder[next]);
-    }, [activeViewId, switchView, viewOrder]);
+    }, [activeViewId, switchView, viewOrder, sidebar]);
 
     const prevPluginIdRef = useRef(activePluginId);
     useLayoutEffect(() => {

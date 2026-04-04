@@ -42,6 +42,7 @@ export function directSurfaces(container) {
             if (el.closest('[data-surface-container]') !== container) return false;
             if (!isVisible(el)) return false;
             if (el.disabled) return false;
+            if (el.closest('[inert]')) return false;
             const parentSurface = el.parentElement?.closest('[data-selected-surface]');
             if (parentSurface && parentSurface.closest('[data-surface-container]') === container) return false;
             return true;
