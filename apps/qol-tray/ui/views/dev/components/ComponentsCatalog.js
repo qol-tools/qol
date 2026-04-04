@@ -131,14 +131,8 @@ function SpinnerShowcase() {
 function EmptyStateShowcase() {
     return html`
         <${CatalogSection} title="Empty state">
-            <div class="catalog-showcase">
-                <div class="catalog-try" inert>
-                    <${EmptyState} message="No items found" hint="Try adjusting your filters" />
-                </div>
-                <div class="catalog-states" inert>
-                    <${StateLabel}>default<//>
-                    <span style="color:var(--text-muted); font-size:var(--fs-sm)">Single variant — message + hint</span>
-                </div>
+            <div inert>
+                <${EmptyState} message="No items found" hint="Try adjusting your filters or adding new items" />
             </div>
         <//>
     `;
@@ -157,8 +151,24 @@ function DropdownShowcase() {
             <div class="catalog-showcase">
                 <div class="catalog-try"><${CustomSelect} value=${value} options=${options} labels=${labels} onChange=${setValue} /></div>
                 <div class="catalog-states" inert>
+                    <${StateLabel}>closed<//>
+                    <${CustomSelect} value="github" options=${options} labels=${labels} onChange=${() => {}} />
                     <${StateLabel}>compact<//>
                     <${CustomSelect} value="folder" options=${options} labels=${labels} onChange=${() => {}} compact=${true} />
+                    <${StateLabel}>open<//>
+                    <div class="custom-select" style="position:relative">
+                        <button class="btn btn-dropdown custom-select-trigger" type="button" aria-expanded="true">
+                            <span class="custom-select-value">GitHub</span>
+                            <span class="custom-select-arrow">${'\u25BE'}</span>
+                        </button>
+                        <div class="custom-select-popover" style="position:relative; display:block;">
+                            <div class="custom-select-list" style="position:relative;">
+                                <div class="custom-select-option selected highlighted">GitHub</div>
+                                <div class="custom-select-option">Folder</div>
+                                <div class="custom-select-option">Local</div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         <//>
@@ -198,15 +208,13 @@ function ToggleShowcase() {
         <${CatalogSection} title="Toggle">
             <div class="catalog-showcase">
                 <div class="catalog-try">
-                    <${ToggleSwitch} checked=${on} onChange=${setOn} label="Interactive toggle" />
+                    <${ToggleSwitch} checked=${on} onChange=${setOn} label="Push on change" description="Automatically sync when profile changes" />
                 </div>
                 <div class="catalog-states" inert>
                     <${StateLabel}>on<//>
                     <${ToggleSwitch} checked=${true} onChange=${() => {}} label="Enabled" />
                     <${StateLabel}>off<//>
                     <${ToggleSwitch} checked=${false} onChange=${() => {}} label="Disabled" />
-                    <${StateLabel}>with description<//>
-                    <${ToggleSwitch} checked=${true} onChange=${() => {}} label="Push on change" description="Automatically sync when profile changes" />
                 </div>
             </div>
         <//>
@@ -279,18 +287,33 @@ function DepthLevel({ level }) {
 
 function DevPluginRowShowcase() {
     const sel = useListSelection();
-    const [state, setState] = useState('rebuild');
-    const cycle = () => {
-        const order = ['linked', 'rebuild', 'linking', 'local'];
-        setState(prev => order[(order.indexOf(prev) + 1) % order.length]);
-    };
+    const [linked, setLinked] = useState(false);
+    const [needsRebuild, setNeedsRebuild] = useState(false);
+    const [busy, setBusy] = useState(false);
+    const builtRef = useRef(false);
+    const doLink = useCallback(() => {
+        setBusy(true);
+        setTimeout(() => { setLinked(true); setNeedsRebuild(!builtRef.current); setBusy(false); }, 600);
+    }, []);
+    const doRebuild = useCallback(() => {
+        setBusy(true);
+        setTimeout(() => { builtRef.current = true; setNeedsRebuild(false); setBusy(false); }, 600);
+    }, []);
+    const doUnlink = useCallback(() => { setLinked(false); setNeedsRebuild(false); }, []);
+    const rebuildActive = linked && needsRebuild;
     const rebuildIcon = (cls) => html`<img class="plugin-action-rebuild-icon ${cls}" src="assets/qol-tray.png?v=1" alt="" aria-hidden="true" />`;
-    const actions = state === 'rebuild'
-        ? [{ label: 'Rebuild', run: cycle }, { label: 'Mute Logs', run: () => {} }, { label: 'Edit Filters', run: () => {} }]
-        : [{ label: state === 'linked' ? 'Unlink' : 'Link', run: cycle }, { label: 'Mute Logs', run: () => {} }, { label: 'Edit Filters', run: () => {} }];
-    const icon = state === 'linking'
+    const dirtySource = useCallback(() => setNeedsRebuild(true), []);
+    const linkLabel = rebuildActive ? 'Rebuild' : linked ? 'Unlink' : 'Link';
+    const linkRun = rebuildActive ? doRebuild : linked ? doUnlink : doLink;
+    const actions = busy ? [] : [
+        { label: linkLabel, run: linkRun },
+        ...(linked ? [{ label: 'Mute Logs', run: () => {} }, { label: 'Edit Filters', run: () => {} }] : []),
+        ...(linked && !needsRebuild ? [{ label: 'Dirty source (mock)', run: dirtySource }] : []),
+    ];
+    const icon = busy
         ? html`<span class="refresh-btn spinning" aria-hidden="true"></span>`
-        : rebuildIcon(state === 'rebuild' ? 'has-rebuild' : 'rebuild-idle');
+        : rebuildIcon(rebuildActive ? 'has-rebuild' : 'rebuild-idle');
+    const status = linked ? 'linked' : 'local';
 
     return html`
         <${CatalogSection} title="Dev plugin row">
@@ -298,12 +321,18 @@ function DevPluginRowShowcase() {
                 <div class="catalog-try">
                     <div class="plugin-list">
                         <${DevPluginRow} name="qol-window-actions" path="~/repos/qol-tools/qol-window-actions"
-                            status=${state === 'local' ? 'local' : 'linked'} pluginId="plugin-window-actions"
+                            status=${status}
                             index=${0} selected=${sel.selected(0)} onSelect=${sel.select}
-                            actions=${state === 'linking' ? [] : actions} actionIcon=${icon}
-                            className=${state === 'linking' ? 'is-linking' : undefined}
-                            badges=${html`<${Badge} style=${{ background: 'rgba(var(--success-rgb),0.14)', borderColor: 'rgba(var(--success-rgb),0.26)' }}>${state}<//>`}
-                            meta=${html`<span style="font-size:var(--fs-xs); color:var(--text-faint)">fp a3b2c1d0 • Built 2m ago</span>`} />
+                            actions=${actions} actionIcon=${icon}
+                            className=${busy ? 'is-linking' : undefined}
+                            badges=${busy
+                                ? html`<${Badge} style=${{ background: 'rgba(var(--warning-rgb),0.16)', borderColor: 'rgba(var(--warning-rgb),0.3)' }}>Building...<//>`
+                                : rebuildActive
+                                ? html`<${Badge} style=${{ background: 'rgba(var(--warning-rgb),0.16)', borderColor: 'rgba(var(--warning-rgb),0.3)' }}>Needs rebuild<//>`
+                                : linked
+                                ? html`<${Badge} style=${{ background: 'rgba(var(--success-rgb),0.14)', borderColor: 'rgba(var(--success-rgb),0.26)' }}>Linked<//>`
+                                : html`<${Badge} style=${{ background: 'rgba(var(--warning-rgb),0.16)', borderColor: 'rgba(var(--warning-rgb),0.3)' }}>Local<//>`}
+                            meta=${html`<span style="font-size:var(--fs-xs); color:var(--text-faint)">${busy ? 'Compiling...' : rebuildActive ? 'Source changed • fp a3b2c1d0' : linked ? 'fp a3b2c1d0 • Built 2m ago' : ''}</span>`} />
                     </div>
                 </div>
                 <div class="catalog-states" inert>
@@ -420,17 +449,15 @@ function HotkeyTableShowcase() {
                 <div class="catalog-try">
                     <${Table} columns="8rem 1fr 1fr" onDeselect=${sel.deselect}>
                         <${TableHeader}><${TableCell}>Shortcut<//><${TableCell}>Plugin<//><${TableCell}>Action<//><//>
-                        <${HotkeyRow} shortcut="Alt+Tab" pluginName="qol-alt-tab" actionLabel="Open switcher" status="linked"
+                        <${HotkeyRow} shortcut="Alt+Tab" pluginName="qol-alt-tab" actionLabel="Open switcher"
                             index=${0} selected=${sel.selected(0)} onSelect=${sel.select} accent="accent" />
                     <//>
                 </div>
                 <div class="catalog-states" inert>
-                    <${StateLabel}>linked<//>
-                    <${Table} columns="8rem 1fr 1fr"><${HotkeyRow} shortcut="Alt+Tab" pluginName="qol-alt-tab" actionLabel="Open switcher" status="linked" accent="accent" /><//>
-                    <${StateLabel}>installed<//>
-                    <${Table} columns="8rem 1fr 1fr"><${HotkeyRow} shortcut="Super+E" pluginName="qol-launcher" actionLabel="Open launcher" status="installed" accent="accent" /><//>
-                    <${StateLabel}>local<//>
-                    <${Table} columns="8rem 1fr 1fr"><${HotkeyRow} shortcut="Print" pluginName="qol-screen-recorder" actionLabel="Screenshot" status="local" accent="warning" /><//>
+                    <${StateLabel}>enabled<//>
+                    <${Table} columns="8rem 1fr 1fr"><${HotkeyRow} shortcut="Alt+Tab" pluginName="qol-alt-tab" actionLabel="Open switcher" accent="accent" /><//>
+                    <${StateLabel}>disabled<//>
+                    <${Table} columns="8rem 1fr 1fr"><${HotkeyRow} shortcut="Super+E" pluginName="qol-launcher" actionLabel="Open launcher" className="disabled" /><//>
                 </div>
             </div>
         <//>
@@ -468,24 +495,49 @@ function ShortcutTableShowcase() {
 
 function StoreCardShowcase() {
     const sel = useListSelection();
+    const [installed, setInstalled] = useState(false);
+    const [installing, setInstalling] = useState(false);
+    const [hasUpdate, setHasUpdate] = useState(false);
+    const doInstall = useCallback(() => {
+        setInstalling(true);
+        setTimeout(() => { setInstalling(false); setInstalled(true); }, 800);
+    }, []);
+    const doUninstall = useCallback(() => { setInstalled(false); setHasUpdate(false); }, []);
+    const doUpdate = useCallback(() => {
+        setInstalling(true);
+        setTimeout(() => { setInstalling(false); setHasUpdate(false); }, 800);
+    }, []);
+    const mockUpdate = useCallback(() => setHasUpdate(true), []);
+    const onActivate = installing ? undefined
+        : !installed ? doInstall
+        : hasUpdate ? doUpdate
+        : undefined;
+    const version = hasUpdate ? { from: '1.2.0', to: '1.3.0' } : { current: '1.2.0' };
     return html`
         <${CatalogSection} title="Store cards">
             <div class="catalog-showcase">
                 <div class="catalog-try">
                     <${StoreCardGrid} onDeselect=${sel.deselect}>
-                        <${StoreCard} name="Alt Tab" version=${{ current: '1.2.0' }} description="Window switcher with live previews"
-                            installed=${true} data-plugin-id="plugin-alt-tab" index=${0} selected=${sel.selected(0)} onSelect=${sel.select} />
+                        <${StoreCard} name="Alt Tab" version=${version} description="Window switcher with live previews"
+                            installed=${installed} installing=${installing} hasUpdate=${hasUpdate}
+                            index=${0} selected=${sel.selected(0)} onSelect=${sel.select} onActivate=${onActivate} />
                     <//>
+                    ${installed && !hasUpdate && !installing && html`
+                        <div style="margin-top:var(--space-2); display:flex; gap:var(--space-2)">
+                            <${Button} small variant="btn-ghost" onActivate=${mockUpdate}>Mock update available<//>
+                            <${Button} small variant="btn-ghost" onActivate=${doUninstall}>Uninstall<//>
+                        </div>
+                    `}
                 </div>
                 <div class="catalog-states" inert>
-                    <${StateLabel}>installed<//>
-                    <${StoreCard} name="Alt Tab" version=${{ current: '1.2.0' }} description="Window switcher" installed=${true} />
-                    <${StateLabel}>has update<//>
-                    <${StoreCard} name="Launcher" version=${{ from: '2.0.1', to: '2.1.0' }} description="App launcher" installed=${true} hasUpdate=${true} />
                     <${StateLabel}>not installed<//>
-                    <${StoreCard} name="Screen Recorder" version=${{ current: '0.3.0' }} description="Record screen" />
+                    <${StoreCardGrid}><${StoreCard} name="Screen Recorder" version=${{ current: '0.3.0' }} description="Record screen" /><//>
                     <${StateLabel}>installing<//>
-                    <${StoreCard} name="Window Actions" version=${{ current: '1.0.0' }} description="Minimize, restore" installing=${true} />
+                    <${StoreCardGrid}><${StoreCard} name="Window Actions" version=${{ current: '1.0.0' }} description="Minimize, restore" installing=${true} /><//>
+                    <${StateLabel}>installed<//>
+                    <${StoreCardGrid}><${StoreCard} name="Alt Tab" version=${{ current: '1.2.0' }} description="Window switcher" installed=${true} /><//>
+                    <${StateLabel}>update available<//>
+                    <${StoreCardGrid}><${StoreCard} name="Launcher" version=${{ from: '2.0.1', to: '2.1.0' }} description="App launcher" installed=${true} hasUpdate=${true} /><//>
                 </div>
             </div>
         <//>
