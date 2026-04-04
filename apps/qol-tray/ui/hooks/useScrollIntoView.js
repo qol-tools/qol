@@ -16,61 +16,20 @@ const FOCUS_SCROLL_KEYS = new Set([
     'PageDown',
 ]);
 function scrollForKeyboardSelection(target) {
-    const mode = target.getAttribute('data-scroll-follow-mode');
-    if (mode === 'nearest') {
-        target.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' });
-        return;
+    let scroller = target.parentElement;
+    while (scroller && scroller !== document.body) {
+        const style = getComputedStyle(scroller);
+        if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && scroller.scrollHeight > scroller.clientHeight + 1) break;
+        scroller = scroller.parentElement;
     }
-
-    const scroller = findScrollParent(target);
-    if (!scroller) {
-        target.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'nearest' });
-        return;
+    if (!scroller || scroller === document.body) return;
+    const sr = scroller.getBoundingClientRect();
+    const er = target.getBoundingClientRect();
+    if (er.top < sr.top) {
+        scroller.scrollTop += er.top - sr.top - 8;
+    } else if (er.bottom > sr.bottom) {
+        scroller.scrollTop += er.bottom - sr.bottom + 8;
     }
-
-    const scrollerRect = scroller.getBoundingClientRect();
-    const targetRect = target.getBoundingClientRect();
-    const targetTop = scroller.scrollTop + targetRect.top - scrollerRect.top;
-    const desiredTop = targetTop - (scroller.clientHeight - targetRect.height) / 2;
-    const maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-    const nextTop = clamp(desiredTop, 0, maxTop);
-
-    scroller.scrollTo({ top: nextTop, behavior: 'auto' });
-}
-
-function findScrollParent(target) {
-    let current = target.parentElement;
-
-    while (current && current !== document.body) {
-        if (isScrollable(current)) {
-            return current;
-        }
-        current = current.parentElement;
-    }
-
-    const root = document.scrollingElement;
-    if (root instanceof HTMLElement) {
-        return root;
-    }
-    return null;
-}
-
-function isScrollable(el) {
-    const style = getComputedStyle(el);
-    if (style.overflowY !== 'auto' && style.overflowY !== 'scroll') {
-        return false;
-    }
-    return el.scrollHeight > el.clientHeight + 1;
-}
-
-function clamp(value, min, max) {
-    if (value < min) {
-        return min;
-    }
-    if (value > max) {
-        return max;
-    }
-    return value;
 }
 
 export function useScrollIntoView() {
@@ -104,6 +63,12 @@ export function useScrollIntoView() {
         function scrollSelectedSurface() {
             scheduledSelectionRef.current = false;
             if (!navKeyPressedRef.current) return;
+
+            const focused = document.activeElement;
+            if (focused instanceof HTMLElement && focused !== document.body && focused.closest('[data-selected-surface]')) {
+                navKeyPressedRef.current = false;
+                return;
+            }
 
             const target = findActiveSelectedSurface({
                 currentTarget: selectionTargetRef.current,
@@ -141,9 +106,7 @@ export function useScrollIntoView() {
             navKeyPressedRef.current = false;
         };
         const onScroll = () => {
-            if (programmaticScrollRef.current) {
-                return;
-            }
+            if (programmaticScrollRef.current) return;
             setInputMode('mouse');
         };
         const onFocusIn = (e) => {
