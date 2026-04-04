@@ -46,3 +46,14 @@
     cursor: pointer;
     overflow: hidden;
 }
+
+.world-region-label {
+    position: absolute;
+    font-size: 42px;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.04);
+    letter-spacing: 2px;
+    pointer-events: none;
+    user-select: none;
+    white-space: nowrap;
+}
