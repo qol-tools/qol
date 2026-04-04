@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { directSurfaces, firstChildContainer } from '../lib/surface-traits.js';
 import { isKeyboardMode } from '../lib/input-mode.js';
 
-export function useViewTabs(tabs, { onActivate } = {}) {
-    const [activeTab, setActiveTab] = useState(tabs[0]?.id ?? '');
+export function useViewTabs(tabs, { onActivate, initialTab } = {}) {
+    const [activeTab, setActiveTab] = useState(initialTab || tabs[0]?.id || '');
     const pendingDescentRef = useRef(false);
     const rootRef = useRef(null);
 
