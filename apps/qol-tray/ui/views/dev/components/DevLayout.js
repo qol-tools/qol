@@ -13,36 +13,38 @@ const TABS = [
     { id: 'components', label: 'Components' },
 ];
 
+const CATALOG_ITEMS = [
+    { id: 'buttons', label: 'Buttons' },
+    { id: 'status', label: 'Status' },
+    { id: 'spinner', label: 'Spinner' },
+    { id: 'empty-state', label: 'Empty State' },
+    { id: 'dropdown', label: 'Dropdown' },
+    { id: 'expander', label: 'Expander' },
+    { id: 'toggle', label: 'Toggle' },
+    { id: 'modal', label: 'Modal' },
+    { id: 'depth-diver', label: 'Depth Diver' },
+    { id: 'dev-plugin-row', label: 'Dev Plugin Row' },
+    { id: 'log-row', label: 'Log Row' },
+    { id: 'suppressed-row', label: 'Suppressed Row' },
+    { id: 'backup-row', label: 'Backup Row' },
+    { id: 'hotkey-row', label: 'Hotkey Row' },
+    { id: 'shortcut-row', label: 'Shortcut Row' },
+    { id: 'store-card', label: 'Store Card' },
+];
+
 export function DevLayout({ ctrl, containerRef }) {
     const vtRef = useRef(null);
     const { setItems, resetSidebar } = useSidebarContext();
     const [catalogId, setCatalogId] = useState('buttons');
+    const [activeTab, setActiveTab] = useState('dev');
+    const tokenRef = useRef(0);
 
-    const activeTab = vtRef.current?.activeTab;
     useEffect(() => {
         if (activeTab !== 'components') {
-            resetSidebar();
+            resetSidebar(tokenRef.current);
             return;
         }
-        const CATALOG_ITEMS = [
-            { id: 'buttons', label: 'Buttons' },
-            { id: 'status', label: 'Status' },
-            { id: 'spinner', label: 'Spinner' },
-            { id: 'empty-state', label: 'Empty State' },
-            { id: 'dropdown', label: 'Dropdown' },
-            { id: 'expander', label: 'Expander' },
-            { id: 'toggle', label: 'Toggle' },
-            { id: 'modal', label: 'Modal' },
-            { id: 'depth-diver', label: 'Depth Diver' },
-            { id: 'dev-plugin-row', label: 'Dev Plugin Row' },
-            { id: 'log-row', label: 'Log Row' },
-            { id: 'suppressed-row', label: 'Suppressed Row' },
-            { id: 'backup-row', label: 'Backup Row' },
-            { id: 'hotkey-row', label: 'Hotkey Row' },
-            { id: 'shortcut-row', label: 'Shortcut Row' },
-            { id: 'store-card', label: 'Store Card' },
-        ];
-        setItems(CATALOG_ITEMS.map(item => ({
+        tokenRef.current = setItems(CATALOG_ITEMS.map(item => ({
             type: 'item',
             key: item.id,
             id: item.id,
@@ -50,10 +52,11 @@ export function DevLayout({ ctrl, containerRef }) {
             active: item.id === catalogId,
             onClick: () => setCatalogId(item.id),
         })));
-        return () => resetSidebar();
+        return () => resetSidebar(tokenRef.current);
     }, [activeTab, catalogId, setItems, resetSidebar]);
 
-    const onTabActivate = useCallback(() => {
+    const onTabActivate = useCallback((tabId) => {
+        setActiveTab(tabId);
         ctrl.setSelectedIndex(0);
     }, [ctrl.setSelectedIndex]);
 

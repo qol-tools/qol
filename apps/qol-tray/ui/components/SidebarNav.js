@@ -7,19 +7,18 @@ function itemSetKey(items) {
     return items.map(i => i.key || i.id || '').join('\0');
 }
 
-let prevSetKey = null;
-
 export function SidebarNav() {
     const { items, header } = useSidebarContext();
     const itemsRef = useRef(null);
+    const prevSetKeyRef = useRef(null);
     const setKey = itemSetKey(items);
 
     useEffect(() => {
         const el = itemsRef.current;
-        if (prevSetKey !== null && prevSetKey !== setKey && el?.offsetHeight > 0) {
+        if (prevSetKeyRef.current !== null && prevSetKeyRef.current !== setKey && el?.offsetHeight > 0) {
             materializeIn(el);
         }
-        prevSetKey = setKey;
+        prevSetKeyRef.current = setKey;
     });
 
     return html`

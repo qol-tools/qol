@@ -26,6 +26,11 @@
     cursor: pointer;
 }
 
+.toggle-inline-content {
+    display: flex;
+    flex-direction: column;
+}
+
 .toggle-inline-label {
     font-size: var(--fs-md);
     color: var(--text-secondary);

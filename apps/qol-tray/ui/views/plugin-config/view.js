@@ -18,10 +18,12 @@ import { SurfaceContainer } from '../../components/SurfaceContainer.js';
 export function PluginConfigView({ onClose }) {
     const ctx = usePluginConfigContext();
     const { setItems, setHeader, resetSidebar } = useSidebarContext();
+    const tokenRef = useRef(0);
 
     useEffect(() => {
         if (!ctx?.sections?.length) return;
-        setItems(ctx.sections.map((s, i) => ({
+        setHeader(html`<div class="sidebar-header"><button class="sidebar-back" tabIndex="-1" onClick=${onClose}>${'\u2190'} Back</button></div>`);
+        tokenRef.current = setItems(ctx.sections.map((s, i) => ({
             type: 'item',
             key: s.id,
             id: s.id,
@@ -29,13 +31,8 @@ export function PluginConfigView({ onClose }) {
             active: i === ctx.activeSectionIndex,
             onClick: () => ctx.setActiveSectionIndex(i),
         })));
-    }, [ctx?.sections, ctx?.activeSectionIndex, setItems]);
-
-    useEffect(() => {
-        if (!ctx) return;
-        setHeader(html`<div class="sidebar-header"><button class="sidebar-back" tabIndex="-1" onClick=${onClose}>${'\u2190'} Back</button></div>`);
-        return () => resetSidebar();
-    }, [ctx?.pluginId, setHeader, resetSidebar, onClose]);
+        return () => resetSidebar(tokenRef.current);
+    }, [ctx?.sections, ctx?.activeSectionIndex, ctx?.pluginId, onClose, setItems, setHeader, resetSidebar]);
 
     if (ctx?.mode === 'ui') {
         return html`
