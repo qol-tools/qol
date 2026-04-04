@@ -46,18 +46,18 @@ function buildActions(plugin, statusToken, index, ctrl, rebuildActive) {
     });
     actions.push({
         label: plugin.logs_muted ? 'Unmute Logs' : 'Mute Logs',
-        run: () => { ctrl.closeMenus(); ctrl.togglePluginLogs(plugin.id); },
+        run: () => ctrl.togglePluginLogs(plugin.id),
     });
     const filterCount = Array.isArray(plugin.suppressed_log_patterns) ? plugin.suppressed_log_patterns.length : 0;
     actions.push({
         label: filterCount > 0 ? `Edit Filters (${filterCount})` : 'Edit Filters',
-        run: () => { ctrl.closeMenus(); ctrl.editPluginLogFilters(plugin.id); },
+        run: () => ctrl.editPluginLogFilters(plugin.id),
     });
     if (plugin.status === 'linked') {
         const enabled = !!ctrl.cpuMonitoring[plugin.id];
         actions.push({
             label: enabled ? 'Disable CPU Monitor' : 'Enable CPU Monitor',
-            run: () => { ctrl.closeMenus(); ctrl.toggleCpu(plugin.id); },
+            run: () => ctrl.toggleCpu(plugin.id),
         });
     }
     return actions;

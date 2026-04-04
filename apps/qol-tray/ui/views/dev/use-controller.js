@@ -18,8 +18,8 @@ export function createInitialState() {
         mergedList: [], mergedCount: 0, logControls: {},
         linkingId: null, buildProgress: {}, mockTesting: false,
         cpuMonitoring: readSavedCpuMonitoring(),
-        cpuByPlugin: {}, openPluginMenuId: null,
-        coreLogControls: {}, openCoreMenuId: null
+        cpuByPlugin: {},
+        coreLogControls: {}
     };
 }
 
@@ -28,8 +28,7 @@ function initDataControllers(state, bump) {
     const cpuController = createCpuController({
         state,
         getVisiblePluginIds: () => new Set(state.mergedList.map(p => p.id)),
-        onNeedsRender: bump,
-        onMissingMenuPlugin: () => { state.openPluginMenuId = null; state.openCoreMenuId = null; }
+        onNeedsRender: bump
     });
     const coreLogActions = createCoreLogActions({ state, discoveryController, onNeedsRender: bump });
     return { discoveryController, cpuController, coreLogActions };
@@ -51,7 +50,7 @@ function initBuildControllers(state, containerRef, dataCtrl, bump) {
         state, discoveryController,
         getMergedPluginById: id => state.mergedList.find(p => p.id === id) || null,
         getActivePluginBuildState: p => buildRef.current.getActivePluginBuildState(p, state.mockTesting),
-        closePluginMenu: () => { state.openPluginMenuId = null; state.openCoreMenuId = null; },
+        closePluginMenu: () => {},
         onNeedsRender: bump
     });
     buildRef.current = createBuildController({
@@ -124,15 +123,9 @@ function useFocusLifecycle(state, ctrl, bump) {
         ]).finally(() => bump());
     }, []);
     const onBlur = useCallback(() => {
-        state.openPluginMenuId = null;
-        state.openCoreMenuId = null;
         focusRefreshPending.current = true;
     }, []);
     return { onFocus, onBlur };
-}
-
-function buildStateProps(state) {
-    return state;
 }
 
 function buildLinkCallbacks(state, ctrl, bump) {
@@ -150,22 +143,10 @@ function buildLinkCallbacks(state, ctrl, bump) {
 }
 
 function buildMenuCallbacks(state, ctrl, bump) {
-    const closeMenus = () => { state.openPluginMenuId = null; state.openCoreMenuId = null; bump(); };
     return {
         togglePluginLogs: id => void ctrl.actionsController.togglePluginLogs(id),
         editPluginLogFilters: id => void ctrl.actionsController.editPluginLogFilters(id),
         toggleCpu: id => ctrl.cpuController.toggle(id),
-        toggleCoreMenu: id => {
-            state.openPluginMenuId = null;
-            state.openCoreMenuId = state.openCoreMenuId === id ? null : id;
-            bump();
-        },
-        togglePluginMenu: id => {
-            state.openCoreMenuId = null;
-            state.openPluginMenuId = state.openPluginMenuId === id ? null : id;
-            bump();
-        },
-        closeMenus,
         toggleCoreLogs: id => void ctrl.coreLogActions.toggleCoreLogs(id),
         editCoreLogFilters: id => void ctrl.coreLogActions.editCoreLogFilters(id)
     };
@@ -177,7 +158,7 @@ function buildActionCallbacks(state, ctrl, bump) {
 
 function buildControllerInterface(state, ctrl, bump, lifecycle) {
     return {
-        ...buildStateProps(state),
+        ...state,
         ...buildActionCallbacks(state, ctrl, bump),
         ...lifecycle,
         buildController: ctrl.buildController,
@@ -202,6 +183,6 @@ export function useDevController(containerRef) {
     useReconnectSubscription(state, ctrl);
     useHydration(state, ctrl, bump);
     const { onFocus, onBlur } = useFocusLifecycle(state, ctrl, bump);
-    const handleKey = useCallback(e => handleDevKey(e, state, ctrl, bump), []);
+    const handleKey = useCallback(e => handleDevKey(e, state, ctrl), []);
     return buildControllerInterface(state, ctrl, bump, { onFocus, onBlur, handleKey });
 }
