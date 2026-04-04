@@ -90,7 +90,7 @@ export function SelectionCursorOverlay() {
             subtree: true,
         });
 
-        document.addEventListener('scroll', sync, true);
+        const unsubCamera = window.__worldCamera?.subscribe?.(sync);
         document.addEventListener('focusin', sync, true);
         document.addEventListener('focusout', sync, true);
         document.addEventListener('keydown', onKey, true);
@@ -105,7 +105,7 @@ export function SelectionCursorOverlay() {
 
         return () => {
             observer.disconnect();
-            document.removeEventListener('scroll', sync, true);
+            if (unsubCamera) unsubCamera();
             document.removeEventListener('focusin', sync, true);
             document.removeEventListener('focusout', sync, true);
             document.removeEventListener('keydown', onKey, true);
@@ -211,39 +211,12 @@ function selectedSurfaceMaxGlide(target) {
 }
 
 function needsViewportTeleport(target) {
-    const scroller = findScrollParent(target);
-    if (!(scroller instanceof HTMLElement)) return false;
-    return !isFullyVisibleWithin(target, scroller);
-}
-
-function isFullyVisibleWithin(target, scroller) {
-    const scrollerRect = scroller.getBoundingClientRect();
-    const targetRect = target.getBoundingClientRect();
+    const viewport = document.getElementById('viewport');
+    if (!viewport) return false;
+    const vr = viewport.getBoundingClientRect();
+    const tr = target.getBoundingClientRect();
     const inset = 2;
-
-    if (targetRect.top < scrollerRect.top + inset) return false;
-    if (targetRect.bottom > scrollerRect.bottom - inset) return false;
-    return true;
-}
-
-function findScrollParent(target) {
-    let current = target.parentElement;
-
-    while (current && current !== document.body) {
-        if (getComputedStyle(current).position === 'fixed') return null;
-        if (isScrollable(current)) return current;
-        current = current.parentElement;
-    }
-
-    const root = document.scrollingElement;
-    if (root instanceof HTMLElement) return root;
-    return null;
-}
-
-function isScrollable(target) {
-    const style = getComputedStyle(target);
-    if (style.overflowY !== 'auto' && style.overflowY !== 'scroll') return false;
-    return target.scrollHeight > target.clientHeight + 1;
+    return tr.top < vr.top + inset || tr.bottom > vr.bottom - inset;
 }
 
 function needsTeleport(prevRect, nextRect, maxGlideDistance) {
