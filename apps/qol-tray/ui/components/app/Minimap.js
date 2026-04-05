@@ -21,18 +21,20 @@ export function Minimap({ camera, registry, viewportRef }) {
         canvas.height = ch * dpr;
         ctx.scale(dpr, dpr);
 
-        const bounds = registry.worldBounds();
+        const currentLayer = camera.layer;
+        const bounds = registry.worldBounds(currentLayer);
         if (bounds.width === 0) return;
         const scale = Math.min(cw / bounds.width, ch / bounds.height);
 
         const vp = viewportRef?.current;
         const vpW = vp ? vp.clientWidth : 0;
         const vpH = vp ? vp.clientHeight : 0;
-        const activeId = registry.activeViewId(camera.x, camera.y, vpW, vpH);
+        const z = camera.zoom || 1;
+        const activeId = registry.activeViewId(camera.x, camera.y, vpW, vpH, z);
 
         ctx.clearRect(0, 0, cw, ch);
 
-        for (const e of registry.getAllEntries()) {
+        for (const e of registry.getEntriesForLayer(currentLayer)) {
             const rx = (e.x - bounds.x) * scale;
             const ry = (e.y - bounds.y) * scale;
             const rw = e.width * scale;
@@ -53,29 +55,42 @@ export function Minimap({ camera, registry, viewportRef }) {
             ctx.fillText(label, rx + rw / 2, ry + rh / 2, rw - 2);
         }
 
+        // Viewport rect accounts for zoom
         if (vp) {
+            const worldVpW = vpW / z;
+            const worldVpH = vpH / z;
             const vpX = (camera.x - bounds.x) * scale;
             const vpY = (camera.y - bounds.y) * scale;
-            const vpWs = vpW * scale;
-            const vpHs = vpH * scale;
+            const vpWs = worldVpW * scale;
+            const vpHs = worldVpH * scale;
             ctx.strokeStyle = 'rgba(255,255,255,0.6)';
             ctx.lineWidth = 1.5;
             ctx.strokeRect(vpX, vpY, vpWs, vpHs);
         }
+
+        // Layer indicator
+        const layerLabel = currentLayer === 0 ? 'L0' : `L${currentLayer}`;
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.font = 'bold 9px -apple-system, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(layerLabel, cw - 4, ch - 3);
     });
 
     const onClick = (e) => {
         const canvas = canvasRef.current;
         if (!canvas) return;
         const rect = canvas.getBoundingClientRect();
-        const bounds = registry.worldBounds();
+        const currentLayer = camera.layer;
+        const bounds = registry.worldBounds(currentLayer);
         if (bounds.width === 0) return;
         const scale = Math.min(canvas.clientWidth / bounds.width, canvas.clientHeight / bounds.height);
         const vp = viewportRef?.current;
+        const z = camera.zoom || 1;
         const vpW = vp ? vp.clientWidth : 0;
         const vpH = vp ? vp.clientHeight : 0;
-        const wx = bounds.x + (e.clientX - rect.left) / scale - vpW / 2;
-        const wy = bounds.y + (e.clientY - rect.top) / scale - vpH / 2;
+        const wx = bounds.x + (e.clientX - rect.left) / scale - vpW / (2 * z);
+        const wy = bounds.y + (e.clientY - rect.top) / scale - vpH / (2 * z);
         camera.panSmooth(wx, wy, 300);
     };
 
