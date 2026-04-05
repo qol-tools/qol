@@ -1,6 +1,5 @@
 import { html } from '../lib/html.js';
 import { usePaletteContext } from '../palette/context.js';
-import { CommandPalette } from './CommandPalette.js';
 import { ScrambleText } from './ScrambleText.js';
 import { NoiseBorder } from './NoiseBorder.js';
 import { NoiseReveal } from './NoiseReveal.js';
@@ -21,7 +20,6 @@ export function PageHeader({ title, subtitle = '', badge = null, scramble = fals
                 ${badge ? html`<div class="page-header-badge">${badge}</div>` : ''}
                 <${NoiseBorder} active=${active} />
             </div>
-            <${CommandPalette} />
         </div>
     `;
 }

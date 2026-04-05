@@ -27,8 +27,8 @@ export function buildViewOrder(devEnabled) {
 
 function WorldViewSlot({ entry, children }) {
     if (!entry) return null;
-    const style = `position:absolute; left:${entry.x}px; top:${entry.y}px; width:${entry.width}px; content-visibility:auto; contain-intrinsic-size:auto ${entry.width}px ${entry.height}px;`;
-    return html`<div class="world-view-slot" style=${style}>${children}</div>`;
+    const style = `left:${entry.x}px; top:${entry.y}px; width:${entry.width}px;`;
+    return html`<div class="world-view-slot" data-view-id=${entry.id} style=${style}>${children}</div>`;
 }
 
 export function renderWorldViews({ registry, openPluginConfig, openPluginUi, syncStatus, syncProviders, onSyncStatusChange, refreshSyncStatus }) {
