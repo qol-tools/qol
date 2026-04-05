@@ -20,10 +20,14 @@ export function slotAtCenter(viewport) {
     let slot = el?.closest(SLOT_SELECTOR);
     let method = 'elementFromPoint';
 
+    // elementFromPoint won't hit display:none slots, but verify layer is visible
+    if (slot && slot.style.display === 'none') slot = null;
+
     if (!slot) {
         method = 'overlap';
         let bestOverlap = 0;
         for (const s of viewport.querySelectorAll(SLOT_SELECTOR)) {
+            if (s.style.display === 'none') continue;
             const sr = s.getBoundingClientRect();
             const ox = Math.max(0, Math.min(sr.right, vr.right) - Math.max(sr.left, vr.left));
             const oy = Math.max(0, Math.min(sr.bottom, vr.bottom) - Math.max(sr.top, vr.top));
