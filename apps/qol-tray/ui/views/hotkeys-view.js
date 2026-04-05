@@ -1,5 +1,5 @@
 import { html } from '../lib/html.js';
-import { useRef, useMemo } from 'preact/hooks';
+import { useRef, useMemo, useState, useEffect } from 'preact/hooks';
 import { usePaletteContext } from '../palette/context.js';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../components/app/view-keyboard-context.js';
@@ -7,9 +7,15 @@ import { matchesQuery } from '../utils/collections.js';
 
 import { PageHeader } from '../components/PageHeader.js';
 import { SurfaceContainer } from '../components/SurfaceContainer.js';
-import { HotkeyEditModal } from './hotkeys/modal.js';
+import { PluginSelect, ActionSelect, KeyInput } from './hotkeys/modal.js';
 import { useHotkeys } from './hotkeys/use-hotkeys.js';
 import { HotkeysList } from './hotkeys/list.js';
+
+// Shared state: HotkeysView writes, HotkeyEditorSubPage reads
+const _sharedEdit = { modal: null, plugins: [], fieldProps: () => ({}), handlers: {} };
+const _editListeners = new Set();
+function notifyEditChange() { for (const fn of _editListeners) fn(); }
+function subscribeEditState(fn) { _editListeners.add(fn); return () => _editListeners.delete(fn); }
 
 function RegistrationWarnings({ errors }) {
     return html`
@@ -26,6 +32,19 @@ function RegistrationWarnings({ errors }) {
 
 export function HotkeysView() {
     const hk = useHotkeys();
+    useEffect(() => {
+        _sharedEdit.modal = hk.editModal;
+        _sharedEdit.plugins = hk.plugins;
+        _sharedEdit.fieldProps = hk.fieldProps;
+        _sharedEdit.handlers = {
+            onPluginChange: hk.handlePluginChange,
+            onActionChange: hk.handleActionChange,
+            onStartRecording: hk.startRecording,
+            onClose: hk.closeModal,
+            onSave: hk.saveHotkey,
+        };
+        notifyEditChange();
+    }, [hk.editModal, hk.plugins]);
     const { searchQuery } = usePaletteContext();
     const filtered = useMemo(
         () => searchQuery
@@ -61,9 +80,43 @@ export function HotkeysView() {
                     <//>
                 </div>
             </div>
-            ${hk.editModal && html`<${HotkeyEditModal} modal=${hk.editModal} plugins=${hk.plugins}
-                fieldProps=${hk.fieldProps} onPluginChange=${hk.handlePluginChange} onActionChange=${hk.handleActionChange}
-                onStartRecording=${hk.startRecording} onClose=${hk.closeModal} onSave=${hk.saveHotkey} />`}
+        </div>
+    `;
+}
+
+export function HotkeyEditorSubPage() {
+    const [, bump] = useState(0);
+    useEffect(() => subscribeEditState(() => bump(t => t + 1)), []);
+
+    const { modal, plugins, fieldProps, handlers } = _sharedEdit;
+    if (!modal) {
+        return html`<div class="view-container content-shell">
+            <${PageHeader} title="Hotkey Editor" subtitle="Select a hotkey to edit" />
+        </div>`;
+    }
+    return html`
+        <div class="view-container content-shell">
+            <${PageHeader} title="Edit Hotkey" subtitle=${`Editing: ${modal.key || 'new hotkey'}`} />
+            <div class="view-body content-shell-body">
+                <div class="content-shell-inner">
+                    <${SurfaceContainer} className="content-frame">
+                        <div class="edit-modal-content">
+                            <div class="form-group" ...${fieldProps(0)}>
+                                <label>Plugin</label>
+                                <${PluginSelect} modal=${modal} plugins=${plugins} onChange=${handlers.onPluginChange} />
+                            </div>
+                            <div class="form-group" ...${fieldProps(1)}>
+                                <label>Action</label>
+                                <${ActionSelect} modal=${modal} onChange=${handlers.onActionChange} />
+                            </div>
+                            <div class="form-group" ...${fieldProps(2)}>
+                                <label>Shortcut</label>
+                                <${KeyInput} modal=${modal} onStartRecording=${handlers.onStartRecording} />
+                            </div>
+                        </div>
+                    <//>
+                </div>
+            </div>
         </div>
     `;
 }

@@ -1,7 +1,7 @@
 import { html } from '../../lib/html.js';
 import { PluginsView } from '../../views/plugins-view.js';
 import { StoreView } from '../../views/store-view.js';
-import { HotkeysView } from '../../views/hotkeys-view.js';
+import { HotkeysView, HotkeyEditorSubPage } from '../../views/hotkeys-view.js';
 import { ShortcutsView } from '../../views/shortcuts-view.js';
 import { TaskRunnerView } from '../../views/task-runner-view.js';
 import { ProfileView } from '../../views/profile/view.js';
@@ -25,22 +25,25 @@ export function buildViewOrder(devEnabled) {
     return devEnabled ? [...BASE_ORDER, 'dev'] : [...BASE_ORDER];
 }
 
-function WorldViewSlot({ entry, children }) {
+function WorldViewSlot({ entry, cameraLayer, children }) {
     if (!entry) return null;
-    const style = `left:${entry.x}px; top:${entry.y}px; width:${entry.width}px;`;
-    return html`<div class="world-view-slot" data-view-id=${entry.id} style=${style}>${children}</div>`;
+    const visible = entry.layer === cameraLayer;
+    const style = `left:${entry.x}px; top:${entry.y}px; width:${entry.width}px;${visible ? '' : ' display:none;'}`;
+    return html`<div class="world-view-slot" data-view-id=${entry.id} data-layer=${entry.layer} style=${style}>${children}</div>`;
 }
 
-export function renderWorldViews({ registry, openPluginConfig, openPluginUi, syncStatus, syncProviders, onSyncStatusChange, refreshSyncStatus }) {
+export function renderWorldViews({ registry, cameraLayer, openPluginConfig, openPluginUi, syncStatus, syncProviders, onSyncStatusChange, refreshSyncStatus }) {
+    const layer = cameraLayer != null ? cameraLayer : 0;
     return html`
-        <${WorldViewSlot} entry=${registry.getEntry('plugins')}><${PluginsView} onOpenPluginConfig=${openPluginConfig} onOpenPluginUi=${openPluginUi} /><//>
-        <${WorldViewSlot} entry=${registry.getEntry('store')}><${StoreView} /><//>
-        <${WorldViewSlot} entry=${registry.getEntry('hotkeys')}><${HotkeysView} /><//>
-        <${WorldViewSlot} entry=${registry.getEntry('shortcuts')}><${ShortcutsView} /><//>
-        <${WorldViewSlot} entry=${registry.getEntry('task-runner')}><${TaskRunnerView} /><//>
-        <${WorldViewSlot} entry=${registry.getEntry('profile')}><${ProfileView} syncStatus=${syncStatus}
+        <${WorldViewSlot} entry=${registry.getEntry('plugins')} cameraLayer=${layer}><${PluginsView} onOpenPluginConfig=${openPluginConfig} onOpenPluginUi=${openPluginUi} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('store')} cameraLayer=${layer}><${StoreView} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('hotkeys')} cameraLayer=${layer}><${HotkeysView} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('shortcuts')} cameraLayer=${layer}><${ShortcutsView} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('task-runner')} cameraLayer=${layer}><${TaskRunnerView} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('profile')} cameraLayer=${layer}><${ProfileView} syncStatus=${syncStatus}
             syncProviders=${syncProviders} onSyncStatusChange=${onSyncStatusChange} refreshSyncStatus=${refreshSyncStatus} /><//>
-        <${WorldViewSlot} entry=${registry.getEntry('logs')}><${LogsView} active=${true} /><//>
-        <${WorldViewSlot} entry=${registry.getEntry('dev')}><${DevView} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('logs')} cameraLayer=${layer}><${LogsView} active=${true} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('dev')} cameraLayer=${layer}><${DevView} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('hotkeys-editor')} cameraLayer=${layer}><${HotkeyEditorSubPage} /><//>
     `;
 }
