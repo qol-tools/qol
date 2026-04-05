@@ -22,6 +22,8 @@ const NAV_KEYS = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRig
 const NAV_KEYS_EXTENDED = { ...NAV_KEYS, h: 'left', j: 'down', k: 'up', l: 'right' };
 let _cameraRef = { current: null };
 let _viewportElRef = { current: null };
+let _diveRef = { current: null };
+let _ascendRef = { current: null };
 
 export function useAppKeyboardRouting({
     activePluginId,
@@ -30,11 +32,15 @@ export function useAppKeyboardRouting({
     closePluginConfig,
     switchView,
     viewOrder,
-    palette
+    palette,
+    dive,
+    ascend,
 }) {
     const pluginConfig = usePluginConfigContext();
     const { getViewKeyboard } = useViewKeyboardContext();
     _cameraRef.current = camera;
+    _diveRef.current = dive;
+    _ascendRef.current = ascend;
     useEffect(() => { _viewportElRef.current = document.getElementById('viewport'); }, []);
     const cycleView = useCallback((event) => {
         event.preventDefault();
@@ -196,6 +202,13 @@ function activateAndMaybeDescend() {
 
     activateSurface(current);
 
+    const diveTarget = current.getAttribute('data-dive-target');
+    if (diveTarget && _diveRef.current) {
+        current.setAttribute('data-dive-source', '');
+        requestAnimationFrame(() => _diveRef.current(diveTarget, current));
+        return;
+    }
+
     if (surfaceContainsChildContainer(current)) {
         requestAnimationFrame(() => descendIntoChild(current));
     }
@@ -213,6 +226,11 @@ function descendInto(container) {
 }
 
 function ascendLayer() {
+    const camera = _cameraRef.current;
+    if (camera && camera.layer < 0 && _ascendRef.current) {
+        return _ascendRef.current();
+    }
+
     const current = findSelectedSurface();
     const container = current ? activeContainer(current) : null;
     if (!container) return false;
