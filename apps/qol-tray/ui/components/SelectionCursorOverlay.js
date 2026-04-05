@@ -222,11 +222,16 @@ function cursorStyle(app, target) {
     const top = readVar(vars, '--selected-surface-wedge-top', '-20px');
     const left = readVar(vars, '--selected-surface-wedge-left', '-24px');
 
+    const camera = window.__worldCamera;
+    const z = camera?.zoom || 1;
+    const wedgeScale = z < 1 ? Math.max(0.3, z) : 1;
+
     return {
         width: `${targetRect.width}px`,
         height: `${targetRect.height}px`,
         opacity: 1,
-        transform: `translate(${targetRect.left - appRect.left}px, ${targetRect.top - appRect.top}px)`,
+        transform: `translate(${targetRect.left - appRect.left}px, ${targetRect.top - appRect.top}px) scale(${wedgeScale})`,
+        transformOrigin: 'top left',
         transition: 'none',
         '--selection-wedge-z': readVar(vars, '--selected-surface-wedge-z', 'var(--z-selection-wedge)'),
         '--selection-wedge-size': readVar(vars, '--selected-surface-wedge-size', '22px'),
