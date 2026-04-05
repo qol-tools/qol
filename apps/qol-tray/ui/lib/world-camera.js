@@ -101,7 +101,7 @@ export function createCamera() {
         get zoom() { return zoom; },
         get layer() { return layer; },
         get animating() { return animTarget !== null; },
-        setWorldElement(el) { worldEl = el; },
+        setWorldElement(el) { worldEl = el; apply(); },
         panTo,
         panSmooth,
         zoomTo,
