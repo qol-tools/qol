@@ -58,7 +58,7 @@ export function WorldViewport({ camera, onViewChange, children }) {
             const dx = e.clientX - d.startX;
             const dy = e.clientY - d.startY;
             if (Math.abs(dx) > 3 || Math.abs(dy) > 3) d.moved = true;
-            camera.panTo(d.camX - dx, d.camY - dy);
+            camera.panTo(d.camX - dx / camera.zoom, d.camY - dy / camera.zoom);
         }
 
         function onPointerUp(e) {
@@ -73,7 +73,7 @@ export function WorldViewport({ camera, onViewChange, children }) {
         function onWheel(e) {
             e.preventDefault();
             if (isCtrlHeld()) return;
-            camera.nudge(e.deltaX, e.deltaY);
+            camera.nudge(e.deltaX / camera.zoom, e.deltaY / camera.zoom);
         }
 
         function onKeyDown(e) {
@@ -103,10 +103,11 @@ export function WorldViewport({ camera, onViewChange, children }) {
             if (isCtrlHeld()) {
                 const keys = keysRef.current;
                 let dx = 0, dy = 0;
-                if (keys.has('ArrowLeft')) dx = -PAN_SPEED;
-                if (keys.has('ArrowRight')) dx = PAN_SPEED;
-                if (keys.has('ArrowUp')) dy = -PAN_SPEED;
-                if (keys.has('ArrowDown')) dy = PAN_SPEED;
+                const speed = PAN_SPEED / camera.zoom;
+                if (keys.has('ArrowLeft')) dx = -speed;
+                if (keys.has('ArrowRight')) dx = speed;
+                if (keys.has('ArrowUp')) dy = -speed;
+                if (keys.has('ArrowDown')) dy = speed;
                 if (dx || dy) { camera.nudge(dx, dy); ctrlPannedRef.current = true; }
             }
             rafId = requestAnimationFrame(ctrlPanLoop);
@@ -126,7 +127,7 @@ export function WorldViewport({ camera, onViewChange, children }) {
             else if (fr.left < vr.left + CAMERA_FOLLOW_PAD) dx = fr.left - (vr.left + CAMERA_FOLLOW_PAD);
             if (dx || dy) {
                 log('cam follow Δ', Math.round(dx), Math.round(dy), elLabel(surface));
-                camera.panSmooth(camera.x + dx, camera.y + dy, 200);
+                camera.panSmooth(camera.x + dx / camera.zoom, camera.y + dy / camera.zoom, 200);
             }
         }
 
