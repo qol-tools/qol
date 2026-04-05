@@ -1,14 +1,36 @@
-const DEFAULT_VIEW_WIDTH = 1000;
-const DEFAULT_VIEW_HEIGHT = 800;
-const GAP = 200;
+const PAGE_WIDTH = 1000;
+const PAGE_HEIGHT = 800;
+const PAGE_STRIDE = 10000;
+const SUB_PAGE_Y_OFFSET = 2000;
+const SUB_PAGE_X_SPACING = 5000;
 
-export function createWorldRegistry(viewOrder) {
+export function createWorldRegistry(viewOrder, manifest = {}) {
     const entries = new Map();
-    let nextX = 0;
 
-    for (const id of viewOrder) {
-        entries.set(id, { id, x: nextX, y: 0, width: DEFAULT_VIEW_WIDTH, height: DEFAULT_VIEW_HEIGHT });
-        nextX += DEFAULT_VIEW_WIDTH + GAP;
+    // Layer 0: pages at PAGE_STRIDE intervals
+    for (let i = 0; i < viewOrder.length; i++) {
+        const id = viewOrder[i];
+        entries.set(id, {
+            id, x: i * PAGE_STRIDE, y: 0,
+            width: PAGE_WIDTH, height: PAGE_HEIGHT,
+            layer: 0, parent: null,
+        });
+    }
+
+    // Layer -1: sub-pages from manifest
+    for (const [parentId, subs] of Object.entries(manifest)) {
+        const parent = entries.get(parentId);
+        if (!parent) continue;
+        for (let i = 0; i < subs.length; i++) {
+            const subId = `${parentId}-${subs[i]}`;
+            entries.set(subId, {
+                id: subId,
+                x: parent.x + i * SUB_PAGE_X_SPACING,
+                y: parent.y + SUB_PAGE_Y_OFFSET,
+                width: PAGE_WIDTH, height: PAGE_HEIGHT,
+                layer: -1, parent: parentId,
+            });
+        }
     }
 
     function getEntry(id) {
@@ -19,9 +41,24 @@ export function createWorldRegistry(viewOrder) {
         return Array.from(entries.values());
     }
 
-    function worldBounds() {
+    function getEntriesForLayer(n) {
+        return getAllEntries().filter(e => e.layer === n);
+    }
+
+    function getSubPages(parentId) {
+        return getAllEntries().filter(e => e.parent === parentId);
+    }
+
+    function diveTarget(id) {
+        return entries.get(id) || null;
+    }
+
+    function worldBounds(layerFilter) {
+        const pool = layerFilter !== undefined
+            ? getAllEntries().filter(e => e.layer === layerFilter)
+            : getAllEntries();
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (const e of entries.values()) {
+        for (const e of pool) {
             minX = Math.min(minX, e.x);
             minY = Math.min(minY, e.y);
             maxX = Math.max(maxX, e.x + e.width);
@@ -32,12 +69,14 @@ export function createWorldRegistry(viewOrder) {
         return { x: minX - pad, y: minY - pad, width: maxX - minX + pad * 2, height: maxY - minY + pad * 2 };
     }
 
-    function activeViewId(cameraX, cameraY, viewportW, viewportH) {
-        const cx = cameraX + viewportW / 2;
-        const cy = cameraY + viewportH / 2;
+    function activeViewId(cameraX, cameraY, viewportW, viewportH, zoom) {
+        const z = zoom || 1;
+        const cx = cameraX + viewportW / (2 * z);
+        const cy = cameraY + viewportH / (2 * z);
         let closest = null;
         let closestDist = Infinity;
         for (const e of entries.values()) {
+            if (e.layer !== 0) continue;
             const vx = e.x + e.width / 2;
             const vy = e.y + e.height / 2;
             const d = Math.hypot(cx - vx, cy - vy);
@@ -47,29 +86,34 @@ export function createWorldRegistry(viewOrder) {
     }
 
     function placeNew(id, width, height) {
-        const w = width || DEFAULT_VIEW_WIDTH;
-        const h = height || DEFAULT_VIEW_HEIGHT;
-        let bestX = 0;
+        const w = width || PAGE_WIDTH;
+        const h = height || PAGE_HEIGHT;
+        let maxRight = 0;
         for (const e of entries.values()) {
-            bestX = Math.max(bestX, e.x + e.width + GAP);
+            if (e.layer !== 0) continue;
+            maxRight = Math.max(maxRight, e.x + PAGE_STRIDE);
         }
-        const entry = { id, x: bestX, y: 0, width: w, height: h };
+        const entry = { id, x: maxRight, y: 0, width: w, height: h, layer: 0, parent: null };
         entries.set(id, entry);
         return entry;
     }
 
-    function cameraTargetForView(id, viewportW, viewportH) {
+    function cameraTargetForView(id, viewportW, viewportH, zoom) {
         const e = entries.get(id);
         if (!e) return null;
+        const z = zoom || 1;
         return {
-            x: e.x + e.width / 2 - viewportW / 2,
-            y: e.y + e.height / 2 - viewportH / 2,
+            x: e.x + e.width / 2 - viewportW / (2 * z),
+            y: e.y + e.height / 2 - viewportH / (2 * z),
         };
     }
 
     return {
         getEntry,
         getAllEntries,
+        getEntriesForLayer,
+        getSubPages,
+        diveTarget,
         worldBounds,
         activeViewId,
         placeNew,
