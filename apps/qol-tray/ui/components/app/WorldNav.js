@@ -11,16 +11,17 @@ export function useWorldNav({ camera, registry, viewportRef }) {
 
     const jumpToView = useCallback((id) => {
         const { w, h } = getViewportSize();
-        const target = registry.cameraTargetForView(id, w, h);
+        const target = registry.cameraTargetForView(id, w, h, camera.zoom);
         if (target) camera.panSmooth(target.x, target.y, 400);
     }, [camera, registry, getViewportSize]);
 
     const fitAll = useCallback(() => {
-        const bounds = registry.worldBounds();
+        const bounds = registry.worldBounds(0);
         const { w, h } = getViewportSize();
+        const z = camera.zoom;
         camera.panSmooth(
-            bounds.x + bounds.width / 2 - w / 2,
-            bounds.y + bounds.height / 2 - h / 2,
+            bounds.x + bounds.width / 2 - w / (2 * z),
+            bounds.y + bounds.height / 2 - h / (2 * z),
             400
         );
     }, [camera, registry, getViewportSize]);

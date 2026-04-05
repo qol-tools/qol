@@ -1,5 +1,6 @@
 import { html } from '../lib/html.js';
-import { useRef, useCallback, useEffect } from 'preact/hooks';
+import { createDiveStack } from '../lib/dive-stack.js';
+import { useRef, useCallback, useEffect, useState } from 'preact/hooks';
 import { PaletteProvider, usePaletteContext } from '../palette/context.js';
 import { createDebug } from '../lib/debug.js';
 
@@ -57,8 +58,15 @@ function AppShell() {
     window.__worldCamera = camera;
 
     const registryRef = useRef(null);
-    if (!registryRef.current) registryRef.current = createWorldRegistry(viewOrder);
+    const SUB_PAGE_MANIFEST = { hotkeys: ['editor'] };
+    if (!registryRef.current) registryRef.current = createWorldRegistry(viewOrder, SUB_PAGE_MANIFEST);
     const registry = registryRef.current;
+
+    const diveStackRef = useRef(null);
+    if (!diveStackRef.current) diveStackRef.current = createDiveStack();
+    const diveStack = diveStackRef.current;
+
+    const [cameraLayer, setCameraLayer] = useState(0);
 
     // Add views that appear after initial render (e.g. dev when devEnabled flips)
     useEffect(() => {
@@ -84,7 +92,7 @@ function AppShell() {
         const h = vp?.clientHeight || 600;
         if (prevViewRef.current !== activeViewId) {
             prevViewRef.current = activeViewId;
-            const target = registry.cameraTargetForView(activeViewId, w, h);
+            const target = registry.cameraTargetForView(activeViewId, w, h, camera.zoom);
             if (target) {
                 const dist = Math.hypot(camera.x - target.x, camera.y - target.y);
                 if (dist > 50) {
@@ -97,13 +105,53 @@ function AppShell() {
         }
     }, [activeViewId, camera, registry]);
 
+    const OVERVIEW_ZOOM = 0.12;
+
     useEffect(() => {
+        camera.zoomTo(OVERVIEW_ZOOM);
         const vp = viewportRef.current;
-        const target = registry.cameraTargetForView(activeViewId, vp?.clientWidth || 800, vp?.clientHeight || 600);
+        const target = registry.cameraTargetForView(activeViewId, vp?.clientWidth || 800, vp?.clientHeight || 600, OVERVIEW_ZOOM);
         if (target) camera.panTo(target.x, target.y);
     }, []);
 
     useWorldNav({ camera, registry, viewportRef });
+
+    const dive = useCallback((targetId, sourceSurface) => {
+        const entry = registry.diveTarget(targetId);
+        if (!entry) return;
+        diveStack.push({
+            layer: camera.layer,
+            x: camera.x, y: camera.y, zoom: camera.zoom,
+            surfaceSelector: sourceSurface ? selectorFor(sourceSurface) : null,
+        });
+        const vp = viewportRef.current;
+        const w = vp?.clientWidth || 800;
+        const h = vp?.clientHeight || 600;
+        setCameraLayer(entry.layer);
+        camera.setLayer(entry.layer);
+        const target = registry.cameraTargetForView(targetId, w, h, 1.0);
+        if (target) {
+            camera.zoomSmooth(target.x, target.y, 1.0, 400, () => {
+                const slot = document.querySelector(`.world-view-slot[data-view-id="${targetId}"]`);
+                const surface = slot?.querySelector('[data-selected-surface]');
+                if (surface) surface.focus({ preventScroll: true });
+            });
+        }
+    }, [camera, registry, diveStack]);
+
+    const ascend = useCallback(() => {
+        const prev = diveStack.pop();
+        if (!prev) return false;
+        setCameraLayer(prev.layer);
+        camera.setLayer(prev.layer);
+        camera.zoomSmooth(prev.x, prev.y, prev.zoom, 400, () => {
+            if (prev.surfaceSelector) {
+                const surface = document.querySelector(prev.surfaceSelector);
+                if (surface) surface.focus({ preventScroll: true });
+            }
+        });
+        return true;
+    }, [camera, diveStack]);
 
     return html`
         <${ModifierStateProvider}>
@@ -116,12 +164,15 @@ function AppShell() {
                     closePluginConfig=${closePluginConfig}
                     switchView=${switchView}
                     viewOrder=${viewOrder}
+                    dive=${dive}
+                    ascend=${ascend}
                 />
                 <div class="app-container">
                     <${WorldViewport} camera=${camera} onViewChange=${switchView}>
                         <${RegionLabels} registry=${registry} />
                         ${renderWorldViews({
                             registry,
+                            cameraLayer,
                             openPluginConfig,
                             openPluginUi,
                             syncStatus,
@@ -142,8 +193,18 @@ function AppShell() {
     `;
 }
 
-function AppKeyboardRouting({ activePluginId, activeViewId, camera, closePluginConfig, switchView, viewOrder }) {
+function AppKeyboardRouting({ activePluginId, activeViewId, camera, closePluginConfig, switchView, viewOrder, dive, ascend }) {
     const palette = usePaletteContext();
-    useAppKeyboardRouting({ activePluginId, activeViewId, camera, closePluginConfig, switchView, viewOrder, palette });
+    useAppKeyboardRouting({ activePluginId, activeViewId, camera, closePluginConfig, switchView, viewOrder, palette, dive, ascend });
+    return null;
+}
+
+function selectorFor(el) {
+    if (el.id) return `#${CSS.escape(el.id)}`;
+    const viewId = el.closest('[data-view-id]')?.dataset?.viewId;
+    const index = el.getAttribute('data-index');
+    if (viewId && index != null) {
+        return `[data-view-id="${CSS.escape(viewId)}"] [data-selected-surface][data-index="${index}"]`;
+    }
     return null;
 }
