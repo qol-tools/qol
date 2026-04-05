@@ -1,5 +1,6 @@
 import { html } from '../../lib/html.js';
 import { useEffect, useRef } from 'preact/hooks';
+import { createWorldCanvasBg } from '../../lib/world-canvas-bg.js';
 import { createDebug, elLabel } from '../../lib/debug.js';
 import { isCtrlHeld } from '../../lib/ctrl-state.js';
 import { nearestSurfaceToCenter } from '../../lib/viewport-spatial.js';
@@ -16,6 +17,13 @@ export function WorldViewport({ camera, onViewChange, children }) {
     const dragRef = useRef({ active: false, startX: 0, startY: 0, camX: 0, camY: 0, moved: false });
     const keysRef = useRef(new Set());
     const ctrlPannedRef = useRef(false);
+    const bgCanvasRef = useRef(null);
+
+    useEffect(() => {
+        if (!bgCanvasRef.current) return;
+        const bg = createWorldCanvasBg(bgCanvasRef.current, camera);
+        return () => bg.destroy();
+    }, [camera]);
 
     useEffect(() => {
         if (worldRef.current) camera.setWorldElement(worldRef.current);
@@ -145,8 +153,8 @@ export function WorldViewport({ camera, onViewChange, children }) {
 
     return html`
         <div id="viewport" ref=${viewportRef}>
+            <canvas id="world-bg" ref=${bgCanvasRef}></canvas>
             <div id="world" ref=${worldRef}>
-                <div id="world-bg"></div>
                 ${children}
             </div>
         </div>
