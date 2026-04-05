@@ -27,7 +27,7 @@ export function useWorldNav({ camera, registry, viewportRef }) {
     }, [camera, registry, getViewportSize]);
 
     const commands = useMemo(() => {
-        const cmds = registry.getAllEntries().map(e => ({
+        const cmds = registry.getEntriesForLayer(0).map(e => ({
             id: `world:jump:${e.id}`,
             label: `Go to ${formatLabel(e.id)}`,
             run: () => jumpToView(e.id),

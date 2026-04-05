@@ -27,8 +27,8 @@ export function createWorldCanvasBg(canvas, camera) {
         const alpha = DOT_ALPHA_BASE * Math.min(1, spacing / 20);
         ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
 
-        const offsetX = ((-camera.x % DOT_SPACING) + DOT_SPACING) % DOT_SPACING * z;
-        const offsetY = ((-camera.y % DOT_SPACING) + DOT_SPACING) % DOT_SPACING * z;
+        const offsetX = (((-camera.x % DOT_SPACING) + DOT_SPACING) % DOT_SPACING) * z;
+        const offsetY = (((-camera.y % DOT_SPACING) + DOT_SPACING) % DOT_SPACING) * z;
 
         for (let x = offsetX; x < w; x += spacing) {
             for (let y = offsetY; y < h; y += spacing) {
