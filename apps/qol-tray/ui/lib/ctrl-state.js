@@ -1,0 +1,37 @@
+/**
+ * Single source of truth for CTRL held state.
+ * Module-level — one pair of keydown/keyup listeners, shared by all consumers.
+ */
+
+let held = false;
+const listeners = new Set();
+
+function onKeyDown(e) {
+    if (e.key === 'Control' && !held) {
+        held = true;
+        document.body.dataset.ctrlHeld = '';
+        notify();
+    }
+}
+
+function onKeyUp(e) {
+    if (e.key === 'Control' && held) {
+        held = false;
+        delete document.body.dataset.ctrlHeld;
+        notify();
+    }
+}
+
+function notify() {
+    for (const fn of listeners) fn(held);
+}
+
+document.addEventListener('keydown', onKeyDown, true);
+document.addEventListener('keyup', onKeyUp, true);
+
+export function isCtrlHeld() { return held; }
+
+export function subscribeCtrl(fn) {
+    listeners.add(fn);
+    return () => listeners.delete(fn);
+}

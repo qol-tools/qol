@@ -4,26 +4,16 @@ import { findActiveSelectedSurface, hasSelectedSurfaceState } from '../lib/selec
 import { hslLuminance } from '../lib/color.js';
 import { surfaceDepth } from '../lib/surface-traits.js';
 import { SelectionWedgeGlyph } from './SelectionWedgeGlyph.js';
-import { createDebug } from '../lib/debug.js';
+import { createDebug, elLabel, rectLabel } from '../lib/debug.js';
+import { isCtrlHeld, subscribeCtrl } from '../lib/ctrl-state.js';
+import { nearestSurfaceToCenter } from '../lib/viewport-spatial.js';
+
 const log = createDebug('qol:wedge');
 
 const ATTRIBUTES = ['data-selected', 'data-selected-surface', 'data-selected-surface-motion', 'data-selected-surface-priority'];
 const WEDGE_HUE_BASE = 50;
 const WEDGE_HUE_STEP = 45;
 const WEDGE_HUE_MAX = 275;
-
-function elLabel(el) {
-    if (!el) return 'null';
-    if (el === document.body) return 'BODY';
-    const tag = el.tagName?.toLowerCase() || '?';
-    const cls = el.className ? `.${String(el.className).split(/\s+/).slice(0, 2).join('.')}` : '';
-    return `${tag}${cls}`;
-}
-
-function rectLabel(r) {
-    if (!r) return 'none';
-    return `(${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)})`;
-}
 
 export function SelectionCursorOverlay() {
     const [style, setStyle] = useState(hiddenStyle());
@@ -43,11 +33,11 @@ export function SelectionCursorOverlay() {
         function syncFrom(source) {
             const mode = app.dataset.inputMode;
             const focused = document.activeElement;
-            const ctrlHeld = ctrlHeldLocal;
+            const ctrlHeld = isCtrlHeld();
 
             // CTRL held: wedge at viewport center, highlight nearest surface
             if (ctrlHeld) {
-                const preview = nearestSurfaceToViewportCenter();
+                const { surface: preview } = nearestSurfaceToCenter();
                 const prevTarget = targetRef.current;
                 if (preview !== prevTarget) {
                     clearCursorTargets();
@@ -122,20 +112,17 @@ export function SelectionCursorOverlay() {
         const syncFromResize = () => syncFrom('resize');
 
         let pointerActive = false;
-        let ctrlHeldLocal = false;
         const setInputMode = (mode) => {
             const prev = app.dataset.inputMode;
             if (prev !== mode) log('mode:', prev, '→', mode);
             app.dataset.inputMode = mode;
         };
-        const onKey = (e) => {
+        const onKey = () => {
             pointerActive = false;
             setInputMode('keyboard');
-            if (e.key === 'Control') { ctrlHeldLocal = true; syncFrom('ctrl-down'); }
         };
-        const onKeyUpSync = (e) => {
-            if (e.key === 'Control') { ctrlHeldLocal = false; syncFrom('ctrl-up'); }
-        };
+        const onCtrlChange = (held) => syncFrom(held ? 'ctrl-down' : 'ctrl-up');
+        const unsubCtrl = subscribeCtrl(onCtrlChange);
         const onPointer = () => {
             pointerActive = true;
             setInputMode('mouse');
@@ -155,7 +142,6 @@ export function SelectionCursorOverlay() {
         document.addEventListener('focusin', syncFromFocusIn, true);
         document.addEventListener('focusout', syncFromFocusOut, true);
         document.addEventListener('keydown', onKey, true);
-        document.addEventListener('keyup', onKeyUpSync, true);
         document.addEventListener('pointerdown', onPointer, true);
         document.addEventListener('wheel', onWheel, { capture: true, passive: true });
         window.addEventListener('resize', syncFromResize);
@@ -171,8 +157,8 @@ export function SelectionCursorOverlay() {
             document.removeEventListener('focusin', syncFromFocusIn, true);
             document.removeEventListener('focusout', syncFromFocusOut, true);
             document.removeEventListener('keydown', onKey, true);
-            document.removeEventListener('keyup', onKeyUpSync, true);
             document.removeEventListener('pointerdown', onPointer, true);
+            unsubCtrl();
             document.removeEventListener('wheel', onWheel, true);
             window.removeEventListener('resize', syncFromResize);
             if (focusOutRaf) cancelAnimationFrame(focusOutRaf);
@@ -285,37 +271,4 @@ function hasFocusedSurface() {
     return focused.closest('[data-selected-surface]') !== null;
 }
 
-function nearestSurfaceToViewportCenter() {
-    const vp = document.getElementById('viewport');
-    if (!vp) return null;
-    const vr = vp.getBoundingClientRect();
-    const cx = vr.left + vr.width / 2;
-    const cy = vr.top + vr.height / 2;
-
-    // Find slot at center
-    const el = document.elementFromPoint(cx, cy);
-    let slot = el?.closest('.world-view-slot');
-    if (!slot) {
-        let bestOverlap = 0;
-        for (const s of vp.querySelectorAll('.world-view-slot')) {
-            const sr = s.getBoundingClientRect();
-            const ox = Math.max(0, Math.min(sr.right, vr.right) - Math.max(sr.left, vr.left));
-            const oy = Math.max(0, Math.min(sr.bottom, vr.bottom) - Math.max(sr.top, vr.top));
-            const overlap = ox * oy;
-            if (overlap > bestOverlap) { bestOverlap = overlap; slot = s; }
-        }
-    }
-    const root = slot || vp;
-
-    let best = null;
-    let bestDist = Infinity;
-    for (const s of root.querySelectorAll('[data-selected-surface]')) {
-        const r = s.getBoundingClientRect();
-        if (r.width === 0 || r.height === 0) continue;
-        if (r.bottom < vr.top || r.top > vr.bottom || r.right < vr.left || r.left > vr.right) continue;
-        const d = Math.hypot(r.left + r.width / 2 - cx, r.top + r.height / 2 - cy);
-        if (d < bestDist) { best = s; bestDist = d; }
-    }
-    return best;
-}
 
