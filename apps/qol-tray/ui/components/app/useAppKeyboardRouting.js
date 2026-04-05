@@ -41,6 +41,7 @@ export function useAppKeyboardRouting({
         const next = event.shiftKey
             ? (idx - 1 + viewOrder.length) % viewOrder.length
             : (idx + 1) % viewOrder.length;
+        log('tab:', activeViewId, '→', viewOrder[next]);
         switchView(viewOrder[next]);
     }, [activeViewId, switchView, viewOrder]);
 
@@ -49,9 +50,9 @@ export function useAppKeyboardRouting({
         const wasOpen = prevPluginIdRef.current;
         prevPluginIdRef.current = activePluginId;
         if (wasOpen && !activePluginId) {
-            const surface = document.querySelector('#content [data-selected-surface][data-selected="true"]');
+            const surface = document.querySelector('#viewport [data-selected-surface][data-selected="true"]');
             if (surface) { surface.focus({ preventScroll: true }); return; }
-            const fallback = document.querySelector('#content [data-selected-surface]');
+            const fallback = document.querySelector('#viewport [data-selected-surface]');
             if (fallback) fallback.focus({ preventScroll: true });
         }
     }, [activePluginId]);
@@ -62,36 +63,45 @@ export function useAppKeyboardRouting({
         prevViewIdRef.current = activeViewId;
         if (prev === activeViewId) return;
         requestAnimationFrame(() => {
-            const target = firstVisibleSurface('#content [data-selected-surface][data-selected="true"]')
-                || firstVisibleSurface('#content [data-selected-surface]');
-            if (target) target.focus({ preventScroll: true });
+            const slot = document.querySelector(`.world-view-slot[data-view-id="${activeViewId}"]`);
+            if (!slot) { log('viewChange: no slot for', activeViewId); return; }
+            // Skip if CTRL+snap already focused a surface in this view
+            const focused = document.activeElement;
+            if (focused && focused !== document.body && slot.contains(focused)) {
+                log('viewChange:', activeViewId, '→ already focused:', surfaceLabel(focused));
+                return;
+            }
+            const surface = slot.querySelector('[data-selected-surface]');
+            log('viewChange:', activeViewId, '→', surface ? surfaceLabel(surface) : 'no surfaces');
+            if (surface) surface.focus({ preventScroll: true });
         });
     }, [activeViewId]);
 
     useKeyboard(useCallback((event) => {
         const viewKeyboard = getViewKeyboard(activeViewId);
-        if (handlePaletteToggle(event, palette, activePluginId, viewKeyboard)) return;
+        if (handlePaletteToggle(event, palette, activePluginId)) return;
         if (palette.active && event.key !== 'Tab') return;
         if (activePluginId) return delegateToPluginConfig(event, pluginConfig, closePluginConfig);
         routeToView(event, viewKeyboard, cycleView);
     }, [activePluginId, activeViewId, closePluginConfig, cycleView, getViewKeyboard, palette, pluginConfig]));
 }
 
-function handlePaletteToggle(event, palette, activePluginId, viewKeyboard) {
+function handlePaletteToggle(event, palette, activePluginId) {
     if (!(event.ctrlKey || event.metaKey) || event.key !== 'e') return false;
     event.preventDefault();
-    if (!palette.active && !activePluginId && !viewKeyboard?.isBlocking?.()) palette.activate();
+    if (!palette.active && !activePluginId) palette.activate();
     return true;
 }
 
 function routeToView(event, viewKeyboard, cycleView) {
+    if (event.key === 'Tab') {
+        event.preventDefault();
+        if (!hasVisibleModal()) cycleView(event);
+        return;
+    }
     if (viewKeyboard?.isBlocking?.()) {
         if (viewKeyboard.handleKey) viewKeyboard.handleKey(event);
         if (!event.defaultPrevented) globalSurfaceNav(event);
-        return;
-    }
-    if (event.key === 'Tab') {
-        if (!hasVisibleModal()) cycleView(event);
         return;
     }
     const active = document.activeElement;
@@ -126,73 +136,59 @@ function findSelectedSurface() {
     const focused = document.activeElement;
     if (focused instanceof HTMLElement && focused !== document.body) {
         const surface = focused.closest('[data-selected-surface]');
-        if (surface && isVisible(surface)) return surface;
+        if (surface && isVisible(surface) && isInViewportBounds(surface)) return surface;
     }
     for (const container of document.querySelectorAll('[data-surface-container]')) {
         if (!isVisible(container)) continue;
         for (const el of directSurfaces(container)) {
-            if (el.getAttribute('data-selected') === 'true') return el;
+            if (el.getAttribute('data-selected') === 'true' && isInViewportBounds(el)) return el;
         }
     }
     return null;
 }
 
+function isInViewportBounds(el) {
+    const vp = document.getElementById('viewport');
+    if (!vp) return true;
+    const vr = vp.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    return r.bottom > vr.top && r.top < vr.bottom && r.right > vr.left && r.left < vr.right;
+}
+
 function navigateInActiveContainer(direction) {
     const current = findSelectedSurface();
     if (!current) {
-        const fallback = firstVisibleSurface('#content [data-selected-surface]');
-        if (fallback) fallback.focus({ preventScroll: true });
+        log('arrow', direction, '→ no current, snap fallback');
+        const fallback = nearestVisibleSurfaceToViewportCenter();
+        if (fallback) {
+            log('arrow', direction, '→ snap:', surfaceLabel(fallback));
+            fallback.focus({ preventScroll: true });
+        } else {
+            log('arrow', direction, '→ snap: nothing found');
+        }
         return;
     }
     const container = activeContainer(current);
-    if (!container) return;
+    if (!container) { log('arrow', direction, '→ no container'); return; }
 
     const surfaces = directSurfaces(container);
-    const cr = current.getBoundingClientRect();
-    log(direction, 'from', surfaceLabel(current),
-        'at (' + Math.round(cr.left) + ',' + Math.round(cr.top) + ')',
-        '| surfaces:', surfaces.length);
     const next = nearestSurfaceInDirection(surfaces, current, direction);
-    if (!next || next === current) {
-        log('  -> no match. All surfaces:');
-        for (const el of surfaces) {
-            if (el === current) continue;
-            const r = el.getBoundingClientRect();
-            log('    ', surfaceLabel(el), '(' + Math.round(r.left) + ',' + Math.round(r.top) + ')');
-        }
-        return;
-    }
+    if (!next || next === current) return;
+
+    const cr = current.getBoundingClientRect();
     const nr = next.getBoundingClientRect();
-    log('  -> RESULT:', surfaceLabel(next),
-        'at (' + Math.round(nr.left) + ',' + Math.round(nr.top) + ')');
+    const slot = next.closest('.world-view-slot');
+    log('arrow', direction, surfaceLabel(current),
+        `(${Math.round(cr.left)},${Math.round(cr.top)})`, '→',
+        surfaceLabel(next), `(${Math.round(nr.left)},${Math.round(nr.top)})`,
+        'view:', slot?.dataset?.viewId || '?');
+
     focusWithoutScroll(next);
-    if (_cameraRef.current && _viewportElRef.current) {
-        const vr = _viewportElRef.current.getBoundingClientRect();
-        const fr = next.getBoundingClientRect();
-        if (fr.top < vr.top || fr.bottom > vr.bottom || fr.left < vr.left || fr.right > vr.right) {
-            const cam = _cameraRef.current;
-            const worldX = cam.x + (fr.left + fr.width / 2 - vr.left) - vr.width / 2;
-            const worldY = cam.y + (fr.top + fr.height / 2 - vr.top) - vr.height / 2;
-            cam.panSmooth(worldX, worldY, 150);
-        }
-    }
+    // Camera follow is handled globally by WorldViewport's focusin listener
 }
 
 function focusWithoutScroll(el) {
-    const saved = [];
-    let parent = el.parentElement;
-    while (parent && parent !== document.body) {
-        const style = getComputedStyle(parent);
-        const oy = style.overflowY;
-        if ((oy === 'auto' || oy === 'scroll') && parent.scrollHeight > parent.clientHeight + 1) {
-            saved.push({ el: parent, top: parent.scrollTop });
-        }
-        parent = parent.parentElement;
-    }
     el.focus({ preventScroll: true });
-    for (const s of saved) {
-        if (s.el.scrollTop !== s.top) s.el.scrollTop = s.top;
-    }
 }
 
 function activateAndMaybeDescend() {
@@ -588,6 +584,40 @@ function firstVisibleSurface(selector) {
         if (isVisible(el)) return el;
     }
     return null;
+}
+
+function nearestVisibleSurfaceToViewportCenter() {
+    const vp = document.getElementById('viewport');
+    if (!vp) return null;
+    const vr = vp.getBoundingClientRect();
+    const cx = vr.left + vr.width / 2;
+    const cy = vr.top + vr.height / 2;
+
+    // Scope search to the view slot at viewport center
+    const elAtCenter = document.elementFromPoint(cx, cy);
+    let slot = elAtCenter?.closest('.world-view-slot');
+    if (!slot) {
+        let bestOverlap = 0;
+        for (const s of vp.querySelectorAll('.world-view-slot')) {
+            const sr = s.getBoundingClientRect();
+            const ox = Math.max(0, Math.min(sr.right, vr.right) - Math.max(sr.left, vr.left));
+            const oy = Math.max(0, Math.min(sr.bottom, vr.bottom) - Math.max(sr.top, vr.top));
+            const overlap = ox * oy;
+            if (overlap > bestOverlap) { bestOverlap = overlap; slot = s; }
+        }
+    }
+    const searchRoot = slot || vp;
+
+    let best = null;
+    let bestDist = Infinity;
+    for (const el of searchRoot.querySelectorAll('[data-selected-surface]')) {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) continue;
+        if (r.bottom < vr.top || r.top > vr.bottom || r.right < vr.left || r.left > vr.right) continue;
+        const d = Math.hypot(r.left + r.width / 2 - cx, r.top + r.height / 2 - cy);
+        if (d < bestDist) { best = el; bestDist = d; }
+    }
+    return best;
 }
 
 function hasVisibleModal() {

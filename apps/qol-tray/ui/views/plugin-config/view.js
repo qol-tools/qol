@@ -1,7 +1,6 @@
 import { html } from '../../lib/html.js';
-import { useCallback, useEffect, useRef } from 'preact/hooks';
+import { useCallback, useRef } from 'preact/hooks';
 import { usePluginConfigContext } from './context.js';
-import { useSidebarContext } from '../../components/app/sidebar-context.js';
 import { prettyLabel } from '../../auto-config/heuristics.js';
 import {
     buildBranchOwnerMap,
@@ -17,22 +16,6 @@ import { SurfaceContainer } from '../../components/SurfaceContainer.js';
 
 export function PluginConfigView({ onClose }) {
     const ctx = usePluginConfigContext();
-    const { setItems, setHeader, resetSidebar } = useSidebarContext();
-    const tokenRef = useRef(0);
-
-    useEffect(() => {
-        if (!ctx?.sections?.length) return;
-        setHeader(html`<div class="sidebar-header"><button class="sidebar-back" tabIndex="-1" onClick=${onClose}>${'\u2190'} Back</button></div>`);
-        tokenRef.current = setItems(ctx.sections.map((s, i) => ({
-            type: 'item',
-            key: s.id,
-            id: s.id,
-            label: s.label || prettyLabel(s.id),
-            active: i === ctx.activeSectionIndex,
-            onClick: () => ctx.setActiveSectionIndex(i),
-        })));
-        return () => resetSidebar(tokenRef.current);
-    }, [ctx?.sections, ctx?.activeSectionIndex, ctx?.pluginId, onClose, setItems, setHeader, resetSidebar]);
 
     if (ctx?.mode === 'ui') {
         return html`

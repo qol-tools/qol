@@ -62,7 +62,7 @@ function MockControls({ actions }) {
     if (!actions?.length) return null;
     return html`
         <div class="catalog-mock-controls">
-            ${actions.map(a => html`<${Button} key=${a.label} small variant="btn-ghost" onActivate=${a.run}>${a.label}<//>`)}
+            ${actions.map(a => html`<button key=${a.label} class="btn btn-sm btn-ghost" onClick=${a.run}>${a.label}</button>`)}
         </div>
     `;
 }
@@ -76,7 +76,7 @@ function ButtonShowcase() {
         <${CatalogSection} title="Buttons">
             <div class="catalog-showcase">
                 <div class="catalog-try">
-                    <${Button} variant="btn-primary" onActivate=${() => {}}>Interactive<//>
+                    <div><${Button} variant="btn-primary" onActivate=${() => {}}>Interactive<//></div>
                 </div>
                 <div class="catalog-states" inert>
                     <${StateLabel}>variants<//>

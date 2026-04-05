@@ -1,6 +1,9 @@
 import { html } from '../lib/html.js';
 import { useRef, useCallback, useEffect } from 'preact/hooks';
 import { PaletteProvider, usePaletteContext } from '../palette/context.js';
+import { createDebug } from '../lib/debug.js';
+
+const log = createDebug('qol:app');
 import { ModifierStateProvider } from '../hooks/modifier-state-context.js';
 import { PluginConfigProvider } from '../views/plugin-config/context.js';
 import { useApp } from './app/useApp.js';
@@ -11,6 +14,7 @@ import { RecompileDissolve } from './RecompileDissolve.js';
 import { PluginConfigView } from '../views/plugin-config/view.js';
 import { GlobalToast } from './ApiErrorToast.js';
 import { SelectionCursorOverlay } from './SelectionCursorOverlay.js';
+import { CommandPalette } from './CommandPalette.js';
 import { createCamera } from '../lib/world-camera.js';
 import { createWorldRegistry } from '../lib/world-registry.js';
 import { WorldViewport } from './app/WorldViewport.js';
@@ -50,17 +54,23 @@ function AppShell() {
     const cameraRef = useRef(null);
     if (!cameraRef.current) cameraRef.current = createCamera();
     const camera = cameraRef.current;
+    window.__worldCamera = camera;
 
     const registryRef = useRef(null);
     if (!registryRef.current) registryRef.current = createWorldRegistry(viewOrder);
     const registry = registryRef.current;
 
-    const viewportRef = useRef(null);
-
+    // Add views that appear after initial render (e.g. dev when devEnabled flips)
     useEffect(() => {
-        window.__worldCamera = camera;
-        return () => { window.__worldCamera = null; };
-    }, [camera]);
+        for (const id of viewOrder) {
+            if (!registry.getEntry(id)) {
+                log('registry: adding late view', id);
+                registry.placeNew(id);
+            }
+        }
+    }, [viewOrder, registry]);
+
+    const viewportRef = useRef(null);
 
     useEffect(() => {
         const el = document.getElementById('viewport');
@@ -68,14 +78,22 @@ function AppShell() {
     }, []);
 
     const prevViewRef = useRef(activeViewId);
+    const skipPanRef = useRef(false);
     useEffect(() => {
         const vp = viewportRef.current;
         const w = vp?.clientWidth || 800;
         const h = vp?.clientHeight || 600;
         if (prevViewRef.current !== activeViewId) {
+            const skip = skipPanRef.current;
             prevViewRef.current = activeViewId;
-            const target = registry.cameraTargetForView(activeViewId, w, h);
-            if (target) camera.panSmooth(target.x, target.y, 400);
+            skipPanRef.current = false;
+            if (!skip) {
+                const target = registry.cameraTargetForView(activeViewId, w, h);
+                log('viewChange:', activeViewId, '→ pan to', target?.x, target?.y);
+                if (target) camera.panSmooth(target.x, target.y, 250);
+            } else {
+                log('viewChange:', activeViewId, '→ skip pan (ctrl-snap)');
+            }
         }
     }, [activeViewId, camera, registry]);
 
@@ -100,7 +118,7 @@ function AppShell() {
                     viewOrder=${viewOrder}
                 />
                 <div class="app-container">
-                    <${WorldViewport} camera=${camera}>
+                    <${WorldViewport} camera=${camera} onViewChange=${useCallback((id) => { skipPanRef.current = true; switchView(id); }, [switchView])}>
                         <${RegionLabels} registry=${registry} />
                         ${renderWorldViews({
                             registry,
@@ -112,6 +130,7 @@ function AppShell() {
                             refreshSyncStatus,
                         })}
                     <//>
+                    <${CommandPalette} />
                     <${Minimap} camera=${camera} registry=${registry} viewportRef=${viewportRef} />
                     <${SelectionCursorOverlay} />
                     <${RecompileDissolve} triggerRef=${dissolveRef} />

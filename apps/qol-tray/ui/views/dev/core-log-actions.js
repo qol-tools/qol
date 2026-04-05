@@ -1,4 +1,5 @@
 import { jsonRequest, readResponseText } from '../../api/client.js';
+import { setDebugEnabled } from '../../lib/debug.js';
 
 export function createCoreLogActions({ state, discoveryController, onNeedsRender }) {
     return {
@@ -9,12 +10,14 @@ export function createCoreLogActions({ state, discoveryController, onNeedsRender
 
 async function toggleCoreLogs(state, discoveryController, onNeedsRender, sectionId) {
     const control = state.coreLogControls[sectionId] || {};
+    const newMuted = !control.muted;
     try {
         await saveCoreLogControl(sectionId, {
-            muted: !control.muted,
+            muted: newMuted,
             suppress_patterns: Array.isArray(control.suppress_patterns) ? control.suppress_patterns : []
         });
         await discoveryController.loadCoreLogControls(true);
+        if (sectionId === 'frontend-debug') setDebugEnabled(!newMuted);
     } catch (error) {
         state.error = error?.message || 'Failed to toggle core logs';
     }

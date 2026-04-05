@@ -13,13 +13,13 @@ export function PaletteProvider({ children }) {
     const [query, setQuery] = useState('');
     const [activeViewId, setActiveViewId] = useState('plugins');
 
-    const mode = query.startsWith('>') ? 'action' : 'search';
-    const searchQuery = mode === 'search' ? query : '';
-    const actionQuery = mode === 'action' ? query.slice(1) : '';
+    const mode = 'action';
+    const searchQuery = '';
+    const actionQuery = query;
 
     const activate = useCallback(() => {
         setActive(true);
-        setQuery('>');
+        setQuery('');
     }, []);
 
     const deactivate = useCallback(() => {

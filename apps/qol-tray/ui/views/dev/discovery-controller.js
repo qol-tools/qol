@@ -1,5 +1,6 @@
 import { tryFetchJson } from '../../api/client.js';
 import { parseDiscoveryPayload, parseLogControlsPayload } from './discovery/reducer.js';
+import { setDebugEnabled } from '../../lib/debug.js';
 
 export function createDiscoveryController({ state, onNeedsRender }) {
     const ctx = { state, onNeedsRender };
@@ -26,7 +27,10 @@ async function loadLogControls(ctx, skipUpdate = false) {
 
 async function loadCoreLogControls(ctx, skipUpdate = false) {
     const payload = await tryFetchJson('/api/dev/core-log-controls');
-    if (payload) ctx.state.coreLogControls = payload;
+    if (payload) {
+        ctx.state.coreLogControls = payload;
+        setDebugEnabled(!payload['frontend-debug']?.muted);
+    }
     maybeRender(ctx, skipUpdate);
 }
 

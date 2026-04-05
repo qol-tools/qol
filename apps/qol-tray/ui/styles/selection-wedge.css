@@ -104,6 +104,28 @@
     z-index: var(--selection-wedge-z, 4);
 }
 
+/* CTRL held: highlight the previewed surface visibly */
+[data-ctrl-held] [data-selection-cursor-active="true"] {
+    border-color: var(--accent) !important;
+}
+
+[data-ctrl-held] [data-selection-cursor-active="true"] [data-selected-text] {
+    color: var(--accent);
+}
+
+/* CTRL held: wedge at viewport center, smaller, point faces down */
+[data-ctrl-held] .selection-cursor-overlay .selection-wedge-icon {
+    top: 0 !important;
+    left: 0 !important;
+    transform: translate(-50%, -50%) scaleX(-1) rotate(90deg) scale(0.75);
+    opacity: 0.6;
+    transition: transform 0.1s ease, opacity 0.1s ease;
+}
+
+[data-ctrl-held] .selection-cursor-overlay > .selection-wedge-depth {
+    opacity: 0;
+}
+
 .app-container[data-input-mode="mouse"] .selection-cursor-overlay {
     pointer-events: none;
 }

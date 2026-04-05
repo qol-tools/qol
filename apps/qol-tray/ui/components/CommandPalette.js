@@ -5,13 +5,17 @@ import { getCommands } from '../palette/registry.js';
 import init, { fuzzy_match as wasmFuzzyMatch } from '../wasm/qol_wasm.js';
 import { Surface } from './Surface.js';
 
-function filterCommands(commands, query) {
+function filterCommands(commands, query, useWasm) {
     if (!query) return commands;
-    return commands
-        .map(c => ({ cmd: c, match: wasmFuzzyMatch(query, c.label) }))
-        .filter(({ match }) => match !== null)
-        .sort((a, b) => a.match.score - b.match.score)
-        .map(({ cmd }) => cmd);
+    if (useWasm) {
+        return commands
+            .map(c => ({ cmd: c, match: wasmFuzzyMatch(query, c.label) }))
+            .filter(({ match }) => match !== null)
+            .sort((a, b) => a.match.score - b.match.score)
+            .map(({ cmd }) => cmd);
+    }
+    const q = query.toLowerCase();
+    return commands.filter(c => c.label.toLowerCase().includes(q));
 }
 
 export function CommandPalette() {
@@ -33,10 +37,13 @@ export function CommandPalette() {
         };
     }, []);
 
-    const commands = useMemo(
-        () => mode === 'action' && wasmLoaded ? filterCommands(getCommands(activeViewId), actionQuery) : [],
-        [mode, activeViewId, actionQuery, wasmLoaded]
-    );
+    const commands = useMemo(() => {
+        if (!active || mode !== 'action') return [];
+        const raw = getCommands(activeViewId);
+        const filtered = filterCommands(raw, actionQuery, wasmLoaded);
+        console.log('[palette] raw:', raw.length, '| query:', JSON.stringify(actionQuery), '| filtered:', filtered.length, '| wasm:', wasmLoaded);
+        return filtered;
+    }, [active, mode, activeViewId, actionQuery, wasmLoaded]);
 
     useEffect(() => {
         setSelectedIndex(0);
