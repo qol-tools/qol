@@ -29,7 +29,8 @@ export function HotkeysList({ hotkeys, plugins, selectedIndex, onSelect, onEdit 
                     actionLabel=${getActionLabel(plugin, hk.action)}
                     status=${plugin?.status || 'installed'}
                     index=${i} selected=${i === selectedIndex} onSelect=${onSelect}
-                    onActivate=${() => i !== selectedIndex ? onSelect(i) : onEdit(hk)} />
+                    data-dive-target="hotkeys-editor"
+                    onActivate=${() => { if (i !== selectedIndex) onSelect(i); onEdit(hk); }} />
             `;
         })}
     <//>`;
