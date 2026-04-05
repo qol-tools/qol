@@ -42,13 +42,13 @@ export function HotkeyEditModal({ modal, plugins, fieldProps, onPluginChange, on
     `;
 }
 
-function PluginSelect({ modal, plugins, onChange }) {
+export function PluginSelect({ modal, plugins, onChange }) {
     const options = useMemo(() => plugins.map(p => p.id), [plugins]);
     const labels = useMemo(() => Object.fromEntries(plugins.map(p => [p.id, p.name])), [plugins]);
     return html`<${CustomSelect} value=${modal.pluginId} options=${options} labels=${labels} onChange=${onChange} />`;
 }
 
-function ActionSelect({ modal, onChange, disabled }) {
+export function ActionSelect({ modal, onChange, disabled }) {
     const options = useMemo(() => modal.availableActions.map(a => a.id), [modal.availableActions]);
     const labels = useMemo(() => Object.fromEntries(modal.availableActions.map(a => [a.id, a.label])), [modal.availableActions]);
 
@@ -65,7 +65,7 @@ function ActionSelect({ modal, onChange, disabled }) {
     return html`<${CustomSelect} value=${modal.action} options=${options} labels=${labels} onChange=${onChange} />`;
 }
 
-function KeyInput({ modal, onStartRecording, disabled }) {
+export function KeyInput({ modal, onStartRecording, disabled }) {
     return html`
         <div class="key-input-row">
             <input type="text" id="hotkey-key"
