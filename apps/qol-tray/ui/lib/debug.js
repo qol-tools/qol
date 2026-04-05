@@ -38,3 +38,16 @@ export function createDebug(namespace) {
     log.namespace = namespace;
     return log;
 }
+
+export function elLabel(el) {
+    if (!el) return 'null';
+    if (el === document.body) return 'BODY';
+    const tag = el.tagName?.toLowerCase() || '?';
+    const cls = el.className ? '.' + String(el.className).split(/\s+/).slice(0, 2).join('.') : '';
+    return tag + cls;
+}
+
+export function rectLabel(r) {
+    if (!r) return 'none';
+    return `(${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)})`;
+}

@@ -78,21 +78,21 @@ function AppShell() {
     }, []);
 
     const prevViewRef = useRef(activeViewId);
-    const skipPanRef = useRef(false);
     useEffect(() => {
         const vp = viewportRef.current;
         const w = vp?.clientWidth || 800;
         const h = vp?.clientHeight || 600;
         if (prevViewRef.current !== activeViewId) {
-            const skip = skipPanRef.current;
             prevViewRef.current = activeViewId;
-            skipPanRef.current = false;
-            if (!skip) {
-                const target = registry.cameraTargetForView(activeViewId, w, h);
-                log('viewChange:', activeViewId, '→ pan to', target?.x, target?.y);
-                if (target) camera.panSmooth(target.x, target.y, 250);
-            } else {
-                log('viewChange:', activeViewId, '→ skip pan (ctrl-snap)');
+            const target = registry.cameraTargetForView(activeViewId, w, h);
+            if (target) {
+                const dist = Math.hypot(camera.x - target.x, camera.y - target.y);
+                if (dist > 50) {
+                    log('viewChange:', activeViewId, '→ pan (dist:', Math.round(dist), ')');
+                    camera.panSmooth(target.x, target.y, 250);
+                } else {
+                    log('viewChange:', activeViewId, '→ already near target');
+                }
             }
         }
     }, [activeViewId, camera, registry]);
@@ -118,7 +118,7 @@ function AppShell() {
                     viewOrder=${viewOrder}
                 />
                 <div class="app-container">
-                    <${WorldViewport} camera=${camera} onViewChange=${useCallback((id) => { skipPanRef.current = true; switchView(id); }, [switchView])}>
+                    <${WorldViewport} camera=${camera} onViewChange=${switchView}>
                         <${RegionLabels} registry=${registry} />
                         ${renderWorldViews({
                             registry,

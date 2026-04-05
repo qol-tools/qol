@@ -2,7 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { useKeyboard } from '../../hooks/useKeyboard.js';
 import { usePluginConfigContext } from '../../views/plugin-config/context.js';
 import { useViewKeyboardContext } from './view-keyboard-context.js';
-import { createDebug } from '../../lib/debug.js';
+import { createDebug, elLabel } from '../../lib/debug.js';
+import { nearestSurfaceToCenter, isInViewport } from '../../lib/viewport-spatial.js';
 import {
     activateSurface,
     activeContainer,
@@ -133,33 +134,26 @@ function globalSurfaceNav(event) {
 }
 
 function findSelectedSurface() {
+    const vp = document.getElementById('viewport');
     const focused = document.activeElement;
     if (focused instanceof HTMLElement && focused !== document.body) {
         const surface = focused.closest('[data-selected-surface]');
-        if (surface && isVisible(surface) && isInViewportBounds(surface)) return surface;
+        if (surface && isVisible(surface) && isInViewport(surface, vp)) return surface;
     }
     for (const container of document.querySelectorAll('[data-surface-container]')) {
         if (!isVisible(container)) continue;
         for (const el of directSurfaces(container)) {
-            if (el.getAttribute('data-selected') === 'true' && isInViewportBounds(el)) return el;
+            if (el.getAttribute('data-selected') === 'true' && isInViewport(el, vp)) return el;
         }
     }
     return null;
-}
-
-function isInViewportBounds(el) {
-    const vp = document.getElementById('viewport');
-    if (!vp) return true;
-    const vr = vp.getBoundingClientRect();
-    const r = el.getBoundingClientRect();
-    return r.bottom > vr.top && r.top < vr.bottom && r.right > vr.left && r.left < vr.right;
 }
 
 function navigateInActiveContainer(direction) {
     const current = findSelectedSurface();
     if (!current) {
         log('arrow', direction, '→ no current, snap fallback');
-        const fallback = nearestVisibleSurfaceToViewportCenter();
+        const { surface: fallback } = nearestSurfaceToCenter();
         if (fallback) {
             log('arrow', direction, '→ snap:', surfaceLabel(fallback));
             fallback.focus({ preventScroll: true });
@@ -586,39 +580,6 @@ function firstVisibleSurface(selector) {
     return null;
 }
 
-function nearestVisibleSurfaceToViewportCenter() {
-    const vp = document.getElementById('viewport');
-    if (!vp) return null;
-    const vr = vp.getBoundingClientRect();
-    const cx = vr.left + vr.width / 2;
-    const cy = vr.top + vr.height / 2;
-
-    // Scope search to the view slot at viewport center
-    const elAtCenter = document.elementFromPoint(cx, cy);
-    let slot = elAtCenter?.closest('.world-view-slot');
-    if (!slot) {
-        let bestOverlap = 0;
-        for (const s of vp.querySelectorAll('.world-view-slot')) {
-            const sr = s.getBoundingClientRect();
-            const ox = Math.max(0, Math.min(sr.right, vr.right) - Math.max(sr.left, vr.left));
-            const oy = Math.max(0, Math.min(sr.bottom, vr.bottom) - Math.max(sr.top, vr.top));
-            const overlap = ox * oy;
-            if (overlap > bestOverlap) { bestOverlap = overlap; slot = s; }
-        }
-    }
-    const searchRoot = slot || vp;
-
-    let best = null;
-    let bestDist = Infinity;
-    for (const el of searchRoot.querySelectorAll('[data-selected-surface]')) {
-        const r = el.getBoundingClientRect();
-        if (r.width === 0 || r.height === 0) continue;
-        if (r.bottom < vr.top || r.top > vr.bottom || r.right < vr.left || r.left > vr.right) continue;
-        const d = Math.hypot(r.left + r.width / 2 - cx, r.top + r.height / 2 - cy);
-        if (d < bestDist) { best = el; bestDist = d; }
-    }
-    return best;
-}
 
 function hasVisibleModal() {
     const modal = document.querySelector(MODAL_SELECTOR);
