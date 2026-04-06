@@ -1,20 +1,16 @@
 import { html } from '../../lib/html.js';
 import { extractParams } from './data.js';
 import { TestPanel } from './panels.js';
-
-function handleCardClick(e, isSelected, actionId, index, onEdit, onSelect) {
-    if (e.target.closest('.test-panel')) return;
-    if (isSelected) onEdit(actionId);
-    else onSelect(index);
-}
+import { Card } from '../../components/Card.js';
 
 function ActionCard({ actionId, action, isSelected, index, onSelect, onEdit, testSlot }) {
     const params = extractParams(action.command);
     const classes = `action-card ${isSelected ? 'selected' : ''} ${testSlot ? 'testing' : ''}`;
     return html`
-        <div key=${actionId} class=${classes} data-selected-surface="" tabIndex="-1" data-selected=${isSelected ? 'true' : 'false'} data-index="${index}" data-id="${actionId}"
-             onFocus=${() => onSelect(index)}
-             onClick=${e => handleCardClick(e, isSelected, actionId, index, onEdit, onSelect)}>
+        <${Card} className=${classes} data-id="${actionId}"
+             index=${index} selected=${isSelected} onSelect=${onSelect}
+             data-dive-target="task-runner-editor"
+             onActivate=${() => { if (!isSelected) onSelect(index); onEdit(actionId); }}>
             <div class="action-header" data-selected-text="">
                 <span class="action-id">${actionId}</span>
                 ${isSelected && html`<span class="action-hints"><kbd>Enter</kbd> edit <kbd>t</kbd> test <kbd>d</kbd> delete</span>`}
@@ -26,7 +22,7 @@ function ActionCard({ actionId, action, isSelected, index, onSelect, onEdit, tes
                 <div class="action-params" data-selected-text="">Parameters: ${params.map(p => html`<code key=${p}>{{'${p}'}}</code> `)}</div>
             `}
             ${testSlot}
-        </div>
+        <//>
     `;
 }
 

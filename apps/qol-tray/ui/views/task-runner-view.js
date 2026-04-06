@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo } from 'preact/hooks';
+import { useEffect, useRef, useMemo, useState } from 'preact/hooks';
 import { html } from '../lib/html.js';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../components/app/view-keyboard-context.js';
@@ -6,12 +6,18 @@ import { PageHeader } from '../components/PageHeader.js';
 import { SurfaceContainer } from '../components/SurfaceContainer.js';
 
 import { API_BASE, buildApiExample } from './task-runner/data.js';
-import { ActionEditModal } from './task-runner/panels.js';
+import { ActionEditForm } from './task-runner/panels.js';
 import { useTaskData } from './task-runner/use-task-data.js';
 import { useEditModal } from './task-runner/use-edit-modal.js';
 import { useTestPanel } from './task-runner/use-test-panel.js';
 import { useTaskKeyHandler } from './task-runner/key-router.js';
 import { ActionList } from './task-runner/action-list.js';
+
+// Shared state: TaskRunnerView writes, ActionEditorSubPage reads
+const _sharedEdit = { modal: null, fieldProps: () => ({}), handlers: {} };
+const _editListeners = new Set();
+function notifyEditChange() { for (const fn of _editListeners) fn(); }
+function subscribeEditState(fn) { _editListeners.add(fn); return () => _editListeners.delete(fn); }
 
 const CSS_ID = 'task-runner-css';
 
@@ -48,6 +54,17 @@ export function TaskRunnerView() {
     const { handleKey, isBlocking, modalNav } = useTaskKeyHandler(data, edit, test);
     useRegisterViewKeyboard('task-runner', handleKey, isBlocking);
 
+    useEffect(() => {
+        _sharedEdit.modal = edit.editModal;
+        _sharedEdit.fieldProps = modalNav.fieldProps;
+        _sharedEdit.handlers = {
+            updateField: edit.updateField,
+            onClose: edit.close,
+            onSave: edit.saveAction,
+        };
+        notifyEditChange();
+    }, [edit.editModal]);
+
     const editRef = useRef(edit);
     editRef.current = edit;
     const dataRef = useRef(data);
@@ -68,8 +85,30 @@ export function TaskRunnerView() {
             <${ApiUsage} actions=${data.actions} actionIds=${data.actionIds} copyApiExample=${data.copyApiExample} />
             <${ActionList} data=${data} edit=${edit} test=${test} />
         <//>
-        ${edit.editModal && html`<${ActionEditModal}
-            modal=${edit.editModal} fieldProps=${modalNav.fieldProps} onUpdate=${edit.updateField}
-            onClose=${edit.close} onSave=${edit.saveAction} />`}
     </div>`;
+}
+
+export function ActionEditorSubPage() {
+    const [, bump] = useState(0);
+    useEffect(() => subscribeEditState(() => bump(t => t + 1)), []);
+
+    const { modal, fieldProps, handlers } = _sharedEdit;
+    if (!modal) {
+        return html`<div class="view-container content-shell">
+            <${PageHeader} title="Action Editor" subtitle="Select an action to edit" />
+        </div>`;
+    }
+    return html`
+        <div class="view-container content-shell">
+            <${PageHeader} title=${modal.isNew ? 'Add Action' : 'Edit Action'}
+                subtitle=${modal.name || modal.actionId || 'new action'} />
+            <div class="view-body content-shell-body">
+                <div class="content-shell-inner">
+                    <${SurfaceContainer} className="content-frame">
+                        <${ActionEditForm} modal=${modal} fieldProps=${fieldProps} handlers=${handlers} />
+                    <//>
+                </div>
+            </div>
+        </div>
+    `;
 }
