@@ -1,6 +1,5 @@
 import { html } from '../../lib/html.js';
 import { useMemo } from 'preact/hooks';
-import { Modal, ModalActions } from '../../components/ModalPreact.js';
 import { CustomSelect } from '../../components/CustomSelect.js';
 
 const MODIFIER_KEYS = ['Control', 'Alt', 'Shift', 'Meta'];
@@ -15,32 +14,6 @@ const NAV_KEY_MAP = {
     F7: 'F7', F8: 'F8', F9: 'F9', F10: 'F10', F11: 'F11', F12: 'F12',
     PrintScreen: 'PrintScreen', Pause: 'Pause'
 };
-
-export function HotkeyEditModal({ modal, plugins, fieldProps, onPluginChange, onActionChange, onStartRecording, onClose, onSave }) {
-    const title = modal.hotkey ? 'Edit Hotkey' : 'Add Hotkey';
-    const exhausted = modal.availableActions.length === 0;
-
-    return html`
-        <${Modal} open=${true} onClose=${onClose} className="edit-modal">
-            <div class="edit-modal-content">
-                <h3>${title}</h3>
-                <div class="form-group" ...${fieldProps(0)}>
-                    <label>Plugin</label>
-                    <${PluginSelect} modal=${modal} plugins=${plugins} onChange=${onPluginChange} />
-                </div>
-                <div class="form-group" ...${fieldProps(1)}>
-                    <label>Action</label>
-                    <${ActionSelect} modal=${modal} onChange=${onActionChange} disabled=${exhausted} />
-                </div>
-                <div class="form-group" ...${fieldProps(2)}>
-                    <label>Shortcut <span class="hint">(Enter to record)</span></label>
-                    <${KeyInput} modal=${modal} onStartRecording=${onStartRecording} disabled=${exhausted} />
-                </div>
-                <${ModalActions} onClose=${onClose} onSave=${onSave} disabled=${exhausted} />
-            </div>
-        <//>
-    `;
-}
 
 export function PluginSelect({ modal, plugins, onChange }) {
     const options = useMemo(() => plugins.map(p => p.id), [plugins]);

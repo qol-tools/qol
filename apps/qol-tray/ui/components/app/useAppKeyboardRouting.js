@@ -21,7 +21,6 @@ const PLUGIN_CONFIG_FIELD = '[data-plugin-config-field-id]';
 const NAV_KEYS = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
 const NAV_KEYS_EXTENDED = { ...NAV_KEYS, h: 'left', j: 'down', k: 'up', l: 'right' };
 let _cameraRef = { current: null };
-let _viewportElRef = { current: null };
 let _diveRef = { current: null };
 let _ascendRef = { current: null };
 
@@ -41,7 +40,6 @@ export function useAppKeyboardRouting({
     _cameraRef.current = camera;
     _diveRef.current = dive;
     _ascendRef.current = ascend;
-    useEffect(() => { _viewportElRef.current = document.getElementById('viewport'); }, []);
     const cycleView = useCallback((event) => {
         event.preventDefault();
         const idx = viewOrder.indexOf(activeViewId);
@@ -612,14 +610,6 @@ function queryFieldElement(detail, fieldId) {
     if (!fieldId) return null;
     return detail.querySelector(`[data-plugin-config-field-id="${CSS.escape(fieldId)}"]`);
 }
-
-function firstVisibleSurface(selector) {
-    for (const el of document.querySelectorAll(selector)) {
-        if (isVisible(el)) return el;
-    }
-    return null;
-}
-
 
 function hasVisibleModal() {
     const modal = document.querySelector(MODAL_SELECTOR);
