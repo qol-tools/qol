@@ -122,29 +122,61 @@ function AppShell() {
             surfaceSelector: sourceSurface ? selectorFor(sourceSurface) : null,
         });
         const vp = viewportRef.current;
-        const w = vp?.clientWidth || 800;
-        const h = vp?.clientHeight || 600;
-        setCameraLayer(entry.layer);
-        camera.setLayer(entry.layer);
-        const target = registry.cameraTargetForView(targetId, w, h, 1.0);
-        if (target) {
-            camera.zoomSmooth(target.x, target.y, 1.0, 400, () => {
-                const slot = document.querySelector(`.world-view-slot[data-view-id="${targetId}"]`);
+        const vr = vp?.getBoundingClientRect();
+        const vpW = vr?.width || 800;
+        const vpH = vr?.height || 600;
+
+        // Phase 1: zoom INTO the source surface (feels like diving in)
+        const DIVE_ZOOM = 2.5;
+        let zx = camera.x, zy = camera.y;
+        if (sourceSurface && vr) {
+            const sr = sourceSurface.getBoundingClientRect();
+            const worldX = camera.x + (sr.left + sr.width / 2 - vr.left) / camera.zoom;
+            const worldY = camera.y + (sr.top + sr.height / 2 - vr.top) / camera.zoom;
+            zx = worldX - vpW / (2 * DIVE_ZOOM);
+            zy = worldY - vpH / (2 * DIVE_ZOOM);
+        }
+        camera.zoomSmooth(zx, zy, DIVE_ZOOM, 200, () => {
+            // Phase 2: snap to sub-page
+            setCameraLayer(entry.layer);
+            camera.setLayer(entry.layer);
+            camera.zoomTo(1.0);
+            const target = registry.cameraTargetForView(targetId, vpW, vpH, 1.0);
+            if (target) camera.panTo(target.x, target.y);
+            requestAnimationFrame(() => {
+                const slot = document.querySelector(`.world-view-slot[data-view-id="${CSS.escape(targetId)}"]`);
                 const surface = slot?.querySelector('[data-selected-surface]');
                 if (surface) surface.focus({ preventScroll: true });
             });
-        }
+        });
     }, [camera, registry, diveStack]);
 
     const ascend = useCallback(() => {
         const prev = diveStack.pop();
         if (!prev) return false;
-        setCameraLayer(prev.layer);
-        camera.setLayer(prev.layer);
-        camera.zoomSmooth(prev.x, prev.y, prev.zoom, 400, () => {
+
+        // Phase 1: zoom OUT from sub-page (pulling back)
+        const vp = viewportRef.current;
+        const vr = vp?.getBoundingClientRect();
+        const vpW = vr?.width || 800;
+        const vpH = vr?.height || 600;
+        const ASCEND_ZOOM = 0.4;
+        const cx = camera.x + vpW / (2 * camera.zoom);
+        const cy = camera.y + vpH / (2 * camera.zoom);
+        const zx = cx - vpW / (2 * ASCEND_ZOOM);
+        const zy = cy - vpH / (2 * ASCEND_ZOOM);
+
+        camera.zoomSmooth(zx, zy, ASCEND_ZOOM, 200, () => {
+            // Phase 2: snap to parent layer
+            setCameraLayer(prev.layer);
+            camera.setLayer(prev.layer);
+            camera.zoomTo(prev.zoom);
+            camera.panTo(prev.x, prev.y);
             if (prev.surfaceSelector) {
-                const surface = document.querySelector(prev.surfaceSelector);
-                if (surface) surface.focus({ preventScroll: true });
+                requestAnimationFrame(() => {
+                    const surface = document.querySelector(prev.surfaceSelector);
+                    if (surface) surface.focus({ preventScroll: true });
+                });
             }
         });
         return true;
