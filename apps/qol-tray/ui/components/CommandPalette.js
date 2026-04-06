@@ -60,7 +60,8 @@ export function CommandPalette() {
     }, [deactivate]);
 
     const handleInput = useCallback((e) => {
-        setQuery(e.target.value);
+        const val = e.target.value;
+        setQuery(val.startsWith('>') ? val.slice(1) : val);
     }, [setQuery]);
 
     const executeCommand = useCallback((cmd) => {
