@@ -96,9 +96,8 @@ function AppShell() {
             if (target) {
                 const dist = Math.hypot(camera.x - target.x, camera.y - target.y);
                 if (dist > 50) {
-                    log('viewChange:', activeViewId, '→ pan (dist:', Math.round(dist), ')');
-                    const dur = Math.min(600, 200 + dist * 0.03);
-                    camera.panSmooth(target.x, target.y, dur);
+                    log('viewChange:', activeViewId, '→ jump (dist:', Math.round(dist), ')');
+                    camera.panTo(target.x, target.y);
                 } else {
                     log('viewChange:', activeViewId, '→ already near target');
                 }
