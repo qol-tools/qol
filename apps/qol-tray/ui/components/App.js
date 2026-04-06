@@ -105,12 +105,9 @@ function AppShell() {
         }
     }, [activeViewId, camera, registry]);
 
-    const OVERVIEW_ZOOM = 0.12;
-
     useEffect(() => {
-        camera.zoomTo(OVERVIEW_ZOOM);
         const vp = viewportRef.current;
-        const target = registry.cameraTargetForView(activeViewId, vp?.clientWidth || 800, vp?.clientHeight || 600, OVERVIEW_ZOOM);
+        const target = registry.cameraTargetForView(activeViewId, vp?.clientWidth || 800, vp?.clientHeight || 600, camera.zoom);
         if (target) camera.panTo(target.x, target.y);
     }, []);
 
