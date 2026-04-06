@@ -1,8 +1,6 @@
 const PAGE_WIDTH = 1000;
 const PAGE_HEIGHT = 800;
 const PAGE_STRIDE = 10000;
-const SUB_PAGE_Y_OFFSET = 2000;
-const SUB_PAGE_X_SPACING = 5000;
 
 export function createWorldRegistry(viewOrder, manifest = {}) {
     const entries = new Map();
@@ -17,7 +15,7 @@ export function createWorldRegistry(viewOrder, manifest = {}) {
         });
     }
 
-    // Layer -1: sub-pages from manifest
+    // Layer -1: sub-pages — same position as parent (each layer is its own world)
     for (const [parentId, subs] of Object.entries(manifest)) {
         const parent = entries.get(parentId);
         if (!parent) continue;
@@ -25,8 +23,8 @@ export function createWorldRegistry(viewOrder, manifest = {}) {
             const subId = `${parentId}-${subs[i]}`;
             entries.set(subId, {
                 id: subId,
-                x: parent.x + i * SUB_PAGE_X_SPACING,
-                y: parent.y + SUB_PAGE_Y_OFFSET,
+                x: parent.x,
+                y: parent.y,
                 width: PAGE_WIDTH, height: PAGE_HEIGHT,
                 layer: -1, parent: parentId,
             });
