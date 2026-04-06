@@ -58,7 +58,12 @@ function AppShell() {
     window.__worldCamera = camera;
 
     const registryRef = useRef(null);
-    const SUB_PAGE_MANIFEST = { hotkeys: ['editor'] };
+    const SUB_PAGE_MANIFEST = {
+        hotkeys: ['editor'],
+        shortcuts: ['editor'],
+        logs: ['detail'],
+        'task-runner': ['editor'],
+    };
     if (!registryRef.current) registryRef.current = createWorldRegistry(viewOrder, SUB_PAGE_MANIFEST);
     const registry = registryRef.current;
 
