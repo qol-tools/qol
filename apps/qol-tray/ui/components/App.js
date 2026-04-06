@@ -62,7 +62,6 @@ function AppShell() {
     const cameraRef = useRef(null);
     if (!cameraRef.current) cameraRef.current = createCamera();
     const camera = cameraRef.current;
-    window.__worldCamera = camera;
 
     const registryRef = useRef(null);
     if (!registryRef.current) registryRef.current = createWorldRegistry(viewOrder, SUB_PAGE_MANIFEST);
@@ -211,7 +210,7 @@ function AppShell() {
                     <//>
                     <${CommandPalette} />
                     <${Minimap} camera=${camera} registry=${registry} viewportRef=${viewportRef} />
-                    <${SelectionCursorOverlay} />
+                    <${SelectionCursorOverlay} camera=${camera} />
                     <${RecompileDissolve} triggerRef=${dissolveRef} />
                     <${GlobalToast} />
                 </div>

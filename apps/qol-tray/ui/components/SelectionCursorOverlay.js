@@ -15,7 +15,7 @@ const WEDGE_HUE_BASE = 50;
 const WEDGE_HUE_STEP = 45;
 const WEDGE_HUE_MAX = 275;
 
-export function SelectionCursorOverlay() {
+export function SelectionCursorOverlay({ camera }) {
     const [style, setStyle] = useState(hiddenStyle());
     const [depth, setDepth] = useState(0);
     const [ready, setReady] = useState(false);
@@ -82,7 +82,7 @@ export function SelectionCursorOverlay() {
             const prevRect = rectRef.current;
             rectRef.current = nextRect;
             setDepth(surfaceDepth(nextTarget));
-            setStyle(cursorStyle(app, nextTarget));
+            setStyle(cursorStyle(app, nextTarget, camera));
 
             if (changed) {
                 log(source, '→ TARGET CHANGED:', elLabel(prevTarget), '→', elLabel(nextTarget),
@@ -138,7 +138,7 @@ export function SelectionCursorOverlay() {
             subtree: true,
         });
 
-        const unsubCamera = window.__worldCamera?.subscribe?.(syncFromCamera);
+        const unsubCamera = camera?.subscribe?.(syncFromCamera);
         document.addEventListener('focusin', syncFromFocusIn, true);
         document.addEventListener('focusout', syncFromFocusOut, true);
         document.addEventListener('keydown', onKey, true);
@@ -211,7 +211,7 @@ function clearCursorTargets() {
     }
 }
 
-function cursorStyle(app, target) {
+function cursorStyle(app, target, cam) {
     const appRect = app.getBoundingClientRect();
     const targetRect = target.getBoundingClientRect();
     const vars = getComputedStyle(target);
@@ -222,8 +222,7 @@ function cursorStyle(app, target) {
     const top = readVar(vars, '--selected-surface-wedge-top', '-20px');
     const left = readVar(vars, '--selected-surface-wedge-left', '-24px');
 
-    const camera = window.__worldCamera;
-    const z = camera?.zoom || 1;
+    const z = cam?.zoom || 1;
     const wedgeScale = z < 1 ? Math.max(0.3, z) : 1;
 
     return {
