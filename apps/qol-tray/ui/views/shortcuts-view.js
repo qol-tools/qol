@@ -10,11 +10,8 @@ import { ShortcutEditForm } from './shortcuts/modal.js';
 import { useShortcuts } from './shortcuts/use-shortcuts.js';
 import { ShortcutsList } from './shortcuts/list.js';
 
-// Shared state: ShortcutsView writes, ShortcutEditorSubPage reads
-const _sharedEdit = { modal: null, fieldProps: () => ({}), handlers: {} };
-const _editListeners = new Set();
-function notifyEditChange() { for (const fn of _editListeners) fn(); }
-function subscribeEditState(fn) { _editListeners.add(fn); return () => _editListeners.delete(fn); }
+import { createSharedSlot } from '../lib/shared-slot.js';
+const editSlot = createSharedSlot({ modal: null, fieldProps: () => ({}), handlers: {} });
 
 export function ShortcutsView() {
     const { searchQuery } = usePaletteContext();
@@ -22,14 +19,15 @@ export function ShortcutsView() {
     useRegisterViewKeyboard('shortcuts', sc.handleKey, sc.isBlocking);
 
     useEffect(() => {
-        _sharedEdit.modal = sc.editModal;
-        _sharedEdit.fieldProps = sc.fieldProps;
-        _sharedEdit.handlers = {
-            onChange: sc.handleModalChange,
-            onClose: sc.closeModal,
-            onSave: sc.saveShortcut,
-        };
-        notifyEditChange();
+        editSlot.set({
+            modal: sc.editModal,
+            fieldProps: sc.fieldProps,
+            handlers: {
+                onChange: sc.handleModalChange,
+                onClose: sc.closeModal,
+                onSave: sc.saveShortcut,
+            },
+        });
     }, [sc.editModal]);
 
     const selected = sc.filtered[sc.selectedIndex];
@@ -58,9 +56,9 @@ export function ShortcutsView() {
 
 export function ShortcutEditorSubPage() {
     const [, bump] = useState(0);
-    useEffect(() => subscribeEditState(() => bump(t => t + 1)), []);
+    useEffect(() => editSlot.subscribe(() => bump(t => t + 1)), []);
 
-    const { modal, fieldProps, handlers } = _sharedEdit;
+    const { modal, fieldProps, handlers } = editSlot.get();
     if (!modal) {
         return html`<div class="view-container content-shell">
             <${PageHeader} title="Shortcut Editor" subtitle="Select a shortcut to edit" />

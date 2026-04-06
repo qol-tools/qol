@@ -13,11 +13,8 @@ import { useTestPanel } from './task-runner/use-test-panel.js';
 import { useTaskKeyHandler } from './task-runner/key-router.js';
 import { ActionList } from './task-runner/action-list.js';
 
-// Shared state: TaskRunnerView writes, ActionEditorSubPage reads
-const _sharedEdit = { modal: null, fieldProps: () => ({}), handlers: {} };
-const _editListeners = new Set();
-function notifyEditChange() { for (const fn of _editListeners) fn(); }
-function subscribeEditState(fn) { _editListeners.add(fn); return () => _editListeners.delete(fn); }
+import { createSharedSlot } from '../lib/shared-slot.js';
+const editSlot = createSharedSlot({ modal: null, fieldProps: () => ({}), handlers: {} });
 
 const CSS_ID = 'task-runner-css';
 
@@ -55,14 +52,15 @@ export function TaskRunnerView() {
     useRegisterViewKeyboard('task-runner', handleKey, isBlocking);
 
     useEffect(() => {
-        _sharedEdit.modal = edit.editModal;
-        _sharedEdit.fieldProps = modalNav.fieldProps;
-        _sharedEdit.handlers = {
-            updateField: edit.updateField,
-            onClose: edit.close,
-            onSave: edit.saveAction,
-        };
-        notifyEditChange();
+        editSlot.set({
+            modal: edit.editModal,
+            fieldProps: modalNav.fieldProps,
+            handlers: {
+                updateField: edit.updateField,
+                onClose: edit.close,
+                onSave: edit.saveAction,
+            },
+        });
     }, [edit.editModal]);
 
     const editRef = useRef(edit);
@@ -90,9 +88,9 @@ export function TaskRunnerView() {
 
 export function ActionEditorSubPage() {
     const [, bump] = useState(0);
-    useEffect(() => subscribeEditState(() => bump(t => t + 1)), []);
+    useEffect(() => editSlot.subscribe(() => bump(t => t + 1)), []);
 
-    const { modal, fieldProps, handlers } = _sharedEdit;
+    const { modal, fieldProps, handlers } = editSlot.get();
     if (!modal) {
         return html`<div class="view-container content-shell">
             <${PageHeader} title="Action Editor" subtitle="Select an action to edit" />
