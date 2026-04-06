@@ -11,11 +11,8 @@ import { PluginSelect, ActionSelect, KeyInput } from './hotkeys/modal.js';
 import { useHotkeys } from './hotkeys/use-hotkeys.js';
 import { HotkeysList } from './hotkeys/list.js';
 
-// Shared state: HotkeysView writes, HotkeyEditorSubPage reads
-const _sharedEdit = { modal: null, plugins: [], fieldProps: () => ({}), handlers: {} };
-const _editListeners = new Set();
-function notifyEditChange() { for (const fn of _editListeners) fn(); }
-function subscribeEditState(fn) { _editListeners.add(fn); return () => _editListeners.delete(fn); }
+import { createSharedSlot } from '../lib/shared-slot.js';
+const editSlot = createSharedSlot({ modal: null, plugins: [], fieldProps: () => ({}), handlers: {} });
 
 function RegistrationWarnings({ errors }) {
     return html`
@@ -33,17 +30,18 @@ function RegistrationWarnings({ errors }) {
 export function HotkeysView() {
     const hk = useHotkeys();
     useEffect(() => {
-        _sharedEdit.modal = hk.editModal;
-        _sharedEdit.plugins = hk.plugins;
-        _sharedEdit.fieldProps = hk.fieldProps;
-        _sharedEdit.handlers = {
-            onPluginChange: hk.handlePluginChange,
-            onActionChange: hk.handleActionChange,
-            onStartRecording: hk.startRecording,
-            onClose: hk.closeModal,
-            onSave: hk.saveHotkey,
-        };
-        notifyEditChange();
+        editSlot.set({
+            modal: hk.editModal,
+            plugins: hk.plugins,
+            fieldProps: hk.fieldProps,
+            handlers: {
+                onPluginChange: hk.handlePluginChange,
+                onActionChange: hk.handleActionChange,
+                onStartRecording: hk.startRecording,
+                onClose: hk.closeModal,
+                onSave: hk.saveHotkey,
+            },
+        });
     }, [hk.editModal, hk.plugins]);
     const { searchQuery } = usePaletteContext();
     const filtered = useMemo(
@@ -86,9 +84,9 @@ export function HotkeysView() {
 
 export function HotkeyEditorSubPage() {
     const [, bump] = useState(0);
-    useEffect(() => subscribeEditState(() => bump(t => t + 1)), []);
+    useEffect(() => editSlot.subscribe(() => bump(t => t + 1)), []);
 
-    const { modal, plugins, fieldProps, handlers } = _sharedEdit;
+    const { modal, plugins, fieldProps, handlers } = editSlot.get();
     if (!modal) {
         return html`<div class="view-container content-shell">
             <${PageHeader} title="Hotkey Editor" subtitle="Select a hotkey to edit" />

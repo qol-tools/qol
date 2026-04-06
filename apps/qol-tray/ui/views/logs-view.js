@@ -14,11 +14,8 @@ import { PageHeader } from '../components/PageHeader.js';
 import { SurfaceContainer } from '../components/SurfaceContainer.js';
 import { SuppressedRow } from '../components/rows/SuppressedRow.js';
 
-// Shared state: LogsView writes, LogDetailSubPage reads
-const _sharedDetail = { entry: null, onClose: null };
-const _detailListeners = new Set();
-function notifyDetailChange() { for (const fn of _detailListeners) fn(); }
-function subscribeDetailState(fn) { _detailListeners.add(fn); return () => _detailListeners.delete(fn); }
+import { createSharedSlot } from '../lib/shared-slot.js';
+const detailSlot = createSharedSlot({ entry: null, onClose: null });
 
 const TABS = [
     { id: 'live', label: 'Live Log' },
@@ -159,9 +156,7 @@ export function LogsView({ active }) {
     }, []);
 
     useEffect(() => {
-        _sharedDetail.entry = detailEntry;
-        _sharedDetail.onClose = closeDetail;
-        notifyDetailChange();
+        detailSlot.set({ entry: detailEntry, onClose: closeDetail });
     }, [detailEntry]);
 
     const handleKey = useCallback((event) => {
@@ -271,9 +266,9 @@ function SuppressedList({ keys, items, onUnsuppress, selectedIndex, setSelectedI
 
 export function LogDetailSubPage() {
     const [, bump] = useState(0);
-    useEffect(() => subscribeDetailState(() => bump(t => t + 1)), []);
+    useEffect(() => detailSlot.subscribe(() => bump(t => t + 1)), []);
 
-    const { entry } = _sharedDetail;
+    const { entry } = detailSlot.get();
     if (!entry) {
         return html`<div class="view-container content-shell">
             <${PageHeader} title="Log Detail" subtitle="Select a log entry to view" />
