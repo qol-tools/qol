@@ -66,6 +66,38 @@ export function ShortcutEditModal({ modal, fieldProps, onChange, onClose, onSave
     `;
 }
 
+export function ShortcutEditForm({ modal, fieldProps, onChange, onClose, onSave }) {
+    const set = (key, value) => onChange({ ...modal.shortcut, [key]: value });
+    const setAction = (patch) => onChange({ ...modal.shortcut, action: { ...modal.shortcut.action, ...patch } });
+    const isUrl = modal.shortcut.action.type === 'open_url';
+    let fi = 0;
+
+    return html`
+        <div class="edit-modal-content">
+            <${IdField} value=${modal.shortcut.id} disabled=${modal.editing}
+                onChange=${(v) => set('id', v)} fp=${fieldProps(fi++)} />
+            <${NameField} value=${modal.shortcut.name} onChange=${(v) => set('name', v)} fp=${fieldProps(fi++)} />
+            <${ActionTypeField} value=${modal.shortcut.action.type}
+                onChange=${(v) => onTypeChange(modal.shortcut, v, onChange)} fp=${fieldProps(fi++)} />
+            ${isUrl && html`
+                <${UrlField} url=${modal.shortcut.action.url || ''} onChange=${(v) => setAction({ url: v })} fp=${fieldProps(fi++)} />
+                <${BrowserOverrideToggle} browser=${modal.shortcut.action.browser_override} onChange=${(v) => setAction({ browser_override: v || undefined })} fp=${fieldProps(fi++)} />
+                ${modal.shortcut.action.browser_override && html`
+                    <div class="form-group-children">
+                        <${BrowserOverrideType} browser=${modal.shortcut.action.browser_override} onChange=${(v) => setAction({ browser_override: v || undefined })} fp=${fieldProps(fi++)} />
+                        <${BrowserOverrideValue} browser=${modal.shortcut.action.browser_override} onChange=${(v) => setAction({ browser_override: v || undefined })} fp=${fieldProps(fi++)} />
+                    </div>
+                `}
+            `}
+            ${!isUrl && html`
+                <${AppRefType} app=${modal.shortcut.action.app} onChange=${(v) => setAction({ app: v })} fp=${fieldProps(fi++)} />
+                <${AppRefValue} app=${modal.shortcut.action.app} onChange=${(v) => setAction({ app: v })} fp=${fieldProps(fi++)} />
+            `}
+            <${OptionsFields} shortcut=${modal.shortcut} onChange=${set} fp1=${fieldProps(fi++)} fp2=${fieldProps(fi++)} />
+        </div>
+    `;
+}
+
 function onTypeChange(shortcut, type, onChange) {
     if (type === 'open_url') {
         onChange({ ...shortcut, action: { type: 'open_url', url: '' } });
