@@ -2,11 +2,11 @@ import { html } from '../../lib/html.js';
 import { PluginsView } from '../../views/plugins-view.js';
 import { StoreView } from '../../views/store-view.js';
 import { HotkeysView, HotkeyEditorSubPage } from '../../views/hotkeys-view.js';
-import { ShortcutsView } from '../../views/shortcuts-view.js';
-import { TaskRunnerView } from '../../views/task-runner-view.js';
+import { ShortcutsView, ShortcutEditorSubPage } from '../../views/shortcuts-view.js';
+import { TaskRunnerView, ActionEditorSubPage } from '../../views/task-runner-view.js';
 import { ProfileView } from '../../views/profile/view.js';
 import { DevView } from '../../views/dev/view.js';
-import { LogsView } from '../../views/logs-view.js';
+import { LogsView, LogDetailSubPage } from '../../views/logs-view.js';
 
 export const VIEW_LABELS = {
     plugins: 'Plugins',
@@ -45,5 +45,8 @@ export function renderWorldViews({ registry, cameraLayer, openPluginConfig, open
         <${WorldViewSlot} entry=${registry.getEntry('logs')} cameraLayer=${layer}><${LogsView} active=${true} /><//>
         <${WorldViewSlot} entry=${registry.getEntry('dev')} cameraLayer=${layer}><${DevView} /><//>
         <${WorldViewSlot} entry=${registry.getEntry('hotkeys-editor')} cameraLayer=${layer}><${HotkeyEditorSubPage} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('shortcuts-editor')} cameraLayer=${layer}><${ShortcutEditorSubPage} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('logs-detail')} cameraLayer=${layer}><${LogDetailSubPage} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('task-runner-editor')} cameraLayer=${layer}><${ActionEditorSubPage} /><//>
     `;
 }
