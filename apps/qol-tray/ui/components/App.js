@@ -23,6 +23,13 @@ import { Minimap } from './app/Minimap.js';
 import { RegionLabels } from './app/RegionLabels.js';
 import { useWorldNav } from './app/WorldNav.js';
 
+const SUB_PAGE_MANIFEST = {
+    hotkeys: ['editor'],
+    shortcuts: ['editor'],
+    logs: ['detail'],
+    'task-runner': ['editor'],
+};
+
 export function App() {
     return html`<${PaletteProvider}><${AppShell} /><//>`;
 }
@@ -58,12 +65,6 @@ function AppShell() {
     window.__worldCamera = camera;
 
     const registryRef = useRef(null);
-    const SUB_PAGE_MANIFEST = {
-        hotkeys: ['editor'],
-        shortcuts: ['editor'],
-        logs: ['detail'],
-        'task-runner': ['editor'],
-    };
     if (!registryRef.current) registryRef.current = createWorldRegistry(viewOrder, SUB_PAGE_MANIFEST);
     const registry = registryRef.current;
 
@@ -72,8 +73,8 @@ function AppShell() {
     const diveStack = diveStackRef.current;
 
     const [cameraLayer, setCameraLayer] = useState(0);
+    const layerAnimatingRef = useRef(false);
 
-    // Add views that appear after initial render (e.g. dev when devEnabled flips)
     useEffect(() => {
         for (const id of viewOrder) {
             if (!registry.getEntry(id)) {
@@ -119,17 +120,17 @@ function AppShell() {
     useWorldNav({ camera, registry, viewportRef });
 
     const dive = useCallback((targetId, sourceSurface) => {
+        if (layerAnimatingRef.current) return;
         const entry = registry.diveTarget(targetId);
         if (!entry) return;
+        const vp = viewportRef.current;
+        if (!vp) return;
+        layerAnimatingRef.current = true;
         diveStack.push({
             layer: camera.layer,
             x: camera.x, y: camera.y, zoom: camera.zoom,
             surfaceSelector: sourceSurface ? selectorFor(sourceSurface) : null,
         });
-        const vp = viewportRef.current;
-        if (!vp) return;
-
-        // Viewport zooms toward center + fades out, then layer switches + fades in
         vp.classList.add('dive-out');
         vp.addEventListener('animationend', function onEnd() {
             vp.removeEventListener('animationend', onEnd);
@@ -140,6 +141,7 @@ function AppShell() {
             vp.addEventListener('animationend', function onIn() {
                 vp.removeEventListener('animationend', onIn);
                 vp.classList.remove('layer-in');
+                layerAnimatingRef.current = false;
             });
             requestAnimationFrame(() => {
                 const slot = document.querySelector(`.world-view-slot[data-view-id="${CSS.escape(targetId)}"]`);
@@ -150,12 +152,12 @@ function AppShell() {
     }, [camera, registry, diveStack]);
 
     const ascend = useCallback(() => {
+        if (layerAnimatingRef.current) return false;
         const prev = diveStack.pop();
         if (!prev) return false;
         const vp = viewportRef.current;
         if (!vp) return false;
-
-        // Viewport shrinks + fades out, then layer switches + fades in
+        layerAnimatingRef.current = true;
         vp.classList.add('ascend-out');
         vp.addEventListener('animationend', function onEnd() {
             vp.removeEventListener('animationend', onEnd);
@@ -167,6 +169,7 @@ function AppShell() {
             vp.addEventListener('animationend', function onIn() {
                 vp.removeEventListener('animationend', onIn);
                 vp.classList.remove('layer-in');
+                layerAnimatingRef.current = false;
             });
             if (prev.surfaceSelector) {
                 requestAnimationFrame(() => {

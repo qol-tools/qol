@@ -5,12 +5,6 @@ const log = createDebug('qol:spatial');
 const SURFACE_SELECTOR = '[data-selected-surface]';
 const SLOT_SELECTOR = '.world-view-slot';
 
-/**
- * Find the view slot at the viewport center.
- * Tries elementFromPoint first, falls back to max-overlap scan.
- * @param {HTMLElement} viewport - the #viewport element
- * @returns {{ slot: HTMLElement|null, viewId: string|null, center: {x: number, y: number} }}
- */
 export function slotAtCenter(viewport) {
     const vr = viewport.getBoundingClientRect();
     const cx = vr.left + vr.width / 2;
@@ -20,7 +14,6 @@ export function slotAtCenter(viewport) {
     let slot = el?.closest(SLOT_SELECTOR);
     let method = 'elementFromPoint';
 
-    // elementFromPoint won't hit display:none slots, but verify layer is visible
     if (slot && slot.style.display === 'none') slot = null;
 
     if (!slot) {
@@ -40,12 +33,6 @@ export function slotAtCenter(viewport) {
     return { slot, viewId: slot?.dataset?.viewId || null, center: { x: cx, y: cy } };
 }
 
-/**
- * Find the nearest [data-selected-surface] to the viewport center.
- * Scopes the search to the slot at center.
- * @param {HTMLElement} [viewport] - the #viewport element (defaults to getElementById)
- * @returns {{ surface: HTMLElement|null, slot: HTMLElement|null, viewId: string|null, dist: number, count: number }}
- */
 export function nearestSurfaceToCenter(viewport) {
     const vp = viewport || document.getElementById('viewport');
     if (!vp) return { surface: null, slot: null, viewId: null, dist: Infinity, count: 0 };
@@ -69,9 +56,6 @@ export function nearestSurfaceToCenter(viewport) {
     return { surface: best, slot, viewId, dist: bestDist, count };
 }
 
-/**
- * Check if an element is visible within the viewport bounds.
- */
 export function isInViewport(el, viewport) {
     if (!el || !viewport) return false;
     const vr = viewport.getBoundingClientRect();
