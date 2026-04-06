@@ -1,6 +1,6 @@
 import { html } from '../../lib/html.js';
 import { useEffect, useCallback, useRef } from 'preact/hooks';
-import { Modal, ModalActions } from '../../components/ModalPreact.js';
+import { ModalActions } from '../../components/ModalPreact.js';
 
 export function TestPanel({ actionId, params, testParams, onParamChange, onRun, onClose, running, result }) {
     const panelRef = useRef(null);
@@ -86,15 +86,3 @@ export function ActionEditForm({ modal, fieldProps, handlers }) {
     `;
 }
 
-export function ActionEditModal({ modal, fieldProps, onUpdate, onClose, onSave }) {
-    const title = modal.isNew ? 'New Action' : 'Edit Action';
-    const handlers = { updateField: onUpdate, onClose, onSave };
-    return html`
-        <${Modal} open=${true} onClose=${onClose} className="edit-modal">
-            <div class="edit-modal-content">
-                <h3>${title}</h3>
-                <${ActionEditForm} modal=${modal} fieldProps=${fieldProps} handlers=${handlers} />
-            </div>
-        <//>
-    `;
-}
