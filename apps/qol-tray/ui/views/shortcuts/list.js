@@ -40,7 +40,8 @@ export function ShortcutsList({ shortcuts, selectedIndex, onSelect, onEdit }) {
                 enabled=${s.enabled}
                 selectValue=${s.id}
                 index=${i} selected=${i === selectedIndex} onSelect=${onSelect}
-                onActivate=${() => i !== selectedIndex ? onSelect(s.id) : onEdit(s)} />
+                data-dive-target="shortcuts-editor"
+                onActivate=${() => { if (i !== selectedIndex) onSelect(s.id); onEdit(s); }} />
         `)}
     <//>`;
 }
