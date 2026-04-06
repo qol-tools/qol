@@ -40,9 +40,7 @@ export function CommandPalette() {
     const commands = useMemo(() => {
         if (!active || mode !== 'action') return [];
         const raw = getCommands(activeViewId);
-        const filtered = filterCommands(raw, actionQuery, wasmLoaded);
-        console.log('[palette] raw:', raw.length, '| query:', JSON.stringify(actionQuery), '| filtered:', filtered.length, '| wasm:', wasmLoaded);
-        return filtered;
+        return filterCommands(raw, actionQuery, wasmLoaded);
     }, [active, mode, activeViewId, actionQuery, wasmLoaded]);
 
     useEffect(() => {
@@ -60,8 +58,7 @@ export function CommandPalette() {
     }, [deactivate]);
 
     const handleInput = useCallback((e) => {
-        const val = e.target.value;
-        setQuery(val.startsWith('>') ? val.slice(1) : val);
+        setQuery(e.target.value);
     }, [setQuery]);
 
     const executeCommand = useCallback((cmd) => {

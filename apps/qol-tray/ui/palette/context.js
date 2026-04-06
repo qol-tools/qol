@@ -15,11 +15,11 @@ export function PaletteProvider({ children }) {
 
     const mode = 'action';
     const searchQuery = '';
-    const actionQuery = query;
+    const actionQuery = query.startsWith('>') ? query.slice(1) : query;
 
     const activate = useCallback(() => {
         setActive(true);
-        setQuery('');
+        setQuery('>');
     }, []);
 
     const deactivate = useCallback(() => {
