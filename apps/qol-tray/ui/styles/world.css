@@ -135,6 +135,27 @@
     letter-spacing: 0.02em;
 }
 
+/* Dive/ascend layer transitions */
+@keyframes dive-zoom-fade {
+    to { transform: scale(1.3); opacity: 0; }
+}
+@keyframes ascend-shrink-fade {
+    to { transform: scale(0.85); opacity: 0; }
+}
+@keyframes layer-fade-in {
+    from { opacity: 0; }
+}
+
+#viewport.dive-out {
+    animation: dive-zoom-fade 180ms ease-in forwards;
+}
+#viewport.ascend-out {
+    animation: ascend-shrink-fade 180ms ease-in forwards;
+}
+#viewport.layer-in {
+    animation: layer-fade-in 120ms ease-out;
+}
+
 .world-region-label {
     position: absolute;
     font-size: 42px;
