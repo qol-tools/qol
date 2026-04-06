@@ -4,7 +4,7 @@ const DOT_ALPHA_BASE = 0.03;
 const MIN_SCREEN_SPACING = 4;
 
 export function createWorldCanvasBg(canvas, camera) {
-    const ctx = canvas.getContext('2d');
+    let ctx = canvas.getContext('2d');
     let mounted = true;
 
     function draw() {
@@ -16,9 +16,17 @@ export function createWorldCanvasBg(canvas, camera) {
         if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
             canvas.width = w * dpr;
             canvas.height = h * dpr;
+            ctx = canvas.getContext('2d');
         }
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        ctx.clearRect(0, 0, w, h);
+        try {
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.clearRect(0, 0, w, h);
+        } catch {
+            canvas.width = w * dpr;
+            canvas.height = h * dpr;
+            ctx = canvas.getContext('2d');
+            return;
+        }
 
         const z = camera.zoom;
         const spacing = DOT_SPACING * z;
