@@ -13,7 +13,7 @@ export function LogRow({ time, level, src, msg, loc, count, severity, index, sel
     return html`
         <${ListRow} className="log-row" index=${index} selected=${selected} onSelect=${onSelect}
             accent=${LEVEL_ACCENT[level]} onActivate=${onActivate}
-            data-level=${levelCls} data-severity=${severity || undefined} ...${rest}>
+            data-level=${levelCls} data-severity=${severity || undefined} data-dive-target="logs-detail" ...${rest}>
             <div class="log-row-top">
                 <span class="log-time">${time}</span>
                 <span class="log-level-badge ${levelCls}">${label}</span>
@@ -46,6 +46,15 @@ export function LogDetailModal({ entry, onClose }) {
                 ]} />
             </div>
         <//>
+    `;
+}
+
+export function LogDetailContent({ entry }) {
+    const text = formatLogDetail(entry);
+    return html`
+        <div class="log-detail-content">
+            <${CodeBlock} text=${text} />
+        </div>
     `;
 }
 

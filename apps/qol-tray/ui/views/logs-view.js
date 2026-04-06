@@ -9,8 +9,16 @@ import { ViewTabs } from '../components/ViewTabs.js';
 import { Button } from '../components/Button.js';
 import { EmptyState } from '../components/EmptyState.js';
 import { ListGroup } from '../components/ListRow.js';
-import { LogRow, LogDetailModal } from '../components/rows/LogRow.js';
+import { LogRow, LogDetailContent } from '../components/rows/LogRow.js';
+import { PageHeader } from '../components/PageHeader.js';
+import { SurfaceContainer } from '../components/SurfaceContainer.js';
 import { SuppressedRow } from '../components/rows/SuppressedRow.js';
+
+// Shared state: LogsView writes, LogDetailSubPage reads
+const _sharedDetail = { entry: null, onClose: null };
+const _detailListeners = new Set();
+function notifyDetailChange() { for (const fn of _detailListeners) fn(); }
+function subscribeDetailState(fn) { _detailListeners.add(fn); return () => _detailListeners.delete(fn); }
 
 const TABS = [
     { id: 'live', label: 'Live Log' },
@@ -150,6 +158,12 @@ export function LogsView({ active }) {
         setDetailEntry(null);
     }, []);
 
+    useEffect(() => {
+        _sharedDetail.entry = detailEntry;
+        _sharedDetail.onClose = closeDetail;
+        notifyDetailChange();
+    }, [detailEntry]);
+
     const handleKey = useCallback((event) => {
         if (document.activeElement?.closest('[role="tablist"]')) return;
         listHandler(event);
@@ -193,7 +207,6 @@ export function LogsView({ active }) {
                 </div>
             `}
         <//>
-        ${detailEntry && html`<${LogDetailModal} entry=${detailEntry} onClose=${closeDetail} />`}
     `;
 }
 
@@ -252,6 +265,30 @@ function SuppressedList({ keys, items, onUnsuppress, selectedIndex, setSelectedI
                     onUnsuppress=${onUnsuppress}
                 />
             `)}
+        </div>
+    `;
+}
+
+export function LogDetailSubPage() {
+    const [, bump] = useState(0);
+    useEffect(() => subscribeDetailState(() => bump(t => t + 1)), []);
+
+    const { entry } = _sharedDetail;
+    if (!entry) {
+        return html`<div class="view-container content-shell">
+            <${PageHeader} title="Log Detail" subtitle="Select a log entry to view" />
+        </div>`;
+    }
+    return html`
+        <div class="view-container content-shell">
+            <${PageHeader} title="Log Detail" subtitle=${`${entry.level} — ${entry.src}`} />
+            <div class="view-body content-shell-body">
+                <div class="content-shell-inner">
+                    <${SurfaceContainer} className="content-frame">
+                        <${LogDetailContent} entry=${entry} />
+                    <//>
+                </div>
+            </div>
         </div>
     `;
 }
