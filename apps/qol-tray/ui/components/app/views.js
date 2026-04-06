@@ -16,7 +16,7 @@ export const VIEW_LABELS = {
     'task-runner': 'Task Runner',
     profile: 'Profile',
     logs: 'Logs',
-    dev: 'Dev'
+    dev: 'Developer'
 };
 
 const BASE_ORDER = ['plugins', 'store', 'hotkeys', 'shortcuts', 'task-runner', 'profile', 'logs'];

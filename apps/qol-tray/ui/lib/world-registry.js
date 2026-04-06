@@ -5,7 +5,6 @@ const PAGE_STRIDE = 10000;
 export function createWorldRegistry(viewOrder, manifest = {}) {
     const entries = new Map();
 
-    // Layer 0: pages at PAGE_STRIDE intervals
     for (let i = 0; i < viewOrder.length; i++) {
         const id = viewOrder[i];
         entries.set(id, {
@@ -15,7 +14,6 @@ export function createWorldRegistry(viewOrder, manifest = {}) {
         });
     }
 
-    // Layer -1: sub-pages — same position as parent (each layer is its own world)
     for (const [parentId, subs] of Object.entries(manifest)) {
         const parent = entries.get(parentId);
         if (!parent) continue;

@@ -113,7 +113,6 @@ export function WorldViewport({ camera, onViewChange, children }) {
             rafId = requestAnimationFrame(ctrlPanLoop);
         }
 
-        // Camera follow: any surface focus outside viewport triggers a pan
         function onFocusIn(e) {
             if (isCtrlHeld()) return;
             const surface = e.target?.closest?.('[data-selected-surface]');

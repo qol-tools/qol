@@ -135,7 +135,6 @@
     letter-spacing: 0.02em;
 }
 
-/* Dive/ascend layer transitions */
 @keyframes dive-zoom-fade {
     to { transform: scale(1.3); opacity: 0; }
 }
