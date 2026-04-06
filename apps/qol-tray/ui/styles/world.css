@@ -147,13 +147,13 @@
 }
 
 #viewport.dive-out {
-    animation: dive-zoom-fade 180ms ease-in forwards;
+    animation: dive-zoom-fade 120ms ease-in forwards;
 }
 #viewport.ascend-out {
-    animation: ascend-shrink-fade 180ms ease-in forwards;
+    animation: ascend-shrink-fade 120ms ease-in forwards;
 }
 #viewport.layer-in {
-    animation: layer-fade-in 120ms ease-out;
+    animation: layer-fade-in 80ms ease-out;
 }
 
 .world-region-label {

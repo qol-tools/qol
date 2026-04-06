@@ -115,6 +115,19 @@ function routeToView(event, viewKeyboard, cycleView) {
         }
         return;
     }
+    // Dive-target takes priority: Enter on a surface with data-dive-target always dives
+    if ((event.key === 'Enter' || event.key === ' ') && !hasVisibleModal()) {
+        const focused = document.activeElement;
+        const surface = focused instanceof HTMLElement ? focused.closest('[data-dive-target]') : null;
+        if (surface && _diveRef.current) {
+            event.preventDefault();
+            activateSurface(surface);
+            surface.setAttribute('data-dive-source', '');
+            requestAnimationFrame(() => _diveRef.current(surface.getAttribute('data-dive-target'), surface));
+            return;
+        }
+    }
+
     if (viewKeyboard?.isBlocking?.()) {
         if (viewKeyboard.handleKey) viewKeyboard.handleKey(event);
         if (!event.defaultPrevented) globalSurfaceNav(event);
