@@ -42,18 +42,80 @@
     flex: none;
 }
 
-.world-minimap {
+.world-minimap-container {
     position: fixed;
     bottom: 16px;
     right: 16px;
-    width: 200px;
-    height: 120px;
+    z-index: var(--z-overlay, 100);
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+}
+
+.world-minimap {
+    width: 280px;
+    height: 56px;
     background: rgba(0, 0, 0, 0.75);
     border: 1px solid var(--border-default, #444);
     border-radius: var(--radius-md, 8px);
-    z-index: var(--z-overlay, 100);
     cursor: pointer;
     overflow: hidden;
+}
+
+.world-minimap-settings-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 1px solid var(--border-default, #444);
+    background: rgba(0, 0, 0, 0.75);
+    color: rgba(255, 255, 255, 0.5);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    padding: 0;
+    transition: color 0.1s, background 0.1s;
+}
+
+.world-minimap-settings-btn:hover {
+    color: rgba(255, 255, 255, 0.8);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.world-settings-panel {
+    background: rgba(0, 0, 0, 0.85);
+    border: 1px solid var(--border-default, #444);
+    border-radius: var(--radius-md, 8px);
+    padding: 12px;
+    width: 240px;
+    backdrop-filter: blur(12px);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.world-settings-panel label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.world-settings-panel input[type="range"] {
+    width: 100px;
+    accent-color: var(--accent, #5e9cff);
+}
+
+.world-settings-panel select {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 4px;
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 11px;
+    padding: 2px 4px;
 }
 
 .app-container > .command-palette,
