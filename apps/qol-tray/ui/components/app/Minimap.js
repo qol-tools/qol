@@ -4,11 +4,12 @@ import { VIEW_LABELS } from './views.js';
 import { getWorldSettings, setWorldSetting, subscribeWorldSettings } from '../../lib/world-settings.js';
 import { IconCog } from '../../assets/icon-cog.js';
 
-const VISIBLE_COUNT = 5;
-const PAGE_GAP = 6;
-const PAGE_RADIUS = 3;
-const PAD = 8;
-const LABEL_FONT = 9;
+const CENTER_RATIO = 0.42;
+const NEIGHBOR_RATIO = 0.24;
+const PEEK_RATIO = 0.05;
+const GAP = 4;
+const RADIUS = 3;
+const ARROW_FLASH_MS = 300;
 
 export function MinimapContainer({ camera, registry, viewportRef }) {
     const [settingsOpen, setSettingsOpen] = useState(false);
@@ -49,18 +50,42 @@ function WorldSettingsPanel({ settings }) {
                 <option value="fade">Fade only</option>
                 <option value="instant">Instant</option>
             </select></label>
-            <label>Minimap width <input type="range" min="160" max="500" value=${settings.minimapSize} onInput=${update('minimapSize')} /></label>
+            <label>Minimap width <input type="range" min="200" max="500" value=${settings.minimapSize} onInput=${update('minimapSize')} /></label>
         </div>
     `;
 }
 
 function Minimap({ camera, registry, viewportRef, width }) {
     const canvasRef = useRef(null);
+    const prevCamRef = useRef({ x: 0, y: 0 });
     const [, bump] = useState(0);
+    const [flash, setFlash] = useState(null);
+    const flashTimerRef = useRef(0);
 
     useEffect(() => {
-        return camera.subscribe(() => bump(t => t + 1));
+        return camera.subscribe(() => {
+            const prev = prevCamRef.current;
+            const dx = camera.x - prev.x;
+            const dy = camera.y - prev.y;
+            prev.x = camera.x;
+            prev.y = camera.y;
+
+            if (Math.abs(dx) > 50 || Math.abs(dy) > 50) {
+                const dir = Math.abs(dx) > Math.abs(dy)
+                    ? (dx > 0 ? 'right' : 'left')
+                    : (dy > 0 ? 'down' : 'up');
+                setFlash(dir);
+                clearTimeout(flashTimerRef.current);
+                flashTimerRef.current = setTimeout(() => setFlash(null), ARROW_FLASH_MS);
+            }
+
+            bump(t => t + 1);
+        });
     }, [camera]);
+
+    useEffect(() => () => clearTimeout(flashTimerRef.current), []);
+
+    const h = Math.round(width * 0.3);
 
     useEffect(() => {
         const canvas = canvasRef.current;
@@ -69,9 +94,12 @@ function Minimap({ camera, registry, viewportRef, width }) {
         const dpr = window.devicePixelRatio || 1;
         const cw = canvas.clientWidth;
         const ch = canvas.clientHeight;
-        canvas.width = cw * dpr;
-        canvas.height = ch * dpr;
-        ctx.scale(dpr, dpr);
+        if (cw === 0 || ch === 0) return;
+        if (canvas.width !== cw * dpr || canvas.height !== ch * dpr) {
+            canvas.width = cw * dpr;
+            canvas.height = ch * dpr;
+        }
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
         const currentLayer = camera.layer;
         const vp = viewportRef?.current;
@@ -80,68 +108,14 @@ function Minimap({ camera, registry, viewportRef, width }) {
         const z = camera.zoom || 1;
 
         const entries = registry.getEntriesForLayer(currentLayer);
-        if (entries.length === 0) return;
+        if (entries.length === 0) { ctx.clearRect(0, 0, cw, ch); return; }
 
         const sorted = [...entries].sort((a, b) => a.x - b.x);
         const activeId = registry.activeViewId(camera.x, camera.y, vpW, vpH, z);
-        const activeIdx = sorted.findIndex(e => e.id === activeId);
-
-        const half = Math.floor(VISIBLE_COUNT / 2);
-        let startIdx = Math.max(0, activeIdx - half);
-        if (startIdx + VISIBLE_COUNT > sorted.length) startIdx = Math.max(0, sorted.length - VISIBLE_COUNT);
-        const visible = sorted.slice(startIdx, startIdx + VISIBLE_COUNT);
-        const count = visible.length;
-
-        const totalGap = (count - 1) * PAGE_GAP;
-        const availW = cw - PAD * 2 - totalGap;
-        const availH = ch - PAD * 2;
-        const pageW = availW / count;
-        const pageH = availH;
+        const activeIdx = Math.max(0, sorted.findIndex(e => e.id === activeId));
 
         ctx.clearRect(0, 0, cw, ch);
-
-        for (let i = 0; i < count; i++) {
-            const e = visible[i];
-            const rx = PAD + i * (pageW + PAGE_GAP);
-            const ry = PAD;
-            const active = e.id === activeId;
-
-            ctx.fillStyle = active ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.06)';
-            roundRect(ctx, rx, ry, pageW, pageH, PAGE_RADIUS);
-            ctx.fill();
-            ctx.strokeStyle = active ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.18)';
-            ctx.lineWidth = active ? 1.5 : 0.5;
-            ctx.stroke();
-
-            const label = VIEW_LABELS[e.id] || e.id;
-            ctx.fillStyle = active ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.45)';
-            ctx.font = `${active ? 'bold ' : ''}${LABEL_FONT}px -apple-system, sans-serif`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(label, rx + pageW / 2, ry + pageH / 2, pageW - 6);
-        }
-
-        if (startIdx > 0) {
-            ctx.fillStyle = 'rgba(255,255,255,0.25)';
-            ctx.font = 'bold 10px -apple-system, sans-serif';
-            ctx.textAlign = 'left';
-            ctx.textBaseline = 'middle';
-            ctx.fillText('\u2039', 2, ch / 2);
-        }
-        if (startIdx + VISIBLE_COUNT < sorted.length) {
-            ctx.fillStyle = 'rgba(255,255,255,0.25)';
-            ctx.font = 'bold 10px -apple-system, sans-serif';
-            ctx.textAlign = 'right';
-            ctx.textBaseline = 'middle';
-            ctx.fillText('\u203A', cw - 2, ch / 2);
-        }
-
-        const layerLabel = currentLayer === 0 ? 'L0' : `L${currentLayer}`;
-        ctx.fillStyle = 'rgba(255,255,255,0.3)';
-        ctx.font = '7px -apple-system, sans-serif';
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'bottom';
-        ctx.fillText(layerLabel, cw - 4, ch - 2);
+        drawSpotlight(ctx, cw, ch, sorted, activeIdx, activeId);
     });
 
     const onClick = (e) => {
@@ -149,6 +123,7 @@ function Minimap({ camera, registry, viewportRef, width }) {
         if (!canvas) return;
         const rect = canvas.getBoundingClientRect();
         const clickX = e.clientX - rect.left;
+        const cw = canvas.clientWidth;
 
         const currentLayer = camera.layer;
         const entries = registry.getEntriesForLayer(currentLayer);
@@ -161,31 +136,79 @@ function Minimap({ camera, registry, viewportRef, width }) {
 
         const sorted = [...entries].sort((a, b) => a.x - b.x);
         const activeId = registry.activeViewId(camera.x, camera.y, vpW, vpH, z);
-        const activeIdx = sorted.findIndex(en => en.id === activeId);
+        const activeIdx = Math.max(0, sorted.findIndex(en => en.id === activeId));
 
-        const half = Math.floor(VISIBLE_COUNT / 2);
-        let startIdx = Math.max(0, activeIdx - half);
-        if (startIdx + VISIBLE_COUNT > sorted.length) startIdx = Math.max(0, sorted.length - VISIBLE_COUNT);
-        const visible = sorted.slice(startIdx, startIdx + VISIBLE_COUNT);
-        const count = visible.length;
+        const slots = buildSlots(cw, sorted.length, activeIdx);
+        const clicked = slots.findIndex(s => clickX >= s.x && clickX < s.x + s.w);
+        if (clicked < 0) return;
 
-        const totalGap = (count - 1) * PAGE_GAP;
-        const pageW = (canvas.clientWidth - PAD * 2 - totalGap) / count;
-        const slotW = pageW + PAGE_GAP;
-        const idx = Math.floor((clickX - PAD) / slotW);
-        const target = visible[Math.max(0, Math.min(idx, count - 1))];
-        if (!target) return;
-
+        const target = sorted[clicked];
         const tx = target.x + target.width / 2 - vpW / (2 * z);
         const ty = target.y + target.height / 2 - vpH / (2 * z);
         camera.panTo(tx, ty);
     };
 
     return html`
-        <div class="world-minimap" style="width:${width}px;height:${Math.round(width * 0.3)}px" onClick=${onClick}>
+        <div class="world-minimap" style="width:${width}px;height:${h}px" onClick=${onClick}>
             <canvas ref=${canvasRef} style="width:100%;height:100%"></canvas>
+            <div class="minimap-arrow minimap-arrow-left ${flash === 'left' ? 'flash' : ''}">\u2039</div>
+            <div class="minimap-arrow minimap-arrow-right ${flash === 'right' ? 'flash' : ''}">\u203A</div>
+            <div class="minimap-arrow minimap-arrow-up ${flash === 'up' ? 'flash' : ''}">\u2303</div>
+            <div class="minimap-arrow minimap-arrow-down ${flash === 'down' ? 'flash' : ''}">\u2304</div>
         </div>
     `;
+}
+
+function buildSlots(canvasW, count, activeIdx) {
+    if (count === 0) return [];
+    if (count === 1) return [{ x: GAP, w: canvasW - GAP * 2 }];
+
+    const slots = [];
+    const usable = canvasW - GAP * 2 - (count - 1) * GAP;
+
+    for (let i = 0; i < count; i++) {
+        const dist = Math.abs(i - activeIdx);
+        if (dist === 0) slots.push({ ratio: CENTER_RATIO });
+        else if (dist === 1) slots.push({ ratio: NEIGHBOR_RATIO });
+        else slots.push({ ratio: PEEK_RATIO });
+    }
+
+    const totalRatio = slots.reduce((s, sl) => s + sl.ratio, 0);
+    let x = GAP;
+    return slots.map(sl => {
+        const w = (sl.ratio / totalRatio) * usable;
+        const slot = { x, w };
+        x += w + GAP;
+        return slot;
+    });
+}
+
+function drawSpotlight(ctx, cw, ch, sorted, activeIdx, activeId) {
+    const pad = 6;
+    const slots = buildSlots(cw, sorted.length, activeIdx);
+
+    for (let i = 0; i < sorted.length; i++) {
+        const e = sorted[i];
+        const s = slots[i];
+        const active = e.id === activeId;
+        const dist = Math.abs(i - activeIdx);
+
+        ctx.fillStyle = active ? 'rgba(255,255,255,0.18)' : dist === 1 ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.03)';
+        roundRect(ctx, s.x, pad, s.w, ch - pad * 2, RADIUS);
+        ctx.fill();
+        ctx.strokeStyle = active ? 'rgba(255,255,255,0.6)' : dist === 1 ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.08)';
+        ctx.lineWidth = active ? 1.5 : 0.5;
+        ctx.stroke();
+
+        if (s.w < 20) continue;
+        const label = VIEW_LABELS[e.id] || e.id;
+        const fontSize = active ? 10 : dist === 1 ? 9 : 7;
+        ctx.fillStyle = active ? 'rgba(255,255,255,0.9)' : dist === 1 ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.25)';
+        ctx.font = `${active ? 'bold ' : ''}${fontSize}px -apple-system, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, s.x + s.w / 2, ch / 2, s.w - 6);
+    }
 }
 
 function roundRect(ctx, x, y, w, h, r) {
