@@ -3,6 +3,7 @@ import { createDiveStack } from '../lib/dive-stack.js';
 import { useRef, useCallback, useEffect, useState } from 'preact/hooks';
 import { PaletteProvider, usePaletteContext } from '../palette/context.js';
 import { createDebug } from '../lib/debug.js';
+import { getWorldSettings } from '../lib/world-settings.js';
 
 const log = createDebug('qol:app');
 import { ModifierStateProvider } from '../hooks/modifier-state-context.js';
@@ -124,30 +125,18 @@ function AppShell() {
         if (!entry) return;
         const vp = viewportRef.current;
         if (!vp) return;
-        layerAnimatingRef.current = true;
         diveStack.push({
             layer: camera.layer,
             x: camera.x, y: camera.y, zoom: camera.zoom,
             surfaceSelector: sourceSurface ? selectorFor(sourceSurface) : null,
         });
-        vp.classList.add('dive-out');
-        vp.addEventListener('animationend', function onEnd() {
-            vp.removeEventListener('animationend', onEnd);
-            vp.classList.remove('dive-out');
-            setCameraLayer(entry.layer);
-            camera.setLayer(entry.layer);
-            vp.classList.add('layer-in');
-            vp.addEventListener('animationend', function onIn() {
-                vp.removeEventListener('animationend', onIn);
-                vp.classList.remove('layer-in');
-                layerAnimatingRef.current = false;
-            });
-            requestAnimationFrame(() => {
-                const slot = document.querySelector(`.world-view-slot[data-view-id="${CSS.escape(targetId)}"]`);
-                const surface = slot?.querySelector('[data-selected-surface]');
-                if (surface) surface.focus({ preventScroll: true });
-            });
+        const focusTarget = () => requestAnimationFrame(() => {
+            const slot = document.querySelector(`.world-view-slot[data-view-id="${CSS.escape(targetId)}"]`);
+            const surface = slot?.querySelector('[data-selected-surface]');
+            if (surface) surface.focus({ preventScroll: true });
         });
+        const applyLayer = () => { setCameraLayer(entry.layer); camera.setLayer(entry.layer); };
+        animateTransition(vp, layerAnimatingRef, 'dive-out', applyLayer, focusTarget);
     }, [camera, registry, diveStack]);
 
     const ascend = useCallback(() => {
@@ -156,27 +145,14 @@ function AppShell() {
         if (!prev) return false;
         const vp = viewportRef.current;
         if (!vp) return false;
-        layerAnimatingRef.current = true;
-        vp.classList.add('ascend-out');
-        vp.addEventListener('animationend', function onEnd() {
-            vp.removeEventListener('animationend', onEnd);
-            vp.classList.remove('ascend-out');
-            setCameraLayer(prev.layer);
-            camera.setLayer(prev.layer);
-            camera.panTo(prev.x, prev.y);
-            vp.classList.add('layer-in');
-            vp.addEventListener('animationend', function onIn() {
-                vp.removeEventListener('animationend', onIn);
-                vp.classList.remove('layer-in');
-                layerAnimatingRef.current = false;
-            });
-            if (prev.surfaceSelector) {
-                requestAnimationFrame(() => {
-                    const surface = document.querySelector(prev.surfaceSelector);
-                    if (surface) surface.focus({ preventScroll: true });
-                });
-            }
-        });
+        const applyLayer = () => { setCameraLayer(prev.layer); camera.setLayer(prev.layer); camera.panTo(prev.x, prev.y); };
+        const focusTarget = prev.surfaceSelector
+            ? () => requestAnimationFrame(() => {
+                const surface = document.querySelector(prev.surfaceSelector);
+                if (surface) surface.focus({ preventScroll: true });
+            })
+            : null;
+        animateTransition(vp, layerAnimatingRef, 'ascend-out', applyLayer, focusTarget);
         return true;
     }, [camera, diveStack]);
 
@@ -224,6 +200,33 @@ function AppKeyboardRouting({ activePluginId, activeViewId, camera, closePluginC
     const palette = usePaletteContext();
     useAppKeyboardRouting({ activePluginId, activeViewId, camera, closePluginConfig, switchView, viewOrder, palette, dive, ascend });
     return null;
+}
+
+function animateTransition(vp, animatingRef, outClass, applyLayer, onDone) {
+    const { transitionStyle, transitionSpeed } = getWorldSettings();
+    if (transitionStyle === 'instant') {
+        applyLayer();
+        if (onDone) onDone();
+        return;
+    }
+    animatingRef.current = true;
+    const outAnim = transitionStyle === 'fade' ? 'fade-out' : outClass;
+    vp.style.animationDuration = `${transitionSpeed}ms`;
+    vp.classList.add(outAnim);
+    vp.addEventListener('animationend', function onEnd() {
+        vp.removeEventListener('animationend', onEnd);
+        vp.classList.remove(outAnim);
+        applyLayer();
+        vp.style.animationDuration = `${Math.round(transitionSpeed * 0.6)}ms`;
+        vp.classList.add('layer-in');
+        vp.addEventListener('animationend', function onIn() {
+            vp.removeEventListener('animationend', onIn);
+            vp.classList.remove('layer-in');
+            vp.style.animationDuration = '';
+            animatingRef.current = false;
+        });
+        if (onDone) onDone();
+    });
 }
 
 function selectorFor(el) {
