@@ -182,7 +182,7 @@ function Minimap({ camera, registry, viewportRef, width }) {
     };
 
     return html`
-        <div class="world-minimap" style="width:${width}px" onClick=${onClick}>
+        <div class="world-minimap" style="width:${width}px;height:${Math.round(width * 0.3)}px" onClick=${onClick}>
             <canvas ref=${canvasRef} style="width:100%;height:100%"></canvas>
         </div>
     `;
