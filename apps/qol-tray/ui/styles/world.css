@@ -203,18 +203,24 @@
 @keyframes ascend-shrink-fade {
     to { transform: scale(0.85); opacity: 0; }
 }
+@keyframes simple-fade-out {
+    to { opacity: 0; }
+}
 @keyframes layer-fade-in {
     from { opacity: 0; }
 }
 
 #viewport.dive-out {
-    animation: dive-zoom-fade 120ms ease-in forwards;
+    animation: dive-zoom-fade ease-in forwards;
 }
 #viewport.ascend-out {
-    animation: ascend-shrink-fade 120ms ease-in forwards;
+    animation: ascend-shrink-fade ease-in forwards;
+}
+#viewport.fade-out {
+    animation: simple-fade-out ease-in forwards;
 }
 #viewport.layer-in {
-    animation: layer-fade-in 80ms ease-out;
+    animation: layer-fade-in ease-out;
 }
 
 .world-region-label {

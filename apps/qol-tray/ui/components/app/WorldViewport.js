@@ -4,10 +4,9 @@ import { createWorldCanvasBg } from '../../lib/world-canvas-bg.js';
 import { createDebug, elLabel } from '../../lib/debug.js';
 import { isCtrlHeld } from '../../lib/ctrl-state.js';
 import { nearestSurfaceToCenter } from '../../lib/viewport-spatial.js';
+import { getWorldSettings } from '../../lib/world-settings.js';
 
 const log = createDebug('qol:world');
-
-const PAN_SPEED = 12;
 const CAMERA_FOLLOW_PAD = 40;
 const INTERACTIVE_SELECTOR = 'button, input, select, textarea, [data-selected-surface], a, [role="tab"], [tabindex]';
 
@@ -103,7 +102,7 @@ export function WorldViewport({ camera, onViewChange, children }) {
             if (isCtrlHeld()) {
                 const keys = keysRef.current;
                 let dx = 0, dy = 0;
-                const speed = PAN_SPEED / camera.zoom;
+                const speed = getWorldSettings().panSpeed / camera.zoom;
                 if (keys.has('ArrowLeft')) dx = -speed;
                 if (keys.has('ArrowRight')) dx = speed;
                 if (keys.has('ArrowUp')) dy = -speed;
