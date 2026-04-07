@@ -64,18 +64,38 @@
 
 .minimap-arrow {
     position: absolute;
-    color: rgba(255, 255, 255, 0);
-    font-size: 14px;
-    font-weight: bold;
+    width: 0;
+    height: 0;
     pointer-events: none;
-    transition: color 0.08s ease;
-    line-height: 1;
+    opacity: 0.15;
+    transition: opacity 0.12s ease;
 }
-.minimap-arrow.flash { color: rgba(255, 255, 255, 0.7); }
-.minimap-arrow-left { left: 2px; top: 50%; transform: translateY(-50%); }
-.minimap-arrow-right { right: 2px; top: 50%; transform: translateY(-50%); }
-.minimap-arrow-up { top: 1px; left: 50%; transform: translateX(-50%); }
-.minimap-arrow-down { bottom: 1px; left: 50%; transform: translateX(-50%); }
+.minimap-arrow.flash { opacity: 0.8; }
+
+.minimap-arrow-left {
+    left: 3px; top: 50%; transform: translateY(-50%);
+    border-top: 5px solid transparent;
+    border-bottom: 5px solid transparent;
+    border-right: 6px solid white;
+}
+.minimap-arrow-right {
+    right: 3px; top: 50%; transform: translateY(-50%);
+    border-top: 5px solid transparent;
+    border-bottom: 5px solid transparent;
+    border-left: 6px solid white;
+}
+.minimap-arrow-up {
+    top: 3px; left: 50%; transform: translateX(-50%);
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-bottom: 6px solid white;
+}
+.minimap-arrow-down {
+    bottom: 3px; left: 50%; transform: translateX(-50%);
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid white;
+}
 
 .world-minimap-settings-btn {
     width: 28px;
@@ -224,16 +244,16 @@
     from { opacity: 0; }
 }
 
-#viewport.dive-out {
+#viewport.dive-out, .world-minimap-container.dive-out {
     animation: dive-zoom-fade ease-in forwards;
 }
-#viewport.ascend-out {
+#viewport.ascend-out, .world-minimap-container.ascend-out {
     animation: ascend-shrink-fade ease-in forwards;
 }
-#viewport.fade-out {
+#viewport.fade-out, .world-minimap-container.fade-out {
     animation: simple-fade-out ease-in forwards;
 }
-#viewport.layer-in {
+#viewport.layer-in, .world-minimap-container.layer-in {
     animation: layer-fade-in ease-out;
 }
 

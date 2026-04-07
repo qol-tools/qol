@@ -204,6 +204,7 @@ function AppKeyboardRouting({ activePluginId, activeViewId, camera, closePluginC
 
 function animateTransition(vp, animatingRef, outClass, applyLayer, onDone) {
     const { transitionStyle, transitionSpeed } = getWorldSettings();
+    const minimap = document.querySelector('.world-minimap-container');
     if (transitionStyle === 'instant') {
         applyLayer();
         if (onDone) onDone();
@@ -211,22 +212,37 @@ function animateTransition(vp, animatingRef, outClass, applyLayer, onDone) {
     }
     animatingRef.current = true;
     const outAnim = transitionStyle === 'fade' ? 'fade-out' : outClass;
-    vp.style.animationDuration = `${transitionSpeed}ms`;
-    vp.classList.add(outAnim);
+    const dur = `${transitionSpeed}ms`;
+    const durIn = `${Math.round(transitionSpeed * 0.6)}ms`;
+    applyAnimClass(vp, outAnim, dur);
+    applyAnimClass(minimap, outAnim, dur);
     vp.addEventListener('animationend', function onEnd() {
         vp.removeEventListener('animationend', onEnd);
-        vp.classList.remove(outAnim);
+        clearAnimClass(vp, outAnim);
+        clearAnimClass(minimap, outAnim);
         applyLayer();
-        vp.style.animationDuration = `${Math.round(transitionSpeed * 0.6)}ms`;
-        vp.classList.add('layer-in');
+        applyAnimClass(vp, 'layer-in', durIn);
+        applyAnimClass(minimap, 'layer-in', durIn);
         vp.addEventListener('animationend', function onIn() {
             vp.removeEventListener('animationend', onIn);
-            vp.classList.remove('layer-in');
-            vp.style.animationDuration = '';
+            clearAnimClass(vp, 'layer-in');
+            clearAnimClass(minimap, 'layer-in');
             animatingRef.current = false;
         });
         if (onDone) onDone();
     });
+}
+
+function applyAnimClass(el, cls, dur) {
+    if (!el) return;
+    el.style.animationDuration = dur;
+    el.classList.add(cls);
+}
+
+function clearAnimClass(el, cls) {
+    if (!el) return;
+    el.classList.remove(cls);
+    el.style.animationDuration = '';
 }
 
 function selectorFor(el) {
