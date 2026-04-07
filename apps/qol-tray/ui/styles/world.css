@@ -54,12 +54,28 @@
 }
 
 .world-minimap {
+    position: relative;
     background: rgba(0, 0, 0, 0.75);
     border: 1px solid var(--border-default, #444);
     border-radius: var(--radius-md, 8px);
     cursor: pointer;
     overflow: hidden;
 }
+
+.minimap-arrow {
+    position: absolute;
+    color: rgba(255, 255, 255, 0);
+    font-size: 14px;
+    font-weight: bold;
+    pointer-events: none;
+    transition: color 0.08s ease;
+    line-height: 1;
+}
+.minimap-arrow.flash { color: rgba(255, 255, 255, 0.7); }
+.minimap-arrow-left { left: 2px; top: 50%; transform: translateY(-50%); }
+.minimap-arrow-right { right: 2px; top: 50%; transform: translateY(-50%); }
+.minimap-arrow-up { top: 1px; left: 50%; transform: translateX(-50%); }
+.minimap-arrow-down { bottom: 1px; left: 50%; transform: translateX(-50%); }
 
 .world-minimap-settings-btn {
     width: 28px;
