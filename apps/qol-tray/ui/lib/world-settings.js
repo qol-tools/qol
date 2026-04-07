@@ -20,7 +20,8 @@ function load() {
 
 function save() {
     localStorage.setItem(KEY, JSON.stringify(current));
-    for (const fn of listeners) fn(current);
+    const snapshot = { ...current };
+    for (const fn of listeners) fn(snapshot);
 }
 
 const listeners = new Set();
