@@ -2,6 +2,10 @@ import { html } from '../../lib/html.js';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { VIEW_LABELS } from './views.js';
 
+const MIN_PAGE_W = 18;
+const MIN_PAGE_H = 14;
+const LABEL_FONT_SIZE = 8;
+
 export function Minimap({ camera, registry, viewportRef }) {
     const canvasRef = useRef(null);
     const [, bump] = useState(0);
@@ -35,27 +39,29 @@ export function Minimap({ camera, registry, viewportRef }) {
         ctx.clearRect(0, 0, cw, ch);
 
         for (const e of registry.getEntriesForLayer(currentLayer)) {
-            const rx = (e.x - bounds.x) * scale;
-            const ry = (e.y - bounds.y) * scale;
-            const rw = e.width * scale;
-            const rh = e.height * scale;
+            const cx = (e.x + e.width / 2 - bounds.x) * scale;
+            const cy = (e.y + e.height / 2 - bounds.y) * scale;
+            const rw = Math.max(MIN_PAGE_W, e.width * scale);
+            const rh = Math.max(MIN_PAGE_H, e.height * scale);
+            const rx = cx - rw / 2;
+            const ry = cy - rh / 2;
             const active = e.id === activeId;
 
-            ctx.fillStyle = active ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.04)';
-            ctx.fillRect(rx, ry, rw, rh);
-            ctx.strokeStyle = active ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.12)';
+            ctx.fillStyle = active ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.06)';
+            roundRect(ctx, rx, ry, rw, rh, 2);
+            ctx.fill();
+            ctx.strokeStyle = active ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.15)';
             ctx.lineWidth = active ? 1 : 0.5;
-            ctx.strokeRect(rx, ry, rw, rh);
+            ctx.stroke();
 
             const label = VIEW_LABELS[e.id] || e.id;
-            ctx.fillStyle = active ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.3)';
-            ctx.font = `${active ? 'bold ' : ''}7px -apple-system, sans-serif`;
+            ctx.fillStyle = active ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.4)';
+            ctx.font = `${active ? 'bold ' : ''}${LABEL_FONT_SIZE}px -apple-system, sans-serif`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillText(label, rx + rw / 2, ry + rh / 2, rw - 2);
+            ctx.fillText(label, cx, cy, rw - 4);
         }
 
-        // Viewport rect accounts for zoom
         if (vp) {
             const worldVpW = vpW / z;
             const worldVpH = vpH / z;
@@ -68,7 +74,6 @@ export function Minimap({ camera, registry, viewportRef }) {
             ctx.strokeRect(vpX, vpY, vpWs, vpHs);
         }
 
-        // Layer indicator
         const layerLabel = currentLayer === 0 ? 'L0' : `L${currentLayer}`;
         ctx.fillStyle = 'rgba(255,255,255,0.5)';
         ctx.font = 'bold 9px -apple-system, sans-serif';
@@ -99,4 +104,18 @@ export function Minimap({ camera, registry, viewportRef }) {
             <canvas ref=${canvasRef} style="width:100%;height:100%"></canvas>
         </div>
     `;
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
 }
