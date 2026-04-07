@@ -19,7 +19,7 @@ import { CommandPalette } from './CommandPalette.js';
 import { createCamera } from '../lib/world-camera.js';
 import { createWorldRegistry } from '../lib/world-registry.js';
 import { WorldViewport } from './app/WorldViewport.js';
-import { Minimap } from './app/Minimap.js';
+import { MinimapContainer } from './app/Minimap.js';
 import { RegionLabels } from './app/RegionLabels.js';
 import { useWorldNav } from './app/WorldNav.js';
 
@@ -209,7 +209,7 @@ function AppShell() {
                         })}
                     <//>
                     <${CommandPalette} />
-                    <${Minimap} camera=${camera} registry=${registry} viewportRef=${viewportRef} />
+                    <${MinimapContainer} camera=${camera} registry=${registry} viewportRef=${viewportRef} />
                     <${SelectionCursorOverlay} camera=${camera} />
                     <${RecompileDissolve} triggerRef=${dissolveRef} />
                     <${GlobalToast} />

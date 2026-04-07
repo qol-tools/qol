@@ -1,6 +1,7 @@
 import { html } from '../../lib/html.js';
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { VIEW_LABELS } from './views.js';
+import { getWorldSettings, setWorldSetting, subscribeWorldSettings } from '../../lib/world-settings.js';
 
 const VISIBLE_COUNT = 5;
 const PAGE_GAP = 6;
@@ -8,7 +9,49 @@ const PAGE_RADIUS = 3;
 const PAD = 8;
 const LABEL_FONT = 9;
 
-export function Minimap({ camera, registry, viewportRef }) {
+export function MinimapContainer({ camera, registry, viewportRef }) {
+    const [settingsOpen, setSettingsOpen] = useState(false);
+    const [settings, setSettings] = useState(getWorldSettings);
+
+    useEffect(() => subscribeWorldSettings(setSettings), []);
+
+    const toggle = useCallback((e) => {
+        e.stopPropagation();
+        setSettingsOpen(v => !v);
+    }, []);
+
+    return html`
+        <div class="world-minimap-container">
+            ${settingsOpen && html`<${WorldSettingsPanel} settings=${settings} />`}
+            <div style="display:flex;align-items:center;gap:6px;">
+                <${Minimap} camera=${camera} registry=${registry} viewportRef=${viewportRef} width=${settings.minimapSize} />
+                <button class="world-minimap-settings-btn" onClick=${toggle} title="World settings">⚙</button>
+            </div>
+        </div>
+    `;
+}
+
+function WorldSettingsPanel({ settings }) {
+    const update = (key) => (e) => {
+        const val = e.target.type === 'range' ? Number(e.target.value) : e.target.value;
+        setWorldSetting(key, val);
+    };
+
+    return html`
+        <div class="world-settings-panel">
+            <label>Pan speed <input type="range" min="4" max="30" value=${settings.panSpeed} onInput=${update('panSpeed')} /></label>
+            <label>Transition speed <input type="range" min="40" max="300" value=${settings.transitionSpeed} onInput=${update('transitionSpeed')} /></label>
+            <label>Transition style <select value=${settings.transitionStyle} onChange=${update('transitionStyle')}>
+                <option value="zoom-fade">Zoom + Fade</option>
+                <option value="fade">Fade only</option>
+                <option value="instant">Instant</option>
+            </select></label>
+            <label>Minimap width <input type="range" min="160" max="500" value=${settings.minimapSize} onInput=${update('minimapSize')} /></label>
+        </div>
+    `;
+}
+
+function Minimap({ camera, registry, viewportRef, width }) {
     const canvasRef = useRef(null);
     const [, bump] = useState(0);
 
@@ -80,14 +123,14 @@ export function Minimap({ camera, registry, viewportRef }) {
             ctx.font = 'bold 10px -apple-system, sans-serif';
             ctx.textAlign = 'left';
             ctx.textBaseline = 'middle';
-            ctx.fillText('‹', 2, ch / 2);
+            ctx.fillText('\u2039', 2, ch / 2);
         }
         if (startIdx + VISIBLE_COUNT < sorted.length) {
             ctx.fillStyle = 'rgba(255,255,255,0.25)';
             ctx.font = 'bold 10px -apple-system, sans-serif';
             ctx.textAlign = 'right';
             ctx.textBaseline = 'middle';
-            ctx.fillText('›', cw - 2, ch / 2);
+            ctx.fillText('\u203A', cw - 2, ch / 2);
         }
 
         const layerLabel = currentLayer === 0 ? 'L0' : `L${currentLayer}`;
@@ -136,7 +179,7 @@ export function Minimap({ camera, registry, viewportRef }) {
     };
 
     return html`
-        <div class="world-minimap" onClick=${onClick}>
+        <div class="world-minimap" style="width:${width}px" onClick=${onClick}>
             <canvas ref=${canvasRef} style="width:100%;height:100%"></canvas>
         </div>
     `;
