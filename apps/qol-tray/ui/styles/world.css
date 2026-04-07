@@ -54,7 +54,6 @@
 }
 
 .world-minimap {
-    height: 48px;
     background: rgba(0, 0, 0, 0.75);
     border: 1px solid var(--border-default, #444);
     border-radius: var(--radius-md, 8px);
