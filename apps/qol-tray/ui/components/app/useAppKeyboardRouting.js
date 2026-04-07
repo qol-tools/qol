@@ -142,11 +142,20 @@ function routeToView(event, viewKeyboard, cycleView) {
 // Global surface navigation
 // ---------------------------------------------------------------------------
 
+function isEditableInput(el) {
+    if (!(el instanceof HTMLElement)) return false;
+    if (el.tagName === 'TEXTAREA') return true;
+    if (el.tagName === 'INPUT' && el.type !== 'button' && el.type !== 'checkbox' && el.type !== 'radio') return true;
+    if (el.contentEditable === 'true') return true;
+    return false;
+}
+
 function globalSurfaceNav(event) {
     if (event.key === 'Escape') {
         if (ascendLayer()) { event.preventDefault(); }
         return;
     }
+    if (isEditableInput(document.activeElement)) return;
     const direction = NAV_KEYS_EXTENDED[event.key];
     if (direction) {
         event.preventDefault();
