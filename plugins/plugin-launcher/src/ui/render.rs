@@ -85,6 +85,13 @@ impl Render for LauncherView {
             0
         };
 
+        if self.is_showing {
+            self.sync_entries_from_shared();
+            if !self.entry_watch_running {
+                self.start_entry_watch(cx);
+            }
+        }
+
         let t0 = std::time::Instant::now();
         self.store
             .ensure_filtered(&self.state.query, self.state.mode, self.state.fuzziness);
