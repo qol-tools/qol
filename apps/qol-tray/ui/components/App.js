@@ -112,8 +112,10 @@ function AppShell() {
     }, [activeViewId, camera, registry]);
 
     useEffect(() => {
-        const vp = viewportRef.current;
-        const target = registry.cameraTargetForView(activeViewId, vp?.clientWidth || 800, vp?.clientHeight || 600, camera.zoom);
+        const vp = document.getElementById('viewport');
+        const w = vp?.clientWidth || 800;
+        const h = vp?.clientHeight || 600;
+        const target = registry.cameraTargetForView(activeViewId, w, h, camera.zoom);
         if (target) camera.panTo(target.x, target.y);
     }, []);
 
