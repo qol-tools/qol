@@ -59,7 +59,11 @@
     border: 1px solid var(--border-default, #444);
     border-radius: var(--radius-md, 8px);
     cursor: pointer;
-    overflow: hidden;
+    overflow: visible;
+}
+
+.world-minimap > canvas {
+    border-radius: inherit;
 }
 
 .minimap-arrow {
@@ -67,34 +71,38 @@
     width: 0;
     height: 0;
     pointer-events: none;
-    opacity: 0.35;
-    transition: opacity 0.12s ease;
+    opacity: 0.5;
+    transition: opacity 0.12s ease, filter 0.12s ease;
+    filter: drop-shadow(0 0 2px transparent);
 }
-.minimap-arrow.flash { opacity: 1; }
+.minimap-arrow.flash {
+    opacity: 1;
+    filter: drop-shadow(0 0 4px var(--accent, #5e9cff));
+}
 
 .minimap-arrow-left {
-    left: 0; top: 50%; transform: translate(-50%, -50%);
-    border-top: 6px solid transparent;
-    border-bottom: 6px solid transparent;
-    border-right: 8px solid white;
+    left: -14px; top: 50%; transform: translateY(-50%);
+    border-top: 8px solid transparent;
+    border-bottom: 8px solid transparent;
+    border-right: 10px solid var(--accent, #5e9cff);
 }
 .minimap-arrow-right {
-    right: 0; top: 50%; transform: translate(50%, -50%);
-    border-top: 6px solid transparent;
-    border-bottom: 6px solid transparent;
-    border-left: 8px solid white;
+    right: -14px; top: 50%; transform: translateY(-50%);
+    border-top: 8px solid transparent;
+    border-bottom: 8px solid transparent;
+    border-left: 10px solid var(--accent, #5e9cff);
 }
 .minimap-arrow-up {
-    top: 0; left: 50%; transform: translate(-50%, -50%);
-    border-left: 6px solid transparent;
-    border-right: 6px solid transparent;
-    border-bottom: 8px solid white;
+    top: -14px; left: 50%; transform: translateX(-50%);
+    border-left: 8px solid transparent;
+    border-right: 8px solid transparent;
+    border-bottom: 10px solid var(--accent, #5e9cff);
 }
 .minimap-arrow-down {
-    bottom: 0; left: 50%; transform: translate(-50%, 50%);
-    border-left: 6px solid transparent;
-    border-right: 6px solid transparent;
-    border-top: 8px solid white;
+    bottom: -14px; left: 50%; transform: translateX(-50%);
+    border-left: 8px solid transparent;
+    border-right: 8px solid transparent;
+    border-top: 10px solid var(--accent, #5e9cff);
 }
 
 .world-minimap-settings-btn {
