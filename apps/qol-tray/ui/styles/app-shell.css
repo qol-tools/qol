@@ -30,7 +30,6 @@ body {
     position: relative;
 }
 
-
 .version-item {
     padding: var(--pad-row-inline);
     min-height: var(--size-version-row-min);

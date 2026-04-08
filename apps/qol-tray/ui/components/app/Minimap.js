@@ -12,7 +12,7 @@ const SLOT_PAD_Y = 6;
 const RADIUS = 3;
 const ARROW_FLASH_MS = 350;
 
-export function MinimapContainer({ camera, registry, viewportRef }) {
+export function MinimapContainer({ camera, registry, viewportRef, diveParent }) {
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [settings, setSettings] = useState(getWorldSettings);
 
@@ -27,7 +27,7 @@ export function MinimapContainer({ camera, registry, viewportRef }) {
         <div class="world-minimap-container">
             ${settingsOpen && html`<${WorldSettingsPanel} settings=${settings} />`}
             <div style="display:flex;align-items:center;gap:6px;">
-                <${Minimap} camera=${camera} registry=${registry} viewportRef=${viewportRef} width=${settings.minimapSize} />
+                <${Minimap} camera=${camera} registry=${registry} viewportRef=${viewportRef} width=${settings.minimapSize} diveParent=${diveParent} />
                 <button class="world-minimap-settings-btn" onClick=${toggle} title="World settings">
                     <${IconCog} />
                 </button>
@@ -56,31 +56,45 @@ function WorldSettingsPanel({ settings }) {
     `;
 }
 
-function Minimap({ camera, registry, viewportRef, width }) {
+function Minimap({ camera, registry, viewportRef, width, diveParent }) {
     const canvasRef = useRef(null);
-    const prevCamRef = useRef(null);
     const [, bump] = useState(0);
     const [flash, setFlash] = useState(null);
     const flashTimerRef = useRef(0);
 
     useEffect(() => {
-        return camera.subscribe(() => {
-            const prev = prevCamRef.current;
-            if (prev) {
-                const dx = camera.x - prev.x;
-                const dy = camera.y - prev.y;
-                if (Math.abs(dx) > 50 || Math.abs(dy) > 50) {
-                    const dir = Math.abs(dx) > Math.abs(dy)
-                        ? (dx > 0 ? 'right' : 'left')
-                        : (dy > 0 ? 'down' : 'up');
-                    setFlash(dir);
-                    clearTimeout(flashTimerRef.current);
-                    flashTimerRef.current = setTimeout(() => setFlash(null), ARROW_FLASH_MS);
-                }
+        let anchorX = camera.x;
+        let anchorY = camera.y;
+        let resetTimer = 0;
+
+        const unsub = camera.subscribe(() => {
+            clearTimeout(resetTimer);
+
+            const dx = camera.x - anchorX;
+            const dy = camera.y - anchorY;
+            const ax = Math.abs(dx);
+            const ay = Math.abs(dy);
+
+            if (ax > 50 || ay > 50) {
+                const dirs = new Set();
+                if (ax > 50) dirs.add(dx > 0 ? 'right' : 'left');
+                if (ay > 50) dirs.add(dy > 0 ? 'down' : 'up');
+                setFlash(dirs);
+                clearTimeout(flashTimerRef.current);
+                flashTimerRef.current = setTimeout(() => setFlash(null), ARROW_FLASH_MS);
+                anchorX = camera.x;
+                anchorY = camera.y;
+            } else {
+                resetTimer = setTimeout(() => {
+                    anchorX = camera.x;
+                    anchorY = camera.y;
+                }, 150);
             }
-            prevCamRef.current = { x: camera.x, y: camera.y };
+
             bump(t => t + 1);
         });
+
+        return () => { unsub(); clearTimeout(resetTimer); };
     }, [camera]);
 
     useEffect(() => () => clearTimeout(flashTimerRef.current), []);
@@ -107,7 +121,8 @@ function Minimap({ camera, registry, viewportRef, width }) {
         const vpH = vp ? vp.clientHeight : 0;
         const z = camera.zoom || 1;
 
-        const entries = registry.getEntriesForLayer(currentLayer);
+        const allEntries = registry.getEntriesForLayer(currentLayer);
+        const entries = diveParent ? allEntries.filter(e => e.parent === diveParent) : allEntries;
         ctx.clearRect(0, 0, cw, ch);
         if (entries.length === 0) return;
 
@@ -126,7 +141,8 @@ function Minimap({ camera, registry, viewportRef, width }) {
         const clickX = e.clientX - rect.left;
 
         const currentLayer = camera.layer;
-        const entries = registry.getEntriesForLayer(currentLayer);
+        const allEntries = registry.getEntriesForLayer(currentLayer);
+        const entries = diveParent ? allEntries.filter(e => e.parent === diveParent) : allEntries;
         if (entries.length === 0) return;
 
         const vp = viewportRef?.current;
@@ -151,10 +167,10 @@ function Minimap({ camera, registry, viewportRef, width }) {
     return html`
         <div class="world-minimap" style="width:${width}px;height:${h}px" onClick=${onClick}>
             <canvas ref=${canvasRef} style="width:100%;height:100%"></canvas>
-            <div class="minimap-arrow minimap-arrow-left ${flash === 'left' ? 'flash' : ''}"></div>
-            <div class="minimap-arrow minimap-arrow-right ${flash === 'right' ? 'flash' : ''}"></div>
-            <div class="minimap-arrow minimap-arrow-up ${flash === 'up' ? 'flash' : ''}"></div>
-            <div class="minimap-arrow minimap-arrow-down ${flash === 'down' ? 'flash' : ''}"></div>
+            <div class="minimap-arrow minimap-arrow-left ${flash?.has('left') ? 'flash' : ''}"></div>
+            <div class="minimap-arrow minimap-arrow-right ${flash?.has('right') ? 'flash' : ''}"></div>
+            <div class="minimap-arrow minimap-arrow-up ${flash?.has('up') ? 'flash' : ''}"></div>
+            <div class="minimap-arrow minimap-arrow-down ${flash?.has('down') ? 'flash' : ''}"></div>
         </div>
     `;
 }

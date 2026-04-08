@@ -1,5 +1,5 @@
 import { html } from '../../lib/html.js';
-import { useEffect, useRef } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { createWorldCanvasBg } from '../../lib/world-canvas-bg.js';
 import { createDebug, elLabel } from '../../lib/debug.js';
 import { isCtrlHeld } from '../../lib/ctrl-state.js';
@@ -24,7 +24,7 @@ export function WorldViewport({ camera, onViewChange, children }) {
         return () => bg.destroy();
     }, [camera]);
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         if (worldRef.current) camera.setWorldElement(worldRef.current);
     }, [camera]);
 
