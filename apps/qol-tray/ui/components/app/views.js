@@ -1,5 +1,6 @@
 import { html } from '../../lib/html.js';
 import { PluginsView } from '../../views/plugins-view.js';
+import { PluginConfigView } from '../../views/plugin-config/view.js';
 import { StoreView } from '../../views/store-view.js';
 import { HotkeysView, HotkeyEditorSubPage } from '../../views/hotkeys-view.js';
 import { ShortcutsView, ShortcutEditorSubPage } from '../../views/shortcuts-view.js';
@@ -32,7 +33,7 @@ function WorldViewSlot({ entry, cameraLayer, children }) {
     return html`<div class="world-view-slot" data-view-id=${entry.id} data-layer=${entry.layer} style=${style}>${children}</div>`;
 }
 
-export function renderWorldViews({ registry, cameraLayer, openPluginConfig, openPluginUi, syncStatus, syncProviders, onSyncStatusChange, refreshSyncStatus }) {
+export function renderWorldViews({ registry, cameraLayer, openPluginConfig, openPluginUi, closePluginConfig, syncStatus, syncProviders, onSyncStatusChange, refreshSyncStatus }) {
     const layer = cameraLayer != null ? cameraLayer : 0;
     return html`
         <${WorldViewSlot} entry=${registry.getEntry('plugins')} cameraLayer=${layer}><${PluginsView} onOpenPluginConfig=${openPluginConfig} onOpenPluginUi=${openPluginUi} /><//>
@@ -44,6 +45,7 @@ export function renderWorldViews({ registry, cameraLayer, openPluginConfig, open
             syncProviders=${syncProviders} onSyncStatusChange=${onSyncStatusChange} refreshSyncStatus=${refreshSyncStatus} /><//>
         <${WorldViewSlot} entry=${registry.getEntry('logs')} cameraLayer=${layer}><${LogsView} active=${true} /><//>
         <${WorldViewSlot} entry=${registry.getEntry('dev')} cameraLayer=${layer}><${DevView} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('plugins-config')} cameraLayer=${layer}><${PluginConfigView} onClose=${closePluginConfig} /><//>
         <${WorldViewSlot} entry=${registry.getEntry('hotkeys-editor')} cameraLayer=${layer}><${HotkeyEditorSubPage} /><//>
         <${WorldViewSlot} entry=${registry.getEntry('shortcuts-editor')} cameraLayer=${layer}><${ShortcutEditorSubPage} /><//>
         <${WorldViewSlot} entry=${registry.getEntry('logs-detail')} cameraLayer=${layer}><${LogDetailSubPage} /><//>

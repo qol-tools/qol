@@ -1,6 +1,6 @@
 import { html } from '../lib/html.js';
 import { createDiveStack } from '../lib/dive-stack.js';
-import { useRef, useCallback, useEffect, useState } from 'preact/hooks';
+import { useRef, useCallback, useEffect, useLayoutEffect, useState } from 'preact/hooks';
 import { PaletteProvider, usePaletteContext } from '../palette/context.js';
 import { createDebug } from '../lib/debug.js';
 import { getWorldSettings } from '../lib/world-settings.js';
@@ -13,7 +13,6 @@ import { useAppKeyboardRouting } from './app/useAppKeyboardRouting.js';
 import { ViewKeyboardProvider } from './app/view-keyboard-context.js';
 import { renderWorldViews } from './app/views.js';
 import { RecompileDissolve } from './RecompileDissolve.js';
-import { PluginConfigView } from '../views/plugin-config/view.js';
 import { GlobalToast } from './ApiErrorToast.js';
 import { SelectionCursorOverlay } from './SelectionCursorOverlay.js';
 import { CommandPalette } from './CommandPalette.js';
@@ -25,6 +24,7 @@ import { RegionLabels } from './app/RegionLabels.js';
 import { useWorldNav } from './app/WorldNav.js';
 
 const SUB_PAGE_MANIFEST = {
+    plugins: ['config'],
     hotkeys: ['editor'],
     shortcuts: ['editor'],
     logs: ['detail'],
@@ -73,6 +73,8 @@ function AppShell() {
     const diveStack = diveStackRef.current;
 
     const [cameraLayer, setCameraLayer] = useState(0);
+    const [diveParent, setDiveParent] = useState(null);
+    const diveParentRef = useRef(null);
     const layerAnimatingRef = useRef(false);
 
     useEffect(() => {
@@ -111,7 +113,9 @@ function AppShell() {
         }
     }, [activeViewId, camera, registry]);
 
-    useEffect(() => {
+    useLayoutEffect(() => {
+        const worldEl = document.getElementById('world');
+        if (worldEl) camera.setWorldElement(worldEl);
         const vp = document.getElementById('viewport');
         const w = vp?.clientWidth || 800;
         const h = vp?.clientHeight || 600;
@@ -131,13 +135,24 @@ function AppShell() {
             layer: camera.layer,
             x: camera.x, y: camera.y, zoom: camera.zoom,
             surfaceSelector: sourceSurface ? selectorFor(sourceSurface) : null,
+            diveParent: diveParentRef.current,
         });
         const focusTarget = () => requestAnimationFrame(() => {
             const slot = document.querySelector(`.world-view-slot[data-view-id="${CSS.escape(targetId)}"]`);
             const surface = slot?.querySelector('[data-selected-surface]');
             if (surface) surface.focus({ preventScroll: true });
         });
-        const applyLayer = () => { setCameraLayer(entry.layer); camera.setLayer(entry.layer); };
+        const newParent = entry.parent || targetId;
+        const applyLayer = () => {
+            setCameraLayer(entry.layer);
+            camera.setLayer(entry.layer);
+            diveParentRef.current = newParent;
+            setDiveParent(newParent);
+            const w = vp.clientWidth || 800;
+            const h = vp.clientHeight || 600;
+            const target = registry.cameraTargetForView(targetId, w, h, camera.zoom);
+            if (target) camera.panTo(target.x, target.y);
+        };
         animateTransition(vp, layerAnimatingRef, 'dive-out', applyLayer, focusTarget);
     }, [camera, registry, diveStack]);
 
@@ -147,7 +162,14 @@ function AppShell() {
         if (!prev) return false;
         const vp = viewportRef.current;
         if (!vp) return false;
-        const applyLayer = () => { setCameraLayer(prev.layer); camera.setLayer(prev.layer); camera.panTo(prev.x, prev.y); };
+        const restoredParent = prev.diveParent ?? null;
+        const applyLayer = () => {
+            setCameraLayer(prev.layer);
+            camera.setLayer(prev.layer);
+            camera.panTo(prev.x, prev.y);
+            diveParentRef.current = restoredParent;
+            setDiveParent(restoredParent);
+        };
         const focusTarget = prev.surfaceSelector
             ? () => requestAnimationFrame(() => {
                 const surface = document.querySelector(prev.surfaceSelector);
@@ -157,6 +179,18 @@ function AppShell() {
         animateTransition(vp, layerAnimatingRef, 'ascend-out', applyLayer, focusTarget);
         return true;
     }, [camera, diveStack]);
+
+    const pluginDiveRef = useRef(false);
+    useEffect(() => {
+        if (activePluginId && !pluginDiveRef.current) {
+            pluginDiveRef.current = true;
+            const source = document.querySelector('[data-selected-surface][data-selected="true"]');
+            dive('plugins-config', source);
+        } else if (!activePluginId && pluginDiveRef.current) {
+            pluginDiveRef.current = false;
+            ascend();
+        }
+    }, [activePluginId, dive, ascend]);
 
     return html`
         <${ModifierStateProvider}>
@@ -180,6 +214,7 @@ function AppShell() {
                             cameraLayer,
                             openPluginConfig,
                             openPluginUi,
+                            closePluginConfig,
                             syncStatus,
                             syncProviders,
                             onSyncStatusChange: setSyncStatus,
@@ -187,7 +222,7 @@ function AppShell() {
                         })}
                     <//>
                     <${CommandPalette} />
-                    <${MinimapContainer} camera=${camera} registry=${registry} viewportRef=${viewportRef} />
+                    <${MinimapContainer} camera=${camera} registry=${registry} viewportRef=${viewportRef} diveParent=${diveParent} />
                     <${SelectionCursorOverlay} camera=${camera} />
                     <${RecompileDissolve} triggerRef=${dissolveRef} />
                     <${GlobalToast} />
