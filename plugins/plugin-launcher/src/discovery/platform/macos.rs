@@ -82,24 +82,10 @@ fn spotlight_entries(dirs: &[PathBuf]) -> Vec<AppEntry> {
 }
 
 fn parse_spotlight_bundle(path: &Path) -> Option<AppEntry> {
-    if !path.is_dir() {
+    if is_bundle_contents_path(path) {
         return None;
     }
-    if path
-        .components()
-        .any(|component| component.as_os_str() == OsStr::new("Contents"))
-    {
-        return None;
-    }
-    if !path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.eq_ignore_ascii_case("app") || ext.eq_ignore_ascii_case("prefPane"))
-        .unwrap_or(false)
-    {
-        return None;
-    }
-    parse_app_bundle(path)
+    parse_app_path(path)
 }
 
 fn collect_apps(dir: &Path, depth: usize, out: &mut Vec<AppEntry>) {
@@ -111,16 +97,11 @@ fn collect_apps(dir: &Path, depth: usize, out: &mut Vec<AppEntry>) {
     };
     for entry in read_dir.flatten() {
         let path = entry.path();
-        if !path.is_dir() {
+        if let Some(app_entry) = parse_app_path(&path) {
+            out.push(app_entry);
             continue;
         }
-        if path
-            .extension()
-            .is_some_and(|ext| ext == "app" || ext == "prefPane")
-        {
-            if let Some(app_entry) = parse_app_bundle(&path) {
-                out.push(app_entry);
-            }
+        if !path.is_dir() {
             continue;
         }
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -131,7 +112,15 @@ fn collect_apps(dir: &Path, depth: usize, out: &mut Vec<AppEntry>) {
     }
 }
 
-fn parse_app_bundle(path: &Path) -> Option<AppEntry> {
+fn is_bundle_contents_path(path: &Path) -> bool {
+    path.components()
+        .any(|component| component.as_os_str() == OsStr::new("Contents"))
+}
+
+fn parse_app_path(path: &Path) -> Option<AppEntry> {
+    if !is_supported_app_path(path) {
+        return None;
+    }
     let name = path.file_stem().and_then(|s| s.to_str())?.to_string();
 
     Some(AppEntry {
@@ -139,4 +128,49 @@ fn parse_app_bundle(path: &Path) -> Option<AppEntry> {
         exec: vec!["open".into(), path.display().to_string()],
         path: path.to_path_buf(),
     })
+}
+
+fn is_supported_app_path(path: &Path) -> bool {
+    if !path.exists() {
+        return false;
+    }
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("app") || ext.eq_ignore_ascii_case("prefPane"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::{self, File};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn collect_apps_includes_regular_app_files() {
+        let root = temp_path("regular-app-file");
+        let apps = root.join("Applications");
+        let qol = apps.join("QoL");
+        fs::create_dir_all(&qol).unwrap();
+        File::create(qol.join("ChatGPT.app")).unwrap();
+
+        let mut entries = Vec::new();
+        collect_apps(&apps, 0, &mut entries);
+
+        assert!(entries.iter().any(|entry| entry.name == "ChatGPT"));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn parse_spotlight_bundle_ignores_contents_paths() {
+        let path = Path::new("/Applications/ChatGPT.app/Contents");
+        assert!(parse_spotlight_bundle(path).is_none());
+    }
+
+    fn temp_path(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("launcher-macos-{name}-{nanos}"))
+    }
 }
