@@ -67,34 +67,34 @@
     width: 0;
     height: 0;
     pointer-events: none;
-    opacity: 0.15;
+    opacity: 0.35;
     transition: opacity 0.12s ease;
 }
-.minimap-arrow.flash { opacity: 0.8; }
+.minimap-arrow.flash { opacity: 1; }
 
 .minimap-arrow-left {
-    left: 3px; top: 50%; transform: translateY(-50%);
-    border-top: 5px solid transparent;
-    border-bottom: 5px solid transparent;
-    border-right: 6px solid white;
+    left: 0; top: 50%; transform: translate(-50%, -50%);
+    border-top: 6px solid transparent;
+    border-bottom: 6px solid transparent;
+    border-right: 8px solid white;
 }
 .minimap-arrow-right {
-    right: 3px; top: 50%; transform: translateY(-50%);
-    border-top: 5px solid transparent;
-    border-bottom: 5px solid transparent;
-    border-left: 6px solid white;
+    right: 0; top: 50%; transform: translate(50%, -50%);
+    border-top: 6px solid transparent;
+    border-bottom: 6px solid transparent;
+    border-left: 8px solid white;
 }
 .minimap-arrow-up {
-    top: 3px; left: 50%; transform: translateX(-50%);
-    border-left: 5px solid transparent;
-    border-right: 5px solid transparent;
-    border-bottom: 6px solid white;
+    top: 0; left: 50%; transform: translate(-50%, -50%);
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-bottom: 8px solid white;
 }
 .minimap-arrow-down {
-    bottom: 3px; left: 50%; transform: translateX(-50%);
-    border-left: 5px solid transparent;
-    border-right: 5px solid transparent;
-    border-top: 6px solid white;
+    bottom: 0; left: 50%; transform: translate(-50%, 50%);
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-top: 8px solid white;
 }
 
 .world-minimap-settings-btn {
