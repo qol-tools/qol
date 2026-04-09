@@ -12,8 +12,11 @@ use qol_plugin_api::monitor::MonitorTracker;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 
 const SMALL_WINDOW_SET_MAX: usize = 2;
+const SHOW_RETRY_ATTEMPTS: usize = 3;
+const SHOW_RETRY_DELAY_MS: u64 = 75;
 const STABLE_PREVIOUS_MIN: usize = 6;
 
 pub(crate) type WindowCache = Arc<Mutex<Vec<WindowInfo>>>;
@@ -466,8 +469,8 @@ fn spawn_daemon_loop(cx: &mut App, rx: mpsc::Receiver<daemon::Command>, state: P
             break;
         };
         match cmd {
-            daemon::Command::Show => dispatch_show(cx, false, &state),
-            daemon::Command::ShowReverse => dispatch_show(cx, true, &state),
+            daemon::Command::Show => dispatch_show(cx, false, &state).await,
+            daemon::Command::ShowReverse => dispatch_show(cx, true, &state).await,
             daemon::Command::Kill => {
                 shutdown_daemon(cx);
                 break;
@@ -486,31 +489,93 @@ async fn recv_command(
         .await
 }
 
-fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
+async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     #[cfg(debug_assertions)]
     eprintln!("[alt-tab/daemon] received Show (reverse={})", reverse);
+    let executor = cx.background_executor().clone();
     let state = state.clone();
+    let (config, windows) = load_show_state(&executor, &state.caches.window_cache).await;
     let _ = cx.update(move |app_cx| {
-        let config = crate::config::load_alt_tab_config();
-        refresh_cache_for_show(&config, &state.caches);
+        apply_show_windows(&state.caches, windows);
         state.open_picker(&config, reverse, app_cx);
     });
 }
 
-fn refresh_cache_for_show(config: &AltTabConfig, caches: &PickerCaches) {
+async fn load_show_state(
+    executor: &gpui::BackgroundExecutor,
+    window_cache: &WindowCache,
+) -> (AltTabConfig, Vec<WindowInfo>) {
+    let config = executor
+        .spawn(async { crate::config::load_alt_tab_config() })
+        .await;
+    let previous_windows = read_window_cache(window_cache);
+    let windows =
+        load_show_windows(executor, config.display.show_minimized, &previous_windows).await;
+    (config, windows)
+}
+
+fn apply_show_windows(caches: &PickerCaches, windows: Vec<WindowInfo>) {
     #[cfg(target_os = "macos")]
     sync_focus_history(caches);
-    let windows = if config.display.show_minimized {
-        discovery::get_open_windows()
-    } else {
-        discovery::get_on_screen_windows()
-    };
     #[cfg(target_os = "macos")]
     let windows = apply_focus_history(windows, &caches.focus_history);
     caches
         .last_window_count
         .store(windows.len().max(1), Ordering::Relaxed);
     replace_window_cache(&caches.window_cache, windows);
+}
+
+async fn load_show_windows(
+    executor: &gpui::BackgroundExecutor,
+    show_minimized: bool,
+    previous_windows: &[WindowInfo],
+) -> Vec<WindowInfo> {
+    let windows = fetch_show_windows(executor, show_minimized).await;
+    if !should_retry_show_result(windows.len(), previous_windows.len()) {
+        return windows;
+    }
+    retry_show_windows(executor, show_minimized, windows, previous_windows).await
+}
+
+fn discover_windows_for_show(show_minimized: bool) -> Vec<WindowInfo> {
+    if show_minimized {
+        return discovery::get_open_windows();
+    }
+    discovery::get_on_screen_windows()
+}
+
+async fn fetch_show_windows(
+    executor: &gpui::BackgroundExecutor,
+    show_minimized: bool,
+) -> Vec<WindowInfo> {
+    executor
+        .spawn(async move { discover_windows_for_show(show_minimized) })
+        .await
+}
+
+async fn retry_show_windows(
+    executor: &gpui::BackgroundExecutor,
+    show_minimized: bool,
+    windows: Vec<WindowInfo>,
+    previous_windows: &[WindowInfo],
+) -> Vec<WindowInfo> {
+    let mut best = windows;
+    for _ in 0..SHOW_RETRY_ATTEMPTS {
+        executor
+            .timer(Duration::from_millis(SHOW_RETRY_DELAY_MS))
+            .await;
+        let retry = fetch_show_windows(executor, show_minimized).await;
+        if retry.len() > best.len() {
+            best = retry;
+        }
+        if !should_retry_show_result(best.len(), previous_windows.len()) {
+            return best;
+        }
+    }
+    if best.len() <= SMALL_WINDOW_SET_MAX && previous_windows.len() >= STABLE_PREVIOUS_MIN {
+        return previous_windows.to_vec();
+    }
+    best
 }
 
 fn shutdown_daemon(cx: &AsyncApp) {
@@ -521,6 +586,13 @@ fn shutdown_daemon(cx: &AsyncApp) {
 
 fn should_retry_small_result(current_len: usize, previous_len: usize) -> bool {
     current_len <= SMALL_WINDOW_SET_MAX && previous_len >= STABLE_PREVIOUS_MIN
+}
+
+fn should_retry_show_result(current_len: usize, previous_len: usize) -> bool {
+    if current_len == 0 {
+        return true;
+    }
+    should_retry_small_result(current_len, previous_len)
 }
 
 fn choose_stable_windows(

@@ -15,6 +15,7 @@ use std::time::Duration;
 pub(crate) static PICKER_VISIBLE: AtomicBool = AtomicBool::new(false);
 
 const ALT_POLL_INTERVAL_MS: u64 = 50;
+const ALT_POLL_ARM_TIMEOUT_MS: u64 = 200;
 
 pub(crate) struct AltTabApp {
     pub(crate) delegate: Entity<PickerState>,
@@ -195,18 +196,30 @@ async fn alt_poll_loop(
     window_handle: AnyWindowHandle,
     mut cx: AsyncApp,
 ) {
+    #[cfg(debug_assertions)]
     eprintln!("[alt-tab/hold] modifier poll task started");
+    let mut saw_modifier = picker::is_modifier_held();
     cx.background_executor()
         .timer(Duration::from_millis(50))
         .await;
+    let mut arm_wait_ms = 0;
 
     loop {
         cx.background_executor()
             .timer(Duration::from_millis(ALT_POLL_INTERVAL_MS))
             .await;
         if picker::is_modifier_held() {
+            saw_modifier = true;
             continue;
         }
+        if !saw_modifier {
+            arm_wait_ms += ALT_POLL_INTERVAL_MS;
+            if arm_wait_ms < ALT_POLL_ARM_TIMEOUT_MS {
+                continue;
+            }
+            break;
+        }
+        #[cfg(debug_assertions)]
         eprintln!("[alt-tab/hold] Alt released — activating selected");
         let _ = cx.update_window(window_handle, |_, window, cx| {
             delegate.update(cx, |s, _| s.activate_selected(window));
@@ -221,6 +234,7 @@ async fn alt_poll_loop(
             });
         }
     });
+    #[cfg(debug_assertions)]
     eprintln!("[alt-tab/hold] modifier poll task ended");
 }
 
