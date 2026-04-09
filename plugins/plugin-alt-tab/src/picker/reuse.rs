@@ -3,12 +3,12 @@ use crate::app::AltTabApp;
 use crate::config::AltTabConfig;
 use crate::shared::layout::*;
 use gpui::*;
-use qol_plugin_api::monitor::{ActiveMonitor, MonitorTracker};
-use qol_plugin_api::window::centered_window_placement;
+use qol_plugin_api::window::PopupPlacement;
 
 pub(crate) struct ReuseLayout {
     pub bounds: Bounds<Pixels>,
     pub size: Size<Pixels>,
+    pub monitor_changed: bool,
 }
 
 pub(crate) struct ReuseRequest<'a> {
@@ -21,7 +21,8 @@ pub(crate) struct ReuseRequest<'a> {
 pub(super) struct LayoutInput<'a> {
     pub config: &'a AltTabConfig,
     pub window_count: usize,
-    pub tracker: &'a MonitorTracker,
+    pub placement: &'a PopupPlacement,
+    pub created_on_origin: Point<Pixels>,
 }
 
 pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
@@ -39,28 +40,28 @@ pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
 }
 
 pub(super) fn compute_layout(input: &LayoutInput, cx: &mut App) -> ReuseLayout {
-    let monitor = input.tracker.snapshot().map(|(m, _)| m);
-    let size = picker_size(input, &monitor);
-    let placement = centered_window_placement(monitor.as_ref(), size, cx);
+    let size = picker_size(input);
+    let bounds = input.placement.centered_bounds(size, cx);
+    let monitor_changed = origin_diverged(input.created_on_origin, input.placement.origin());
     ReuseLayout {
-        bounds: placement.bounds,
+        bounds,
         size,
+        monitor_changed,
     }
 }
 
-fn picker_size(input: &LayoutInput, monitor: &Option<ActiveMonitor>) -> Size<Pixels> {
+fn picker_size(input: &LayoutInput) -> Size<Pixels> {
     let count = input.window_count.max(1);
-    let monitor_size = monitor.as_ref().map(|m| m.size());
     let (w, h) = picker_dimensions(
         count,
         input.config.display.max_columns,
-        monitor_size,
+        input.placement.monitor_size(),
         input.config.display.show_hotkey_hints,
     );
     size(px(w), px(h))
 }
 
-pub(crate) fn origin_diverged(a: Point<Pixels>, b: Point<Pixels>) -> bool {
+fn origin_diverged(a: Point<Pixels>, b: Point<Pixels>) -> bool {
     const TOLERANCE_PX: f64 = 6.0;
     let dx = (a.x.to_f64() - b.x.to_f64()).abs();
     let dy = (a.y.to_f64() - b.y.to_f64()).abs();

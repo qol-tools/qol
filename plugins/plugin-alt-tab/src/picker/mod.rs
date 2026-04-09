@@ -5,7 +5,7 @@ mod reuse;
 pub(crate) mod run;
 
 pub use platform::{dismiss_picker, is_modifier_held};
-pub(crate) use reuse::{origin_diverged, ReuseRequest};
+pub(crate) use reuse::ReuseRequest;
 
 use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::config::{parse_hex_color, ActionMode, AltTabConfig, DisplayConfig};
@@ -13,7 +13,7 @@ use crate::{PickerWindowState, SharedIconCache};
 use gather::{gather, spawn_icon_fill, GatheredWindows, IconFillRequest};
 use gpui::*;
 use qol_plugin_api::monitor::MonitorTracker;
-use qol_plugin_api::window::{target_monitor_key, MonitorKey};
+use qol_plugin_api::window::{MonitorKey, PopupPlacement};
 use run::{SharedPreviewCache, WindowCache};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -46,17 +46,18 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
         return;
     }
 
+    let placement = PopupPlacement::from_tracker(req.tracker);
     let gathered = gather(
         req.config,
         &req.icon_cache,
         &req.window_cache,
         &req.preview_cache,
     );
-    if try_reuse_existing(req, &gathered, cx) {
+    if try_reuse_existing(req, &placement, &gathered, cx) {
         return;
     }
-    destroy_non_target_windows(req, cx);
-    create_from_request(req, gathered, cx);
+    destroy_non_target_windows(req, &placement, cx);
+    create_from_request(req, placement, gathered, cx);
 }
 
 fn try_cycle_existing(req: &OpenPickerRequest, cx: &mut App) -> bool {
@@ -72,12 +73,13 @@ fn try_cycle_existing(req: &OpenPickerRequest, cx: &mut App) -> bool {
     true
 }
 
-fn try_reuse_existing(req: &OpenPickerRequest, gathered: &GatheredWindows, cx: &mut App) -> bool {
-    let monitor = req.tracker.snapshot().map(|(monitor, _)| monitor);
-    let Some(target_monitor) = monitor.as_ref() else {
-        return false;
-    };
-    let target = target_monitor_key(Some(target_monitor));
+fn try_reuse_existing(
+    req: &OpenPickerRequest,
+    placement: &PopupPlacement,
+    gathered: &GatheredWindows,
+    cx: &mut App,
+) -> bool {
+    let target = placement.target();
     let (handle, source_key) = match req.current.borrow().existing(target) {
         Some(h) => (h, target),
         None => match any_existing(req.current) {
@@ -85,10 +87,12 @@ fn try_reuse_existing(req: &OpenPickerRequest, gathered: &GatheredWindows, cx: &
             None => return false,
         },
     };
+    let source_origin = point(px(source_key.x as f32), px(source_key.y as f32));
     let input = reuse::LayoutInput {
         config: req.config,
         window_count: gathered.windows.len(),
-        tracker: req.tracker,
+        placement,
+        created_on_origin: source_origin,
     };
     let layout = reuse::compute_layout(&input, cx);
     let reuse_req = reuse::ReuseRequest {
@@ -113,12 +117,8 @@ fn any_existing(current: &PickerWindowState) -> Option<(MonitorKey, WindowHandle
     current.borrow().iter().into_iter().next()
 }
 
-fn destroy_non_target_windows(req: &OpenPickerRequest, cx: &mut App) {
-    let monitor = req.tracker.snapshot().map(|(monitor, _)| monitor);
-    let Some(target_monitor) = monitor.as_ref() else {
-        return;
-    };
-    let target = target_monitor_key(Some(target_monitor));
+fn destroy_non_target_windows(req: &OpenPickerRequest, placement: &PopupPlacement, cx: &mut App) {
+    let target = placement.target();
     req.current.borrow_mut().destroy_non_target(target, cx);
 }
 
@@ -134,10 +134,15 @@ fn discard_old_window(
     req.current.borrow_mut().remove(target);
 }
 
-fn create_from_request(req: &OpenPickerRequest, gathered: GatheredWindows, cx: &mut App) {
+fn create_from_request(
+    req: &OpenPickerRequest,
+    placement: PopupPlacement,
+    gathered: GatheredWindows,
+    cx: &mut App,
+) {
     let create_req = create::CreateRequest {
         config: req.config,
-        tracker: req.tracker,
+        placement,
         last_window_count: req.last_window_count.clone(),
         icon_cache: req.icon_cache.clone(),
         current: req.current,
@@ -323,10 +328,12 @@ pub(crate) mod state {
 
         pub(crate) fn activate_selected(&self, window: &mut Window) {
             let Some(ix) = self.selected_index else {
+                #[cfg(debug_assertions)]
                 eprintln!("[alt-tab/activate] no selection — skipping");
                 return;
             };
             let win = &self.windows[ix];
+            #[cfg(debug_assertions)]
             eprintln!(
                 "[alt-tab/activate] idx={} id={} app={} title={}",
                 ix, win.id, win.app_name, win.title

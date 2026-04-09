@@ -5,14 +5,13 @@ use crate::discovery::WindowInfo;
 use crate::shared::layout::*;
 use crate::{IconMap, PickerWindowState, PreviewMap, SharedIconCache};
 use gpui::*;
-use qol_plugin_api::monitor::{ActiveMonitor, MonitorTracker};
-use qol_plugin_api::window::centered_window_placement;
+use qol_plugin_api::window::PopupPlacement;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 pub(super) struct CreateRequest<'a> {
     pub config: &'a AltTabConfig,
-    pub tracker: &'a MonitorTracker,
+    pub placement: PopupPlacement,
     pub last_window_count: Arc<AtomicUsize>,
     pub icon_cache: SharedIconCache,
     pub current: &'a PickerWindowState,
@@ -21,23 +20,17 @@ pub(super) struct CreateRequest<'a> {
 pub(super) fn create_new(req: &CreateRequest, gathered: GatheredWindows, cx: &mut App) {
     let layout = compute_create_layout(req, &gathered, cx);
     let post = PostCreateData::new(req.config, &gathered);
-    let handle = open_picker_window(
-        layout.bounds,
-        layout.display_id,
-        PickerInit::new(req.config, gathered),
-        cx,
-    );
+    let handle = open_picker_window(layout.bounds, PickerInit::new(req.config, gathered), cx);
     let Some(handle) = handle else {
         return on_open_failure();
     };
-    req.current.borrow_mut().insert(layout.target, handle);
+    let target = req.placement.target();
+    req.current.borrow_mut().insert(target, handle);
     post.finalize(handle, req.icon_cache.clone(), cx);
 }
 
 struct CreateLayout {
-    target: qol_plugin_api::window::MonitorKey,
     bounds: Bounds<Pixels>,
-    display_id: Option<DisplayId>,
 }
 
 fn compute_create_layout(
@@ -45,30 +38,20 @@ fn compute_create_layout(
     gathered: &GatheredWindows,
     cx: &mut App,
 ) -> CreateLayout {
-    let monitor = req.tracker.snapshot().map(|(m, _)| m);
-    let size = estimate_picker_size(req, gathered, &monitor);
-    let placement = centered_window_placement(monitor.as_ref(), size, cx);
-    CreateLayout {
-        target: placement.target,
-        bounds: placement.bounds,
-        display_id: placement.display_id,
-    }
+    let size = estimate_picker_size(req, gathered);
+    let bounds = req.placement.centered_bounds(size, cx);
+    CreateLayout { bounds }
 }
 
-fn estimate_picker_size(
-    req: &CreateRequest,
-    gathered: &GatheredWindows,
-    monitor: &Option<ActiveMonitor>,
-) -> Size<Pixels> {
+fn estimate_picker_size(req: &CreateRequest, gathered: &GatheredWindows) -> Size<Pixels> {
     let target = gathered.windows.len().max(1);
     let estimated = target
         .max(req.last_window_count.load(Ordering::Relaxed))
         .max(1);
-    let monitor_size = monitor.as_ref().map(|m| m.size());
     let (w, h) = picker_dimensions(
         estimated,
         req.config.display.max_columns,
-        monitor_size,
+        req.placement.monitor_size(),
         req.config.display.show_hotkey_hints,
     );
     size(px(w), px(h))
@@ -113,11 +96,10 @@ impl PickerInit {
 
 fn open_picker_window(
     bounds: Bounds<Pixels>,
-    display_id: Option<DisplayId>,
     init: PickerInit,
     cx: &mut App,
 ) -> Option<WindowHandle<AltTabApp>> {
-    let opts = picker_window_options(bounds, display_id, init.transparent_bg);
+    let opts = picker_window_options(bounds, init.transparent_bg);
     cx.open_window(opts, move |window, cx| {
         window.set_window_title("qol-alt-tab-picker");
         let view = cx.new(|cx| init.into_app(window, cx));
@@ -128,11 +110,7 @@ fn open_picker_window(
     .ok()
 }
 
-fn picker_window_options(
-    bounds: Bounds<Pixels>,
-    display_id: Option<DisplayId>,
-    transparent: bool,
-) -> WindowOptions {
+fn picker_window_options(bounds: Bounds<Pixels>, transparent: bool) -> WindowOptions {
     let bg = if transparent {
         WindowBackgroundAppearance::Transparent
     } else {
@@ -145,7 +123,6 @@ fn picker_window_options(
     };
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
-        display_id,
         titlebar: None,
         window_decorations: Some(decor),
         kind: super::platform::picker_window_kind(),
