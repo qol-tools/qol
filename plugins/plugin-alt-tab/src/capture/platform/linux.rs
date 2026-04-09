@@ -14,6 +14,13 @@ struct CaptureSession {
     formats: HashMap<u8, Pictformat>,
 }
 
+struct CaptureScale {
+    src_w: u16,
+    src_h: u16,
+    dst_w: u16,
+    dst_h: u16,
+}
+
 fn capture_session() -> &'static Mutex<Option<CaptureSession>> {
     static SESSION: OnceLock<Mutex<Option<CaptureSession>>> = OnceLock::new();
     SESSION.get_or_init(|| Mutex::new(connect_session()))
@@ -107,10 +114,12 @@ fn capture_window_scaled(
         wid,
         fmt,
         geom.depth,
-        geom.width,
-        geom.height,
-        dst_w,
-        dst_h,
+        CaptureScale {
+            src_w: geom.width,
+            src_h: geom.height,
+            dst_w,
+            dst_h,
+        },
     )?;
 
     let force_opaque = geom.depth < 32;
@@ -139,10 +148,7 @@ fn render_scaled_capture(
     wid: u32,
     fmt: Pictformat,
     depth: u8,
-    src_w: u16,
-    src_h: u16,
-    dst_w: u16,
-    dst_h: u16,
+    scale: CaptureScale,
 ) -> Option<Vec<u8>> {
     let conn = &session.conn;
 
@@ -157,7 +163,7 @@ fn render_scaled_capture(
         return None;
     }
 
-    let result = scale_via_render(session, src_pixmap, fmt, depth, src_w, src_h, dst_w, dst_h);
+    let result = scale_via_render(session, src_pixmap, fmt, depth, scale);
 
     let _ = conn.free_pixmap(src_pixmap);
     let _ = conn.composite_unredirect_window(wid, Redirect::AUTOMATIC);
@@ -169,16 +175,13 @@ fn scale_via_render(
     src_pixmap: u32,
     fmt: Pictformat,
     depth: u8,
-    src_w: u16,
-    src_h: u16,
-    dst_w: u16,
-    dst_h: u16,
+    scale: CaptureScale,
 ) -> Option<Vec<u8>> {
     let conn = &session.conn;
 
     let dst_pixmap = conn.generate_id().ok()?;
     if conn
-        .create_pixmap(depth, dst_pixmap, session.root, dst_w, dst_h)
+        .create_pixmap(depth, dst_pixmap, session.root, scale.dst_w, scale.dst_h)
         .ok()?
         .check()
         .is_err()
@@ -206,8 +209,8 @@ fn scale_via_render(
         return None;
     }
 
-    let sx = ((src_w as i64) << 16) / dst_w as i64;
-    let sy = ((src_h as i64) << 16) / dst_h as i64;
+    let sx = ((scale.src_w as i64) << 16) / scale.dst_w as i64;
+    let sy = ((scale.src_h as i64) << 16) / scale.dst_h as i64;
     let transform = render::Transform {
         matrix11: sx as i32,
         matrix12: 0,
@@ -233,8 +236,8 @@ fn scale_via_render(
         0,
         0,
         0,
-        dst_w,
-        dst_h,
+        scale.dst_w,
+        scale.dst_h,
     );
 
     let image = conn
@@ -243,8 +246,8 @@ fn scale_via_render(
             dst_pixmap,
             0,
             0,
-            dst_w,
-            dst_h,
+            scale.dst_w,
+            scale.dst_h,
             u32::MAX,
         )
         .ok()
