@@ -69,7 +69,7 @@ impl AltTabApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.reposition_if_needed(req, window) {
+        if !self.reposition_if_needed(req) {
             return false;
         }
         self.apply_reuse_config(req, window, cx);
@@ -78,9 +78,8 @@ impl AltTabApp {
         true
     }
 
-    fn reposition_if_needed(&self, req: &crate::picker::ReuseRequest, window: &Window) -> bool {
-        let current_origin = window.window_bounds().get_bounds().origin;
-        let reposition_needed = picker::origin_diverged(current_origin, req.layout.bounds.origin);
+    fn reposition_if_needed(&self, req: &crate::picker::ReuseRequest) -> bool {
+        let reposition_needed = req.layout.monitor_changed;
         #[cfg(debug_assertions)]
         eprintln!(
             "[alt-tab/hold] reuse path (poll_task={}) — reset={} reposition_needed={}",
