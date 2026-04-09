@@ -127,6 +127,10 @@ export function SelectionCursorOverlay({ camera }) {
             pointerActive = true;
             setInputMode('mouse');
         };
+        const onPointerMove = () => {
+            pointerActive = true;
+            setInputMode('mouse');
+        };
         const onWheel = () => setInputMode('mouse');
         setInputMode('keyboard');
 
@@ -143,6 +147,7 @@ export function SelectionCursorOverlay({ camera }) {
         document.addEventListener('focusout', syncFromFocusOut, true);
         document.addEventListener('keydown', onKey, true);
         document.addEventListener('pointerdown', onPointer, true);
+        document.addEventListener('pointermove', onPointerMove, true);
         document.addEventListener('wheel', onWheel, { capture: true, passive: true });
         window.addEventListener('resize', syncFromResize);
         syncFrom('init');
@@ -158,6 +163,7 @@ export function SelectionCursorOverlay({ camera }) {
             document.removeEventListener('focusout', syncFromFocusOut, true);
             document.removeEventListener('keydown', onKey, true);
             document.removeEventListener('pointerdown', onPointer, true);
+            document.removeEventListener('pointermove', onPointerMove, true);
             unsubCtrl();
             document.removeEventListener('wheel', onWheel, true);
             window.removeEventListener('resize', syncFromResize);
