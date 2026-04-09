@@ -55,9 +55,15 @@ export function DevLayout({ ctrl, containerRef }) {
             initialTab=${activeTab} onActivate=${onTabActivate} onContentBlur=${onContentBlur}>
             ${(vt) => html`
                 ${vt.activeTab === 'dev' && html`
-                    <${PluginsSection} ctrl=${ctrl} />
-                    <${CoreLogSection} ctrl=${ctrl} />
-                    <${ActionsSection} ctrl=${ctrl} />
+                    <div class="dev-columns">
+                        <div class="dev-col-primary">
+                            <${PluginsSection} ctrl=${ctrl} />
+                        </div>
+                        <div class="dev-col-secondary">
+                            <${CoreLogSection} ctrl=${ctrl} />
+                            <${ActionsSection} ctrl=${ctrl} />
+                        </div>
+                    </div>
                 `}
                 ${vt.activeTab === 'components' && html`
                     <${ComponentsCatalog} activeId=${catalogId} />

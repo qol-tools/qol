@@ -1,5 +1,5 @@
-const PAGE_WIDTH = 1000;
-const PAGE_HEIGHT = 800;
+const PAGE_WIDTH = 1280;
+const PAGE_HEIGHT = 900;
 const PAGE_STRIDE = 10000;
 
 export function createWorldRegistry(viewOrder, manifest = {}) {

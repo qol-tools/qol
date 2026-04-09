@@ -142,17 +142,15 @@ function AppShell() {
             if (surface) surface.focus({ preventScroll: true });
         });
         const newParent = entry.parent || targetId;
-        const applyLayer = () => {
-            setCameraLayer(entry.layer);
-            camera.setLayer(entry.layer);
-            diveParentRef.current = newParent;
-            setDiveParent(newParent);
-            const w = vp.clientWidth || 800;
-            const h = vp.clientHeight || 600;
-            const target = registry.cameraTargetForView(targetId, w, h, camera.zoom);
-            if (target) camera.panTo(target.x, target.y);
-        };
-        animateTransition(vp, layerAnimatingRef, 'dive-out', applyLayer, focusTarget);
+        setCameraLayer(entry.layer);
+        camera.setLayer(entry.layer);
+        diveParentRef.current = newParent;
+        setDiveParent(newParent);
+        const w = vp.clientWidth || 800;
+        const h = vp.clientHeight || 600;
+        const camTarget = registry.cameraTargetForView(targetId, w, h, camera.zoom);
+        if (camTarget) camera.panTo(camTarget.x, camTarget.y);
+        focusTarget();
     }, [camera, registry, diveStack]);
 
     const ascend = useCallback(() => {
@@ -221,7 +219,8 @@ function AppShell() {
                         })}
                     <//>
                     <${CommandPalette} />
-                    <${MinimapContainer} camera=${camera} registry=${registry} viewportRef=${viewportRef} diveParent=${diveParent} />
+                    <${MinimapContainer} camera=${camera} registry=${registry} viewportRef=${viewportRef} diveParent=${diveParent}
+                        version=${appVersion} updateState=${updateState} isDevMode=${devEnabled} onAction=${handleSidebarAction} />
                     <${SelectionCursorOverlay} camera=${camera} />
                     <${RecompileDissolve} triggerRef=${dissolveRef} />
                     <${GlobalToast} />
@@ -247,22 +246,37 @@ function animateTransition(vp, animatingRef, outClass, applyLayer, onDone) {
         return;
     }
     animatingRef.current = true;
+    const totalBudget = transitionSpeed * 3;
+    const failsafe = setTimeout(() => {
+        clearAnimClass(vp, 'dive-out');
+        clearAnimClass(vp, 'ascend-out');
+        clearAnimClass(vp, 'fade-out');
+        clearAnimClass(vp, 'layer-in');
+        clearAnimClass(minimap, 'dive-out');
+        clearAnimClass(minimap, 'ascend-out');
+        clearAnimClass(minimap, 'fade-out');
+        clearAnimClass(minimap, 'layer-in');
+        animatingRef.current = false;
+    }, totalBudget);
     const outAnim = transitionStyle === 'fade' ? 'fade-out' : outClass;
     const dur = `${transitionSpeed}ms`;
     const durIn = `${Math.round(transitionSpeed * 0.6)}ms`;
     applyAnimClass(vp, outAnim, dur);
     applyAnimClass(minimap, outAnim, dur);
-    vp.addEventListener('animationend', function onEnd() {
+    vp.addEventListener('animationend', function onEnd(e) {
+        if (e.target !== vp) return;
         vp.removeEventListener('animationend', onEnd);
         clearAnimClass(vp, outAnim);
         clearAnimClass(minimap, outAnim);
         applyLayer();
         applyAnimClass(vp, 'layer-in', durIn);
         applyAnimClass(minimap, 'layer-in', durIn);
-        vp.addEventListener('animationend', function onIn() {
+        vp.addEventListener('animationend', function onIn(e) {
+            if (e.target !== vp) return;
             vp.removeEventListener('animationend', onIn);
             clearAnimClass(vp, 'layer-in');
             clearAnimClass(minimap, 'layer-in');
+            clearTimeout(failsafe);
             animatingRef.current = false;
         });
         if (onDone) onDone();

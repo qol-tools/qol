@@ -117,7 +117,6 @@ export function CommandPalette() {
                         className="palette-item ${i === clampedIndex ? 'selected' : ''}"
                         selected=${i === clampedIndex}
                         data-selected-surface-priority="10"
-                        data-scroll-follow-mode="nearest"
                         onMouseDown=${() => executeCommand(cmd)}>
                         <span class="palette-item-label" data-selected-text="">${cmd.label}</span>
                     <//>
