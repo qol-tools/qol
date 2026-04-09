@@ -1,11 +1,28 @@
 import { createDebug } from './debug.js';
 
 const log = createDebug('qol:camera');
+const STORAGE_KEY = 'qoltray.camera';
+const SAVE_DEBOUNCE_MS = 300;
+
+function loadSaved() {
+    try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return null;
+        const s = JSON.parse(raw);
+        if (typeof s.x === 'number' && typeof s.y === 'number') return s;
+    } catch {}
+    return null;
+}
+
+function saveTo(x, y, zoom) {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ x, y, zoom })); } catch {}
+}
 
 export function createCamera() {
-    let x = 0;
-    let y = 0;
-    let zoom = 1.0;
+    const saved = loadSaved();
+    let x = saved?.x ?? 0;
+    let y = saved?.y ?? 0;
+    let zoom = saved?.zoom ?? 1.0;
     let layer = 0;
     let worldEl = null;
     let animId = 0;
@@ -15,6 +32,10 @@ export function createCamera() {
     let animDuration = 0;
     let animComplete = null;
     const listeners = new Set();
+    let saveTimer = 0;
+    let dirty = false;
+
+    window.addEventListener('beforeunload', () => { if (dirty) saveTo(x, y, zoom); });
 
     function notify() {
         for (const fn of listeners) fn({ x, y, zoom, layer });
@@ -23,6 +44,9 @@ export function createCamera() {
     function apply() {
         if (worldEl) worldEl.style.transform = `scale(${zoom}) translate(${-x}px, ${-y}px)`;
         notify();
+        dirty = true;
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => { saveTo(x, y, zoom); dirty = false; }, SAVE_DEBOUNCE_MS);
     }
 
     function panTo(nx, ny) {
