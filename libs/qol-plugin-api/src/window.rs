@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use gpui::*;
 
-use crate::monitor::ActiveMonitor;
+use crate::monitor::{ActiveMonitor, MonitorTracker};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct MonitorKey {
@@ -20,6 +20,57 @@ impl MonitorKey {
             width: bounds.size.width.to_f64().round() as i32,
             height: bounds.size.height.to_f64().round() as i32,
         }
+    }
+
+    pub fn fallback() -> Self {
+        Self {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct PopupPlacement {
+    monitor: Option<ActiveMonitor>,
+}
+
+impl PopupPlacement {
+    pub fn from_tracker(tracker: &MonitorTracker) -> Self {
+        Self {
+            monitor: tracker.snapshot_monitor(),
+        }
+    }
+
+    pub fn from_monitor(monitor: Option<ActiveMonitor>) -> Self {
+        Self { monitor }
+    }
+
+    pub fn target(&self) -> MonitorKey {
+        self.monitor
+            .as_ref()
+            .map(|monitor| MonitorKey::from_bounds(&monitor.bounds()))
+            .unwrap_or_else(MonitorKey::fallback)
+    }
+
+    pub fn centered_bounds(&self, win_size: Size<Pixels>, cx: &mut App) -> Bounds<Pixels> {
+        self.monitor
+            .as_ref()
+            .map(|monitor| monitor.centered_bounds(win_size))
+            .unwrap_or_else(|| Bounds::centered(None, win_size, cx))
+    }
+
+    pub fn monitor_size(&self) -> Option<(f32, f32)> {
+        self.monitor.as_ref().map(ActiveMonitor::size)
+    }
+
+    pub fn origin(&self) -> Point<Pixels> {
+        self.monitor
+            .as_ref()
+            .map(|monitor| monitor.bounds().origin)
+            .unwrap_or(point(px(0.0), px(0.0)))
     }
 }
 
