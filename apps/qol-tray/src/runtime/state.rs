@@ -15,14 +15,24 @@ pub(crate) struct InputState {
 
 impl InputState {
     pub(crate) fn update_cursor(&mut self, monitor: MonitorBounds, at: Instant, moved: bool) {
-        if !moved {
-            return;
-        }
         let same_monitor = self.cursor.as_ref().is_some_and(|c| c.monitor == monitor);
         let focus_is_newer = self
             .focus
             .as_ref()
             .is_some_and(|f| self.cursor.as_ref().is_none_or(|c| f.at > c.at));
+        let focus_elsewhere = self.focus.as_ref().is_some_and(|f| f.monitor != monitor);
+        if !moved {
+            if same_monitor && focus_is_newer && focus_elsewhere {
+                log::debug!(
+                    "[runtime/state] cursor STAMPED mon=({}, {}) at={:?} reason=still_here_reclaim",
+                    monitor.x,
+                    monitor.y,
+                    at,
+                );
+                self.cursor = Some(Stamped { monitor, at });
+            }
+            return;
+        }
         if !same_monitor || focus_is_newer {
             log::debug!(
                 "[runtime/state] cursor STAMPED mon=({}, {}) at={:?} reason={}",
