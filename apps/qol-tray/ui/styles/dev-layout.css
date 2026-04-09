@@ -320,6 +320,18 @@
     color: var(--text-faint);
 }
 
+.dev-columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-6);
+    align-items: start;
+}
+
+.dev-col-primary,
+.dev-col-secondary {
+    min-width: 0;
+}
+
 .dev-section {
     margin-bottom: var(--size-control-md);
 }

@@ -4,7 +4,7 @@ const DEFAULTS = {
     panSpeed: 12,
     transitionSpeed: 120,
     transitionStyle: 'zoom-fade',
-    minimapSize: 280,
+    minimapSize: 380,
 };
 
 let current = load();

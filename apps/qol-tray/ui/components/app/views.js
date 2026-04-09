@@ -29,7 +29,7 @@ export function buildViewOrder(devEnabled) {
 function WorldViewSlot({ entry, cameraLayer, children }) {
     if (!entry) return null;
     const visible = entry.layer === cameraLayer;
-    const style = `left:${entry.x}px; top:${entry.y}px; width:${entry.width}px;${visible ? '' : ' display:none;'}`;
+    const style = `left:${entry.x}px; top:${entry.y}px; width:${entry.width}px; min-height:${entry.height}px;${visible ? '' : ' display:none;'}`;
     return html`<div class="world-view-slot" data-view-id=${entry.id} data-layer=${entry.layer} style=${style}>${children}</div>`;
 }
 

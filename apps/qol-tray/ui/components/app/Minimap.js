@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { VIEW_LABELS } from './views.js';
 import { getWorldSettings, setWorldSetting, subscribeWorldSettings } from '../../lib/world-settings.js';
 import { IconCog } from '../../assets/icon-cog.js';
+import { useClickOutside } from '../../hooks/useClickOutside.js';
 
 const CENTER_W_FRAC = 0.34;
 const NEIGHBOR_W_FRAC = 0.22;
@@ -12,9 +13,10 @@ const SLOT_PAD_Y = 6;
 const RADIUS = 3;
 const ARROW_FLASH_MS = 350;
 
-export function MinimapContainer({ camera, registry, viewportRef, diveParent }) {
+export function MinimapContainer({ camera, registry, viewportRef, diveParent, version, updateState, isDevMode, onAction }) {
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [settings, setSettings] = useState(getWorldSettings);
+    const cogRef = useRef(null);
 
     useEffect(() => subscribeWorldSettings(setSettings), []);
 
@@ -22,21 +24,24 @@ export function MinimapContainer({ camera, registry, viewportRef, diveParent }) 
         e.stopPropagation();
         setSettingsOpen(v => !v);
     }, []);
+    const close = useCallback(() => setSettingsOpen(false), []);
+    useClickOutside(cogRef, settingsOpen, close);
 
     return html`
         <div class="world-minimap-container">
-            ${settingsOpen && html`<${WorldSettingsPanel} settings=${settings} />`}
-            <div style="display:flex;align-items:center;gap:6px;">
-                <${Minimap} camera=${camera} registry=${registry} viewportRef=${viewportRef} width=${settings.minimapSize} diveParent=${diveParent} />
-                <button class="world-minimap-settings-btn" onClick=${toggle} title="World settings">
-                    <${IconCog} />
-                </button>
-            </div>
+            <${Minimap} camera=${camera} registry=${registry} viewportRef=${viewportRef} width=${settings.minimapSize} diveParent=${diveParent} />
+        </div>
+        <div class="world-cog-anchor" ref=${cogRef}>
+            <button class="world-cog-btn ${settingsOpen ? 'is-open' : ''}" onClick=${toggle} title="Settings">
+                <${IconCog} size=${28} />
+            </button>
+            ${settingsOpen && html`<${WorldSettingsPanel} settings=${settings}
+                version=${version} updateState=${updateState} isDevMode=${isDevMode} onAction=${onAction} />`}
         </div>
     `;
 }
 
-function WorldSettingsPanel({ settings }) {
+function WorldSettingsPanel({ settings, version, updateState, isDevMode, onAction }) {
     const update = (key) => (e) => {
         const val = e.target.type === 'range' ? Number(e.target.value) : e.target.value;
         setWorldSetting(key, val);
@@ -44,16 +49,56 @@ function WorldSettingsPanel({ settings }) {
 
     return html`
         <div class="world-settings-panel">
-            <label>Pan speed <input type="range" min="4" max="30" value=${settings.panSpeed} onInput=${update('panSpeed')} /></label>
-            <label>Transition speed <input type="range" min="40" max="300" value=${settings.transitionSpeed} onInput=${update('transitionSpeed')} /></label>
-            <label>Transition style <select value=${settings.transitionStyle} onChange=${update('transitionStyle')}>
-                <option value="zoom-fade">Zoom + Fade</option>
-                <option value="fade">Fade only</option>
-                <option value="instant">Instant</option>
-            </select></label>
-            <label>Minimap width <input type="range" min="200" max="500" value=${settings.minimapSize} onInput=${update('minimapSize')} /></label>
+            <div class="wsp-section">
+                <div class="wsp-heading">Navigation</div>
+                <label>Pan speed <input type="range" min="4" max="30" value=${settings.panSpeed} onInput=${update('panSpeed')} /></label>
+                <label>Minimap size <input type="range" min="200" max="500" value=${settings.minimapSize} onInput=${update('minimapSize')} /></label>
+            </div>
+            <div class="wsp-section">
+                <div class="wsp-heading">Transitions</div>
+                <label>Speed <input type="range" min="40" max="300" value=${settings.transitionSpeed} onInput=${update('transitionSpeed')} /></label>
+                <label>Style <select value=${settings.transitionStyle} onChange=${update('transitionStyle')}>
+                    <option value="zoom-fade">Zoom + Fade</option>
+                    <option value="fade">Fade only</option>
+                    <option value="instant">Instant</option>
+                </select></label>
+            </div>
+            ${version && html`<${VersionSection} version=${version} updateState=${updateState} isDevMode=${isDevMode} onAction=${onAction} />`}
         </div>
     `;
+}
+
+function VersionSection({ version, updateState, isDevMode, onAction }) {
+    const status = updateState?.status || 'idle';
+    const tag = isDevMode ? ' DEV' : '';
+
+    const actionLabel = versionActionLabel(status, updateState);
+    const actionClick = () => {
+        if (status === 'available') onAction('self-update');
+        else if (status === 'error') onAction(isDevMode ? 'dev-recompile' : 'check-update');
+        else if (status === 'idle' || status === 'up-to-date') onAction('check-update');
+    };
+    const busy = status === 'downloading' || status === 'compiling' || status === 'checking' || status === 'done' || status === 'recompile_done';
+
+    return html`
+        <div class="wsp-section wsp-version">
+            <div class="wsp-version-row">
+                <span class="wsp-version-label">v${version}${tag}</span>
+                <button class="wsp-version-btn ${status === 'available' ? 'has-update' : ''} ${status === 'error' ? 'is-error' : ''}"
+                    onClick=${actionClick} disabled=${busy}>${actionLabel}</button>
+            </div>
+        </div>
+    `;
+}
+
+function versionActionLabel(status, state) {
+    if (status === 'available') return `Update to v${state?.latest}`;
+    if (status === 'downloading') return `${Math.round(state?.percent || 0)}%`;
+    if (status === 'compiling') return 'Compiling...';
+    if (status === 'checking') return 'Checking...';
+    if (status === 'done' || status === 'recompile_done') return 'Restarting...';
+    if (status === 'error') return 'Retry';
+    return 'Check for updates';
 }
 
 function Minimap({ camera, registry, viewportRef, width, diveParent }) {
@@ -99,7 +144,7 @@ function Minimap({ camera, registry, viewportRef, width, diveParent }) {
 
     useEffect(() => () => clearTimeout(flashTimerRef.current), []);
 
-    const h = Math.round(width * 0.3);
+    const h = Math.round(width * 0.55);
 
     useEffect(() => {
         const canvas = canvasRef.current;
