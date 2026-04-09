@@ -116,11 +116,21 @@ function AppShell() {
     useLayoutEffect(() => {
         const worldEl = document.getElementById('world');
         if (worldEl) camera.setWorldElement(worldEl);
-        const vp = document.getElementById('viewport');
-        const w = vp?.clientWidth || 800;
-        const h = vp?.clientHeight || 600;
-        const target = registry.cameraTargetForView(activeViewId, w, h, camera.zoom);
-        if (target) camera.panTo(target.x, target.y);
+    }, []);
+
+    useEffect(() => {
+        requestAnimationFrame(() => {
+            const vp = document.getElementById('viewport');
+            if (!vp) return;
+            const w = vp.clientWidth;
+            const h = vp.clientHeight;
+            if (!w || !h) return;
+            const target = registry.cameraTargetForView(activeViewId, w, h, camera.zoom);
+            if (target) {
+                log('init center:', activeViewId, w, 'x', h, '→', Math.round(target.x), Math.round(target.y));
+                camera.panTo(target.x, target.y);
+            }
+        });
     }, []);
 
     useWorldNav({ camera, registry, viewportRef });
