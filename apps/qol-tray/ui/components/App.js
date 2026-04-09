@@ -93,7 +93,7 @@ function AppShell() {
         viewportRef.current = el;
     }, []);
 
-    const prevViewRef = useRef(activeViewId);
+    const prevViewRef = useRef(null);
     useEffect(() => {
         const vp = viewportRef.current;
         const w = vp?.clientWidth || 800;
