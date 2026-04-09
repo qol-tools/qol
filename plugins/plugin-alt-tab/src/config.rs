@@ -114,6 +114,7 @@ const PLUGIN_NAMES: &[&str] = &["plugin-alt-tab", "alt-tab"];
 
 pub fn load_alt_tab_config() -> AltTabConfig {
     let config: AltTabConfig = qol_config::load_plugin_config(PLUGIN_NAMES);
+    #[cfg(debug_assertions)]
     eprintln!(
         "[alt-tab] config: action_mode={:?} max_columns={} reset_selection_on_open={} open_behavior={:?}",
         config.action_mode,
