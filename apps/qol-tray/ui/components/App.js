@@ -11,7 +11,7 @@ import { PluginConfigProvider } from '../views/plugin-config/context.js';
 import { useApp } from './app/useApp.js';
 import { useAppKeyboardRouting } from './app/useAppKeyboardRouting.js';
 import { ViewKeyboardProvider } from './app/view-keyboard-context.js';
-import { renderWorldViews } from './app/views.js';
+import { buildViewOrder, renderWorldViews } from './app/views.js';
 import { RecompileDissolve } from './RecompileDissolve.js';
 import { GlobalToast } from './ApiErrorToast.js';
 import { SelectionCursorOverlay } from './SelectionCursorOverlay.js';
@@ -65,7 +65,7 @@ function AppShell() {
     const camera = cameraRef.current;
 
     const registryRef = useRef(null);
-    if (!registryRef.current) registryRef.current = createWorldRegistry(viewOrder, SUB_PAGE_MANIFEST);
+    if (!registryRef.current) registryRef.current = createWorldRegistry(buildViewOrder(true), SUB_PAGE_MANIFEST);
     const registry = registryRef.current;
 
     const diveStackRef = useRef(null);
@@ -79,10 +79,7 @@ function AppShell() {
 
     useEffect(() => {
         for (const id of viewOrder) {
-            if (!registry.getEntry(id)) {
-                log('registry: adding late view', id);
-                registry.placeNew(id);
-            }
+            if (!registry.getEntry(id)) registry.placeNew(id);
         }
     }, [viewOrder, registry]);
 
@@ -93,7 +90,7 @@ function AppShell() {
         viewportRef.current = el;
     }, []);
 
-    const prevViewRef = useRef(null);
+    const prevViewRef = useRef(activeViewId);
     useEffect(() => {
         const vp = viewportRef.current;
         const w = vp?.clientWidth || 800;
@@ -116,21 +113,13 @@ function AppShell() {
     useLayoutEffect(() => {
         const worldEl = document.getElementById('world');
         if (worldEl) camera.setWorldElement(worldEl);
-    }, []);
-
-    useEffect(() => {
-        requestAnimationFrame(() => {
+        if (camera.x === 0 && camera.y === 0) {
             const vp = document.getElementById('viewport');
-            if (!vp) return;
-            const w = vp.clientWidth;
-            const h = vp.clientHeight;
-            if (!w || !h) return;
+            const w = vp?.clientWidth || 800;
+            const h = vp?.clientHeight || 600;
             const target = registry.cameraTargetForView(activeViewId, w, h, camera.zoom);
-            if (target) {
-                log('init center:', activeViewId, w, 'x', h, '→', Math.round(target.x), Math.round(target.y));
-                camera.panTo(target.x, target.y);
-            }
-        });
+            if (target) camera.panTo(target.x, target.y);
+        }
     }, []);
 
     useWorldNav({ camera, registry, viewportRef });
