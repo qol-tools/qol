@@ -1,0 +1,56 @@
+schema_version = 1
+title = "Lights"
+description = "Connection and default target settings for the lights plugin."
+
+[section.connection]
+label = "Connection"
+description = "Coordinator connection settings."
+actions = ["settings", "pair"]
+
+[field.backend_serial_port]
+type = "string"
+config_key = "backend.serial_port"
+label = "Serial Port"
+description = "Use auto or a concrete /dev/... path."
+section = "connection"
+placeholder = "auto"
+default = "auto"
+
+[field.backend_channel]
+type = "number"
+config_key = "backend.channel"
+label = "Channel"
+section = "connection"
+default = 11
+min = 11
+max = 26
+step = 1
+
+[field.backend_network_key]
+type = "string"
+config_key = "backend.network_key"
+label = "Network Key"
+description = "Use auto unless you need a fixed key."
+section = "connection"
+placeholder = "auto"
+default = "auto"
+
+[section.target]
+label = "Main Target"
+description = "Default light target for tray actions."
+actions = ["settings"]
+
+[field.main_target_type]
+type = "select"
+config_key = "main_target_type"
+label = "Target Type"
+section = "target"
+default = "device"
+options = ["device", "group"]
+
+[field.main_target_id]
+type = "string"
+config_key = "main_target_id"
+label = "Target ID"
+section = "target"
+default = ""

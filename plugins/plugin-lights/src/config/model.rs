@@ -6,6 +6,7 @@ use crate::domain::model::{DeviceId, GroupId, LightTarget};
 use crate::runtime::actions;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PluginConfig {
     pub backend: BackendConfig,
     pub main_target_type: String,
@@ -47,6 +48,7 @@ impl PluginConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct BackendConfig {
     pub kind: String,
     pub serial_port: String,
@@ -81,6 +83,7 @@ pub struct EndpointEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PresetConfig {
     pub preset_1: PresetSlot,
     pub preset_2: PresetSlot,
@@ -138,6 +141,7 @@ impl PresetConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PresetSlot {
     pub enabled: bool,
     pub name: String,
@@ -157,6 +161,12 @@ impl PresetSlot {
             color_hex: "ffffff".into(),
             mirek: 300,
         }
+    }
+}
+
+impl Default for PresetSlot {
+    fn default() -> Self {
+        Self::named("Preset")
     }
 }
 
