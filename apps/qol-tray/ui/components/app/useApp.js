@@ -75,7 +75,15 @@ export function useApp({ onDissolve } = {}) {
             .then(nextProviders => setSyncProviders(Array.isArray(nextProviders) ? nextProviders : []))
             .catch(() => {});
     }, []);
-    const handleSidebarAction = useSidebarActions({ checkForUpdate, beginSelfUpdate, failSelfUpdate, beginDevRecompile, failDevRecompile, defaultWorktreeRef });
+    const handleSidebarAction = useSidebarActions({
+        devEnabled,
+        checkForUpdate,
+        beginSelfUpdate,
+        failSelfUpdate,
+        beginDevRecompile,
+        failDevRecompile,
+        defaultWorktreeRef
+    });
     const palette = usePaletteContext();
     useEffect(() => {
         palette.setActiveViewId(activeViewId);

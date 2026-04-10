@@ -16,6 +16,5 @@ export async function fetchPluginsRequest(forceRefresh = false) {
 }
 
 export async function installPluginRequest(id) {
-    const response = await apiResponse(`/api/install/${id}`, { method: 'POST' });
-    await throwIfNotOk(response, 'Installation failed');
+    return apiJson(`/api/install/${id}`, { method: 'POST' });
 }
