@@ -38,6 +38,7 @@ pub enum ActionExecutionError {
         plugin_id: PluginId,
         action_id: String,
     },
+    ActionRejected(String),
     SpawnFailed(String),
 }
 
@@ -69,6 +70,7 @@ impl Display for ActionExecutionError {
             } => {
                 write!(f, "no execution target for {}::{}", plugin_id, action_id)
             }
+            Self::ActionRejected(message) => write!(f, "{}", message),
             Self::SpawnFailed(error) => write!(f, "spawn failed: {}", error),
         }
     }

@@ -64,10 +64,7 @@ fn daemon_dispatch_error(
         resolved.action_id,
         message
     );
-    Err(ActionExecutionError::SpawnFailed(format!(
-        "daemon error for {}::{}: {}",
-        resolved.plugin_id, resolved.action_id, message
-    )))
+    Err(ActionExecutionError::ActionRejected(message.to_string()))
 }
 
 fn execute_via_runtime(resolved: &ResolvedAction) -> Result<(), ActionExecutionError> {
