@@ -9,6 +9,7 @@ const RECOMPILE_ERRORS = {
 export const SELF_UPDATE_EVENT = 'qol:self-update';
 
 export function useSidebarActions({
+    devEnabled,
     checkForUpdate,
     beginSelfUpdate,
     failSelfUpdate,
@@ -18,6 +19,9 @@ export function useSidebarActions({
 }) {
     const handler = useCallback(async (action) => {
         if (action === 'check-update') {
+            if (devEnabled) {
+                return;
+            }
             checkForUpdate();
             return;
         }
@@ -57,6 +61,7 @@ export function useSidebarActions({
             failDevRecompile(error?.message || 'Could not start recompile');
         }
     }, [
+        devEnabled,
         beginDevRecompile,
         beginSelfUpdate,
         checkForUpdate,

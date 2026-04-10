@@ -4,6 +4,7 @@ import { VIEW_LABELS } from './views.js';
 import { getWorldSettings, setWorldSetting, subscribeWorldSettings } from '../../lib/world-settings.js';
 import { IconCog } from '../../assets/icon-cog.js';
 import { useClickOutside } from '../../hooks/useClickOutside.js';
+import { clampPercent, formatDownloadingProgress, formatPhaseProgress, toProgressScale } from '../../utils/progress.js';
 
 const CENTER_W_FRAC = 0.34;
 const NEIGHBOR_W_FRAC = 0.22;
@@ -71,34 +72,61 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
 function VersionSection({ version, updateState, isDevMode, onAction }) {
     const status = updateState?.status || 'idle';
     const tag = isDevMode ? ' DEV' : '';
-
-    const actionLabel = versionActionLabel(status, updateState);
-    const actionClick = () => {
-        if (status === 'available') onAction('self-update');
-        else if (status === 'error') onAction(isDevMode ? 'dev-recompile' : 'check-update');
-        else if (status === 'idle' || status === 'up-to-date') onAction('check-update');
-    };
+    const action = versionAction(status, isDevMode);
+    const actionLabel = versionActionLabel(status, updateState, isDevMode);
     const busy = status === 'downloading' || status === 'compiling' || status === 'checking' || status === 'done' || status === 'recompile_done';
+    const hasUpdate = !isDevMode && status === 'available';
+    const progress = versionProgress(status, updateState);
+    const detail = versionDetail(status, updateState, isDevMode);
+
+    const actionClick = () => {
+        if (!action) return;
+        onAction(action);
+    };
 
     return html`
-        <div class="wsp-section wsp-version">
+        <div class="wsp-section wsp-version ${progress !== null ? 'progress-track' : ''}">
+            ${progress !== null && html`<div class="progress-fill" style=${{ '--progress-scale': toProgressScale(progress) }}></div>`}
             <div class="wsp-version-row">
                 <span class="wsp-version-label">v${version}${tag}</span>
-                <button class="wsp-version-btn ${status === 'available' ? 'has-update' : ''} ${status === 'error' ? 'is-error' : ''}"
+                <button class="wsp-version-btn ${hasUpdate ? 'has-update' : ''} ${status === 'error' ? 'is-error' : ''}"
                     onClick=${actionClick} disabled=${busy}>${actionLabel}</button>
             </div>
+            ${detail && html`<div class="wsp-version-detail">${detail}</div>`}
         </div>
     `;
 }
 
-function versionActionLabel(status, state) {
-    if (status === 'available') return `Update to v${state?.latest}`;
-    if (status === 'downloading') return `${Math.round(state?.percent || 0)}%`;
-    if (status === 'compiling') return 'Compiling...';
+function versionAction(status, isDevMode) {
+    if (status === 'downloading' || status === 'compiling' || status === 'checking' || status === 'done' || status === 'recompile_done') return null;
+    if (isDevMode) return 'dev-recompile';
+    if (status === 'available') return 'self-update';
+    return 'check-update';
+}
+
+function versionActionLabel(status, state, isDevMode) {
+    if (status === 'available' && !isDevMode) return `Update to v${state?.latest}`;
+    if (status === 'downloading') return `${Math.round(clampPercent(state?.percent || 0))}%`;
+    if (status === 'compiling') return `${Math.round(clampPercent(state?.percent || 0))}%`;
     if (status === 'checking') return 'Checking...';
     if (status === 'done' || status === 'recompile_done') return 'Restarting...';
-    if (status === 'error') return 'Retry';
+    if (status === 'error') return isDevMode ? 'Retry recompile' : 'Retry';
+    if (isDevMode) return 'Recompile';
     return 'Check for updates';
+}
+
+function versionProgress(status, state) {
+    if (status !== 'downloading' && status !== 'compiling') return null;
+    return clampPercent(state?.percent || 0);
+}
+
+function versionDetail(status, state, isDevMode) {
+    if (status === 'downloading') return formatDownloadingProgress(state?.percent || 0);
+    if (status === 'compiling') return formatPhaseProgress(state?.phase, state?.percent || 0, 'Recompiling QoL Tray');
+    if (status === 'error') return state?.message || (isDevMode ? 'Recompile failed' : 'Update failed');
+    if (status === 'recompile_done') return 'Recompile complete';
+    if (status === 'done' && isDevMode) return 'Update complete';
+    return null;
 }
 
 function Minimap({ camera, registry, viewportRef, width, diveParent }) {

@@ -31,30 +31,17 @@
     position: absolute;
     display: flex;
     flex-direction: column;
-    overflow: visible;
+    overflow: hidden;
 }
 
-.world-view-slot .view-body {
-    overflow: visible;
-    flex: none;
-}
-
-.world-view-slot .view-container {
-    flex: none;
-}
-
-.world-view-slot .plugin-config-detail {
-    overflow: visible;
-    flex: none;
-}
-
-.world-view-slot .plugin-ui-container {
-    overflow: visible;
-    flex: none;
-}
-
+.world-view-slot .view-body,
+.world-view-slot .view-container,
+.world-view-slot .plugin-config-detail,
+.world-view-slot .plugin-ui-container,
 .world-view-slot .plugin-config-loading {
-    flex: none;
+    flex: 1;
+    min-height: 0;
+    overflow: visible;
 }
 
 .world-minimap-container {
@@ -122,12 +109,12 @@
 
 .world-cog-anchor {
     position: fixed;
-    top: var(--space-4);
-    right: var(--space-4);
+    bottom: var(--space-4);
+    left: var(--space-4);
     z-index: var(--z-overlay, 100);
     display: flex;
-    flex-direction: column;
-    align-items: flex-end;
+    flex-direction: column-reverse;
+    align-items: flex-start;
     gap: var(--space-2);
 }
 
@@ -213,12 +200,16 @@
 
 .wsp-version {
     padding: var(--space-4) var(--space-6);
+    position: relative;
+    overflow: hidden;
 }
 
 .wsp-version-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    position: relative;
+    z-index: var(--z-1);
 }
 
 .wsp-version-label {
@@ -258,6 +249,17 @@
 .wsp-version-btn:disabled {
     opacity: 0.5;
     pointer-events: none;
+}
+
+.wsp-version-detail {
+    margin-top: var(--space-2);
+    color: var(--text-muted);
+    font-size: var(--fs-caption-1);
+    position: relative;
+    z-index: var(--z-1);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .app-container > .command-palette,
