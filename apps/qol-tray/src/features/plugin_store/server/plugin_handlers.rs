@@ -177,6 +177,7 @@ fn action_error_response(
         ActionExecutionError::PluginNotFound(_) => StatusCode::NOT_FOUND,
         ActionExecutionError::InvalidActionId(_)
         | ActionExecutionError::MissingActionMapping { .. } => StatusCode::BAD_REQUEST,
+        ActionExecutionError::ActionRejected(_) => StatusCode::CONFLICT,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     let message = log_and_message(status, id, action, error);

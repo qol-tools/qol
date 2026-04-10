@@ -1,5 +1,6 @@
 use super::*;
 use serde_json::json;
+use std::ffi::OsString;
 use std::fs;
 use tempfile::TempDir;
 
@@ -12,6 +13,57 @@ fn setup_test_env() -> (PluginConfigManager, TempDir, TempDir) {
     (manager, temp_base, temp_plugins)
 }
 
+struct ConfigEnvGuard {
+    home: Option<OsString>,
+    xdg_config_home: Option<OsString>,
+    xdg_data_home: Option<OsString>,
+}
+
+impl ConfigEnvGuard {
+    fn new(root: &std::path::Path) -> Self {
+        let home = std::env::var_os("HOME");
+        let xdg_config_home = std::env::var_os("XDG_CONFIG_HOME");
+        let xdg_data_home = std::env::var_os("XDG_DATA_HOME");
+        let home_dir = root.join("home");
+        let xdg_config_dir = root.join("xdg-config");
+        let xdg_data_dir = root.join("xdg-data");
+        fs::create_dir_all(&home_dir).unwrap();
+        fs::create_dir_all(&xdg_config_dir).unwrap();
+        fs::create_dir_all(&xdg_data_dir).unwrap();
+        std::env::set_var("HOME", &home_dir);
+        std::env::set_var("XDG_CONFIG_HOME", &xdg_config_dir);
+        std::env::set_var("XDG_DATA_HOME", &xdg_data_dir);
+        Self {
+            home,
+            xdg_config_home,
+            xdg_data_home,
+        }
+    }
+}
+
+impl Drop for ConfigEnvGuard {
+    fn drop(&mut self) {
+        if let Some(value) = &self.home {
+            std::env::set_var("HOME", value);
+        }
+        if self.home.is_none() {
+            std::env::remove_var("HOME");
+        }
+        if let Some(value) = &self.xdg_config_home {
+            std::env::set_var("XDG_CONFIG_HOME", value);
+        }
+        if self.xdg_config_home.is_none() {
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+        if let Some(value) = &self.xdg_data_home {
+            std::env::set_var("XDG_DATA_HOME", value);
+        }
+        if self.xdg_data_home.is_none() {
+            std::env::remove_var("XDG_DATA_HOME");
+        }
+    }
+}
+
 #[test]
 fn plugin_config_path_returns_plugin_directory() {
     let plugin_id = "test-plugin";
@@ -20,6 +72,27 @@ fn plugin_config_path_returns_plugin_directory() {
     assert!(path.to_string_lossy().contains("plugins"));
     assert!(path.to_string_lossy().contains("test-plugin"));
     assert!(path.to_string_lossy().ends_with("config.json"));
+}
+
+#[test]
+fn plugin_config_path_prefers_active_install_root() {
+    let _guard = crate::test_support::env_lock().blocking_lock();
+    let root = TempDir::new().unwrap();
+    let _env = ConfigEnvGuard::new(root.path());
+    let install_id = "install-test-123";
+    let active_path = crate::paths::base_data_dir()
+        .unwrap()
+        .join("active-install-id");
+    fs::create_dir_all(active_path.parent().unwrap()).unwrap();
+    fs::write(&active_path, format!("{install_id}\n")).unwrap();
+
+    let path = PluginConfigManager::plugin_config_path("plugin-test").unwrap();
+
+    assert!(path.to_string_lossy().contains("installs"));
+    assert!(path.to_string_lossy().contains(install_id));
+    assert!(path
+        .to_string_lossy()
+        .ends_with("plugins/plugin-test/config.json"));
 }
 
 #[test]
