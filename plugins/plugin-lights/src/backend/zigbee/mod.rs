@@ -170,8 +170,34 @@ impl LightBackend for ZigbeeBackend {
 
 fn resolve_serial_port(configured: &str) -> Result<String> {
     if configured == "auto" {
-        return crate::znp::detect_sonoff()
-            .ok_or_else(|| anyhow!("no Sonoff dongle detected; set serial_port manually"));
+        if let Some(port) = crate::znp::detect_coordinator_port() {
+            return Ok(port);
+        }
+
+        let candidates = crate::znp::candidate_coordinator_ports();
+        if let Some(port) = crate::znp::probe_candidate_coordinator_ports(&candidates) {
+            return Ok(port);
+        }
+
+        let ports = crate::znp::available_port_descriptions();
+        if ports.is_empty() {
+            return Err(anyhow!(
+                "no supported Zigbee coordinator detected automatically and no serial devices are available"
+            ));
+        }
+
+        if candidates.is_empty() {
+            return Err(anyhow!(
+                "no supported Zigbee coordinator detected automatically; available serial devices: {}",
+                ports.join(", ")
+            ));
+        }
+
+        return Err(anyhow!(
+            "no Zigbee coordinator responded on auto-detected serial ports: {}; available serial devices: {}",
+            candidates.join(", "),
+            ports.join(", ")
+        ));
     }
     Ok(configured.to_string())
 }

@@ -29,6 +29,11 @@ struct DaemonResponse {
     message: Option<String>,
 }
 
+enum DaemonRuntime {
+    Ready(Box<DaemonState>),
+    Unavailable(String),
+}
+
 pub fn run_from_env() -> Result<()> {
     let socket_path =
         std::env::var("QOL_TRAY_DAEMON_SOCKET").context("QOL_TRAY_DAEMON_SOCKET is not set")?;
@@ -43,31 +48,16 @@ pub fn execute_action_once(action: &str) -> Result<()> {
 
 pub fn run(socket_path: &str) -> Result<()> {
     let listener = bind_listener(socket_path)?;
-
-    let mut state = DaemonState::new()?;
-    eprintln!("coordinator ready");
-
-    let events_rx = state.events();
-    thread::Builder::new()
-        .name("device-monitor".into())
-        .spawn(move || device_monitor_loop(events_rx))
-        .context("failed to spawn device monitor")?;
-
-    let ws_buffer = ws::CommandBuffer::default();
-    ws::start(
-        ws_buffer,
-        state.shared_service(),
-        state.main_target().clone(),
-    );
+    let mut runtime = runtime_state();
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                if let Err(error) = handle_stream(&mut state, stream) {
+                if let Err(error) = handle_stream(&mut runtime, stream) {
                     eprintln!("{error:#}");
                 }
             }
-            Err(e) => eprintln!("accept error: {e:#}"),
+            Err(error) => eprintln!("accept error: {error:#}"),
         }
     }
 
@@ -85,9 +75,9 @@ fn device_monitor_loop(events: crossbeam_channel::Receiver<crate::znp::ZigbeeEve
                     endpoints: device
                         .endpoints
                         .iter()
-                        .map(|ep| EndpointEntry {
-                            id: ep.id,
-                            clusters: ep.input_clusters.clone(),
+                        .map(|endpoint| EndpointEntry {
+                            id: endpoint.id,
+                            clusters: endpoint.input_clusters.clone(),
                         })
                         .collect(),
                     online: true,
@@ -106,9 +96,37 @@ fn device_monitor_loop(events: crossbeam_channel::Receiver<crate::znp::ZigbeeEve
     }
 }
 
+fn runtime_state() -> DaemonRuntime {
+    let state = match DaemonState::new() {
+        Ok(state) => state,
+        Err(error) => {
+            eprintln!("backend unavailable: {error:#}");
+            return DaemonRuntime::Unavailable(error.to_string());
+        }
+    };
+
+    eprintln!("coordinator ready");
+    start_background_services(&state);
+    DaemonRuntime::Ready(Box::new(state))
+}
+
+fn start_background_services(state: &DaemonState) {
+    let events = state.events();
+    let _ = thread::Builder::new()
+        .name("device-monitor".into())
+        .spawn(move || device_monitor_loop(events));
+
+    let command_buffer = ws::CommandBuffer::default();
+    ws::start(
+        command_buffer,
+        state.shared_service(),
+        state.main_target().clone(),
+    );
+}
+
 fn format_ieee(addr: &[u8; 8]) -> String {
     addr.iter()
-        .map(|b| format!("{:02X}", b))
+        .map(|byte| format!("{:02X}", byte))
         .collect::<Vec<_>>()
         .join(":")
 }
@@ -120,22 +138,58 @@ fn bind_listener(socket_path: &str) -> Result<UnixListener> {
         .with_context(|| format!("failed to bind daemon socket {}", path.display()))
 }
 
-fn handle_stream(state: &mut DaemonState, stream: UnixStream) -> Result<()> {
+fn handle_stream(runtime: &mut DaemonRuntime, stream: UnixStream) -> Result<()> {
     let request = read_request(&stream)?;
-    let ack = response_line(DaemonOutcome::Handled)?;
-    write_response(stream, &ack)?;
-    let outcome = state.handle_action(&request.action);
-    if let DaemonOutcome::Error(msg) = outcome {
-        eprintln!("action '{}' failed: {}", request.action, msg);
+    let Some(request) = request else {
+        return Ok(());
+    };
+    let outcome = dispatch_action(runtime, &request.action);
+    let response = response_line(outcome.clone())?;
+    write_response(stream, &response)?;
+    if let DaemonOutcome::Error(message) = outcome {
+        eprintln!("action '{}' failed: {}", request.action, message);
     }
     Ok(())
 }
 
-fn read_request(stream: &UnixStream) -> Result<DaemonRequest> {
+fn dispatch_action(runtime: &mut DaemonRuntime, action: &str) -> DaemonOutcome {
+    if let DaemonRuntime::Ready(state) = runtime {
+        return state.handle_action(action);
+    }
+
+    if action != "reload" {
+        if let DaemonRuntime::Unavailable(message) = runtime {
+            return DaemonOutcome::Error(message.clone());
+        }
+        unreachable!()
+    }
+
+    let state = match DaemonState::new() {
+        Ok(state) => state,
+        Err(error) => {
+            let message = error.to_string();
+            *runtime = DaemonRuntime::Unavailable(message.clone());
+            return DaemonOutcome::Error(message);
+        }
+    };
+
+    eprintln!("coordinator ready");
+    start_background_services(&state);
+    *runtime = DaemonRuntime::Ready(Box::new(state));
+    DaemonOutcome::Handled
+}
+
+fn read_request(stream: &UnixStream) -> Result<Option<DaemonRequest>> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut line = String::new();
     reader.read_line(&mut line)?;
-    serde_json::from_str(line.trim()).context("failed to parse daemon request")
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str(trimmed)
+        .map(Some)
+        .context("failed to parse daemon request")
 }
 
 fn response_line(outcome: DaemonOutcome) -> Result<String> {

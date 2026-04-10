@@ -11,5 +11,8 @@ pub mod zcl;
 
 pub use controller::{ControllerConfig, ZigbeeController, ZigbeeEvent};
 pub use device::{Device, Endpoint};
-pub use dongle::detect_sonoff;
+pub use dongle::{
+    available_port_descriptions, candidate_coordinator_ports, detect_coordinator_port,
+    probe_candidate_coordinator_ports,
+};
 pub use zcl::ZclFrame;

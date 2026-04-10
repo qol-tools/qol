@@ -12,7 +12,9 @@ use crate::service::light_service::LightService;
 
 const BRIGHTNESS_STEP: u8 = 10;
 const MIREK_STEP: u16 = 25;
+const RELOAD_ACTION: &str = "reload";
 
+#[derive(Clone)]
 pub enum DaemonOutcome {
     Handled,
     Fallback,
@@ -29,32 +31,13 @@ pub struct DaemonState {
 
 impl DaemonState {
     pub fn new() -> Result<Self> {
-        let mut config = store::load()?;
-        let main_target = config.main_target();
-        let persisted_devices = load_persisted_devices(&config);
-
-        let backend = ZigbeeBackend::open(&config.backend, persisted_devices)?;
-
-        if config.backend.network_key == "auto" {
-            config.backend.network_key = format_key(backend.network_key());
-        }
-
-        let live_devices = backend.devices();
-        for (key, entry) in config.devices.iter_mut() {
-            let nwk = parse_network_address(key).unwrap_or(0);
-            entry.online = live_devices.iter().any(|d| d.network_address == nwk);
-        }
-        store::save(&config)?;
-
-        let initial_brightness = config.live_brightness;
-        let initial_mirek = config.live_mirek;
-        let service = Arc::new(Mutex::new(LightService::new(backend)));
+        let loaded = load_runtime_state()?;
         Ok(Self {
-            service,
-            config,
-            main_target,
-            current_brightness: initial_brightness,
-            current_mirek: initial_mirek,
+            service: loaded.service,
+            config: loaded.config,
+            main_target: loaded.main_target,
+            current_brightness: loaded.current_brightness,
+            current_mirek: loaded.current_mirek,
         })
     }
 
@@ -71,6 +54,9 @@ impl DaemonState {
     }
 
     pub fn handle_action(&mut self, action: &str) -> DaemonOutcome {
+        if action == RELOAD_ACTION {
+            return self.reload();
+        }
         if action == actions::TOGGLE_MAIN {
             return self.apply(LightCommand::Toggle);
         }
@@ -95,7 +81,7 @@ impl DaemonState {
         if action == actions::PAIR {
             return match self.service.lock().unwrap().backend().permit_join(60) {
                 Ok(()) => DaemonOutcome::Handled,
-                Err(e) => DaemonOutcome::Error(e.to_string()),
+                Err(error) => DaemonOutcome::Error(error.to_string()),
             };
         }
         if action == actions::SET_COLOR_MAIN {
@@ -140,8 +126,8 @@ impl DaemonState {
 
     fn apply_live_color(&mut self) -> DaemonOutcome {
         let config = match store::load() {
-            Ok(c) => c,
-            Err(e) => return DaemonOutcome::Error(e.to_string()),
+            Ok(config) => config,
+            Err(error) => return DaemonOutcome::Error(error.to_string()),
         };
         let color = parse_color(&config.live_color_hex);
         self.apply(LightCommand::SetColor { color })
@@ -149,8 +135,8 @@ impl DaemonState {
 
     fn apply_live_brightness(&mut self) -> DaemonOutcome {
         let config = match store::load() {
-            Ok(c) => c,
-            Err(e) => return DaemonOutcome::Error(e.to_string()),
+            Ok(config) => config,
+            Err(error) => return DaemonOutcome::Error(error.to_string()),
         };
         self.current_brightness = config.live_brightness;
         let result = self.apply(LightCommand::SetBrightness {
@@ -165,8 +151,8 @@ impl DaemonState {
 
     fn apply_live_colortemp(&mut self) -> DaemonOutcome {
         let config = match store::load() {
-            Ok(c) => c,
-            Err(e) => return DaemonOutcome::Error(e.to_string()),
+            Ok(config) => config,
+            Err(error) => return DaemonOutcome::Error(error.to_string()),
         };
         self.current_mirek = config.live_mirek;
         self.apply(LightCommand::SetColorTemperature {
@@ -186,15 +172,67 @@ impl DaemonState {
         }
 
         let commands = preset_commands(preset);
-        let mut svc = self.service.lock().unwrap();
+        let mut service = self.service.lock().unwrap();
         for command in commands {
-            if let Err(error) = svc.apply_command(&self.main_target, &command) {
+            if let Err(error) = service.apply_command(&self.main_target, &command) {
                 return DaemonOutcome::Error(error.to_string());
             }
         }
 
         DaemonOutcome::Handled
     }
+
+    fn reload(&mut self) -> DaemonOutcome {
+        let loaded = match load_runtime_state() {
+            Ok(loaded) => loaded,
+            Err(error) => return DaemonOutcome::Error(error.to_string()),
+        };
+
+        self.service = loaded.service;
+        self.config = loaded.config;
+        self.main_target = loaded.main_target;
+        self.current_brightness = loaded.current_brightness;
+        self.current_mirek = loaded.current_mirek;
+        DaemonOutcome::Handled
+    }
+}
+
+struct LoadedRuntimeState {
+    service: Arc<Mutex<LightService<ZigbeeBackend>>>,
+    config: PluginConfig,
+    main_target: LightTarget,
+    current_brightness: u8,
+    current_mirek: u16,
+}
+
+fn load_runtime_state() -> Result<LoadedRuntimeState> {
+    let mut config = store::load()?;
+    let main_target = config.main_target();
+    let persisted_devices = load_persisted_devices(&config);
+    let backend = ZigbeeBackend::open(&config.backend, persisted_devices)?;
+
+    if config.backend.network_key == "auto" {
+        config.backend.network_key = format_key(backend.network_key());
+    }
+
+    let live_devices = backend.devices();
+    for (key, entry) in config.devices.iter_mut() {
+        let nwk = parse_network_address(key).unwrap_or(0);
+        entry.online = live_devices
+            .iter()
+            .any(|device| device.network_address == nwk);
+    }
+    store::save(&config)?;
+    let current_brightness = config.live_brightness;
+    let current_mirek = config.live_mirek;
+
+    Ok(LoadedRuntimeState {
+        service: Arc::new(Mutex::new(LightService::new(backend))),
+        config,
+        main_target,
+        current_brightness,
+        current_mirek,
+    })
 }
 
 fn load_persisted_devices(config: &PluginConfig) -> Vec<Device> {
@@ -207,9 +245,9 @@ fn load_persisted_devices(config: &PluginConfig) -> Vec<Device> {
             let endpoints = entry
                 .endpoints
                 .iter()
-                .map(|ep| Endpoint {
-                    id: ep.id,
-                    input_clusters: ep.clusters.clone(),
+                .map(|endpoint| Endpoint {
+                    id: endpoint.id,
+                    input_clusters: endpoint.clusters.clone(),
                 })
                 .collect();
             Some(Device {
@@ -235,16 +273,16 @@ fn parse_ieee_address(hex: &str) -> Result<[u8; 8], String> {
         ));
     }
     let mut addr = [0u8; 8];
-    for (i, part) in parts.iter().enumerate() {
-        addr[i] = u8::from_str_radix(part, 16)
-            .map_err(|_| format!("invalid hex byte '{}' at position {}", part, i))?;
+    for (index, part) in parts.iter().enumerate() {
+        addr[index] = u8::from_str_radix(part, 16)
+            .map_err(|_| format!("invalid hex byte '{}' at position {}", part, index))?;
     }
     Ok(addr)
 }
 
 fn format_key(key: &[u8; 16]) -> String {
     key.iter()
-        .map(|b| format!("{:02X}", b))
+        .map(|byte| format!("{:02X}", byte))
         .collect::<Vec<_>>()
         .join(":")
 }

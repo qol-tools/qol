@@ -18,13 +18,153 @@ let refreshTimer = null;
 let hueWheelInstance = null;
 let controlsSection = null;
 let controlsDeviceId = null;
+let serialPortDraft = null;
+let savingSerialPort = false;
+
+function parsePortPaths(value) {
+    return value.match(/\/dev\/[^,\s]+/g) || [];
+}
+
+function parsePortDescriptions(value) {
+    return value.match(/\/dev\/[^,\s]+(?: \[[^\]]+\])?/g) || [];
+}
+
+function coordinatorIssue() {
+    if (typeof actionMessage !== 'string') return null;
+
+    const message = actionMessage.trim();
+    if (!message) return null;
+
+    const respondedPrefix = 'no Zigbee coordinator responded on auto-detected serial ports: ';
+    if (message.startsWith(respondedPrefix)) {
+        const rest = message.slice(respondedPrefix.length);
+        const [candidatesPart, devicesPart = ''] = rest.split('; available serial devices: ');
+        const candidatePorts = parsePortPaths(candidatesPart);
+        const availablePorts = parsePortDescriptions(devicesPart);
+        const checkedCount = candidatePorts.length;
+        const checkedLabel = checkedCount === 1 ? 'port' : 'ports';
+        return {
+            title: 'Coordinator not connected',
+            detail: checkedCount
+                ? `Auto-detect checked ${checkedCount} likely ${checkedLabel}`
+                : 'Auto-detect could not verify a coordinator',
+            summary: checkedCount
+                ? `Checked ${checkedCount} likely ${checkedLabel}, but none answered a Zigbee probe.`
+                : 'Auto-detect could not verify a coordinator.',
+            candidatePorts,
+            availablePorts,
+        };
+    }
+
+    const supportedPrefix = 'no supported Zigbee coordinator detected automatically; available serial devices: ';
+    if (message.startsWith(supportedPrefix)) {
+        return {
+            title: 'Coordinator not detected',
+            detail: 'Auto-detect did not find a likely Zigbee coordinator',
+            summary: 'No serial device identified itself clearly enough to auto-select.',
+            candidatePorts: [],
+            availablePorts: parsePortDescriptions(message.slice(supportedPrefix.length)),
+        };
+    }
+
+    if (message === 'no supported Zigbee coordinator detected automatically and no serial devices are available') {
+        return {
+            title: 'No serial devices available',
+            detail: 'No serial devices are visible to the plugin',
+            summary: 'Connect a Zigbee coordinator or make sure serial access is available.',
+            candidatePorts: [],
+            availablePorts: [],
+        };
+    }
+
+    return null;
+}
+
+function defaultPreset(name) {
+    return {
+        enabled: false,
+        name,
+        power_on: true,
+        brightness: 100,
+        color_hex: 'ffffff',
+        mirek: 300,
+    };
+}
+
+function defaultConfig() {
+    return {
+        backend: {
+            kind: 'zigbee-direct',
+            serial_port: 'auto',
+            channel: 11,
+            network_key: 'auto',
+        },
+        main_target_type: 'device',
+        main_target_id: '',
+        devices: {},
+        live_color_hex: 'ffffff',
+        live_brightness: 100,
+        live_mirek: 300,
+        presets: {
+            preset_1: defaultPreset('Preset 1'),
+            preset_2: defaultPreset('Preset 2'),
+            preset_3: defaultPreset('Preset 3'),
+            preset_4: defaultPreset('Preset 4'),
+            preset_5: defaultPreset('Preset 5'),
+            preset_6: defaultPreset('Preset 6'),
+            preset_7: defaultPreset('Preset 7'),
+            preset_8: defaultPreset('Preset 8'),
+        },
+    };
+}
+
+function isRecord(value) {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeConfig(raw) {
+    const fallback = defaultConfig();
+    const source = isRecord(raw) ? raw : {};
+    const backend = isRecord(source.backend) ? source.backend : {};
+    const presets = isRecord(source.presets) ? source.presets : {};
+    return {
+        ...fallback,
+        ...source,
+        backend: {
+            ...fallback.backend,
+            ...backend,
+        },
+        devices: isRecord(source.devices) ? source.devices : {},
+        presets: {
+            ...fallback.presets,
+            preset_1: { ...fallback.presets.preset_1, ...(isRecord(presets.preset_1) ? presets.preset_1 : {}) },
+            preset_2: { ...fallback.presets.preset_2, ...(isRecord(presets.preset_2) ? presets.preset_2 : {}) },
+            preset_3: { ...fallback.presets.preset_3, ...(isRecord(presets.preset_3) ? presets.preset_3 : {}) },
+            preset_4: { ...fallback.presets.preset_4, ...(isRecord(presets.preset_4) ? presets.preset_4 : {}) },
+            preset_5: { ...fallback.presets.preset_5, ...(isRecord(presets.preset_5) ? presets.preset_5 : {}) },
+            preset_6: { ...fallback.presets.preset_6, ...(isRecord(presets.preset_6) ? presets.preset_6 : {}) },
+            preset_7: { ...fallback.presets.preset_7, ...(isRecord(presets.preset_7) ? presets.preset_7 : {}) },
+            preset_8: { ...fallback.presets.preset_8, ...(isRecord(presets.preset_8) ? presets.preset_8 : {}) },
+        },
+    };
+}
+
+function configNeedsBootstrap(raw) {
+    if (!isRecord(raw)) return true;
+    return !isRecord(raw.backend);
+}
 
 async function loadConfig() {
     try {
         const res = await fetch(CONFIG_URL);
-        if (!res.ok) return;
-        config = await res.json();
+        const raw = res.ok ? await res.json() : null;
+        config = normalizeConfig(raw);
+        if (serialPortDraft === null) {
+            serialPortDraft = config.backend?.serial_port || 'auto';
+        }
         render();
+        if (!configNeedsBootstrap(raw)) return;
+        await saveConfig(config);
     } catch (_) {}
 }
 
@@ -105,10 +245,14 @@ async function saveConfig(updated) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(updated),
         });
-        if (!res.ok) return;
+        if (!res.ok) return false;
         config = updated;
+        serialPortDraft = updated.backend?.serial_port || 'auto';
         render();
+        return true;
     } catch (_) {}
+
+    return false;
 }
 
 async function silentSaveConfig(updated) {
@@ -177,51 +321,261 @@ function setMainDevice(deviceId) {
     saveConfig({ ...config, main_target_id: deviceId });
 }
 
+function currentSerialPortDraft() {
+    return serialPortDraft ?? config?.backend?.serial_port ?? 'auto';
+}
 
-function buildStatusBar() {
+async function saveSerialPort() {
+    if (savingSerialPort || !config) return;
+
+    savingSerialPort = true;
+    actionMessage = '';
+    render();
+
+    const serialPort = currentSerialPortDraft().trim() || 'auto';
+    const success = await saveConfig({
+        ...config,
+        backend: {
+            ...(config.backend || {}),
+            serial_port: serialPort,
+        },
+    });
+
+    savingSerialPort = false;
+    if (!success) {
+        actionMessage = 'Could not save connection settings.';
+    }
+    render();
+}
+
+function buildConnectionSection() {
+    const section = document.createElement('div');
+    section.className = 'section';
+
+    const title = document.createElement('div');
+    title.className = 'section-title';
+    title.textContent = 'Connection';
+    section.appendChild(title);
+
+    const label = document.createElement('label');
+    label.className = 'field-label';
+    label.htmlFor = 'serial-port-input';
+    label.textContent = 'Serial Port';
+    section.appendChild(label);
+
+    const row = document.createElement('div');
+    row.className = 'field-row';
+
+    const input = document.createElement('input');
+    input.className = 'text-input';
+    input.id = 'serial-port-input';
+    input.type = 'text';
+    input.spellcheck = false;
+    input.placeholder = 'auto or /dev/cu.usbserial...';
+    input.value = currentSerialPortDraft();
+    input.addEventListener('input', event => {
+        serialPortDraft = event.target.value;
+    });
+    input.addEventListener('keydown', event => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        saveSerialPort();
+    });
+    row.appendChild(input);
+
+    const saveButton = document.createElement('button');
+    saveButton.className = 'btn btn-sm btn-primary';
+    saveButton.textContent = savingSerialPort ? 'Saving...' : 'Save';
+    saveButton.disabled = savingSerialPort;
+    saveButton.addEventListener('click', saveSerialPort);
+    row.appendChild(saveButton);
+
+    const autoButton = document.createElement('button');
+    autoButton.className = 'btn btn-sm btn-ghost';
+    autoButton.textContent = 'Auto';
+    autoButton.disabled = savingSerialPort;
+    autoButton.addEventListener('click', () => {
+        serialPortDraft = 'auto';
+        saveSerialPort();
+    });
+    row.appendChild(autoButton);
+
+    section.appendChild(row);
+
+    const hint = document.createElement('div');
+    hint.className = 'field-hint';
+    hint.textContent = 'Use auto for clearly identified Zigbee dongles. Set an explicit /dev/... path when the coordinator appears as a generic USB serial device.';
+    section.appendChild(hint);
+
+    return section;
+}
+
+function backendSummary() {
     const backend = config.backend || {};
+    return `${backend.kind || 'unknown'} \u00B7 port: ${backend.serial_port || 'auto'} \u00B7 ch ${backend.channel || '?'}`;
+}
+
+function blockedStatusState() {
+    const requiresRestart = worstPermissionState() === 'requires_logout';
+    return {
+        connected: false,
+        title: requiresRestart ? 'Restart required' : 'Permission required',
+        detail: requiresRestart
+            ? 'Log out and back in to activate serial access'
+            : 'Grant serial access to connect the Zigbee dongle',
+        note: '',
+        issue: null,
+        action: '',
+    };
+}
+
+function issueStatusState(issue) {
+    const backend = config.backend || {};
+    return {
+        connected: false,
+        title: issue.title,
+        detail: `${issue.detail} · port: ${backend.serial_port || 'auto'} · ch ${backend.channel || '?'}`,
+        note: permissionMessage,
+        issue,
+        action: '',
+    };
+}
+
+function defaultStatusState() {
     const hasMain = !!config.main_target_id;
-    const blocked = permissionsBlocked();
+    return {
+        connected: hasMain,
+        title: hasMain ? 'Main target configured' : 'No main target set',
+        detail: backendSummary(),
+        note: permissionMessage,
+        issue: null,
+        action: actionMessage,
+    };
+}
+
+function statusState() {
+    if (permissionsBlocked()) {
+        return blockedStatusState();
+    }
+
+    const issue = coordinatorIssue();
+    if (issue) {
+        return issueStatusState(issue);
+    }
+
+    return defaultStatusState();
+}
+
+function buildStatusHeader(state) {
     const dot = document.createElement('span');
-    dot.className = `status-dot ${!blocked && hasMain ? 'connected' : 'warning'}`;
+    dot.className = `status-dot ${state.connected ? 'connected' : 'warning'}`;
 
     const text = document.createElement('span');
     text.className = 'status-text';
-    const worstState = worstPermissionState();
-    text.textContent = blocked
-        ? worstState === 'requires_logout' ? 'Restart required' : 'Permission required'
-        : hasMain ? 'Main target configured' : 'No main target set';
+    text.textContent = state.title;
 
     const detail = document.createElement('span');
     detail.className = 'status-detail';
-    detail.textContent = blocked
-        ? worstState === 'requires_logout'
-            ? 'Log out and back in to activate serial access'
-            : 'Grant serial access to connect the Zigbee dongle'
-        : `${backend.kind || 'unknown'} \u00B7 port: ${backend.serial_port || 'auto'} \u00B7 ch ${backend.channel || '?'}`;
+    detail.textContent = state.detail;
+
+    const copy = document.createElement('div');
+    copy.className = 'status-copy';
+    copy.append(text, detail);
 
     const bar = document.createElement('div');
     bar.className = 'status-bar';
-    bar.append(dot, text, detail);
+    bar.append(dot, copy);
+    return bar;
+}
+
+function buildStatusNote(message, error = false) {
+    if (!message) return null;
+
+    const note = document.createElement('div');
+    note.className = error ? 'status-note status-note-error' : 'status-note';
+    note.textContent = message;
+    return note;
+}
+
+function buildPortGroup(labelText, ports, muted = false) {
+    if (!ports.length) return null;
+
+    const group = document.createElement('div');
+    group.className = 'status-diagnostic-group';
+
+    const label = document.createElement('div');
+    label.className = 'status-diagnostic-label';
+    label.textContent = labelText;
+    group.appendChild(label);
+
+    const list = document.createElement('div');
+    list.className = 'status-port-list';
+    ports.forEach(port => {
+        const entry = document.createElement('div');
+        entry.className = muted ? 'status-port-entry status-port-entry-muted' : 'status-port-entry';
+        entry.textContent = port;
+        list.appendChild(entry);
+    });
+    group.appendChild(list);
+    return group;
+}
+
+function buildIssueDiagnostics(issue) {
+    if (!issue) return null;
+    if (!issue.candidatePorts.length && !issue.availablePorts.length) return null;
+
+    const diagnostics = document.createElement('details');
+    diagnostics.className = 'status-diagnostics';
+
+    const summary = document.createElement('summary');
+    summary.textContent = 'Serial diagnostics';
+    diagnostics.appendChild(summary);
+
+    const body = document.createElement('div');
+    body.className = 'status-diagnostics-body';
+    const checkedPorts = buildPortGroup('Checked ports', issue.candidatePorts);
+    if (checkedPorts) {
+        body.appendChild(checkedPorts);
+    }
+    const detectedDevices = buildPortGroup('Detected serial devices', issue.availablePorts, true);
+    if (detectedDevices) {
+        body.appendChild(detectedDevices);
+    }
+    diagnostics.appendChild(body);
+    return diagnostics;
+}
+
+function appendStatusContent(section, state) {
+    const note = buildStatusNote(state.note);
+    if (note) {
+        section.appendChild(note);
+    }
+
+    if (state.issue) {
+        const issueNote = buildStatusNote(state.issue.summary, true);
+        if (issueNote) {
+            section.appendChild(issueNote);
+        }
+        const diagnostics = buildIssueDiagnostics(state.issue);
+        if (diagnostics) {
+            section.appendChild(diagnostics);
+        }
+        return;
+    }
+
+    const action = buildStatusNote(state.action, true);
+    if (action) {
+        section.appendChild(action);
+    }
+}
+
+function buildStatusBar() {
+    const state = statusState();
 
     const section = document.createElement('div');
     section.className = 'section';
-    section.appendChild(bar);
-
-    if (permissionMessage && !blocked) {
-        const note = document.createElement('div');
-        note.className = 'status-note';
-        note.textContent = permissionMessage;
-        section.appendChild(note);
-    }
-
-    if (actionMessage) {
-        const note = document.createElement('div');
-        note.className = 'status-note status-note-error';
-        note.textContent = actionMessage;
-        section.appendChild(note);
-    }
-
+    section.appendChild(buildStatusHeader(state));
+    appendStatusContent(section, state);
     return section;
 }
 
@@ -460,6 +814,7 @@ function render() {
     container.className = `container${permissionsBlocked() ? ' page-blocked' : ''}`;
     container.append(
         buildStatusBar(),
+        buildConnectionSection(),
         buildDevices(),
         buildControls(),
     );

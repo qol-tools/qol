@@ -8,6 +8,7 @@ use super::subsystem::*;
 use super::zcl;
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+const PROBE_TIMEOUT: Duration = Duration::from_millis(750);
 const ENDPOINT_1: u8 = 0x01;
 const PROFILE_HOME_AUTOMATION: u16 = 0x0104;
 const DEVICE_CONFIGURATION_TOOL: u16 = 0x0005;
@@ -68,6 +69,13 @@ pub fn startup(engine: &RequestEngine, config: &NetworkConfig) -> Result<Network
     let info = get_device_info(engine).context("get_device_info")?;
     eprintln!("[znp] coordinator ready: addr=0x{:04X}", info.short_address);
     Ok(info)
+}
+
+pub fn probe(engine: &RequestEngine) -> Result<()> {
+    engine
+        .sreq_timeout(SYS, sys::PING, vec![], PROBE_TIMEOUT)
+        .context("ping")?;
+    Ok(())
 }
 
 pub fn get_device_info(engine: &RequestEngine) -> Result<NetworkInfo> {
