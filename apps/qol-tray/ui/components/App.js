@@ -125,11 +125,20 @@ function AppShell() {
     useWorldNav({ camera, registry, viewportRef });
 
     const dive = useCallback((targetId, sourceSurface) => {
-        if (layerAnimatingRef.current) return;
+        if (layerAnimatingRef.current) {
+            log('dive:', targetId, '→ skipped (animating)');
+            return;
+        }
         const entry = registry.diveTarget(targetId);
-        if (!entry) return;
+        if (!entry) {
+            log('dive:', targetId, '→ skipped (no entry)');
+            return;
+        }
         const vp = viewportRef.current;
-        if (!vp) return;
+        if (!vp) {
+            log('dive:', targetId, '→ skipped (no viewport)');
+            return;
+        }
         diveStack.push({
             layer: camera.layer,
             x: camera.x, y: camera.y, zoom: camera.zoom,
@@ -149,17 +158,25 @@ function AppShell() {
         const w = vp.clientWidth || 800;
         const h = vp.clientHeight || 600;
         const camTarget = registry.cameraTargetForView(targetId, w, h, camera.zoom);
+        log('dive:', targetId, 'entry=(', entry.x, ',', entry.y, entry.width + 'x' + entry.height, ')',
+            'vp=(' + w + 'x' + h + ')',
+            'z=' + camera.zoom.toFixed(2),
+            '→ layer', entry.layer,
+            'cam=(' + (camTarget ? Math.round(camTarget.x) : '?') + ',' + (camTarget ? Math.round(camTarget.y) : '?') + ')',
+            'stack=' + diveStack.size);
         if (camTarget) camera.panTo(camTarget.x, camTarget.y);
         focusTarget();
     }, [camera, registry, diveStack]);
 
     const forceAscendToRoot = useCallback(() => {
         const vp = viewportRef.current;
+        const wasAnimating = layerAnimatingRef.current;
         layerAnimatingRef.current = false;
         const prev = diveStack.pop();
         const parentTarget = prev?.diveParent ?? null;
         setCameraLayer(0);
         camera.setLayer(0);
+        let resolved = prev ? { x: prev.x, y: prev.y, source: 'stack' } : null;
         if (prev) {
             camera.panTo(prev.x, prev.y);
         } else if (vp) {
@@ -167,10 +184,20 @@ function AppShell() {
             const h = vp.clientHeight || 600;
             const targetId = parentTarget || activeViewId || 'plugins';
             const target = registry.cameraTargetForView(targetId, w, h, camera.zoom);
-            if (target) camera.panTo(target.x, target.y);
+            if (target) {
+                camera.panTo(target.x, target.y);
+                resolved = { x: target.x, y: target.y, source: 'target:' + targetId };
+            }
         }
         diveParentRef.current = parentTarget;
         setDiveParent(parentTarget);
+        log('forceAscend:',
+            'wasAnimating=' + wasAnimating,
+            'prev=' + (prev ? 'yes' : 'none'),
+            '→ layer 0',
+            'parent=' + (parentTarget || 'null'),
+            'cam=(' + (resolved ? Math.round(resolved.x) + ',' + Math.round(resolved.y) : '?') + ')',
+            resolved ? 'via ' + resolved.source : 'no pan');
     }, [camera, registry, activeViewId, diveStack]);
 
     const ascend = useCallback(() => {
@@ -200,10 +227,12 @@ function AppShell() {
     const pluginDiveRef = useRef(false);
     useEffect(() => {
         if (activePluginId && !pluginDiveRef.current) {
+            log('pluginDive: open', activePluginId, '→ dive plugins-config');
             pluginDiveRef.current = true;
             const source = document.querySelector('[data-selected-surface][data-selected="true"]');
             dive('plugins-config', source);
         } else if (!activePluginId && pluginDiveRef.current) {
+            log('pluginDive: close → forceAscend');
             pluginDiveRef.current = false;
             forceAscendToRoot();
         }
