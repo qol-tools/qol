@@ -277,10 +277,6 @@ function AppShell() {
         const pluginId = sourceSurface?.dataset?.pluginId
             || sourceSurface?.closest?.('[data-plugin-id]')?.dataset?.pluginId;
         const parentPageId = sourceSurface?.closest?.('[data-view-id]')?.dataset?.viewId;
-        log('dive:', targetId,
-            'sourceSurface=' + (sourceSurface ? elLabel(sourceSurface) : 'null'),
-            'pluginId=' + (pluginId || 'none'),
-            'parentPageId=' + (parentPageId || 'none'));
         const candidateSelectors = [];
         if (pluginId) candidateSelectors.push(`[data-plugin-id="${pluginId}"]`);
         if (parentPageId) candidateSelectors.push(`[data-view-id="${parentPageId}"]`);
@@ -314,27 +310,40 @@ function AppShell() {
         return didAscend;
     }, [navigation, registry]);
 
+    const divePlugin = useCallback((pluginId) => {
+        if (layerAnimatingRef.current) {
+            log('divePlugin:', pluginId, '→ skipped (animating)');
+            return;
+        }
+        const selector = `[data-plugin-id="${pluginId}"]`;
+        const diveTarget = registry.getDiveTargetForSource(selector);
+        if (!diveTarget) {
+            log('divePlugin:', pluginId, '→ no DiveTarget registered');
+            return;
+        }
+        navigation.diveInto(selector);
+        setDiveDepth(navigation.stackDepth());
+        const firstPageId = diveTarget.pages[0];
+        if (firstPageId) {
+            const entry = registry.getEntry(firstPageId);
+            const newParent = entry?.parent || firstPageId;
+            diveParentRef.current = newParent;
+            setDiveParent(newParent);
+        }
+    }, [navigation, registry]);
+
     const pluginDiveRef = useRef(false);
     useEffect(() => {
         if (activePluginId && !pluginDiveRef.current) {
-            log('pluginDive: open', activePluginId, '→ dive plugins-config');
+            log('pluginDive: open', activePluginId, '→ divePlugin');
             pluginDiveRef.current = true;
-            const allCards = document.querySelectorAll('[data-plugin-id]');
-            const scoped = document.querySelector(`[data-view-id="plugins"] [data-plugin-id="${CSS.escape(activePluginId)}"]`);
-            const direct = document.querySelector(`[data-plugin-id="${CSS.escape(activePluginId)}"]`);
-            log('pluginDive: query',
-                'allCards=' + allCards.length,
-                'scoped=' + (scoped ? 'yes' : 'no'),
-                'direct=' + (direct ? 'yes' : 'no'),
-                'sample=' + (allCards[0] ? allCards[0].getAttribute('data-plugin-id') : 'none'));
-            const source = scoped || direct;
-            dive('plugins-config', source);
+            divePlugin(activePluginId);
         } else if (!activePluginId && pluginDiveRef.current) {
             log('pluginDive: close → ascend');
             pluginDiveRef.current = false;
             ascend();
         }
-    }, [activePluginId, dive, ascend]);
+    }, [activePluginId, divePlugin, ascend]);
 
     return html`
         <${ModifierStateProvider}>
