@@ -127,10 +127,12 @@ function AppShell() {
         let cancelled = false;
         async function registerPluginDiveTargets() {
             try {
-                const res = await fetch('/api/plugins');
+                const res = await fetch('/api/installed');
                 if (!res.ok || cancelled) return;
-                const plugins = await res.json();
+                const payload = await res.json();
                 if (cancelled) return;
+                const plugins = Array.isArray(payload) ? payload : (Array.isArray(payload?.plugins) ? payload.plugins : []);
+                if (!plugins.length) return;
                 const registered = diveTargetsRegisteredRef.current;
                 const pluginsEntry = registry.getEntry('plugins');
                 if (!pluginsEntry) return;
@@ -292,12 +294,7 @@ function AppShell() {
             }
             return;
         }
-        const entry = registry.diveTarget(targetId);
-        const newParent = entry?.parent || targetId;
-        diveParentRef.current = newParent;
-        setDiveParent(newParent);
-        navigation.dive(targetId);
-        setDiveDepth(navigation.stackDepth());
+        log('dive:', targetId, '→ no DiveTarget matched', candidateSelectors);
     }, [navigation, registry]);
 
     const ascend = useCallback(() => {
