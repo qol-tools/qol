@@ -112,12 +112,21 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         const targetY = center.y - h / (2 * z);
         if (entry.layer !== camera.layer) camera.setLayer(entry.layer);
         const pageId = anchor.pageId;
-        camera.panSmooth(targetX, targetY, 400, () => {
+        camera.panSmooth(targetX, targetY, 200, () => {
             if (typeof document === 'undefined') return;
             const sel = focusRegistry[pageId];
-            if (!sel) return;
-            const el = document.querySelector(sel);
-            if (el && typeof el.focus === 'function') el.focus({ preventScroll: true });
+            if (sel) {
+                const el = document.querySelector(sel);
+                if (el && typeof el.focus === 'function') {
+                    el.focus({ preventScroll: true });
+                    return;
+                }
+            }
+            const slot = document.querySelector(`[data-view-id="${CSS.escape(pageId)}"]`);
+            const firstSurface = slot?.querySelector?.('[data-selected-surface]');
+            if (firstSurface && typeof firstSurface.focus === 'function') {
+                firstSurface.focus({ preventScroll: true });
+            }
         });
     }
 
