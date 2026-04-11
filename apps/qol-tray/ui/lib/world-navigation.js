@@ -103,11 +103,13 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         const targetY = center.y - h / (2 * z);
         const focusSelector = focusRegistry[anchor.pageId] || null;
         if (entry.layer !== camera.layer) camera.setLayer(entry.layer);
-        if (focusSelector && typeof document !== 'undefined') {
-            const el = document.querySelector(focusSelector);
-            if (el && typeof el.focus === 'function') el.focus({ preventScroll: true });
-        }
         camera.panSmooth(targetX, targetY, 400);
+        if (focusSelector && typeof document !== 'undefined' && typeof requestAnimationFrame === 'function') {
+            requestAnimationFrame(() => {
+                const el = document.querySelector(focusSelector);
+                if (el && typeof el.focus === 'function') el.focus({ preventScroll: true });
+            });
+        }
     }
 
     function dive(targetPageId) {
