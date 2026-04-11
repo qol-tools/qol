@@ -121,16 +121,17 @@ function handlePaletteToggle(event, palette, activePluginId) {
 function routeToView(event, viewKeyboard, cycleView) {
     if (event.key === 'Tab') {
         event.preventDefault();
-        const camera = _cameraRef.current;
-        const onSubLayer = camera && camera.layer < 0;
-        if (!hasVisibleModal() && !onSubLayer) {
-            cycleView(event);
+        if (hasVisibleModal()) {
+            if (viewKeyboard?.isBlocking?.() && viewKeyboard.handleKey) {
+                viewKeyboard.handleKey(event);
+            }
             return;
         }
-        // On sub-layer or in modal: let view keyboard handle Tab for field cycling
         if (viewKeyboard?.isBlocking?.() && viewKeyboard.handleKey) {
             viewKeyboard.handleKey(event);
+            return;
         }
+        cycleView(event);
         return;
     }
     // Dive-target takes priority: Enter on a surface with data-dive-target always dives
