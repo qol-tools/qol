@@ -456,7 +456,7 @@ fn validate_step_value(
 fn default_matches_kind(default: &FieldDefault, kind: FieldKind) -> bool {
     match (default, kind) {
         (FieldDefault::Boolean(_), FieldKind::Boolean) => true,
-        (FieldDefault::String(_), FieldKind::String | FieldKind::Select) => true,
+        (FieldDefault::String(_), FieldKind::String | FieldKind::Select | FieldKind::Color) => true,
         (FieldDefault::Number(_), FieldKind::Number) => true,
         (FieldDefault::StringArray(_), FieldKind::StringArray) => true,
         (FieldDefault::ObjectArray(_), FieldKind::ObjectArray) => true,
@@ -491,5 +491,6 @@ fn field_kind_name(kind: FieldKind) -> &'static str {
         FieldKind::StringArray => "string_array",
         FieldKind::ObjectArray => "object_array",
         FieldKind::ObjectMap => "object_map",
+        FieldKind::Color => "color",
     }
 }

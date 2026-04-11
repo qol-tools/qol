@@ -71,6 +71,8 @@ pub struct FieldSpec {
     pub entry_fields: IndexMap<String, FieldKind>,
     #[serde(default)]
     pub show_when: Option<ShowWhenSpec>,
+    #[serde(default)]
+    pub alpha: Option<bool>,
     #[serde(flatten)]
     pub number: NumberConstraints,
 }
@@ -97,6 +99,7 @@ pub enum FieldKind {
     StringArray,
     ObjectArray,
     ObjectMap,
+    Color,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -127,4 +130,47 @@ pub fn parse_spec(path: impl AsRef<Path>) -> Result<ConfigSpec, ParseSpecError> 
 
 pub fn parse_spec_str(input: &str) -> Result<ConfigSpec, toml::de::Error> {
     toml::from_str(input)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_color_field() {
+        let spec_str = "
+schema_version = 1
+
+[field.border_color]
+type = \"color\"
+default = \"#5FA8FF\"
+";
+        let spec = parse_spec_str(spec_str).expect("parse");
+        let field = spec.fields.get("border_color").expect("field present");
+        assert!(
+            matches!(field.kind, FieldKind::Color),
+            "expected Color, got {:?}",
+            field.kind
+        );
+        match field.default.as_ref() {
+            Some(FieldDefault::String(s)) => assert_eq!(s, "#5FA8FF", "color default"),
+            other => panic!("expected String default, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_color_field_with_alpha() {
+        let spec_str = "
+schema_version = 1
+
+[field.overlay_color]
+type = \"color\"
+default = \"#000000FF\"
+alpha = true
+";
+        let spec = parse_spec_str(spec_str).expect("parse");
+        let field = spec.fields.get("overlay_color").expect("field present");
+        assert!(matches!(field.kind, FieldKind::Color));
+        assert_eq!(field.alpha, Some(true), "alpha flag");
+    }
 }

@@ -191,7 +191,7 @@ fn config_key_for(id: &str, field: &crate::contract::FieldSpec) -> String {
 fn field_default_from_override(kind: FieldKind, raw: &serde_json::Value) -> Option<FieldDefault> {
     match kind {
         FieldKind::Boolean => raw.as_bool().map(FieldDefault::Boolean),
-        FieldKind::String | FieldKind::Select => raw
+        FieldKind::String | FieldKind::Select | FieldKind::Color => raw
             .as_str()
             .map(|value| FieldDefault::String(value.to_string())),
         FieldKind::Number => raw.as_f64().map(FieldDefault::Number),
@@ -309,5 +309,6 @@ fn field_kind_name(kind: FieldKind) -> &'static str {
         FieldKind::StringArray => "string_array",
         FieldKind::ObjectArray => "object_array",
         FieldKind::ObjectMap => "object_map",
+        FieldKind::Color => "color",
     }
 }
