@@ -101,15 +101,15 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         const z = camera.zoom || 1;
         const targetX = center.x - w / (2 * z);
         const targetY = center.y - h / (2 * z);
-        const focusSelector = focusRegistry[anchor.pageId] || null;
         if (entry.layer !== camera.layer) camera.setLayer(entry.layer);
-        camera.panSmooth(targetX, targetY, 400);
-        if (focusSelector && typeof document !== 'undefined' && typeof requestAnimationFrame === 'function') {
-            requestAnimationFrame(() => {
-                const el = document.querySelector(focusSelector);
-                if (el && typeof el.focus === 'function') el.focus({ preventScroll: true });
-            });
-        }
+        const pageId = anchor.pageId;
+        camera.panSmooth(targetX, targetY, 400, () => {
+            if (typeof document === 'undefined') return;
+            const sel = focusRegistry[pageId];
+            if (!sel) return;
+            const el = document.querySelector(sel);
+            if (el && typeof el.focus === 'function') el.focus({ preventScroll: true });
+        });
     }
 
     function dive(targetPageId) {
