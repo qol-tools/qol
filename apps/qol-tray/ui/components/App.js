@@ -60,8 +60,25 @@ function AppShell() {
         refreshSyncStatus,
     } = useApp({ onDissolve });
 
+    const viewportRef = useRef(null);
+
+    useEffect(() => {
+        const el = document.getElementById('viewport');
+        viewportRef.current = el;
+    }, []);
+
     const cameraRef = useRef(null);
-    if (!cameraRef.current) cameraRef.current = createCamera();
+    if (!cameraRef.current) {
+        cameraRef.current = createCamera({
+            getViewportSize: () => {
+                const el = viewportRef.current;
+                return {
+                    w: el?.clientWidth || window.innerWidth,
+                    h: el?.clientHeight || window.innerHeight,
+                };
+            },
+        });
+    }
     const camera = cameraRef.current;
 
     const registryRef = useRef(null);
@@ -79,13 +96,6 @@ function AppShell() {
             if (!registry.getEntry(id)) registry.placeNew(id);
         }
     }, [viewOrder, registry]);
-
-    const viewportRef = useRef(null);
-
-    useEffect(() => {
-        const el = document.getElementById('viewport');
-        viewportRef.current = el;
-    }, []);
 
     const navigationRef = useRef(null);
     if (!navigationRef.current) {

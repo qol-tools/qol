@@ -2,7 +2,8 @@ import { createDebug } from './debug.js';
 
 const log = createDebug('qol:camera');
 
-export function createCamera() {
+export function createCamera(options = {}) {
+    const getViewportSize = options.getViewportSize || (() => ({ w: 800, h: 600 }));
     let x = 0;
     let y = 0;
     let zoom = 1.0;
@@ -14,7 +15,38 @@ export function createCamera() {
     let animStart = 0;
     let animDuration = 0;
     let animComplete = null;
+    let bounds = null;
     const listeners = new Set();
+
+    function clampPanTarget(tx, ty) {
+        if (!bounds) return { x: tx, y: ty };
+        const vp = getViewportSize();
+        const visibleW = vp.w / zoom;
+        const visibleH = vp.h / zoom;
+        let nx, ny;
+        if (visibleW >= bounds.width) {
+            nx = bounds.x + bounds.width / 2 - vp.w / 2;
+        } else {
+            nx = Math.max(bounds.x, Math.min(tx, bounds.x + bounds.width - visibleW));
+        }
+        if (visibleH >= bounds.height) {
+            ny = bounds.y + bounds.height / 2 - vp.h / 2;
+        } else {
+            ny = Math.max(bounds.y, Math.min(ty, bounds.y + bounds.height - visibleH));
+        }
+        return { x: nx, y: ny };
+    }
+
+    function clampZoom(nz) {
+        if (!bounds) return nz;
+        const vp = getViewportSize();
+        const minZoom = Math.max(vp.w / bounds.width, vp.h / bounds.height);
+        return Math.max(nz, minZoom);
+    }
+
+    function setBounds(rect) {
+        bounds = rect;
+    }
 
     function notify() {
         for (const fn of listeners) fn({ x, y, zoom, layer });
@@ -27,15 +59,17 @@ export function createCamera() {
 
     function panTo(nx, ny) {
         cancelSmooth();
-        x = nx;
-        y = ny;
+        const clamped = clampPanTarget(nx, ny);
+        x = clamped.x;
+        y = clamped.y;
         apply();
     }
 
     function panSmooth(tx, ty, duration, onComplete) {
         cancelSmooth();
+        const clamped = clampPanTarget(tx, ty);
         animFrom = { x, y, zoom };
-        animTarget = { x: tx, y: ty, zoom };
+        animTarget = { x: clamped.x, y: clamped.y, zoom };
         animStart = performance.now();
         animDuration = duration;
         animComplete = onComplete || null;
@@ -44,7 +78,7 @@ export function createCamera() {
 
     function zoomTo(nz) {
         cancelSmooth();
-        zoom = nz;
+        zoom = clampZoom(nz);
         apply();
     }
 
@@ -86,8 +120,9 @@ export function createCamera() {
 
     function nudge(dx, dy) {
         cancelSmooth();
-        x += dx;
-        y += dy;
+        const clamped = clampPanTarget(x + dx, y + dy);
+        x = clamped.x;
+        y = clamped.y;
         apply();
     }
 
@@ -110,6 +145,7 @@ export function createCamera() {
         cancelSmooth,
         nudge,
         setLayer,
+        setBounds,
         subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     };
 }
