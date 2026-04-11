@@ -106,6 +106,11 @@ export function useAppKeyboardRouting({
         const viewKeyboard = getViewKeyboard(activeViewId);
         if (handlePaletteToggle(event, palette, activePluginId)) return;
         if (palette.active && event.key !== 'Tab') return;
+        if (event.key === 'Tab' && activePluginId && !viewKeyboard?.isBlocking?.()) {
+            event.preventDefault();
+            cycleView(event);
+            return;
+        }
         if (activePluginId) return delegateToPluginConfig(event, pluginConfig, closePluginConfig);
         routeToView(event, viewKeyboard, cycleView);
     }, [activePluginId, activeViewId, closePluginConfig, cycleView, getViewKeyboard, palette, pluginConfig]));
