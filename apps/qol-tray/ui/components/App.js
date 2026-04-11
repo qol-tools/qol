@@ -326,7 +326,14 @@ function AppShell() {
             log('divePlugin:', pluginId, '→ no DiveTarget registered');
             return;
         }
+        log('divePlugin:', pluginId,
+            `cameraBefore=(${Math.round(camera.x)},${Math.round(camera.y)})`,
+            `claim=${JSON.stringify(diveTarget.claim)}`,
+            `firstPage=${diveTarget.pages[0]}`);
         navigation.diveInto(selector);
+        log('divePlugin:', pluginId,
+            `cameraAfter=(${Math.round(camera.x)},${Math.round(camera.y)})`,
+            `layer=${camera.layer}`);
         setDiveDepth(navigation.stackDepth());
         const firstPageId = diveTarget.pages[0];
         if (firstPageId) {
