@@ -1,7 +1,45 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createNavigation } from './world-navigation.js';
-import { contains } from './world-registry.js';
+import { contains, createWorldRegistry } from './world-registry.js';
+
+test('registry stores and retrieves dive targets', () => {
+    const reg = createWorldRegistry([], {});
+    const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
+    reg.addDiveTarget({ sourceSelector: '#card-a', claim, pages: ['page-a'] });
+    const targets = reg.getDiveTargets();
+    assert.equal(targets.length, 1);
+    assert.equal(targets[0].sourceSelector, '#card-a');
+});
+
+test('registry looks up dive target by source selector', () => {
+    const reg = createWorldRegistry([], {});
+    const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
+    reg.addDiveTarget({ sourceSelector: '#card-a', claim, pages: ['page-a'] });
+    const target = reg.getDiveTargetForSource('#card-a');
+    assert.equal(target?.sourceSelector, '#card-a');
+});
+
+test('registry returns null for unknown source selector', () => {
+    const reg = createWorldRegistry([], {});
+    assert.equal(reg.getDiveTargetForSource('#nonexistent'), null);
+});
+
+test('registry addEntry adds an entry that getEntry retrieves', () => {
+    const reg = createWorldRegistry([], {});
+    reg.addEntry({ id: 'custom', x: 100, y: 200, width: 50, height: 60, layer: -1 });
+    const e = reg.getEntry('custom');
+    assert.equal(e?.id, 'custom');
+    assert.equal(e?.x, 100);
+});
+
+test('registry addEntry overwrites existing entry with same id', () => {
+    const reg = createWorldRegistry([], {});
+    reg.addEntry({ id: 'e', x: 0, y: 0, width: 10, height: 10, layer: 0 });
+    reg.addEntry({ id: 'e', x: 999, y: 999, width: 20, height: 20, layer: 0 });
+    const e = reg.getEntry('e');
+    assert.equal(e.x, 999);
+});
 
 test('contains returns true when rect is null (no confinement)', () => {
     const e = { id: 'x', x: 0, y: 0, width: 100, height: 100, layer: 0 };

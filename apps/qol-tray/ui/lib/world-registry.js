@@ -13,6 +13,23 @@ export function contains(rect, entry) {
 
 export function createWorldRegistry(viewOrder, manifest = {}) {
     const entries = new Map();
+    const diveTargets = new Map();
+
+    function addEntry(entry) {
+        entries.set(entry.id, { ...entry });
+    }
+
+    function addDiveTarget(target) {
+        diveTargets.set(target.sourceSelector, { ...target });
+    }
+
+    function getDiveTargets() {
+        return Array.from(diveTargets.values());
+    }
+
+    function getDiveTargetForSource(selector) {
+        return diveTargets.get(selector) || null;
+    }
 
     for (let i = 0; i < viewOrder.length; i++) {
         const id = viewOrder[i];
@@ -123,5 +140,9 @@ export function createWorldRegistry(viewOrder, manifest = {}) {
         activeViewId,
         placeNew,
         cameraTargetForView,
+        addEntry,
+        addDiveTarget,
+        getDiveTargets,
+        getDiveTargetForSource,
     };
 }
