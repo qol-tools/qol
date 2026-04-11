@@ -149,36 +149,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
             layer: camera.layer,
             confinement: currentConfinement,
         });
-        const { w: vpW, h: vpH } = domHelpers.getViewportSize();
-        const z = camera.zoom || 1;
-        const visibleW = vpW / z;
-        const visibleH = vpH / z;
-        const N = target.pages.length;
-        const PAGE_WIDTH_LOCAL = 1280;
-        const PAGE_HEIGHT_LOCAL = 900;
-        const claimOriginX = camera.x;
-        const claimOriginY = camera.y;
-        const claimWidth = Math.max(N * PAGE_WIDTH_LOCAL, visibleW);
-        const claimHeight = Math.max(PAGE_HEIGHT_LOCAL, visibleH);
-        const repositionedClaim = {
-            x: claimOriginX,
-            y: claimOriginY,
-            width: claimWidth,
-            height: claimHeight,
-            layer: target.claim.layer,
-        };
-        target.pages.forEach((pageId, i) => {
-            registry.addEntry?.({
-                id: pageId,
-                x: claimOriginX + i * PAGE_WIDTH_LOCAL,
-                y: claimOriginY,
-                width: PAGE_WIDTH_LOCAL,
-                height: PAGE_HEIGHT_LOCAL,
-                layer: target.claim.layer,
-            });
-        });
-        target.claim = repositionedClaim;
-        currentConfinement = repositionedClaim;
+        currentConfinement = target.claim;
         if (target.claim.layer !== camera.layer && typeof camera.setLayer === 'function') {
             camera.setLayer(target.claim.layer);
         }
@@ -198,9 +169,13 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         }
         currentAnchor = prev.anchor;
         currentConfinement = prev.confinement ?? null;
+        if (typeof prev.layer === 'number' && prev.layer !== camera.layer && typeof camera.setLayer === 'function') {
+            camera.setLayer(prev.layer);
+        }
+        if (typeof prev.zoom === 'number' && typeof camera.zoomTo === 'function') {
+            camera.zoomTo(prev.zoom);
+        }
         setBounds(currentConfinement);
-        camera.zoomTo(prev.zoom);
-        gotoAnchor(prev.anchor, { respectKnob: false });
         scheduleSave();
         return true;
     }
