@@ -20,6 +20,13 @@ const log = createDebug('qol:nav');
 const PLUGIN_CONFIG_FIELD = '[data-plugin-config-field-id]';
 const NAV_KEYS = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
 const NAV_KEYS_EXTENDED = { ...NAV_KEYS, h: 'left', j: 'down', k: 'up', l: 'right' };
+
+function cycleIndex(current, length, reverse) {
+    const safe = current < 0 ? 0 : current;
+    return reverse
+        ? (safe - 1 + length) % length
+        : (safe + 1) % length;
+}
 let _cameraRef = { current: null };
 let _diveRef = { current: null };
 let _ascendRef = { current: null };
@@ -42,33 +49,31 @@ export function useAppKeyboardRouting({
     _cameraRef.current = camera;
     _diveRef.current = dive;
     _ascendRef.current = ascend;
+    const cyclePluginSection = useCallback((shiftKey) => {
+        if (!activePluginId || !navigation?.getCurrentConfinement?.()) return false;
+        const target = registry?.getDiveTargetForSource?.(`[data-plugin-id="${activePluginId}"]`);
+        const pages = target?.pages || [];
+        if (pages.length <= 1) return false;
+        const current = navigation.getCurrentAnchor()?.pageId;
+        const idx = Math.max(0, pages.indexOf(current));
+        const nextId = pages[cycleIndex(idx, pages.length, shiftKey)];
+        log('tab:', current, '→', nextId, '(section)');
+        navigation.setCurrentAnchor({ pageId: nextId });
+        navigation.gotoAnchor({ pageId: nextId }, { respectKnob: false });
+        return true;
+    }, [activePluginId, navigation, registry]);
+
+    const cycleTopLevelView = useCallback((shiftKey) => {
+        const nextId = viewOrder[cycleIndex(viewOrder.indexOf(activeViewId), viewOrder.length, shiftKey)];
+        log('tab:', activeViewId, '→', nextId);
+        switchView(nextId);
+    }, [activeViewId, switchView, viewOrder]);
+
     const cycleView = useCallback((event) => {
         event.preventDefault();
-        const confinement = navigation?.getCurrentConfinement?.();
-        if (confinement && activePluginId && registry) {
-            const selector = `[data-plugin-id="${activePluginId}"]`;
-            const target = registry.getDiveTargetForSource?.(selector);
-            const pages = target?.pages || [];
-            if (pages.length > 1) {
-                const current = navigation.getCurrentAnchor()?.pageId;
-                const idx = Math.max(0, pages.indexOf(current));
-                const next = event.shiftKey
-                    ? (idx - 1 + pages.length) % pages.length
-                    : (idx + 1) % pages.length;
-                const nextId = pages[next];
-                log('tab:', current, '→', nextId, '(section)');
-                navigation.setCurrentAnchor({ pageId: nextId });
-                navigation.gotoAnchor({ pageId: nextId }, { respectKnob: false });
-                return;
-            }
-        }
-        const idx = viewOrder.indexOf(activeViewId);
-        const next = event.shiftKey
-            ? (idx - 1 + viewOrder.length) % viewOrder.length
-            : (idx + 1) % viewOrder.length;
-        log('tab:', activeViewId, '→', viewOrder[next]);
-        switchView(viewOrder[next]);
-    }, [activeViewId, switchView, viewOrder, navigation, registry, activePluginId]);
+        if (cyclePluginSection(event.shiftKey)) return;
+        cycleTopLevelView(event.shiftKey);
+    }, [cyclePluginSection, cycleTopLevelView]);
 
     const prevPluginIdRef = useRef(activePluginId);
     useLayoutEffect(() => {

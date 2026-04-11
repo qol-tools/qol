@@ -150,7 +150,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         const target = registry.getDiveTargetForSource?.(sourceSelector);
         if (!target) {
             log('diveInto: no target for', sourceSelector);
-            return;
+            return null;
         }
         diveStack.push({
             anchor: currentAnchor,
@@ -168,6 +168,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
             camera.setLayer(target.claim.layer);
         }
         scheduleSave();
+        return target;
     }
 
     function ascend() {
