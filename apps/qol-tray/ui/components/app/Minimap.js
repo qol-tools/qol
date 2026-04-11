@@ -15,7 +15,7 @@ const SLOT_PAD_Y = 6;
 const RADIUS = 3;
 const ARROW_FLASH_MS = 350;
 
-export function MinimapContainer({ camera, registry, viewportRef, diveParent, activePluginId, version, updateState, isDevMode, onAction }) {
+export function MinimapContainer({ camera, registry, viewportRef, diveParent, activePluginId, diveDepth, version, updateState, isDevMode, onAction }) {
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [settings, setSettings] = useState(getWorldSettings);
     const cogRef = useRef(null);
@@ -31,6 +31,7 @@ export function MinimapContainer({ camera, registry, viewportRef, diveParent, ac
 
     return html`
         <div class="world-minimap-container">
+            ${diveDepth > 0 && html`<span class="world-minimap-depth" style=${`--wedge-hue: ${50 + (diveDepth - 1) * 45}`}>${diveDepth}</span>`}
             <${Minimap} camera=${camera} registry=${registry} viewportRef=${viewportRef} width=${settings.minimapSize} diveParent=${diveParent} activePluginId=${activePluginId} />
         </div>
         <div class="world-cog-anchor" ref=${cogRef}>
@@ -203,7 +204,7 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, activePlugi
         if (entries.length === 0) return;
 
         const sorted = [...entries].sort((a, b) => a.x - b.x);
-        const activeId = registry.activeViewId(camera.x, camera.y, vpW, vpH, z);
+        const activeId = nearestEntryId(sorted, camera, vpW, vpH, z);
         const activeIdx = Math.max(0, sorted.findIndex(e => e.id === activeId));
 
         const slots = buildCenteredSlots(cw, sorted.length, activeIdx);
@@ -227,7 +228,7 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, activePlugi
         const vpH = vp ? vp.clientHeight : 0;
 
         const sorted = [...entries].sort((a, b) => a.x - b.x);
-        const activeId = registry.activeViewId(camera.x, camera.y, vpW, vpH, z);
+        const activeId = nearestEntryId(sorted, camera, vpW, vpH, z);
         const activeIdx = Math.max(0, sorted.findIndex(en => en.id === activeId));
 
         const slots = buildCenteredSlots(canvas.clientWidth, sorted.length, activeIdx);
@@ -280,6 +281,23 @@ function buildCenteredSlots(cw, count, activeIdx) {
     }
 
     return slots;
+}
+
+function nearestEntryId(entries, camera, vpW, vpH, zoom) {
+    if (entries.length === 0) return null;
+    if (entries.length === 1) return entries[0].id;
+    const z = zoom || 1;
+    const cx = camera.x + vpW / (2 * z);
+    const cy = camera.y + vpH / (2 * z);
+    let bestId = null;
+    let bestDist = Infinity;
+    for (const e of entries) {
+        const ex = e.x + e.width / 2;
+        const ey = e.y + e.height / 2;
+        const d = Math.hypot(cx - ex, cy - ey);
+        if (d < bestDist) { bestId = e.id; bestDist = d; }
+    }
+    return bestId;
 }
 
 function slotLabel(entry, activePluginId) {
