@@ -149,7 +149,34 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
             layer: camera.layer,
             confinement: currentConfinement,
         });
-        currentConfinement = target.claim;
+        const { w: vpW, h: vpH } = domHelpers.getViewportSize();
+        const z = camera.zoom || 1;
+        const viewportCenterX = camera.x + vpW / (2 * z);
+        const viewportCenterY = camera.y + vpH / (2 * z);
+        const N = target.pages.length;
+        const PAGE_WIDTH_LOCAL = 1280;
+        const PAGE_HEIGHT_LOCAL = 900;
+        const claimOriginX = viewportCenterX - PAGE_WIDTH_LOCAL / 2;
+        const claimOriginY = viewportCenterY - PAGE_HEIGHT_LOCAL / 2;
+        const repositionedClaim = {
+            x: claimOriginX,
+            y: claimOriginY,
+            width: N * PAGE_WIDTH_LOCAL,
+            height: PAGE_HEIGHT_LOCAL,
+            layer: target.claim.layer,
+        };
+        target.pages.forEach((pageId, i) => {
+            registry.addEntry?.({
+                id: pageId,
+                x: claimOriginX + i * PAGE_WIDTH_LOCAL,
+                y: claimOriginY,
+                width: PAGE_WIDTH_LOCAL,
+                height: PAGE_HEIGHT_LOCAL,
+                layer: target.claim.layer,
+            });
+        });
+        target.claim = repositionedClaim;
+        currentConfinement = repositionedClaim;
         setBounds(currentConfinement);
         const firstPageId = target.pages[0];
         if (firstPageId) {
