@@ -27,7 +27,6 @@ function registerStaticDiveTargets(registry) {
     const PAGE_WIDTH = 1280;
     const PAGE_HEIGHT = 900;
     const staticTargets = [
-        { parentId: 'plugins', subId: 'plugins-config' },
         { parentId: 'hotkeys', subId: 'hotkeys-editor' },
         { parentId: 'shortcuts', subId: 'shortcuts-editor' },
         { parentId: 'logs', subId: 'logs-detail' },
