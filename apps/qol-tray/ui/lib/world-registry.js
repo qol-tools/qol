@@ -2,6 +2,15 @@ const PAGE_WIDTH = 1280;
 const PAGE_HEIGHT = 900;
 const PAGE_STRIDE = 10000;
 
+export function contains(rect, entry) {
+    if (!rect) return true;
+    if (entry.layer !== rect.layer) return false;
+    return entry.x >= rect.x
+        && entry.y >= rect.y
+        && entry.x + entry.width <= rect.x + rect.width
+        && entry.y + entry.height <= rect.y + rect.height;
+}
+
 export function createWorldRegistry(viewOrder, manifest = {}) {
     const entries = new Map();
 
