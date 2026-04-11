@@ -34,6 +34,8 @@ export function useAppKeyboardRouting({
     palette,
     dive,
     ascend,
+    navigation,
+    registry,
 }) {
     const pluginConfig = usePluginConfigContext();
     const { getViewKeyboard } = useViewKeyboardContext();
@@ -42,13 +44,31 @@ export function useAppKeyboardRouting({
     _ascendRef.current = ascend;
     const cycleView = useCallback((event) => {
         event.preventDefault();
+        const confinement = navigation?.getCurrentConfinement?.();
+        if (confinement && activePluginId && registry) {
+            const selector = `[data-plugin-id="${activePluginId}"]`;
+            const target = registry.getDiveTargetForSource?.(selector);
+            const pages = target?.pages || [];
+            if (pages.length > 1) {
+                const current = navigation.getCurrentAnchor()?.pageId;
+                const idx = Math.max(0, pages.indexOf(current));
+                const next = event.shiftKey
+                    ? (idx - 1 + pages.length) % pages.length
+                    : (idx + 1) % pages.length;
+                const nextId = pages[next];
+                log('tab:', current, '→', nextId, '(section)');
+                navigation.setCurrentAnchor({ pageId: nextId });
+                navigation.gotoAnchor({ pageId: nextId }, { respectKnob: false });
+                return;
+            }
+        }
         const idx = viewOrder.indexOf(activeViewId);
         const next = event.shiftKey
             ? (idx - 1 + viewOrder.length) % viewOrder.length
             : (idx + 1) % viewOrder.length;
         log('tab:', activeViewId, '→', viewOrder[next]);
         switchView(viewOrder[next]);
-    }, [activeViewId, switchView, viewOrder]);
+    }, [activeViewId, switchView, viewOrder, navigation, registry, activePluginId]);
 
     const prevPluginIdRef = useRef(activePluginId);
     useLayoutEffect(() => {

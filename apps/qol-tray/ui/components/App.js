@@ -363,6 +363,8 @@ function AppShell() {
                     viewOrder=${viewOrder}
                     dive=${dive}
                     ascend=${ascend}
+                    navigation=${navigation}
+                    registry=${registry}
                 />
                 <div class="app-container">
                     <${WorldViewport} camera=${camera} onViewChange=${switchView} navigation=${navigation} registry=${registry}>
@@ -394,9 +396,9 @@ function AppShell() {
     `;
 }
 
-function AppKeyboardRouting({ activePluginId, activeViewId, camera, closePluginConfig, switchView, viewOrder, dive, ascend }) {
+function AppKeyboardRouting({ activePluginId, activeViewId, camera, closePluginConfig, switchView, viewOrder, dive, ascend, navigation, registry }) {
     const palette = usePaletteContext();
-    useAppKeyboardRouting({ activePluginId, activeViewId, camera, closePluginConfig, switchView, viewOrder, palette, dive, ascend });
+    useAppKeyboardRouting({ activePluginId, activeViewId, camera, closePluginConfig, switchView, viewOrder, palette, dive, ascend, navigation, registry });
     return null;
 }
 
