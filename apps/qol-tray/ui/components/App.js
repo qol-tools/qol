@@ -1,8 +1,7 @@
 import { html } from '../lib/html.js';
-import { createDiveStack } from '../lib/dive-stack.js';
 import { useRef, useCallback, useEffect, useLayoutEffect, useState } from 'preact/hooks';
 import { PaletteProvider, usePaletteContext } from '../palette/context.js';
-import { createDebug, rectLabel, pointLabel } from '../lib/debug.js';
+import { createDebug } from '../lib/debug.js';
 import { createNavigation, selectorFor, animateTransition } from '../lib/world-navigation.js';
 import { getWorldSettings } from '../lib/world-settings.js';
 
@@ -69,10 +68,6 @@ function AppShell() {
     if (!registryRef.current) registryRef.current = createWorldRegistry(buildViewOrder(true), SUB_PAGE_MANIFEST);
     const registry = registryRef.current;
 
-    const diveStackRef = useRef(null);
-    if (!diveStackRef.current) diveStackRef.current = createDiveStack();
-    const diveStack = diveStackRef.current;
-
     const [cameraLayer, setCameraLayer] = useState(0);
     const [diveParent, setDiveParent] = useState(null);
     const diveParentRef = useRef(null);
@@ -119,10 +114,21 @@ function AppShell() {
                         h: el?.clientHeight || window.innerHeight,
                     };
                 },
+                crossLayerTransition: (entry, applyAndPan) => {
+                    const vp = viewportRef.current;
+                    if (!vp) { applyAndPan(); return; }
+                    const outClass = entry.layer < camera.layer ? 'dive-out' : 'ascend-out';
+                    animateTransition(vp, layerAnimatingRef, outClass, applyAndPan, null);
+                },
             },
         });
     }
     const navigation = navigationRef.current;
+
+    useEffect(() => {
+        const unsub = camera.subscribe(({ layer }) => setCameraLayer(layer));
+        return unsub;
+    }, [camera]);
 
     const prevViewRef = useRef(activeViewId);
     useEffect(() => {
@@ -152,105 +158,28 @@ function AppShell() {
             log('dive:', targetId, '→ skipped (animating)');
             return;
         }
+        if (sourceSurface) {
+            const sourcePageId = sourceSurface.closest('[data-view-id]')?.dataset?.viewId;
+            const selector = selectorFor(sourceSurface);
+            if (sourcePageId && selector) navigation.setFocus(sourcePageId, selector);
+        }
         const entry = registry.diveTarget(targetId);
-        if (!entry) {
-            log('dive:', targetId, '→ skipped (no entry)');
-            return;
-        }
-        const vp = viewportRef.current;
-        if (!vp) {
-            log('dive:', targetId, '→ skipped (no viewport)');
-            return;
-        }
-        diveStack.push({
-            layer: camera.layer,
-            x: camera.x, y: camera.y, zoom: camera.zoom,
-            surfaceSelector: sourceSurface ? selectorFor(sourceSurface) : null,
-            diveParent: diveParentRef.current,
-        });
-        const focusTarget = () => requestAnimationFrame(() => {
-            const slot = document.querySelector(`.world-view-slot[data-view-id="${CSS.escape(targetId)}"]`);
-            const surface = slot?.querySelector('[data-selected-surface]');
-            if (surface) surface.focus({ preventScroll: true });
-        });
-        const newParent = entry.parent || targetId;
-        setCameraLayer(entry.layer);
-        camera.setLayer(entry.layer);
+        const newParent = entry?.parent || targetId;
         diveParentRef.current = newParent;
         setDiveParent(newParent);
-        const rawW = vp.clientWidth;
-        const rawH = vp.clientHeight;
-        const w = rawW || window.innerWidth;
-        const h = rawH || window.innerHeight;
-        const vpFallback = !rawW || !rawH;
-        const camTarget = registry.cameraTargetForView(targetId, w, h, camera.zoom);
-        log('dive:', targetId,
-            `entry=${rectLabel(entry)}`,
-            `vp=(${w}x${h})${vpFallback ? '!' : ''}`,
-            `z=${camera.zoom.toFixed(2)}`,
-            '→ layer', entry.layer,
-            `cam=${pointLabel(camTarget)}`,
-            `stack=${diveStack.depth()}`);
-        if (camTarget) camera.panTo(camTarget.x, camTarget.y);
-        focusTarget();
-    }, [camera, registry, diveStack]);
-
-    const forceAscendToRoot = useCallback(() => {
-        const vp = viewportRef.current;
-        const wasAnimating = layerAnimatingRef.current;
-        layerAnimatingRef.current = false;
-        const prev = diveStack.pop();
-        const parentTarget = prev?.diveParent ?? null;
-        setCameraLayer(0);
-        camera.setLayer(0);
-        let resolved = prev ? { x: prev.x, y: prev.y, source: 'stack' } : null;
-        if (prev) {
-            camera.panTo(prev.x, prev.y);
-        } else if (vp) {
-            const w = vp.clientWidth || 800;
-            const h = vp.clientHeight || 600;
-            const targetId = parentTarget || activeViewId || 'plugins';
-            const target = registry.cameraTargetForView(targetId, w, h, camera.zoom);
-            if (target) {
-                camera.panTo(target.x, target.y);
-                resolved = { x: target.x, y: target.y, source: 'target:' + targetId };
-            }
-        }
-        diveParentRef.current = parentTarget;
-        setDiveParent(parentTarget);
-        const panSource = resolved ? `via ${resolved.source}` : 'no pan';
-        log('forceAscend:',
-            `wasAnimating=${wasAnimating}`,
-            `prev=${prev ? 'yes' : 'none'}`,
-            '→ layer 0',
-            `parent=${parentTarget || 'null'}`,
-            `cam=${pointLabel(resolved)}`,
-            panSource);
-    }, [camera, registry, activeViewId, diveStack]);
+        navigation.dive(targetId);
+    }, [navigation, registry]);
 
     const ascend = useCallback(() => {
-        if (layerAnimatingRef.current) return false;
-        const prev = diveStack.pop();
-        if (!prev) return false;
-        const vp = viewportRef.current;
-        if (!vp) return false;
-        const restoredParent = prev.diveParent ?? null;
-        const applyLayer = () => {
-            setCameraLayer(prev.layer);
-            camera.setLayer(prev.layer);
-            camera.panTo(prev.x, prev.y);
-            diveParentRef.current = restoredParent;
-            setDiveParent(restoredParent);
-        };
-        const focusTarget = prev.surfaceSelector
-            ? () => requestAnimationFrame(() => {
-                const surface = document.querySelector(prev.surfaceSelector);
-                if (surface) surface.focus({ preventScroll: true });
-            })
-            : null;
-        animateTransition(vp, layerAnimatingRef, 'ascend-out', applyLayer, focusTarget);
-        return true;
-    }, [camera, diveStack]);
+        const didAscend = navigation.ascend();
+        if (didAscend) {
+            const topAnchor = navigation.getCurrentAnchor();
+            const parentForAnchor = topAnchor?.pageId ? (registry.getEntry(topAnchor.pageId)?.parent || topAnchor.pageId) : null;
+            diveParentRef.current = parentForAnchor;
+            setDiveParent(parentForAnchor);
+        }
+        return didAscend;
+    }, [navigation, registry]);
 
     const pluginDiveRef = useRef(false);
     useEffect(() => {
@@ -260,11 +189,11 @@ function AppShell() {
             const source = document.querySelector('[data-selected-surface][data-selected="true"]');
             dive('plugins-config', source);
         } else if (!activePluginId && pluginDiveRef.current) {
-            log('pluginDive: close → forceAscend');
+            log('pluginDive: close → ascend');
             pluginDiveRef.current = false;
-            forceAscendToRoot();
+            ascend();
         }
-    }, [activePluginId, dive, forceAscendToRoot]);
+    }, [activePluginId, dive, ascend]);
 
     return html`
         <${ModifierStateProvider}>

@@ -56,12 +56,13 @@ export function createCamera() {
         apply();
     }
 
-    function panSmooth(tx, ty, duration) {
+    function panSmooth(tx, ty, duration, onComplete) {
         cancelSmooth();
         animFrom = { x, y, zoom };
         animTarget = { x: tx, y: ty, zoom };
         animStart = performance.now();
         animDuration = duration;
+        animComplete = onComplete || null;
         animId = requestAnimationFrame(tick);
     }
 
