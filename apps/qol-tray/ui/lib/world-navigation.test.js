@@ -94,17 +94,22 @@ function makeMocks() {
         hotkeys: { id: 'hotkeys', x: 10000, y: 0, width: 1280, height: 900, layer: 0, parent: null },
         'plugins-config': { id: 'plugins-config', x: 0, y: 0, width: 1280, height: 900, layer: -1, parent: 'plugins' },
     };
+    const diveTargets = new Map();
     const registry = {
         getEntry: (id) => pages[id] || null,
         getEntriesForLayer: (n) => Object.values(pages).filter(e => e.layer === n),
+        getDiveTargetForSource: (sel) => diveTargets.get(sel) || null,
+        addDiveTarget: (t) => diveTargets.set(t.sourceSelector, { ...t }),
+        addEntry: (e) => { pages[e.id] = { ...e }; },
     };
     const camera = {
         x: 0, y: 0, zoom: 1, layer: 0,
-        panSmooth(tx, ty) { this.x = tx; this.y = ty; },
+        panSmooth(tx, ty, dur, onComplete) { this.x = tx; this.y = ty; if (onComplete) onComplete(); },
         panTo(tx, ty) { this.x = tx; this.y = ty; },
         zoomTo(z) { this.zoom = z; },
         setLayer(l) { this.layer = l; },
         cancelSmooth() {},
+        setBounds(r) { this._bounds = r; },
     };
     const settings = { anchorToPages: true };
     const domHelpers = {
@@ -261,4 +266,78 @@ test('dive/ascend invariant holds under passive noise', () => {
         nav.ascend();
         assert.equal(nav.getCurrentAnchor().pageId, start, `restoring from ${start} under noise`);
     }
+});
+
+test('getCurrentConfinement returns null by default', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMocks();
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    assert.equal(nav.getCurrentConfinement(), null);
+});
+
+test('dive into a DiveTarget sets current confinement to the target claim', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMocks();
+    const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
+    registry.addDiveTarget({ sourceSelector: '#card-a', claim, pages: ['plugins-config'] });
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.setCurrentAnchor({ pageId: 'plugins' });
+    nav.diveInto('#card-a');
+    assert.deepEqual(nav.getCurrentConfinement(), claim);
+});
+
+test('ascend pops the confinement back to null', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMocks();
+    const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
+    registry.addDiveTarget({ sourceSelector: '#card-a', claim, pages: ['plugins-config'] });
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.setCurrentAnchor({ pageId: 'plugins' });
+    nav.diveInto('#card-a');
+    nav.ascend();
+    assert.equal(nav.getCurrentConfinement(), null);
+});
+
+test('nested dive pushes and ascend pops one frame at a time', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMocks();
+    const claim1 = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
+    const claim2 = { x: 100, y: 100, width: 400, height: 400, layer: -2 };
+    registry.addDiveTarget({ sourceSelector: '#a', claim: claim1, pages: ['plugins-config'] });
+    registry.addDiveTarget({ sourceSelector: '#b', claim: claim2, pages: ['plugins-config'] });
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.setCurrentAnchor({ pageId: 'plugins' });
+    nav.diveInto('#a');
+    nav.diveInto('#b');
+    assert.deepEqual(nav.getCurrentConfinement(), claim2);
+    nav.ascend();
+    assert.deepEqual(nav.getCurrentConfinement(), claim1);
+    nav.ascend();
+    assert.equal(nav.getCurrentConfinement(), null);
+});
+
+test('diveInto on an unknown selector is a no-op', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMocks();
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.setCurrentAnchor({ pageId: 'plugins' });
+    nav.diveInto('#nonexistent');
+    assert.equal(nav.getCurrentConfinement(), null);
+    assert.equal(nav.stackDepth(), 0);
+});
+
+test('dive calls camera.setBounds with the confinement rect', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMocks();
+    const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
+    registry.addDiveTarget({ sourceSelector: '#card-a', claim, pages: ['plugins-config'] });
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.setCurrentAnchor({ pageId: 'plugins' });
+    nav.diveInto('#card-a');
+    assert.deepEqual(camera._bounds, claim);
+});
+
+test('ascend from root dive calls camera.setBounds(null)', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMocks();
+    const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
+    registry.addDiveTarget({ sourceSelector: '#card-a', claim, pages: ['plugins-config'] });
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.setCurrentAnchor({ pageId: 'plugins' });
+    nav.diveInto('#card-a');
+    nav.ascend();
+    assert.equal(camera._bounds, null);
 });
