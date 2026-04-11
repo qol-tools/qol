@@ -55,6 +55,27 @@
     gap: var(--space-1-5);
 }
 
+.world-minimap-container > .world-minimap-depth {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    font-weight: 700;
+    font-family: var(--font-mono, monospace);
+    line-height: 1;
+    color: #000;
+    background: hsl(var(--wedge-hue, 50) 80% 38% / 0.95);
+    border-radius: 99px;
+    pointer-events: none;
+    z-index: 1;
+}
+
 .world-minimap {
     position: relative;
     background: rgba(0, 0, 0, 0.75);

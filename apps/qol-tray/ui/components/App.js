@@ -70,6 +70,7 @@ function AppShell() {
 
     const [cameraLayer, setCameraLayer] = useState(0);
     const [diveParent, setDiveParent] = useState(null);
+    const [diveDepth, setDiveDepth] = useState(0);
     const diveParentRef = useRef(null);
     const layerAnimatingRef = useRef(false);
 
@@ -167,6 +168,7 @@ function AppShell() {
         diveParentRef.current = newParent;
         setDiveParent(newParent);
         navigation.dive(targetId);
+        setDiveDepth(navigation.stackDepth());
     }, [navigation, registry]);
 
     const ascend = useCallback(() => {
@@ -177,6 +179,7 @@ function AppShell() {
             const parentForAnchor = topEntry?.parent ?? null;
             diveParentRef.current = parentForAnchor;
             setDiveParent(parentForAnchor);
+            setDiveDepth(navigation.stackDepth());
         }
         return didAscend;
     }, [navigation, registry]);
@@ -226,7 +229,7 @@ function AppShell() {
                     <//>
                     <${CommandPalette} />
                     <${MinimapContainer} camera=${camera} registry=${registry} viewportRef=${viewportRef} diveParent=${diveParent}
-                        activePluginId=${activePluginId}
+                        activePluginId=${activePluginId} diveDepth=${diveDepth}
                         version=${appVersion} updateState=${updateState} isDevMode=${devEnabled} onAction=${handleSidebarAction} />
                     <${SelectionCursorOverlay} camera=${camera} />
                     <${RecompileDissolve} triggerRef=${dissolveRef} />
