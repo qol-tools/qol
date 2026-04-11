@@ -248,6 +248,15 @@ function AppShell() {
         return unsub;
     }, [camera]);
 
+    const [activeAnchorId, setActiveAnchorId] = useState(() => navigation.getCurrentAnchor()?.pageId || null);
+    useEffect(() => {
+        const unsub = navigation.subscribeAnchor((anchor) => setActiveAnchorId(anchor?.pageId || null));
+        return unsub;
+    }, [navigation]);
+    const activeSectionId = (activeAnchorId && activePluginId && activeAnchorId.startsWith(`${activePluginId}-`))
+        ? activeAnchorId.slice(activePluginId.length + 1)
+        : null;
+
     const prevViewRef = useRef(activeViewId);
     useEffect(() => {
         if (prevViewRef.current === activeViewId) return;
@@ -337,7 +346,7 @@ function AppShell() {
 
     return html`
         <${ModifierStateProvider}>
-        <${PluginConfigProvider} pluginId=${activePluginId} mode=${activePluginMode}>
+        <${PluginConfigProvider} pluginId=${activePluginId} mode=${activePluginMode} activeSectionId=${activeSectionId}>
             <${ViewKeyboardProvider}>
                 <${AppKeyboardRouting}
                     activePluginId=${activePluginId}

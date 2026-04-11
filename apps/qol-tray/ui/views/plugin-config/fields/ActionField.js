@@ -2,13 +2,11 @@ import { html } from '../../../lib/html.js';
 import { useCallback, useState } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
 import { useDispatchAction } from '../../../hooks/useDispatchAction.js';
-import { fieldSelectionClasses } from '../field-map.js';
+import { fieldSurfaceAttrs } from '../field-map.js';
 import { Modal, ModalActions } from '../../../components/ModalPreact.js';
 
 export function ActionField({ field }) {
     const ctx = usePluginConfigContext();
-    const selected = ctx.selectedFieldId === field.id;
-    const index = ctx.fieldIndexById[field.id];
     const runtimeAction = ctx.runtime?.action?.[field.action];
     const { dispatch, pending, error } = useDispatchAction(ctx.pluginId, field.action);
     const [confirmOpen, setConfirmOpen] = useState(false);
@@ -50,11 +48,7 @@ export function ActionField({ field }) {
     const variant = field.variant || 'primary';
 
     return html`
-        <div class="field-group field-action ${fieldSelectionClasses(selected)}"
-            data-plugin-config-field-id=${field.id}
-            data-plugin-config-index=${index}
-            data-selected-surface="" tabIndex="-1"
-            data-selected=${selected ? 'true' : 'false'}
+        <div ...${fieldSurfaceAttrs(field, ctx, 'field-group field-action')}
             onMouseDown=${onSelect}
             onFocus=${onSelect}
             onKeyDown=${onKeyDown}>

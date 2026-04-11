@@ -34,8 +34,6 @@ export function renderField(field) {
 function BooleanField({ field }) {
     const ctx = usePluginConfigContext();
     const checked = Boolean(ctx.getFieldValue(field));
-    const selected = ctx.selectedFieldId === field.id;
-    const index = ctx.fieldIndexById[field.id];
     const onChange = useCallback((value) => {
         ctx.setFieldValue(field, value);
         ctx.bumpRender();
@@ -47,14 +45,12 @@ function BooleanField({ field }) {
 
     return html`<${Toggle} checked=${checked} onChange=${onChange}
         label=${field.label} description=${field.description || ''}
-        selected=${selected} index=${index} onSelect=${onSelect} fieldId=${field.id}
-        surfaceSelected=${selected} />`;
+        fieldAttrs=${fieldSurfaceAttrs(field, ctx, 'toggle-row')}
+        onSelect=${onSelect} />`;
 }
 
 function StringField({ field }) {
     const ctx = usePluginConfigContext();
-    const selected = ctx.selectedFieldId === field.id;
-    const index = ctx.fieldIndexById[field.id];
     const onInput = useCallback((event) => {
         ctx.setFieldValue(field, event.target.value);
         ctx.save();
@@ -64,11 +60,7 @@ function StringField({ field }) {
     }, [ctx, field.id]);
 
     return html`
-        <div class="field-group ${fieldSelectionClasses(selected)}"
-            data-plugin-config-field-id=${field.id}
-            data-plugin-config-index=${index}
-            data-selected-surface="" tabIndex="-1"
-            data-selected=${selected ? 'true' : 'false'}
+        <div ...${fieldSurfaceAttrs(field, ctx, 'field-group')}
             onMouseDown=${onSelect}
             onFocus=${onSelect}>
             <${FieldLabel} text=${field.label} description=${field.description || ''} />
@@ -83,8 +75,6 @@ function StringField({ field }) {
 function SelectField({ field }) {
     const ctx = usePluginConfigContext();
     const value = ctx.getFieldValue(field);
-    const selected = ctx.selectedFieldId === field.id;
-    const index = ctx.fieldIndexById[field.id];
     const onChange = useCallback((option) => {
         ctx.setFieldValue(field, option);
         ctx.bumpRender();
@@ -95,11 +85,7 @@ function SelectField({ field }) {
     }, [ctx, field.id]);
 
     return html`
-        <div class="field-group ${fieldSelectionClasses(selected)}"
-            data-plugin-config-field-id=${field.id}
-            data-plugin-config-index=${index}
-            data-selected-surface="" tabIndex="-1"
-            data-selected=${selected ? 'true' : 'false'}
+        <div ...${fieldSurfaceAttrs(field, ctx, 'field-group')}
             onMouseDown=${onSelect}
             onFocus=${onSelect}>
             <${FieldLabel} text=${field.label} description=${field.description || ''} />
@@ -109,7 +95,7 @@ function SelectField({ field }) {
     `;
 }
 
-function Toggle({ checked, onChange, label, description, selected, index, onSelect, fieldId, surfaceSelected }) {
+function Toggle({ checked, onChange, label, description, fieldAttrs, onSelect }) {
     const toggle = useCallback(() => onChange(!checked), [checked, onChange]);
     const onKeyDown = useCallback((event) => {
         if (event.key !== 'Enter' && event.key !== ' ') return;
@@ -119,11 +105,7 @@ function Toggle({ checked, onChange, label, description, selected, index, onSele
     }, [toggle]);
 
     return html`
-        <div class="toggle-row ${fieldSelectionClasses(selected)}"
-            data-plugin-config-field-id=${fieldId}
-            data-plugin-config-index=${index}
-            data-selected-surface="" tabIndex="-1"
-            data-selected=${surfaceSelected ? 'true' : 'false'}
+        <div ...${fieldAttrs}
             onClick=${toggle}
             onMouseDown=${onSelect}
             onFocus=${onSelect}>
@@ -139,18 +121,16 @@ function Toggle({ checked, onChange, label, description, selected, index, onSele
     `;
 }
 
-export function fieldSelectionClasses(selected) {
-    if (!selected) return '';
-    return 'selected is-selected';
-}
-
-export function fieldSurfaceAttrs(field, ctx) {
+export function fieldSurfaceAttrs(field, ctx, baseClass) {
     const selected = ctx.selectedFieldId === field.id;
-    return {
+    const index = ctx.fieldIndexById[field.id];
+    const attrs = {
+        class: selected ? `${baseClass} selected is-selected` : baseClass,
         'data-plugin-config-field-id': field.id,
-        'data-plugin-config-index': ctx.fieldIndexById[field.id],
         'data-selected-surface': '',
-        'data-selected': selected ? 'true' : 'false',
         tabIndex: -1,
     };
+    if (index !== undefined) attrs['data-plugin-config-index'] = index;
+    if (selected) attrs['data-selected'] = 'true';
+    return attrs;
 }

@@ -52,6 +52,17 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         camera.zoomTo(persisted.zoom);
     }
 
+    const anchorListeners = new Set();
+
+    function notifyAnchorChange() {
+        for (const fn of anchorListeners) fn(currentAnchor);
+    }
+
+    function subscribeAnchor(fn) {
+        anchorListeners.add(fn);
+        return () => anchorListeners.delete(fn);
+    }
+
     function getCurrentConfinement() {
         return currentConfinement;
     }
@@ -66,6 +77,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
 
     function setCurrentAnchor(anchor) {
         currentAnchor = { pageId: anchor.pageId };
+        notifyAnchorChange();
         scheduleSave();
     }
 
@@ -142,6 +154,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
             confinement: currentConfinement,
         });
         currentAnchor = { pageId: targetPageId };
+        notifyAnchorChange();
         gotoAnchor(currentAnchor, { respectKnob: false });
         scheduleSave();
     }
@@ -163,6 +176,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         const firstPageId = target.pages[0];
         if (firstPageId) {
             currentAnchor = { pageId: firstPageId };
+            notifyAnchorChange();
             gotoAnchor(currentAnchor, { respectKnob: false });
         } else if (target.claim.layer !== camera.layer && typeof camera.setLayer === 'function') {
             camera.setLayer(target.claim.layer);
@@ -178,6 +192,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
             return false;
         }
         currentAnchor = prev.anchor;
+        notifyAnchorChange();
         currentConfinement = prev.confinement ?? null;
         if (typeof prev.zoom === 'number' && typeof camera.zoomTo === 'function') {
             camera.zoomTo(prev.zoom);
@@ -207,6 +222,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         gotoAnchor,
         stackDepth,
         getCurrentConfinement,
+        subscribeAnchor,
     };
 }
 

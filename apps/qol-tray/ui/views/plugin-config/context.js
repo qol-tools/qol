@@ -2,7 +2,6 @@ import { createContext } from 'preact';
 import { useCallback, useEffect, useMemo, useContext, useState } from 'preact/hooks';
 import { html } from '../../lib/html.js';
 import { usePluginConfig } from './usePluginConfig.js';
-import { usePersistedIndex } from '../../hooks/usePersistedIndex.js';
 import {
     buildBranchOwnerMap,
     collectVariantGroups,
@@ -15,32 +14,26 @@ export function usePluginConfigContext() {
     return useContext(PluginConfigContext);
 }
 
-export function PluginConfigProvider({ pluginId, mode, children }) {
+export function PluginConfigProvider({ pluginId, mode, activeSectionId, children }) {
     if (!pluginId) return html`<${PluginConfigContext.Provider} value=${null}>${children}<//>`;
     if (mode === 'ui') return html`<${PluginConfigContext.Provider} value=${{ pluginId, mode }}>${children}<//>`;
-    return html`<${ActivePluginConfigProvider} pluginId=${pluginId} mode=${mode}>${children}<//>`;
+    return html`<${ActivePluginConfigProvider} pluginId=${pluginId} mode=${mode} activeSectionId=${activeSectionId}>${children}<//>`;
 }
 
-function ActivePluginConfigProvider({ pluginId, mode, children }) {
+function ActivePluginConfigProvider({ pluginId, mode, activeSectionId, children }) {
     const config = usePluginConfig(pluginId);
-    const [activeSectionIndex, setActiveSectionIndex, , markRestored] = usePersistedIndex(
-        `plugin-config-section-${pluginId}`, 0,
-    );
     const [selectedFieldIds, setSelectedFieldIds] = useState({});
 
-    useEffect(() => {
-        if (config.loading) return;
-        markRestored();
-    }, [config.loading, markRestored]);
+    const activeSection = useMemo(() => {
+        const sections = config.sections;
+        if (!sections?.length) return null;
+        if (activeSectionId) {
+            const found = sections.find(s => s.id === activeSectionId);
+            if (found) return found;
+        }
+        return sections[0];
+    }, [config.sections, activeSectionId]);
 
-    const navigate = useCallback((delta) => {
-        if (config.sections.length === 0) return;
-        setActiveSectionIndex(i => (i + delta + config.sections.length) % config.sections.length);
-    }, [config.sections.length]);
-
-    const safeIndex = config.sections.length > 0
-        ? Math.min(activeSectionIndex, config.sections.length - 1) : 0;
-    const activeSection = config.sections[safeIndex] || null;
     const visibleFields = useMemo(
         () => collectVisibleFields(activeSection, config.getFieldValue, config.getFieldValueById),
         [activeSection, config.renderTick]
@@ -49,18 +42,18 @@ function ActivePluginConfigProvider({ pluginId, mode, children }) {
         () => Object.fromEntries(visibleFields.map((field, index) => [field.id, index])),
         [visibleFields]
     );
-    const selectedFieldId = activeSection?.id ? selectedFieldIds[activeSection.id] ?? null : null;
-    const selectedField = visibleFields.find(field => field.id === selectedFieldId) || visibleFields[0] || null;
+
+    const storedFieldId = activeSection?.id ? selectedFieldIds[activeSection.id] : null;
+    const selectedField = visibleFields.find(field => field.id === storedFieldId)
+        || visibleFields[0]
+        || null;
 
     useEffect(() => {
-        if (!activeSection?.id) return;
-        if (visibleFields.length === 0) return;
-        if (selectedFieldId && visibleFields.some(field => field.id === selectedFieldId)) return;
-        setSelectedFieldIds(current => {
-            if (current[activeSection.id] === visibleFields[0].id) return current;
-            return { ...current, [activeSection.id]: visibleFields[0].id };
-        });
-    }, [activeSection?.id, selectedFieldId, visibleFields]);
+        if (!activeSection?.id || visibleFields.length === 0) return;
+        if (storedFieldId && visibleFields.some(f => f.id === storedFieldId)) return;
+        setSelectedFieldIds(current => ({ ...current, [activeSection.id]: visibleFields[0].id }));
+    }, [activeSection?.id, storedFieldId, visibleFields]);
+
     const setSelectedFieldId = useCallback((fieldId) => {
         if (!activeSection?.id || !fieldId) return;
         setSelectedFieldIds(current => {
@@ -73,27 +66,13 @@ function ActivePluginConfigProvider({ pluginId, mode, children }) {
         ...config,
         pluginId,
         mode,
-        activeSectionIndex: safeIndex,
-        setActiveSectionIndex,
         activeSection,
-        navigate,
         visibleFields,
         fieldIndexById,
         selectedFieldId: selectedField?.id || null,
         selectedField,
         setSelectedFieldId,
-    }), [
-        config,
-        pluginId,
-        mode,
-        safeIndex,
-        activeSection,
-        navigate,
-        visibleFields,
-        fieldIndexById,
-        selectedField,
-        setSelectedFieldId,
-    ]);
+    }), [config, pluginId, mode, activeSection, visibleFields, fieldIndexById, selectedField, setSelectedFieldId]);
 
     return html`<${PluginConfigContext.Provider} value=${value}>${children}<//>`;
 }
