@@ -315,7 +315,8 @@ function AppShell() {
         if (activePluginId && !pluginDiveRef.current) {
             log('pluginDive: open', activePluginId, '→ dive plugins-config');
             pluginDiveRef.current = true;
-            const source = document.querySelector('[data-selected-surface][data-selected="true"]');
+            const source = document.querySelector(`[data-view-id="plugins"] [data-plugin-id="${CSS.escape(activePluginId)}"]`)
+                || document.querySelector(`[data-plugin-id="${CSS.escape(activePluginId)}"]`);
             dive('plugins-config', source);
         } else if (!activePluginId && pluginDiveRef.current) {
             log('pluginDive: close → ascend');
