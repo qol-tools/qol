@@ -151,18 +151,20 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         });
         const { w: vpW, h: vpH } = domHelpers.getViewportSize();
         const z = camera.zoom || 1;
-        const viewportCenterX = camera.x + vpW / (2 * z);
-        const viewportCenterY = camera.y + vpH / (2 * z);
+        const visibleW = vpW / z;
+        const visibleH = vpH / z;
         const N = target.pages.length;
         const PAGE_WIDTH_LOCAL = 1280;
         const PAGE_HEIGHT_LOCAL = 900;
-        const claimOriginX = viewportCenterX - PAGE_WIDTH_LOCAL / 2;
-        const claimOriginY = viewportCenterY - PAGE_HEIGHT_LOCAL / 2;
+        const claimOriginX = camera.x;
+        const claimOriginY = camera.y;
+        const claimWidth = Math.max(N * PAGE_WIDTH_LOCAL, visibleW);
+        const claimHeight = Math.max(PAGE_HEIGHT_LOCAL, visibleH);
         const repositionedClaim = {
             x: claimOriginX,
             y: claimOriginY,
-            width: N * PAGE_WIDTH_LOCAL,
-            height: PAGE_HEIGHT_LOCAL,
+            width: claimWidth,
+            height: claimHeight,
             layer: target.claim.layer,
         };
         target.pages.forEach((pageId, i) => {
@@ -177,11 +179,13 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         });
         target.claim = repositionedClaim;
         currentConfinement = repositionedClaim;
+        if (target.claim.layer !== camera.layer && typeof camera.setLayer === 'function') {
+            camera.setLayer(target.claim.layer);
+        }
         setBounds(currentConfinement);
         const firstPageId = target.pages[0];
         if (firstPageId) {
             currentAnchor = { pageId: firstPageId };
-            gotoAnchor(currentAnchor, { respectKnob: false });
         }
         scheduleSave();
     }
