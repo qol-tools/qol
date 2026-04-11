@@ -1,7 +1,7 @@
 import { html } from '../lib/html.js';
 import { useRef, useCallback, useEffect, useLayoutEffect, useState } from 'preact/hooks';
 import { PaletteProvider, usePaletteContext } from '../palette/context.js';
-import { createDebug } from '../lib/debug.js';
+import { createDebug, elLabel } from '../lib/debug.js';
 import { createNavigation, selectorFor, animateTransition } from '../lib/world-navigation.js';
 import { getWorldSettings } from '../lib/world-settings.js';
 
@@ -277,6 +277,10 @@ function AppShell() {
         const pluginId = sourceSurface?.dataset?.pluginId
             || sourceSurface?.closest?.('[data-plugin-id]')?.dataset?.pluginId;
         const parentPageId = sourceSurface?.closest?.('[data-view-id]')?.dataset?.viewId;
+        log('dive:', targetId,
+            'sourceSurface=' + (sourceSurface ? elLabel(sourceSurface) : 'null'),
+            'pluginId=' + (pluginId || 'none'),
+            'parentPageId=' + (parentPageId || 'none'));
         const candidateSelectors = [];
         if (pluginId) candidateSelectors.push(`[data-plugin-id="${pluginId}"]`);
         if (parentPageId) candidateSelectors.push(`[data-view-id="${parentPageId}"]`);
