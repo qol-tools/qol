@@ -4,5 +4,55 @@ description = "Universal search with action modifiers."
 
 [section.launcher]
 label = "Launcher"
-description = "Launcher currently exposes no plugin-editable settings in qol-tray."
+description = "Universal search with action modifiers."
 actions = ["open"]
+
+[section.monitor]
+label = "Monitor Tracking"
+description = "Cursor polling behavior for launcher popup positioning."
+
+[field.poll_min_ms]
+type = "number"
+section = "monitor"
+config_key = "monitor.poll_min_ms"
+label = "Poll Min (ms)"
+description = "Lower values react faster but use more CPU."
+default = 16
+min = 8
+max = 100
+step = 1
+
+[field.poll_max_ms]
+type = "number"
+section = "monitor"
+config_key = "monitor.poll_max_ms"
+label = "Poll Max (ms)"
+description = "Upper bound for idle polling backoff."
+default = 500
+min = 200
+max = 2000
+step = 1
+
+[field.commit_threshold_ms]
+type = "number"
+section = "monitor"
+config_key = "monitor.commit_threshold_ms"
+label = "Commit Threshold (ms)"
+description = "Cursor movement updates become committed once polling reaches this interval."
+default = 128
+min = 50
+max = 500
+step = 1
+
+[field.strategy]
+type = "select"
+section = "monitor"
+config_key = "monitor.strategy"
+label = "Strategy"
+description = "Basic uses fixed half/double steps. Momentum adapts ramp speed based on streaks."
+default = "basic"
+options = ["basic", "momentum"]
+
+[field.strategy.option_labels]
+basic = "Basic"
+momentum = "Momentum"
