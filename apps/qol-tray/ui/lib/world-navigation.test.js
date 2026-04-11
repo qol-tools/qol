@@ -350,14 +350,18 @@ test('getCurrentConfinement returns null by default', () => {
     assert.equal(nav.getCurrentConfinement(), null);
 });
 
-test('dive into a DiveTarget sets current confinement to the target claim', () => {
+test('dive into a DiveTarget sets a confinement sized from the target pages', () => {
     const { registry, camera, getSettings, domHelpers } = makeMocks();
     const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
     registry.addDiveTarget({ sourceSelector: '#card-a', claim, pages: ['plugins-config'] });
     const nav = createNavigation({ registry, camera, getSettings, domHelpers });
     nav.setCurrentAnchor({ pageId: 'plugins' });
     nav.diveInto('#card-a');
-    assert.deepEqual(nav.getCurrentConfinement(), claim);
+    const c = nav.getCurrentConfinement();
+    assert.ok(c, 'confinement is set');
+    assert.equal(c.width, 1280);
+    assert.equal(c.height, 900);
+    assert.equal(c.layer, -1);
 });
 
 test('ascend pops the confinement back to null', () => {
@@ -380,10 +384,12 @@ test('nested dive pushes and ascend pops one frame at a time', () => {
     const nav = createNavigation({ registry, camera, getSettings, domHelpers });
     nav.setCurrentAnchor({ pageId: 'plugins' });
     nav.diveInto('#a');
+    const c1AfterA = nav.getCurrentConfinement();
     nav.diveInto('#b');
-    assert.deepEqual(nav.getCurrentConfinement(), claim2);
+    assert.equal(nav.getCurrentConfinement().layer, -2);
     nav.ascend();
-    assert.deepEqual(nav.getCurrentConfinement(), claim1);
+    assert.equal(nav.getCurrentConfinement().layer, -1);
+    assert.deepEqual(nav.getCurrentConfinement(), c1AfterA);
     nav.ascend();
     assert.equal(nav.getCurrentConfinement(), null);
 });
@@ -397,14 +403,17 @@ test('diveInto on an unknown selector is a no-op', () => {
     assert.equal(nav.stackDepth(), 0);
 });
 
-test('dive calls camera.setBounds with the confinement rect', () => {
+test('dive calls camera.setBounds with the repositioned confinement rect', () => {
     const { registry, camera, getSettings, domHelpers } = makeMocks();
     const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
     registry.addDiveTarget({ sourceSelector: '#card-a', claim, pages: ['plugins-config'] });
     const nav = createNavigation({ registry, camera, getSettings, domHelpers });
     nav.setCurrentAnchor({ pageId: 'plugins' });
     nav.diveInto('#card-a');
-    assert.deepEqual(camera._bounds, claim);
+    assert.ok(camera._bounds);
+    assert.equal(camera._bounds.layer, -1);
+    assert.equal(camera._bounds.width, 1280);
+    assert.equal(camera._bounds.height, 900);
 });
 
 test('ascend from root dive calls camera.setBounds(null)', () => {
