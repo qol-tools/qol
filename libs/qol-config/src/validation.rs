@@ -454,19 +454,23 @@ fn validate_step_value(
 }
 
 fn default_matches_kind(default: &FieldDefault, kind: FieldKind) -> bool {
-    match (default, kind) {
-        (FieldDefault::Boolean(_), FieldKind::Boolean) => true,
-        (FieldDefault::String(_), FieldKind::String | FieldKind::Select | FieldKind::Color) => true,
-        (FieldDefault::Number(_), FieldKind::Number) => true,
-        (FieldDefault::StringArray(_), FieldKind::StringArray) => true,
-        (FieldDefault::ObjectArray(_), FieldKind::ObjectArray) => true,
-        (FieldDefault::StringArray(values), FieldKind::ObjectArray) => values.is_empty(),
-        (FieldDefault::ObjectMap(_), FieldKind::ObjectMap) => true,
-        (_, FieldKind::Action) => false,
-        (_, FieldKind::List) => false,
-        (_, FieldKind::Status) => false,
-        (_, FieldKind::QrCode) => false,
-        _ => false,
+    match kind {
+        FieldKind::Boolean => matches!(default, FieldDefault::Boolean(_)),
+        FieldKind::String | FieldKind::Select | FieldKind::Color => {
+            matches!(default, FieldDefault::String(_))
+        }
+        FieldKind::Number => matches!(default, FieldDefault::Number(_)),
+        FieldKind::StringArray => matches!(default, FieldDefault::StringArray(_)),
+        FieldKind::ObjectArray => match default {
+            FieldDefault::ObjectArray(_) => true,
+            FieldDefault::StringArray(values) => values.is_empty(),
+            FieldDefault::Boolean(_)
+            | FieldDefault::String(_)
+            | FieldDefault::Number(_)
+            | FieldDefault::ObjectMap(_) => false,
+        },
+        FieldKind::ObjectMap => matches!(default, FieldDefault::ObjectMap(_)),
+        FieldKind::Action | FieldKind::List | FieldKind::Status | FieldKind::QrCode => false,
     }
 }
 
