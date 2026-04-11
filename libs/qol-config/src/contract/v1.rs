@@ -73,6 +73,10 @@ pub struct FieldSpec {
     pub show_when: Option<ShowWhenSpec>,
     #[serde(default)]
     pub alpha: Option<bool>,
+    #[serde(default)]
+    pub action: Option<String>,
+    #[serde(default)]
+    pub variant: Option<String>,
     #[serde(flatten)]
     pub number: NumberConstraints,
 }
@@ -100,6 +104,7 @@ pub enum FieldKind {
     ObjectArray,
     ObjectMap,
     Color,
+    Action,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -172,5 +177,46 @@ alpha = true
         let field = spec.fields.get("overlay_color").expect("field present");
         assert!(matches!(field.kind, FieldKind::Color));
         assert_eq!(field.alpha, Some(true), "alpha flag");
+    }
+
+    #[test]
+    fn parses_action_field() {
+        let spec_str = r#"
+schema_version = 1
+
+[field.pair_new_device]
+type = "action"
+label = "Pair New Device"
+action = "pair_device"
+"#;
+        let spec = parse_spec_str(spec_str).expect("parse");
+        let field = spec.fields.get("pair_new_device").expect("field present");
+        assert!(
+            matches!(field.kind, FieldKind::Action),
+            "expected Action, got {:?}",
+            field.kind
+        );
+        assert_eq!(
+            field.action.as_deref(),
+            Some("pair_device"),
+            "action reference"
+        );
+        assert_eq!(field.label.as_deref(), Some("Pair New Device"), "label");
+    }
+
+    #[test]
+    fn parses_action_field_with_variant() {
+        let spec_str = r#"
+schema_version = 1
+
+[field.remove_all]
+type = "action"
+label = "Remove All"
+action = "remove_all_devices"
+variant = "danger"
+"#;
+        let spec = parse_spec_str(spec_str).expect("parse");
+        let field = spec.fields.get("remove_all").expect("field present");
+        assert_eq!(field.variant.as_deref(), Some("danger"), "variant");
     }
 }
