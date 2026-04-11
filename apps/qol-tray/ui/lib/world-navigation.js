@@ -153,7 +153,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         if (target.claim.layer !== camera.layer && typeof camera.setLayer === 'function') {
             camera.setLayer(target.claim.layer);
         }
-        setBounds(currentConfinement);
+        setBounds(null);
         const firstPageId = target.pages[0];
         if (firstPageId) {
             currentAnchor = { pageId: firstPageId };
@@ -175,7 +175,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         if (typeof prev.zoom === 'number' && typeof camera.zoomTo === 'function') {
             camera.zoomTo(prev.zoom);
         }
-        setBounds(currentConfinement);
+        setBounds(null);
         scheduleSave();
         return true;
     }
