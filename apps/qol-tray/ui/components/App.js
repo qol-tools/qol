@@ -238,7 +238,12 @@ function AppShell() {
     const navigation = navigationRef.current;
 
     useEffect(() => {
-        const unsub = camera.subscribe(({ layer }) => setCameraLayer(layer));
+        const unsub = camera.subscribe(({ layer }) => {
+            setCameraLayer(prev => {
+                if (prev !== layer) log('camera subscribe: layer', prev, '→', layer);
+                return layer;
+            });
+        });
         return unsub;
     }, [camera]);
 
