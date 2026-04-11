@@ -85,6 +85,12 @@ pub struct FieldSpec {
     pub row_subtitle: Option<String>,
     #[serde(default)]
     pub empty_message: Option<String>,
+    #[serde(default)]
+    pub value_from: Option<String>,
+    #[serde(default)]
+    pub label_map: Option<IndexMap<String, String>>,
+    #[serde(default)]
+    pub tone_map: Option<IndexMap<String, String>>,
     #[serde(flatten)]
     pub number: NumberConstraints,
 }
@@ -114,6 +120,7 @@ pub enum FieldKind {
     Color,
     Action,
     List,
+    Status,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -261,5 +268,44 @@ empty_message = "No devices paired yet."
             Some("No devices paired yet."),
             "empty_message"
         );
+    }
+
+    #[test]
+    fn parses_status_field() {
+        let spec_str = r#"
+schema_version = 1
+
+[field.coordinator_status]
+type = "status"
+label = "Coordinator"
+query = "connection_status"
+value_from = "state"
+
+[field.coordinator_status.label_map]
+ok = "Connected"
+connecting = "Connecting..."
+offline = "Offline"
+
+[field.coordinator_status.tone_map]
+ok = "success"
+connecting = "warning"
+offline = "danger"
+"#;
+        let spec = parse_spec_str(spec_str).expect("parse");
+        let field = spec
+            .fields
+            .get("coordinator_status")
+            .expect("field present");
+        assert!(matches!(field.kind, FieldKind::Status));
+        assert_eq!(field.query.as_deref(), Some("connection_status"));
+        assert_eq!(field.value_from.as_deref(), Some("state"));
+        let label_map = field.label_map.as_ref().expect("label_map");
+        assert_eq!(label_map.get("ok").map(|s| s.as_str()), Some("Connected"));
+        assert_eq!(
+            label_map.get("offline").map(|s| s.as_str()),
+            Some("Offline")
+        );
+        let tone_map = field.tone_map.as_ref().expect("tone_map");
+        assert_eq!(tone_map.get("ok").map(|s| s.as_str()), Some("success"));
     }
 }

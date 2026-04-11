@@ -464,6 +464,7 @@ fn default_matches_kind(default: &FieldDefault, kind: FieldKind) -> bool {
         (FieldDefault::ObjectMap(_), FieldKind::ObjectMap) => true,
         (_, FieldKind::Action) => false,
         (_, FieldKind::List) => false,
+        (_, FieldKind::Status) => false,
         _ => false,
     }
 }
@@ -496,5 +497,6 @@ fn field_kind_name(kind: FieldKind) -> &'static str {
         FieldKind::Color => "color",
         FieldKind::Action => "action",
         FieldKind::List => "list",
+        FieldKind::Status => "status",
     }
 }

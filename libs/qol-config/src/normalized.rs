@@ -209,6 +209,7 @@ fn field_default_from_override(kind: FieldKind, raw: &serde_json::Value) -> Opti
         }
         FieldKind::Action => None,
         FieldKind::List => None,
+        FieldKind::Status => None,
     }
 }
 
@@ -314,5 +315,6 @@ fn field_kind_name(kind: FieldKind) -> &'static str {
         FieldKind::Color => "color",
         FieldKind::Action => "action",
         FieldKind::List => "list",
+        FieldKind::Status => "status",
     }
 }
