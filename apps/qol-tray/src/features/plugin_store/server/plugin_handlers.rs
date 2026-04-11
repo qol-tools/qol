@@ -28,9 +28,29 @@ pub(super) fn routes() -> Router<AppState> {
             "/plugins/{id}/actions/{action}",
             post(execute_plugin_action),
         )
+        .route("/plugins/{id}/queries/{query}", get(query_plugin_handler))
         .route("/install/{id}", post(install_plugin))
         .route("/update/{id}", post(update_plugin))
         .route("/uninstall/{id}", post(uninstall_plugin))
+}
+
+pub(super) async fn query_plugin_handler(
+    Path((id, query)): Path<(String, String)>,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    validate_plugin_id_bad_request(&id)?;
+    let runtime = crate::plugins::config::load_runable_contract(&id)
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "no runable contract".to_string()))?;
+    if !runtime.queries.contains_key(&query) {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("query not declared: {query}"),
+        ));
+    }
+    crate::plugins::action_executor::dispatch_query(&state.plugin_manager, &id, &query)
+        .map(Json)
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
 }
 
 pub(super) async fn list_plugins(
