@@ -153,6 +153,26 @@ function AppShell() {
         focusTarget();
     }, [camera, registry, diveStack]);
 
+    const forceAscendToRoot = useCallback(() => {
+        const vp = viewportRef.current;
+        layerAnimatingRef.current = false;
+        const prev = diveStack.pop();
+        const parentTarget = prev?.diveParent ?? null;
+        setCameraLayer(0);
+        camera.setLayer(0);
+        if (prev) {
+            camera.panTo(prev.x, prev.y);
+        } else if (vp) {
+            const w = vp.clientWidth || 800;
+            const h = vp.clientHeight || 600;
+            const targetId = parentTarget || activeViewId || 'plugins';
+            const target = registry.cameraTargetForView(targetId, w, h, camera.zoom);
+            if (target) camera.panTo(target.x, target.y);
+        }
+        diveParentRef.current = parentTarget;
+        setDiveParent(parentTarget);
+    }, [camera, registry, activeViewId, diveStack]);
+
     const ascend = useCallback(() => {
         if (layerAnimatingRef.current) return false;
         const prev = diveStack.pop();
@@ -185,9 +205,9 @@ function AppShell() {
             dive('plugins-config', source);
         } else if (!activePluginId && pluginDiveRef.current) {
             pluginDiveRef.current = false;
-            ascend();
+            forceAscendToRoot();
         }
-    }, [activePluginId, dive, ascend]);
+    }, [activePluginId, dive, forceAscendToRoot]);
 
     return html`
         <${ModifierStateProvider}>
