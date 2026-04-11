@@ -172,3 +172,35 @@ poll_interval_ms = 1000
         );
     }
 }
+
+#[cfg(test)]
+mod property_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn valid_name_strategy() -> impl Strategy<Value = String> {
+        "[a-z][a-z0-9_]{0,31}".prop_map(String::from)
+    }
+
+    proptest! {
+        #[test]
+        fn valid_names_always_parse_as_actions(name in valid_name_strategy()) {
+            let input = format!(
+                "schema_version = 1\n\n[action.{name}]\ndescription = \"test\"\n"
+            );
+            let result = parse_runtime_spec_str(&input);
+            prop_assert!(result.is_ok(), "valid name {name} should parse: {:?}", result);
+            let spec = result.unwrap();
+            prop_assert!(spec.actions.contains_key(&name));
+        }
+
+        #[test]
+        fn is_valid_runable_name_matches_regex(name in "[a-zA-Z0-9_ ]{0,32}") {
+            let valid = is_valid_runable_name(&name);
+            let expected = !name.is_empty()
+                && name.chars().next().map_or(false, |c| c.is_ascii_lowercase())
+                && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+            prop_assert_eq!(valid, expected, "mismatch on {:?}", name);
+        }
+    }
+}
