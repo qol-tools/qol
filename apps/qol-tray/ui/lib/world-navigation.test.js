@@ -3,6 +3,36 @@ import assert from 'node:assert/strict';
 import { createNavigation } from './world-navigation.js';
 import { contains, createWorldRegistry } from './world-registry.js';
 import { createCamera } from './world-camera.js';
+import { filterSurfacesByConfinement } from './spatial-nav.js';
+
+test('filterSurfacesByConfinement returns all surfaces when confinement is null', () => {
+    const surfaces = [{ tag: 'a' }, { tag: 'b' }];
+    const result = filterSurfacesByConfinement(surfaces, null, null);
+    assert.deepEqual(result, surfaces);
+});
+
+test('filterSurfacesByConfinement returns empty when surfaces lack closest method', () => {
+    const surfaces = [{ tag: 'a' }, { tag: 'b' }];
+    const confinement = { x: 0, y: 0, width: 100, height: 100, layer: -1 };
+    const result = filterSurfacesByConfinement(surfaces, confinement, null);
+    assert.deepEqual(result, []);
+});
+
+test('filterSurfacesByConfinement keeps surfaces whose entry is inside the confinement', () => {
+    const pages = {
+        a: { id: 'a', x: 0, y: 0, width: 100, height: 100, layer: -1 },
+        b: { id: 'b', x: 500, y: 0, width: 100, height: 100, layer: -1 },
+    };
+    const registry = { getEntry: (id) => pages[id] || null };
+    const confinement = { x: 0, y: 0, width: 200, height: 200, layer: -1 };
+    const makeSurface = (viewId) => ({
+        closest: () => ({ dataset: { viewId } }),
+    });
+    const surfaces = [makeSurface('a'), makeSurface('b')];
+    const result = filterSurfacesByConfinement(surfaces, confinement, registry);
+    assert.equal(result.length, 1);
+    assert.equal(result[0].closest().dataset.viewId, 'a');
+});
 
 test('camera.panTo clamps x to bounds.x when target is left of bounds', () => {
     const cam = createCamera({ getViewportSize: () => ({ w: 400, h: 300 }) });
