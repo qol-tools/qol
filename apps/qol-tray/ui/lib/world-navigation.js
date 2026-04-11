@@ -47,8 +47,17 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         ? { ...persisted.focusRegistry }
         : {};
     const diveStack = [];
+    let currentConfinement = null;
     if (persisted?.zoom && typeof camera.zoomTo === 'function') {
         camera.zoomTo(persisted.zoom);
+    }
+
+    function getCurrentConfinement() {
+        return currentConfinement;
+    }
+
+    function setBounds(rect) {
+        if (typeof camera.setBounds === 'function') camera.setBounds(rect);
     }
 
     function getCurrentAnchor() {
@@ -117,9 +126,36 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
             log('dive: skipped (no targetPageId)');
             return;
         }
-        diveStack.push({ anchor: currentAnchor, zoom: camera.zoom });
+        diveStack.push({
+            anchor: currentAnchor,
+            zoom: camera.zoom,
+            layer: camera.layer,
+            confinement: currentConfinement,
+        });
         currentAnchor = { pageId: targetPageId };
         gotoAnchor(currentAnchor, { respectKnob: false });
+        scheduleSave();
+    }
+
+    function diveInto(sourceSelector) {
+        const target = registry.getDiveTargetForSource?.(sourceSelector);
+        if (!target) {
+            log('diveInto: no target for', sourceSelector);
+            return;
+        }
+        diveStack.push({
+            anchor: currentAnchor,
+            zoom: camera.zoom,
+            layer: camera.layer,
+            confinement: currentConfinement,
+        });
+        currentConfinement = target.claim;
+        setBounds(currentConfinement);
+        const firstPageId = target.pages[0];
+        if (firstPageId) {
+            currentAnchor = { pageId: firstPageId };
+            gotoAnchor(currentAnchor, { respectKnob: false });
+        }
         scheduleSave();
     }
 
@@ -130,6 +166,8 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
             return false;
         }
         currentAnchor = prev.anchor;
+        currentConfinement = prev.confinement ?? null;
+        setBounds(currentConfinement);
         camera.zoomTo(prev.zoom);
         gotoAnchor(prev.anchor, { respectKnob: false });
         scheduleSave();
@@ -146,9 +184,11 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         setFocus,
         getFocus,
         dive,
+        diveInto,
         ascend,
         gotoAnchor,
         stackDepth,
+        getCurrentConfinement,
     };
 }
 
