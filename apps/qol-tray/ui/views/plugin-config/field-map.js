@@ -4,6 +4,11 @@ import { usePluginConfigContext } from './context.js';
 import { NumberField } from './fields/NumberField.js';
 import { StringArrayField } from './fields/StringArrayField.js';
 import { ObjectArrayField } from './fields/ObjectArrayField.js';
+import { ColorField } from './fields/ColorField.js';
+import { ActionField } from './fields/ActionField.js';
+import { ListField } from './fields/ListField.js';
+import { StatusField } from './fields/StatusField.js';
+import { QrCodeField } from './fields/QrCodeField.js';
 import { CustomSelect } from '../../components/CustomSelect.js';
 import { FieldLabel } from './fields/FieldLabel.js';
 
@@ -14,6 +19,11 @@ const FIELD_MAP = {
     number: NumberField,
     string_array: StringArrayField,
     object_array: ObjectArrayField,
+    color: ColorField,
+    action: ActionField,
+    list: ListField,
+    status: StatusField,
+    qr_code: QrCodeField,
 };
 
 export function renderField(field) {
