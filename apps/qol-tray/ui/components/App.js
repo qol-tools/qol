@@ -223,7 +223,7 @@ function AppShell() {
                     ascend=${ascend}
                 />
                 <div class="app-container">
-                    <${WorldViewport} camera=${camera} onViewChange=${switchView} navigation=${navigation}>
+                    <${WorldViewport} camera=${camera} onViewChange=${switchView} navigation=${navigation} registry=${registry}>
                         <${RegionLabels} registry=${registry} />
                         ${renderWorldViews({
                             registry,
