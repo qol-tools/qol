@@ -122,6 +122,65 @@ function AppShell() {
     const [diveDepth, setDiveDepth] = useState(0);
     const diveParentRef = useRef(null);
     const layerAnimatingRef = useRef(false);
+    const diveTargetsRegisteredRef = useRef(new Set());
+
+    useEffect(() => {
+        let cancelled = false;
+        async function registerPluginDiveTargets() {
+            try {
+                const res = await fetch('/api/plugins');
+                if (!res.ok || cancelled) return;
+                const plugins = await res.json();
+                if (cancelled) return;
+                const registered = diveTargetsRegisteredRef.current;
+                const pluginsEntry = registry.getEntry('plugins');
+                if (!pluginsEntry) return;
+                const PAGE_WIDTH_LOCAL = 1280;
+                const PAGE_HEIGHT_LOCAL = 900;
+                let cursorX = pluginsEntry.x;
+                for (const p of plugins) {
+                    if (registered.has(p.id)) continue;
+                    const formRes = await fetch(`/api/plugins/${p.id}/config-form`);
+                    if (!formRes.ok) continue;
+                    const form = await formRes.json();
+                    const sections = form?.sections || [];
+                    const N = Math.max(1, sections.length);
+                    const claim = {
+                        x: cursorX,
+                        y: pluginsEntry.y,
+                        width: N * PAGE_WIDTH_LOCAL,
+                        height: PAGE_HEIGHT_LOCAL,
+                        layer: pluginsEntry.layer - 1,
+                    };
+                    const pageIds = [];
+                    for (let i = 0; i < N; i++) {
+                        const sectionId = sections[i]?.id || 'config';
+                        const pageId = `${p.id}-${sectionId}`;
+                        registry.addEntry({
+                            id: pageId,
+                            x: claim.x + i * PAGE_WIDTH_LOCAL,
+                            y: claim.y,
+                            width: PAGE_WIDTH_LOCAL,
+                            height: PAGE_HEIGHT_LOCAL,
+                            layer: claim.layer,
+                        });
+                        pageIds.push(pageId);
+                    }
+                    registry.addDiveTarget({
+                        sourceSelector: `[data-plugin-id="${p.id}"]`,
+                        claim,
+                        pages: pageIds,
+                    });
+                    registered.add(p.id);
+                    cursorX += N * PAGE_WIDTH_LOCAL;
+                }
+            } catch (err) {
+                log('pluginDiveTargets: registration failed', err);
+            }
+        }
+        registerPluginDiveTargets();
+        return () => { cancelled = true; };
+    }, [registry]);
 
     useEffect(() => {
         for (const id of viewOrder) {
@@ -205,11 +264,16 @@ function AppShell() {
             const selector = selectorFor(sourceSurface);
             if (sourcePageId && selector) navigation.setFocus(sourcePageId, selector);
         }
-        const sourcePageId = sourceSurface?.closest('[data-view-id]')?.dataset?.viewId;
-        const targetSelector = sourcePageId ? `[data-view-id="${sourcePageId}"]` : null;
-        const diveTarget = targetSelector ? registry.getDiveTargetForSource(targetSelector) : null;
-        if (diveTarget) {
-            navigation.diveInto(targetSelector);
+        const pluginId = sourceSurface?.dataset?.pluginId
+            || sourceSurface?.closest?.('[data-plugin-id]')?.dataset?.pluginId;
+        const parentPageId = sourceSurface?.closest?.('[data-view-id]')?.dataset?.viewId;
+        const candidateSelectors = [];
+        if (pluginId) candidateSelectors.push(`[data-plugin-id="${pluginId}"]`);
+        if (parentPageId) candidateSelectors.push(`[data-view-id="${parentPageId}"]`);
+        for (const sel of candidateSelectors) {
+            const diveTarget = registry.getDiveTargetForSource(sel);
+            if (!diveTarget) continue;
+            navigation.diveInto(sel);
             setDiveDepth(navigation.stackDepth());
             const firstPageId = diveTarget.pages[0];
             if (firstPageId) {
