@@ -85,3 +85,96 @@ test('ascend restores zoom captured at dive time', () => {
     nav.ascend();
     assert.equal(camera.zoom, 1.5);
 });
+
+function spyCamera() {
+    const calls = [];
+    return {
+        x: 0, y: 0, zoom: 1, layer: 0,
+        panSmooth(tx, ty, dur, onComplete) { calls.push(['panSmooth', tx, ty, dur]); this.x = tx; this.y = ty; if (onComplete) onComplete(); },
+        panTo(tx, ty) { calls.push(['panTo', tx, ty]); this.x = tx; this.y = ty; },
+        zoomTo(z) { calls.push(['zoomTo', z]); this.zoom = z; },
+        setLayer(l) { calls.push(['setLayer', l]); this.layer = l; },
+        cancelSmooth() { calls.push(['cancelSmooth']); },
+        _calls: calls,
+    };
+}
+
+test('gotoAnchor centers on page geometric center when focus registry is empty', () => {
+    const { registry, getSettings, domHelpers } = makeMocks();
+    const camera = spyCamera();
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.gotoAnchor({ pageId: 'plugins' }, { respectKnob: false });
+    const pan = camera._calls.find(c => c[0] === 'panSmooth');
+    assert.ok(pan, 'panSmooth was called');
+    assert.equal(pan[1], 640 - 800 / 2);
+    assert.equal(pan[2], 450 - 600 / 2);
+});
+
+test('gotoAnchor honors respectKnob when knob is off', () => {
+    const { registry, domHelpers, settings } = makeMocks();
+    const camera = spyCamera();
+    settings.anchorToPages = false;
+    const nav = createNavigation({ registry, camera, getSettings: () => settings, domHelpers });
+    nav.gotoAnchor({ pageId: 'plugins' }, { respectKnob: true });
+    assert.equal(camera._calls.filter(c => c[0] === 'panSmooth').length, 0);
+});
+
+test('gotoAnchor with respectKnob=false bypasses the knob', () => {
+    const { registry, domHelpers, settings } = makeMocks();
+    const camera = spyCamera();
+    settings.anchorToPages = false;
+    const nav = createNavigation({ registry, camera, getSettings: () => settings, domHelpers });
+    nav.gotoAnchor({ pageId: 'plugins' }, { respectKnob: false });
+    assert.equal(camera._calls.filter(c => c[0] === 'panSmooth').length, 1);
+});
+
+test('gotoAnchor falls back to first layer-0 page on unknown pageId', () => {
+    const { registry, getSettings, domHelpers } = makeMocks();
+    const camera = spyCamera();
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.gotoAnchor({ pageId: 'nonexistent' }, { respectKnob: false });
+    const pan = camera._calls.find(c => c[0] === 'panSmooth');
+    assert.ok(pan, 'panSmooth was called with fallback');
+    assert.equal(pan[1], 640 - 800 / 2);
+});
+
+test('gotoAnchor centers on resolved surface world center when focus registry has it', () => {
+    const { registry, getSettings } = makeMocks();
+    const camera = spyCamera();
+    const domHelpers = {
+        resolveSelector: (sel) => sel === 'fake-selector' ? { x: 500, y: 300 } : null,
+        getViewportSize: () => ({ w: 800, h: 600 }),
+    };
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.setFocus('plugins', 'fake-selector');
+    nav.gotoAnchor({ pageId: 'plugins' }, { respectKnob: false });
+    const pan = camera._calls.find(c => c[0] === 'panSmooth');
+    assert.ok(pan);
+    assert.equal(pan[1], 500 - 800 / 2);
+    assert.equal(pan[2], 300 - 600 / 2);
+});
+
+test('gotoAnchor falls back to page center when focus selector is stale', () => {
+    const { registry, getSettings } = makeMocks();
+    const camera = spyCamera();
+    const domHelpers = {
+        resolveSelector: () => null,
+        getViewportSize: () => ({ w: 800, h: 600 }),
+    };
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.setFocus('plugins', '#gone');
+    nav.gotoAnchor({ pageId: 'plugins' }, { respectKnob: false });
+    const pan = camera._calls.find(c => c[0] === 'panSmooth');
+    assert.equal(pan[1], 640 - 800 / 2);
+});
+
+test('gotoAnchor triggers setLayer when page layer differs', () => {
+    const { registry, getSettings, domHelpers } = makeMocks();
+    const camera = spyCamera();
+    camera.layer = 0;
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.gotoAnchor({ pageId: 'plugins-config' }, { respectKnob: false });
+    const setLayer = camera._calls.find(c => c[0] === 'setLayer');
+    assert.ok(setLayer);
+    assert.equal(setLayer[1], -1);
+});
