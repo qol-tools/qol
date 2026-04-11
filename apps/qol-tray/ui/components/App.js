@@ -59,6 +59,73 @@ function registerStaticDiveTargets(registry) {
     }
 }
 
+const PLUGIN_PAGE_WIDTH = 1280;
+const PLUGIN_PAGE_HEIGHT = 900;
+const PLUGIN_PAGE_STRIDE = 10000;
+
+async function fetchInstalledPlugins() {
+    const res = await fetch('/api/installed');
+    if (!res.ok) return [];
+    const payload = await res.json();
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload?.plugins)) return payload.plugins;
+    return [];
+}
+
+async function fetchPluginSections(pluginId) {
+    const res = await fetch(`/api/plugins/${pluginId}/config-form`);
+    if (!res.ok) return [];
+    const form = await res.json();
+    return form?.sections || [];
+}
+
+function registerPluginDiveTarget(registry, plugin, sections, pluginsEntry) {
+    const N = Math.max(1, sections.length);
+    const claim = {
+        x: pluginsEntry.x,
+        y: pluginsEntry.y,
+        width: (N - 1) * PLUGIN_PAGE_STRIDE + PLUGIN_PAGE_WIDTH,
+        height: PLUGIN_PAGE_HEIGHT,
+        layer: pluginsEntry.layer - 1,
+    };
+    const pageIds = [];
+    for (let i = 0; i < N; i++) {
+        const section = sections[i];
+        const sectionId = section?.id || 'config';
+        const pageId = `${plugin.id}-${sectionId}`;
+        registry.addEntry({
+            id: pageId,
+            x: claim.x + i * PLUGIN_PAGE_STRIDE,
+            y: claim.y,
+            width: PLUGIN_PAGE_WIDTH,
+            height: PLUGIN_PAGE_HEIGHT,
+            layer: claim.layer,
+            label: section?.label || prettyLabel(sectionId),
+        });
+        pageIds.push(pageId);
+    }
+    registry.addDiveTarget({
+        sourceSelector: `[data-plugin-id="${plugin.id}"]`,
+        claim,
+        pages: pageIds,
+    });
+}
+
+async function registerAllPluginDiveTargets(registry, registered, isCancelled) {
+    const plugins = await fetchInstalledPlugins();
+    if (isCancelled() || !plugins.length) return;
+    const pluginsEntry = registry.getEntry('plugins');
+    if (!pluginsEntry) return;
+    for (const plugin of plugins) {
+        if (isCancelled()) return;
+        if (registered.has(plugin.id)) continue;
+        const sections = await fetchPluginSections(plugin.id);
+        if (isCancelled()) return;
+        registerPluginDiveTarget(registry, plugin, sections, pluginsEntry);
+        registered.add(plugin.id);
+    }
+}
+
 export function App() {
     return html`<${PaletteProvider}><${AppShell} /><//>`;
 }
@@ -126,62 +193,8 @@ function AppShell() {
 
     useEffect(() => {
         let cancelled = false;
-        async function registerPluginDiveTargets() {
-            try {
-                const res = await fetch('/api/installed');
-                if (!res.ok || cancelled) return;
-                const payload = await res.json();
-                if (cancelled) return;
-                const plugins = Array.isArray(payload) ? payload : (Array.isArray(payload?.plugins) ? payload.plugins : []);
-                if (!plugins.length) return;
-                const registered = diveTargetsRegisteredRef.current;
-                const pluginsEntry = registry.getEntry('plugins');
-                if (!pluginsEntry) return;
-                const PAGE_WIDTH_LOCAL = 1280;
-                const PAGE_HEIGHT_LOCAL = 900;
-                const PAGE_STRIDE_LOCAL = 10000;
-                for (const p of plugins) {
-                    if (registered.has(p.id)) continue;
-                    const formRes = await fetch(`/api/plugins/${p.id}/config-form`);
-                    if (!formRes.ok) continue;
-                    const form = await formRes.json();
-                    const sections = form?.sections || [];
-                    const N = Math.max(1, sections.length);
-                    const claim = {
-                        x: pluginsEntry.x,
-                        y: pluginsEntry.y,
-                        width: (N - 1) * PAGE_STRIDE_LOCAL + PAGE_WIDTH_LOCAL,
-                        height: PAGE_HEIGHT_LOCAL,
-                        layer: pluginsEntry.layer - 1,
-                    };
-                    const pageIds = [];
-                    for (let i = 0; i < N; i++) {
-                        const section = sections[i];
-                        const sectionId = section?.id || 'config';
-                        const pageId = `${p.id}-${sectionId}`;
-                        registry.addEntry({
-                            id: pageId,
-                            x: claim.x + i * PAGE_STRIDE_LOCAL,
-                            y: claim.y,
-                            width: PAGE_WIDTH_LOCAL,
-                            height: PAGE_HEIGHT_LOCAL,
-                            layer: claim.layer,
-                            label: section?.label || prettyLabel(sectionId),
-                        });
-                        pageIds.push(pageId);
-                    }
-                    registry.addDiveTarget({
-                        sourceSelector: `[data-plugin-id="${p.id}"]`,
-                        claim,
-                        pages: pageIds,
-                    });
-                    registered.add(p.id);
-                }
-            } catch (err) {
-                log('pluginDiveTargets: registration failed', err);
-            }
-        }
-        registerPluginDiveTargets();
+        registerAllPluginDiveTargets(registry, diveTargetsRegisteredRef.current, () => cancelled)
+            .catch(err => log('pluginDiveTargets: registration failed', err));
         return () => { cancelled = true; };
     }, [registry]);
 
@@ -231,12 +244,7 @@ function AppShell() {
     const navigation = navigationRef.current;
 
     useEffect(() => {
-        const unsub = camera.subscribe(({ layer }) => {
-            setCameraLayer(prev => {
-                if (prev !== layer) log('camera subscribe: layer', prev, '→', layer);
-                return layer;
-            });
-        });
+        const unsub = camera.subscribe(({ layer }) => setCameraLayer(layer));
         return unsub;
     }, [camera]);
 
@@ -262,6 +270,20 @@ function AppShell() {
 
     useWorldNav({ camera, registry, viewportRef });
 
+    const diveViaSelector = useCallback((selector) => {
+        const target = navigation.diveInto(selector);
+        if (!target) return false;
+        setDiveDepth(navigation.stackDepth());
+        const firstPageId = target.pages[0];
+        if (firstPageId) {
+            const entry = registry.getEntry(firstPageId);
+            const newParent = entry?.parent || firstPageId;
+            diveParentRef.current = newParent;
+            setDiveParent(newParent);
+        }
+        return true;
+    }, [navigation, registry]);
+
     const dive = useCallback((targetId, sourceSurface) => {
         if (layerAnimatingRef.current) {
             log('dive:', targetId, '→ skipped (animating)');
@@ -274,38 +296,22 @@ function AppShell() {
         }
         const pluginId = sourceSurface?.dataset?.pluginId
             || sourceSurface?.closest?.('[data-plugin-id]')?.dataset?.pluginId;
+        if (pluginId && diveViaSelector(`[data-plugin-id="${pluginId}"]`)) return;
         const parentPageId = sourceSurface?.closest?.('[data-view-id]')?.dataset?.viewId;
-        const candidateSelectors = [];
-        if (pluginId) candidateSelectors.push(`[data-plugin-id="${pluginId}"]`);
-        if (parentPageId) candidateSelectors.push(`[data-view-id="${parentPageId}"]`);
-        for (const sel of candidateSelectors) {
-            const diveTarget = registry.getDiveTargetForSource(sel);
-            if (!diveTarget) continue;
-            navigation.diveInto(sel);
-            setDiveDepth(navigation.stackDepth());
-            const firstPageId = diveTarget.pages[0];
-            if (firstPageId) {
-                const entry = registry.getEntry(firstPageId);
-                const newParent = entry?.parent || firstPageId;
-                diveParentRef.current = newParent;
-                setDiveParent(newParent);
-            }
-            return;
-        }
-        log('dive:', targetId, '→ no DiveTarget matched', candidateSelectors);
-    }, [navigation, registry]);
+        if (parentPageId && diveViaSelector(`[data-view-id="${parentPageId}"]`)) return;
+        log('dive:', targetId, '→ no DiveTarget matched');
+    }, [navigation, diveViaSelector]);
 
     const ascend = useCallback(() => {
         const didAscend = navigation.ascend();
-        if (didAscend) {
-            const topAnchor = navigation.getCurrentAnchor();
-            const topEntry = topAnchor?.pageId ? registry.getEntry(topAnchor.pageId) : null;
-            const parentForAnchor = topEntry?.parent ?? null;
-            diveParentRef.current = parentForAnchor;
-            setDiveParent(parentForAnchor);
-            setDiveDepth(navigation.stackDepth());
-        }
-        return didAscend;
+        if (!didAscend) return false;
+        const topAnchor = navigation.getCurrentAnchor();
+        const topEntry = topAnchor?.pageId ? registry.getEntry(topAnchor.pageId) : null;
+        const parentForAnchor = topEntry?.parent ?? null;
+        diveParentRef.current = parentForAnchor;
+        setDiveParent(parentForAnchor);
+        setDiveDepth(navigation.stackDepth());
+        return true;
     }, [navigation, registry]);
 
     const divePlugin = useCallback((pluginId) => {
@@ -313,29 +319,8 @@ function AppShell() {
             log('divePlugin:', pluginId, '→ skipped (animating)');
             return;
         }
-        const selector = `[data-plugin-id="${pluginId}"]`;
-        const diveTarget = registry.getDiveTargetForSource(selector);
-        if (!diveTarget) {
-            log('divePlugin:', pluginId, '→ no DiveTarget registered');
-            return;
-        }
-        log('divePlugin:', pluginId,
-            `cameraBefore=(${Math.round(camera.x)},${Math.round(camera.y)})`,
-            `claim=${JSON.stringify(diveTarget.claim)}`,
-            `firstPage=${diveTarget.pages[0]}`);
-        navigation.diveInto(selector);
-        log('divePlugin:', pluginId,
-            `cameraAfter=(${Math.round(camera.x)},${Math.round(camera.y)})`,
-            `layer=${camera.layer}`);
-        setDiveDepth(navigation.stackDepth());
-        const firstPageId = diveTarget.pages[0];
-        if (firstPageId) {
-            const entry = registry.getEntry(firstPageId);
-            const newParent = entry?.parent || firstPageId;
-            diveParentRef.current = newParent;
-            setDiveParent(newParent);
-        }
-    }, [navigation, registry]);
+        diveViaSelector(`[data-plugin-id="${pluginId}"]`);
+    }, [diveViaSelector]);
 
     const pluginDiveRef = useRef(false);
     useEffect(() => {
