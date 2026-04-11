@@ -138,34 +138,13 @@ test('gotoAnchor falls back to first layer-0 page on unknown pageId', () => {
     assert.equal(pan[1], 640 - 800 / 2);
 });
 
-test('gotoAnchor centers on resolved surface world center when focus registry has it', () => {
-    const { registry, getSettings } = makeMocks();
-    const camera = spyCamera();
-    const domHelpers = {
-        resolveSelector: (sel) => sel === 'fake-selector' ? { x: 500, y: 300 } : null,
-        getViewportSize: () => ({ w: 800, h: 600 }),
-    };
+test('gotoAnchor uses page geometric center regardless of focus registry', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMocks();
     const nav = createNavigation({ registry, camera, getSettings, domHelpers });
     nav.setFocus('plugins', 'fake-selector');
     nav.gotoAnchor({ pageId: 'plugins' }, { respectKnob: false });
-    const pan = camera._calls.find(c => c[0] === 'panSmooth');
-    assert.ok(pan);
-    assert.equal(pan[1], 500 - 800 / 2);
-    assert.equal(pan[2], 300 - 600 / 2);
-});
-
-test('gotoAnchor falls back to page center when focus selector is stale', () => {
-    const { registry, getSettings } = makeMocks();
-    const camera = spyCamera();
-    const domHelpers = {
-        resolveSelector: () => null,
-        getViewportSize: () => ({ w: 800, h: 600 }),
-    };
-    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
-    nav.setFocus('plugins', '#gone');
-    nav.gotoAnchor({ pageId: 'plugins' }, { respectKnob: false });
-    const pan = camera._calls.find(c => c[0] === 'panSmooth');
-    assert.equal(pan[1], 640 - 800 / 2);
+    assert.equal(camera.x, 640 - 800 / 2);
+    assert.equal(camera.y, 450 - 600 / 2);
 });
 
 test('gotoAnchor triggers setLayer when page layer differs', () => {
