@@ -35,8 +35,15 @@ export function WorldViewport({ camera, onViewChange, navigation, registry, chil
         if (!vp) return;
 
         function onPointerDown(e) {
-            if (e.button !== 0) return;
-            if (e.target.closest(INTERACTIVE_SELECTOR)) { vp.classList.add('interactive'); return; }
+            const isMiddleClick = e.button === 1;
+            const isAltLeftClick = e.button === 0 && e.altKey;
+            const isForcePan = isMiddleClick || isAltLeftClick;
+            if (e.button !== 0 && !isMiddleClick) return;
+            if (!isForcePan && e.target.closest(INTERACTIVE_SELECTOR)) {
+                vp.classList.add('interactive');
+                return;
+            }
+            if (isForcePan) e.preventDefault();
             const d = dragRef.current;
             d.active = true;
             d.moved = false;
