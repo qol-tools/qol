@@ -3,6 +3,7 @@ import { createDiveStack } from '../lib/dive-stack.js';
 import { useRef, useCallback, useEffect, useLayoutEffect, useState } from 'preact/hooks';
 import { PaletteProvider, usePaletteContext } from '../palette/context.js';
 import { createDebug, rectLabel, pointLabel } from '../lib/debug.js';
+import { selectorFor, animateTransition } from '../lib/world-navigation.js';
 import { getWorldSettings } from '../lib/world-settings.js';
 
 const log = createDebug('qol:app');
@@ -291,70 +292,3 @@ function AppKeyboardRouting({ activePluginId, activeViewId, camera, closePluginC
     return null;
 }
 
-function animateTransition(vp, animatingRef, outClass, applyLayer, onDone) {
-    const { transitionStyle, transitionSpeed } = getWorldSettings();
-    const minimap = document.querySelector('.world-minimap-container');
-    if (transitionStyle === 'instant') {
-        applyLayer();
-        if (onDone) onDone();
-        return;
-    }
-    animatingRef.current = true;
-    const totalBudget = transitionSpeed * 3;
-    const failsafe = setTimeout(() => {
-        clearAnimClass(vp, 'dive-out');
-        clearAnimClass(vp, 'ascend-out');
-        clearAnimClass(vp, 'fade-out');
-        clearAnimClass(vp, 'layer-in');
-        clearAnimClass(minimap, 'dive-out');
-        clearAnimClass(minimap, 'ascend-out');
-        clearAnimClass(minimap, 'fade-out');
-        clearAnimClass(minimap, 'layer-in');
-        animatingRef.current = false;
-    }, totalBudget);
-    const outAnim = transitionStyle === 'fade' ? 'fade-out' : outClass;
-    const dur = `${transitionSpeed}ms`;
-    const durIn = `${Math.round(transitionSpeed * 0.6)}ms`;
-    applyAnimClass(vp, outAnim, dur);
-    applyAnimClass(minimap, outAnim, dur);
-    vp.addEventListener('animationend', function onEnd(e) {
-        if (e.target !== vp) return;
-        vp.removeEventListener('animationend', onEnd);
-        clearAnimClass(vp, outAnim);
-        clearAnimClass(minimap, outAnim);
-        applyLayer();
-        applyAnimClass(vp, 'layer-in', durIn);
-        applyAnimClass(minimap, 'layer-in', durIn);
-        vp.addEventListener('animationend', function onIn(e) {
-            if (e.target !== vp) return;
-            vp.removeEventListener('animationend', onIn);
-            clearAnimClass(vp, 'layer-in');
-            clearAnimClass(minimap, 'layer-in');
-            clearTimeout(failsafe);
-            animatingRef.current = false;
-        });
-        if (onDone) onDone();
-    });
-}
-
-function applyAnimClass(el, cls, dur) {
-    if (!el) return;
-    el.style.animationDuration = dur;
-    el.classList.add(cls);
-}
-
-function clearAnimClass(el, cls) {
-    if (!el) return;
-    el.classList.remove(cls);
-    el.style.animationDuration = '';
-}
-
-function selectorFor(el) {
-    if (el.id) return `#${CSS.escape(el.id)}`;
-    const viewId = el.closest('[data-view-id]')?.dataset?.viewId;
-    const index = el.getAttribute('data-index');
-    if (viewId && index != null) {
-        return `[data-view-id="${CSS.escape(viewId)}"] [data-selected-surface][data-index="${index}"]`;
-    }
-    return null;
-}
