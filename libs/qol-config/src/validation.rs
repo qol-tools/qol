@@ -465,6 +465,7 @@ fn default_matches_kind(default: &FieldDefault, kind: FieldKind) -> bool {
         (_, FieldKind::Action) => false,
         (_, FieldKind::List) => false,
         (_, FieldKind::Status) => false,
+        (_, FieldKind::QrCode) => false,
         _ => false,
     }
 }
@@ -498,5 +499,6 @@ fn field_kind_name(kind: FieldKind) -> &'static str {
         FieldKind::Action => "action",
         FieldKind::List => "list",
         FieldKind::Status => "status",
+        FieldKind::QrCode => "qr_code",
     }
 }

@@ -121,6 +121,7 @@ pub enum FieldKind {
     Action,
     List,
     Status,
+    QrCode,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -307,5 +308,25 @@ offline = "danger"
         );
         let tone_map = field.tone_map.as_ref().expect("tone_map");
         assert_eq!(tone_map.get("ok").map(|s| s.as_str()), Some("success"));
+    }
+
+    #[test]
+    fn parses_qr_code_field() {
+        let spec_str = r#"
+schema_version = 1
+
+[field.pair_qr]
+type = "qr_code"
+label = "Scan to pair phone"
+query = "pair_url"
+value_from = "url"
+placeholder = "Waiting for session..."
+"#;
+        let spec = parse_spec_str(spec_str).expect("parse");
+        let field = spec.fields.get("pair_qr").expect("field present");
+        assert!(matches!(field.kind, FieldKind::QrCode));
+        assert_eq!(field.query.as_deref(), Some("pair_url"));
+        assert_eq!(field.value_from.as_deref(), Some("url"));
+        assert_eq!(field.placeholder.as_deref(), Some("Waiting for session..."));
     }
 }
