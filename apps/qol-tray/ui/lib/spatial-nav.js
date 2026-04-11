@@ -1,6 +1,23 @@
 import { createDebug } from './debug.js';
+import { contains } from './world-registry.js';
 
 const log = createDebug('qol:spatial');
+
+export function isSurfaceInsideConfinement(surface, confinement, registry) {
+    if (!confinement) return true;
+    const viewEl = surface.closest?.('[data-view-id]');
+    if (!viewEl) return false;
+    const pageId = viewEl.dataset?.viewId;
+    if (!pageId) return false;
+    const entry = registry?.getEntry?.(pageId);
+    if (!entry) return false;
+    return contains(confinement, entry);
+}
+
+export function filterSurfacesByConfinement(surfaces, confinement, registry) {
+    if (!confinement) return surfaces;
+    return surfaces.filter(s => isSurfaceInsideConfinement(s, confinement, registry));
+}
 
 export function nearestSurfaceInDirection(surfaces, current, direction) {
     const horizontal = direction === 'left' || direction === 'right';
