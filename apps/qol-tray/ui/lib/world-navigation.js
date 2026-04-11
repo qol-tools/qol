@@ -78,12 +78,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         return fallback || null;
     }
 
-    function resolveCenter(entry, pageId) {
-        const selector = focusRegistry[pageId];
-        if (selector) {
-            const resolved = domHelpers.resolveSelector(selector);
-            if (resolved) return { x: resolved.x, y: resolved.y };
-        }
+    function resolveCenter(entry) {
         return { x: entry.x + entry.width / 2, y: entry.y + entry.height / 2 };
     }
 
@@ -101,7 +96,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
             log('gotoAnchor: skipped (no fallback entry)', anchor.pageId);
             return;
         }
-        const center = resolveCenter(entry, anchor.pageId);
+        const center = resolveCenter(entry);
         const { w, h } = domHelpers.getViewportSize();
         const z = camera.zoom || 1;
         const targetX = center.x - w / (2 * z);
