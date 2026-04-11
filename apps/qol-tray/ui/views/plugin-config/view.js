@@ -80,6 +80,25 @@ export function PluginConfigView({ onClose }) {
     `;
 }
 
+export function PluginConfigSectionView({ pluginId, sectionId, onClose }) {
+    const ctx = usePluginConfigContext();
+    if (!ctx || ctx.pluginId !== pluginId) return null;
+    if (ctx.loading || !ctx.sections) return null;
+    const section = ctx.sections.find(s => s.id === sectionId);
+    if (!section) return null;
+    return html`
+        <${SurfaceContainer} className="plugin-config-detail" tabIndex="-1">
+            <div class="config-detail-content">
+                <header class="config-detail-header">
+                    <h2>${section.label || prettyLabel(section.id)}</h2>
+                    ${section.description && html`<p class="section-copy">${section.description}</p>`}
+                </header>
+                <${ConfigSection} fields=${section.fields} />
+            </div>
+        <//>
+    `;
+}
+
 function ConfigSection({ fields }) {
     const ctx = usePluginConfigContext();
     const groups = collectVariantGroups(fields);

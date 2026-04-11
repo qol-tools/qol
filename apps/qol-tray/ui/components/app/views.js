@@ -1,6 +1,6 @@
 import { html } from '../../lib/html.js';
 import { PluginsView } from '../../views/plugins-view.js';
-import { PluginConfigView } from '../../views/plugin-config/view.js';
+import { PluginConfigView, PluginConfigSectionView } from '../../views/plugin-config/view.js';
 import { StoreView } from '../../views/store-view.js';
 import { HotkeysView, HotkeyEditorSubPage } from '../../views/hotkeys-view.js';
 import { ShortcutsView, ShortcutEditorSubPage } from '../../views/shortcuts-view.js';
@@ -46,6 +46,16 @@ export function renderWorldViews({ registry, cameraLayer, openPluginConfig, open
         <${WorldViewSlot} entry=${registry.getEntry('logs')} cameraLayer=${layer}><${LogsView} active=${true} /><//>
         <${WorldViewSlot} entry=${registry.getEntry('dev')} cameraLayer=${layer}><${DevView} /><//>
         <${WorldViewSlot} entry=${registry.getEntry('plugins-config')} cameraLayer=${layer}><${PluginConfigView} onClose=${closePluginConfig} /><//>
+        ${registry.getAllEntries()
+            .filter(e => e.layer === -1 && /^plugin-/.test(e.id) && e.id !== 'plugins-config')
+            .map(e => {
+                const m = e.id.match(/^(plugin-[^-]+(?:-[^-]+)*?)-([^-]+)$/);
+                if (!m) return null;
+                const [, pluginId, sectionId] = m;
+                return html`<${WorldViewSlot} key=${e.id} entry=${e} cameraLayer=${layer}>
+                    <${PluginConfigSectionView} pluginId=${pluginId} sectionId=${sectionId} onClose=${closePluginConfig} />
+                <//>`;
+            })}
         <${WorldViewSlot} entry=${registry.getEntry('hotkeys-editor')} cameraLayer=${layer}><${HotkeyEditorSubPage} /><//>
         <${WorldViewSlot} entry=${registry.getEntry('shortcuts-editor')} cameraLayer=${layer}><${ShortcutEditorSubPage} /><//>
         <${WorldViewSlot} entry=${registry.getEntry('logs-detail')} cameraLayer=${layer}><${LogDetailSubPage} /><//>
