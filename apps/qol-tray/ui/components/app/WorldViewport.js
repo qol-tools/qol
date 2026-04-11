@@ -168,19 +168,21 @@ export function WorldViewport({ camera, onViewChange, navigation, children }) {
 
 function snapToCenter(viewport, onViewChange, navigation) {
     const { surface, viewId, dist, count } = nearestSurfaceToCenter(viewport);
+    const fallbackAnchor = navigation?.getCurrentAnchor?.();
+    const effectiveViewId = viewId || fallbackAnchor?.pageId || null;
 
     if (viewId && onViewChange) onViewChange(viewId);
 
-    if (surface && navigation) {
+    if (surface && navigation && viewId) {
         const selector = selectorFor(surface);
-        if (selector && viewId) navigation.setFocus(viewId, selector);
+        if (selector) navigation.setFocus(viewId, selector);
     }
 
     if (!surface) {
-        log('snap: no surfaces in', viewId);
-        if (navigation && viewId) {
-            navigation.setCurrentAnchor({ pageId: viewId });
-            navigation.gotoAnchor({ pageId: viewId }, { respectKnob: true });
+        log('snap: no surfaces in', viewId || '(no-view)', '→ recover to', effectiveViewId || '(none)');
+        if (navigation && effectiveViewId) {
+            navigation.setCurrentAnchor({ pageId: effectiveViewId });
+            navigation.gotoAnchor({ pageId: effectiveViewId }, { respectKnob: false });
         }
         return;
     }
