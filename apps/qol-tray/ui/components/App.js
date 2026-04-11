@@ -173,7 +173,8 @@ function AppShell() {
         const didAscend = navigation.ascend();
         if (didAscend) {
             const topAnchor = navigation.getCurrentAnchor();
-            const parentForAnchor = topAnchor?.pageId ? (registry.getEntry(topAnchor.pageId)?.parent || topAnchor.pageId) : null;
+            const topEntry = topAnchor?.pageId ? registry.getEntry(topAnchor.pageId) : null;
+            const parentForAnchor = topEntry?.parent ?? null;
             diveParentRef.current = parentForAnchor;
             setDiveParent(parentForAnchor);
         }
