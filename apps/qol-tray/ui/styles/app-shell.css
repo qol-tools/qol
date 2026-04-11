@@ -214,6 +214,13 @@ body {
     flex: 1;
     overflow-y: auto;
     padding: 1.5rem 1.8rem 2.5rem;
+    display: flex;
+    flex-direction: column;
+}
+
+.plugin-config-detail > .config-detail-content {
+    margin: auto 0;
+    width: 100%;
 }
 
 .plugin-config-loading {
