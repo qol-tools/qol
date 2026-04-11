@@ -6,12 +6,13 @@ import { isCtrlHeld } from '../../lib/ctrl-state.js';
 import { nearestSurfaceToCenter } from '../../lib/viewport-spatial.js';
 import { getWorldSettings } from '../../lib/world-settings.js';
 import { selectorFor } from '../../lib/world-navigation.js';
+import { contains } from '../../lib/world-registry.js';
 
 const log = createDebug('qol:world');
 const CAMERA_FOLLOW_PAD = 40;
 const INTERACTIVE_SELECTOR = 'button, input, select, textarea, [data-selected-surface], a, [role="tab"], [tabindex]';
 
-export function WorldViewport({ camera, onViewChange, navigation, children }) {
+export function WorldViewport({ camera, onViewChange, navigation, registry, children }) {
     const viewportRef = useRef(null);
     const worldRef = useRef(null);
     const dragRef = useRef({ active: false, startX: 0, startY: 0, camX: 0, camY: 0, moved: false });
@@ -91,7 +92,7 @@ export function WorldViewport({ camera, onViewChange, navigation, children }) {
                 if (panned) {
                     requestAnimationFrame(() => {
                         const isInput = document.activeElement?.matches('input, textarea, select, [contenteditable]');
-                        if (!isInput) snapToCenter(vp, onViewChange, navigation);
+                        if (!isInput) snapToCenter(vp, onViewChange, navigation, registry);
                     });
                 }
             }
@@ -154,7 +155,7 @@ export function WorldViewport({ camera, onViewChange, navigation, children }) {
             document.removeEventListener('focusin', onFocusIn, true);
             cancelAnimationFrame(rafId);
         };
-    }, [camera, navigation]);
+    }, [camera, navigation, registry]);
 
     return html`
         <div id="viewport" ref=${viewportRef}>
@@ -166,10 +167,18 @@ export function WorldViewport({ camera, onViewChange, navigation, children }) {
     `;
 }
 
-function snapToCenter(viewport, onViewChange, navigation) {
+function snapToCenter(viewport, onViewChange, navigation, registry) {
     const { surface, viewId, dist, count } = nearestSurfaceToCenter(viewport);
+    const confinement = navigation?.getCurrentConfinement?.() || null;
+    const viewIdInsideConfinement = (() => {
+        if (!viewId) return null;
+        if (!confinement) return viewId;
+        const entry = registry?.getEntry?.(viewId);
+        if (!entry) return null;
+        return contains(confinement, entry) ? viewId : null;
+    })();
     const fallbackAnchor = navigation?.getCurrentAnchor?.();
-    const effectiveViewId = viewId || fallbackAnchor?.pageId || null;
+    const effectiveViewId = viewIdInsideConfinement || fallbackAnchor?.pageId || null;
 
     if (viewId && onViewChange) onViewChange(viewId);
 
