@@ -417,3 +417,34 @@ test('ascend from root dive calls camera.setBounds(null)', () => {
     nav.ascend();
     assert.equal(camera._bounds, null);
 });
+
+test('diveInto then ascend restores currentConfinement and currentAnchor', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMocks();
+    const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
+    registry.addDiveTarget({ sourceSelector: '#card-a', claim, pages: ['plugins-config'] });
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.setCurrentAnchor({ pageId: 'plugins' });
+    const originalAnchor = nav.getCurrentAnchor();
+    const originalConfinement = nav.getCurrentConfinement();
+    nav.diveInto('#card-a');
+    nav.ascend();
+    assert.deepEqual(nav.getCurrentAnchor(), originalAnchor);
+    assert.equal(nav.getCurrentConfinement(), originalConfinement);
+});
+
+test('nested diveInto then ascend twice restores root', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMocks();
+    const claim1 = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
+    const claim2 = { x: 100, y: 100, width: 500, height: 500, layer: -2 };
+    registry.addDiveTarget({ sourceSelector: '#a', claim: claim1, pages: ['plugins-config'] });
+    registry.addDiveTarget({ sourceSelector: '#b', claim: claim2, pages: ['plugins-config'] });
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.setCurrentAnchor({ pageId: 'plugins' });
+    nav.diveInto('#a');
+    nav.diveInto('#b');
+    nav.ascend();
+    nav.ascend();
+    assert.equal(nav.getCurrentConfinement(), null);
+    assert.equal(nav.getCurrentAnchor().pageId, 'plugins');
+    assert.equal(nav.stackDepth(), 0);
+});
