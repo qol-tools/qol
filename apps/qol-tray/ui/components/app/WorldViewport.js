@@ -91,7 +91,7 @@ export function WorldViewport({ camera, onViewChange, navigation, children }) {
                 if (panned) {
                     requestAnimationFrame(() => {
                         const isInput = document.activeElement?.matches('input, textarea, select, [contenteditable]');
-                        if (!isInput) snapToCenter(vp, onViewChange);
+                        if (!isInput) snapToCenter(vp, onViewChange, navigation);
                     });
                 }
             }
@@ -166,16 +166,31 @@ export function WorldViewport({ camera, onViewChange, navigation, children }) {
     `;
 }
 
-function snapToCenter(viewport, onViewChange) {
+function snapToCenter(viewport, onViewChange, navigation) {
     const { surface, viewId, dist, count } = nearestSurfaceToCenter(viewport);
 
     if (viewId && onViewChange) onViewChange(viewId);
 
+    if (surface && navigation) {
+        const selector = selectorFor(surface);
+        if (selector && viewId) navigation.setFocus(viewId, selector);
+    }
+
     if (!surface) {
         log('snap: no surfaces in', viewId);
+        if (navigation && viewId) {
+            navigation.setCurrentAnchor({ pageId: viewId });
+            navigation.gotoAnchor({ pageId: viewId }, { respectKnob: true });
+        }
         return;
     }
 
     log('snap →', elLabel(surface), 'in', viewId, 'dist:', Math.round(dist), 'of', count, 'candidates');
-    surface.focus({ preventScroll: true });
+
+    if (navigation) {
+        navigation.setCurrentAnchor({ pageId: viewId });
+        navigation.gotoAnchor({ pageId: viewId }, { respectKnob: true });
+    } else {
+        surface.focus({ preventScroll: true });
+    }
 }
