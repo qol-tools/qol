@@ -1,4 +1,6 @@
-use qol_config::contract::parse_spec;
+use qol_config::contract::{
+    parse_runtime_spec, parse_spec, validate_contracts, ParseRuntimeSpecError, RuntimeSpec,
+};
 use qol_config::normalized::resolve_config;
 use qol_config::validation::validate_spec;
 use std::path::{Path, PathBuf};
@@ -33,6 +35,8 @@ fn run_validate(args: &[String]) -> Result<(), String> {
     let plugin_root = parse_plugin_root(args)?;
     let spec = parse_spec(spec_path(&plugin_root)).map_err(format_parse_error)?;
     validate_spec(&spec).map_err(format_validation_errors)?;
+    let runtime = load_runtime_spec(&plugin_root)?;
+    validate_contracts(&spec, runtime.as_ref()).map_err(format_validation_errors)?;
     println!("valid");
     Ok(())
 }
@@ -75,6 +79,10 @@ fn spec_path(plugin_root: &Path) -> PathBuf {
     plugin_root.join("qol-config.toml")
 }
 
+fn runtime_path(plugin_root: &Path) -> PathBuf {
+    plugin_root.join("qol-runtime.toml")
+}
+
 fn load_overrides(path: Option<&str>) -> Result<serde_json::Value, String> {
     let path = match path {
         Some(path) => path,
@@ -84,10 +92,28 @@ fn load_overrides(path: Option<&str>) -> Result<serde_json::Value, String> {
     serde_json::from_str(&raw).map_err(|error| error.to_string())
 }
 
+fn load_runtime_spec(plugin_root: &Path) -> Result<Option<RuntimeSpec>, String> {
+    let path = runtime_path(plugin_root);
+    if !path.exists() {
+        return Ok(None);
+    }
+    parse_runtime_spec(&path)
+        .map(Some)
+        .map_err(format_runtime_parse_error)
+}
+
 fn format_parse_error(error: qol_config::contract::ParseSpecError) -> String {
     match error {
         qol_config::contract::ParseSpecError::Io(error) => error.to_string(),
         qol_config::contract::ParseSpecError::Toml(error) => error.to_string(),
+    }
+}
+
+fn format_runtime_parse_error(error: ParseRuntimeSpecError) -> String {
+    match error {
+        ParseRuntimeSpecError::Io(error) => error.to_string(),
+        ParseRuntimeSpecError::Toml(error) => error.to_string(),
+        ParseRuntimeSpecError::Validation(message) => message,
     }
 }
 
