@@ -23,7 +23,7 @@ fn execute_via_daemon(
 ) -> Result<(), ActionExecutionError> {
     let dispatch =
         crate::plugins::action_transport::dispatch_daemon_action(socket_path, &resolved.action_id);
-    if matches!(dispatch, DaemonActionDispatch::Handled) {
+    if matches!(dispatch, DaemonActionDispatch::Handled { .. }) {
         log::info!(
             "Plugin action handled via daemon: {}::{}",
             resolved.plugin_id,
@@ -50,7 +50,7 @@ fn daemon_failure_reason(
         DaemonActionDispatch::Fallback => Ok("daemon rejected action"),
         DaemonActionDispatch::Unavailable => Ok("daemon unavailable for"),
         DaemonActionDispatch::Error(message) => daemon_dispatch_error(resolved, message),
-        DaemonActionDispatch::Handled => unreachable!(),
+        DaemonActionDispatch::Handled { .. } => unreachable!(),
     }
 }
 
@@ -128,38 +128,4 @@ fn spawn_wait_untracker(resolved: &ResolvedAction, mut child: std::process::Chil
         let _ = child.wait();
         untrack_action_process(&plugin_id, &action_id, pid);
     });
-}
-
-pub(crate) fn parse_query_response(raw: &str) -> Result<serde_json::Value, ActionExecutionError> {
-    serde_json::from_str::<serde_json::Value>(raw).map_err(|error| {
-        ActionExecutionError::ActionRejected(format!("invalid query JSON response: {error}"))
-    })
-}
-
-#[cfg(test)]
-mod query_tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn query_action_returns_parsed_json_payload() {
-        let raw = r#"{"devices": [{"name": "bulb1", "online": true}]}"#;
-        let parsed = parse_query_response(raw).expect("parse");
-        let expected = json!({"devices": [{"name": "bulb1", "online": true}]});
-        assert_eq!(parsed, expected, "query payload should match raw JSON");
-    }
-
-    #[test]
-    fn query_action_rejects_invalid_json() {
-        let raw = "not valid json";
-        let result = parse_query_response(raw);
-        assert!(result.is_err(), "invalid JSON should fail");
-    }
-
-    #[test]
-    fn query_action_accepts_empty_object() {
-        let raw = "{}";
-        let parsed = parse_query_response(raw).expect("parse");
-        assert_eq!(parsed, json!({}));
-    }
 }
