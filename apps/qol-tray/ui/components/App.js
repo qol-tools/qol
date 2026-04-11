@@ -2,7 +2,7 @@ import { html } from '../lib/html.js';
 import { createDiveStack } from '../lib/dive-stack.js';
 import { useRef, useCallback, useEffect, useLayoutEffect, useState } from 'preact/hooks';
 import { PaletteProvider, usePaletteContext } from '../palette/context.js';
-import { createDebug } from '../lib/debug.js';
+import { createDebug, rectLabel, pointLabel } from '../lib/debug.js';
 import { getWorldSettings } from '../lib/world-settings.js';
 
 const log = createDebug('qol:app');
@@ -155,15 +155,19 @@ function AppShell() {
         camera.setLayer(entry.layer);
         diveParentRef.current = newParent;
         setDiveParent(newParent);
-        const w = vp.clientWidth || 800;
-        const h = vp.clientHeight || 600;
+        const rawW = vp.clientWidth;
+        const rawH = vp.clientHeight;
+        const w = rawW || window.innerWidth;
+        const h = rawH || window.innerHeight;
+        const vpFallback = !rawW || !rawH;
         const camTarget = registry.cameraTargetForView(targetId, w, h, camera.zoom);
-        log('dive:', targetId, 'entry=(', entry.x, ',', entry.y, entry.width + 'x' + entry.height, ')',
-            'vp=(' + w + 'x' + h + ')',
-            'z=' + camera.zoom.toFixed(2),
+        log('dive:', targetId,
+            `entry=${rectLabel(entry)}`,
+            `vp=(${w}x${h})${vpFallback ? '!' : ''}`,
+            `z=${camera.zoom.toFixed(2)}`,
             '→ layer', entry.layer,
-            'cam=(' + (camTarget ? Math.round(camTarget.x) : '?') + ',' + (camTarget ? Math.round(camTarget.y) : '?') + ')',
-            'stack=' + diveStack.size);
+            `cam=${pointLabel(camTarget)}`,
+            `stack=${diveStack.depth()}`);
         if (camTarget) camera.panTo(camTarget.x, camTarget.y);
         focusTarget();
     }, [camera, registry, diveStack]);
@@ -191,13 +195,14 @@ function AppShell() {
         }
         diveParentRef.current = parentTarget;
         setDiveParent(parentTarget);
+        const panSource = resolved ? `via ${resolved.source}` : 'no pan';
         log('forceAscend:',
-            'wasAnimating=' + wasAnimating,
-            'prev=' + (prev ? 'yes' : 'none'),
+            `wasAnimating=${wasAnimating}`,
+            `prev=${prev ? 'yes' : 'none'}`,
             '→ layer 0',
-            'parent=' + (parentTarget || 'null'),
-            'cam=(' + (resolved ? Math.round(resolved.x) + ',' + Math.round(resolved.y) : '?') + ')',
-            resolved ? 'via ' + resolved.source : 'no pan');
+            `parent=${parentTarget || 'null'}`,
+            `cam=${pointLabel(resolved)}`,
+            panSource);
     }, [camera, registry, activeViewId, diveStack]);
 
     const ascend = useCallback(() => {

@@ -49,5 +49,12 @@ export function elLabel(el) {
 
 export function rectLabel(r) {
     if (!r) return 'none';
-    return `(${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)})`;
+    const x = r.x ?? r.left;
+    const y = r.y ?? r.top;
+    return `(${Math.round(x)},${Math.round(y)} ${Math.round(r.width)}x${Math.round(r.height)})`;
+}
+
+export function pointLabel(p) {
+    if (!p) return '(?)';
+    return `(${Math.round(p.x)},${Math.round(p.y)})`;
 }
