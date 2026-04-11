@@ -463,6 +463,7 @@ fn default_matches_kind(default: &FieldDefault, kind: FieldKind) -> bool {
         (FieldDefault::StringArray(values), FieldKind::ObjectArray) => values.is_empty(),
         (FieldDefault::ObjectMap(_), FieldKind::ObjectMap) => true,
         (_, FieldKind::Action) => false,
+        (_, FieldKind::List) => false,
         _ => false,
     }
 }
@@ -494,5 +495,6 @@ fn field_kind_name(kind: FieldKind) -> &'static str {
         FieldKind::ObjectMap => "object_map",
         FieldKind::Color => "color",
         FieldKind::Action => "action",
+        FieldKind::List => "list",
     }
 }

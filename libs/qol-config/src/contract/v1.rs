@@ -77,6 +77,14 @@ pub struct FieldSpec {
     pub action: Option<String>,
     #[serde(default)]
     pub variant: Option<String>,
+    #[serde(default)]
+    pub query: Option<String>,
+    #[serde(default)]
+    pub row_label: Option<String>,
+    #[serde(default)]
+    pub row_subtitle: Option<String>,
+    #[serde(default)]
+    pub empty_message: Option<String>,
     #[serde(flatten)]
     pub number: NumberConstraints,
 }
@@ -105,6 +113,7 @@ pub enum FieldKind {
     ObjectMap,
     Color,
     Action,
+    List,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -218,5 +227,39 @@ variant = "danger"
         let spec = parse_spec_str(spec_str).expect("parse");
         let field = spec.fields.get("remove_all").expect("field present");
         assert_eq!(field.variant.as_deref(), Some("danger"), "variant");
+    }
+
+    #[test]
+    fn parses_list_field() {
+        let spec_str = r#"
+schema_version = 1
+
+[field.paired_devices]
+type = "list"
+label = "Paired Devices"
+query = "list_devices"
+row_label = "{name}"
+row_subtitle = "{ieee}"
+empty_message = "No devices paired yet."
+"#;
+        let spec = parse_spec_str(spec_str).expect("parse");
+        let field = spec.fields.get("paired_devices").expect("field present");
+        assert!(
+            matches!(field.kind, FieldKind::List),
+            "expected List, got {:?}",
+            field.kind
+        );
+        assert_eq!(field.query.as_deref(), Some("list_devices"), "query");
+        assert_eq!(field.row_label.as_deref(), Some("{name}"), "row_label");
+        assert_eq!(
+            field.row_subtitle.as_deref(),
+            Some("{ieee}"),
+            "row_subtitle"
+        );
+        assert_eq!(
+            field.empty_message.as_deref(),
+            Some("No devices paired yet."),
+            "empty_message"
+        );
     }
 }

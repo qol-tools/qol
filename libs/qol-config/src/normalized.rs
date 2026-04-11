@@ -208,6 +208,7 @@ fn field_default_from_override(kind: FieldKind, raw: &serde_json::Value) -> Opti
             object_map_from_json(values).map(FieldDefault::ObjectMap)
         }
         FieldKind::Action => None,
+        FieldKind::List => None,
     }
 }
 
@@ -312,5 +313,6 @@ fn field_kind_name(kind: FieldKind) -> &'static str {
         FieldKind::ObjectMap => "object_map",
         FieldKind::Color => "color",
         FieldKind::Action => "action",
+        FieldKind::List => "list",
     }
 }
