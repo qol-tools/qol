@@ -24,16 +24,31 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         return focusRegistry[pageId] || null;
     }
 
+    function gotoAnchor(anchor, { respectKnob = true } = {}) {
+        void anchor;
+        void respectKnob;
+    }
+
     function dive(targetPageId) {
-        throw new Error('dive: not implemented');
+        if (!targetPageId) {
+            log('dive: skipped (no targetPageId)');
+            return;
+        }
+        diveStack.push({ anchor: currentAnchor, zoom: camera.zoom });
+        currentAnchor = { pageId: targetPageId };
+        gotoAnchor(currentAnchor, { respectKnob: false });
     }
 
     function ascend() {
-        throw new Error('ascend: not implemented');
-    }
-
-    function gotoAnchor(anchor, opts) {
-        throw new Error('gotoAnchor: not implemented');
+        const prev = diveStack.pop();
+        if (!prev) {
+            log('ascend: skipped (empty stack)');
+            return false;
+        }
+        currentAnchor = prev.anchor;
+        camera.zoomTo(prev.zoom);
+        gotoAnchor(prev.anchor, { respectKnob: false });
+        return true;
     }
 
     function stackDepth() {

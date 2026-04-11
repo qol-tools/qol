@@ -34,3 +34,54 @@ test('getCurrentAnchor returns the current anchor', () => {
     nav.setCurrentAnchor({ pageId: 'plugins' });
     assert.equal(nav.getCurrentAnchor().pageId, 'plugins');
 });
+
+test('dive pushes current anchor and sets new', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMocks();
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.setCurrentAnchor({ pageId: 'plugins' });
+    nav.dive('plugins-config');
+    assert.equal(nav.getCurrentAnchor().pageId, 'plugins-config');
+    assert.equal(nav.stackDepth(), 1);
+});
+
+test('ascend pops and restores previous anchor', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMocks();
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.setCurrentAnchor({ pageId: 'plugins' });
+    nav.dive('plugins-config');
+    const ok = nav.ascend();
+    assert.equal(ok, true);
+    assert.equal(nav.getCurrentAnchor().pageId, 'plugins');
+    assert.equal(nav.stackDepth(), 0);
+});
+
+test('ascend returns false when stack is empty', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMocks();
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.setCurrentAnchor({ pageId: 'plugins' });
+    assert.equal(nav.ascend(), false);
+    assert.equal(nav.getCurrentAnchor().pageId, 'plugins');
+});
+
+test('dive/ascend invariant holds across all layer-0 pages', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMocks();
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    const pages = ['plugins', 'hotkeys'];
+    for (const start of pages) {
+        nav.setCurrentAnchor({ pageId: start });
+        nav.dive('plugins-config');
+        nav.ascend();
+        assert.equal(nav.getCurrentAnchor().pageId, start, `restoring from ${start}`);
+    }
+});
+
+test('ascend restores zoom captured at dive time', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMocks();
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.setCurrentAnchor({ pageId: 'plugins' });
+    camera.zoom = 1.5;
+    nav.dive('plugins-config');
+    camera.zoom = 2.0;
+    nav.ascend();
+    assert.equal(camera.zoom, 1.5);
+});
