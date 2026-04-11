@@ -205,6 +205,21 @@ function AppShell() {
             const selector = selectorFor(sourceSurface);
             if (sourcePageId && selector) navigation.setFocus(sourcePageId, selector);
         }
+        const sourcePageId = sourceSurface?.closest('[data-view-id]')?.dataset?.viewId;
+        const targetSelector = sourcePageId ? `[data-view-id="${sourcePageId}"]` : null;
+        const diveTarget = targetSelector ? registry.getDiveTargetForSource(targetSelector) : null;
+        if (diveTarget) {
+            navigation.diveInto(targetSelector);
+            setDiveDepth(navigation.stackDepth());
+            const firstPageId = diveTarget.pages[0];
+            if (firstPageId) {
+                const entry = registry.getEntry(firstPageId);
+                const newParent = entry?.parent || firstPageId;
+                diveParentRef.current = newParent;
+                setDiveParent(newParent);
+            }
+            return;
+        }
         const entry = registry.diveTarget(targetId);
         const newParent = entry?.parent || targetId;
         diveParentRef.current = newParent;
