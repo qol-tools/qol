@@ -1,6 +1,54 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createNavigation } from './world-navigation.js';
+import { contains } from './world-registry.js';
+
+test('contains returns true when rect is null (no confinement)', () => {
+    const e = { id: 'x', x: 0, y: 0, width: 100, height: 100, layer: 0 };
+    assert.equal(contains(null, e), true);
+});
+
+test('contains returns true for entry fully inside rect', () => {
+    const rect = { x: 0, y: 0, width: 1000, height: 1000, layer: 0 };
+    const e = { id: 'x', x: 100, y: 100, width: 200, height: 200, layer: 0 };
+    assert.equal(contains(rect, e), true);
+});
+
+test('contains returns true when entry exactly fills rect', () => {
+    const rect = { x: 0, y: 0, width: 1000, height: 1000, layer: 0 };
+    const e = { id: 'x', x: 0, y: 0, width: 1000, height: 1000, layer: 0 };
+    assert.equal(contains(rect, e), true);
+});
+
+test('contains returns false for entry on a different layer', () => {
+    const rect = { x: 0, y: 0, width: 1000, height: 1000, layer: 0 };
+    const e = { id: 'x', x: 100, y: 100, width: 200, height: 200, layer: -1 };
+    assert.equal(contains(rect, e), false);
+});
+
+test('contains returns false when entry extends past right edge', () => {
+    const rect = { x: 0, y: 0, width: 1000, height: 1000, layer: 0 };
+    const e = { id: 'x', x: 900, y: 0, width: 200, height: 100, layer: 0 };
+    assert.equal(contains(rect, e), false);
+});
+
+test('contains returns false when entry extends past bottom edge', () => {
+    const rect = { x: 0, y: 0, width: 1000, height: 1000, layer: 0 };
+    const e = { id: 'x', x: 0, y: 900, width: 100, height: 200, layer: 0 };
+    assert.equal(contains(rect, e), false);
+});
+
+test('contains returns false when entry starts before left edge', () => {
+    const rect = { x: 100, y: 0, width: 1000, height: 1000, layer: 0 };
+    const e = { id: 'x', x: 0, y: 0, width: 200, height: 100, layer: 0 };
+    assert.equal(contains(rect, e), false);
+});
+
+test('contains returns false when entry starts above top edge', () => {
+    const rect = { x: 0, y: 100, width: 1000, height: 1000, layer: 0 };
+    const e = { id: 'x', x: 0, y: 0, width: 100, height: 200, layer: 0 };
+    assert.equal(contains(rect, e), false);
+});
 
 function makeMocks() {
     const pages = {
