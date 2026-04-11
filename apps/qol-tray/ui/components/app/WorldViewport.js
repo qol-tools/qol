@@ -5,12 +5,13 @@ import { createDebug, elLabel } from '../../lib/debug.js';
 import { isCtrlHeld } from '../../lib/ctrl-state.js';
 import { nearestSurfaceToCenter } from '../../lib/viewport-spatial.js';
 import { getWorldSettings } from '../../lib/world-settings.js';
+import { selectorFor } from '../../lib/world-navigation.js';
 
 const log = createDebug('qol:world');
 const CAMERA_FOLLOW_PAD = 40;
 const INTERACTIVE_SELECTOR = 'button, input, select, textarea, [data-selected-surface], a, [role="tab"], [tabindex]';
 
-export function WorldViewport({ camera, onViewChange, children }) {
+export function WorldViewport({ camera, onViewChange, navigation, children }) {
     const viewportRef = useRef(null);
     const worldRef = useRef(null);
     const dragRef = useRef({ active: false, startX: 0, startY: 0, camX: 0, camY: 0, moved: false });
@@ -113,9 +114,14 @@ export function WorldViewport({ camera, onViewChange, children }) {
         }
 
         function onFocusIn(e) {
-            if (isCtrlHeld()) return;
             const surface = e.target?.closest?.('[data-selected-surface]');
             if (!surface) return;
+            if (navigation) {
+                const pageId = surface.closest('[data-view-id]')?.dataset?.viewId;
+                const selector = selectorFor(surface);
+                if (pageId && selector) navigation.setFocus(pageId, selector);
+            }
+            if (isCtrlHeld()) return;
             const vr = vp.getBoundingClientRect();
             const fr = surface.getBoundingClientRect();
             let dx = 0, dy = 0;
@@ -148,7 +154,7 @@ export function WorldViewport({ camera, onViewChange, children }) {
             document.removeEventListener('focusin', onFocusIn, true);
             cancelAnimationFrame(rafId);
         };
-    }, [camera]);
+    }, [camera, navigation]);
 
     return html`
         <div id="viewport" ref=${viewportRef}>
