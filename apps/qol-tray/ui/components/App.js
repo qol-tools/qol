@@ -239,7 +239,7 @@ function AppShell() {
                     <//>
                     <${CommandPalette} />
                     <${MinimapContainer} camera=${camera} registry=${registry} viewportRef=${viewportRef} diveParent=${diveParent}
-                        activePluginId=${activePluginId} diveDepth=${diveDepth}
+                        activePluginId=${activePluginId} diveDepth=${diveDepth} navigation=${navigation}
                         version=${appVersion} updateState=${updateState} isDevMode=${devEnabled} onAction=${handleSidebarAction} />
                     <${SelectionCursorOverlay} camera=${camera} />
                     <${RecompileDissolve} triggerRef=${dissolveRef} />
