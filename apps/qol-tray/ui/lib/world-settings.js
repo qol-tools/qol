@@ -5,6 +5,7 @@ const DEFAULTS = {
     transitionSpeed: 120,
     transitionStyle: 'zoom-fade',
     minimapSize: 380,
+    anchorToPages: true,
 };
 
 let current = load();
