@@ -231,46 +231,18 @@ fn field_default_matches_kind(
     kind: qol_config::contract::FieldKind,
     value: &qol_config::contract::FieldDefault,
 ) -> bool {
-    matches!(
-        (kind, value),
-        (
-            qol_config::contract::FieldKind::Boolean,
-            qol_config::contract::FieldDefault::Boolean(_),
-        ) | (
-            qol_config::contract::FieldKind::String,
-            qol_config::contract::FieldDefault::String(_),
-        ) | (
-            qol_config::contract::FieldKind::Select,
-            qol_config::contract::FieldDefault::String(_),
-        ) | (
-            qol_config::contract::FieldKind::Number,
-            qol_config::contract::FieldDefault::Number(_),
-        ) | (
-            qol_config::contract::FieldKind::StringArray,
-            qol_config::contract::FieldDefault::StringArray(_),
-        ) | (
-            qol_config::contract::FieldKind::ObjectArray,
-            qol_config::contract::FieldDefault::ObjectArray(_),
-        ) | (
-            qol_config::contract::FieldKind::ObjectMap,
-            qol_config::contract::FieldDefault::ObjectMap(_),
-        ) | (
-            qol_config::contract::FieldKind::Color,
-            qol_config::contract::FieldDefault::String(_),
-        ) | (
-            qol_config::contract::FieldKind::Action,
-            qol_config::contract::FieldDefault::String(_),
-        ) | (
-            qol_config::contract::FieldKind::List,
-            qol_config::contract::FieldDefault::String(_),
-        ) | (
-            qol_config::contract::FieldKind::Status,
-            qol_config::contract::FieldDefault::String(_),
-        ) | (
-            qol_config::contract::FieldKind::QrCode,
-            qol_config::contract::FieldDefault::String(_),
-        )
-    )
+    use qol_config::contract::{FieldDefault, FieldKind};
+    match kind {
+        FieldKind::Boolean => matches!(value, FieldDefault::Boolean(_)),
+        FieldKind::String | FieldKind::Select | FieldKind::Color => {
+            matches!(value, FieldDefault::String(_))
+        }
+        FieldKind::Number => matches!(value, FieldDefault::Number(_)),
+        FieldKind::StringArray => matches!(value, FieldDefault::StringArray(_)),
+        FieldKind::ObjectArray => matches!(value, FieldDefault::ObjectArray(_)),
+        FieldKind::ObjectMap => matches!(value, FieldDefault::ObjectMap(_)),
+        FieldKind::Action | FieldKind::List | FieldKind::Status | FieldKind::QrCode => false,
+    }
 }
 
 fn field_kind_name(kind: qol_config::contract::FieldKind) -> &'static str {
