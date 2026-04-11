@@ -319,8 +319,15 @@ function AppShell() {
         if (activePluginId && !pluginDiveRef.current) {
             log('pluginDive: open', activePluginId, '→ dive plugins-config');
             pluginDiveRef.current = true;
-            const source = document.querySelector(`[data-view-id="plugins"] [data-plugin-id="${CSS.escape(activePluginId)}"]`)
-                || document.querySelector(`[data-plugin-id="${CSS.escape(activePluginId)}"]`);
+            const allCards = document.querySelectorAll('[data-plugin-id]');
+            const scoped = document.querySelector(`[data-view-id="plugins"] [data-plugin-id="${CSS.escape(activePluginId)}"]`);
+            const direct = document.querySelector(`[data-plugin-id="${CSS.escape(activePluginId)}"]`);
+            log('pluginDive: query',
+                'allCards=' + allCards.length,
+                'scoped=' + (scoped ? 'yes' : 'no'),
+                'direct=' + (direct ? 'yes' : 'no'),
+                'sample=' + (allCards[0] ? allCards[0].getAttribute('data-plugin-id') : 'none'));
+            const source = scoped || direct;
             dive('plugins-config', source);
         } else if (!activePluginId && pluginDiveRef.current) {
             log('pluginDive: close → ascend');
