@@ -1,5 +1,5 @@
 import { html } from '../../lib/html.js';
-import { useCallback, useRef } from 'preact/hooks';
+import { useCallback, useEffect, useRef } from 'preact/hooks';
 import { usePluginConfigContext } from './context.js';
 import { prettyLabel } from '../../auto-config/heuristics.js';
 import {
@@ -14,8 +14,23 @@ import { renderField, fieldSelectionClasses } from './field-map.js';
 import { dissolveIn, DISSOLVE_PRESETS } from '../../lib/dissolve.js';
 import { SurfaceContainer } from '../../components/SurfaceContainer.js';
 
+function useEscapeFallback(onClose) {
+    useEffect(() => {
+        const onKey = (event) => {
+            if (event.key !== 'Escape') return;
+            event.preventDefault();
+            event.stopPropagation();
+            onClose();
+        };
+        document.addEventListener('keydown', onKey, true);
+        return () => document.removeEventListener('keydown', onKey, true);
+    }, [onClose]);
+}
+
 export function PluginConfigView({ onClose }) {
     const ctx = usePluginConfigContext();
+    const isPlaceholder = !ctx || ctx.loading || ctx.mode === 'ui' || (ctx && ctx.sections && ctx.sections.length === 0);
+    useEscapeFallback(isPlaceholder ? onClose : noopClose);
 
     if (ctx?.mode === 'ui') {
         return html`
@@ -34,8 +49,20 @@ export function PluginConfigView({ onClose }) {
 
     const section = ctx?.activeSection;
 
-    if (!ctx || ctx.loading) return html`<div class="plugin-config-loading">Loading configuration...</div>`;
-    if (ctx.sections.length === 0) return html`<div class="plugin-config-loading">No settings available.</div>`;
+    if (!ctx || ctx.loading) {
+        return html`
+            <div class="plugin-config-loading" onClick=${onClose} title="Press Escape or click to return">
+                Loading configuration...
+            </div>
+        `;
+    }
+    if (ctx.sections.length === 0) {
+        return html`
+            <div class="plugin-config-loading" onClick=${onClose} title="Press Escape or click to return">
+                No settings available.
+            </div>
+        `;
+    }
 
     return html`
         <${SurfaceContainer} className="plugin-config-detail" tabIndex="-1">
@@ -51,6 +78,8 @@ export function PluginConfigView({ onClose }) {
         <//>
     `;
 }
+
+function noopClose() {}
 
 function ConfigSection({ fields }) {
     const ctx = usePluginConfigContext();
