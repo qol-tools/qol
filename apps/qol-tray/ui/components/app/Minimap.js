@@ -44,7 +44,8 @@ export function MinimapContainer({ camera, registry, viewportRef, diveParent, ve
 
 function WorldSettingsPanel({ settings, version, updateState, isDevMode, onAction }) {
     const update = (key) => (e) => {
-        const val = e.target.type === 'range' ? Number(e.target.value) : e.target.value;
+        const t = e.target;
+        const val = t.type === 'range' ? Number(t.value) : t.type === 'checkbox' ? t.checked : t.value;
         setWorldSetting(key, val);
     };
 
@@ -54,6 +55,7 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
                 <div class="wsp-heading">Navigation</div>
                 <label>Pan speed <input type="range" min="4" max="30" value=${settings.panSpeed} onInput=${update('panSpeed')} /></label>
                 <label>Minimap size <input type="range" min="200" max="500" value=${settings.minimapSize} onInput=${update('minimapSize')} /></label>
+                <label><input type="checkbox" checked=${settings.anchorToPages} onChange=${update('anchorToPages')} /> Anchor view to pages</label>
             </div>
             <div class="wsp-section">
                 <div class="wsp-heading">Transitions</div>

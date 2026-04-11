@@ -178,3 +178,22 @@ test('gotoAnchor triggers setLayer when page layer differs', () => {
     assert.ok(setLayer);
     assert.equal(setLayer[1], -1);
 });
+
+test('dive/ascend invariant holds under passive noise', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMocks();
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    const pages = ['plugins', 'hotkeys'];
+    const noise = [
+        () => nav.setFocus('plugins', '[data-index="1"]'),
+        () => nav.setFocus('hotkeys', '[data-index="2"]'),
+        () => nav.gotoAnchor({ pageId: 'hotkeys' }, { respectKnob: true }),
+    ];
+    for (const start of pages) {
+        nav.setCurrentAnchor({ pageId: start });
+        for (const n of noise) n();
+        nav.dive('plugins-config');
+        for (const n of noise) n();
+        nav.ascend();
+        assert.equal(nav.getCurrentAnchor().pageId, start, `restoring from ${start} under noise`);
+    }
+});
