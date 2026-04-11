@@ -137,7 +137,10 @@ function AppShell() {
                 if (!pluginsEntry) return;
                 const PAGE_WIDTH_LOCAL = 1280;
                 const PAGE_HEIGHT_LOCAL = 900;
+                const ROW_CAPACITY = 3;
                 let cursorX = pluginsEntry.x;
+                let cursorY = pluginsEntry.y;
+                let rowUsed = 0;
                 for (const p of plugins) {
                     if (registered.has(p.id)) continue;
                     const formRes = await fetch(`/api/plugins/${p.id}/config-form`);
@@ -145,9 +148,14 @@ function AppShell() {
                     const form = await formRes.json();
                     const sections = form?.sections || [];
                     const N = Math.max(1, sections.length);
+                    if (rowUsed + N > ROW_CAPACITY) {
+                        cursorX = pluginsEntry.x;
+                        cursorY += PAGE_HEIGHT_LOCAL;
+                        rowUsed = 0;
+                    }
                     const claim = {
                         x: cursorX,
-                        y: pluginsEntry.y,
+                        y: cursorY,
                         width: N * PAGE_WIDTH_LOCAL,
                         height: PAGE_HEIGHT_LOCAL,
                         layer: pluginsEntry.layer - 1,
@@ -173,6 +181,7 @@ function AppShell() {
                     });
                     registered.add(p.id);
                     cursorX += N * PAGE_WIDTH_LOCAL;
+                    rowUsed += N;
                 }
             } catch (err) {
                 log('pluginDiveTargets: registration failed', err);
