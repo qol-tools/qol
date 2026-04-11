@@ -10,7 +10,7 @@ import {
     selectorDensityClass,
     selectorGridTemplate,
 } from '../../auto-config/display-rules.js';
-import { renderField, fieldSelectionClasses } from './field-map.js';
+import { renderField, fieldSurfaceAttrs } from './field-map.js';
 import { dissolveIn, DISSOLVE_PRESETS } from '../../lib/dissolve.js';
 import { SurfaceContainer } from '../../components/SurfaceContainer.js';
 
@@ -127,8 +127,6 @@ function VariantPanel({ group }) {
     const ctx = usePluginConfigContext();
     const contentRef = useRef(null);
     const activeOption = ctx.getFieldValue(group.selector);
-    const selected = ctx.selectedFieldId === group.selector.id;
-    const index = ctx.fieldIndexById[group.selector.id];
     const densityClass = selectorDensityClass(group.selector);
     const widthStyle = `grid-template-columns: ${selectorGridTemplate(group.selector)}`;
 
@@ -147,11 +145,7 @@ function VariantPanel({ group }) {
 
     return html`
         <div class="variant-panel">
-            <div class="variant-selector ${densityClass} ${fieldSelectionClasses(selected)}"
-                data-plugin-config-field-id=${group.selector.id}
-                data-plugin-config-index=${index}
-                data-selected-surface="" tabIndex="-1"
-                data-selected=${selected ? 'true' : 'false'}
+            <div ...${fieldSurfaceAttrs(group.selector, ctx, `variant-selector ${densityClass}`)}
                 onMouseDown=${onFocusSelector}
                 onFocus=${onFocusSelector}>
                 <div class="variant-selector-label">${group.selector.label}</div>
@@ -160,7 +154,6 @@ function VariantPanel({ group }) {
                         ${group.selector.options.map(option => html`
                             <button key=${option} type="button"
                                 class="variant-option segmented-control__option ${option === activeOption ? 'active is-active' : ''}"
-                                tabIndex="-1"
                                 onClick=${() => onSelect(option)}>
                                 ${optionLabel(group.selector, option)}
                             </button>

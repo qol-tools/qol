@@ -316,6 +316,14 @@ function ascendLayer() {
 // Plugin config keyboard handling
 // ---------------------------------------------------------------------------
 
+function activeSectionDetail(pluginConfig) {
+    const sectionId = pluginConfig?.activeSection?.id;
+    const pluginId = pluginConfig?.pluginId;
+    if (!sectionId || !pluginId) return document.querySelector('.plugin-config-detail');
+    const slot = document.querySelector(`[data-view-id="${CSS.escape(`${pluginId}-${sectionId}`)}"]`);
+    return slot?.querySelector('.plugin-config-detail') || null;
+}
+
 function delegateToPluginConfig(event, pluginConfig, closePluginConfig) {
     if (!pluginConfig || pluginConfig.mode === 'ui') {
         if (event.key === 'Escape') { event.preventDefault(); closePluginConfig(); }
@@ -325,13 +333,7 @@ function delegateToPluginConfig(event, pluginConfig, closePluginConfig) {
         if (event.key === 'Escape') { event.preventDefault(); closePluginConfig(); }
         return;
     }
-    const detail = document.querySelector('.plugin-config-detail');
-    if (event.key === 'Tab') {
-        event.preventDefault();
-        blurPluginConfigFocus(detail);
-        pluginConfig.navigate(event.shiftKey ? -1 : 1);
-        return;
-    }
+    const detail = activeSectionDetail(pluginConfig);
     if (!detail || pluginConfig.visibleFields.length === 0) {
         if (event.key === 'Escape') { event.preventDefault(); closePluginConfig(); }
         return;
@@ -368,11 +370,10 @@ function handlePluginConfigFieldAction(event, detail, pluginConfig, field) {
     return handleGenericFieldActivation(event, detail, field.id);
 }
 
-function isActuallyFocusable(el) {
+function isInteractable(el) {
     if (!(el instanceof HTMLElement)) return false;
     if (el.matches(':disabled')) return false;
     if (el.getAttribute('aria-hidden') === 'true') return false;
-    if (el.tabIndex < 0) return false;
     if (el.offsetParent === null && getComputedStyle(el).position !== 'fixed') return false;
     return true;
 }
@@ -429,7 +430,7 @@ function handleSelectFieldAction(event, detail, pluginConfig, field) {
     }
     if (event.key !== 'Enter' && event.key !== ' ') return false;
     const trigger = queryFieldElement(detail, field.id)?.querySelector('.custom-select-trigger');
-    if (!isActuallyFocusable(trigger)) return false;
+    if (!isInteractable(trigger)) return false;
     event.preventDefault();
     trigger.click();
     return true;
@@ -447,9 +448,9 @@ function handleGenericFieldActivation(event, detail, fieldId) {
 function firstFieldEntryPoint(fieldElement) {
     if (!(fieldElement instanceof HTMLElement)) return null;
     const input = fieldElement.querySelector('input:not([type="hidden"]):not(.btn-remove), select, [tabindex="0"]');
-    if (isActuallyFocusable(input)) return input;
+    if (isInteractable(input)) return input;
     const button = fieldElement.querySelector('button:not(.btn-remove)');
-    if (isActuallyFocusable(button)) return button;
+    if (isInteractable(button)) return button;
     return null;
 }
 
@@ -457,7 +458,7 @@ function handleTextFieldActivation(event, detail, fieldId) {
     if (event.key !== 'Enter') return false;
     event.preventDefault();
     const input = queryFieldElement(detail, fieldId)?.querySelector('.text-input');
-    if (!isActuallyFocusable(input)) return true;
+    if (!isInteractable(input)) return true;
     input.focus();
     input.select();
     return true;
@@ -467,7 +468,7 @@ function handleNumberFieldActivation(event, detail, fieldId) {
     if (event.key !== 'Enter') return false;
     event.preventDefault();
     const display = queryFieldElement(detail, fieldId)?.querySelector('.number-display');
-    if (!isActuallyFocusable(display)) return true;
+    if (!isInteractable(display)) return true;
     display.focus();
     dispatchFieldKey(display, 'Enter');
     return true;
@@ -508,7 +509,7 @@ function startStringFieldEdit(event, detail, fieldId) {
     if (!isStringEditKey(event)) return false;
     event.preventDefault();
     const input = queryFieldElement(detail, fieldId)?.querySelector('.text-input');
-    if (!isActuallyFocusable(input)) return true;
+    if (!isInteractable(input)) return true;
     focusTextInput(input, event.key);
     return true;
 }
@@ -517,7 +518,7 @@ function startNumberFieldEdit(event, detail, fieldId) {
     if (!isNumberEditKey(event)) return false;
     event.preventDefault();
     const display = queryFieldElement(detail, fieldId)?.querySelector('.number-display');
-    if (!isActuallyFocusable(display)) return true;
+    if (!isInteractable(display)) return true;
     display.focus();
     dispatchFieldKey(display, event.key);
     return true;
@@ -578,7 +579,7 @@ function genericFieldStops(fieldElement) {
     if (!(fieldElement instanceof HTMLElement)) return [];
     return Array.from(fieldElement.querySelectorAll(
         'input:not([type="hidden"]), select, button, [tabindex="0"]'
-    )).filter(isActuallyFocusable);
+    )).filter(isInteractable);
 }
 
 function isStringEditKey(event) {

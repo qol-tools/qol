@@ -1,12 +1,10 @@
 import { html } from '../../../lib/html.js';
 import { useCallback, useEffect, useState } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
-import { fieldSelectionClasses } from '../field-map.js';
+import { fieldSurfaceAttrs } from '../field-map.js';
 
 export function ColorField({ field }) {
     const ctx = usePluginConfigContext();
-    const selected = ctx.selectedFieldId === field.id;
-    const index = ctx.fieldIndexById[field.id];
     const stored = ctx.getFieldValue(field);
     const defaultValue = typeof field.default === 'string' ? field.default : '#000000';
     const initial = typeof stored === 'string' ? stored : defaultValue;
@@ -43,11 +41,7 @@ export function ColorField({ field }) {
     }, [commit, field.alpha]);
 
     return html`
-        <div class="field-group field-color ${fieldSelectionClasses(selected)}"
-            data-plugin-config-field-id=${field.id}
-            data-plugin-config-index=${index}
-            data-selected-surface="" tabIndex="-1"
-            data-selected=${selected ? 'true' : 'false'}
+        <div ...${fieldSurfaceAttrs(field, ctx, 'field-group field-color')}
             onMouseDown=${onSelect}
             onFocus=${onSelect}>
             <label class="field-color-label">${field.label}</label>

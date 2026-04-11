@@ -2,7 +2,7 @@ import { html } from '../../../lib/html.js';
 import { useState, useCallback, useRef } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
 import { FieldLabel } from './FieldLabel.js';
-import { fieldSelectionClasses } from '../field-map.js';
+import { fieldSurfaceAttrs } from '../field-map.js';
 
 export function StringArrayField({ field }) {
     const ctx = usePluginConfigContext();
@@ -10,8 +10,6 @@ export function StringArrayField({ field }) {
     const inputRef = useRef(null);
     const values = ctx.getFieldValue(field) || [];
     const showIcon = hasAppIcon(field);
-    const selected = ctx.selectedFieldId === field.id;
-    const index = ctx.fieldIndexById[field.id];
 
     const remove = useCallback((index) => {
         values.splice(index, 1);
@@ -34,11 +32,7 @@ export function StringArrayField({ field }) {
     }, [ctx, field.id]);
 
     return html`
-        <div class="field-group ${fieldSelectionClasses(selected)}"
-            data-plugin-config-field-id=${field.id}
-            data-plugin-config-index=${index}
-            data-selected-surface="" tabIndex="-1"
-            data-selected=${selected ? 'true' : 'false'}
+        <div ...${fieldSurfaceAttrs(field, ctx, 'field-group')}
             onMouseDown=${onSelect}
             onFocus=${onSelect}>
             <${FieldLabel} text=${field.label} description=${field.description || ''} />

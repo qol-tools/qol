@@ -2,14 +2,12 @@ import { html } from '../../../lib/html.js';
 import { useCallback } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
 import { useQueryPoll } from '../../../hooks/useQueryPoll.js';
-import { fieldSelectionClasses } from '../field-map.js';
+import { fieldSurfaceAttrs } from '../field-map.js';
 
 const DEFAULT_POLL_MS = 2000;
 
 export function ListField({ field }) {
     const ctx = usePluginConfigContext();
-    const selected = ctx.selectedFieldId === field.id;
-    const index = ctx.fieldIndexById[field.id];
     const queryDef = ctx.runtime?.query?.[field.query];
     const interval = queryDef?.poll_interval_ms || DEFAULT_POLL_MS;
     const { data, error, loading } = useQueryPoll(ctx.pluginId, field.query, interval);
@@ -21,11 +19,7 @@ export function ListField({ field }) {
     const rows = rowsFrom(data);
 
     return html`
-        <div class="field-group field-list ${fieldSelectionClasses(selected)}"
-            data-plugin-config-field-id=${field.id}
-            data-plugin-config-index=${index}
-            data-selected-surface="" tabIndex="-1"
-            data-selected=${selected ? 'true' : 'false'}
+        <div ...${fieldSurfaceAttrs(field, ctx, 'field-group field-list')}
             onMouseDown=${onSelect}
             onFocus=${onSelect}>
             <div class="field-list-label">${field.label}</div>

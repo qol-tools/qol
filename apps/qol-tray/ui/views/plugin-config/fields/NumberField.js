@@ -2,7 +2,7 @@ import { html } from '../../../lib/html.js';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
 import { FieldLabel } from './FieldLabel.js';
-import { fieldSelectionClasses } from '../field-map.js';
+import { fieldSurfaceAttrs } from '../field-map.js';
 
 export function NumberField({ field }) {
     const ctx = usePluginConfigContext();
@@ -10,8 +10,6 @@ export function NumberField({ field }) {
     const { min, max, step } = field.number;
     const unit = inferUnit(field);
     const resolvedStep = step ?? 1;
-    const selected = ctx.selectedFieldId === field.id;
-    const index = ctx.fieldIndexById[field.id];
     const inputRef = useRef(null);
     const displayRef = useRef(null);
     const editInitRef = useRef(null);
@@ -84,11 +82,7 @@ export function NumberField({ field }) {
     }, [editing]);
 
     return html`
-        <div class="field-group ${fieldSelectionClasses(selected)}"
-            data-plugin-config-field-id=${field.id}
-            data-plugin-config-index=${index}
-            data-selected-surface="" tabIndex="-1"
-            data-selected=${selected ? 'true' : 'false'}
+        <div ...${fieldSurfaceAttrs(field, ctx, 'field-group')}
             onMouseDown=${onSelect}
             onFocus=${onSelect}>
             <${FieldLabel} text=${field.label} description=${field.description || ''} />
