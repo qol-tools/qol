@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 const CONFIG_FILE_NAME: &str = "config.json";
 const CONFIG_CONTRACT_FILE_NAME: &str = "qol-config.toml";
+const RUNABLE_CONTRACT_FILE_NAME: &str = "qol-runtime.toml";
 
 pub(crate) fn resolve_plugin_root(plugin_id: &str) -> Result<PathBuf> {
     if !crate::paths::is_safe_path_component(plugin_id) {
@@ -31,6 +32,10 @@ pub(crate) fn config_path(plugin_root: &Path) -> PathBuf {
 
 pub(crate) fn config_contract_path(plugin_root: &Path) -> PathBuf {
     plugin_root.join(CONFIG_CONTRACT_FILE_NAME)
+}
+
+pub(crate) fn runable_contract_path(plugin_root: &Path) -> PathBuf {
+    plugin_root.join(RUNABLE_CONTRACT_FILE_NAME)
 }
 
 pub(crate) fn has_custom_ui(plugin_root: &Path) -> bool {
@@ -170,5 +175,14 @@ initAutoConfigPage();
     fn has_custom_ui_false_when_no_ui_dir() {
         let dir = tempfile::tempdir().unwrap();
         assert!(!has_custom_ui(dir.path()));
+    }
+
+    #[test]
+    fn runable_contract_path_joins_filename() {
+        let root = Path::new("/tmp/plugin-foo");
+        assert_eq!(
+            runable_contract_path(root),
+            Path::new("/tmp/plugin-foo/qol-runtime.toml")
+        );
     }
 }
