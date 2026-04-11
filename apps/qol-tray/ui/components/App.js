@@ -23,13 +23,41 @@ import { MinimapContainer } from './app/Minimap.js';
 import { RegionLabels } from './app/RegionLabels.js';
 import { useWorldNav } from './app/WorldNav.js';
 
-const SUB_PAGE_MANIFEST = {
-    plugins: ['config'],
-    hotkeys: ['editor'],
-    shortcuts: ['editor'],
-    logs: ['detail'],
-    'task-runner': ['editor'],
-};
+function registerStaticDiveTargets(registry) {
+    const PAGE_WIDTH = 1280;
+    const PAGE_HEIGHT = 900;
+    const staticTargets = [
+        { parentId: 'plugins', subId: 'plugins-config' },
+        { parentId: 'hotkeys', subId: 'hotkeys-editor' },
+        { parentId: 'shortcuts', subId: 'shortcuts-editor' },
+        { parentId: 'logs', subId: 'logs-detail' },
+        { parentId: 'task-runner', subId: 'task-runner-editor' },
+    ];
+    for (const t of staticTargets) {
+        const parent = registry.getEntry(t.parentId);
+        if (!parent) continue;
+        const claim = {
+            x: parent.x,
+            y: parent.y,
+            width: PAGE_WIDTH,
+            height: PAGE_HEIGHT,
+            layer: parent.layer - 1,
+        };
+        registry.addEntry({
+            id: t.subId,
+            x: claim.x,
+            y: claim.y,
+            width: PAGE_WIDTH,
+            height: PAGE_HEIGHT,
+            layer: claim.layer,
+        });
+        registry.addDiveTarget({
+            sourceSelector: `[data-view-id="${t.parentId}"]`,
+            claim,
+            pages: [t.subId],
+        });
+    }
+}
 
 export function App() {
     return html`<${PaletteProvider}><${AppShell} /><//>`;
@@ -82,7 +110,11 @@ function AppShell() {
     const camera = cameraRef.current;
 
     const registryRef = useRef(null);
-    if (!registryRef.current) registryRef.current = createWorldRegistry(buildViewOrder(true), SUB_PAGE_MANIFEST);
+    if (!registryRef.current) {
+        const reg = createWorldRegistry(buildViewOrder(true), {});
+        registerStaticDiveTargets(reg);
+        registryRef.current = reg;
+    }
     const registry = registryRef.current;
 
     const [cameraLayer, setCameraLayer] = useState(0);
