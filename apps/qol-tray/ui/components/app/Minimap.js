@@ -6,6 +6,7 @@ import { IconCog } from '../../assets/icon-cog.js';
 import { useClickOutside } from '../../hooks/useClickOutside.js';
 import { clampPercent, formatDownloadingProgress, formatPhaseProgress, toProgressScale } from '../../utils/progress.js';
 import { prettyLabel } from '../../auto-config/heuristics.js';
+import { contains } from '../../lib/world-registry.js';
 
 const CENTER_W_FRAC = 0.34;
 const NEIGHBOR_W_FRAC = 0.22;
@@ -15,7 +16,7 @@ const SLOT_PAD_Y = 6;
 const RADIUS = 3;
 const ARROW_FLASH_MS = 350;
 
-export function MinimapContainer({ camera, registry, viewportRef, diveParent, activePluginId, diveDepth, version, updateState, isDevMode, onAction }) {
+export function MinimapContainer({ camera, registry, viewportRef, diveParent, activePluginId, diveDepth, navigation, version, updateState, isDevMode, onAction }) {
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [settings, setSettings] = useState(getWorldSettings);
     const cogRef = useRef(null);
@@ -32,7 +33,7 @@ export function MinimapContainer({ camera, registry, viewportRef, diveParent, ac
     return html`
         <div class="world-minimap-container">
             ${diveDepth > 0 && html`<span class="world-minimap-depth" style=${`--wedge-hue: ${50 + (diveDepth - 1) * 45}`}>${diveDepth}</span>`}
-            <${Minimap} camera=${camera} registry=${registry} viewportRef=${viewportRef} width=${settings.minimapSize} diveParent=${diveParent} activePluginId=${activePluginId} />
+            <${Minimap} camera=${camera} registry=${registry} viewportRef=${viewportRef} width=${settings.minimapSize} diveParent=${diveParent} activePluginId=${activePluginId} navigation=${navigation} />
         </div>
         <div class="world-cog-anchor" ref=${cogRef}>
             <button class="world-cog-btn ${settingsOpen ? 'is-open' : ''}" onClick=${toggle} title="Settings">
@@ -133,7 +134,7 @@ function versionDetail(status, state, isDevMode) {
     return null;
 }
 
-function Minimap({ camera, registry, viewportRef, width, diveParent, activePluginId }) {
+function Minimap({ camera, registry, viewportRef, width, diveParent, activePluginId, navigation }) {
     const canvasRef = useRef(null);
     const [, bump] = useState(0);
     const [flash, setFlash] = useState(null);
@@ -198,8 +199,11 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, activePlugi
         const vpH = vp ? vp.clientHeight : 0;
         const z = camera.zoom || 1;
 
+        const confinement = navigation?.getCurrentConfinement?.() || null;
         const allEntries = registry.getEntriesForLayer(currentLayer);
-        const entries = diveParent ? allEntries.filter(e => e.parent === diveParent) : allEntries;
+        const entries = confinement
+            ? allEntries.filter(e => contains(confinement, e))
+            : (diveParent ? allEntries.filter(e => e.parent === diveParent) : allEntries);
         ctx.clearRect(0, 0, cw, ch);
         if (entries.length === 0) return;
 
@@ -218,8 +222,11 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, activePlugi
         const clickX = e.clientX - rect.left;
 
         const currentLayer = camera.layer;
+        const confinement = navigation?.getCurrentConfinement?.() || null;
         const allEntries = registry.getEntriesForLayer(currentLayer);
-        const entries = diveParent ? allEntries.filter(e => e.parent === diveParent) : allEntries;
+        const entries = confinement
+            ? allEntries.filter(e => contains(confinement, e))
+            : (diveParent ? allEntries.filter(e => e.parent === diveParent) : allEntries);
         if (entries.length === 0) return;
 
         const vp = viewportRef?.current;
