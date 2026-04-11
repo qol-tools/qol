@@ -1,18 +1,28 @@
 use axum::{http::StatusCode, response::IntoResponse, response::Response};
+use serde::Serialize;
+
+#[derive(Serialize)]
+pub(super) struct CombinedPluginForm {
+    #[serde(flatten)]
+    pub form: qol_config::normalized::ResolvedConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<qol_config::contract::RuntimeSpec>,
+}
 
 pub(super) fn load_plugin_config_form(
     plugin_id: &str,
-) -> Result<Option<qol_config::normalized::ResolvedConfig>, Box<Response>> {
-    let spec = match crate::plugins::config::load_config_contract(plugin_id)
+) -> Result<Option<CombinedPluginForm>, Box<Response>> {
+    let combined = match crate::plugins::config::load_combined_contracts(plugin_id)
         .map_err(|_| Box::new(contract_unavailable_response()))?
     {
-        Some(spec) => spec,
+        Some(combined) => combined,
         None => return Ok(None),
     };
+    let (spec, runtime) = combined;
     let config = load_plugin_config_value(plugin_id)?;
     let form = qol_config::normalized::resolve_config(&spec, &config)
         .map_err(|errors| Box::new(contract_validation_response(errors)))?;
-    Ok(Some(form))
+    Ok(Some(CombinedPluginForm { form, runtime }))
 }
 
 pub(super) fn validate_plugin_config(
