@@ -83,8 +83,8 @@ fn config_json_response(config: &serde_json::Value) -> Response {
     http_json::json_response(json)
 }
 
-fn config_form_json_response(config: &qol_config::normalized::ResolvedConfig) -> Response {
-    let json = match http_json::encode_json(config, "Failed to serialize config form") {
+fn config_form_json_response(combined: &form::CombinedPluginForm) -> Response {
+    let json = match http_json::encode_json(combined, "Failed to serialize config form") {
         Ok(json) => json,
         Err(_) => return serialize_config_form_failed_response(),
     };
