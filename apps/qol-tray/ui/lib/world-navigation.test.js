@@ -403,17 +403,14 @@ test('diveInto on an unknown selector is a no-op', () => {
     assert.equal(nav.stackDepth(), 0);
 });
 
-test('dive calls camera.setBounds with the repositioned confinement rect', () => {
+test('dive clears camera bounds so pan stays unclamped', () => {
     const { registry, camera, getSettings, domHelpers } = makeMocks();
     const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
     registry.addDiveTarget({ sourceSelector: '#card-a', claim, pages: ['plugins-config'] });
     const nav = createNavigation({ registry, camera, getSettings, domHelpers });
     nav.setCurrentAnchor({ pageId: 'plugins' });
     nav.diveInto('#card-a');
-    assert.ok(camera._bounds);
-    assert.equal(camera._bounds.layer, -1);
-    assert.equal(camera._bounds.width, 1280);
-    assert.equal(camera._bounds.height, 900);
+    assert.equal(camera._bounds, null);
 });
 
 test('ascend from root dive calls camera.setBounds(null)', () => {
