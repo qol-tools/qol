@@ -41,6 +41,7 @@ export function usePluginConfig(pluginId) {
         save,
         bumpRender,
         renderTick,
+        runtime: form?.runtime || null,
         getFieldValue: (field) => getFieldValue(state, field),
         setFieldValue: (field, value) => setFieldValue(state, field, value),
         getFieldValueById: (fieldId) => getFieldValueById(state, fieldId),
