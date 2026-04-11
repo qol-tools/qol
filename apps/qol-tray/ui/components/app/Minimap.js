@@ -5,6 +5,7 @@ import { getWorldSettings, setWorldSetting, subscribeWorldSettings } from '../..
 import { IconCog } from '../../assets/icon-cog.js';
 import { useClickOutside } from '../../hooks/useClickOutside.js';
 import { clampPercent, formatDownloadingProgress, formatPhaseProgress, toProgressScale } from '../../utils/progress.js';
+import { prettyLabel } from '../../auto-config/heuristics.js';
 
 const CENTER_W_FRAC = 0.34;
 const NEIGHBOR_W_FRAC = 0.22;
@@ -14,7 +15,7 @@ const SLOT_PAD_Y = 6;
 const RADIUS = 3;
 const ARROW_FLASH_MS = 350;
 
-export function MinimapContainer({ camera, registry, viewportRef, diveParent, version, updateState, isDevMode, onAction }) {
+export function MinimapContainer({ camera, registry, viewportRef, diveParent, activePluginId, version, updateState, isDevMode, onAction }) {
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [settings, setSettings] = useState(getWorldSettings);
     const cogRef = useRef(null);
@@ -30,7 +31,7 @@ export function MinimapContainer({ camera, registry, viewportRef, diveParent, ve
 
     return html`
         <div class="world-minimap-container">
-            <${Minimap} camera=${camera} registry=${registry} viewportRef=${viewportRef} width=${settings.minimapSize} diveParent=${diveParent} />
+            <${Minimap} camera=${camera} registry=${registry} viewportRef=${viewportRef} width=${settings.minimapSize} diveParent=${diveParent} activePluginId=${activePluginId} />
         </div>
         <div class="world-cog-anchor" ref=${cogRef}>
             <button class="world-cog-btn ${settingsOpen ? 'is-open' : ''}" onClick=${toggle} title="Settings">
@@ -131,7 +132,7 @@ function versionDetail(status, state, isDevMode) {
     return null;
 }
 
-function Minimap({ camera, registry, viewportRef, width, diveParent }) {
+function Minimap({ camera, registry, viewportRef, width, diveParent, activePluginId }) {
     const canvasRef = useRef(null);
     const [, bump] = useState(0);
     const [flash, setFlash] = useState(null);
@@ -206,7 +207,7 @@ function Minimap({ camera, registry, viewportRef, width, diveParent }) {
         const activeIdx = Math.max(0, sorted.findIndex(e => e.id === activeId));
 
         const slots = buildCenteredSlots(cw, sorted.length, activeIdx);
-        drawSlots(ctx, cw, ch, sorted, slots, activeIdx, activeId);
+        drawSlots(ctx, cw, ch, sorted, slots, activeIdx, activeId, activePluginId);
     });
 
     const onClick = (e) => {
@@ -281,7 +282,14 @@ function buildCenteredSlots(cw, count, activeIdx) {
     return slots;
 }
 
-function drawSlots(ctx, cw, ch, sorted, slots, activeIdx, activeId) {
+function slotLabel(entry, activePluginId) {
+    if (entry.id === 'plugins-config' && activePluginId) {
+        return prettyLabel(activePluginId.replace(/^plugin-/, ''));
+    }
+    return VIEW_LABELS[entry.id] || entry.id;
+}
+
+function drawSlots(ctx, cw, ch, sorted, slots, activeIdx, activeId, activePluginId) {
     for (let i = 0; i < sorted.length; i++) {
         const e = sorted[i];
         const s = slots[i];
@@ -297,7 +305,7 @@ function drawSlots(ctx, cw, ch, sorted, slots, activeIdx, activeId) {
         ctx.stroke();
 
         if (s.w < 18) continue;
-        const label = VIEW_LABELS[e.id] || e.id;
+        const label = slotLabel(e, activePluginId);
         const fontSize = active ? 10 : dist === 1 ? 9 : 7;
         ctx.fillStyle = active ? 'rgba(255,255,255,0.9)' : dist === 1 ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.25)';
         ctx.font = `${active ? 'bold ' : ''}${fontSize}px -apple-system, sans-serif`;
