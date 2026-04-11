@@ -4,9 +4,52 @@ import { getWorldSettings } from './world-settings.js';
 const log = createDebug('qol:nav-state');
 
 export function createNavigation({ registry, camera, getSettings, domHelpers }) {
-    let currentAnchor = { pageId: null };
-    const focusRegistry = {};
+    const STORAGE_KEY = 'qoltray.navigation';
+    const LEGACY_KEY = 'qoltray.camera';
+
+    function loadFromStorage() {
+        if (typeof localStorage === 'undefined') return null;
+        try {
+            localStorage.removeItem(LEGACY_KEY);
+        } catch {}
+        try {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object') return parsed;
+        } catch {}
+        return null;
+    }
+
+    function saveToStorage() {
+        if (typeof localStorage === 'undefined') return;
+        try {
+            const snapshot = {
+                currentAnchor: { pageId: currentAnchor.pageId },
+                zoom: camera.zoom,
+                focusRegistry: { ...focusRegistry },
+            };
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+        } catch {}
+    }
+
+    let saveTimer = 0;
+    function scheduleSave() {
+        if (typeof clearTimeout === 'function') clearTimeout(saveTimer);
+        saveTimer = setTimeout(saveToStorage, 300);
+    }
+
+    const persisted = loadFromStorage();
+    let currentAnchor = persisted?.currentAnchor?.pageId
+        ? { pageId: persisted.currentAnchor.pageId }
+        : { pageId: null };
+    const focusRegistry = (persisted?.focusRegistry && typeof persisted.focusRegistry === 'object')
+        ? { ...persisted.focusRegistry }
+        : {};
     const diveStack = [];
+    if (persisted?.zoom && typeof camera.zoomTo === 'function') {
+        camera.zoomTo(persisted.zoom);
+    }
 
     function getCurrentAnchor() {
         return currentAnchor;
@@ -14,11 +57,13 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
 
     function setCurrentAnchor(anchor) {
         currentAnchor = { pageId: anchor.pageId };
+        scheduleSave();
     }
 
     function setFocus(pageId, selector) {
         if (!pageId || !selector) return;
         focusRegistry[pageId] = selector;
+        scheduleSave();
     }
 
     function getFocus(pageId) {
@@ -86,6 +131,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         diveStack.push({ anchor: currentAnchor, zoom: camera.zoom });
         currentAnchor = { pageId: targetPageId };
         gotoAnchor(currentAnchor, { respectKnob: false });
+        scheduleSave();
     }
 
     function ascend() {
@@ -97,6 +143,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         currentAnchor = prev.anchor;
         camera.zoomTo(prev.zoom);
         gotoAnchor(prev.anchor, { respectKnob: false });
+        scheduleSave();
         return true;
     }
 
