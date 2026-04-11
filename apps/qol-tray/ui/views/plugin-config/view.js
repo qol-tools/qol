@@ -14,8 +14,9 @@ import { renderField, fieldSelectionClasses } from './field-map.js';
 import { dissolveIn, DISSOLVE_PRESETS } from '../../lib/dissolve.js';
 import { SurfaceContainer } from '../../components/SurfaceContainer.js';
 
-function useEscapeFallback(onClose) {
+function useEscapeFallback(onClose, active) {
     useEffect(() => {
+        if (!active) return undefined;
         const onKey = (event) => {
             if (event.key !== 'Escape') return;
             event.preventDefault();
@@ -24,13 +25,13 @@ function useEscapeFallback(onClose) {
         };
         document.addEventListener('keydown', onKey, true);
         return () => document.removeEventListener('keydown', onKey, true);
-    }, [onClose]);
+    }, [onClose, active]);
 }
 
 export function PluginConfigView({ onClose }) {
     const ctx = usePluginConfigContext();
     const isPlaceholder = !ctx || ctx.loading || ctx.mode === 'ui' || (ctx && ctx.sections && ctx.sections.length === 0);
-    useEscapeFallback(isPlaceholder ? onClose : noopClose);
+    useEscapeFallback(onClose, isPlaceholder);
 
     if (ctx?.mode === 'ui') {
         return html`
@@ -78,8 +79,6 @@ export function PluginConfigView({ onClose }) {
         <//>
     `;
 }
-
-function noopClose() {}
 
 function ConfigSection({ fields }) {
     const ctx = usePluginConfigContext();
