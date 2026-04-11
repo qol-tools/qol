@@ -308,6 +308,7 @@ function nearestEntryId(entries, camera, vpW, vpH, zoom) {
 }
 
 function slotLabel(entry, activePluginId) {
+    if (entry.label) return entry.label;
     if (entry.id === 'plugins-config' && activePluginId) {
         return prettyLabel(activePluginId.replace(/^plugin-/, ''));
     }
