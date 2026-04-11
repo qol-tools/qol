@@ -2,6 +2,52 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createNavigation } from './world-navigation.js';
 import { contains, createWorldRegistry } from './world-registry.js';
+import { createCamera } from './world-camera.js';
+
+test('camera.panTo clamps x to bounds.x when target is left of bounds', () => {
+    const cam = createCamera({ getViewportSize: () => ({ w: 400, h: 300 }) });
+    cam.setBounds({ x: 100, y: 100, width: 1000, height: 1000, layer: 0 });
+    cam.panTo(0, 150);
+    assert.equal(cam.x, 100);
+    assert.equal(cam.y, 150);
+});
+
+test('camera.panTo clamps x to right edge when target is beyond bounds', () => {
+    const cam = createCamera({ getViewportSize: () => ({ w: 400, h: 300 }) });
+    cam.setBounds({ x: 100, y: 100, width: 1000, height: 1000, layer: 0 });
+    cam.panTo(9999, 150);
+    assert.equal(cam.x, 100 + 1000 - 400);
+});
+
+test('camera.panTo does not clamp when bounds is null', () => {
+    const cam = createCamera({ getViewportSize: () => ({ w: 400, h: 300 }) });
+    cam.setBounds(null);
+    cam.panTo(9999, 9999);
+    assert.equal(cam.x, 9999);
+    assert.equal(cam.y, 9999);
+});
+
+test('camera.panTo centers on bounds when viewport is larger than bounds', () => {
+    const cam = createCamera({ getViewportSize: () => ({ w: 2000, h: 2000 }) });
+    cam.setBounds({ x: 100, y: 100, width: 500, height: 500, layer: 0 });
+    cam.panTo(200, 200);
+    assert.equal(cam.x, 100 + 500 / 2 - 2000 / 2);
+    assert.equal(cam.y, 100 + 500 / 2 - 2000 / 2);
+});
+
+test('camera.zoomTo clamps to minimum fit zoom when zooming out past bounds', () => {
+    const cam = createCamera({ getViewportSize: () => ({ w: 1000, h: 500 }) });
+    cam.setBounds({ x: 0, y: 0, width: 1000, height: 500, layer: 0 });
+    cam.zoomTo(0.1);
+    assert.equal(cam.zoom, 1);
+});
+
+test('camera.zoomTo allows zooming in past fit', () => {
+    const cam = createCamera({ getViewportSize: () => ({ w: 1000, h: 500 }) });
+    cam.setBounds({ x: 0, y: 0, width: 1000, height: 500, layer: 0 });
+    cam.zoomTo(5);
+    assert.equal(cam.zoom, 5);
+});
 
 test('registry stores and retrieves dive targets', () => {
     const reg = createWorldRegistry([], {});
