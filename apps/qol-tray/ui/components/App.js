@@ -3,7 +3,7 @@ import { createDiveStack } from '../lib/dive-stack.js';
 import { useRef, useCallback, useEffect, useLayoutEffect, useState } from 'preact/hooks';
 import { PaletteProvider, usePaletteContext } from '../palette/context.js';
 import { createDebug, rectLabel, pointLabel } from '../lib/debug.js';
-import { selectorFor, animateTransition } from '../lib/world-navigation.js';
+import { createNavigation, selectorFor, animateTransition } from '../lib/world-navigation.js';
 import { getWorldSettings } from '../lib/world-settings.js';
 
 const log = createDebug('qol:app');
@@ -91,25 +91,47 @@ function AppShell() {
         viewportRef.current = el;
     }, []);
 
+    const navigationRef = useRef(null);
+    if (!navigationRef.current) {
+        navigationRef.current = createNavigation({
+            registry,
+            camera,
+            getSettings: getWorldSettings,
+            domHelpers: {
+                resolveSelector: (selector) => {
+                    const el = document.querySelector(selector);
+                    if (!el) return null;
+                    const vpEl = viewportRef.current;
+                    if (!vpEl) return null;
+                    const vr = el.getBoundingClientRect();
+                    const vpr = vpEl.getBoundingClientRect();
+                    const relCenterX = (vr.left + vr.width / 2) - vpr.left;
+                    const relCenterY = (vr.top + vr.height / 2) - vpr.top;
+                    return {
+                        x: camera.x + relCenterX / camera.zoom,
+                        y: camera.y + relCenterY / camera.zoom,
+                    };
+                },
+                getViewportSize: () => {
+                    const el = viewportRef.current;
+                    return {
+                        w: el?.clientWidth || window.innerWidth,
+                        h: el?.clientHeight || window.innerHeight,
+                    };
+                },
+            },
+        });
+    }
+    const navigation = navigationRef.current;
+
     const prevViewRef = useRef(activeViewId);
     useEffect(() => {
-        const vp = viewportRef.current;
-        const w = vp?.clientWidth || 800;
-        const h = vp?.clientHeight || 600;
-        if (prevViewRef.current !== activeViewId) {
-            prevViewRef.current = activeViewId;
-            const target = registry.cameraTargetForView(activeViewId, w, h, camera.zoom);
-            if (target) {
-                const dist = Math.hypot(camera.x - target.x, camera.y - target.y);
-                if (dist > 50) {
-                    log('viewChange:', activeViewId, '→ jump (dist:', Math.round(dist), ')');
-                    camera.panTo(target.x, target.y);
-                } else {
-                    log('viewChange:', activeViewId, '→ already near target');
-                }
-            }
-        }
-    }, [activeViewId, camera, registry]);
+        if (prevViewRef.current === activeViewId) return;
+        prevViewRef.current = activeViewId;
+        log('viewChange:', activeViewId, '→ gotoAnchor');
+        navigation.setCurrentAnchor({ pageId: activeViewId });
+        navigation.gotoAnchor({ pageId: activeViewId }, { respectKnob: true });
+    }, [activeViewId, navigation]);
 
     useLayoutEffect(() => {
         const worldEl = document.getElementById('world');
