@@ -102,16 +102,12 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         const targetX = center.x - w / (2 * z);
         const targetY = center.y - h / (2 * z);
         const focusSelector = focusRegistry[anchor.pageId] || null;
-        const applyAndPan = () => {
-            if (entry.layer !== camera.layer) camera.setLayer(entry.layer);
-            camera.panSmooth(targetX, targetY, 400, () => {
-                if (focusSelector && typeof document !== 'undefined') {
-                    const el = document.querySelector(focusSelector);
-                    if (el && typeof el.focus === 'function') el.focus({ preventScroll: true });
-                }
-            });
-        };
-        applyAndPan();
+        if (entry.layer !== camera.layer) camera.setLayer(entry.layer);
+        if (focusSelector && typeof document !== 'undefined') {
+            const el = document.querySelector(focusSelector);
+            if (el && typeof el.focus === 'function') el.focus({ preventScroll: true });
+        }
+        camera.panSmooth(targetX, targetY, 400);
     }
 
     function dive(targetPageId) {
