@@ -154,6 +154,13 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
             camera.setLayer(target.claim.layer);
         }
         setBounds(null);
+        const { w: vpW, h: vpH } = domHelpers.getViewportSize();
+        if (target.claim.width > 0 && target.claim.height > 0 && typeof camera.zoomTo === 'function') {
+            const fitZoom = Math.min(vpW / target.claim.width, vpH / target.claim.height);
+            if (fitZoom > 0 && Number.isFinite(fitZoom)) {
+                camera.zoomTo(fitZoom);
+            }
+        }
         const firstPageId = target.pages[0];
         if (firstPageId) {
             currentAnchor = { pageId: firstPageId };
