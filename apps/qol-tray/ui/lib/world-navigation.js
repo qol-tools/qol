@@ -150,20 +150,13 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
             confinement: currentConfinement,
         });
         currentConfinement = target.claim;
-        if (target.claim.layer !== camera.layer && typeof camera.setLayer === 'function') {
-            camera.setLayer(target.claim.layer);
-        }
         setBounds(null);
-        const { w: vpW, h: vpH } = domHelpers.getViewportSize();
-        if (target.claim.width > 0 && target.claim.height > 0 && typeof camera.zoomTo === 'function') {
-            const fitZoom = Math.min(vpW / target.claim.width, vpH / target.claim.height);
-            if (fitZoom > 0 && Number.isFinite(fitZoom)) {
-                camera.zoomTo(fitZoom);
-            }
-        }
         const firstPageId = target.pages[0];
         if (firstPageId) {
             currentAnchor = { pageId: firstPageId };
+            gotoAnchor(currentAnchor, { respectKnob: false });
+        } else if (target.claim.layer !== camera.layer && typeof camera.setLayer === 'function') {
+            camera.setLayer(target.claim.layer);
         }
         scheduleSave();
     }
@@ -176,13 +169,15 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         }
         currentAnchor = prev.anchor;
         currentConfinement = prev.confinement ?? null;
-        if (typeof prev.layer === 'number' && prev.layer !== camera.layer && typeof camera.setLayer === 'function') {
-            camera.setLayer(prev.layer);
-        }
         if (typeof prev.zoom === 'number' && typeof camera.zoomTo === 'function') {
             camera.zoomTo(prev.zoom);
         }
         setBounds(null);
+        if (prev.anchor?.pageId) {
+            gotoAnchor(prev.anchor, { respectKnob: false });
+        } else if (typeof prev.layer === 'number' && prev.layer !== camera.layer && typeof camera.setLayer === 'function') {
+            camera.setLayer(prev.layer);
+        }
         scheduleSave();
         return true;
     }

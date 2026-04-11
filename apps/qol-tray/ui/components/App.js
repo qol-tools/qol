@@ -2,6 +2,7 @@ import { html } from '../lib/html.js';
 import { useRef, useCallback, useEffect, useLayoutEffect, useState } from 'preact/hooks';
 import { PaletteProvider, usePaletteContext } from '../palette/context.js';
 import { createDebug, elLabel } from '../lib/debug.js';
+import { prettyLabel } from '../auto-config/heuristics.js';
 import { createNavigation, selectorFor, animateTransition } from '../lib/world-navigation.js';
 import { getWorldSettings } from '../lib/world-settings.js';
 
@@ -138,6 +139,7 @@ function AppShell() {
                 if (!pluginsEntry) return;
                 const PAGE_WIDTH_LOCAL = 1280;
                 const PAGE_HEIGHT_LOCAL = 900;
+                const PAGE_STRIDE_LOCAL = 10000;
                 for (const p of plugins) {
                     if (registered.has(p.id)) continue;
                     const formRes = await fetch(`/api/plugins/${p.id}/config-form`);
@@ -148,21 +150,23 @@ function AppShell() {
                     const claim = {
                         x: pluginsEntry.x,
                         y: pluginsEntry.y,
-                        width: N * PAGE_WIDTH_LOCAL,
+                        width: (N - 1) * PAGE_STRIDE_LOCAL + PAGE_WIDTH_LOCAL,
                         height: PAGE_HEIGHT_LOCAL,
                         layer: pluginsEntry.layer - 1,
                     };
                     const pageIds = [];
                     for (let i = 0; i < N; i++) {
-                        const sectionId = sections[i]?.id || 'config';
+                        const section = sections[i];
+                        const sectionId = section?.id || 'config';
                         const pageId = `${p.id}-${sectionId}`;
                         registry.addEntry({
                             id: pageId,
-                            x: claim.x + i * PAGE_WIDTH_LOCAL,
+                            x: claim.x + i * PAGE_STRIDE_LOCAL,
                             y: claim.y,
                             width: PAGE_WIDTH_LOCAL,
                             height: PAGE_HEIGHT_LOCAL,
                             layer: claim.layer,
+                            label: section?.label || prettyLabel(sectionId),
                         });
                         pageIds.push(pageId);
                     }
