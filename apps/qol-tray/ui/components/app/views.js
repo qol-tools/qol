@@ -33,7 +33,7 @@ function WorldViewSlot({ entry, cameraLayer, children }) {
     return html`<div class="world-view-slot" data-view-id=${entry.id} data-layer=${entry.layer} style=${style}>${children}</div>`;
 }
 
-export function renderWorldViews({ registry, cameraLayer, openPluginConfig, openPluginUi, closePluginConfig, syncStatus, syncProviders, onSyncStatusChange, refreshSyncStatus }) {
+export function renderWorldViews({ registry, cameraLayer, activePluginId, openPluginConfig, openPluginUi, closePluginConfig, syncStatus, syncProviders, onSyncStatusChange, refreshSyncStatus }) {
     const layer = cameraLayer != null ? cameraLayer : 0;
     return html`
         <${WorldViewSlot} entry=${registry.getEntry('plugins')} cameraLayer=${layer}><${PluginsView} onOpenPluginConfig=${openPluginConfig} onOpenPluginUi=${openPluginUi} /><//>
@@ -45,14 +45,12 @@ export function renderWorldViews({ registry, cameraLayer, openPluginConfig, open
             syncProviders=${syncProviders} onSyncStatusChange=${onSyncStatusChange} refreshSyncStatus=${refreshSyncStatus} /><//>
         <${WorldViewSlot} entry=${registry.getEntry('logs')} cameraLayer=${layer}><${LogsView} active=${true} /><//>
         <${WorldViewSlot} entry=${registry.getEntry('dev')} cameraLayer=${layer}><${DevView} /><//>
-        ${registry.getAllEntries()
-            .filter(e => e.layer === -1 && /^plugin-/.test(e.id) && e.id !== 'plugins-config')
+        ${activePluginId && registry.getAllEntries()
+            .filter(e => e.layer === -1 && e.id.startsWith(`${activePluginId}-`))
             .map(e => {
-                const m = e.id.match(/^(plugin-[^-]+(?:-[^-]+)*?)-([^-]+)$/);
-                if (!m) return null;
-                const [, pluginId, sectionId] = m;
+                const sectionId = e.id.slice(activePluginId.length + 1);
                 return html`<${WorldViewSlot} key=${e.id} entry=${e} cameraLayer=${layer}>
-                    <${PluginConfigSectionView} pluginId=${pluginId} sectionId=${sectionId} onClose=${closePluginConfig} />
+                    <${PluginConfigSectionView} pluginId=${activePluginId} sectionId=${sectionId} onClose=${closePluginConfig} />
                 <//>`;
             })}
         <${WorldViewSlot} entry=${registry.getEntry('hotkeys-editor')} cameraLayer=${layer}><${HotkeyEditorSubPage} /><//>

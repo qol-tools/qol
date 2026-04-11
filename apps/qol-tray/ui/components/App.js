@@ -366,6 +366,7 @@ function AppShell() {
                         ${renderWorldViews({
                             registry,
                             cameraLayer,
+                            activePluginId,
                             openPluginConfig,
                             openPluginUi,
                             closePluginConfig,
