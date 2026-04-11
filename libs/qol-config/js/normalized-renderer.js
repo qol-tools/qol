@@ -82,7 +82,41 @@ function renderField(field, state) {
     if (field.kind === 'object_map') {
         return renderEmbeddedObjectMap(field, state);
     }
+    if (field.kind === 'color') {
+        return renderColorField(field, state);
+    }
     return renderStringField(field, state);
+}
+
+function renderColorField(field, state) {
+    const group = createFieldGroup(field);
+    const row = document.createElement('div');
+    row.className = 'color-row';
+    const current = getFieldValue(state, field) || '#000000';
+    const swatch = document.createElement('input');
+    swatch.type = 'color';
+    swatch.className = 'color-swatch';
+    swatch.value = current;
+    const hex = document.createElement('input');
+    hex.type = 'text';
+    hex.className = 'color-hex text-input';
+    hex.value = current;
+    swatch.addEventListener('input', () => {
+        hex.value = swatch.value;
+        setFieldValue(state, field, swatch.value);
+        state.save();
+    });
+    hex.addEventListener('input', () => {
+        const next = hex.value.trim();
+        if (/^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/.test(next)) {
+            swatch.value = next.slice(0, 7);
+            setFieldValue(state, field, next);
+            state.save();
+        }
+    });
+    row.append(swatch, hex);
+    group.appendChild(row);
+    return group;
 }
 
 function renderBooleanField(field, state) {
