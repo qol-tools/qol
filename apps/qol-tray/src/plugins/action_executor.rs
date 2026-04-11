@@ -109,6 +109,26 @@ pub fn try_execute_action(
     execution::execute_resolved_action(&resolved)
 }
 
+pub fn dispatch_query(
+    _plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_id: &str,
+    query_name: &str,
+) -> Result<serde_json::Value, ActionExecutionError> {
+    Err(ActionExecutionError::ActionRejected(format!(
+        "query dispatch not yet implemented: {plugin_id}::{query_name} (requires daemon protocol extension)"
+    )))
+}
+
+pub fn dispatch_action_by_name(
+    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_id: &str,
+    action_name: &str,
+    _input: serde_json::Value,
+) -> Result<serde_json::Value, ActionExecutionError> {
+    try_execute_action(plugin_manager, plugin_id, action_name)?;
+    Ok(serde_json::Value::Null)
+}
+
 fn resolve_plugin_action(
     plugin_manager: &Arc<Mutex<PluginManager>>,
     plugin_id: &str,
