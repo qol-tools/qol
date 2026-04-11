@@ -142,13 +142,10 @@ function AppShell() {
     useLayoutEffect(() => {
         const worldEl = document.getElementById('world');
         if (worldEl) camera.setWorldElement(worldEl);
-        if (camera.x === 0 && camera.y === 0) {
-            const vp = document.getElementById('viewport');
-            const w = vp?.clientWidth || 800;
-            const h = vp?.clientHeight || 600;
-            const target = registry.cameraTargetForView(activeViewId, w, h, camera.zoom);
-            if (target) camera.panTo(target.x, target.y);
-        }
+        const current = navigation.getCurrentAnchor();
+        const pageId = current?.pageId || activeViewId;
+        navigation.setCurrentAnchor({ pageId });
+        navigation.gotoAnchor({ pageId }, { respectKnob: false });
     }, []);
 
     useWorldNav({ camera, registry, viewportRef });
