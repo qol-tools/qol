@@ -116,7 +116,8 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
                 }
             });
         };
-        if (entry.layer !== camera.layer && domHelpers.crossLayerTransition) {
+        const goingUp = entry.layer > camera.layer;
+        if (goingUp && domHelpers.crossLayerTransition) {
             domHelpers.crossLayerTransition(entry, applyAndPan);
         } else {
             applyAndPan();

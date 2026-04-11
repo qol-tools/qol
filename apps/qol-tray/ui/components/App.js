@@ -143,7 +143,9 @@ function AppShell() {
         const worldEl = document.getElementById('world');
         if (worldEl) camera.setWorldElement(worldEl);
         const current = navigation.getCurrentAnchor();
-        const pageId = current?.pageId || activeViewId;
+        const fallback = registry.getEntriesForLayer(0)[0]?.id;
+        const pageId = current?.pageId || activeViewId || fallback;
+        if (!pageId) return;
         navigation.setCurrentAnchor({ pageId });
         navigation.gotoAnchor({ pageId }, { respectKnob: false });
     }, []);
