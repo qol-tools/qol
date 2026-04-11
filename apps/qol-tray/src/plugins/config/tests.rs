@@ -220,3 +220,80 @@ fn plugin_config_path_cases() {
         );
     }
 }
+
+#[test]
+fn load_combined_contracts_returns_both_when_present() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    fs::write(
+        root.join("qol-config.toml"),
+        r#"
+schema_version = 1
+
+[field.pair]
+type = "action"
+label = "Pair"
+action = "pair_device"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("qol-runtime.toml"),
+        r#"
+schema_version = 1
+
+[action.pair_device]
+description = "Pair device"
+"#,
+    )
+    .unwrap();
+    let (config, runtime) = load_combined_contracts_from_root(root)
+        .expect("load contracts")
+        .expect("contract present");
+    assert_eq!(config.fields.len(), 1);
+    let runtime = runtime.expect("runtime present");
+    assert!(runtime.actions.contains_key("pair_device"));
+}
+
+#[test]
+fn load_combined_contracts_fails_on_dangling_reference() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    fs::write(
+        root.join("qol-config.toml"),
+        r#"
+schema_version = 1
+
+[field.pair]
+type = "action"
+label = "Pair"
+action = "nonexistent"
+"#,
+    )
+    .unwrap();
+    fs::write(root.join("qol-runtime.toml"), "schema_version = 1\n").unwrap();
+    let result = load_combined_contracts_from_root(root);
+    assert!(result.is_err(), "dangling reference should fail");
+}
+
+#[test]
+fn load_combined_contracts_allows_missing_runtime_when_not_referenced() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    fs::write(
+        root.join("qol-config.toml"),
+        r#"
+schema_version = 1
+
+[field.enabled]
+type = "boolean"
+default = true
+"#,
+    )
+    .unwrap();
+    let (config, runtime) = load_combined_contracts_from_root(root)
+        .expect("load contracts")
+        .expect("contract present");
+    assert_eq!(config.fields.len(), 1);
+    assert!(runtime.is_none(), "runtime should be None when not present");
+}

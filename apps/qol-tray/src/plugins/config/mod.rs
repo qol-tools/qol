@@ -92,6 +92,58 @@ pub(crate) fn load_config_contract_from_root(
         .map_err(|error| anyhow::anyhow!("{error:?}"))
 }
 
+pub(crate) fn load_runable_contract_from_root(
+    plugin_root: &std::path::Path,
+) -> Result<Option<qol_config::contract::RuntimeSpec>> {
+    let runtime_path = plugin_paths::runable_contract_path(plugin_root);
+    if !is_regular_contract_file(&runtime_path) {
+        return Ok(None);
+    }
+    qol_config::contract::parse_runtime_spec(&runtime_path)
+        .map(Some)
+        .map_err(|error| anyhow::anyhow!("{error:?}"))
+}
+
+pub(crate) fn load_runable_contract(
+    plugin_id: &str,
+) -> Result<Option<qol_config::contract::RuntimeSpec>> {
+    let plugin_root = plugin_paths::resolve_plugin_root(plugin_id)?;
+    load_runable_contract_from_root(&plugin_root)
+}
+
+pub(crate) fn load_combined_contracts_from_root(
+    plugin_root: &std::path::Path,
+) -> Result<
+    Option<(
+        qol_config::contract::ConfigSpec,
+        Option<qol_config::contract::RuntimeSpec>,
+    )>,
+> {
+    let Some(config) = load_config_contract_from_root(plugin_root)? else {
+        return Ok(None);
+    };
+    let runtime = load_runable_contract_from_root(plugin_root)?;
+    qol_config::contract::validate_contracts(&config, runtime.as_ref()).map_err(|errors| {
+        anyhow::anyhow!(
+            "contract validation failed:\n{}",
+            format_validation_errors(errors)
+        )
+    })?;
+    Ok(Some((config, runtime)))
+}
+
+pub(crate) fn load_combined_contracts(
+    plugin_id: &str,
+) -> Result<
+    Option<(
+        qol_config::contract::ConfigSpec,
+        Option<qol_config::contract::RuntimeSpec>,
+    )>,
+> {
+    let plugin_root = plugin_paths::resolve_plugin_root(plugin_id)?;
+    load_combined_contracts_from_root(&plugin_root)
+}
+
 pub(crate) fn validate_config_value(
     spec: &qol_config::contract::ConfigSpec,
     config: &serde_json::Value,
@@ -202,6 +254,21 @@ fn field_default_matches_kind(
         ) | (
             qol_config::contract::FieldKind::ObjectMap,
             qol_config::contract::FieldDefault::ObjectMap(_),
+        ) | (
+            qol_config::contract::FieldKind::Color,
+            qol_config::contract::FieldDefault::String(_),
+        ) | (
+            qol_config::contract::FieldKind::Action,
+            qol_config::contract::FieldDefault::String(_),
+        ) | (
+            qol_config::contract::FieldKind::List,
+            qol_config::contract::FieldDefault::String(_),
+        ) | (
+            qol_config::contract::FieldKind::Status,
+            qol_config::contract::FieldDefault::String(_),
+        ) | (
+            qol_config::contract::FieldKind::QrCode,
+            qol_config::contract::FieldDefault::String(_),
         )
     )
 }
@@ -215,5 +282,10 @@ fn field_kind_name(kind: qol_config::contract::FieldKind) -> &'static str {
         qol_config::contract::FieldKind::StringArray => "string_array",
         qol_config::contract::FieldKind::ObjectArray => "object_array",
         qol_config::contract::FieldKind::ObjectMap => "object_map",
+        qol_config::contract::FieldKind::Color => "color",
+        qol_config::contract::FieldKind::Action => "action",
+        qol_config::contract::FieldKind::List => "list",
+        qol_config::contract::FieldKind::Status => "status",
+        qol_config::contract::FieldKind::QrCode => "qr_code",
     }
 }
