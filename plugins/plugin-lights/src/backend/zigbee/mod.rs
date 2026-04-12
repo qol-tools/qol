@@ -199,7 +199,12 @@ fn resolve_serial_port(configured: &str) -> Result<String> {
             ports.join(", ")
         ));
     }
-    Ok(configured.to_string())
+    if std::path::Path::new(configured).exists() {
+        return Ok(configured.to_string());
+    }
+
+    eprintln!("configured serial port '{}' not found, falling back to auto-detection", configured);
+    resolve_serial_port("auto")
 }
 
 fn resolve_network_key(configured: &str) -> Result<[u8; 16]> {

@@ -17,12 +17,13 @@ const RELOAD_ACTION: &str = "reload";
 #[derive(Clone)]
 pub enum DaemonOutcome {
     Handled,
+    HandledWithData(serde_json::Value),
     Fallback,
     Error(String),
 }
 
 pub struct DaemonState {
-    service: Arc<Mutex<LightService<ZigbeeBackend>>>,
+    service: Arc<Mutex<Option<LightService<ZigbeeBackend>>>>,
     config: PluginConfig,
     main_target: LightTarget,
     current_brightness: u8,
@@ -41,7 +42,11 @@ impl DaemonState {
         })
     }
 
-    pub fn shared_service(&self) -> Arc<Mutex<LightService<ZigbeeBackend>>> {
+    pub fn config(&self) -> &PluginConfig {
+        &self.config
+    }
+
+    pub fn shared_service(&self) -> Arc<Mutex<Option<LightService<ZigbeeBackend>>>> {
         self.service.clone()
     }
 
@@ -50,7 +55,14 @@ impl DaemonState {
     }
 
     pub fn events(&self) -> crossbeam_channel::Receiver<crate::znp::ZigbeeEvent> {
-        self.service.lock().unwrap().backend().events().clone()
+        self.service
+            .lock()
+            .unwrap()
+            .as_ref()
+            .expect("service not initialized")
+            .backend()
+            .events()
+            .clone()
     }
 
     pub fn handle_action(&mut self, action: &str) -> DaemonOutcome {
@@ -79,10 +91,7 @@ impl DaemonState {
             return self.adjust_mirek(-(MIREK_STEP as i32));
         }
         if action == actions::PAIR {
-            return match self.service.lock().unwrap().backend().permit_join(60) {
-                Ok(()) => DaemonOutcome::Handled,
-                Err(error) => DaemonOutcome::Error(error.to_string()),
-            };
+            return self.with_service(|svc| svc.backend().permit_join(60));
         }
         if action == actions::SET_COLOR_MAIN {
             return self.apply_live_color();
@@ -106,16 +115,23 @@ impl DaemonState {
         DaemonOutcome::Fallback
     }
 
-    fn apply(&mut self, command: LightCommand) -> DaemonOutcome {
-        match self
-            .service
-            .lock()
-            .unwrap()
-            .apply_command(&self.main_target, &command)
-        {
+    fn with_service<F>(&self, f: F) -> DaemonOutcome
+    where
+        F: FnOnce(&mut LightService<ZigbeeBackend>) -> Result<()>,
+    {
+        let mut guard = self.service.lock().unwrap();
+        let Some(svc) = guard.as_mut() else {
+            return DaemonOutcome::Error("service not available".into());
+        };
+        match f(svc) {
             Ok(()) => DaemonOutcome::Handled,
-            Err(error) => DaemonOutcome::Error(error.to_string()),
+            Err(e) => DaemonOutcome::Error(e.to_string()),
         }
+    }
+
+    fn apply(&mut self, command: LightCommand) -> DaemonOutcome {
+        let target = self.main_target.clone();
+        self.with_service(|svc| svc.apply_command(&target, &command))
     }
 
     fn adjust_brightness(&mut self, delta: i16) -> DaemonOutcome {
@@ -172,9 +188,13 @@ impl DaemonState {
         }
 
         let commands = preset_commands(preset);
-        let mut service = self.service.lock().unwrap();
+        let target = self.main_target.clone();
+        let mut guard = self.service.lock().unwrap();
+        let Some(svc) = guard.as_mut() else {
+            return DaemonOutcome::Error("service not available".into());
+        };
         for command in commands {
-            if let Err(error) = service.apply_command(&self.main_target, &command) {
+            if let Err(error) = svc.apply_command(&target, &command) {
                 return DaemonOutcome::Error(error.to_string());
             }
         }
@@ -183,22 +203,20 @@ impl DaemonState {
     }
 
     fn reload(&mut self) -> DaemonOutcome {
-        let loaded = match load_runtime_state() {
-            Ok(loaded) => loaded,
-            Err(error) => return DaemonOutcome::Error(error.to_string()),
+        let config = match store::load() {
+            Ok(c) => c,
+            Err(e) => return DaemonOutcome::Error(e.to_string()),
         };
-
-        self.service = loaded.service;
-        self.config = loaded.config;
-        self.main_target = loaded.main_target;
-        self.current_brightness = loaded.current_brightness;
-        self.current_mirek = loaded.current_mirek;
+        self.main_target = config.main_target();
+        self.current_brightness = config.live_brightness;
+        self.current_mirek = config.live_mirek;
+        self.config = config;
         DaemonOutcome::Handled
     }
 }
 
 struct LoadedRuntimeState {
-    service: Arc<Mutex<LightService<ZigbeeBackend>>>,
+    service: Arc<Mutex<Option<LightService<ZigbeeBackend>>>>,
     config: PluginConfig,
     main_target: LightTarget,
     current_brightness: u8,
@@ -227,7 +245,7 @@ fn load_runtime_state() -> Result<LoadedRuntimeState> {
     let current_mirek = config.live_mirek;
 
     Ok(LoadedRuntimeState {
-        service: Arc::new(Mutex::new(LightService::new(backend))),
+        service: Arc::new(Mutex::new(Some(LightService::new(backend)))),
         config,
         main_target,
         current_brightness,
