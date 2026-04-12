@@ -1,56 +1,56 @@
 schema_version = 1
 title = "Lights"
-description = "Connection and default target settings for the lights plugin."
+description = "Zigbee light control."
 
 [section.connection]
 label = "Connection"
-description = "Coordinator connection settings."
-actions = ["settings", "pair"]
 
-[field.backend_serial_port]
-type = "string"
-config_key = "backend.serial_port"
-label = "Serial Port"
-description = "Use auto or a concrete /dev/... path."
+[section.controls]
+label = "Controls"
+
+[field.coordinator_status]
+type = "status"
+label = "Coordinator"
 section = "connection"
-placeholder = "auto"
-default = "auto"
+query = "connection_status"
+value_from = "state"
+label_map = { ok = "Connected", offline = "Offline", no_target = "No target" }
+tone_map = { ok = "success", offline = "danger", no_target = "danger" }
 
-[field.backend_channel]
-type = "number"
-config_key = "backend.channel"
-label = "Channel"
+[field.reconnect]
+type = "action"
+label = "Reconnect"
 section = "connection"
-default = 11
-min = 11
-max = 26
-step = 1
+action = "reload"
+variant = "ghost"
 
-[field.backend_network_key]
-type = "string"
-config_key = "backend.network_key"
-label = "Network Key"
-description = "Use auto unless you need a fixed key."
+[field.pair_device]
+type = "action"
+label = "Pair Device"
 section = "connection"
-placeholder = "auto"
-default = "auto"
+action = "pair"
+variant = "primary"
 
-[section.target]
-label = "Main Target"
-description = "Default light target for tray actions."
-actions = ["settings"]
+[field.known_devices]
+type = "list"
+label = "Devices"
+section = "connection"
+query = "list_devices"
+row_label = "{name}"
+row_subtitle = "{address}"
+empty_message = "No devices paired. Click Pair Device to start."
 
-[field.main_target_type]
-type = "select"
-config_key = "main_target_type"
-label = "Target Type"
-section = "target"
-default = "device"
-options = ["device", "group"]
+[field.toggle_power]
+type = "action"
+label = "Toggle"
+section = "controls"
+action = "toggle_main"
+variant = "primary"
 
-[field.main_target_id]
-type = "string"
-config_key = "main_target_id"
-label = "Target ID"
-section = "target"
-default = ""
+[field.live_color_hex]
+type = "color"
+config_key = "live_color_hex"
+label = "Color"
+section = "controls"
+default = "#FFFFFF"
+stream = "live_color"

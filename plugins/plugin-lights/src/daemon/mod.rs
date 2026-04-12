@@ -27,6 +27,8 @@ struct DaemonResponse {
     status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<serde_json::Value>,
 }
 
 enum DaemonRuntime {
@@ -152,7 +154,44 @@ fn handle_stream(runtime: &mut DaemonRuntime, stream: UnixStream) -> Result<()> 
     Ok(())
 }
 
+const CONNECTION_STATUS_QUERY: &str = "connection_status";
+const LIST_DEVICES_QUERY: &str = "list_devices";
+
 fn dispatch_action(runtime: &mut DaemonRuntime, action: &str) -> DaemonOutcome {
+    if action == LIST_DEVICES_QUERY {
+        let devices: Vec<serde_json::Value> = match runtime {
+            DaemonRuntime::Ready(s) => s
+                .config()
+                .devices
+                .iter()
+                .map(|(addr, entry)| {
+                    serde_json::json!({
+                        "address": addr,
+                        "name": entry.name,
+                        "ieee": entry.ieee_address,
+                        "online": entry.online,
+                    })
+                })
+                .collect(),
+            DaemonRuntime::Unavailable(_) => vec![],
+        };
+        return DaemonOutcome::HandledWithData(serde_json::json!(devices));
+    }
+
+    if action == CONNECTION_STATUS_QUERY {
+        let state = match runtime {
+            DaemonRuntime::Ready(s) => {
+                if s.config().main_target_id.is_empty() {
+                    "no_target"
+                } else {
+                    "ok"
+                }
+            }
+            DaemonRuntime::Unavailable(_) => "offline",
+        };
+        return DaemonOutcome::HandledWithData(serde_json::json!({ "state": state }));
+    }
+
     if let DaemonRuntime::Ready(state) = runtime {
         return state.handle_action(action);
     }
@@ -197,14 +236,22 @@ fn response_line(outcome: DaemonOutcome) -> Result<String> {
         DaemonOutcome::Handled => DaemonResponse {
             status: "handled",
             message: None,
+            data: None,
+        },
+        DaemonOutcome::HandledWithData(data) => DaemonResponse {
+            status: "handled",
+            message: None,
+            data: Some(data),
         },
         DaemonOutcome::Fallback => DaemonResponse {
             status: "fallback",
             message: None,
+            data: None,
         },
         DaemonOutcome::Error(message) => DaemonResponse {
             status: "error",
             message: Some(message),
+            data: None,
         },
     };
     let mut line = serde_json::to_string(&response)?;
@@ -218,14 +265,11 @@ fn write_response(mut stream: UnixStream, response: &str) -> Result<()> {
 }
 
 fn map_outcome(action: &str, outcome: DaemonOutcome) -> Result<()> {
-    if let DaemonOutcome::Handled = outcome {
-        return Ok(());
+    match outcome {
+        DaemonOutcome::Handled | DaemonOutcome::HandledWithData(_) => Ok(()),
+        DaemonOutcome::Fallback => {
+            anyhow::bail!("plugin-lights fell back for action '{}'", action)
+        }
+        DaemonOutcome::Error(message) => anyhow::bail!(message),
     }
-    if let DaemonOutcome::Fallback = outcome {
-        anyhow::bail!("plugin-lights fell back for action '{}'", action);
-    }
-    if let DaemonOutcome::Error(message) = outcome {
-        anyhow::bail!(message);
-    }
-    unreachable!()
 }

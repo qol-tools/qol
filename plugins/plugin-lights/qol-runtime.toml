@@ -1,0 +1,50 @@
+schema_version = 1
+
+[action.toggle_main]
+description = "Toggle power on the main target device"
+
+[action.on_main]
+description = "Turn on the main target device"
+
+[action.off_main]
+description = "Turn off the main target device"
+
+[action.brighter_main]
+description = "Increase brightness by 10%"
+
+[action.dimmer_main]
+description = "Decrease brightness by 10%"
+
+[action.warmer_main]
+description = "Increase color temperature (warmer)"
+
+[action.cooler_main]
+description = "Decrease color temperature (cooler)"
+
+[action.pair]
+description = "Pairing"
+duration_seconds = 60
+
+[action.set_color_main]
+description = "Apply the live color to the main target"
+
+[action.set_brightness_main]
+description = "Apply the live brightness to the main target"
+
+[action.set_colortemp_main]
+description = "Apply the live color temperature to the main target"
+
+[action.reload]
+description = "Reconnect to the Zigbee coordinator"
+
+[query.list_devices]
+description = "All known Zigbee devices"
+poll_interval_ms = 3000
+
+[query.connection_status]
+description = "Current coordinator connection state"
+poll_interval_ms = 3000
+
+[stream.live_color]
+description = "Real-time color and brightness control"
+throttle_ms = 100
