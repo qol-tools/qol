@@ -6,7 +6,7 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
-const SOCKET_IO_TIMEOUT_MS: u64 = 80;
+const SOCKET_IO_TIMEOUT_MS: u64 = 10_000;
 type DispatchResult<T> = Result<T, ()>;
 
 pub(super) fn dispatch_action(endpoint: &Path, action_id: &str) -> DaemonActionDispatch {
