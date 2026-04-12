@@ -1,4 +1,5 @@
 import { html } from '../../../lib/html.js';
+import { useEffect } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
 import { useQueryPoll } from '../../../hooks/useQueryPoll.js';
 
@@ -15,6 +16,12 @@ export function StatusField({ field }) {
     const label = (field.label_map && stringValue && field.label_map[stringValue]) || stringValue;
     const tone = (field.tone_map && stringValue && field.tone_map[stringValue]) || 'neutral';
     const displayText = loading && !data ? 'Loading...' : error ? 'Error' : (label || '—');
+
+    const effectiveTone = (loading && !data) ? 'danger' : (error ? 'danger' : tone);
+
+    useEffect(() => {
+        ctx.reportStatusTone?.(field.id, effectiveTone);
+    }, [effectiveTone, field.id]);
 
     return html`
         <div class="field-group field-status"

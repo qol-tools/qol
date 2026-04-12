@@ -18,6 +18,17 @@ export function ListField({ field }) {
 
     const rows = rowsFrom(data);
 
+    if (ctx.isRuntimeDisabled) {
+        return html`
+            <div ...${fieldSurfaceAttrs(field, ctx, 'field-group field-list field-gated')}
+                onMouseDown=${onSelect}
+                onFocus=${onSelect}>
+                <div class="field-list-label">${field.label}</div>
+                <div class="field-list-empty">${field.empty_message || 'No items.'}</div>
+            </div>
+        `;
+    }
+
     return html`
         <div ...${fieldSurfaceAttrs(field, ctx, 'field-group field-list')}
             onMouseDown=${onSelect}
