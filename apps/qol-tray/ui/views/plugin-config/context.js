@@ -23,6 +23,18 @@ export function PluginConfigProvider({ pluginId, mode, activeSectionId, children
 function ActivePluginConfigProvider({ pluginId, mode, activeSectionId, children }) {
     const config = usePluginConfig(pluginId);
     const [selectedFieldIds, setSelectedFieldIds] = useState({});
+    const [statusTones, setStatusTones] = useState({});
+
+    const reportStatusTone = useCallback((fieldId, tone) => {
+        setStatusTones(current => {
+            if (current[fieldId] === tone) return current;
+            return { ...current, [fieldId]: tone };
+        });
+    }, []);
+
+    const isRuntimeDisabled = useMemo(() => {
+        return Object.values(statusTones).some(t => t === 'danger');
+    }, [statusTones]);
 
     const activeSection = useMemo(() => {
         const sections = config.sections;
@@ -72,7 +84,9 @@ function ActivePluginConfigProvider({ pluginId, mode, activeSectionId, children 
         selectedFieldId: selectedField?.id || null,
         selectedField,
         setSelectedFieldId,
-    }), [config, pluginId, mode, activeSection, visibleFields, fieldIndexById, selectedField, setSelectedFieldId]);
+        reportStatusTone,
+        isRuntimeDisabled,
+    }), [config, pluginId, mode, activeSection, visibleFields, fieldIndexById, selectedField, setSelectedFieldId, reportStatusTone, isRuntimeDisabled]);
 
     return html`<${PluginConfigContext.Provider} value=${value}>${children}<//>`;
 }
