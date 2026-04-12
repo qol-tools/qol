@@ -251,6 +251,21 @@ fn register_endpoint(engine: &RequestEngine) -> Result<()> {
     Ok(())
 }
 
+const NWK_ADDR_TIMEOUT: Duration = Duration::from_secs(3);
+
+pub fn resolve_nwk_address(engine: &RequestEngine, ieee: &[u8; 8]) -> Result<u16> {
+    let mut data = ieee.to_vec();
+    data.push(0x00);
+    data.push(0x00);
+    engine.sreq(ZDO, zdo::NWK_ADDR_REQ, data)?;
+    let rsp = engine.wait_for_areq(ZDO, zdo::NWK_ADDR_RSP, NWK_ADDR_TIMEOUT)?;
+    let status = rsp.data.first().copied().unwrap_or(0xFF);
+    ensure!(status == STATUS_SUCCESS, "NWK_ADDR_REQ failed: status=0x{:02X}", status);
+    ensure!(rsp.data.len() >= 11, "NWK_ADDR_RSP too short");
+    let nwk = u16::from_le_bytes([rsp.data[9], rsp.data[10]]);
+    Ok(nwk)
+}
+
 fn start_network(engine: &RequestEngine) -> Result<()> {
     engine.sreq(ZDO, zdo::STARTUP_FROM_APP, vec![0x00, 0x00])?;
     let state_frame = engine.wait_for_areq(ZDO, zdo::STATE_CHANGE_IND, STARTUP_TIMEOUT)?;

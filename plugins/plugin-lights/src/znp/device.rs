@@ -66,6 +66,10 @@ impl DeviceRegistry {
         &self.devices
     }
 
+    pub fn devices_mut(&mut self) -> &mut [Device] {
+        &mut self.devices
+    }
+
     pub fn by_network_address(&self, addr: u16) -> Option<&Device> {
         self.devices.iter().find(|d| d.network_address == addr)
     }
