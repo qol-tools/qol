@@ -267,23 +267,26 @@ function AppShell() {
         : null;
 
     const prevViewRef = useRef(activeViewId);
+    const prevViewOrderRef = useRef(viewOrder);
     useEffect(() => {
-        if (prevViewRef.current === activeViewId) return;
+        const prevOrder = prevViewOrderRef.current;
+        prevViewOrderRef.current = viewOrder;
+        const viewChanged = prevViewRef.current !== activeViewId;
+        const becameAvailable = !viewChanged && prevOrder !== viewOrder
+            && viewOrder.includes(activeViewId) && !prevOrder.includes(activeViewId);
+        if (!viewChanged && !becameAvailable) return;
         prevViewRef.current = activeViewId;
-        log('viewChange:', activeViewId, '→ gotoAnchor');
+        log('viewChange:', activeViewId, viewChanged ? '→ switched' : '→ became available');
         navigation.setCurrentAnchor({ pageId: activeViewId });
-        navigation.gotoAnchor({ pageId: activeViewId }, { respectKnob: true });
-    }, [activeViewId, navigation]);
+        navigation.gotoAnchor({ pageId: activeViewId }, { respectKnob: true, instant: becameAvailable });
+    }, [activeViewId, viewOrder, navigation]);
 
     useLayoutEffect(() => {
         const worldEl = document.getElementById('world');
         if (worldEl) camera.setWorldElement(worldEl);
-        const current = navigation.getCurrentAnchor();
-        const fallback = registry.getEntriesForLayer(0)[0]?.id;
-        const pageId = current?.pageId || activeViewId || fallback;
-        if (!pageId) return;
-        navigation.setCurrentAnchor({ pageId });
-        navigation.gotoAnchor({ pageId }, { respectKnob: false });
+        if (!activeViewId) return;
+        navigation.setCurrentAnchor({ pageId: activeViewId });
+        navigation.gotoAnchor({ pageId: activeViewId }, { respectKnob: false, instant: true });
     }, []);
 
     useWorldNav({ camera, registry, viewportRef });
