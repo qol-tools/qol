@@ -91,7 +91,9 @@ fn handle_client(stream: std::net::TcpStream, buffer: CommandBuffer) {
         let Some(pending) = parse_pending(&cmd) else {
             continue;
         };
-        *buffer.lock().unwrap() = Some(pending);
+        if let Ok(mut buf) = buffer.lock() {
+            *buf = Some(pending);
+        }
     }
 }
 
@@ -112,10 +114,10 @@ fn start_send_loop(
         .name("ws-send".into())
         .spawn(move || loop {
             thread::sleep(SEND_INTERVAL);
-            let Some(cmd) = buffer.lock().unwrap().take() else {
+            let Some(cmd) = buffer.lock().ok().and_then(|mut b| b.take()) else {
                 continue;
             };
-            let mut guard = service.lock().unwrap();
+            let Ok(mut guard) = service.lock() else { continue };
             if let Some(svc) = guard.as_mut() {
                 dispatch(svc, &target, cmd);
             }
