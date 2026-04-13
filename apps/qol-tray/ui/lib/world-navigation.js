@@ -92,9 +92,10 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         return focusRegistry[pageId] || null;
     }
 
-    function resolvePageEntry(pageId) {
+    function resolvePageEntry(pageId, { allowFallback = true } = {}) {
         const entry = registry.getEntry(pageId);
         if (entry) return entry;
+        if (!allowFallback) return null;
         log('gotoAnchor: unknown pageId, falling back', pageId);
         const fallback = registry.getEntriesForLayer(0)[0];
         return fallback || null;
@@ -104,7 +105,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         return { x: entry.x + entry.width / 2, y: entry.y + entry.height / 2 };
     }
 
-    function gotoAnchor(anchor, { respectKnob = true } = {}) {
+    function gotoAnchor(anchor, { respectKnob = true, instant = false } = {}) {
         if (!anchor || !anchor.pageId) {
             log('gotoAnchor: skipped (no anchor)');
             return;
@@ -113,7 +114,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
             log('gotoAnchor: skipped (knob off)', anchor.pageId);
             return;
         }
-        const entry = resolvePageEntry(anchor.pageId);
+        const entry = resolvePageEntry(anchor.pageId, { allowFallback: !instant });
         if (!entry) {
             log('gotoAnchor: skipped (no fallback entry)', anchor.pageId);
             return;
@@ -125,7 +126,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         const targetY = center.y - h / (2 * z);
         if (entry.layer !== camera.layer) camera.setLayer(entry.layer);
         const pageId = anchor.pageId;
-        camera.panSmooth(targetX, targetY, 200, () => {
+        const focusAfterPan = () => {
             if (typeof document === 'undefined') return;
             const sel = focusRegistry[pageId];
             if (sel) {
@@ -140,7 +141,25 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
             if (firstSurface && typeof firstSurface.focus === 'function') {
                 firstSurface.focus({ preventScroll: true });
             }
-        });
+        };
+        if (instant) {
+            camera.panTo(targetX, targetY);
+            focusAfterPan();
+            return;
+        }
+        const dx = targetX - camera.x;
+        const dy = targetY - camera.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const FAR_THRESHOLD = 2000;
+        const APPROACH_PX = 400;
+
+        if (distance > FAR_THRESHOLD) {
+            const ratio = APPROACH_PX / distance;
+            camera.panTo(targetX - dx * ratio, targetY - dy * ratio);
+            camera.panSmooth(targetX, targetY, 120, focusAfterPan);
+            return;
+        }
+        camera.panSmooth(targetX, targetY, 200, focusAfterPan);
     }
 
     function dive(targetPageId) {
