@@ -79,11 +79,12 @@ async function fetchPluginSections(pluginId) {
     return form?.sections || [];
 }
 
-function registerPluginDiveTarget(registry, plugin, sections, pluginsEntry) {
+function registerPluginDiveTarget(registry, plugin, sections, pluginsEntry, pluginIndex) {
     const N = Math.max(1, sections.length);
+    const yOffset = pluginIndex * PLUGIN_PAGE_STRIDE;
     const claim = {
         x: pluginsEntry.x,
-        y: pluginsEntry.y,
+        y: pluginsEntry.y + yOffset,
         width: (N - 1) * PLUGIN_PAGE_STRIDE + PLUGIN_PAGE_WIDTH,
         height: PLUGIN_PAGE_HEIGHT,
         layer: pluginsEntry.layer - 1,
@@ -122,7 +123,7 @@ async function registerAllPluginDiveTargets(registry, registered, isCancelled) {
         if (registered.has(plugin.id)) continue;
         const sections = await fetchPluginSections(plugin.id);
         if (isCancelled()) return;
-        registerPluginDiveTarget(registry, plugin, sections, pluginsEntry);
+        registerPluginDiveTarget(registry, plugin, sections, pluginsEntry, registered.size);
         registered.add(plugin.id);
     }
     log('diveTargets: registered', registered.size, 'plugins:', [...registered].join(', '));
