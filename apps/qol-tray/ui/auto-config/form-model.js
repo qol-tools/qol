@@ -1,11 +1,15 @@
 import { setVal } from './config-paths.js';
 
-export function configFromForm(form) {
+const RUNTIME_ONLY_KINDS = new Set(['action', 'list', 'status', 'qr_code']);
+
+export function configFromForm(form, existingConfig = {}) {
+    const base = cloneValue(existingConfig);
     const allFields = [...form.fields, ...form.sections.flatMap(section => section.fields)];
     return allFields.reduce((config, field) => {
+        if (RUNTIME_ONLY_KINDS.has(field.kind)) return config;
         setConfigValue(config, field, field.value);
         return config;
-    }, {});
+    }, base);
 }
 
 export function getDisplaySections(form) {
@@ -13,6 +17,17 @@ export function getDisplaySections(form) {
         ? [{ id: '_root', label: 'General', description: '', fields: form.fields, actions: [] }]
         : [];
     return [...root, ...form.sections.filter(section => section.fields.length > 0)];
+}
+
+export function ownedConfigKeys(form) {
+    const allFields = [...form.fields, ...form.sections.flatMap(section => section.fields)];
+    const keys = new Set();
+    for (const field of allFields) {
+        if (RUNTIME_ONLY_KINDS.has(field.kind)) continue;
+        const path = field.config_key || field.id;
+        keys.add(path.split('.')[0]);
+    }
+    return keys;
 }
 
 function setConfigValue(config, field, value) {

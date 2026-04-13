@@ -4,39 +4,44 @@ import { usePluginConfigContext } from '../context.js';
 import { useDispatchAction } from '../../../hooks/useDispatchAction.js';
 import { fieldSurfaceAttrs } from '../field-map.js';
 
+const PAIR_DURATION_S = 60;
+
 export function ActionField({ field }) {
     const ctx = usePluginConfigContext();
     const { dispatch, pending, error } = useDispatchAction(ctx.pluginId, field.action);
-    const [countdown, setCountdown] = useState(0);
-    const intervalRef = useRef(0);
+    const isPairAction = field.action === 'pair';
+    const stopPair = useDispatchAction(ctx.pluginId, 'stop_pair');
+    const [pairing, setPairing] = useState(false);
+    const timerRef = useRef(0);
 
-    useEffect(() => () => clearInterval(intervalRef.current), []);
+    useEffect(() => () => clearTimeout(timerRef.current), []);
 
     const onSelect = useCallback(() => {
         ctx.setSelectedFieldId(field.id);
     }, [ctx, field.id]);
 
-    const runtimeAction = ctx.runtime?.action?.[field.action];
-
     const run = useCallback(() => {
-        if (countdown > 0 || pending) return;
+        if (pending || stopPair.pending) return;
+
+        if (isPairAction && pairing) {
+            stopPair.dispatch()
+                .then(() => {
+                    clearTimeout(timerRef.current);
+                    setPairing(false);
+                })
+                .catch(() => {});
+            return;
+        }
+
         dispatch()
             .then(() => {
-                const seconds = field.action === 'pair' ? 60 : 3;
-                setCountdown(seconds);
-                clearInterval(intervalRef.current);
-                intervalRef.current = setInterval(() => {
-                    setCountdown(n => {
-                        if (n <= 1) {
-                            clearInterval(intervalRef.current);
-                            return 0;
-                        }
-                        return n - 1;
-                    });
-                }, 1000);
+                if (!isPairAction) return;
+                setPairing(true);
+                clearTimeout(timerRef.current);
+                timerRef.current = setTimeout(() => setPairing(false), PAIR_DURATION_S * 1000);
             })
             .catch(() => {});
-    }, [dispatch, countdown, pending, field.action]);
+    }, [dispatch, pending, isPairAction, pairing, stopPair]);
 
     const onKeyDown = useCallback((event) => {
         if (event.key !== 'Enter' && event.key !== ' ') return;
@@ -46,26 +51,33 @@ export function ActionField({ field }) {
     }, [run]);
 
     const variant = field.variant || 'primary';
-    const exempt = field.variant === 'ghost' || field.action === 'reload' || field.action === 'pair';
+    const exempt = field.variant === 'ghost' || field.action === 'reload' || isPairAction;
     const gated = ctx.isRuntimeDisabled && !exempt;
-    const busy = countdown > 0;
+    const busy = pending || stopPair.pending;
 
-    const feedbackLabel = runtimeAction?.description || field.feedback_label || field.label;
-    const label = busy
-        ? `${feedbackLabel}... ${countdown}s`
-        : pending ? 'Working...' : (field.label || 'Run');
+    let label;
+    if (isPairAction && pairing) {
+        label = 'Stop Pairing';
+    } else if (busy) {
+        label = 'Working...';
+    } else {
+        label = field.label || 'Run';
+    }
 
     return html`
         <div ...${fieldSurfaceAttrs(field, ctx, 'field-group field-action')}
             onMouseDown=${onSelect}
             onFocus=${onSelect}
             onKeyDown=${gated ? undefined : onKeyDown}>
-            <button type="button" class="btn btn-${variant}"
-                    disabled=${pending || gated || busy}
-                    onClick=${gated ? undefined : run}>
-                ${label}
-            </button>
-            ${error && !busy && html`<div class="field-action-error">${error}</div>`}
+            <div class="field-action-row">
+                ${isPairAction && pairing && html`<span class="refresh-btn spinning"></span>`}
+                <button type="button" class="btn btn-${pairing ? 'ghost' : variant}"
+                        disabled=${busy || gated}
+                        onClick=${gated ? undefined : run}>
+                    ${label}
+                </button>
+            </div>
+            ${error && html`<div class="field-action-error">${error}</div>`}
         </div>
     `;
 }

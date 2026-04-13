@@ -18,13 +18,36 @@ pub(super) fn parse_config_body(
     http_json::parse_json_body(body, MAX_CONFIG_SIZE)
 }
 
+// Merge-save: reads existing config from disk, overlays the frontend's values on top.
+// The frontend only sends fields it manages (those declared in qol-config.toml).
+// Daemon-owned fields (devices, backend settings) are preserved from the existing file.
+// Without this merge, every color wheel drag would wipe the paired device list.
 pub(super) fn save_plugin_config(
     plugin_id: &str,
     config: serde_json::Value,
 ) -> Result<(), Box<Response>> {
-    PluginConfigManager::new()
-        .and_then(|manager| manager.set_config(plugin_id, config))
+    let manager =
+        PluginConfigManager::new().map_err(|_| Box::new(save_config_failed_response()))?;
+    let existing = manager
+        .get_config(plugin_id)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
+    let merged = merge_config(existing, config);
+    manager
+        .set_config(plugin_id, merged)
         .map_err(|_| Box::new(save_config_failed_response()))
+}
+
+fn merge_config(mut base: serde_json::Value, overlay: serde_json::Value) -> serde_json::Value {
+    if let (Some(base_obj), Some(overlay_obj)) = (base.as_object_mut(), overlay.as_object()) {
+        for (key, value) in overlay_obj {
+            base_obj.insert(key.clone(), value.clone());
+        }
+        base
+    } else {
+        overlay
+    }
 }
 
 pub(super) fn encode_config_json(config: &serde_json::Value) -> Result<Vec<u8>, Box<Response>> {

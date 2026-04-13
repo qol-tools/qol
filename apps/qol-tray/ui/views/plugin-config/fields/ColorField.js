@@ -1,13 +1,20 @@
 import { html } from '../../../lib/html.js';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
+import { useDispatchAction } from '../../../hooks/useDispatchAction.js';
 import { fieldSurfaceAttrs } from '../field-map.js';
+import { hueComponents, hueSatToHex, hexToHueSat } from './color-math.js';
+import { openColorStream, closeColorStream, streamColorHex, streamBrightness } from './color-stream.js';
 
 const DISC_SIZE = 200;
 const THUMB_R = 8;
+const DISC_RADIUS = DISC_SIZE / 2 - 1;
 
 export function ColorField({ field }) {
     const ctx = usePluginConfigContext();
+    const hasStream = !!field.stream;
+    const { dispatch: sendColor } = useDispatchAction(ctx.pluginId, hasStream ? 'set_color_main' : null);
+    const { dispatch: sendBrightnessAction } = useDispatchAction(ctx.pluginId, hasStream ? 'set_brightness_main' : null);
     const stored = ctx.getFieldValue(field);
     const raw = typeof stored === 'string' ? stored.replace(/^#/, '') : 'ffffff';
     const initial = hexToHueSat(raw);
@@ -15,14 +22,22 @@ export function ColorField({ field }) {
     const [hue, setHue] = useState(initial.hue);
     const [sat, setSat] = useState(initial.saturation);
     const [brightness, setBrightness] = useState(100);
+    const [thumbActive, setThumbActive] = useState(false);
     const canvasRef = useRef(null);
     const offscreenRef = useRef(null);
+    const outerRef = useRef(null);
+    const thumbRef = useRef(null);
     const trackingRef = useRef(null);
+    const liveHueRef = useRef(initial.hue);
+    const liveSatRef = useRef(initial.saturation);
+    const liveBrightnessRef = useRef(100);
 
     useEffect(() => {
         const parsed = hexToHueSat(raw);
         setHue(parsed.hue);
         setSat(parsed.saturation);
+        liveHueRef.current = parsed.hue;
+        liveSatRef.current = parsed.saturation;
     }, [raw]);
 
     useEffect(() => {
@@ -32,32 +47,137 @@ export function ColorField({ field }) {
             offscreenRef.current.height = DISC_SIZE;
             prerenderDisc(offscreenRef.current);
         }
-        drawDisc(canvasRef.current, offscreenRef.current, hue, sat);
-    }, [hue, sat]);
+        drawDisc(canvasRef.current, offscreenRef.current, hue, sat, !thumbActive);
+    }, [hue, sat, thumbActive]);
 
-    const commit = useCallback((h, s, b) => {
+    const commitColor = useCallback((h, s) => {
         const hex = '#' + hueSatToHex(h, s);
         ctx.setFieldValue(field, hex);
-        ctx.save();
-    }, [ctx, field]);
+        ctx.saveNow().then(() => {
+            if (sendColor) sendColor().catch(() => {});
+        });
+    }, [ctx, field, sendColor]);
+
+    const commitBrightness = useCallback((b) => {
+        ctx.setConfigKey('live_brightness', b);
+        ctx.saveNow().then(() => {
+            if (sendBrightnessAction) sendBrightnessAction().catch(() => {});
+        });
+    }, [ctx, sendBrightnessAction]);
+
+    useEffect(() => {
+        const el = outerRef.current;
+        if (!el) return;
+        const onCommit = () => commitColor(liveHueRef.current, liveSatRef.current);
+        el.addEventListener('color-commit', onCommit);
+        return () => el.removeEventListener('color-commit', onCommit);
+    }, [commitColor]);
+
+    useEffect(() => {
+        const thumb = thumbRef.current;
+        if (!thumb) return;
+        const dirs = new Set();
+        let anim = null;
+        let shift = false;
+        const SPEED = 120;
+        const SPEED_SHIFT = 280;
+
+        function tick(now) {
+            if (!anim) return;
+            const dt = Math.min((now - anim.t) / 1000, 0.05);
+            anim.t = now;
+            const px = (shift ? SPEED_SHIFT : SPEED) * dt;
+            const h = liveHueRef.current;
+            const s = liveSatRef.current;
+            const angle = h * Math.PI / 180;
+            const dist = s * DISC_RADIUS;
+            let x = dist * Math.cos(angle);
+            let y = dist * Math.sin(angle);
+            if (dirs.has('left')) x -= px;
+            if (dirs.has('right')) x += px;
+            if (dirs.has('up')) y -= px;
+            if (dirs.has('down')) y += px;
+            const newDist = Math.min(Math.sqrt(x * x + y * y), DISC_RADIUS);
+            const newH = ((Math.atan2(y, x) * 180 / Math.PI) + 360) % 360;
+            const newS = newDist / DISC_RADIUS;
+            setHue(newH);
+            setSat(newS);
+            liveHueRef.current = newH;
+            liveSatRef.current = newS;
+            if (hasStream) streamColorHex(hueSatToHex(newH, newS));
+            const center = DISC_SIZE / 2;
+            const tx = center + newS * DISC_RADIUS * Math.cos(newH * Math.PI / 180);
+            const ty = center + newS * DISC_RADIUS * Math.sin(newH * Math.PI / 180);
+            thumb.style.left = tx + 'px';
+            thumb.style.top = ty + 'px';
+            nudgeWedge(thumb);
+            anim.frame = requestAnimationFrame(tick);
+        }
+
+        function onDown(e) {
+            const map = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
+            const dir = map[e.key];
+            if (!dir) return;
+            e.preventDefault();
+            shift = e.shiftKey;
+            dirs.add(dir);
+            if (!anim) {
+                anim = { t: performance.now(), frame: 0 };
+                anim.frame = requestAnimationFrame(tick);
+            }
+        }
+
+        function onUp(e) {
+            const map = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
+            if (!map[e.key]) return;
+            dirs.delete(map[e.key]);
+            if (dirs.size === 0 && anim) {
+                cancelAnimationFrame(anim.frame);
+                anim = null;
+            }
+        }
+
+        thumb.addEventListener('keydown', onDown);
+        thumb.addEventListener('keyup', onUp);
+        return () => {
+            thumb.removeEventListener('keydown', onDown);
+            thumb.removeEventListener('keyup', onUp);
+            if (anim) cancelAnimationFrame(anim.frame);
+        };
+    }, [hasStream]);
 
     const onSelect = useCallback(() => ctx.setSelectedFieldId(field.id), [ctx, field.id]);
+
+    const onThumbFocus = useCallback(() => {
+        setThumbActive(true);
+        if (hasStream) openColorStream();
+    }, [hasStream]);
+
+    const onThumbBlur = useCallback(() => {
+        setThumbActive(false);
+        if (hasStream) closeColorStream();
+        const hex = '#' + hueSatToHex(liveHueRef.current, liveSatRef.current);
+        ctx.setFieldValue(field, hex);
+        ctx.save();
+    }, [hasStream, ctx, field]);
 
     const onDiscPointer = useCallback((e) => {
         const rect = canvasRef.current.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
         const center = DISC_SIZE / 2;
-        const radius = center - 1;
         const dx = x - center;
         const dy = y - center;
-        const dist = Math.min(Math.sqrt(dx * dx + dy * dy), radius);
+        const dist = Math.min(Math.sqrt(dx * dx + dy * dy), DISC_RADIUS);
         const h = ((Math.atan2(dy, dx) * 180 / Math.PI) + 360) % 360;
-        const s = dist / radius;
+        const s = dist / DISC_RADIUS;
         setHue(h);
         setSat(s);
+        liveHueRef.current = h;
+        liveSatRef.current = s;
+        if (hasStream) streamColorHex(hueSatToHex(h, s));
         return { h, s };
-    }, []);
+    }, [hasStream]);
 
     const onDiscDown = useCallback((e) => {
         const rect = canvasRef.current.getBoundingClientRect();
@@ -65,8 +185,9 @@ export function ColorField({ field }) {
         if (Math.sqrt((e.clientX - rect.left - cx) ** 2 + (e.clientY - rect.top - cx) ** 2) > cx) return;
         trackingRef.current = 'disc';
         canvasRef.current.setPointerCapture(e.pointerId);
+        if (hasStream) openColorStream();
         onDiscPointer(e);
-    }, [onDiscPointer]);
+    }, [onDiscPointer, hasStream]);
 
     const onDiscMove = useCallback((e) => {
         if (trackingRef.current !== 'disc') return;
@@ -76,8 +197,9 @@ export function ColorField({ field }) {
     const onDiscUp = useCallback(() => {
         if (trackingRef.current !== 'disc') return;
         trackingRef.current = null;
-        commit(hue, sat, brightness);
-    }, [commit, hue, sat, brightness]);
+        if (hasStream) closeColorStream();
+        commitColor(liveHueRef.current, liveSatRef.current);
+    }, [commitColor, hasStream]);
 
     const trackRef = useRef(null);
 
@@ -86,14 +208,17 @@ export function ColorField({ field }) {
         const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
         const b = Math.max(1, Math.round(pct * 100));
         setBrightness(b);
+        liveBrightnessRef.current = b;
+        if (hasStream) streamBrightness(b, hueSatToHex(liveHueRef.current, liveSatRef.current));
         return b;
-    }, []);
+    }, [hasStream]);
 
     const onSliderDown = useCallback((e) => {
         trackingRef.current = 'slider';
         trackRef.current.setPointerCapture(e.pointerId);
+        if (hasStream) openColorStream();
         onSliderPointer(e);
-    }, [onSliderPointer]);
+    }, [onSliderPointer, hasStream]);
 
     const onSliderMove = useCallback((e) => {
         if (trackingRef.current !== 'slider') return;
@@ -103,37 +228,39 @@ export function ColorField({ field }) {
     const onSliderUp = useCallback(() => {
         if (trackingRef.current !== 'slider') return;
         trackingRef.current = null;
-        commit(hue, sat, brightness);
-    }, [commit, hue, sat, brightness]);
-
-    const onKeyDown = useCallback((e) => {
-        if (e.key === 'Enter') { e.preventDefault(); commit(hue, sat, brightness); return; }
-        if (!e.ctrlKey && !e.metaKey) return;
-        const step = e.shiftKey ? 10 : 2;
-        if (e.key === 'ArrowLeft') { e.preventDefault(); setHue(h => (h - step + 360) % 360); }
-        if (e.key === 'ArrowRight') { e.preventDefault(); setHue(h => (h + step) % 360); }
-        if (e.key === 'ArrowUp') { e.preventDefault(); setSat(s => Math.min(1, s + 0.01 * step)); }
-        if (e.key === 'ArrowDown') { e.preventDefault(); setSat(s => Math.max(0, s - 0.01 * step)); }
-        if (e.key === 'PageUp') { e.preventDefault(); setBrightness(b => Math.min(100, b + step)); }
-        if (e.key === 'PageDown') { e.preventDefault(); setBrightness(b => Math.max(1, b - step)); }
-    }, [commit, hue, sat, brightness]);
+        if (hasStream) closeColorStream();
+        commitBrightness(liveBrightnessRef.current);
+    }, [commitBrightness, hasStream]);
 
     const hex = hueSatToHex(hue, sat);
     const gradient = `linear-gradient(to right, #0a0a0a, #${hex})`;
     const thumbLeft = `${brightness}%`;
     const gated = ctx.isRuntimeDisabled && field.stream;
+    const center = DISC_SIZE / 2;
+    const thumbAngle = hue * Math.PI / 180;
+    const thumbDist = sat * DISC_RADIUS;
+    const thumbX = center + thumbDist * Math.cos(thumbAngle);
+    const thumbY = center + thumbDist * Math.sin(thumbAngle);
 
     return html`
-        <div ...${fieldSurfaceAttrs(field, ctx, `field-group field-color${gated ? ' field-gated' : ''}`)}
-            onMouseDown=${onSelect} onFocus=${onSelect} onKeyDown=${gated ? undefined : onKeyDown}>
+        <div ref=${outerRef} ...${fieldSurfaceAttrs(field, ctx, `field-group field-color${gated ? ' field-gated' : ''}`)}
+            onMouseDown=${onSelect} onFocus=${onSelect}>
             <label class="field-color-label">${field.label}</label>
             <div class="hue-wheel-container${gated ? ' hue-wheel-disabled' : ''}">
-                <canvas ref=${canvasRef} class="hue-disc" width=${DISC_SIZE} height=${DISC_SIZE}
-                    onPointerDown=${gated ? undefined : onDiscDown}
-                    onPointerMove=${gated ? undefined : onDiscMove}
-                    onPointerUp=${gated ? undefined : onDiscUp}
-                    onPointerCancel=${gated ? undefined : onDiscUp}
-                    style=${gated ? 'pointer-events:none;opacity:0.4' : ''} />
+                <div class="hue-disc-wrap">
+                    <canvas ref=${canvasRef} class="hue-disc" width=${DISC_SIZE} height=${DISC_SIZE}
+                        onPointerDown=${gated ? undefined : onDiscDown}
+                        onPointerMove=${gated ? undefined : onDiscMove}
+                        onPointerUp=${gated ? undefined : onDiscUp}
+                        onPointerCancel=${gated ? undefined : onDiscUp}
+                        style=${gated ? 'pointer-events:none;opacity:0.4' : ''} />
+                    <div ref=${thumbRef} class="color-thumb-target" data-color-thumb=""
+                        data-selected-surface="" data-selected=${thumbActive ? 'true' : 'false'}
+                        data-selected-surface-priority="10"
+                        tabIndex="-1"
+                        onFocus=${onThumbFocus} onBlur=${onThumbBlur}
+                        style="left:${thumbX}px;top:${thumbY}px" />
+                </div>
                 <div class="hue-slider">
                     <div class="hue-slider-header">
                         <span class="hue-slider-label">Brightness</span>
@@ -150,42 +277,6 @@ export function ColorField({ field }) {
             </div>
         </div>
     `;
-}
-
-function hueComponents(h) {
-    const x = 1 - Math.abs(((h / 60) % 2) - 1);
-    if (h < 60)  return [1, x, 0];
-    if (h < 120) return [x, 1, 0];
-    if (h < 180) return [0, 1, x];
-    if (h < 240) return [0, x, 1];
-    if (h < 300) return [x, 0, 1];
-    return [1, 0, x];
-}
-
-function hueSatToHex(h, s) {
-    const [hr, hg, hb] = hueComponents(h);
-    const r = Math.round((1 - s + s * hr) * 255);
-    const g = Math.round((1 - s + s * hg) * 255);
-    const b = Math.round((1 - s + s * hb) * 255);
-    return [r, g, b].map(c => c.toString(16).padStart(2, '0')).join('');
-}
-
-function hexToHueSat(hex) {
-    const clean = hex.replace(/^#/, '').slice(0, 6).padEnd(6, '0');
-    const r = parseInt(clean.substring(0, 2), 16) / 255;
-    const g = parseInt(clean.substring(2, 4), 16) / 255;
-    const b = parseInt(clean.substring(4, 6), 16) / 255;
-    const max = Math.max(r, g, b);
-    const min = Math.min(r, g, b);
-    const delta = max - min;
-    let h = 0;
-    if (delta > 0) {
-        if (max === r) h = 60 * (((g - b) / delta + 6) % 6);
-        else if (max === g) h = 60 * ((b - r) / delta + 2);
-        else h = 60 * ((r - g) / delta + 4);
-    }
-    const s = max === 0 ? 0 : delta / max;
-    return { hue: h, saturation: s };
 }
 
 function prerenderDisc(canvas) {
@@ -215,13 +306,23 @@ function prerenderDisc(canvas) {
     ctx.putImageData(imageData, 0, 0);
 }
 
-function drawDisc(canvas, offscreen, hue, sat) {
+function nudgeWedge(el) {
+    if (!el) return;
+    if (el.hasAttribute('data-selected-surface-motion')) {
+        el.removeAttribute('data-selected-surface-motion');
+    } else {
+        el.setAttribute('data-selected-surface-motion', 'teleport');
+    }
+}
+
+function drawDisc(canvas, offscreen, hue, sat, showThumb) {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     const center = DISC_SIZE / 2;
     const radius = center - 1;
     ctx.clearRect(0, 0, DISC_SIZE, DISC_SIZE);
     ctx.drawImage(offscreen, 0, 0);
+    if (!showThumb) return;
     const angle = hue * Math.PI / 180;
     const dist = sat * radius;
     const tx = center + dist * Math.cos(angle);
