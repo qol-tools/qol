@@ -23,6 +23,9 @@ pub enum DaemonOutcome {
 }
 
 pub struct DaemonState {
+    // Option so reload() can take() the old service, closing the serial port
+    // before opening a new one. The WS thread and device monitor hold Arc clones,
+    // so replacing self.service alone wouldn't drop the inner — take() does.
     service: Arc<Mutex<Option<LightService<ZigbeeBackend>>>>,
     config: PluginConfig,
     main_target: LightTarget,
@@ -57,7 +60,7 @@ impl DaemonState {
     pub fn events(&self) -> crossbeam_channel::Receiver<crate::znp::ZigbeeEvent> {
         self.service
             .lock()
-            .unwrap()
+            .expect("service lock poisoned during events()")
             .as_ref()
             .expect("service not initialized")
             .backend()
@@ -93,6 +96,9 @@ impl DaemonState {
         if action == actions::PAIR {
             return self.with_service(|svc| svc.backend().permit_join(60));
         }
+        if action == actions::STOP_PAIR {
+            return self.with_service(|svc| svc.backend().permit_join(0));
+        }
         if action == actions::SET_COLOR_MAIN {
             return self.apply_live_color();
         }
@@ -119,7 +125,9 @@ impl DaemonState {
     where
         F: FnOnce(&mut LightService<ZigbeeBackend>) -> Result<()>,
     {
-        let mut guard = self.service.lock().unwrap();
+        let Ok(mut guard) = self.service.lock() else {
+            return DaemonOutcome::Error("service lock poisoned".into());
+        };
         let Some(svc) = guard.as_mut() else {
             return DaemonOutcome::Error("service not available".into());
         };
@@ -155,14 +163,14 @@ impl DaemonState {
             Err(error) => return DaemonOutcome::Error(error.to_string()),
         };
         self.current_brightness = config.live_brightness;
-        let result = self.apply(LightCommand::SetBrightness {
+        let brightness_result = self.apply(LightCommand::SetBrightness {
             level: config.live_brightness,
         });
-        if matches!(result, DaemonOutcome::Handled) {
-            let color = parse_color(&config.live_color_hex);
-            self.apply(LightCommand::SetColor { color });
+        if !matches!(brightness_result, DaemonOutcome::Handled) {
+            return brightness_result;
         }
-        result
+        let color = parse_color(&config.live_color_hex);
+        self.apply(LightCommand::SetColor { color })
     }
 
     fn apply_live_colortemp(&mut self) -> DaemonOutcome {
@@ -189,7 +197,9 @@ impl DaemonState {
 
         let commands = preset_commands(preset);
         let target = self.main_target.clone();
-        let mut guard = self.service.lock().unwrap();
+        let Ok(mut guard) = self.service.lock() else {
+            return DaemonOutcome::Error("service lock poisoned".into());
+        };
         let Some(svc) = guard.as_mut() else {
             return DaemonOutcome::Error("service not available".into());
         };
@@ -202,6 +212,10 @@ impl DaemonState {
         DaemonOutcome::Handled
     }
 
+    // Config-only reload: re-reads config.json without re-opening the coordinator.
+    // The coordinator stays connected; only target, brightness, etc. update.
+    // A full re-init (close serial + reopen) is handled by the Unavailable→reload
+    // path in dispatch_action, not here.
     fn reload(&mut self) -> DaemonOutcome {
         let config = match store::load() {
             Ok(c) => c,
@@ -229,18 +243,13 @@ fn load_runtime_state() -> Result<LoadedRuntimeState> {
     let persisted_devices = load_persisted_devices(&config);
     let backend = ZigbeeBackend::open(&config.backend, persisted_devices)?;
 
+    // Only write config on first boot (auto → resolved key). Never on subsequent
+    // startups — the frontend also writes this file, and a startup save would
+    // overwrite fields the frontend manages (e.g. live_color_hex) with stale values.
     if config.backend.network_key == "auto" {
         config.backend.network_key = format_key(backend.network_key());
+        let _ = store::save(&config);
     }
-
-    let live_devices = backend.devices();
-    for (key, entry) in config.devices.iter_mut() {
-        let nwk = parse_network_address(key).unwrap_or(0);
-        entry.online = live_devices
-            .iter()
-            .any(|device| device.network_address == nwk);
-    }
-    store::save(&config)?;
     let current_brightness = config.live_brightness;
     let current_mirek = config.live_mirek;
 
@@ -329,10 +338,11 @@ fn power_command(power_on: bool) -> LightCommand {
 }
 
 fn parse_color(color_hex: &str) -> RgbColor {
+    let hex = color_hex.strip_prefix('#').unwrap_or(color_hex);
     RgbColor {
-        red: parse_hex_pair(&color_hex[0..2]),
-        green: parse_hex_pair(&color_hex[2..4]),
-        blue: parse_hex_pair(&color_hex[4..6]),
+        red: parse_hex_pair(hex.get(0..2).unwrap_or("00")),
+        green: parse_hex_pair(hex.get(2..4).unwrap_or("00")),
+        blue: parse_hex_pair(hex.get(4..6).unwrap_or("00")),
     }
 }
 

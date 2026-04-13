@@ -15,6 +15,7 @@ pub const PRESET_7: &str = "preset_7";
 pub const PRESET_8: &str = "preset_8";
 pub const SETTINGS: &str = "settings";
 pub const PAIR: &str = "pair";
+pub const STOP_PAIR: &str = "stop_pair";
 pub const SET_COLOR_MAIN: &str = "set_color_main";
 pub const SET_BRIGHTNESS_MAIN: &str = "set_brightness_main";
 pub const SET_COLORTEMP_MAIN: &str = "set_colortemp_main";
@@ -36,6 +37,7 @@ pub const RUN_ACTIONS: &[&str] = &[
     PRESET_7,
     PRESET_8,
     PAIR,
+    STOP_PAIR,
     SET_COLOR_MAIN,
     SET_BRIGHTNESS_MAIN,
     SET_COLORTEMP_MAIN,
@@ -59,6 +61,7 @@ pub const ALL_ACTIONS: &[&str] = &[
     PRESET_8,
     SETTINGS,
     PAIR,
+    STOP_PAIR,
     SET_COLOR_MAIN,
     SET_BRIGHTNESS_MAIN,
     SET_COLORTEMP_MAIN,

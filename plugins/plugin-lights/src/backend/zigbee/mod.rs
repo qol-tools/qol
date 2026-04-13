@@ -199,6 +199,8 @@ fn resolve_serial_port(configured: &str) -> Result<String> {
             ports.join(", ")
         ));
     }
+    // Self-healing: if the user (or a UI bug) wrote a garbage serial_port value
+    // into config.json, fall back to auto-detection instead of failing permanently.
     if std::path::Path::new(configured).exists() {
         return Ok(configured.to_string());
     }
@@ -285,28 +287,27 @@ fn rgb_to_cie_xy(r: u8, g: u8, b: u8) -> (u16, u16) {
     ((cx * 65535.0) as u16, (cy * 65535.0) as u16)
 }
 
+// Resolves a target to (nwk_addr, device). Three modes:
+// 1. Empty target ID → auto-select the sole paired device
+// 2. IEEE address (AA:BB:...) → resolve NWK via ZDO_NWK_ADDR_REQ at command time
+//    (NWK addresses change on rejoin; IEEE is stable across coordinator restarts)
+// 3. NWK address (0x1234) → direct lookup (legacy, kept for backward compat)
 fn resolve_target(target: &LightTarget, controller: &ZigbeeController) -> Result<(u16, Device)> {
     let id = match target {
         LightTarget::Device { id } => &id.0,
         LightTarget::Group { .. } => return Err(anyhow!("group targets not supported yet")),
     };
 
-    let devices = controller.devices();
+    if id.is_empty() {
+        return resolve_sole_device(controller);
+    }
 
     if let Ok(ieee) = parse_ieee_colon(id) {
-        let nwk = controller
-            .resolve_nwk_address(&ieee)
-            .with_context(|| format!("device {} not reachable", id))?;
-        let devices = controller.devices();
-        let device = devices
-            .iter()
-            .find(|d| d.ieee_address == ieee)
-            .ok_or_else(|| anyhow!("device {} not found (by IEEE)", id))?
-            .clone();
-        return Ok((nwk, device));
+        return resolve_by_ieee(controller, &ieee, id);
     }
 
     if let Ok(nwk) = parse_hex_u16(id) {
+        let devices = controller.devices();
         let device = devices
             .iter()
             .find(|d| d.network_address == nwk)
@@ -316,6 +317,34 @@ fn resolve_target(target: &LightTarget, controller: &ZigbeeController) -> Result
     }
 
     Err(anyhow!("invalid target ID '{}': expected IEEE (AA:BB:...) or NWK (0x1234)", id))
+}
+
+fn resolve_sole_device(controller: &ZigbeeController) -> Result<(u16, Device)> {
+    let devices = controller.devices();
+    if devices.is_empty() {
+        return Err(anyhow!("no devices paired"));
+    }
+    if devices.len() > 1 {
+        return Err(anyhow!("multiple devices paired, set a main target"));
+    }
+    let device = devices[0].clone();
+    let nwk = controller
+        .resolve_nwk_address(&device.ieee_address)
+        .unwrap_or(device.network_address);
+    Ok((nwk, device))
+}
+
+fn resolve_by_ieee(controller: &ZigbeeController, ieee: &[u8; 8], label: &str) -> Result<(u16, Device)> {
+    let nwk = controller
+        .resolve_nwk_address(ieee)
+        .with_context(|| format!("device {} not reachable", label))?;
+    let devices = controller.devices();
+    let device = devices
+        .iter()
+        .find(|d| d.ieee_address == *ieee)
+        .ok_or_else(|| anyhow!("device {} not found (by IEEE)", label))?
+        .clone();
+    Ok((nwk, device))
 }
 
 fn format_ieee(addr: &[u8; 8]) -> String {
