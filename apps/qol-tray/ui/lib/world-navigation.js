@@ -48,6 +48,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         : {};
     const diveStack = [];
     let currentConfinement = null;
+    let currentConfinedPages = [];
     if (persisted?.zoom && typeof camera.zoomTo === 'function') {
         camera.zoomTo(persisted.zoom);
     }
@@ -165,13 +166,18 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
             log('diveInto: no target for', sourceSelector);
             return null;
         }
+        log('diveInto: saving layer', camera.layer,
+            'anchor', currentAnchor?.pageId || 'none',
+            '→', target.pages[0] || 'no pages');
         diveStack.push({
             anchor: currentAnchor,
             zoom: camera.zoom,
             layer: camera.layer,
             confinement: currentConfinement,
+            confinedPages: currentConfinedPages,
         });
         currentConfinement = target.claim;
+        currentConfinedPages = target.pages || [];
         setBounds(null);
         const firstPageId = target.pages[0];
         if (firstPageId) {
@@ -191,17 +197,29 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
             log('ascend: skipped (empty stack)');
             return false;
         }
+        log('ascend: prev.layer', prev.layer,
+            'camera.layer', camera.layer,
+            'anchor', prev.anchor?.pageId || 'none',
+            'stack', diveStack.length);
         currentAnchor = prev.anchor;
         notifyAnchorChange();
         currentConfinement = prev.confinement ?? null;
+        currentConfinedPages = prev.confinedPages ?? [];
         if (typeof prev.zoom === 'number' && typeof camera.zoomTo === 'function') {
             camera.zoomTo(prev.zoom);
         }
         setBounds(null);
-        if (prev.anchor?.pageId) {
-            gotoAnchor(prev.anchor, { respectKnob: false });
-        } else if (typeof prev.layer === 'number' && prev.layer !== camera.layer && typeof camera.setLayer === 'function') {
-            camera.setLayer(prev.layer);
+        const targetLayer = typeof prev.layer === 'number' ? prev.layer : 0;
+        const anchorEntry = prev.anchor?.pageId ? registry.getEntry(prev.anchor.pageId) : null;
+        const anchorOnCorrectLayer = anchorEntry && anchorEntry.layer === targetLayer;
+        const safeAnchor = anchorOnCorrectLayer
+            ? prev.anchor
+            : { pageId: registry.getEntriesForLayer(targetLayer)[0]?.id };
+        if (typeof camera.setLayer === 'function') {
+            camera.setLayer(targetLayer);
+        }
+        if (safeAnchor?.pageId) {
+            gotoAnchor(safeAnchor, { respectKnob: false });
         }
         scheduleSave();
         return true;
@@ -222,6 +240,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         gotoAnchor,
         stackDepth,
         getCurrentConfinement,
+        getConfinedPages() { return currentConfinedPages; },
         subscribeAnchor,
     };
 }

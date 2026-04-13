@@ -26,36 +26,41 @@ export function buildViewOrder(devEnabled) {
     return devEnabled ? [...BASE_ORDER, 'dev'] : [...BASE_ORDER];
 }
 
-function WorldViewSlot({ entry, cameraLayer, children }) {
+function WorldViewSlot({ entry, cameraLayer, confinedPages, diveDepth, children }) {
     if (!entry) return null;
-    const visible = entry.layer === cameraLayer;
+    const layerMatch = entry.layer === cameraLayer;
+    const confined = confinedPages && confinedPages.length > 0;
+    const ascending = entry.layer < 0 && (diveDepth ?? 0) === 0;
+    const visible = layerMatch && !ascending && (!confined || confinedPages.includes(entry.id));
     const style = `left:${entry.x}px; top:${entry.y}px; width:${entry.width}px; height:${entry.height}px;${visible ? '' : ' display:none;'}`;
     return html`<div class="world-view-slot" data-view-id=${entry.id} data-layer=${entry.layer} style=${style}>${children}</div>`;
 }
 
-export function renderWorldViews({ registry, cameraLayer, activePluginId, openPluginConfig, openPluginUi, closePluginConfig, syncStatus, syncProviders, onSyncStatusChange, refreshSyncStatus }) {
+export function renderWorldViews({ registry, cameraLayer, confinedPages, diveDepth, activePluginId, openPluginConfig, openPluginUi, closePluginConfig, syncStatus, syncProviders, onSyncStatusChange, refreshSyncStatus }) {
     const layer = cameraLayer != null ? cameraLayer : 0;
+    const cp = confinedPages;
+    const dd = diveDepth;
     return html`
-        <${WorldViewSlot} entry=${registry.getEntry('plugins')} cameraLayer=${layer}><${PluginsView} onOpenPluginConfig=${openPluginConfig} onOpenPluginUi=${openPluginUi} /><//>
-        <${WorldViewSlot} entry=${registry.getEntry('store')} cameraLayer=${layer}><${StoreView} /><//>
-        <${WorldViewSlot} entry=${registry.getEntry('hotkeys')} cameraLayer=${layer}><${HotkeysView} /><//>
-        <${WorldViewSlot} entry=${registry.getEntry('shortcuts')} cameraLayer=${layer}><${ShortcutsView} /><//>
-        <${WorldViewSlot} entry=${registry.getEntry('task-runner')} cameraLayer=${layer}><${TaskRunnerView} /><//>
-        <${WorldViewSlot} entry=${registry.getEntry('profile')} cameraLayer=${layer}><${ProfileView} syncStatus=${syncStatus}
+        <${WorldViewSlot} entry=${registry.getEntry('plugins')} cameraLayer=${layer} confinedPages=${cp} diveDepth=${dd}><${PluginsView} onOpenPluginConfig=${openPluginConfig} onOpenPluginUi=${openPluginUi} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('store')} cameraLayer=${layer} confinedPages=${cp} diveDepth=${dd}><${StoreView} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('hotkeys')} cameraLayer=${layer} confinedPages=${cp} diveDepth=${dd}><${HotkeysView} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('shortcuts')} cameraLayer=${layer} confinedPages=${cp} diveDepth=${dd}><${ShortcutsView} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('task-runner')} cameraLayer=${layer} confinedPages=${cp} diveDepth=${dd}><${TaskRunnerView} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('profile')} cameraLayer=${layer} confinedPages=${cp} diveDepth=${dd}><${ProfileView} syncStatus=${syncStatus}
             syncProviders=${syncProviders} onSyncStatusChange=${onSyncStatusChange} refreshSyncStatus=${refreshSyncStatus} /><//>
-        <${WorldViewSlot} entry=${registry.getEntry('logs')} cameraLayer=${layer}><${LogsView} active=${true} /><//>
-        <${WorldViewSlot} entry=${registry.getEntry('dev')} cameraLayer=${layer}><${DevView} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('logs')} cameraLayer=${layer} confinedPages=${cp} diveDepth=${dd}><${LogsView} active=${true} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('dev')} cameraLayer=${layer} confinedPages=${cp} diveDepth=${dd}><${DevView} /><//>
         ${activePluginId && registry.getAllEntries()
             .filter(e => e.layer === -1 && e.id.startsWith(`${activePluginId}-`))
             .map(e => {
                 const sectionId = e.id.slice(activePluginId.length + 1);
-                return html`<${WorldViewSlot} key=${e.id} entry=${e} cameraLayer=${layer}>
+                return html`<${WorldViewSlot} key=${e.id} entry=${e} cameraLayer=${layer} confinedPages=${cp} diveDepth=${dd}>
                     <${PluginConfigSectionView} pluginId=${activePluginId} sectionId=${sectionId} onClose=${closePluginConfig} />
                 <//>`;
             })}
-        <${WorldViewSlot} entry=${registry.getEntry('hotkeys-editor')} cameraLayer=${layer}><${HotkeyEditorSubPage} /><//>
-        <${WorldViewSlot} entry=${registry.getEntry('shortcuts-editor')} cameraLayer=${layer}><${ShortcutEditorSubPage} /><//>
-        <${WorldViewSlot} entry=${registry.getEntry('logs-detail')} cameraLayer=${layer}><${LogDetailSubPage} /><//>
-        <${WorldViewSlot} entry=${registry.getEntry('task-runner-editor')} cameraLayer=${layer}><${ActionEditorSubPage} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('hotkeys-editor')} cameraLayer=${layer} confinedPages=${cp} diveDepth=${dd}><${HotkeyEditorSubPage} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('shortcuts-editor')} cameraLayer=${layer} confinedPages=${cp} diveDepth=${dd}><${ShortcutEditorSubPage} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('logs-detail')} cameraLayer=${layer} confinedPages=${cp} diveDepth=${dd}><${LogDetailSubPage} /><//>
+        <${WorldViewSlot} entry=${registry.getEntry('task-runner-editor')} cameraLayer=${layer} confinedPages=${cp} diveDepth=${dd}><${ActionEditorSubPage} /><//>
     `;
 }

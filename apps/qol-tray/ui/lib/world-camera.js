@@ -127,6 +127,7 @@ export function createCamera(options = {}) {
     }
 
     function setLayer(n) {
+        log('setLayer:', layer, '→', n, `listeners=${listeners.size}`);
         layer = n;
         notify();
     }

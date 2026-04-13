@@ -26,8 +26,16 @@ function notify() {
     for (const fn of listeners) fn(held);
 }
 
+function onBlur() {
+    if (!held) return;
+    held = false;
+    delete document.body.dataset.ctrlHeld;
+    notify();
+}
+
 document.addEventListener('keydown', onKeyDown, true);
 document.addEventListener('keyup', onKeyUp, true);
+window.addEventListener('blur', onBlur);
 
 export function isCtrlHeld() { return held; }
 

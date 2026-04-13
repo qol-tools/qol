@@ -38,13 +38,13 @@ async function doOpenSelected(pluginsRef, selectedIndexRef, onOpenPluginConfig, 
         toast('error', `${plugin.name} failed to load: ${plugin.load_error}`);
         return;
     }
-    if (plugin.has_custom_ui) {
-        onOpenPluginUi(plugin.id);
-        return;
-    }
     if (plugin.has_config) {
         const opened = await onOpenPluginConfig(plugin.id);
         if (!opened) toast('info', `No settings available for ${plugin.name}`);
+        return;
+    }
+    if (plugin.has_custom_ui) {
+        onOpenPluginUi(plugin.id);
         return;
     }
 }

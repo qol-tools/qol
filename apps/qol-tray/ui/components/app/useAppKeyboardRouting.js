@@ -22,10 +22,10 @@ const NAV_KEYS = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRig
 const NAV_KEYS_EXTENDED = { ...NAV_KEYS, h: 'left', j: 'down', k: 'up', l: 'right' };
 
 function cycleIndex(current, length, reverse) {
-    const safe = current < 0 ? 0 : current;
+    if (current < 0) return reverse ? length - 1 : 0;
     return reverse
-        ? (safe - 1 + length) % length
-        : (safe + 1) % length;
+        ? (current - 1 + length) % length
+        : (current + 1) % length;
 }
 let _cameraRef = { current: null };
 let _diveRef = { current: null };
@@ -49,6 +49,10 @@ export function useAppKeyboardRouting({
     _cameraRef.current = camera;
     _diveRef.current = dive;
     _ascendRef.current = ascend;
+    const viewOrderRef = useRef(viewOrder);
+    viewOrderRef.current = viewOrder;
+    const switchViewRef = useRef(switchView);
+    switchViewRef.current = switchView;
     const cyclePluginSection = useCallback((shiftKey) => {
         if (!activePluginId || !navigation?.getCurrentConfinement?.()) return false;
         const target = registry?.getDiveTargetForSource?.(`[data-plugin-id="${activePluginId}"]`);
@@ -64,16 +68,20 @@ export function useAppKeyboardRouting({
     }, [activePluginId, navigation, registry]);
 
     const cycleTopLevelView = useCallback((shiftKey) => {
-        const nextId = viewOrder[cycleIndex(viewOrder.indexOf(activeViewId), viewOrder.length, shiftKey)];
-        log('tab:', activeViewId, '→', nextId);
-        switchView(nextId);
-    }, [activeViewId, switchView, viewOrder]);
+        const order = viewOrderRef.current;
+        const idx = order.indexOf(activeViewId);
+        const nextIdx = cycleIndex(idx, order.length, shiftKey);
+        const nextId = order[nextIdx];
+        log('tab:', activeViewId, '→', nextId, `(idx=${idx} next=${nextIdx} len=${order.length} order=${order.join(',')})`);
+        switchViewRef.current(nextId);
+    }, [activeViewId]);
 
     const cycleView = useCallback((event) => {
         event.preventDefault();
         if (cyclePluginSection(event.shiftKey)) return;
+        if (navigation?.stackDepth?.() > 0) return;
         cycleTopLevelView(event.shiftKey);
-    }, [cyclePluginSection, cycleTopLevelView]);
+    }, [cyclePluginSection, cycleTopLevelView, navigation]);
 
     const prevPluginIdRef = useRef(activePluginId);
     useLayoutEffect(() => {
@@ -367,7 +375,41 @@ function handlePluginConfigFieldAction(event, detail, pluginConfig, field) {
     if (field.kind === 'select') return handleSelectFieldAction(event, detail, pluginConfig, field);
     if (field.kind === 'string') return handleTextFieldActivation(event, detail, field.id);
     if (field.kind === 'number') return handleNumberFieldActivation(event, detail, field.id);
+    if (field.kind === 'action') return handleActionFieldActivation(event, detail, field.id);
+    if (field.kind === 'color') return handleColorFieldAction(event, detail, pluginConfig, field);
     return handleGenericFieldActivation(event, detail, field.id);
+}
+
+function handleActionFieldActivation(event, detail, fieldId) {
+    if (event.key !== 'Enter' && event.key !== ' ') return false;
+    event.preventDefault();
+    const fieldElement = queryFieldElement(detail, fieldId);
+    const button = fieldElement?.querySelector('button:not(.btn-remove)');
+    if (button instanceof HTMLElement && isInteractable(button)) button.click();
+    return true;
+}
+
+
+function handleColorFieldAction(event, detail, pluginConfig, field) {
+    const thumbFocused = document.activeElement?.hasAttribute?.('data-color-thumb');
+
+    if (!thumbFocused) {
+        if (event.key !== 'Enter' && event.key !== ' ') return false;
+        event.preventDefault();
+        const fieldEl = queryFieldElement(detail, field.id);
+        const thumb = fieldEl?.querySelector('[data-color-thumb]');
+        if (thumb) thumb.focus({ preventScroll: true });
+        return true;
+    }
+
+    if (NAV_KEYS[event.key]) return true;
+    if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        const fieldEl = queryFieldElement(detail, field.id);
+        if (fieldEl) fieldEl.dispatchEvent(new CustomEvent('color-commit'));
+        return true;
+    }
+    return false;
 }
 
 function isInteractable(el) {
@@ -565,6 +607,7 @@ function handleFieldSubmode(event, detail, fieldId) {
     }
 
     if (active && shouldKeepHorizontalCaret(event, active)) return false;
+    if (active?.hasAttribute('data-color-thumb')) return false;
 
     const direction = NAV_KEYS[event.key];
     if (!direction) return false;

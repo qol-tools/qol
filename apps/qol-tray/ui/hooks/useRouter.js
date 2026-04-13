@@ -50,16 +50,15 @@ async function validatePluginConfig(pluginId) {
 async function handleHashChange(viewOrder, setActivePluginId, setActiveViewId, setActivePluginMode) {
     const route = parseHashRoute();
     if (route.pluginId) {
-        if (route.mode === 'ui') {
-            setActiveViewId('plugins');
-            setActivePluginId(route.pluginId);
-            setActivePluginMode('ui');
-            return;
-        }
+        setActiveViewId('plugins');
         if (await validatePluginConfig(route.pluginId)) {
-            setActiveViewId('plugins');
             setActivePluginId(route.pluginId);
             setActivePluginMode('config');
+            return;
+        }
+        if (route.mode === 'ui') {
+            setActivePluginId(route.pluginId);
+            setActivePluginMode('ui');
         }
         return;
     }
@@ -107,15 +106,13 @@ export function useRouter({ viewOrder }) {
     useEffect(() => {
         const route = parseHashRoute();
         if (!route.pluginId) return;
-        if (route.mode === 'ui') {
-            setActivePluginId(route.pluginId);
-            setActivePluginMode('ui');
-            return;
-        }
         validatePluginConfig(route.pluginId).then(valid => {
             if (valid) {
                 setActivePluginId(route.pluginId);
                 setActivePluginMode('config');
+            } else if (route.mode === 'ui') {
+                setActivePluginId(route.pluginId);
+                setActivePluginMode('ui');
             }
         });
     }, []);

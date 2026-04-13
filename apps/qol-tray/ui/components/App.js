@@ -113,9 +113,10 @@ function registerPluginDiveTarget(registry, plugin, sections, pluginsEntry) {
 
 async function registerAllPluginDiveTargets(registry, registered, isCancelled) {
     const plugins = await fetchInstalledPlugins();
-    if (isCancelled() || !plugins.length) return;
+    if (isCancelled()) { log('diveTargets: cancelled'); return; }
+    if (!plugins.length) { log('diveTargets: no plugins'); return; }
     const pluginsEntry = registry.getEntry('plugins');
-    if (!pluginsEntry) return;
+    if (!pluginsEntry) { log('diveTargets: no plugins entry in registry'); return; }
     for (const plugin of plugins) {
         if (isCancelled()) return;
         if (registered.has(plugin.id)) continue;
@@ -124,6 +125,7 @@ async function registerAllPluginDiveTargets(registry, registered, isCancelled) {
         registerPluginDiveTarget(registry, plugin, sections, pluginsEntry);
         registered.add(plugin.id);
     }
+    log('diveTargets: registered', registered.size, 'plugins:', [...registered].join(', '));
 }
 
 export function App() {
@@ -193,9 +195,16 @@ function AppShell() {
 
     useEffect(() => {
         let cancelled = false;
-        registerAllPluginDiveTargets(registry, diveTargetsRegisteredRef.current, () => cancelled)
-            .catch(err => log('pluginDiveTargets: registration failed', err));
-        return () => { cancelled = true; };
+        let retryTimer;
+        function attempt(delay) {
+            registerAllPluginDiveTargets(registry, diveTargetsRegisteredRef.current, () => cancelled)
+                .catch(err => {
+                    log('diveTargets: registration failed, retry in', delay, 'ms');
+                    if (!cancelled) retryTimer = setTimeout(() => attempt(Math.min(delay * 2, 5000)), delay);
+                });
+        }
+        attempt(500);
+        return () => { cancelled = true; clearTimeout(retryTimer); };
     }, [registry]);
 
     useEffect(() => {
@@ -280,6 +289,7 @@ function AppShell() {
     useWorldNav({ camera, registry, viewportRef });
 
     const diveViaSelector = useCallback((selector) => {
+        if (layerAnimatingRef.current) return false;
         const target = navigation.diveInto(selector);
         if (!target) return false;
         setDiveDepth(navigation.stackDepth());
@@ -294,10 +304,7 @@ function AppShell() {
     }, [navigation, registry]);
 
     const dive = useCallback((targetId, sourceSurface) => {
-        if (layerAnimatingRef.current) {
-            log('dive:', targetId, '→ skipped (animating)');
-            return;
-        }
+        if (layerAnimatingRef.current) return;
         if (sourceSurface) {
             const sourcePageId = sourceSurface.closest('[data-view-id]')?.dataset?.viewId;
             const selector = selectorFor(sourceSurface);
@@ -323,26 +330,16 @@ function AppShell() {
         return true;
     }, [navigation, registry]);
 
-    const divePlugin = useCallback((pluginId) => {
-        if (layerAnimatingRef.current) {
-            log('divePlugin:', pluginId, '→ skipped (animating)');
-            return;
-        }
-        diveViaSelector(`[data-plugin-id="${pluginId}"]`);
-    }, [diveViaSelector]);
-
-    const pluginDiveRef = useRef(false);
+    const diveRef = useRef(false);
     useEffect(() => {
-        if (activePluginId && !pluginDiveRef.current) {
-            log('pluginDive: open', activePluginId, '→ divePlugin');
-            pluginDiveRef.current = true;
-            divePlugin(activePluginId);
-        } else if (!activePluginId && pluginDiveRef.current) {
-            log('pluginDive: close → ascend');
-            pluginDiveRef.current = false;
+        if (activePluginId && !diveRef.current) {
+            diveRef.current = true;
+            diveViaSelector(`[data-plugin-id="${activePluginId}"]`);
+        } else if (!activePluginId && diveRef.current) {
+            diveRef.current = false;
             ascend();
         }
-    }, [activePluginId, divePlugin, ascend]);
+    }, [activePluginId, diveViaSelector, ascend]);
 
     return html`
         <${ModifierStateProvider}>
@@ -362,10 +359,12 @@ function AppShell() {
                 />
                 <div class="app-container">
                     <${WorldViewport} camera=${camera} onViewChange=${switchView} navigation=${navigation} registry=${registry}>
-                        <${RegionLabels} registry=${registry} />
+                        <${RegionLabels} registry=${registry} cameraLayer=${cameraLayer} navigation=${navigation} diveDepth=${diveDepth} />
                         ${renderWorldViews({
                             registry,
                             cameraLayer,
+                            confinedPages: navigation.getConfinedPages(),
+                            diveDepth,
                             activePluginId,
                             openPluginConfig,
                             openPluginUi,
