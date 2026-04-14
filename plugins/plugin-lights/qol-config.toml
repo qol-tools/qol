@@ -54,3 +54,16 @@ label = "Color"
 section = "controls"
 default = "#FFFFFF"
 stream = "live_color"
+
+[field.live_brightness]
+type = "number"
+config_key = "live_brightness"
+label = "Brightness"
+section = "controls"
+default = 100
+min = 1
+max = 100
+step = 1
+variant = "slider"
+stream = "live_color"
+action = "set_brightness_main"
