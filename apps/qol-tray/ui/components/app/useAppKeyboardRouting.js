@@ -366,7 +366,7 @@ function delegateToPluginConfig(event, pluginConfig, closePluginConfig) {
 
 function handlePluginConfigDirectEdit(event, detail, field) {
     if (field.kind === 'string') return startStringFieldEdit(event, detail, field.id);
-    if (field.kind === 'number') return startNumberFieldEdit(event, detail, field.id);
+    if (field.kind === 'number' && field.variant !== 'slider') return startNumberFieldEdit(event, detail, field.id);
     return false;
 }
 
@@ -374,10 +374,36 @@ function handlePluginConfigFieldAction(event, detail, pluginConfig, field) {
     if (field.kind === 'boolean') return handleBooleanFieldAction(event, pluginConfig, field);
     if (field.kind === 'select') return handleSelectFieldAction(event, detail, pluginConfig, field);
     if (field.kind === 'string') return handleTextFieldActivation(event, detail, field.id);
+    if (field.kind === 'number' && field.variant === 'slider') return handleSliderFieldAction(event, detail, field);
     if (field.kind === 'number') return handleNumberFieldActivation(event, detail, field.id);
     if (field.kind === 'action') return handleActionFieldActivation(event, detail, field.id);
     if (field.kind === 'color') return handleColorFieldAction(event, detail, pluginConfig, field);
     return handleGenericFieldActivation(event, detail, field.id);
+}
+
+function handleSliderFieldAction(event, detail, field) {
+    const active = document.activeElement;
+    const thumbFocused = active?.hasAttribute?.('data-slider-thumb');
+    const fieldEl = queryFieldElement(detail, field.id);
+
+    if (thumbFocused) {
+        if (NAV_KEYS[event.key]) return true;
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            active.dispatchEvent(new CustomEvent('slider-commit'));
+            fieldEl?.focus({ preventScroll: true });
+            return true;
+        }
+        return false;
+    }
+
+    if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        const thumb = fieldEl?.querySelector('[data-slider-thumb]');
+        if (thumb) thumb.focus({ preventScroll: true });
+        return true;
+    }
+    return false;
 }
 
 function handleActionFieldActivation(event, detail, fieldId) {
@@ -391,22 +417,33 @@ function handleActionFieldActivation(event, detail, fieldId) {
 
 
 function handleColorFieldAction(event, detail, pluginConfig, field) {
-    const thumbFocused = document.activeElement?.hasAttribute?.('data-color-thumb');
+    const active = document.activeElement;
+    const colorThumbFocused = active?.hasAttribute?.('data-color-thumb');
+    const brightnessThumbFocused = active?.hasAttribute?.('data-brightness-thumb');
+    const fieldEl = queryFieldElement(detail, field.id);
 
-    if (!thumbFocused) {
-        if (event.key !== 'Enter' && event.key !== ' ') return false;
+    if (colorThumbFocused || brightnessThumbFocused) {
+        if (NAV_KEYS[event.key]) return true;
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            const commitEvent = colorThumbFocused ? 'color-commit' : 'brightness-commit';
+            fieldEl?.dispatchEvent(new CustomEvent(commitEvent));
+            fieldEl?.focus({ preventScroll: true });
+            return true;
+        }
+        return false;
+    }
+
+    if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
-        const fieldEl = queryFieldElement(detail, field.id);
         const thumb = fieldEl?.querySelector('[data-color-thumb]');
         if (thumb) thumb.focus({ preventScroll: true });
         return true;
     }
-
-    if (NAV_KEYS[event.key]) return true;
-    if (event.key === 'Enter' || event.key === ' ') {
+    if (event.key === 'PageUp' || event.key === 'PageDown') {
         event.preventDefault();
-        const fieldEl = queryFieldElement(detail, field.id);
-        if (fieldEl) fieldEl.dispatchEvent(new CustomEvent('color-commit'));
+        const brightnessThumb = fieldEl?.querySelector('[data-brightness-thumb]');
+        if (brightnessThumb) brightnessThumb.focus({ preventScroll: true });
         return true;
     }
     return false;
@@ -608,6 +645,8 @@ function handleFieldSubmode(event, detail, fieldId) {
 
     if (active && shouldKeepHorizontalCaret(event, active)) return false;
     if (active?.hasAttribute('data-color-thumb')) return false;
+    if (active?.hasAttribute('data-brightness-thumb')) return false;
+    if (active?.hasAttribute('data-slider-thumb')) return false;
 
     const direction = NAV_KEYS[event.key];
     if (!direction) return false;
