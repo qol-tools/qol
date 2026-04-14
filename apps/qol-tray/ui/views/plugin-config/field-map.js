@@ -9,6 +9,7 @@ import { ActionField } from './fields/ActionField.js';
 import { ListField } from './fields/ListField.js';
 import { StatusField } from './fields/StatusField.js';
 import { QrCodeField } from './fields/QrCodeField.js';
+import { SliderField } from './fields/SliderField.js';
 import { CustomSelect } from '../../components/CustomSelect.js';
 import { FieldLabel } from './fields/FieldLabel.js';
 
@@ -27,6 +28,9 @@ const FIELD_MAP = {
 };
 
 export function renderField(field) {
+    if (field.kind === 'number' && field.variant === 'slider') {
+        return html`<${SliderField} key=${field.id} field=${field} />`;
+    }
     const Component = FIELD_MAP[field.kind] || StringField;
     return html`<${Component} key=${field.id} field=${field} />`;
 }

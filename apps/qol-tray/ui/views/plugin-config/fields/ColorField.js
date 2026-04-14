@@ -4,7 +4,7 @@ import { usePluginConfigContext } from '../context.js';
 import { useDispatchAction } from '../../../hooks/useDispatchAction.js';
 import { fieldSurfaceAttrs } from '../field-map.js';
 import { hueComponents, hueSatToHex, hexToHueSat } from './color-math.js';
-import { openColorStream, closeColorStream, streamColorHex, streamBrightness } from './color-stream.js';
+import { openColorStream, closeColorStream, streamColorHex } from './color-stream.js';
 
 const DISC_SIZE = 200;
 const THUMB_R = 8;
@@ -14,14 +14,12 @@ export function ColorField({ field }) {
     const ctx = usePluginConfigContext();
     const hasStream = !!field.stream;
     const { dispatch: sendColor } = useDispatchAction(ctx.pluginId, hasStream ? 'set_color_main' : null);
-    const { dispatch: sendBrightnessAction } = useDispatchAction(ctx.pluginId, hasStream ? 'set_brightness_main' : null);
     const stored = ctx.getFieldValue(field);
     const raw = typeof stored === 'string' ? stored.replace(/^#/, '') : 'ffffff';
     const initial = hexToHueSat(raw);
 
     const [hue, setHue] = useState(initial.hue);
     const [sat, setSat] = useState(initial.saturation);
-    const [brightness, setBrightness] = useState(100);
     const [thumbActive, setThumbActive] = useState(false);
     const canvasRef = useRef(null);
     const offscreenRef = useRef(null);
@@ -30,7 +28,6 @@ export function ColorField({ field }) {
     const trackingRef = useRef(null);
     const liveHueRef = useRef(initial.hue);
     const liveSatRef = useRef(initial.saturation);
-    const liveBrightnessRef = useRef(100);
 
     useEffect(() => {
         const parsed = hexToHueSat(raw);
@@ -57,13 +54,6 @@ export function ColorField({ field }) {
             if (sendColor) sendColor().catch(() => {});
         });
     }, [ctx, field, sendColor]);
-
-    const commitBrightness = useCallback((b) => {
-        ctx.setConfigKey('live_brightness', b);
-        ctx.saveNow().then(() => {
-            if (sendBrightnessAction) sendBrightnessAction().catch(() => {});
-        });
-    }, [ctx, sendBrightnessAction]);
 
     useEffect(() => {
         const el = outerRef.current;
@@ -201,40 +191,6 @@ export function ColorField({ field }) {
         commitColor(liveHueRef.current, liveSatRef.current);
     }, [commitColor, hasStream]);
 
-    const trackRef = useRef(null);
-
-    const onSliderPointer = useCallback((e) => {
-        const rect = trackRef.current.getBoundingClientRect();
-        const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-        const b = Math.max(1, Math.round(pct * 100));
-        setBrightness(b);
-        liveBrightnessRef.current = b;
-        if (hasStream) streamBrightness(b, hueSatToHex(liveHueRef.current, liveSatRef.current));
-        return b;
-    }, [hasStream]);
-
-    const onSliderDown = useCallback((e) => {
-        trackingRef.current = 'slider';
-        trackRef.current.setPointerCapture(e.pointerId);
-        if (hasStream) openColorStream();
-        onSliderPointer(e);
-    }, [onSliderPointer, hasStream]);
-
-    const onSliderMove = useCallback((e) => {
-        if (trackingRef.current !== 'slider') return;
-        onSliderPointer(e);
-    }, [onSliderPointer]);
-
-    const onSliderUp = useCallback(() => {
-        if (trackingRef.current !== 'slider') return;
-        trackingRef.current = null;
-        if (hasStream) closeColorStream();
-        commitBrightness(liveBrightnessRef.current);
-    }, [commitBrightness, hasStream]);
-
-    const hex = hueSatToHex(hue, sat);
-    const gradient = `linear-gradient(to right, #0a0a0a, #${hex})`;
-    const thumbLeft = `${brightness}%`;
     const gated = ctx.isRuntimeDisabled && field.stream;
     const center = DISC_SIZE / 2;
     const thumbAngle = hue * Math.PI / 180;
@@ -261,22 +217,18 @@ export function ColorField({ field }) {
                         onFocus=${onThumbFocus} onBlur=${onThumbBlur}
                         style="left:${thumbX}px;top:${thumbY}px" />
                 </div>
-                <div class="hue-slider">
-                    <div class="hue-slider-header">
-                        <span class="hue-slider-label">Brightness</span>
-                        <span class="hue-slider-value">${brightness}%</span>
-                    </div>
-                    <div ref=${trackRef} class="hue-slider-track" style="background:${gradient}"
-                        onPointerDown=${gated ? undefined : onSliderDown}
-                        onPointerMove=${gated ? undefined : onSliderMove}
-                        onPointerUp=${gated ? undefined : onSliderUp}
-                        onPointerCancel=${gated ? undefined : onSliderUp}>
-                        <div class="hue-slider-thumb" style="left:${thumbLeft};${gated ? 'opacity:0.4' : ''}" />
-                    </div>
-                </div>
             </div>
         </div>
     `;
+}
+
+function nudgeWedge(el) {
+    if (!el) return;
+    if (el.hasAttribute('data-selected-surface-motion')) {
+        el.removeAttribute('data-selected-surface-motion');
+    } else {
+        el.setAttribute('data-selected-surface-motion', 'teleport');
+    }
 }
 
 function prerenderDisc(canvas) {
@@ -304,15 +256,6 @@ function prerenderDisc(canvas) {
         }
     }
     ctx.putImageData(imageData, 0, 0);
-}
-
-function nudgeWedge(el) {
-    if (!el) return;
-    if (el.hasAttribute('data-selected-surface-motion')) {
-        el.removeAttribute('data-selected-surface-motion');
-    } else {
-        el.setAttribute('data-selected-surface-motion', 'teleport');
-    }
 }
 
 function drawDisc(canvas, offscreen, hue, sat, showThumb) {
