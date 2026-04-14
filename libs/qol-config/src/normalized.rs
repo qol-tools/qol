@@ -1,4 +1,6 @@
-use crate::contract::{ConfigSpec, FieldDefault, FieldKind, ItemSpec, NumberConstraints};
+use crate::contract::{
+    ConfigSpec, FieldDefault, FieldKind, ItemSpec, NumberConstraints, RowActionSpec,
+};
 use crate::validation::{validate_field_value, validate_spec_collect, ValidationError};
 use indexmap::IndexMap;
 use serde::Serialize;
@@ -37,6 +39,30 @@ pub struct ResolvedField {
     pub item: Option<ResolvedItemSpec>,
     pub show_when: Option<ResolvedShowWhen>,
     pub number: NumberConstraints,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alpha: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_subtitle: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_action: Option<RowActionSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub empty_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value_from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label_map: Option<IndexMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tone_map: Option<IndexMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -64,8 +90,19 @@ pub fn resolve_config(
     let mut sections = build_sections(spec);
 
     for (id, field) in &spec.fields {
-        let default = field.default.clone().expect("validated default");
-        let value = resolve_field_value(id, field, &default, overrides, &mut errors);
+        let no_stored_value = matches!(
+            field.kind,
+            FieldKind::Action | FieldKind::List | FieldKind::Status | FieldKind::QrCode
+        );
+        let default = field
+            .default
+            .clone()
+            .unwrap_or(FieldDefault::String(String::new()));
+        let value = if no_stored_value {
+            default.clone()
+        } else {
+            resolve_field_value(id, field, &default, overrides, &mut errors)
+        };
         let resolved = ResolvedField {
             id: id.clone(),
             kind: field.kind,
@@ -93,6 +130,18 @@ pub fn resolve_config(
                 equals: show_when.equals.clone(),
             }),
             number: field.number.clone(),
+            alpha: field.alpha,
+            action: field.action.clone(),
+            variant: field.variant.clone(),
+            query: field.query.clone(),
+            stream: field.stream.clone(),
+            row_label: field.row_label.clone(),
+            row_subtitle: field.row_subtitle.clone(),
+            row_action: field.row_action.clone(),
+            empty_message: field.empty_message.clone(),
+            value_from: field.value_from.clone(),
+            label_map: field.label_map.clone(),
+            tone_map: field.tone_map.clone(),
         };
         push_resolved_field(
             &mut root_fields,

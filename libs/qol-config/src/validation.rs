@@ -143,14 +143,23 @@ fn validate_field_section(
     ));
 }
 
+fn kind_has_stored_value(kind: FieldKind) -> bool {
+    !matches!(
+        kind,
+        FieldKind::Action | FieldKind::List | FieldKind::Status | FieldKind::QrCode
+    )
+}
+
 fn validate_field_default(id: &str, field: &FieldSpec, errors: &mut Vec<ValidationError>) {
     let default = match &field.default {
         Some(default) => default,
         None => {
-            errors.push(ValidationError::new(
-                format!("field.{id}.default"),
-                "missing default",
-            ));
+            if kind_has_stored_value(field.kind) {
+                errors.push(ValidationError::new(
+                    format!("field.{id}.default"),
+                    "missing default",
+                ));
+            }
             return;
         }
     };

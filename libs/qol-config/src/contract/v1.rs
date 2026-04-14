@@ -84,9 +84,13 @@ pub struct FieldSpec {
     #[serde(default)]
     pub row_subtitle: Option<String>,
     #[serde(default)]
+    pub row_action: Option<RowActionSpec>,
+    #[serde(default)]
     pub empty_message: Option<String>,
     #[serde(default)]
     pub value_from: Option<String>,
+    #[serde(default)]
+    pub stream: Option<String>,
     #[serde(default)]
     pub label_map: Option<IndexMap<String, String>>,
     #[serde(default)]
@@ -105,6 +109,17 @@ pub struct ShowWhenSpec {
 pub struct ItemSpec {
     #[serde(default)]
     pub fields: IndexMap<String, FieldKind>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct RowActionSpec {
+    pub action: String,
+    #[serde(default)]
+    pub input: Option<IndexMap<String, String>>,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub key: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
