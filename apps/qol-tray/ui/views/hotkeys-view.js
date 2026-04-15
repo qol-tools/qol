@@ -2,7 +2,7 @@ import { html } from '../lib/html.js';
 import { useRef, useMemo, useState, useEffect } from 'preact/hooks';
 import { usePaletteContext } from '../palette/context.js';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
-import { useRegisterViewKeyboard } from '../components/app/view-keyboard-context.js';
+import { useRegisterViewKeyboard } from '../app/view-keyboard-context.js';
 import { matchesQuery } from '../utils/collections.js';
 
 import { PageHeader } from '../components/PageHeader.js';

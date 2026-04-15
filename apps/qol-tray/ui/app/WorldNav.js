@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'preact/hooks';
-import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
-import { GLOBAL_ID } from '../../palette/registry.js';
-import { useKeyboard } from '../../lib/hooks/useKeyboard.js';
+import { useRegisterCommands } from '../palette/useRegisterCommands.js';
+import { GLOBAL_ID } from '../palette/registry.js';
+import { useKeyboard } from '../lib/hooks/useKeyboard.js';
 import { VIEW_LABELS } from './views.js';
 
 export function useWorldNav({ camera, registry, viewportRef }) {

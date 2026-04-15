@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'preact/hooks';
-import { useKeyboard } from '../../lib/hooks/useKeyboard.js';
-import { usePluginConfigContext } from '../../views/plugin-config/context.js';
+import { useKeyboard } from '../lib/hooks/useKeyboard.js';
+import { usePluginConfigContext } from '../views/plugin-config/context.js';
 import { useViewKeyboardContext } from './view-keyboard-context.js';
-import { createDebug, elLabel } from '../../lib/debug.js';
-import { nearestSurfaceToCenter, isInViewport } from '../../lib/viewport-spatial.js';
+import { createDebug, elLabel } from '../lib/debug.js';
+import { nearestSurfaceToCenter, isInViewport } from '../lib/viewport-spatial.js';
 import {
     activateSurface,
     activeContainer,
@@ -12,9 +12,9 @@ import {
     MODAL_SELECTOR,
     parentContainer,
     surfaceContainsChildContainer,
-} from '../../lib/surface-traits.js';
-import { nearestSurfaceInDirection, surfaceLabel } from '../../lib/spatial-nav.js';
-import { focusGridRows, nextFocusGridElement } from '../../lib/focus-grid.js';
+} from '../lib/surface-traits.js';
+import { nearestSurfaceInDirection, surfaceLabel } from '../lib/spatial-nav.js';
+import { focusGridRows, nextFocusGridElement } from '../lib/focus-grid.js';
 
 const log = createDebug('qol:nav');
 const PLUGIN_CONFIG_FIELD = '[data-plugin-config-field-id]';

@@ -1,11 +1,11 @@
 import { useCallback, useEffect } from 'preact/hooks';
-import { useSSE, useSSEReconnect } from '../../hooks/useSSE.js';
-import { clampPercent } from '../../utils/progress.js';
+import { useSSE, useSSEReconnect } from '../hooks/useSSE.js';
+import { clampPercent } from '../utils/progress.js';
 import { devFlowKey, devFlowPhase } from './dev-flows.js';
 import { useUpdateChecker } from './use-update-checker.js';
 import { useDevFlows } from './use-dev-flows.js';
 import { useDevActions } from './use-dev-actions.js';
-import { MOCK_FLOWS_DONE } from '../../views/dev/mock/events.js';
+import { MOCK_FLOWS_DONE } from '../views/dev/mock/events.js';
 
 function routeDevSSE(event, applyDevFlowTransition) {
     const key = devFlowKey(event.type);

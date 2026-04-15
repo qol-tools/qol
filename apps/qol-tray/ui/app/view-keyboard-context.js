@@ -1,6 +1,6 @@
 import { createContext } from 'preact';
 import { useCallback, useContext, useEffect, useMemo, useRef } from 'preact/hooks';
-import { html } from '../../lib/html.js';
+import { html } from '../lib/html.js';
 
 const ViewKeyboardContext = createContext(null);
 

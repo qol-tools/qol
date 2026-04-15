@@ -1,6 +1,6 @@
 import { html } from '../../../lib/html.js';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
-import { useRegisterViewKeyboard } from '../../../components/app/view-keyboard-context.js';
+import { useRegisterViewKeyboard } from '../../../app/view-keyboard-context.js';
 import { ViewTabs } from '../../../components/ViewTabs.js';
 import { PluginsSection } from './PluginsSection.js';
 import { CoreLogSection } from './CoreLogSection.js';

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { useRouter } from '../../hooks/useRouter.js';
-import { usePaletteContext } from '../../palette/context.js';
-import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
-import { GLOBAL_ID } from '../../palette/registry.js';
+import { useRouter } from '../hooks/useRouter.js';
+import { usePaletteContext } from '../palette/context.js';
+import { useRegisterCommands } from '../palette/useRegisterCommands.js';
+import { GLOBAL_ID } from '../palette/registry.js';
 import { useAppBootstrap } from './useAppBootstrap.js';
 import { useAppUpdateCoordinator } from './useAppUpdateCoordinator.js';
 import { useMountedViews } from './useMountedViews.js';
@@ -13,8 +13,8 @@ import {
     fetchSyncProviders,
     fetchSyncStatus,
     promptImportProfile,
-} from '../../views/profile/actions.js';
-import { toast } from '../../lib/toast.js';
+} from '../views/profile/actions.js';
+import { toast } from '../lib/toast.js';
 
 const WT_KEY = 'dev.recompile.defaultWorktree';
 const SYNC_STATUS_POLL_MS = 5000;

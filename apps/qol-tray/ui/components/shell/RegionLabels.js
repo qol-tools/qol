@@ -1,7 +1,7 @@
 import { html } from '../../lib/html.js';
 import { useRef } from 'preact/hooks';
 import { createDebug } from '../../lib/debug.js';
-import { VIEW_LABELS } from './views.js';
+import { VIEW_LABELS } from '../../app/views.js';
 
 const log = createDebug('qol:world');
 

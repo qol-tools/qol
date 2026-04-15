@@ -1,6 +1,6 @@
 import { html } from '../../lib/html.js';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
-import { VIEW_LABELS } from './views.js';
+import { VIEW_LABELS } from '../../app/views.js';
 import { getWorldSettings, setWorldSetting, subscribeWorldSettings } from '../../lib/world-settings.js';
 import { IconCog } from '../../assets/icon-cog.js';
 import { useClickOutside } from '../../lib/hooks/useClickOutside.js';

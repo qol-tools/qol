@@ -1,13 +1,13 @@
-import { html } from '../../lib/html.js';
-import { PluginsView } from '../../views/plugins-view.js';
-import { PluginConfigSectionView } from '../../views/plugin-config/view.js';
-import { StoreView } from '../../views/store-view.js';
-import { HotkeysView, HotkeyEditorSubPage } from '../../views/hotkeys-view.js';
-import { ShortcutsView, ShortcutEditorSubPage } from '../../views/shortcuts-view.js';
-import { TaskRunnerView, ActionEditorSubPage } from '../../views/task-runner-view.js';
-import { ProfileView } from '../../views/profile/view.js';
-import { DevView } from '../../views/dev/view.js';
-import { LogsView, LogDetailSubPage } from '../../views/logs-view.js';
+import { html } from '../lib/html.js';
+import { PluginsView } from '../views/plugins-view.js';
+import { PluginConfigSectionView } from '../views/plugin-config/view.js';
+import { StoreView } from '../views/store-view.js';
+import { HotkeysView, HotkeyEditorSubPage } from '../views/hotkeys-view.js';
+import { ShortcutsView, ShortcutEditorSubPage } from '../views/shortcuts-view.js';
+import { TaskRunnerView, ActionEditorSubPage } from '../views/task-runner-view.js';
+import { ProfileView } from '../views/profile/view.js';
+import { DevView } from '../views/dev/view.js';
+import { LogsView, LogDetailSubPage } from '../views/logs-view.js';
 
 export const VIEW_LABELS = {
     plugins: 'Plugins',

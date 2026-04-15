@@ -7,7 +7,7 @@ import { Expander, ExpanderTrigger, ExpanderBody } from '../../lib/components/Ex
 import { Badge, HealthDot, Alert } from '../../lib/components/StatusIndicators.js';
 import { Button } from '../../lib/components/Button.js';
 import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
-import { useRegisterViewKeyboard } from '../../components/app/view-keyboard-context.js';
+import { useRegisterViewKeyboard } from '../../app/view-keyboard-context.js';
 import { useProfileController } from './use-controller.js';
 import {
     BackupPreviewModal,
