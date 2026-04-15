@@ -7,6 +7,7 @@ import { nearestSurfaceToCenter } from '../../lib/viewport-spatial.js';
 import { getWorldSettings } from '../../lib/world-settings.js';
 import { selectorFor } from '../../lib/world-navigation.js';
 import { contains } from '../../lib/world-registry.js';
+import { PeripheralPreview } from './PeripheralPreview.js';
 
 const log = createDebug('qol:world');
 const CAMERA_FOLLOW_PAD = 40;
@@ -170,6 +171,7 @@ export function WorldViewport({ camera, onViewChange, navigation, registry, chil
             <div id="world" ref=${worldRef}>
                 ${children}
             </div>
+            <${PeripheralPreview} navigation=${navigation} registry=${registry} />
         </div>
     `;
 }
