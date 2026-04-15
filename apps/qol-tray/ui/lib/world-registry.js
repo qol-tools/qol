@@ -20,7 +20,8 @@ export function createWorldRegistry(viewOrder, manifest = {}) {
     }
 
     function addDiveTarget(target) {
-        diveTargets.set(target.sourceSelector, { ...target });
+        const traits = target.traits || { confined: {} };
+        diveTargets.set(target.sourceSelector, { ...target, traits });
     }
 
     function getDiveTargets() {
