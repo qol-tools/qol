@@ -378,16 +378,10 @@ function AppShell() {
         if (!activePluginId && hiddenUntilDive) setHiddenUntilDive(false);
     }, [activePluginId, diveViaSelector, ascend, targetsVersion, hiddenUntilDive]);
     useLayoutEffect(() => {
-        if (!hiddenUntilDive) {
-            document.documentElement.classList.remove('qol-bootstrapping-dive');
-            return undefined;
-        }
-        document.documentElement.classList.add('qol-bootstrapping-dive');
+        document.documentElement.classList.toggle('qol-bootstrapping-dive', hiddenUntilDive);
+        if (!hiddenUntilDive) return undefined;
         const failsafe = setTimeout(() => setHiddenUntilDive(false), 2000);
-        return () => {
-            document.documentElement.classList.remove('qol-bootstrapping-dive');
-            clearTimeout(failsafe);
-        };
+        return () => clearTimeout(failsafe);
     }, [hiddenUntilDive]);
 
     return html`
