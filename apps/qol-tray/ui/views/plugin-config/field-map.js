@@ -136,5 +136,7 @@ export function fieldSurfaceAttrs(field, ctx, baseClass) {
     };
     if (index !== undefined) attrs['data-plugin-config-index'] = index;
     if (selected) attrs['data-selected'] = 'true';
+    if (field.align) attrs['data-field-align'] = field.align;
+    if (field.span) attrs['data-field-span'] = String(field.span);
     return attrs;
 }

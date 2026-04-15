@@ -270,6 +270,10 @@
 }
 
 .field-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    align-items: stretch;
     margin-bottom: 0;
     min-width: 0;
     width: 100%;
@@ -278,6 +282,24 @@
     border: 1px solid rgba(var(--accent-rgb), 0.06);
     border-radius: 6px;
     transition: border-color 0.12s;
+}
+
+.field-group[data-field-align="center"] {
+    align-items: center;
+}
+
+.field-group[data-field-align="right"] {
+    align-items: flex-end;
+}
+
+.field-group > .field-label-group,
+.field-group > .field-qr-label,
+.field-group > input,
+.field-group > .text-input,
+.field-group > .custom-select,
+.field-group > .string-list,
+.field-group > .object-array-panel {
+    align-self: stretch;
 }
 
 .field-group:hover {
@@ -880,10 +902,7 @@
 }
 
 .field-qr-code {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
+    gap: 0.5rem;
 }
 
 .field-qr-label {

@@ -3,6 +3,7 @@ import { html } from '../../../lib/html.js';
 import { useEffect, useRef } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
 import { useQueryPoll } from '../../../lib/hooks/useQueryPoll.js';
+import { fieldSurfaceAttrs } from '../field-map.js';
 
 const DEFAULT_POLL_MS = 5000;
 const QR_SIZE = 256;
@@ -27,8 +28,7 @@ export function QrCodeField({ field }) {
     }, [url]);
 
     return html`
-        <div class="field-group field-qr-code"
-            data-plugin-config-field-id=${field.id}>
+        <div ...${fieldSurfaceAttrs(field, ctx, 'field-group field-qr-code')}>
             <div class="field-qr-label">${field.label}</div>
             ${url
                 ? html`<canvas ref=${canvasRef} class="qr-canvas" width=${QR_SIZE} height=${QR_SIZE} />`
