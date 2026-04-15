@@ -12,6 +12,9 @@ export function useHashSubPath(viewId) {
 
     const setSubPath = useCallback((segments) => {
         setSubPathState(segments);
+        const currentRaw = location.hash.replace(/^#/, '');
+        const currentView = currentRaw.split('/')[0];
+        if (currentView !== viewId) return;
         const path = segments.length ? `${viewId}/${segments.join('/')}` : viewId;
         history.replaceState(null, '', `#${path}`);
     }, [viewId]);
