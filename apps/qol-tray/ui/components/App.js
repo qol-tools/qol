@@ -119,7 +119,7 @@ function registerPluginDiveTarget(registry, plugin, sections, traits, pluginsEnt
     });
 }
 
-async function registerAllPluginDiveTargets(registry, registered, isCancelled) {
+async function registerAllPluginDiveTargets(registry, registered, isCancelled, onPlaceholdersReady) {
     const plugins = await fetchInstalledPlugins();
     if (isCancelled()) { log('diveTargets: cancelled'); return; }
     if (!plugins.length) { log('diveTargets: no plugins'); return; }
@@ -132,6 +132,7 @@ async function registerAllPluginDiveTargets(registry, registered, isCancelled) {
         registered.add(plugin.id);
     });
     log('diveTargets: pre-registered', pending.length, 'placeholders');
+    onPlaceholdersReady?.();
 
     await Promise.all(pending.map(async (plugin, i) => {
         if (isCancelled()) return;
@@ -204,6 +205,7 @@ function AppShell() {
     const [cameraLayer, setCameraLayer] = useState(0);
     const [diveParent, setDiveParent] = useState(null);
     const [diveDepth, setDiveDepth] = useState(0);
+    const [targetsVersion, setTargetsVersion] = useState(0);
     const diveParentRef = useRef(null);
     const layerAnimatingRef = useRef(false);
     const diveTargetsRegisteredRef = useRef(new Set());
@@ -212,9 +214,17 @@ function AppShell() {
         let cancelled = false;
         let retryTimer;
         function attempt(delay) {
-            registerAllPluginDiveTargets(registry, diveTargetsRegisteredRef.current, () => cancelled)
+            registerAllPluginDiveTargets(
+                registry,
+                diveTargetsRegisteredRef.current,
+                () => cancelled,
+                () => { if (!cancelled) setTargetsVersion(v => v + 1); },
+            )
                 .then(() => {
-                    if (!cancelled) navigationRef.current?.refreshCurrentDive?.();
+                    if (!cancelled) {
+                        navigationRef.current?.refreshCurrentDive?.();
+                        setTargetsVersion(v => v + 1);
+                    }
                 })
                 .catch(err => {
                     log('diveTargets: registration failed, retry in', delay, 'ms');
@@ -361,7 +371,7 @@ function AppShell() {
             diveRef.current = false;
             ascend();
         }
-    }, [activePluginId, diveViaSelector, ascend]);
+    }, [activePluginId, diveViaSelector, ascend, targetsVersion]);
 
     return html`
         <${ModifierStateProvider}>
