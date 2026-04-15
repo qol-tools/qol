@@ -19,6 +19,7 @@ import { SelectionCursorOverlay } from '../lib/components/SelectionCursorOverlay
 import { CommandPalette } from './CommandPalette.js';
 import { createCamera } from '../lib/world-camera.js';
 import { createWorldRegistry } from '../lib/world-registry.js';
+import { pluginTraitOverride } from '../lib/plugin-trait-overrides.js';
 import { WorldViewport } from './shell/WorldViewport.js';
 import { MinimapContainer } from './shell/Minimap.js';
 import { RegionLabels } from './shell/RegionLabels.js';
@@ -109,11 +110,12 @@ function registerPluginDiveTarget(registry, plugin, sections, traits, pluginsEnt
         });
         pageIds.push(pageId);
     }
+    const effectiveTraits = traits || pluginTraitOverride(plugin.id);
     registry.addDiveTarget({
         sourceSelector: `[data-plugin-id="${plugin.id}"]`,
         claim,
         pages: pageIds,
-        ...(traits ? { traits } : {}),
+        ...(effectiveTraits ? { traits: effectiveTraits } : {}),
     });
 }
 
