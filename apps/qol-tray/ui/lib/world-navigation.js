@@ -27,6 +27,14 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
             const snapshot = {
                 currentAnchor: { pageId: currentAnchor.pageId },
                 zoom: camera.zoom,
+                layer: camera.layer,
+                camX: camera.x,
+                camY: camera.y,
+                confinement: currentConfinement,
+                confinedPages: [...currentConfinedPages],
+                traits: { ...currentTraits },
+                sourceSelector: currentSourceSelector,
+                diveStack: diveStack.map(f => ({ ...f })),
                 focusRegistry: { ...focusRegistry },
             };
             localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
@@ -46,13 +54,19 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
     const focusRegistry = (persisted?.focusRegistry && typeof persisted.focusRegistry === 'object')
         ? { ...persisted.focusRegistry }
         : {};
-    const diveStack = [];
-    let currentConfinement = null;
-    let currentConfinedPages = [];
-    let currentTraits = {};
-    let currentSourceSelector = null;
+    const diveStack = Array.isArray(persisted?.diveStack) ? persisted.diveStack.map(f => ({ ...f })) : [];
+    let currentConfinement = persisted?.confinement ?? null;
+    let currentConfinedPages = Array.isArray(persisted?.confinedPages) ? [...persisted.confinedPages] : [];
+    let currentTraits = (persisted?.traits && typeof persisted.traits === 'object') ? { ...persisted.traits } : {};
+    let currentSourceSelector = typeof persisted?.sourceSelector === 'string' ? persisted.sourceSelector : null;
     if (persisted?.zoom && typeof camera.zoomTo === 'function') {
         camera.zoomTo(persisted.zoom);
+    }
+    if (Number.isInteger(persisted?.layer) && typeof camera.setLayer === 'function') {
+        camera.setLayer(persisted.layer);
+    }
+    if (typeof persisted?.camX === 'number' && typeof persisted?.camY === 'number' && typeof camera.panTo === 'function') {
+        camera.panTo(persisted.camX, persisted.camY);
     }
 
     const anchorListeners = new Set();
@@ -269,6 +283,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         getCurrentConfinement,
         getConfinedPages() { return currentConfinedPages; },
         getCurrentTraits() { return currentTraits; },
+        getCurrentSourceSelector() { return currentSourceSelector; },
         refreshCurrentDive() {
             if (!currentSourceSelector) return false;
             const target = registry.getDiveTargetForSource?.(currentSourceSelector);
