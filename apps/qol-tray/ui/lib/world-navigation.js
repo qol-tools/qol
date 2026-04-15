@@ -50,6 +50,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
     let currentConfinement = null;
     let currentConfinedPages = [];
     let currentTraits = {};
+    let currentSourceSelector = null;
     if (persisted?.zoom && typeof camera.zoomTo === 'function') {
         camera.zoomTo(persisted.zoom);
     }
@@ -196,10 +197,12 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
             confinement: currentConfinement,
             confinedPages: currentConfinedPages,
             traits: currentTraits,
+            sourceSelector: currentSourceSelector,
         });
         currentConfinement = target.claim;
         currentConfinedPages = target.pages || [];
         currentTraits = target.traits || {};
+        currentSourceSelector = sourceSelector;
         setBounds(null);
         const firstPageId = target.pages[0];
         if (firstPageId) {
@@ -228,6 +231,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         currentConfinement = prev.confinement ?? null;
         currentConfinedPages = prev.confinedPages ?? [];
         currentTraits = prev.traits ?? {};
+        currentSourceSelector = prev.sourceSelector ?? null;
         if (typeof prev.zoom === 'number' && typeof camera.zoomTo === 'function') {
             camera.zoomTo(prev.zoom);
         }
@@ -265,6 +269,21 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         getCurrentConfinement,
         getConfinedPages() { return currentConfinedPages; },
         getCurrentTraits() { return currentTraits; },
+        refreshCurrentDive() {
+            if (!currentSourceSelector) return false;
+            const target = registry.getDiveTargetForSource?.(currentSourceSelector);
+            if (!target) return false;
+            currentConfinement = target.claim;
+            currentConfinedPages = target.pages || [];
+            currentTraits = target.traits || {};
+            const anchorStillValid = currentConfinedPages.includes(currentAnchor?.pageId);
+            if (!anchorStillValid && currentConfinedPages.length > 0) {
+                currentAnchor = { pageId: currentConfinedPages[0] };
+                notifyAnchorChange();
+                gotoAnchor(currentAnchor, { respectKnob: false });
+            }
+            return true;
+        },
         subscribeAnchor,
     };
 }

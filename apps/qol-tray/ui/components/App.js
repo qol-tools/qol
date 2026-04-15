@@ -213,6 +213,9 @@ function AppShell() {
         let retryTimer;
         function attempt(delay) {
             registerAllPluginDiveTargets(registry, diveTargetsRegisteredRef.current, () => cancelled)
+                .then(() => {
+                    if (!cancelled) navigationRef.current?.refreshCurrentDive?.();
+                })
                 .catch(err => {
                     log('diveTargets: registration failed, retry in', delay, 'ms');
                     if (!cancelled) retryTimer = setTimeout(() => attempt(Math.min(delay * 2, 5000)), delay);
