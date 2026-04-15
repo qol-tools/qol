@@ -1,9 +1,11 @@
+import QRCode from 'https://esm.sh/qrcode@1.5.4';
 import { html } from '../../../lib/html.js';
 import { useEffect, useRef } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
 import { useQueryPoll } from '../../../hooks/useQueryPoll.js';
 
 const DEFAULT_POLL_MS = 5000;
+const QR_SIZE = 256;
 
 export function QrCodeField({ field }) {
     const ctx = usePluginConfigContext();
@@ -16,10 +18,12 @@ export function QrCodeField({ field }) {
     const url = rawValue == null ? null : String(rawValue);
 
     useEffect(() => {
-        if (!url || !canvasRef.current) {
-            return;
-        }
-        renderQrPlaceholder(canvasRef.current, url);
+        if (!url || !canvasRef.current) return;
+        QRCode.toCanvas(canvasRef.current, url, {
+            width: QR_SIZE,
+            margin: 2,
+            color: { dark: '#000000', light: '#ffffff' },
+        }).catch(() => {});
     }, [url]);
 
     return html`
@@ -27,9 +31,10 @@ export function QrCodeField({ field }) {
             data-plugin-config-field-id=${field.id}>
             <div class="field-qr-label">${field.label}</div>
             ${url
-                ? html`<canvas ref=${canvasRef} class="qr-canvas" width="256" height="256" />`
+                ? html`<canvas ref=${canvasRef} class="qr-canvas" width=${QR_SIZE} height=${QR_SIZE} />`
                 : html`<div class="field-qr-placeholder">${field.placeholder || 'Waiting...'}</div>`
             }
+            ${url && html`<a class="field-qr-link" href=${url} target="_blank" rel="noopener">${url}</a>`}
             ${error && html`<div class="field-qr-error">${error}</div>`}
         </div>
     `;
@@ -39,21 +44,8 @@ function extractPath(obj, path) {
     const parts = path.split('.');
     let current = obj;
     for (const part of parts) {
-        if (current == null || typeof current !== 'object') {
-            return null;
-        }
+        if (current == null || typeof current !== 'object') return null;
         current = current[part];
     }
     return current;
-}
-
-function renderQrPlaceholder(canvas, url) {
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-        return;
-    }
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = '#000';
-    ctx.font = '12px sans-serif';
-    ctx.fillText('QR: ' + url.slice(0, 32), 8, 20);
 }

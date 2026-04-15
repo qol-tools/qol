@@ -69,10 +69,12 @@ export function PluginConfigView({ onClose }) {
         <${SurfaceContainer} className="plugin-config-detail" tabIndex="-1">
             ${section && html`
                 <div class="config-detail-content">
-                    <header class="config-detail-header">
-                        <h2>${section.label || prettyLabel(section.id)}</h2>
-                        ${section.description && html`<p class="section-copy">${section.description}</p>`}
-                    </header>
+                    ${section.id !== '_root' && html`
+                        <header class="config-detail-header">
+                            <h2>${section.label || prettyLabel(section.id)}</h2>
+                            ${section.description && html`<p class="section-copy">${section.description}</p>`}
+                        </header>
+                    `}
                     <${ConfigSection} fields=${section.fields} />
                 </div>
             `}
@@ -89,10 +91,12 @@ export function PluginConfigSectionView({ pluginId, sectionId, onClose }) {
     return html`
         <${SurfaceContainer} className="plugin-config-detail" tabIndex="-1">
             <div class="config-detail-content">
-                <header class="config-detail-header">
-                    <h2>${section.label || prettyLabel(section.id)}</h2>
-                    ${section.description && html`<p class="section-copy">${section.description}</p>`}
-                </header>
+                ${section.id !== '_root' && html`
+                    <header class="config-detail-header">
+                        <h2>${section.label || prettyLabel(section.id)}</h2>
+                        ${section.description && html`<p class="section-copy">${section.description}</p>`}
+                    </header>
+                `}
                 <${ConfigSection} fields=${section.fields} />
             </div>
         <//>

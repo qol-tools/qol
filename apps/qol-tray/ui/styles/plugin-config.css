@@ -878,3 +878,38 @@
     border: none;
     background: none;
 }
+
+.field-qr-code {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.field-qr-label {
+    color: var(--text-muted);
+    font-size: var(--fs-sm);
+}
+
+.qr-canvas {
+    display: block;
+    border-radius: 4px;
+}
+
+.field-qr-link {
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+    word-break: break-all;
+    text-decoration: none;
+}
+
+.field-qr-link:hover {
+    color: var(--accent);
+    text-decoration: underline;
+}
+
+.field-qr-placeholder {
+    color: var(--text-muted);
+    font-size: var(--fs-sm);
+    padding: 2rem;
+}
