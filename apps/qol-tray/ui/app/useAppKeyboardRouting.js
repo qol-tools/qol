@@ -622,7 +622,8 @@ function handleFieldSubmode(event, detail, fieldId) {
 
     if (event.key === 'Enter' && (isTextEditable(target) || isTextEditable(active))) {
         event.preventDefault();
-        fieldElement.focus();
+        const editable = isTextEditable(active) ? active : target;
+        editable.blur();
         return true;
     }
 
