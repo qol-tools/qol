@@ -4,7 +4,7 @@ import { randomizeGlow } from './lib/glow.js';
 
 try {
     if (window.localStorage?.getItem('qoltray.activePlugin')) {
-        document.body.classList.add('qol-bootstrapping-dive');
+        document.documentElement.classList.add('qol-bootstrapping-dive');
     }
 } catch {}
 

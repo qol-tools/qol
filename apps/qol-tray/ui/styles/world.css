@@ -6,8 +6,8 @@
     min-height: 0;
 }
 
-body.qol-bootstrapping-dive #viewport {
-    visibility: hidden;
+html.qol-bootstrapping-dive #app {
+    visibility: hidden !important;
 }
 
 #viewport.grabbing {
