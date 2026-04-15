@@ -8,6 +8,6 @@ pub use runtime::{
     RuntimeSpec, StreamSpec,
 };
 pub use v1::{
-    parse_spec, parse_spec_str, ConfigSpec, ConfigSpecV1, FieldDefault, FieldKind, FieldSpec,
-    ItemSpec, NumberConstraints, ParseSpecError, RowActionSpec, SectionSpec,
+    parse_spec, parse_spec_str, ConfigSpec, ConfigSpecV1, FieldAlign, FieldDefault, FieldKind,
+    FieldSpec, ItemSpec, NumberConstraints, ParseSpecError, RowActionSpec, SectionSpec,
 };

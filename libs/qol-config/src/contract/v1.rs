@@ -95,8 +95,20 @@ pub struct FieldSpec {
     pub label_map: Option<IndexMap<String, String>>,
     #[serde(default)]
     pub tone_map: Option<IndexMap<String, String>>,
+    #[serde(default)]
+    pub align: Option<FieldAlign>,
+    #[serde(default)]
+    pub span: Option<u8>,
     #[serde(flatten)]
     pub number: NumberConstraints,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FieldAlign {
+    Left,
+    Center,
+    Right,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
