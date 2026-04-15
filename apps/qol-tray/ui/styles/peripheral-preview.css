@@ -90,3 +90,15 @@
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
 }
+
+.peripheral-slot-empty {
+    opacity: 0.15 !important;
+}
+
+.peripheral-edge {
+    width: 100%;
+    height: 100%;
+    border: 1px dashed var(--border-subtle);
+    border-radius: var(--radius-lg);
+    background: transparent;
+}

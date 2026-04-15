@@ -27,21 +27,22 @@ export function PeripheralPreview({ navigation, registry }) {
     const slots = [];
     for (let d = 1; d <= neighbors; d++) {
         const prevId = confinedPages[idx - d];
-        if (prevId) slots.push({ id: prevId, side: 'prev', distance: d });
+        slots.push({ id: prevId || null, side: 'prev', distance: d });
         const nextId = confinedPages[idx + d];
-        if (nextId) slots.push({ id: nextId, side: 'next', distance: d });
+        slots.push({ id: nextId || null, side: 'next', distance: d });
     }
-    if (!slots.length) return null;
 
     return html`
         <div class="peripheral-preview" aria-hidden="true">
             ${slots.map((slot) => html`
                 <div
-                    class="peripheral-slot peripheral-slot-${slot.side}"
+                    class=${`peripheral-slot peripheral-slot-${slot.side}${slot.id ? '' : ' peripheral-slot-empty'}`}
                     data-distance=${slot.distance}
-                    key=${slot.id}
+                    key=${`${slot.side}-${slot.distance}`}
                 >
-                    <${PeripheralMini} registry=${registry} pageId=${slot.id} />
+                    ${slot.id
+                        ? html`<${PeripheralMini} registry=${registry} pageId=${slot.id} />`
+                        : html`<div class="peripheral-edge"></div>`}
                 </div>
             `)}
         </div>
