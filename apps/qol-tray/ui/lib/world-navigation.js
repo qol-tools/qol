@@ -49,6 +49,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
     const diveStack = [];
     let currentConfinement = null;
     let currentConfinedPages = [];
+    let currentTraits = {};
     if (persisted?.zoom && typeof camera.zoomTo === 'function') {
         camera.zoomTo(persisted.zoom);
     }
@@ -194,9 +195,11 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
             layer: camera.layer,
             confinement: currentConfinement,
             confinedPages: currentConfinedPages,
+            traits: currentTraits,
         });
         currentConfinement = target.claim;
         currentConfinedPages = target.pages || [];
+        currentTraits = target.traits || {};
         setBounds(null);
         const firstPageId = target.pages[0];
         if (firstPageId) {
@@ -224,6 +227,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         notifyAnchorChange();
         currentConfinement = prev.confinement ?? null;
         currentConfinedPages = prev.confinedPages ?? [];
+        currentTraits = prev.traits ?? {};
         if (typeof prev.zoom === 'number' && typeof camera.zoomTo === 'function') {
             camera.zoomTo(prev.zoom);
         }
@@ -260,6 +264,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         stackDepth,
         getCurrentConfinement,
         getConfinedPages() { return currentConfinedPages; },
+        getCurrentTraits() { return currentTraits; },
         subscribeAnchor,
     };
 }

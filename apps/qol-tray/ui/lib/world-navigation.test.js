@@ -454,3 +454,34 @@ test('nested diveInto then ascend twice restores root', () => {
     assert.equal(nav.getCurrentAnchor().pageId, 'plugins');
     assert.equal(nav.stackDepth(), 0);
 });
+
+test('addDiveTarget defaults traits to { confined: {} } when omitted', () => {
+    const reg = createWorldRegistry([], {});
+    const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
+    reg.addDiveTarget({ sourceSelector: '#card-a', claim, pages: ['page-a'] });
+    const target = reg.getDiveTargetForSource('#card-a');
+    assert.deepEqual(target.traits, { confined: {} });
+});
+
+test('addDiveTarget preserves explicit traits', () => {
+    const reg = createWorldRegistry([], {});
+    const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
+    const traits = { confined: {}, 'peripheral-preview': { neighbors: 2 } };
+    reg.addDiveTarget({ sourceSelector: '#card-a', claim, pages: ['page-a'], traits });
+    const target = reg.getDiveTargetForSource('#card-a');
+    assert.deepEqual(target.traits, traits);
+});
+
+test('diveInto and ascend propagate traits via getCurrentTraits', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMocks();
+    const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
+    const traits = { confined: {}, 'peripheral-preview': { neighbors: 2 } };
+    registry.addDiveTarget({ sourceSelector: '#a', claim, pages: ['plugins-config'], traits });
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.setCurrentAnchor({ pageId: 'plugins' });
+    assert.deepEqual(nav.getCurrentTraits(), {});
+    nav.diveInto('#a');
+    assert.deepEqual(nav.getCurrentTraits(), traits);
+    nav.ascend();
+    assert.deepEqual(nav.getCurrentTraits(), {});
+});
