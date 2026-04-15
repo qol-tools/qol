@@ -125,18 +125,25 @@ function Toggle({ checked, onChange, label, description, fieldAttrs, onSelect })
     `;
 }
 
+export function fieldLayoutAttrs(field) {
+    const attrs = {
+        'data-plugin-config-field-id': field.id,
+    };
+    if (field.align) attrs['data-field-align'] = field.align;
+    if (field.span) attrs['data-field-span'] = String(field.span);
+    return attrs;
+}
+
 export function fieldSurfaceAttrs(field, ctx, baseClass) {
     const selected = ctx.selectedFieldId === field.id;
     const index = ctx.fieldIndexById[field.id];
     const attrs = {
+        ...fieldLayoutAttrs(field),
         class: selected ? `${baseClass} selected is-selected` : baseClass,
-        'data-plugin-config-field-id': field.id,
         'data-selected-surface': '',
         tabIndex: -1,
     };
     if (index !== undefined) attrs['data-plugin-config-index'] = index;
     if (selected) attrs['data-selected'] = 'true';
-    if (field.align) attrs['data-field-align'] = field.align;
-    if (field.span) attrs['data-field-span'] = String(field.span);
     return attrs;
 }
