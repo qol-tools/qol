@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'preact/hooks';
-import { useKeyboard } from '../../hooks/useKeyboard.js';
+import { useKeyboard } from '../../lib/hooks/useKeyboard.js';
 import { usePluginConfigContext } from '../../views/plugin-config/context.js';
 import { useViewKeyboardContext } from './view-keyboard-context.js';
 import { createDebug, elLabel } from '../../lib/debug.js';

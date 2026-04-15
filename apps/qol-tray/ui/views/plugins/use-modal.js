@@ -1,5 +1,5 @@
 import { useCallback } from 'preact/hooks';
-import { useStateRef } from '../../hooks/useStateRef.js';
+import { useStateRef } from '../../lib/hooks/useStateRef.js';
 import { findPluginById } from './data.js';
 
 export function usePluginsModal(plugins) {

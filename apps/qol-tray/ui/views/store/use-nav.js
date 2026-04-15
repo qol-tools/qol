@@ -1,6 +1,6 @@
 import { useEffect, useRef, useMemo } from 'preact/hooks';
-import { usePersistedIndex } from '../../hooks/usePersistedIndex.js';
-import { useGridNav } from '../../hooks/useGridNav.js';
+import { usePersistedIndex } from '../../lib/hooks/usePersistedIndex.js';
+import { useGridNav } from '../../lib/hooks/useGridNav.js';
 import { getFilteredPlugins, clampSelectedIndex } from './reducer.js';
 
 export function useStoreNav(plugins, searchQuery) {

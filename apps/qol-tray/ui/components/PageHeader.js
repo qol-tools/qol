@@ -1,8 +1,8 @@
 import { html } from '../lib/html.js';
 import { usePaletteContext } from '../palette/context.js';
-import { ScrambleText } from './ScrambleText.js';
-import { NoiseBorder } from './NoiseBorder.js';
-import { NoiseReveal } from './NoiseReveal.js';
+import { ScrambleText } from '../lib/components/ScrambleText.js';
+import { NoiseBorder } from '../lib/components/NoiseBorder.js';
+import { NoiseReveal } from '../lib/components/NoiseReveal.js';
 
 export function PageHeader({ title, subtitle = '', badge = null, scramble = false, noiseReveal = false, className = '' }) {
     const { active } = usePaletteContext();

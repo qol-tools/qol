@@ -1,4 +1,4 @@
-import { html } from '../lib/html.js';
+import { html } from '../html.js';
 import { Surface } from './Surface.js';
 
 export function Table({ columns, className, onDeselect, children, ...rest }) {

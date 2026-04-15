@@ -1,12 +1,12 @@
-import { html } from '../lib/html.js';
+import { html } from '../html.js';
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { findActiveSelectedSurface, hasSelectedSurfaceState } from '../lib/selected-surface.js';
-import { hslLuminance } from '../lib/color.js';
-import { surfaceDepth } from '../lib/surface-traits.js';
+import { findActiveSelectedSurface, hasSelectedSurfaceState } from '../selected-surface.js';
+import { hslLuminance } from '../color.js';
+import { surfaceDepth } from '../surface-traits.js';
 import { SelectionWedgeGlyph } from './SelectionWedgeGlyph.js';
-import { createDebug, elLabel, rectLabel } from '../lib/debug.js';
-import { isCtrlHeld, subscribeCtrl } from '../lib/ctrl-state.js';
-import { nearestSurfaceToCenter } from '../lib/viewport-spatial.js';
+import { createDebug, elLabel, rectLabel } from '../debug.js';
+import { isCtrlHeld, subscribeCtrl } from '../ctrl-state.js';
+import { nearestSurfaceToCenter } from '../viewport-spatial.js';
 
 const log = createDebug('qol:wedge');
 

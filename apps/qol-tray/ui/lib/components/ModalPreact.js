@@ -1,6 +1,6 @@
-import { html } from '../lib/html.js';
+import { html } from '../html.js';
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'preact/hooks';
-import { surfaceDepth } from '../lib/surface-traits.js';
+import { surfaceDepth } from '../surface-traits.js';
 import { Button } from './Button.js';
 
 const FOCUSABLE = 'input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), .custom-select-trigger:not([disabled]), [tabindex]:not([disabled]):not([tabindex="-1"])';

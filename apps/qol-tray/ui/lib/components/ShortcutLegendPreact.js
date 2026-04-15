@@ -1,4 +1,4 @@
-import { html } from '../lib/html.js';
+import { html } from '../html.js';
 
 export function ShortcutLegend({ shortcuts }) {
     if (!shortcuts || shortcuts.length === 0) return null;

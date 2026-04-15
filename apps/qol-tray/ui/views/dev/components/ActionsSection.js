@@ -1,7 +1,7 @@
 import { html } from '../../../lib/html.js';
 import { useState } from 'preact/hooks';
-import { Surface } from '../../../components/Surface.js';
-import { RefreshButton } from '../../../components/Button.js';
+import { Surface } from '../../../lib/components/Surface.js';
+import { RefreshButton } from '../../../lib/components/Button.js';
 import { BuildResults } from './BuildResults.js';
 import { SELF_UPDATE_EVENT } from '../../../components/app/useSidebarActions.js';
 

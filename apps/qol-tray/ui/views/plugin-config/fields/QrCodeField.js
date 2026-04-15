@@ -2,7 +2,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.4';
 import { html } from '../../../lib/html.js';
 import { useEffect, useRef } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
-import { useQueryPoll } from '../../../hooks/useQueryPoll.js';
+import { useQueryPoll } from '../../../lib/hooks/useQueryPoll.js';
 
 const DEFAULT_POLL_MS = 5000;
 const QR_SIZE = 256;

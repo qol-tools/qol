@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { VIEW_LABELS } from './views.js';
 import { getWorldSettings, setWorldSetting, subscribeWorldSettings } from '../../lib/world-settings.js';
 import { IconCog } from '../../assets/icon-cog.js';
-import { useClickOutside } from '../../hooks/useClickOutside.js';
+import { useClickOutside } from '../../lib/hooks/useClickOutside.js';
 import { clampPercent, formatDownloadingProgress, formatPhaseProgress, toProgressScale } from '../../utils/progress.js';
 import { prettyLabel } from '../../auto-config/heuristics.js';
 import { contains } from '../../lib/world-registry.js';

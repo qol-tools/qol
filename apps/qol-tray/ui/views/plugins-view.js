@@ -5,7 +5,7 @@ import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../components/app/view-keyboard-context.js';
 
 import { PageHeader } from '../components/PageHeader.js';
-import { SurfaceContainer } from '../components/SurfaceContainer.js';
+import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
 import { UninstallConfirmModal } from './plugins/confirm-modal.js';
 import { PluginsGrid } from './plugins/grid.js';
 import { usePluginsList } from './plugins/use-list.js';

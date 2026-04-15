@@ -3,7 +3,7 @@ import { html } from '../lib/html.js';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../components/app/view-keyboard-context.js';
 import { PageHeader } from '../components/PageHeader.js';
-import { SurfaceContainer } from '../components/SurfaceContainer.js';
+import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
 
 import { API_BASE, buildApiExample } from './task-runner/data.js';
 import { ActionEditForm } from './task-runner/panels.js';

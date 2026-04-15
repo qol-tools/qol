@@ -1,5 +1,5 @@
-import { html } from '../lib/html.js';
-import { IconChevron } from '../assets/icon-chevron.js';
+import { html } from '../html.js';
+import { IconChevron } from '../../assets/icon-chevron.js';
 import { Surface } from './Surface.js';
 
 export function Expander({ open, onToggle, className, children, ...rest }) {

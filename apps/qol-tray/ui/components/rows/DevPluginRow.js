@@ -1,9 +1,9 @@
 import { html } from '../../lib/html.js';
 import { useState, useCallback, useEffect, useRef } from 'preact/hooks';
-import { TableRow } from '../TableRow.js';
-import { SurfaceContainer } from '../SurfaceContainer.js';
-import { Button } from '../Button.js';
-import { useClickOutside } from '../../hooks/useClickOutside.js';
+import { TableRow } from '../../lib/components/TableRow.js';
+import { SurfaceContainer } from '../../lib/components/SurfaceContainer.js';
+import { Button } from '../../lib/components/Button.js';
+import { useClickOutside } from '../../lib/hooks/useClickOutside.js';
 
 const STATUS_ACCENT = { linked: 'success', local: 'warning', installed: 'accent' };
 

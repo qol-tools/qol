@@ -1,12 +1,12 @@
 import { html } from '../../lib/html.js';
 import { useCallback } from 'preact/hooks';
-import { CodeBlock } from '../../components/CodeBlock.js';
-import { Modal, ModalFooter } from '../../components/ModalPreact.js';
-import { CustomSelect } from '../../components/CustomSelect.js';
-import { Badge } from '../../components/StatusIndicators.js';
-import { Button } from '../../components/Button.js';
-import { ToggleSwitch } from '../../components/ToggleSwitch.js';
-import { Surface } from '../../components/Surface.js';
+import { CodeBlock } from '../../lib/components/CodeBlock.js';
+import { Modal, ModalFooter } from '../../lib/components/ModalPreact.js';
+import { CustomSelect } from '../../lib/components/CustomSelect.js';
+import { Badge } from '../../lib/components/StatusIndicators.js';
+import { Button } from '../../lib/components/Button.js';
+import { ToggleSwitch } from '../../lib/components/ToggleSwitch.js';
+import { Surface } from '../../lib/components/Surface.js';
 import { BackupRow } from '../../components/rows/BackupRow.js';
 import { toast } from '../../lib/toast.js';
 import {

@@ -1,4 +1,4 @@
-import { html } from '../lib/html.js';
+import { html } from '../html.js';
 
 export function Badge({ className, style, children }) {
     const cls = ['badge', className].filter(Boolean).join(' ');

@@ -1,7 +1,7 @@
 import { html } from '../../../lib/html.js';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
-import { useQueryPoll } from '../../../hooks/useQueryPoll.js';
+import { useQueryPoll } from '../../../lib/hooks/useQueryPoll.js';
 
 const DEFAULT_POLL_MS = 2000;
 const FAILURE_THRESHOLD = 2;

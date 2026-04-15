@@ -1,4 +1,4 @@
-import { html } from '../lib/html.js';
+import { html } from '../html.js';
 
 export function SelectionWedgeGlyph({ className = '' }) {
     const classes = className ? `selection-wedge-icon ${className}` : 'selection-wedge-icon';

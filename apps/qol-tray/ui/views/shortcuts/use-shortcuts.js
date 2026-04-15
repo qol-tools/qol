@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'preact/hooks';
-import { useStateRef } from '../../hooks/useStateRef.js';
-import { usePersistedId } from '../../hooks/usePersistedIndex.js';
-import { useListKeyboard } from '../../hooks/useListKeyboard.js';
-import { useModalKeyboard } from '../../hooks/useModalKeyboard.js';
+import { useStateRef } from '../../lib/hooks/useStateRef.js';
+import { usePersistedId } from '../../lib/hooks/usePersistedIndex.js';
+import { useListKeyboard } from '../../lib/hooks/useListKeyboard.js';
+import { useModalKeyboard } from '../../lib/hooks/useModalKeyboard.js';
 import { matchesQuery } from '../../utils/collections.js';
 import {
     loadShortcuts, createShortcut, updateShortcut,

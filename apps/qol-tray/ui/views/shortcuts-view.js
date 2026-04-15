@@ -5,7 +5,7 @@ import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../components/app/view-keyboard-context.js';
 
 import { PageHeader } from '../components/PageHeader.js';
-import { SurfaceContainer } from '../components/SurfaceContainer.js';
+import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
 import { ShortcutEditForm } from './shortcuts/modal.js';
 import { useShortcuts } from './shortcuts/use-shortcuts.js';
 import { ShortcutsList } from './shortcuts/list.js';

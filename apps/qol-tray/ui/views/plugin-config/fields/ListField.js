@@ -1,7 +1,7 @@
 import { html } from '../../../lib/html.js';
 import { useCallback } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
-import { useQueryPoll } from '../../../hooks/useQueryPoll.js';
+import { useQueryPoll } from '../../../lib/hooks/useQueryPoll.js';
 import { fieldSurfaceAttrs } from '../field-map.js';
 
 const DEFAULT_POLL_MS = 2000;

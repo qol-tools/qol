@@ -1,5 +1,5 @@
 import { html } from '../../../lib/html.js';
-import { Badge } from '../../../components/StatusIndicators.js';
+import { Badge } from '../../../lib/components/StatusIndicators.js';
 
 function StatusBadge({ statusToken }) {
     if (statusToken === 'linked') return html`<${Badge} className="badge-linked">Linked<//>`;

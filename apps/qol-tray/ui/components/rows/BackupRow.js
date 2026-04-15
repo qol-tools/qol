@@ -1,6 +1,6 @@
 import { html } from '../../lib/html.js';
-import { ListRow, ListRowHeader, ListRowBody, ListRowText } from '../ListRow.js';
-import { Badge } from '../StatusIndicators.js';
+import { ListRow, ListRowHeader, ListRowBody, ListRowText } from '../../lib/components/ListRow.js';
+import { Badge } from '../../lib/components/StatusIndicators.js';
 
 export function BackupRow({ time, fileName, size, review, index, selected, onSelect, onActivate, ...rest }) {
     return html`

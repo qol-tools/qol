@@ -1,5 +1,5 @@
 import { html } from '../../lib/html.js';
-import { Table, TableHeader, TableCell } from '../../components/TableRow.js';
+import { Table, TableHeader, TableCell } from '../../lib/components/TableRow.js';
 import { HotkeyRow } from '../../components/rows/HotkeyRow.js';
 
 function getActionLabel(plugin, actionId) {

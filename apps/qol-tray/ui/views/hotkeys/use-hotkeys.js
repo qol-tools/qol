@@ -1,9 +1,9 @@
 import { useEffect, useCallback } from 'preact/hooks';
-import { useStateRef } from '../../hooks/useStateRef.js';
-import { usePersistedIndex } from '../../hooks/usePersistedIndex.js';
+import { useStateRef } from '../../lib/hooks/useStateRef.js';
+import { usePersistedIndex } from '../../lib/hooks/usePersistedIndex.js';
 import { useSSEDebounce } from '../../hooks/useSSEDebounce.js';
-import { useListKeyboard } from '../../hooks/useListKeyboard.js';
-import { useModalKeyboard } from '../../hooks/useModalKeyboard.js';
+import { useListKeyboard } from '../../lib/hooks/useListKeyboard.js';
+import { useModalKeyboard } from '../../lib/hooks/useModalKeyboard.js';
 import {
     buildSavedHotkeys,
     getAvailableActions as resolveAvailableActions,

@@ -1,4 +1,4 @@
-import { html } from '../lib/html.js';
+import { html } from '../html.js';
 import { useCallback } from 'preact/hooks';
 import { Surface } from './Surface.js';
 

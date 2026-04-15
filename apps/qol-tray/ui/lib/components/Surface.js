@@ -1,4 +1,4 @@
-import { html } from '../lib/html.js';
+import { html } from '../html.js';
 import { useRef } from 'preact/hooks';
 
 export function useSurface({ index, selected, onSelect, onActivate, selectValue } = {}) {

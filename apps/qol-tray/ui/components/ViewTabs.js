@@ -1,10 +1,10 @@
 import { html } from '../lib/html.js';
 import { useCallback } from 'preact/hooks';
-import { useViewTabs } from '../hooks/useViewTabs.js';
+import { useViewTabs } from '../lib/hooks/useViewTabs.js';
 import { MODAL_SELECTOR } from '../lib/surface-traits.js';
 import { PageHeader } from './PageHeader.js';
-import { Surface } from './Surface.js';
-import { SurfaceContainer } from './SurfaceContainer.js';
+import { Surface } from '../lib/components/Surface.js';
+import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
 
 /**
  * Full tabbed view shell. Renders page header, content frame, tab bar,

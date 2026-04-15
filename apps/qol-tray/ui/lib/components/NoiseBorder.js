@@ -1,6 +1,6 @@
-import { html } from '../lib/html.js';
+import { html } from '../html.js';
 import { useRef, useEffect } from 'preact/hooks';
-import { shuffle, resolveColor } from '../lib/canvas.js';
+import { shuffle, resolveColor } from '../canvas.js';
 
 const FADE_IN_RATE = 0.12;
 const INITIAL_ALPHA = 0.35;
