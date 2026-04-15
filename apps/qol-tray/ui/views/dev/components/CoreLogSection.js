@@ -1,6 +1,6 @@
 import { html } from '../../../lib/html.js';
 import { Table } from '../../../lib/components/TableRow.js';
-import { DevPluginRow } from '../../../components/rows/DevPluginRow.js';
+import { DevPluginRow } from '../../../components/domain-rows/DevPluginRow.js';
 import { useListSelection } from '../../../lib/hooks/useListSelection.js';
 
 const CORE_SECTIONS = [

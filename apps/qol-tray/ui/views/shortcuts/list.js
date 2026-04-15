@@ -1,6 +1,6 @@
 import { html } from '../../lib/html.js';
 import { Table, TableHeader, TableCell } from '../../lib/components/TableRow.js';
-import { ShortcutRow } from '../../components/rows/ShortcutRow.js';
+import { ShortcutRow } from '../../components/domain-rows/ShortcutRow.js';
 
 const TYPE_LABELS = { open_url: 'URL', launch_app: 'App' };
 
