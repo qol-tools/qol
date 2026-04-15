@@ -1,5 +1,5 @@
 import { useCallback, useEffect } from 'preact/hooks';
-import { readResponseText } from '../../api/client.js';
+import { readResponseText } from '../api/client.js';
 
 const RECOMPILE_ERRORS = {
     404: 'Connected daemon is older than this UI. Stop it and launch the current checkout.',

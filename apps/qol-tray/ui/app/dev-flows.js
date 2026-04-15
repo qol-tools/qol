@@ -1,4 +1,4 @@
-import { clampPercent } from '../../utils/progress.js';
+import { clampPercent } from '../utils/progress.js';
 
 export const FLOW_STATE = {
     IDLE: 'idle',

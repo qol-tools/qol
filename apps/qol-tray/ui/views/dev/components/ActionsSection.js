@@ -3,7 +3,7 @@ import { useState } from 'preact/hooks';
 import { Surface } from '../../../lib/components/Surface.js';
 import { RefreshButton } from '../../../lib/components/Button.js';
 import { BuildResults } from './BuildResults.js';
-import { SELF_UPDATE_EVENT } from '../../../components/app/useSidebarActions.js';
+import { SELF_UPDATE_EVENT } from '../../../app/useSidebarActions.js';
 
 function ReloadCard({ building, buildResults, lastReload, error, reloadPlugins }) {
     return html`
