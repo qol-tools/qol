@@ -6,6 +6,10 @@
     min-height: 0;
 }
 
+body.qol-bootstrapping-dive #viewport {
+    visibility: hidden;
+}
+
 #viewport.grabbing {
     cursor: grabbing;
     user-select: none;
