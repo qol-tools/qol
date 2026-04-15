@@ -168,11 +168,7 @@
     animation: plugin-config-selection-pulse 1.6s ease-in-out infinite;
 }
 
-.config-section > .toggle-row,
-.config-section > .variant-panel,
-.config-section > .field-group:has(.text-input),
-.config-section > .field-group:has(.string-list),
-.config-section > .field-group:has(.object-array-panel) {
+.config-section > .variant-panel {
     grid-column: 1 / -1;
 }
 
@@ -302,6 +298,10 @@
 
 .field-group > .field-label-group,
 .field-group > .field-qr-label,
+.field-group > .field-color-label,
+.field-group > .field-list-label,
+.field-group > .slider-label,
+.field-group > .status-label,
 .field-group > input,
 .field-group > .text-input,
 .field-group > .custom-select,
