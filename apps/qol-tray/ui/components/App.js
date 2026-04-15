@@ -377,8 +377,11 @@ function AppShell() {
         }
         if (!activePluginId && hiddenUntilDive) setHiddenUntilDive(false);
     }, [activePluginId, diveViaSelector, ascend, targetsVersion, hiddenUntilDive]);
-    useEffect(() => {
-        if (!hiddenUntilDive) return undefined;
+    useLayoutEffect(() => {
+        if (!hiddenUntilDive) {
+            document.body.classList.remove('qol-bootstrapping-dive');
+            return undefined;
+        }
         document.body.classList.add('qol-bootstrapping-dive');
         const failsafe = setTimeout(() => setHiddenUntilDive(false), 2000);
         return () => {
