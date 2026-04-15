@@ -1,5 +1,5 @@
 import { useCallback } from 'preact/hooks';
-import { useStateRef } from '../../hooks/useStateRef.js';
+import { useStateRef } from '../../lib/hooks/useStateRef.js';
 import { disconnectGitHubAuth, startGitHubAuth, waitForGitHubAuth } from '../../features/github-auth/actions.js';
 import { looksLikeGithubAuthFailure } from './reducer.js';
 import { toast } from '../../lib/toast.js';

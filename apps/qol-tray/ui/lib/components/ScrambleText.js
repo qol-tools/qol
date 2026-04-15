@@ -1,6 +1,6 @@
-import { html } from '../lib/html.js';
+import { html } from '../html.js';
 import { useRef } from 'preact/hooks';
-import { useScramble } from '../lib/scramble.js';
+import { useScramble } from '../scramble.js';
 
 export function ScrambleText({ text, delay = 0 }) {
     const ref = useRef(null);

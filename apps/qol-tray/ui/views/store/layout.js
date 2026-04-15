@@ -1,8 +1,8 @@
 import { html } from '../../lib/html.js';
 import { formatCacheAge } from './reducer.js';
 import { PageHeader } from '../../components/PageHeader.js';
-import { SurfaceContainer } from '../../components/SurfaceContainer.js';
-import { Button, RefreshButton } from '../../components/Button.js';
+import { SurfaceContainer } from '../../lib/components/SurfaceContainer.js';
+import { Button, RefreshButton } from '../../lib/components/Button.js';
 import { StoreGrid } from './grid.js';
 
 export function StoreLayout({ ctrl }) {

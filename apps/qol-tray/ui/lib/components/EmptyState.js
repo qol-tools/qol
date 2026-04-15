@@ -1,4 +1,4 @@
-import { html } from '../lib/html.js';
+import { html } from '../html.js';
 
 const DEFAULT_ICON = html`
     <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5">

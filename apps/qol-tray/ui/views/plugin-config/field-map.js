@@ -10,7 +10,7 @@ import { ListField } from './fields/ListField.js';
 import { StatusField } from './fields/StatusField.js';
 import { QrCodeField } from './fields/QrCodeField.js';
 import { SliderField } from './fields/SliderField.js';
-import { CustomSelect } from '../../components/CustomSelect.js';
+import { CustomSelect } from '../../lib/components/CustomSelect.js';
 import { FieldLabel } from './fields/FieldLabel.js';
 
 const FIELD_MAP = {

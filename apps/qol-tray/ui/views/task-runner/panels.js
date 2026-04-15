@@ -1,6 +1,6 @@
 import { html } from '../../lib/html.js';
 import { useEffect, useCallback, useRef } from 'preact/hooks';
-import { ModalActions } from '../../components/ModalPreact.js';
+import { ModalActions } from '../../lib/components/ModalPreact.js';
 
 export function TestPanel({ actionId, params, testParams, onParamChange, onRun, onClose, running, result }) {
     const panelRef = useRef(null);

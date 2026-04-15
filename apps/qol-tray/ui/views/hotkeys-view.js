@@ -6,7 +6,7 @@ import { useRegisterViewKeyboard } from '../components/app/view-keyboard-context
 import { matchesQuery } from '../utils/collections.js';
 
 import { PageHeader } from '../components/PageHeader.js';
-import { SurfaceContainer } from '../components/SurfaceContainer.js';
+import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
 import { PluginSelect, ActionSelect, KeyInput } from './hotkeys/modal.js';
 import { useHotkeys } from './hotkeys/use-hotkeys.js';
 import { HotkeysList } from './hotkeys/list.js';

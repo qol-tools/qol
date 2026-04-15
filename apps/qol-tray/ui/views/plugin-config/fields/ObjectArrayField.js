@@ -3,7 +3,7 @@ import { useState, useCallback, useRef } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
 import { FieldLabel } from './FieldLabel.js';
 import { fieldSurfaceAttrs } from '../field-map.js';
-import { ToggleSwitch } from '../../../components/ToggleSwitch.js';
+import { ToggleSwitch } from '../../../lib/components/ToggleSwitch.js';
 import { groupFields } from '../../../auto-config/object-array-form.js';
 import { declaredFieldsToSchema } from '../../../auto-config/object-array-renderer.js';
 import { KNOWN_MODS, prettyLabel, getObjectArraySchema, guessSchemaFromKey } from '../../../auto-config/heuristics.js';

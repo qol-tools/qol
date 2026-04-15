@@ -1,6 +1,6 @@
-import { html } from '../lib/html.js';
+import { html } from '../html.js';
 import { useRef, useCallback, useLayoutEffect } from 'preact/hooks';
-import { runDissolve } from '../lib/dissolve.js';
+import { runDissolve } from '../dissolve.js';
 
 const DISSOLVE_PENDING_KEY = 'qol:dissolve-pending';
 

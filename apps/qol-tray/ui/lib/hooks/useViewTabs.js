@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
-import { directSurfaces, firstChildContainer } from '../lib/surface-traits.js';
-import { isKeyboardMode } from '../lib/input-mode.js';
+import { directSurfaces, firstChildContainer } from '../surface-traits.js';
+import { isKeyboardMode } from '../input-mode.js';
 
 export function useViewTabs(tabs, { onActivate, initialTab } = {}) {
     const [activeTab, setActiveTab] = useState(initialTab || tabs[0]?.id || '');

@@ -7,15 +7,15 @@ import { createNavigation, selectorFor, animateTransition } from '../lib/world-n
 import { getWorldSettings } from '../lib/world-settings.js';
 
 const log = createDebug('qol:app');
-import { ModifierStateProvider } from '../hooks/modifier-state-context.js';
+import { ModifierStateProvider } from '../lib/hooks/modifier-state-context.js';
 import { PluginConfigProvider } from '../views/plugin-config/context.js';
 import { useApp } from './app/useApp.js';
 import { useAppKeyboardRouting } from './app/useAppKeyboardRouting.js';
 import { ViewKeyboardProvider } from './app/view-keyboard-context.js';
 import { buildViewOrder, renderWorldViews } from './app/views.js';
-import { RecompileDissolve } from './RecompileDissolve.js';
+import { RecompileDissolve } from '../lib/components/RecompileDissolve.js';
 import { GlobalToast } from './ApiErrorToast.js';
-import { SelectionCursorOverlay } from './SelectionCursorOverlay.js';
+import { SelectionCursorOverlay } from '../lib/components/SelectionCursorOverlay.js';
 import { CommandPalette } from './CommandPalette.js';
 import { createCamera } from '../lib/world-camera.js';
 import { createWorldRegistry } from '../lib/world-registry.js';

@@ -3,7 +3,7 @@ import { useRef, useState, useEffect, useMemo, useCallback } from 'preact/hooks'
 import { usePaletteContext } from '../palette/context.js';
 import { getCommands } from '../palette/registry.js';
 import init, { fuzzy_match as wasmFuzzyMatch } from '../wasm/qol_wasm.js';
-import { Surface } from './Surface.js';
+import { Surface } from '../lib/components/Surface.js';
 
 function filterCommands(commands, query, useWasm) {
     if (!query) return commands;

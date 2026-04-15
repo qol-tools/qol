@@ -1,6 +1,6 @@
 import { html } from '../../lib/html.js';
 import { useMemo } from 'preact/hooks';
-import { CustomSelect } from '../../components/CustomSelect.js';
+import { CustomSelect } from '../../lib/components/CustomSelect.js';
 
 const MODIFIER_KEYS = ['Control', 'Alt', 'Shift', 'Meta'];
 const MODIFIER_NAMES = ['Ctrl', 'Alt', 'Shift', 'Super'];

@@ -1,5 +1,5 @@
 import { html } from '../../lib/html.js';
-import { Surface } from '../Surface.js';
+import { Surface } from '../../lib/components/Surface.js';
 
 function formatTimestamp(ts) {
     if (!ts) return '?';

@@ -1,6 +1,6 @@
 import { useCallback } from 'preact/hooks';
-import { useListKeyboard } from '../../hooks/useListKeyboard.js';
-import { useModalKeyboard } from '../../hooks/useModalKeyboard.js';
+import { useListKeyboard } from '../../lib/hooks/useListKeyboard.js';
+import { useModalKeyboard } from '../../lib/hooks/useModalKeyboard.js';
 export function useTaskKeyHandler(data, edit, test) {
     const modalNav = useModalKeyboard({
         onSave: edit.saveAction,

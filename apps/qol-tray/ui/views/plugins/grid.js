@@ -1,6 +1,6 @@
 import { html } from '../../lib/html.js';
-import { useModifierState } from '../../hooks/modifier-state-context.js';
-import { Card, CardGrid } from '../../components/Card.js';
+import { useModifierState } from '../../lib/hooks/modifier-state-context.js';
+import { Card, CardGrid } from '../../lib/components/Card.js';
 
 const brokenCovers = new Set();
 

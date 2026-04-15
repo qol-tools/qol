@@ -1,8 +1,8 @@
 import { useRef, useEffect, useCallback } from 'preact/hooks';
-import { useStateRef } from '../../hooks/useStateRef.js';
-import { usePersistedId } from '../../hooks/usePersistedIndex.js';
-import { useAsyncToken } from '../../hooks/useAsyncToken.js';
-import { useRefreshOnFocus } from '../../hooks/useRefreshOnFocus.js';
+import { useStateRef } from '../../lib/hooks/useStateRef.js';
+import { usePersistedId } from '../../lib/hooks/usePersistedIndex.js';
+import { useAsyncToken } from '../../lib/hooks/useAsyncToken.js';
+import { useRefreshOnFocus } from '../../lib/hooks/useRefreshOnFocus.js';
 import { useSSEDebounce } from '../../hooks/useSSEDebounce.js';
 import { useInstalling } from '../../hooks/useInstalling.js';
 import { loadInstalledPlugins, buildGhostPlugins } from './data.js';

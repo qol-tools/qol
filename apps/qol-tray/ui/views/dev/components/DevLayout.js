@@ -5,7 +5,7 @@ import { ViewTabs } from '../../../components/ViewTabs.js';
 import { PluginsSection } from './PluginsSection.js';
 import { CoreLogSection } from './CoreLogSection.js';
 import { ActionsSection } from './ActionsSection.js';
-import { useHashSubPath } from '../../../hooks/useHashSubPath.js';
+import { useHashSubPath } from '../../../lib/hooks/useHashSubPath.js';
 import { ComponentsCatalog } from './ComponentsCatalog.js';
 
 const TABS = [

@@ -1,7 +1,7 @@
 import { html } from '../../../lib/html.js';
-import { Table } from '../../../components/TableRow.js';
+import { Table } from '../../../lib/components/TableRow.js';
 import { DevPluginRow } from '../../../components/rows/DevPluginRow.js';
-import { useListSelection } from '../../../hooks/useListSelection.js';
+import { useListSelection } from '../../../lib/hooks/useListSelection.js';
 
 const CORE_SECTIONS = [
     { id: 'runtime', name: 'Runtime', description: 'Socket, state, polling' },

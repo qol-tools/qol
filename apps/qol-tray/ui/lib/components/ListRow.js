@@ -1,4 +1,4 @@
-import { html } from '../lib/html.js';
+import { html } from '../html.js';
 import { Surface } from './Surface.js';
 
 export function ListGroup({ className, onDeselect, children, ...rest }) {

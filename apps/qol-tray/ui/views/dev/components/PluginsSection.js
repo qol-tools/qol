@@ -1,6 +1,6 @@
 import { html } from '../../../lib/html.js';
-import { Table } from '../../../components/TableRow.js';
-import { RefreshButton } from '../../../components/Button.js';
+import { Table } from '../../../lib/components/TableRow.js';
+import { RefreshButton } from '../../../lib/components/Button.js';
 import { PluginRow } from './PluginRow.js';
 import { LinkInput } from './LinkInput.js';
 

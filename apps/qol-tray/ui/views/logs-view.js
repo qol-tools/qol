@@ -3,15 +3,15 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks'
 import { usePaletteContext } from '../palette/context.js';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../components/app/view-keyboard-context.js';
-import { useListKeyboard } from '../hooks/useListKeyboard.js';
+import { useListKeyboard } from '../lib/hooks/useListKeyboard.js';
 import { matchesQuery } from '../utils/collections.js';
 import { ViewTabs } from '../components/ViewTabs.js';
-import { Button } from '../components/Button.js';
-import { EmptyState } from '../components/EmptyState.js';
-import { ListGroup } from '../components/ListRow.js';
+import { Button } from '../lib/components/Button.js';
+import { EmptyState } from '../lib/components/EmptyState.js';
+import { ListGroup } from '../lib/components/ListRow.js';
 import { LogRow, LogDetailContent } from '../components/rows/LogRow.js';
 import { PageHeader } from '../components/PageHeader.js';
-import { SurfaceContainer } from '../components/SurfaceContainer.js';
+import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
 import { SuppressedRow } from '../components/rows/SuppressedRow.js';
 
 import { createSharedSlot } from '../lib/shared-slot.js';

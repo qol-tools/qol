@@ -1,8 +1,8 @@
 import { html } from '../../lib/html.js';
 import { useCallback } from 'preact/hooks';
-import { ListRow } from '../ListRow.js';
-import { Modal, ModalFooter } from '../ModalPreact.js';
-import { CodeBlock } from '../CodeBlock.js';
+import { ListRow } from '../../lib/components/ListRow.js';
+import { Modal, ModalFooter } from '../../lib/components/ModalPreact.js';
+import { CodeBlock } from '../../lib/components/CodeBlock.js';
 import { toast } from '../../lib/toast.js';
 
 const LEVEL_ACCENT = { startup: 'accent', error: 'danger', suppressed: 'muted' };

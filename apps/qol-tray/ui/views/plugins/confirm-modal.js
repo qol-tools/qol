@@ -1,5 +1,5 @@
 import { html } from '../../lib/html.js';
-import { Modal, ModalFooter } from '../../components/ModalPreact.js';
+import { Modal, ModalFooter } from '../../lib/components/ModalPreact.js';
 
 export function UninstallConfirmModal({ plugin, pluginId, onClose, onConfirm }) {
     return html`

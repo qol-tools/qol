@@ -1,4 +1,4 @@
-import { html } from '../lib/html.js';
+import { html } from '../html.js';
 import { useState, useCallback, useRef, useEffect, useLayoutEffect } from 'preact/hooks';
 import { SurfaceContainer } from './SurfaceContainer.js';
 import { Surface, useInputSurface } from './Surface.js';

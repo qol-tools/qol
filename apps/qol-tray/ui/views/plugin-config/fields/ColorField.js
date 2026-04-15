@@ -1,7 +1,7 @@
 import { html } from '../../../lib/html.js';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
-import { useDispatchAction } from '../../../hooks/useDispatchAction.js';
+import { useDispatchAction } from '../../../lib/hooks/useDispatchAction.js';
 import { fieldSurfaceAttrs } from '../field-map.js';
 import { hueComponents, hueSatToHex, hexToHueSat } from './color-math.js';
 import { openColorStream, closeColorStream, streamColorHex } from './color-stream.js';

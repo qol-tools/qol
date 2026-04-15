@@ -1,6 +1,6 @@
 import { createContext } from 'preact';
 import { useContext, useState, useEffect, useMemo } from 'preact/hooks';
-import { html } from '../lib/html.js';
+import { html } from '../html.js';
 
 const ModifierStateContext = createContext(null);
 

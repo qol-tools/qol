@@ -1,5 +1,5 @@
 import { html } from '../../lib/html.js';
-import { Card, CardGrid } from '../Card.js';
+import { Card, CardGrid } from '../../lib/components/Card.js';
 
 export function StoreCardGrid({ className, onDeselect, children, ...rest }) {
     const cls = ['plugin-grid-store card-grid--zoom', className].filter(Boolean).join(' ');

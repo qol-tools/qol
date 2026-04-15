@@ -1,6 +1,6 @@
-import { html } from '../lib/html.js';
+import { html } from '../html.js';
 import { useRef, useEffect } from 'preact/hooks';
-import { shuffle, resolveColor, sizeToParent, filledImageData } from '../lib/canvas.js';
+import { shuffle, resolveColor, sizeToParent, filledImageData } from '../canvas.js';
 
 const DISSOLVE_RATE = 0.06;
 const FADE_STEP = 0.05;

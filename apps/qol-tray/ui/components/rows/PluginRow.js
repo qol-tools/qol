@@ -1,6 +1,6 @@
 import { html } from '../../lib/html.js';
-import { ListRow, ListRowHeader, ListRowBody, ListRowTitle, ListRowText } from '../ListRow.js';
-import { Badge } from '../StatusIndicators.js';
+import { ListRow, ListRowHeader, ListRowBody, ListRowTitle, ListRowText } from '../../lib/components/ListRow.js';
+import { Badge } from '../../lib/components/StatusIndicators.js';
 
 const STATUS_ACCENT = { linked: 'success', local: 'warning', installed: 'accent' };
 const STATUS_BADGE = {

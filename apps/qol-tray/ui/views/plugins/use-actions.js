@@ -1,6 +1,6 @@
 import { useCallback } from 'preact/hooks';
-import { useStateRef } from '../../hooks/useStateRef.js';
-import { useGridNav } from '../../hooks/useGridNav.js';
+import { useStateRef } from '../../lib/hooks/useStateRef.js';
+import { useGridNav } from '../../lib/hooks/useGridNav.js';
 import { updateInstalledPlugin, uninstallInstalledPlugin } from './data.js';
 import { toast } from '../../lib/toast.js';
 

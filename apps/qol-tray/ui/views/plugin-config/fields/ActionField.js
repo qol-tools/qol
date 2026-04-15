@@ -1,7 +1,7 @@
 import { html } from '../../../lib/html.js';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
-import { useDispatchAction } from '../../../hooks/useDispatchAction.js';
+import { useDispatchAction } from '../../../lib/hooks/useDispatchAction.js';
 import { fieldSurfaceAttrs } from '../field-map.js';
 
 const PAIR_DURATION_S = 60;

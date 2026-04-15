@@ -12,7 +12,7 @@ import {
 } from '../../auto-config/display-rules.js';
 import { renderField, fieldSurfaceAttrs } from './field-map.js';
 import { dissolveIn, DISSOLVE_PRESETS } from '../../lib/dissolve.js';
-import { SurfaceContainer } from '../../components/SurfaceContainer.js';
+import { SurfaceContainer } from '../../lib/components/SurfaceContainer.js';
 
 function useEscapeFallback(onClose, active) {
     useEffect(() => {

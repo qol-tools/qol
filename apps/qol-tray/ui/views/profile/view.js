@@ -1,11 +1,11 @@
 import { html } from '../../lib/html.js';
 import { useState } from 'preact/hooks';
 import { PageHeader } from '../../components/PageHeader.js';
-import { SurfaceContainer } from '../../components/SurfaceContainer.js';
-import { Surface } from '../../components/Surface.js';
-import { Expander, ExpanderTrigger, ExpanderBody } from '../../components/Expander.js';
-import { Badge, HealthDot, Alert } from '../../components/StatusIndicators.js';
-import { Button } from '../../components/Button.js';
+import { SurfaceContainer } from '../../lib/components/SurfaceContainer.js';
+import { Surface } from '../../lib/components/Surface.js';
+import { Expander, ExpanderTrigger, ExpanderBody } from '../../lib/components/Expander.js';
+import { Badge, HealthDot, Alert } from '../../lib/components/StatusIndicators.js';
+import { Button } from '../../lib/components/Button.js';
 import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../../components/app/view-keyboard-context.js';
 import { useProfileController } from './use-controller.js';

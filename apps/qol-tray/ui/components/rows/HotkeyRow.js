@@ -1,5 +1,5 @@
 import { html } from '../../lib/html.js';
-import { TableRow, TableCell } from '../TableRow.js';
+import { TableRow, TableCell } from '../../lib/components/TableRow.js';
 
 export function HotkeyRow({ shortcut, pluginName, actionLabel, status, index, selected, onSelect, onActivate, className, ...rest }) {
     const cls = ['hotkey-row', className].filter(Boolean).join(' ');

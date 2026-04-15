@@ -1,5 +1,5 @@
 import { html } from '../../lib/html.js';
-import { TableRow, TableCell } from '../TableRow.js';
+import { TableRow, TableCell } from '../../lib/components/TableRow.js';
 
 export function ShortcutRow({ name, type, target, launcher, enabled, selectValue, index, selected, onSelect, onActivate, className, ...rest }) {
     const cls = ['shortcut-row', className].filter(Boolean).join(' ');

@@ -1,4 +1,4 @@
-import { html } from '../lib/html.js';
+import { html } from '../html.js';
 
 /**
  * Marks a region as keyboard-navigable. Only surfaces inside a

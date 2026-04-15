@@ -1,7 +1,7 @@
 import { html } from '../../lib/html.js';
 import { extractParams } from './data.js';
 import { TestPanel } from './panels.js';
-import { Card } from '../../components/Card.js';
+import { Card } from '../../lib/components/Card.js';
 
 function ActionCard({ actionId, action, isSelected, index, onSelect, onEdit, testSlot }) {
     const params = extractParams(action.command);
