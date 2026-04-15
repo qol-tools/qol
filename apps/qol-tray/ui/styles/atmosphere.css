@@ -12,63 +12,28 @@
 }
 
 .atmosphere-preset-wood {
-    background-color: #2a1e15;
+    background-color: #120a05;
     background-image:
-        repeating-linear-gradient(
-            90deg,
-            rgba(91, 54, 24, 0.35) 0,
-            rgba(91, 54, 24, 0.35) 2px,
-            transparent 2px,
-            transparent 28px
-        ),
-        repeating-linear-gradient(
-            90deg,
-            rgba(51, 28, 11, 0.5) 0,
-            rgba(51, 28, 11, 0.5) 1px,
-            transparent 1px,
-            transparent 9px
-        ),
-        radial-gradient(ellipse at 20% 35%, rgba(120, 70, 30, 0.18), transparent 60%),
-        radial-gradient(ellipse at 80% 65%, rgba(70, 40, 18, 0.22), transparent 55%);
+        radial-gradient(ellipse at 25% 30%, rgba(101, 61, 30, 0.18), transparent 55%),
+        radial-gradient(ellipse at 75% 70%, rgba(60, 34, 15, 0.18), transparent 60%);
 }
 
 .atmosphere-preset-parchment {
-    background-color: #b9a484;
+    background-color: #141210;
     background-image:
-        radial-gradient(ellipse at 30% 25%, rgba(90, 66, 38, 0.22), transparent 55%),
-        radial-gradient(ellipse at 70% 75%, rgba(60, 44, 22, 0.3), transparent 60%),
-        repeating-linear-gradient(
-            135deg,
-            rgba(180, 150, 105, 0.18) 0,
-            rgba(180, 150, 105, 0.18) 1px,
-            transparent 1px,
-            transparent 6px
-        );
+        radial-gradient(ellipse at 30% 25%, rgba(140, 105, 60, 0.12), transparent 55%),
+        radial-gradient(ellipse at 70% 75%, rgba(95, 72, 40, 0.14), transparent 60%);
 }
 
 .atmosphere-preset-terminal {
-    background-color: #041208;
+    background-color: #030a06;
     background-image:
-        repeating-linear-gradient(
-            0deg,
-            rgba(50, 205, 115, 0.1) 0,
-            rgba(50, 205, 115, 0.1) 1px,
-            transparent 1px,
-            transparent 3px
-        ),
-        radial-gradient(ellipse at 50% 50%, rgba(50, 205, 115, 0.18), transparent 65%);
+        radial-gradient(ellipse at 50% 50%, rgba(50, 205, 115, 0.08), transparent 65%);
 }
 
 .atmosphere-preset-spacecraft {
-    background-color: #0a0d1a;
+    background-color: #080a14;
     background-image:
-        radial-gradient(ellipse at 25% 20%, rgba(255, 105, 180, 0.18), transparent 55%),
-        radial-gradient(ellipse at 75% 80%, rgba(120, 60, 180, 0.22), transparent 60%),
-        repeating-linear-gradient(
-            0deg,
-            rgba(255, 255, 255, 0.02) 0,
-            rgba(255, 255, 255, 0.02) 1px,
-            transparent 1px,
-            transparent 4px
-        );
+        radial-gradient(ellipse at 25% 20%, rgba(255, 105, 180, 0.1), transparent 55%),
+        radial-gradient(ellipse at 75% 80%, rgba(120, 60, 180, 0.12), transparent 60%);
 }
