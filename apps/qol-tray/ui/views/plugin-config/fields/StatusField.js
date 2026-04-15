@@ -2,6 +2,7 @@ import { html } from '../../../lib/html.js';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
 import { useQueryPoll } from '../../../lib/hooks/useQueryPoll.js';
+import { fieldLayoutAttrs } from '../field-map.js';
 
 const DEFAULT_POLL_MS = 2000;
 const FAILURE_THRESHOLD = 2;
@@ -36,8 +37,7 @@ export function StatusField({ field }) {
     }, [effectiveTone, field.id]);
 
     return html`
-        <div class="field-group field-status"
-            data-plugin-config-field-id=${field.id}>
+        <div class="field-group field-status" ...${fieldLayoutAttrs(field)}>
             <div class="status-label">${field.label}</div>
             <div class="status-chip status-chip--${effectiveTone}">${displayText}</div>
             ${error && html`<div class="field-status-error">${error}</div>`}
