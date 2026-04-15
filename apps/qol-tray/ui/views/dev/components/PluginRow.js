@@ -1,6 +1,6 @@
 import { html } from '../../../lib/html.js';
 import { safeStatusToken } from '../../../utils/escape-html.js';
-import { DevPluginRow } from '../../../components/rows/DevPluginRow.js';
+import { DevPluginRow } from '../../../components/domain-rows/DevPluginRow.js';
 import { BuildMeta } from './BuildMeta.js';
 import { StatusBadges } from './StatusBadges.js';
 import { CpuStrip } from './CpuStrip.js';

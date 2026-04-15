@@ -9,10 +9,10 @@ import { ViewTabs } from '../components/ViewTabs.js';
 import { Button } from '../lib/components/Button.js';
 import { EmptyState } from '../lib/components/EmptyState.js';
 import { ListGroup } from '../lib/components/ListRow.js';
-import { LogRow, LogDetailContent } from '../components/rows/LogRow.js';
+import { LogRow, LogDetailContent } from '../components/domain-rows/LogRow.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
-import { SuppressedRow } from '../components/rows/SuppressedRow.js';
+import { SuppressedRow } from '../components/domain-rows/SuppressedRow.js';
 
 import { createSharedSlot } from '../lib/shared-slot.js';
 const detailSlot = createSharedSlot({ entry: null, onClose: null });

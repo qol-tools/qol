@@ -7,7 +7,7 @@ import { Badge } from '../../lib/components/StatusIndicators.js';
 import { Button } from '../../lib/components/Button.js';
 import { ToggleSwitch } from '../../lib/components/ToggleSwitch.js';
 import { Surface } from '../../lib/components/Surface.js';
-import { BackupRow } from '../../components/rows/BackupRow.js';
+import { BackupRow } from '../../components/domain-rows/BackupRow.js';
 import { toast } from '../../lib/toast.js';
 import {
     FIELD_KIND_BOOLEAN,

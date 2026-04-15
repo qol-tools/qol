@@ -13,13 +13,13 @@ import { Surface } from '../../../lib/components/Surface.js';
 import { Button, RefreshButton } from '../../../lib/components/Button.js';
 import { EmptyState } from '../../../lib/components/EmptyState.js';
 import { useListSelection } from '../../../lib/hooks/useListSelection.js';
-import { LogRow, LogDetailModal } from '../../../components/rows/LogRow.js';
-import { SuppressedRow } from '../../../components/rows/SuppressedRow.js';
-import { BackupRow } from '../../../components/rows/BackupRow.js';
-import { HotkeyRow } from '../../../components/rows/HotkeyRow.js';
-import { ShortcutRow } from '../../../components/rows/ShortcutRow.js';
-import { DevPluginRow } from '../../../components/rows/DevPluginRow.js';
-import { StoreCard, StoreCardGrid } from '../../../components/rows/StoreCard.js';
+import { LogRow, LogDetailModal } from '../../../components/domain-rows/LogRow.js';
+import { SuppressedRow } from '../../../components/domain-rows/SuppressedRow.js';
+import { BackupRow } from '../../../components/domain-rows/BackupRow.js';
+import { HotkeyRow } from '../../../components/domain-rows/HotkeyRow.js';
+import { ShortcutRow } from '../../../components/domain-rows/ShortcutRow.js';
+import { DevPluginRow } from '../../../components/domain-rows/DevPluginRow.js';
+import { StoreCard, StoreCardGrid } from '../../../components/domain-rows/StoreCard.js';
 
 export function ComponentsCatalog({ activeId }) {
     const showcases = {

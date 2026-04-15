@@ -1,6 +1,6 @@
 import { html } from '../../lib/html.js';
 import { Table, TableHeader, TableCell } from '../../lib/components/TableRow.js';
-import { HotkeyRow } from '../../components/rows/HotkeyRow.js';
+import { HotkeyRow } from '../../components/domain-rows/HotkeyRow.js';
 
 function getActionLabel(plugin, actionId) {
     if (!plugin) return actionId;

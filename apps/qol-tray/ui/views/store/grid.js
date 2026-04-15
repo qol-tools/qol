@@ -1,6 +1,6 @@
 import { html } from '../../lib/html.js';
 import { isStoreUpdateAvailable } from './reducer.js';
-import { StoreCard, StoreCardGrid } from '../../components/rows/StoreCard.js';
+import { StoreCard, StoreCardGrid } from '../../components/domain-rows/StoreCard.js';
 
 export function StoreGrid({ plugins, loading, selectedIndex, isInstalling, onCardClick, onSelect }) {
     return html`
