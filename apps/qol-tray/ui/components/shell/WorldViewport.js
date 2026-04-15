@@ -8,6 +8,7 @@ import { getWorldSettings } from '../../lib/world-settings.js';
 import { selectorFor } from '../../lib/world-navigation.js';
 import { contains } from '../../lib/world-registry.js';
 import { PeripheralPreview } from './PeripheralPreview.js';
+import { AtmosphereLayer } from './AtmosphereLayer.js';
 
 const log = createDebug('qol:world');
 const CAMERA_FOLLOW_PAD = 40;
@@ -168,6 +169,7 @@ export function WorldViewport({ camera, onViewChange, navigation, registry, chil
     return html`
         <div id="viewport" ref=${viewportRef}>
             <canvas id="world-bg" ref=${bgCanvasRef}></canvas>
+            <${AtmosphereLayer} navigation=${navigation} />
             <div id="world" ref=${worldRef}>
                 ${children}
             </div>
