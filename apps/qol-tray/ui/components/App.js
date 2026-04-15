@@ -408,21 +408,23 @@ function AppShell() {
                 />
                 <div class="app-container">
                     <${WorldViewport} camera=${camera} onViewChange=${switchView} navigation=${navigation} registry=${registry}>
-                        <${RegionLabels} registry=${registry} cameraLayer=${cameraLayer} navigation=${navigation} diveDepth=${diveDepth} />
-                        ${renderWorldViews({
-                            registry,
-                            cameraLayer,
-                            confinedPages: navigation.getConfinedPages(),
-                            diveDepth,
-                            activePluginId,
-                            openPluginConfig,
-                            openPluginUi,
-                            closePluginConfig,
-                            syncStatus,
-                            syncProviders,
-                            onSyncStatusChange: setSyncStatus,
-                            refreshSyncStatus,
-                        })}
+                        ${hiddenUntilDive ? null : html`
+                            <${RegionLabels} registry=${registry} cameraLayer=${cameraLayer} navigation=${navigation} diveDepth=${diveDepth} />
+                            ${renderWorldViews({
+                                registry,
+                                cameraLayer,
+                                confinedPages: navigation.getConfinedPages(),
+                                diveDepth,
+                                activePluginId,
+                                openPluginConfig,
+                                openPluginUi,
+                                closePluginConfig,
+                                syncStatus,
+                                syncProviders,
+                                onSyncStatusChange: setSyncStatus,
+                                refreshSyncStatus,
+                            })}
+                        `}
                     <//>
                     <${CommandPalette} />
                     <${MinimapContainer} camera=${camera} registry=${registry} viewportRef=${viewportRef} diveParent=${diveParent}
