@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'preact/hooks';
+import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 import { tryFetchJson } from '../api/client.js';
 import { preloadConfigForm } from '../views/plugin-config/usePluginConfig.js';
 
@@ -146,6 +146,13 @@ export function useRouter({ viewOrder }) {
         return () => window.removeEventListener('hashchange', handler);
     }, [viewOrder]);
     useEffect(() => { if (!activePluginId) persistView(activeViewId); }, [activeViewId, activePluginId]);
-    useEffect(() => { persistPlugin(activePluginId, activePluginMode); }, [activePluginId, activePluginMode]);
+    const firstPersistRef = useRef(true);
+    useEffect(() => {
+        if (firstPersistRef.current) {
+            firstPersistRef.current = false;
+            return;
+        }
+        persistPlugin(activePluginId, activePluginMode);
+    }, [activePluginId, activePluginMode]);
     return { activeViewId, activePluginId, activePluginMode, switchView, openPluginConfig, openPluginUi, closePluginConfig, viewOrder };
 }
