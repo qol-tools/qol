@@ -369,7 +369,6 @@ function AppShell() {
         if (activePluginId && !diveRef.current) {
             if (diveViaSelector(`[data-plugin-id="${activePluginId}"]`)) {
                 diveRef.current = true;
-                setHiddenUntilDive(false);
             }
         } else if (!activePluginId && diveRef.current) {
             diveRef.current = false;
@@ -377,6 +376,9 @@ function AppShell() {
         }
         if (!activePluginId && hiddenUntilDive) setHiddenUntilDive(false);
     }, [activePluginId, diveViaSelector, ascend, targetsVersion, hiddenUntilDive]);
+    useEffect(() => {
+        if (hiddenUntilDive && cameraLayer !== 0) setHiddenUntilDive(false);
+    }, [cameraLayer, hiddenUntilDive]);
     useLayoutEffect(() => {
         document.documentElement.classList.toggle('qol-bootstrapping-dive', hiddenUntilDive);
         if (!hiddenUntilDive) return undefined;
