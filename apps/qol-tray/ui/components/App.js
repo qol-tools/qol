@@ -72,17 +72,18 @@ async function fetchInstalledPlugins() {
     return [];
 }
 
-async function fetchPluginSections(pluginId) {
+async function fetchPluginContract(pluginId) {
     const res = await fetch(`/api/plugins/${pluginId}/config-form`);
-    if (!res.ok) return [];
+    if (!res.ok) return { sections: [], traits: null };
     const form = await res.json();
+    const traits = (form?.traits && typeof form.traits === 'object') ? form.traits : null;
     const sections = (form?.sections || []).filter(s => s.fields?.length);
-    if (sections.length > 0) return sections;
-    if (form?.fields?.length > 0) return [{ id: '_root', label: form.title || '' }];
-    return [];
+    if (sections.length > 0) return { sections, traits };
+    if (form?.fields?.length > 0) return { sections: [{ id: '_root', label: form.title || '' }], traits };
+    return { sections: [], traits };
 }
 
-function registerPluginDiveTarget(registry, plugin, sections, pluginsEntry, pluginIndex) {
+function registerPluginDiveTarget(registry, plugin, sections, traits, pluginsEntry, pluginIndex) {
     const N = Math.max(1, sections.length);
     const yOffset = pluginIndex * PLUGIN_PAGE_STRIDE;
     const claim = {
@@ -112,6 +113,7 @@ function registerPluginDiveTarget(registry, plugin, sections, pluginsEntry, plug
         sourceSelector: `[data-plugin-id="${plugin.id}"]`,
         claim,
         pages: pageIds,
+        ...(traits ? { traits } : {}),
     });
 }
 
@@ -124,9 +126,9 @@ async function registerAllPluginDiveTargets(registry, registered, isCancelled) {
     for (const plugin of plugins) {
         if (isCancelled()) return;
         if (registered.has(plugin.id)) continue;
-        const sections = await fetchPluginSections(plugin.id);
+        const { sections, traits } = await fetchPluginContract(plugin.id);
         if (isCancelled()) return;
-        registerPluginDiveTarget(registry, plugin, sections, pluginsEntry, registered.size);
+        registerPluginDiveTarget(registry, plugin, sections, traits, pluginsEntry, registered.size);
         registered.add(plugin.id);
     }
     log('diveTargets: registered', registered.size, 'plugins:', [...registered].join(', '));
