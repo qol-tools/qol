@@ -379,13 +379,13 @@ function AppShell() {
     }, [activePluginId, diveViaSelector, ascend, targetsVersion, hiddenUntilDive]);
     useLayoutEffect(() => {
         if (!hiddenUntilDive) {
-            document.body.classList.remove('qol-bootstrapping-dive');
+            document.documentElement.classList.remove('qol-bootstrapping-dive');
             return undefined;
         }
-        document.body.classList.add('qol-bootstrapping-dive');
+        document.documentElement.classList.add('qol-bootstrapping-dive');
         const failsafe = setTimeout(() => setHiddenUntilDive(false), 2000);
         return () => {
-            document.body.classList.remove('qol-bootstrapping-dive');
+            document.documentElement.classList.remove('qol-bootstrapping-dive');
             clearTimeout(failsafe);
         };
     }, [hiddenUntilDive]);
