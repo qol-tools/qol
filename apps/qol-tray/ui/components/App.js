@@ -364,20 +364,14 @@ function AppShell() {
     const diveRef = useRef(false);
     useEffect(() => {
         if (activePluginId && !diveRef.current) {
-            const selector = `[data-plugin-id="${activePluginId}"]`;
-            if (navigation.getCurrentSourceSelector?.() === selector) {
-                diveRef.current = true;
-                setDiveDepth(navigation.stackDepth());
-                return;
-            }
-            if (diveViaSelector(selector)) {
+            if (diveViaSelector(`[data-plugin-id="${activePluginId}"]`)) {
                 diveRef.current = true;
             }
         } else if (!activePluginId && diveRef.current) {
             diveRef.current = false;
             ascend();
         }
-    }, [activePluginId, diveViaSelector, ascend, targetsVersion, navigation]);
+    }, [activePluginId, diveViaSelector, ascend, targetsVersion]);
 
     return html`
         <${ModifierStateProvider}>
