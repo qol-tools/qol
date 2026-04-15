@@ -362,16 +362,30 @@ function AppShell() {
     }, [navigation, registry]);
 
     const diveRef = useRef(false);
+    const [hiddenUntilDive, setHiddenUntilDive] = useState(() => {
+        try { return !!window.localStorage?.getItem('qoltray.activePlugin'); } catch { return false; }
+    });
     useEffect(() => {
         if (activePluginId && !diveRef.current) {
             if (diveViaSelector(`[data-plugin-id="${activePluginId}"]`)) {
                 diveRef.current = true;
+                setHiddenUntilDive(false);
             }
         } else if (!activePluginId && diveRef.current) {
             diveRef.current = false;
             ascend();
         }
-    }, [activePluginId, diveViaSelector, ascend, targetsVersion]);
+        if (!activePluginId && hiddenUntilDive) setHiddenUntilDive(false);
+    }, [activePluginId, diveViaSelector, ascend, targetsVersion, hiddenUntilDive]);
+    useEffect(() => {
+        if (!hiddenUntilDive) return undefined;
+        document.body.classList.add('qol-bootstrapping-dive');
+        const failsafe = setTimeout(() => setHiddenUntilDive(false), 2000);
+        return () => {
+            document.body.classList.remove('qol-bootstrapping-dive');
+            clearTimeout(failsafe);
+        };
+    }, [hiddenUntilDive]);
 
     return html`
         <${ModifierStateProvider}>
