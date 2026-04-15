@@ -42,7 +42,9 @@ function initActiveView() {
 async function validatePluginConfig(pluginId) {
     if (!pluginId) return false;
     const form = await tryFetchJson(`/api/plugins/${pluginId}/config-form`);
-    if (!form?.sections?.some(s => s.fields?.length)) return false;
+    const hasRootFields = form?.fields?.length > 0;
+    const hasSectionFields = form?.sections?.some(s => s.fields?.length);
+    if (!hasRootFields && !hasSectionFields) return false;
     preloadConfigForm(pluginId, form);
     return true;
 }

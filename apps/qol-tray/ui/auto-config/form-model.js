@@ -14,7 +14,7 @@ export function configFromForm(form, existingConfig = {}) {
 
 export function getDisplaySections(form) {
     const root = form.fields.length > 0
-        ? [{ id: '_root', label: 'General', description: '', fields: form.fields, actions: [] }]
+        ? [{ id: '_root', label: '', description: '', fields: form.fields, actions: [] }]
         : [];
     return [...root, ...form.sections.filter(section => section.fields.length > 0)];
 }

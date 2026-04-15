@@ -76,7 +76,10 @@ async function fetchPluginSections(pluginId) {
     const res = await fetch(`/api/plugins/${pluginId}/config-form`);
     if (!res.ok) return [];
     const form = await res.json();
-    return form?.sections || [];
+    const sections = (form?.sections || []).filter(s => s.fields?.length);
+    if (sections.length > 0) return sections;
+    if (form?.fields?.length > 0) return [{ id: '_root', label: form.title || '' }];
+    return [];
 }
 
 function registerPluginDiveTarget(registry, plugin, sections, pluginsEntry, pluginIndex) {
