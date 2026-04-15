@@ -125,15 +125,22 @@ async function registerAllPluginDiveTargets(registry, registered, isCancelled) {
     if (!plugins.length) { log('diveTargets: no plugins'); return; }
     const pluginsEntry = registry.getEntry('plugins');
     if (!pluginsEntry) { log('diveTargets: no plugins entry in registry'); return; }
-    for (const plugin of plugins) {
+
+    const pending = plugins.filter(p => !registered.has(p.id));
+    pending.forEach((plugin, i) => {
+        registerPluginDiveTarget(registry, plugin, [], null, pluginsEntry, registered.size + i);
+        registered.add(plugin.id);
+    });
+    log('diveTargets: pre-registered', pending.length, 'placeholders');
+
+    await Promise.all(pending.map(async (plugin, i) => {
         if (isCancelled()) return;
-        if (registered.has(plugin.id)) continue;
         const { sections, traits } = await fetchPluginContract(plugin.id);
         if (isCancelled()) return;
-        registerPluginDiveTarget(registry, plugin, sections, traits, pluginsEntry, registered.size);
-        registered.add(plugin.id);
-    }
-    log('diveTargets: registered', registered.size, 'plugins:', [...registered].join(', '));
+        const pluginIndex = registered.size - pending.length + i;
+        registerPluginDiveTarget(registry, plugin, sections, traits, pluginsEntry, pluginIndex);
+    }));
+    log('diveTargets: resolved', registered.size, 'plugins:', [...registered].join(', '));
 }
 
 export function App() {
@@ -344,8 +351,9 @@ function AppShell() {
     const diveRef = useRef(false);
     useEffect(() => {
         if (activePluginId && !diveRef.current) {
-            diveRef.current = true;
-            diveViaSelector(`[data-plugin-id="${activePluginId}"]`);
+            if (diveViaSelector(`[data-plugin-id="${activePluginId}"]`)) {
+                diveRef.current = true;
+            }
         } else if (!activePluginId && diveRef.current) {
             diveRef.current = false;
             ascend();
