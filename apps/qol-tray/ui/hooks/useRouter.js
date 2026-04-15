@@ -3,6 +3,24 @@ import { tryFetchJson } from '../api/client.js';
 import { preloadConfigForm } from '../views/plugin-config/usePluginConfig.js';
 
 const VIEW_STORAGE_KEY = 'qoltray.activeView';
+const PLUGIN_STORAGE_KEY = 'qoltray.activePlugin';
+
+function readStoredPlugin() {
+    try {
+        const raw = window.localStorage.getItem(PLUGIN_STORAGE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.pluginId === 'string') return parsed;
+    } catch {}
+    return null;
+}
+
+function persistPlugin(pluginId, mode) {
+    try {
+        if (pluginId) window.localStorage.setItem(PLUGIN_STORAGE_KEY, JSON.stringify({ pluginId, mode }));
+        else window.localStorage.removeItem(PLUGIN_STORAGE_KEY);
+    } catch {}
+}
 
 function parseHashRoute() {
     const raw = window.location.hash.replace(/^#/, '').trim();
@@ -107,13 +125,16 @@ export function useRouter({ viewOrder }) {
     }, []);
     useEffect(() => {
         const route = parseHashRoute();
-        if (!route.pluginId) return;
-        validatePluginConfig(route.pluginId).then(valid => {
+        const stored = readStoredPlugin();
+        const pluginId = route.pluginId || stored?.pluginId;
+        const mode = route.pluginId ? route.mode : stored?.mode;
+        if (!pluginId) return;
+        validatePluginConfig(pluginId).then(valid => {
             if (valid) {
-                setActivePluginId(route.pluginId);
+                setActivePluginId(pluginId);
                 setActivePluginMode('config');
-            } else if (route.mode === 'ui') {
-                setActivePluginId(route.pluginId);
+            } else if (mode === 'ui') {
+                setActivePluginId(pluginId);
                 setActivePluginMode('ui');
             }
         });
@@ -125,5 +146,6 @@ export function useRouter({ viewOrder }) {
         return () => window.removeEventListener('hashchange', handler);
     }, [viewOrder]);
     useEffect(() => { if (!activePluginId) persistView(activeViewId); }, [activeViewId, activePluginId]);
+    useEffect(() => { persistPlugin(activePluginId, activePluginMode); }, [activePluginId, activePluginMode]);
     return { activeViewId, activePluginId, activePluginMode, switchView, openPluginConfig, openPluginUi, closePluginConfig, viewOrder };
 }
