@@ -5,34 +5,27 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 const LEGACY_DEV_LINKS_RELPATH: &str = "dev/links.json";
-const LEGACY_DEV_LINKS_MIGRATED_BAK: &str = "dev/links.json.migrated.bak";
 const LEGACY_DEV_LINKS_CORRUPT_PREFIX: &str = "dev/links.json.corrupt.";
 
 pub fn ensure_registry_initialized(
     config_dir: &Path,
     plugins_dir: &Path,
 ) -> Result<Registry, String> {
-    if registry_path(config_dir).exists() {
-        retire_legacy_dev_links(config_dir);
+    let legacy_exists = config_dir.join(LEGACY_DEV_LINKS_RELPATH).exists();
+    let registry_exists = registry_path(config_dir).exists();
+
+    if registry_exists && !legacy_exists {
         return load_registry(config_dir);
     }
+
+    // Legacy dev/links.json still present, or registry missing: rebuild.
+    // Retirement of the legacy file is deferred until step 13 (the dev-link
+    // HTTP handlers will then write the registry directly). Until then, the
+    // legacy file remains authoritative for consumers that still read it, and
+    // the registry is rebuilt on every boot to stay in sync.
     let registry = build_from_legacy_state(config_dir, plugins_dir);
     save_registry(config_dir, &registry)?;
-    retire_legacy_dev_links(config_dir);
     Ok(registry)
-}
-
-fn retire_legacy_dev_links(config_dir: &Path) {
-    let path = config_dir.join(LEGACY_DEV_LINKS_RELPATH);
-    if !path.exists() {
-        return;
-    }
-    let bak = config_dir.join(LEGACY_DEV_LINKS_MIGRATED_BAK);
-    if let Err(e) = std::fs::rename(&path, &bak) {
-        log::warn!("Failed to retire {}: {}", path.display(), e);
-    } else {
-        log::info!("Retired legacy dev-links file to {}", bak.display());
-    }
 }
 
 fn build_from_legacy_state(config_dir: &Path, plugins_dir: &Path) -> Registry {
@@ -55,6 +48,14 @@ fn build_from_legacy_state(config_dir: &Path, plugins_dir: &Path) -> Registry {
     match read_legacy_dev_links(config_dir) {
         LegacyDevLinks::Parsed(links) => {
             for (id, path) in links {
+                if !is_valid_dev_link_target(&path) {
+                    log::warn!(
+                        "Skipping dev-link during migration: id={} path={} (invalid or missing target)",
+                        id,
+                        path.display()
+                    );
+                    continue;
+                }
                 merge_dev_link_into(&mut by_id, id, path);
             }
         }
@@ -87,8 +88,9 @@ fn read_legacy_dev_links(config_dir: &Path) -> LegacyDevLinks {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return LegacyDevLinks::Absent,
         Err(e) => {
-            log::warn!("Failed to read {}: {}", path.display(), e);
-            return LegacyDevLinks::Absent;
+            let reason = format!("Failed to read {}: {}", path.display(), e);
+            back_up_corrupt_dev_links(config_dir, &path);
+            return LegacyDevLinks::Corrupt(reason);
         }
     };
     match serde_json::from_str::<HashMap<String, PathBuf>>(&content) {
@@ -98,6 +100,14 @@ fn read_legacy_dev_links(config_dir: &Path) -> LegacyDevLinks {
             LegacyDevLinks::Corrupt(format!("Failed to parse {}: {}", path.display(), e))
         }
     }
+}
+
+fn is_valid_dev_link_target(path: &Path) -> bool {
+    if !path.is_dir() {
+        return false;
+    }
+    let manifest = path.join("plugin.toml");
+    manifest.exists() && manifest_parses_and_version_valid(&manifest)
 }
 
 fn back_up_corrupt_dev_links(config_dir: &Path, original: &Path) {
@@ -277,15 +287,90 @@ mod tests {
     }
 
     #[test]
-    fn retires_legacy_dev_links_after_migration() {
+    fn legacy_file_retained_after_migration_pending_handler_rewrite() {
         let tmp = TempDir::new().unwrap();
         let plugins_dir = tmp.path().join("plugins");
         fs::create_dir(&plugins_dir).unwrap();
         write_legacy_dev_links(tmp.path(), &HashMap::new());
 
         let _ = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
-        assert!(!tmp.path().join(LEGACY_DEV_LINKS_RELPATH).exists());
-        assert!(tmp.path().join(LEGACY_DEV_LINKS_MIGRATED_BAK).exists());
+        assert!(
+            tmp.path().join(LEGACY_DEV_LINKS_RELPATH).exists(),
+            "legacy dev/links.json should remain until step 13 redirects HTTP handlers"
+        );
+    }
+
+    #[test]
+    fn rebuilds_registry_when_legacy_file_is_present() {
+        let tmp = TempDir::new().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        fs::create_dir(&plugins_dir).unwrap();
+
+        let first = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
+        assert_eq!(first.entries.len(), 0);
+
+        let dev_src = make_plugin_dir(tmp.path(), "new-dev-link");
+        let mut links = HashMap::new();
+        links.insert("new-dev-link".to_string(), dev_src);
+        write_legacy_dev_links(tmp.path(), &links);
+
+        let second = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
+        assert_eq!(second.entries.len(), 1);
+        assert_eq!(second.entries[0].id, "new-dev-link");
+    }
+
+    #[test]
+    fn skips_dev_link_with_missing_target() {
+        let tmp = TempDir::new().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        fs::create_dir(&plugins_dir).unwrap();
+
+        let mut links = HashMap::new();
+        links.insert("stale".to_string(), tmp.path().join("nonexistent-dev-src"));
+        write_legacy_dev_links(tmp.path(), &links);
+
+        let registry = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
+        assert_eq!(registry.entries.len(), 0);
+    }
+
+    #[test]
+    fn skips_dev_link_with_invalid_manifest() {
+        let tmp = TempDir::new().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        fs::create_dir(&plugins_dir).unwrap();
+
+        let dev_src = tmp.path().join("bad-dev-src");
+        fs::create_dir(&dev_src).unwrap();
+        fs::write(dev_src.join("plugin.toml"), "not valid toml {{{").unwrap();
+
+        let mut links = HashMap::new();
+        links.insert("bad".to_string(), dev_src);
+        write_legacy_dev_links(tmp.path(), &links);
+
+        let registry = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
+        assert_eq!(registry.entries.len(), 0);
+    }
+
+    #[test]
+    fn stale_dev_link_leaves_installed_fallback_as_sole_release_entry() {
+        let tmp = TempDir::new().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        fs::create_dir(&plugins_dir).unwrap();
+        let installed = make_plugin_dir(&plugins_dir, "plugin-foo");
+
+        let mut links = HashMap::new();
+        links.insert(
+            "plugin-foo".to_string(),
+            tmp.path().join("nonexistent-dev-src"),
+        );
+        write_legacy_dev_links(tmp.path(), &links);
+
+        let registry = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
+        assert_eq!(registry.entries.len(), 1);
+        let entry = &registry.entries[0];
+        assert!(matches!(entry.active.source, SlotSource::ReleaseAsset));
+        assert_eq!(entry.active.path, installed);
+        assert!(entry.fallback.is_none());
     }
 
     #[test]
@@ -361,19 +446,5 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(second.entries.len(), 1);
         assert_eq!(second.entries[0].id, "plugin-a");
-    }
-
-    #[test]
-    fn retires_legacy_file_on_second_boot_if_left_behind() {
-        let tmp = TempDir::new().unwrap();
-        let plugins_dir = tmp.path().join("plugins");
-        fs::create_dir(&plugins_dir).unwrap();
-
-        let _ = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
-        write_legacy_dev_links(tmp.path(), &HashMap::new());
-        let _ = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
-
-        assert!(!tmp.path().join(LEGACY_DEV_LINKS_RELPATH).exists());
-        assert!(tmp.path().join(LEGACY_DEV_LINKS_MIGRATED_BAK).exists());
     }
 }
