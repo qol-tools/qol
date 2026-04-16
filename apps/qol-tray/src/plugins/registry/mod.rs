@@ -52,12 +52,23 @@ pub fn registry_path(config_dir: &Path) -> PathBuf {
 
 pub fn load_registry(config_dir: &Path) -> Result<Registry, String> {
     let path = registry_path(config_dir);
-    match std::fs::read_to_string(&path) {
-        Ok(content) => serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse {}: {}", path.display(), e)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Registry::default()),
-        Err(e) => Err(format!("Failed to read {}: {}", path.display(), e)),
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Registry::default()),
+        Err(e) => return Err(format!("Failed to read {}: {}", path.display(), e)),
+    };
+    let registry: Registry = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))?;
+    if registry.version > CURRENT_REGISTRY_VERSION {
+        return Err(format!(
+            "Registry at {} is version {}; this binary supports up to version {}. \
+             Downgrade detected — refusing to read a newer format.",
+            path.display(),
+            registry.version,
+            CURRENT_REGISTRY_VERSION
+        ));
     }
+    Ok(registry)
 }
 
 pub fn save_registry(config_dir: &Path, registry: &Registry) -> Result<(), String> {
@@ -171,5 +182,20 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("parse"));
+    }
+
+    #[test]
+    fn rejects_registry_with_future_version() {
+        let tmp = TempDir::new().unwrap();
+        let future = Registry {
+            version: CURRENT_REGISTRY_VERSION + 1,
+            entries: vec![],
+        };
+        let content = serde_json::to_string_pretty(&future).unwrap();
+        std::fs::write(registry_path(tmp.path()), content).unwrap();
+        let result = load_registry(tmp.path());
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Downgrade"));
     }
 }
