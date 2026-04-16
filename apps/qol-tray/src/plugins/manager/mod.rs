@@ -4,17 +4,20 @@ mod loading;
 mod runtime;
 
 use super::{Plugin, PluginId};
+use crate::plugins::resolver::ResolutionReport;
 use anyhow::Result;
 use std::collections::HashMap;
 
 pub struct PluginManager {
     plugins: HashMap<PluginId, Plugin>,
+    resolution_report: ResolutionReport,
 }
 
 impl PluginManager {
     pub fn new() -> Self {
         Self {
             plugins: HashMap::new(),
+            resolution_report: ResolutionReport::default(),
         }
     }
 
@@ -36,6 +39,14 @@ impl PluginManager {
 
     pub fn plugins(&self) -> impl Iterator<Item = &Plugin> {
         self.plugins.values()
+    }
+
+    pub fn last_resolution_report(&self) -> &ResolutionReport {
+        &self.resolution_report
+    }
+
+    pub(super) fn set_resolution_report(&mut self, report: ResolutionReport) {
+        self.resolution_report = report;
     }
 
     pub fn restart_running_plugin_daemon(&mut self, plugin_id: &str) -> Result<()> {

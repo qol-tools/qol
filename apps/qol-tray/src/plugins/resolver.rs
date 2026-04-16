@@ -8,6 +8,7 @@ pub struct ResolvedPlugin {
     pub path: PathBuf,
     pub source: PluginSource,
     pub resolved_from: ResolutionOrigin,
+    pub active_failure: Option<SlotFailure>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,7 +45,7 @@ pub struct PluginUnavailable {
     pub fallback: Option<SlotFailure>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ResolutionReport {
     pub plugins: Vec<ResolvedPlugin>,
     pub unavailable: Vec<PluginUnavailable>,
@@ -58,6 +59,7 @@ pub fn resolve_from_registry(registry: &Registry) -> ResolutionReport {
                 &entry.id,
                 &entry.active,
                 ResolutionOrigin::Active,
+                None,
             )),
             Err(active_reason) => {
                 let active_fail = SlotFailure {
@@ -76,6 +78,7 @@ pub fn resolve_from_registry(registry: &Registry) -> ResolutionReport {
                             &entry.id,
                             slot,
                             ResolutionOrigin::Fallback,
+                            Some(active_fail),
                         ));
                     }
                     Some((slot, Err(fallback_reason))) => {
@@ -106,12 +109,18 @@ pub fn resolve_from_registry(registry: &Registry) -> ResolutionReport {
     report
 }
 
-fn resolved_from_slot(id: &str, slot: &Slot, origin: ResolutionOrigin) -> ResolvedPlugin {
+fn resolved_from_slot(
+    id: &str,
+    slot: &Slot,
+    origin: ResolutionOrigin,
+    active_failure: Option<SlotFailure>,
+) -> ResolvedPlugin {
     ResolvedPlugin {
         id: PluginId::new(id.to_string()),
         path: slot.path.clone(),
         source: slot_source_to_plugin_source(&slot.source),
         resolved_from: origin,
+        active_failure,
     }
 }
 
@@ -189,6 +198,7 @@ mod tests {
         assert_eq!(report.plugins[0].id.as_str(), "plugin-foo");
         assert_eq!(report.plugins[0].resolved_from, ResolutionOrigin::Active);
         assert_eq!(report.plugins[0].source, PluginSource::Installed);
+        assert!(report.plugins[0].active_failure.is_none());
     }
 
     #[test]
@@ -221,6 +231,12 @@ mod tests {
         assert_eq!(report.unavailable.len(), 0);
         assert_eq!(report.plugins[0].resolved_from, ResolutionOrigin::Fallback);
         assert_eq!(report.plugins[0].source, PluginSource::Installed);
+        let failure = report.plugins[0]
+            .active_failure
+            .as_ref()
+            .expect("fallback resolution carries active failure");
+        assert_eq!(failure.path, tmp.path().join("missing-dev-src"));
+        assert!(failure.reason.contains("not a directory"));
     }
 
     #[test]
