@@ -40,24 +40,6 @@ pub(super) async fn uninstall(plugins_dir: &Path, plugin_id: &str) -> Result<()>
     Ok(())
 }
 
-#[cfg(feature = "dev")]
-pub(super) fn ensure_no_dev_link_conflict(plugin_id: &str) -> Result<()> {
-    let config_dir = crate::paths::shared_config_dir()?;
-    let dev_links = crate::dev::load_dev_links(&config_dir);
-    if dev_links.contains_key(plugin_id) {
-        anyhow::bail!(
-            "Cannot proceed — {} is dev-linked. Unlink first.",
-            plugin_id
-        );
-    }
-    Ok(())
-}
-
-#[cfg(not(feature = "dev"))]
-pub(super) fn ensure_no_dev_link_conflict(_plugin_id: &str) -> Result<()> {
-    Ok(())
-}
-
 struct InstallPlan<'a> {
     repo_url: &'a str,
     plugin_id: &'a str,
