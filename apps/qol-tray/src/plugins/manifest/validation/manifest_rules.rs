@@ -15,14 +15,42 @@ impl PluginManifest {
     }
 }
 
+const MIN_SUPPORTED_MANIFEST_VERSION: u32 = 1;
+
 fn validate_manifest_version(version: u32) -> Result<()> {
-    if version == CURRENT_MANIFEST_VERSION {
+    if (MIN_SUPPORTED_MANIFEST_VERSION..=CURRENT_MANIFEST_VERSION).contains(&version) {
         return Ok(());
     }
 
     bail!(
-        "Unsupported manifest_version {} (expected {})",
+        "Unsupported manifest_version {} (expected {}..={})",
         version,
+        MIN_SUPPORTED_MANIFEST_VERSION,
         CURRENT_MANIFEST_VERSION
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_current_version() {
+        validate_manifest_version(CURRENT_MANIFEST_VERSION).unwrap();
+    }
+
+    #[test]
+    fn accepts_minimum_supported_version() {
+        validate_manifest_version(MIN_SUPPORTED_MANIFEST_VERSION).unwrap();
+    }
+
+    #[test]
+    fn rejects_below_minimum() {
+        assert!(validate_manifest_version(0).is_err());
+    }
+
+    #[test]
+    fn rejects_above_current() {
+        assert!(validate_manifest_version(CURRENT_MANIFEST_VERSION + 1).is_err());
+    }
 }
