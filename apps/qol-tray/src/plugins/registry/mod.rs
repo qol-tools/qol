@@ -1,3 +1,7 @@
+mod migration;
+
+pub use migration::ensure_registry_initialized;
+
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
