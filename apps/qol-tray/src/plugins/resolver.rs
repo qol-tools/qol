@@ -16,6 +16,15 @@ pub enum PluginSource {
     DevLinked,
 }
 
+impl PluginSource {
+    pub fn is_live_source(&self) -> bool {
+        match self {
+            Self::DevLinked => true,
+            Self::Installed => false,
+        }
+    }
+}
+
 pub fn resolve_all(
     plugins_dir: &Path,
     dev_links: &HashMap<String, PathBuf>,

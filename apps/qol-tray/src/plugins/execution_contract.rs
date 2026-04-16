@@ -87,7 +87,7 @@ fn resolve_candidate_by_source(
     command_path: &Path,
     canonical_plugin_dir: &Path,
 ) -> Option<PathBuf> {
-    if matches!(source, Some(PluginSource::DevLinked)) {
+    if source.is_some_and(PluginSource::is_live_source) {
         return resolve_dev_candidate(plugin_dir, command_path, canonical_plugin_dir)
             .or_else(|| resolve_primary_candidate(plugin_dir, command_path, canonical_plugin_dir));
     }

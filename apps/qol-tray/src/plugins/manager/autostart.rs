@@ -54,7 +54,7 @@ fn should_autostart_daemon_for_source(
     if !daemon_enabled {
         return true;
     }
-    if !matches!(source, Some(PluginSource::DevLinked)) {
+    if !source.is_some_and(PluginSource::is_live_source) {
         return true;
     }
 
