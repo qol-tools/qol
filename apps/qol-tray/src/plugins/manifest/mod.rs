@@ -12,7 +12,7 @@ pub use schema::{
 };
 pub use validation::{is_valid_action_id, is_valid_command_basename};
 
-pub const CURRENT_MANIFEST_VERSION: u32 = 1;
+pub const CURRENT_MANIFEST_VERSION: u32 = 2;
 
 pub fn default_manifest_version() -> u32 {
     CURRENT_MANIFEST_VERSION
