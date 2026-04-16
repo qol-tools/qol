@@ -14,9 +14,47 @@ pub(super) async fn install(
     install_source: InstallSource,
 ) -> Result<()> {
     let plan = InstallPlan::new(plugins_dir, repo_url, plugin_id, install_source);
-    ensure_not_installed(&plan.target_dir, plugin_id)?;
+    if active_is_live_source(plugin_id) {
+        clear_stale_fallback(&plan.target_dir, plugin_id).await;
+    } else {
+        ensure_not_installed(&plan.target_dir, plugin_id)?;
+    }
     let result = install_plugin(&plan).await;
     finish_with_cleanup(&plan.staging_dir, result).await
+}
+
+fn active_is_live_source(plugin_id: &str) -> bool {
+    let Ok(config_dir) = crate::paths::shared_config_dir() else {
+        return false;
+    };
+    let Ok(registry) = crate::plugins::registry::load_registry(&config_dir) else {
+        return false;
+    };
+    registry
+        .entries
+        .iter()
+        .find(|e| e.id == plugin_id)
+        .map(|e| {
+            matches!(
+                e.active.source,
+                crate::plugins::registry::SlotSource::DevLink { .. }
+                    | crate::plugins::registry::SlotSource::WorktreeLink { .. }
+            )
+        })
+        .unwrap_or(false)
+}
+
+async fn clear_stale_fallback(target_dir: &Path, plugin_id: &str) {
+    if !target_dir.exists() {
+        return;
+    }
+    log::info!(
+        "Replacing stale release-asset fallback for dev-linked plugin: {}",
+        plugin_id
+    );
+    if let Err(e) = tokio::fs::remove_dir_all(target_dir).await {
+        log::warn!("Failed to clear stale fallback at {:?}: {}", target_dir, e);
+    }
 }
 
 pub(super) async fn update(
