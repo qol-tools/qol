@@ -68,6 +68,64 @@ pub fn current_active_path(plugin_id: &str) -> Option<PathBuf> {
     lookup_active_path(&config_dir, plugin_id)
 }
 
+/// Record a release-asset install in the registry per the "Plugin-store install
+/// as a pointer write" transition rules. If the plugin isn't in the registry,
+/// creates an entry with ReleaseAsset active. If it is and active is already
+/// ReleaseAsset, replaces active. If active is DevLink/WorktreeLink, leaves
+/// active untouched and writes the release asset into the fallback slot.
+pub fn record_release_install(
+    config_dir: &Path,
+    plugin_id: &str,
+    plugin_root: PathBuf,
+) -> Result<(), String> {
+    let mut registry = load_registry(config_dir).unwrap_or_default();
+    let new_slot = Slot {
+        path: plugin_root,
+        source: SlotSource::ReleaseAsset,
+    };
+    if let Some(entry) = registry.entries.iter_mut().find(|e| e.id == plugin_id) {
+        match entry.active.source {
+            SlotSource::ReleaseAsset => entry.active = new_slot,
+            SlotSource::DevLink { .. } | SlotSource::WorktreeLink { .. } => {
+                entry.fallback = Some(new_slot);
+            }
+        }
+    } else {
+        registry.entries.push(Entry {
+            id: plugin_id.to_string(),
+            active: new_slot,
+            fallback: None,
+        });
+    }
+    registry.entries.sort_by(|a, b| a.id.cmp(&b.id));
+    save_registry(config_dir, &registry)
+}
+
+/// Record a release-asset uninstall per the transition rules. If active is
+/// ReleaseAsset without a fallback, drops the whole entry. If active is
+/// DevLink/WorktreeLink, clears the fallback slot. If active is ReleaseAsset
+/// with a fallback (unexpected per install rules but handled defensively),
+/// promotes the fallback to active.
+pub fn record_release_uninstall(config_dir: &Path, plugin_id: &str) -> Result<(), String> {
+    let mut registry = load_registry(config_dir).unwrap_or_default();
+    let Some(idx) = registry.entries.iter().position(|e| e.id == plugin_id) else {
+        return Ok(());
+    };
+    let entry = &mut registry.entries[idx];
+    match entry.active.source {
+        SlotSource::ReleaseAsset => match entry.fallback.take() {
+            Some(fallback) => entry.active = fallback,
+            None => {
+                registry.entries.remove(idx);
+            }
+        },
+        SlotSource::DevLink { .. } | SlotSource::WorktreeLink { .. } => {
+            entry.fallback = None;
+        }
+    }
+    save_registry(config_dir, &registry)
+}
+
 pub fn load_registry(config_dir: &Path) -> Result<Registry, String> {
     let path = registry_path(config_dir);
     let content = match std::fs::read_to_string(&path) {
@@ -200,6 +258,108 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("parse"));
+    }
+
+    #[test]
+    fn record_release_install_creates_entry_when_absent() {
+        let tmp = TempDir::new().unwrap();
+        record_release_install(tmp.path(), "plugin-foo", PathBuf::from("/p/plugin-foo")).unwrap();
+        let registry = load_registry(tmp.path()).unwrap();
+        assert_eq!(registry.entries.len(), 1);
+        assert_eq!(registry.entries[0].id, "plugin-foo");
+        assert!(matches!(
+            registry.entries[0].active.source,
+            SlotSource::ReleaseAsset
+        ));
+        assert!(registry.entries[0].fallback.is_none());
+    }
+
+    #[test]
+    fn record_release_install_replaces_active_when_release_asset() {
+        let tmp = TempDir::new().unwrap();
+        record_release_install(tmp.path(), "plugin-foo", PathBuf::from("/p/old")).unwrap();
+        record_release_install(tmp.path(), "plugin-foo", PathBuf::from("/p/new")).unwrap();
+        let registry = load_registry(tmp.path()).unwrap();
+        assert_eq!(registry.entries.len(), 1);
+        assert_eq!(registry.entries[0].active.path, PathBuf::from("/p/new"));
+    }
+
+    #[test]
+    fn record_release_install_preserves_dev_link_writes_fallback() {
+        let tmp = TempDir::new().unwrap();
+        let reg = Registry {
+            version: CURRENT_REGISTRY_VERSION,
+            entries: vec![Entry {
+                id: "plugin-foo".to_string(),
+                active: Slot {
+                    path: PathBuf::from("/dev/src"),
+                    source: SlotSource::DevLink {
+                        origin_path: PathBuf::from("/dev/src"),
+                    },
+                },
+                fallback: None,
+            }],
+        };
+        save_registry(tmp.path(), &reg).unwrap();
+
+        record_release_install(tmp.path(), "plugin-foo", PathBuf::from("/p/plugin-foo")).unwrap();
+        let registry = load_registry(tmp.path()).unwrap();
+        assert_eq!(registry.entries.len(), 1);
+        assert!(matches!(
+            registry.entries[0].active.source,
+            SlotSource::DevLink { .. }
+        ));
+        let fallback = registry.entries[0].fallback.as_ref().unwrap();
+        assert!(matches!(fallback.source, SlotSource::ReleaseAsset));
+        assert_eq!(fallback.path, PathBuf::from("/p/plugin-foo"));
+    }
+
+    #[test]
+    fn record_release_uninstall_drops_entry_when_only_release_asset() {
+        let tmp = TempDir::new().unwrap();
+        record_release_install(tmp.path(), "plugin-foo", PathBuf::from("/p/plugin-foo")).unwrap();
+        record_release_uninstall(tmp.path(), "plugin-foo").unwrap();
+        let registry = load_registry(tmp.path()).unwrap();
+        assert_eq!(registry.entries.len(), 0);
+    }
+
+    #[test]
+    fn record_release_uninstall_clears_fallback_when_dev_link_active() {
+        let tmp = TempDir::new().unwrap();
+        let reg = Registry {
+            version: CURRENT_REGISTRY_VERSION,
+            entries: vec![Entry {
+                id: "plugin-foo".to_string(),
+                active: Slot {
+                    path: PathBuf::from("/dev/src"),
+                    source: SlotSource::DevLink {
+                        origin_path: PathBuf::from("/dev/src"),
+                    },
+                },
+                fallback: Some(Slot {
+                    path: PathBuf::from("/p/plugin-foo"),
+                    source: SlotSource::ReleaseAsset,
+                }),
+            }],
+        };
+        save_registry(tmp.path(), &reg).unwrap();
+
+        record_release_uninstall(tmp.path(), "plugin-foo").unwrap();
+        let registry = load_registry(tmp.path()).unwrap();
+        assert_eq!(registry.entries.len(), 1);
+        assert!(matches!(
+            registry.entries[0].active.source,
+            SlotSource::DevLink { .. }
+        ));
+        assert!(registry.entries[0].fallback.is_none());
+    }
+
+    #[test]
+    fn record_release_uninstall_is_noop_when_entry_missing() {
+        let tmp = TempDir::new().unwrap();
+        record_release_uninstall(tmp.path(), "absent-plugin").unwrap();
+        let registry = load_registry(tmp.path()).unwrap();
+        assert_eq!(registry.entries.len(), 0);
     }
 
     #[test]
