@@ -17,6 +17,7 @@ use axum::{
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
         .route("/plugins", get(list_plugins))
+        .route("/plugins/registry", get(get_registry))
         .route("/installed", get(list_installed))
         .route("/events", get(sse_handler))
         .route("/plugins/{id}/permissions", get(get_plugin_permissions))
@@ -57,6 +58,15 @@ pub(super) async fn list_plugins(
     Query(query): Query<PluginsQuery>,
 ) -> Result<Json<PluginsResponse>, (StatusCode, String)> {
     plugin_services::list_plugins(query.refresh).await.map(Json)
+}
+
+pub(super) async fn get_registry(
+) -> Result<Json<crate::plugins::registry::Registry>, (StatusCode, String)> {
+    let config_dir = crate::paths::shared_config_dir()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let registry = crate::plugins::registry::load_registry(&config_dir)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(registry))
 }
 
 pub(super) async fn install_plugin(
