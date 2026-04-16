@@ -101,6 +101,57 @@ pub fn record_release_install(
     save_registry(config_dir, &registry)
 }
 
+/// Record a dev-link create per the "Dev-link as a pointer write" transition
+/// rules. If no entry: create with DevLink active. If active is ReleaseAsset:
+/// preserve as fallback, replace active. If active is already DevLink or
+/// WorktreeLink: replace active (fallback untouched).
+pub fn record_dev_link_create(
+    config_dir: &Path,
+    plugin_id: &str,
+    dev_source: PathBuf,
+) -> Result<(), String> {
+    let mut registry = load_registry(config_dir).unwrap_or_default();
+    let new_active = Slot {
+        path: dev_source.clone(),
+        source: SlotSource::DevLink {
+            origin_path: dev_source,
+        },
+    };
+    if let Some(entry) = registry.entries.iter_mut().find(|e| e.id == plugin_id) {
+        let previous_active = std::mem::replace(&mut entry.active, new_active);
+        if matches!(previous_active.source, SlotSource::ReleaseAsset) {
+            entry.fallback = Some(previous_active);
+        }
+    } else {
+        registry.entries.push(Entry {
+            id: plugin_id.to_string(),
+            active: new_active,
+            fallback: None,
+        });
+    }
+    registry.entries.sort_by(|a, b| a.id.cmp(&b.id));
+    save_registry(config_dir, &registry)
+}
+
+/// Record a dev-link removal. If fallback exists, promote it to active and
+/// clear the fallback slot. If no fallback, remove the entry entirely.
+pub fn record_dev_link_remove(config_dir: &Path, plugin_id: &str) -> Result<(), String> {
+    let mut registry = load_registry(config_dir).unwrap_or_default();
+    let Some(idx) = registry.entries.iter().position(|e| e.id == plugin_id) else {
+        return Ok(());
+    };
+    let entry = &mut registry.entries[idx];
+    match entry.fallback.take() {
+        Some(fallback) => {
+            entry.active = fallback;
+        }
+        None => {
+            registry.entries.remove(idx);
+        }
+    }
+    save_registry(config_dir, &registry)
+}
+
 /// Record a release-asset uninstall per the transition rules. If active is
 /// ReleaseAsset without a fallback, drops the whole entry. If active is
 /// DevLink/WorktreeLink, clears the fallback slot. If active is ReleaseAsset
@@ -358,6 +409,89 @@ mod tests {
     fn record_release_uninstall_is_noop_when_entry_missing() {
         let tmp = TempDir::new().unwrap();
         record_release_uninstall(tmp.path(), "absent-plugin").unwrap();
+        let registry = load_registry(tmp.path()).unwrap();
+        assert_eq!(registry.entries.len(), 0);
+    }
+
+    #[test]
+    fn record_dev_link_create_adds_new_entry_when_absent() {
+        let tmp = TempDir::new().unwrap();
+        record_dev_link_create(tmp.path(), "plugin-foo", PathBuf::from("/dev/src")).unwrap();
+        let registry = load_registry(tmp.path()).unwrap();
+        assert_eq!(registry.entries.len(), 1);
+        assert!(matches!(
+            registry.entries[0].active.source,
+            SlotSource::DevLink { .. }
+        ));
+        assert!(registry.entries[0].fallback.is_none());
+    }
+
+    #[test]
+    fn record_dev_link_create_promotes_release_asset_to_fallback() {
+        let tmp = TempDir::new().unwrap();
+        record_release_install(tmp.path(), "plugin-foo", PathBuf::from("/p/plugin-foo")).unwrap();
+        record_dev_link_create(tmp.path(), "plugin-foo", PathBuf::from("/dev/src")).unwrap();
+        let registry = load_registry(tmp.path()).unwrap();
+        assert_eq!(registry.entries.len(), 1);
+        assert!(matches!(
+            registry.entries[0].active.source,
+            SlotSource::DevLink { .. }
+        ));
+        let fallback = registry.entries[0].fallback.as_ref().unwrap();
+        assert!(matches!(fallback.source, SlotSource::ReleaseAsset));
+        assert_eq!(fallback.path, PathBuf::from("/p/plugin-foo"));
+    }
+
+    #[test]
+    fn record_dev_link_create_replaces_existing_dev_link_preserves_fallback() {
+        let tmp = TempDir::new().unwrap();
+        record_release_install(tmp.path(), "plugin-foo", PathBuf::from("/p/plugin-foo")).unwrap();
+        record_dev_link_create(tmp.path(), "plugin-foo", PathBuf::from("/dev/src-old")).unwrap();
+        record_dev_link_create(tmp.path(), "plugin-foo", PathBuf::from("/dev/src-new")).unwrap();
+
+        let registry = load_registry(tmp.path()).unwrap();
+        assert_eq!(
+            registry.entries[0].active.path,
+            PathBuf::from("/dev/src-new")
+        );
+        let fallback = registry.entries[0].fallback.as_ref().unwrap();
+        assert_eq!(fallback.path, PathBuf::from("/p/plugin-foo"));
+    }
+
+    #[test]
+    fn record_dev_link_remove_promotes_fallback_to_active() {
+        let tmp = TempDir::new().unwrap();
+        record_release_install(tmp.path(), "plugin-foo", PathBuf::from("/p/plugin-foo")).unwrap();
+        record_dev_link_create(tmp.path(), "plugin-foo", PathBuf::from("/dev/src")).unwrap();
+        record_dev_link_remove(tmp.path(), "plugin-foo").unwrap();
+
+        let registry = load_registry(tmp.path()).unwrap();
+        assert_eq!(registry.entries.len(), 1);
+        assert!(matches!(
+            registry.entries[0].active.source,
+            SlotSource::ReleaseAsset
+        ));
+        assert_eq!(
+            registry.entries[0].active.path,
+            PathBuf::from("/p/plugin-foo")
+        );
+        assert!(registry.entries[0].fallback.is_none());
+    }
+
+    #[test]
+    fn record_dev_link_remove_drops_entry_when_no_fallback() {
+        let tmp = TempDir::new().unwrap();
+        record_dev_link_create(tmp.path(), "plugin-foo", PathBuf::from("/dev/src")).unwrap();
+        record_dev_link_remove(tmp.path(), "plugin-foo").unwrap();
+
+        let registry = load_registry(tmp.path()).unwrap();
+        assert_eq!(registry.entries.len(), 0);
+    }
+
+    #[test]
+    fn record_dev_link_remove_is_noop_when_entry_missing() {
+        let tmp = TempDir::new().unwrap();
+        record_dev_link_remove(tmp.path(), "absent").unwrap();
         let registry = load_registry(tmp.path()).unwrap();
         assert_eq!(registry.entries.len(), 0);
     }

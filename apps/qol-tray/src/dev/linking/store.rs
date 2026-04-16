@@ -63,6 +63,7 @@ pub fn create_link(source: &Path, config_dir: &Path) -> Result<String, String> {
         crate::dev::find_git_worktree_base(source).unwrap_or_else(|| source.to_path_buf());
     links.insert(plugin_id.clone(), canonical.clone());
     save_dev_links(config_dir, &links)?;
+    crate::plugins::registry::record_dev_link_create(config_dir, &plugin_id, canonical.clone())?;
     log::info!("Created dev-link: {} -> {:?}", plugin_id, canonical);
     Ok(plugin_id)
 }
@@ -75,6 +76,7 @@ pub fn remove_link(id: &str, config_dir: &Path) -> Result<(), String> {
     }
 
     save_dev_links(config_dir, &links)?;
+    crate::plugins::registry::record_dev_link_remove(config_dir, id)?;
     log::info!("Removed dev-link: {}", id);
     Ok(())
 }
