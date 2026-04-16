@@ -63,6 +63,11 @@ pub fn lookup_active_path(config_dir: &Path, plugin_id: &str) -> Option<PathBuf>
         .map(|e| e.active.path)
 }
 
+pub fn current_active_path(plugin_id: &str) -> Option<PathBuf> {
+    let config_dir = crate::paths::shared_config_dir().ok()?;
+    lookup_active_path(&config_dir, plugin_id)
+}
+
 pub fn load_registry(config_dir: &Path) -> Result<Registry, String> {
     let path = registry_path(config_dir);
     let content = match std::fs::read_to_string(&path) {

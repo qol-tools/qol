@@ -92,12 +92,17 @@ fn add_unloaded_plugins(
     cached_versions: &HashMap<String, String>,
     plugins_by_id: &mut HashMap<PluginId, InstalledPlugin>,
 ) {
-    for (raw_id, plugin_dir) in read_installed_plugin_dirs(plugins_dir) {
+    for (raw_id, _plugin_dir) in read_installed_plugin_dirs(plugins_dir) {
         if plugins_by_id.contains_key(raw_id.as_str()) {
             continue;
         }
+        let resolved_root =
+            plugin_paths::resolve_plugin_root_from_plugins_dir(plugins_dir, &raw_id);
         let id = PluginId::new(raw_id);
-        plugins_by_id.insert(id.clone(), unloaded_plugin(id, plugin_dir, cached_versions));
+        plugins_by_id.insert(
+            id.clone(),
+            unloaded_plugin(id, resolved_root, cached_versions),
+        );
     }
 }
 

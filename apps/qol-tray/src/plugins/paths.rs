@@ -17,15 +17,10 @@ pub(crate) fn resolve_plugin_root(plugin_id: &str) -> Result<PathBuf> {
 }
 
 pub(crate) fn resolve_plugin_root_from_plugins_dir(plugins_dir: &Path, plugin_id: &str) -> PathBuf {
-    if let Some(active) = registry_active_path(plugin_id) {
+    if let Some(active) = crate::plugins::registry::current_active_path(plugin_id) {
         return active;
     }
     plugins_dir.join(plugin_id)
-}
-
-fn registry_active_path(plugin_id: &str) -> Option<PathBuf> {
-    let config_dir = crate::paths::shared_config_dir().ok()?;
-    crate::plugins::registry::lookup_active_path(&config_dir, plugin_id)
 }
 
 pub(crate) fn config_path(plugin_root: &Path) -> PathBuf {
