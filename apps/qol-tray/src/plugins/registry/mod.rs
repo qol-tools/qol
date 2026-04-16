@@ -54,6 +54,15 @@ pub fn registry_path(config_dir: &Path) -> PathBuf {
     config_dir.join(REGISTRY_FILE_NAME)
 }
 
+pub fn lookup_active_path(config_dir: &Path, plugin_id: &str) -> Option<PathBuf> {
+    let registry = load_registry(config_dir).ok()?;
+    registry
+        .entries
+        .into_iter()
+        .find(|e| e.id == plugin_id)
+        .map(|e| e.active.path)
+}
+
 pub fn load_registry(config_dir: &Path) -> Result<Registry, String> {
     let path = registry_path(config_dir);
     let content = match std::fs::read_to_string(&path) {
