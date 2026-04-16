@@ -216,6 +216,7 @@ pub fn open_url(url: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "dev")]
 pub fn repo_root_from_manifest_dir() -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut dir = manifest.as_path();
