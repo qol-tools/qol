@@ -36,7 +36,7 @@ function WorldViewSlot({ entry, cameraLayer, confinedPages, diveDepth, children 
     return html`<div class="world-view-slot" data-view-id=${entry.id} data-layer=${entry.layer} style=${style}>${children}</div>`;
 }
 
-export function renderWorldViews({ registry, cameraLayer, confinedPages, diveDepth, activePluginId, openPluginConfig, openPluginUi, closePluginConfig, syncStatus, syncProviders, onSyncStatusChange, refreshSyncStatus }) {
+export function renderWorldViews({ registry, cameraLayer, confinedPages, diveDepth, activePluginId, openPluginConfig, openPluginUi, closePluginConfig, syncStatus, syncProviders, onSyncStatusChange, refreshSyncStatus, devEnabled }) {
     const layer = cameraLayer != null ? cameraLayer : 0;
     const cp = confinedPages;
     const dd = diveDepth;
@@ -49,7 +49,7 @@ export function renderWorldViews({ registry, cameraLayer, confinedPages, diveDep
         <${WorldViewSlot} entry=${registry.getEntry('profile')} cameraLayer=${layer} confinedPages=${cp} diveDepth=${dd}><${ProfileView} syncStatus=${syncStatus}
             syncProviders=${syncProviders} onSyncStatusChange=${onSyncStatusChange} refreshSyncStatus=${refreshSyncStatus} /><//>
         <${WorldViewSlot} entry=${registry.getEntry('logs')} cameraLayer=${layer} confinedPages=${cp} diveDepth=${dd}><${LogsView} active=${true} /><//>
-        <${WorldViewSlot} entry=${registry.getEntry('dev')} cameraLayer=${layer} confinedPages=${cp} diveDepth=${dd}><${DevView} /><//>
+        ${devEnabled ? html`<${WorldViewSlot} entry=${registry.getEntry('dev')} cameraLayer=${layer} confinedPages=${cp} diveDepth=${dd}><${DevView} /><//>` : null}
         ${activePluginId && registry.getAllEntries()
             .filter(e => e.layer === -1 && e.id.startsWith(`${activePluginId}-`))
             .map(e => {

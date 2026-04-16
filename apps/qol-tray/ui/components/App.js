@@ -419,6 +419,7 @@ function AppShell() {
                                 syncProviders,
                                 onSyncStatusChange: setSyncStatus,
                                 refreshSyncStatus,
+                                devEnabled,
                             })}
                         `}
                     <//>
