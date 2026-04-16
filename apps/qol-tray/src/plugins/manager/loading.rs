@@ -1,7 +1,10 @@
 use super::{autostart, dev_registry, runtime, PluginManager};
-use crate::plugins::resolver::{PluginSource, ResolvedPlugin};
+use crate::plugins::registry::ensure_registry_initialized;
+use crate::plugins::resolver::{
+    resolve_from_registry, PluginSource, PluginUnavailable, ResolvedPlugin,
+};
 use crate::plugins::{Plugin, PluginId, PluginLoader};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -32,7 +35,7 @@ fn load_all_plugins() -> Result<LoadedPlugins> {
 fn resolution_context() -> Result<ResolutionContext> {
     let plugins_dir = PluginLoader::ensure_plugin_dir()?;
     dev_registry::migrate_symlinks_to_registry(&plugins_dir);
-    let resolved = resolve_plugins(&plugins_dir);
+    let resolved = resolve_plugins(&plugins_dir)?;
     log_resolved_plugins(&resolved);
     let resolved_sources = resolved_sources(&resolved);
     Ok(ResolutionContext {
@@ -41,8 +44,30 @@ fn resolution_context() -> Result<ResolutionContext> {
     })
 }
 
-fn resolve_plugins(plugins_dir: &Path) -> Vec<ResolvedPlugin> {
-    super::super::resolver::resolve_all(plugins_dir, &dev_registry::active_dev_links())
+fn resolve_plugins(plugins_dir: &Path) -> Result<Vec<ResolvedPlugin>> {
+    let config_dir =
+        crate::paths::shared_config_dir().context("resolve_plugins: shared_config_dir")?;
+    let registry = ensure_registry_initialized(&config_dir, plugins_dir)
+        .map_err(|e| anyhow::anyhow!("Failed to initialize plugin registry: {}", e))?;
+    let report = resolve_from_registry(&registry);
+    log_unavailable(&report.unavailable);
+    Ok(report.plugins)
+}
+
+fn log_unavailable(unavailable: &[PluginUnavailable]) {
+    for u in unavailable {
+        let fallback_info = match &u.fallback {
+            Some(f) => format!(" (fallback {} also failed: {})", f.path.display(), f.reason),
+            None => " (no fallback)".to_string(),
+        };
+        log::warn!(
+            "Plugin {} unavailable: active {} failed — {}{}",
+            u.id,
+            u.active.path.display(),
+            u.active.reason,
+            fallback_info
+        );
+    }
 }
 
 fn log_resolved_plugins(resolved: &[ResolvedPlugin]) {
