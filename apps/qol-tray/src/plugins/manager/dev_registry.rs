@@ -2,19 +2,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "dev")]
-pub(super) fn active_dev_links() -> HashMap<String, PathBuf> {
-    let Ok(config_dir) = crate::paths::shared_config_dir() else {
-        return HashMap::new();
-    };
-    crate::dev::active_dev_links(&config_dir)
-}
-
-#[cfg(not(feature = "dev"))]
-pub(super) fn active_dev_links() -> HashMap<String, PathBuf> {
-    HashMap::new()
-}
-
-#[cfg(feature = "dev")]
 pub(super) fn migrate_symlinks_to_registry(plugins_dir: &Path) {
     let Some(config_dir) = plugins_dir.parent() else {
         return;
