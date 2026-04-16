@@ -406,6 +406,38 @@ mod tests {
     }
 
     #[test]
+    fn record_release_uninstall_promotes_fallback_when_active_is_release_asset_with_fallback() {
+        let tmp = TempDir::new().unwrap();
+        let reg = Registry {
+            version: CURRENT_REGISTRY_VERSION,
+            entries: vec![Entry {
+                id: "plugin-foo".to_string(),
+                active: Slot {
+                    path: PathBuf::from("/p/plugin-foo"),
+                    source: SlotSource::ReleaseAsset,
+                },
+                fallback: Some(Slot {
+                    path: PathBuf::from("/dev/src"),
+                    source: SlotSource::DevLink {
+                        origin_path: PathBuf::from("/dev/src"),
+                    },
+                }),
+            }],
+        };
+        save_registry(tmp.path(), &reg).unwrap();
+
+        record_release_uninstall(tmp.path(), "plugin-foo").unwrap();
+        let registry = load_registry(tmp.path()).unwrap();
+        assert_eq!(registry.entries.len(), 1);
+        assert!(matches!(
+            registry.entries[0].active.source,
+            SlotSource::DevLink { .. }
+        ));
+        assert_eq!(registry.entries[0].active.path, PathBuf::from("/dev/src"));
+        assert!(registry.entries[0].fallback.is_none());
+    }
+
+    #[test]
     fn record_release_uninstall_is_noop_when_entry_missing() {
         let tmp = TempDir::new().unwrap();
         record_release_uninstall(tmp.path(), "absent-plugin").unwrap();
