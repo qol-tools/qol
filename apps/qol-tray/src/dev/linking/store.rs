@@ -84,11 +84,32 @@ fn validate_link_source(source: &Path) -> Result<String, String> {
         return Err("Source path does not exist".to_string());
     }
 
-    if !source.join("plugin.toml").exists() {
+    let canonical = source
+        .canonicalize()
+        .map_err(|e| format!("Failed to canonicalize {}: {}", source.display(), e))?;
+
+    if !canonical.is_dir() {
+        return Err(format!("Not a directory: {}", canonical.display()));
+    }
+
+    let manifest_path = canonical.join("plugin.toml");
+    if !manifest_path.exists() {
         return Err("No plugin.toml found in source".to_string());
     }
 
-    let plugin_id = source
+    let manifest_content = std::fs::read_to_string(&manifest_path)
+        .map_err(|e| format!("Failed to read {}: {}", manifest_path.display(), e))?;
+    let manifest: crate::plugins::manifest::PluginManifest = toml::from_str(&manifest_content)
+        .map_err(|e| format!("Failed to parse {}: {}", manifest_path.display(), e))?;
+    manifest.validate().map_err(|e| {
+        format!(
+            "Manifest validation failed for {}: {}",
+            manifest_path.display(),
+            e
+        )
+    })?;
+
+    let plugin_id = canonical
         .file_name()
         .ok_or_else(|| "Invalid path".to_string())?
         .to_string_lossy()
