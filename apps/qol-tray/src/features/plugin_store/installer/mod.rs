@@ -36,7 +36,6 @@ impl PluginInstaller {
     pub(crate) async fn install(&self, repo_url: &str, plugin_id: &str) -> Result<()> {
         validate_plugin_id(plugin_id)?;
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
-        operations::ensure_no_dev_link_conflict(plugin_id)?;
         operations::install(
             &self.plugins_dir,
             repo_url,
@@ -54,7 +53,6 @@ impl PluginInstaller {
     ) -> Result<()> {
         validate_plugin_id(plugin_id)?;
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
-        operations::ensure_no_dev_link_conflict(plugin_id)?;
         operations::install(
             &self.plugins_dir,
             repo_url,
@@ -67,7 +65,6 @@ impl PluginInstaller {
     pub(crate) async fn update(&self, repo_url: &str, plugin_id: &str) -> Result<()> {
         validate_plugin_id(plugin_id)?;
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
-        operations::ensure_no_dev_link_conflict(plugin_id)?;
         operations::update(
             &self.plugins_dir,
             repo_url,
@@ -85,7 +82,6 @@ impl PluginInstaller {
     ) -> Result<()> {
         validate_plugin_id(plugin_id)?;
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
-        operations::ensure_no_dev_link_conflict(plugin_id)?;
         operations::update(
             &self.plugins_dir,
             repo_url,
