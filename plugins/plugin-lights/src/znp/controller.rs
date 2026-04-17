@@ -127,7 +127,9 @@ impl ZigbeeController {
             if dev.network_address != nwk {
                 eprintln!(
                     "[znp] device {} NWK updated: 0x{:04X} → 0x{:04X}",
-                    format_ieee(&dev.ieee_address), dev.network_address, nwk,
+                    format_ieee(&dev.ieee_address),
+                    dev.network_address,
+                    nwk,
                 );
                 let mut updated = dev;
                 updated.network_address = nwk;

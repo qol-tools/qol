@@ -117,7 +117,9 @@ fn start_send_loop(
             let Some(cmd) = buffer.lock().ok().and_then(|mut b| b.take()) else {
                 continue;
             };
-            let Ok(mut guard) = service.lock() else { continue };
+            let Ok(mut guard) = service.lock() else {
+                continue;
+            };
             if let Some(svc) = guard.as_mut() {
                 dispatch(svc, &target, cmd);
             }
