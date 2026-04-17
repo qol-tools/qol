@@ -4,10 +4,7 @@ mod store;
 use serde::{Deserialize, Serialize};
 
 pub use listing::list_linked_plugins;
-pub use store::{
-    create_link, get_active_worktree_branch, load_dev_links, remove_link,
-    set_active_worktree_branch,
-};
+pub use store::{create_link, get_active_worktree_branch, remove_link, set_active_worktree_branch};
 
 pub fn active_dev_links(
     config_dir: &std::path::Path,
@@ -55,9 +52,9 @@ mod tests {
     }
 
     #[test]
-    fn load_dev_links_returns_empty_when_no_file() {
+    fn dev_linked_paths_empty_when_no_registry() {
         let tmp = TempDir::new().unwrap();
-        assert!(load_dev_links(tmp.path()).is_empty());
+        assert!(crate::plugins::registry::dev_linked_paths(tmp.path()).is_empty());
     }
 
     #[test]
@@ -70,7 +67,7 @@ mod tests {
         let id = create_link(&source, tmp.path()).unwrap();
         assert_eq!(id, "my-plugin");
 
-        let links = load_dev_links(tmp.path());
+        let links = crate::plugins::registry::dev_linked_paths(tmp.path());
         assert_eq!(links.len(), 1);
         assert_eq!(links["my-plugin"], source);
     }
@@ -114,7 +111,7 @@ mod tests {
         create_link(&source, tmp.path()).unwrap();
         remove_link("foo", tmp.path()).unwrap();
 
-        assert!(load_dev_links(tmp.path()).is_empty());
+        assert!(crate::plugins::registry::dev_linked_paths(tmp.path()).is_empty());
     }
 
     #[test]
