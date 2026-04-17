@@ -216,8 +216,7 @@ fn should_recreate_launcher(
     let Some(expected_bounds) = expected_bounds else {
         return false;
     };
-    let Ok(current_bounds) =
-        handle.update(cx, |_, window, _| window.window_bounds().get_bounds())
+    let Ok(current_bounds) = handle.update(cx, |_, window, _| window.window_bounds().get_bounds())
     else {
         return true;
     };
