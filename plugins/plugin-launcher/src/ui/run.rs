@@ -26,20 +26,18 @@ pub fn run() {
         return;
     }
 
+    let (tx, rx) = mpsc::channel();
+    if !daemon::start_listener(tx) {
+        eprintln!("[launcher] daemon listener failed, exiting");
+        return;
+    }
+    eprintln!("[launcher] daemon listener started");
+
     Application::new().run(move |cx: &mut App| {
         #[cfg(debug_assertions)]
         eprintln!("[launcher] run: pid={}", std::process::id());
 
         let focus_cache = MonitorTracker::start(cx);
-
-        let (tx, rx) = mpsc::channel();
-        if !daemon::start_listener(tx) {
-            #[cfg(debug_assertions)]
-            eprintln!("[launcher] daemon listener failed, quitting");
-            cx.quit();
-            return;
-        }
-        eprintln!("[launcher] daemon listener started");
 
         let entries: SharedEntries = Arc::new(Mutex::new(SharedEntryState::pending()));
         let active: Rc<RefCell<ActiveLaunchers>> =
