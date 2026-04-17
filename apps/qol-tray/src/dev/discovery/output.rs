@@ -18,7 +18,7 @@ pub fn discover_plugins(
     plugins_dir: &Path,
 ) -> Vec<DiscoveredPlugin> {
     let config_dir = plugins_dir.parent().unwrap_or(plugins_dir);
-    let dev_links = crate::dev::load_dev_links(config_dir);
+    let dev_links = crate::plugins::registry::dev_linked_paths(config_dir);
 
     let resolved_dev_links = crate::dev::active_dev_links(config_dir);
 
