@@ -36,6 +36,7 @@ export function PluginsGrid({ plugins, ghostPlugins, selectedIndex, contextMenuO
 function PluginCard({ plugin, index, selected, contextMenuOpen, updating, onCardClick, onSelect }) {
     const { ctrlHeld } = useModifierState();
     const cls = cardClassName(plugin);
+    const chip = pluginStatusChip(plugin);
     return html`
         <${Card} className=${cls}
              index=${index} selected=${selected} onSelect=${onSelect}
@@ -44,7 +45,10 @@ function PluginCard({ plugin, index, selected, contextMenuOpen, updating, onCard
             <img src=${plugin.has_cover && !brokenCovers.has(plugin.id) ? `/api/cover/${plugin.id}` : PLACEHOLDER_SVG}
                  alt=${plugin.name}
                  onError=${(e) => { brokenCovers.add(plugin.id); e.target.src = PLACEHOLDER_SVG; }} />
-            <div class="plugin-name" data-selected-text="">${plugin.name}</div>
+            <div class="plugin-name" data-selected-text="">
+                <span class="plugin-name-text">${plugin.name}</span>
+                ${chip && html`<span class="plugin-status-chip ${chip.className}" title=${chip.tooltip}>${chip.label}</span>`}
+            </div>
             ${plugin.loaded === false && html`<div class="plugin-load-state" data-selected-text="">Not loaded</div>`}
             ${plugin.update_available && html`<${PluginUpdateButton} plugin=${plugin} updating=${updating} />`}
             <${PluginCogButton} />
@@ -58,6 +62,32 @@ function PluginCard({ plugin, index, selected, contextMenuOpen, updating, onCard
             </div>
         <//>
     `;
+}
+
+function pluginStatusChip(plugin) {
+    if (plugin.unavailable) {
+        return {
+            label: 'Broken',
+            className: 'chip-unavailable',
+            tooltip: plugin.load_error || 'Plugin could not be resolved from registry.'
+        };
+    }
+    if (plugin.resolved_from === 'fallback') {
+        const reason = plugin.active_failure_reason || 'unknown reason';
+        return {
+            label: 'Fallback',
+            className: 'chip-fallback',
+            tooltip: `Dev-link unavailable: ${reason}. Showing installed copy.`
+        };
+    }
+    if (plugin.source === 'dev_linked') {
+        return {
+            label: 'Dev',
+            className: 'chip-dev',
+            tooltip: 'Running from a dev-link. Changes to the linked source take effect on reload.'
+        };
+    }
+    return null;
 }
 
 function PluginUpdateButton({ plugin, updating }) {
@@ -89,5 +119,7 @@ function cardClassName(plugin) {
     if (!plugin.has_custom_ui && !plugin.has_config) classes.push('no-ui');
     if (plugin.update_available) classes.push('has-update');
     if (plugin.loaded === false) classes.push('not-loaded');
+    if (plugin.unavailable) classes.push('unavailable');
+    if (plugin.resolved_from === 'fallback') classes.push('resolved-fallback');
     return classes.join(' ');
 }
