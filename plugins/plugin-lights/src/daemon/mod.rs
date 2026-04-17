@@ -179,7 +179,9 @@ fn dispatch_action(runtime: &mut DaemonRuntime, action: &str) -> DaemonOutcome {
         let devices: Vec<serde_json::Value> = match runtime {
             DaemonRuntime::Ready(s) => {
                 let guard = s.shared_service();
-                let Ok(lock) = guard.lock() else { return DaemonOutcome::Error("service lock poisoned".into()) };
+                let Ok(lock) = guard.lock() else {
+                    return DaemonOutcome::Error("service lock poisoned".into());
+                };
                 match lock.as_ref() {
                     Some(svc) => svc
                         .backend()

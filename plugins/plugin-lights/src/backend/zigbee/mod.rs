@@ -205,7 +205,10 @@ fn resolve_serial_port(configured: &str) -> Result<String> {
         return Ok(configured.to_string());
     }
 
-    eprintln!("configured serial port '{}' not found, falling back to auto-detection", configured);
+    eprintln!(
+        "configured serial port '{}' not found, falling back to auto-detection",
+        configured
+    );
     resolve_serial_port("auto")
 }
 
@@ -316,7 +319,10 @@ fn resolve_target(target: &LightTarget, controller: &ZigbeeController) -> Result
         return Ok((nwk, device));
     }
 
-    Err(anyhow!("invalid target ID '{}': expected IEEE (AA:BB:...) or NWK (0x1234)", id))
+    Err(anyhow!(
+        "invalid target ID '{}': expected IEEE (AA:BB:...) or NWK (0x1234)",
+        id
+    ))
 }
 
 fn resolve_sole_device(controller: &ZigbeeController) -> Result<(u16, Device)> {
@@ -334,7 +340,11 @@ fn resolve_sole_device(controller: &ZigbeeController) -> Result<(u16, Device)> {
     Ok((nwk, device))
 }
 
-fn resolve_by_ieee(controller: &ZigbeeController, ieee: &[u8; 8], label: &str) -> Result<(u16, Device)> {
+fn resolve_by_ieee(
+    controller: &ZigbeeController,
+    ieee: &[u8; 8],
+    label: &str,
+) -> Result<(u16, Device)> {
     let nwk = controller
         .resolve_nwk_address(ieee)
         .with_context(|| format!("device {} not reachable", label))?;

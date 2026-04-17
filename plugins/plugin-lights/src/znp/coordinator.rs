@@ -260,7 +260,11 @@ pub fn resolve_nwk_address(engine: &RequestEngine, ieee: &[u8; 8]) -> Result<u16
     engine.sreq(ZDO, zdo::NWK_ADDR_REQ, data)?;
     let rsp = engine.wait_for_areq(ZDO, zdo::NWK_ADDR_RSP, NWK_ADDR_TIMEOUT)?;
     let status = rsp.data.first().copied().unwrap_or(0xFF);
-    ensure!(status == STATUS_SUCCESS, "NWK_ADDR_REQ failed: status=0x{:02X}", status);
+    ensure!(
+        status == STATUS_SUCCESS,
+        "NWK_ADDR_REQ failed: status=0x{:02X}",
+        status
+    );
     ensure!(rsp.data.len() >= 11, "NWK_ADDR_RSP too short");
     let nwk = u16::from_le_bytes([rsp.data[9], rsp.data[10]]);
     Ok(nwk)
