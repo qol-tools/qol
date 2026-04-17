@@ -20,6 +20,7 @@ pub struct DaemonConfig {
 pub enum ReadResult<C> {
     Command(C),
     Handled,
+    HandledWithData(serde_json::Value),
     Fallback,
     Error(&'static str),
     Ignore,
@@ -140,6 +141,9 @@ pub fn start_listener<C: Send + 'static>(
                         }
                         ReadResult::Handled => {
                             write_response(&mut s, &DaemonResponse::Handled { data: None });
+                        }
+                        ReadResult::HandledWithData(data) => {
+                            write_response(&mut s, &DaemonResponse::Handled { data: Some(data) });
                         }
                         ReadResult::Fallback => {
                             write_response(&mut s, &DaemonResponse::Fallback);
