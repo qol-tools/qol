@@ -1,5 +1,4 @@
 mod autostart;
-mod dev_registry;
 mod loading;
 mod runtime;
 
