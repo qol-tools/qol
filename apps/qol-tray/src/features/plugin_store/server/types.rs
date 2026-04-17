@@ -165,6 +165,10 @@ pub(super) struct InstalledPlugin {
     pub(super) available_version: Option<String>,
     pub(super) update_available: bool,
     pub(super) actions: Vec<PluginAction>,
+    pub(super) source: Option<&'static str>,
+    pub(super) resolved_from: Option<&'static str>,
+    pub(super) active_failure_reason: Option<String>,
+    pub(super) unavailable: bool,
 }
 
 #[derive(Serialize)]
