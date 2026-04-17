@@ -5,7 +5,6 @@ use std::time::Duration;
 use tokio::task::JoinSet;
 
 use crate::daemon::EventBus;
-use crate::dev;
 use crate::dev::adapters::{CoreEventSink, DevMockTarget, DevRuntimeStateStore};
 use crate::dev::core::{BuildStatus, CoreBuildResult, CoreEvent};
 
