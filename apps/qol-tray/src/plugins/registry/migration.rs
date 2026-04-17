@@ -1,20 +1,23 @@
 use crate::plugins::registry::{
     load_registry, registry_path, save_registry, Entry, Registry, Slot, SlotSource,
 };
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 const LEGACY_DEV_LINKS_RELPATH: &str = "dev/links.json";
+const LEGACY_DEV_LINKS_CORRUPT_PREFIX: &str = "dev/links.json.corrupt.";
 
 pub fn ensure_registry_initialized(
     config_dir: &Path,
     plugins_dir: &Path,
 ) -> Result<Registry, String> {
-    clean_up_legacy_dev_links(config_dir);
     if registry_path(config_dir).exists() {
+        clean_up_legacy_dev_links(config_dir);
         return load_registry(config_dir);
     }
-    let registry = build_from_installed_plugins(plugins_dir);
+    let registry = build_from_legacy_state(config_dir, plugins_dir);
     save_registry(config_dir, &registry)?;
+    clean_up_legacy_dev_links(config_dir);
     Ok(registry)
 }
 
@@ -29,22 +32,101 @@ fn clean_up_legacy_dev_links(config_dir: &Path) {
     }
 }
 
-fn build_from_installed_plugins(plugins_dir: &Path) -> Registry {
-    let mut entries: Vec<Entry> = scan_installed_plugins(plugins_dir)
-        .into_iter()
-        .map(|(id, path)| Entry {
-            id,
-            active: Slot {
-                path,
-                source: SlotSource::ReleaseAsset,
+fn build_from_legacy_state(config_dir: &Path, plugins_dir: &Path) -> Registry {
+    let mut by_id: HashMap<String, Entry> = HashMap::new();
+
+    for (id, path) in scan_installed_plugins(plugins_dir) {
+        by_id.insert(
+            id.clone(),
+            Entry {
+                id,
+                active: Slot {
+                    path,
+                    source: SlotSource::ReleaseAsset,
+                },
+                fallback: None,
             },
-            fallback: None,
-        })
-        .collect();
+        );
+    }
+
+    match read_legacy_dev_links(config_dir) {
+        LegacyDevLinks::Parsed(links) => {
+            for (id, path) in links {
+                if !is_valid_dev_link_target(&path) {
+                    log::warn!(
+                        "Skipping dev-link during migration: id={} path={} (invalid or missing target)",
+                        id,
+                        path.display()
+                    );
+                    continue;
+                }
+                merge_dev_link_into(&mut by_id, id, path);
+            }
+        }
+        LegacyDevLinks::Corrupt(reason) => {
+            log::error!(
+                "Legacy dev-links file is corrupt; dev-links not migrated: {}",
+                reason
+            );
+        }
+        LegacyDevLinks::Absent => {}
+    }
+
+    let mut entries: Vec<Entry> = by_id.into_values().collect();
     entries.sort_by(|a, b| a.id.cmp(&b.id));
     Registry {
         version: 1,
         entries,
+    }
+}
+
+enum LegacyDevLinks {
+    Parsed(HashMap<String, PathBuf>),
+    Corrupt(String),
+    Absent,
+}
+
+fn read_legacy_dev_links(config_dir: &Path) -> LegacyDevLinks {
+    let path = config_dir.join(LEGACY_DEV_LINKS_RELPATH);
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return LegacyDevLinks::Absent,
+        Err(e) => {
+            let reason = format!("Failed to read {}: {}", path.display(), e);
+            back_up_corrupt_dev_links(config_dir, &path);
+            return LegacyDevLinks::Corrupt(reason);
+        }
+    };
+    match serde_json::from_str::<HashMap<String, PathBuf>>(&content) {
+        Ok(map) => LegacyDevLinks::Parsed(map),
+        Err(e) => {
+            back_up_corrupt_dev_links(config_dir, &path);
+            LegacyDevLinks::Corrupt(format!("Failed to parse {}: {}", path.display(), e))
+        }
+    }
+}
+
+fn is_valid_dev_link_target(path: &Path) -> bool {
+    if !path.is_dir() {
+        return false;
+    }
+    let manifest = path.join("plugin.toml");
+    manifest.exists() && manifest_parses_and_version_valid(&manifest)
+}
+
+fn back_up_corrupt_dev_links(config_dir: &Path, original: &Path) {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let corrupt_path = config_dir.join(format!("{}{}.bak", LEGACY_DEV_LINKS_CORRUPT_PREFIX, ts));
+    match std::fs::rename(original, &corrupt_path) {
+        Ok(()) => log::info!(
+            "Backed up corrupt {} to {}",
+            original.display(),
+            corrupt_path.display()
+        ),
+        Err(e) => log::error!("Failed to back up corrupt {}: {}", original.display(), e),
     }
 }
 
@@ -68,7 +150,7 @@ fn scan_installed_plugins(plugins_dir: &Path) -> Vec<(String, PathBuf)> {
         }
         if !manifest_parses_and_version_valid(&manifest) {
             log::warn!(
-                "Skipping {} during initial registry build: manifest parse or version check failed",
+                "Skipping {} during migration: manifest parse or version check failed",
                 path.display()
             );
             continue;
@@ -86,6 +168,32 @@ fn manifest_parses_and_version_valid(manifest_path: &Path) -> bool {
         return false;
     };
     manifest.validate_version().is_ok()
+}
+
+fn merge_dev_link_into(by_id: &mut HashMap<String, Entry>, id: String, path: PathBuf) {
+    let dev_slot = Slot {
+        path: path.clone(),
+        source: SlotSource::DevLink { origin_path: path },
+    };
+    if let Some(existing) = by_id.remove(&id) {
+        by_id.insert(
+            id.clone(),
+            Entry {
+                id,
+                active: dev_slot,
+                fallback: Some(existing.active),
+            },
+        );
+    } else {
+        by_id.insert(
+            id.clone(),
+            Entry {
+                id,
+                active: dev_slot,
+                fallback: None,
+            },
+        );
+    }
 }
 
 #[cfg(test)]
@@ -108,8 +216,15 @@ mod tests {
         dir
     }
 
+    fn write_legacy_dev_links(config_dir: &Path, links: &HashMap<String, PathBuf>) {
+        let dev_dir = config_dir.join("dev");
+        fs::create_dir_all(&dev_dir).unwrap();
+        let json = serde_json::to_string_pretty(links).unwrap();
+        fs::write(config_dir.join(LEGACY_DEV_LINKS_RELPATH), json).unwrap();
+    }
+
     #[test]
-    fn builds_registry_from_installed_plugins() {
+    fn builds_registry_from_installed_plugins_only() {
         let tmp = TempDir::new().unwrap();
         let plugins_dir = tmp.path().join("plugins");
         fs::create_dir(&plugins_dir).unwrap();
@@ -127,19 +242,163 @@ mod tests {
     }
 
     #[test]
-    fn idempotent_when_registry_already_exists() {
+    fn pairs_dev_link_with_installed_as_fallback() {
         let tmp = TempDir::new().unwrap();
         let plugins_dir = tmp.path().join("plugins");
         fs::create_dir(&plugins_dir).unwrap();
-        make_plugin_dir(&plugins_dir, "plugin-a");
+        let installed = make_plugin_dir(&plugins_dir, "plugin-foo");
+        let dev_src = tmp.path().join("dev-src");
+        make_plugin_dir(tmp.path(), "dev-src");
+
+        let mut links = HashMap::new();
+        links.insert("plugin-foo".to_string(), dev_src.clone());
+        write_legacy_dev_links(tmp.path(), &links);
+
+        let registry = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
+        let entry = registry
+            .entries
+            .iter()
+            .find(|e| e.id == "plugin-foo")
+            .unwrap();
+
+        assert!(matches!(entry.active.source, SlotSource::DevLink { .. }));
+        assert_eq!(entry.active.path, dev_src);
+        let fallback = entry.fallback.as_ref().unwrap();
+        assert!(matches!(fallback.source, SlotSource::ReleaseAsset));
+        assert_eq!(fallback.path, installed);
+    }
+
+    #[test]
+    fn dev_link_without_install_has_no_fallback() {
+        let tmp = TempDir::new().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        fs::create_dir(&plugins_dir).unwrap();
+        let dev_src = make_plugin_dir(tmp.path(), "dev-only");
+
+        let mut links = HashMap::new();
+        links.insert("dev-only".to_string(), dev_src);
+        write_legacy_dev_links(tmp.path(), &links);
+
+        let registry = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
+        let entry = registry
+            .entries
+            .iter()
+            .find(|e| e.id == "dev-only")
+            .unwrap();
+
+        assert!(matches!(entry.active.source, SlotSource::DevLink { .. }));
+        assert!(entry.fallback.is_none());
+    }
+
+    #[test]
+    fn legacy_file_removed_after_first_migration() {
+        let tmp = TempDir::new().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        fs::create_dir(&plugins_dir).unwrap();
+        write_legacy_dev_links(tmp.path(), &HashMap::new());
+
+        let _ = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
+        assert!(!tmp.path().join(LEGACY_DEV_LINKS_RELPATH).exists());
+    }
+
+    #[test]
+    fn does_not_rebuild_registry_once_it_exists_even_if_legacy_reappears() {
+        let tmp = TempDir::new().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        fs::create_dir(&plugins_dir).unwrap();
 
         let first = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
-        make_plugin_dir(&plugins_dir, "plugin-b");
-        let second = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
+        assert_eq!(first.entries.len(), 0);
 
-        assert_eq!(first, second);
-        assert_eq!(second.entries.len(), 1);
-        assert_eq!(second.entries[0].id, "plugin-a");
+        let dev_src = make_plugin_dir(tmp.path(), "new-dev-link");
+        let mut links = HashMap::new();
+        links.insert("new-dev-link".to_string(), dev_src);
+        write_legacy_dev_links(tmp.path(), &links);
+
+        let second = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
+        assert_eq!(second.entries.len(), 0);
+        assert!(!tmp.path().join(LEGACY_DEV_LINKS_RELPATH).exists());
+    }
+
+    #[test]
+    fn skips_dev_link_with_missing_target() {
+        let tmp = TempDir::new().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        fs::create_dir(&plugins_dir).unwrap();
+
+        let mut links = HashMap::new();
+        links.insert("stale".to_string(), tmp.path().join("nonexistent-dev-src"));
+        write_legacy_dev_links(tmp.path(), &links);
+
+        let registry = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
+        assert_eq!(registry.entries.len(), 0);
+    }
+
+    #[test]
+    fn skips_dev_link_with_invalid_manifest() {
+        let tmp = TempDir::new().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        fs::create_dir(&plugins_dir).unwrap();
+
+        let dev_src = tmp.path().join("bad-dev-src");
+        fs::create_dir(&dev_src).unwrap();
+        fs::write(dev_src.join("plugin.toml"), "not valid toml {{{").unwrap();
+
+        let mut links = HashMap::new();
+        links.insert("bad".to_string(), dev_src);
+        write_legacy_dev_links(tmp.path(), &links);
+
+        let registry = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
+        assert_eq!(registry.entries.len(), 0);
+    }
+
+    #[test]
+    fn stale_dev_link_leaves_installed_fallback_as_sole_release_entry() {
+        let tmp = TempDir::new().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        fs::create_dir(&plugins_dir).unwrap();
+        let installed = make_plugin_dir(&plugins_dir, "plugin-foo");
+
+        let mut links = HashMap::new();
+        links.insert(
+            "plugin-foo".to_string(),
+            tmp.path().join("nonexistent-dev-src"),
+        );
+        write_legacy_dev_links(tmp.path(), &links);
+
+        let registry = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
+        assert_eq!(registry.entries.len(), 1);
+        let entry = &registry.entries[0];
+        assert!(matches!(entry.active.source, SlotSource::ReleaseAsset));
+        assert_eq!(entry.active.path, installed);
+        assert!(entry.fallback.is_none());
+    }
+
+    #[test]
+    fn corrupt_dev_links_are_backed_up_and_migration_continues() {
+        let tmp = TempDir::new().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        fs::create_dir(&plugins_dir).unwrap();
+        make_plugin_dir(&plugins_dir, "installed");
+
+        let dev_dir = tmp.path().join("dev");
+        fs::create_dir_all(&dev_dir).unwrap();
+        fs::write(tmp.path().join(LEGACY_DEV_LINKS_RELPATH), "{{{ not json").unwrap();
+
+        let registry = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
+        assert_eq!(registry.entries.len(), 1);
+        assert_eq!(registry.entries[0].id, "installed");
+
+        let corrupt_present = fs::read_dir(&dev_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("links.json.corrupt.")
+            });
+        assert!(corrupt_present);
+        assert!(!tmp.path().join(LEGACY_DEV_LINKS_RELPATH).exists());
     }
 
     #[test]
@@ -175,29 +434,18 @@ mod tests {
     }
 
     #[test]
-    fn legacy_dev_links_file_is_removed_on_boot() {
+    fn idempotent_when_registry_already_exists() {
         let tmp = TempDir::new().unwrap();
         let plugins_dir = tmp.path().join("plugins");
         fs::create_dir(&plugins_dir).unwrap();
-        fs::create_dir_all(tmp.path().join("dev")).unwrap();
-        fs::write(tmp.path().join(LEGACY_DEV_LINKS_RELPATH), "{}").unwrap();
+        make_plugin_dir(&plugins_dir, "plugin-a");
 
-        let _ = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
-        assert!(!tmp.path().join(LEGACY_DEV_LINKS_RELPATH).exists());
-    }
-
-    #[test]
-    fn does_not_rescan_plugins_dir_after_registry_exists() {
-        let tmp = TempDir::new().unwrap();
-        let plugins_dir = tmp.path().join("plugins");
-        fs::create_dir(&plugins_dir).unwrap();
-
-        let initial = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
-        assert_eq!(initial.entries.len(), 0);
-
-        make_plugin_dir(&plugins_dir, "dropped-in");
-
+        let first = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
+        make_plugin_dir(&plugins_dir, "plugin-b");
         let second = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
-        assert_eq!(second.entries.len(), 0);
+
+        assert_eq!(first, second);
+        assert_eq!(second.entries.len(), 1);
+        assert_eq!(second.entries[0].id, "plugin-a");
     }
 }
