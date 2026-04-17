@@ -1,4 +1,4 @@
-use super::{autostart, dev_registry, runtime, PluginManager};
+use super::{autostart, runtime, PluginManager};
 use crate::plugins::registry::ensure_registry_initialized;
 use crate::plugins::resolver::{
     resolve_from_registry, PluginSource, PluginUnavailable, ResolutionReport, ResolvedPlugin,
@@ -38,7 +38,6 @@ fn load_all_plugins() -> Result<LoadedPlugins> {
 
 fn resolution_context() -> Result<ResolutionContext> {
     let plugins_dir = PluginLoader::ensure_plugin_dir()?;
-    dev_registry::migrate_symlinks_to_registry(&plugins_dir);
     let report = resolve_plugins(&plugins_dir)?;
     log_resolved_plugins(&report.plugins);
     let resolved_sources = resolved_sources(&report.plugins);
