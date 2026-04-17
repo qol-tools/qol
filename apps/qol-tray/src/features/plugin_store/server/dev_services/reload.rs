@@ -87,7 +87,7 @@ fn run_build(task: &ReloadTask) {
     let dev_links: std::collections::HashMap<String, std::path::PathBuf> = task
         .config_dir
         .as_deref()
-        .map(dev::load_dev_links)
+        .map(crate::plugins::registry::dev_linked_paths)
         .unwrap_or_default()
         .into_iter()
         .filter(|(k, _)| task.plugin_filter.as_ref().is_none_or(|id| k == id))

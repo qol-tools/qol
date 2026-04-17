@@ -12,7 +12,7 @@ pub use store::{
 pub fn active_dev_links(
     config_dir: &std::path::Path,
 ) -> std::collections::HashMap<String, std::path::PathBuf> {
-    let base = load_dev_links(config_dir);
+    let base = crate::plugins::registry::dev_linked_paths(config_dir);
     crate::dev::resolve_worktree_paths(&base, get_active_worktree_branch(config_dir).as_deref())
 }
 

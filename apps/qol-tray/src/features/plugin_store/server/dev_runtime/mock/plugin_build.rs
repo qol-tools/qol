@@ -171,7 +171,7 @@ fn mock_build_delays(plugin_id: &str) -> (Duration, Duration) {
 
 fn mock_plugin_ids(config_dir: Option<&Path>, fallback_plugin_ids: Vec<String>) -> Vec<String> {
     let mut plugin_ids: Vec<String> = config_dir
-        .map(dev::load_dev_links)
+        .map(crate::plugins::registry::dev_linked_paths)
         .unwrap_or_default()
         .into_keys()
         .collect();

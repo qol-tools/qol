@@ -53,14 +53,14 @@ pub fn get_active_worktree_branch(config_dir: &Path) -> Option<String> {
 
 pub fn create_link(source: &Path, config_dir: &Path) -> Result<String, String> {
     let plugin_id = validate_link_source(source)?;
-    let mut links = load_dev_links(config_dir);
 
-    if links.contains_key(&plugin_id) {
+    if crate::plugins::registry::dev_linked_paths(config_dir).contains_key(&plugin_id) {
         return Err("Already linked".to_string());
     }
 
     let canonical =
         crate::dev::find_git_worktree_base(source).unwrap_or_else(|| source.to_path_buf());
+    let mut links = load_dev_links(config_dir);
     links.insert(plugin_id.clone(), canonical.clone());
     save_dev_links(config_dir, &links)?;
     crate::plugins::registry::record_dev_link_create(config_dir, &plugin_id, canonical.clone())?;
@@ -69,12 +69,11 @@ pub fn create_link(source: &Path, config_dir: &Path) -> Result<String, String> {
 }
 
 pub fn remove_link(id: &str, config_dir: &Path) -> Result<(), String> {
-    let mut links = load_dev_links(config_dir);
-
-    if links.remove(id).is_none() {
+    if !crate::plugins::registry::dev_linked_paths(config_dir).contains_key(id) {
         return Err("Plugin not dev-linked".to_string());
     }
-
+    let mut links = load_dev_links(config_dir);
+    links.remove(id);
     save_dev_links(config_dir, &links)?;
     crate::plugins::registry::record_dev_link_remove(config_dir, id)?;
     log::info!("Removed dev-link: {}", id);
