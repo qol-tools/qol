@@ -68,6 +68,21 @@ pub fn current_active_path(plugin_id: &str) -> Option<PathBuf> {
     lookup_active_path(&config_dir, plugin_id)
 }
 
+pub fn dev_linked_paths(config_dir: &Path) -> std::collections::HashMap<String, PathBuf> {
+    load_registry(config_dir)
+        .map(|r| r.entries)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| {
+            matches!(
+                e.active.source,
+                SlotSource::DevLink { .. } | SlotSource::WorktreeLink { .. }
+            )
+        })
+        .map(|e| (e.id, e.active.path))
+        .collect()
+}
+
 /// Record a release-asset install in the registry per the "Plugin-store install
 /// as a pointer write" transition rules. If the plugin isn't in the registry,
 /// creates an entry with ReleaseAsset active. If it is and active is already
