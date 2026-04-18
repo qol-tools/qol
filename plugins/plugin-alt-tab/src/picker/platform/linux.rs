@@ -25,7 +25,7 @@ pub fn picker_window_kind() -> gpui::WindowKind {
 }
 
 pub fn dismiss_picker(window: &mut gpui::Window) {
-    window.minimize_window();
+    window.remove_window();
 }
 
 pub fn is_modifier_held() -> bool {
