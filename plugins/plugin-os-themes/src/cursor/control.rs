@@ -1,3 +1,8 @@
+// Some symbols here are only consumed by the Linux cursor effect; the macOS
+// and Windows stubs short-circuit before touching this control loop. The
+// allow keeps clippy quiet on hosts that don't yet have a real impl.
+#![allow(dead_code)]
+
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub trait RunControl {
