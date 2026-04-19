@@ -85,7 +85,7 @@ fn scan_desktop_entries(dirs: &[PathBuf]) -> Vec<AppEntry> {
         .filter_map(|p| parse_desktop_entry(&p))
         .collect();
 
-    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    entries.sort_by_key(|e| e.name.to_lowercase());
     entries.dedup_by(|a, b| a.name.to_lowercase() == b.name.to_lowercase());
     entries
 }
