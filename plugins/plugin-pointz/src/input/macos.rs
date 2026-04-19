@@ -75,11 +75,10 @@ impl InputHandlerTrait for InputHandlerImpl {
                 .current_pos
                 .lock()
                 .expect("Cursor position mutex poisoned");
-            let button = self
+            let button = *self
                 .button_state
                 .lock()
-                .expect("Button state mutex poisoned")
-                .clone();
+                .expect("Button state mutex poisoned");
 
             let (new_x, new_y) = if let Some((px, py)) = *pos_opt {
                 (px + x, py + y)
@@ -526,30 +525,6 @@ impl InputHandlerImpl {
     }
 }
 
-mod tests {
-    #[test]
-    fn test_drag_batching_accumulates_movement() {
-        let handler = InputHandlerImpl::new().unwrap();
-
-        let mut drag = handler.drag_state.lock().unwrap();
-        drag.pending_x = 0.0;
-        drag.pending_y = 0.0;
-
-        assert_eq!(drag.pending_x, 0.0);
-        assert_eq!(drag.pending_y, 0.0);
-    }
-
-    #[test]
-    fn test_drag_state_initialized() {
-        let handler = InputHandlerImpl::new().unwrap();
-        let drag = handler.drag_state.lock().unwrap();
-
-        assert_eq!(drag.pending_x, 0.0);
-        assert_eq!(drag.pending_y, 0.0);
-        assert!(drag.button.is_none());
-    }
-}
-
 fn string_to_key(s: &str) -> Option<Key> {
     match s {
         " " => Some(Key::Space),
@@ -630,5 +605,32 @@ fn string_to_key(s: &str) -> Option<Key> {
             }
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_drag_batching_accumulates_movement() {
+        let handler = InputHandlerImpl::new().unwrap();
+
+        let mut drag = handler.drag_state.lock().unwrap();
+        drag.pending_x = 0.0;
+        drag.pending_y = 0.0;
+
+        assert_eq!(drag.pending_x, 0.0);
+        assert_eq!(drag.pending_y, 0.0);
+    }
+
+    #[test]
+    fn test_drag_state_initialized() {
+        let handler = InputHandlerImpl::new().unwrap();
+        let drag = handler.drag_state.lock().unwrap();
+
+        assert_eq!(drag.pending_x, 0.0);
+        assert_eq!(drag.pending_y, 0.0);
+        assert!(drag.button.is_none());
     }
 }

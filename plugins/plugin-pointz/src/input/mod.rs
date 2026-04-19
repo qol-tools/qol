@@ -1,12 +1,21 @@
+//! Cross-platform cursor/keyboard input dispatch.
+//!
+//! Each `<os>.rs` provides an `InputHandlerImpl` that implements
+//! [`InputHandlerTrait`]. The wiring layer below picks the correct impl per
+//! target. Unsupported OSes get an `other.rs` stub that returns typed `Err`
+//! at construction time, so the binary still compiles and the daemon can
+//! report "not supported" cleanly instead of panicking.
+//!
+//! See `workspace/.claude/skills/qol-architecture` for the pattern rules.
+
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+mod other;
 #[cfg(target_os = "linux")]
 mod unix;
-#[cfg(windows)]
+#[cfg(target_os = "windows")]
 mod windows;
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-compile_error!("plugin-pointz: unsupported target OS");
 
 use crate::domain::models::{Command, ModifierKeys};
 use anyhow::Result;
@@ -17,8 +26,11 @@ use unix::InputHandlerImpl;
 #[cfg(target_os = "macos")]
 use macos::InputHandlerImpl;
 
-#[cfg(windows)]
+#[cfg(target_os = "windows")]
 use windows::InputHandlerImpl;
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+use other::InputHandlerImpl;
 
 pub struct InputHandler {
     inner: InputHandlerImpl,

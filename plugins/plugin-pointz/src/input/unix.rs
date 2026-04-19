@@ -5,8 +5,6 @@ use anyhow::Result;
 use rdev::{simulate, Button, EventType, Key, SimulateError};
 use std::sync::Mutex;
 use std::time::Duration;
-
-#[cfg(target_os = "linux")]
 use x11::xlib;
 
 pub struct InputHandlerImpl {
