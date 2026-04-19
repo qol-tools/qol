@@ -31,7 +31,7 @@ pub fn load_app_entries() -> Vec<AppEntry> {
         collect_apps(dir, 0, &mut entries);
     }
     entries.retain(|e| !is_excluded_launcher(&e.name));
-    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    entries.sort_by_key(|e| e.name.to_lowercase());
     entries.dedup_by(|a, b| a.name.to_lowercase() == b.name.to_lowercase());
     entries
 }

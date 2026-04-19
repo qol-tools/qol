@@ -14,7 +14,7 @@ pub(crate) fn scan_files(roots: Vec<PathBuf>) -> Vec<FileEntry> {
         }
         collect_files(&root, 0, &mut files);
     }
-    files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    files.sort_by_key(|f| f.name.to_lowercase());
     files
 }
 
