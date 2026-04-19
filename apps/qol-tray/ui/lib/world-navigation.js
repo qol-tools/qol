@@ -28,6 +28,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
                 currentAnchor: { pageId: currentAnchor.pageId },
                 zoom: camera.zoom,
                 focusRegistry: { ...focusRegistry },
+                lastViewedSection: { ...lastViewedSection },
             };
             localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
         } catch {}
@@ -45,6 +46,9 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         : { pageId: null };
     const focusRegistry = (persisted?.focusRegistry && typeof persisted.focusRegistry === 'object')
         ? { ...persisted.focusRegistry }
+        : {};
+    const lastViewedSection = (persisted?.lastViewedSection && typeof persisted.lastViewedSection === 'object')
+        ? { ...persisted.lastViewedSection }
         : {};
     const diveStack = [];
     let currentConfinement = null;
@@ -80,6 +84,9 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
 
     function setCurrentAnchor(anchor) {
         currentAnchor = { pageId: anchor.pageId };
+        if (currentSourceSelector && anchor.pageId && currentConfinedPages.includes(anchor.pageId)) {
+            lastViewedSection[currentSourceSelector] = anchor.pageId;
+        }
         notifyAnchorChange();
         scheduleSave();
     }
@@ -204,9 +211,13 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         currentTraits = target.traits || {};
         currentSourceSelector = sourceSelector;
         setBounds(null);
-        const firstPageId = target.pages[0];
-        if (firstPageId) {
-            currentAnchor = { pageId: firstPageId };
+        const remembered = lastViewedSection[sourceSelector];
+        const landingPageId = (remembered && currentConfinedPages.includes(remembered))
+            ? remembered
+            : target.pages[0];
+        if (landingPageId) {
+            currentAnchor = { pageId: landingPageId };
+            lastViewedSection[sourceSelector] = landingPageId;
             notifyAnchorChange();
             gotoAnchor(currentAnchor, { respectKnob: false });
         } else if (target.claim.layer !== camera.layer && typeof camera.setLayer === 'function') {
