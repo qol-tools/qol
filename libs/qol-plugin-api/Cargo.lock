@@ -7373,4 +7373,4 @@ dependencies = [
 
 [[patch.unused]]
 name = "qol-tray"
-version = "3.9.1"
+version = "3.7.1"
