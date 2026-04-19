@@ -38,7 +38,7 @@ impl CursorPlatform for Platform {
 
 fn register(signal: libc::c_int) {
     unsafe {
-        libc::signal(signal, handle_signal as libc::sighandler_t);
+        libc::signal(signal, handle_signal as *const () as libc::sighandler_t);
     }
 }
 
