@@ -12,3 +12,4 @@
 .idea/
 .cargo/config.toml
 .worktrees/
+.superpowers/

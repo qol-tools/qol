@@ -1,4 +1,0 @@
-{"type":"server-started","port":58410,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:58410","screen_dir":"/Users/kaho/repos/private/qol-tools/qol-tray/.superpowers/brainstorm/94205-1775415567/content","state_dir":"/Users/kaho/repos/private/qol-tools/qol-tray/.superpowers/brainstorm/94205-1775415567/state"}
-{"type":"screen-added","file":"/Users/kaho/repos/private/qol-tools/qol-tray/.superpowers/brainstorm/94205-1775415567/content/layer-concept.html"}
-{"type":"screen-added","file":"/Users/kaho/repos/private/qol-tools/qol-tray/.superpowers/brainstorm/94205-1775415567/content/waiting.html"}
-{"type":"server-stopped","reason":"idle timeout"}
