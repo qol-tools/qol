@@ -20,8 +20,7 @@ pub struct Subscription {
 
 impl PlatformStateClient {
     pub fn from_env() -> Self {
-        let path =
-            std::env::var(ENV_STATE_SOCKET).unwrap_or_else(|_| DEFAULT_SOCKET.to_string());
+        let path = std::env::var(ENV_STATE_SOCKET).unwrap_or_else(|_| DEFAULT_SOCKET.to_string());
         Self {
             socket_path: PathBuf::from(path),
         }

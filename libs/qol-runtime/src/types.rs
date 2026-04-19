@@ -40,14 +40,17 @@ pub struct PlatformState {
 
 impl PlatformState {
     pub fn active_monitor(&self) -> Option<MonitorBounds> {
-        self.active_monitor_idx.and_then(|i| self.monitors.get(i).copied())
+        self.active_monitor_idx
+            .and_then(|i| self.monitors.get(i).copied())
     }
 
     pub fn cursor_monitor(&self) -> Option<MonitorBounds> {
-        self.cursor_monitor_idx.and_then(|i| self.monitors.get(i).copied())
+        self.cursor_monitor_idx
+            .and_then(|i| self.monitors.get(i).copied())
     }
 
     pub fn focus_monitor(&self) -> Option<MonitorBounds> {
-        self.focus_monitor_idx.and_then(|i| self.monitors.get(i).copied())
+        self.focus_monitor_idx
+            .and_then(|i| self.monitors.get(i).copied())
     }
 }
