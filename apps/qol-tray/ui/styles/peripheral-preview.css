@@ -12,9 +12,7 @@
     width: clamp(180px, 24vw, 360px);
     height: clamp(140px, 32vh, 420px);
     transform-origin: center;
-    transition:
-        transform var(--dur-base) ease-out,
-        opacity var(--dur-base) ease-out;
+    will-change: transform, opacity;
 }
 
 .peripheral-slot-prev[data-distance="1"] {
@@ -101,4 +99,10 @@
     border: 1px dashed var(--border-subtle);
     border-radius: var(--radius-lg);
     background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .peripheral-slot {
+        will-change: auto;
+    }
 }
