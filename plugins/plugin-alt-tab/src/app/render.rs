@@ -145,8 +145,9 @@ fn render_card(
                 let _ = entity.update(cx, |this, cx| {
                     this.delegate.update(cx, |s, _| {
                         s.selected_index = Some(i);
-                        s.activate_selected(window);
+                        s.activate_selected_target();
                     });
+                    this.dismiss(window, cx);
                 });
             }
         })

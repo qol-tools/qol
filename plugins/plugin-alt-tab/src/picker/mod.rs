@@ -209,14 +209,10 @@ pub(crate) fn resolve_card_bg(display: &DisplayConfig) -> (u32, f32) {
 
 pub(crate) mod state {
     use crate::actions;
-    use crate::app::PICKER_VISIBLE;
     use crate::config::{AltTabConfig, LabelConfig};
     use crate::discovery::WindowInfo;
-    use crate::picker;
     use crate::picker::create::PickerInit;
     use crate::{IconMap, PreviewMap};
-    use gpui::Window;
-    use std::sync::atomic::Ordering;
 
     pub(crate) struct PickerState {
         pub(crate) windows: Vec<WindowInfo>,
@@ -326,7 +322,8 @@ pub(crate) mod state {
             self.set_windows(reordered, false);
         }
 
-        pub(crate) fn activate_selected(&self, window: &mut Window) {
+        // Caller is responsible for dismissing the picker after this returns.
+        pub(crate) fn activate_selected_target(&self) {
             let Some(ix) = self.selected_index else {
                 #[cfg(debug_assertions)]
                 eprintln!("[alt-tab/activate] no selection — skipping");
@@ -340,8 +337,6 @@ pub(crate) mod state {
             );
             actions::activate_window(win.id);
             push_focus_hint(win);
-            PICKER_VISIBLE.store(false, Ordering::Relaxed);
-            picker::dismiss_picker(window);
         }
 
         pub(crate) fn select_next(&mut self) {

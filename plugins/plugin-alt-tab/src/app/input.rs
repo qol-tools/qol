@@ -1,9 +1,7 @@
-use super::{AltTabApp, PICKER_VISIBLE};
+use super::AltTabApp;
 use crate::actions;
-use crate::picker;
 use crate::shared::layout::rendered_column_count;
 use gpui::{Context, Window};
-use std::sync::atomic::Ordering;
 
 pub(crate) fn handle_key_down(
     this: &mut AltTabApp,
@@ -17,7 +15,7 @@ pub(crate) fn handle_key_down(
         event.keystroke.key, event.keystroke.modifiers.alt, event.keystroke.modifiers.shift,
     );
     match event.keystroke.key.as_str() {
-        "escape" | "esc" => on_dismiss(window),
+        "escape" | "esc" => this.dismiss(window, cx),
         "enter" => on_activate(this, window, cx),
         "w" => on_close(this, cx),
         "q" => on_quit(this, cx),
@@ -32,16 +30,12 @@ pub(crate) fn handle_key_down(
     }
 }
 
-fn on_dismiss(window: &mut Window) {
-    PICKER_VISIBLE.store(false, Ordering::Relaxed);
-    picker::dismiss_picker(window);
-}
-
-fn on_activate(this: &AltTabApp, window: &mut Window, cx: &mut Context<AltTabApp>) {
+fn on_activate(this: &mut AltTabApp, window: &mut Window, cx: &mut Context<AltTabApp>) {
     if this.delegate.read(cx).selected_index.is_none() {
         return;
     }
-    this.delegate.update(cx, |s, _| s.activate_selected(window));
+    this.delegate.update(cx, |s, _| s.activate_selected_target());
+    this.dismiss(window, cx);
 }
 
 fn on_close(this: &mut AltTabApp, cx: &mut Context<AltTabApp>) {

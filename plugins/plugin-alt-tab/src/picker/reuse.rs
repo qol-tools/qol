@@ -1,9 +1,10 @@
 use super::GatheredWindows;
-use crate::app::AltTabApp;
+use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::config::AltTabConfig;
 use crate::shared::layout::*;
 use gpui::*;
 use qol_plugin_api::window::PopupPlacement;
+use std::sync::atomic::Ordering;
 
 pub(crate) struct ReuseLayout {
     pub bounds: Bounds<Pixels>,
@@ -28,6 +29,10 @@ pub(super) struct LayoutInput<'a> {
 pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
     req.handle
         .update(cx, |view, window: &mut Window, cx| {
+            // WindowHandle can outlive the platform window's destruction; don't resurrect a dismissed picker.
+            if !PICKER_VISIBLE.load(Ordering::Relaxed) {
+                return false;
+            }
             if !view.apply_reuse(req, window, cx) {
                 return false;
             }

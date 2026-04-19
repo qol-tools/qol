@@ -10,18 +10,21 @@ use crate::picker::state::PickerState;
 use crate::IconMap;
 use gpui::*;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub(crate) static PICKER_VISIBLE: AtomicBool = AtomicBool::new(false);
 
 const ALT_POLL_INTERVAL_MS: u64 = 50;
 const ALT_POLL_ARM_TIMEOUT_MS: u64 = 200;
+// PopUp windows on X11 fire a spurious blur right after creation; absorb it.
+const BLUR_GUARD_MS: u64 = 250;
 
 pub(crate) struct AltTabApp {
     pub(crate) delegate: Entity<PickerState>,
     pub(crate) focus_handle: FocusHandle,
     pub(crate) action_mode: ActionMode,
     pub(crate) alt_was_held: bool,
+    pub(crate) blur_guard_until: Instant,
     pub(crate) _alt_poll_task: Option<Task<()>>,
     _live_preview_task: Option<Task<()>>,
     _focus_out_sub: gpui::Subscription,
@@ -53,6 +56,7 @@ impl AltTabApp {
             focus_handle,
             action_mode: action_mode.clone(),
             alt_was_held: true,
+            blur_guard_until: Instant::now() + Duration::from_millis(BLUR_GUARD_MS),
             _alt_poll_task: None,
         };
 
@@ -122,6 +126,7 @@ impl AltTabApp {
         let (card_color, card_opacity) = crate::picker::resolve_card_bg(&req.config.display);
         self.action_mode = req.config.action_mode.clone();
         self.alt_was_held = true;
+        self.blur_guard_until = Instant::now() + Duration::from_millis(BLUR_GUARD_MS);
         self.delegate.update(cx, |s, _| {
             s.apply_config(req.config, card_color, card_opacity)
         });
@@ -220,10 +225,14 @@ async fn alt_poll_loop(
         }
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/hold] Alt released — activating selected");
-        let _ = cx.update_window(window_handle, |_, window, cx| {
-            delegate.update(cx, |s, _| s.activate_selected(window));
+        let weak = this.clone();
+        let _ = cx.update_window(window_handle, move |_, window, cx| {
+            delegate.update(cx, |s, _| s.activate_selected_target());
+            if let Some(entity) = weak.upgrade() {
+                entity.update(cx, |app, cx| app.dismiss(window, cx));
+            }
         });
-        break;
+        return;
     }
 
     let _ = cx.update(|cx| {
@@ -242,13 +251,21 @@ fn subscribe_focus_out(
     window: &mut Window,
     cx: &mut Context<AltTabApp>,
 ) -> gpui::Subscription {
-    cx.on_focus_out(handle, window, |this, _event, window, _cx| {
-        if this.action_mode == ActionMode::HoldToSwitch {
+    cx.on_focus_out(handle, window, |this, _event, window, cx| {
+        if Instant::now() < this.blur_guard_until {
             return;
         }
+        this.dismiss(window, cx);
+    })
+}
+
+impl AltTabApp {
+    pub(crate) fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self._alt_poll_task = None;
         PICKER_VISIBLE.store(false, Ordering::Relaxed);
         picker::dismiss_picker(window);
-    })
+        cx.notify();
+    }
 }
 
 impl Focusable for AltTabApp {
