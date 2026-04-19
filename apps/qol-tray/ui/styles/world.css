@@ -38,7 +38,6 @@ html.qol-bootstrapping-dive #app {
     overflow: hidden;
 }
 
-.world-view-slot .view-body,
 .world-view-slot .view-container,
 .world-view-slot .plugin-config-detail,
 .world-view-slot .plugin-ui-container,
@@ -46,6 +45,13 @@ html.qol-bootstrapping-dive #app {
     flex: 1;
     min-height: 0;
     overflow: visible;
+}
+
+/* Slot clips to PAGE_HEIGHT; view-body is the scroll container for over-tall pages. */
+.world-view-slot .view-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
 }
 
 .world-minimap-container {
