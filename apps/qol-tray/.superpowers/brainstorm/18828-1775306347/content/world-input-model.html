@@ -1,0 +1,72 @@
+<h2>World Viewport — Input Model</h2>
+<p class="subtitle">How the three input modes interact with the infinite canvas</p>
+
+<div class="options">
+  <div class="option" data-choice="default" style="pointer-events:none;opacity:1">
+    <div class="letter" style="background:#2d7d46">1</div>
+    <div class="content">
+      <h3>Default Mode — Content Interaction</h3>
+      <p>Mouse clicks, hovers, typing — everything works normally inside the world. The camera is invisible.</p>
+      <div style="margin-top:12px; display:grid; grid-template-columns:1fr 1fr; gap:8px; font-size:13px; color:#aaa">
+        <div><strong style="color:#ccc">Mouse</strong><br>Click, hover, select — normal</div>
+        <div><strong style="color:#ccc">Keyboard</strong><br>Arrow nav moves between surfaces<br>Camera auto-follows focused element</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="edge" style="pointer-events:none;opacity:1">
+    <div class="letter" style="background:#7d6b2d">2</div>
+    <div class="content">
+      <h3>Edge Panning — Ambient Discovery</h3>
+      <p>Mouse near viewport edge → camera pans in that direction. Speed scales with proximity to edge. No click needed.</p>
+      <div style="margin-top:12px; position:relative; height:120px; border:2px solid #444; border-radius:8px; overflow:hidden; background:#1a1a1a">
+        <div style="position:absolute;top:0;left:0;right:0;height:20px;background:linear-gradient(to bottom,rgba(255,180,0,0.15),transparent);display:flex;align-items:center;justify-content:center;font-size:10px;color:#a88530">↑ pan up</div>
+        <div style="position:absolute;bottom:0;left:0;right:0;height:20px;background:linear-gradient(to top,rgba(255,180,0,0.15),transparent);display:flex;align-items:center;justify-content:center;font-size:10px;color:#a88530">↓ pan down</div>
+        <div style="position:absolute;top:0;left:0;bottom:0;width:20px;background:linear-gradient(to right,rgba(255,180,0,0.15),transparent);display:flex;align-items:center;justify-content:center;font-size:10px;color:#a88530;writing-mode:vertical-rl">← pan left</div>
+        <div style="position:absolute;top:0;right:0;bottom:0;width:20px;background:linear-gradient(to left,rgba(255,180,0,0.15),transparent);display:flex;align-items:center;justify-content:center;font-size:10px;color:#a88530;writing-mode:vertical-rl">pan right →</div>
+        <div style="position:absolute;inset:20px;display:flex;align-items:center;justify-content:center;color:#555;font-size:12px;border:1px dashed #333;border-radius:4px">content area — normal interaction</div>
+      </div>
+      <p style="margin-top:8px; font-size:12px; color:#666">Only active when world extends beyond viewport. Dead zone = inner area.</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="ctrl" style="pointer-events:none;opacity:1">
+    <div class="letter" style="background:#2d5a7d">3</div>
+    <div class="content">
+      <h3>CTRL Mode — Explicit Viewport Control</h3>
+      <p>Hold CTRL to enter navigation mode. World content becomes inert. Release to return to default.</p>
+      <div style="margin-top:12px; display:grid; grid-template-columns:1fr 1fr; gap:8px; font-size:13px; color:#aaa">
+        <div><strong style="color:#ccc">CTRL + Arrows</strong><br>Pan the camera</div>
+        <div><strong style="color:#ccc">CTRL + Wheel</strong><br>Zoom in/out (milestone C)</div>
+      </div>
+      <p style="margin-top:8px; font-size:12px; color:#666">Future: CTRL held could show contextual overlays (action hints, jump targets)</p>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:32px">
+  <h3>Camera Behavior</h3>
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:12px">
+    <div style="background:#1a1a1a; border:1px solid #333; border-radius:8px; padding:16px">
+      <div style="font-size:11px; text-transform:uppercase; letter-spacing:1px; color:#666; margin-bottom:8px">Auto-follow (keyboard nav)</div>
+      <p style="font-size:13px; color:#bbb; margin:0">When surface navigation moves focus to an element outside the viewport, the camera pans smoothly to center it. Same intent as scroll-into-view, but as a camera translation.</p>
+    </div>
+    <div style="background:#1a1a1a; border:1px solid #333; border-radius:8px; padding:16px">
+      <div style="font-size:11px; text-transform:uppercase; letter-spacing:1px; color:#666; margin-bottom:8px">No zoom in milestone A</div>
+      <p style="font-size:13px; color:#bbb; margin:0">World renders at 1x scale. Camera only translates (pan). Zoom comes in milestone C with uniform scaling. CTRL+wheel is reserved but inactive.</p>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:32px">
+  <h3>Architecture</h3>
+  <div style="background:#1a1a1a; border:1px solid #333; border-radius:8px; padding:16px; font-family:monospace; font-size:13px; color:#aaa; line-height:1.8">
+    <span style="color:#666"># DOM structure</span><br>
+    <span style="color:#7daacc">.app-container</span><br>
+    &nbsp;&nbsp;<span style="color:#7daacc">#sidebar</span> <span style="color:#555">— screen-space, outside world</span><br>
+    &nbsp;&nbsp;<span style="color:#cc9b7d">#viewport</span> <span style="color:#555">— overflow:hidden, replaces #content</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#7dcc7d">#world</span> <span style="color:#555">— transform: translate(X,Y), contains all views</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#aaa">view content</span> <span style="color:#555">— positioned, never scrolls</span><br>
+    &nbsp;&nbsp;<span style="color:#7daacc">SelectionCursorOverlay</span> <span style="color:#555">— screen-space, reads world transform</span><br>
+  </div>
+</div>
