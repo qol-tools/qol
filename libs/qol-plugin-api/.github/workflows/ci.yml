@@ -9,3 +9,5 @@ on:
 jobs:
   test:
     uses: qol-tools/qol-cicd/.github/workflows/lib-ci.yml@main
+    with:
+      system_deps: "libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev"
