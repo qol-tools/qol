@@ -485,3 +485,130 @@ test('diveInto and ascend propagate traits via getCurrentTraits', () => {
     nav.ascend();
     assert.deepEqual(nav.getCurrentTraits(), {});
 });
+
+function makeMemoryMocks() {
+    const m = makeMocks();
+    m.registry.addEntry({ id: 'p1-s1', x: 0, y: 0, width: 100, height: 100, layer: -1 });
+    m.registry.addEntry({ id: 'p1-s2', x: 200, y: 0, width: 100, height: 100, layer: -1 });
+    m.registry.addEntry({ id: 'p1-s3', x: 400, y: 0, width: 100, height: 100, layer: -1 });
+    const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
+    m.registry.addDiveTarget({
+        sourceSelector: '[data-plugin-id="p1"]',
+        claim,
+        pages: ['p1-s1', 'p1-s2', 'p1-s3'],
+    });
+    return m;
+}
+
+test('first diveInto lands on target.pages[0] when no memory exists', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMemoryMocks();
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.setCurrentAnchor({ pageId: 'plugins' });
+    nav.diveInto('[data-plugin-id="p1"]');
+    assert.equal(nav.getCurrentAnchor().pageId, 'p1-s1');
+});
+
+test('re-dive lands on the last viewed section after navigating and ascending', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMemoryMocks();
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.setCurrentAnchor({ pageId: 'plugins' });
+    nav.diveInto('[data-plugin-id="p1"]');
+    nav.setCurrentAnchor({ pageId: 'p1-s2' });
+    nav.ascend();
+    nav.diveInto('[data-plugin-id="p1"]');
+    assert.equal(nav.getCurrentAnchor().pageId, 'p1-s2');
+});
+
+test('re-dive falls back to target.pages[0] when remembered section is no longer in target.pages', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMemoryMocks();
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.setCurrentAnchor({ pageId: 'plugins' });
+    nav.diveInto('[data-plugin-id="p1"]');
+    nav.setCurrentAnchor({ pageId: 'p1-s3' });
+    nav.ascend();
+    const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
+    registry.addDiveTarget({
+        sourceSelector: '[data-plugin-id="p1"]',
+        claim,
+        pages: ['p1-s1', 'p1-s2'],
+    });
+    nav.diveInto('[data-plugin-id="p1"]');
+    assert.equal(nav.getCurrentAnchor().pageId, 'p1-s1');
+});
+
+test('per-plugin memory is independent across different sourceSelectors', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMemoryMocks();
+    registry.addEntry({ id: 'p2-s1', x: 0, y: 500, width: 100, height: 100, layer: -1 });
+    registry.addEntry({ id: 'p2-s2', x: 200, y: 500, width: 100, height: 100, layer: -1 });
+    const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
+    registry.addDiveTarget({
+        sourceSelector: '[data-plugin-id="p2"]',
+        claim,
+        pages: ['p2-s1', 'p2-s2'],
+    });
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.setCurrentAnchor({ pageId: 'plugins' });
+    nav.diveInto('[data-plugin-id="p1"]');
+    nav.setCurrentAnchor({ pageId: 'p1-s2' });
+    nav.ascend();
+    nav.diveInto('[data-plugin-id="p2"]');
+    nav.setCurrentAnchor({ pageId: 'p2-s2' });
+    nav.ascend();
+    nav.diveInto('[data-plugin-id="p1"]');
+    assert.equal(nav.getCurrentAnchor().pageId, 'p1-s2');
+    nav.ascend();
+    nav.diveInto('[data-plugin-id="p2"]');
+    assert.equal(nav.getCurrentAnchor().pageId, 'p2-s2');
+});
+
+test('setCurrentAnchor outside a confinement does not pollute lastViewedSection', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMemoryMocks();
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.setCurrentAnchor({ pageId: 'plugins' });
+    nav.setCurrentAnchor({ pageId: 'hotkeys' });
+    nav.diveInto('[data-plugin-id="p1"]');
+    assert.equal(nav.getCurrentAnchor().pageId, 'p1-s1');
+});
+
+test('lastViewedSection survives a localStorage round-trip', async () => {
+    const store = new Map();
+    const originalLocalStorage = globalThis.localStorage;
+    globalThis.localStorage = {
+        getItem: (k) => (store.has(k) ? store.get(k) : null),
+        setItem: (k, v) => { store.set(k, String(v)); },
+        removeItem: (k) => { store.delete(k); },
+    };
+    try {
+        const m1 = makeMemoryMocks();
+        const nav1 = createNavigation({
+            registry: m1.registry,
+            camera: m1.camera,
+            getSettings: m1.getSettings,
+            domHelpers: m1.domHelpers,
+        });
+        nav1.setCurrentAnchor({ pageId: 'plugins' });
+        nav1.diveInto('[data-plugin-id="p1"]');
+        nav1.setCurrentAnchor({ pageId: 'p1-s2' });
+        nav1.ascend();
+        await new Promise((r) => setTimeout(r, 350));
+        const raw = store.get('qoltray.navigation');
+        assert.ok(raw, 'snapshot was written');
+        const parsed = JSON.parse(raw);
+        assert.equal(parsed.lastViewedSection['[data-plugin-id="p1"]'], 'p1-s2');
+
+        const m2 = makeMemoryMocks();
+        const nav2 = createNavigation({
+            registry: m2.registry,
+            camera: m2.camera,
+            getSettings: m2.getSettings,
+            domHelpers: m2.domHelpers,
+        });
+        nav2.setCurrentAnchor({ pageId: 'plugins' });
+        nav2.diveInto('[data-plugin-id="p1"]');
+        assert.equal(nav2.getCurrentAnchor().pageId, 'p1-s2');
+        await new Promise((r) => setTimeout(r, 350));
+    } finally {
+        if (originalLocalStorage === undefined) delete globalThis.localStorage;
+        else globalThis.localStorage = originalLocalStorage;
+    }
+});
