@@ -18,19 +18,21 @@ export function createCamera(options = {}) {
     let bounds = null;
     const listeners = new Set();
 
-    function clampPanTarget(tx, ty) {
+    function clampPanTarget(tx, ty, zoomOverride) {
         if (!bounds) return { x: tx, y: ty };
+        if (typeof bounds.layer === 'number' && bounds.layer !== layer) return { x: tx, y: ty };
         const vp = getViewportSize();
-        const visibleW = vp.w / zoom;
-        const visibleH = vp.h / zoom;
+        const z = zoomOverride ?? zoom;
+        const visibleW = vp.w / z;
+        const visibleH = vp.h / z;
         let nx, ny;
         if (visibleW >= bounds.width) {
-            nx = bounds.x + bounds.width / 2 - vp.w / 2;
+            nx = bounds.x + bounds.width / 2 - visibleW / 2;
         } else {
             nx = Math.max(bounds.x, Math.min(tx, bounds.x + bounds.width - visibleW));
         }
         if (visibleH >= bounds.height) {
-            ny = bounds.y + bounds.height / 2 - vp.h / 2;
+            ny = bounds.y + bounds.height / 2 - visibleH / 2;
         } else {
             ny = Math.max(bounds.y, Math.min(ty, bounds.y + bounds.height - visibleH));
         }
@@ -39,6 +41,7 @@ export function createCamera(options = {}) {
 
     function clampZoom(nz) {
         if (!bounds) return nz;
+        if (typeof bounds.layer === 'number' && bounds.layer !== layer) return nz;
         const vp = getViewportSize();
         const minZoom = Math.max(vp.w / bounds.width, vp.h / bounds.height);
         return Math.max(nz, minZoom);
@@ -46,6 +49,12 @@ export function createCamera(options = {}) {
 
     function setBounds(rect) {
         bounds = rect;
+        if (bounds) {
+            const clamped = clampPanTarget(x, y);
+            x = clamped.x;
+            y = clamped.y;
+            apply();
+        }
     }
 
     function notify() {
@@ -79,14 +88,19 @@ export function createCamera(options = {}) {
     function zoomTo(nz) {
         cancelSmooth();
         zoom = clampZoom(nz);
+        const clamped = clampPanTarget(x, y);
+        x = clamped.x;
+        y = clamped.y;
         apply();
     }
 
     function zoomSmooth(tx, ty, tz, duration, onComplete) {
         cancelSmooth();
-        log('zoomSmooth →', Math.round(tx), Math.round(ty), 'z:', tz.toFixed(3), 'dur:', duration);
+        const clampedZ = clampZoom(tz);
+        const clamped = clampPanTarget(tx, ty, clampedZ);
+        log('zoomSmooth →', Math.round(clamped.x), Math.round(clamped.y), 'z:', clampedZ.toFixed(3), 'dur:', duration);
         animFrom = { x, y, zoom };
-        animTarget = { x: tx, y: ty, zoom: tz };
+        animTarget = { x: clamped.x, y: clamped.y, zoom: clampedZ };
         animStart = performance.now();
         animDuration = duration;
         animComplete = onComplete || null;

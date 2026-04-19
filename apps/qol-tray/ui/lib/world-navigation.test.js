@@ -403,17 +403,17 @@ test('diveInto on an unknown selector is a no-op', () => {
     assert.equal(nav.stackDepth(), 0);
 });
 
-test('dive clears camera bounds so pan stays unclamped', () => {
+test('dive sets camera bounds to the dive target claim', () => {
     const { registry, camera, getSettings, domHelpers } = makeMocks();
     const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
     registry.addDiveTarget({ sourceSelector: '#card-a', claim, pages: ['plugins-config'] });
     const nav = createNavigation({ registry, camera, getSettings, domHelpers });
     nav.setCurrentAnchor({ pageId: 'plugins' });
     nav.diveInto('#card-a');
-    assert.equal(camera._bounds, null);
+    assert.deepEqual(camera._bounds, claim);
 });
 
-test('ascend from root dive calls camera.setBounds(null)', () => {
+test('ascend from root dive clears camera bounds', () => {
     const { registry, camera, getSettings, domHelpers } = makeMocks();
     const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
     registry.addDiveTarget({ sourceSelector: '#card-a', claim, pages: ['plugins-config'] });
@@ -422,6 +422,21 @@ test('ascend from root dive calls camera.setBounds(null)', () => {
     nav.diveInto('#card-a');
     nav.ascend();
     assert.equal(camera._bounds, null);
+});
+
+test('ascend from nested dive restores parent confinement bounds', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMocks();
+    const claim1 = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
+    const claim2 = { x: 100, y: 100, width: 500, height: 500, layer: -2 };
+    registry.addDiveTarget({ sourceSelector: '#a', claim: claim1, pages: ['plugins-config'] });
+    registry.addDiveTarget({ sourceSelector: '#b', claim: claim2, pages: ['plugins-config'] });
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.setCurrentAnchor({ pageId: 'plugins' });
+    nav.diveInto('#a');
+    nav.diveInto('#b');
+    assert.deepEqual(camera._bounds, claim2);
+    nav.ascend();
+    assert.deepEqual(camera._bounds, claim1);
 });
 
 test('diveInto then ascend restores currentConfinement and currentAnchor', () => {

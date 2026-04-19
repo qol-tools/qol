@@ -210,7 +210,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         currentConfinedPages = target.pages || [];
         currentTraits = target.traits || {};
         currentSourceSelector = sourceSelector;
-        setBounds(null);
+        setBounds(currentConfinement);
         const remembered = lastViewedSection[sourceSelector];
         const landingPageId = (remembered && currentConfinedPages.includes(remembered))
             ? remembered
@@ -243,10 +243,10 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         currentConfinedPages = prev.confinedPages ?? [];
         currentTraits = prev.traits ?? {};
         currentSourceSelector = prev.sourceSelector ?? null;
+        setBounds(currentConfinement);
         if (typeof prev.zoom === 'number' && typeof camera.zoomTo === 'function') {
             camera.zoomTo(prev.zoom);
         }
-        setBounds(null);
         const targetLayer = typeof prev.layer === 'number' ? prev.layer : 0;
         const anchorEntry = prev.anchor?.pageId ? registry.getEntry(prev.anchor.pageId) : null;
         const anchorOnCorrectLayer = anchorEntry && anchorEntry.layer === targetLayer;
@@ -287,6 +287,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
             currentConfinement = target.claim;
             currentConfinedPages = target.pages || [];
             currentTraits = target.traits || {};
+            setBounds(currentConfinement);
             const anchorStillValid = currentConfinedPages.includes(currentAnchor?.pageId);
             if (!anchorStillValid && currentConfinedPages.length > 0) {
                 currentAnchor = { pageId: currentConfinedPages[0] };
