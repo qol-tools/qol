@@ -1,9 +1,15 @@
+#[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "windows")]
+mod windows;
 
-#[cfg(not(target_os = "linux"))]
-compile_error!("plugin-screen-recorder: only Linux is supported");
-
+#[cfg(target_os = "linux")]
 pub use linux::*;
+#[cfg(target_os = "macos")]
+pub use macos::*;
+#[cfg(target_os = "windows")]
+pub use windows::*;
 
-pub const SETTINGS_URL: &str = "http://127.0.0.1:42700/plugins/plugin-screen-recorder/";
 pub const CAPTURE_LOG: &str = "/tmp/record-region.log";

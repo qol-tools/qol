@@ -5,6 +5,8 @@ use std::process::{Command, Stdio};
 
 use crate::{Config, Monitor, Rect};
 
+const SETTINGS_URL: &str = "http://127.0.0.1:42700/plugins/plugin-screen-recorder/";
+
 pub fn select_region() -> Result<Option<Rect>> {
     let output = Command::new("slop")
         .args([
@@ -206,7 +208,7 @@ pub fn show_notification(title: &str, message: &str, timeout_ms: u32) {
 
 pub fn open_settings() -> Result<()> {
     Command::new("xdg-open")
-        .arg(super::SETTINGS_URL)
+        .arg(SETTINGS_URL)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

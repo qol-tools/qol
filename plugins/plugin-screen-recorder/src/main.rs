@@ -14,6 +14,10 @@ const PIDFILE: &str = "/tmp/record-region.pid";
 const SNAP_MARGIN_PX: i32 = 50;
 
 #[derive(Debug, Clone, Deserialize, Default)]
+#[allow(
+    dead_code,
+    reason = "fields are consumed by the linux platform impl only"
+)]
 pub(crate) struct Config {
     #[serde(default)]
     pub audio: AudioConfig,
@@ -22,6 +26,10 @@ pub(crate) struct Config {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(
+    dead_code,
+    reason = "fields are consumed by the linux platform impl only"
+)]
 pub(crate) struct AudioConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -45,6 +53,10 @@ impl Default for AudioConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(
+    dead_code,
+    reason = "fields are consumed by the linux platform impl only"
+)]
 pub(crate) struct VideoConfig {
     #[serde(default = "default_crf")]
     pub crf: i32,
