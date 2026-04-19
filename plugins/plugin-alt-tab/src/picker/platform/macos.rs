@@ -10,7 +10,10 @@ pub fn picker_window_kind() -> gpui::WindowKind {
     gpui::WindowKind::Normal
 }
 
-pub fn dismiss_picker(_window: &mut gpui::Window) {
+pub fn dismiss_picker(window: &mut gpui::Window) {
+    // Destroy via GPUI first to invalidate the WindowHandle synchronously.
+    window.remove_window();
+    // Belt-and-suspenders for stale pickers from multi-monitor opens.
     use objc2_app_kit::NSApplication;
     use objc2_foundation::MainThreadMarker;
     let mtm = MainThreadMarker::new().expect("must be on main thread");
@@ -18,7 +21,6 @@ pub fn dismiss_picker(_window: &mut gpui::Window) {
     for win in app.windows().iter() {
         if win.title().to_string() == "qol-alt-tab-picker" {
             win.orderOut(None);
-            return;
         }
     }
 }

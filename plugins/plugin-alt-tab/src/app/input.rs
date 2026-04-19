@@ -15,7 +15,7 @@ pub(crate) fn handle_key_down(
         event.keystroke.key, event.keystroke.modifiers.alt, event.keystroke.modifiers.shift,
     );
     match event.keystroke.key.as_str() {
-        "escape" | "esc" => this.dismiss(window, cx),
+        "escape" | "esc" => this.dismiss("key/escape", window, cx),
         "enter" => on_activate(this, window, cx),
         "w" => on_close(this, cx),
         "q" => on_quit(this, cx),
@@ -35,7 +35,7 @@ fn on_activate(this: &mut AltTabApp, window: &mut Window, cx: &mut Context<AltTa
         return;
     }
     this.delegate.update(cx, |s, _| s.activate_selected_target());
-    this.dismiss(window, cx);
+    this.dismiss("key/enter", window, cx);
 }
 
 fn on_close(this: &mut AltTabApp, cx: &mut Context<AltTabApp>) {

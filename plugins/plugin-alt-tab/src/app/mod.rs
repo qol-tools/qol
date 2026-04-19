@@ -16,7 +16,7 @@ pub(crate) static PICKER_VISIBLE: AtomicBool = AtomicBool::new(false);
 
 const ALT_POLL_INTERVAL_MS: u64 = 50;
 const ALT_POLL_ARM_TIMEOUT_MS: u64 = 200;
-// PopUp windows on X11 fire a spurious blur right after creation; absorb it.
+// PopUp windows on X11 fire one spurious blur right after creation; absorb only the first.
 const BLUR_GUARD_MS: u64 = 250;
 
 pub(crate) struct AltTabApp {
@@ -25,6 +25,7 @@ pub(crate) struct AltTabApp {
     pub(crate) action_mode: ActionMode,
     pub(crate) alt_was_held: bool,
     pub(crate) blur_guard_until: Instant,
+    pub(crate) blur_guard_armed: bool,
     pub(crate) _alt_poll_task: Option<Task<()>>,
     _live_preview_task: Option<Task<()>>,
     _focus_out_sub: gpui::Subscription,
@@ -57,6 +58,7 @@ impl AltTabApp {
             action_mode: action_mode.clone(),
             alt_was_held: true,
             blur_guard_until: Instant::now() + Duration::from_millis(BLUR_GUARD_MS),
+            blur_guard_armed: true,
             _alt_poll_task: None,
         };
 
@@ -127,6 +129,7 @@ impl AltTabApp {
         self.action_mode = req.config.action_mode.clone();
         self.alt_was_held = true;
         self.blur_guard_until = Instant::now() + Duration::from_millis(BLUR_GUARD_MS);
+        self.blur_guard_armed = true;
         self.delegate.update(cx, |s, _| {
             s.apply_config(req.config, card_color, card_opacity)
         });
@@ -202,7 +205,20 @@ async fn alt_poll_loop(
 ) {
     #[cfg(debug_assertions)]
     eprintln!("[alt-tab/hold] modifier poll task started");
-    let mut saw_modifier = picker::is_modifier_held();
+    if !picker::is_modifier_held() {
+        // Tap-too-fast: hotkey fired but Alt was already released by the time the task ran.
+        #[cfg(debug_assertions)]
+        eprintln!("[alt-tab/hold] Alt released before first poll — dismissing instantly");
+        let weak = this.clone();
+        let _ = cx.update_window(window_handle, move |_, window, cx| {
+            delegate.update(cx, |s, _| s.activate_selected_target());
+            if let Some(entity) = weak.upgrade() {
+                entity.update(cx, |app, cx| app.dismiss("alt-poll/instant", window, cx));
+            }
+        });
+        return;
+    }
+    let mut saw_modifier = true;
     cx.background_executor()
         .timer(Duration::from_millis(50))
         .await;
@@ -221,7 +237,17 @@ async fn alt_poll_loop(
             if arm_wait_ms < ALT_POLL_ARM_TIMEOUT_MS {
                 continue;
             }
-            break;
+            // Alt was never seen held: treat the tap as a complete hold-release cycle.
+            #[cfg(debug_assertions)]
+            eprintln!("[alt-tab/hold] arm timeout — Alt never seen held, dismissing");
+            let weak = this.clone();
+            let _ = cx.update_window(window_handle, move |_, window, cx| {
+                delegate.update(cx, |s, _| s.activate_selected_target());
+                if let Some(entity) = weak.upgrade() {
+                    entity.update(cx, |app, cx| app.dismiss("alt-poll/arm-timeout", window, cx));
+                }
+            });
+            return;
         }
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/hold] Alt released — activating selected");
@@ -229,21 +255,11 @@ async fn alt_poll_loop(
         let _ = cx.update_window(window_handle, move |_, window, cx| {
             delegate.update(cx, |s, _| s.activate_selected_target());
             if let Some(entity) = weak.upgrade() {
-                entity.update(cx, |app, cx| app.dismiss(window, cx));
+                entity.update(cx, |app, cx| app.dismiss("alt-poll/release", window, cx));
             }
         });
         return;
     }
-
-    let _ = cx.update(|cx| {
-        if let Some(entity) = this.upgrade() {
-            entity.update(cx, |app, _| {
-                app._alt_poll_task = None;
-            });
-        }
-    });
-    #[cfg(debug_assertions)]
-    eprintln!("[alt-tab/hold] modifier poll task ended");
 }
 
 fn subscribe_focus_out(
@@ -252,16 +268,28 @@ fn subscribe_focus_out(
     cx: &mut Context<AltTabApp>,
 ) -> gpui::Subscription {
     cx.on_focus_out(handle, window, |this, _event, window, cx| {
-        if Instant::now() < this.blur_guard_until {
+        // Absorb only the first post-create blur; later blurs are real dismiss requests.
+        if this.blur_guard_armed && Instant::now() < this.blur_guard_until {
+            this.blur_guard_armed = false;
+            #[cfg(debug_assertions)]
+            eprintln!("[alt-tab/blur] absorbed spurious post-create blur");
             return;
         }
-        this.dismiss(window, cx);
+        this.dismiss("focus-out", window, cx);
     })
 }
 
 impl AltTabApp {
-    pub(crate) fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn dismiss(
+        &mut self,
+        _source: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        #[cfg(debug_assertions)]
+        eprintln!("[alt-tab/dismiss] from={}", _source);
         self._alt_poll_task = None;
+        self.blur_guard_armed = false;
         PICKER_VISIBLE.store(false, Ordering::Relaxed);
         picker::dismiss_picker(window);
         cx.notify();

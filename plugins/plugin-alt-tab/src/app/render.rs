@@ -147,7 +147,7 @@ fn render_card(
                         s.selected_index = Some(i);
                         s.activate_selected_target();
                     });
-                    this.dismiss(window, cx);
+                    this.dismiss("click/card", window, cx);
                 });
             }
         })
