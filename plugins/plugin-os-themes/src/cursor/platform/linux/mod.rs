@@ -7,23 +7,33 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
 
-use crate::cursor::request_external_stop;
+use crate::cursor::control::request_external_stop;
+use crate::cursor::CursorEffect;
 
-pub use runtime::create_effect;
-pub fn install_signal_handlers() {
-    register(libc::SIGTERM);
-    register(libc::SIGINT);
-}
+use super::CursorPlatform;
 
-pub fn open_settings() -> Result<()> {
-    Command::new(SETTINGS_URL)
-        .arg(PLUGIN_URL)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("failed to open settings URL")?;
-    Ok(())
+pub struct Platform;
+
+impl CursorPlatform for Platform {
+    fn create_effect(&self) -> Box<dyn CursorEffect> {
+        runtime::create_effect()
+    }
+
+    fn install_signal_handlers(&self) {
+        register(libc::SIGTERM);
+        register(libc::SIGINT);
+    }
+
+    fn open_settings(&self) -> Result<()> {
+        Command::new(SETTINGS_URL)
+            .arg(PLUGIN_URL)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("failed to open settings URL")?;
+        Ok(())
+    }
 }
 
 fn register(signal: libc::c_int) {

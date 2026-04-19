@@ -2,15 +2,15 @@ use std::sync::{mpsc, Arc};
 
 use anyhow::{ensure, Result};
 
-use crate::cursor::RunState;
-use crate::{cursor, daemon};
+use crate::cursor::{CursorPlatform, Platform, RunState};
+use crate::daemon;
 
 pub fn run() -> Result<()> {
     if daemon::send_ping() {
         return Ok(());
     }
 
-    cursor::install_signal_handlers();
+    Platform.install_signal_handlers();
 
     let control = Arc::new(RunState::new());
     let (tx, rx) = mpsc::channel();
@@ -26,7 +26,7 @@ pub fn run() -> Result<()> {
 }
 
 fn supervise_effect(control: Arc<RunState>) -> Result<()> {
-    let effect = cursor::create_effect();
+    let effect = Platform.create_effect();
 
     loop {
         control.reset();

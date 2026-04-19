@@ -4,12 +4,13 @@ use std::process::ExitCode;
 
 use anyhow::Result;
 
-use crate::{cursor, daemon};
+use crate::cursor::{CursorPlatform, Platform};
+use crate::daemon;
 
 pub fn run(action: Option<&str>) -> ExitCode {
     let result = match action {
         None | Some("run") => daemon_run::run(),
-        Some("settings") => cursor::open_settings(),
+        Some("settings") => Platform.open_settings(),
         Some("kill") => {
             daemon::send_kill();
             Ok(())

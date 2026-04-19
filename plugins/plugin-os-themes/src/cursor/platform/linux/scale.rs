@@ -1,4 +1,11 @@
-pub fn scale_bilinear(src_pixels: &[u32], src_width: u32, src_height: u32, dst: &mut [u32], dst_width: u32, dst_height: u32) {
+pub fn scale_bilinear(
+    src_pixels: &[u32],
+    src_width: u32,
+    src_height: u32,
+    dst: &mut [u32],
+    dst_width: u32,
+    dst_height: u32,
+) {
     let Some(src_len) = checked_pixel_count(src_width, src_height) else {
         return;
     };
