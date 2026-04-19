@@ -75,12 +75,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 
 [[patch.unused]]
-name = "qol-tray"
-version = "3.7.1"
-
-[[patch.unused]]
 name = "qol-runtime"
 version = "0.1.0"
+
+[[patch.unused]]
+name = "qol-tray"
+version = "3.7.1"
 
 [[patch.unused]]
 name = "qol-plugin-api"
