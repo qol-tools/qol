@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>World Viewport Prototype</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #111; color: #ccc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; overflow: hidden; height: 100vh; }
+
+#viewport {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    cursor: default;
+}
+
+#world {
+    position: absolute;
+    will-change: transform;
+}
+
+.view-region {
+    position: absolute;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.view-region-header {
+    padding: 16px 20px;
+    font-size: 18px;
+    font-weight: 600;
+    color: #fff;
+    border-bottom: 1px solid #333;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.view-region-header .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.view-region-body {
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.mock-row {
+    background: #222;
+    border: 1px solid #2a2a2a;
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 13px;
+    color: #aaa;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.mock-row:hover {
+    background: #282828;
+    border-color: #444;
+    color: #ddd;
+}
+
+.mock-row.selected {
+    background: #1a2a1a;
+    border-color: #3a6a3a;
+    color: #8c8;
+}
+
+.mock-card {
+    background: #222;
+    border: 1px solid #2a2a2a;
+    border-radius: 8px;
+    padding: 14px;
+    width: 160px;
+    display: inline-block;
+    margin: 4px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.mock-card:hover { background: #282828; }
+
+.mock-card h4 { font-size: 13px; color: #ddd; margin-bottom: 4px; }
+.mock-card p { font-size: 11px; color: #666; }
+
+/* Region labels in world space */
+.region-label {
+    position: absolute;
+    font-size: 42px;
+    font-weight: 700;
+    color: rgba(255,255,255,0.04);
+    letter-spacing: 2px;
+    pointer-events: none;
+    user-select: none;
+    white-space: nowrap;
+}
+
+/* Minimap */
+#minimap {
+    position: fixed;
+    bottom: 16px;
+    right: 16px;
+    width: 200px;
+    height: 120px;
+    background: rgba(0,0,0,0.8);
+    border: 1px solid #444;
+    border-radius: 8px;
+    overflow: hidden;
+    z-index: 100;
+    cursor: pointer;
+}
+
+#minimap-content {
+    position: absolute;
+    inset: 8px;
+}
+
+.minimap-view {
+    position: absolute;
+    border: 1px solid #555;
+    border-radius: 2px;
+    font-size: 7px;
+    color: #888;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: border-color 0.2s;
+}
+
+.minimap-view.active {
+    border-color: #7a7;
+    background: rgba(100,200,100,0.1);
+}
+
+#minimap-viewport {
+    position: absolute;
+    border: 2px solid rgba(255,255,255,0.5);
+    border-radius: 1px;
+    pointer-events: none;
+    transition: all 0.1s;
+}
+
+/* Edge panning indicators */
+.edge-indicator {
+    position: fixed;
+    z-index: 50;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.edge-indicator.active { opacity: 1; }
+
+#edge-top { top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(to bottom, rgba(255,180,0,0.3), transparent); }
+#edge-bottom { bottom: 0; left: 0; right: 0; height: 3px; background: linear-gradient(to top, rgba(255,180,0,0.3), transparent); }
+#edge-left { top: 0; left: 0; bottom: 0; width: 3px; background: linear-gradient(to right, rgba(255,180,0,0.3), transparent); }
+#edge-right { top: 0; right: 0; bottom: 0; width: 3px; background: linear-gradient(to left, rgba(255,180,0,0.3), transparent); }
+
+/* CTRL mode overlay */
+#ctrl-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    pointer-events: none;
+    border: 2px solid transparent;
+    transition: border-color 0.15s;
+}
+
+#ctrl-overlay.active {
+    border-color: rgba(100,150,255,0.3);
+}
+
+/* HUD */
+#hud {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 100;
+    font-size: 11px;
+    color: #666;
+    font-family: monospace;
+    line-height: 1.6;
+    background: rgba(0,0,0,0.6);
+    padding: 8px 12px;
+    border-radius: 6px;
+    pointer-events: none;
+}
+
+#hud .key { color: #999; }
+#hud .val { color: #7a7; }
+
+/* Zoom-to-fit button */
+#fit-btn {
+    position: fixed;
+    bottom: 16px;
+    right: 228px;
+    z-index: 100;
+    background: rgba(0,0,0,0.8);
+    border: 1px solid #444;
+    border-radius: 6px;
+    color: #aaa;
+    padding: 6px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: inherit;
+}
+
+#fit-btn:hover { background: rgba(40,40,40,0.9); color: #ddd; }
+</style>
+</head>
+<body>
+
+<div id="viewport">
+    <div id="world"></div>
+</div>
+
+<div class="edge-indicator" id="edge-top"></div>
+<div class="edge-indicator" id="edge-bottom"></div>
+<div class="edge-indicator" id="edge-left"></div>
+<div class="edge-indicator" id="edge-right"></div>
+
+<div id="ctrl-overlay"></div>
+
+<div id="minimap">
+    <div id="minimap-content"></div>
+</div>
+
+<button id="fit-btn" title="Shift+1">Fit All</button>
+
+<div id="hud">
+    <div><span class="key">camera:</span> <span class="val" id="hud-cam">0, 0</span></div>
+    <div><span class="key">mode:</span> <span class="val" id="hud-mode">default</span></div>
+    <div><span class="key">view:</span> <span class="val" id="hud-view">—</span></div>
+    <div style="margin-top:4px;color:#555">
+        Edge pan with mouse | CTRL+arrows to pan | Shift+1 fit all
+    </div>
+</div>
+
+<script>
+const VIEWS = [
+    { id: 'plugins', label: 'Plugins', color: '#2d7d46', x: 0, y: 0, w: 800, h: 600 },
+    { id: 'store', label: 'Store', color: '#2d5a7d', x: 1000, y: 0, w: 800, h: 500 },
+    { id: 'hotkeys', label: 'Hotkeys', color: '#7d6b2d', x: 2000, y: 0, w: 700, h: 400 },
+    { id: 'shortcuts', label: 'Shortcuts', color: '#7d2d2d', x: 2900, y: 0, w: 700, h: 450 },
+    { id: 'task-runner', label: 'Task Runner', color: '#5a2d7d', x: 0, y: 800, w: 800, h: 500 },
+    { id: 'profile', label: 'Profile', color: '#2d7d6b', x: 1000, y: 700, w: 800, h: 600 },
+    { id: 'logs', label: 'Logs', color: '#6b7d2d', x: 2000, y: 600, w: 900, h: 500 },
+    { id: 'dev', label: 'Developer', color: '#7d5a2d', x: 2900, y: 650, w: 900, h: 600 },
+];
+
+const GAP = 200;
+const EDGE_ZONE = 30;
+const EDGE_SPEED = 8;
+const PAN_SPEED = 12;
+
+const world = document.getElementById('world');
+const viewport = document.getElementById('viewport');
+const hudCam = document.getElementById('hud-cam');
+const hudMode = document.getElementById('hud-mode');
+const hudView = document.getElementById('hud-view');
+const ctrlOverlay = document.getElementById('ctrl-overlay');
+const edges = { top: document.getElementById('edge-top'), bottom: document.getElementById('edge-bottom'), left: document.getElementById('edge-left'), right: document.getElementById('edge-right') };
+
+const camera = { x: 0, y: 0 };
+let ctrlHeld = false;
+let mouseX = -1, mouseY = -1;
+let animTarget = null;
+let animStart = null;
+let animFrom = null;
+let animDuration = 0;
+
+// Build world
+function buildWorld() {
+    VIEWS.forEach(v => {
+        // Region label
+        const label = document.createElement('div');
+        label.className = 'region-label';
+        label.textContent = v.label;
+        label.style.left = v.x + 'px';
+        label.style.top = (v.y - 52) + 'px';
+        world.appendChild(label);
+
+        // View region
+        const el = document.createElement('div');
+        el.className = 'view-region';
+        el.style.left = v.x + 'px';
+        el.style.top = v.y + 'px';
+        el.style.width = v.w + 'px';
+        el.style.height = v.h + 'px';
+
+        const header = document.createElement('div');
+        header.className = 'view-region-header';
+        header.innerHTML = `<span class="dot" style="background:${v.color}"></span>${v.label}`;
+        el.appendChild(header);
+
+        const body = document.createElement('div');
+        body.className = 'view-region-body';
+        if (v.id === 'store') {
+            for (let i = 0; i < 6; i++) {
+                const card = document.createElement('div');
+                card.className = 'mock-card';
+                card.innerHTML = `<h4>Plugin ${i + 1}</h4><p>Description text</p>`;
+                card.onclick = () => card.classList.toggle('selected');
+                body.appendChild(card);
+            }
+        } else {
+            const count = Math.floor(v.h / 50) - 1;
+            for (let i = 0; i < count; i++) {
+                const row = document.createElement('div');
+                row.className = 'mock-row';
+                row.textContent = `${v.label} item ${i + 1}`;
+                row.onclick = () => {
+                    body.querySelectorAll('.mock-row').forEach(r => r.classList.remove('selected'));
+                    row.classList.toggle('selected');
+                };
+                body.appendChild(row);
+            }
+        }
+        el.appendChild(body);
+        world.appendChild(el);
+    });
+}
+
+// Camera
+function applyCamera() {
+    world.style.transform = `translate(${-camera.x}px, ${-camera.y}px)`;
+    hudCam.textContent = `${Math.round(camera.x)}, ${Math.round(camera.y)}`;
+    updateActiveView();
+    updateMinimap();
+}
+
+function panTo(x, y) {
+    camera.x = x;
+    camera.y = y;
+    animTarget = null;
+    applyCamera();
+}
+
+function panSmooth(tx, ty, dur) {
+    animFrom = { x: camera.x, y: camera.y };
+    animTarget = { x: tx, y: ty };
+    animStart = performance.now();
+    animDuration = dur;
+}
+
+function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
+
+// Active view detection
+function updateActiveView() {
+    const cx = camera.x + viewport.clientWidth / 2;
+    const cy = camera.y + viewport.clientHeight / 2;
+    let closest = null, closestDist = Infinity;
+    VIEWS.forEach(v => {
+        const vx = v.x + v.w / 2;
+        const vy = v.y + v.h / 2;
+        const d = Math.hypot(cx - vx, cy - vy);
+        if (d < closestDist) { closest = v; closestDist = d; }
+    });
+    hudView.textContent = closest ? closest.label : '—';
+}
+
+// Minimap
+function buildMinimap() {
+    const mc = document.getElementById('minimap-content');
+    const bounds = worldBounds();
+    const mw = mc.clientWidth;
+    const mh = mc.clientHeight;
+    const sx = mw / bounds.w;
+    const sy = mh / bounds.h;
+    const s = Math.min(sx, sy);
+
+    VIEWS.forEach(v => {
+        const el = document.createElement('div');
+        el.className = 'minimap-view';
+        el.dataset.id = v.id;
+        el.style.left = ((v.x - bounds.x) * s) + 'px';
+        el.style.top = ((v.y - bounds.y) * s) + 'px';
+        el.style.width = (v.w * s) + 'px';
+        el.style.height = (v.h * s) + 'px';
+        el.style.background = v.color + '22';
+        el.textContent = v.label.slice(0, 3);
+        mc.appendChild(el);
+    });
+
+    const vp = document.createElement('div');
+    vp.id = 'minimap-viewport';
+    mc.appendChild(vp);
+}
+
+function updateMinimap() {
+    const mc = document.getElementById('minimap-content');
+    const bounds = worldBounds();
+    const mw = mc.clientWidth;
+    const mh = mc.clientHeight;
+    const s = Math.min(mw / bounds.w, mh / bounds.h);
+    const vp = document.getElementById('minimap-viewport');
+
+    vp.style.left = ((camera.x - bounds.x) * s) + 'px';
+    vp.style.top = ((camera.y - bounds.y) * s) + 'px';
+    vp.style.width = (viewport.clientWidth * s) + 'px';
+    vp.style.height = (viewport.clientHeight * s) + 'px';
+
+    mc.querySelectorAll('.minimap-view').forEach(el => {
+        el.classList.toggle('active', el.dataset.id === hudView.textContent.toLowerCase().replace(' ', '-'));
+    });
+}
+
+function worldBounds() {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    VIEWS.forEach(v => {
+        minX = Math.min(minX, v.x - 100);
+        minY = Math.min(minY, v.y - 100);
+        maxX = Math.max(maxX, v.x + v.w + 100);
+        maxY = Math.max(maxY, v.y + v.h + 100);
+    });
+    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
+// Minimap click-to-jump
+document.getElementById('minimap').addEventListener('click', (e) => {
+    const mc = document.getElementById('minimap-content');
+    const rect = mc.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const bounds = worldBounds();
+    const s = Math.min(mc.clientWidth / bounds.w, mc.clientHeight / bounds.h);
+    const wx = bounds.x + mx / s - viewport.clientWidth / 2;
+    const wy = bounds.y + my / s - viewport.clientHeight / 2;
+    panSmooth(wx, wy, 300);
+});
+
+// Fit all
+function fitAll() {
+    const bounds = worldBounds();
+    const vw = viewport.clientWidth;
+    const vh = viewport.clientHeight;
+    const tx = bounds.x + bounds.w / 2 - vw / 2;
+    const ty = bounds.y + bounds.h / 2 - vh / 2;
+    panSmooth(tx, ty, 400);
+}
+
+document.getElementById('fit-btn').addEventListener('click', fitAll);
+
+// Edge panning
+function updateEdgePan() {
+    if (ctrlHeld || mouseX < 0) {
+        Object.values(edges).forEach(e => e.classList.remove('active'));
+        return { dx: 0, dy: 0 };
+    }
+    const vw = viewport.clientWidth;
+    const vh = viewport.clientHeight;
+    let dx = 0, dy = 0;
+
+    if (mouseX < EDGE_ZONE) { dx = -EDGE_SPEED * (1 - mouseX / EDGE_ZONE); edges.left.classList.add('active'); } else { edges.left.classList.remove('active'); }
+    if (mouseX > vw - EDGE_ZONE) { dx = EDGE_SPEED * (1 - (vw - mouseX) / EDGE_ZONE); edges.right.classList.add('active'); } else { edges.right.classList.remove('active'); }
+    if (mouseY < EDGE_ZONE) { dy = -EDGE_SPEED * (1 - mouseY / EDGE_ZONE); edges.top.classList.add('active'); } else { edges.top.classList.remove('active'); }
+    if (mouseY > vh - EDGE_ZONE) { dy = EDGE_SPEED * (1 - (vh - mouseY) / EDGE_ZONE); edges.bottom.classList.add('active'); } else { edges.bottom.classList.remove('active'); }
+
+    return { dx, dy };
+}
+
+// Input
+document.addEventListener('mousemove', (e) => { mouseX = e.clientX; mouseY = e.clientY; });
+document.addEventListener('mouseleave', () => { mouseX = -1; mouseY = -1; });
+
+const keysDown = new Set();
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Control') { ctrlHeld = true; ctrlOverlay.classList.add('active'); hudMode.textContent = 'CTRL (viewport)'; }
+    keysDown.add(e.key);
+    if (e.shiftKey && e.key === '!') { e.preventDefault(); fitAll(); }
+});
+document.addEventListener('keyup', (e) => {
+    if (e.key === 'Control') { ctrlHeld = false; ctrlOverlay.classList.remove('active'); hudMode.textContent = 'default'; }
+    keysDown.delete(e.key);
+});
+
+// Main loop
+function tick(now) {
+    // Smooth animation
+    if (animTarget) {
+        const elapsed = now - animStart;
+        const t = Math.min(1, elapsed / animDuration);
+        const e = easeOut(t);
+        camera.x = animFrom.x + (animTarget.x - animFrom.x) * e;
+        camera.y = animFrom.y + (animTarget.y - animFrom.y) * e;
+        if (t >= 1) animTarget = null;
+        applyCamera();
+    }
+
+    // Edge panning
+    if (!animTarget) {
+        const edge = updateEdgePan();
+
+        // CTRL + arrows
+        let ctrlDx = 0, ctrlDy = 0;
+        if (ctrlHeld) {
+            if (keysDown.has('ArrowLeft')) ctrlDx = -PAN_SPEED;
+            if (keysDown.has('ArrowRight')) ctrlDx = PAN_SPEED;
+            if (keysDown.has('ArrowUp')) ctrlDy = -PAN_SPEED;
+            if (keysDown.has('ArrowDown')) ctrlDy = PAN_SPEED;
+        }
+
+        const dx = edge.dx + ctrlDx;
+        const dy = edge.dy + ctrlDy;
+        if (dx || dy) {
+            camera.x += dx;
+            camera.y += dy;
+            applyCamera();
+        }
+    }
+
+    requestAnimationFrame(tick);
+}
+
+// Init
+buildWorld();
+buildMinimap();
+applyCamera();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
