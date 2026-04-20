@@ -114,7 +114,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         return { x: entry.x + entry.width / 2, y: entry.y + entry.height / 2 };
     }
 
-    function gotoAnchor(anchor, { respectKnob = true, instant = false } = {}) {
+    function gotoAnchor(anchor, { respectKnob = true, instant = false, useFocusMemory = true } = {}) {
         if (!anchor || !anchor.pageId) {
             log('gotoAnchor: skipped (no anchor)');
             return;
@@ -137,13 +137,11 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         const pageId = anchor.pageId;
         const focusAfterPan = () => {
             if (typeof document === 'undefined') return;
-            const sel = focusRegistry[pageId];
-            if (sel) {
-                const el = document.querySelector(sel);
-                if (el && typeof el.focus === 'function') {
-                    el.focus({ preventScroll: true });
-                    return;
-                }
+            const rememberedSel = useFocusMemory ? focusRegistry[pageId] : null;
+            const remembered = rememberedSel ? document.querySelector(rememberedSel) : null;
+            if (remembered && typeof remembered.focus === 'function') {
+                remembered.focus({ preventScroll: true });
+                return;
             }
             const slot = document.querySelector(`[data-view-id="${CSS.escape(pageId)}"]`);
             const firstSurface = slot?.querySelector?.('[data-selected-surface]');
