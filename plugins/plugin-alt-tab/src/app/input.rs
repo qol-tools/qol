@@ -34,7 +34,8 @@ fn on_activate(this: &mut AltTabApp, window: &mut Window, cx: &mut Context<AltTa
     if this.delegate.read(cx).selected_index.is_none() {
         return;
     }
-    this.delegate.update(cx, |s, _| s.activate_selected_target());
+    this.delegate
+        .update(cx, |s, _| s.activate_selected_target());
     this.dismiss("key/enter", window, cx);
 }
 

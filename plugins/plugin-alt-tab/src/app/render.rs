@@ -23,19 +23,19 @@ impl Render for AltTabApp {
         let key_handler = cx.listener(|this, event: &KeyDownEvent, window, cx| {
             super::input::handle_key_down(this, event, window, cx);
         });
-        let modifiers_handler =
-            cx.listener(|this, event: &ModifiersChangedEvent, window, cx| {
-                if this.action_mode != ActionMode::HoldToSwitch {
-                    return;
-                }
-                if event.modifiers.alt {
-                    return;
-                }
-                #[cfg(debug_assertions)]
-                eprintln!("[alt-tab/hold] Alt released via on_modifiers_changed");
-                this.delegate.update(cx, |s, _| s.activate_selected_target());
-                this.dismiss("modifiers/alt-up", window, cx);
-            });
+        let modifiers_handler = cx.listener(|this, event: &ModifiersChangedEvent, window, cx| {
+            if this.action_mode != ActionMode::HoldToSwitch {
+                return;
+            }
+            if event.modifiers.alt {
+                return;
+            }
+            #[cfg(debug_assertions)]
+            eprintln!("[alt-tab/hold] Alt released via on_modifiers_changed");
+            this.delegate
+                .update(cx, |s, _| s.activate_selected_target());
+            this.dismiss("modifiers/alt-up", window, cx);
+        });
 
         let d = self.delegate.read(cx);
         let alpha = (d.card_bg_opacity.clamp(0.0, 1.0) * 255.0) as u32;
