@@ -1,5 +1,5 @@
 use super::AltTabApp;
-use crate::config::LabelConfig;
+use crate::config::{ActionMode, LabelConfig};
 use crate::discovery::WindowInfo;
 use crate::shared::layout::{
     GRID_CARD_HEIGHT, GRID_CARD_WIDTH, GRID_PREVIEW_HEIGHT, GRID_PREVIEW_WIDTH,
@@ -23,6 +23,19 @@ impl Render for AltTabApp {
         let key_handler = cx.listener(|this, event: &KeyDownEvent, window, cx| {
             super::input::handle_key_down(this, event, window, cx);
         });
+        let modifiers_handler =
+            cx.listener(|this, event: &ModifiersChangedEvent, window, cx| {
+                if this.action_mode != ActionMode::HoldToSwitch {
+                    return;
+                }
+                if event.modifiers.alt {
+                    return;
+                }
+                #[cfg(debug_assertions)]
+                eprintln!("[alt-tab/hold] Alt released via on_modifiers_changed");
+                this.delegate.update(cx, |s, _| s.activate_selected_target());
+                this.dismiss("modifiers/alt-up", window, cx);
+            });
 
         let d = self.delegate.read(cx);
         let alpha = (d.card_bg_opacity.clamp(0.0, 1.0) * 255.0) as u32;
@@ -51,6 +64,7 @@ impl Render for AltTabApp {
             .w_full()
             .h_full()
             .on_key_down(key_handler)
+            .on_modifiers_changed(modifiers_handler)
             .when(snap.show_hotkey_hints, |s| {
                 s.child(header_bar(
                     "Alt Tab",

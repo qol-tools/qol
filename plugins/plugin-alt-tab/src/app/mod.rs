@@ -14,8 +14,6 @@ use std::time::{Duration, Instant};
 
 pub(crate) static PICKER_VISIBLE: AtomicBool = AtomicBool::new(false);
 
-const ALT_POLL_INTERVAL_MS: u64 = 50;
-const ALT_POLL_ARM_TIMEOUT_MS: u64 = 200;
 // PopUp windows on X11 fire one spurious blur right after creation; absorb only the first.
 const BLUR_GUARD_MS: u64 = 250;
 
@@ -192,74 +190,31 @@ impl AltTabApp {
         let delegate = self.delegate.clone();
         self.alt_was_held = true;
         self._alt_poll_task = Some(cx.spawn(move |this, cx: &mut AsyncApp| {
-            alt_poll_loop(this, delegate, window_handle, cx.clone())
+            alt_release_check(this, delegate, window_handle, cx.clone())
         }));
     }
 }
 
-async fn alt_poll_loop(
+// Covers tap-too-fast: hotkey fired but Alt was already released by the time we got here.
+// Normal hold-then-release is handled event-driven via on_modifiers_changed in render.
+async fn alt_release_check(
     this: WeakEntity<AltTabApp>,
     delegate: Entity<PickerState>,
     window_handle: AnyWindowHandle,
     mut cx: AsyncApp,
 ) {
+    if picker::is_modifier_held() {
+        return;
+    }
     #[cfg(debug_assertions)]
-    eprintln!("[alt-tab/hold] modifier poll task started");
-    if !picker::is_modifier_held() {
-        // Tap-too-fast: hotkey fired but Alt was already released by the time the task ran.
-        #[cfg(debug_assertions)]
-        eprintln!("[alt-tab/hold] Alt released before first poll — dismissing instantly");
-        let weak = this.clone();
-        let _ = cx.update_window(window_handle, move |_, window, cx| {
-            delegate.update(cx, |s, _| s.activate_selected_target());
-            if let Some(entity) = weak.upgrade() {
-                entity.update(cx, |app, cx| app.dismiss("alt-poll/instant", window, cx));
-            }
-        });
-        return;
-    }
-    let mut saw_modifier = true;
-    cx.background_executor()
-        .timer(Duration::from_millis(50))
-        .await;
-    let mut arm_wait_ms = 0;
-
-    loop {
-        cx.background_executor()
-            .timer(Duration::from_millis(ALT_POLL_INTERVAL_MS))
-            .await;
-        if picker::is_modifier_held() {
-            saw_modifier = true;
-            continue;
+    eprintln!("[alt-tab/hold] Alt released before first check — dismissing instantly");
+    let weak = this.clone();
+    let _ = cx.update_window(window_handle, move |_, window, cx| {
+        delegate.update(cx, |s, _| s.activate_selected_target());
+        if let Some(entity) = weak.upgrade() {
+            entity.update(cx, |app, cx| app.dismiss("alt-release/instant", window, cx));
         }
-        if !saw_modifier {
-            arm_wait_ms += ALT_POLL_INTERVAL_MS;
-            if arm_wait_ms < ALT_POLL_ARM_TIMEOUT_MS {
-                continue;
-            }
-            // Alt was never seen held: treat the tap as a complete hold-release cycle.
-            #[cfg(debug_assertions)]
-            eprintln!("[alt-tab/hold] arm timeout — Alt never seen held, dismissing");
-            let weak = this.clone();
-            let _ = cx.update_window(window_handle, move |_, window, cx| {
-                delegate.update(cx, |s, _| s.activate_selected_target());
-                if let Some(entity) = weak.upgrade() {
-                    entity.update(cx, |app, cx| app.dismiss("alt-poll/arm-timeout", window, cx));
-                }
-            });
-            return;
-        }
-        #[cfg(debug_assertions)]
-        eprintln!("[alt-tab/hold] Alt released — activating selected");
-        let weak = this.clone();
-        let _ = cx.update_window(window_handle, move |_, window, cx| {
-            delegate.update(cx, |s, _| s.activate_selected_target());
-            if let Some(entity) = weak.upgrade() {
-                entity.update(cx, |app, cx| app.dismiss("alt-poll/release", window, cx));
-            }
-        });
-        return;
-    }
+    });
 }
 
 fn subscribe_focus_out(
