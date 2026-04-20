@@ -219,11 +219,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 
 [[patch.unused]]
-name = "qol-plugin-api"
+name = "qol-runtime"
 version = "0.1.0"
 
 [[patch.unused]]
-name = "qol-runtime"
+name = "qol-plugin-api"
 version = "0.1.0"
 
 [[patch.unused]]
