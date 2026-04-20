@@ -32,7 +32,8 @@ function WorldViewSlot({ entry, cameraLayer, confinedPages, diveDepth, children 
     const confined = confinedPages && confinedPages.length > 0;
     const ascending = entry.layer < 0 && (diveDepth ?? 0) === 0;
     const visible = layerMatch && !ascending && (!confined || confinedPages.includes(entry.id));
-    const style = `left:${entry.x}px; top:${entry.y}px; width:${entry.width}px; height:${entry.height}px;${visible ? '' : ' display:none;'}`;
+    const heightStyle = entry.contentSized ? '' : ` height:${entry.height}px;`;
+    const style = `left:${entry.x}px; top:${entry.y}px; width:${entry.width}px;${heightStyle}${visible ? '' : ' display:none;'}`;
     return html`<div class="world-view-slot" data-view-id=${entry.id} data-layer=${entry.layer} style=${style}>${children}</div>`;
 }
 

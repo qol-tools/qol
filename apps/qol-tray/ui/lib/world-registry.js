@@ -38,6 +38,7 @@ export function createWorldRegistry(viewOrder, manifest = {}) {
             id, x: i * PAGE_STRIDE, y: 0,
             width: PAGE_WIDTH, height: PAGE_HEIGHT,
             layer: 0, parent: null,
+            contentSized: id === 'dev',
         });
     }
 
