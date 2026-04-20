@@ -306,7 +306,7 @@ function AppShell() {
         prevViewRef.current = activeViewId;
         log('viewChange:', activeViewId, viewChanged ? '→ switched' : '→ became available');
         navigation.setCurrentAnchor({ pageId: activeViewId });
-        navigation.gotoAnchor({ pageId: activeViewId }, { respectKnob: true, instant: becameAvailable });
+        navigation.gotoAnchor({ pageId: activeViewId }, { respectKnob: true, instant: becameAvailable, useFocusMemory: false });
     }, [activeViewId, viewOrder, navigation]);
 
     useLayoutEffect(() => {
