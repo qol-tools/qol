@@ -36,6 +36,35 @@ test('panTo at zoom 2 clamps to bounds using visible-world width, not raw viewpo
     assert.equal(camera.y, 400 - visibleH);
 });
 
+test('zoomTo clamps to a hard MAX_ZOOM even when bounds allow higher', () => {
+    const camera = createCamera({ getViewportSize: () => ({ w: 800, h: 600 }) });
+    camera.setBounds({ x: 0, y: 0, width: 2000, height: 2000, layer: 0 });
+    camera.zoomTo(9999);
+    assert.equal(camera.zoom, 8);
+});
+
+test('zoomAround keeps the world point under the anchor fixed on screen', () => {
+    const camera = createCamera({ getViewportSize: () => ({ w: 800, h: 600 }) });
+    camera.setBounds({ x: 0, y: 0, width: 2000, height: 2000, layer: 0 });
+    camera.panTo(100, 100);
+    const anchorSx = 200;
+    const anchorSy = 150;
+    const anchorWorldX = camera.x + anchorSx / camera.zoom;
+    const anchorWorldY = camera.y + anchorSy / camera.zoom;
+    camera.zoomAround(anchorSx, anchorSy, 2);
+    assert.equal(camera.zoom, 2);
+    assert.equal(camera.x + anchorSx / camera.zoom, anchorWorldX);
+    assert.equal(camera.y + anchorSy / camera.zoom, anchorWorldY);
+});
+
+test('zoomAround clamps to bounds min when target is too small', () => {
+    const camera = createCamera({ getViewportSize: () => ({ w: 800, h: 600 }) });
+    camera.setBounds({ x: 0, y: 0, width: 100, height: 100, layer: 0 });
+    camera.zoomTo(20);
+    camera.zoomAround(0, 0, 0.01);
+    assert.equal(camera.zoom, 6);
+});
+
 test('zoomSmooth clamps target zoom and pan to bounds', () => {
     const rafCallbacks = [];
     const origRaf = globalThis.requestAnimationFrame;
@@ -54,9 +83,9 @@ test('zoomSmooth clamps target zoom and pan to bounds', () => {
             const cb = rafCallbacks.shift();
             cb(now);
         }
-        assert.equal(camera.zoom, 8);
-        assert.equal(camera.x, 0);
-        assert.equal(camera.y, 25);
+        assert.equal(camera.zoom, 6);
+        assert.ok(Math.abs(camera.x - (50 - 800 / 6 / 2)) < 1e-9);
+        assert.equal(camera.y, 0);
     } finally {
         if (origRaf === undefined) delete globalThis.requestAnimationFrame;
         else globalThis.requestAnimationFrame = origRaf;

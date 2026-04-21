@@ -11,7 +11,7 @@ export function contains(rect, entry) {
         && entry.y + entry.height <= rect.y + rect.height;
 }
 
-export function createWorldRegistry(viewOrder, manifest = {}) {
+export function createWorldRegistry(viewOrder, manifest = {}, { contentSizedIds } = {}) {
     const entries = new Map();
     const diveTargets = new Map();
 
@@ -38,7 +38,7 @@ export function createWorldRegistry(viewOrder, manifest = {}) {
             id, x: i * PAGE_STRIDE, y: 0,
             width: PAGE_WIDTH, height: PAGE_HEIGHT,
             layer: 0, parent: null,
-            contentSized: id === 'dev',
+            contentSized: !!contentSizedIds?.has?.(id),
         });
     }
 

@@ -7,6 +7,7 @@ import { useClickOutside } from '../../lib/hooks/useClickOutside.js';
 import { clampPercent, formatDownloadingProgress, formatPhaseProgress, toProgressScale } from '../../utils/progress.js';
 import { prettyLabel } from '../../auto-config/heuristics.js';
 import { contains } from '../../lib/world-registry.js';
+import { computeMinimapViewportRect } from '../../lib/minimap-geometry.js';
 
 const CENTER_W_FRAC = 0.34;
 const NEIGHBOR_W_FRAC = 0.22;
@@ -15,6 +16,8 @@ const SLOT_GAP = 4;
 const SLOT_PAD_Y = 6;
 const RADIUS = 3;
 const ARROW_FLASH_MS = 350;
+const VIEWPORT_FILL = 'rgba(140, 200, 255, 0.12)';
+const VIEWPORT_STROKE = 'rgba(140, 200, 255, 0.55)';
 
 export function MinimapContainer({ camera, registry, viewportRef, diveParent, activePluginId, diveDepth, navigation, version, updateState, isDevMode, onAction }) {
     const [settingsOpen, setSettingsOpen] = useState(false);
@@ -213,6 +216,22 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, activePlugi
 
         const slots = buildCenteredSlots(cw, sorted.length, activeIdx);
         drawSlots(ctx, cw, ch, sorted, slots, activeIdx, activeId, activePluginId);
+
+        const rect = computeMinimapViewportRect({
+            sortedEntries: sorted,
+            slots,
+            cameraX: camera.x,
+            cameraZoom: z,
+            viewportWidthPx: vpW,
+        });
+        if (rect.width >= 2) {
+            ctx.fillStyle = VIEWPORT_FILL;
+            roundRect(ctx, rect.x, SLOT_PAD_Y, rect.width, ch - SLOT_PAD_Y * 2, RADIUS);
+            ctx.fill();
+            ctx.strokeStyle = VIEWPORT_STROKE;
+            ctx.lineWidth = 1;
+            ctx.stroke();
+        }
     });
 
     const onClick = (e) => {

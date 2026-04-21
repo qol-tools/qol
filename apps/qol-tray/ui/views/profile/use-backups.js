@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useState } from 'preact/hooks';
 import { toast } from '../../lib/toast.js';
+import { createSharedSlot } from '../../lib/shared-slot.js';
 import {
     fetchProfileBackupPreview,
     fetchProfileBackups,
     openProfileBackupsDir,
 } from './actions.js';
+
+export const backupPreviewSlot = createSharedSlot({ preview: null, incident: null, onAcknowledge: null });
 
 export function useBackups({ incident, syncStatus }) {
     const [backups, setBackups] = useState([]);

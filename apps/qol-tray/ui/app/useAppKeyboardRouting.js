@@ -63,7 +63,7 @@ export function useAppKeyboardRouting({
         const nextId = pages[cycleIndex(idx, pages.length, shiftKey)];
         log('tab:', current, '→', nextId, '(section)');
         navigation.setCurrentAnchor({ pageId: nextId });
-        navigation.gotoAnchor({ pageId: nextId }, { respectKnob: false });
+        navigation.gotoAnchor({ pageId: nextId }, { respectKnob: false, resetZoom: 1 });
         return true;
     }, [activePluginId, navigation, registry]);
 
@@ -212,7 +212,7 @@ function findSelectedSurface() {
     const focused = document.activeElement;
     if (focused instanceof HTMLElement && focused !== document.body) {
         const surface = focused.closest('[data-selected-surface]');
-        if (surface && isVisible(surface) && isInViewport(surface, vp)) return surface;
+        if (surface && isVisible(surface)) return surface;
     }
     for (const container of document.querySelectorAll('[data-surface-container]')) {
         if (!isVisible(container)) continue;
@@ -239,7 +239,11 @@ function navigateInActiveContainer(direction) {
     const container = activeContainer(current);
     if (!container) { log('arrow', direction, '→ no container'); return; }
 
-    const surfaces = directSurfaces(container);
+    const currentViewId = current.closest('[data-view-id]')?.dataset?.viewId || null;
+    const surfaces = directSurfaces(container).filter(el => {
+        if (!currentViewId) return true;
+        return el.closest('[data-view-id]')?.dataset?.viewId === currentViewId;
+    });
     const next = nearestSurfaceInDirection(surfaces, current, direction);
     if (!next || next === current) return;
 

@@ -615,3 +615,19 @@
         margin-left: 0;
     }
 }
+
+.backup-detail-frame {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.backup-detail-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+}
+
+.backup-detail-actions kbd {
+    margin-left: var(--space-1);
+}

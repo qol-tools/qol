@@ -1,16 +1,17 @@
 import { html } from '../../lib/html.js';
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import { PageHeader } from '../../components/PageHeader.js';
 import { SurfaceContainer } from '../../lib/components/SurfaceContainer.js';
 import { Surface } from '../../lib/components/Surface.js';
 import { Expander, ExpanderTrigger, ExpanderBody } from '../../lib/components/Expander.js';
 import { Badge, HealthDot, Alert } from '../../lib/components/StatusIndicators.js';
 import { Button } from '../../lib/components/Button.js';
+import { CodeBlock } from '../../lib/components/CodeBlock.js';
 import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../../app/view-keyboard-context.js';
+import { toast } from '../../lib/toast.js';
 import { useProfileController } from './use-controller.js';
 import {
-    BackupPreviewModal,
     ImportFeedback,
     ProfileActionButton,
     ProfileBackupRow,
@@ -19,7 +20,9 @@ import {
     renderProviderField,
 } from './components.js';
 import { providerFieldSurfaceId } from './form.js';
+import { backupPreviewSlot } from './use-backups.js';
 import {
+    formatBackupPreview,
     profileHealthLabel,
     profileLastSyncSummary,
 } from './summary.js';
@@ -34,6 +37,14 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
     useRegisterViewKeyboard('profile', ctrl.handleKey, ctrl.isBlocking);
     useRegisterCommands('profile', ctrl.commands);
     const [showSettings, setShowSettings] = useState(false);
+
+    useEffect(() => {
+        backupPreviewSlot.set({
+            preview: ctrl.backupPreview,
+            incident: ctrl.incident,
+            onAcknowledge: ctrl.handleAcknowledge,
+        });
+    }, [ctrl.backupPreview, ctrl.incident, ctrl.handleAcknowledge]);
 
     const health = ctrl.syncStatus?.health || 'not_configured';
     const settingsSurface = ctrl.surfaceById.get('settings');
@@ -168,12 +179,48 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                 </div>
             </div>
         </div>
-        ${ctrl.backupPreview && html`<${BackupPreviewModal}
-            preview=${ctrl.backupPreview}
-            incident=${ctrl.incident}
-            onAcknowledge=${ctrl.handleAcknowledge}
-            onClose=${() => ctrl.setBackupPreview(null)}
-        />`}
+    `;
+}
+
+function dispatchEscape() {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+}
+
+export function BackupDetailSubPage() {
+    const [, bump] = useState(0);
+    useEffect(() => backupPreviewSlot.subscribe(() => bump(t => t + 1)), []);
+
+    const { preview, incident, onAcknowledge } = backupPreviewSlot.get();
+    if (!preview) {
+        return html`<div class="view-container content-shell">
+            <${PageHeader} title="Backup Preview" subtitle="Select a backup to view" />
+        </div>`;
+    }
+    const isIncidentBackup = incident?.backup_file === preview.file_name;
+    const copy = () => {
+        navigator.clipboard.writeText(preview.content);
+        toast('success', 'Copied to clipboard');
+    };
+    const acknowledge = () => { onAcknowledge?.(); dispatchEscape(); };
+    return html`
+        <div class="view-container content-shell">
+            <${PageHeader} title=${preview.file_name} subtitle=${isIncidentBackup ? 'Backup awaiting review' : 'Backup preview'} />
+            <div class="view-body content-shell-body">
+                <div class="content-shell-inner">
+                    <${SurfaceContainer} className="content-frame backup-detail-frame">
+                        <${CodeBlock}
+                            text=${formatBackupPreview(preview.content)}
+                            onCopy=${() => toast('success', 'Copied to clipboard')}
+                        />
+                        <div class="backup-detail-actions">
+                            <${Button} variant="btn-ghost" onActivate=${dispatchEscape}>Close <kbd>Esc</kbd><//>
+                            <${Button} variant=${isIncidentBackup ? 'btn-ghost' : 'btn-primary'} onActivate=${copy}>Copy<//>
+                            ${isIncidentBackup && html`<${Button} variant="btn-primary" onActivate=${acknowledge}>Looks Good<//>`}
+                        </div>
+                    <//>
+                </div>
+            </div>
+        </div>
     `;
 }
 

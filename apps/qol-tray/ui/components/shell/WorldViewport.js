@@ -12,9 +12,10 @@ import { AtmosphereLayer } from './AtmosphereLayer.js';
 
 const log = createDebug('qol:world');
 const CAMERA_FOLLOW_PAD = 40;
+const WHEEL_ZOOM_FACTOR = 0.002;
 const INTERACTIVE_SELECTOR = 'button, input, select, textarea, [data-selected-surface], a, [role="tab"], [tabindex]';
 
-export function WorldViewport({ camera, onViewChange, navigation, registry, children }) {
+export function WorldViewport({ camera, onViewChange, navigation, registry, renderPage, children }) {
     const viewportRef = useRef(null);
     const worldRef = useRef(null);
     const dragRef = useRef({ active: false, startX: 0, startY: 0, camX: 0, camY: 0, moved: false });
@@ -41,49 +42,67 @@ export function WorldViewport({ camera, onViewChange, navigation, registry, chil
             const isAltLeftClick = e.button === 0 && e.altKey;
             const isForcePan = isMiddleClick || isAltLeftClick;
             if (e.button !== 0 && !isMiddleClick) return;
-            if (!isForcePan && e.target.closest(INTERACTIVE_SELECTOR)) {
+            const isPeripheral = !!e.target.closest('.peripheral-preview');
+            if (!isForcePan && !isPeripheral && e.target.closest(INTERACTIVE_SELECTOR)) {
                 vp.classList.add('interactive');
                 return;
             }
             if (isForcePan) e.preventDefault();
             const d = dragRef.current;
-            d.active = true;
+            d.pending = true;
+            d.active = false;
             d.moved = false;
             d.startX = e.clientX;
             d.startY = e.clientY;
             d.camX = camera.x;
             d.camY = camera.y;
-            camera.cancelSmooth();
-            vp.classList.add('grabbing');
-            vp.setPointerCapture(e.pointerId);
+            d.pointerId = e.pointerId;
         }
 
         function onPointerMove(e) {
             const d = dragRef.current;
-            if (!d.active) {
+            if (!d.pending && !d.active) {
                 const target = document.elementFromPoint(e.clientX, e.clientY);
                 vp.classList.toggle('interactive', !!(target && target.closest(INTERACTIVE_SELECTOR)));
                 return;
             }
             const dx = e.clientX - d.startX;
             const dy = e.clientY - d.startY;
-            if (Math.abs(dx) > 3 || Math.abs(dy) > 3) d.moved = true;
-            camera.panTo(d.camX - dx / camera.zoom, d.camY - dy / camera.zoom);
+            if (d.pending && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) {
+                d.pending = false;
+                d.active = true;
+                d.moved = true;
+                camera.cancelSmooth();
+                vp.classList.add('grabbing');
+                vp.setPointerCapture(d.pointerId);
+            }
+            if (d.active) {
+                camera.panTo(d.camX - dx / camera.zoom, d.camY - dy / camera.zoom);
+            }
         }
 
         function onPointerUp(e) {
             const d = dragRef.current;
-            if (!d.active) return;
+            if (d.active) {
+                vp.classList.remove('grabbing');
+                vp.classList.remove('interactive');
+                vp.releasePointerCapture(e.pointerId);
+            }
+            d.pending = false;
             d.active = false;
-            vp.classList.remove('grabbing');
-            vp.classList.remove('interactive');
-            vp.releasePointerCapture(e.pointerId);
         }
 
         function onWheel(e) {
             e.preventDefault();
-            if (isCtrlHeld()) return;
-            camera.nudge(e.deltaX / camera.zoom, e.deltaY / camera.zoom);
+            if (e.deltaY) {
+                const rect = vp.getBoundingClientRect();
+                camera.zoomAround(
+                    e.clientX - rect.left,
+                    e.clientY - rect.top,
+                    camera.zoom * Math.exp(-e.deltaY * WHEEL_ZOOM_FACTOR),
+                );
+            }
+            if (e.deltaX) camera.nudge(e.deltaX / camera.zoom, 0);
         }
 
         function onKeyDown(e) {
@@ -173,7 +192,7 @@ export function WorldViewport({ camera, onViewChange, navigation, registry, chil
             <div id="world" ref=${worldRef}>
                 ${children}
             </div>
-            <${PeripheralPreview} navigation=${navigation} registry=${registry} />
+            <${PeripheralPreview} camera=${camera} navigation=${navigation} registry=${registry} renderPage=${renderPage} />
         </div>
     `;
 }

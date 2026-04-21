@@ -52,6 +52,12 @@ html.qol-bootstrapping-dive #app {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    scrollbar-gutter: auto;
+    scrollbar-width: none;
+}
+
+.world-view-slot .view-body::-webkit-scrollbar {
+    display: none;
 }
 
 .world-minimap-container {
