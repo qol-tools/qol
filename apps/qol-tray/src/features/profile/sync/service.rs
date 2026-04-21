@@ -9,10 +9,12 @@ use super::providers::{
     ensure_profile_gist, normalize_folder_path, normalize_path, sync_provider_definitions,
     validate_github_token, ProviderError, RemoteDocument,
 };
+use super::resolve::{resolve_sync_action, SyncAction};
 use super::state::{
     backup_file_path, build_status, ensure_sync_dirs, filename_string, hash_text, incident_kind,
-    list_backup_entries, load_state_file, now_rfc3339, pull_noop_message, pull_success_message,
-    sanitize_reason, save_state_file, PullMode, SyncStateFile,
+    list_backup_entries, load_state_file, now_rfc3339, pull_conflict_message,
+    pull_local_ahead_message, pull_noop_message, pull_success_message, sanitize_reason,
+    save_state_file, PullMode, SyncStateFile,
 };
 use super::types::{
     SyncActionResult, SyncBackupEntry, SyncBackupPreview, SyncConnectRequest, SyncConnection,
@@ -53,7 +55,7 @@ struct SyncOperationOutcome {
     message: String,
     applied_remote: bool,
     remote_revision: String,
-    local_hash: String,
+    last_synced_hash_update: Option<String>,
     incident: Option<super::types::SyncIncident>,
 }
 
@@ -201,7 +203,12 @@ impl SyncService {
                 .state
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if state.incident.is_some() || state.last_error.is_some() {
+            let blocked_by_conflict = state
+                .incident
+                .as_ref()
+                .map(|incident| incident.kind == "conflict" || incident.kind == "push_conflict")
+                .unwrap_or(false);
+            if blocked_by_conflict || state.last_error.is_some() {
                 false
             } else {
                 state
@@ -356,46 +363,84 @@ impl SyncService {
         let local_json = self.current_sync_document_json()?;
         let local_hash = hash_text(&local_json);
         let remote_hash = hash_text(&remote.content);
-        if remote_hash == local_hash {
-            return Ok(SyncOperationOutcome {
+        let last_synced = {
+            let state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.last_synced_hash.clone()
+        };
+
+        let action = if matches!(mode, PullMode::Connect) {
+            SyncAction::FastForwardFromRemote
+        } else {
+            resolve_sync_action(&local_hash, &remote_hash, last_synced.as_deref())
+        };
+
+        match action {
+            SyncAction::NoOp => Ok(SyncOperationOutcome {
                 message: pull_noop_message(mode),
                 applied_remote: false,
                 remote_revision: remote.revision,
-                local_hash: remote_hash,
+                last_synced_hash_update: Some(remote_hash),
                 incident: None,
-            });
+            }),
+            SyncAction::PushLocal => Ok(SyncOperationOutcome {
+                message: pull_local_ahead_message(mode),
+                applied_remote: false,
+                remote_revision: remote.revision,
+                last_synced_hash_update: None,
+                incident: None,
+            }),
+            SyncAction::Conflict => {
+                let backup_file = self.write_backup_file("conflict")?;
+                let message = pull_conflict_message(mode);
+                Ok(SyncOperationOutcome {
+                    message: message.clone(),
+                    applied_remote: false,
+                    remote_revision: remote.revision,
+                    last_synced_hash_update: None,
+                    incident: Some(super::types::SyncIncident {
+                        kind: "conflict".to_string(),
+                        message,
+                        backup_file: Some(filename_string(&backup_file)),
+                        created_at: now_rfc3339(),
+                    }),
+                })
+            }
+            SyncAction::FastForwardFromRemote => {
+                let backup_required = matches!(mode, PullMode::Connect);
+                let backup_file = if backup_required {
+                    Some(self.write_backup_file("remote-applied")?)
+                } else {
+                    None
+                };
+                let bundle: crate::features::profile::core::ProfileImportBundle =
+                    serde_json::from_str(&remote.content)
+                        .context("Remote profile JSON is invalid")?;
+                let result =
+                    crate::features::profile::core::apply_import_bundle(&self.plugins_dir, &bundle)
+                        .await?;
+                let message = pull_success_message(mode, backup_required, result.success);
+                let incident = if backup_required || !result.success {
+                    Some(super::types::SyncIncident {
+                        kind: incident_kind(mode).to_string(),
+                        message: message.clone(),
+                        backup_file: backup_file.as_ref().map(|path| filename_string(path)),
+                        created_at: now_rfc3339(),
+                    })
+                } else {
+                    None
+                };
+                Ok(SyncOperationOutcome {
+                    message,
+                    applied_remote: true,
+                    remote_revision: remote.revision,
+                    last_synced_hash_update: Some(remote_hash),
+                    incident,
+                })
+            }
         }
-
-        let backup_required = self.local_changes_require_backup(mode, &local_hash);
-        let backup_file = if backup_required {
-            Some(self.write_backup_file("remote-applied")?)
-        } else {
-            None
-        };
-
-        let bundle: crate::features::profile::core::ProfileImportBundle =
-            serde_json::from_str(&remote.content).context("Remote profile JSON is invalid")?;
-        let result =
-            crate::features::profile::core::apply_import_bundle(&self.plugins_dir, &bundle).await?;
-        let message = pull_success_message(mode, backup_required, result.success);
-        let incident = if backup_required || !result.success {
-            Some(super::types::SyncIncident {
-                kind: incident_kind(mode).to_string(),
-                message: message.clone(),
-                backup_file: backup_file.as_ref().map(|path| filename_string(path)),
-                created_at: now_rfc3339(),
-            })
-        } else {
-            None
-        };
-
-        Ok(SyncOperationOutcome {
-            message,
-            applied_remote: true,
-            remote_revision: remote.revision,
-            local_hash: remote_hash,
-            incident,
-        })
     }
 
     async fn push_current_document(
@@ -420,7 +465,7 @@ impl SyncService {
                     message: "Cloud sync is already up to date".to_string(),
                     applied_remote: false,
                     remote_revision: remote.revision.clone(),
-                    local_hash,
+                    last_synced_hash_update: Some(local_hash),
                     incident: None,
                 });
             }
@@ -468,7 +513,7 @@ impl SyncService {
             message: "Cloud sync pushed local changes".to_string(),
             applied_remote: false,
             remote_revision: next_revision,
-            local_hash,
+            last_synced_hash_update: Some(local_hash),
             incident: None,
         })
     }
@@ -490,7 +535,7 @@ impl SyncService {
             message: message.to_string(),
             applied_remote: true,
             remote_revision: remote.revision,
-            local_hash: remote_hash,
+            last_synced_hash_update: Some(remote_hash),
             incident: Some(super::types::SyncIncident {
                 kind: "push_conflict".to_string(),
                 message: message.to_string(),
@@ -523,7 +568,9 @@ impl SyncService {
             state.connection = Some(connection);
         }
         state.remote_revision = Some(outcome.remote_revision.clone());
-        state.last_synced_hash = Some(outcome.local_hash.clone());
+        if let Some(hash) = &outcome.last_synced_hash_update {
+            state.last_synced_hash = Some(hash.clone());
+        }
         state.last_sync_at = Some(now_rfc3339());
         state.incident = outcome.incident.clone();
         state.last_error = last_error.map(str::to_string);
@@ -536,17 +583,6 @@ impl SyncService {
             applied_remote: outcome.applied_remote,
             status: self.status(),
         }
-    }
-
-    fn local_changes_require_backup(&self, mode: PullMode, local_hash: &str) -> bool {
-        if matches!(mode, PullMode::Connect) {
-            return true;
-        }
-        let state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.last_synced_hash.as_deref() != Some(local_hash)
     }
 
     fn current_connection(&self) -> Result<SyncConnection> {

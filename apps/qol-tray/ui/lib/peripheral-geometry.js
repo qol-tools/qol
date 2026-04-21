@@ -28,9 +28,9 @@ export function computeSiblingCoverage(sibling, camera, viewport) {
     return (iw * ih) / area;
 }
 
-export function handleSlotClick(slot, navigation) {
+export function handleSlotClick(slot, navigation, resetZoom = 1) {
     if (!slot?.id) return;
-    navigation?.gotoAnchor?.({ pageId: slot.id }, { resetZoom: 1 });
+    navigation?.gotoAnchor?.({ pageId: slot.id }, { resetZoom });
 }
 
 export function shouldHidePeripheralSide({ side, activeEntry, camera, viewport, hysteresisPx = 16 }) {

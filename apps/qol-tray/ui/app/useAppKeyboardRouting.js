@@ -15,6 +15,7 @@ import {
 } from '../lib/surface-traits.js';
 import { nearestSurfaceInDirection, surfaceLabel } from '../lib/spatial-nav.js';
 import { focusGridRows, nextFocusGridElement } from '../lib/focus-grid.js';
+import { getWorldSettings } from '../lib/world-settings.js';
 
 const log = createDebug('qol:nav');
 const PLUGIN_CONFIG_FIELD = '[data-plugin-config-field-id]';
@@ -63,7 +64,11 @@ export function useAppKeyboardRouting({
         const nextId = pages[cycleIndex(idx, pages.length, shiftKey)];
         log('tab:', current, '→', nextId, '(section)');
         navigation.setCurrentAnchor({ pageId: nextId });
-        navigation.gotoAnchor({ pageId: nextId }, { respectKnob: false, resetZoom: 1 });
+        const s = getWorldSettings();
+        navigation.gotoAnchor(
+            { pageId: nextId },
+            { respectKnob: false, resetZoom: s.resetZoomOnNav ? s.defaultZoom : null },
+        );
         return true;
     }, [activePluginId, navigation, registry]);
 

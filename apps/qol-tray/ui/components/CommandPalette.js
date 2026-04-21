@@ -4,6 +4,7 @@ import { usePaletteContext } from '../palette/context.js';
 import { getCommands } from '../palette/registry.js';
 import init, { fuzzy_match as wasmFuzzyMatch } from '../wasm/qol_wasm.js';
 import { Surface } from '../lib/components/Surface.js';
+import { Peripheral } from './shell/Peripheral.js';
 
 function filterCommands(commands, query, useWasm) {
     if (!query) return commands;
@@ -18,7 +19,7 @@ function filterCommands(commands, query, useWasm) {
     return commands.filter(c => c.label.toLowerCase().includes(q));
 }
 
-export function CommandPalette() {
+export function CommandPalette({ camera, navigation }) {
     const { active, query, mode, actionQuery, activeViewId, activate, deactivate, setQuery } = usePaletteContext();
     const inputRef = useRef(null);
     const [selectedIndex, setSelectedIndex] = useState(0);
@@ -99,9 +100,10 @@ export function CommandPalette() {
     const clampedIndex = Math.min(selectedIndex, Math.max(0, commands.length - 1));
 
     if (!active) {
-        return html`<div class="search-bar palette-hint" onClick=${handleClick}>
+        return html`<${Peripheral} camera=${camera} navigation=${navigation} edge="top"
+            className="search-bar palette-hint" onClick=${handleClick}>
             <span class="palette-hint-text">Ctrl+E to search & run actions...</span>
-        </div>`;
+        <//>`;
     }
 
     return html`<div class="command-palette">

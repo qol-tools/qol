@@ -6,6 +6,8 @@ const DEFAULTS = {
     transitionStyle: 'zoom-fade',
     minimapSize: 380,
     anchorToPages: true,
+    defaultZoom: 0.8,
+    resetZoomOnNav: true,
 };
 
 let current = load();

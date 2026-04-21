@@ -364,9 +364,15 @@ function AppShell() {
         prevViewRef.current = activeViewId;
         log('viewChange:', activeViewId, viewChanged ? '→ switched' : '→ became available');
         navigation.setCurrentAnchor({ pageId: activeViewId });
+        const s = getWorldSettings();
         navigation.gotoAnchor(
             { pageId: activeViewId },
-            { respectKnob: true, instant: becameAvailable, useFocusMemory: false, resetZoom: viewChanged ? 1 : null },
+            {
+                respectKnob: true,
+                instant: becameAvailable,
+                useFocusMemory: false,
+                resetZoom: viewChanged && s.resetZoomOnNav ? s.defaultZoom : null,
+            },
         );
     }, [activeViewId, viewOrder, navigation]);
 
@@ -484,7 +490,7 @@ function AppShell() {
                             ${renderWorldViews({ ...renderCtx, registry, cameraLayer, confinedPages: navigation.getConfinedPages(), diveDepth })}
                         `}
                     <//>
-                    <${CommandPalette} />
+                    <${CommandPalette} camera=${camera} navigation=${navigation} />
                     <${MinimapContainer} camera=${camera} registry=${registry} viewportRef=${viewportRef} diveParent=${diveParent}
                         activePluginId=${activePluginId} diveDepth=${diveDepth} navigation=${navigation}
                         version=${appVersion} updateState=${updateState} isDevMode=${devEnabled} onAction=${handleSidebarAction} />

@@ -7,6 +7,8 @@ import {
     pickCenteredEntry,
     shouldHidePeripheralSide,
 } from '../../lib/peripheral-geometry.js';
+import { getWorldSettings } from '../../lib/world-settings.js';
+import { useOverlayHide } from '../../lib/hooks/useIdleHide.js';
 
 const DEFAULT_NEIGHBORS = 1;
 const ANIM_DURATION_MS = 240;
@@ -104,41 +106,60 @@ export function PeripheralPreview({ camera, navigation, registry, renderPage }) 
                 const coverage = entry && camera
                     ? computeSiblingCoverage(entry, camera, viewportSize)
                     : 0;
-                const hide = activeEntry && camera
+                const hideSide = activeEntry && camera
                     ? shouldHidePeripheralSide({ side: slot.side, activeEntry, camera, viewport: viewportSize })
                     : false;
-                if (hide) return null;
+                if (hideSide) return null;
                 const base = BASE_OPACITY_FOR_DISTANCE[slot.distance] ?? 0.08;
-                const opacity = Math.max(0, 1 - coverage) * base;
-                const isEmpty = !slot.id;
+                const coverageOpacity = Math.max(0, 1 - coverage) * base;
                 const miniScale = computeMiniScale(entry, slotBox);
-                const contentStyle = entry
-                    ? `width:${entry.width}px;height:${entry.height}px;--peripheral-mini-scale:${miniScale};`
-                    : '';
-                return html`
-                    <button
-                        type="button"
-                        class=${`peripheral-slot peripheral-slot-${slot.side}${isEmpty ? ' peripheral-slot-empty' : ''}`}
-                        data-distance=${slot.distance}
-                        key=${key}
-                        tabindex="-1"
-                        style=${isEmpty ? '' : `opacity:${opacity};`}
-                        disabled=${isEmpty}
-                        onClick=${isEmpty ? undefined : () => handleSlotClick(slot, navigation)}
-                        ref=${(el) => {
-                            if (el) slotRefs.current.set(key, el);
-                            else slotRefs.current.delete(key);
-                        }}
-                    >
-                        ${slot.id && renderPage
-                            ? html`<div class="peripheral-mini">
-                                <div class="peripheral-mini-content" style=${contentStyle}>${renderPage(slot.id)}</div>
-                            </div>`
-                            : html`<div class="peripheral-edge"></div>`}
-                    </button>
-                `;
+                return html`<${PeripheralSlot}
+                    key=${key}
+                    slotKey=${key}
+                    slot=${slot}
+                    entry=${entry}
+                    renderPage=${renderPage}
+                    miniScale=${miniScale}
+                    coverageOpacity=${coverageOpacity}
+                    camera=${camera}
+                    navigation=${navigation}
+                    slotRefs=${slotRefs}
+                />`;
             })}
         </div>
+    `;
+}
+
+function PeripheralSlot({ slotKey, slot, entry, renderPage, miniScale, coverageOpacity, camera, navigation, slotRefs }) {
+    const ref = useRef(null);
+    useOverlayHide({ targetRef: ref, camera, navigation });
+    const isEmpty = !slot.id;
+    const contentStyle = entry
+        ? `width:${entry.width}px;height:${entry.height}px;--peripheral-mini-scale:${miniScale};`
+        : '';
+    const slotStyle = isEmpty ? '' : `--coverage-opacity:${coverageOpacity};`;
+    const setRef = (el) => {
+        ref.current = el;
+        if (el) slotRefs.current.set(slotKey, el);
+        else slotRefs.current.delete(slotKey);
+    };
+    return html`
+        <button
+            type="button"
+            class=${`peripheral-slot peripheral-slot-${slot.side}${isEmpty ? ' peripheral-slot-empty' : ''}`}
+            data-distance=${slot.distance}
+            tabindex="-1"
+            style=${slotStyle}
+            disabled=${isEmpty}
+            onClick=${isEmpty ? undefined : () => handleSlotClick(slot, navigation, getWorldSettings().defaultZoom)}
+            ref=${setRef}
+        >
+            ${slot.id && renderPage
+                ? html`<div class="peripheral-mini">
+                    <div class="peripheral-mini-content" style=${contentStyle}>${renderPage(slot.id)}</div>
+                </div>`
+                : html`<div class="peripheral-edge"></div>`}
+        </button>
     `;
 }
 

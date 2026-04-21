@@ -241,6 +241,24 @@ pub(crate) fn incident_kind(mode: PullMode) -> &'static str {
     }
 }
 
+pub(crate) fn pull_conflict_message(mode: PullMode) -> String {
+    match mode {
+        PullMode::Launch => "Cloud sync found divergent changes on launch. Local profile was preserved; review the conflict backup before pulling or pushing.".to_string(),
+        PullMode::Manual => "Cloud sync found divergent changes. Local profile was preserved; review the conflict backup before pulling or pushing.".to_string(),
+        PullMode::Connect => "Cloud sync found divergent changes during setup. Local profile was preserved; review the conflict backup before pulling or pushing.".to_string(),
+    }
+}
+
+pub(crate) fn pull_local_ahead_message(mode: PullMode) -> String {
+    match mode {
+        PullMode::Launch => {
+            "Local profile has unpushed changes; skipping remote apply until next push".to_string()
+        }
+        PullMode::Manual => "Local profile has unpushed changes; push to publish them".to_string(),
+        PullMode::Connect => "Local profile has unpushed changes relative to remote".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
