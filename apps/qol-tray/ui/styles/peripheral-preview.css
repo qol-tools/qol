@@ -13,6 +13,24 @@
     height: clamp(140px, 32vh, 420px);
     transform-origin: center;
     will-change: transform, opacity;
+    pointer-events: auto;
+    cursor: pointer;
+    padding: 0;
+    border: none;
+    background: transparent;
+    appearance: none;
+    font: inherit;
+    color: inherit;
+}
+
+.peripheral-slot:disabled {
+    cursor: default;
+    pointer-events: none;
+}
+
+.peripheral-slot:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
 }
 
 .peripheral-slot-prev[data-distance="1"] {
@@ -66,27 +84,21 @@
 .peripheral-mini {
     width: 100%;
     height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: var(--space-4);
+    position: relative;
+    overflow: hidden;
     background: var(--bg-surface);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
     box-shadow: var(--elevation-1);
 }
 
-.peripheral-mini-label {
-    color: var(--text-secondary);
-    font-size: var(--fs-lg);
-    font-weight: var(--fw-semibold);
-    letter-spacing: var(--ls-sm);
-    text-align: center;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
+.peripheral-mini-content {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform: scale(var(--peripheral-mini-scale, 1));
+    transform-origin: top left;
+    pointer-events: none;
 }
 
 .peripheral-slot-empty {

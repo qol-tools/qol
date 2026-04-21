@@ -2,6 +2,9 @@ import { createDebug } from './debug.js';
 
 const log = createDebug('qol:camera');
 
+const MAX_ZOOM = 8;
+const UNBOUNDED_MIN_ZOOM = 0.1;
+
 export function createCamera(options = {}) {
     const getViewportSize = options.getViewportSize || (() => ({ w: 800, h: 600 }));
     let x = 0;
@@ -40,11 +43,12 @@ export function createCamera(options = {}) {
     }
 
     function clampZoom(nz) {
-        if (!bounds) return nz;
-        if (typeof bounds.layer === 'number' && bounds.layer !== layer) return nz;
+        const activeBounds = bounds && (typeof bounds.layer !== 'number' || bounds.layer === layer);
         const vp = getViewportSize();
-        const minZoom = Math.max(vp.w / bounds.width, vp.h / bounds.height);
-        return Math.max(nz, minZoom);
+        const minZoom = activeBounds
+            ? Math.min(vp.w / bounds.width, vp.h / bounds.height)
+            : UNBOUNDED_MIN_ZOOM;
+        return Math.max(minZoom, Math.min(nz, MAX_ZOOM));
     }
 
     function setBounds(rect) {
@@ -89,6 +93,22 @@ export function createCamera(options = {}) {
         cancelSmooth();
         zoom = clampZoom(nz);
         const clamped = clampPanTarget(x, y);
+        x = clamped.x;
+        y = clamped.y;
+        apply();
+    }
+
+    function zoomAround(anchorScreenX, anchorScreenY, nz) {
+        cancelSmooth();
+        const clampedZ = clampZoom(nz);
+        if (clampedZ === zoom) return;
+        const anchorWorldX = x + anchorScreenX / zoom;
+        const anchorWorldY = y + anchorScreenY / zoom;
+        zoom = clampedZ;
+        const clamped = clampPanTarget(
+            anchorWorldX - anchorScreenX / clampedZ,
+            anchorWorldY - anchorScreenY / clampedZ,
+        );
         x = clamped.x;
         y = clamped.y;
         apply();
@@ -156,6 +176,7 @@ export function createCamera(options = {}) {
         panTo,
         panSmooth,
         zoomTo,
+        zoomAround,
         zoomSmooth,
         cancelSmooth,
         nudge,

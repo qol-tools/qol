@@ -3,7 +3,7 @@ import { getWorldSettings } from './world-settings.js';
 
 const log = createDebug('qol:nav-state');
 
-export function createNavigation({ registry, camera, getSettings, domHelpers }) {
+export function createNavigation({ registry, camera, getSettings, domHelpers, groundConfinement }) {
     const STORAGE_KEY = 'qoltray.navigation';
     const LEGACY_KEY = 'qoltray.camera';
 
@@ -51,12 +51,18 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         ? { ...persisted.lastViewedSection }
         : {};
     const diveStack = [];
-    let currentConfinement = null;
-    let currentConfinedPages = [];
+    let currentConfinement = groundConfinement?.bounds ?? null;
+    let currentConfinedPages = Array.isArray(groundConfinement?.pages) ? [...groundConfinement.pages] : [];
     let currentTraits = {};
     let currentSourceSelector = null;
+    if (currentConfinement && typeof camera.setBounds === 'function') {
+        camera.setBounds(currentConfinement);
+    }
     if (persisted?.zoom && typeof camera.zoomTo === 'function') {
         camera.zoomTo(persisted.zoom);
+    }
+    if (typeof camera.subscribe === 'function') {
+        camera.subscribe(() => scheduleSave());
     }
 
     const anchorListeners = new Set();
@@ -114,7 +120,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         return { x: entry.x + entry.width / 2, y: entry.y + entry.height / 2 };
     }
 
-    function gotoAnchor(anchor, { respectKnob = true, instant = false, useFocusMemory = true } = {}) {
+    function gotoAnchor(anchor, { respectKnob = true, instant = false, useFocusMemory = true, resetZoom = null } = {}) {
         if (!anchor || !anchor.pageId) {
             log('gotoAnchor: skipped (no anchor)');
             return;
@@ -130,7 +136,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         }
         const center = resolveCenter(entry);
         const { w, h } = domHelpers.getViewportSize();
-        const z = camera.zoom || 1;
+        const z = resetZoom ?? camera.zoom ?? 1;
         const targetX = center.x - w / (2 * z);
         const targetY = center.y - h / (2 * z);
         if (entry.layer !== camera.layer) camera.setLayer(entry.layer);
@@ -150,6 +156,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
             }
         };
         if (instant) {
+            if (resetZoom != null) camera.zoomTo(resetZoom);
             camera.panTo(targetX, targetY);
             focusAfterPan();
             return;
@@ -159,11 +166,18 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         const distance = Math.sqrt(dx * dx + dy * dy);
         const FAR_THRESHOLD = 2000;
         const APPROACH_PX = 400;
-
         if (distance > FAR_THRESHOLD) {
             const ratio = APPROACH_PX / distance;
             camera.panTo(targetX - dx * ratio, targetY - dy * ratio);
-            camera.panSmooth(targetX, targetY, 120, focusAfterPan);
+            if (resetZoom != null) {
+                camera.zoomSmooth(targetX, targetY, resetZoom, 120, focusAfterPan);
+            } else {
+                camera.panSmooth(targetX, targetY, 120, focusAfterPan);
+            }
+            return;
+        }
+        if (resetZoom != null) {
+            camera.zoomSmooth(targetX, targetY, resetZoom, 200, focusAfterPan);
             return;
         }
         camera.panSmooth(targetX, targetY, 200, focusAfterPan);
@@ -265,6 +279,11 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         return diveStack.length;
     }
 
+    function setGroundPages(pages) {
+        if (diveStack.length > 0) return;
+        currentConfinedPages = Array.isArray(pages) ? [...pages] : [];
+    }
+
     return {
         getCurrentAnchor,
         setCurrentAnchor,
@@ -276,6 +295,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers }) 
         gotoAnchor,
         stackDepth,
         getCurrentConfinement,
+        setGroundPages,
         getConfinedPages() { return currentConfinedPages; },
         getCurrentTraits() { return currentTraits; },
         refreshCurrentDive() {

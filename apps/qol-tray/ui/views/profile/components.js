@@ -1,14 +1,10 @@
 import { html } from '../../lib/html.js';
-import { useCallback } from 'preact/hooks';
-import { CodeBlock } from '../../lib/components/CodeBlock.js';
-import { Modal, ModalFooter } from '../../lib/components/ModalPreact.js';
 import { CustomSelect } from '../../lib/components/CustomSelect.js';
 import { Badge } from '../../lib/components/StatusIndicators.js';
 import { Button } from '../../lib/components/Button.js';
 import { ToggleSwitch } from '../../lib/components/ToggleSwitch.js';
 import { Surface } from '../../lib/components/Surface.js';
 import { BackupRow } from '../../components/domain-rows/BackupRow.js';
-import { toast } from '../../lib/toast.js';
 import {
     FIELD_KIND_BOOLEAN,
     FIELD_KIND_PASSWORD,
@@ -23,7 +19,6 @@ import {
 } from './form.js';
 import {
     buildBadges,
-    formatBackupPreview,
     formatBytes,
     importCounts,
     importSummary,
@@ -127,7 +122,7 @@ export function ProfileBackupRow({ backup, incident, ctrl, onOpen }) {
     const review = incident?.backup_file === backup.file_name;
     return html`<${BackupRow} time=${backup.created_at} fileName=${backup.file_name}
         size=${formatBytes(backup.size_bytes)} review=${review}
-        ...${sel} onActivate=${onOpen} />`;
+        ...${sel} onActivate=${onOpen} data-dive-target="profile-backup-detail" />`;
 }
 
 export function ImportFeedback({ lastImport }) {
@@ -161,41 +156,6 @@ export function ImportFeedback({ lastImport }) {
                 </div>
             `}
         </div>
-    `;
-}
-
-export function BackupPreviewModal({ preview, incident, onAcknowledge, onClose }) {
-    const isIncidentBackup = incident?.backup_file === preview.file_name;
-    const copy = useCallback(() => {
-        navigator.clipboard.writeText(preview.content);
-        toast('success', 'Copied to clipboard');
-    }, [preview]);
-    const acknowledge = useCallback(() => {
-        onAcknowledge?.();
-        onClose();
-    }, [onAcknowledge, onClose]);
-
-    const actions = [
-        { label: 'Close', kbd: 'Esc', onClick: onClose },
-        { label: 'Copy', kbd: 'C', onClick: copy },
-    ];
-    if (isIncidentBackup) {
-        actions.push({ label: 'Looks Good', kbd: 'Enter', variant: 'btn-primary', onClick: acknowledge });
-    } else {
-        actions[1].variant = 'btn-primary';
-    }
-
-    return html`
-        <${Modal} open=${true} onClose=${onClose} size="xl" dismissOnBackdrop=${true} className="edit-modal">
-            <div class="edit-modal-content" tabIndex="-1">
-                <h3>${preview.file_name}</h3>
-                <${CodeBlock}
-                    text=${formatBackupPreview(preview.content)}
-                    onCopy=${() => toast('success', 'Copied to clipboard')}
-                />
-                <${ModalFooter} actions=${actions} />
-            </div>
-        <//>
     `;
 }
 

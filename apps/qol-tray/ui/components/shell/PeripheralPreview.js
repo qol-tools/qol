@@ -1,20 +1,46 @@
 import { html } from '../../lib/html.js';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import {
+    computePeripheralSlots,
+    computeSiblingCoverage,
+    handleSlotClick,
+    pickCenteredEntry,
+    shouldHidePeripheralSide,
+} from '../../lib/peripheral-geometry.js';
 
-const NEIGHBOR_HARD_CAP = 4;
+const DEFAULT_NEIGHBORS = 1;
 const ANIM_DURATION_MS = 240;
 const ANIM_EASING = 'cubic-bezier(0.2, 0.8, 0.25, 1)';
 const PARALLAX_PX = 28;
+const SCALE_FOR_DISTANCE = { 1: 0.8, 2: 0.6, 3: 0.4, 4: 0.28 };
+const BASE_OPACITY_FOR_DISTANCE = { 1: 0.4, 2: 0.2, 3: 0.12, 4: 0.08 };
+const SLOT_CSS_W = { min: 180, vw: 0.24, max: 360 };
+const SLOT_CSS_H = { min: 140, vh: 0.32, max: 420 };
 
-export function PeripheralPreview({ navigation, registry }) {
-    const [, setTick] = useState(0);
+function computeSlotBoxSize(vpW, vpH) {
+    return {
+        w: Math.max(SLOT_CSS_W.min, Math.min(SLOT_CSS_W.max, vpW * SLOT_CSS_W.vw)),
+        h: Math.max(SLOT_CSS_H.min, Math.min(SLOT_CSS_H.max, vpH * SLOT_CSS_H.vh)),
+    };
+}
+
+function computeMiniScale(entry, slotBox) {
+    if (!entry || entry.width <= 0 || entry.height <= 0) return 1;
+    return Math.min(slotBox.w / entry.width, slotBox.h / entry.height);
+}
+
+export function PeripheralPreview({ camera, navigation, registry, renderPage }) {
+    const [, bump] = useState(0);
+
     useEffect(() => {
         if (!navigation?.subscribeAnchor) return undefined;
-        return navigation.subscribeAnchor(() => setTick((t) => t + 1));
+        return navigation.subscribeAnchor(() => bump((t) => t + 1));
     }, [navigation]);
 
-    const traits = navigation?.getCurrentTraits?.() || {};
-    const cfg = traits['peripheral-preview'];
+    useEffect(() => {
+        if (!camera?.subscribe) return undefined;
+        return camera.subscribe(() => bump((t) => t + 1));
+    }, [camera]);
 
     const slotRefs = useRef(new Map());
     const prevIdxRef = useRef(null);
@@ -25,26 +51,29 @@ export function PeripheralPreview({ navigation, registry }) {
         animationsRef.current.clear();
     }, []);
 
-    const anchorId = navigation?.getCurrentAnchor?.()?.pageId;
+    useEffect(() => {
+        const onResize = () => bump((t) => t + 1);
+        window.addEventListener('resize', onResize);
+        return () => window.removeEventListener('resize', onResize);
+    }, []);
+
     const confinedPages = navigation?.getConfinedPages?.() || [];
-    const idx = anchorId ? confinedPages.indexOf(anchorId) : -1;
+    const viewportSize = { w: window.innerWidth, h: window.innerHeight };
+    const entries = confinedPages
+        .map((id) => registry?.getEntry?.(id))
+        .filter(Boolean);
+    const centered = camera ? pickCenteredEntry(entries, camera, viewportSize) : null;
+    const activePageId = centered?.id || navigation?.getCurrentAnchor?.()?.pageId || null;
+    const idx = activePageId ? confinedPages.indexOf(activePageId) : -1;
 
     useLayoutEffect(() => {
-        if (idx < 0) {
-            prevIdxRef.current = null;
-            return;
-        }
+        if (idx < 0) { prevIdxRef.current = null; return; }
         const prevIdx = prevIdxRef.current;
         prevIdxRef.current = idx;
         if (prevIdx == null || prevIdx === idx) return;
-
         const step = idx - prevIdx;
         if (!step) return;
-
-        const reduced = typeof window !== 'undefined'
-            && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-        if (reduced) return;
-
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
         const direction = step > 0 ? 1 : -1;
         for (const [key, el] of slotRefs.current) {
             if (!el || !el.isConnected) continue;
@@ -59,60 +88,59 @@ export function PeripheralPreview({ navigation, registry }) {
                 () => {},
             );
         }
-    }, [idx, anchorId]);
+    }, [idx, activePageId]);
 
-    if (!cfg) return null;
-    const requested = Number.isInteger(cfg.neighbors) ? cfg.neighbors : 1;
-    if (requested <= 0) return null;
-    const neighbors = Math.min(requested, NEIGHBOR_HARD_CAP);
+    const slots = computePeripheralSlots(activePageId, confinedPages, DEFAULT_NEIGHBORS);
+    if (slots.length === 0) return null;
 
-    if (!anchorId || !confinedPages.length) return null;
-    if (idx < 0) return null;
-
-    const slots = [];
-    for (let d = 1; d <= neighbors; d++) {
-        const prevId = confinedPages[idx - d];
-        slots.push({ id: prevId || null, side: 'prev', distance: d });
-        const nextId = confinedPages[idx + d];
-        slots.push({ id: nextId || null, side: 'next', distance: d });
-    }
+    const slotBox = computeSlotBoxSize(viewportSize.w, viewportSize.h);
+    const activeEntry = activePageId ? registry?.getEntry?.(activePageId) : null;
 
     return html`
         <div class="peripheral-preview" aria-hidden="true">
             ${slots.map((slot) => {
                 const key = `${slot.side}-${slot.distance}`;
+                const entry = slot.id ? registry?.getEntry?.(slot.id) : null;
+                const coverage = entry && camera
+                    ? computeSiblingCoverage(entry, camera, viewportSize)
+                    : 0;
+                const hide = activeEntry && camera
+                    ? shouldHidePeripheralSide({ side: slot.side, activeEntry, camera, viewport: viewportSize })
+                    : false;
+                if (hide) return null;
+                const base = BASE_OPACITY_FOR_DISTANCE[slot.distance] ?? 0.08;
+                const opacity = Math.max(0, 1 - coverage) * base;
+                const isEmpty = !slot.id;
+                const miniScale = computeMiniScale(entry, slotBox);
+                const contentStyle = entry
+                    ? `width:${entry.width}px;height:${entry.height}px;--peripheral-mini-scale:${miniScale};`
+                    : '';
                 return html`
-                    <div
-                        class=${`peripheral-slot peripheral-slot-${slot.side}${slot.id ? '' : ' peripheral-slot-empty'}`}
+                    <button
+                        type="button"
+                        class=${`peripheral-slot peripheral-slot-${slot.side}${isEmpty ? ' peripheral-slot-empty' : ''}`}
                         data-distance=${slot.distance}
                         key=${key}
+                        tabindex="-1"
+                        style=${isEmpty ? '' : `opacity:${opacity};`}
+                        disabled=${isEmpty}
+                        onClick=${isEmpty ? undefined : () => handleSlotClick(slot, navigation)}
                         ref=${(el) => {
                             if (el) slotRefs.current.set(key, el);
                             else slotRefs.current.delete(key);
                         }}
                     >
-                        ${slot.id
-                            ? html`<${PeripheralMini} registry=${registry} pageId=${slot.id} />`
+                        ${slot.id && renderPage
+                            ? html`<div class="peripheral-mini">
+                                <div class="peripheral-mini-content" style=${contentStyle}>${renderPage(slot.id)}</div>
+                            </div>`
                             : html`<div class="peripheral-edge"></div>`}
-                    </div>
+                    </button>
                 `;
             })}
         </div>
     `;
 }
-
-function PeripheralMini({ registry, pageId }) {
-    const entry = registry?.getEntry?.(pageId);
-    const label = entry?.label || pageId;
-    return html`
-        <div class="peripheral-mini">
-            <div class="peripheral-mini-label">${label}</div>
-        </div>
-    `;
-}
-
-const SCALE_FOR_DISTANCE = { 1: 0.8, 2: 0.6, 3: 0.4, 4: 0.28 };
-const OPACITY_FOR_DISTANCE = { 1: 0.4, 2: 0.2, 3: 0.12, 4: 0.08 };
 
 function captureRunningState(el) {
     const cs = getComputedStyle(el);
@@ -123,7 +151,7 @@ function animateSlot(el, key, direction, fromStyle) {
     const [side, distStr] = key.split('-');
     const distance = Number(distStr);
     const restScale = SCALE_FOR_DISTANCE[distance] ?? 0.2;
-    const restOpacity = OPACITY_FOR_DISTANCE[distance] ?? 0.05;
+    const restOpacity = BASE_OPACITY_FOR_DISTANCE[distance] ?? 0.05;
 
     const sideSign = side === 'next' ? 1 : -1;
     const movingTowardThisSide = sideSign === direction;
@@ -131,8 +159,8 @@ function animateSlot(el, key, direction, fromStyle) {
         ? (SCALE_FOR_DISTANCE[distance + 1] ?? Math.max(0.18, restScale - 0.18))
         : (SCALE_FOR_DISTANCE[Math.max(1, distance - 1)] ?? Math.min(0.95, restScale + 0.18));
     const fromOpacity = movingTowardThisSide
-        ? (OPACITY_FOR_DISTANCE[distance + 1] ?? Math.max(0.04, restOpacity * 0.5))
-        : (OPACITY_FOR_DISTANCE[Math.max(1, distance - 1)] ?? Math.min(1, restOpacity * 2));
+        ? (BASE_OPACITY_FOR_DISTANCE[distance + 1] ?? Math.max(0.04, restOpacity * 0.5))
+        : (BASE_OPACITY_FOR_DISTANCE[Math.max(1, distance - 1)] ?? Math.min(1, restOpacity * 2));
 
     const parallaxX = direction * PARALLAX_PX * (1 / distance);
 

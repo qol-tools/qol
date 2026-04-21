@@ -1,5 +1,5 @@
 import { html } from '../lib/html.js';
-import { useRef, useCallback, useEffect, useLayoutEffect, useState } from 'preact/hooks';
+import { useRef, useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'preact/hooks';
 import { PaletteProvider, usePaletteContext } from '../palette/context.js';
 import { createDebug, elLabel } from '../lib/debug.js';
 import { prettyLabel } from '../auto-config/heuristics.js';
@@ -12,7 +12,7 @@ import { PluginConfigProvider } from '../views/plugin-config/context.js';
 import { useApp } from '../app/useApp.js';
 import { useAppKeyboardRouting } from '../app/useAppKeyboardRouting.js';
 import { ViewKeyboardProvider } from '../app/view-keyboard-context.js';
-import { buildViewOrder, renderWorldViews } from '../app/views.js';
+import { buildViewOrder, renderPageContent, renderWorldViews, CONTENT_SIZED_PAGES } from '../app/views.js';
 import { RecompileDissolve } from '../lib/components/RecompileDissolve.js';
 import { GlobalToast } from './ApiErrorToast.js';
 import { SelectionCursorOverlay } from '../lib/components/SelectionCursorOverlay.js';
@@ -33,6 +33,7 @@ function registerStaticDiveTargets(registry) {
         { parentId: 'shortcuts', subId: 'shortcuts-editor' },
         { parentId: 'logs', subId: 'logs-detail' },
         { parentId: 'task-runner', subId: 'task-runner-editor' },
+        { parentId: 'profile', subId: 'profile-backup-detail' },
     ];
     for (const t of staticTargets) {
         const parent = registry.getEntry(t.parentId);
@@ -196,7 +197,7 @@ function AppShell() {
 
     const registryRef = useRef(null);
     if (!registryRef.current) {
-        const reg = createWorldRegistry(buildViewOrder(true), {});
+        const reg = createWorldRegistry(buildViewOrder(true), {}, { contentSizedIds: CONTENT_SIZED_PAGES });
         registerStaticDiveTargets(reg);
         registryRef.current = reg;
     }
@@ -239,14 +240,71 @@ function AppShell() {
         for (const id of viewOrder) {
             if (!registry.getEntry(id)) registry.placeNew(id);
         }
+        if (navigationRef.current) {
+            navigationRef.current.setGroundPages(viewOrder);
+            setTargetsVersion(v => v + 1);
+        }
     }, [viewOrder, registry]);
+
+    useEffect(() => {
+        const worldEl = document.getElementById('world');
+        if (!worldEl) return undefined;
+        const recomputeBounds = () => {
+            const layer0Entries = registry.getEntriesForLayer(0);
+            if (!layer0Entries.length) return;
+            const slots = worldEl.querySelectorAll('.world-view-slot[data-layer="0"]');
+            let yExtent = Math.max(...layer0Entries.map(e => e.y + e.height));
+            for (const el of slots) {
+                const entry = registry.getEntry(el.dataset.viewId);
+                if (!entry) continue;
+                const bottom = entry.y + el.offsetHeight;
+                if (bottom > yExtent) yExtent = bottom;
+            }
+            const x0 = Math.min(...layer0Entries.map(e => e.x));
+            const y0 = Math.min(...layer0Entries.map(e => e.y));
+            const x1 = Math.max(...layer0Entries.map(e => e.x + e.width));
+            const padX = Math.max(...layer0Entries.map(e => e.width));
+            const padY = Math.max(...layer0Entries.map(e => e.height));
+            camera.setBounds({
+                x: x0 - padX,
+                y: y0 - padY,
+                width: (x1 - x0) + padX * 2,
+                height: (yExtent - y0) + padY * 2,
+                layer: 0,
+            });
+        };
+        const ro = new ResizeObserver(recomputeBounds);
+        const slots = worldEl.querySelectorAll('.world-view-slot[data-layer="0"]');
+        for (const el of slots) ro.observe(el);
+        recomputeBounds();
+        return () => ro.disconnect();
+    }, [camera, registry, targetsVersion]);
 
     const navigationRef = useRef(null);
     if (!navigationRef.current) {
+        const layer0Entries = registry.getEntriesForLayer(0);
+        const groundConfinement = layer0Entries.length > 0 ? (() => {
+            const xs = layer0Entries.map(e => e.x);
+            const x0 = Math.min(...xs);
+            const y0 = Math.min(...layer0Entries.map(e => e.y));
+            const x1 = Math.max(...layer0Entries.map(e => e.x + e.width));
+            const y1 = Math.max(...layer0Entries.map(e => e.y + e.height));
+            const padX = Math.max(...layer0Entries.map(e => e.width));
+            const padY = Math.max(...layer0Entries.map(e => e.height));
+            const bounds = {
+                x: x0 - padX,
+                y: y0 - padY,
+                width: (x1 - x0) + padX * 2,
+                height: (y1 - y0) + padY * 2,
+                layer: 0,
+            };
+            return { bounds, pages: viewOrder };
+        })() : undefined;
         navigationRef.current = createNavigation({
             registry,
             camera,
             getSettings: getWorldSettings,
+            groundConfinement,
             domHelpers: {
                 resolveSelector: (selector) => {
                     const el = document.querySelector(selector);
@@ -306,7 +364,10 @@ function AppShell() {
         prevViewRef.current = activeViewId;
         log('viewChange:', activeViewId, viewChanged ? '→ switched' : '→ became available');
         navigation.setCurrentAnchor({ pageId: activeViewId });
-        navigation.gotoAnchor({ pageId: activeViewId }, { respectKnob: true, instant: becameAvailable, useFocusMemory: false });
+        navigation.gotoAnchor(
+            { pageId: activeViewId },
+            { respectKnob: true, instant: becameAvailable, useFocusMemory: false, resetZoom: viewChanged ? 1 : null },
+        );
     }, [activeViewId, viewOrder, navigation]);
 
     useLayoutEffect(() => {
@@ -386,6 +447,20 @@ function AppShell() {
         return () => clearTimeout(failsafe);
     }, [hiddenUntilDive]);
 
+    const renderCtx = useMemo(() => ({
+        activePluginId,
+        openPluginConfig,
+        openPluginUi,
+        closePluginConfig,
+        syncStatus,
+        syncProviders,
+        onSyncStatusChange: setSyncStatus,
+        refreshSyncStatus,
+        devEnabled,
+    }), [activePluginId, openPluginConfig, openPluginUi, closePluginConfig,
+        syncStatus, syncProviders, setSyncStatus, refreshSyncStatus, devEnabled]);
+    const renderPage = useCallback((pageId) => renderPageContent(pageId, renderCtx), [renderCtx]);
+
     return html`
         <${ModifierStateProvider}>
         <${PluginConfigProvider} pluginId=${activePluginId} mode=${activePluginMode} activeSectionId=${activeSectionId}>
@@ -403,24 +478,10 @@ function AppShell() {
                     registry=${registry}
                 />
                 <div class="app-container">
-                    <${WorldViewport} camera=${camera} onViewChange=${switchView} navigation=${navigation} registry=${registry}>
+                    <${WorldViewport} camera=${camera} onViewChange=${switchView} navigation=${navigation} registry=${registry} renderPage=${renderPage}>
                         ${hiddenUntilDive ? null : html`
                             <${RegionLabels} registry=${registry} cameraLayer=${cameraLayer} navigation=${navigation} diveDepth=${diveDepth} />
-                            ${renderWorldViews({
-                                registry,
-                                cameraLayer,
-                                confinedPages: navigation.getConfinedPages(),
-                                diveDepth,
-                                activePluginId,
-                                openPluginConfig,
-                                openPluginUi,
-                                closePluginConfig,
-                                syncStatus,
-                                syncProviders,
-                                onSyncStatusChange: setSyncStatus,
-                                refreshSyncStatus,
-                                devEnabled,
-                            })}
+                            ${renderWorldViews({ ...renderCtx, registry, cameraLayer, confinedPages: navigation.getConfinedPages(), diveDepth })}
                         `}
                     <//>
                     <${CommandPalette} />

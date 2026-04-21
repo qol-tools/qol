@@ -627,3 +627,40 @@ test('lastViewedSection survives a localStorage round-trip', async () => {
         else globalThis.localStorage = originalLocalStorage;
     }
 });
+
+test('groundConfinement makes getConfinedPages return ground pages at rest', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMocks();
+    const groundPages = ['plugins', 'store', 'hotkeys'];
+    const groundBounds = { x: 0, y: 0, width: 30000, height: 900, layer: 0 };
+    const nav = createNavigation({
+        registry, camera, getSettings, domHelpers,
+        groundConfinement: { bounds: groundBounds, pages: groundPages },
+    });
+    assert.deepEqual(nav.getConfinedPages(), groundPages);
+    assert.deepEqual(nav.getCurrentConfinement(), groundBounds);
+});
+
+test('groundConfinement is restored after diveInto + ascend', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMocks();
+    const groundPages = ['plugins', 'store'];
+    const groundBounds = { x: 0, y: 0, width: 20000, height: 900, layer: 0 };
+    const diveClaim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
+    registry.addDiveTarget({ sourceSelector: '#card-a', claim: diveClaim, pages: ['plugin-section'] });
+    const nav = createNavigation({
+        registry, camera, getSettings, domHelpers,
+        groundConfinement: { bounds: groundBounds, pages: groundPages },
+    });
+    nav.setCurrentAnchor({ pageId: 'plugins' });
+    nav.diveInto('#card-a');
+    assert.deepEqual(nav.getConfinedPages(), ['plugin-section']);
+    nav.ascend();
+    assert.deepEqual(nav.getConfinedPages(), groundPages);
+    assert.deepEqual(nav.getCurrentConfinement(), groundBounds);
+});
+
+test('without groundConfinement, getConfinedPages stays empty at rest', () => {
+    const { registry, camera, getSettings, domHelpers } = makeMocks();
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    assert.deepEqual(nav.getConfinedPages(), []);
+    assert.equal(nav.getCurrentConfinement(), null);
+});
