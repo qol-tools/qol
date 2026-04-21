@@ -73,6 +73,7 @@ export function WorldViewport({ camera, onViewChange, navigation, registry, rend
                 d.active = true;
                 d.moved = true;
                 camera.cancelSmooth();
+                window.getSelection?.()?.removeAllRanges?.();
                 vp.classList.add('grabbing');
                 vp.setPointerCapture(d.pointerId);
             }

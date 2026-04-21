@@ -4,6 +4,7 @@ import { VIEW_LABELS } from '../../app/views.js';
 import { getWorldSettings, setWorldSetting, subscribeWorldSettings } from '../../lib/world-settings.js';
 import { IconCog } from '../../assets/icon-cog.js';
 import { useClickOutside } from '../../lib/hooks/useClickOutside.js';
+import { Peripheral } from './Peripheral.js';
 import { clampPercent, formatDownloadingProgress, formatPhaseProgress, toProgressScale } from '../../utils/progress.js';
 import { prettyLabel } from '../../auto-config/heuristics.js';
 import { contains } from '../../lib/world-registry.js';
@@ -23,6 +24,7 @@ export function MinimapContainer({ camera, registry, viewportRef, diveParent, ac
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [settings, setSettings] = useState(getWorldSettings);
     const cogRef = useRef(null);
+    const mapRef = useRef(null);
 
     useEffect(() => subscribeWorldSettings(setSettings), []);
 
@@ -34,17 +36,19 @@ export function MinimapContainer({ camera, registry, viewportRef, diveParent, ac
     useClickOutside(cogRef, settingsOpen, close);
 
     return html`
-        <div class="world-minimap-container">
+        <${Peripheral} camera=${camera} navigation=${navigation} edge="br"
+            className="world-minimap-container" elementRef=${mapRef}>
             ${diveDepth > 0 && html`<span class="world-minimap-depth" style=${`--wedge-hue: ${50 + (diveDepth - 1) * 45}`}>${diveDepth}</span>`}
             <${Minimap} camera=${camera} registry=${registry} viewportRef=${viewportRef} width=${settings.minimapSize} diveParent=${diveParent} activePluginId=${activePluginId} navigation=${navigation} />
-        </div>
-        <div class="world-cog-anchor" ref=${cogRef}>
+        <//>
+        <${Peripheral} camera=${camera} navigation=${navigation} edge="bl"
+            alwaysVisible=${settingsOpen} className="world-cog-anchor" elementRef=${cogRef}>
             <button class="world-cog-btn ${settingsOpen ? 'is-open' : ''}" onClick=${toggle} title="Settings">
                 <${IconCog} size=${28} />
             </button>
             ${settingsOpen && html`<${WorldSettingsPanel} settings=${settings}
                 version=${version} updateState=${updateState} isDevMode=${isDevMode} onAction=${onAction} />`}
-        </div>
+        <//>
     `;
 }
 
@@ -61,7 +65,9 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
                 <div class="wsp-heading">Navigation</div>
                 <label>Pan speed <input type="range" min="4" max="30" value=${settings.panSpeed} onInput=${update('panSpeed')} /></label>
                 <label>Minimap size <input type="range" min="200" max="500" value=${settings.minimapSize} onInput=${update('minimapSize')} /></label>
+                <label>Default zoom <input type="range" min="0.5" max="2" step="0.05" value=${settings.defaultZoom} onInput=${update('defaultZoom')} /> <span class="wsp-value">${Number(settings.defaultZoom).toFixed(2)}×</span></label>
                 <label><input type="checkbox" checked=${settings.anchorToPages} onChange=${update('anchorToPages')} /> Anchor view to pages</label>
+                <label><input type="checkbox" checked=${settings.resetZoomOnNav} onChange=${update('resetZoomOnNav')} /> Reset zoom on keyboard nav</label>
             </div>
             <div class="wsp-section">
                 <div class="wsp-heading">Transitions</div>

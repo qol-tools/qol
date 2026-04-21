@@ -3,6 +3,7 @@ const AUTO_PUSH_INTERVAL_SECS: u64 = 3;
 
 mod platform;
 mod providers;
+mod resolve;
 mod service;
 mod state;
 mod types;

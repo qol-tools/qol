@@ -7,6 +7,8 @@
 }
 
 .peripheral-slot {
+    --hide: 0;
+    --coverage-opacity: 1;
     position: absolute;
     top: 50%;
     width: clamp(180px, 24vw, 360px);
@@ -21,6 +23,8 @@
     appearance: none;
     font: inherit;
     color: inherit;
+    opacity: calc(var(--coverage-opacity) * (1 - var(--hide)));
+    transition: --hide 240ms ease-out;
 }
 
 .peripheral-slot:disabled {
@@ -36,49 +40,41 @@
 .peripheral-slot-prev[data-distance="1"] {
     left: calc(-1 * clamp(90px, 12vw, 180px));
     transform: translateY(-50%) scale(0.8);
-    opacity: 0.4;
 }
 
 .peripheral-slot-next[data-distance="1"] {
     right: calc(-1 * clamp(90px, 12vw, 180px));
     transform: translateY(-50%) scale(0.8);
-    opacity: 0.4;
 }
 
 .peripheral-slot-prev[data-distance="2"] {
     left: calc(-1 * clamp(160px, 22vw, 320px));
     transform: translateY(-50%) scale(0.6);
-    opacity: 0.2;
 }
 
 .peripheral-slot-next[data-distance="2"] {
     right: calc(-1 * clamp(160px, 22vw, 320px));
     transform: translateY(-50%) scale(0.6);
-    opacity: 0.2;
 }
 
 .peripheral-slot-prev[data-distance="3"] {
     left: calc(-1 * clamp(220px, 30vw, 440px));
     transform: translateY(-50%) scale(0.4);
-    opacity: 0.12;
 }
 
 .peripheral-slot-next[data-distance="3"] {
     right: calc(-1 * clamp(220px, 30vw, 440px));
     transform: translateY(-50%) scale(0.4);
-    opacity: 0.12;
 }
 
 .peripheral-slot-prev[data-distance="4"] {
     left: calc(-1 * clamp(270px, 36vw, 540px));
     transform: translateY(-50%) scale(0.28);
-    opacity: 0.08;
 }
 
 .peripheral-slot-next[data-distance="4"] {
     right: calc(-1 * clamp(270px, 36vw, 540px));
     transform: translateY(-50%) scale(0.28);
-    opacity: 0.08;
 }
 
 .peripheral-mini {
