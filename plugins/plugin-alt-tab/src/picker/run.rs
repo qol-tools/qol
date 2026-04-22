@@ -4,20 +4,19 @@ use crate::capture;
 use crate::config::AltTabConfig;
 use crate::daemon;
 use crate::discovery;
+#[cfg(target_os = "macos")]
+use crate::discovery::platform::macos::SharedWindowStore;
 use crate::discovery::WindowInfo;
 use crate::picker::gather::build_icon_cache;
 use crate::{PickerWindowState, SharedIconCache};
 use gpui::*;
 use qol_plugin_api::monitor::MonitorTracker;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const SMALL_WINDOW_SET_MAX: usize = 2;
-const SHOW_RETRY_ATTEMPTS: usize = 3;
-const SHOW_RETRY_DELAY_MS: u64 = 75;
-const STABLE_PREVIOUS_MIN: usize = 6;
+const BACKGROUND_REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(crate) type WindowCache = Arc<Mutex<Vec<WindowInfo>>>;
 pub(crate) type SharedPreviewCache = Arc<Mutex<crate::PreviewMap>>;
@@ -32,17 +31,17 @@ struct FocusHistory {
     window_ids: Vec<u32>,
 }
 
-#[cfg(target_os = "macos")]
-const FOCUS_HISTORY_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
-
 #[derive(Clone)]
 struct PickerCaches {
     last_window_count: Arc<AtomicUsize>,
     window_cache: WindowCache,
     icon_cache: SharedIconCache,
     preview_cache: SharedPreviewCache,
+    last_refresh_ns: Arc<AtomicI64>,
     #[cfg(target_os = "macos")]
     focus_history: SharedFocusHistory,
+    #[cfg(target_os = "macos")]
+    window_store: SharedWindowStore,
 }
 
 #[derive(Clone)]
@@ -53,14 +52,17 @@ struct PickerState {
 }
 
 impl PickerCaches {
-    fn new() -> Self {
+    fn new(#[cfg(target_os = "macos")] window_store: SharedWindowStore) -> Self {
         Self {
             last_window_count: Arc::new(AtomicUsize::new(super::default_estimated_window_count())),
             window_cache: Arc::new(Mutex::new(Vec::new())),
             icon_cache: Arc::new(Mutex::new(HashMap::new())),
             preview_cache: Arc::new(Mutex::new(HashMap::new())),
+            last_refresh_ns: Arc::new(AtomicI64::new(0)),
             #[cfg(target_os = "macos")]
             focus_history: Arc::new(Mutex::new(FocusHistory::default())),
+            #[cfg(target_os = "macos")]
+            window_store,
         }
     }
 }
@@ -91,22 +93,34 @@ pub(crate) fn run_app(
     app.run(move |cx: &mut App| {
         qol_plugin_api::keepalive::open_keepalive(cx, None);
         super::platform::set_accessory_policy();
+        #[cfg(target_os = "macos")]
+        crate::discovery::platform::macos::ax::init_messaging_timeout();
+
+        #[cfg(target_os = "macos")]
+        let window_store = crate::discovery::platform::macos::shared_window_store();
 
         let state = PickerState {
             current: picker_window_state(),
             tracker: MonitorTracker::start(cx),
-            caches: PickerCaches::new(),
+            caches: PickerCaches::new(
+                #[cfg(target_os = "macos")]
+                window_store.clone(),
+            ),
         };
 
         let (cache_tx, cache_rx) = std::sync::mpsc::channel();
         #[cfg(target_os = "linux")]
         let _watcher = crate::discovery::watcher::spawn_watcher(cache_tx);
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "macos")]
+        let _window_observer =
+            crate::discovery::platform::macos::start_window_observer(window_store, cache_tx);
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let _ = cache_tx;
         spawn_cache_updater(cx, cache_rx, state.caches.clone());
         spawn_initial_cache_fill(cx, state.caches.clone());
+
         #[cfg(target_os = "macos")]
-        spawn_focus_history_tracker(cx, state.caches.clone());
+        super::create::pre_create_offscreen(&config, &state.current, cx);
 
         if show_on_start {
             state.open_picker(&config, false, cx);
@@ -159,32 +173,6 @@ fn spawn_initial_cache_fill(cx: &mut App, caches: PickerCaches) {
     .detach();
 }
 
-#[cfg(target_os = "macos")]
-fn spawn_focus_history_tracker(cx: &mut App, caches: PickerCaches) {
-    cx.spawn(async move |cx: &mut AsyncApp| {
-        let executor = cx.background_executor().clone();
-        loop {
-            executor.timer(FOCUS_HISTORY_POLL_INTERVAL).await;
-            if picker_visible() {
-                continue;
-            }
-            let focused = read_focused_window_id(&executor).await;
-            let Some(focused) = focused else {
-                continue;
-            };
-            if !remember_focused_window(&caches.focus_history, focused) {
-                continue;
-            }
-            let windows = apply_focus_history(
-                read_window_cache(&caches.window_cache),
-                &caches.focus_history,
-            );
-            replace_window_cache(&caches.window_cache, windows);
-        }
-    })
-    .detach();
-}
-
 async fn refresh_cache(executor: &gpui::BackgroundExecutor, caches: &PickerCaches) {
     refresh_cache_inner(executor, caches, false).await;
 }
@@ -198,9 +186,12 @@ async fn refresh_cache_inner(
     caches: &PickerCaches,
     include_previews: bool,
 ) {
-    let Some(windows) = load_stable_windows(executor, &caches.window_cache).await else {
+    let Some(windows) = load_stable_windows(executor).await else {
         return;
     };
+    stamp_last_refresh(&caches.last_refresh_ns);
+    #[cfg(target_os = "macos")]
+    sync_focus_history_from_store(&caches.focus_history, &caches.window_store);
     #[cfg(target_os = "macos")]
     let windows = apply_focus_history(windows, &caches.focus_history);
     caches
@@ -213,6 +204,8 @@ async fn refresh_cache_inner(
     if !include_previews {
         retain_active_previews(&caches.preview_cache, &windows);
     }
+    #[cfg(target_os = "macos")]
+    store_replace_all(&caches.window_store, &windows);
     replace_window_cache(&caches.window_cache, windows);
 }
 
@@ -220,28 +213,12 @@ fn picker_visible() -> bool {
     PICKER_VISIBLE.load(Ordering::Relaxed)
 }
 
-fn read_window_cache(window_cache: &WindowCache) -> Vec<WindowInfo> {
-    window_cache
-        .lock()
-        .ok()
-        .map(|c| c.clone())
-        .unwrap_or_default()
-}
-
-async fn load_stable_windows(
-    executor: &gpui::BackgroundExecutor,
-    window_cache: &WindowCache,
-) -> Option<Vec<WindowInfo>> {
-    let previous_windows = read_window_cache(window_cache);
+async fn load_stable_windows(executor: &gpui::BackgroundExecutor) -> Option<Vec<WindowInfo>> {
     let windows = fetch_open_windows(executor).await;
     if picker_visible() {
         return None;
     }
-    if !should_retry_small_result(windows.len(), previous_windows.len()) {
-        return Some(windows);
-    }
-    let retry = fetch_open_windows(executor).await;
-    Some(choose_stable_windows(windows, retry, previous_windows))
+    Some(windows)
 }
 
 async fn fetch_open_windows(executor: &gpui::BackgroundExecutor) -> Vec<WindowInfo> {
@@ -347,30 +324,59 @@ async fn refresh_preview_cache(
 }
 
 #[cfg(target_os = "macos")]
-async fn read_focused_window_id(executor: &gpui::BackgroundExecutor) -> Option<u32> {
-    executor
-        .spawn(async move { crate::discovery::platform::macos::ax::focused_window_id() })
-        .await
-}
-
-#[cfg(target_os = "macos")]
-fn sync_focus_history(caches: &PickerCaches) {
-    let Some(window_id) = crate::discovery::platform::macos::ax::focused_window_id() else {
+fn sync_focus_history_from_store(
+    focus_history: &SharedFocusHistory,
+    window_store: &SharedWindowStore,
+) {
+    let (last, order) = {
+        let Ok(store) = window_store.lock() else {
+            return;
+        };
+        (store.focused_window_id(), store.mru_order())
+    };
+    let Ok(mut history) = focus_history.lock() else {
         return;
     };
-    let _ = remember_focused_window(&caches.focus_history, window_id);
+    history.last_window_id = last;
+    history.window_ids = order;
 }
 
 #[cfg(target_os = "macos")]
-fn remember_focused_window(focus_history: &SharedFocusHistory, window_id: u32) -> bool {
-    let Ok(mut history) = focus_history.lock() else {
-        return false;
+fn store_replace_all(window_store: &SharedWindowStore, windows: &[WindowInfo]) {
+    let Ok(mut store) = window_store.lock() else {
+        return;
     };
-    if history.last_window_id == Some(window_id) {
-        return false;
+    store.replace_all(windows.to_vec());
+}
+
+#[cfg(target_os = "macos")]
+fn store_snapshot(window_store: &SharedWindowStore) -> Vec<WindowInfo> {
+    window_store
+        .lock()
+        .ok()
+        .map(|s| s.snapshot())
+        .unwrap_or_default()
+}
+
+fn stamp_last_refresh(last_refresh_ns: &AtomicI64) {
+    let now = now_nanos();
+    last_refresh_ns.store(now, Ordering::Relaxed);
+}
+
+fn last_refresh_elapsed(last_refresh_ns: &AtomicI64) -> Duration {
+    let last = last_refresh_ns.load(Ordering::Relaxed);
+    if last <= 0 {
+        return Duration::from_secs(u64::MAX / 2);
     }
-    history.last_window_id = Some(window_id);
-    true
+    let diff = now_nanos().saturating_sub(last).max(0) as u64;
+    Duration::from_nanos(diff)
+}
+
+fn now_nanos() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as i64)
+        .unwrap_or(0)
 }
 
 #[cfg(target_os = "macos")]
@@ -492,31 +498,69 @@ async fn recv_command(
 async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     #[cfg(debug_assertions)]
     eprintln!("[alt-tab/daemon] received Show (reverse={})", reverse);
-    let executor = cx.background_executor().clone();
-    let state = state.clone();
-    let (config, windows) = load_show_state(&executor, &state.caches.window_cache).await;
+    let config = crate::config::load_alt_tab_config();
+    let (windows, used_store) = resolve_show_windows(cx, &config, &state.caches).await;
+    let state_for_update = state.clone();
     let _ = cx.update(move |app_cx| {
-        apply_show_windows(&state.caches, windows);
-        state.open_picker(&config, reverse, app_cx);
+        apply_show_windows(&state_for_update.caches, windows);
+        state_for_update.open_picker(&config, reverse, app_cx);
     });
+    if used_store {
+        maybe_kick_background_refresh(cx, state.caches.clone());
+    }
 }
 
-async fn load_show_state(
-    executor: &gpui::BackgroundExecutor,
-    window_cache: &WindowCache,
-) -> (AltTabConfig, Vec<WindowInfo>) {
-    let config = executor
-        .spawn(async { crate::config::load_alt_tab_config() })
-        .await;
-    let previous_windows = read_window_cache(window_cache);
-    let windows =
-        load_show_windows(executor, config.display.show_minimized, &previous_windows).await;
-    (config, windows)
+#[cfg(target_os = "macos")]
+async fn resolve_show_windows(
+    cx: &AsyncApp,
+    config: &AltTabConfig,
+    caches: &PickerCaches,
+) -> (Vec<WindowInfo>, bool) {
+    let snapshot = store_snapshot(&caches.window_store);
+    if !snapshot.is_empty() {
+        let windows = filter_show_windows(snapshot, config.display.show_minimized);
+        return (windows, true);
+    }
+    let executor = cx.background_executor().clone();
+    let fallback = load_show_windows(&executor, config.display.show_minimized).await;
+    (fallback, false)
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn resolve_show_windows(
+    cx: &AsyncApp,
+    config: &AltTabConfig,
+    _caches: &PickerCaches,
+) -> (Vec<WindowInfo>, bool) {
+    let executor = cx.background_executor().clone();
+    let windows = load_show_windows(&executor, config.display.show_minimized).await;
+    (windows, false)
+}
+
+#[cfg(target_os = "macos")]
+fn filter_show_windows(windows: Vec<WindowInfo>, show_minimized: bool) -> Vec<WindowInfo> {
+    if show_minimized {
+        return windows;
+    }
+    windows.into_iter().filter(|w| !w.is_minimized).collect()
+}
+
+fn maybe_kick_background_refresh(cx: &AsyncApp, caches: PickerCaches) {
+    if last_refresh_elapsed(&caches.last_refresh_ns) < BACKGROUND_REFRESH_MIN_INTERVAL {
+        return;
+    }
+    let executor = cx.background_executor().clone();
+    executor
+        .clone()
+        .spawn(async move {
+            refresh_cache(&executor, &caches).await;
+        })
+        .detach();
 }
 
 fn apply_show_windows(caches: &PickerCaches, windows: Vec<WindowInfo>) {
     #[cfg(target_os = "macos")]
-    sync_focus_history(caches);
+    sync_focus_history_from_store(&caches.focus_history, &caches.window_store);
     #[cfg(target_os = "macos")]
     let windows = apply_focus_history(windows, &caches.focus_history);
     caches
@@ -528,13 +572,8 @@ fn apply_show_windows(caches: &PickerCaches, windows: Vec<WindowInfo>) {
 async fn load_show_windows(
     executor: &gpui::BackgroundExecutor,
     show_minimized: bool,
-    previous_windows: &[WindowInfo],
 ) -> Vec<WindowInfo> {
-    let windows = fetch_show_windows(executor, show_minimized).await;
-    if !should_retry_show_result(windows.len(), previous_windows.len()) {
-        return windows;
-    }
-    retry_show_windows(executor, show_minimized, windows, previous_windows).await
+    fetch_show_windows(executor, show_minimized).await
 }
 
 fn discover_windows_for_show(show_minimized: bool) -> Vec<WindowInfo> {
@@ -553,60 +592,8 @@ async fn fetch_show_windows(
         .await
 }
 
-async fn retry_show_windows(
-    executor: &gpui::BackgroundExecutor,
-    show_minimized: bool,
-    windows: Vec<WindowInfo>,
-    previous_windows: &[WindowInfo],
-) -> Vec<WindowInfo> {
-    let mut best = windows;
-    for _ in 0..SHOW_RETRY_ATTEMPTS {
-        executor
-            .timer(Duration::from_millis(SHOW_RETRY_DELAY_MS))
-            .await;
-        let retry = fetch_show_windows(executor, show_minimized).await;
-        if retry.len() > best.len() {
-            best = retry;
-        }
-        if !should_retry_show_result(best.len(), previous_windows.len()) {
-            return best;
-        }
-    }
-    if best.len() <= SMALL_WINDOW_SET_MAX && previous_windows.len() >= STABLE_PREVIOUS_MIN {
-        return previous_windows.to_vec();
-    }
-    best
-}
-
 fn shutdown_daemon(cx: &AsyncApp) {
     #[cfg(debug_assertions)]
     eprintln!("[alt-tab/daemon] shutting down");
     cx.update(|app_cx| app_cx.quit()).ok();
-}
-
-fn should_retry_small_result(current_len: usize, previous_len: usize) -> bool {
-    current_len <= SMALL_WINDOW_SET_MAX && previous_len >= STABLE_PREVIOUS_MIN
-}
-
-fn should_retry_show_result(current_len: usize, previous_len: usize) -> bool {
-    if current_len == 0 {
-        return true;
-    }
-    should_retry_small_result(current_len, previous_len)
-}
-
-fn choose_stable_windows(
-    current: Vec<WindowInfo>,
-    retry: Vec<WindowInfo>,
-    previous: Vec<WindowInfo>,
-) -> Vec<WindowInfo> {
-    let best = if retry.len() > current.len() {
-        retry
-    } else {
-        current
-    };
-    if best.len() <= SMALL_WINDOW_SET_MAX && previous.len() >= STABLE_PREVIOUS_MIN {
-        return previous;
-    }
-    best
 }

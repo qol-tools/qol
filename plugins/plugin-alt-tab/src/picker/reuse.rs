@@ -1,10 +1,9 @@
 use super::GatheredWindows;
-use crate::app::{AltTabApp, PICKER_VISIBLE};
+use crate::app::AltTabApp;
 use crate::config::AltTabConfig;
 use crate::shared::layout::*;
 use gpui::*;
 use qol_plugin_api::window::PopupPlacement;
-use std::sync::atomic::Ordering;
 
 pub(crate) struct ReuseLayout {
     pub bounds: Bounds<Pixels>,
@@ -27,18 +26,19 @@ pub(super) struct LayoutInput<'a> {
 }
 
 pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
+    // On macOS the picker window is pre-created at boot and kept alive across dismisses, so the
+    // handle is never stale; Linux destroys on dismiss, so the handle update simply fails for a
+    // missing window and we fall through to the create path.
     req.handle
         .update(cx, |view, window: &mut Window, cx| {
-            // WindowHandle can outlive the platform window's destruction; don't resurrect a dismissed picker.
-            if !PICKER_VISIBLE.load(Ordering::Relaxed) {
-                return false;
-            }
+            super::platform::prepare_picker_for_show();
             if !view.apply_reuse(req, window, cx) {
                 return false;
             }
             resize_if_needed(window, req.layout.size);
             window.focus(&view.focus_handle(cx));
             window.activate_window();
+            super::platform::show_picker_onscreen();
             true
         })
         .unwrap_or(false)

@@ -9,6 +9,8 @@ use qol_plugin_api::window::PopupPlacement;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+pub(crate) const PICKER_WINDOW_TITLE: &str = "qol-alt-tab-picker";
+
 pub(super) struct CreateRequest<'a> {
     pub config: &'a AltTabConfig,
     pub placement: PopupPlacement,
@@ -89,6 +91,18 @@ impl PickerInit {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    pub(crate) fn empty(config: &AltTabConfig) -> Self {
+        Self::new(
+            config,
+            GatheredWindows {
+                windows: Vec::new(),
+                previews: PreviewMap::new(),
+                icons: IconMap::new(),
+            },
+        )
+    }
+
     pub(crate) fn into_app(self, window: &mut Window, cx: &mut Context<AltTabApp>) -> AltTabApp {
         AltTabApp::new(self, window, cx)
     }
@@ -101,7 +115,7 @@ fn open_picker_window(
 ) -> Option<WindowHandle<AltTabApp>> {
     let opts = picker_window_options(bounds, init.transparent_bg);
     cx.open_window(opts, move |window, cx| {
-        window.set_window_title("qol-alt-tab-picker");
+        window.set_window_title(PICKER_WINDOW_TITLE);
         let view = cx.new(|cx| init.into_app(window, cx));
         window.focus(&view.focus_handle(cx));
         window.activate_window();
@@ -136,6 +150,40 @@ fn on_open_failure() {
     #[cfg(debug_assertions)]
     eprintln!("[alt-tab/open] failed to open picker window");
     PICKER_VISIBLE.store(false, Ordering::Relaxed);
+}
+
+/// Pre-create an offscreen, alpha-0 picker window at daemon boot and register it under the
+/// `BOOTSTRAP_KEY` sentinel. Mirrors lwouis/alt-tab-macos's `TilesPanel` keep-alive pattern so
+/// subsequent opens reuse the same NSWindow instead of paying cold Metal/WindowServer costs.
+#[cfg(target_os = "macos")]
+pub(crate) fn pre_create_offscreen(
+    config: &AltTabConfig,
+    current: &PickerWindowState,
+    cx: &mut App,
+) {
+    let init = PickerInit::empty(config);
+    let bounds = offscreen_bounds();
+    let Some(handle) = open_picker_window(bounds, init, cx) else {
+        #[cfg(debug_assertions)]
+        eprintln!("[alt-tab/boot] pre-create failed — falling back to on-demand creation");
+        return;
+    };
+    current.borrow_mut().insert(super::BOOTSTRAP_KEY, handle);
+    super::platform::hide_picker_offscreen();
+    // Resetting PICKER_VISIBLE keeps the pre-created window out of dispatch_show / cache
+    // gates even though its WindowHandle is now permanently registered.
+    PICKER_VISIBLE.store(false, Ordering::Relaxed);
+    #[cfg(debug_assertions)]
+    eprintln!("[alt-tab/boot] pre-created picker window (hidden offscreen)");
+}
+
+#[cfg(target_os = "macos")]
+fn offscreen_bounds() -> Bounds<Pixels> {
+    use crate::picker::platform::macos as imp;
+    Bounds {
+        origin: point(px(imp::OFFSCREEN_X as f32), px(imp::OFFSCREEN_Y as f32)),
+        size: size(px(720.0), px(320.0)),
+    }
 }
 
 struct PostCreateData {

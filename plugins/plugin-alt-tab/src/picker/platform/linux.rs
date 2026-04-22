@@ -102,3 +102,7 @@ fn intern(conn: &impl Connection, name: &[u8]) -> Option<u32> {
 }
 
 pub fn disable_window_shadow() {}
+
+pub fn show_picker_onscreen() {}
+
+pub fn prepare_picker_for_show() {}

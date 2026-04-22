@@ -13,6 +13,22 @@ extern "C" {
         attr: *const c_void,
         val: *mut *const c_void,
     ) -> i32;
+    fn AXUIElementSetMessagingTimeout(el: *const c_void, timeout: f32) -> i32;
+}
+
+/// Cap blocking time for every AX mach-IPC call. Default is 6s — a single unresponsive
+/// app can stall window enumeration for that long. Setting the timeout on the system-wide
+/// element propagates it as the default to every element created afterwards.
+/// Mirrors alt-tab-macos's `AXUIElement.swift` (1s cap).
+pub(crate) fn init_messaging_timeout() {
+    unsafe {
+        let system = AXUIElementCreateSystemWide();
+        if system.is_null() {
+            return;
+        }
+        AXUIElementSetMessagingTimeout(system, 1.0);
+        CFRelease(system);
+    }
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]

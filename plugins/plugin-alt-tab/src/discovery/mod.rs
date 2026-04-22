@@ -16,7 +16,7 @@ pub struct WindowInfo {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // constructed on Linux only (watcher module)
+#[allow(dead_code)] // constructed on Linux/macOS only; Windows/unsupported stays silent
 pub(crate) enum CacheEvent {
     WindowsChanged,
 }

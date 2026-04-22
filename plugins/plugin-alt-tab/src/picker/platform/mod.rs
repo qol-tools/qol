@@ -1,7 +1,7 @@
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
-mod macos;
+pub(crate) mod macos;
 
 #[cfg(target_os = "linux")]
 use linux as imp;
@@ -27,6 +27,8 @@ mod imp {
         false
     }
     pub fn disable_window_shadow() {}
+    pub fn show_picker_onscreen() {}
+    pub fn prepare_picker_for_show() {}
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -53,4 +55,17 @@ pub fn is_shift_held() -> bool {
 }
 pub fn disable_window_shadow() {
     imp::disable_window_shadow()
+}
+/// Fade the picker to alpha=1 after `activate_window()` has returned. macOS-only; no-op on other platforms.
+pub fn show_picker_onscreen() {
+    imp::show_picker_onscreen()
+}
+/// Force the picker to alpha=0 before repositioning/activation. macOS-only; no-op on other platforms.
+pub fn prepare_picker_for_show() {
+    imp::prepare_picker_for_show()
+}
+/// Hide the picker without destroying its NSWindow (bootstrap path). macOS-only.
+#[cfg(target_os = "macos")]
+pub fn hide_picker_offscreen() {
+    imp::hide_picker_offscreen()
 }

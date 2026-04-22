@@ -10,9 +10,74 @@ use window_enum::{
 };
 
 pub(crate) mod ax;
+mod events;
 pub(crate) mod ffi;
+mod observer;
 mod process;
 mod window_enum;
+mod window_store;
+mod workspace;
+
+pub(crate) use window_store::{shared_window_store, SharedWindowStore};
+
+use crate::discovery::CacheEvent;
+use events::AxEvent;
+use std::sync::mpsc::{self, Sender};
+use workspace::WorkspaceWatcher;
+
+const AX_EVENT_CHANNEL_CAPACITY: usize = 256;
+
+pub(crate) struct WindowObserverHandle {
+    _watcher: WorkspaceWatcher,
+}
+
+/// Spawn the AX observer pipeline. A dedicated OS thread owns the observer's
+/// CFRunLoop so notifications can be delivered without blocking GPUI's main
+/// loop; a second thread drains events into the [`WindowStore`] and nudges the
+/// existing `refresh_cache` machinery via [`CacheEvent::WindowsChanged`].
+pub(crate) fn start_window_observer(
+    store: SharedWindowStore,
+    cache_tx: Sender<CacheEvent>,
+) -> Option<WindowObserverHandle> {
+    let (ax_tx, ax_rx) = mpsc::sync_channel::<AxEvent>(AX_EVENT_CHANNEL_CAPACITY);
+    spawn_run_loop_thread();
+    spawn_relay_thread(ax_rx, store, cache_tx);
+    let watcher = WorkspaceWatcher::start(ax_tx);
+    Some(WindowObserverHandle { _watcher: watcher })
+}
+
+fn spawn_run_loop_thread() {
+    let _ = std::thread::Builder::new()
+        .name("ax-observer".into())
+        .spawn(|| unsafe {
+            #[link(name = "CoreFoundation", kind = "framework")]
+            extern "C" {
+                fn CFRunLoopRun();
+            }
+            CFRunLoopRun();
+        });
+}
+
+fn spawn_relay_thread(
+    rx: mpsc::Receiver<AxEvent>,
+    store: SharedWindowStore,
+    cache_tx: Sender<CacheEvent>,
+) {
+    let _ = std::thread::Builder::new()
+        .name("ax-event-relay".into())
+        .spawn(move || relay_loop(rx, store, cache_tx));
+}
+
+fn relay_loop(rx: mpsc::Receiver<AxEvent>, store: SharedWindowStore, cache_tx: Sender<CacheEvent>) {
+    while let Ok(event) = rx.recv() {
+        if let Ok(mut store) = store.lock() {
+            store.apply_event(event);
+        }
+        if cache_tx.send(CacheEvent::WindowsChanged).is_err() {
+            break;
+        }
+    }
+}
 
 pub(super) struct CgWindow {
     pub id: u32,

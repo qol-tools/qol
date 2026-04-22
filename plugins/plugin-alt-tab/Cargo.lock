@@ -64,6 +64,7 @@ dependencies = [
 name = "alt-tab"
 version = "0.10.12"
 dependencies = [
+ "block2",
  "dirs 6.0.0",
  "gpui",
  "image",

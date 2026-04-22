@@ -195,24 +195,38 @@ impl AltTabApp {
     }
 }
 
-// Covers tap-too-fast: hotkey fired but Alt was already released by the time we got here.
-// Normal hold-then-release is handled event-driven via on_modifiers_changed in render.
+// on_modifiers_changed drives the common case, but it can be lost when the picker isn't yet
+// key on reuse. Poll CGEventSource every ALT_POLL_INTERVAL_MS as a ground-truth fallback.
+const ALT_POLL_INTERVAL_MS: u64 = 30;
+
 async fn alt_release_check(
     this: WeakEntity<AltTabApp>,
     delegate: Entity<PickerState>,
     window_handle: AnyWindowHandle,
     mut cx: AsyncApp,
 ) {
-    if picker::is_modifier_held() {
-        return;
+    let executor = cx.background_executor().clone();
+    loop {
+        if this.upgrade().is_none() {
+            return;
+        }
+        if !PICKER_VISIBLE.load(Ordering::Relaxed) {
+            return;
+        }
+        if !picker::is_modifier_held() {
+            break;
+        }
+        executor
+            .timer(Duration::from_millis(ALT_POLL_INTERVAL_MS))
+            .await;
     }
     #[cfg(debug_assertions)]
-    eprintln!("[alt-tab/hold] Alt released before first check — dismissing instantly");
+    eprintln!("[alt-tab/hold] Alt released via poll — activating selection");
     let weak = this.clone();
     let _ = cx.update_window(window_handle, move |_, window, cx| {
         delegate.update(cx, |s, _| s.activate_selected_target());
         if let Some(entity) = weak.upgrade() {
-            entity.update(cx, |app, cx| app.dismiss("alt-release/instant", window, cx));
+            entity.update(cx, |app, cx| app.dismiss("alt-release/poll", window, cx));
         }
     });
 }
