@@ -117,10 +117,20 @@ export function createCamera(options = {}) {
     function zoomSmooth(tx, ty, tz, duration, onComplete) {
         cancelSmooth();
         const clampedZ = clampZoom(tz);
-        const clamped = clampPanTarget(tx, ty, clampedZ);
-        log('zoomSmooth →', Math.round(clamped.x), Math.round(clamped.y), 'z:', clampedZ.toFixed(3), 'dur:', duration);
-        animFrom = { x, y, zoom };
-        animTarget = { x: clamped.x, y: clamped.y, zoom: clampedZ };
+        const vp = getViewportSize();
+        const worldCenterX = tx + vp.w / (2 * clampedZ);
+        const worldCenterY = ty + vp.h / (2 * clampedZ);
+        const screenStartX = (worldCenterX - x) * zoom;
+        const screenStartY = (worldCenterY - y) * zoom;
+        log('zoomSmooth →', Math.round(tx), Math.round(ty), 'z:', clampedZ.toFixed(3), 'dur:', duration);
+        animFrom = { zoom, screenX: screenStartX, screenY: screenStartY };
+        animTarget = {
+            worldCenterX,
+            worldCenterY,
+            zoom: clampedZ,
+            screenEndX: vp.w / 2,
+            screenEndY: vp.h / 2,
+        };
         animStart = performance.now();
         animDuration = duration;
         animComplete = onComplete || null;
@@ -137,9 +147,21 @@ export function createCamera(options = {}) {
         if (!animTarget) return;
         const t = Math.min(1, (now - animStart) / animDuration);
         const e = 1 - Math.pow(1 - t, 3);
-        x = animFrom.x + (animTarget.x - animFrom.x) * e;
-        y = animFrom.y + (animTarget.y - animFrom.y) * e;
         zoom = animFrom.zoom + (animTarget.zoom - animFrom.zoom) * e;
+        if (animTarget.worldCenterX != null) {
+            const sx = animFrom.screenX + (animTarget.screenEndX - animFrom.screenX) * e;
+            const sy = animFrom.screenY + (animTarget.screenEndY - animFrom.screenY) * e;
+            const clamped = clampPanTarget(
+                animTarget.worldCenterX - sx / zoom,
+                animTarget.worldCenterY - sy / zoom,
+                zoom,
+            );
+            x = clamped.x;
+            y = clamped.y;
+        } else {
+            x = animFrom.x + (animTarget.x - animFrom.x) * e;
+            y = animFrom.y + (animTarget.y - animFrom.y) * e;
+        }
         apply();
         if (t < 1) {
             animId = requestAnimationFrame(tick);

@@ -156,23 +156,8 @@ export function createNavigation({ registry, camera, getSettings, domHelpers, gr
             focusAfterPan();
             return;
         }
-        const dx = targetX - camera.x;
-        const dy = targetY - camera.y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-        const FAR_THRESHOLD = 2000;
-        const APPROACH_PX = 400;
-        if (distance > FAR_THRESHOLD) {
-            const ratio = APPROACH_PX / distance;
-            camera.panTo(targetX - dx * ratio, targetY - dy * ratio);
-            if (resetZoom != null) {
-                camera.zoomSmooth(targetX, targetY, resetZoom, 120, focusAfterPan);
-            } else {
-                camera.panSmooth(targetX, targetY, 120, focusAfterPan);
-            }
-            return;
-        }
         if (resetZoom != null) {
-            camera.zoomSmooth(targetX, targetY, resetZoom, 200, focusAfterPan);
+            camera.zoomSmooth(targetX, targetY, resetZoom, 260, focusAfterPan);
             return;
         }
         camera.panSmooth(targetX, targetY, 200, focusAfterPan);
