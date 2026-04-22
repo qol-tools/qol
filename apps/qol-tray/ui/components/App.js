@@ -4,7 +4,7 @@ import { PaletteProvider, usePaletteContext } from '../palette/context.js';
 import { createDebug, elLabel } from '../lib/debug.js';
 import { prettyLabel } from '../auto-config/heuristics.js';
 import { createNavigation, selectorFor, animateTransition } from '../lib/world-navigation.js';
-import { getWorldSettings } from '../lib/world-settings.js';
+import { getWorldSettings, subscribeWorldSettings } from '../lib/world-settings.js';
 
 const log = createDebug('qol:app');
 import { ModifierStateProvider } from '../lib/hooks/modifier-state-context.js';
@@ -19,11 +19,63 @@ import { SelectionCursorOverlay } from '../lib/components/SelectionCursorOverlay
 import { CommandPalette } from './CommandPalette.js';
 import { createCamera } from '../lib/world-camera.js';
 import { createWorldRegistry } from '../lib/world-registry.js';
+import { boundsOfEntries, maxEntryExtent, withPadding } from '../lib/world-geometry.js';
+import { pageMode } from '../lib/peripheral-geometry.js';
 import { pluginTraitOverride } from '../lib/plugin-trait-overrides.js';
 import { WorldViewport } from './shell/WorldViewport.js';
 import { MinimapContainer } from './shell/Minimap.js';
 import { RegionLabels } from './shell/RegionLabels.js';
 import { useWorldNav } from '../app/WorldNav.js';
+
+const PAGE_STRIDE = 10000;
+const SLOT_GAP_FACTOR = 0.85;
+
+function computeBaseScale(zoom, threshold) {
+    return Math.max(1, Math.pow(threshold / zoom, 0.85));
+}
+
+function applySlotScales(worldEl, registry, camera, baseScale) {
+    const slots = worldEl.querySelectorAll('.world-view-slot');
+    if (baseScale === 1) {
+        for (const s of slots) s.style.removeProperty('--slot-scale');
+        return;
+    }
+    const z = Math.max(camera.zoom, 0.05);
+    const vpCenterX = camera.x + window.innerWidth / (2 * z);
+    const vpCenterY = camera.y + window.innerHeight / (2 * z);
+    const falloff = (PAGE_STRIDE * z) * 2.5;
+    const centerFloor = 0.75;
+    for (const slot of slots) {
+        const entry = registry.getEntry(slot.dataset.viewId);
+        if (!entry) continue;
+        const cx = entry.x + entry.width / 2;
+        const cy = entry.y + entry.height / 2;
+        const d = Math.hypot(cx - vpCenterX, cy - vpCenterY) * z;
+        const t = 1 - Math.min(d / falloff, 1);
+        const proximity = centerFloor + (1 - centerFloor) * (t * t * (3 - 2 * t));
+        const maxSlotScale = (PAGE_STRIDE * SLOT_GAP_FACTOR) / Math.max(entry.width, 1);
+        const slotScale = Math.min(1 + (baseScale - 1) * proximity, maxSlotScale);
+        slot.style.setProperty('--slot-scale', slotScale.toFixed(3));
+    }
+}
+
+function measuredLayer0Entries(worldEl, entries, registry) {
+    const slots = worldEl.querySelectorAll('.world-view-slot[data-layer="0"]');
+    const heightById = new Map();
+    for (const el of slots) {
+        const entry = registry.getEntry(el.dataset.viewId);
+        if (entry) heightById.set(entry.id, el.offsetHeight);
+    }
+    return entries.map(e => ({ ...e, height: Math.max(e.height, heightById.get(e.id) || 0) }));
+}
+
+function computeGroundConfinement(registry, viewOrder) {
+    const entries = registry.getEntriesForLayer(0);
+    if (!entries.length) return undefined;
+    const rect = boundsOfEntries(entries);
+    const { padX, padY } = maxEntryExtent(entries);
+    return { bounds: { ...withPadding(rect, padX, padY), layer: 0 }, pages: viewOrder };
+}
 
 function registerStaticDiveTargets(registry) {
     const PAGE_WIDTH = 1280;
@@ -88,13 +140,14 @@ async function fetchPluginContract(pluginId) {
 function registerPluginDiveTarget(registry, plugin, sections, traits, pluginsEntry, pluginIndex) {
     const N = Math.max(1, sections.length);
     const yOffset = pluginIndex * PLUGIN_PAGE_STRIDE;
-    const claim = {
+    const inner = {
         x: pluginsEntry.x,
         y: pluginsEntry.y + yOffset,
         width: (N - 1) * PLUGIN_PAGE_STRIDE + PLUGIN_PAGE_WIDTH,
         height: PLUGIN_PAGE_HEIGHT,
         layer: pluginsEntry.layer - 1,
     };
+    const claim = withPadding(inner, PLUGIN_PAGE_WIDTH, PLUGIN_PAGE_HEIGHT);
     const pageIds = [];
     for (let i = 0; i < N; i++) {
         const section = sections[i];
@@ -102,11 +155,11 @@ function registerPluginDiveTarget(registry, plugin, sections, traits, pluginsEnt
         const pageId = `${plugin.id}-${sectionId}`;
         registry.addEntry({
             id: pageId,
-            x: claim.x + i * PLUGIN_PAGE_STRIDE,
-            y: claim.y,
+            x: inner.x + i * PLUGIN_PAGE_STRIDE,
+            y: inner.y,
             width: PLUGIN_PAGE_WIDTH,
             height: PLUGIN_PAGE_HEIGHT,
-            layer: claim.layer,
+            layer: inner.layer,
             label: section?.label || prettyLabel(sectionId),
         });
         pageIds.push(pageId);
@@ -250,28 +303,12 @@ function AppShell() {
         const worldEl = document.getElementById('world');
         if (!worldEl) return undefined;
         const recomputeBounds = () => {
-            const layer0Entries = registry.getEntriesForLayer(0);
-            if (!layer0Entries.length) return;
-            const slots = worldEl.querySelectorAll('.world-view-slot[data-layer="0"]');
-            let yExtent = Math.max(...layer0Entries.map(e => e.y + e.height));
-            for (const el of slots) {
-                const entry = registry.getEntry(el.dataset.viewId);
-                if (!entry) continue;
-                const bottom = entry.y + el.offsetHeight;
-                if (bottom > yExtent) yExtent = bottom;
-            }
-            const x0 = Math.min(...layer0Entries.map(e => e.x));
-            const y0 = Math.min(...layer0Entries.map(e => e.y));
-            const x1 = Math.max(...layer0Entries.map(e => e.x + e.width));
-            const padX = Math.max(...layer0Entries.map(e => e.width));
-            const padY = Math.max(...layer0Entries.map(e => e.height));
-            camera.setBounds({
-                x: x0 - padX,
-                y: y0 - padY,
-                width: (x1 - x0) + padX * 2,
-                height: (yExtent - y0) + padY * 2,
-                layer: 0,
-            });
+            const entries = registry.getEntriesForLayer(0);
+            if (!entries.length) return;
+            const measured = measuredLayer0Entries(worldEl, entries, registry);
+            const rect = boundsOfEntries(measured);
+            const { padX, padY } = maxEntryExtent(entries);
+            camera.setBounds({ ...withPadding(rect, padX, padY), layer: 0 });
         };
         const ro = new ResizeObserver(recomputeBounds);
         const slots = worldEl.querySelectorAll('.world-view-slot[data-layer="0"]');
@@ -282,24 +319,7 @@ function AppShell() {
 
     const navigationRef = useRef(null);
     if (!navigationRef.current) {
-        const layer0Entries = registry.getEntriesForLayer(0);
-        const groundConfinement = layer0Entries.length > 0 ? (() => {
-            const xs = layer0Entries.map(e => e.x);
-            const x0 = Math.min(...xs);
-            const y0 = Math.min(...layer0Entries.map(e => e.y));
-            const x1 = Math.max(...layer0Entries.map(e => e.x + e.width));
-            const y1 = Math.max(...layer0Entries.map(e => e.y + e.height));
-            const padX = Math.max(...layer0Entries.map(e => e.width));
-            const padY = Math.max(...layer0Entries.map(e => e.height));
-            const bounds = {
-                x: x0 - padX,
-                y: y0 - padY,
-                width: (x1 - x0) + padX * 2,
-                height: (y1 - y0) + padY * 2,
-                layer: 0,
-            };
-            return { bounds, pages: viewOrder };
-        })() : undefined;
+        const groundConfinement = computeGroundConfinement(registry, viewOrder);
         navigationRef.current = createNavigation({
             registry,
             camera,
@@ -453,6 +473,36 @@ function AppShell() {
         return () => clearTimeout(failsafe);
     }, [hiddenUntilDive]);
 
+    const onJumpTo = useCallback((pageId) => {
+        if (pageId === activeViewId) {
+            const s = getWorldSettings();
+            navigation.gotoAnchor({ pageId }, { respectKnob: false, resetZoom: s.defaultZoom });
+            return;
+        }
+        switchView(pageId);
+    }, [activeViewId, switchView, navigation]);
+
+    useEffect(() => {
+        const syncMode = () => {
+            const worldEl = document.getElementById('world');
+            if (!worldEl) return;
+            const { ghostThreshold, uiScaleOnZoomOut } = getWorldSettings();
+            const zoom = Math.max(camera.zoom, 0.05);
+            const baseScale = uiScaleOnZoomOut ? computeBaseScale(zoom, ghostThreshold) : 1;
+            worldEl.setAttribute('data-page-mode', pageMode(camera.zoom, ghostThreshold));
+            document.documentElement.style.setProperty('--zoom', zoom.toFixed(4));
+            applySlotScales(worldEl, registry, camera, baseScale);
+        };
+        const rafId = requestAnimationFrame(syncMode);
+        const unsub = camera.subscribe(syncMode);
+        const unsubSettings = subscribeWorldSettings(syncMode);
+        return () => {
+            cancelAnimationFrame(rafId);
+            unsub();
+            unsubSettings();
+        };
+    }, [camera, registry]);
+
     const renderCtx = useMemo(() => ({
         activePluginId,
         openPluginConfig,
@@ -463,8 +513,9 @@ function AppShell() {
         onSyncStatusChange: setSyncStatus,
         refreshSyncStatus,
         devEnabled,
+        onJumpTo,
     }), [activePluginId, openPluginConfig, openPluginUi, closePluginConfig,
-        syncStatus, syncProviders, setSyncStatus, refreshSyncStatus, devEnabled]);
+        syncStatus, syncProviders, setSyncStatus, refreshSyncStatus, devEnabled, onJumpTo]);
     const renderPage = useCallback((pageId) => renderPageContent(pageId, renderCtx), [renderCtx]);
 
     return html`

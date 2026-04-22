@@ -4,6 +4,15 @@
     position: relative;
     cursor: grab;
     min-height: 0;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+#viewport input,
+#viewport textarea,
+#viewport [contenteditable="true"] {
+    user-select: text;
+    -webkit-user-select: text;
 }
 
 html.qol-bootstrapping-dive #app {
@@ -306,7 +315,7 @@ html.qol-bootstrapping-dive #app {
     position: fixed;
     top: 64px;
     left: 50%;
-    transform: translateX(-50%);
+    translate: -50% 0;
     width: min(520px, 80vw);
     z-index: var(--z-popover, 200);
 }
@@ -444,14 +453,59 @@ html.qol-bootstrapping-dive #app {
         scale(calc(1 - 0.35 * var(--hide)));
 }
 
-.app-container > .palette-hint.peripheral-edge-top {
+.peripheral-edge-top {
     transform-origin: top center;
     transform:
-        translateX(-50%)
-        translateY(calc(-36% * var(--hide)))
-        scale(calc(1 - 0.3 * var(--hide)));
+        translateY(calc(-80px * var(--hide)))
+        scale(calc(1 - 0.35 * var(--hide)));
 }
 
 @media (prefers-reduced-motion: reduce) {
     .peripheral-edge-dock { --hide: 0 !important; }
+}
+
+.world-slot-jumper {
+    position: absolute;
+    inset: 0;
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    pointer-events: none;
+    z-index: 2;
+}
+
+#world[data-page-mode="ghost"] .world-slot-jumper {
+    pointer-events: auto;
+}
+
+.world-view-slot {
+    --visual-scale: calc(var(--zoom, 1) * var(--slot-scale, 1));
+    transform: scale(var(--slot-scale, 1));
+    transform-origin: center center;
+    transition: transform 220ms cubic-bezier(0.2, 0.8, 0.25, 1);
+}
+
+#world[data-page-mode="ghost"] .world-view-slot > *:not(.world-slot-jumper) {
+    pointer-events: none;
+    filter: brightness(0.82) saturate(0.75);
+    transition: filter 220ms ease-out;
+}
+
+#world[data-page-mode="ghost"] .world-view-slot[data-layer="0"] {
+    height: 900px !important;
+}
+
+#world[data-page-mode="ghost"] .world-view-slot:hover > *:not(.world-slot-jumper) {
+    filter: brightness(1) saturate(1);
+}
+
+#world[data-page-mode="ghost"] .world-view-slot:hover,
+.peripheral-slot:hover {
+    box-shadow:
+        0 0 0 calc(2px / var(--visual-scale, 1)) var(--accent, rgba(140, 200, 255, 0.6)),
+        0 calc(8px / var(--visual-scale, 1)) calc(32px / var(--visual-scale, 1)) rgba(0, 0, 0, 0.4);
+    border-radius: calc(var(--radius-lg, 8px) / var(--visual-scale, 1));
+    transition: box-shadow 200ms ease-out;
 }

@@ -44,7 +44,7 @@ function ProfileInputField({ id, fieldId, label, hint = '', value, placeholder, 
     const cls = ['form-group', 'profile-input-surface', className].filter(Boolean).join(' ');
     return html`
         <${Surface} className=${cls} ...${sel}
-            onActivate=${() => { const el = document.getElementById(id); if (el) { el.focus(); el.select?.(); } }}>
+            onActivate=${() => document.getElementById(id)?.focus?.()}>
             <label for=${id}>${label}${hint && html`<span class="hint"> ${hint}</span>`}</label>
             <input id=${id} type=${type} class="profile-field-input" value=${value} placeholder=${placeholder} data-profile-editable="" onInput=${onInput} />
         <//>

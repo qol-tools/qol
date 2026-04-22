@@ -46,7 +46,7 @@ export function createCamera(options = {}) {
         const activeBounds = bounds && (typeof bounds.layer !== 'number' || bounds.layer === layer);
         const vp = getViewportSize();
         const minZoom = activeBounds
-            ? Math.min(vp.w / bounds.width, vp.h / bounds.height)
+            ? Math.min(vp.w / bounds.width, vp.h / bounds.height) * 0.5
             : UNBOUNDED_MIN_ZOOM;
         return Math.max(minZoom, Math.min(nz, MAX_ZOOM));
     }

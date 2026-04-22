@@ -15,6 +15,7 @@ export function Peripheral({
     navigation,
     alwaysVisible = false,
     edge,
+    occludeSelector,
     as: Tag = 'div',
     className,
     elementRef,
@@ -23,7 +24,7 @@ export function Peripheral({
 }) {
     const localRef = useRef(null);
     const ref = elementRef || localRef;
-    useOverlayHide({ targetRef: ref, camera, navigation, alwaysVisible });
+    useOverlayHide({ targetRef: ref, camera, navigation, alwaysVisible, occludeSelector });
     const classes = ['peripheral-edge-dock', EDGE_CLASS[edge], className].filter(Boolean).join(' ');
     return html`<${Tag} ref=${ref} class=${classes} ...${rest}>${children}<//>`;
 }

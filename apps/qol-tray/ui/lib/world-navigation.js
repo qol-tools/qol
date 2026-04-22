@@ -1,5 +1,6 @@
 import { createDebug } from './debug.js';
 import { getWorldSettings } from './world-settings.js';
+import { cameraCenterFor } from './world-geometry.js';
 
 const log = createDebug('qol:nav-state');
 
@@ -116,10 +117,6 @@ export function createNavigation({ registry, camera, getSettings, domHelpers, gr
         return fallback || null;
     }
 
-    function resolveCenter(entry) {
-        return { x: entry.x + entry.width / 2, y: entry.y + entry.height / 2 };
-    }
-
     function gotoAnchor(anchor, { respectKnob = true, instant = false, useFocusMemory = true, resetZoom = null } = {}) {
         if (!anchor || !anchor.pageId) {
             log('gotoAnchor: skipped (no anchor)');
@@ -134,11 +131,9 @@ export function createNavigation({ registry, camera, getSettings, domHelpers, gr
             log('gotoAnchor: skipped (no fallback entry)', anchor.pageId);
             return;
         }
-        const center = resolveCenter(entry);
         const { w, h } = domHelpers.getViewportSize();
         const z = resetZoom ?? camera.zoom ?? 1;
-        const targetX = center.x - w / (2 * z);
-        const targetY = center.y - h / (2 * z);
+        const { x: targetX, y: targetY } = cameraCenterFor(entry, w, h, z);
         if (entry.layer !== camera.layer) camera.setLayer(entry.layer);
         const pageId = anchor.pageId;
         const focusAfterPan = () => {

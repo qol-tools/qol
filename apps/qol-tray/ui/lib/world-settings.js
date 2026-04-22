@@ -8,6 +8,8 @@ const DEFAULTS = {
     anchorToPages: true,
     defaultZoom: 0.8,
     resetZoomOnNav: true,
+    ghostThreshold: 0.55,
+    uiScaleOnZoomOut: true,
 };
 
 let current = load();

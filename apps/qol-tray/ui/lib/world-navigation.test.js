@@ -69,7 +69,7 @@ test('camera.zoomTo clamps to minimum fit zoom when zooming out past bounds', ()
     const cam = createCamera({ getViewportSize: () => ({ w: 1000, h: 500 }) });
     cam.setBounds({ x: 0, y: 0, width: 1000, height: 500, layer: 0 });
     cam.zoomTo(0.1);
-    assert.equal(cam.zoom, 1);
+    assert.equal(cam.zoom, 0.5);
 });
 
 test('camera.zoomTo allows zooming in past fit', () => {

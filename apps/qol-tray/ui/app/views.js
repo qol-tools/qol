@@ -56,7 +56,7 @@ export function renderPageContent(pageId, ctx) {
     return null;
 }
 
-function WorldViewSlot({ entry, cameraLayer, confinedPages, diveDepth, children }) {
+function WorldViewSlot({ entry, cameraLayer, confinedPages, diveDepth, onJumpTo, children }) {
     if (!entry) return null;
     const layerMatch = entry.layer === cameraLayer;
     const confined = confinedPages && confinedPages.length > 0;
@@ -64,14 +64,17 @@ function WorldViewSlot({ entry, cameraLayer, confinedPages, diveDepth, children 
     const visible = layerMatch && !ascending && (!confined || confinedPages.includes(entry.id));
     const heightStyle = entry.contentSized ? '' : ` height:${entry.height}px;`;
     const style = `left:${entry.x}px; top:${entry.y}px; width:${entry.width}px;${heightStyle}${visible ? '' : ' display:none;'}`;
-    return html`<div class="world-view-slot" data-view-id=${entry.id} data-layer=${entry.layer} style=${style}>${children}</div>`;
+    const jumper = entry.layer === 0 && onJumpTo
+        ? html`<button class="world-slot-jumper" tabindex="-1" aria-label=${`Jump to ${entry.id}`} onClick=${() => onJumpTo(entry.id)}></button>`
+        : null;
+    return html`<div class="world-view-slot" data-view-id=${entry.id} data-layer=${entry.layer} style=${style}>${jumper}${children}</div>`;
 }
 
 export function renderWorldViews(ctx) {
-    const { registry, cameraLayer, confinedPages, diveDepth, activePluginId } = ctx;
+    const { registry, cameraLayer, confinedPages, diveDepth, activePluginId, onJumpTo } = ctx;
     const layer = cameraLayer != null ? cameraLayer : 0;
     const slotFor = (entry, content) => entry && content != null
-        ? html`<${WorldViewSlot} key=${entry.id} entry=${entry} cameraLayer=${layer} confinedPages=${confinedPages} diveDepth=${diveDepth}>${content}<//>`
+        ? html`<${WorldViewSlot} key=${entry.id} entry=${entry} cameraLayer=${layer} confinedPages=${confinedPages} diveDepth=${diveDepth} onJumpTo=${onJumpTo}>${content}<//>`
         : null;
 
     return html`
