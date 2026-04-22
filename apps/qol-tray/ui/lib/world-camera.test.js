@@ -62,7 +62,7 @@ test('zoomAround clamps to bounds min when target is too small', () => {
     camera.setBounds({ x: 0, y: 0, width: 100, height: 100, layer: 0 });
     camera.zoomTo(20);
     camera.zoomAround(0, 0, 0.01);
-    assert.equal(camera.zoom, 6);
+    assert.equal(camera.zoom, 3);
 });
 
 test('zoomSmooth clamps target zoom and pan to bounds', () => {
@@ -83,9 +83,9 @@ test('zoomSmooth clamps target zoom and pan to bounds', () => {
             const cb = rafCallbacks.shift();
             cb(now);
         }
-        assert.equal(camera.zoom, 6);
-        assert.ok(Math.abs(camera.x - (50 - 800 / 6 / 2)) < 1e-9);
-        assert.equal(camera.y, 0);
+        assert.equal(camera.zoom, 3);
+        assert.ok(Math.abs(camera.x - (50 - 800 / 3 / 2)) < 1e-9);
+        assert.ok(Math.abs(camera.y - (50 - 600 / 3 / 2)) < 1e-9);
     } finally {
         if (origRaf === undefined) delete globalThis.requestAnimationFrame;
         else globalThis.requestAnimationFrame = origRaf;

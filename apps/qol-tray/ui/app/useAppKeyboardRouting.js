@@ -116,7 +116,12 @@ export function useAppKeyboardRouting({
             }
             const surface = slot.querySelector('[data-selected-surface]');
             log('viewChange:', activeViewId, '→', surface ? surfaceLabel(surface) : 'no surfaces');
-            if (surface) surface.focus({ preventScroll: true });
+            if (!surface) return;
+            surface.focus({ preventScroll: true });
+            if (surface instanceof HTMLInputElement || surface instanceof HTMLTextAreaElement) {
+                const end = surface.value?.length ?? 0;
+                surface.setSelectionRange?.(end, end);
+            }
         });
     }, [activeViewId]);
 
@@ -148,10 +153,6 @@ function routeToView(event, viewKeyboard, cycleView) {
             if (viewKeyboard?.isBlocking?.() && viewKeyboard.handleKey) {
                 viewKeyboard.handleKey(event);
             }
-            return;
-        }
-        if (viewKeyboard?.isBlocking?.() && viewKeyboard.handleKey) {
-            viewKeyboard.handleKey(event);
             return;
         }
         cycleView(event);

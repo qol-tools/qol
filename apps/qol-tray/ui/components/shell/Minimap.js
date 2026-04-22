@@ -65,8 +65,10 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
                 <label>Pan speed <input type="range" min="4" max="30" value=${settings.panSpeed} onInput=${update('panSpeed')} /></label>
                 <label>Minimap size <input type="range" min="200" max="500" value=${settings.minimapSize} onInput=${update('minimapSize')} /></label>
                 <label>Default zoom <input type="range" min="0.5" max="2" step="0.05" value=${settings.defaultZoom} onInput=${update('defaultZoom')} /> <span class="wsp-value">${Number(settings.defaultZoom).toFixed(2)}×</span></label>
+                <label>Ghost threshold <input type="range" min="0.2" max="1" step="0.05" value=${settings.ghostThreshold} onInput=${update('ghostThreshold')} /> <span class="wsp-value">${Number(settings.ghostThreshold).toFixed(2)}×</span></label>
                 <label><input type="checkbox" checked=${settings.anchorToPages} onChange=${update('anchorToPages')} /> Anchor view to pages</label>
                 <label><input type="checkbox" checked=${settings.resetZoomOnNav} onChange=${update('resetZoomOnNav')} /> Reset zoom on keyboard nav</label>
+                <label><input type="checkbox" checked=${settings.uiScaleOnZoomOut} onChange=${update('uiScaleOnZoomOut')} /> Scale pages up when zoomed out</label>
             </div>
             <div class="wsp-section">
                 <div class="wsp-heading">Transitions</div>

@@ -41,6 +41,14 @@ export function shouldHidePeripheralSide({ side, activeEntry, camera, viewport, 
     return false;
 }
 
+export function isGhostScale(apparentScale, threshold) {
+    return apparentScale < threshold;
+}
+
+export function pageMode(zoom, threshold) {
+    return isGhostScale(zoom, threshold) ? 'ghost' : 'interactive';
+}
+
 export function pickCenteredEntry(entries, camera, viewport) {
     if (!entries?.length) return null;
     if (entries.length === 1) return entries[0];

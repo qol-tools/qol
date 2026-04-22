@@ -43,44 +43,49 @@
     outline-offset: 2px;
 }
 
+.peripheral-slot[data-distance="1"] { --visual-scale: 0.8; }
+.peripheral-slot[data-distance="2"] { --visual-scale: 0.6; }
+.peripheral-slot[data-distance="3"] { --visual-scale: 0.4; }
+.peripheral-slot[data-distance="4"] { --visual-scale: 0.28; }
+
 .peripheral-slot-prev[data-distance="1"] {
     left: calc(-1 * clamp(90px, 12vw, 180px));
-    transform: translateY(-50%) scale(0.8);
+    transform: translateY(-50%) scale(var(--visual-scale));
 }
 
 .peripheral-slot-next[data-distance="1"] {
     right: calc(-1 * clamp(90px, 12vw, 180px));
-    transform: translateY(-50%) scale(0.8);
+    transform: translateY(-50%) scale(var(--visual-scale));
 }
 
 .peripheral-slot-prev[data-distance="2"] {
     left: calc(-1 * clamp(160px, 22vw, 320px));
-    transform: translateY(-50%) scale(0.6);
+    transform: translateY(-50%) scale(var(--visual-scale));
 }
 
 .peripheral-slot-next[data-distance="2"] {
     right: calc(-1 * clamp(160px, 22vw, 320px));
-    transform: translateY(-50%) scale(0.6);
+    transform: translateY(-50%) scale(var(--visual-scale));
 }
 
 .peripheral-slot-prev[data-distance="3"] {
     left: calc(-1 * clamp(220px, 30vw, 440px));
-    transform: translateY(-50%) scale(0.4);
+    transform: translateY(-50%) scale(var(--visual-scale));
 }
 
 .peripheral-slot-next[data-distance="3"] {
     right: calc(-1 * clamp(220px, 30vw, 440px));
-    transform: translateY(-50%) scale(0.4);
+    transform: translateY(-50%) scale(var(--visual-scale));
 }
 
 .peripheral-slot-prev[data-distance="4"] {
     left: calc(-1 * clamp(270px, 36vw, 540px));
-    transform: translateY(-50%) scale(0.28);
+    transform: translateY(-50%) scale(var(--visual-scale));
 }
 
 .peripheral-slot-next[data-distance="4"] {
     right: calc(-1 * clamp(270px, 36vw, 540px));
-    transform: translateY(-50%) scale(0.28);
+    transform: translateY(-50%) scale(var(--visual-scale));
 }
 
 .peripheral-mini {
