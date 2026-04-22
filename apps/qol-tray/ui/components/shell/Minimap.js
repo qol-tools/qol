@@ -24,7 +24,6 @@ export function MinimapContainer({ camera, registry, viewportRef, diveParent, ac
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [settings, setSettings] = useState(getWorldSettings);
     const cogRef = useRef(null);
-    const mapRef = useRef(null);
 
     useEffect(() => subscribeWorldSettings(setSettings), []);
 
@@ -37,7 +36,7 @@ export function MinimapContainer({ camera, registry, viewportRef, diveParent, ac
 
     return html`
         <${Peripheral} camera=${camera} navigation=${navigation} edge="br"
-            className="world-minimap-container" elementRef=${mapRef}>
+            className="world-minimap-container">
             ${diveDepth > 0 && html`<span class="world-minimap-depth" style=${`--wedge-hue: ${50 + (diveDepth - 1) * 45}`}>${diveDepth}</span>`}
             <${Minimap} camera=${camera} registry=${registry} viewportRef=${viewportRef} width=${settings.minimapSize} diveParent=${diveParent} activePluginId=${activePluginId} navigation=${navigation} />
         <//>

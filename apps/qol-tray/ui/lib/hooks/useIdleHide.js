@@ -4,13 +4,17 @@ const OCCLUSION_SELECTOR = '.world-view-slot';
 
 function measureHomeRect(el) {
     const hadHide = el.style.getPropertyValue('--hide');
+    const hideIsZero = hadHide === '' || hadHide === '0' || parseFloat(hadHide) === 0;
+    if (hideIsZero) {
+        const r = el.getBoundingClientRect();
+        return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+    }
     const hadTransition = el.style.getPropertyValue('transition');
     el.style.transition = 'none';
     el.style.setProperty('--hide', '0');
     void el.offsetWidth;
     const r = el.getBoundingClientRect();
-    if (hadHide !== '') el.style.setProperty('--hide', hadHide);
-    else el.style.removeProperty('--hide');
+    el.style.setProperty('--hide', hadHide);
     if (hadTransition !== '') el.style.transition = hadTransition;
     else el.style.removeProperty('transition');
     void el.offsetWidth;
@@ -35,12 +39,13 @@ export function useOverlayHide({ targetRef, camera, navigation, alwaysVisible = 
 
         el.style.setProperty('--hide', '0');
         let home = null;
+        let rafPending = 0;
 
         const measure = () => {
             home = measureHomeRect(el);
         };
 
-        const recompute = () => {
+        const recomputeNow = () => {
             if (!home) return;
             const slots = document.querySelectorAll(OCCLUSION_SELECTOR);
             let overlaps = false;
@@ -53,6 +58,14 @@ export function useOverlayHide({ targetRef, camera, navigation, alwaysVisible = 
             el.style.setProperty('--hide', overlaps ? '1' : '0');
         };
 
+        const recompute = () => {
+            if (rafPending) return;
+            rafPending = requestAnimationFrame(() => {
+                rafPending = 0;
+                recomputeNow();
+            });
+        };
+
         measure();
         requestAnimationFrame(recompute);
 
@@ -62,10 +75,12 @@ export function useOverlayHide({ targetRef, camera, navigation, alwaysVisible = 
         ro.observe(el);
         const onResize = () => { measure(); recompute(); };
         window.addEventListener('resize', onResize);
+        const worldEl = document.getElementById('world') || document.body;
         const mo = new MutationObserver(recompute);
-        mo.observe(document.body, { childList: true, subtree: true });
+        mo.observe(worldEl, { childList: true, subtree: true });
 
         return () => {
+            if (rafPending) cancelAnimationFrame(rafPending);
             unsubCam?.();
             unsubAnchor?.();
             ro.disconnect();

@@ -1,3 +1,9 @@
+@property --hide {
+    syntax: "<number>";
+    inherits: false;
+    initial-value: 0;
+}
+
 .peripheral-preview {
     position: absolute;
     inset: 0;
