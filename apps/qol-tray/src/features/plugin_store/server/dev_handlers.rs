@@ -61,17 +61,20 @@ fn resolve_active_worktree() -> super::types::ActiveWorktreeResponse {
     let branch = super::helpers::shared_config_dir()
         .ok()
         .and_then(|dir| crate::dev::get_active_worktree_branch(&dir));
-    resolve_active_from(branch, dev_services::list_worktrees())
+    let repo_branch = dev_services::current_repo_branch();
+    resolve_active_from(branch, dev_services::list_worktrees(), repo_branch)
 }
 
 fn resolve_active_from(
     branch: Option<String>,
     worktrees: Vec<super::types::WorktreeInfo>,
+    repo_branch: Option<String>,
 ) -> super::types::ActiveWorktreeResponse {
     let Some(branch) = branch else {
         return super::types::ActiveWorktreeResponse {
             branch: None,
             path: None,
+            repo_branch,
         };
     };
     let path = worktrees
@@ -81,6 +84,7 @@ fn resolve_active_from(
     super::types::ActiveWorktreeResponse {
         branch: Some(branch),
         path,
+        repo_branch,
     }
 }
 
@@ -211,9 +215,11 @@ mod tests {
         let active = resolve_active_from(
             None,
             vec![named_worktree("main", "/repo/main")],
+            Some("world-canvas-overhaul".to_string()),
         );
         assert_eq!(active.branch, None);
         assert_eq!(active.path, None);
+        assert_eq!(active.repo_branch.as_deref(), Some("world-canvas-overhaul"));
     }
 
     #[test]
@@ -224,9 +230,11 @@ mod tests {
                 named_worktree("main", "/repo/main"),
                 named_worktree("feat/x", "/repo/feat-x"),
             ],
+            Some("main".to_string()),
         );
         assert_eq!(active.branch.as_deref(), Some("feat/x"));
         assert_eq!(active.path.as_deref(), Some("/repo/feat-x"));
+        assert_eq!(active.repo_branch.as_deref(), Some("main"));
     }
 
     #[test]
@@ -234,9 +242,11 @@ mod tests {
         let active = resolve_active_from(
             Some("feat/gone".to_string()),
             vec![named_worktree("main", "/repo/main")],
+            None,
         );
         assert_eq!(active.branch.as_deref(), Some("feat/gone"));
         assert_eq!(active.path, None);
+        assert_eq!(active.repo_branch, None);
     }
 
     #[test]
@@ -247,7 +257,16 @@ mod tests {
                 named_worktree("feat/a-suffix", "/repo/a-suffix"),
                 named_worktree("feat/a", "/repo/a"),
             ],
+            Some("main".to_string()),
         );
         assert_eq!(active.path.as_deref(), Some("/repo/a"));
+    }
+
+    #[test]
+    fn resolve_active_from_passes_repo_branch_through_when_no_worktree_override() {
+        let active = resolve_active_from(None, vec![], Some("world-canvas-overhaul".to_string()));
+        assert_eq!(active.branch, None);
+        assert_eq!(active.path, None);
+        assert_eq!(active.repo_branch.as_deref(), Some("world-canvas-overhaul"));
     }
 }

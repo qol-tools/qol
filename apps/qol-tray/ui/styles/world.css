@@ -221,6 +221,26 @@ html.qol-bootstrapping-dive #app {
     letter-spacing: 0.08em;
     color: var(--text-faint);
     margin-bottom: 2px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.wsp-pill {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: var(--radius-sm, 4px);
+    background: var(--layer-paper-10);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: calc(var(--fs-caption-1) * 0.92);
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0;
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .world-settings-panel label {

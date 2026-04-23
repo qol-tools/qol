@@ -111,7 +111,7 @@ fn resolve_repo_dir(feature_dir: &Path, repo_name: Option<&str>) -> Option<std::
         .find(|path| path.join("Cargo.toml").is_file())
 }
 
-fn resolve_git_branch(repo_dir: &Path) -> Option<String> {
+pub(super) fn resolve_git_branch(repo_dir: &Path) -> Option<String> {
     if !repo_dir.join(".git").exists() {
         return None;
     }
