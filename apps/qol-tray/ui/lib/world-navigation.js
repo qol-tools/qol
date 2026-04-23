@@ -156,11 +156,23 @@ export function createNavigation({ registry, camera, getSettings, domHelpers, gr
             focusAfterPan();
             return;
         }
-        if (resetZoom != null) {
-            camera.zoomSmooth(targetX, targetY, resetZoom, 260, focusAfterPan);
+        const dx = targetX - camera.x;
+        const dy = targetY - camera.y;
+        const distance = Math.hypot(dx, dy);
+        const FAR_THRESHOLD = 300;
+        const APPROACH_PX = 120;
+        if (distance > FAR_THRESHOLD) {
+            const ratio = APPROACH_PX / distance;
+            if (resetZoom != null) camera.zoomTo(resetZoom);
+            camera.panTo(targetX - dx * ratio, targetY - dy * ratio);
+            camera.panSmooth(targetX, targetY, 120, focusAfterPan);
             return;
         }
-        camera.panSmooth(targetX, targetY, 200, focusAfterPan);
+        if (resetZoom != null) {
+            camera.zoomSmooth(targetX, targetY, resetZoom, 220, focusAfterPan);
+            return;
+        }
+        camera.panSmooth(targetX, targetY, 140, focusAfterPan);
     }
 
     function dive(targetPageId) {
