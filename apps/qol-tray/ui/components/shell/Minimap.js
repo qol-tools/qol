@@ -20,7 +20,7 @@ const ARROW_FLASH_MS = 350;
 const VIEWPORT_FILL = 'rgba(140, 200, 255, 0.12)';
 const VIEWPORT_STROKE = 'rgba(140, 200, 255, 0.55)';
 
-export function MinimapContainer({ camera, registry, viewportRef, diveParent, activePluginId, diveDepth, navigation, version, updateState, isDevMode, onAction }) {
+export function MinimapContainer({ camera, registry, viewportRef, diveParent, activePluginId, diveDepth, navigation, version, updateState, isDevMode, onAction, worktrees, defaultWorktree, setDefaultWorktree }) {
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [settings, setSettings] = useState(getWorldSettings);
     const cogRef = useRef(null);
@@ -46,12 +46,13 @@ export function MinimapContainer({ camera, registry, viewportRef, diveParent, ac
                 <${IconCog} size=${28} />
             </button>
             ${settingsOpen && html`<${WorldSettingsPanel} settings=${settings}
-                version=${version} updateState=${updateState} isDevMode=${isDevMode} onAction=${onAction} />`}
+                version=${version} updateState=${updateState} isDevMode=${isDevMode} onAction=${onAction}
+                worktrees=${worktrees} defaultWorktree=${defaultWorktree} setDefaultWorktree=${setDefaultWorktree} />`}
         <//>
     `;
 }
 
-function WorldSettingsPanel({ settings, version, updateState, isDevMode, onAction }) {
+function WorldSettingsPanel({ settings, version, updateState, isDevMode, onAction, worktrees, defaultWorktree, setDefaultWorktree }) {
     const update = (key) => (e) => {
         const t = e.target;
         const val = t.type === 'range' ? Number(t.value) : t.type === 'checkbox' ? t.checked : t.value;
@@ -79,7 +80,23 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
                     <option value="instant">Instant</option>
                 </select></label>
             </div>
+            ${isDevMode && worktrees && worktrees.length > 0 && html`
+                <${WorktreeSection} worktrees=${worktrees} defaultWorktree=${defaultWorktree} setDefaultWorktree=${setDefaultWorktree} />
+            `}
             ${version && html`<${VersionSection} version=${version} updateState=${updateState} isDevMode=${isDevMode} onAction=${onAction} />`}
+        </div>
+    `;
+}
+
+function WorktreeSection({ worktrees, defaultWorktree, setDefaultWorktree }) {
+    const onChange = (e) => setDefaultWorktree(e.target.value || null);
+    return html`
+        <div class="wsp-section">
+            <div class="wsp-heading">Worktree</div>
+            <label>Branch <select value=${defaultWorktree || ''} onChange=${onChange}>
+                <option value="">main</option>
+                ${worktrees.map(w => html`<option value=${w.path}>${w.branch}</option>`)}
+            </select></label>
         </div>
     `;
 }
