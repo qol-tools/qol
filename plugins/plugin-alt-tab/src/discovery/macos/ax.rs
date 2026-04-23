@@ -168,41 +168,6 @@ pub(super) fn ax_windows(
     Some((id_map, all_meta, accepted))
 }
 
-pub(crate) fn focused_window_id() -> Option<u32> {
-    unsafe {
-        let system = AXUIElementCreateSystemWide();
-        if system.is_null() {
-            return None;
-        }
-
-        let app_attr = ffi::cfstr(b"AXFocusedApplication");
-        let window_attr = ffi::cfstr(b"AXFocusedWindow");
-        let id_attr = ffi::cfstr(b"_AXWindowID");
-
-        let app = ax_copy_attr(system, app_attr);
-        CFRelease(system);
-        CFRelease(app_attr);
-        if app.is_null() {
-            CFRelease(window_attr);
-            CFRelease(id_attr);
-            return None;
-        }
-
-        let window = ax_copy_attr(app, window_attr);
-        CFRelease(app);
-        CFRelease(window_attr);
-        if window.is_null() {
-            CFRelease(id_attr);
-            return None;
-        }
-
-        let id = ax_read_window_id(window, id_attr);
-        CFRelease(window);
-        CFRelease(id_attr);
-        id
-    }
-}
-
 fn collect_ax_window_meta(
     wins_val: *const c_void,
     count: isize,

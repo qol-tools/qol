@@ -120,3 +120,39 @@ fn find_picker_window(mtm: MainThreadMarker) -> Option<Retained<NSWindow>> {
         .iter()
         .find(|win| win.title().to_string() == PICKER_WINDOW_TITLE)
 }
+
+pub fn pre_create_if_supported(
+    config: &crate::config::AltTabConfig,
+    current: &crate::PickerWindowState,
+    cx: &mut gpui::App,
+) {
+    crate::picker::create::pre_create_offscreen(config, current, cx)
+}
+
+pub fn offscreen_origin() -> (f64, f64) {
+    (OFFSCREEN_X, OFFSCREEN_Y)
+}
+
+/// No-op: the keep-alive NSWindow spans opens and multi-monitor is handled by repositioning.
+pub fn destroy_non_target_windows(
+    _current: &crate::PickerWindowState,
+    _target: qol_plugin_api::window::MonitorKey,
+    _cx: &mut gpui::App,
+) {
+}
+
+/// Drop the stale `ActiveWindows` slot so a subsequent `create_from_request` fallback doesn't
+/// leave a dangling sentinel key. The keep-alive NSWindow is never destroyed.
+pub fn discard_old_window(
+    current: &crate::PickerWindowState,
+    target: qol_plugin_api::window::MonitorKey,
+    _handle: gpui::WindowHandle<crate::app::AltTabApp>,
+    _cx: &mut gpui::App,
+) {
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[alt-tab/open] keep-alive reuse failed; dropping stale slot {:?}",
+        target
+    );
+    current.borrow_mut().remove(target);
+}

@@ -1,6 +1,6 @@
-use crate::discovery::platform::macos::ax::ax_find_window;
-use crate::discovery::platform::macos::ffi;
-use crate::discovery::platform::macos::ffi::{
+use crate::discovery::macos::ax::ax_find_window;
+use crate::discovery::macos::ffi;
+use crate::discovery::macos::ffi::{
     CFArrayGetCount, CFArrayGetValueAtIndex, CFDictionaryRef, CFRelease,
     CGWindowListCopyWindowInfo, K_CG_NULL_WINDOW_ID, K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
 };

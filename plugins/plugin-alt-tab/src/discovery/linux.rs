@@ -1,10 +1,22 @@
-use crate::discovery::WindowInfo;
+use super::{DiscoveryError, WindowDiscovery, WindowInfo};
 use qol_plugin_api::app_icon::RgbaImage;
 use std::sync::{Mutex, OnceLock};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::ConnectionExt as _;
 use x11rb::protocol::xproto::*;
 use x11rb::rust_connection::RustConnection;
+
+pub struct Platform;
+
+impl WindowDiscovery for Platform {
+    fn visible_windows(&self, include_minimized: bool) -> Result<Vec<WindowInfo>, DiscoveryError> {
+        let mut windows = get_open_windows();
+        if !include_minimized {
+            windows.retain(|w| !w.is_minimized);
+        }
+        Ok(windows)
+    }
+}
 
 struct DiscoverySession {
     conn: RustConnection,

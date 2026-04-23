@@ -130,51 +130,17 @@ fn any_existing(current: &PickerWindowState) -> Option<(MonitorKey, WindowHandle
     current.borrow().iter().into_iter().next()
 }
 
-#[cfg(not(target_os = "macos"))]
 fn destroy_non_target_windows(req: &OpenPickerRequest, placement: &PopupPlacement, cx: &mut App) {
-    let target = placement.target();
-    req.current.borrow_mut().destroy_non_target(target, cx);
+    platform::destroy_non_target_windows(req.current, placement.target(), cx);
 }
 
-/// macOS keeps a single pre-created picker window alive across opens; multi-monitor is handled
-/// by repositioning the one window rather than destroying others.
-#[cfg(target_os = "macos")]
-fn destroy_non_target_windows(
-    _req: &OpenPickerRequest,
-    _placement: &PopupPlacement,
-    _cx: &mut App,
-) {
-}
-
-#[cfg(not(target_os = "macos"))]
 fn discard_old_window(
     req: &OpenPickerRequest,
     target: qol_plugin_api::window::MonitorKey,
     handle: WindowHandle<AltTabApp>,
     cx: &mut App,
 ) {
-    #[cfg(debug_assertions)]
-    eprintln!("[alt-tab/open] closing old window — will recreate on correct monitor");
-    let _ = handle.update(cx, |_, window, _| window.remove_window());
-    req.current.borrow_mut().remove(target);
-}
-
-/// On macOS the keep-alive NSWindow must never be destroyed; we only drop the stale
-/// `ActiveWindows` entry so a subsequent `create_from_request` fallback doesn't leave behind
-/// a dangling sentinel key. In steady state this path is unreachable — reuse always succeeds.
-#[cfg(target_os = "macos")]
-fn discard_old_window(
-    req: &OpenPickerRequest,
-    target: qol_plugin_api::window::MonitorKey,
-    _handle: WindowHandle<AltTabApp>,
-    _cx: &mut App,
-) {
-    #[cfg(debug_assertions)]
-    eprintln!(
-        "[alt-tab/open] keep-alive reuse failed; dropping stale slot {:?}",
-        target
-    );
-    req.current.borrow_mut().remove(target);
+    platform::discard_old_window(req.current, target, handle, cx);
 }
 
 fn create_from_request(

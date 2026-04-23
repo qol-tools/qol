@@ -1,5 +1,5 @@
-use crate::discovery::platform::macos::ffi;
-use crate::discovery::platform::macos::ffi::{
+use crate::discovery::macos::ffi;
+use crate::discovery::macos::ffi::{
     CFArrayGetCount, CFArrayGetValueAtIndex, CFDataGetBytePtr, CFDataGetLength, CFDictionaryRef,
     CFRelease, CGDataProviderCopyData, CGImageGetBytesPerRow, CGImageGetDataProvider,
     CGImageGetHeight, CGImageGetWidth, CGImageRef, CGWindowListCopyWindowInfo,

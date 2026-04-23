@@ -15,20 +15,60 @@ pub struct WindowInfo {
     pub is_minimized: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // constructed on Linux/macOS only; Windows/unsupported stays silent
-pub(crate) enum CacheEvent {
-    WindowsChanged,
+/// Strategy trait implemented once per OS. The picker calls `visible_windows`
+/// on every show; no caching, no events, no polling. MRU order is whatever
+/// the OS says is on top right now.
+pub trait WindowDiscovery {
+    /// Live, per-window, MRU-ordered snapshot. First entry = most recently
+    /// active real window. Per-window means an app with three windows produces
+    /// three entries — never grouped.
+    ///
+    /// Must return `Err` only when the OS is genuinely unsupported, not for
+    /// transient failures (transient failures return an empty Vec).
+    fn visible_windows(&self, include_minimized: bool) -> Result<Vec<WindowInfo>, DiscoveryError>;
 }
 
-pub(crate) mod platform;
+#[derive(Debug)]
+pub enum DiscoveryError {
+    #[allow(dead_code)] // only constructed on Windows / unsupported hosts
+    Unsupported,
+}
+
+impl std::fmt::Display for DiscoveryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DiscoveryError::Unsupported => {
+                write!(f, "window discovery is not implemented on this platform")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DiscoveryError {}
+
 #[cfg(target_os = "linux")]
-pub(crate) mod watcher;
+mod linux;
+#[cfg(target_os = "macos")]
+pub(crate) mod macos;
+#[cfg(target_os = "windows")]
+mod windows;
 
-pub fn get_open_windows() -> Vec<WindowInfo> {
-    platform::get_open_windows()
-}
+#[cfg(target_os = "linux")]
+pub use linux::Platform;
+#[cfg(target_os = "macos")]
+pub use macos::Platform;
+#[cfg(target_os = "windows")]
+pub use windows::Platform;
 
-pub fn get_on_screen_windows() -> Vec<WindowInfo> {
-    platform::get_on_screen_windows()
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+mod unsupported {
+    use super::{DiscoveryError, WindowDiscovery, WindowInfo};
+    pub struct Platform;
+    impl WindowDiscovery for Platform {
+        fn visible_windows(&self, _: bool) -> Result<Vec<WindowInfo>, DiscoveryError> {
+            Err(DiscoveryError::Unsupported)
+        }
+    }
 }
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+pub use unsupported::Platform;

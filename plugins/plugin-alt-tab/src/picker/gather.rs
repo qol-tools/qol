@@ -2,7 +2,6 @@ use super::run::WindowCache;
 use crate::app::AltTabApp;
 use crate::capture;
 use crate::config::AltTabConfig;
-use crate::discovery;
 use crate::discovery::WindowInfo;
 use crate::{IconMap, PreviewMap, SharedIconCache};
 use gpui::*;
@@ -48,49 +47,16 @@ pub(super) fn gather(
 }
 
 fn windows_from_cache_or_discovery(
-    config: &AltTabConfig,
+    _config: &AltTabConfig,
     window_cache: &WindowCache,
 ) -> Vec<WindowInfo> {
-    let cached = window_cache
+    // dispatch_show writes the live query into window_cache before open_picker
+    // runs, so this is always populated by the time gather() is called.
+    window_cache
         .lock()
         .ok()
         .map(|c| c.clone())
-        .unwrap_or_default();
-    if !cached.is_empty() {
-        return apply_minimized_filter(config, cached);
-    }
-    recover_small_window_set(config, initial_display_windows(config))
-}
-
-fn apply_minimized_filter(config: &AltTabConfig, windows: Vec<WindowInfo>) -> Vec<WindowInfo> {
-    if config.display.show_minimized {
-        return windows;
-    }
-    windows.into_iter().filter(|w| !w.is_minimized).collect()
-}
-
-fn initial_display_windows(config: &AltTabConfig) -> Vec<WindowInfo> {
-    if !config.display.show_minimized {
-        return discovery::get_on_screen_windows();
-    }
-    discovery::get_open_windows()
-}
-
-fn recover_small_window_set(
-    config: &AltTabConfig,
-    display_windows: Vec<WindowInfo>,
-) -> Vec<WindowInfo> {
-    if display_windows.len() > 2 {
-        return display_windows;
-    }
-    let recovered = discovery::get_on_screen_windows();
-    if recovered.len() <= display_windows.len() {
-        return display_windows;
-    }
-    if config.display.show_minimized {
-        return recovered;
-    }
-    recovered.into_iter().filter(|w| !w.is_minimized).collect()
+        .unwrap_or_default()
 }
 
 pub(super) struct IconFillRequest {

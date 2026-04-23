@@ -106,3 +106,36 @@ pub fn disable_window_shadow() {}
 pub fn show_picker_onscreen() {}
 
 pub fn prepare_picker_for_show() {}
+
+pub fn hide_picker_offscreen() {}
+
+pub fn pre_create_if_supported(
+    _config: &crate::config::AltTabConfig,
+    _current: &crate::PickerWindowState,
+    _cx: &mut gpui::App,
+) {
+}
+
+pub fn offscreen_origin() -> (f64, f64) {
+    (0.0, 0.0)
+}
+
+pub fn destroy_non_target_windows(
+    current: &crate::PickerWindowState,
+    target: qol_plugin_api::window::MonitorKey,
+    cx: &mut gpui::App,
+) {
+    current.borrow_mut().destroy_non_target(target, cx);
+}
+
+pub fn discard_old_window(
+    current: &crate::PickerWindowState,
+    target: qol_plugin_api::window::MonitorKey,
+    handle: gpui::WindowHandle<crate::app::AltTabApp>,
+    cx: &mut gpui::App,
+) {
+    #[cfg(debug_assertions)]
+    eprintln!("[alt-tab/open] closing old window — will recreate on correct monitor");
+    let _ = handle.update(cx, |_, window, _| window.remove_window());
+    current.borrow_mut().remove(target);
+}
