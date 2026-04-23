@@ -544,7 +544,8 @@ function AppShell() {
                     <${CommandPalette} camera=${camera} navigation=${navigation} />
                     <${MinimapContainer} camera=${camera} registry=${registry} viewportRef=${viewportRef} diveParent=${diveParent}
                         activePluginId=${activePluginId} diveDepth=${diveDepth} navigation=${navigation}
-                        version=${appVersion} updateState=${updateState} isDevMode=${devEnabled} onAction=${handleSidebarAction} />
+                        version=${appVersion} updateState=${updateState} isDevMode=${devEnabled} onAction=${handleSidebarAction}
+                        worktrees=${worktrees} defaultWorktree=${defaultWorktree} setDefaultWorktree=${setDefaultWorktree} />
                     <${SelectionCursorOverlay} camera=${camera} />
                     <${RecompileDissolve} triggerRef=${dissolveRef} />
                     <${GlobalToast} />
