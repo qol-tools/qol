@@ -229,10 +229,20 @@
     font-size: var(--fs-caption-1);
     line-height: var(--lh-tight);
     min-height: 1em;
+    max-width: 100%;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 100%;
+}
+
+.plugin-row:hover .plugin-path,
+.plugin-row:focus-within .plugin-path,
+.plugin-row.is-selected .plugin-path {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+    word-break: break-all;
 }
 
 .plugin-row .plugin-build-meta {
