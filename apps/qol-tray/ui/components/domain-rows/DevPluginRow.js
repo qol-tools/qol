@@ -45,7 +45,7 @@ export function DevPluginRow({ name, path, status, pluginId, badges, meta, actio
                         <div class="plugin-title-row">
                             <span class="plugin-name" data-selected-text="">${name}</span>
                         </div>
-                        ${path && html`<span class="plugin-path" data-selected-text="">${path}</span>`}
+                        ${path && html`<span class="plugin-path" data-selected-text="" title=${path}>${path}</span>`}
                         ${meta}
                     </div>
                     ${badges}
