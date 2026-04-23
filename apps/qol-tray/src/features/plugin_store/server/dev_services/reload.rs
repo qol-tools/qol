@@ -97,7 +97,10 @@ fn run_build(task: &ReloadTask) {
         .config_dir
         .as_deref()
         .and_then(dev::get_active_worktree_branch);
-    let branch = task.worktree_branch.as_deref().or(persisted_branch.as_deref());
+    let branch = task
+        .worktree_branch
+        .as_deref()
+        .or(persisted_branch.as_deref());
 
     let event_sink = task.runtime.create_core_event_sink(task.events.clone());
     let build_service = dev::default_build_application_service(event_sink.as_ref());

@@ -61,10 +61,7 @@ fn resolve_plugins(plugins_dir: &Path) -> Result<ResolutionReport> {
 }
 
 #[cfg(feature = "dev")]
-fn apply_worktree_override(
-    registry: &mut crate::plugins::registry::Registry,
-    config_dir: &Path,
-) {
+fn apply_worktree_override(registry: &mut crate::plugins::registry::Registry, config_dir: &Path) {
     use crate::plugins::registry::SlotSource;
     let branch = crate::dev::get_active_worktree_branch(config_dir);
     let Some(branch) = branch else { return };
@@ -96,10 +93,7 @@ fn apply_worktree_override(
 }
 
 #[cfg(not(feature = "dev"))]
-fn apply_worktree_override(
-    _registry: &mut crate::plugins::registry::Registry,
-    _config_dir: &Path,
-) {
+fn apply_worktree_override(_registry: &mut crate::plugins::registry::Registry, _config_dir: &Path) {
 }
 
 fn log_unavailable(unavailable: &[PluginUnavailable]) {
