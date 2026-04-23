@@ -251,6 +251,8 @@ pub(super) struct WorktreeInfo {
 pub(super) struct ActiveWorktreeResponse {
     pub(super) branch: Option<String>,
     pub(super) path: Option<String>,
+    #[serde(rename = "repoBranch")]
+    pub(super) repo_branch: Option<String>,
 }
 
 #[cfg(all(test, feature = "dev"))]

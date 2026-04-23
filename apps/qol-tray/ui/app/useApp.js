@@ -31,6 +31,7 @@ export function useApp({ onDissolve } = {}) {
     const mounted = useMountedViews(activeViewId);
     const { updateState, checkForUpdate, beginSelfUpdate, failSelfUpdate, beginDevRecompile, failDevRecompile } = useAppUpdateCoordinator({ devEnabled, appVersion, onDissolve });
     const [worktrees, setWorktrees] = useState([]);
+    const [repoBranch, setRepoBranch] = useState(null);
     const [defaultWorktree, setDefaultWorktreeState] = useState(readDefaultWorktree);
     const [syncStatus, setSyncStatus] = useState(defaultSyncStatus);
     const [syncProviders, setSyncProviders] = useState([]);
@@ -54,6 +55,7 @@ export function useApp({ onDissolve } = {}) {
         ]).then(([nextWorktrees, active]) => {
             if (cancelled) return;
             setWorktrees(nextWorktrees);
+            setRepoBranch(active?.repoBranch ?? null);
             const resolved = resolveInitialWorktree({
                 persisted: defaultWorktreeRef.current,
                 serverActive: active?.path ?? null,
@@ -129,6 +131,7 @@ export function useApp({ onDissolve } = {}) {
         handleSidebarAction,
         handleViewClick,
         worktrees,
+        repoBranch,
         defaultWorktree,
         setDefaultWorktree,
         syncStatus,
