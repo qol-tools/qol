@@ -7,6 +7,8 @@ use crate::plugins::{Plugin, PluginId, PluginLoader};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
+#[cfg(feature = "dev")]
+use std::path::PathBuf;
 
 pub(super) fn load_plugins(manager: &mut PluginManager) -> Result<()> {
     super::super::daemon_tracker::kill_orphan_daemons();
@@ -50,11 +52,54 @@ fn resolution_context() -> Result<ResolutionContext> {
 fn resolve_plugins(plugins_dir: &Path) -> Result<ResolutionReport> {
     let config_dir =
         crate::paths::shared_config_dir().context("resolve_plugins: shared_config_dir")?;
-    let registry = ensure_registry_initialized(&config_dir, plugins_dir)
+    let mut registry = ensure_registry_initialized(&config_dir, plugins_dir)
         .map_err(|e| anyhow::anyhow!("Failed to initialize plugin registry: {}", e))?;
+    apply_worktree_override(&mut registry, &config_dir);
     let report = resolve_from_registry(&registry);
     log_unavailable(&report.unavailable);
     Ok(report)
+}
+
+#[cfg(feature = "dev")]
+fn apply_worktree_override(
+    registry: &mut crate::plugins::registry::Registry,
+    config_dir: &Path,
+) {
+    use crate::plugins::registry::SlotSource;
+    let branch = crate::dev::get_active_worktree_branch(config_dir);
+    let Some(branch) = branch else { return };
+    let base_links: HashMap<String, PathBuf> = registry
+        .entries
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.active.source,
+                SlotSource::DevLink { .. } | SlotSource::WorktreeLink { .. }
+            )
+        })
+        .map(|e| (e.id.clone(), e.active.path.clone()))
+        .collect();
+    let resolved = crate::dev::resolve_worktree_paths(&base_links, Some(&branch));
+    for entry in &mut registry.entries {
+        if let Some(new_path) = resolved.get(&entry.id) {
+            if *new_path != entry.active.path {
+                log::info!(
+                    "[worktree] overriding {} path: {} → {}",
+                    entry.id,
+                    entry.active.path.display(),
+                    new_path.display()
+                );
+                entry.active.path = new_path.clone();
+            }
+        }
+    }
+}
+
+#[cfg(not(feature = "dev"))]
+fn apply_worktree_override(
+    _registry: &mut crate::plugins::registry::Registry,
+    _config_dir: &Path,
+) {
 }
 
 fn log_unavailable(unavailable: &[PluginUnavailable]) {
