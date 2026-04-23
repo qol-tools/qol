@@ -279,7 +279,10 @@ path = \"src/main.rs\"
         write_manifest(&plugin_dir, &plugin_manifest("alt-tab"));
         let resolved = resolve_missing_tray_root(&plugin_dir);
         assert_ne!(resolved, plugin_dir, "should not return the plugin dir");
-        assert!(manifest_is_qol_tray(&resolved), "fallback must point at real qol-tray manifest");
+        assert!(
+            manifest_is_qol_tray(&resolved),
+            "fallback must point at real qol-tray manifest"
+        );
     }
 
     #[test]
@@ -287,7 +290,10 @@ path = \"src/main.rs\"
         // Simulates: <feature-root>/plugin-alt-tab and <feature-root>/qol-tray.
         let tmp = TempDir::new().unwrap();
         let feature_root = tmp.path();
-        write_manifest(&feature_root.join("plugin-alt-tab"), &plugin_manifest("alt-tab"));
+        write_manifest(
+            &feature_root.join("plugin-alt-tab"),
+            &plugin_manifest("alt-tab"),
+        );
         write_manifest(&feature_root.join("qol-tray"), qol_tray_manifest());
         let resolved = resolve_missing_tray_root(&feature_root.join("plugin-alt-tab"));
         assert_eq!(resolved, feature_root.join("qol-tray"));
