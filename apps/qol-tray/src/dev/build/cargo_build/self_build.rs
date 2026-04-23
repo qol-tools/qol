@@ -23,7 +23,7 @@ where
         .map(Path::to_path_buf)
         .unwrap_or_else(paths::repo_root_from_manifest_dir);
 
-    if !repo_root.join("Cargo.toml").exists() {
+    if !manifest_is_qol_tray(&repo_root) {
         repo_root = resolve_missing_tray_root(&repo_root);
     }
 
@@ -47,8 +47,14 @@ where
 
 fn resolve_missing_tray_root(repo_root: &Path) -> std::path::PathBuf {
     let nested_tray = repo_root.join("qol-tray");
-    if nested_tray.join("Cargo.toml").exists() {
+    if manifest_is_qol_tray(&nested_tray) {
         return nested_tray;
+    }
+    let sibling_tray = repo_root.parent().map(|p| p.join("qol-tray"));
+    if let Some(sibling) = sibling_tray {
+        if manifest_is_qol_tray(&sibling) {
+            return sibling;
+        }
     }
 
     let base = paths::repo_root_from_manifest_dir();
@@ -58,6 +64,32 @@ fn resolve_missing_tray_root(repo_root: &Path) -> std::path::PathBuf {
         base.display()
     );
     base
+}
+
+fn manifest_is_qol_tray(dir: &Path) -> bool {
+    let Ok(contents) = std::fs::read_to_string(dir.join("Cargo.toml")) else {
+        return false;
+    };
+    let mut in_package = false;
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_package = trimmed == "[package]";
+            continue;
+        }
+        if !in_package {
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("name") {
+            let name = rest
+                .trim_start()
+                .trim_start_matches('=')
+                .trim()
+                .trim_matches(|c| c == '"' || c == '\'');
+            return name == "qol-tray";
+        }
+    }
+    false
 }
 
 fn start_build<F>(
