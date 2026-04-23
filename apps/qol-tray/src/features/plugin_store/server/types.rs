@@ -246,6 +246,13 @@ pub(super) struct WorktreeInfo {
     pub(super) path: String,
 }
 
+#[cfg(feature = "dev")]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(super) struct ActiveWorktreeResponse {
+    pub(super) branch: Option<String>,
+    pub(super) path: Option<String>,
+}
+
 #[cfg(all(test, feature = "dev"))]
 mod tests {
     use super::RecompileSelfRequest;

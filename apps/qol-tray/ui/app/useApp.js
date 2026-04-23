@@ -15,6 +15,7 @@ import {
     promptImportProfile,
 } from '../views/profile/actions.js';
 import { toast } from '../lib/toast.js';
+import { resolveInitialWorktree } from './worktree-selection.js';
 
 const WT_KEY = 'dev.recompile.defaultWorktree';
 const SYNC_STATUS_POLL_MS = 5000;
@@ -46,15 +47,22 @@ export function useApp({ onDissolve } = {}) {
     }, []);
     useEffect(() => {
         if (!devEnabled) return;
-        fetch('/api/dev/worktrees')
-            .then(r => r.ok ? r.json() : [])
-            .then(nextWorktrees => {
-                setWorktrees(nextWorktrees);
-                const normalized = normalizeDefaultWorktree(defaultWorktreeRef.current, nextWorktrees);
-                if (normalized === defaultWorktreeRef.current) return;
-                setDefaultWorktree(normalized);
-            })
-            .catch(() => {});
+        let cancelled = false;
+        Promise.all([
+            fetch('/api/dev/worktrees').then(r => r.ok ? r.json() : []).catch(() => []),
+            fetch('/api/dev/active-worktree').then(r => r.ok ? r.json() : null).catch(() => null),
+        ]).then(([nextWorktrees, active]) => {
+            if (cancelled) return;
+            setWorktrees(nextWorktrees);
+            const resolved = resolveInitialWorktree({
+                persisted: defaultWorktreeRef.current,
+                serverActive: active?.path ?? null,
+                worktrees: nextWorktrees,
+            });
+            if (resolved === defaultWorktreeRef.current) return;
+            setDefaultWorktree(resolved);
+        });
+        return () => { cancelled = true; };
     }, [devEnabled]);
     const refreshSyncStatus = useCallback(async () => {
         try {
@@ -128,20 +136,6 @@ export function useApp({ onDissolve } = {}) {
         setSyncStatus,
         refreshSyncStatus,
     };
-}
-
-function normalizeDefaultWorktree(current, worktrees) {
-    if (!current) return null;
-    if (worktrees.some(worktree => worktree.path === current)) return current;
-    const resolved = worktrees.find(worktree => parentDir(worktree.path) === current);
-    if (resolved) return resolved.path;
-    return null;
-}
-
-function parentDir(path) {
-    const separator = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
-    if (separator <= 0) return null;
-    return path.slice(0, separator);
 }
 
 async function exportConfig() {
