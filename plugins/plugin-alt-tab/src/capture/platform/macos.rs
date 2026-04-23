@@ -96,13 +96,41 @@ pub fn capture_previews_cg(
     max_w: usize,
     max_h: usize,
 ) -> Vec<(usize, Option<RgbaImage>)> {
-    std::thread::scope(|s| {
+    #[cfg(debug_assertions)]
+    let t_all = std::time::Instant::now();
+    let results: Vec<_> = std::thread::scope(|s| {
         let handles: Vec<_> = targets
             .iter()
-            .map(|&(idx, wid)| s.spawn(move || (idx, cg_capture_window(wid, max_w, max_h))))
+            .map(|&(idx, wid)| {
+                s.spawn(move || {
+                    #[cfg(debug_assertions)]
+                    let t = std::time::Instant::now();
+                    let result = cg_capture_window(wid, max_w, max_h);
+                    #[cfg(debug_assertions)]
+                    {
+                        let ms = t.elapsed().as_millis();
+                        if ms >= 100 {
+                            eprintln!(
+                                "[alt-tab/capture] SLOW cg_capture_window wid={} {}ms ok={}",
+                                wid,
+                                ms,
+                                result.is_some()
+                            );
+                        }
+                    }
+                    (idx, result)
+                })
+            })
             .collect();
         handles.into_iter().filter_map(|h| h.join().ok()).collect()
-    })
+    });
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[alt-tab/capture] capture_previews_cg targets={} total={}ms",
+        targets.len(),
+        t_all.elapsed().as_millis()
+    );
+    results
 }
 
 fn cg_capture_window(wid: u32, max_w: usize, max_h: usize) -> Option<RgbaImage> {

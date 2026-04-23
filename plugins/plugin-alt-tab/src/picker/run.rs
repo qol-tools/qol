@@ -118,22 +118,55 @@ async fn recv_command(
 
 async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     #[cfg(debug_assertions)]
+    let t_total = std::time::Instant::now();
+    #[cfg(debug_assertions)]
     eprintln!("[alt-tab/daemon] received Show (reverse={})", reverse);
+
+    #[cfg(debug_assertions)]
+    let t_config = std::time::Instant::now();
     let config = crate::config::load_alt_tab_config();
+    #[cfg(debug_assertions)]
+    let config_ms = t_config.elapsed().as_millis();
+
     let executor = cx.background_executor().clone();
     let show_minimized = config.display.show_minimized;
+
+    #[cfg(debug_assertions)]
+    let t_query = std::time::Instant::now();
     let windows = executor
         .spawn(async move { Platform.visible_windows(show_minimized).unwrap_or_default() })
         .await;
+    #[cfg(debug_assertions)]
+    let (query_ms, window_count) = (t_query.elapsed().as_millis(), windows.len());
 
+    #[cfg(debug_assertions)]
+    let t_preview = std::time::Instant::now();
     refresh_preview_cache(&executor, &windows, &state.caches.preview_cache).await;
+    #[cfg(debug_assertions)]
+    let preview_ms = t_preview.elapsed().as_millis();
+
+    #[cfg(debug_assertions)]
+    let t_icon = std::time::Instant::now();
     refresh_icon_cache(&executor, &windows, &state.caches.icon_cache).await;
+    #[cfg(debug_assertions)]
+    let icon_ms = t_icon.elapsed().as_millis();
 
     let state_for_update = state.clone();
+    #[cfg(debug_assertions)]
+    let t_update = std::time::Instant::now();
     let _ = cx.update(move |app_cx| {
         apply_show_windows(&state_for_update.caches, windows);
         state_for_update.open_picker(&config, reverse, app_cx);
     });
+    #[cfg(debug_assertions)]
+    {
+        let update_ms = t_update.elapsed().as_millis();
+        let total_ms = t_total.elapsed().as_millis();
+        eprintln!(
+            "[alt-tab/timing] total={}ms config={}ms query={}ms({} windows) preview={}ms icon={}ms update={}ms",
+            total_ms, config_ms, query_ms, window_count, preview_ms, icon_ms, update_ms
+        );
+    }
 }
 
 fn apply_show_windows(caches: &PickerCaches, windows: Vec<WindowInfo>) {

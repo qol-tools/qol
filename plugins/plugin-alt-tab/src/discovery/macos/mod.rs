@@ -4,6 +4,7 @@ use ffi::{
     CGWindowListCopyWindowInfo, K_CG_NULL_WINDOW_ID, K_CG_WINDOW_LAYER_NORMAL,
     K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS, K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
 };
+use std::collections::HashSet;
 use std::ffi::c_void;
 use window_enum::{
     collect_minimized_windows, collect_on_screen_windows, KnownWindowTracker, WindowEnumeration,
@@ -196,16 +197,21 @@ fn discover_live_windows(include_minimized: bool) -> Vec<WindowInfo> {
         K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
     let on_screen = fetch_cg_windows(on_screen_opts, own_pid);
 
+    let (all_windows, pids) = gather_pids_for_ax(&on_screen, own_pid, include_minimized);
+    let mut ax_cache = ax::prefetch_ax_parallel(pids);
+
     let mut state = WindowEnumeration::default();
     let mut tracker = KnownWindowTracker::new();
-    let mut ax_cache = std::collections::HashMap::new();
     collect_on_screen_windows(on_screen, &mut state, &mut tracker, &mut ax_cache);
 
     if !include_minimized {
         tracker.persist();
         return state.windows;
     }
-    let all_windows = fetch_cg_windows(K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS, own_pid);
+    let Some(all_windows) = all_windows else {
+        tracker.persist();
+        return state.windows;
+    };
     if all_windows.is_empty() {
         tracker.persist();
         return state.windows;
@@ -214,4 +220,22 @@ fn discover_live_windows(include_minimized: bool) -> Vec<WindowInfo> {
     collect_minimized_windows(off_screen, &mut state, &mut tracker, &mut ax_cache);
     tracker.persist();
     state.windows
+}
+
+fn gather_pids_for_ax(
+    on_screen: &[CgWindow],
+    own_pid: i32,
+    include_minimized: bool,
+) -> (Option<Vec<CgWindow>>, HashSet<i32>) {
+    let mut pids: HashSet<i32> = on_screen.iter().map(|w| w.pid).collect();
+    if !include_minimized {
+        return (None, pids);
+    }
+    let all_windows = fetch_cg_windows(K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS, own_pid);
+    for w in &all_windows {
+        if !w.is_onscreen {
+            pids.insert(w.pid);
+        }
+    }
+    (Some(all_windows), pids)
 }

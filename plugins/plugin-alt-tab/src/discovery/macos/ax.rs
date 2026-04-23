@@ -3,6 +3,8 @@ use super::ffi::{CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef, CFRelease,
 use super::CgWindow;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
@@ -139,11 +141,95 @@ impl Drop for AxAttrs {
     }
 }
 
-pub(super) fn ax_windows(
-    pid: i32,
-) -> Option<(HashMap<u32, AxWindowMeta>, Vec<AxWindowMeta>, usize)> {
+pub(super) type AxWindowsResult = Option<(HashMap<u32, AxWindowMeta>, Vec<AxWindowMeta>, usize)>;
+
+/// Skip re-querying the same PID within this window. Activity Monitor and other
+/// background helpers can stall for 400ms+ on AXWindows lookups; caching empty/slow
+/// results means repeated Alt+Tab presses don't pay that cost every time.
+const AX_CACHE_TTL: Duration = Duration::from_millis(2000);
+
+struct CachedAxEntry {
+    captured_at: Instant,
+    value: AxWindowsResult,
+}
+
+static AX_WINDOWS_CACHE: OnceLock<Mutex<HashMap<i32, CachedAxEntry>>> = OnceLock::new();
+
+fn ax_windows_cache() -> &'static Mutex<HashMap<i32, CachedAxEntry>> {
+    AX_WINDOWS_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn cached_ax_windows(pid: i32) -> Option<AxWindowsResult> {
+    let cache = ax_windows_cache().lock().ok()?;
+    let entry = cache.get(&pid)?;
+    if entry.captured_at.elapsed() >= AX_CACHE_TTL {
+        return None;
+    }
+    Some(entry.value.clone())
+}
+
+fn remember_ax_windows(pid: i32, value: &AxWindowsResult) {
+    let Ok(mut cache) = ax_windows_cache().lock() else {
+        return;
+    };
+    cache.insert(
+        pid,
+        CachedAxEntry {
+            captured_at: Instant::now(),
+            value: value.clone(),
+        },
+    );
+}
+
+pub(super) fn ax_windows(pid: i32) -> AxWindowsResult {
+    if let Some(cached) = cached_ax_windows(pid) {
+        #[cfg(debug_assertions)]
+        eprintln!("[alt-tab/ax] cache hit pid={}", pid);
+        return cached;
+    }
+    let computed = ax_windows_compute(pid);
+    remember_ax_windows(pid, &computed);
+    computed
+}
+
+/// Run `ax_windows` for every PID concurrently. One hung process no longer serializes
+/// with the rest — total wall time collapses from `sum(per-pid)` to `max(per-pid)`.
+pub(super) fn prefetch_ax_parallel(pids: HashSet<i32>) -> HashMap<i32, AxWindowsResult> {
+    #[cfg(debug_assertions)]
+    let t = Instant::now();
+    #[cfg(debug_assertions)]
+    let pid_count = pids.len();
+    let result: HashMap<i32, AxWindowsResult> = std::thread::scope(|s| {
+        let handles: Vec<_> = pids
+            .into_iter()
+            .map(|pid| s.spawn(move || (pid, ax_windows(pid))))
+            .collect();
+        handles.into_iter().filter_map(|h| h.join().ok()).collect()
+    });
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[alt-tab/ax] prefetch_ax_parallel pids={} {}ms",
+        pid_count,
+        t.elapsed().as_millis()
+    );
+    result
+}
+
+fn ax_windows_compute(pid: i32) -> AxWindowsResult {
+    #[cfg(debug_assertions)]
+    let t_open = std::time::Instant::now();
     let wins_val = unsafe { ax_open_window_list(pid) };
     if wins_val.is_null() {
+        #[cfg(debug_assertions)]
+        {
+            let open_ms = t_open.elapsed().as_millis();
+            if open_ms >= 50 {
+                eprintln!(
+                    "[alt-tab/ax] SLOW ax_open_window_list pid={} {}ms (null result)",
+                    pid, open_ms
+                );
+            }
+        }
         return None;
     }
     let attrs = AxAttrs::new();
@@ -154,9 +240,22 @@ pub(super) fn ax_windows(
         pid, count
     );
 
+    #[cfg(debug_assertions)]
+    let t_collect = std::time::Instant::now();
     let (id_map, all_meta, accepted) = collect_ax_window_meta(wins_val, count, &attrs);
     unsafe { CFRelease(wins_val) };
     drop(attrs);
+    #[cfg(debug_assertions)]
+    {
+        let open_ms = t_open.elapsed().as_millis();
+        let collect_ms = t_collect.elapsed().as_millis();
+        if open_ms >= 100 {
+            eprintln!(
+                "[alt-tab/ax] SLOW ax_windows pid={} total={}ms collect={}ms count={}",
+                pid, open_ms, collect_ms, count
+            );
+        }
+    }
     #[cfg(debug_assertions)]
     eprintln!(
         "[alt-tab/ax] ax_windows pid={} id_map={} all_meta={} accepted={}",
