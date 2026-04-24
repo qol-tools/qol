@@ -254,11 +254,13 @@ async fn refresh_preview_cache(
     use crate::shared::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
     use crate::shared::preview::bgra_to_render_image;
 
-    let cached_ids = cached_preview_ids(preview_cache);
+    // Re-capture every visible window on each show. Caching by id produced stale thumbnails
+    // that never updated once a window's visuals changed after first boot. `HashMap::extend`
+    // overwrites existing keys, so failed/minimized windows fall back to the prior frame.
     let targets: Vec<(usize, u32)> = windows
         .iter()
         .enumerate()
-        .filter(|(_, w)| !w.is_minimized && !cached_ids.contains(&w.id))
+        .filter(|(_, w)| !w.is_minimized)
         .map(|(i, w)| (i, w.id))
         .collect();
     if targets.is_empty() {
@@ -287,14 +289,6 @@ async fn refresh_preview_cache(
         return;
     };
     cache.extend(new_previews);
-}
-
-fn cached_preview_ids(preview_cache: &SharedPreviewCache) -> HashSet<u32> {
-    preview_cache
-        .lock()
-        .ok()
-        .map(|c| c.keys().copied().collect())
-        .unwrap_or_default()
 }
 
 fn shutdown_daemon(cx: &AsyncApp) {
