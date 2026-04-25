@@ -1,4 +1,4 @@
-import { useCallback } from 'preact/hooks';
+import { useCallback, useRef } from 'preact/hooks';
 import { useStateRef } from '../../lib/hooks/useStateRef.js';
 import { useGridNav } from '../../lib/hooks/useGridNav.js';
 import { updateInstalledPlugin } from './data.js';
@@ -54,9 +54,16 @@ export function usePluginActions(list, modal, onOpenPluginConfig) {
         const card = document.querySelector(`#plugins-grid [data-plugin-id="${CSS.escape(plugin.id)}"]`);
         if (card instanceof HTMLElement) card.focus({ preventScroll: true });
     }, []);
-    const isBlocking = useCallback(
-        () => modal.contextMenuOpenRef.current,
-        []
-    );
-    return { updating, updatePlugin, openSelected, openConfig, navigateInGrid, focusSelectedCard, isBlocking };
+    const apiRef = useRef(null);
+    const openActionsMenu = useCallback((pluginId) => {
+        const plugin = pluginId
+            ? list.pluginsRef.current?.find(p => p.id === pluginId)
+            : list.pluginsRef.current?.[list.selectedIndexRef.current];
+        if (!plugin) return;
+        modal.triggerActionsMenu(plugin.id, apiRef.current);
+    }, [modal.triggerActionsMenu]);
+    const isBlocking = useCallback(() => false, []);
+    const api = { updating, updatePlugin, openSelected, openConfig, navigateInGrid, focusSelectedCard, openActionsMenu, isBlocking };
+    apiRef.current = api;
+    return api;
 }

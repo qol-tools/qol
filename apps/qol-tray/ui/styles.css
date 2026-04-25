@@ -6,6 +6,7 @@
 @import "./styles/log-filters.css";
 @import "./styles/uninstall-confirm.css";
 @import "./styles/test-runner.css";
+@import "./styles/plugin-actions.css";
 @import "./styles/plugin-config.css";
 @import "./styles/logs.css";
 @import "./styles/profile.css";

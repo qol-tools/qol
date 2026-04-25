@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { pluginContextMenuItems, dispatchPluginContextAction } from './plugin-context-menu-items.js';
+import { pluginContextMenuItems, dispatchPluginContextAction, bindPluginContextMenuItems } from './plugin-context-menu-items.js';
 
 // ---------------------------------------------------------------------------
 // Exact-output table: every combination of capability flags is an observable
@@ -166,5 +166,58 @@ test('dispatch: every visible menu item has a matching dispatch entry', () => {
             true,
             `menu item "${item.id}" has no handler`,
         );
+    }
+});
+
+// ---------------------------------------------------------------------------
+// bindPluginContextMenuItems: the same visibility rules as
+// pluginContextMenuItems, but each item carries a bound `run` that closes
+// over the ctx and the plugin id. This is what the plugin-actions subpage
+// renders; the binding must not require the caller to know action ids.
+// ---------------------------------------------------------------------------
+
+test('bind: null plugin yields empty list', () => {
+    const { ctx } = makeCtx();
+    assert.deepEqual(bindPluginContextMenuItems(null, ctx), []);
+});
+
+test('bind: plugin with no capabilities exposes only Delete', () => {
+    const { ctx } = makeCtx();
+    const items = bindPluginContextMenuItems({ id: 'foo' }, ctx);
+    assert.deepEqual(items.map(i => i.id), ['delete']);
+});
+
+test('bind: items carry id, label, and a callable run', () => {
+    const { ctx } = makeCtx();
+    const plugin = { id: 'foo', update_available: true, has_config: true };
+    const items = bindPluginContextMenuItems(plugin, ctx);
+    assert.equal(items.length, 3);
+    for (const item of items) {
+        assert.equal(typeof item.id, 'string');
+        assert.equal(typeof item.label, 'string');
+        assert.equal(typeof item.run, 'function');
+    }
+});
+
+test('bind: running an item dispatches the matching handler with the plugin id', () => {
+    const { ctx, calls } = makeCtx();
+    const plugin = { id: 'plugin-z', update_available: true, has_config: true };
+    const items = bindPluginContextMenuItems(plugin, ctx);
+    const byId = Object.fromEntries(items.map(i => [i.id, i]));
+    byId.update.run();
+    assert.deepEqual(calls, [['updatePlugin', 'plugin-z'], ['focusSelectedCard']]);
+});
+
+test('bind: the same visibility rules as the unbound list', () => {
+    const cases = [
+        { plugin: {}, expected: ['delete'] },
+        { plugin: { has_config: true }, expected: ['config', 'delete'] },
+        { plugin: { update_available: true }, expected: ['update', 'delete'] },
+        { plugin: { update_available: true, has_config: true }, expected: ['update', 'config', 'delete'] },
+    ];
+    const { ctx } = makeCtx();
+    for (const c of cases) {
+        const ids = bindPluginContextMenuItems({ id: 'foo', ...c.plugin }, ctx).map(i => i.id);
+        assert.deepEqual(ids, c.expected, `plugin: ${JSON.stringify(c.plugin)}`);
     }
 });

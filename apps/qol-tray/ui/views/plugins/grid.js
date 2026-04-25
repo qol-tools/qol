@@ -1,12 +1,8 @@
 import { html } from '../../lib/html.js';
-import { useLayoutEffect, useRef } from 'preact/hooks';
 import { Card, CardGrid } from '../../lib/components/Card.js';
-import { Surface } from '../../lib/components/Surface.js';
-import { pluginContextMenuItems } from '../../lib/plugin-context-menu-items.js';
 import { useModifierState } from '../../lib/hooks/modifier-state-context.js';
 
 const brokenCovers = new Set();
-const CONTEXT_MENU_PRIORITY = 20;
 
 const PLACEHOLDER_SVG = 'data:image/svg+xml,' + encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">' +
@@ -15,7 +11,7 @@ const PLACEHOLDER_SVG = 'data:image/svg+xml,' + encodeURIComponent(
     '</svg>'
 );
 
-export function PluginsGrid({ plugins, ghostPlugins, selectedIndex, contextMenuOpen, updating, onCardClick, onSelect, onToggleMenu, onContextAction }) {
+export function PluginsGrid({ plugins, ghostPlugins, selectedIndex, updating, onCardClick, onSelect, onToggleMenu }) {
     return html`
         <${CardGrid} id="plugins-grid" className="plugin-grid-media grid-cards--zoom">
             ${plugins.length === 0 && ghostPlugins.length === 0 && html`
@@ -30,19 +26,18 @@ export function PluginsGrid({ plugins, ghostPlugins, selectedIndex, contextMenuO
             ${plugins.map((plugin, index) => html`
                 <${PluginCard} key=${plugin.id} plugin=${plugin} index=${index}
                     selected=${index === selectedIndex}
-                    contextMenuOpen=${contextMenuOpen && index === selectedIndex}
                     updating=${updating} onCardClick=${onCardClick} onSelect=${onSelect}
-                    onToggleMenu=${onToggleMenu} onContextAction=${onContextAction} />
+                    onToggleMenu=${onToggleMenu} />
             `)}
         <//>
     `;
 }
 
-function PluginCard({ plugin, index, selected, contextMenuOpen, updating, onCardClick, onSelect, onToggleMenu, onContextAction }) {
+function PluginCard({ plugin, index, selected, updating, onCardClick, onSelect, onToggleMenu }) {
     const cls = cardClassName(plugin);
     const chip = pluginStatusChip(plugin);
     const { shiftHeld } = useModifierState();
-    const showShiftHint = selected && shiftHeld && !contextMenuOpen;
+    const showShiftHint = selected && shiftHeld;
     const handleCogClick = (e) => {
         e.stopPropagation();
         onToggleMenu(index);
@@ -63,31 +58,7 @@ function PluginCard({ plugin, index, selected, contextMenuOpen, updating, onCard
             ${plugin.update_available && html`<${PluginUpdateButton} plugin=${plugin} updating=${updating} />`}
             <${PluginCogButton} onClick=${handleCogClick} />
             ${showShiftHint && html`<div class="plugin-shift-overlay">Menu</div>`}
-            ${contextMenuOpen && html`
-                <${PluginContextMenu} plugin=${plugin} onContextAction=${onContextAction} />
-            `}
         <//>
-    `;
-}
-
-function PluginContextMenu({ plugin, onContextAction }) {
-    const items = pluginContextMenuItems(plugin);
-    const ref = useRef(null);
-    useLayoutEffect(() => {
-        const first = ref.current?.querySelector('[data-selected-surface]');
-        if (first instanceof HTMLElement) first.focus({ preventScroll: true });
-    }, []);
-    return html`
-        <div ref=${ref} class="plugin-context-menu open" data-surface-container="">
-            ${items.map(item => html`
-                <${Surface} key=${item.id} as="button" className=${item.className}
-                    selected=${false}
-                    data-selected-surface-priority=${CONTEXT_MENU_PRIORITY}
-                    onActivate=${(e) => { e.stopPropagation(); onContextAction(item.id, plugin.id); }}>
-                    ${item.label}
-                <//>
-            `)}
-        </div>
     `;
 }
 
