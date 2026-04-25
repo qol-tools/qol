@@ -337,3 +337,50 @@ fn checkbox_defaults_to_unchecked() {
         _ => panic!("Expected Checkbox"),
     }
 }
+
+const TRAITS_MANIFEST_HEAD: &str = r#"
+[plugin]
+name = "Traits Plugin"
+description = ""
+version = "0.0.0"
+
+[menu]
+label = "Traits"
+items = []
+"#;
+
+#[test]
+fn parse_manifest_without_traits_yields_none() {
+    let manifest: PluginManifest = toml::from_str(TRAITS_MANIFEST_HEAD).unwrap();
+    assert!(manifest.traits.is_none());
+}
+
+#[test]
+fn parse_manifest_traits_preserves_kebab_and_snake_keys() {
+    let toml = format!(
+        r#"{TRAITS_MANIFEST_HEAD}
+[traits]
+confined = {{}}
+
+[traits.peripheral-preview]
+neighbors = 2
+
+[traits.atmosphere]
+preset = "spacecraft"
+
+[traits.future_trait]
+value = 1
+"#
+    );
+    let manifest: PluginManifest = toml::from_str(&toml).unwrap();
+    let traits = manifest.traits.expect("traits should parse");
+    assert_eq!(
+        traits,
+        serde_json::json!({
+            "confined": {},
+            "peripheral-preview": { "neighbors": 2 },
+            "atmosphere": { "preset": "spacecraft" },
+            "future_trait": { "value": 1 },
+        })
+    );
+}

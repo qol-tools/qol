@@ -3,13 +3,15 @@ import { useRef } from 'preact/hooks';
 
 const INTERACTIVE_DESCENDANT = 'input, textarea, select, button, a, label, [contenteditable="true"]';
 
-export function useSurface({ index, selected, onSelect, onActivate, selectValue } = {}) {
+export function useSurface({ index, selected, onSelect, onActivate, selectValue, priority, motion } = {}) {
     const focusValue = selectValue !== undefined ? selectValue : index;
     return {
         attrs: {
             'data-selected-surface': '',
             'data-selected': selected != null ? (selected ? 'true' : 'false') : undefined,
             'data-index': index != null ? String(index) : undefined,
+            'data-selected-surface-priority': priority != null ? String(priority) : undefined,
+            'data-selected-surface-motion': motion || undefined,
             tabIndex: -1,
             onFocus: onSelect ? () => onSelect(focusValue) : undefined,
             onClick: onActivate ? (e) => {

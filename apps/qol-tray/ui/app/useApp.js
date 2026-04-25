@@ -7,7 +7,7 @@ import { useAppBootstrap } from './useAppBootstrap.js';
 import { useAppUpdateCoordinator } from './useAppUpdateCoordinator.js';
 import { useMountedViews } from './useMountedViews.js';
 import { useSidebarActions } from './useSidebarActions.js';
-import { buildViewOrder, VIEW_LABELS } from './views.js';
+import { buildViewOrder, getViewLabel } from './views.js';
 import {
     exportProfile,
     fetchSyncProviders,
@@ -27,7 +27,7 @@ function readDefaultWorktree() {
 export function useApp({ onDissolve } = {}) {
     const { devEnabled, appVersion } = useAppBootstrap();
     const viewOrder = useMemo(() => buildViewOrder(devEnabled), [devEnabled]);
-    const { activeViewId, activePluginId, activePluginMode, switchView, openPluginConfig, openPluginUi, closePluginConfig } = useRouter({ viewOrder });
+    const { activeViewId, activePluginId, switchView, openPluginConfig, closePluginConfig } = useRouter({ viewOrder });
     const mounted = useMountedViews(activeViewId);
     const { updateState, checkForUpdate, beginSelfUpdate, failSelfUpdate, beginDevRecompile, failDevRecompile } = useAppUpdateCoordinator({ devEnabled, appVersion, onDissolve });
     const [worktrees, setWorktrees] = useState([]);
@@ -107,7 +107,7 @@ export function useApp({ onDissolve } = {}) {
     const globalCommands = useMemo(() => [
         ...viewOrder.map(id => ({
             id: `nav:${id}`,
-            label: `Go to ${VIEW_LABELS[id] || id}`,
+            label: `Go to ${getViewLabel(id).text}`,
             run: () => switchView(id)
         })),
         { id: 'config:export', label: 'Export configuration', run: exportConfig },
@@ -121,10 +121,8 @@ export function useApp({ onDissolve } = {}) {
         viewOrder,
         activeViewId,
         activePluginId,
-        activePluginMode,
         switchView,
         openPluginConfig,
-        openPluginUi,
         closePluginConfig,
         mounted,
         updateState,

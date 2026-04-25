@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
 import { useDispatchAction } from '../../../lib/hooks/useDispatchAction.js';
 import { fieldSurfaceAttrs } from '../field-map.js';
+import { useSurface } from '../../../lib/components/Surface.js';
 import { hueComponents, hueSatToHex, hexToHueSat } from './color-math.js';
 import { openColorStream, closeColorStream, streamColorHex } from './color-stream.js';
 
@@ -197,6 +198,7 @@ export function ColorField({ field }) {
     const thumbDist = sat * DISC_RADIUS;
     const thumbX = center + thumbDist * Math.cos(thumbAngle);
     const thumbY = center + thumbDist * Math.sin(thumbAngle);
+    const { attrs: thumbAttrs } = useSurface({ selected: thumbActive, priority: 10 });
 
     return html`
         <div ref=${outerRef} ...${fieldSurfaceAttrs(field, ctx, `field-group field-color${gated ? ' field-gated' : ''}`)}
@@ -211,9 +213,7 @@ export function ColorField({ field }) {
                         onPointerCancel=${gated ? undefined : onDiscUp}
                         style=${gated ? 'pointer-events:none;opacity:0.4' : ''} />
                     <div ref=${thumbRef} class="color-thumb-target" data-color-thumb=""
-                        data-selected-surface="" data-selected=${thumbActive ? 'true' : 'false'}
-                        data-selected-surface-priority="10"
-                        tabIndex="-1"
+                        ...${thumbAttrs}
                         onFocus=${onThumbFocus} onBlur=${onThumbBlur}
                         style="left:${thumbX}px;top:${thumbY}px" />
                 </div>

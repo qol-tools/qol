@@ -2,7 +2,7 @@ import { useCallback, useMemo } from 'preact/hooks';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { GLOBAL_ID } from '../palette/registry.js';
 import { useKeyboard } from '../lib/hooks/useKeyboard.js';
-import { VIEW_LABELS } from './views.js';
+import { getViewLabel } from './views.js';
 
 export function useWorldNav({ camera, registry, viewportRef }) {
     const getViewportSize = useCallback(() => {
@@ -30,7 +30,7 @@ export function useWorldNav({ camera, registry, viewportRef }) {
     const commands = useMemo(() => {
         const cmds = registry.getEntriesForLayer(0).map(e => ({
             id: `world:jump:${e.id}`,
-            label: `Go to ${VIEW_LABELS[e.id] || e.id}`,
+            label: `Go to ${getViewLabel(e.id).text}`,
             run: () => jumpToView(e.id),
         }));
         cmds.push({ id: 'world:fit-all', label: 'Fit all views', run: fitAll });

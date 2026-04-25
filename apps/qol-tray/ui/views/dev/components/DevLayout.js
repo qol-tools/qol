@@ -50,7 +50,7 @@ export function DevLayout({ ctrl, containerRef }) {
     useRegisterViewKeyboard('dev', handleKey);
 
     return html`
-        <${ViewTabs} title="Developer Control" scramble=${true}
+        <${ViewTabs}
             tabs=${TABS} vtRef=${vtRef} className="dev-view-shell" containerRef=${containerRef}
             initialTab=${activeTab} onActivate=${onTabActivate} onContentBlur=${onContentBlur}>
             ${(vt) => html`

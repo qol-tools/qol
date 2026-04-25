@@ -220,7 +220,11 @@ body {
 }
 
 .plugin-config-detail > .config-detail-content {
-    margin: auto 0;
+    /* Top-align content inside the page so the Labels/Behavior/Layout headers
+     * all start at the same screen-Y regardless of how many fields the section
+     * has. `margin: auto 0` vertically centered short content, which made
+     * cycling between sections feel nauseating. */
+    margin: 0;
     width: 100%;
     max-width: 720px;
 }

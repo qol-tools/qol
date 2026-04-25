@@ -144,6 +144,39 @@ pub(crate) fn load_combined_contracts(
     load_combined_contracts_from_root(&plugin_root)
 }
 
+/// Default traits served when a plugin manifest does not declare any.
+/// Matches the frontend fallback in `ui/components/App.js`.
+pub(crate) fn default_plugin_traits() -> serde_json::Value {
+    serde_json::json!({ "confined": {} })
+}
+
+pub(crate) fn load_plugin_traits_from_root(plugin_root: &std::path::Path) -> serde_json::Value {
+    read_manifest_traits(plugin_root).unwrap_or_else(default_plugin_traits)
+}
+
+pub(crate) fn load_plugin_traits(plugin_id: &str) -> serde_json::Value {
+    let plugin_root = match plugin_paths::resolve_plugin_root(plugin_id) {
+        Ok(root) => root,
+        Err(_) => return default_plugin_traits(),
+    };
+    load_plugin_traits_from_root(&plugin_root)
+}
+
+fn read_manifest_traits(plugin_root: &std::path::Path) -> Option<serde_json::Value> {
+    #[derive(serde::Deserialize)]
+    struct TraitsOnly {
+        traits: Option<serde_json::Value>,
+    }
+    let manifest_path = plugin_root.join("plugin.toml");
+    let content = std::fs::read_to_string(&manifest_path).ok()?;
+    let parsed: TraitsOnly = toml::from_str(&content).ok()?;
+    let traits = parsed.traits?;
+    if !traits.is_object() {
+        return None;
+    }
+    Some(traits)
+}
+
 pub(crate) fn validate_config_value(
     spec: &qol_config::contract::ConfigSpec,
     config: &serde_json::Value,

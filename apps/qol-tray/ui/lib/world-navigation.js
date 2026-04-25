@@ -1,6 +1,6 @@
 import { createDebug } from './debug.js';
 import { getWorldSettings } from './world-settings.js';
-import { cameraCenterFor } from './world-geometry.js';
+import { cameraTargetFor, paddedWorldBounds } from './world-geometry.js';
 
 const log = createDebug('qol:nav-state');
 
@@ -57,7 +57,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers, gr
     let currentTraits = {};
     let currentSourceSelector = null;
     if (currentConfinement && typeof camera.setBounds === 'function') {
-        camera.setBounds(currentConfinement);
+        applyConfinementBounds();
     }
     if (persisted?.zoom && typeof camera.zoomTo === 'function') {
         camera.zoomTo(persisted.zoom);
@@ -82,7 +82,18 @@ export function createNavigation({ registry, camera, getSettings, domHelpers, gr
     }
 
     function setBounds(rect) {
-        if (typeof camera.setBounds === 'function') camera.setBounds(rect);
+        if (typeof camera.setBounds !== 'function') return;
+        if (!rect) { camera.setBounds(null); return; }
+        // Pad at a fixed baseline zoom of 1 rather than current zoom. Padding
+        // by the current zoom shrinks as the user zooms in, which tightens
+        // bounds and raises the bounds-driven minZoom floor — trapping zoom
+        // at the zoomed-in state and making it impossible to escape back out.
+        const vp = domHelpers.getViewportSize ? domHelpers.getViewportSize() : { w: 0, h: 0 };
+        camera.setBounds(paddedWorldBounds(rect, vp, 1));
+    }
+
+    function applyConfinementBounds() {
+        setBounds(currentConfinement);
     }
 
     function getCurrentAnchor() {
@@ -133,7 +144,7 @@ export function createNavigation({ registry, camera, getSettings, domHelpers, gr
         }
         const { w, h } = domHelpers.getViewportSize();
         const z = resetZoom ?? camera.zoom ?? 1;
-        const { x: targetX, y: targetY } = cameraCenterFor(entry, w, h, z);
+        const { x: targetX, y: targetY } = cameraTargetFor(entry, w, h, z);
         if (entry.layer !== camera.layer) camera.setLayer(entry.layer);
         const pageId = anchor.pageId;
         const focusAfterPan = () => {

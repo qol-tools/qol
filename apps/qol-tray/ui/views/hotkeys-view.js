@@ -68,7 +68,7 @@ export function HotkeysView() {
 
     return html`
         <div class="view-container content-shell">
-            <${PageHeader} title="Hotkeys" subtitle="Configure global keyboard shortcuts for plugin actions" />
+            <${PageHeader} subtitle="Configure global keyboard shortcuts for plugin actions" />
             ${hk.registrationErrors.length > 0 && html`<${RegistrationWarnings} errors=${hk.registrationErrors} />`}
             <div class="view-body content-shell-body">
                 <div class="content-shell-inner">

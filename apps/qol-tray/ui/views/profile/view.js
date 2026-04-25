@@ -51,7 +51,7 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
 
     return html`
         <div id="profile-page" class="view-container content-shell profile-view-shell">
-            <${PageHeader} title="Profile" subtitle="Cloud sync, import and export, and recovery for your QoL Tray setup" />
+            <${PageHeader} subtitle="Cloud sync, import and export, and recovery for your QoL Tray setup" />
             <div class="view-body content-shell-body">
                 <div class="content-shell-inner">
                     <div class="profile-page-stack">

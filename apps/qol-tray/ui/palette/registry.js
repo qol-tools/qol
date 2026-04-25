@@ -1,18 +1,45 @@
 const GLOBAL_ID = '__global__';
 const registry = new Map();
+const listeners = new Set();
+let version = 0;
 
-export function registerCommands(viewId, commands) {
-    registry.set(viewId, commands);
+function bump() {
+    version += 1;
+    for (const fn of listeners) fn(version);
 }
 
-export function unregisterCommands(viewId) {
-    registry.delete(viewId);
+export function registerCommands(viewId, scope, commands) {
+    let bucket = registry.get(viewId);
+    if (!bucket) { bucket = new Map(); registry.set(viewId, bucket); }
+    bucket.set(scope, commands);
+    bump();
+}
+
+export function unregisterCommands(viewId, scope) {
+    const bucket = registry.get(viewId);
+    if (!bucket) return;
+    bucket.delete(scope);
+    if (bucket.size === 0) registry.delete(viewId);
+    bump();
+}
+
+function bucketCommands(viewId) {
+    const bucket = registry.get(viewId);
+    if (!bucket) return [];
+    return [...bucket.values()].flat();
 }
 
 export function getCommands(activeViewId) {
-    const contextual = registry.get(activeViewId) || [];
-    const global = registry.get(GLOBAL_ID) || [];
-    return [...contextual, ...global];
+    return [...bucketCommands(activeViewId), ...bucketCommands(GLOBAL_ID)];
+}
+
+export function subscribeRegistry(fn) {
+    listeners.add(fn);
+    return () => listeners.delete(fn);
+}
+
+export function getRegistryVersion() {
+    return version;
 }
 
 export { GLOBAL_ID };

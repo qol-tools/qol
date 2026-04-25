@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
 import { useDispatchAction } from '../../../lib/hooks/useDispatchAction.js';
 import { fieldSurfaceAttrs } from '../field-map.js';
+import { useSurface } from '../../../lib/components/Surface.js';
 import { openColorStream, closeColorStream, streamBrightness } from './color-stream.js';
 
 const DEFAULT_MIN = 0;
@@ -153,6 +154,7 @@ export function SliderField({ field }) {
     const gated = ctx.isRuntimeDisabled && field.stream;
     const thumbLeft = pct(value, min, max);
     const unit = field.unit || '';
+    const { attrs: thumbAttrs } = useSurface({ selected: active, priority: 10 });
 
     return html`
         <div ...${fieldSurfaceAttrs(field, ctx, `field-group field-slider${gated ? ' field-gated' : ''}`)}
@@ -169,9 +171,7 @@ export function SliderField({ field }) {
                 <div class="slider-fill" style="width:${thumbLeft}%"></div>
                 <div class="slider-thumb" style="left:${thumbLeft}%;${gated ? 'opacity:0.4' : ''}"></div>
                 <div ref=${thumbTargetRef} class="slider-thumb-target" data-slider-thumb=""
-                    data-selected-surface="" data-selected=${active ? 'true' : 'false'}
-                    data-selected-surface-priority="10"
-                    tabIndex="-1"
+                    ...${thumbAttrs}
                     onFocus=${onThumbFocus} onBlur=${onThumbBlur}
                     style="left:${thumbLeft}%"></div>
             </div>

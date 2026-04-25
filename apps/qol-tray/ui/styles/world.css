@@ -51,7 +51,6 @@ html.qol-bootstrapping-dive #app {
 
 .world-view-slot .view-container,
 .world-view-slot .plugin-config-detail,
-.world-view-slot .plugin-ui-container,
 .world-view-slot .plugin-config-loading {
     flex: 1;
     min-height: 0;
@@ -435,15 +434,33 @@ html.qol-bootstrapping-dive #app {
     animation: layer-fade-in ease-out;
 }
 
+/* Overlay layer sits above #world but inside .app-container so labels don't
+ * scale with the world transform — keeps title size consistent at any zoom. */
+.world-region-label-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: hidden;
+    z-index: 5;
+}
+
 .world-region-label {
     position: absolute;
     font-size: 42px;
     font-weight: 700;
-    color: rgba(255, 255, 255, 0.04);
+    color: var(--text-primary);
     letter-spacing: 2px;
     pointer-events: none;
     user-select: none;
     white-space: nowrap;
+    /* Clip to the page's on-screen width (set inline as max-width) so labels
+     * don't overlap neighbours when the world is zoomed out. */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    /* top/left are the page's top-left on screen. Shift the label up by its
+     * own height via translateY(-100%) so the bottom of the text sits
+     * LABEL_GAP_PX above the page top rather than crashing into it. */
+    transform: translateY(-100%);
 }
 
 @property --hide {

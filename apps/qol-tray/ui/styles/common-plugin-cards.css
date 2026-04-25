@@ -234,6 +234,24 @@
     overflow: visible;
 }
 
+.plugin-shift-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(2px);
+    border-radius: inherit;
+    color: var(--accent);
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-semibold);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    z-index: var(--z-control);
+    pointer-events: none;
+}
+
 .context-update,
 .context-delete {
     display: block;
@@ -311,28 +329,6 @@
 .plugin-grid .plugin-card.has-update[data-selected="true"] {
     border-color: var(--success);
     box-shadow: 0 0 12px var(--success-glow);
-}
-
-.plugin-ctrl-overlay {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(2px);
-    border-radius: inherit;
-    color: var(--accent);
-    font-size: var(--fs-lg);
-    font-weight: var(--fw-semibold);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    z-index: var(--z-popover);
-    pointer-events: none;
-}
-
-.plugin-ctrl-overlay.disabled {
-    color: var(--text-disabled);
 }
 
 .context-config {

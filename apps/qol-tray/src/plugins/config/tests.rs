@@ -297,3 +297,102 @@ default = true
     assert_eq!(config.fields.len(), 1);
     assert!(runtime.is_none(), "runtime should be None when not present");
 }
+
+const MANIFEST_HEAD: &str = r#"
+manifest_version = 2
+
+[plugin]
+name = "Traits Test"
+description = "Traits serialization test"
+version = "0.0.0"
+
+[menu]
+label = "Traits"
+items = []
+"#;
+
+#[test]
+fn load_plugin_traits_defaults_when_manifest_missing() {
+    let tmp = TempDir::new().unwrap();
+    let traits = load_plugin_traits_from_root(tmp.path());
+    assert_eq!(traits, serde_json::json!({ "confined": {} }));
+}
+
+#[test]
+fn load_plugin_traits_defaults_when_manifest_has_no_traits_table() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(tmp.path().join("plugin.toml"), MANIFEST_HEAD).unwrap();
+    let traits = load_plugin_traits_from_root(tmp.path());
+    assert_eq!(traits, serde_json::json!({ "confined": {} }));
+}
+
+#[test]
+fn load_plugin_traits_passes_through_manifest_table_verbatim() {
+    let tmp = TempDir::new().unwrap();
+    let manifest = format!(
+        r#"{MANIFEST_HEAD}
+[traits]
+confined = {{}}
+
+[traits.peripheral-preview]
+neighbors = 1
+
+[traits.atmosphere]
+preset = "wood"
+"#
+    );
+    fs::write(tmp.path().join("plugin.toml"), manifest).unwrap();
+
+    let traits = load_plugin_traits_from_root(tmp.path());
+
+    assert_eq!(
+        traits,
+        serde_json::json!({
+            "confined": {},
+            "peripheral-preview": { "neighbors": 1 },
+            "atmosphere": { "preset": "wood" },
+        })
+    );
+}
+
+#[test]
+fn load_plugin_traits_tolerates_unknown_keys() {
+    let tmp = TempDir::new().unwrap();
+    let manifest = format!(
+        r#"{MANIFEST_HEAD}
+[traits.future_trait]
+tunable = 42
+kind = "experimental"
+"#
+    );
+    fs::write(tmp.path().join("plugin.toml"), manifest).unwrap();
+
+    let traits = load_plugin_traits_from_root(tmp.path());
+
+    assert_eq!(
+        traits,
+        serde_json::json!({
+            "future_trait": { "tunable": 42, "kind": "experimental" },
+        })
+    );
+}
+
+#[test]
+fn load_plugin_traits_falls_back_on_non_object_traits_value() {
+    let tmp = TempDir::new().unwrap();
+    let cases = [
+        (r#"traits = 7"#, "scalar integer"),
+        (r#"traits = "hi""#, "scalar string"),
+        (r#"traits = [1, 2]"#, "array"),
+    ];
+    for (fragment, label) in cases {
+        let manifest = format!("{MANIFEST_HEAD}\n{fragment}\n");
+        fs::write(tmp.path().join("plugin.toml"), manifest).unwrap();
+        let traits = load_plugin_traits_from_root(tmp.path());
+        assert_eq!(
+            traits,
+            serde_json::json!({ "confined": {} }),
+            "case: {label}"
+        );
+    }
+}
