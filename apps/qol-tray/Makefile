@@ -1,4 +1,11 @@
-.PHONY: build release run dev test check lint lint-fix fmt fmt-check icons clean install
+.PHONY: build release run dev dev-sync sync test check lint lint-fix fmt fmt-check icons clean install
+
+WORKSPACE_BIN := $(abspath ..)/workspace/bin
+
+sync:
+	@$(WORKSPACE_BIN)/pull-qol-plugins
+
+dev-sync: sync dev
 
 build: lint
 	cargo build
