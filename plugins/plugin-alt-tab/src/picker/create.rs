@@ -2,6 +2,7 @@ use super::GatheredWindows;
 use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::config::{ActionMode, AltTabConfig, LabelConfig};
 use crate::discovery::WindowInfo;
+use crate::picker::run::SharedPreviewCache;
 use crate::shared::layout::*;
 use crate::{IconMap, PickerWindowState, PreviewMap, SharedIconCache};
 use gpui::*;
@@ -16,6 +17,7 @@ pub(super) struct CreateRequest<'a> {
     pub placement: PopupPlacement,
     pub last_window_count: Arc<AtomicUsize>,
     pub icon_cache: SharedIconCache,
+    pub preview_cache: SharedPreviewCache,
     pub current: &'a PickerWindowState,
 }
 
@@ -28,7 +30,12 @@ pub(super) fn create_new(req: &CreateRequest, gathered: GatheredWindows, cx: &mu
     };
     let target = req.placement.target();
     req.current.borrow_mut().insert(target, handle);
-    post.finalize(handle, req.icon_cache.clone(), cx);
+    post.finalize(
+        handle,
+        req.icon_cache.clone(),
+        req.preview_cache.clone(),
+        cx,
+    );
 }
 
 struct CreateLayout {
@@ -198,7 +205,13 @@ impl PostCreateData {
         }
     }
 
-    fn finalize(self, handle: WindowHandle<AltTabApp>, icon_cache: SharedIconCache, cx: &mut App) {
+    fn finalize(
+        self,
+        handle: WindowHandle<AltTabApp>,
+        icon_cache: SharedIconCache,
+        preview_cache: SharedPreviewCache,
+        cx: &mut App,
+    ) {
         PICKER_VISIBLE.store(true, Ordering::Relaxed);
         cx.activate(true);
         if self.transparent_bg {
@@ -209,10 +222,16 @@ impl PostCreateData {
         });
         let icon_req = super::IconFillRequest {
             handle,
-            windows: self.windows,
+            windows: self.windows.clone(),
             icon_cache,
         };
         super::spawn_icon_fill(icon_req, &self.icons, cx);
+        let preview_req = super::PreviewFillRequest {
+            handle,
+            windows: self.windows,
+            preview_cache,
+        };
+        super::spawn_preview_fill(preview_req, cx);
         super::platform::set_accessory_policy();
     }
 }

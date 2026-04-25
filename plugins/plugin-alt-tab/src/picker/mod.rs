@@ -10,7 +10,10 @@ pub(crate) use reuse::ReuseRequest;
 use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::config::{parse_hex_color, ActionMode, AltTabConfig, DisplayConfig};
 use crate::{PickerWindowState, SharedIconCache};
-use gather::{gather, spawn_icon_fill, GatheredWindows, IconFillRequest};
+use gather::{
+    gather, spawn_icon_fill, spawn_preview_fill, GatheredWindows, IconFillRequest,
+    PreviewFillRequest,
+};
 use gpui::*;
 use qol_plugin_api::monitor::MonitorTracker;
 use qol_plugin_api::window::{MonitorKey, PopupPlacement};
@@ -119,7 +122,7 @@ fn try_reuse_existing(
             req.current.borrow_mut().remove(source_key);
             req.current.borrow_mut().insert(target, handle);
         }
-        finalize_reuse(handle, gathered, &req.icon_cache, cx);
+        finalize_reuse(handle, gathered, &req.icon_cache, &req.preview_cache, cx);
         return true;
     }
     discard_old_window(req, source_key, handle, cx);
@@ -154,6 +157,7 @@ fn create_from_request(
         placement,
         last_window_count: req.last_window_count.clone(),
         icon_cache: req.icon_cache.clone(),
+        preview_cache: req.preview_cache.clone(),
         current: req.current,
     };
     create::create_new(&create_req, gathered, cx);
@@ -191,6 +195,7 @@ fn finalize_reuse(
     handle: WindowHandle<AltTabApp>,
     gathered: &GatheredWindows,
     icon_cache: &SharedIconCache,
+    preview_cache: &SharedPreviewCache,
     cx: &mut App,
 ) {
     let previews = gathered.previews.clone();
@@ -207,6 +212,12 @@ fn finalize_reuse(
         icon_cache: icon_cache.clone(),
     };
     spawn_icon_fill(icon_req, &gathered.icons, cx);
+    let preview_req = PreviewFillRequest {
+        handle,
+        windows: gathered.windows.clone(),
+        preview_cache: preview_cache.clone(),
+    };
+    spawn_preview_fill(preview_req, cx);
     cx.activate(true);
 }
 

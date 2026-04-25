@@ -140,12 +140,6 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     let (query_ms, window_count) = (t_query.elapsed().as_millis(), windows.len());
 
     #[cfg(debug_assertions)]
-    let t_preview = std::time::Instant::now();
-    refresh_preview_cache(&executor, &windows, &state.caches.preview_cache).await;
-    #[cfg(debug_assertions)]
-    let preview_ms = t_preview.elapsed().as_millis();
-
-    #[cfg(debug_assertions)]
     let t_icon = std::time::Instant::now();
     refresh_icon_cache(&executor, &windows, &state.caches.icon_cache).await;
     #[cfg(debug_assertions)]
@@ -154,17 +148,21 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     let state_for_update = state.clone();
     #[cfg(debug_assertions)]
     let t_update = std::time::Instant::now();
+    // Previews are refreshed from inside open_picker via spawn_preview_fill so the show
+    // path stays snappy and the fresh frames land in the live view as they arrive.
     let _ = cx.update(move |app_cx| {
         apply_show_windows(&state_for_update.caches, windows);
         state_for_update.open_picker(&config, reverse, app_cx);
     });
     #[cfg(debug_assertions)]
+    let update_ms = t_update.elapsed().as_millis();
+
+    #[cfg(debug_assertions)]
     {
-        let update_ms = t_update.elapsed().as_millis();
         let total_ms = t_total.elapsed().as_millis();
         eprintln!(
-            "[alt-tab/timing] total={}ms config={}ms query={}ms({} windows) preview={}ms icon={}ms update={}ms",
-            total_ms, config_ms, query_ms, window_count, preview_ms, icon_ms, update_ms
+            "[alt-tab/timing] total={}ms config={}ms query={}ms({} windows) icon={}ms update={}ms (preview fill deferred to view)",
+            total_ms, config_ms, query_ms, window_count, icon_ms, update_ms
         );
     }
 }
@@ -244,51 +242,6 @@ fn merge_icons(icon_cache: &SharedIconCache, rendered: crate::IconMap) {
     for (name, img) in rendered {
         cache.insert(name, img);
     }
-}
-
-async fn refresh_preview_cache(
-    executor: &gpui::BackgroundExecutor,
-    windows: &[WindowInfo],
-    preview_cache: &SharedPreviewCache,
-) {
-    use crate::shared::layout::{PREVIEW_MAX_HEIGHT, PREVIEW_MAX_WIDTH};
-    use crate::shared::preview::bgra_to_render_image;
-
-    // Re-capture every visible window on each show. Caching by id produced stale thumbnails
-    // that never updated once a window's visuals changed after first boot. `HashMap::extend`
-    // overwrites existing keys, so failed/minimized windows fall back to the prior frame.
-    let targets: Vec<(usize, u32)> = windows
-        .iter()
-        .enumerate()
-        .filter(|(_, w)| !w.is_minimized)
-        .map(|(i, w)| (i, w.id))
-        .collect();
-    if targets.is_empty() {
-        return;
-    }
-    let id_for_idx: HashMap<usize, u32> = targets.iter().copied().collect();
-    let captured = executor
-        .spawn(async move {
-            capture::capture_previews_cg(&targets, PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT)
-        })
-        .await;
-    let mut new_previews = crate::PreviewMap::new();
-    for (idx, rgba) in captured {
-        let Some(rgba) = rgba else { continue };
-        let Some(&wid) = id_for_idx.get(&idx) else {
-            continue;
-        };
-        if let Some(img) = bgra_to_render_image(rgba.data, rgba.width, rgba.height) {
-            new_previews.insert(wid, img);
-        }
-    }
-    if new_previews.is_empty() {
-        return;
-    }
-    let Ok(mut cache) = preview_cache.lock() else {
-        return;
-    };
-    cache.extend(new_previews);
 }
 
 fn shutdown_daemon(cx: &AsyncApp) {

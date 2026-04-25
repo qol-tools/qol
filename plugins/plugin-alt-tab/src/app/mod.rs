@@ -7,7 +7,7 @@ use crate::picker;
 use crate::picker::create::PickerInit;
 use crate::picker::gather::GatheredWindows;
 use crate::picker::state::PickerState;
-use crate::IconMap;
+use crate::{IconMap, PreviewMap};
 use gpui::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -172,6 +172,12 @@ impl AltTabApp {
     pub(crate) fn update_icons(&mut self, icons: IconMap, cx: &mut Context<Self>) {
         self.delegate
             .update(cx, |state, _| state.insert_icons(icons));
+        cx.notify();
+    }
+
+    pub(crate) fn update_previews(&mut self, previews: PreviewMap, cx: &mut Context<Self>) {
+        self.delegate
+            .update(cx, |state, _| state.insert_previews(previews));
         cx.notify();
     }
 
