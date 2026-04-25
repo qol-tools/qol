@@ -4,6 +4,7 @@ import { PaletteProvider, usePaletteContext } from '../palette/context.js';
 import { createDebug, elLabel } from '../lib/debug.js';
 import { prettyLabel } from '../auto-config/heuristics.js';
 import { createNavigation, selectorFor, animateTransition } from '../lib/world-navigation.js';
+import { setDiveViaSelector } from '../lib/world-navigation-singleton.js';
 import { getWorldSettings, subscribeWorldSettings } from '../lib/world-settings.js';
 
 const log = createDebug('qol:app');
@@ -86,6 +87,7 @@ function registerStaticDiveTargets(registry) {
         { parentId: 'logs', subId: 'logs-detail' },
         { parentId: 'task-runner', subId: 'task-runner-editor' },
         { parentId: 'profile', subId: 'profile-backup-detail' },
+        { parentId: 'dev', subId: 'dev-log-filters' },
     ];
     for (const t of staticTargets) {
         const parent = registry.getEntry(t.parentId);
@@ -440,6 +442,11 @@ function AppShell() {
         }
         return true;
     }, [navigation, registry]);
+
+    useEffect(() => {
+        setDiveViaSelector(diveViaSelector);
+        return () => setDiveViaSelector(null);
+    }, [diveViaSelector]);
 
     const dive = useCallback((targetId, sourceSurface) => {
         if (layerAnimatingRef.current) return;
