@@ -5,6 +5,7 @@ import { StoreView } from '../views/store-view.js';
 import { HotkeysView, HotkeyEditorSubPage } from '../views/hotkeys-view.js';
 import { ShortcutsView, ShortcutEditorSubPage } from '../views/shortcuts-view.js';
 import { TaskRunnerView, ActionEditorSubPage } from '../views/task-runner-view.js';
+import { TestRunnerSubPage } from '../views/task-runner/test-runner-subpage.js';
 import { ProfileView, BackupDetailSubPage } from '../views/profile/view.js';
 import { DevView } from '../views/dev/view.js';
 import { LogsView, LogDetailSubPage } from '../views/logs-view.js';
@@ -55,6 +56,7 @@ const WORLD_PAGES = [
     { id: 'shortcuts-editor',  render: () => html`<${ShortcutEditorSubPage} />` },
     { id: 'logs-detail',       render: () => html`<${LogDetailSubPage} />` },
     { id: 'task-runner-editor', render: () => html`<${ActionEditorSubPage} />` },
+    { id: 'task-runner-test-runner', render: () => html`<${TestRunnerSubPage} />` },
     { id: 'profile-backup-detail', render: () => html`<${BackupDetailSubPage} />` },
     { id: 'dev-log-filters',   devOnly: true, render: () => html`<${LogFiltersSubPage} />` },
     { id: 'plugins-uninstall-confirm', render: () => html`<${UninstallConfirmSubPage} />` },
