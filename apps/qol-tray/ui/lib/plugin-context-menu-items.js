@@ -49,3 +49,14 @@ export function dispatchPluginContextAction(actionId, pluginId, ctx) {
     item.handler(ctx, pluginId);
     return true;
 }
+
+export function bindPluginContextMenuItems(plugin, ctx) {
+    if (!plugin) return [];
+    return ITEMS
+        .filter(item => item.requires == null || !!plugin[item.requires])
+        .map(item => ({
+            id: item.id,
+            label: item.label,
+            run: () => item.handler(ctx, plugin.id),
+        }));
+}
