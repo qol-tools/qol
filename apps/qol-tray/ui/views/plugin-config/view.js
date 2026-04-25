@@ -1,7 +1,6 @@
 import { html } from '../../lib/html.js';
 import { useCallback, useEffect, useRef } from 'preact/hooks';
 import { usePluginConfigContext } from './context.js';
-import { prettyLabel } from '../../auto-config/heuristics.js';
 import {
     buildBranchOwnerMap,
     collectVariantGroups,
@@ -30,23 +29,8 @@ function useEscapeFallback(onClose, active) {
 
 export function PluginConfigView({ onClose }) {
     const ctx = usePluginConfigContext();
-    const isPlaceholder = !ctx || ctx.loading || ctx.mode === 'ui' || (ctx && ctx.sections && ctx.sections.length === 0);
+    const isPlaceholder = !ctx || ctx.loading || (ctx && ctx.sections && ctx.sections.length === 0);
     useEscapeFallback(onClose, isPlaceholder);
-
-    if (ctx?.mode === 'ui') {
-        return html`
-            <div class="plugin-ui-container">
-                <div class="plugin-ui-toolbar">
-                    <span class="plugin-ui-toolbar-title">${ctx.pluginId}</span>
-                    <button class="plugin-ui-toolbar-close" onClick=${onClose}>\u00d7</button>
-                </div>
-                <iframe
-                    src=${`/plugins/${ctx.pluginId}/`}
-                    class="plugin-custom-ui"
-                />
-            </div>
-        `;
-    }
 
     const section = ctx?.activeSection;
 
@@ -65,15 +49,14 @@ export function PluginConfigView({ onClose }) {
         `;
     }
 
+    // Section titles come from the world-region-label above the page — don't
+    // duplicate them inside the body. Keep the subtitle copy when present.
     return html`
         <${SurfaceContainer} className="plugin-config-detail" tabIndex="-1">
             ${section && html`
                 <div class="config-detail-content">
-                    ${section.id !== '_root' && html`
-                        <header class="config-detail-header">
-                            <h2>${section.label || prettyLabel(section.id)}</h2>
-                            ${section.description && html`<p class="section-copy">${section.description}</p>`}
-                        </header>
+                    ${section.id !== '_root' && section.description && html`
+                        <p class="section-copy">${section.description}</p>
                     `}
                     <${ConfigSection} fields=${section.fields} />
                 </div>
@@ -91,11 +74,8 @@ export function PluginConfigSectionView({ pluginId, sectionId, onClose }) {
     return html`
         <${SurfaceContainer} className="plugin-config-detail" tabIndex="-1">
             <div class="config-detail-content">
-                ${section.id !== '_root' && html`
-                    <header class="config-detail-header">
-                        <h2>${section.label || prettyLabel(section.id)}</h2>
-                        ${section.description && html`<p class="section-copy">${section.description}</p>`}
-                    </header>
+                ${section.id !== '_root' && section.description && html`
+                    <p class="section-copy">${section.description}</p>
                 `}
                 <${ConfigSection} fields=${section.fields} />
             </div>

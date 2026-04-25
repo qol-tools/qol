@@ -343,7 +343,7 @@ function activeSectionDetail(pluginConfig) {
 }
 
 function delegateToPluginConfig(event, pluginConfig, closePluginConfig) {
-    if (!pluginConfig || pluginConfig.mode === 'ui') {
+    if (!pluginConfig) {
         if (event.key === 'Escape') { event.preventDefault(); closePluginConfig(); }
         return;
     }
@@ -374,20 +374,32 @@ function delegateToPluginConfig(event, pluginConfig, closePluginConfig) {
     handlePluginConfigMove(event, detail, pluginConfig);
 }
 
+const DIRECT_EDIT_HANDLERS = {
+    string: (event, detail, _pluginConfig, field) => startStringFieldEdit(event, detail, field.id),
+    number: (event, detail, _pluginConfig, field) =>
+        field.variant === 'slider' ? false : startNumberFieldEdit(event, detail, field.id),
+};
+
+const FIELD_ACTION_HANDLERS = {
+    boolean: (event, _detail, pluginConfig, field) => handleBooleanFieldAction(event, pluginConfig, field),
+    select: (event, detail, pluginConfig, field) => handleSelectFieldAction(event, detail, pluginConfig, field),
+    string: (event, detail, _pluginConfig, field) => handleTextFieldActivation(event, detail, field.id),
+    number: (event, detail, _pluginConfig, field) =>
+        field.variant === 'slider'
+            ? handleSliderFieldAction(event, detail, field)
+            : handleNumberFieldActivation(event, detail, field.id),
+    action: (event, detail, _pluginConfig, field) => handleActionFieldActivation(event, detail, field.id),
+    color: (event, detail, pluginConfig, field) => handleColorFieldAction(event, detail, pluginConfig, field),
+};
+
 function handlePluginConfigDirectEdit(event, detail, field) {
-    if (field.kind === 'string') return startStringFieldEdit(event, detail, field.id);
-    if (field.kind === 'number' && field.variant !== 'slider') return startNumberFieldEdit(event, detail, field.id);
-    return false;
+    const handler = DIRECT_EDIT_HANDLERS[field.kind];
+    return handler ? handler(event, detail, null, field) : false;
 }
 
 function handlePluginConfigFieldAction(event, detail, pluginConfig, field) {
-    if (field.kind === 'boolean') return handleBooleanFieldAction(event, pluginConfig, field);
-    if (field.kind === 'select') return handleSelectFieldAction(event, detail, pluginConfig, field);
-    if (field.kind === 'string') return handleTextFieldActivation(event, detail, field.id);
-    if (field.kind === 'number' && field.variant === 'slider') return handleSliderFieldAction(event, detail, field);
-    if (field.kind === 'number') return handleNumberFieldActivation(event, detail, field.id);
-    if (field.kind === 'action') return handleActionFieldActivation(event, detail, field.id);
-    if (field.kind === 'color') return handleColorFieldAction(event, detail, pluginConfig, field);
+    const handler = FIELD_ACTION_HANDLERS[field.kind];
+    if (handler) return handler(event, detail, pluginConfig, field);
     return handleGenericFieldActivation(event, detail, field.id);
 }
 

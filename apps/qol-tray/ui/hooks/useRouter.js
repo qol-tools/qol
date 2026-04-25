@@ -15,9 +15,9 @@ function readStoredPlugin() {
     return null;
 }
 
-function persistPlugin(pluginId, mode) {
+function persistPlugin(pluginId) {
     try {
-        if (pluginId) window.localStorage.setItem(PLUGIN_STORAGE_KEY, JSON.stringify({ pluginId, mode }));
+        if (pluginId) window.localStorage.setItem(PLUGIN_STORAGE_KEY, JSON.stringify({ pluginId }));
         else window.localStorage.removeItem(PLUGIN_STORAGE_KEY);
     } catch {}
 }
@@ -26,14 +26,10 @@ function parseHashRoute() {
     const raw = window.location.hash.replace(/^#/, '').trim();
     const configMatch = raw.match(/^plugins\/(.+)\/config$/);
     if (configMatch) {
-        return { viewId: 'plugins', pluginId: configMatch[1], mode: 'config' };
-    }
-    const pluginMatch = raw.match(/^plugins\/(.+)$/);
-    if (pluginMatch) {
-        return { viewId: 'plugins', pluginId: pluginMatch[1], mode: 'ui' };
+        return { viewId: 'plugins', pluginId: configMatch[1] };
     }
     const viewId = raw.split('/')[0] || null;
-    return { viewId, pluginId: null, mode: null };
+    return { viewId, pluginId: null };
 }
 
 function readStoredView() {
@@ -67,23 +63,16 @@ async function validatePluginConfig(pluginId) {
     return true;
 }
 
-async function handleHashChange(viewOrder, setActivePluginId, setActiveViewId, setActivePluginMode) {
+async function handleHashChange(viewOrder, setActivePluginId, setActiveViewId) {
     const route = parseHashRoute();
     if (route.pluginId) {
         setActiveViewId('plugins');
         if (await validatePluginConfig(route.pluginId)) {
             setActivePluginId(route.pluginId);
-            setActivePluginMode('config');
-            return;
-        }
-        if (route.mode === 'ui') {
-            setActivePluginId(route.pluginId);
-            setActivePluginMode('ui');
         }
         return;
     }
     setActivePluginId(null);
-    setActivePluginMode(null);
     if (route.viewId && viewOrder.includes(route.viewId)) {
         setActiveViewId(route.viewId);
     }
@@ -96,9 +85,8 @@ function doSwitchView(viewId, viewOrder, setActivePluginId, setActiveViewId) {
     persistView(viewId);
 }
 
-function doClosePluginConfig(setActivePluginId, setActiveViewId, setActivePluginMode) {
+function doClosePluginConfig(setActivePluginId, setActiveViewId) {
     setActivePluginId(null);
-    setActivePluginMode(null);
     setActiveViewId(prev => {
         const viewId = prev || 'plugins';
         persistView(viewId);
@@ -109,39 +97,25 @@ function doClosePluginConfig(setActivePluginId, setActiveViewId, setActivePlugin
 export function useRouter({ viewOrder }) {
     const [activeViewId, setActiveViewId] = useState(initActiveView);
     const [activePluginId, setActivePluginId] = useState(null);
-    const [activePluginMode, setActivePluginMode] = useState(null);
     const switchView = useCallback(id => doSwitchView(id, viewOrder, setActivePluginId, setActiveViewId), [viewOrder]);
     const openPluginConfig = useCallback(async (pluginId) => {
         if (!await validatePluginConfig(pluginId)) return false;
         setActivePluginId(pluginId);
-        setActivePluginMode('config');
         window.history.pushState(null, '', `#plugins/${pluginId}/config`);
         return true;
-    }, []);
-    const openPluginUi = useCallback((pluginId) => {
-        setActivePluginId(pluginId);
-        setActivePluginMode('ui');
-        window.location.hash = `#plugins/${pluginId}`;
     }, []);
     useEffect(() => {
         const route = parseHashRoute();
         const stored = readStoredPlugin();
         const pluginId = route.pluginId || stored?.pluginId;
-        const mode = route.pluginId ? route.mode : stored?.mode;
         if (!pluginId) return;
         validatePluginConfig(pluginId).then(valid => {
-            if (valid) {
-                setActivePluginId(pluginId);
-                setActivePluginMode('config');
-            } else if (mode === 'ui') {
-                setActivePluginId(pluginId);
-                setActivePluginMode('ui');
-            }
+            if (valid) setActivePluginId(pluginId);
         });
     }, []);
-    const closePluginConfig = useCallback(() => doClosePluginConfig(setActivePluginId, setActiveViewId, setActivePluginMode), []);
+    const closePluginConfig = useCallback(() => doClosePluginConfig(setActivePluginId, setActiveViewId), []);
     useEffect(() => {
-        const handler = () => handleHashChange(viewOrder, setActivePluginId, setActiveViewId, setActivePluginMode);
+        const handler = () => handleHashChange(viewOrder, setActivePluginId, setActiveViewId);
         window.addEventListener('hashchange', handler);
         return () => window.removeEventListener('hashchange', handler);
     }, [viewOrder]);
@@ -152,7 +126,7 @@ export function useRouter({ viewOrder }) {
             firstPersistRef.current = false;
             return;
         }
-        persistPlugin(activePluginId, activePluginMode);
-    }, [activePluginId, activePluginMode]);
-    return { activeViewId, activePluginId, activePluginMode, switchView, openPluginConfig, openPluginUi, closePluginConfig, viewOrder };
+        persistPlugin(activePluginId);
+    }, [activePluginId]);
+    return { activeViewId, activePluginId, switchView, openPluginConfig, closePluginConfig, viewOrder };
 }

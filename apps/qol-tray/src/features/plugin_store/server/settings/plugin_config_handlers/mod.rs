@@ -43,10 +43,6 @@ fn get_plugin_config_inner(plugin_id: String) -> HttpResult<Response> {
 fn get_plugin_config_form_inner(plugin_id: String) -> HttpResult<Response> {
     let plugin_id = validated_plugin_id(plugin_id)?;
     let form = form::load_plugin_config_form(&plugin_id)?;
-    let form = match form {
-        Some(form) => form,
-        None => return Ok(config_form_not_found_response()),
-    };
     Ok(config_form_json_response(&form))
 }
 
@@ -101,10 +97,6 @@ fn config_refresh_failed_response() -> Response {
         "Config saved but live daemon refresh failed",
     )
         .into_response()
-}
-
-fn config_form_not_found_response() -> Response {
-    (StatusCode::NOT_FOUND, "Config form not found").into_response()
 }
 
 fn serialize_config_failed_response() -> Response {

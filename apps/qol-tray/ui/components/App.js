@@ -19,7 +19,7 @@ import { SelectionCursorOverlay } from '../lib/components/SelectionCursorOverlay
 import { CommandPalette } from './CommandPalette.js';
 import { createCamera } from '../lib/world-camera.js';
 import { createWorldRegistry } from '../lib/world-registry.js';
-import { boundsOfEntries, maxEntryExtent, withPadding } from '../lib/world-geometry.js';
+import { boundsOfEntries, maxEntryExtent, paddedWorldBounds, withPadding } from '../lib/world-geometry.js';
 import { pageMode } from '../lib/peripheral-geometry.js';
 import { pluginTraitOverride } from '../lib/plugin-trait-overrides.js';
 import { WorldViewport } from './shell/WorldViewport.js';
@@ -211,10 +211,8 @@ function AppShell() {
         viewOrder,
         activeViewId,
         activePluginId,
-        activePluginMode,
         switchView,
         openPluginConfig,
-        openPluginUi,
         closePluginConfig,
         updateState,
         handleSidebarAction,
@@ -308,14 +306,35 @@ function AppShell() {
             if (!entries.length) return;
             const measured = measuredLayer0Entries(worldEl, entries, registry);
             const rect = boundsOfEntries(measured);
-            const { padX, padY } = maxEntryExtent(entries);
-            camera.setBounds({ ...withPadding(rect, padX, padY), layer: 0 });
+            const vpEl = viewportRef.current;
+            const vp = vpEl ? { w: vpEl.clientWidth, h: vpEl.clientHeight } : null;
+            // Pad at zoom=1 baseline so the bounds-driven minZoom floor stays
+            // low regardless of current zoom — otherwise zoom-in tightens the
+            // pad, raises minZoom, and traps the camera zoomed in.
+            camera.setBounds(paddedWorldBounds({ ...rect, layer: 0 }, vp, 1, entries));
         };
-        const ro = new ResizeObserver(recomputeBounds);
+        let rafId = 0;
+        const scheduleRecompute = () => {
+            if (rafId) return;
+            rafId = requestAnimationFrame(() => { rafId = 0; recomputeBounds(); });
+        };
+        const ro = new ResizeObserver(scheduleRecompute);
         const slots = worldEl.querySelectorAll('.world-view-slot[data-layer="0"]');
         for (const el of slots) ro.observe(el);
+        if (viewportRef.current) ro.observe(viewportRef.current);
+        let lastZoom = camera.zoom;
+        const unsub = camera.subscribe(() => {
+            if (camera.zoom !== lastZoom) {
+                lastZoom = camera.zoom;
+                scheduleRecompute();
+            }
+        });
         recomputeBounds();
-        return () => ro.disconnect();
+        return () => {
+            ro.disconnect();
+            unsub();
+            if (rafId) cancelAnimationFrame(rafId);
+        };
     }, [camera, registry, targetsVersion]);
 
     const navigationRef = useRef(null);
@@ -507,7 +526,6 @@ function AppShell() {
     const renderCtx = useMemo(() => ({
         activePluginId,
         openPluginConfig,
-        openPluginUi,
         closePluginConfig,
         syncStatus,
         syncProviders,
@@ -515,13 +533,13 @@ function AppShell() {
         refreshSyncStatus,
         devEnabled,
         onJumpTo,
-    }), [activePluginId, openPluginConfig, openPluginUi, closePluginConfig,
+    }), [activePluginId, openPluginConfig, closePluginConfig,
         syncStatus, syncProviders, setSyncStatus, refreshSyncStatus, devEnabled, onJumpTo]);
     const renderPage = useCallback((pageId) => renderPageContent(pageId, renderCtx), [renderCtx]);
 
     return html`
         <${ModifierStateProvider}>
-        <${PluginConfigProvider} pluginId=${activePluginId} mode=${activePluginMode} activeSectionId=${activeSectionId}>
+        <${PluginConfigProvider} pluginId=${activePluginId} activeSectionId=${activeSectionId}>
             <${ViewKeyboardProvider}>
                 <${AppKeyboardRouting}
                     activePluginId=${activePluginId}
@@ -538,10 +556,12 @@ function AppShell() {
                 <div class="app-container">
                     <${WorldViewport} camera=${camera} onViewChange=${switchView} navigation=${navigation} registry=${registry} renderPage=${renderPage}>
                         ${hiddenUntilDive ? null : html`
-                            <${RegionLabels} registry=${registry} cameraLayer=${cameraLayer} navigation=${navigation} diveDepth=${diveDepth} />
                             ${renderWorldViews({ ...renderCtx, registry, cameraLayer, confinedPages: navigation.getConfinedPages(), diveDepth })}
                         `}
                     <//>
+                    ${hiddenUntilDive ? null : html`
+                        <${RegionLabels} registry=${registry} cameraLayer=${cameraLayer} navigation=${navigation} diveDepth=${diveDepth} camera=${camera} />
+                    `}
                     <${CommandPalette} camera=${camera} navigation=${navigation} />
                     <${MinimapContainer} camera=${camera} registry=${registry} viewportRef=${viewportRef} diveParent=${diveParent}
                         activePluginId=${activePluginId} diveDepth=${diveDepth} navigation=${navigation}

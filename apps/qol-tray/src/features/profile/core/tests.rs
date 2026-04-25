@@ -637,6 +637,7 @@ fn test_plugin(
             runtime: None,
             capabilities: Capabilities::default(),
             build: Default::default(),
+            traits: None,
         },
         PathBuf::from(format!("/tmp/{id}")),
         source,

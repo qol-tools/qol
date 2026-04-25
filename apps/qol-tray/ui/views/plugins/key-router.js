@@ -7,28 +7,28 @@ function routePluginsKey(e, list, modal, actions) {
         return;
     }
     if (modal.contextMenuOpenRef.current) {
-        routeContextMenuKey(e, list, modal);
+        routeContextMenuKey(e, list, modal, actions);
         return;
     }
-    routeNormalKey(e, list, actions);
+    routeNormalKey(e, list, modal, actions);
 }
 
 function routeConfirmKey(e, clearConfirm, confirmUninstall) {
     if (e.key === 'Enter') { e.preventDefault(); confirmUninstall(); }
 }
 
-function routeContextMenuKey(e, list, modal) {
-    e.preventDefault();
-    if (e.key === 'Escape') { modal.closeAll(); return; }
-    if (e.key !== 'Enter') return;
-    const plugin = list.pluginsRef.current[list.selectedIndexRef.current];
-    if (plugin) { modal.closeAll(); modal.setConfirmPluginId(plugin.id); }
+function routeContextMenuKey(e, list, modal, actions) {
+    if (e.key === 'Escape' || (e.key === 'Enter' && e.shiftKey)) {
+        e.preventDefault();
+        modal.closeAll();
+        actions.focusSelectedCard();
+    }
 }
 
-function routeNormalKey(e, list, actions) {
-    if (e.key === 'Enter' && e.ctrlKey) {
+function routeNormalKey(e, list, modal, actions) {
+    if (e.key === 'Enter' && e.shiftKey) {
         e.preventDefault();
-        actions.openConfig();
+        modal.setContextMenuOpen(prev => !prev);
         return;
     }
     dispatchKey(e, withShiftVariants({
@@ -43,6 +43,6 @@ function routeNormalKey(e, list, actions) {
 export function usePluginsKeyHandler(list, modal, actions) {
     return useCallback(
         e => routePluginsKey(e, list, modal, actions),
-        [actions.confirmUninstall, actions.openSelected, actions.openConfig, actions.navigateInGrid]
+        [actions.confirmUninstall, actions.openSelected, actions.focusSelectedCard, actions.navigateInGrid]
     );
 }

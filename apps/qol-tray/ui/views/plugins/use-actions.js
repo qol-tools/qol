@@ -31,7 +31,7 @@ async function doUninstall(confirmPluginIdRef, clearConfirm, refreshPlugins) {
     }
 }
 
-async function doOpenSelected(pluginsRef, selectedIndexRef, onOpenPluginConfig, onOpenPluginUi) {
+async function doOpenSelected(pluginsRef, selectedIndexRef, onOpenPluginConfig) {
     const plugin = pluginsRef.current[selectedIndexRef.current];
     if (!plugin) return;
     if (plugin.loaded === false) {
@@ -43,13 +43,9 @@ async function doOpenSelected(pluginsRef, selectedIndexRef, onOpenPluginConfig, 
         if (!opened) toast('info', `No settings available for ${plugin.name}`);
         return;
     }
-    if (plugin.has_custom_ui) {
-        onOpenPluginUi(plugin.id);
-        return;
-    }
 }
 
-export function usePluginActions(list, modal, onOpenPluginConfig, onOpenPluginUi) {
+export function usePluginActions(list, modal, onOpenPluginConfig) {
     const [updating, setUpdating, updatingRef] = useStateRef(new Set());
     const updatePlugin = useCallback(
         pluginId => doUpdate(pluginId, updatingRef, setUpdating, list.refreshPlugins),
@@ -60,8 +56,8 @@ export function usePluginActions(list, modal, onOpenPluginConfig, onOpenPluginUi
         [list.refreshPlugins, modal.clearConfirm]
     );
     const openSelected = useCallback(
-        () => doOpenSelected(list.pluginsRef, list.selectedIndexRef, onOpenPluginConfig, onOpenPluginUi),
-        [onOpenPluginConfig, onOpenPluginUi]
+        () => doOpenSelected(list.pluginsRef, list.selectedIndexRef, onOpenPluginConfig),
+        [onOpenPluginConfig]
     );
     const openConfig = useCallback(() => {
         const plugin = list.pluginsRef.current?.[list.selectedIndexRef.current];
@@ -69,9 +65,15 @@ export function usePluginActions(list, modal, onOpenPluginConfig, onOpenPluginUi
         onOpenPluginConfig(plugin.id);
     }, [onOpenPluginConfig]);
     const navigateInGrid = useGridNav('#plugins-grid .plugin-card:not(.ghost)', list.selectedIndexRef, list.setSelectedIndex);
+    const focusSelectedCard = useCallback(() => {
+        const plugin = list.pluginsRef.current?.[list.selectedIndexRef.current];
+        if (!plugin) return;
+        const card = document.querySelector(`#plugins-grid [data-plugin-id="${CSS.escape(plugin.id)}"]`);
+        if (card instanceof HTMLElement) card.focus({ preventScroll: true });
+    }, []);
     const isBlocking = useCallback(
         () => modal.confirmPluginIdRef.current !== null || modal.contextMenuOpenRef.current,
         []
     );
-    return { updating, updatePlugin, confirmUninstall, openSelected, openConfig, navigateInGrid, isBlocking };
+    return { updating, updatePlugin, confirmUninstall, openSelected, openConfig, navigateInGrid, focusSelectedCard, isBlocking };
 }

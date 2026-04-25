@@ -4,6 +4,7 @@ import { createNavigation } from './world-navigation.js';
 import { contains, createWorldRegistry } from './world-registry.js';
 import { createCamera } from './world-camera.js';
 import { filterSurfacesByConfinement } from './spatial-nav.js';
+import { PAGE_TOP_PAD_PX } from './world-geometry.js';
 
 test('filterSurfacesByConfinement returns all surfaces when confinement is null', () => {
     const surfaces = [{ tag: 'a' }, { tag: 'b' }];
@@ -274,7 +275,7 @@ test('gotoAnchor centers on page geometric center when focus registry is empty',
     const pan = camera._calls.find(c => c[0] === 'panSmooth');
     assert.ok(pan, 'panSmooth was called');
     assert.equal(pan[1], 640 - 800 / 2);
-    assert.equal(pan[2], 450 - 600 / 2);
+    assert.equal(pan[2], 0 - PAGE_TOP_PAD_PX);
 });
 
 test('gotoAnchor honors respectKnob when knob is off', () => {
@@ -305,13 +306,41 @@ test('gotoAnchor falls back to first layer-0 page on unknown pageId', () => {
     assert.equal(pan[1], 640 - 800 / 2);
 });
 
-test('gotoAnchor uses page geometric center regardless of focus registry', () => {
+test('gotoAnchor top-aligns the target page regardless of focus registry', () => {
     const { registry, camera, getSettings, domHelpers } = makeMocks();
     const nav = createNavigation({ registry, camera, getSettings, domHelpers });
     nav.setFocus('plugins', 'fake-selector');
     nav.gotoAnchor({ pageId: 'plugins' }, { respectKnob: false });
+    // X still centers the page: entry x-center 640, minus half viewport 400 → 240.
     assert.equal(camera.x, 640 - 800 / 2);
-    assert.equal(camera.y, 450 - 600 / 2);
+    // Y top-aligns: entry top 0, minus PAGE_TOP_PAD_PX at zoom 1.
+    assert.equal(camera.y, 0 - PAGE_TOP_PAD_PX);
+});
+
+test('inside a dive, heterogeneous page heights all top-align at the same camera.y', () => {
+    // This is the regression that prompted the padded-bounds refactor:
+    // dive confinements were bypassing the viewport-half pad, so the camera's
+    // center-when-viewport-exceeds-bounds branch pinned y to the claim midpoint
+    // instead of the requested entry.y - PAGE_TOP_PAD_PX.
+    const { registry, camera, getSettings, domHelpers } = makeMocks();
+    const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
+    const pages = [
+        { id: 'short', x: 0, y: 0, width: 1280, height: 200, layer: -1, parent: 'plugins' },
+        { id: 'medium', x: 0, y: 0, width: 1280, height: 500, layer: -1, parent: 'plugins' },
+        { id: 'tall', x: 0, y: 0, width: 1280, height: 900, layer: -1, parent: 'plugins' },
+    ];
+    for (const p of pages) registry.addEntry(p);
+    registry.addDiveTarget({ sourceSelector: '#card-a', claim, pages: pages.map(p => p.id) });
+    const nav = createNavigation({ registry, camera, getSettings, domHelpers });
+    nav.setCurrentAnchor({ pageId: 'plugins' });
+    nav.diveInto('#card-a');
+    const ys = [];
+    for (const p of pages) {
+        nav.gotoAnchor({ pageId: p.id }, { respectKnob: false });
+        ys.push(camera.y);
+    }
+    assert.ok(ys.every(v => v === ys[0]), `all camera.y should match, got ${JSON.stringify(ys)}`);
+    assert.equal(ys[0], 0 - PAGE_TOP_PAD_PX);
 });
 
 test('gotoAnchor triggers setLayer when page layer differs', () => {
@@ -403,14 +432,24 @@ test('diveInto on an unknown selector is a no-op', () => {
     assert.equal(nav.stackDepth(), 0);
 });
 
-test('dive sets camera bounds to the dive target claim', () => {
+test('dive sets camera bounds to the dive target claim padded by half the viewport', () => {
+    // Confinement rects are padded by vp/(2*zoom) in world units so the
+    // camera can anchor a page top at PAGE_TOP_PAD_PX regardless of how
+    // tight the claim is, and so bounds-driven minZoom doesn't force auto-
+    // zoom-in. makeMocks() reports viewport 800x600, and default zoom is 1.
     const { registry, camera, getSettings, domHelpers } = makeMocks();
     const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
     registry.addDiveTarget({ sourceSelector: '#card-a', claim, pages: ['plugins-config'] });
     const nav = createNavigation({ registry, camera, getSettings, domHelpers });
     nav.setCurrentAnchor({ pageId: 'plugins' });
     nav.diveInto('#card-a');
-    assert.deepEqual(camera._bounds, claim);
+    assert.deepEqual(camera._bounds, {
+        x: claim.x - 400,
+        y: claim.y - 300,
+        width: claim.width + 800,
+        height: claim.height + 600,
+        layer: -1,
+    });
 });
 
 test('ascend from root dive clears camera bounds', () => {
@@ -434,9 +473,21 @@ test('ascend from nested dive restores parent confinement bounds', () => {
     nav.setCurrentAnchor({ pageId: 'plugins' });
     nav.diveInto('#a');
     nav.diveInto('#b');
-    assert.deepEqual(camera._bounds, claim2);
+    assert.deepEqual(camera._bounds, {
+        x: claim2.x - 400,
+        y: claim2.y - 300,
+        width: claim2.width + 800,
+        height: claim2.height + 600,
+        layer: -2,
+    });
     nav.ascend();
-    assert.deepEqual(camera._bounds, claim1);
+    assert.deepEqual(camera._bounds, {
+        x: claim1.x - 400,
+        y: claim1.y - 300,
+        width: claim1.width + 800,
+        height: claim1.height + 600,
+        layer: -1,
+    });
 });
 
 test('diveInto then ascend restores currentConfinement and currentAnchor', () => {

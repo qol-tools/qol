@@ -14,13 +14,12 @@ export function usePluginConfigContext() {
     return useContext(PluginConfigContext);
 }
 
-export function PluginConfigProvider({ pluginId, mode, activeSectionId, children }) {
+export function PluginConfigProvider({ pluginId, activeSectionId, children }) {
     if (!pluginId) return html`<${PluginConfigContext.Provider} value=${null}>${children}<//>`;
-    if (mode === 'ui') return html`<${PluginConfigContext.Provider} value=${{ pluginId, mode }}>${children}<//>`;
-    return html`<${ActivePluginConfigProvider} pluginId=${pluginId} mode=${mode} activeSectionId=${activeSectionId}>${children}<//>`;
+    return html`<${ActivePluginConfigProvider} pluginId=${pluginId} activeSectionId=${activeSectionId}>${children}<//>`;
 }
 
-function ActivePluginConfigProvider({ pluginId, mode, activeSectionId, children }) {
+function ActivePluginConfigProvider({ pluginId, activeSectionId, children }) {
     const config = usePluginConfig(pluginId);
     const [selectedFieldIds, setSelectedFieldIds] = useState({});
     // HA-style status gating: StatusField reports its tone (from polled queries),
@@ -80,7 +79,6 @@ function ActivePluginConfigProvider({ pluginId, mode, activeSectionId, children 
     const value = useMemo(() => ({
         ...config,
         pluginId,
-        mode,
         activeSection,
         visibleFields,
         fieldIndexById,
@@ -89,7 +87,7 @@ function ActivePluginConfigProvider({ pluginId, mode, activeSectionId, children 
         setSelectedFieldId,
         reportStatusTone,
         isRuntimeDisabled,
-    }), [config, pluginId, mode, activeSection, visibleFields, fieldIndexById, selectedField, setSelectedFieldId, reportStatusTone, isRuntimeDisabled]);
+    }), [config, pluginId, activeSection, visibleFields, fieldIndexById, selectedField, setSelectedFieldId, reportStatusTone, isRuntimeDisabled]);
 
     return html`<${PluginConfigContext.Provider} value=${value}>${children}<//>`;
 }

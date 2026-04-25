@@ -11,6 +11,8 @@ import { StatusField } from './fields/StatusField.js';
 import { QrCodeField } from './fields/QrCodeField.js';
 import { SliderField } from './fields/SliderField.js';
 import { CustomSelect } from '../../lib/components/CustomSelect.js';
+import { ToggleSwitch } from '../../lib/components/ToggleSwitch.js';
+import { useSurface } from '../../lib/components/Surface.js';
 import { FieldLabel } from './fields/FieldLabel.js';
 
 const FIELD_MAP = {
@@ -47,10 +49,13 @@ function BooleanField({ field }) {
         ctx.setSelectedFieldId(field.id);
     }, [ctx, field.id]);
 
-    return html`<${Toggle} checked=${checked} onChange=${onChange}
-        label=${field.label} description=${field.description || ''}
-        fieldAttrs=${fieldSurfaceAttrs(field, ctx, 'toggle-row')}
-        onSelect=${onSelect} />`;
+    return html`
+        <div ...${fieldSurfaceAttrs(field, ctx, 'toggle-row')}
+            onMouseDown=${onSelect} onFocus=${onSelect}>
+            <${ToggleSwitch} checked=${checked} onChange=${onChange}
+                label=${field.label} description=${field.description || ''} />
+        </div>
+    `;
 }
 
 function StringField({ field }) {
@@ -99,32 +104,6 @@ function SelectField({ field }) {
     `;
 }
 
-function Toggle({ checked, onChange, label, description, fieldAttrs, onSelect }) {
-    const toggle = useCallback(() => onChange(!checked), [checked, onChange]);
-    const onKeyDown = useCallback((event) => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-        event.preventDefault();
-        event.stopPropagation();
-        toggle();
-    }, [toggle]);
-
-    return html`
-        <div ...${fieldAttrs}
-            onClick=${toggle}
-            onMouseDown=${onSelect}
-            onFocus=${onSelect}>
-            <div class="toggle-track ${checked ? 'on' : ''}" tabIndex="0" role="switch"
-                aria-checked=${checked} onKeyDown=${onKeyDown}>
-                <div class="toggle-thumb" />
-            </div>
-            <div class="toggle-label-group">
-                <strong>${label}</strong>
-                ${description && html`<div class="toggle-help">${description}</div>`}
-            </div>
-        </div>
-    `;
-}
-
 export function fieldLayoutAttrs(field) {
     const attrs = {
         'data-plugin-config-field-id': field.id,
@@ -137,13 +116,12 @@ export function fieldLayoutAttrs(field) {
 export function fieldSurfaceAttrs(field, ctx, baseClass) {
     const selected = ctx.selectedFieldId === field.id;
     const index = ctx.fieldIndexById[field.id];
-    const attrs = {
+    const { attrs } = useSurface({ selected: selected ? true : undefined });
+    const result = {
         ...fieldLayoutAttrs(field),
+        ...attrs,
         class: selected ? `${baseClass} selected is-selected` : baseClass,
-        'data-selected-surface': '',
-        tabIndex: -1,
     };
-    if (index !== undefined) attrs['data-plugin-config-index'] = index;
-    if (selected) attrs['data-selected'] = 'true';
-    return attrs;
+    if (index !== undefined) result['data-plugin-config-index'] = index;
+    return result;
 }

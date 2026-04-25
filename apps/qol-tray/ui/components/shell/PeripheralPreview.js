@@ -16,8 +16,8 @@ const ANIM_EASING = 'cubic-bezier(0.2, 0.8, 0.25, 1)';
 const PARALLAX_PX = 28;
 const SCALE_FOR_DISTANCE = { 1: 0.8, 2: 0.6, 3: 0.4, 4: 0.28 };
 const BASE_OPACITY_FOR_DISTANCE = { 1: 0.75, 2: 0.45, 3: 0.25, 4: 0.15 };
-const SLOT_CSS_W = { min: 180, vw: 0.24, max: 360 };
-const SLOT_CSS_H = { min: 140, vh: 0.32, max: 420 };
+const SLOT_CSS_W = { min: 300, vw: 0.40, max: 600 };
+const SLOT_CSS_H = { min: 260, vh: 0.50, max: 660 };
 
 function computeSlotBoxSize(vpW, vpH) {
     return {

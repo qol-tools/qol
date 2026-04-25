@@ -13,9 +13,9 @@ export function PaletteProvider({ children }) {
     const [query, setQuery] = useState('');
     const [activeViewId, setActiveViewId] = useState('plugins');
 
-    const mode = 'action';
-    const searchQuery = '';
-    const actionQuery = query.startsWith('>') ? query.slice(1) : query;
+    const mode = query.startsWith('>') ? 'action' : 'search';
+    const searchQuery = mode === 'search' ? query : '';
+    const actionQuery = mode === 'action' ? query.slice(1) : '';
 
     const activate = useCallback(() => {
         setActive(true);

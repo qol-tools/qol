@@ -9,6 +9,10 @@ import { ProfileView, BackupDetailSubPage } from '../views/profile/view.js';
 import { DevView } from '../views/dev/view.js';
 import { LogsView, LogDetailSubPage } from '../views/logs-view.js';
 
+// VIEW_LABELS: id → string OR { text, animation }.
+// Plain string is the default (no animation). The object form opts a single
+// view into a named label animation (see ANIMATIONS map in RegionLabels.js).
+// Add new animations by extending that map, not by branching on id.
 export const VIEW_LABELS = {
     plugins: 'Plugins',
     store: 'Plugin Store',
@@ -17,8 +21,18 @@ export const VIEW_LABELS = {
     'task-runner': 'Task Runner',
     profile: 'Profile',
     logs: 'Logs',
-    dev: 'Developer'
+    dev: { text: 'Developer', animation: 'scramble' },
 };
+
+// Normalised accessor: always returns { text, animation }.
+// `animation` is null when the entry is a bare string or has no animation field.
+// Callers that only care about the display text can use `.text`.
+export function getViewLabel(id) {
+    const entry = VIEW_LABELS[id];
+    if (entry == null) return { text: id, animation: null };
+    if (typeof entry === 'string') return { text: entry, animation: null };
+    return { text: entry.text || id, animation: entry.animation || null };
+}
 
 const BASE_ORDER = ['plugins', 'store', 'hotkeys', 'shortcuts', 'task-runner', 'profile', 'logs'];
 
@@ -27,7 +41,7 @@ export function buildViewOrder(devEnabled) {
 }
 
 const WORLD_PAGES = [
-    { id: 'plugins',           render: (ctx) => html`<${PluginsView} onOpenPluginConfig=${ctx.openPluginConfig} onOpenPluginUi=${ctx.openPluginUi} />` },
+    { id: 'plugins',           render: (ctx) => html`<${PluginsView} onOpenPluginConfig=${ctx.openPluginConfig} />` },
     { id: 'store',             render: () => html`<${StoreView} />` },
     { id: 'hotkeys',           render: () => html`<${HotkeysView} />` },
     { id: 'shortcuts',         render: () => html`<${ShortcutsView} />` },

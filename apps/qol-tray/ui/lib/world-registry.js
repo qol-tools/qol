@@ -1,4 +1,4 @@
-import { cameraCenterFor } from './world-geometry.js';
+import { cameraTargetFor } from './world-geometry.js';
 
 const PAGE_WIDTH = 1280;
 const PAGE_HEIGHT = 900;
@@ -127,7 +127,7 @@ export function createWorldRegistry(viewOrder, manifest = {}, { contentSizedIds 
     function cameraTargetForView(id, viewportW, viewportH, zoom) {
         const e = entries.get(id);
         if (!e) return null;
-        return cameraCenterFor(e, viewportW, viewportH, zoom);
+        return cameraTargetFor(e, viewportW, viewportH, zoom);
     }
 
     return {

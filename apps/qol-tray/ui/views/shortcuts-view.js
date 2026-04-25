@@ -41,7 +41,7 @@ export function ShortcutsView() {
 
     return html`
         <div class="view-container content-shell">
-            <${PageHeader} title="Shortcuts" subtitle="User-defined launcher shortcuts for URLs and apps" />
+            <${PageHeader} subtitle="User-defined launcher shortcuts for URLs and apps" />
             <div class="view-body content-shell-body">
                 <div class="content-shell-inner">
                     <${SurfaceContainer} className="content-frame">
