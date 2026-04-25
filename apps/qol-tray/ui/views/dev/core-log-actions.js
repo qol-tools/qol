@@ -1,5 +1,7 @@
 import { jsonRequest, readResponseText } from '../../api/client.js';
 import { setDebugEnabled } from '../../lib/debug.js';
+import { diveViaSelector } from '../../lib/world-navigation-singleton.js';
+import { logFiltersSlot } from './log-filters-subpage.js';
 
 export function createCoreLogActions({ state, discoveryController, onNeedsRender }) {
     return {
@@ -24,29 +26,29 @@ async function toggleCoreLogs(state, discoveryController, onNeedsRender, section
     onNeedsRender();
 }
 
-async function editCoreLogFilters(state, discoveryController, onNeedsRender, sectionId) {
+function editCoreLogFilters(state, discoveryController, onNeedsRender, sectionId) {
     const control = state.coreLogControls[sectionId] || {};
     const current = Array.isArray(control.suppress_patterns) ? control.suppress_patterns : [];
-    const value = window.prompt(
-        'Mute log lines containing these comma-separated substrings (leave empty to clear):',
-        current.join(', ')
-    );
-    if (value === null) return;
-    try {
-        await saveCoreLogControl(sectionId, {
-            muted: !!control.muted,
-            suppress_patterns: normalizePatternsInput(value)
-        });
-        await discoveryController.loadCoreLogControls(true);
-    } catch (error) {
-        state.error = error?.message || 'Failed to update core log filters';
-    }
-    onNeedsRender();
-}
-
-function normalizePatternsInput(raw) {
-    if (!raw) return [];
-    return raw.split(',').map(v => v.trim()).filter(Boolean);
+    logFiltersSlot.set({
+        scope: 'core',
+        pluginId: null,
+        sectionId,
+        label: sectionId,
+        current,
+        save: async (patterns) => {
+            try {
+                await saveCoreLogControl(sectionId, {
+                    muted: !!control.muted,
+                    suppress_patterns: patterns,
+                });
+                await discoveryController.loadCoreLogControls(true);
+            } catch (error) {
+                state.error = error?.message || 'Failed to update core log filters';
+            }
+            onNeedsRender();
+        },
+    });
+    diveViaSelector('[data-view-id="dev"]');
 }
 
 async function saveCoreLogControl(sectionId, control) {
