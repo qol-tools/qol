@@ -5,7 +5,6 @@ import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../app/view-keyboard-context.js';
 
 import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
-import { UninstallConfirmModal } from './plugins/confirm-modal.js';
 import { PluginsGrid } from './plugins/grid.js';
 import { usePluginsList } from './plugins/use-list.js';
 import { usePluginsModal } from './plugins/use-modal.js';
@@ -29,7 +28,7 @@ export function PluginsView({ onOpenPluginConfig }) {
         list.setSelectedIndex(prev => clampIndex(prev, filtered.length));
     }, [filtered.length, list.setSelectedIndex]);
     const filteredList = { ...list, plugins: filtered, pluginsRef: filteredRef };
-    const modal = usePluginsModal(filtered);
+    const modal = usePluginsModal(filtered, list.refreshPlugins);
     const actions = usePluginActions(filteredList, modal, onOpenPluginConfig);
     const handleKey = usePluginsKeyHandler(filteredList, modal, actions);
     useRegisterViewKeyboard('plugins', handleKey, actions.isBlocking);
@@ -51,7 +50,7 @@ export function PluginsView({ onOpenPluginConfig }) {
         });
     }, []);
     const commands = useMemo(() => [
-        { id: 'plugins:uninstall', label: 'Uninstall selected plugin', run: () => { const p = filteredRef.current[list.selectedIndexRef.current]; if (p) modalRef.current.setConfirmPluginId(p.id); } },
+        { id: 'plugins:uninstall', label: 'Uninstall selected plugin', run: () => { const p = filteredRef.current[list.selectedIndexRef.current]; if (p) modalRef.current.triggerUninstallConfirm(p.id); } },
         { id: 'plugins:update', label: 'Update selected plugin', run: () => { const p = filteredRef.current[list.selectedIndexRef.current]; if (p?.update_available) actionsRef.current.updatePlugin(p.id); } },
         { id: 'plugins:settings', label: 'Open plugin settings', run: () => actionsRef.current.openSelected() },
         { id: 'plugins:menu', label: 'Toggle context menu', run: () => {
@@ -70,7 +69,5 @@ export function PluginsView({ onOpenPluginConfig }) {
                 updating=${actions.updating} onCardClick=${handleCardClick} onSelect=${list.setSelectedIndex}
                 onToggleMenu=${handleToggleMenu} onContextAction=${handleContextAction} />
         <//>
-        <${UninstallConfirmModal} plugin=${modal.confirmPlugin} pluginId=${modal.confirmPluginId}
-            onClose=${modal.clearConfirm} onConfirm=${actions.confirmUninstall} />
     </div>`;
 }

@@ -33,7 +33,7 @@ const ITEMS = [
         label: 'Delete',
         className: 'context-delete',
         requires: null,
-        handler: ({ modal }, pluginId) => modal.setConfirmPluginId(pluginId),
+        handler: ({ modal }, pluginId) => modal.triggerUninstallConfirm(pluginId),
     },
 ];
 

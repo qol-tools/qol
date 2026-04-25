@@ -1,7 +1,7 @@
 import { useCallback } from 'preact/hooks';
 import { useStateRef } from '../../lib/hooks/useStateRef.js';
 import { useGridNav } from '../../lib/hooks/useGridNav.js';
-import { updateInstalledPlugin, uninstallInstalledPlugin } from './data.js';
+import { updateInstalledPlugin } from './data.js';
 import { toast } from '../../lib/toast.js';
 
 async function doUpdate(pluginId, updatingRef, setUpdating, refreshPlugins) {
@@ -15,19 +15,6 @@ async function doUpdate(pluginId, updatingRef, setUpdating, refreshPlugins) {
     } finally {
         setUpdating(prev => { const s = new Set(prev); s.delete(pluginId); return s; });
         refreshPlugins();
-    }
-}
-
-async function doUninstall(confirmPluginIdRef, clearConfirm, refreshPlugins) {
-    const pluginId = confirmPluginIdRef.current;
-    clearConfirm();
-    if (!pluginId) return;
-    try {
-        await uninstallInstalledPlugin(pluginId);
-        toast('success', `Uninstalled ${pluginId}`);
-        await refreshPlugins();
-    } catch (error) {
-        toast('error', `Failed to uninstall ${pluginId}: ${error.message}`);
     }
 }
 
@@ -51,10 +38,6 @@ export function usePluginActions(list, modal, onOpenPluginConfig) {
         pluginId => doUpdate(pluginId, updatingRef, setUpdating, list.refreshPlugins),
         [list.refreshPlugins]
     );
-    const confirmUninstall = useCallback(
-        () => doUninstall(modal.confirmPluginIdRef, modal.clearConfirm, list.refreshPlugins),
-        [list.refreshPlugins, modal.clearConfirm]
-    );
     const openSelected = useCallback(
         () => doOpenSelected(list.pluginsRef, list.selectedIndexRef, onOpenPluginConfig),
         [onOpenPluginConfig]
@@ -72,8 +55,8 @@ export function usePluginActions(list, modal, onOpenPluginConfig) {
         if (card instanceof HTMLElement) card.focus({ preventScroll: true });
     }, []);
     const isBlocking = useCallback(
-        () => modal.confirmPluginIdRef.current !== null || modal.contextMenuOpenRef.current,
+        () => modal.contextMenuOpenRef.current,
         []
     );
-    return { updating, updatePlugin, confirmUninstall, openSelected, openConfig, navigateInGrid, focusSelectedCard, isBlocking };
+    return { updating, updatePlugin, openSelected, openConfig, navigateInGrid, focusSelectedCard, isBlocking };
 }
