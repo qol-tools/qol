@@ -86,6 +86,7 @@ function registerStaticDiveTargets(registry) {
         { parentId: 'shortcuts', subId: 'shortcuts-editor' },
         { parentId: 'logs', subId: 'logs-detail' },
         { parentId: 'task-runner', subId: 'task-runner-editor' },
+        { parentId: 'task-runner', subId: 'task-runner-test-runner', sourceSelector: '[data-dive-source="task-runner-test-runner"]' },
         { parentId: 'profile', subId: 'profile-backup-detail' },
         { parentId: 'dev', subId: 'dev-log-filters' },
         { parentId: 'plugins', subId: 'plugins-uninstall-confirm' },
@@ -109,7 +110,7 @@ function registerStaticDiveTargets(registry) {
             layer: claim.layer,
         });
         registry.addDiveTarget({
-            sourceSelector: `[data-view-id="${t.parentId}"]`,
+            sourceSelector: t.sourceSelector || `[data-view-id="${t.parentId}"]`,
             claim,
             pages: [t.subId],
         });
