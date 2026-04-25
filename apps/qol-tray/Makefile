@@ -1,8 +1,12 @@
-.PHONY: build release run dev dev-sync sync test check lint lint-fix fmt fmt-check icons clean install
+.PHONY: build release run dev dev-sync sync ensure-merge-driver test check lint lint-fix fmt fmt-check icons clean install
 
-WORKSPACE_BIN := $(abspath ..)/workspace/bin
+WORKSPACE_DIR := $(abspath ..)/workspace
+WORKSPACE_BIN := $(WORKSPACE_DIR)/bin
 
-sync:
+ensure-merge-driver:
+	@$(WORKSPACE_DIR)/scripts/install-merge-driver.sh --quiet
+
+sync: ensure-merge-driver
 	@$(WORKSPACE_BIN)/pull-qol-plugins
 
 dev-sync: sync dev
@@ -69,7 +73,7 @@ release:
 run: lint
 	cargo run --bin qol-tray
 
-dev: lint
+dev: ensure-merge-driver lint
 	-pkill -f 'qol-tray'
 	cargo run --bin qol-tray --features dev
 
