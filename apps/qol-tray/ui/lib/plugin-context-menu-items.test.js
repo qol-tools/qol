@@ -125,7 +125,7 @@ function makeCtx() {
         openConfig: () => calls.push(['openConfig']),
     };
     const modal = {
-        setConfirmPluginId: (id) => calls.push(['setConfirmPluginId', id]),
+        triggerUninstallConfirm: (id) => calls.push(['triggerUninstallConfirm', id]),
     };
     return { ctx: { actions, modal }, calls };
 }
@@ -143,10 +143,10 @@ test('dispatch: config runs openConfig', () => {
     assert.deepEqual(calls, [['openConfig']]);
 });
 
-test('dispatch: delete sets confirm plugin id', () => {
+test('dispatch: delete triggers the uninstall confirm subpage', () => {
     const { ctx, calls } = makeCtx();
     assert.equal(dispatchPluginContextAction('delete', 'plugin-c', ctx), true);
-    assert.deepEqual(calls, [['setConfirmPluginId', 'plugin-c']]);
+    assert.deepEqual(calls, [['triggerUninstallConfirm', 'plugin-c']]);
 });
 
 test('dispatch: unknown action id returns false and triggers no handlers', () => {

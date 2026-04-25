@@ -88,6 +88,7 @@ function registerStaticDiveTargets(registry) {
         { parentId: 'task-runner', subId: 'task-runner-editor' },
         { parentId: 'profile', subId: 'profile-backup-detail' },
         { parentId: 'dev', subId: 'dev-log-filters' },
+        { parentId: 'plugins', subId: 'plugins-uninstall-confirm' },
     ];
     for (const t of staticTargets) {
         const parent = registry.getEntry(t.parentId);

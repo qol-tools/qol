@@ -9,6 +9,7 @@ import { ProfileView, BackupDetailSubPage } from '../views/profile/view.js';
 import { DevView } from '../views/dev/view.js';
 import { LogsView, LogDetailSubPage } from '../views/logs-view.js';
 import { LogFiltersSubPage } from '../views/dev/log-filters-subpage.js';
+import { UninstallConfirmSubPage } from '../views/plugins/uninstall-confirm-subpage.js';
 
 // VIEW_LABELS: id → string OR { text, animation }.
 // Plain string is the default (no animation). The object form opts a single
@@ -56,6 +57,7 @@ const WORLD_PAGES = [
     { id: 'task-runner-editor', render: () => html`<${ActionEditorSubPage} />` },
     { id: 'profile-backup-detail', render: () => html`<${BackupDetailSubPage} />` },
     { id: 'dev-log-filters',   devOnly: true, render: () => html`<${LogFiltersSubPage} />` },
+    { id: 'plugins-uninstall-confirm', render: () => html`<${UninstallConfirmSubPage} />` },
 ];
 
 const PAGES_BY_ID = new Map(WORLD_PAGES.map(p => [p.id, p]));
