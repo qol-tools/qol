@@ -1,33 +1,44 @@
 import { html } from '../html.js';
-import { useCallback, useEffect, useRef } from 'preact/hooks';
+import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 
-export function CodeBlock({ text, onCopy, index, selected, onSelect }) {
+export function CodeBlock({ index, selected, onSelect, text }) {
     const ref = useRef(null);
-    const copy = useCallback(() => {
-        navigator.clipboard.writeText(text).then(() => {
-            if (onCopy) onCopy();
-        });
-    }, [text, onCopy]);
+    const [scrollMode, setScrollMode] = useState(false);
+
+    const enterScrollMode = useCallback(() => {
+        setScrollMode(true);
+        ref.current?.focus?.({ preventScroll: true });
+    }, []);
 
     useEffect(() => {
-        if (selected) ref.current?.focus?.({ preventScroll: true });
-    }, [selected]);
+        if (!scrollMode) return;
+        const el = ref.current;
+        if (!el) return;
+        const exit = () => setScrollMode(false);
+        el.addEventListener('exit-scroll-mode', exit);
+        el.addEventListener('blur', exit);
+        return () => {
+            el.removeEventListener('exit-scroll-mode', exit);
+            el.removeEventListener('blur', exit);
+        };
+    }, [scrollMode]);
 
-    const focusValue = index;
+    const className = ['code-block', scrollMode && 'is-scroll-mode'].filter(Boolean).join(' ');
     return html`
-        <pre ref=${ref} class="code-block"
+        <pre ref=${ref} class=${className}
             data-selected-surface=""
             data-selected=${selected != null ? (selected ? 'true' : 'false') : undefined}
             data-index=${index != null ? String(index) : undefined}
+            data-scroll-surface-active=${scrollMode ? '' : undefined}
             tabIndex="-1"
-            onFocus=${onSelect ? () => onSelect(focusValue) : undefined}
+            onFocus=${onSelect ? () => onSelect(index) : undefined}
+            onClick=${enterScrollMode}
             onKeyDown=${(e) => {
+                if (scrollMode) return;
                 if (e.key !== 'Enter' && e.key !== ' ') return;
-                if (e.target !== ref.current) return;
                 e.preventDefault();
-                copy();
+                enterScrollMode();
             }}
-            onClick=${copy}
-            title="Enter or click to copy. PgUp/PgDn/Home/End to scroll.">${text}</pre>
+            title=${scrollMode ? 'Esc to exit scroll mode' : 'Enter or click to enter scroll mode (PgUp/PgDn/Arrows/Home/End)'}>${text}</pre>
     `;
 }

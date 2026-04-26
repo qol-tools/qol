@@ -195,12 +195,23 @@ function isEditableInput(el) {
     return false;
 }
 
+function isScrollSurfaceActive(el) {
+    if (!(el instanceof HTMLElement)) return false;
+    return el.hasAttribute('data-scroll-surface-active');
+}
+
 function globalSurfaceNav(event) {
     if (event.key === 'Escape') {
+        if (isScrollSurfaceActive(document.activeElement)) {
+            event.preventDefault();
+            document.activeElement.dispatchEvent(new CustomEvent('exit-scroll-mode', { bubbles: true }));
+            return;
+        }
         if (ascendLayer()) { event.preventDefault(); }
         return;
     }
     if (isEditableInput(document.activeElement)) return;
+    if (isScrollSurfaceActive(document.activeElement)) return;
     const direction = NAV_KEYS_EXTENDED[event.key];
     if (direction) {
         event.preventDefault();
