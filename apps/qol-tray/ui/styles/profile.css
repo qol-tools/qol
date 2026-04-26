@@ -343,6 +343,23 @@
     min-height: var(--size-control-md);
 }
 
+.profile-action-btn.is-busy {
+    pointer-events: none;
+    cursor: wait;
+}
+
+.profile-action-spinner {
+    display: inline-block;
+    width: 0.85em;
+    height: 0.85em;
+    margin-right: var(--space-2);
+    border: 2px solid rgba(var(--accent-rgb), 0.25);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    vertical-align: -2px;
+    animation: spin 0.8s linear infinite;
+}
+
 .profile-toolbar-actions .profile-action-btn,
 .profile-section .section-actions .profile-action-btn {
     min-height: var(--size-control-btn-sm-h);

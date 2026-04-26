@@ -88,6 +88,24 @@ export function connectActionLabel(configured, providerKind) {
     return 'Connect Sync';
 }
 
+const ACTION_BUSY_LABELS = {
+    connect: { idle: '', busy: 'Connecting' },
+    pull: { idle: 'Pull Now', busy: 'Pulling' },
+    push: { idle: 'Push Now', busy: 'Pushing' },
+    disconnect: { idle: 'Disconnect', busy: 'Disconnecting' },
+    acknowledge: { idle: 'Acknowledge', busy: 'Acknowledging' },
+    export: { idle: 'Export', busy: 'Exporting' },
+    import: { idle: 'Import', busy: 'Importing' },
+};
+
+export function busyActionLabel(actionId, busy) {
+    const labels = ACTION_BUSY_LABELS[actionId];
+    if (!labels) {
+        return '';
+    }
+    return busy ? `${labels.busy}…` : labels.idle;
+}
+
 export function profileLastSyncSummary(syncStatus) {
     if (!syncStatus?.last_sync_at) {
         return 'Last sync never';

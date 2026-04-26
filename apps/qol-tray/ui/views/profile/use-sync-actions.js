@@ -138,6 +138,7 @@ export function useSyncActions({
 
     return {
         authPrompt,
+        busyAction,
         handleAcknowledge,
         handleConnect,
         handleDisconnect,

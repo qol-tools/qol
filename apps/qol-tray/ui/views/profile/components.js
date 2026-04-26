@@ -34,8 +34,12 @@ export function ProfileActionButton({ id, ctrl }) {
     const s = ctrl.surfaceById.get(id);
     const sel = surfaceSel(ctrl, id);
     if (!s || !sel) return null;
-    return html`<${Button} variant=${s.variant || 'btn-ghost'} className="profile-action-btn"
-        ...${sel} onActivate=${s.run}>${s.label}<//>`;
+    const cls = ['profile-action-btn', s.busy && 'is-busy'].filter(Boolean).join(' ');
+    return html`<${Button} variant=${s.variant || 'btn-ghost'} className=${cls}
+        ...${sel} onActivate=${s.run}>
+        ${s.busy && html`<span class="profile-action-spinner" aria-hidden="true"></span>`}
+        <span>${s.label}</span>
+    <//>`;
 }
 
 function ProfileInputField({ id, fieldId, label, hint = '', value, placeholder, type = 'text', className = '', ctrl, onInput }) {
