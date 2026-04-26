@@ -1,7 +1,7 @@
 import { html } from '../lib/html.js';
 import { useRef, useState, useEffect, useMemo, useCallback } from 'preact/hooks';
 import { usePaletteContext } from '../palette/context.js';
-import { getCommands, subscribeRegistry, getRegistryVersion } from '../palette/registry.js';
+import { getContextualCommands, subscribeRegistry, getRegistryVersion } from '../palette/registry.js';
 import init, { fuzzy_match as wasmFuzzyMatch } from '../wasm/qol_wasm.js';
 import { Surface } from '../lib/components/Surface.js';
 import { Peripheral } from './shell/Peripheral.js';
@@ -43,9 +43,7 @@ export function CommandPalette({ camera, navigation }) {
 
     const commands = useMemo(() => {
         if (!active || mode !== 'action') return [];
-        const raw = getCommands(activeViewId);
-        console.log('[palette] activeViewId:', activeViewId, '| raw:', raw.length, '| query:', JSON.stringify(actionQuery), '| wasm:', wasmLoaded, '| version:', registryVersion);
-        return filterCommands(raw, actionQuery, wasmLoaded);
+        return filterCommands(getContextualCommands(activeViewId), actionQuery, wasmLoaded);
     }, [active, mode, activeViewId, actionQuery, wasmLoaded, registryVersion]);
 
     useEffect(() => {
