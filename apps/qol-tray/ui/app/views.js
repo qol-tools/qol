@@ -1,4 +1,5 @@
 import { html } from '../lib/html.js';
+import { isSlotVisible, slotStyle } from '../lib/world-slot-style.js';
 import { PluginsView } from '../views/plugins-view.js';
 import { PluginConfigSectionView } from '../views/plugin-config/view.js';
 import { StoreView } from '../views/store-view.js';
@@ -22,13 +23,13 @@ export function buildViewOrder(devEnabled) {
 }
 
 const WORLD_PAGES = [
-    { id: 'plugins',           render: (ctx) => html`<${PluginsView} onOpenPluginConfig=${ctx.openPluginConfig} />` },
-    { id: 'store',             render: () => html`<${StoreView} />` },
-    { id: 'hotkeys',           render: () => html`<${HotkeysView} />` },
-    { id: 'shortcuts',         render: () => html`<${ShortcutsView} />` },
-    { id: 'task-runner',       render: () => html`<${TaskRunnerView} />` },
+    { id: 'plugins',           contentSized: true, render: (ctx) => html`<${PluginsView} onOpenPluginConfig=${ctx.openPluginConfig} />` },
+    { id: 'store',             contentSized: true, render: () => html`<${StoreView} />` },
+    { id: 'hotkeys',           contentSized: true, render: () => html`<${HotkeysView} />` },
+    { id: 'shortcuts',         contentSized: true, render: () => html`<${ShortcutsView} />` },
+    { id: 'task-runner',       contentSized: true, render: () => html`<${TaskRunnerView} />` },
     { id: 'profile',           contentSized: true, render: (ctx) => html`<${ProfileView} syncStatus=${ctx.syncStatus} syncProviders=${ctx.syncProviders} onSyncStatusChange=${ctx.onSyncStatusChange} refreshSyncStatus=${ctx.refreshSyncStatus} />` },
-    { id: 'logs',              render: () => html`<${LogsView} active=${true} />` },
+    { id: 'logs',              contentSized: true, render: () => html`<${LogsView} active=${true} />` },
     { id: 'dev',               devOnly: true, contentSized: true, render: () => html`<${DevView} />` },
     { id: 'hotkeys-editor',    render: () => html`<${HotkeyEditorSubPage} />` },
     { id: 'shortcuts-editor',  render: () => html`<${ShortcutEditorSubPage} />` },
@@ -58,12 +59,8 @@ export function renderPageContent(pageId, ctx) {
 
 function WorldViewSlot({ entry, cameraLayer, confinedPages, diveDepth, onJumpTo, children }) {
     if (!entry) return null;
-    const layerMatch = entry.layer === cameraLayer;
-    const confined = confinedPages && confinedPages.length > 0;
-    const ascending = entry.layer < 0 && (diveDepth ?? 0) === 0;
-    const visible = layerMatch && !ascending && (!confined || confinedPages.includes(entry.id));
-    const heightStyle = entry.contentSized ? '' : ` height:${entry.height}px;`;
-    const style = `left:${entry.x}px; top:${entry.y}px; width:${entry.width}px;${heightStyle}${visible ? '' : ' display:none;'}`;
+    const visible = isSlotVisible(entry, cameraLayer, confinedPages ?? [], diveDepth);
+    const style = slotStyle(entry, visible);
     const jumper = entry.layer === 0 && onJumpTo
         ? html`<button class="world-slot-jumper" tabindex="-1" aria-label=${`Jump to ${entry.id}`} onClick=${() => onJumpTo(entry.id)}></button>`
         : null;
