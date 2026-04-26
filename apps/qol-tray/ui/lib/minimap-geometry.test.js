@@ -427,7 +427,14 @@ test('slots: with sparse world layout (stride >> width), slots still pack to fil
 // The draw code currently computes scaled coordinates manually and never
 // touches the CTM; this test locks that in.
 
-import { drawMinimap, drawViewportRect, clampRectForDraw, VIEWPORT_MIN_WIDTH } from './minimap-draw.js';
+import {
+    computeLayerPulse,
+    drawMinimap,
+    drawViewportRect,
+    clampRectForDraw,
+    LAYER_PULSE_MS,
+    VIEWPORT_MIN_WIDTH,
+} from './minimap-draw.js';
 
 function makeMockCtx() {
     const state = { transforms: [[1, 0, 0, 1, 0, 0]], calls: [] };
@@ -808,4 +815,156 @@ test('computeSlotCoverage: at zoom 0.5 spanning entries i and i+1, both slots re
     assert.ok(Math.abs(computeSlotCoverage(slots[1], rect) - 1) < 1e-6);
     // Entry c is fully outside → coverage 0.
     assert.ok(computeSlotCoverage(slots[2], rect) < 1e-6);
+});
+
+// --- computeLayerPulse: layer-change visual cue ----------------------------
+// The viewport rect's geometric position can land on the same slot pre and
+// post a dive (Plugins → plugin → Plugins: every plugin sub-page is anchored
+// at the Plugins entry's x, so the rect always projects to the same Plugins
+// slot at root). Without a non-geometric cue the user perceives the rect as
+// "frozen". The pulse provides that cue. These tests lock the contract so
+// future changes don't accidentally suppress the cue or leave it always on.
+
+test('computeLayerPulse: returns null when no pulse is armed (start = null)', () => {
+    assert.equal(computeLayerPulse(1000, null), null);
+    assert.equal(computeLayerPulse(1000, undefined), null);
+});
+
+test('computeLayerPulse: returns null when pulse window has elapsed', () => {
+    assert.equal(computeLayerPulse(1000 + LAYER_PULSE_MS, 1000), null);
+    assert.equal(computeLayerPulse(1000 + LAYER_PULSE_MS + 1, 1000), null);
+});
+
+test('computeLayerPulse: returns null when nowMs is before start (clock skew guard)', () => {
+    // Negative t should be treated as not-yet-pulsing; we hand back null so
+    // the draw layer stays at baseline rather than fabricating a glow.
+    assert.equal(computeLayerPulse(900, 1000), null);
+});
+
+test('computeLayerPulse: returns null when duration is zero or negative', () => {
+    assert.equal(computeLayerPulse(1000, 990, 0), null);
+    assert.equal(computeLayerPulse(1000, 990, -100), null);
+});
+
+test('computeLayerPulse: at t=0 the boost is at its peak', () => {
+    const pulse = computeLayerPulse(1000, 1000);
+    assert.ok(pulse, 'pulse is active at t=0');
+    assert.ok(Math.abs(pulse.alphaBoost - 0.20) < 1e-9, `alphaBoost ${pulse.alphaBoost}`);
+    assert.ok(Math.abs(pulse.blurExtra - 14) < 1e-9, `blurExtra ${pulse.blurExtra}`);
+    assert.ok(Math.abs(pulse.widthBoost - 1.5) < 1e-9, `widthBoost ${pulse.widthBoost}`);
+    assert.equal(pulse.progress, 0);
+});
+
+test('computeLayerPulse: monotonically decays toward zero across the window', () => {
+    const start = 5000;
+    const samples = [0, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99].map(f => start + f * LAYER_PULSE_MS);
+    const pulses = samples.map(t => computeLayerPulse(t, start));
+    for (let i = 1; i < pulses.length; i++) {
+        assert.ok(
+            pulses[i].alphaBoost <= pulses[i - 1].alphaBoost + 1e-9,
+            `alphaBoost not monotone at i=${i}: ${pulses[i - 1].alphaBoost} → ${pulses[i].alphaBoost}`,
+        );
+        assert.ok(
+            pulses[i].blurExtra <= pulses[i - 1].blurExtra + 1e-9,
+            `blurExtra not monotone at i=${i}`,
+        );
+        assert.ok(
+            pulses[i].widthBoost <= pulses[i - 1].widthBoost + 1e-9,
+            `widthBoost not monotone at i=${i}`,
+        );
+    }
+    // Last sample (just before window end) is close to zero.
+    const tail = pulses.at(-1);
+    assert.ok(tail.alphaBoost < 0.01, `tail alphaBoost ${tail.alphaBoost} should be near zero`);
+});
+
+test('property: pulse boosts are always non-negative inside the window (200 cases)', () => {
+    const rng = makeRng(0xBADC0DE5);
+    const start = 1000;
+    for (let i = 0; i < 200; i++) {
+        const t = start + rng() * LAYER_PULSE_MS;
+        const pulse = computeLayerPulse(t, start);
+        assert.ok(pulse, `case ${i}: expected pulse at t=${t}`);
+        assert.ok(pulse.alphaBoost >= -1e-9, `case ${i}: alphaBoost=${pulse.alphaBoost} < 0`);
+        assert.ok(pulse.blurExtra >= -1e-9, `case ${i}: blurExtra=${pulse.blurExtra} < 0`);
+        assert.ok(pulse.widthBoost >= -1e-9, `case ${i}: widthBoost=${pulse.widthBoost} < 0`);
+        assert.ok(pulse.progress >= 0 && pulse.progress < 1, `case ${i}: progress=${pulse.progress} outside [0,1)`);
+    }
+});
+
+// --- Layer-change rect invariant -------------------------------------------
+// Codex's hypothesis: pre-dive and post-ascend rect at Plugins land at the
+// SAME pixel position because plugin sub-pages anchor at pluginsEntry.x.
+// Lock that invariant so we know geometric drift would be a regression, not
+// the fix to chase. The pulse is the load-bearing visible cue.
+
+test('rect at Plugins page is identical before dive and after ascend (Codex hypothesis lock)', () => {
+    const PAGE_STRIDE = 10000;
+    const PAGE_W = 1280;
+    const PAGE_H = 900;
+    const minimapWidth = 380;
+    const canvasHeight = 209;
+    const viewportWidthPx = 1200;
+
+    const rootEntries = ['plugins', 'store', 'hotkeys', 'shortcuts', 'profile'].map((id, i) => ({
+        id, x: i * PAGE_STRIDE, y: 0, width: PAGE_W, height: PAGE_H,
+    }));
+    // Camera anchored on Plugins page at zoom 1.
+    const cam = cameraTargetFor(rootEntries[0], viewportWidthPx, 600, 1);
+    const computeAt = () => computeMinimapViewportRect({
+        sortedEntries: rootEntries,
+        cameraX: cam.x,
+        cameraZoom: 1,
+        viewportWidthPx,
+        minimapWidth,
+        canvasHeight,
+    });
+    const before = computeAt();
+    const after = computeAt();
+    assert.ok(Math.abs(before.x - after.x) < 1e-9, `x drift: ${before.x} vs ${after.x}`);
+    assert.ok(Math.abs(before.width - after.width) < 1e-9, `width drift: ${before.width} vs ${after.width}`);
+    assert.ok(Math.abs(before.y - after.y) < 1e-9, `y drift: ${before.y} vs ${after.y}`);
+    assert.ok(Math.abs(before.height - after.height) < 1e-9, `height drift`);
+});
+
+// --- drawViewportRect: pulse is plumbed through ----------------------------
+
+test('drawViewportRect: passing a pulse increases stroke width above the baseline 2px', () => {
+    const ctx = makeMockCtxWithPaths();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    let lastWidth = null;
+    Object.defineProperty(ctx, 'lineWidth', {
+        configurable: true,
+        set(v) { lastWidth = v; },
+        get() { return lastWidth; },
+    });
+    drawViewportRect(ctx, 200, 60, { x: 50, width: 40, y: 10, height: 40 },
+        { progress: 0, alphaBoost: 0.2, blurExtra: 14, widthBoost: 1.5 });
+    assert.ok(lastWidth > 2 + 1e-9, `lineWidth ${lastWidth} should exceed baseline 2 during pulse`);
+});
+
+test('drawViewportRect: with null pulse, stroke width stays at baseline 2px', () => {
+    const ctx = makeMockCtxWithPaths();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    let lastWidth = null;
+    Object.defineProperty(ctx, 'lineWidth', {
+        configurable: true,
+        set(v) { lastWidth = v; },
+        get() { return lastWidth; },
+    });
+    drawViewportRect(ctx, 200, 60, { x: 50, width: 40, y: 10, height: 40 }, null);
+    assert.ok(Math.abs(lastWidth - 2) < 1e-9, `lineWidth ${lastWidth} drifted from baseline 2 with null pulse`);
+});
+
+test('drawViewportRect: with omitted pulse arg, stroke width stays at baseline 2px (back-compat)', () => {
+    const ctx = makeMockCtxWithPaths();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    let lastWidth = null;
+    Object.defineProperty(ctx, 'lineWidth', {
+        configurable: true,
+        set(v) { lastWidth = v; },
+        get() { return lastWidth; },
+    });
+    drawViewportRect(ctx, 200, 60, { x: 50, width: 40, y: 10, height: 40 });
+    assert.ok(Math.abs(lastWidth - 2) < 1e-9, `lineWidth ${lastWidth} drifted with omitted pulse arg`);
 });

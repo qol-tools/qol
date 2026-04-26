@@ -8,7 +8,7 @@ import { Peripheral } from './Peripheral.js';
 import { clampPercent, formatDownloadingProgress, formatPhaseProgress, toProgressScale } from '../../utils/progress.js';
 import { computeMinimapSlots, computeMinimapViewportRect } from '../../lib/minimap-geometry.js';
 import { visibleMinimapEntries } from '../../lib/minimap-filter.js';
-import { drawMinimap, drawViewportRect } from '../../lib/minimap-draw.js';
+import { computeLayerPulse, drawMinimap, drawViewportRect, LAYER_PULSE_MS } from '../../lib/minimap-draw.js';
 import { cameraTargetFor } from '../../lib/world-geometry.js';
 import { ToggleSwitch } from '../../lib/components/ToggleSwitch.js';
 import { CustomSelect } from '../../lib/components/CustomSelect.js';
@@ -170,14 +170,41 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
     const [, bump] = useState(0);
     const [flash, setFlash] = useState(null);
     const flashTimerRef = useRef(0);
+    const pulseStartRef = useRef(null);
+    const pulseRafRef = useRef(0);
 
     useEffect(() => {
         let anchorX = camera.x;
         let anchorY = camera.y;
+        let lastLayer = camera.layer;
         let resetTimer = 0;
+
+        const drivePulseFrames = () => {
+            if (pulseStartRef.current == null) return;
+            bump(t => t + 1);
+            const elapsed = performance.now() - pulseStartRef.current;
+            if (elapsed >= LAYER_PULSE_MS) {
+                pulseStartRef.current = null;
+                pulseRafRef.current = 0;
+                return;
+            }
+            pulseRafRef.current = requestAnimationFrame(drivePulseFrames);
+        };
 
         const unsub = camera.subscribe(() => {
             clearTimeout(resetTimer);
+
+            // Layer transition (dive or ascend): the rect's geometric position
+            // can land on the same slot pre/post (Plugins → plugin → Plugins),
+            // so a pulse provides the visible "you crossed a layer" cue that
+            // pure geometry can't here.
+            if (camera.layer !== lastLayer) {
+                lastLayer = camera.layer;
+                pulseStartRef.current = performance.now();
+                if (!pulseRafRef.current) {
+                    pulseRafRef.current = requestAnimationFrame(drivePulseFrames);
+                }
+            }
 
             const dx = camera.x - anchorX;
             const dy = camera.y - anchorY;
@@ -203,7 +230,13 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
             bump(t => t + 1);
         });
 
-        return () => { unsub(); clearTimeout(resetTimer); };
+        return () => {
+            unsub();
+            clearTimeout(resetTimer);
+            if (pulseRafRef.current) cancelAnimationFrame(pulseRafRef.current);
+            pulseRafRef.current = 0;
+            pulseStartRef.current = null;
+        };
     }, [camera]);
 
     useEffect(() => () => clearTimeout(flashTimerRef.current), []);
@@ -249,8 +282,9 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
             minimapWidth: cw,
             canvasHeight: ch,
         });
+        const pulse = computeLayerPulse(performance.now(), pulseStartRef.current);
         drawMinimap(ctx, cw, ch, sorted, slots, activeId, labelFor, rect);
-        drawViewportRect(ctx, cw, ch, rect);
+        drawViewportRect(ctx, cw, ch, rect, pulse);
     });
 
     const onClick = (e) => {
