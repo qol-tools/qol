@@ -6,6 +6,7 @@
 .DS_Store
 .github-token
 .plugin-cache.json
+.qol-tray-dev-hooks
 /.cursor.idea/
 
 .cursor/
