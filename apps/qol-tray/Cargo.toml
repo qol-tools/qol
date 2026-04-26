@@ -65,7 +65,7 @@ tower-http = { version = "0.6", default-features = false, features = ["set-heade
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 
 # Global hotkeys
-global-hotkey = { version = "0.7", features = ["serde"] }
+global-hotkey = "0.7"
 
 # Embed static files
 rust-embed = "8.0"

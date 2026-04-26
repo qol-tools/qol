@@ -743,7 +743,6 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "once_cell",
- "serde",
  "thiserror 2.0.18",
  "windows-sys 0.59.0",
  "x11rb",
