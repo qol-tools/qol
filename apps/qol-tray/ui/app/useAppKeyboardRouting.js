@@ -5,7 +5,6 @@ import { useViewKeyboardContext } from './view-keyboard-context.js';
 import { createDebug, elLabel } from '../lib/debug.js';
 import { nearestSurfaceToCenter, isInViewport } from '../lib/viewport-spatial.js';
 import {
-    activateSurface,
     activeContainer,
     directSurfaces,
     isVisible,
@@ -29,7 +28,6 @@ function cycleIndex(current, length, reverse) {
         : (current + 1) % length;
 }
 let _cameraRef = { current: null };
-let _diveRef = { current: null };
 let _ascendRef = { current: null };
 
 export function useAppKeyboardRouting({
@@ -40,7 +38,6 @@ export function useAppKeyboardRouting({
     switchView,
     viewOrder,
     palette,
-    dive,
     ascend,
     navigation,
     registry,
@@ -48,7 +45,6 @@ export function useAppKeyboardRouting({
     const pluginConfig = usePluginConfigContext();
     const { getViewKeyboard } = useViewKeyboardContext();
     _cameraRef.current = camera;
-    _diveRef.current = dive;
     _ascendRef.current = ascend;
     const viewOrderRef = useRef(viewOrder);
     viewOrderRef.current = viewOrder;
@@ -158,22 +154,6 @@ function routeToView(event, viewKeyboard, cycleView) {
         cycleView(event);
         return;
     }
-    // Dive-target takes priority: plain Enter on a surface with data-dive-target always dives.
-    // Modifier-held Enter (Shift/Ctrl/Meta) falls through to globalSurfaceNav so the surface's
-    // secondary action runs instead of being shadowed by the dive shortcut.
-    const diveModifierHeld = event.shiftKey || event.ctrlKey || event.metaKey;
-    if ((event.key === 'Enter' || event.key === ' ') && !hasVisibleModal() && !diveModifierHeld) {
-        const focused = document.activeElement;
-        const surface = focused instanceof HTMLElement ? focused.closest('[data-dive-target]') : null;
-        if (surface && _diveRef.current) {
-            event.preventDefault();
-            activateSurface(surface);
-            surface.setAttribute('data-dive-source', '');
-            requestAnimationFrame(() => _diveRef.current(surface.getAttribute('data-dive-target'), surface));
-            return;
-        }
-    }
-
     if (viewKeyboard?.isBlocking?.()) {
         if (viewKeyboard.handleKey) viewKeyboard.handleKey(event);
         if (!event.defaultPrevented) globalSurfaceNav(event);
@@ -286,23 +266,9 @@ function focusWithoutScroll(el) {
 function activateAndMaybeDescend(keyEvent) {
     const current = findSelectedSurface();
     if (!current) return;
-
-    if (current.getAttribute('role') === 'tab') {
-        dispatchModifierClick(current, keyEvent);
-        return;
-    }
-
     dispatchModifierClick(current, keyEvent);
-
     if (keyEvent?.shiftKey || keyEvent?.ctrlKey || keyEvent?.metaKey) return;
-
-    const diveTarget = current.getAttribute('data-dive-target');
-    if (diveTarget && _diveRef.current) {
-        current.setAttribute('data-dive-source', '');
-        requestAnimationFrame(() => _diveRef.current(diveTarget, current));
-        return;
-    }
-
+    if (current.getAttribute('data-dive-target')) return;
     if (surfaceContainsChildContainer(current)) {
         requestAnimationFrame(() => descendIntoChild(current));
     }
