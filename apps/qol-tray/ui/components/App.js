@@ -81,7 +81,7 @@ function computeGroundConfinement(registry, viewOrder) {
 
 function registerStaticDiveTargets(registry) {
     const PAGE_WIDTH = 1280;
-    const PAGE_HEIGHT = 900;
+    const PAGE_FRAME_HEIGHT = 900;
     const staticTargets = [
         { parentId: 'hotkeys', subId: 'hotkeys-editor', label: 'Hotkey Editor' },
         { parentId: 'shortcuts', subId: 'shortcuts-editor', label: 'Shortcut Editor' },
@@ -101,7 +101,7 @@ function registerStaticDiveTargets(registry) {
             x: parent.x,
             y: parent.y,
             width: PAGE_WIDTH,
-            height: PAGE_HEIGHT,
+            height: PAGE_FRAME_HEIGHT,
             layer: parent.layer - 1,
         };
         registry.addEntry({
@@ -109,9 +109,10 @@ function registerStaticDiveTargets(registry) {
             x: claim.x,
             y: claim.y,
             width: PAGE_WIDTH,
-            height: PAGE_HEIGHT,
+            height: PAGE_FRAME_HEIGHT,
             layer: claim.layer,
             label: t.label,
+            contentSized: true,
         });
         registry.addDiveTarget({
             sourceSelector: t.sourceSelector || `[data-view-id="${t.parentId}"]`,
@@ -169,6 +170,7 @@ function registerPluginDiveTarget(registry, plugin, sections, traits, pluginsEnt
             height: PLUGIN_PAGE_HEIGHT,
             layer: inner.layer,
             label: section?.label || prettyLabel(sectionId),
+            contentSized: true,
         });
         pageIds.push(pageId);
     }
