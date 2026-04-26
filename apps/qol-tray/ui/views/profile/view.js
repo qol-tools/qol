@@ -6,6 +6,7 @@ import { Surface } from '../../lib/components/Surface.js';
 import { Expander, ExpanderTrigger, ExpanderBody } from '../../lib/components/Expander.js';
 import { Badge, HealthDot, Alert } from '../../lib/components/StatusIndicators.js';
 import { Button } from '../../lib/components/Button.js';
+import { ConfirmButton } from '../../lib/components/ConfirmButton.js';
 import { CodeBlock } from '../../lib/components/CodeBlock.js';
 import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../../app/view-keyboard-context.js';
@@ -205,10 +206,6 @@ export function BackupDetailSubPage() {
     };
     const acknowledge = () => { onAcknowledge?.(); dispatchEscape(); };
     const restore = () => {
-        const proceed = window.confirm(
-            `Restore "${preview.file_name}"?\n\nThis will replace your current hotkeys, shortcuts, task-runner config, and plugin configs with the contents of this backup.`,
-        );
-        if (!proceed) return;
         importProfileText(preview.content)
             .then(() => dispatchEscape())
             .catch((err) => toast('error', `Failed to restore backup: ${err.message}`));
@@ -234,7 +231,7 @@ export function BackupDetailSubPage() {
                                     .catch((err) => toast('error', `Failed to open: ${err.message}`));
                             }}>Open in editor<//>
                             <${Button} variant="btn-ghost" onActivate=${copy}>Copy<//>
-                            <${Button} variant="btn-primary" onActivate=${restore}>Restore this backup<//>
+                            <${ConfirmButton} confirmWith="restore" onActivate=${restore}>Restore this backup<//>
                             ${isIncidentBackup && html`<${Button} variant="btn-ghost" onActivate=${acknowledge}>Looks Good<//>`}
                         </div>
                     <//>
