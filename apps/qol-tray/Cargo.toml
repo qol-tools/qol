@@ -58,8 +58,8 @@ dirs = "6.0.0"
 open = "5"
 
 # Web server for plugin store UI
-axum = { version = "0.8.7", features = ["ws", "macros"] }
-tower-http = { version = "0.6", features = ["fs", "trace", "set-header"] }
+axum = "0.8.7"
+tower-http = { version = "0.6", default-features = false, features = ["set-header"] }
 
 # HTTP client for GitHub API
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
@@ -89,9 +89,8 @@ gtk = "0.18"
 x11rb = { version = "0.13", features = ["allow-unsafe-code"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSObject"] }
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSRunningApplication"] }
+objc2-foundation = { version = "0.3", default-features = false }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSApplication"] }
 mach2 = "0.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
