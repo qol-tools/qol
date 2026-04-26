@@ -43,47 +43,10 @@ const ACCENT_R = 74;
 const ACCENT_G = 158;
 const ACCENT_B = 255;
 
-// Layer-change pulse duration. When the camera changes layer (dive or ascend),
-// the rect briefly glows so the user can perceive the transition even when
-// the rect's geometric position lands on the same slot pre and post (the
-// Plugins → plugin → Plugins case: every plugin sub-page is anchored at the
-// Plugins entry's x, so the rect at root layer always projects onto the same
-// Plugins slot, making the change otherwise invisible).
-export const LAYER_PULSE_MS = 320;
-
 function slotAlpha(coverage, floor) {
     if (!(coverage >= 0)) return floor;
     if (coverage >= 1) return 1;
     return floor + (1 - floor) * coverage;
-}
-
-// Layer-change pulse — pure function so it can be property-tested directly.
-// Returns multipliers the draw layer applies to the viewport rect's stroke
-// width, shadow blur, and fill alpha so the rect briefly glows when the user
-// crosses a layer boundary. Progress runs 0 → 1 over LAYER_PULSE_MS, then
-// returns null (no pulse). Eases via 1 - (1 - t)^2 (ease-out quadratic) so the
-// glow snaps in then decays smoothly.
-//
-// Inputs:
-//   nowMs:           current timestamp (performance.now())
-//   pulseStartedAt:  timestamp captured at the moment camera.layer changed,
-//                    or null/undefined if no pulse is active.
-// Output:
-//   { progress, alphaBoost, blurExtra, widthBoost } — additive multipliers,
-//   all 0 outside the pulse window. Caller can branch on the falsy value.
-export function computeLayerPulse(nowMs, pulseStartedAt, durationMs = LAYER_PULSE_MS) {
-    if (pulseStartedAt == null) return null;
-    if (!(durationMs > 0)) return null;
-    const t = (nowMs - pulseStartedAt) / durationMs;
-    if (!(t >= 0) || t >= 1) return null;
-    const ease = 1 - (1 - t) * (1 - t);
-    const fade = 1 - ease;
-    return {
-        progress: t,
-        alphaBoost: 0.20 * fade,
-        blurExtra: 14 * fade,
-        widthBoost: 1.5 * fade,
-    };
 }
 
 function roundRect(ctx, x, y, w, h, r) {
@@ -206,20 +169,14 @@ export function clampRectForDraw(rect, cw, minWidth = VIEWPORT_MIN_WIDTH) {
     return { x, width: targetWidth };
 }
 
-export function drawViewportRect(ctx, cw, ch, rect, pulse = null) {
+export function drawViewportRect(ctx, cw, ch, rect) {
     const clamped = clampRectForDraw(rect, cw);
     if (clamped.width <= 0) return;
     const y = rect.y != null ? rect.y : 0;
     const h = rect.height != null ? rect.height : ch;
-    const fillAlpha = 0.18 + (pulse?.alphaBoost ?? 0);
-    const strokeWidth = 2 + (pulse?.widthBoost ?? 0);
-    const shadowBlur = 6 + (pulse?.blurExtra ?? 0);
-    const strokeAlpha = Math.min(1, 0.95 + (pulse?.alphaBoost ?? 0));
 
     // Fill — translucent accent so the covered slots show through tinted.
-    // During a layer-change pulse the alpha lifts briefly so the rect's
-    // motion across the layer boundary is visible to the user.
-    ctx.fillStyle = `rgba(${ACCENT_R}, ${ACCENT_G}, ${ACCENT_B}, ${fillAlpha})`;
+    ctx.fillStyle = `rgba(${ACCENT_R}, ${ACCENT_G}, ${ACCENT_B}, 0.18)`;
     roundRect(ctx, clamped.x, y, clamped.width, h, RADIUS);
     ctx.fill();
 
@@ -228,9 +185,9 @@ export function drawViewportRect(ctx, cw, ch, rect, pulse = null) {
     // edge so the two signals read as distinct.
     ctx.save();
     ctx.shadowColor = `rgba(${ACCENT_R}, ${ACCENT_G}, ${ACCENT_B}, 0.45)`;
-    ctx.shadowBlur = shadowBlur;
-    ctx.strokeStyle = `rgba(${ACCENT_R}, ${ACCENT_G}, ${ACCENT_B}, ${strokeAlpha})`;
-    ctx.lineWidth = strokeWidth;
+    ctx.shadowBlur = 6;
+    ctx.strokeStyle = `rgba(${ACCENT_R}, ${ACCENT_G}, ${ACCENT_B}, 0.95)`;
+    ctx.lineWidth = 2;
     roundRect(ctx, clamped.x, y, clamped.width, h, RADIUS);
     ctx.stroke();
     ctx.restore();
