@@ -2,9 +2,13 @@ use anyhow::Result;
 use std::path::Path;
 
 pub(crate) fn open_dir(dir: &Path) -> Result<()> {
-    if !dir.exists() {
-        anyhow::bail!("Directory does not exist");
+    open_path(dir)
+}
+
+pub(crate) fn open_path(path: &Path) -> Result<()> {
+    if !path.exists() {
+        anyhow::bail!("Path does not exist");
     }
-    std::process::Command::new("open").arg(dir).spawn()?;
+    std::process::Command::new("open").arg(path).spawn()?;
     Ok(())
 }

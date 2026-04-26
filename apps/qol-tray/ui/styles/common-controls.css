@@ -31,6 +31,26 @@
     cursor: default;
 }
 
+body[data-shift-held] [data-selected-surface][data-selected="true"][data-secondary-label]::after {
+    content: "Shift: " attr(data-secondary-label);
+    position: absolute;
+    top: var(--space-2, 0.5rem);
+    right: var(--space-2, 0.5rem);
+    padding: 2px var(--space-2, 0.5rem);
+    background: rgba(var(--accent-rgb), 0.18);
+    color: var(--text-primary);
+    border: 1px solid rgba(var(--accent-rgb), 0.45);
+    border-radius: var(--radius-sm, 4px);
+    font-size: var(--fs-xs, 0.75rem);
+    font-family: var(--font-sans);
+    pointer-events: none;
+    z-index: 5;
+}
+
+body[data-shift-held] [data-selected-surface][data-selected="true"][data-secondary-label] {
+    position: relative;
+}
+
 .toggle-inline {
     display: flex;
     align-items: center;

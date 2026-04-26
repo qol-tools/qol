@@ -4,6 +4,7 @@ import { createSharedSlot } from '../../lib/shared-slot.js';
 import {
     fetchProfileBackupPreview,
     fetchProfileBackups,
+    openProfileBackupFile,
     openProfileBackupsDir,
 } from './actions.js';
 
@@ -43,9 +44,18 @@ export function useBackups({ incident, syncStatus }) {
         }
     }, []);
 
+    const handleOpenBackupFile = useCallback(async (fileName) => {
+        try {
+            await openProfileBackupFile(fileName);
+        } catch (error) {
+            toast('error', `Failed to open backup: ${error.message}`);
+        }
+    }, []);
+
     return {
         backupPreview,
         backups,
+        handleOpenBackupFile,
         handleOpenBackups,
         handlePreviewBackup,
         setBackupPreview,
