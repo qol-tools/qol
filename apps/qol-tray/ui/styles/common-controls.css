@@ -11,10 +11,18 @@
     word-break: break-word;
     cursor: pointer;
     line-height: var(--lh-relaxed);
+    max-height: 70vh;
+    overflow: auto;
+    outline: none;
 }
 
 .code-block:hover {
     border-color: var(--border-hover);
+}
+
+.code-block:focus-visible {
+    border-color: var(--border-focus, var(--border-hover));
+    box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.25);
 }
 
 .toggle-inline {
