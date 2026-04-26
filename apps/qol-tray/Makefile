@@ -1,16 +1,12 @@
-.PHONY: build release run dev sync ensure-merge-driver test check lint lint-fix fmt fmt-check icons clean install
+.PHONY: build release run dev setup test check lint lint-fix fmt fmt-check icons clean install
 
-ensure-merge-driver:
-	@if command -v qol-install-merge-driver >/dev/null 2>&1; then \
-		qol-install-merge-driver --quiet; \
-	fi
+DEV_HOOKS := .qol-tray-dev-hooks
 
-sync: ensure-merge-driver
-	@if command -v qol-sync >/dev/null 2>&1; then \
-		qol-sync; \
-	else \
-		echo "skip: qol-sync not on PATH (source qol-cicd/bin/activate.sh)"; \
-	fi
+setup:
+	@bash scripts/dev-setup.sh
+
+$(DEV_HOOKS):
+	@bash scripts/dev-setup.sh
 
 build: lint
 	cargo build
@@ -74,7 +70,8 @@ release:
 run: lint
 	cargo run --bin qol-tray
 
-dev: sync lint
+dev: $(DEV_HOOKS) lint
+	@if [ -x ./$(DEV_HOOKS) ]; then ./$(DEV_HOOKS); fi
 	-pkill -f 'qol-tray'
 	cargo run --bin qol-tray --features dev
 
