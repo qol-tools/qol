@@ -31,24 +31,29 @@
     cursor: default;
 }
 
-body[data-shift-held] [data-selected-surface][data-selected="true"][data-secondary-label]::after {
-    content: "Shift: " attr(data-secondary-label);
-    position: absolute;
-    top: var(--space-2, 0.5rem);
-    right: var(--space-2, 0.5rem);
-    padding: 2px var(--space-2, 0.5rem);
-    background: rgba(var(--accent-rgb), 0.18);
-    color: var(--text-primary);
-    border: 1px solid rgba(var(--accent-rgb), 0.45);
-    border-radius: var(--radius-sm, 4px);
-    font-size: var(--fs-xs, 0.75rem);
-    font-family: var(--font-sans);
-    pointer-events: none;
-    z-index: 5;
+body[data-shift-held] [data-selected-surface][data-secondary-label][data-selected="true"],
+body[data-shift-held] [data-selected-surface][data-secondary-label]:focus {
+    position: relative;
 }
 
-body[data-shift-held] [data-selected-surface][data-selected="true"][data-secondary-label] {
-    position: relative;
+body[data-shift-held] [data-selected-surface][data-secondary-label][data-selected="true"]::after,
+body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after {
+    content: attr(data-secondary-label);
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(2px);
+    border-radius: inherit;
+    color: var(--accent);
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-semibold);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    z-index: var(--z-control);
+    pointer-events: none;
 }
 
 .toggle-inline {

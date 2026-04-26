@@ -15,6 +15,8 @@ use super::types::AppState;
 
 pub(super) use hotkey_handlers::get_hotkey_errors;
 pub(super) use hotkey_handlers::get_hotkeys;
+pub(super) use hotkey_handlers::open_hotkeys_file;
+pub(super) use hotkey_handlers::open_shortcuts_file;
 pub(super) use hotkey_handlers::set_hotkeys;
 pub(super) use media_apps_handlers::list_apps;
 pub(super) use media_cover_handlers::serve_cover;
@@ -37,6 +39,8 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/hotkeys", get(get_hotkeys))
         .route("/hotkeys", axum::routing::put(set_hotkeys))
         .route("/hotkeys/errors", get(get_hotkey_errors))
+        .route("/hotkeys/open-file", post(open_hotkeys_file))
+        .route("/shortcuts/open-file", post(open_shortcuts_file))
         .route("/shortcuts", get(shortcut_handlers::list_shortcuts))
         .route("/shortcuts", post(shortcut_handlers::create_shortcut))
         .route(
