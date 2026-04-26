@@ -21,7 +21,7 @@ import {
 } from './components.js';
 import { providerFieldSurfaceId } from './form.js';
 import { backupPreviewSlot } from './use-backups.js';
-import { openProfileBackupFile } from './actions.js';
+import { importProfileText, openProfileBackupFile } from './actions.js';
 import {
     formatBackupPreview,
     profileHealthLabel,
@@ -204,6 +204,15 @@ export function BackupDetailSubPage() {
         toast('success', 'Copied to clipboard');
     };
     const acknowledge = () => { onAcknowledge?.(); dispatchEscape(); };
+    const restore = () => {
+        const proceed = window.confirm(
+            `Restore "${preview.file_name}"?\n\nThis will replace your current hotkeys, shortcuts, task-runner config, and plugin configs with the contents of this backup.`,
+        );
+        if (!proceed) return;
+        importProfileText(preview.content)
+            .then(() => dispatchEscape())
+            .catch((err) => toast('error', `Failed to restore backup: ${err.message}`));
+    };
     return html`
         <div class="view-container content-shell">
             <${PageHeader} title=${preview.file_name} subtitle=${isIncidentBackup ? 'Backup awaiting review' : 'Backup preview'} />
@@ -224,8 +233,9 @@ export function BackupDetailSubPage() {
                                 openProfileBackupFile(preview.file_name)
                                     .catch((err) => toast('error', `Failed to open: ${err.message}`));
                             }}>Open in editor<//>
-                            <${Button} variant=${isIncidentBackup ? 'btn-ghost' : 'btn-primary'} onActivate=${copy}>Copy<//>
-                            ${isIncidentBackup && html`<${Button} variant="btn-primary" onActivate=${acknowledge}>Looks Good<//>`}
+                            <${Button} variant="btn-ghost" onActivate=${copy}>Copy<//>
+                            <${Button} variant="btn-primary" onActivate=${restore}>Restore this backup<//>
+                            ${isIncidentBackup && html`<${Button} variant="btn-ghost" onActivate=${acknowledge}>Looks Good<//>`}
                         </div>
                     <//>
                 </div>
