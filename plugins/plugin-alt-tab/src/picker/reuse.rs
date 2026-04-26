@@ -16,6 +16,7 @@ pub(crate) struct ReuseRequest<'a> {
     pub layout: &'a ReuseLayout,
     pub config: &'a AltTabConfig,
     pub gathered: &'a GatheredWindows,
+    pub reverse: bool,
 }
 
 pub(super) struct LayoutInput<'a> {

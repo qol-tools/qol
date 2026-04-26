@@ -152,7 +152,13 @@ impl AltTabApp {
         if req.gathered.windows.len() < 2 {
             return;
         }
-        self.delegate.update(cx, |s, _| s.select_next());
+        self.delegate.update(cx, |s, _| {
+            if req.reverse {
+                s.select_prev();
+            } else {
+                s.select_next();
+            }
+        });
     }
 
     fn apply_gathered(&mut self, gathered: &GatheredWindows, reset: bool, cx: &mut Context<Self>) {

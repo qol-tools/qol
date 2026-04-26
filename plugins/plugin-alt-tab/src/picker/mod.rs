@@ -116,6 +116,7 @@ fn try_reuse_existing(
         layout: &layout,
         config: req.config,
         gathered,
+        reverse: req.reverse,
     };
     if reuse::try_reuse(&reuse_req, cx) {
         if source_key != target {
@@ -517,5 +518,104 @@ pub(crate) mod state {
         let target_start = (row + 1) * g.cols;
         let target_end = g.row_end(row + 1);
         target_start + col.min(target_end - target_start - 1)
+    }
+
+    #[cfg(test)]
+    mod cycle_direction_tests {
+        use super::PickerState;
+        use crate::config::{ActionMode, LabelConfig};
+        use crate::discovery::WindowInfo;
+        use crate::picker::create::PickerInit;
+        use std::collections::HashMap;
+
+        fn picker(window_count: usize) -> PickerState {
+            let windows: Vec<WindowInfo> = (0..window_count)
+                .map(|i| WindowInfo {
+                    id: i as u32,
+                    title: String::new(),
+                    app_name: String::new(),
+                    preview_path: None,
+                    icon: None,
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.0,
+                    height: 0.0,
+                    is_minimized: false,
+                })
+                .collect();
+            PickerState::from_init(PickerInit {
+                windows,
+                label_config: LabelConfig::default(),
+                transparent_bg: false,
+                card_color: 0,
+                card_opacity: 1.0,
+                show_debug_overlay: false,
+                show_hotkey_hints: false,
+                action_mode: ActionMode::HoldToSwitch,
+                cycle_on_open: false,
+                previews: HashMap::new(),
+                icons: HashMap::new(),
+            })
+        }
+
+        // After fresh open with reset=Some(0), forward cycle picks idx 1 and reverse picks idx N-1.
+        // Regression: reuse path used to always select_next; reverse=true now correctly select_prev.
+        #[test]
+        fn first_cycle_after_reset_picks_idx_1_forward() {
+            for n in 2..=8 {
+                let mut s = picker(n);
+                assert_eq!(s.selected_index, Some(0));
+                s.select_next();
+                assert_eq!(s.selected_index, Some(1), "n={n}: forward must hit idx 1");
+            }
+        }
+
+        #[test]
+        fn first_cycle_after_reset_picks_last_idx_reverse() {
+            for n in 2..=8 {
+                let mut s = picker(n);
+                assert_eq!(s.selected_index, Some(0));
+                s.select_prev();
+                assert_eq!(
+                    s.selected_index,
+                    Some(n - 1),
+                    "n={n}: reverse must wrap to idx N-1"
+                );
+            }
+        }
+
+        #[test]
+        fn reverse_then_forward_returns_to_origin() {
+            for n in 2..=8 {
+                let mut s = picker(n);
+                s.select_prev();
+                s.select_next();
+                assert_eq!(
+                    s.selected_index,
+                    Some(0),
+                    "n={n}: prev+next must round-trip"
+                );
+            }
+        }
+
+        #[test]
+        fn n_forwards_equals_one_backward_for_two_windows() {
+            // Two-window edge: pressing prev once must equal pressing next once.
+            let mut a = picker(2);
+            let mut b = picker(2);
+            a.select_prev();
+            b.select_next();
+            assert_eq!(a.selected_index, b.selected_index);
+            assert_eq!(a.selected_index, Some(1));
+        }
+
+        #[test]
+        fn cycling_with_no_windows_is_noop() {
+            let mut s = picker(0);
+            s.select_prev();
+            assert_eq!(s.selected_index, None);
+            s.select_next();
+            assert_eq!(s.selected_index, None);
+        }
     }
 }
