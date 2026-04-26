@@ -1,15 +1,16 @@
-.PHONY: build release run dev dev-sync sync ensure-merge-driver test check lint lint-fix fmt fmt-check icons clean install
-
-WORKSPACE_DIR := $(abspath ..)/workspace
-WORKSPACE_BIN := $(WORKSPACE_DIR)/bin
+.PHONY: build release run dev sync ensure-merge-driver test check lint lint-fix fmt fmt-check icons clean install
 
 ensure-merge-driver:
-	@$(WORKSPACE_DIR)/scripts/install-merge-driver.sh --quiet
+	@if command -v qol-install-merge-driver >/dev/null 2>&1; then \
+		qol-install-merge-driver --quiet; \
+	fi
 
 sync: ensure-merge-driver
-	@$(WORKSPACE_BIN)/pull-qol-plugins
-
-dev-sync: sync dev
+	@if command -v qol-sync >/dev/null 2>&1; then \
+		qol-sync; \
+	else \
+		echo "skip: qol-sync not on PATH (source qol-cicd/bin/activate.sh)"; \
+	fi
 
 build: lint
 	cargo build
@@ -73,7 +74,7 @@ release:
 run: lint
 	cargo run --bin qol-tray
 
-dev: ensure-merge-driver lint
+dev: sync lint
 	-pkill -f 'qol-tray'
 	cargo run --bin qol-tray --features dev
 
