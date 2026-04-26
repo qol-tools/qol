@@ -13,30 +13,7 @@ import { LogFiltersSubPage } from '../views/dev/log-filters-subpage.js';
 import { UninstallConfirmSubPage } from '../views/plugins/uninstall-confirm-subpage.js';
 import { PluginActionsSubPage } from '../views/plugins/plugin-actions-subpage.js';
 
-// VIEW_LABELS: id → string OR { text, animation }.
-// Plain string is the default (no animation). The object form opts a single
-// view into a named label animation (see ANIMATIONS map in RegionLabels.js).
-// Add new animations by extending that map, not by branching on id.
-export const VIEW_LABELS = {
-    plugins: 'Plugins',
-    store: 'Plugin Store',
-    hotkeys: 'Hotkeys',
-    shortcuts: 'Shortcuts',
-    'task-runner': 'Task Runner',
-    profile: 'Profile',
-    logs: 'Logs',
-    dev: { text: 'Developer', animation: 'scramble' },
-};
-
-// Normalised accessor: always returns { text, animation }.
-// `animation` is null when the entry is a bare string or has no animation field.
-// Callers that only care about the display text can use `.text`.
-export function getViewLabel(id) {
-    const entry = VIEW_LABELS[id];
-    if (entry == null) return { text: id, animation: null };
-    if (typeof entry === 'string') return { text: entry, animation: null };
-    return { text: entry.text || id, animation: entry.animation || null };
-}
+export { VIEW_LABELS, getViewLabel, resolveViewLabel } from './view-labels.js';
 
 const BASE_ORDER = ['plugins', 'store', 'hotkeys', 'shortcuts', 'task-runner', 'profile', 'logs'];
 

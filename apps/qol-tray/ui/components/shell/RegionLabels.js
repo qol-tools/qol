@@ -1,7 +1,7 @@
 import { html } from '../../lib/html.js';
 import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { createDebug } from '../../lib/debug.js';
-import { getViewLabel } from '../../app/views.js';
+import { resolveViewLabel } from '../../app/views.js';
 import { regionLabelPosition } from '../../lib/world-geometry.js';
 import { ScrambleText } from '../../lib/components/ScrambleText.js';
 
@@ -88,7 +88,7 @@ export function RegionLabels({ registry, cameraLayer, navigation, diveDepth, cam
         log('regionLabels: layer', layer,
             `entries=${entries.length}/${allEntries.length}`,
             pages.length > 0 ? 'confined' : 'all',
-            entries.map(e => e.label || getViewLabel(e.id).text).join(', '));
+            entries.map(e => resolveViewLabel(e).text).join(', '));
     }
 
     const setLabelRef = (id) => (el) => {
@@ -102,9 +102,8 @@ export function RegionLabels({ registry, cameraLayer, navigation, diveDepth, cam
     return html`
         <div class="world-region-label-layer">
             ${entries.map(e => {
-                const label = getViewLabel(e.id);
-                const text = label.text || e.label || e.id;
-                const Renderer = ANIMATIONS[label.animation] || PlainText;
+                const { text, animation } = resolveViewLabel(e);
+                const Renderer = ANIMATIONS[animation] || PlainText;
                 return html`
                     <div key=${e.id} ref=${setLabelRef(e.id)} class="world-region-label">
                         <${Renderer} text=${text} />
