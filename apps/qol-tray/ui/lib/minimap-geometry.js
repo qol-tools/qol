@@ -7,6 +7,16 @@
 // to zero. The viewport rect is computed by walking the entries the camera
 // window intersects and mapping each overlap into its slot.
 //
+// Slot-scale inflation: when the camera zooms below ghostThreshold and the
+// `uiScaleOnZoomOut` setting is on (default), each page's `.world-view-slot`
+// is CSS-scaled around its centre so it stays readable. The scaled slot's
+// VISUAL world bounds extend beyond `entry.x..entry.x+entry.width`. The rect
+// is therefore computed against an optional `inflatedRanges` array — when
+// supplied, overlap is checked against the inflated bounds, so the rect
+// reflects what the user *sees* rather than the raw camera window. When
+// omitted the rect falls back to raw entry bounds (legacy behaviour, used
+// in tests and zoom levels where slot-scale === 1 for every entry).
+//
 // Invariants the projection preserves:
 //   - 1:1 alignment: when the camera window exactly covers one entry, the
 //     viewport rect's x-range equals that entry's slot's x-range.
@@ -83,6 +93,7 @@ export function computeMinimapViewportRect({
     viewportWidthPx,
     minimapWidth,
     canvasHeight,
+    inflatedRanges,
 }) {
     const empty = { x: 0, y: 0, width: 0, height: 0 };
     if (!(viewportWidthPx > 0)) return empty;
@@ -99,17 +110,28 @@ export function computeMinimapViewportRect({
     const slots = buildSlots(sortedEntries, proj.widths, layout.scale, minimapWidth, rowY);
 
     const camEnd = cameraX + viewportWidthPx / z;
+    const useInflated = Array.isArray(inflatedRanges) && inflatedRanges.length === sortedEntries.length;
 
     let minStart = Infinity;
     let maxEnd = -Infinity;
     for (let i = 0; i < sortedEntries.length; i++) {
         const e = sortedEntries[i];
         const slot = slots[i];
-        const overlapStart = Math.max(cameraX, e.x);
-        const overlapEnd = Math.min(camEnd, e.x + e.width);
+        // Visual world-x bounds: when slots are CSS-scaled around their centre
+        // (ghost mode), `inflatedRanges[i]` extends past `entry.x..entry.x+width`.
+        // The CAMERA-vs-VISUAL overlap test runs against the inflated range, but
+        // the SLOT mapping still uses raw entry bounds — we want to highlight
+        // the slot that owns the inflated content, not stretch the slot itself.
+        const visual = useInflated && inflatedRanges[i] ? inflatedRanges[i] : { x0: e.x, x1: e.x + e.width };
+        const overlapStart = Math.max(cameraX, visual.x0);
+        const overlapEnd = Math.min(camEnd, visual.x1);
         if (overlapEnd <= overlapStart) continue;
-        const fStart = (overlapStart - e.x) / e.width;
-        const fEnd = (overlapEnd - e.x) / e.width;
+        // Map the OVERLAP into slot pixel space using the visual range, so that
+        // a partial-visibility sliver maps to a partial slot fraction. Without
+        // this we'd see step-jumps when the slot is fully or zero covered.
+        const visW = visual.x1 - visual.x0;
+        const fStart = visW > 0 ? Math.max(0, (overlapStart - visual.x0) / visW) : 0;
+        const fEnd = visW > 0 ? Math.min(1, (overlapEnd - visual.x0) / visW) : 1;
         const xStart = slot.x + fStart * slot.w;
         const xEnd = slot.x + fEnd * slot.w;
         if (xStart < minStart) minStart = xStart;
