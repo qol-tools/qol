@@ -3932,14 +3932,14 @@ dependencies = [
 [[package]]
 name = "qol-platform"
 version = "0.2.0"
-source = "git+https://github.com/qol-tools/qol-platform#3be7dbb82f2af69e636d3ea149cc91cc0b0bcedd"
+source = "git+https://github.com/qol-tools/qol-platform#cdd234a4e1ec39f70457b03a99f2f7aed24c3bf6"
 dependencies = [
  "dirs 6.0.0",
 ]
 
 [[package]]
 name = "qol-plugin-api"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "gpui",
  "objc2",
