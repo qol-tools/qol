@@ -19,6 +19,7 @@ import { GlobalToast } from './ApiErrorToast.js';
 import { SelectionCursorOverlay } from '../lib/components/SelectionCursorOverlay.js';
 import { CommandPalette } from './CommandPalette.js';
 import { createCamera } from '../lib/world-camera.js';
+import { createFocusRetention } from '../lib/focus-retention.js';
 import { createWorldRegistry } from '../lib/world-registry.js';
 import { boundsOfEntries, maxEntryExtent, paddedWorldBounds, withPadding } from '../lib/world-geometry.js';
 import { pageMode } from '../lib/peripheral-geometry.js';
@@ -238,6 +239,11 @@ function AppShell() {
     useEffect(() => {
         const el = document.getElementById('viewport');
         viewportRef.current = el;
+    }, []);
+
+    useEffect(() => {
+        const retention = createFocusRetention();
+        return () => retention.dispose();
     }, []);
 
     const cameraRef = useRef(null);
