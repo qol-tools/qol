@@ -101,18 +101,14 @@
 .log-src {
     color: rgba(var(--accent-rgb), 0.7);
     font-family: var(--font-mono);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    word-break: break-word;
 }
 
 .log-msg {
     color: var(--text-secondary);
     flex: 1;
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    word-break: break-word;
 }
 
 .log-row[data-selected="true"] .log-msg { color: var(--text-primary); }
@@ -147,9 +143,7 @@
     color: var(--text-faint);
     font-size: var(--fs-xs);
     font-family: var(--font-mono);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    word-break: break-word;
     margin-left: calc(-1 * var(--space-2));
 }
 
@@ -194,9 +188,7 @@
     color: var(--text-primary);
     flex: 1;
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    word-break: break-word;
 }
 
 .suppressed-count-badge {

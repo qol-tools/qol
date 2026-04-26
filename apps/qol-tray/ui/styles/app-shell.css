@@ -212,7 +212,6 @@ body {
 
 .plugin-config-detail {
     flex: 1;
-    overflow-y: auto;
     padding: 1.5rem 1.8rem 2.5rem;
     display: flex;
     flex-direction: column;
@@ -247,9 +246,6 @@ body {
 
 .view-body {
     flex: 1;
-    overflow-y: auto;
-    overflow-anchor: none;
-    scrollbar-gutter: stable;
     min-height: 0;
     padding: var(--space-6) var(--space-7);
     max-width: var(--size-content-max);
