@@ -88,6 +88,11 @@ export async function fetchProfileBackupPreview(fileName) {
 export async function importProfileFile(file) {
     if (!file) throw new Error('No file selected');
     const text = await file.text();
+    return importProfileText(text);
+}
+
+export async function importProfileText(text) {
+    if (!text) throw new Error('Backup is empty');
     JSON.parse(text);
     const result = await apiJson('/api/config/import', {
         method: 'POST',
