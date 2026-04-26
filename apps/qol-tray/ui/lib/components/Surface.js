@@ -15,7 +15,10 @@ export function useSurface({ index, selected, onSelect, onActivate, selectValue,
             tabIndex: -1,
             onFocus: onSelect ? () => onSelect(focusValue) : undefined,
             onClick: onActivate ? (e) => {
-                if (e.target !== e.currentTarget && e.target.closest?.(INTERACTIVE_DESCENDANT)) return;
+                if (e.target !== e.currentTarget) {
+                    const inner = e.target.closest?.(INTERACTIVE_DESCENDANT);
+                    if (inner && inner !== e.currentTarget) return;
+                }
                 onActivate(e);
             } : undefined,
         },
