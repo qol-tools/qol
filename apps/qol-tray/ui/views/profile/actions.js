@@ -63,6 +63,17 @@ export async function openProfileBackupsDir() {
     throw new Error(message);
 }
 
+export async function openProfileBackupFile(fileName) {
+    if (!fileName) throw new Error('Backup file is required');
+    const response = await apiResponse(
+        `/api/sync/backups/${encodeURIComponent(fileName)}/open`,
+        { method: 'POST' },
+    );
+    if (response.ok) return;
+    const message = (await readResponseText(response)) || 'Failed to open backup';
+    throw new Error(message);
+}
+
 export async function fetchProfileBackups() {
     return apiJson('/api/sync/backups');
 }

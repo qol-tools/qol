@@ -84,6 +84,16 @@ pub(crate) async fn open_sync_backups_dir(
     }
 }
 
+pub(crate) async fn open_sync_backup_file(
+    State(state): State<super::ProfileHttpState>,
+    Path(file_name): Path<String>,
+) -> impl IntoResponse {
+    match state.sync_service.open_backup_file(&file_name) {
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(error) => sync_error_response(error),
+    }
+}
+
 pub(crate) async fn list_sync_backups(
     State(state): State<super::ProfileHttpState>,
 ) -> impl IntoResponse {

@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::Mutex as AsyncMutex;
 
-use super::platform::open_dir;
+use super::platform::{open_dir, open_path};
 use super::providers::{
     ensure_profile_gist, normalize_folder_path, normalize_path, sync_provider_definitions,
     validate_github_token, ProviderError, RemoteDocument,
@@ -264,6 +264,11 @@ impl SyncService {
     pub fn open_backups_dir(&self) -> Result<()> {
         ensure_sync_dirs()?;
         open_dir(&crate::paths::sync_backups_dir()?)
+    }
+
+    pub fn open_backup_file(&self, file_name: &str) -> Result<()> {
+        ensure_sync_dirs()?;
+        open_path(&backup_file_path(file_name)?)
     }
 
     pub fn list_backups(&self) -> Result<Vec<SyncBackupEntry>> {

@@ -21,6 +21,7 @@ import {
 } from './components.js';
 import { providerFieldSurfaceId } from './form.js';
 import { backupPreviewSlot } from './use-backups.js';
+import { openProfileBackupFile } from './actions.js';
 import {
     formatBackupPreview,
     profileHealthLabel,
@@ -164,6 +165,7 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                                                 incident=${ctrl.incident}
                                                 ctrl=${ctrl}
                                                 onOpen=${() => ctrl.handlePreviewBackup(backup.file_name)}
+                                                onOpenExternal=${ctrl.handleOpenBackupFile}
                                             />
                                         `)}
                                     </div>
@@ -210,7 +212,11 @@ export function BackupDetailSubPage() {
                     <${SurfaceContainer} className="content-frame backup-detail-frame">
                         <${CodeBlock}
                             text=${formatBackupPreview(preview.content)}
-                            onCopy=${() => toast('success', 'Copied to clipboard')}
+                            onSecondaryActivate=${() => {
+                                openProfileBackupFile(preview.file_name)
+                                    .catch((err) => toast('error', `Failed to open: ${err.message}`));
+                            }}
+                            secondaryLabel="Open in editor"
                         />
                         <div class="backup-detail-actions">
                             <${Button} variant="btn-ghost" onActivate=${dispatchEscape}>Close <kbd>Esc</kbd><//>

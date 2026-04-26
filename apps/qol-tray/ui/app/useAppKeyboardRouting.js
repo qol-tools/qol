@@ -158,8 +158,11 @@ function routeToView(event, viewKeyboard, cycleView) {
         cycleView(event);
         return;
     }
-    // Dive-target takes priority: Enter on a surface with data-dive-target always dives
-    if ((event.key === 'Enter' || event.key === ' ') && !hasVisibleModal()) {
+    // Dive-target takes priority: plain Enter on a surface with data-dive-target always dives.
+    // Modifier-held Enter (Shift/Ctrl/Meta) falls through to globalSurfaceNav so the surface's
+    // secondary action runs instead of being shadowed by the dive shortcut.
+    const diveModifierHeld = event.shiftKey || event.ctrlKey || event.metaKey;
+    if ((event.key === 'Enter' || event.key === ' ') && !hasVisibleModal() && !diveModifierHeld) {
         const focused = document.activeElement;
         const surface = focused instanceof HTMLElement ? focused.closest('[data-dive-target]') : null;
         if (surface && _diveRef.current) {
@@ -220,7 +223,7 @@ function globalSurfaceNav(event) {
     }
     if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
-        activateAndMaybeDescend();
+        activateAndMaybeDescend(event);
     }
 }
 
@@ -280,16 +283,18 @@ function focusWithoutScroll(el) {
     el.focus({ preventScroll: true });
 }
 
-function activateAndMaybeDescend() {
+function activateAndMaybeDescend(keyEvent) {
     const current = findSelectedSurface();
     if (!current) return;
 
     if (current.getAttribute('role') === 'tab') {
-        activateSurface(current);
+        dispatchModifierClick(current, keyEvent);
         return;
     }
 
-    activateSurface(current);
+    dispatchModifierClick(current, keyEvent);
+
+    if (keyEvent?.shiftKey || keyEvent?.ctrlKey || keyEvent?.metaKey) return;
 
     const diveTarget = current.getAttribute('data-dive-target');
     if (diveTarget && _diveRef.current) {
@@ -301,6 +306,18 @@ function activateAndMaybeDescend() {
     if (surfaceContainsChildContainer(current)) {
         requestAnimationFrame(() => descendIntoChild(current));
     }
+}
+
+function dispatchModifierClick(el, event) {
+    if (!(el instanceof HTMLElement)) return;
+    el.dispatchEvent(new MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+        shiftKey: Boolean(event?.shiftKey),
+        ctrlKey: Boolean(event?.ctrlKey),
+        metaKey: Boolean(event?.metaKey),
+        altKey: Boolean(event?.altKey),
+    }));
 }
 
 function descendIntoChild(surface) {

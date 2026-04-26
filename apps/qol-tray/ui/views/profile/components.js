@@ -120,13 +120,17 @@ export function renderProviderField({ field, form, syncStatus, ctrl, updateForm 
     `;
 }
 
-export function ProfileBackupRow({ backup, incident, ctrl, onOpen }) {
+export function ProfileBackupRow({ backup, incident, ctrl, onOpen, onOpenExternal }) {
     const sel = surfaceSel(ctrl, `backup:${backup.file_name}`);
     if (!sel) return null;
     const review = incident?.backup_file === backup.file_name;
     return html`<${BackupRow} time=${backup.created_at} fileName=${backup.file_name}
         size=${formatBytes(backup.size_bytes)} review=${review}
-        ...${sel} onActivate=${onOpen} data-dive-target="profile-backup-detail" />`;
+        ...${sel}
+        onActivate=${onOpen}
+        onSecondaryActivate=${onOpenExternal ? () => onOpenExternal(backup.file_name) : undefined}
+        data-secondary-label=${onOpenExternal ? 'Open in editor' : undefined}
+        data-dive-target="profile-backup-detail" />`;
 }
 
 export function ImportFeedback({ lastImport }) {

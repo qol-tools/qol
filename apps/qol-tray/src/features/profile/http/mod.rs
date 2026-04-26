@@ -41,6 +41,10 @@ where
         .route("/sync/acknowledge", post(sync::acknowledge_sync))
         .route("/sync/backups", get(sync::list_sync_backups))
         .route("/sync/backups/open-dir", post(sync::open_sync_backups_dir))
+        .route(
+            "/sync/backups/{file_name}/open",
+            post(sync::open_sync_backup_file),
+        )
         .route("/sync/backups/{file_name}", get(sync::preview_sync_backup))
 }
 
