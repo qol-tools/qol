@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { providerFieldSurfaceId } from './form.js';
-import { connectActionLabel } from './summary.js';
+import { busyActionLabel, connectActionLabel } from './summary.js';
 
 export function useSurfaceNav({
     advancedProviderFields,
+    authPrompt,
     backups,
     basicProviderFields,
+    busyAction,
     configured,
     form,
     handleAcknowledge,
@@ -29,26 +31,33 @@ export function useSurfaceNav({
         const add = (id, kind, extra = {}) => {
             next.push({ id, kind, index: next.length, ...extra });
         };
+        const actionBusy = (id) => busyAction === id;
 
         if (configured) {
-            add('pull', 'action', { label: 'Pull Now', run: syncBusy ? null : handlePull });
-            add('push', 'action', { label: 'Push Now', run: syncBusy ? null : handlePush });
+            add('pull', 'action', { label: busyActionLabel('pull', actionBusy('pull')), run: syncBusy ? null : handlePull, busy: actionBusy('pull') });
+            add('push', 'action', { label: busyActionLabel('push', actionBusy('push')), run: syncBusy ? null : handlePush, busy: actionBusy('push') });
         }
         if (incident) {
-            add('acknowledge', 'action', { label: 'Acknowledge', variant: 'btn-primary', run: syncBusy ? null : handleAcknowledge });
+            add('acknowledge', 'action', { label: busyActionLabel('acknowledge', actionBusy('acknowledge')), variant: 'btn-primary', run: syncBusy ? null : handleAcknowledge, busy: actionBusy('acknowledge') });
         }
         if (configured) {
-            add('disconnect', 'action', { label: 'Disconnect', variant: 'btn-ghost', run: syncBusy ? null : handleDisconnect });
+            add('disconnect', 'action', { label: busyActionLabel('disconnect', actionBusy('disconnect')), variant: 'btn-ghost', run: syncBusy ? null : handleDisconnect, busy: actionBusy('disconnect') });
         }
         if (!configured) {
-            add('connect', 'action', { label: connectActionLabel(configured, form.provider), variant: 'btn-primary', run: syncBusy ? null : handleConnect });
+            const connectBusy = actionBusy('connect') && !authPrompt;
+            add('connect', 'action', {
+                label: connectBusy ? busyActionLabel('connect', true) : connectActionLabel(configured, form.provider),
+                variant: 'btn-primary',
+                run: syncBusy ? null : handleConnect,
+                busy: connectBusy,
+            });
         }
         add('settings', 'toggle', { run: null });
         add('provider', 'field');
         basicProviderFields.forEach(field => add(providerFieldSurfaceId(field.key), 'field'));
         advancedProviderFields.forEach(field => add(providerFieldSurfaceId(field.key), 'field'));
-        add('export', 'action', { label: 'Export', variant: 'btn-ghost', run: importBusy ? null : handleExport });
-        add('import', 'action', { label: 'Import', variant: 'btn-ghost', run: importBusy ? null : handleImport });
+        add('export', 'action', { label: busyActionLabel('export', actionBusy('export')), variant: 'btn-ghost', run: importBusy ? null : handleExport, busy: actionBusy('export') });
+        add('import', 'action', { label: busyActionLabel('import', actionBusy('import')), variant: 'btn-ghost', run: importBusy ? null : handleImport, busy: actionBusy('import') });
         add('open-backups', 'action', { label: 'Open Folder', run: handleOpenBackups });
         backups.forEach(backup => {
             add(`backup:${backup.file_name}`, 'action', { label: backup.file_name, run: () => handlePreviewBackup(backup.file_name) });
@@ -56,8 +65,8 @@ export function useSurfaceNav({
 
         return next;
     }, [
-        advancedProviderFields, backups, basicProviderFields, configured,
-        form.pull_on_launch, form.push_on_change,
+        advancedProviderFields, authPrompt, backups, basicProviderFields, busyAction, configured,
+        form.pull_on_launch, form.push_on_change, form.provider,
         handleAcknowledge, handleConnect, handleDisconnect, handleExport,
         handleImport, handleOpenBackups, handlePreviewBackup, handlePull, handlePush,
         importBusy, incident, syncBusy, updateForm,

@@ -27,8 +27,10 @@ export function useProfileController({
     });
     const surfaceNav = useSurfaceNav({
         advancedProviderFields: syncForm.advancedProviderFields,
+        authPrompt: syncActions.authPrompt,
         backups: backups.backups,
         basicProviderFields: syncForm.basicProviderFields,
+        busyAction: syncActions.busyAction,
         configured: syncForm.configured,
         form: syncForm.form,
         handleAcknowledge: syncActions.handleAcknowledge,
