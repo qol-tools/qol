@@ -82,16 +82,16 @@ function registerStaticDiveTargets(registry) {
     const PAGE_WIDTH = 1280;
     const PAGE_HEIGHT = 900;
     const staticTargets = [
-        { parentId: 'hotkeys', subId: 'hotkeys-editor' },
-        { parentId: 'shortcuts', subId: 'shortcuts-editor' },
-        { parentId: 'logs', subId: 'logs-detail' },
-        { parentId: 'task-runner', subId: 'task-runner-editor' },
-        { parentId: 'task-runner', subId: 'task-runner-test-runner', sourceSelector: '[data-dive-source="task-runner-test-runner"]' },
-        { parentId: 'profile', subId: 'profile-backup-detail' },
-        { parentId: 'dev', subId: 'dev-log-filters' },
-        { parentId: 'dev', subId: 'dev-plugin-actions', sourceSelector: '[data-dive-source="dev-plugin-actions"]' },
-        { parentId: 'plugins', subId: 'plugins-uninstall-confirm' },
-        { parentId: 'plugins', subId: 'plugins-actions', sourceSelector: '[data-dive-source="plugins-actions"]' },
+        { parentId: 'hotkeys', subId: 'hotkeys-editor', label: 'Hotkey Editor' },
+        { parentId: 'shortcuts', subId: 'shortcuts-editor', label: 'Shortcut Editor' },
+        { parentId: 'logs', subId: 'logs-detail', label: 'Log Detail' },
+        { parentId: 'task-runner', subId: 'task-runner-editor', label: 'Action Editor' },
+        { parentId: 'task-runner', subId: 'task-runner-test-runner', label: 'Test Runner', sourceSelector: '[data-dive-source="task-runner-test-runner"]' },
+        { parentId: 'profile', subId: 'profile-backup-detail', label: 'Backup Detail' },
+        { parentId: 'dev', subId: 'dev-log-filters', label: 'Edit Log Filters' },
+        { parentId: 'dev', subId: 'dev-plugin-actions', label: 'Plugin Actions', sourceSelector: '[data-dive-source="dev-plugin-actions"]' },
+        { parentId: 'plugins', subId: 'plugins-uninstall-confirm', label: 'Confirm Uninstall' },
+        { parentId: 'plugins', subId: 'plugins-actions', label: 'Plugin Actions', sourceSelector: '[data-dive-source="plugins-actions"]' },
     ];
     for (const t of staticTargets) {
         const parent = registry.getEntry(t.parentId);
@@ -110,6 +110,7 @@ function registerStaticDiveTargets(registry) {
             width: PAGE_WIDTH,
             height: PAGE_HEIGHT,
             layer: claim.layer,
+            label: t.label,
         });
         registry.addDiveTarget({
             sourceSelector: t.sourceSelector || `[data-view-id="${t.parentId}"]`,
@@ -575,7 +576,7 @@ function AppShell() {
                     `}
                     <${CommandPalette} camera=${camera} navigation=${navigation} />
                     <${MinimapContainer} camera=${camera} registry=${registry} viewportRef=${viewportRef} diveParent=${diveParent}
-                        activePluginId=${activePluginId} diveDepth=${diveDepth} navigation=${navigation}
+                        diveDepth=${diveDepth} navigation=${navigation}
                         version=${appVersion} updateState=${updateState} isDevMode=${devEnabled} onAction=${handleSidebarAction}
                         worktrees=${worktrees} defaultWorktree=${defaultWorktree} setDefaultWorktree=${setDefaultWorktree}
                         repoBranch=${repoBranch} />

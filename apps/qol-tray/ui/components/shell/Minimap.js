@@ -1,12 +1,11 @@
 import { html } from '../../lib/html.js';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
-import { getViewLabel } from '../../app/views.js';
+import { resolveViewLabel } from '../../app/views.js';
 import { getWorldSettings, setWorldSetting, subscribeWorldSettings } from '../../lib/world-settings.js';
 import { IconCog } from '../../assets/icon-cog.js';
 import { useClickOutside } from '../../lib/hooks/useClickOutside.js';
 import { Peripheral } from './Peripheral.js';
 import { clampPercent, formatDownloadingProgress, formatPhaseProgress, toProgressScale } from '../../utils/progress.js';
-import { prettyLabel } from '../../auto-config/heuristics.js';
 import { computeMinimapSlots, computeMinimapViewportRect } from '../../lib/minimap-geometry.js';
 import { visibleMinimapEntries } from '../../lib/minimap-filter.js';
 import { drawMinimap, drawViewportRect } from '../../lib/minimap-draw.js';
@@ -16,7 +15,7 @@ import { CustomSelect } from '../../lib/components/CustomSelect.js';
 
 const ARROW_FLASH_MS = 350;
 
-export function MinimapContainer({ camera, registry, viewportRef, diveParent, activePluginId, diveDepth, navigation, version, updateState, isDevMode, onAction, worktrees, defaultWorktree, setDefaultWorktree, repoBranch }) {
+export function MinimapContainer({ camera, registry, viewportRef, diveParent, diveDepth, navigation, version, updateState, isDevMode, onAction, worktrees, defaultWorktree, setDefaultWorktree, repoBranch }) {
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [settings, setSettings] = useState(getWorldSettings);
     const cogRef = useRef(null);
@@ -34,7 +33,7 @@ export function MinimapContainer({ camera, registry, viewportRef, diveParent, ac
         <${Peripheral} camera=${camera} navigation=${navigation} edge="br"
             className="world-minimap-container">
             ${diveDepth > 0 && html`<span class="world-minimap-depth" style=${`--wedge-hue: ${50 + (diveDepth - 1) * 45}`}>${diveDepth}</span>`}
-            <${Minimap} camera=${camera} registry=${registry} viewportRef=${viewportRef} width=${settings.minimapSize} diveParent=${diveParent} activePluginId=${activePluginId} navigation=${navigation} />
+            <${Minimap} camera=${camera} registry=${registry} viewportRef=${viewportRef} width=${settings.minimapSize} diveParent=${diveParent} navigation=${navigation} />
         <//>
         <${Peripheral} camera=${camera} navigation=${navigation} edge="bl"
             alwaysVisible=${settingsOpen} className="world-cog-anchor" elementRef=${cogRef}>
@@ -166,7 +165,7 @@ function versionDetail(status, state, isDevMode) {
     return null;
 }
 
-function Minimap({ camera, registry, viewportRef, width, diveParent, activePluginId, navigation }) {
+function Minimap({ camera, registry, viewportRef, width, diveParent, navigation }) {
     const canvasRef = useRef(null);
     const [, bump] = useState(0);
     const [flash, setFlash] = useState(null);
@@ -241,7 +240,7 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, activePlugi
         const activeId = nearestEntryId(sorted, camera, vpW, vpH, z);
 
         const slots = computeMinimapSlots({ sortedEntries: sorted, minimapWidth: cw, canvasHeight: ch });
-        const labelFor = (entry) => slotLabel(entry, activePluginId);
+        const labelFor = (entry) => slotLabel(entry);
         const rect = computeMinimapViewportRect({
             sortedEntries: sorted,
             cameraX: camera.x,
@@ -318,11 +317,7 @@ function nearestEntryId(entries, camera, vpW, vpH, zoom) {
     return bestId;
 }
 
-function slotLabel(entry, activePluginId) {
-    if (entry.label) return entry.label;
-    if (entry.id === 'plugins-config' && activePluginId) {
-        return prettyLabel(activePluginId.replace(/^plugin-/, ''));
-    }
-    return getViewLabel(entry.id).text;
+function slotLabel(entry) {
+    return resolveViewLabel(entry).text;
 }
 
