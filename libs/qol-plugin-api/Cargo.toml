@@ -1,6 +1,6 @@
 [package]
 name = "qol-plugin-api"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Shared library for QoL Tray plugins"
 license = "PolyForm-Noncommercial-1.0.0"
@@ -22,19 +22,20 @@ x11rb = "0.13"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = [
+objc2-foundation = { version = "0.3", default-features = false, features = [
   "NSString",
-  "NSObject",
   "NSURL",
 ] }
-objc2-app-kit = { version = "0.3", features = [
+objc2-app-kit = { version = "0.3", default-features = false, features = [
   "NSApplication",
+  "NSResponder",
   "NSRunningApplication",
   "NSWorkspace",
   "NSImage",
   "NSImageRep",
   "NSGraphicsContext",
   "objc2-core-graphics",
+  "libc",
 ] }
 objc2-core-graphics = { version = "0.3", features = [
   "CGImage",
