@@ -140,9 +140,7 @@
     font-weight: var(--fw-semibold);
     flex: 1;
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    word-break: break-word;
 }
 
 .list-row-text {
@@ -150,9 +148,7 @@
     font-size: var(--fs-sm);
     flex: 1;
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    word-break: break-word;
 }
 
 .list-row-mono {

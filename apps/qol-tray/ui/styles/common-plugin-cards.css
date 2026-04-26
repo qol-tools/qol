@@ -113,11 +113,6 @@
 .plugin-grid-store .plugin-card .description,
 .plugins-grid .plugin-card .description {
     color: var(--text-secondary);
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 3;
-    line-clamp: 3;
-    overflow: hidden;
     min-height: calc(1.6em * 3);
 }
 
