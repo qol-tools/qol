@@ -220,6 +220,10 @@ export function BackupDetailSubPage() {
                         />
                         <div class="backup-detail-actions">
                             <${Button} variant="btn-ghost" onActivate=${dispatchEscape}>Close <kbd>Esc</kbd><//>
+                            <${Button} variant="btn-ghost" onActivate=${() => {
+                                openProfileBackupFile(preview.file_name)
+                                    .catch((err) => toast('error', `Failed to open: ${err.message}`));
+                            }}>Open in editor<//>
                             <${Button} variant=${isIncidentBackup ? 'btn-ghost' : 'btn-primary'} onActivate=${copy}>Copy<//>
                             ${isIncidentBackup && html`<${Button} variant="btn-primary" onActivate=${acknowledge}>Looks Good<//>`}
                         </div>

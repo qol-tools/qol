@@ -4,7 +4,7 @@ import { PaletteProvider, usePaletteContext } from '../palette/context.js';
 import { createDebug, elLabel } from '../lib/debug.js';
 import { prettyLabel } from '../auto-config/heuristics.js';
 import { createNavigation, selectorFor, animateTransition } from '../lib/world-navigation.js';
-import { setDiveViaSelector } from '../lib/world-navigation-singleton.js';
+import { setDiveFromSurface, setDiveViaSelector } from '../lib/world-navigation-singleton.js';
 import { getWorldSettings, subscribeWorldSettings } from '../lib/world-settings.js';
 
 const log = createDebug('qol:app');
@@ -477,6 +477,16 @@ function AppShell() {
         if (parentPageId && diveViaSelector(`[data-view-id="${parentPageId}"]`)) return;
         log('dive:', targetId, '→ no DiveTarget matched');
     }, [navigation, diveViaSelector]);
+
+    useEffect(() => {
+        setDiveFromSurface((surface) => {
+            const target = surface?.getAttribute?.('data-dive-target');
+            if (!target) return false;
+            dive(target, surface);
+            return true;
+        });
+        return () => setDiveFromSurface(null);
+    }, [dive]);
 
     const ascend = useCallback(() => {
         const didAscend = navigation.ascend();
