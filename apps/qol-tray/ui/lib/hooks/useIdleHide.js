@@ -1,6 +1,6 @@
 import { useEffect } from 'preact/hooks';
 
-const DEFAULT_OCCLUDE_SELECTOR = '.page-header, [data-selected-surface], [data-surface-container] > *';
+const DEFAULT_OCCLUDE_SELECTOR = '.world-view-slot';
 const OVERLAY_ANCESTOR = '.peripheral-preview, .peripheral-edge-dock';
 const HIDE_DELAY_MS = 250;
 
