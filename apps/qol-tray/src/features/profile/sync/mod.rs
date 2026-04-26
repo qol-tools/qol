@@ -1,7 +1,7 @@
 const DEFAULT_PATH: &str = "qol-tray/profile.json";
 const AUTO_PUSH_INTERVAL_SECS: u64 = 3;
 
-mod platform;
+pub(crate) mod platform;
 mod providers;
 mod resolve;
 mod service;

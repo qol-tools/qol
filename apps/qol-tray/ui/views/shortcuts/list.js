@@ -1,6 +1,8 @@
 import { html } from '../../lib/html.js';
 import { Table, TableHeader, TableCell } from '../../lib/components/TableRow.js';
 import { ShortcutRow } from '../../components/domain-rows/ShortcutRow.js';
+import { openShortcutsFile } from '../../api/config-files.js';
+import { toast } from '../../lib/toast.js';
 
 const TYPE_LABELS = { open_url: 'URL', launch_app: 'App' };
 
@@ -41,7 +43,11 @@ export function ShortcutsList({ shortcuts, selectedIndex, onSelect, onEdit }) {
                 selectValue=${s.id}
                 index=${i} selected=${i === selectedIndex} onSelect=${onSelect}
                 data-dive-target="shortcuts-editor"
-                onActivate=${() => { if (i !== selectedIndex) onSelect(s.id); onEdit(s); }} />
+                data-secondary-label="Open shortcuts.json"
+                onActivate=${() => { if (i !== selectedIndex) onSelect(s.id); onEdit(s); }}
+                onSecondaryActivate=${() => {
+                    openShortcutsFile().catch((err) => toast('error', `Failed to open shortcuts file: ${err.message}`));
+                }} />
         `)}
     <//>`;
 }

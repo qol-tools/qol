@@ -1,6 +1,8 @@
 import { html } from '../../lib/html.js';
 import { Table, TableHeader, TableCell } from '../../lib/components/TableRow.js';
 import { HotkeyRow } from '../../components/domain-rows/HotkeyRow.js';
+import { openHotkeysFile } from '../../api/config-files.js';
+import { toast } from '../../lib/toast.js';
 
 function getActionLabel(plugin, actionId) {
     if (!plugin) return actionId;
@@ -30,7 +32,11 @@ export function HotkeysList({ hotkeys, plugins, selectedIndex, onSelect, onEdit 
                     status=${plugin?.status || 'installed'}
                     index=${i} selected=${i === selectedIndex} onSelect=${onSelect}
                     data-dive-target="hotkeys-editor"
-                    onActivate=${() => { if (i !== selectedIndex) onSelect(i); onEdit(hk); }} />
+                    data-secondary-label="Open hotkeys.json"
+                    onActivate=${() => { if (i !== selectedIndex) onSelect(i); onEdit(hk); }}
+                    onSecondaryActivate=${() => {
+                        openHotkeysFile().catch((err) => toast('error', `Failed to open hotkeys file: ${err.message}`));
+                    }} />
             `;
         })}
     <//>`;
