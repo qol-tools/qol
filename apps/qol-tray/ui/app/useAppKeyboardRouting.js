@@ -291,6 +291,14 @@ function descendIntoChild(surface) {
     if (child && isVisible(child)) descendInto(child);
 }
 
+function restoreDiveSourceFocus() {
+    const source = document.querySelector('[data-dive-source]');
+    if (!(source instanceof HTMLElement)) return;
+    source.removeAttribute('data-dive-source');
+    if (!isVisible(source)) return;
+    source.focus({ preventScroll: true });
+}
+
 function descendInto(container) {
     const surfaces = directSurfaces(container);
     if (surfaces.length === 0) return;
@@ -300,7 +308,9 @@ function descendInto(container) {
 function ascendLayer() {
     const camera = _cameraRef.current;
     if (camera && camera.layer < 0 && _ascendRef.current) {
-        return _ascendRef.current();
+        const result = _ascendRef.current();
+        requestAnimationFrame(restoreDiveSourceFocus);
+        return result;
     }
 
     const current = findSelectedSurface();
