@@ -9,12 +9,7 @@ import { clampPercent, formatDownloadingProgress, formatPhaseProgress, toProgres
 import { computeMinimapSlots, computeMinimapViewportRect } from '../../lib/minimap-geometry.js';
 import { visibleMinimapEntries } from '../../lib/minimap-filter.js';
 import { computeLayerPulse, drawMinimap, drawViewportRect, LAYER_PULSE_MS } from '../../lib/minimap-draw.js';
-import {
-    cameraTargetFor,
-    computeBaseScale,
-    computeSlotScale,
-    inflatedEntryRange,
-} from '../../lib/world-geometry.js';
+import { cameraTargetFor } from '../../lib/world-geometry.js';
 import { ToggleSwitch } from '../../lib/components/ToggleSwitch.js';
 import { CustomSelect } from '../../lib/components/CustomSelect.js';
 
@@ -279,25 +274,6 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
 
         const slots = computeMinimapSlots({ sortedEntries: sorted, minimapWidth: cw, canvasHeight: ch });
         const labelFor = (entry) => slotLabel(entry);
-        // When uiScaleOnZoomOut is on and zoom < ghostThreshold, slots are
-        // CSS-scaled around their centre — see App.js's applySlotScales. The
-        // rect needs the same per-entry scale to know which slots the user
-        // *visually* sees, otherwise it under-represents the camera's framing.
-        const settings = getWorldSettings();
-        const baseScale = settings.uiScaleOnZoomOut
-            ? computeBaseScale(z, settings.ghostThreshold)
-            : 1;
-        const inflatedRanges = baseScale > 1
-            ? sorted.map(entry => inflatedEntryRange(entry, computeSlotScale({
-                entry,
-                cameraX: camera.x,
-                cameraY: camera.y,
-                viewportW: vpW,
-                viewportH: vpH,
-                zoom: z,
-                baseScale,
-            })))
-            : null;
         const rect = computeMinimapViewportRect({
             sortedEntries: sorted,
             cameraX: camera.x,
@@ -305,7 +281,6 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
             viewportWidthPx: vpW,
             minimapWidth: cw,
             canvasHeight: ch,
-            inflatedRanges,
         });
         const pulse = computeLayerPulse(performance.now(), pulseStartRef.current);
         drawMinimap(ctx, cw, ch, sorted, slots, activeId, labelFor, rect);
