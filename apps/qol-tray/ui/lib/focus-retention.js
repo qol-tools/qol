@@ -10,7 +10,8 @@ const VIEWPORT_SELECTOR = '#viewport';
 export function pickFallbackSurface({ lostContainer, lostSlot, viewport }) {
     const candidate = pickSelectedThenFirst(lostContainer)
         || pickSelectedThenFirst(lostSlot)
-        || firstConnectedSurface(viewport);
+        || pickAnchoredSlotSurface(viewport)
+        || firstSurfaceInViewport(viewport);
     return candidate || null;
 }
 
@@ -24,15 +25,61 @@ function pickSelectedThenFirst(root) {
     return surfaces[0];
 }
 
-function firstConnectedSurface(root) {
-    if (!isUsable(root)) return null;
-    const surfaces = visibleSurfaces(root);
-    return surfaces[0] || null;
+// World slots live at distant coordinates inside #viewport (transformed via
+// CSS). After ascend the lost editor slot is empty; we must NOT fall back to
+// a surface in another world slot that happens to be off-screen, or the
+// camera will chase it. Prefer a slot whose rect actually intersects the
+// viewport — that's the slot the camera is currently showing.
+function pickAnchoredSlotSurface(viewport) {
+    if (!isUsable(viewport)) return null;
+    const vr = viewportRect(viewport);
+    if (!vr) return null;
+    const slots = typeof viewport.querySelectorAll === 'function'
+        ? Array.from(viewport.querySelectorAll(SLOT_SELECTOR))
+        : [];
+    for (const slot of slots) {
+        if (!isUsable(slot)) continue;
+        if (!rectIntersects(boundingRect(slot), vr)) continue;
+        const surfaces = visibleSurfaces(slot);
+        if (surfaces.length === 0) continue;
+        for (const el of surfaces) {
+            if (el.getAttribute('data-selected') === 'true') return el;
+        }
+        return surfaces[0];
+    }
+    return null;
+}
+
+function firstSurfaceInViewport(viewport) {
+    if (!isUsable(viewport)) return null;
+    const vr = viewportRect(viewport);
+    const surfaces = visibleSurfaces(viewport);
+    if (!vr) return surfaces[0] || null;
+    for (const el of surfaces) {
+        if (rectIntersects(boundingRect(el), vr)) return el;
+    }
+    return null;
 }
 
 function visibleSurfaces(root) {
     if (!root || typeof root.querySelectorAll !== 'function') return [];
     return Array.from(root.querySelectorAll(SURFACE_SELECTOR)).filter(isSurfaceUsable);
+}
+
+function viewportRect(viewport) {
+    return boundingRect(viewport);
+}
+
+function boundingRect(el) {
+    if (!el || typeof el.getBoundingClientRect !== 'function') return null;
+    const r = el.getBoundingClientRect();
+    if (!r || (r.width === 0 && r.height === 0)) return null;
+    return r;
+}
+
+function rectIntersects(a, b) {
+    if (!a || !b) return false;
+    return a.right > b.left && a.left < b.right && a.bottom > b.top && a.top < b.bottom;
 }
 
 function isSurfaceUsable(el) {

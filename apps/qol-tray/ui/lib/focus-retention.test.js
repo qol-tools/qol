@@ -19,15 +19,20 @@ function makeSurface({ id, selected = false, connected = true, visible = true, d
     };
 }
 
-function makeRoot({ id, surfaces = [], connected = true }) {
-    return {
+function makeRoot({ id, surfaces = [], slots = [], connected = true, rect = null }) {
+    const root = {
         id,
         isConnected: connected,
         querySelectorAll(selector) {
-            assert.equal(selector, '[data-selected-surface]');
-            return surfaces;
+            if (selector === '[data-selected-surface]') return surfaces;
+            if (selector === '.world-view-slot') return slots;
+            throw new Error(`unexpected selector: ${selector}`);
         },
     };
+    if (rect) {
+        root.getBoundingClientRect = () => rect;
+    }
+    return root;
 }
 
 test('pickFallbackSurface picks selected surface in lost container first', () => {
@@ -157,6 +162,76 @@ test('property: 200 random shapes — fallback always usable when any usable sur
             assert.equal(fallback, null, `case ${i}: expected null when no usable surfaces`);
         }
     }
+});
+
+// ---------------------------------------------------------------------------
+// Regression: after ascend, the dive editor slot is empty (placeholder), but
+// other world-slots living far off-screen at distant world coordinates remain
+// connected and "visible" (have getClientRects). The previous viewport
+// fallback returned the first off-screen surface, causing the camera to chase
+// it across the world. Recovery must scope to a slot whose rect actually
+// intersects the viewport — i.e. the slot the camera is currently showing.
+// ---------------------------------------------------------------------------
+
+function makeSurfaceWithRect({ id, selected = false, rect }) {
+    const s = makeSurface({ id, selected });
+    s.getBoundingClientRect = () => rect;
+    return s;
+}
+
+test('pickFallbackSurface ignores off-screen world-slots in viewport fallback', () => {
+    const VIEWPORT_RECT = { left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 };
+    // Off-screen plugins slot lives at world-x = -15578 in screen coords.
+    const offscreen = makeSurfaceWithRect({
+        id: 'plugin-card',
+        rect: { left: -15578, top: 115, right: -15290, bottom: 277, width: 288, height: 162 },
+    });
+    const offscreenSlot = makeRoot({
+        id: 'slot-plugins',
+        surfaces: [offscreen],
+        rect: { left: -15600, top: 0, right: -14320, bottom: 900, width: 1280, height: 900 },
+    });
+    // Active hotkeys slot is centered in viewport.
+    const onscreen = makeSurfaceWithRect({
+        id: 'hotkey-row',
+        selected: true,
+        rect: { left: 100, top: 200, right: 700, bottom: 240, width: 600, height: 40 },
+    });
+    const onscreenSlot = makeRoot({
+        id: 'slot-hotkeys',
+        surfaces: [onscreen],
+        rect: { left: 80, top: 0, right: 720, bottom: 900, width: 640, height: 900 },
+    });
+    const viewport = makeRoot({
+        id: 'viewport',
+        surfaces: [offscreen, onscreen],
+        slots: [offscreenSlot, onscreenSlot],
+        rect: VIEWPORT_RECT,
+    });
+    const fallback = pickFallbackSurface({ lostContainer: null, lostSlot: null, viewport });
+    assert.equal(fallback?.id, 'hotkey-row',
+        'must pick a surface inside a slot whose rect intersects the viewport');
+});
+
+test('pickFallbackSurface picks first viewport-intersecting surface when no slot is selected', () => {
+    const VIEWPORT_RECT = { left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 };
+    const offscreen = makeSurfaceWithRect({
+        id: 'far-away',
+        rect: { left: -2000, top: 0, right: -1800, bottom: 100, width: 200, height: 100 },
+    });
+    const onscreen = makeSurfaceWithRect({
+        id: 'visible',
+        rect: { left: 100, top: 100, right: 300, bottom: 200, width: 200, height: 100 },
+    });
+    const viewport = makeRoot({
+        id: 'viewport',
+        surfaces: [offscreen, onscreen],
+        slots: [],
+        rect: VIEWPORT_RECT,
+    });
+    const fallback = pickFallbackSurface({ lostContainer: null, lostSlot: null, viewport });
+    assert.equal(fallback?.id, 'visible',
+        'must skip surfaces whose rects fall outside the viewport');
 });
 
 test('property: 200 random shapes — selected-true in container always wins over slot/viewport', () => {

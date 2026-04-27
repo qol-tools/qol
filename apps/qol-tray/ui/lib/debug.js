@@ -1,9 +1,16 @@
 /**
  * Frontend debug logger with namespace support.
  *
- * Toggle from the Developer > Dev tab or programmatically:
+ * Logs are ON by default. Mute via the Developer > Dev tab "Frontend Debug"
+ * toggle, or programmatically:
  *   import { setDebugEnabled } from './debug.js';
- *   setDebugEnabled(true);
+ *   setDebugEnabled(false);   // mute
+ *   setDebugEnabled(true);    // unmute (default)
+ *
+ * Verbose tier (per-loop / per-candidate spam) is OFF by default. Opt in with:
+ *   localStorage.setItem('qol-debug-verbose', '1')
+ * or call setVerboseDebugEnabled(true). Use log.verbose(...) at call sites
+ * that fire inside hot loops.
  */
 
 const COLORS = [
@@ -12,17 +19,29 @@ const COLORS = [
 ];
 
 const KEY = 'qol-debug';
-let enabled = typeof localStorage !== 'undefined' && localStorage.getItem(KEY) === '1';
+const VERBOSE_KEY = 'qol-debug-verbose';
+
+// Default ON. Muted only when localStorage explicitly says '0'.
+let enabled = !(typeof localStorage !== 'undefined' && localStorage.getItem(KEY) === '0');
+let verbose = typeof localStorage !== 'undefined' && localStorage.getItem(VERBOSE_KEY) === '1';
 let colorIndex = 0;
 const nsColors = new Map();
 
 export function isDebugEnabled() { return enabled; }
 
 export function setDebugEnabled(on) {
-    enabled = on;
-    if (typeof localStorage !== 'undefined') {
-        on ? localStorage.setItem(KEY, '1') : localStorage.removeItem(KEY);
-    }
+    enabled = !!on;
+    if (typeof localStorage === 'undefined') return;
+    // Default state (enabled) = key absent. Muted = '0'.
+    on ? localStorage.removeItem(KEY) : localStorage.setItem(KEY, '0');
+}
+
+export function isVerboseDebugEnabled() { return verbose; }
+
+export function setVerboseDebugEnabled(on) {
+    verbose = !!on;
+    if (typeof localStorage === 'undefined') return;
+    on ? localStorage.setItem(VERBOSE_KEY, '1') : localStorage.removeItem(VERBOSE_KEY);
 }
 
 export function createDebug(namespace) {
@@ -32,6 +51,12 @@ export function createDebug(namespace) {
         if (!enabled) return;
         const color = nsColors.get(namespace);
         console.log(`%c${namespace}%c`, `color:${color};font-weight:bold`, 'color:inherit', ...args);
+    };
+
+    log.verbose = (...args) => {
+        if (!enabled || !verbose) return;
+        const color = nsColors.get(namespace);
+        console.log(`%c${namespace}%c`, `color:${color};font-weight:bold;opacity:0.7`, 'color:inherit;opacity:0.7', ...args);
     };
 
     log.extend = (sub) => createDebug(`${namespace}:${sub}`);

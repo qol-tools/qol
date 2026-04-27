@@ -5,7 +5,7 @@ export function useModalKeyboard({ onSave }) {
     const [selectedIndex, setSelectedIndex] = useState(0);
 
     useLayoutEffect(() => {
-        const container = document.querySelector('.edit-modal');
+        const container = document.querySelector('.edit-modal-content');
         if (!container) return;
         const surfaces = getModalSurfaces(container);
         const surface = surfaces[Math.min(selectedIndex, surfaces.length - 1)];

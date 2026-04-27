@@ -4,7 +4,7 @@ import { PaletteProvider, usePaletteContext } from '../palette/context.js';
 import { createDebug, elLabel } from '../lib/debug.js';
 import { prettyLabel } from '../auto-config/heuristics.js';
 import { createNavigation, selectorFor, animateTransition } from '../lib/world-navigation.js';
-import { setDiveFromSurface, setDiveViaSelector } from '../lib/world-navigation-singleton.js';
+import { setAscend, setDiveFromSurface, setDiveViaSelector } from '../lib/world-navigation-singleton.js';
 import { getWorldSettings, subscribeWorldSettings } from '../lib/world-settings.js';
 
 const log = createDebug('qol:app');
@@ -499,6 +499,11 @@ function AppShell() {
         setDiveDepth(navigation.stackDepth());
         return true;
     }, [navigation, registry]);
+
+    useEffect(() => {
+        setAscend(ascend);
+        return () => setAscend(null);
+    }, [ascend]);
 
     const diveRef = useRef(false);
     const [hiddenUntilDive, setHiddenUntilDive] = useState(() => {
