@@ -1,7 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { computeMinimapSlots, computeMinimapViewportRect, computeSlotCoverage } from './minimap-geometry.js';
-import { cameraTargetFor } from './world-geometry.js';
+import {
+    cameraTargetFor,
+    computeBaseScale,
+    computeSlotScale,
+    inflatedEntryRange,
+} from './world-geometry.js';
 
 const THREE_ENTRIES = [
     { id: 'a', x: 0,     y: 0, width: 1280, height: 900 },
@@ -386,6 +391,89 @@ test('property: slot row stays inside [0, canvasHeight] and is vertically centre
         assert.ok(
             Math.abs(topGap - bottomGap) < 1e-6,
             `case ${i}: not centred top=${topGap} bottom=${bottomGap}`,
+        );
+    }
+});
+
+test('property: rect.y matches slot row.y for the same canvasHeight, regardless of camera state (200 cases)', () => {
+    // Visual contract: the viewport rect's vertical band is the slot strip
+    // row, not the camera's y. If a future change ever derives rect.y from
+    // camera.y or returns a divergent rowHeight, this test catches it. Bug
+    // shape it guards: rect floating above/below the slot icons after a
+    // dive→ascend that perturbs camera.y.
+    const rng = makeRng(0xA110CA7E);
+    for (let i = 0; i < 200; i++) {
+        const count = 1 + Math.floor(rng() * 6);
+        const entries = makeRandomEntries(rng, count);
+        const minimapWidth = 100 + rng() * 400;
+        const canvasHeight = 40 + rng() * 200;
+        const slots = computeMinimapSlots({ sortedEntries: entries, minimapWidth, canvasHeight });
+        if (slots.length === 0) continue;
+
+        // Sweep camera across pre-, in-, and post-world spans plus arbitrary y.
+        const worldMin = entries[0].x;
+        const worldMax = entries.at(-1).x + entries.at(-1).width;
+        const cameraX = worldMin - (worldMax - worldMin) + rng() * (worldMax - worldMin) * 3;
+        // cameraY shouldn't influence rect.y at all — vary it to lock that.
+        // (Not a parameter to computeMinimapViewportRect, but if a future bug
+        // wires it in, callers will pass it; verify the function doesn't accept
+        // it from a stray prop merge.)
+        const cameraZoom = 0.05 + rng() * 4;
+        const viewportWidthPx = 400 + rng() * 1600;
+
+        const rect = computeMinimapViewportRect({
+            sortedEntries: entries,
+            cameraX,
+            cameraZoom,
+            viewportWidthPx,
+            minimapWidth,
+            canvasHeight,
+        });
+
+        // rect.y MUST equal the slot row's y for the same canvasHeight, in
+        // every empty-or-overlap case. height MUST equal the row's height.
+        const rowY = slots[0].y;
+        const maxSlotH = slots.reduce((m, s) => Math.max(m, s.h), 0);
+        assert.ok(
+            Math.abs(rect.y - rowY) < 1e-9,
+            `case ${i}: rect.y=${rect.y} drifted from slot row y=${rowY}`,
+        );
+        assert.ok(
+            Math.abs(rect.height - maxSlotH) < 1e-6,
+            `case ${i}: rect.height=${rect.height} drifted from row height=${maxSlotH}`,
+        );
+    }
+});
+
+test('rect.y is independent of cameraX, cameraZoom, and viewport width (anchored to slot row)', () => {
+    // Anchor lock: rect.y MUST NOT drift when the camera pans, zooms, or the
+    // viewport resizes. This is the "post-ascend rect floats above slots"
+    // regression guard — rect.y is a layout constant, not a camera-derived value.
+    const entries = Array.from({ length: 8 }, (_, i) => ({
+        id: `p${i}`, x: i * 10000, y: 0, width: 1280, height: 900,
+    }));
+    const minimapWidth = 380;
+    const canvasHeight = 209;
+    const slots = computeMinimapSlots({ sortedEntries: entries, minimapWidth, canvasHeight });
+    const expectedY = slots[0].y;
+
+    const cases = [
+        { cameraX: 0, cameraZoom: 0.05, viewportWidthPx: 800 },
+        { cameraX: 0, cameraZoom: 0.5, viewportWidthPx: 800 },
+        { cameraX: 0, cameraZoom: 1, viewportWidthPx: 800 },
+        { cameraX: 5000, cameraZoom: 1, viewportWidthPx: 1200 },
+        { cameraX: 70000, cameraZoom: 2, viewportWidthPx: 1600 },
+        // No-overlap case (camera before world) still must report row Y so
+        // a brief no-camera-overlap frame doesn't snap the rect to y=0.
+        { cameraX: -50000, cameraZoom: 1, viewportWidthPx: 800 },
+    ];
+    for (const c of cases) {
+        const rect = computeMinimapViewportRect({
+            sortedEntries: entries, ...c, minimapWidth, canvasHeight,
+        });
+        assert.ok(
+            Math.abs(rect.y - expectedY) < 1e-9,
+            `case ${JSON.stringify(c)}: rect.y=${rect.y} expected ${expectedY}`,
         );
     }
 });
@@ -783,6 +871,116 @@ test('property: at zoom=1 snug on entry[i], coverage of slot[i] === 1 and all ot
             }
         }
     }
+});
+
+// --- Slot-scale inflation: rect tracks visually-inflated content -------
+// At zoom < ghostThreshold with uiScaleOnZoomOut on, slots are CSS-scaled
+// around their centre so they stay readable. The user sees neighbour pages
+// even though the raw camera window doesn't cover them. The rect must
+// reflect that.
+
+function buildInflatedRanges(sorted, cameraX, cameraY, viewportW, viewportH, zoom, baseScale) {
+    return sorted.map(entry => inflatedEntryRange(entry, computeSlotScale({
+        entry, cameraX, cameraY, viewportW, viewportH, zoom, baseScale,
+    })));
+}
+
+test('inflated: when zoom >= ghostThreshold (baseScale === 1), inflated path matches legacy', () => {
+    // baseScale is 1 ⇒ inflatedRanges become entry.x..entry.x+width identically.
+    const baseScale = computeBaseScale(0.8, 0.55);
+    assert.equal(baseScale, 1);
+    const inflatedRanges = buildInflatedRanges(THREE_ENTRIES, 0, 0, 1200, 800, 0.8, baseScale);
+    const legacy = computeMinimapViewportRect({
+        sortedEntries: THREE_ENTRIES, cameraX: 0, cameraZoom: 0.8, viewportWidthPx: 1200, minimapWidth: 220,
+    });
+    const inflated = computeMinimapViewportRect({
+        sortedEntries: THREE_ENTRIES, cameraX: 0, cameraZoom: 0.8, viewportWidthPx: 1200, minimapWidth: 220, inflatedRanges,
+    });
+    assert.ok(Math.abs(legacy.x - inflated.x) < 1e-6);
+    assert.ok(Math.abs(legacy.width - inflated.width) < 1e-6);
+});
+
+test('inflated: at deep zoom-out, neighbour slot enters rect when its inflated visual range overlaps the camera', () => {
+    // At zoom 0.12 with the production layout (8 pages at stride 10000, width 1280):
+    //   camera window = [0, 1200/0.12] = [0, 10000]
+    //   raw entry b is [10000, 11280] — does NOT overlap raw camera.
+    //   Inflated b spans cx=10640 ± width*scale/2; with scale ~3 (centre-floor 0.75),
+    //   half-width ~1920, so inflated b ≈ [8720, 12560] — overlaps camera right edge.
+    const entries = Array.from({ length: 8 }, (_, i) => ({
+        id: `p${i}`, x: i * 10000, y: 0, width: 1280, height: 900,
+    }));
+    const cameraX = 0;
+    const zoom = 0.12;
+    const viewportW = 1200;
+    const viewportH = 800;
+    const baseScale = computeBaseScale(zoom, 0.55);
+    assert.ok(baseScale > 1, `expected baseScale>1, got ${baseScale}`);
+    const inflatedRanges = buildInflatedRanges(entries, cameraX, 0, viewportW, viewportH, zoom, baseScale);
+    const legacy = computeMinimapViewportRect({
+        sortedEntries: entries, cameraX, cameraZoom: zoom, viewportWidthPx: viewportW, minimapWidth: 380,
+    });
+    const inflated = computeMinimapViewportRect({
+        sortedEntries: entries, cameraX, cameraZoom: zoom, viewportWidthPx: viewportW, minimapWidth: 380, inflatedRanges,
+    });
+    // Inflated rect must extend past legacy rect on the right (neighbour bleeds in).
+    const legacyEnd = legacy.x + legacy.width;
+    const inflatedEnd = inflated.x + inflated.width;
+    assert.ok(
+        inflatedEnd > legacyEnd + 1,
+        `expected inflated rect to extend past legacy (legacyEnd=${legacyEnd}, inflatedEnd=${inflatedEnd})`,
+    );
+    // Specifically, the inflated rect must cross into slot[1] (entry b's slot).
+    const slots = computeMinimapSlots({ sortedEntries: entries, minimapWidth: 380 });
+    assert.ok(
+        inflatedEnd > slots[1].x,
+        `expected inflated end ${inflatedEnd} to enter slot[1] (x=${slots[1].x})`,
+    );
+});
+
+test('inflated: rect stays clamped to minimap bounds even at extreme inflation', () => {
+    const entries = Array.from({ length: 4 }, (_, i) => ({
+        id: `p${i}`, x: i * 10000, y: 0, width: 1280, height: 900,
+    }));
+    const cameraX = 5000;
+    const zoom = 0.05; // very deep zoom-out
+    const baseScale = computeBaseScale(zoom, 0.55);
+    const inflatedRanges = buildInflatedRanges(entries, cameraX, 0, 1200, 800, zoom, baseScale);
+    const rect = computeMinimapViewportRect({
+        sortedEntries: entries, cameraX, cameraZoom: zoom, viewportWidthPx: 1200, minimapWidth: 240, inflatedRanges,
+    });
+    assert.ok(rect.x >= -1e-9, `rect.x out of bounds: ${rect.x}`);
+    assert.ok(rect.x + rect.width <= 240 + 1e-9, `rect right edge out of bounds: ${rect.x + rect.width}`);
+});
+
+test('property: inflated rect always stays within minimap bounds across deep zoom-out (200 cases)', () => {
+    // Containment guard for the inflated path — analogous to the existing
+    // legacy-path containment property, but exercised at zoom levels where
+    // baseScale > 1 so the inflated mapping is actually engaged.
+    const rng = makeRng(0xBEEFCAFE);
+    let cases = 0;
+    for (let i = 0; i < 600 && cases < 200; i++) {
+        const count = 2 + Math.floor(rng() * 5);
+        const entries = Array.from({ length: count }, (_, j) => ({
+            id: `e${j}`, x: j * 10000, y: 0, width: 1000 + rng() * 800, height: 900,
+        }));
+        const cameraX = -5000 + rng() * (count * 10000 + 10000);
+        const zoom = 0.05 + rng() * 0.45;
+        const baseScale = computeBaseScale(zoom, 0.55);
+        if (!(baseScale > 1)) continue;
+        const viewportW = 600 + rng() * 1200;
+        const viewportH = 500 + rng() * 600;
+        const minimapWidth = 150 + rng() * 350;
+        const inflatedRanges = buildInflatedRanges(entries, cameraX, 0, viewportW, viewportH, zoom, baseScale);
+        const rect = computeMinimapViewportRect({
+            sortedEntries: entries, cameraX, cameraZoom: zoom, viewportWidthPx: viewportW, minimapWidth, inflatedRanges,
+        });
+        assert.ok(
+            rect.x >= -1e-9 && rect.x + rect.width <= minimapWidth + 1e-9 && rect.width >= -1e-9,
+            `case ${i}: rect=${JSON.stringify(rect)} minimapWidth=${minimapWidth}`,
+        );
+        cases++;
+    }
+    assert.ok(cases > 0, 'no inflated cases generated — check zoom range vs ghostThreshold');
 });
 
 test('computeSlotCoverage: at zoom 0.5 spanning entries i and i+1, both slots register partial coverage', () => {

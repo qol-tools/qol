@@ -22,7 +22,14 @@ import { CommandPalette } from './CommandPalette.js';
 import { createCamera } from '../lib/world-camera.js';
 import { createFocusRetention } from '../lib/focus-retention.js';
 import { createWorldRegistry } from '../lib/world-registry.js';
-import { boundsOfEntries, maxEntryExtent, paddedWorldBounds, withPadding } from '../lib/world-geometry.js';
+import {
+    boundsOfEntries,
+    computeBaseScale,
+    computeSlotScale,
+    maxEntryExtent,
+    paddedWorldBounds,
+    withPadding,
+} from '../lib/world-geometry.js';
 import { pageMode } from '../lib/peripheral-geometry.js';
 import { pluginTraitOverride } from '../lib/plugin-trait-overrides.js';
 import { WorldViewport } from './shell/WorldViewport.js';
@@ -30,34 +37,24 @@ import { MinimapContainer } from './shell/Minimap.js';
 import { RegionLabels } from './shell/RegionLabels.js';
 import { useWorldNav } from '../app/WorldNav.js';
 
-const PAGE_STRIDE = 10000;
-const SLOT_GAP_FACTOR = 0.85;
-
-function computeBaseScale(zoom, threshold) {
-    return Math.max(1, Math.pow(threshold / zoom, 0.85));
-}
-
 function applySlotScales(worldEl, registry, camera, baseScale) {
     const slots = worldEl.querySelectorAll('.world-view-slot');
     if (baseScale === 1) {
         for (const s of slots) s.style.removeProperty('--slot-scale');
         return;
     }
-    const z = Math.max(camera.zoom, 0.05);
-    const vpCenterX = camera.x + window.innerWidth / (2 * z);
-    const vpCenterY = camera.y + window.innerHeight / (2 * z);
-    const falloff = (PAGE_STRIDE * z) * 2.5;
-    const centerFloor = 0.75;
     for (const slot of slots) {
         const entry = registry.getEntry(slot.dataset.viewId);
         if (!entry) continue;
-        const cx = entry.x + entry.width / 2;
-        const cy = entry.y + entry.height / 2;
-        const d = Math.hypot(cx - vpCenterX, cy - vpCenterY) * z;
-        const t = 1 - Math.min(d / falloff, 1);
-        const proximity = centerFloor + (1 - centerFloor) * (t * t * (3 - 2 * t));
-        const maxSlotScale = (PAGE_STRIDE * SLOT_GAP_FACTOR) / Math.max(entry.width, 1);
-        const slotScale = Math.min(1 + (baseScale - 1) * proximity, maxSlotScale);
+        const slotScale = computeSlotScale({
+            entry,
+            cameraX: camera.x,
+            cameraY: camera.y,
+            viewportW: window.innerWidth,
+            viewportH: window.innerHeight,
+            zoom: camera.zoom,
+            baseScale,
+        });
         slot.style.setProperty('--slot-scale', slotScale.toFixed(3));
     }
 }
