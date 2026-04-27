@@ -1,5 +1,6 @@
 import { useCallback, useLayoutEffect, useState } from 'preact/hooks';
 import { modalFields } from '../components/ModalPreact.js';
+import { resolveModalKeyAction } from './modal-key-action.js';
 
 let activeModalContainer = null;
 let warnedFallback = false;
@@ -13,7 +14,7 @@ export function setActiveModalContainer(ref) {
     activeModalContainer = ref || null;
 }
 
-export function useModalKeyboard({ onSave, containerRef } = {}) {
+export function useModalKeyboard({ onSave, onClose, containerRef } = {}) {
     const [selectedIndex, setSelectedIndex] = useState(0);
 
     useLayoutEffect(() => {
@@ -30,17 +31,19 @@ export function useModalKeyboard({ onSave, containerRef } = {}) {
         const active = document.activeElement;
         if (active?.closest('.custom-select-list')) return;
 
-        if (isEditing(active)) {
-            if (e.key === 'Escape' || e.key === 'Enter') {
-                e.preventDefault();
-                active.closest('[data-selected-surface]')?.focus();
-            }
-            if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); onSave(); }
-            return;
-        }
-
-        if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); onSave(); return; }
-    }, [onSave]);
+        const action = resolveModalKeyAction({
+            key: e.key,
+            ctrlKey: !!e.ctrlKey,
+            isEditing: isEditing(active),
+            hasOnClose: !!onClose,
+        });
+        if (action === 'noop') return;
+        e.preventDefault();
+        if (action === 'blur-edit') { active.closest('[data-selected-surface]')?.focus(); return; }
+        if (action === 'blur-edit-and-save') { active.closest('[data-selected-surface]')?.focus(); onSave(); return; }
+        if (action === 'save') { onSave(); return; }
+        if (action === 'close') { onClose(); return; }
+    }, [onSave, onClose]);
 
     const fieldProps = useCallback((index) => ({
         'data-selected-surface': '',

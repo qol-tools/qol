@@ -151,7 +151,9 @@ function routeToView(event, viewKeyboard, cycleView) {
             viewKeyboard.handleKey(event);
             return;
         }
-        if (hasVisibleModal()) return;
+        if (hasVisibleModal()) {
+            return;
+        }
         cycleView(event);
         return;
     }
