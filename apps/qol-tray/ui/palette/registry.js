@@ -40,10 +40,6 @@ export function getContextualCommands(activeViewId) {
     return bucketCommands(GLOBAL_ID);
 }
 
-export function getCommands(activeViewId) {
-    return [...bucketCommands(activeViewId), ...bucketCommands(GLOBAL_ID)];
-}
-
 export function subscribeRegistry(fn) {
     listeners.add(fn);
     return () => listeners.delete(fn);
