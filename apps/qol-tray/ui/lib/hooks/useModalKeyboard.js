@@ -1,11 +1,23 @@
 import { useCallback, useLayoutEffect, useState } from 'preact/hooks';
 import { modalFields } from '../components/ModalPreact.js';
 
-export function useModalKeyboard({ onSave }) {
+let activeModalContainer = null;
+let warnedFallback = false;
+
+/**
+ * Registered by DiveEditorSubPage so useModalKeyboard (called in the parent
+ * view's hook layer) can resolve the modal container without each caller
+ * threading a ref through.
+ */
+export function setActiveModalContainer(ref) {
+    activeModalContainer = ref || null;
+}
+
+export function useModalKeyboard({ onSave, containerRef } = {}) {
     const [selectedIndex, setSelectedIndex] = useState(0);
 
     useLayoutEffect(() => {
-        const container = document.querySelector('.edit-modal-content');
+        const container = resolveContainer(containerRef);
         if (!container) return;
         const surfaces = getModalSurfaces(container);
         const surface = surfaces[Math.min(selectedIndex, surfaces.length - 1)];
@@ -39,6 +51,18 @@ export function useModalKeyboard({ onSave }) {
     }), [selectedIndex]);
 
     return { handleKey, fieldProps };
+}
+
+function resolveContainer(containerRef) {
+    if (containerRef?.current) return containerRef.current;
+    if (activeModalContainer?.current) return activeModalContainer.current;
+    const fallback = document.querySelector('.edit-modal-content');
+    if (fallback && !warnedFallback) {
+        warnedFallback = true;
+        // eslint-disable-next-line no-console
+        console.warn('useModalKeyboard: falling back to global .edit-modal-content selector. Wire a containerRef or render inside DiveEditorSubPage.');
+    }
+    return fallback;
 }
 
 function getModalSurfaces(container) {
