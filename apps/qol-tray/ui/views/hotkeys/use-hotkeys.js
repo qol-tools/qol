@@ -4,6 +4,7 @@ import { usePersistedIndex } from '../../lib/hooks/usePersistedIndex.js';
 import { useSSEDebounce } from '../../hooks/useSSEDebounce.js';
 import { useListKeyboard } from '../../lib/hooks/useListKeyboard.js';
 import { useModalKeyboard } from '../../lib/hooks/useModalKeyboard.js';
+import { useRecorder } from './useRecorder.js';
 import {
     buildSavedHotkeys,
     getAvailableActions as resolveAvailableActions,
@@ -15,31 +16,52 @@ import {
     removeHotkeyAtIndex
 } from './data.js';
 import {
-    applyRecordingKey,
     changeEditModalPlugin,
     createEditModalState,
 } from './modal.js';
 
 export function useHotkeys({ onAfterSave, onAfterClose } = {}) {
     const d = useHotkeysData();
-    const m = useModalActions(d);
+    const recorder = useRecorder({
+        onCapture: useCallback((key) => {
+            d.setEditModal(prev => prev ? { ...prev, key } : prev);
+        }, []),
+    });
+    const m = useModalActions(d, recorder);
     const saveAndExit = useCallback(() => {
         if (m.saveHotkey() === false) return false;
         onAfterSave?.();
         return true;
     }, [m.saveHotkey, onAfterSave]);
     const closeAndExit = useCallback(() => {
+        recorder.cancel();
         m.closeModal();
         onAfterClose?.();
-    }, [m.closeModal, onAfterClose]);
+    }, [m.closeModal, onAfterClose, recorder.cancel]);
     const { deleteSelected } = useListActions(d);
-    const { handleKey, isBlocking, modalNav } = useKeyboard(d, { ...m, saveHotkey: saveAndExit, closeModal: closeAndExit }, deleteSelected);
+    const { handleKey, isBlocking, modalNav } = useKeyboard(
+        d,
+        { ...m, saveHotkey: saveAndExit, closeModal: closeAndExit },
+        deleteSelected,
+        recorder
+    );
+    // Backwards-compat shim: KeyInput still reads modal.recording for the
+    // recording chrome (input class + placeholder). The recorder owns the bit;
+    // mirror it back so existing consumers do not need to change.
+    useEffect(() => {
+        d.setEditModal(prev => {
+            if (!prev) return prev;
+            if (prev.recording === recorder.isRecording) return prev;
+            return { ...prev, recording: recorder.isRecording };
+        });
+    }, [recorder.isRecording]);
     return {
         hotkeys: d.hotkeys,
         plugins: d.plugins,
         registrationErrors: d.registrationErrors,
         selectedIndex: d.selectedIndex,
         editModal: d.editModal,
+        recorder,
         fieldProps: modalNav.fieldProps,
         setSelectedIndex: d.setSelectedIndex,
         openEditModal: m.openEditModal,
@@ -85,25 +107,27 @@ function loadInitialData(setHotkeys, setPlugins, setSelectedIndex, markRestored)
     }).catch(() => {});
 }
 
-function useModalActions(d) {
+function useModalActions(d, recorder) {
     const getActions = useCallback(
         (pluginId, editingId) => resolveAvailableActions(d.plugins, d.hotkeysRef.current, pluginId, editingId),
         [d.plugins]
     );
     const openEditModal = useCallback((hotkey = null, keepPlugin = null) => {
+        recorder.cancel();
         d.setEditModal(createEditModalState(hotkey, keepPlugin, getActions));
-    }, [getActions]);
-    const saveHotkey = useCallback(() => executeSave(d), []);
+    }, [getActions, recorder.cancel]);
+    const saveHotkey = useCallback(() => executeSave(d, recorder), [recorder]);
     const handlePluginChange = useCallback((id) => d.setEditModal(prev => changeEditModalPlugin(prev, id, getActions)), [getActions]);
     const handleActionChange = useCallback((action) => d.setEditModal(prev => prev ? { ...prev, action } : prev), []);
-    const startRecording = useCallback(() => d.setEditModal(prev => prev ? { ...prev, recording: true, key: '' } : prev), []);
+    const startRecording = useCallback(() => recorder.start(''), [recorder.start]);
     const closeModal = useCallback(() => d.setEditModal(null), []);
     return { openEditModal, saveHotkey, getActions, handlePluginChange, handleActionChange, startRecording, closeModal };
 }
 
-function executeSave(d) {
+function executeSave(d, recorder) {
     const modal = d.editModalRef.current;
     if (!modal?.key || !modal?.pluginId || !modal?.action) return false;
+    recorder.cancel();
     const nextHotkeys = buildSavedHotkeys(d.hotkeysRef.current, modal);
     d.setHotkeys(nextHotkeys);
     d.hotkeysRef.current = nextHotkeys;
@@ -127,7 +151,7 @@ function useListActions(d) {
     };
 }
 
-function useKeyboard(d, m, deleteSelected) {
+function useKeyboard(d, m, deleteSelected, recorder) {
     const modalNav = useModalKeyboard({
         onSave: m.saveHotkey,
         onClose: m.closeModal,
@@ -145,20 +169,14 @@ function useKeyboard(d, m, deleteSelected) {
     });
 
     const handleKey = useCallback((e) => {
+        if (recorder.handleKey(e)) return;
         const modal = d.editModalRef.current;
         if (modal) {
-            if (modal.recording) {
-                e.preventDefault();
-                e.stopPropagation();
-                const result = applyRecordingKey(modal, e);
-                d.setEditModal(result.modal);
-                return;
-            }
             modalNav.handleKey(e);
             return;
         }
         listHandler(e);
-    }, [listHandler, modalNav.handleKey]);
+    }, [listHandler, modalNav.handleKey, recorder.handleKey]);
 
     return {
         handleKey,
