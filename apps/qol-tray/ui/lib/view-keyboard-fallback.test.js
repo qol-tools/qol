@@ -2,13 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parentViewIdFor, resolveViewKeyboard } from './view-keyboard-fallback.js';
 
-test('parentViewIdFor maps known editor sub-pages to their parent', () => {
+test('parentViewIdFor strips the -editor suffix to recover the parent id', () => {
     assert.equal(parentViewIdFor('hotkeys-editor'), 'hotkeys');
     assert.equal(parentViewIdFor('shortcuts-editor'), 'shortcuts');
     assert.equal(parentViewIdFor('task-runner-editor'), 'task-runner');
 });
 
-test('parentViewIdFor returns null for top-level views and unknown ids', () => {
+test('parentViewIdFor returns null for ids without the -editor suffix', () => {
     assert.equal(parentViewIdFor('hotkeys'), null);
     assert.equal(parentViewIdFor('plugins'), null);
     assert.equal(parentViewIdFor(''), null);

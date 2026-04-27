@@ -8,14 +8,11 @@
 // editor sub-pages register their own keyboard handler while still falling
 // back to the parent's handler when the sub-page hasn't registered.
 
-const EDITOR_PARENT_VIEW = {
-    'hotkeys-editor': 'hotkeys',
-    'shortcuts-editor': 'shortcuts',
-    'task-runner-editor': 'task-runner',
-};
+const EDITOR_SUFFIX = '-editor';
 
 export function parentViewIdFor(viewId) {
-    return EDITOR_PARENT_VIEW[viewId] || null;
+    if (!viewId?.endsWith(EDITOR_SUFFIX)) return null;
+    return viewId.slice(0, -EDITOR_SUFFIX.length);
 }
 
 export function resolveViewKeyboard(viewId, getViewKeyboard, anchorPageId = null) {
