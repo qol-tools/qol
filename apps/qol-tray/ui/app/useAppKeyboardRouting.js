@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { useKeyboard } from '../lib/hooks/useKeyboard.js';
 import { usePluginConfigContext } from '../views/plugin-config/context.js';
 import { useViewKeyboardContext } from './view-keyboard-context.js';
-import { createDebug, elLabel } from '../lib/debug.js';
+import { createDebug } from '../lib/debug.js';
 import { nearestSurfaceToCenter, isInViewport } from '../lib/viewport-spatial.js';
 import {
     activeContainer,
@@ -15,6 +15,7 @@ import {
 import { nearestSurfaceInDirection, surfaceLabel } from '../lib/spatial-nav.js';
 import { focusGridRows, nextFocusGridElement } from '../lib/focus-grid.js';
 import { getWorldSettings } from '../lib/world-settings.js';
+import { resolveViewKeyboard } from '../lib/view-keyboard-fallback.js';
 
 const log = createDebug('qol:nav');
 const PLUGIN_CONFIG_FIELD = '[data-plugin-config-field-id]';
@@ -80,7 +81,7 @@ export function useAppKeyboardRouting({
     const cycleView = useCallback((event) => {
         event.preventDefault();
         if (cyclePluginSection(event.shiftKey)) return;
-        if (navigation?.stackDepth?.() > 0) return;
+        if ((navigation?.stackDepth?.() ?? 0) > 0) return;
         cycleTopLevelView(event.shiftKey);
     }, [cyclePluginSection, cycleTopLevelView, navigation]);
 
@@ -122,7 +123,8 @@ export function useAppKeyboardRouting({
     }, [activeViewId]);
 
     useKeyboard(useCallback((event) => {
-        const viewKeyboard = getViewKeyboard(activeViewId);
+        const anchorPageId = navigation?.getCurrentAnchor?.()?.pageId || null;
+        const viewKeyboard = resolveViewKeyboard(activeViewId, getViewKeyboard, anchorPageId);
         if (handlePaletteToggle(event, palette, activePluginId)) return;
         if (palette.active && event.key !== 'Tab') return;
         if (event.key === 'Tab' && activePluginId && !viewKeyboard?.isBlocking?.()) {
@@ -132,7 +134,7 @@ export function useAppKeyboardRouting({
         }
         if (activePluginId) return delegateToPluginConfig(event, pluginConfig, closePluginConfig);
         routeToView(event, viewKeyboard, cycleView);
-    }, [activePluginId, activeViewId, closePluginConfig, cycleView, getViewKeyboard, palette, pluginConfig]));
+    }, [activePluginId, activeViewId, closePluginConfig, cycleView, getViewKeyboard, navigation, palette, pluginConfig]));
 }
 
 function handlePaletteToggle(event, palette, activePluginId) {
@@ -145,12 +147,11 @@ function handlePaletteToggle(event, palette, activePluginId) {
 function routeToView(event, viewKeyboard, cycleView) {
     if (event.key === 'Tab') {
         event.preventDefault();
-        if (hasVisibleModal()) {
-            if (viewKeyboard?.isBlocking?.() && viewKeyboard.handleKey) {
-                viewKeyboard.handleKey(event);
-            }
+        if (viewKeyboard?.isBlocking?.() && viewKeyboard.handleKey) {
+            viewKeyboard.handleKey(event);
             return;
         }
+        if (hasVisibleModal()) return;
         cycleView(event);
         return;
     }

@@ -1,6 +1,6 @@
 import { tryFetchJson } from '../../api/client.js';
 import { parseDiscoveryPayload, parseLogControlsPayload } from './discovery/reducer.js';
-import { setDebugEnabled } from '../../lib/debug.js';
+import { isDebugEnabled } from '../../lib/debug.js';
 
 export function createDiscoveryController({ state, onNeedsRender }) {
     const ctx = { state, onNeedsRender };
@@ -28,8 +28,12 @@ async function loadLogControls(ctx, skipUpdate = false) {
 async function loadCoreLogControls(ctx, skipUpdate = false) {
     const payload = await tryFetchJson('/api/dev/core-log-controls');
     if (payload) {
-        ctx.state.coreLogControls = payload;
-        setDebugEnabled(!payload['frontend-debug']?.muted);
+        // Synthesize a frontend-debug entry from local debug state — backend
+        // doesn't track this section, mute flag lives in localStorage.
+        ctx.state.coreLogControls = {
+            ...payload,
+            'frontend-debug': { muted: !isDebugEnabled(), suppress_patterns: [] }
+        };
     }
     maybeRender(ctx, skipUpdate);
 }

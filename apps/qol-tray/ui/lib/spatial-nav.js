@@ -53,7 +53,7 @@ function spatialSearch(surfaces, current, direction, useCone) {
         if (useCone && horizontal && (cross > primary / 4 || cross > 100)) continue;
         if (useCone && !horizontal && cross > primary * 3) continue;
         const dist = horizontal ? primary + cross * 5 : primary * 3 + cross;
-        log('  candidate', surfaceLabel(el),
+        log.verbose('  candidate', surfaceLabel(el),
             'pos=(' + Math.round(r.left) + ',' + Math.round(r.top) + ')',
             'dx=' + Math.round(dx), 'dy=' + Math.round(dy),
             'pri=' + Math.round(primary), 'cross=' + Math.round(cross),

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo, useState } from 'preact/hooks';
+import { useEffect, useRef, useMemo, useState, useCallback } from 'preact/hooks';
 import { html } from '../lib/html.js';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../app/view-keyboard-context.js';
@@ -16,7 +16,13 @@ import { testRunnerSlot } from './task-runner/test-runner-subpage.js';
 import { diveViaSelector } from '../lib/world-navigation-singleton.js';
 
 import { createSharedSlot } from '../lib/shared-slot.js';
-const editSlot = createSharedSlot({ modal: null, fieldProps: () => ({}), handlers: {} });
+const editSlot = createSharedSlot({
+    modal: null,
+    fieldProps: () => ({}),
+    handlers: {},
+    handleKey: null,
+    isBlocking: null,
+});
 const TEST_RUNNER_DIVE_SELECTOR = '[data-dive-source="task-runner-test-runner"]';
 
 const CSS_ID = 'task-runner-css';
@@ -63,8 +69,10 @@ export function TaskRunnerView() {
                 onClose: edit.close,
                 onSave: edit.saveAction,
             },
+            handleKey,
+            isBlocking,
         });
-    }, [edit.editModal]);
+    }, [edit.editModal, handleKey, isBlocking]);
 
     useEffect(() => {
         const action = test.testingId ? data.actions[test.testingId] : null;
@@ -110,6 +118,16 @@ export function TaskRunnerView() {
 export function ActionEditorSubPage() {
     const [, bump] = useState(0);
     useEffect(() => editSlot.subscribe(() => bump(t => t + 1)), []);
+
+    const slotHandleKey = useCallback((e) => {
+        const fn = editSlot.get().handleKey;
+        if (fn) fn(e);
+    }, []);
+    const slotIsBlocking = useCallback(() => {
+        const fn = editSlot.get().isBlocking;
+        return fn ? fn() : false;
+    }, []);
+    useRegisterViewKeyboard('task-runner-editor', slotHandleKey, slotIsBlocking);
 
     const { modal, fieldProps, handlers } = editSlot.get();
     if (!modal) {

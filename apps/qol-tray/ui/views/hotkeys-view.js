@@ -1,18 +1,28 @@
 import { html } from '../lib/html.js';
-import { useRef, useMemo, useState, useEffect } from 'preact/hooks';
+import { useRef, useMemo, useState, useEffect, useCallback } from 'preact/hooks';
 import { usePaletteContext } from '../palette/context.js';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../app/view-keyboard-context.js';
 import { matchesQuery } from '../utils/collections.js';
+import { ascend, diveViaSelector } from '../lib/world-navigation-singleton.js';
 
 import { PageHeader } from '../components/PageHeader.js';
 import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
+import { ModalActions } from '../lib/components/ModalPreact.js';
 import { PluginSelect, ActionSelect, KeyInput } from './hotkeys/modal.js';
 import { useHotkeys } from './hotkeys/use-hotkeys.js';
 import { HotkeysList } from './hotkeys/list.js';
 
 import { createSharedSlot } from '../lib/shared-slot.js';
-const editSlot = createSharedSlot({ modal: null, plugins: [], fieldProps: () => ({}), handlers: {} });
+const editSlot = createSharedSlot({
+    modal: null,
+    plugins: [],
+    fieldProps: () => ({}),
+    handlers: {},
+    handleKey: null,
+    isBlocking: null,
+});
+const HOTKEYS_EDITOR_DIVE_SELECTOR = '[data-view-id="hotkeys"]';
 
 function RegistrationWarnings({ errors }) {
     return html`
@@ -28,7 +38,8 @@ function RegistrationWarnings({ errors }) {
 }
 
 export function HotkeysView() {
-    const hk = useHotkeys();
+    const ascendIfDeep = useCallback(() => { ascend(); }, []);
+    const hk = useHotkeys({ onAfterSave: ascendIfDeep, onAfterClose: ascendIfDeep });
     useEffect(() => {
         editSlot.set({
             modal: hk.editModal,
@@ -41,8 +52,10 @@ export function HotkeysView() {
                 onClose: hk.closeModal,
                 onSave: hk.saveHotkey,
             },
+            handleKey: hk.handleKey,
+            isBlocking: hk.isBlocking,
         });
-    }, [hk.editModal, hk.plugins]);
+    }, [hk.editModal, hk.plugins, hk.handleKey, hk.isBlocking]);
     const { searchQuery } = usePaletteContext();
     const filtered = useMemo(
         () => searchQuery
@@ -60,9 +73,17 @@ export function HotkeysView() {
     const filteredRef = useRef(filtered);
     filteredRef.current = filtered;
     const commands = useMemo(() => [
-        { id: 'hotkeys:add', label: 'Add new hotkey', run: () => hkRef.current.openEditModal() },
+        { id: 'hotkeys:add', label: 'Add new hotkey', run: () => {
+            hkRef.current.openEditModal();
+            diveViaSelector(HOTKEYS_EDITOR_DIVE_SELECTOR);
+        } },
         { id: 'hotkeys:delete', label: 'Delete selected hotkey', run: () => hkRef.current.deleteSelected() },
-        { id: 'hotkeys:edit', label: 'Edit selected hotkey', run: () => { const h = filteredRef.current[hkRef.current.selectedIndex]; if (h) hkRef.current.openEditModal(h); } },
+        { id: 'hotkeys:edit', label: 'Edit selected hotkey', run: () => {
+            const h = filteredRef.current[hkRef.current.selectedIndex];
+            if (!h) return;
+            hkRef.current.openEditModal(h);
+            diveViaSelector(HOTKEYS_EDITOR_DIVE_SELECTOR);
+        } },
     ], []);
     useRegisterCommands('hotkeys', commands);
 
@@ -86,15 +107,27 @@ export function HotkeyEditorSubPage() {
     const [, bump] = useState(0);
     useEffect(() => editSlot.subscribe(() => bump(t => t + 1)), []);
 
+    const slotHandleKey = useCallback((e) => {
+        const fn = editSlot.get().handleKey;
+        if (fn) fn(e);
+    }, []);
+    const slotIsBlocking = useCallback(() => {
+        const fn = editSlot.get().isBlocking;
+        return fn ? fn() : false;
+    }, []);
+    useRegisterViewKeyboard('hotkeys-editor', slotHandleKey, slotIsBlocking);
+
     const { modal, plugins, fieldProps, handlers } = editSlot.get();
     if (!modal) {
         return html`<div class="view-container content-shell">
             <${PageHeader} title="Hotkey Editor" subtitle="Select a hotkey to edit" />
         </div>`;
     }
+    const canSave = !!(modal.key && modal.pluginId && modal.action);
     return html`
         <div class="view-container content-shell">
-            <${PageHeader} title="Edit Hotkey" subtitle=${`Editing: ${modal.key || 'new hotkey'}`} />
+            <${PageHeader} title=${modal.hotkey ? 'Edit Hotkey' : 'Add Hotkey'}
+                subtitle=${modal.key || 'new hotkey'} />
             <div class="view-body content-shell-body">
                 <div class="content-shell-inner">
                     <${SurfaceContainer} className="content-frame">
@@ -111,6 +144,7 @@ export function HotkeyEditorSubPage() {
                                 <label>Shortcut</label>
                                 <${KeyInput} modal=${modal} onStartRecording=${handlers.onStartRecording} />
                             </div>
+                            <${ModalActions} onClose=${handlers.onClose} onSave=${handlers.onSave} disabled=${!canSave} />
                         </div>
                     <//>
                 </div>

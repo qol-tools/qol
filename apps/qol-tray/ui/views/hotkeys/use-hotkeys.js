@@ -20,11 +20,20 @@ import {
     createEditModalState,
 } from './modal.js';
 
-export function useHotkeys() {
+export function useHotkeys({ onAfterSave, onAfterClose } = {}) {
     const d = useHotkeysData();
     const m = useModalActions(d);
+    const saveAndExit = useCallback(() => {
+        if (m.saveHotkey() === false) return false;
+        onAfterSave?.();
+        return true;
+    }, [m.saveHotkey, onAfterSave]);
+    const closeAndExit = useCallback(() => {
+        m.closeModal();
+        onAfterClose?.();
+    }, [m.closeModal, onAfterClose]);
     const { deleteSelected } = useListActions(d);
-    const { handleKey, isBlocking, modalNav } = useKeyboard(d, m, deleteSelected);
+    const { handleKey, isBlocking, modalNav } = useKeyboard(d, { ...m, saveHotkey: saveAndExit, closeModal: closeAndExit }, deleteSelected);
     return {
         hotkeys: d.hotkeys,
         plugins: d.plugins,
@@ -37,8 +46,8 @@ export function useHotkeys() {
         handlePluginChange: m.handlePluginChange,
         handleActionChange: m.handleActionChange,
         startRecording: m.startRecording,
-        closeModal: m.closeModal,
-        saveHotkey: m.saveHotkey,
+        closeModal: closeAndExit,
+        saveHotkey: saveAndExit,
         deleteSelected,
         handleKey,
         isBlocking
@@ -84,7 +93,7 @@ function useModalActions(d) {
     const openEditModal = useCallback((hotkey = null, keepPlugin = null) => {
         d.setEditModal(createEditModalState(hotkey, keepPlugin, getActions));
     }, [getActions]);
-    const saveHotkey = useCallback(() => executeSave(d, getActions), [getActions]);
+    const saveHotkey = useCallback(() => executeSave(d), []);
     const handlePluginChange = useCallback((id) => d.setEditModal(prev => changeEditModalPlugin(prev, id, getActions)), [getActions]);
     const handleActionChange = useCallback((action) => d.setEditModal(prev => prev ? { ...prev, action } : prev), []);
     const startRecording = useCallback(() => d.setEditModal(prev => prev ? { ...prev, recording: true, key: '' } : prev), []);
@@ -92,27 +101,16 @@ function useModalActions(d) {
     return { openEditModal, saveHotkey, getActions, handlePluginChange, handleActionChange, startRecording, closeModal };
 }
 
-function executeSave(d, getActions) {
+function executeSave(d) {
     const modal = d.editModalRef.current;
-    if (!modal?.key || !modal?.pluginId || !modal?.action) return;
+    if (!modal?.key || !modal?.pluginId || !modal?.action) return false;
     const nextHotkeys = buildSavedHotkeys(d.hotkeysRef.current, modal);
     d.setHotkeys(nextHotkeys);
     d.hotkeysRef.current = nextHotkeys;
     persistHotkeys(nextHotkeys).then(() => setTimeout(d.refreshErrors, 200));
-    if (modal.hotkey) {
-        d.setEditModal(null);
-        return;
-    }
-    d.setSelectedIndex(nextHotkeys.length - 1);
-    const remaining = getActions(modal.pluginId);
-    d.setEditModal({
-        ...modal,
-        hotkey: null,
-        key: '',
-        action: remaining[0]?.id || '',
-        recording: false,
-        availableActions: remaining,
-    });
+    if (!modal.hotkey) d.setSelectedIndex(nextHotkeys.length - 1);
+    d.setEditModal(null);
+    return true;
 }
 
 function useListActions(d) {

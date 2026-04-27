@@ -13,13 +13,20 @@ export function createCoreLogActions({ state, discoveryController, onNeedsRender
 async function toggleCoreLogs(state, discoveryController, onNeedsRender, sectionId) {
     const control = state.coreLogControls[sectionId] || {};
     const newMuted = !control.muted;
+    // frontend-debug is a frontend-only toggle persisted via debug.js localStorage.
+    // The backend rejects this section name, so don't round-trip through the API.
+    if (sectionId === 'frontend-debug') {
+        setDebugEnabled(!newMuted);
+        state.coreLogControls = { ...state.coreLogControls, 'frontend-debug': { muted: newMuted, suppress_patterns: [] } };
+        onNeedsRender();
+        return;
+    }
     try {
         await saveCoreLogControl(sectionId, {
             muted: newMuted,
             suppress_patterns: Array.isArray(control.suppress_patterns) ? control.suppress_patterns : []
         });
         await discoveryController.loadCoreLogControls(true);
-        if (sectionId === 'frontend-debug') setDebugEnabled(!newMuted);
     } catch (error) {
         state.error = error?.message || 'Failed to toggle core logs';
     }

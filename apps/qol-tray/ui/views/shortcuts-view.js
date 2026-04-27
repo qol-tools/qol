@@ -1,5 +1,5 @@
 import { html } from '../lib/html.js';
-import { useMemo, useState, useEffect } from 'preact/hooks';
+import { useMemo, useState, useEffect, useCallback } from 'preact/hooks';
 import { usePaletteContext } from '../palette/context.js';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../app/view-keyboard-context.js';
@@ -11,7 +11,13 @@ import { useShortcuts } from './shortcuts/use-shortcuts.js';
 import { ShortcutsList } from './shortcuts/list.js';
 
 import { createSharedSlot } from '../lib/shared-slot.js';
-const editSlot = createSharedSlot({ modal: null, fieldProps: () => ({}), handlers: {} });
+const editSlot = createSharedSlot({
+    modal: null,
+    fieldProps: () => ({}),
+    handlers: {},
+    handleKey: null,
+    isBlocking: null,
+});
 
 export function ShortcutsView() {
     const { searchQuery } = usePaletteContext();
@@ -27,8 +33,10 @@ export function ShortcutsView() {
                 onClose: sc.closeModal,
                 onSave: sc.saveShortcut,
             },
+            handleKey: sc.handleKey,
+            isBlocking: sc.isBlocking,
         });
-    }, [sc.editModal]);
+    }, [sc.editModal, sc.handleKey, sc.isBlocking]);
 
     const selected = sc.filtered[sc.selectedIndex];
     const commands = useMemo(() => [
@@ -57,6 +65,16 @@ export function ShortcutsView() {
 export function ShortcutEditorSubPage() {
     const [, bump] = useState(0);
     useEffect(() => editSlot.subscribe(() => bump(t => t + 1)), []);
+
+    const slotHandleKey = useCallback((e) => {
+        const fn = editSlot.get().handleKey;
+        if (fn) fn(e);
+    }, []);
+    const slotIsBlocking = useCallback(() => {
+        const fn = editSlot.get().isBlocking;
+        return fn ? fn() : false;
+    }, []);
+    useRegisterViewKeyboard('shortcuts-editor', slotHandleKey, slotIsBlocking);
 
     const { modal, fieldProps, handlers } = editSlot.get();
     if (!modal) {
