@@ -1,5 +1,5 @@
 import { html } from '../lib/html.js';
-import { useRef, useMemo, useState, useEffect, useCallback } from 'preact/hooks';
+import { useRef, useMemo, useCallback } from 'preact/hooks';
 import { usePaletteContext } from '../palette/context.js';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../app/view-keyboard-context.js';
@@ -7,8 +7,10 @@ import { matchesQuery } from '../utils/collections.js';
 import { ascend, diveViaSelector } from '../lib/world-navigation-singleton.js';
 
 import { PageHeader } from '../components/PageHeader.js';
-import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
 import { ModalActions } from '../lib/components/ModalPreact.js';
+import { DiveEditorSubPage } from '../lib/components/DiveEditorSubPage.js';
+import { useDiveEditor } from '../lib/hooks/useDiveEditor.js';
+import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
 import { PluginSelect, ActionSelect, KeyInput } from './hotkeys/modal.js';
 import { useHotkeys } from './hotkeys/use-hotkeys.js';
 import { HotkeysList } from './hotkeys/list.js';
@@ -40,8 +42,10 @@ function RegistrationWarnings({ errors }) {
 export function HotkeysView() {
     const ascendIfDeep = useCallback(() => { ascend(); }, []);
     const hk = useHotkeys({ onAfterSave: ascendIfDeep, onAfterClose: ascendIfDeep });
-    useEffect(() => {
-        editSlot.set({
+    useDiveEditor({
+        slot: editSlot,
+        deps: [hk.editModal, hk.plugins, hk.handleKey, hk.isBlocking],
+        build: () => ({
             modal: hk.editModal,
             plugins: hk.plugins,
             fieldProps: hk.fieldProps,
@@ -54,8 +58,8 @@ export function HotkeysView() {
             },
             handleKey: hk.handleKey,
             isBlocking: hk.isBlocking,
-        });
-    }, [hk.editModal, hk.plugins, hk.handleKey, hk.isBlocking]);
+        }),
+    });
     const { searchQuery } = usePaletteContext();
     const filtered = useMemo(
         () => searchQuery
@@ -104,51 +108,35 @@ export function HotkeysView() {
 }
 
 export function HotkeyEditorSubPage() {
-    const [, bump] = useState(0);
-    useEffect(() => editSlot.subscribe(() => bump(t => t + 1)), []);
+    return html`<${DiveEditorSubPage}
+        slot=${editSlot}
+        viewId="hotkeys-editor"
+        fallbackTitle="Hotkey Editor"
+        fallbackSubtitle="Select a hotkey to edit"
+        renderHeader=${(v) => html`<${PageHeader}
+            title=${v.modal.hotkey ? 'Edit Hotkey' : 'Add Hotkey'}
+            subtitle=${v.modal.key || 'new hotkey'} />`}
+        children=${(v) => html`<${HotkeyEditorBody} value=${v} />`} />`;
+}
 
-    const slotHandleKey = useCallback((e) => {
-        const fn = editSlot.get().handleKey;
-        if (fn) fn(e);
-    }, []);
-    const slotIsBlocking = useCallback(() => {
-        const fn = editSlot.get().isBlocking;
-        return fn ? fn() : false;
-    }, []);
-    useRegisterViewKeyboard('hotkeys-editor', slotHandleKey, slotIsBlocking);
-
-    const { modal, plugins, fieldProps, handlers } = editSlot.get();
-    if (!modal) {
-        return html`<div class="view-container content-shell">
-            <${PageHeader} title="Hotkey Editor" subtitle="Select a hotkey to edit" />
-        </div>`;
-    }
+function HotkeyEditorBody({ value }) {
+    const { modal, plugins, fieldProps, handlers } = value;
     const canSave = !!(modal.key && modal.pluginId && modal.action);
     return html`
-        <div class="view-container content-shell">
-            <${PageHeader} title=${modal.hotkey ? 'Edit Hotkey' : 'Add Hotkey'}
-                subtitle=${modal.key || 'new hotkey'} />
-            <div class="view-body content-shell-body">
-                <div class="content-shell-inner">
-                    <${SurfaceContainer} className="content-frame">
-                        <div class="edit-modal-content">
-                            <div class="form-group" ...${fieldProps(0)}>
-                                <label>Plugin</label>
-                                <${PluginSelect} modal=${modal} plugins=${plugins} onChange=${handlers.onPluginChange} />
-                            </div>
-                            <div class="form-group" ...${fieldProps(1)}>
-                                <label>Action</label>
-                                <${ActionSelect} modal=${modal} onChange=${handlers.onActionChange} />
-                            </div>
-                            <div class="form-group" ...${fieldProps(2)}>
-                                <label>Shortcut</label>
-                                <${KeyInput} modal=${modal} onStartRecording=${handlers.onStartRecording} />
-                            </div>
-                            <${ModalActions} onClose=${handlers.onClose} onSave=${handlers.onSave} disabled=${!canSave} />
-                        </div>
-                    <//>
-                </div>
+        <div class="edit-modal-content">
+            <div class="form-group" ...${fieldProps(0)}>
+                <label>Plugin</label>
+                <${PluginSelect} modal=${modal} plugins=${plugins} onChange=${handlers.onPluginChange} />
             </div>
+            <div class="form-group" ...${fieldProps(1)}>
+                <label>Action</label>
+                <${ActionSelect} modal=${modal} onChange=${handlers.onActionChange} />
+            </div>
+            <div class="form-group" ...${fieldProps(2)}>
+                <label>Shortcut</label>
+                <${KeyInput} modal=${modal} onStartRecording=${handlers.onStartRecording} />
+            </div>
+            <${ModalActions} onClose=${handlers.onClose} onSave=${handlers.onSave} disabled=${!canSave} />
         </div>
     `;
 }

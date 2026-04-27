@@ -7,6 +7,6 @@ import { html } from '../html.js';
  * Any component that needs navigable children should compose this.
  * ViewTabs uses it for the content panel. Future containers derive from it.
  */
-export function SurfaceContainer({ className, children, ...rest }) {
-    return html`<div ...${rest} class=${className} data-surface-container="">${children}</div>`;
+export function SurfaceContainer({ className, children, containerRef, ...rest }) {
+    return html`<div ref=${containerRef} ...${rest} class=${className} data-surface-container="">${children}</div>`;
 }

@@ -1,9 +1,11 @@
-import { useEffect, useRef, useMemo, useState, useCallback } from 'preact/hooks';
+import { useEffect, useRef, useMemo } from 'preact/hooks';
 import { html } from '../lib/html.js';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../app/view-keyboard-context.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
+import { DiveEditorSubPage } from '../lib/components/DiveEditorSubPage.js';
+import { useDiveEditor } from '../lib/hooks/useDiveEditor.js';
 
 import { API_BASE, buildApiExample } from './task-runner/data.js';
 import { ActionEditForm } from './task-runner/panels.js';
@@ -60,8 +62,10 @@ export function TaskRunnerView() {
     const { handleKey, isBlocking, modalNav } = useTaskKeyHandler(data, edit);
     useRegisterViewKeyboard('task-runner', handleKey, isBlocking);
 
-    useEffect(() => {
-        editSlot.set({
+    useDiveEditor({
+        slot: editSlot,
+        deps: [edit.editModal, handleKey, isBlocking],
+        build: () => ({
             modal: edit.editModal,
             fieldProps: modalNav.fieldProps,
             handlers: {
@@ -71,8 +75,8 @@ export function TaskRunnerView() {
             },
             handleKey,
             isBlocking,
-        });
-    }, [edit.editModal, handleKey, isBlocking]);
+        }),
+    });
 
     useEffect(() => {
         const action = test.testingId ? data.actions[test.testingId] : null;
@@ -116,36 +120,14 @@ export function TaskRunnerView() {
 }
 
 export function ActionEditorSubPage() {
-    const [, bump] = useState(0);
-    useEffect(() => editSlot.subscribe(() => bump(t => t + 1)), []);
-
-    const slotHandleKey = useCallback((e) => {
-        const fn = editSlot.get().handleKey;
-        if (fn) fn(e);
-    }, []);
-    const slotIsBlocking = useCallback(() => {
-        const fn = editSlot.get().isBlocking;
-        return fn ? fn() : false;
-    }, []);
-    useRegisterViewKeyboard('task-runner-editor', slotHandleKey, slotIsBlocking);
-
-    const { modal, fieldProps, handlers } = editSlot.get();
-    if (!modal) {
-        return html`<div class="view-container content-shell">
-            <${PageHeader} title="Action Editor" subtitle="Select an action to edit" />
-        </div>`;
-    }
-    return html`
-        <div class="view-container content-shell">
-            <${PageHeader} title=${modal.isNew ? 'Add Action' : 'Edit Action'}
-                subtitle=${modal.name || modal.actionId || 'new action'} />
-            <div class="view-body content-shell-body">
-                <div class="content-shell-inner">
-                    <${SurfaceContainer} className="content-frame">
-                        <${ActionEditForm} modal=${modal} fieldProps=${fieldProps} handlers=${handlers} />
-                    <//>
-                </div>
-            </div>
-        </div>
-    `;
+    return html`<${DiveEditorSubPage}
+        slot=${editSlot}
+        viewId="task-runner-editor"
+        fallbackTitle="Action Editor"
+        fallbackSubtitle="Select an action to edit"
+        renderHeader=${(v) => html`<${PageHeader}
+            title=${v.modal.isNew ? 'Add Action' : 'Edit Action'}
+            subtitle=${v.modal.name || v.modal.actionId || 'new action'} />`}
+        children=${(v) => html`<${ActionEditForm}
+            modal=${v.modal} fieldProps=${v.fieldProps} handlers=${v.handlers} />`} />`;
 }
