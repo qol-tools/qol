@@ -1007,3 +1007,144 @@ test('computeSlotCoverage: at zoom 0.5 spanning entries i and i+1, both slots re
     // Entry c is fully outside → coverage 0.
     assert.ok(computeSlotCoverage(slots[2], rect) < 1e-6);
 });
+
+// --- Draw Y-band containment ------------------------------------------
+// User-reported bug shape: post dive→ascend on the Plugins page, an extra
+// "Plugins" rect renders ABOVE the slots row with empty space between it
+// and the rest of the slots strip. Working state has the active label/rect
+// overlay sitting on the slot itself, inside the row band.
+//
+// These tests lock the contract: every draw call (slot fill/stroke, label,
+// viewport-rect fill/stroke) must land inside [rowY - overshoot,
+// rowY + rowHeight + overshoot], where overshoot bounds the active-slot
+// 1.12× vertical scale.
+
+function makeYTrackingCtx() {
+    const ctx = makeMockCtx();
+    ctx._state.moves = [];
+    ctx._state.lines = [];
+    ctx._state.texts = [];
+    ctx.moveTo = function (x, y) { ctx._state.moves.push({ x, y }); };
+    ctx.lineTo = function (x, y) { ctx._state.lines.push({ x, y }); };
+    ctx.quadraticCurveTo = function (cx, cy, x, y) {
+        // The control point can sit above/below the rect by up to RADIUS;
+        // capture the endpoint, which is on the rect edge.
+        ctx._state.lines.push({ x, y });
+    };
+    ctx.fillText = function (text, x, y) { ctx._state.texts.push({ text, x, y }); };
+    return ctx;
+}
+
+function rowBandFromSlots(slots) {
+    if (slots.length === 0) return { top: 0, bottom: 0 };
+    const rowY = slots[0].y;
+    const rowH = slots.reduce((m, s) => Math.max(m, s.h), 0);
+    return { top: rowY, bottom: rowY + rowH };
+}
+
+// ACTIVE_SCALE_Y = 1.12 — active slot draws at 1.12× height around centre,
+// so it overshoots the row by 0.06 * slot.h on each side. Allow that plus
+// a small floating-point cushion.
+const ACTIVE_OVERSHOOT_FACTOR = 0.07;
+
+test('property: all draw Y coordinates land inside slot row band ± active overshoot (200 cases)', () => {
+    const rng = makeRng(0xB10C0DED);
+    for (let i = 0; i < 200; i++) {
+        const count = 1 + Math.floor(rng() * 8);
+        const entries = makeRandomEntries(rng, count);
+        const minimapWidth = 100 + rng() * 400;
+        const ch = 40 + rng() * 200;
+        const slots = computeMinimapSlots({ sortedEntries: entries, minimapWidth, canvasHeight: ch });
+        const { top: rowTop, bottom: rowBottom } = rowBandFromSlots(slots);
+        const maxSlotH = slots.reduce((m, s) => Math.max(m, s.h), 0);
+        const overshoot = maxSlotH * ACTIVE_OVERSHOOT_FACTOR + 1e-6;
+
+        const activeIdx = Math.floor(rng() * entries.length);
+        const activeId = entries[activeIdx].id;
+        const labelFor = (entry) => entry.id;
+        const rect = computeMinimapViewportRect({
+            sortedEntries: entries,
+            cameraX: rng() * 50000,
+            cameraZoom: 0.1 + rng() * 4,
+            viewportWidthPx: 400 + rng() * 1600,
+            minimapWidth,
+            canvasHeight: ch,
+        });
+
+        const ctx = makeYTrackingCtx();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        drawMinimap(ctx, minimapWidth, ch, entries, slots, activeId, labelFor, rect);
+        drawViewportRect(ctx, minimapWidth, ch, rect);
+
+        const allYs = [
+            ...ctx._state.moves.map(m => m.y),
+            ...ctx._state.lines.map(l => l.y),
+            ...ctx._state.texts.map(t => t.y),
+        ];
+        for (const y of allYs) {
+            assert.ok(
+                y >= rowTop - overshoot,
+                `case ${i} active=${activeIdx}: draw Y=${y} above row top=${rowTop} (overshoot=${overshoot})`,
+            );
+            assert.ok(
+                y <= rowBottom + overshoot,
+                `case ${i} active=${activeIdx}: draw Y=${y} below row bottom=${rowBottom} (overshoot=${overshoot})`,
+            );
+        }
+    }
+});
+
+// Exact post-ascend reproduction at the 8-root-views layer 0 state.
+// Mirrors the reported bug: on Plugins page after dive→ascend, with the
+// canvas dimensions actually used by the running app (380×209 from the
+// default minimapSize=380), the active-slot draw must land on the row.
+test('regression: 8-entry layer-0 state at default minimap size keeps Plugins active draw on the row', () => {
+    const ROOT_VIEWS = ['plugins', 'store', 'hotkeys', 'shortcuts', 'task-runner', 'profile', 'logs', 'dev'];
+    const entries = ROOT_VIEWS.map((id, idx) => ({
+        id, x: idx * 10000, y: 0, width: 1280, height: 900,
+    }));
+    const minimapWidth = 380;
+    const ch = 209; // round(380 * 0.55)
+    const slots = computeMinimapSlots({ sortedEntries: entries, minimapWidth, canvasHeight: ch });
+    const { top: rowTop, bottom: rowBottom } = rowBandFromSlots(slots);
+    const maxSlotH = slots.reduce((m, s) => Math.max(m, s.h), 0);
+    const overshoot = maxSlotH * ACTIVE_OVERSHOOT_FACTOR + 1e-6;
+
+    // Camera state representative of being on the Plugins page post-ascend:
+    // camera snug on entry 0 at zoom 1.
+    const cam = cameraTargetFor(entries[0], 1280, 900, 1);
+    const rect = computeMinimapViewportRect({
+        sortedEntries: entries,
+        cameraX: cam.x,
+        cameraZoom: 1,
+        viewportWidthPx: 1280,
+        minimapWidth,
+        canvasHeight: ch,
+    });
+
+    const ctx = makeYTrackingCtx();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    drawMinimap(ctx, minimapWidth, ch, entries, slots, 'plugins', (e) => e.id, rect);
+    drawViewportRect(ctx, minimapWidth, ch, rect);
+
+    // Active label is rendered for "plugins". Find it in fillText calls.
+    const pluginsLabel = ctx._state.texts.find(t => t.text === 'plugins');
+    assert.ok(pluginsLabel, 'expected "plugins" label to be drawn');
+    assert.ok(
+        pluginsLabel.y >= rowTop - overshoot && pluginsLabel.y <= rowBottom + overshoot,
+        `Plugins label Y=${pluginsLabel.y} outside slot row band [${rowTop - overshoot}, ${rowBottom + overshoot}]`,
+    );
+
+    // Every path/text Y must stay inside the band ± overshoot.
+    const allYs = [
+        ...ctx._state.moves.map(m => m.y),
+        ...ctx._state.lines.map(l => l.y),
+        ...ctx._state.texts.map(t => t.y),
+    ];
+    for (const y of allYs) {
+        assert.ok(
+            y >= rowTop - overshoot && y <= rowBottom + overshoot,
+            `draw Y=${y} outside slot row band [${rowTop - overshoot}, ${rowBottom + overshoot}]`,
+        );
+    }
+});
