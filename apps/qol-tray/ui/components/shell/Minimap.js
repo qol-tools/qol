@@ -17,6 +17,7 @@ import {
 } from '../../lib/world-geometry.js';
 import { ToggleSwitch } from '../../lib/components/ToggleSwitch.js';
 import { CustomSelect } from '../../lib/components/CustomSelect.js';
+import { resolveViewport } from '../../lib/viewport-resolve.js';
 
 const ARROW_FLASH_MS = 350;
 
@@ -230,7 +231,7 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
         const currentLayer = camera.layer;
-        const vp = viewportRef?.current;
+        const vp = resolveViewport(viewportRef);
         const vpW = vp ? vp.clientWidth : 0;
         const vpH = vp ? vp.clientHeight : 0;
         const z = camera.zoom || 1;
@@ -295,7 +296,7 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
         const entries = visibleMinimapEntries({ allEntries, confinedPages, diveParent });
         if (entries.length === 0) return;
 
-        const vp = viewportRef?.current;
+        const vp = resolveViewport(viewportRef);
         const z = camera.zoom || 1;
         const vpW = vp ? vp.clientWidth : 0;
         const vpH = vp ? vp.clientHeight : 0;
