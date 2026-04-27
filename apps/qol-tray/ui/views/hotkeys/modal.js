@@ -2,8 +2,6 @@ import { html } from '../../lib/html.js';
 import { useMemo } from 'preact/hooks';
 import { CustomSelect } from '../../lib/components/CustomSelect.js';
 
-export { applyRecordingKey } from './recorder.js';
-
 export function PluginSelect({ modal, plugins, onChange }) {
     const options = useMemo(() => plugins.map(p => p.id), [plugins]);
     const labels = useMemo(() => Object.fromEntries(plugins.map(p => [p.id, p.name])), [plugins]);
