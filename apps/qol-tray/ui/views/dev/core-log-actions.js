@@ -1,7 +1,7 @@
 import { jsonRequest, readResponseText } from '../../api/client.js';
-import { setDebugEnabled } from '../../lib/debug.js';
 import { diveViaSelector } from '../../lib/world-navigation-singleton.js';
 import { logFiltersSlot } from './log-filters-subpage.js';
+import { findFrontendLogSection } from './frontend-log-sections.js';
 
 export function createCoreLogActions({ state, discoveryController, onNeedsRender }) {
     return {
@@ -13,11 +13,15 @@ export function createCoreLogActions({ state, discoveryController, onNeedsRender
 async function toggleCoreLogs(state, discoveryController, onNeedsRender, sectionId) {
     const control = state.coreLogControls[sectionId] || {};
     const newMuted = !control.muted;
-    // frontend-debug is a frontend-only toggle persisted via debug.js localStorage.
-    // The backend rejects this section name, so don't round-trip through the API.
-    if (sectionId === 'frontend-debug') {
-        setDebugEnabled(!newMuted);
-        state.coreLogControls = { ...state.coreLogControls, 'frontend-debug': { muted: newMuted, suppress_patterns: [] } };
+    // Frontend-only sections (see frontend-log-sections.js) persist client-side;
+    // the backend rejects these section names, so don't round-trip through the API.
+    const frontendSection = findFrontendLogSection(sectionId);
+    if (frontendSection) {
+        frontendSection.setMuted(newMuted);
+        state.coreLogControls = {
+            ...state.coreLogControls,
+            [sectionId]: { muted: newMuted, suppress_patterns: [] }
+        };
         onNeedsRender();
         return;
     }
