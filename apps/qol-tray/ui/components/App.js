@@ -254,6 +254,7 @@ function AppShell() {
     const cameraRef = useRef(null);
     if (!cameraRef.current) {
         cameraRef.current = createCamera({
+            zoom: getWorldSettings().defaultZoom,
             getViewportSize: () => {
                 const vp = resolveViewport(viewportRef);
                 return {
