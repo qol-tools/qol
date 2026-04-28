@@ -2,12 +2,17 @@ import { html } from '../../../lib/html.js';
 import { Table } from '../../../lib/components/TableRow.js';
 import { DevPluginRow } from '../../../components/domain-rows/DevPluginRow.js';
 import { useListSelection } from '../../../lib/hooks/useListSelection.js';
+import { FRONTEND_LOG_SECTIONS } from '../frontend-log-sections.js';
 
-const CORE_SECTIONS = [
+const CORE_BACKEND_SECTIONS = [
     { id: 'runtime', name: 'Runtime', description: 'Socket, state, polling' },
     { id: 'plugins', name: 'Plugins', description: 'Daemon lifecycle, loading' },
-    { id: 'core', name: 'Core', description: 'Tray, hotkeys, menu, updates' },
-    { id: 'frontend-debug', name: 'Frontend Debug', description: 'Console logging for UI navigation, focus, surface' }
+    { id: 'core', name: 'Core', description: 'Tray, hotkeys, menu, updates' }
+];
+
+const CORE_SECTIONS = [
+    ...CORE_BACKEND_SECTIONS,
+    ...FRONTEND_LOG_SECTIONS.map(({ id, name, description }) => ({ id, name, description }))
 ];
 
 function CoreLogRow({ section, ctrl, index, selected, onSelect }) {
