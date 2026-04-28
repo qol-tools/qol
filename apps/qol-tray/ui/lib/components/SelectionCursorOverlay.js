@@ -128,6 +128,13 @@ export function SelectionCursorOverlay({ camera }) {
             setInputMode('mouse');
         };
         const onPointerMove = () => {
+            // Camera-driven layout shifts retarget the cursor's hit-test under a stationary pointer,
+            // and the browser fires a synthetic pointermove. That flips mode to 'mouse', then
+            // syncFromCamera reverts to 'keyboard' on the next tick — hundreds of flip-flops per
+            // pan animation peg CPU and trigger Firefox's slow-script warning. Real user input
+            // doesn't happen mid-animation in any meaningful way, so ignore pointermove while
+            // the camera is animating.
+            if (camera?.animating) return;
             pointerActive = true;
             setInputMode('mouse');
         };
