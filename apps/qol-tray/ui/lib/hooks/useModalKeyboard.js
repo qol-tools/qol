@@ -3,7 +3,6 @@ import { modalFields } from '../components/ModalPreact.js';
 import { resolveModalKeyAction } from './modal-key-action.js';
 
 let activeModalContainer = null;
-let warnedFallback = false;
 
 /**
  * Registered by DiveEditorSubPage so useModalKeyboard (called in the parent
@@ -59,13 +58,7 @@ export function useModalKeyboard({ onSave, onClose, containerRef } = {}) {
 function resolveContainer(containerRef) {
     if (containerRef?.current) return containerRef.current;
     if (activeModalContainer?.current) return activeModalContainer.current;
-    const fallback = document.querySelector('.edit-modal-content');
-    if (fallback && !warnedFallback) {
-        warnedFallback = true;
-        // eslint-disable-next-line no-console
-        console.warn('useModalKeyboard: falling back to global .edit-modal-content selector. Wire a containerRef or render inside DiveEditorSubPage.');
-    }
-    return fallback;
+    return null;
 }
 
 function getModalSurfaces(container) {
