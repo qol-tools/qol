@@ -32,17 +32,21 @@ import {
 } from '../lib/world-geometry.js';
 import { pageMode } from '../lib/peripheral-geometry.js';
 import { pluginTraitOverride } from '../lib/plugin-trait-overrides.js';
+import { resolveViewport } from '../lib/viewport-resolve.js';
 import { WorldViewport } from './shell/WorldViewport.js';
 import { MinimapContainer } from './shell/Minimap.js';
 import { RegionLabels } from './shell/RegionLabels.js';
 import { useWorldNav } from '../app/WorldNav.js';
 
-function applySlotScales(worldEl, registry, camera, baseScale) {
+function applySlotScales(worldEl, registry, camera, baseScale, viewportRef) {
     const slots = worldEl.querySelectorAll('.world-view-slot');
     if (baseScale === 1) {
         for (const s of slots) s.style.removeProperty('--slot-scale');
         return;
     }
+    const vp = resolveViewport(viewportRef);
+    const viewportW = vp?.clientWidth || window.innerWidth;
+    const viewportH = vp?.clientHeight || window.innerHeight;
     for (const slot of slots) {
         const entry = registry.getEntry(slot.dataset.viewId);
         if (!entry) continue;
@@ -50,8 +54,8 @@ function applySlotScales(worldEl, registry, camera, baseScale) {
             entry,
             cameraX: camera.x,
             cameraY: camera.y,
-            viewportW: window.innerWidth,
-            viewportH: window.innerHeight,
+            viewportW,
+            viewportH,
             zoom: camera.zoom,
             baseScale,
         });
@@ -251,10 +255,10 @@ function AppShell() {
     if (!cameraRef.current) {
         cameraRef.current = createCamera({
             getViewportSize: () => {
-                const el = viewportRef.current;
+                const vp = resolveViewport(viewportRef);
                 return {
-                    w: el?.clientWidth || window.innerWidth,
-                    h: el?.clientHeight || window.innerHeight,
+                    w: vp?.clientWidth || window.innerWidth,
+                    h: vp?.clientHeight || window.innerHeight,
                 };
             },
         });
@@ -320,7 +324,7 @@ function AppShell() {
             if (!entries.length) return;
             const measured = measuredLayer0Entries(worldEl, entries, registry);
             const rect = boundsOfEntries(measured);
-            const vpEl = viewportRef.current;
+            const vpEl = resolveViewport(viewportRef);
             const vp = vpEl ? { w: vpEl.clientWidth, h: vpEl.clientHeight } : null;
             // Pad at zoom=1 baseline so the bounds-driven minZoom floor stays
             // low regardless of current zoom — otherwise zoom-in tightens the
@@ -335,7 +339,8 @@ function AppShell() {
         const ro = new ResizeObserver(scheduleRecompute);
         const slots = worldEl.querySelectorAll('.world-view-slot[data-layer="0"]');
         for (const el of slots) ro.observe(el);
-        if (viewportRef.current) ro.observe(viewportRef.current);
+        const vpForObserver = resolveViewport(viewportRef);
+        if (vpForObserver) ro.observe(vpForObserver);
         let lastZoom = camera.zoom;
         const unsub = camera.subscribe(() => {
             if (camera.zoom !== lastZoom) {
@@ -363,7 +368,7 @@ function AppShell() {
                 resolveSelector: (selector) => {
                     const el = document.querySelector(selector);
                     if (!el) return null;
-                    const vpEl = viewportRef.current;
+                    const vpEl = resolveViewport(viewportRef);
                     if (!vpEl) return null;
                     const vr = el.getBoundingClientRect();
                     const vpr = vpEl.getBoundingClientRect();
@@ -375,14 +380,14 @@ function AppShell() {
                     };
                 },
                 getViewportSize: () => {
-                    const el = viewportRef.current;
+                    const vp = resolveViewport(viewportRef);
                     return {
-                        w: el?.clientWidth || window.innerWidth,
-                        h: el?.clientHeight || window.innerHeight,
+                        w: vp?.clientWidth || window.innerWidth,
+                        h: vp?.clientHeight || window.innerHeight,
                     };
                 },
                 crossLayerTransition: (entry, applyAndPan) => {
-                    const vp = viewportRef.current;
+                    const vp = resolveViewport(viewportRef);
                     if (!vp) { applyAndPan(); return; }
                     const outClass = entry.layer < camera.layer ? 'dive-out' : 'ascend-out';
                     animateTransition(vp, layerAnimatingRef, outClass, applyAndPan, null);
@@ -545,7 +550,7 @@ function AppShell() {
             const baseScale = uiScaleOnZoomOut ? computeBaseScale(zoom, ghostThreshold) : 1;
             worldEl.setAttribute('data-page-mode', pageMode(camera.zoom, ghostThreshold));
             document.documentElement.style.setProperty('--zoom', zoom.toFixed(4));
-            applySlotScales(worldEl, registry, camera, baseScale);
+            applySlotScales(worldEl, registry, camera, baseScale, viewportRef);
         };
         const rafId = requestAnimationFrame(syncMode);
         const unsub = camera.subscribe(syncMode);
