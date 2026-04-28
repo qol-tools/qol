@@ -21,11 +21,21 @@ export function CustomSelect({ value, options, labels, onChange, compact = false
     }, [onChange]);
 
     const onTriggerClick = useCallback(() => {
+        if (!options || options.length === 0) return;
         if (!open) setHighlightIndex(Math.max(0, options.indexOf(value)));
         setOpen(!open);
     }, [open, options, value]);
 
     const onListKeyDown = useCallback((e) => {
+        if (!options || options.length === 0) {
+            if (e.key === 'Escape' || e.key === 'Tab') {
+                e.preventDefault();
+                e.stopPropagation();
+                setOpen(false);
+                focusFieldLevel(containerRef.current);
+            }
+            return;
+        }
         if (e.key === 'ArrowDown') {
             e.preventDefault();
             e.stopPropagation();
