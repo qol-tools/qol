@@ -9,7 +9,7 @@ export function createCamera(options = {}) {
     const getViewportSize = options.getViewportSize || (() => ({ w: 800, h: 600 }));
     let x = 0;
     let y = 0;
-    let zoom = 1.0;
+    let zoom = typeof options.zoom === 'number' ? options.zoom : 1.0;
     let layer = 0;
     let worldEl = null;
     let animId = 0;

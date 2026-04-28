@@ -8,6 +8,16 @@ test('setBounds preserves the current zoom (does not auto-bump to fit)', () => {
     assert.equal(camera.zoom, 1);
 });
 
+test('createCamera honors initial zoom option (so boot uses configured defaultZoom)', () => {
+    const camera = createCamera({ zoom: 0.8, getViewportSize: () => ({ w: 800, h: 600 }) });
+    assert.equal(camera.zoom, 0.8);
+});
+
+test('createCamera defaults to zoom 1 when option omitted', () => {
+    const camera = createCamera({ getViewportSize: () => ({ w: 800, h: 600 }) });
+    assert.equal(camera.zoom, 1);
+});
+
 test('setBounds is a no-op when bounds layer does not match camera layer', () => {
     const camera = createCamera({ getViewportSize: () => ({ w: 800, h: 600 }) });
     camera.setBounds({ x: 0, y: 0, width: 100, height: 100, layer: 1 });
