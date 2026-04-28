@@ -132,7 +132,8 @@ function HotkeyEditorBody({ value }) {
             </div>
             <div class="form-group" ...${fieldProps(1)}>
                 <label>Action</label>
-                <${ActionSelect} modal=${modal} onChange=${handlers.onActionChange} />
+                <${ActionSelect} modal=${modal} onChange=${handlers.onActionChange}
+                    disabled=${modal.availableActions.length === 0} />
             </div>
             <div class="form-group" ...${fieldProps(2)}>
                 <label>Shortcut</label>
