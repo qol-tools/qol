@@ -45,16 +45,6 @@ export function useHotkeys({ onAfterSave, onAfterClose } = {}) {
         deleteSelected,
         recorder
     );
-    // Backwards-compat shim: KeyInput still reads modal.recording for the
-    // recording chrome (input class + placeholder). The recorder owns the bit;
-    // mirror it back so existing consumers do not need to change.
-    useEffect(() => {
-        d.setEditModal(prev => {
-            if (!prev) return prev;
-            if (prev.recording === recorder.isRecording) return prev;
-            return { ...prev, recording: recorder.isRecording };
-        });
-    }, [recorder.isRecording]);
     return {
         hotkeys: d.hotkeys,
         plugins: d.plugins,
