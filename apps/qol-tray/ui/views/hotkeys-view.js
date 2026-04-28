@@ -19,6 +19,7 @@ import { createSharedSlot } from '../lib/shared-slot.js';
 const editSlot = createSharedSlot({
     modal: null,
     plugins: [],
+    recording: false,
     fieldProps: () => ({}),
     handlers: {},
     handleKey: null,
@@ -44,10 +45,11 @@ export function HotkeysView() {
     const hk = useHotkeys({ onAfterSave: ascendIfDeep, onAfterClose: ascendIfDeep });
     useDiveEditor({
         slot: editSlot,
-        deps: [hk.editModal, hk.plugins, hk.handleKey, hk.isBlocking],
+        deps: [hk.editModal, hk.plugins, hk.recorder.isRecording, hk.handleKey, hk.isBlocking],
         build: () => ({
             modal: hk.editModal,
             plugins: hk.plugins,
+            recording: hk.recorder.isRecording,
             fieldProps: hk.fieldProps,
             handlers: {
                 onPluginChange: hk.handlePluginChange,
@@ -120,7 +122,7 @@ export function HotkeyEditorSubPage() {
 }
 
 function HotkeyEditorBody({ value }) {
-    const { modal, plugins, fieldProps, handlers } = value;
+    const { modal, plugins, recording, fieldProps, handlers } = value;
     const canSave = !!(modal.key && modal.pluginId && modal.action);
     return html`
         <div class="edit-modal-content">
@@ -134,7 +136,7 @@ function HotkeyEditorBody({ value }) {
             </div>
             <div class="form-group" ...${fieldProps(2)}>
                 <label>Shortcut</label>
-                <${KeyInput} modal=${modal} onStartRecording=${handlers.onStartRecording} />
+                <${KeyInput} modal=${modal} recording=${recording} onStartRecording=${handlers.onStartRecording} />
             </div>
             <${ModalActions} onClose=${handlers.onClose} onSave=${handlers.onSave} disabled=${!canSave} />
         </div>

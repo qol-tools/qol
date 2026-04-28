@@ -25,13 +25,13 @@ export function ActionSelect({ modal, onChange, disabled }) {
     return html`<${CustomSelect} value=${modal.action} options=${options} labels=${labels} onChange=${onChange} />`;
 }
 
-export function KeyInput({ modal, onStartRecording, disabled }) {
+export function KeyInput({ modal, recording, onStartRecording, disabled }) {
     return html`
         <div class="key-input-row">
             <input type="text" id="hotkey-key"
                    value=${modal.key} readonly disabled=${disabled}
-                   class=${modal.recording ? 'recording' : ''}
-                   placeholder=${modal.recording ? 'Press keys... (Esc to cancel)' : 'Press Enter to record'}
+                   class=${recording ? 'recording' : ''}
+                   placeholder=${recording ? 'Press keys... (Esc to cancel)' : 'Press Enter to record'}
                    onClick=${!disabled ? onStartRecording : undefined} />
         </div>
     `;
@@ -45,7 +45,6 @@ export function createEditModalState(hotkey, keepPlugin, getAvailableActions) {
         pluginId,
         action: hotkey?.action || availableActions[0]?.id || '',
         key: hotkey?.key || '',
-        recording: false,
         availableActions
     };
 }
