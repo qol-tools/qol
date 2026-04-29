@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sliceMinimapRange, visibleMinimapEntries } from './minimap-filter.js';
+import { visibleMinimapEntries } from './minimap-filter.js';
 
 // ---------------------------------------------------------------------------
 // Parameterized table: each row is { name, input, expectedIds } so every
@@ -267,114 +267,6 @@ runProperty('property: empty confinedPages with null diveParent is identity', (w
     const allEntries = world.entries;
     const result = visibleMinimapEntries({ allEntries, confinedPages: [], diveParent: null });
     assert.equal(result, allEntries);
-});
-
-// ---------------------------------------------------------------------------
-// sliceMinimapRange contract tests.
-// ---------------------------------------------------------------------------
-
-const E = (id, x, width = 1000) => ({ id, x, width });
-
-const RANGE_TABLE = [
-    {
-        name: 'empty list short-circuits',
-        input: { entries: [], worldStart: 0, worldEnd: 100 },
-        expected: [],
-    },
-    {
-        name: 'invalid range (NaN start) returns identity',
-        input: { entries: [E('a', 0), E('b', 100)], worldStart: NaN, worldEnd: 100 },
-        expected: ['a', 'b'],
-    },
-    {
-        name: 'invalid range (end <= start) returns identity',
-        input: { entries: [E('a', 0), E('b', 100)], worldStart: 50, worldEnd: 50 },
-        expected: ['a', 'b'],
-    },
-    {
-        name: 'range covering everything yields everything',
-        input: { entries: [E('a', 0), E('b', 5000), E('c', 10000)], worldStart: -1e9, worldEnd: 1e9 },
-        expected: ['a', 'b', 'c'],
-    },
-    {
-        name: 'range strictly between two entries yields empty',
-        input: { entries: [E('a', 0, 100), E('b', 5000, 100)], worldStart: 200, worldEnd: 4900 },
-        expected: [],
-    },
-    {
-        name: 'partial left-overlap: entry trailing edge intersects range',
-        input: { entries: [E('a', 0, 1000), E('b', 5000, 1000)], worldStart: 800, worldEnd: 1200 },
-        expected: ['a'],
-    },
-    {
-        name: 'partial right-overlap: entry leading edge intersects range',
-        input: { entries: [E('a', 0, 1000), E('b', 5000, 1000)], worldStart: 4500, worldEnd: 5500 },
-        expected: ['b'],
-    },
-    {
-        name: 'tangent on right edge (entry.x === worldEnd) excluded',
-        input: { entries: [E('a', 0, 100), E('b', 200, 100)], worldStart: 0, worldEnd: 200 },
-        expected: ['a'],
-    },
-    {
-        name: 'tangent on left edge (entry.x+width === worldStart) excluded',
-        input: { entries: [E('a', 0, 100), E('b', 200, 100)], worldStart: 100, worldEnd: 300 },
-        expected: ['b'],
-    },
-    {
-        name: 'preserves input order',
-        input: { entries: [E('c', 200, 50), E('a', 0, 50), E('b', 100, 50)], worldStart: -10, worldEnd: 1000 },
-        expected: ['c', 'a', 'b'],
-    },
-    {
-        name: 'wide entry: range fully inside one entry yields that one',
-        input: { entries: [E('a', 0, 10000)], worldStart: 4000, worldEnd: 6000 },
-        expected: ['a'],
-    },
-];
-
-for (const row of RANGE_TABLE) {
-    test(`sliceMinimapRange: ${row.name}`, () => {
-        const result = sliceMinimapRange({
-            entries: row.input.entries,
-            worldStart: row.input.worldStart,
-            worldEnd: row.input.worldEnd,
-        });
-        assert.deepEqual(result.map(e => e.id), row.expected);
-    });
-}
-
-test('sliceMinimapRange: factor 1 with viewport on a page keeps that page', () => {
-    const entries = Array.from({ length: 10 }, (_, i) => E(`e${i}`, i * 10000, 1280));
-    // simulate: viewport zoom 1, viewport width 1280, camera parked on entry 4
-    const cameraX = entries[4].x;
-    const viewportRange = 1280;
-    const center = cameraX + viewportRange / 2;
-    const result = sliceMinimapRange({
-        entries,
-        worldStart: center - viewportRange / 2,
-        worldEnd: center + viewportRange / 2,
-    });
-    assert.deepEqual(result.map(e => e.id), ['e4']);
-});
-
-test('sliceMinimapRange: as factor grows from 1 to "all", visible count is monotonic', () => {
-    const entries = Array.from({ length: 10 }, (_, i) => E(`e${i}`, i * 10000, 1280));
-    const cameraX = entries[4].x;
-    const viewportRange = 1280;
-    const center = cameraX + viewportRange / 2;
-    let prev = 0;
-    for (const factor of [1, 2, 4, 8, 16, 32, 64, 128]) {
-        const half = (viewportRange * factor) / 2;
-        const result = sliceMinimapRange({
-            entries,
-            worldStart: center - half,
-            worldEnd: center + half,
-        });
-        assert.ok(result.length >= prev, `count regressed at factor=${factor}`);
-        prev = result.length;
-    }
-    assert.equal(prev, entries.length);
 });
 
 runProperty('property: n-deep chain of dives — each level only sees its registered children', (world) => {

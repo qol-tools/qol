@@ -8,9 +8,10 @@
 // call. Every ctx.save() must be matched by a ctx.restore(); no bare
 // ctx.scale or ctx.translate without a surrounding save/restore.
 //
-// Slot geometry now comes from computeMinimapSlots — slots carry {x, y, w, h}
-// with y/h representing the vertically centred row. Draw code reads these
-// directly instead of deriving a body rect from canvas height.
+// Slot geometry comes from computeMinimapLinearLayout — slots carry
+// {x, y, w, h} with y/h representing the vertically centred row, and slot.x
+// can lie outside [0, cw] when an entry projects past the visible strip.
+// Draw code reads these directly and culls off-strip slots.
 //
 // Per-slot opacity tracks how much of the slot is inside the viewport rect
 // (computeSlotCoverage). A slot fully inside the camera window draws at full
@@ -92,7 +93,7 @@ function drawInactiveSlot(ctx, cw, label, slot, alpha) {
 
 function drawActiveSlot(ctx, cw, label, slot, alpha) {
     // Scale visually around the layout slot's centre. Layout slot box is
-    // untouched — computeMinimapViewportRect still aligns with slot.{x,w,y,h}.
+    // untouched — computeMinimapLinearRect still aligns with slot.{x,w,y,h}.
     const layoutInnerX = slot.x + SLOT_INSET;
     const layoutInnerW = Math.max(0, slot.w - SLOT_INSET * 2);
     const layoutInnerH = Math.max(0, slot.h - SLOT_INSET * 2);
