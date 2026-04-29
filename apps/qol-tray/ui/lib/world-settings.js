@@ -5,7 +5,12 @@ const DEFAULTS = {
     transitionSpeed: 120,
     transitionStyle: 'zoom-fade',
     minimapSize: 380,
-    minimapWindow: 2,
+    // How many times wider than the viewport's world-x range the minimap
+    // should cover. The minimap therefore tracks the viewport's zoom — when
+    // the viewport zooms out, its world-x range grows, and so does the
+    // minimap's. At MINIMAP_ZOOM_MAX (20) the minimap is clamped to the full
+    // world span. 1 means minimap == viewport.
+    minimapZoomFactor: 4,
     anchorToPages: true,
     defaultZoom: 0.8,
     resetZoomOnNav: true,

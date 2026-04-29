@@ -7,7 +7,7 @@ import { useClickOutside } from '../../lib/hooks/useClickOutside.js';
 import { Peripheral } from './Peripheral.js';
 import { clampPercent, formatDownloadingProgress, formatPhaseProgress, toProgressScale } from '../../utils/progress.js';
 import { computeMinimapSlots, computeMinimapViewportRect } from '../../lib/minimap-geometry.js';
-import { sliceMinimapWindow, visibleMinimapEntries } from '../../lib/minimap-filter.js';
+import { sliceMinimapRange, visibleMinimapEntries } from '../../lib/minimap-filter.js';
 import { drawMinimap, drawViewportRect } from '../../lib/minimap-draw.js';
 import {
     cameraTargetFor,
@@ -57,15 +57,16 @@ export function MinimapContainer({ camera, registry, viewportRef, diveParent, di
 const TRANSITION_STYLE_OPTIONS = ['zoom-fade', 'fade', 'instant'];
 const TRANSITION_STYLE_LABELS = { 'zoom-fade': 'Zoom + Fade', fade: 'Fade only', instant: 'Instant' };
 
-const MAX_MINIMAP_WINDOW = 12;
+export const MINIMAP_ZOOM_MIN = 1;
+export const MINIMAP_ZOOM_MAX = 20;
 
 function WorldSettingsPanel({ settings, version, updateState, isDevMode, onAction, worktrees, defaultWorktree, setDefaultWorktree, repoBranch }) {
     const updateRange = (key) => (e) => setWorldSetting(key, Number(e.target.value));
     const updateToggle = (key) => (value) => setWorldSetting(key, value);
     const updateSelect = (key) => (value) => setWorldSetting(key, value);
 
-    const minimapWindow = Number(settings.minimapWindow ?? 2);
-    const minimapWindowLabel = minimapWindow >= MAX_MINIMAP_WINDOW ? 'all' : `±${minimapWindow}`;
+    const minimapZoom = Number(settings.minimapZoomFactor ?? 4);
+    const minimapZoomLabel = minimapZoom >= MINIMAP_ZOOM_MAX ? 'all' : `${minimapZoom.toFixed(1)}×`;
 
     return html`
         <div class="world-settings-panel">
@@ -74,7 +75,7 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
                 <div class="wsp-grid">
                     ${rangeRow({ label: 'Pan speed', key: 'panSpeed', min: 4, max: 30, value: settings.panSpeed, onInput: updateRange('panSpeed') })}
                     ${rangeRow({ label: 'Minimap size', key: 'minimapSize', min: 200, max: 500, value: settings.minimapSize, onInput: updateRange('minimapSize') })}
-                    ${rangeRow({ label: 'Minimap zoom', key: 'minimapWindow', min: 1, max: MAX_MINIMAP_WINDOW, step: 1, value: minimapWindow, onInput: updateRange('minimapWindow'), display: minimapWindowLabel })}
+                    ${rangeRow({ label: 'Minimap zoom', key: 'minimapZoomFactor', min: MINIMAP_ZOOM_MIN, max: MINIMAP_ZOOM_MAX, step: 0.5, value: minimapZoom, onInput: updateRange('minimapZoomFactor'), display: minimapZoomLabel })}
                     ${rangeRow({ label: 'Default zoom', key: 'defaultZoom', min: 0.5, max: 2, step: 0.05, value: settings.defaultZoom, onInput: updateRange('defaultZoom'), display: `${Number(settings.defaultZoom).toFixed(2)}×` })}
                     ${rangeRow({ label: 'Ghost threshold', key: 'ghostThreshold', min: 0.2, max: 1, step: 0.05, value: settings.ghostThreshold, onInput: updateRange('ghostThreshold'), display: `${Number(settings.ghostThreshold).toFixed(2)}×` })}
                 </div>
@@ -270,10 +271,13 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
         const sortedAll = [...entries].sort((a, b) => a.x - b.x);
         const activeId = nearestEntryId(sortedAll, camera, vpW, vpH, z);
         const settings = getWorldSettings();
-        const sorted = sliceMinimapWindow({
-            entries: sortedAll,
+        const sorted = applyMinimapZoomFactor({
+            sortedAll,
             activeId,
-            radius: settings.minimapWindow,
+            cameraX: camera.x,
+            viewportWidthPx: vpW,
+            cameraZoom: z,
+            factor: settings.minimapZoomFactor,
         });
 
         const slots = computeMinimapSlots({ sortedEntries: sorted, minimapWidth: cw, canvasHeight: ch });
@@ -334,10 +338,13 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
         const sortedAll = [...entries].sort((a, b) => a.x - b.x);
         const settings = getWorldSettings();
         const activeId = nearestEntryId(sortedAll, camera, vpW, vpH, z);
-        const sorted = sliceMinimapWindow({
-            entries: sortedAll,
+        const sorted = applyMinimapZoomFactor({
+            sortedAll,
             activeId,
-            radius: settings.minimapWindow,
+            cameraX: camera.x,
+            viewportWidthPx: vpW,
+            cameraZoom: z,
+            factor: settings.minimapZoomFactor,
         });
         const slots = computeMinimapSlots({ sortedEntries: sorted, minimapWidth, canvasHeight });
         // Clicks must land inside the centred slot row's y-range as well as the
@@ -382,5 +389,33 @@ function nearestEntryId(entries, camera, vpW, vpH, zoom) {
 
 function slotLabel(entry) {
     return resolveViewLabel(entry).text;
+}
+
+// Apply the user-configured `minimapZoomFactor` to derive a world-x range
+// centred on the camera and slice the entries to that range. The minimap's
+// zoom therefore tracks the viewport's: when the viewport zooms out, its
+// world-x range grows and the minimap reveals more entries; at MINIMAP_ZOOM_MAX
+// or when the viewport isn't measurable yet, we fall back to showing all
+// entries (so the minimap stays useful pre-layout). The active entry is
+// re-injected if a tight factor would otherwise drop it (camera parked in a
+// world-x gap), so the active page is always represented in the strip.
+function applyMinimapZoomFactor({ sortedAll, activeId, cameraX, viewportWidthPx, cameraZoom, factor }) {
+    const f = Number(factor);
+    if (!Number.isFinite(f) || f >= MINIMAP_ZOOM_MAX) return sortedAll;
+    if (!(viewportWidthPx > 0) || !(cameraZoom > 0)) return sortedAll;
+    const viewportRange = viewportWidthPx / cameraZoom;
+    const center = cameraX + viewportRange / 2;
+    const half = (viewportRange * Math.max(MINIMAP_ZOOM_MIN, f)) / 2;
+    const sliced = sliceMinimapRange({
+        entries: sortedAll,
+        worldStart: center - half,
+        worldEnd: center + half,
+    });
+    if (sliced.length === 0) return sortedAll;
+    if (activeId && !sliced.some(e => e.id === activeId)) {
+        const active = sortedAll.find(e => e.id === activeId);
+        if (active) return [...sliced, active].sort((a, b) => a.x - b.x);
+    }
+    return sliced;
 }
 
