@@ -6,15 +6,10 @@ import { IconCog } from '../../assets/icon-cog.js';
 import { useClickOutside } from '../../lib/hooks/useClickOutside.js';
 import { Peripheral } from './Peripheral.js';
 import { clampPercent, formatDownloadingProgress, formatPhaseProgress, toProgressScale } from '../../utils/progress.js';
-import { computeMinimapSlots, computeMinimapViewportRect } from '../../lib/minimap-geometry.js';
-import { sliceMinimapRange, visibleMinimapEntries } from '../../lib/minimap-filter.js';
+import { computeMinimapLinearLayout, computeMinimapLinearRect } from '../../lib/minimap-geometry.js';
+import { visibleMinimapEntries } from '../../lib/minimap-filter.js';
 import { drawMinimap, drawViewportRect } from '../../lib/minimap-draw.js';
-import {
-    cameraTargetFor,
-    computeBaseScale,
-    computeSlotScale,
-    inflatedEntryRange,
-} from '../../lib/world-geometry.js';
+import { cameraTargetFor } from '../../lib/world-geometry.js';
 import { ToggleSwitch } from '../../lib/components/ToggleSwitch.js';
 import { CustomSelect } from '../../lib/components/CustomSelect.js';
 import { resolveViewport } from '../../lib/viewport-resolve.js';
@@ -271,45 +266,35 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
         const sortedAll = [...entries].sort((a, b) => a.x - b.x);
         const activeId = nearestEntryId(sortedAll, camera, vpW, vpH, z);
         const settings = getWorldSettings();
-        const sorted = applyMinimapZoomFactor({
+        const bounds = resolveMinimapWorldBounds({
             sortedAll,
             activeId,
-            cameraX: camera.x,
             viewportWidthPx: vpW,
             cameraZoom: z,
             factor: settings.minimapZoomFactor,
         });
+        if (!bounds) return;
 
-        const slots = computeMinimapSlots({ sortedEntries: sorted, minimapWidth: cw, canvasHeight: ch });
-        const labelFor = (entry) => slotLabel(entry);
-        // When uiScaleOnZoomOut is on and zoom < ghostThreshold, slots are
-        // CSS-scaled around their centre — see App.js's applySlotScales. The
-        // rect needs the same per-entry scale to know which slots the user
-        // *visually* sees, otherwise it under-represents the camera's framing.
-        const baseScale = settings.uiScaleOnZoomOut
-            ? computeBaseScale(z, settings.ghostThreshold)
-            : 1;
-        const inflatedRanges = baseScale > 1
-            ? sorted.map(entry => inflatedEntryRange(entry, computeSlotScale({
-                entry,
-                cameraX: camera.x,
-                cameraY: camera.y,
-                viewportW: vpW,
-                viewportH: vpH,
-                zoom: z,
-                baseScale,
-            })))
-            : null;
-        const rect = computeMinimapViewportRect({
-            sortedEntries: sorted,
-            cameraX: camera.x,
-            cameraZoom: z,
-            viewportWidthPx: vpW,
+        const layout = computeMinimapLinearLayout({
+            entries: sortedAll,
+            worldStart: bounds.worldStart,
+            worldEnd: bounds.worldEnd,
             minimapWidth: cw,
             canvasHeight: ch,
-            inflatedRanges,
         });
-        drawMinimap(ctx, cw, ch, sorted, slots, activeId, labelFor, rect);
+        if (!layout) return;
+
+        const viewportRange = vpW > 0 && z > 0 ? vpW / z : 0;
+        const rect = computeMinimapLinearRect({
+            cameraX: camera.x,
+            viewportRange,
+            worldStart: bounds.worldStart,
+            worldEnd: bounds.worldEnd,
+            minimapWidth: cw,
+            rowY: layout.rowY,
+            rowHeight: layout.rowHeight,
+        });
+        drawMinimap(ctx, cw, ch, sortedAll, layout.slots, activeId, slotLabel, rect);
         drawViewportRect(ctx, cw, ch, rect);
     });
 
@@ -338,23 +323,30 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
         const sortedAll = [...entries].sort((a, b) => a.x - b.x);
         const settings = getWorldSettings();
         const activeId = nearestEntryId(sortedAll, camera, vpW, vpH, z);
-        const sorted = applyMinimapZoomFactor({
+        const bounds = resolveMinimapWorldBounds({
             sortedAll,
             activeId,
-            cameraX: camera.x,
             viewportWidthPx: vpW,
             cameraZoom: z,
             factor: settings.minimapZoomFactor,
         });
-        const slots = computeMinimapSlots({ sortedEntries: sorted, minimapWidth, canvasHeight });
+        if (!bounds) return;
+        const layout = computeMinimapLinearLayout({
+            entries: sortedAll,
+            worldStart: bounds.worldStart,
+            worldEnd: bounds.worldEnd,
+            minimapWidth,
+            canvasHeight,
+        });
+        if (!layout) return;
         // Clicks must land inside the centred slot row's y-range as well as the
         // correct x-column, so click-margin above/below the row is ignored.
-        const clicked = slots.findIndex(s =>
+        const clicked = layout.slots.findIndex(s =>
             clickX >= s.x && clickX < s.x + s.w &&
             clickY >= s.y && clickY < s.y + s.h);
         if (clicked < 0) return;
 
-        const target = sorted[clicked];
+        const target = sortedAll[clicked];
         const cam = cameraTargetFor(target, vpW, vpH, z);
         camera.panTo(cam.x, cam.y);
     };
@@ -391,31 +383,38 @@ function slotLabel(entry) {
     return resolveViewLabel(entry).text;
 }
 
-// Apply the user-configured `minimapZoomFactor` to derive a world-x range
-// centred on the camera and slice the entries to that range. The minimap's
-// zoom therefore tracks the viewport's: when the viewport zooms out, its
-// world-x range grows and the minimap reveals more entries; at MINIMAP_ZOOM_MAX
-// or when the viewport isn't measurable yet, we fall back to showing all
-// entries (so the minimap stays useful pre-layout). The active entry is
-// re-injected if a tight factor would otherwise drop it (camera parked in a
-// world-x gap), so the active page is always represented in the strip.
-function applyMinimapZoomFactor({ sortedAll, activeId, cameraX, viewportWidthPx, cameraZoom, factor }) {
+// Pick the world-x range the minimap projects into its strip. The range is
+// centred on the active entry (so neighbours render at constant pixel
+// widths regardless of which page the camera is on — the previous behaviour
+// rescaled slots based on how many entries fell into a camera-centred
+// window, which made navigation feel like the minimap was zooming in/out).
+//
+// At MINIMAP_ZOOM_MAX (or when the viewport isn't measurable yet, e.g.
+// pre-layout), fall back to the world's span so the minimap still gives
+// a useful overview. Returns null when there is nothing to project.
+export function resolveMinimapWorldBounds({ sortedAll, activeId, viewportWidthPx, cameraZoom, factor }) {
+    if (!Array.isArray(sortedAll) || sortedAll.length === 0) return null;
     const f = Number(factor);
-    if (!Number.isFinite(f) || f >= MINIMAP_ZOOM_MAX) return sortedAll;
-    if (!(viewportWidthPx > 0) || !(cameraZoom > 0)) return sortedAll;
-    const viewportRange = viewportWidthPx / cameraZoom;
-    const center = cameraX + viewportRange / 2;
-    const half = (viewportRange * Math.max(MINIMAP_ZOOM_MIN, f)) / 2;
-    const sliced = sliceMinimapRange({
-        entries: sortedAll,
-        worldStart: center - half,
-        worldEnd: center + half,
-    });
-    if (sliced.length === 0) return sortedAll;
-    if (activeId && !sliced.some(e => e.id === activeId)) {
-        const active = sortedAll.find(e => e.id === activeId);
-        if (active) return [...sliced, active].sort((a, b) => a.x - b.x);
+    const viewportRange = viewportWidthPx > 0 && cameraZoom > 0
+        ? viewportWidthPx / cameraZoom
+        : 0;
+    const active = activeId ? sortedAll.find(e => e.id === activeId) : null;
+
+    const showAll = !Number.isFinite(f) || f >= MINIMAP_ZOOM_MAX
+        || !(viewportRange > 0) || !active;
+    if (showAll) {
+        let minX = Infinity, maxX = -Infinity;
+        for (const e of sortedAll) {
+            if (e.x < minX) minX = e.x;
+            const ex = e.x + e.width;
+            if (ex > maxX) maxX = ex;
+        }
+        if (!(maxX > minX)) return null;
+        return { worldStart: minX, worldEnd: maxX };
     }
-    return sliced;
+
+    const half = (viewportRange * Math.max(MINIMAP_ZOOM_MIN, f)) / 2;
+    const center = active.x + active.width / 2;
+    return { worldStart: center - half, worldEnd: center + half };
 }
 
