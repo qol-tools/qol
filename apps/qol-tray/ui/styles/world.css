@@ -239,18 +239,50 @@ html.qol-bootstrapping-dive #app {
     white-space: nowrap;
 }
 
-.world-settings-panel label {
-    display: flex;
-    justify-content: space-between;
+.wsp-grid {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr) auto;
+    column-gap: var(--space-4);
+    row-gap: var(--space-3);
     align-items: center;
-    font-size: var(--fs-md);
-    color: var(--text-secondary);
 }
 
-.world-settings-panel input[type="range"] {
-    width: 160px;
+.wsp-grid .wsp-label {
+    font-size: var(--fs-md);
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.wsp-grid .wsp-range {
+    width: 100%;
+    max-width: 220px;
     height: 6px;
     accent-color: var(--accent);
+    justify-self: end;
+}
+
+.wsp-grid .wsp-value {
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+    font-size: var(--fs-sm);
+    min-width: 3.25em;
+    text-align: right;
+}
+
+.wsp-grid .wsp-control {
+    grid-column: 2 / -1;
+    justify-self: stretch;
+    min-width: 0;
+}
+
+.wsp-grid .wsp-control .custom-select {
+    width: 100%;
+}
+
+.wsp-toggles {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
 }
 
 .world-settings-panel select {

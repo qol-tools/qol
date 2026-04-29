@@ -7,7 +7,7 @@ import { useClickOutside } from '../../lib/hooks/useClickOutside.js';
 import { Peripheral } from './Peripheral.js';
 import { clampPercent, formatDownloadingProgress, formatPhaseProgress, toProgressScale } from '../../utils/progress.js';
 import { computeMinimapSlots, computeMinimapViewportRect } from '../../lib/minimap-geometry.js';
-import { visibleMinimapEntries } from '../../lib/minimap-filter.js';
+import { sliceMinimapWindow, visibleMinimapEntries } from '../../lib/minimap-filter.js';
 import { drawMinimap, drawViewportRect } from '../../lib/minimap-draw.js';
 import {
     cameraTargetFor,
@@ -57,30 +57,43 @@ export function MinimapContainer({ camera, registry, viewportRef, diveParent, di
 const TRANSITION_STYLE_OPTIONS = ['zoom-fade', 'fade', 'instant'];
 const TRANSITION_STYLE_LABELS = { 'zoom-fade': 'Zoom + Fade', fade: 'Fade only', instant: 'Instant' };
 
+const MAX_MINIMAP_WINDOW = 12;
+
 function WorldSettingsPanel({ settings, version, updateState, isDevMode, onAction, worktrees, defaultWorktree, setDefaultWorktree, repoBranch }) {
     const updateRange = (key) => (e) => setWorldSetting(key, Number(e.target.value));
     const updateToggle = (key) => (value) => setWorldSetting(key, value);
     const updateSelect = (key) => (value) => setWorldSetting(key, value);
 
+    const minimapWindow = Number(settings.minimapWindow ?? 2);
+    const minimapWindowLabel = minimapWindow >= MAX_MINIMAP_WINDOW ? 'all' : `±${minimapWindow}`;
+
     return html`
         <div class="world-settings-panel">
             <div class="wsp-section">
                 <div class="wsp-heading">Navigation</div>
-                <label>Pan speed <input type="range" min="4" max="30" value=${settings.panSpeed} onInput=${updateRange('panSpeed')} /></label>
-                <label>Minimap size <input type="range" min="200" max="500" value=${settings.minimapSize} onInput=${updateRange('minimapSize')} /></label>
-                <label>Default zoom <input type="range" min="0.5" max="2" step="0.05" value=${settings.defaultZoom} onInput=${updateRange('defaultZoom')} /> <span class="wsp-value">${Number(settings.defaultZoom).toFixed(2)}×</span></label>
-                <label>Ghost threshold <input type="range" min="0.2" max="1" step="0.05" value=${settings.ghostThreshold} onInput=${updateRange('ghostThreshold')} /> <span class="wsp-value">${Number(settings.ghostThreshold).toFixed(2)}×</span></label>
-                <${ToggleSwitch} checked=${settings.anchorToPages} onChange=${updateToggle('anchorToPages')} label="Anchor view to pages" />
-                <${ToggleSwitch} checked=${settings.resetZoomOnNav} onChange=${updateToggle('resetZoomOnNav')} label="Reset zoom on keyboard nav" />
-                <${ToggleSwitch} checked=${settings.uiScaleOnZoomOut} onChange=${updateToggle('uiScaleOnZoomOut')} label="Scale pages up when zoomed out" />
+                <div class="wsp-grid">
+                    ${rangeRow({ label: 'Pan speed', key: 'panSpeed', min: 4, max: 30, value: settings.panSpeed, onInput: updateRange('panSpeed') })}
+                    ${rangeRow({ label: 'Minimap size', key: 'minimapSize', min: 200, max: 500, value: settings.minimapSize, onInput: updateRange('minimapSize') })}
+                    ${rangeRow({ label: 'Minimap zoom', key: 'minimapWindow', min: 1, max: MAX_MINIMAP_WINDOW, step: 1, value: minimapWindow, onInput: updateRange('minimapWindow'), display: minimapWindowLabel })}
+                    ${rangeRow({ label: 'Default zoom', key: 'defaultZoom', min: 0.5, max: 2, step: 0.05, value: settings.defaultZoom, onInput: updateRange('defaultZoom'), display: `${Number(settings.defaultZoom).toFixed(2)}×` })}
+                    ${rangeRow({ label: 'Ghost threshold', key: 'ghostThreshold', min: 0.2, max: 1, step: 0.05, value: settings.ghostThreshold, onInput: updateRange('ghostThreshold'), display: `${Number(settings.ghostThreshold).toFixed(2)}×` })}
+                </div>
+                <div class="wsp-toggles">
+                    <${ToggleSwitch} checked=${settings.anchorToPages} onChange=${updateToggle('anchorToPages')} label="Anchor view to pages" />
+                    <${ToggleSwitch} checked=${settings.resetZoomOnNav} onChange=${updateToggle('resetZoomOnNav')} label="Reset zoom on keyboard nav" />
+                    <${ToggleSwitch} checked=${settings.uiScaleOnZoomOut} onChange=${updateToggle('uiScaleOnZoomOut')} label="Scale pages up when zoomed out" />
+                </div>
             </div>
             <div class="wsp-section">
                 <div class="wsp-heading">Transitions</div>
-                <label>Speed <input type="range" min="40" max="300" value=${settings.transitionSpeed} onInput=${updateRange('transitionSpeed')} /></label>
-                <label><span>Style</span>
-                    <${CustomSelect} value=${settings.transitionStyle} options=${TRANSITION_STYLE_OPTIONS}
-                        labels=${TRANSITION_STYLE_LABELS} onChange=${updateSelect('transitionStyle')} compact=${true} />
-                </label>
+                <div class="wsp-grid">
+                    ${rangeRow({ label: 'Speed', key: 'transitionSpeed', min: 40, max: 300, value: settings.transitionSpeed, onInput: updateRange('transitionSpeed') })}
+                    <span class="wsp-label">Style</span>
+                    <div class="wsp-control">
+                        <${CustomSelect} value=${settings.transitionStyle} options=${TRANSITION_STYLE_OPTIONS}
+                            labels=${TRANSITION_STYLE_LABELS} onChange=${updateSelect('transitionStyle')} compact=${true} />
+                    </div>
+                </div>
             </div>
             ${isDevMode && worktrees && worktrees.length > 0 && html`
                 <${WorktreeSection} worktrees=${worktrees} defaultWorktree=${defaultWorktree}
@@ -88,6 +101,15 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
             `}
             ${version && html`<${VersionSection} version=${version} updateState=${updateState} isDevMode=${isDevMode} onAction=${onAction} />`}
         </div>
+    `;
+}
+
+function rangeRow({ label, key, min, max, step, value, onInput, display }) {
+    return html`
+        <span class="wsp-label">${label}</span>
+        <input class="wsp-range" type="range" min=${min} max=${max} step=${step ?? 'any'}
+            value=${value} onInput=${onInput} aria-label=${label} data-setting=${key} />
+        <span class="wsp-value">${display ?? ''}</span>
     `;
 }
 
@@ -103,10 +125,13 @@ function WorktreeSection({ worktrees, defaultWorktree, setDefaultWorktree, repoB
                 <span>Worktree</span>
                 ${repoBranch && html`<span class="wsp-pill" title="Base repo HEAD">${repoBranch}</span>`}
             </div>
-            <label><span>Branch</span>
-                <${CustomSelect} value=${defaultWorktree || ''} options=${options}
-                    labels=${labels} onChange=${onChange} compact=${true} />
-            </label>
+            <div class="wsp-grid">
+                <span class="wsp-label">Branch</span>
+                <div class="wsp-control">
+                    <${CustomSelect} value=${defaultWorktree || ''} options=${options}
+                        labels=${labels} onChange=${onChange} compact=${true} />
+                </div>
+            </div>
         </div>
     `;
 }
@@ -242,8 +267,14 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
         ctx.clearRect(0, 0, cw, ch);
         if (entries.length === 0) return;
 
-        const sorted = [...entries].sort((a, b) => a.x - b.x);
-        const activeId = nearestEntryId(sorted, camera, vpW, vpH, z);
+        const sortedAll = [...entries].sort((a, b) => a.x - b.x);
+        const activeId = nearestEntryId(sortedAll, camera, vpW, vpH, z);
+        const settings = getWorldSettings();
+        const sorted = sliceMinimapWindow({
+            entries: sortedAll,
+            activeId,
+            radius: settings.minimapWindow,
+        });
 
         const slots = computeMinimapSlots({ sortedEntries: sorted, minimapWidth: cw, canvasHeight: ch });
         const labelFor = (entry) => slotLabel(entry);
@@ -251,7 +282,6 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
         // CSS-scaled around their centre — see App.js's applySlotScales. The
         // rect needs the same per-entry scale to know which slots the user
         // *visually* sees, otherwise it under-represents the camera's framing.
-        const settings = getWorldSettings();
         const baseScale = settings.uiScaleOnZoomOut
             ? computeBaseScale(z, settings.ghostThreshold)
             : 1;
@@ -301,7 +331,14 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
         const vpW = vp ? vp.clientWidth : 0;
         const vpH = vp ? vp.clientHeight : 0;
 
-        const sorted = [...entries].sort((a, b) => a.x - b.x);
+        const sortedAll = [...entries].sort((a, b) => a.x - b.x);
+        const settings = getWorldSettings();
+        const activeId = nearestEntryId(sortedAll, camera, vpW, vpH, z);
+        const sorted = sliceMinimapWindow({
+            entries: sortedAll,
+            activeId,
+            radius: settings.minimapWindow,
+        });
         const slots = computeMinimapSlots({ sortedEntries: sorted, minimapWidth, canvasHeight });
         // Clicks must land inside the centred slot row's y-range as well as the
         // correct x-column, so click-margin above/below the row is ignored.
