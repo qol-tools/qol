@@ -5,6 +5,7 @@ const DEFAULTS = {
     transitionSpeed: 120,
     transitionStyle: 'zoom-fade',
     minimapSize: 380,
+    minimapWindow: 2,
     anchorToPages: true,
     defaultZoom: 0.8,
     resetZoomOnNav: true,

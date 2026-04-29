@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { visibleMinimapEntries } from './minimap-filter.js';
+import { sliceMinimapWindow, visibleMinimapEntries } from './minimap-filter.js';
 
 // ---------------------------------------------------------------------------
 // Parameterized table: each row is { name, input, expectedIds } so every
@@ -267,6 +267,91 @@ runProperty('property: empty confinedPages with null diveParent is identity', (w
     const allEntries = world.entries;
     const result = visibleMinimapEntries({ allEntries, confinedPages: [], diveParent: null });
     assert.equal(result, allEntries);
+});
+
+// ---------------------------------------------------------------------------
+// sliceMinimapWindow contract tests.
+// ---------------------------------------------------------------------------
+
+const SLICE_TABLE = [
+    {
+        name: 'radius 0 returns input untouched',
+        input: { entries: ['a', 'b', 'c', 'd', 'e'], activeId: 'c', radius: 0 },
+        expected: ['a', 'b', 'c', 'd', 'e'],
+    },
+    {
+        name: 'negative radius returns input untouched',
+        input: { entries: ['a', 'b', 'c'], activeId: 'b', radius: -2 },
+        expected: ['a', 'b', 'c'],
+    },
+    {
+        name: 'window larger than entries returns all',
+        input: { entries: ['a', 'b', 'c'], activeId: 'b', radius: 5 },
+        expected: ['a', 'b', 'c'],
+    },
+    {
+        name: 'centred window: active in middle of long list',
+        input: { entries: ['a', 'b', 'c', 'd', 'e', 'f', 'g'], activeId: 'd', radius: 2 },
+        expected: ['b', 'c', 'd', 'e', 'f'],
+    },
+    {
+        name: 'left-edge slide: active at index 0 produces leading window',
+        input: { entries: ['a', 'b', 'c', 'd', 'e', 'f', 'g'], activeId: 'a', radius: 2 },
+        expected: ['a', 'b', 'c', 'd', 'e'],
+    },
+    {
+        name: 'right-edge slide: active at last index produces trailing window',
+        input: { entries: ['a', 'b', 'c', 'd', 'e', 'f', 'g'], activeId: 'g', radius: 2 },
+        expected: ['c', 'd', 'e', 'f', 'g'],
+    },
+    {
+        name: 'one off the right edge still produces 5 entries',
+        input: { entries: ['a', 'b', 'c', 'd', 'e', 'f', 'g'], activeId: 'f', radius: 2 },
+        expected: ['c', 'd', 'e', 'f', 'g'],
+    },
+    {
+        name: 'unknown activeId returns leading window',
+        input: { entries: ['a', 'b', 'c', 'd', 'e'], activeId: 'ghost', radius: 1 },
+        expected: ['a', 'b', 'c'],
+    },
+    {
+        name: 'null activeId returns leading window',
+        input: { entries: ['a', 'b', 'c', 'd', 'e'], activeId: null, radius: 1 },
+        expected: ['a', 'b', 'c'],
+    },
+    {
+        name: 'empty list short-circuits',
+        input: { entries: [], activeId: 'x', radius: 2 },
+        expected: [],
+    },
+    {
+        name: 'fractional radius floors',
+        input: { entries: ['a', 'b', 'c', 'd', 'e'], activeId: 'c', radius: 1.9 },
+        expected: ['b', 'c', 'd'],
+    },
+];
+
+for (const row of SLICE_TABLE) {
+    test(`sliceMinimapWindow: ${row.name}`, () => {
+        const result = sliceMinimapWindow({
+            entries: row.input.entries.map(id => ({ id })),
+            activeId: row.input.activeId,
+            radius: row.input.radius,
+        });
+        assert.deepEqual(result.map(e => e.id), row.expected);
+    });
+}
+
+test('sliceMinimapWindow: result always contains activeId when found', () => {
+    const entries = Array.from({ length: 10 }, (_, i) => ({ id: `e${i}` }));
+    for (let i = 0; i < entries.length; i++) {
+        for (let r = 1; r <= 4; r++) {
+            const result = sliceMinimapWindow({ entries, activeId: `e${i}`, radius: r });
+            assert.ok(result.some(e => e.id === `e${i}`), `lost active e${i} at radius=${r}`);
+            const expectedSize = Math.min(r * 2 + 1, entries.length);
+            assert.equal(result.length, expectedSize, `wrong size at i=${i} r=${r}`);
+        }
+    }
 });
 
 runProperty('property: n-deep chain of dives — each level only sees its registered children', (world) => {
