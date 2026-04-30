@@ -6,13 +6,16 @@ import { IconCog } from '../../assets/icon-cog.js';
 import { useClickOutside } from '../../lib/hooks/useClickOutside.js';
 import { Peripheral } from './Peripheral.js';
 import { clampPercent, formatDownloadingProgress, formatPhaseProgress, toProgressScale } from '../../utils/progress.js';
-import { computeMinimapLinearLayout, computeMinimapLinearRect } from '../../lib/minimap-geometry.js';
+import { computeMinimapFocalLayout, computeMinimapFocalRect } from '../../lib/minimap-geometry.js';
 import { visibleMinimapEntries } from '../../lib/minimap-filter.js';
 import { drawMinimap, drawViewportRect } from '../../lib/minimap-draw.js';
 import { cameraTargetFor } from '../../lib/world-geometry.js';
 import { ToggleSwitch } from '../../lib/components/ToggleSwitch.js';
 import { CustomSelect } from '../../lib/components/CustomSelect.js';
 import { resolveViewport } from '../../lib/viewport-resolve.js';
+import { createDebug } from '../../lib/debug.js';
+
+const log = createDebug('qol:minimap');
 
 const ARROW_FLASH_MS = 350;
 
@@ -52,9 +55,10 @@ export function MinimapContainer({ camera, registry, viewportRef, diveParent, di
 const TRANSITION_STYLE_OPTIONS = ['zoom-fade', 'fade', 'instant'];
 const TRANSITION_STYLE_LABELS = { 'zoom-fade': 'Zoom + Fade', fade: 'Fade only', instant: 'Instant' };
 
-export const MINIMAP_ZOOM_MIN = 1;
-export const MINIMAP_ZOOM_MAX = 20;
-export const MINIMAP_MIN_ACTIVE_SLOT_PX = 50;
+export const MINIMAP_NEIGHBOURS_MIN = 1;
+export const MINIMAP_NEIGHBOURS_MAX = 12;
+export const MINIMAP_MIN_SLOT_PX = 28;
+export const MINIMAP_MIN_SLOT_FRAC = 0.08;
 
 function WorldSettingsPanel({ settings, version, updateState, isDevMode, onAction, worktrees, defaultWorktree, setDefaultWorktree, repoBranch }) {
     const updateRange = (key) => (e) => setWorldSetting(key, Number(e.target.value));
@@ -62,7 +66,7 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
     const updateSelect = (key) => (value) => setWorldSetting(key, value);
 
     const minimapZoom = Number(settings.minimapZoomFactor ?? 4);
-    const minimapZoomLabel = minimapZoom >= MINIMAP_ZOOM_MAX ? 'all' : `${minimapZoom.toFixed(1)}×`;
+    const minimapZoomLabel = minimapZoom >= MINIMAP_NEIGHBOURS_MAX ? 'all' : `±${minimapZoom | 0}`;
 
     return html`
         <div class="world-settings-panel">
@@ -71,7 +75,7 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
                 <div class="wsp-grid">
                     ${rangeRow({ label: 'Pan speed', key: 'panSpeed', min: 4, max: 30, value: settings.panSpeed, onInput: updateRange('panSpeed') })}
                     ${rangeRow({ label: 'Minimap size', key: 'minimapSize', min: 200, max: 500, value: settings.minimapSize, onInput: updateRange('minimapSize') })}
-                    ${rangeRow({ label: 'Minimap zoom', key: 'minimapZoomFactor', min: MINIMAP_ZOOM_MIN, max: MINIMAP_ZOOM_MAX, step: 0.5, value: minimapZoom, onInput: updateRange('minimapZoomFactor'), display: minimapZoomLabel })}
+                    ${rangeRow({ label: 'Minimap zoom', key: 'minimapZoomFactor', min: MINIMAP_NEIGHBOURS_MIN, max: MINIMAP_NEIGHBOURS_MAX, step: 1, value: minimapZoom, onInput: updateRange('minimapZoomFactor'), display: minimapZoomLabel })}
                     ${rangeRow({ label: 'Default zoom', key: 'defaultZoom', min: 0.5, max: 2, step: 0.05, value: settings.defaultZoom, onInput: updateRange('defaultZoom'), display: `${Number(settings.defaultZoom).toFixed(2)}×` })}
                     ${rangeRow({ label: 'Ghost threshold', key: 'ghostThreshold', min: 0.2, max: 1, step: 0.05, value: settings.ghostThreshold, onInput: updateRange('ghostThreshold'), display: `${Number(settings.ghostThreshold).toFixed(2)}×` })}
                 </div>
@@ -265,39 +269,59 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
         if (entries.length === 0) return;
 
         const sortedAll = [...entries].sort((a, b) => a.x - b.x);
-        const activeId = nearestEntryId(sortedAll, camera, vpW, vpH, z);
         const settings = getWorldSettings();
-        const bounds = resolveMinimapWorldBounds({
-            sortedAll,
-            activeId,
-            viewportWidthPx: vpW,
-            cameraZoom: z,
-            factor: settings.minimapZoomFactor,
-            minimapWidth: cw,
-        });
-        if (!bounds) return;
+        const viewportRange = vpW > 0 && z > 0 ? vpW / z : 0;
+        const cx = camera.x + (viewportRange > 0 ? viewportRange / 2 : 0);
+        const activePosF = activePosFromCameraCentre(sortedAll, cx);
+        const activeIdInWorld = sortedAll[Math.round(activePosF)]?.id ?? null;
 
-        const layout = computeMinimapLinearLayout({
+        const factor = Number(settings.minimapZoomFactor) || 1;
+        const isShowAll = factor >= MINIMAP_NEIGHBOURS_MAX;
+        const pageWidth = sortedAll[0]?.width || 1280;
+        const viewportPagesSpan = viewportRange > 0 && pageWidth > 0
+            ? Math.max(1, viewportRange / pageWidth)
+            : 1;
+        const effectiveR = isShowAll
+            ? sortedAll.length * 100
+            : factor * Math.pow(viewportPagesSpan, 0.3);
+        const layout = computeMinimapFocalLayout({
             entries: sortedAll,
-            worldStart: bounds.worldStart,
-            worldEnd: bounds.worldEnd,
+            activePosF,
+            focusRadius: effectiveR,
             minimapWidth: cw,
             canvasHeight: ch,
+            minSlotPx: 0,
         });
         if (!layout) return;
 
-        const viewportRange = vpW > 0 && z > 0 ? vpW / z : 0;
-        const rect = computeMinimapLinearRect({
+        const rawRect = computeMinimapFocalRect({
+            entries: sortedAll,
+            slots: layout.slots,
             cameraX: camera.x,
             viewportRange,
-            worldStart: bounds.worldStart,
-            worldEnd: bounds.worldEnd,
-            minimapWidth: cw,
-            rowY: layout.rowY,
-            rowHeight: layout.rowHeight,
         });
-        drawMinimap(ctx, cw, ch, sortedAll, layout.slots, activeId, slotLabel, rect);
+        const rect = rawRect
+            ? { x: rawRect.x, y: layout.rowY, width: rawRect.width, height: layout.rowHeight }
+            : { x: 0, y: layout.rowY, width: 0, height: layout.rowHeight };
+        drawMinimap(ctx, cw, ch, sortedAll, layout.slots, activeIdInWorld, slotLabel, rect);
         drawViewportRect(ctx, cw, ch, rect);
+
+        log(
+            'render',
+            'active=', activeIdInWorld,
+            'posF=', activePosF.toFixed(3),
+            'N=', sortedAll.length,
+            'cw=', cw,
+            'vpW=', vpW,
+            'z=', z.toFixed(3),
+            'vR=', viewportRange.toFixed(0),
+            'pageW=', pageWidth,
+            'span=', viewportPagesSpan.toFixed(3),
+            'R=', effectiveR.toFixed(3),
+            'activeW=', layout.slots[Math.round(activePosF)]?.w?.toFixed(1),
+            'rectW=', rect.width.toFixed(1),
+            'cam.layer=', currentLayer,
+        );
     });
 
     const onClick = (e) => {
@@ -306,8 +330,6 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
         const rect = canvas.getBoundingClientRect();
         const minimapWidth = canvas.clientWidth;
         const canvasHeight = canvas.clientHeight;
-        // Clamp to the canvas so the final pixel still lands in the last slot
-        // (strict `clickX < slot.x + slot.w` would miss the right-edge column).
         const clickX = Math.min(Math.max(e.clientX - rect.left, 0), minimapWidth - 1e-6);
         const clickY = Math.min(Math.max(e.clientY - rect.top, 0), canvasHeight - 1e-6);
 
@@ -324,26 +346,27 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
 
         const sortedAll = [...entries].sort((a, b) => a.x - b.x);
         const settings = getWorldSettings();
-        const activeId = nearestEntryId(sortedAll, camera, vpW, vpH, z);
-        const bounds = resolveMinimapWorldBounds({
-            sortedAll,
-            activeId,
-            viewportWidthPx: vpW,
-            cameraZoom: z,
-            factor: settings.minimapZoomFactor,
-            minimapWidth,
-        });
-        if (!bounds) return;
-        const layout = computeMinimapLinearLayout({
+        const viewportRange = vpW > 0 && z > 0 ? vpW / z : 0;
+        const cx = camera.x + (viewportRange > 0 ? viewportRange / 2 : 0);
+        const activePosF = activePosFromCameraCentre(sortedAll, cx);
+        const factor = Number(settings.minimapZoomFactor) || 1;
+        const isShowAll = factor >= MINIMAP_NEIGHBOURS_MAX;
+        const pageWidth = sortedAll[0]?.width || 1280;
+        const viewportPagesSpan = viewportRange > 0 && pageWidth > 0
+            ? Math.max(1, viewportRange / pageWidth)
+            : 1;
+        const effectiveR = isShowAll
+            ? sortedAll.length * 100
+            : factor * Math.pow(viewportPagesSpan, 0.3);
+        const layout = computeMinimapFocalLayout({
             entries: sortedAll,
-            worldStart: bounds.worldStart,
-            worldEnd: bounds.worldEnd,
+            activePosF,
+            focusRadius: effectiveR,
             minimapWidth,
             canvasHeight,
+            minSlotPx: 0,
         });
         if (!layout) return;
-        // Clicks must land inside the centred slot row's y-range as well as the
-        // correct x-column, so click-margin above/below the row is ignored.
         const clicked = layout.slots.findIndex(s =>
             clickX >= s.x && clickX < s.x + s.w &&
             clickY >= s.y && clickY < s.y + s.h);
@@ -386,33 +409,23 @@ function slotLabel(entry) {
     return resolveViewLabel(entry).text;
 }
 
-export function resolveMinimapWorldBounds({ sortedAll, activeId, viewportWidthPx, cameraZoom, factor, minimapWidth }) {
-    if (!Array.isArray(sortedAll) || sortedAll.length === 0) return null;
-    const f = Number(factor);
-    const viewportRange = viewportWidthPx > 0 && cameraZoom > 0
-        ? viewportWidthPx / cameraZoom
-        : 0;
-    const active = activeId ? sortedAll.find(e => e.id === activeId) : null;
-
-    const showAll = !Number.isFinite(f) || f >= MINIMAP_ZOOM_MAX
-        || !(viewportRange > 0) || !active;
-    if (showAll) {
-        let minX = Infinity, maxX = -Infinity;
-        for (const e of sortedAll) {
-            if (e.x < minX) minX = e.x;
-            const ex = e.x + e.width;
-            if (ex > maxX) maxX = ex;
+export function activePosFromCameraCentre(sortedAll, cameraCentreX) {
+    if (!Array.isArray(sortedAll) || sortedAll.length === 0) return 0;
+    if (sortedAll.length === 1) return 0;
+    for (let i = 0; i < sortedAll.length; i++) {
+        const e = sortedAll[i];
+        if (cameraCentreX >= e.x && cameraCentreX < e.x + e.width) return i;
+    }
+    const centres = sortedAll.map(e => e.x + e.width / 2);
+    if (cameraCentreX <= centres[0]) return 0;
+    if (cameraCentreX >= centres[centres.length - 1]) return centres.length - 1;
+    for (let i = 0; i < centres.length - 1; i++) {
+        if (cameraCentreX >= centres[i] && cameraCentreX < centres[i + 1]) {
+            const span = centres[i + 1] - centres[i];
+            return span > 0 ? i + (cameraCentreX - centres[i]) / span : i;
         }
-        if (!(maxX > minX)) return null;
-        return { worldStart: minX, worldEnd: maxX };
     }
-
-    let range = viewportRange * Math.max(MINIMAP_ZOOM_MIN, f);
-    if (minimapWidth > 0 && active.width > 0) {
-        const maxRange = (active.width * minimapWidth) / MINIMAP_MIN_ACTIVE_SLOT_PX;
-        if (range > maxRange) range = maxRange;
-    }
-    const center = active.x + active.width / 2;
-    return { worldStart: center - range / 2, worldEnd: center + range / 2 };
+    return centres.length - 1;
 }
+
 
