@@ -13,15 +13,6 @@ const THREE_ENTRIES = [
     { id: 'c', x: 20000, y: 0, width: 1280, height: 900 },
 ];
 
-// ---------------------------------------------------------------------------
-// computeMinimapLinearLayout — linear projection of entries into pixel space.
-// The contract that matters most: slot widths depend ONLY on entry.width
-// and the projection scale (= minimapWidth / range). They are invariant to
-// how many entries fall inside the projected window. That is the whole
-// point of switching to linear projection — the previous packing made
-// slots rescale as the user navigated between pages.
-// ---------------------------------------------------------------------------
-
 test('layout: empty input returns null', () => {
     assert.equal(computeMinimapLinearLayout({
         entries: [], worldStart: 0, worldEnd: 100, minimapWidth: 200,
@@ -129,10 +120,6 @@ test('layout: degenerate entry (width or height 0) gets zero-size slot but is st
     assert.equal(layout.slots[0].h, 0);
 });
 
-// ---------------------------------------------------------------------------
-// computeMinimapLinearRect — camera viewport projected to minimap pixels.
-// ---------------------------------------------------------------------------
-
 test('rect: full viewport range matches the minimap width', () => {
     const rect = computeMinimapLinearRect({
         cameraX: 0, viewportRange: 100, worldStart: 0, worldEnd: 100, minimapWidth: 200,
@@ -192,10 +179,6 @@ test('rect: rowY/rowHeight pass through', () => {
     assert.equal(r.height, 30);
 });
 
-// ---------------------------------------------------------------------------
-// computeSlotCoverage — overlap fraction of slot vs camera rect, in pixels.
-// ---------------------------------------------------------------------------
-
 test('coverage: slot fully inside rect returns 1', () => {
     const slot = { x: 50, w: 20 };
     const rect = { x: 0, width: 100 };
@@ -221,12 +204,6 @@ test('coverage: missing slot/rect returns 0', () => {
     assert.equal(computeSlotCoverage({ x: 0, w: 0 }, { x: 0, width: 10 }), 0);
     assert.equal(computeSlotCoverage({ x: 0, w: 10 }, { x: 0, width: 0 }), 0);
 });
-
-// ---------------------------------------------------------------------------
-// clampRectForDraw — viewport-rect draw-layer clamp. Independent of the
-// projection, but lives in minimap-draw.js, which Minimap.js reaches via
-// drawViewportRect. These tests guard the clamp's pixel math.
-// ---------------------------------------------------------------------------
 
 test('clampRectForDraw: rect wider than min width passes through unchanged', () => {
     const c = clampRectForDraw({ x: 10, width: 40 }, 220);
@@ -268,10 +245,6 @@ test('clampRectForDraw: min-width capped at canvas width when canvas is tiny', (
     assert.equal(c.width, 4);
     assert.equal(c.x, 0);
 });
-
-// ---------------------------------------------------------------------------
-// Property tests — seeded RNG, 200 cases each.
-// ---------------------------------------------------------------------------
 
 function makeRng(seed) {
     let s = seed >>> 0;
@@ -383,12 +356,6 @@ test('property: rect width = viewportRange * scale, regardless of camera positio
         );
     }
 });
-
-// ---------------------------------------------------------------------------
-// Canvas transform-state guard. Regression test: drawMinimap must not leak
-// any ctx.scale/translate. Adapted to the linear layout — it just feeds the
-// layout's slots into drawMinimap and asserts the CTM stays identity.
-// ---------------------------------------------------------------------------
 
 function makeMockCtx() {
     const state = { transforms: [[1, 0, 0, 1, 0, 0]], calls: [] };

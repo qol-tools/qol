@@ -54,6 +54,7 @@ const TRANSITION_STYLE_LABELS = { 'zoom-fade': 'Zoom + Fade', fade: 'Fade only',
 
 export const MINIMAP_ZOOM_MIN = 1;
 export const MINIMAP_ZOOM_MAX = 20;
+export const MINIMAP_MIN_ACTIVE_SLOT_PX = 50;
 
 function WorldSettingsPanel({ settings, version, updateState, isDevMode, onAction, worktrees, defaultWorktree, setDefaultWorktree, repoBranch }) {
     const updateRange = (key) => (e) => setWorldSetting(key, Number(e.target.value));
@@ -272,6 +273,7 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
             viewportWidthPx: vpW,
             cameraZoom: z,
             factor: settings.minimapZoomFactor,
+            minimapWidth: cw,
         });
         if (!bounds) return;
 
@@ -329,6 +331,7 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
             viewportWidthPx: vpW,
             cameraZoom: z,
             factor: settings.minimapZoomFactor,
+            minimapWidth,
         });
         if (!bounds) return;
         const layout = computeMinimapLinearLayout({
@@ -383,16 +386,7 @@ function slotLabel(entry) {
     return resolveViewLabel(entry).text;
 }
 
-// Pick the world-x range the minimap projects into its strip. The range is
-// centred on the active entry (so neighbours render at constant pixel
-// widths regardless of which page the camera is on — the previous behaviour
-// rescaled slots based on how many entries fell into a camera-centred
-// window, which made navigation feel like the minimap was zooming in/out).
-//
-// At MINIMAP_ZOOM_MAX (or when the viewport isn't measurable yet, e.g.
-// pre-layout), fall back to the world's span so the minimap still gives
-// a useful overview. Returns null when there is nothing to project.
-export function resolveMinimapWorldBounds({ sortedAll, activeId, viewportWidthPx, cameraZoom, factor }) {
+export function resolveMinimapWorldBounds({ sortedAll, activeId, viewportWidthPx, cameraZoom, factor, minimapWidth }) {
     if (!Array.isArray(sortedAll) || sortedAll.length === 0) return null;
     const f = Number(factor);
     const viewportRange = viewportWidthPx > 0 && cameraZoom > 0
@@ -413,8 +407,12 @@ export function resolveMinimapWorldBounds({ sortedAll, activeId, viewportWidthPx
         return { worldStart: minX, worldEnd: maxX };
     }
 
-    const half = (viewportRange * Math.max(MINIMAP_ZOOM_MIN, f)) / 2;
+    let range = viewportRange * Math.max(MINIMAP_ZOOM_MIN, f);
+    if (minimapWidth > 0 && active.width > 0) {
+        const maxRange = (active.width * minimapWidth) / MINIMAP_MIN_ACTIVE_SLOT_PX;
+        if (range > maxRange) range = maxRange;
+    }
     const center = active.x + active.width / 2;
-    return { worldStart: center - half, worldEnd: center + half };
+    return { worldStart: center - range / 2, worldEnd: center + range / 2 };
 }
 

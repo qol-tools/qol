@@ -1,45 +1,13 @@
-// Minimap canvas draw. Extracted from Minimap.js so the draw code can be
-// exercised against a mock 2D context — the only way to guard against
-// future transform-state leaks (e.g. someone reintroducing ctx.scale()
-// for the active slot and forgetting to wrap it in save/restore).
-//
-// Public contract: drawMinimap(ctx, cw, ch, sortedEntries, slots, activeId,
-// labelFor, rect) must NOT mutate the canvas transform state across the
-// call. Every ctx.save() must be matched by a ctx.restore(); no bare
-// ctx.scale or ctx.translate without a surrounding save/restore.
-//
-// Slot geometry comes from computeMinimapLinearLayout — slots carry
-// {x, y, w, h} with y/h representing the vertically centred row, and slot.x
-// can lie outside [0, cw] when an entry projects past the visible strip.
-// Draw code reads these directly and culls off-strip slots.
-//
-// Per-slot opacity tracks how much of the slot is inside the viewport rect
-// (computeSlotCoverage). A slot fully inside the camera window draws at full
-// opacity; slots outside the window fade to an inactive/active floor. This
-// makes the strip itself convey zoom/pan state — user sees at a glance which
-// pages the camera frames.
-
 import { computeSlotCoverage } from './minimap-geometry.js';
 
 const SLOT_INSET = 1;
 const RADIUS = 3;
 const ACTIVE_SCALE_X = 1.15;
 const ACTIVE_SCALE_Y = 1.12;
-// Viewport rect must stay visible even when the camera window is narrower
-// than a single slot (high zoom). Below this, the rect collapses to a sliver
-// the user can't see. Clamp it up and recentre so it still points at the
-// camera's centre of interest inside the slot.
 const VIEWPORT_MIN_WIDTH = 8;
-// Inactive slots fade to this floor when camera has zero coverage. Full
-// coverage draws at alpha 1. Keep the floor high enough that labels remain
-// legible — the goal is de-emphasis, not disappearance.
 const INACTIVE_OPACITY_FLOOR = 0.22;
-// Active slot floors higher so the anchored page stays readable even when
-// the user has panned away — it's a secondary signal ("you came from here")
-// so it should never fully dim.
 const ACTIVE_OPACITY_FLOOR = 0.55;
-// Accent-rgb channel values — matches theme-tokens.css --accent-rgb.
-// Canvas has no access to CSS vars; keep in sync if the token changes.
+// Keep in sync with --accent-rgb in theme-tokens.css; canvas can't read CSS vars.
 const ACCENT_R = 74;
 const ACCENT_G = 158;
 const ACCENT_B = 255;
@@ -92,8 +60,6 @@ function drawInactiveSlot(ctx, cw, label, slot, alpha) {
 }
 
 function drawActiveSlot(ctx, cw, label, slot, alpha) {
-    // Scale visually around the layout slot's centre. Layout slot box is
-    // untouched — computeMinimapLinearRect still aligns with slot.{x,w,y,h}.
     const layoutInnerX = slot.x + SLOT_INSET;
     const layoutInnerW = Math.max(0, slot.w - SLOT_INSET * 2);
     const layoutInnerH = Math.max(0, slot.h - SLOT_INSET * 2);
@@ -154,14 +120,9 @@ export function drawMinimap(ctx, cw, ch, sortedEntries, slots, activeId, labelFo
     }
 }
 
-// Clamp the computed viewport rect for drawing: widen below a minimum so
-// the rect stays visible at high zoom, then keep it inside [0, cw]. Pure
-// function — no ctx side-effects — so it can be property-tested directly.
 export function clampRectForDraw(rect, cw, minWidth = VIEWPORT_MIN_WIDTH) {
     if (!(cw > 0)) return { x: 0, width: 0 };
     if (!(rect.width > 0)) return { x: 0, width: 0 };
-    // minWidth is capped by canvas width — if the whole canvas is smaller
-    // than the configured minimum, use the canvas width instead.
     const targetWidth = Math.min(cw, Math.max(rect.width, minWidth));
     const centre = rect.x + rect.width / 2;
     let x = centre - targetWidth / 2;
@@ -176,14 +137,10 @@ export function drawViewportRect(ctx, cw, ch, rect) {
     const y = rect.y != null ? rect.y : 0;
     const h = rect.height != null ? rect.height : ch;
 
-    // Fill — translucent accent so the covered slots show through tinted.
     ctx.fillStyle = `rgba(${ACCENT_R}, ${ACCENT_G}, ${ACCENT_B}, 0.18)`;
     roundRect(ctx, clamped.x, y, clamped.width, h, RADIUS);
     ctx.fill();
 
-    // Border — prominent, 2px accent. Drawn after active slot (caller order)
-    // so nothing hides it; accent stroke contrasts with the white active-slot
-    // edge so the two signals read as distinct.
     ctx.save();
     ctx.shadowColor = `rgba(${ACCENT_R}, ${ACCENT_G}, ${ACCENT_B}, 0.45)`;
     ctx.shadowBlur = 6;
