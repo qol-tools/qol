@@ -68,10 +68,14 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
     const minimapZoomLabel = minimapZoom >= MINIMAP_NEIGHBOURS_MAX ? 'all' : `±${minimapZoom | 0}`;
 
     const { revealed, bumpClick, feedKey } = useDevSwitchUnlock();
-    const onPanelKeyDown = (e) => feedKey(e.key);
+    useEffect(() => {
+        const onKey = (e) => feedKey(e.key);
+        document.addEventListener('keydown', onKey);
+        return () => document.removeEventListener('keydown', onKey);
+    }, [feedKey]);
 
     return html`
-        <div class="world-settings-panel" onKeyDown=${onPanelKeyDown}>
+        <div class="world-settings-panel">
             <div class="wsp-section">
                 <div class="wsp-heading">Navigation</div>
                 <div class="wsp-grid">

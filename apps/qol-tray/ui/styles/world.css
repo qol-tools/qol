@@ -379,13 +379,19 @@ html.qol-bootstrapping-dive #app {
     z-index: var(--z-modal);
 }
 
-.path-prompt-body {
-    background: var(--layer-paper-04);
+.path-prompt-dialog {
+    background: var(--layer-paper-05);
     border: 1px solid var(--layer-paper-12);
     border-radius: var(--radius-lg);
     padding: var(--space-5);
     min-width: 360px;
     max-width: 520px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.path-prompt-body {
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
