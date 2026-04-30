@@ -93,8 +93,6 @@ export function completeReconnectFlows(devFlows, scheduleDoneClear) {
     let restartedFlow = null;
     for (const key of ['recompile', 'update']) {
         const flow = devFlows[key];
-        // RESTARTING: got the completion event before disconnect
-        // ACTIVE + restarts: server died before the completion event arrived
         const completed = flow.state === FLOW_STATE.RESTARTING
             || (flow.state === FLOW_STATE.ACTIVE && flow.restarts);
         if (!completed) continue;

@@ -2,12 +2,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { visibleMinimapEntries } from './minimap-filter.js';
 
-// ---------------------------------------------------------------------------
-// Parameterized table: each row is { name, input, expectedIds } so every
-// branch and edge (no-dive, dive, sibling collisions, overlapping geometry,
-// deep layers, empty layers, duplicate parents) is asserted as a contract.
-// ---------------------------------------------------------------------------
-
 const ground = [
     { id: 'plugins', parent: null, layer: 0 },
     { id: 'hotkeys', parent: null, layer: 0 },
@@ -133,11 +127,6 @@ for (const row of TABLE) {
         assert.deepEqual(result.map(e => e.id), row.expectedIds);
     });
 }
-
-// ---------------------------------------------------------------------------
-// Property tests — 200 generated worlds per property. Invariants must hold
-// at any depth, any layer, with arbitrary numbers of entries and siblings.
-// ---------------------------------------------------------------------------
 
 function makeRng(seed) {
     let s = seed >>> 0;

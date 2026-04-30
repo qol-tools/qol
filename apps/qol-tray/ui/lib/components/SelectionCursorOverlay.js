@@ -35,7 +35,6 @@ export function SelectionCursorOverlay({ camera }) {
             const focused = document.activeElement;
             const ctrlHeld = isCtrlHeld();
 
-            // CTRL held: wedge at viewport center, highlight nearest surface
             if (ctrlHeld) {
                 const { surface: preview } = nearestSurfaceToCenter();
                 const prevTarget = targetRef.current;
@@ -44,7 +43,6 @@ export function SelectionCursorOverlay({ camera }) {
                     targetRef.current = preview;
                     log(source, '→ CTRL PREVIEW:', elLabel(preview));
                 }
-                // Always ensure highlight is active on the preview surface
                 if (preview && preview.getAttribute('data-selection-cursor-active') !== 'true') {
                     preview.setAttribute('data-selection-cursor-active', 'true');
                 }
@@ -102,7 +100,6 @@ export function SelectionCursorOverlay({ camera }) {
             syncFrom('focusin');
         };
         const syncFromFocusOut = () => {
-            // Focus going to body is always transient (camera pan, view switch) — wait for focusin
             if (document.activeElement === document.body || document.activeElement == null) return;
             if (focusOutRaf) cancelAnimationFrame(focusOutRaf);
             focusOutRaf = requestAnimationFrame(() => { focusOutRaf = 0; syncFrom('focusout'); });
@@ -128,12 +125,6 @@ export function SelectionCursorOverlay({ camera }) {
             setInputMode('mouse');
         };
         const onPointerMove = () => {
-            // Camera-driven layout shifts retarget the cursor's hit-test under a stationary pointer,
-            // and the browser fires a synthetic pointermove. That flips mode to 'mouse', then
-            // syncFromCamera reverts to 'keyboard' on the next tick — hundreds of flip-flops per
-            // pan animation peg CPU and trigger Firefox's slow-script warning. Real user input
-            // doesn't happen mid-animation in any meaningful way, so ignore pointermove while
-            // the camera is animating.
             if (camera?.animating) return;
             pointerActive = true;
             setInputMode('mouse');

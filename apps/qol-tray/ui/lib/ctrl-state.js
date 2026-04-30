@@ -1,8 +1,3 @@
-/**
- * Single source of truth for CTRL held state.
- * Module-level — one pair of keydown/keyup listeners, shared by all consumers.
- */
-
 let held = false;
 const listeners = new Set();
 

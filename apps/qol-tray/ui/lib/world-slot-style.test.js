@@ -50,8 +50,6 @@ test('isSlotVisible respects confinedPages allowlist', () => {
 });
 
 test('property: slotStyle output never contains overflow or scrollbar tokens', () => {
-    // Lock down the "no scrolling" invariant — slot styles must never
-    // re-introduce overflow / scroll directives via inline CSS regression.
     let rng = 1;
     const next = () => {
         rng = (rng * 1664525 + 1013904223) >>> 0;

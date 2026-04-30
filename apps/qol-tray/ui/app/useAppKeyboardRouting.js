@@ -105,7 +105,6 @@ export function useAppKeyboardRouting({
         requestAnimationFrame(() => {
             const slot = document.querySelector(`.world-view-slot[data-view-id="${activeViewId}"]`);
             if (!slot) { log('viewChange: no slot for', activeViewId); return; }
-            // Skip if CTRL+snap already focused a surface in this view
             const focused = document.activeElement;
             if (focused && focused !== document.body && slot.contains(focused)) {
                 log('viewChange:', activeViewId, '→ already focused:', surfaceLabel(focused));
@@ -168,10 +167,6 @@ function routeToView(event, viewKeyboard, cycleView) {
     }
     if (!event.defaultPrevented) globalSurfaceNav(event);
 }
-
-// ---------------------------------------------------------------------------
-// Global surface navigation
-// ---------------------------------------------------------------------------
 
 function isEditableInput(el) {
     if (!(el instanceof HTMLElement)) return false;
@@ -259,7 +254,6 @@ function navigateInActiveContainer(direction) {
         'view:', slot?.dataset?.viewId || '?');
 
     focusWithoutScroll(next);
-    // Camera follow is handled globally by WorldViewport's focusin listener
 }
 
 function focusWithoutScroll(el) {
@@ -336,10 +330,6 @@ function ascendLayer() {
     anchor.focus({ preventScroll: true });
     return true;
 }
-
-// ---------------------------------------------------------------------------
-// Plugin config keyboard handling
-// ---------------------------------------------------------------------------
 
 function activeSectionDetail(pluginConfig) {
     const sectionId = pluginConfig?.activeSection?.id;
@@ -715,10 +705,6 @@ function shouldKeepHorizontalCaret(event, active) {
     if (event.key === 'ArrowLeft') return active.selectionStart > 0;
     return active.selectionEnd < active.value.length;
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function focusTextInput(input, key) {
     input.focus();

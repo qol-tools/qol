@@ -22,9 +22,6 @@ export function PluginConfigProvider({ pluginId, activeSectionId, children }) {
 function ActivePluginConfigProvider({ pluginId, activeSectionId, children }) {
     const config = usePluginConfig(pluginId);
     const [selectedFieldIds, setSelectedFieldIds] = useState({});
-    // HA-style status gating: StatusField reports its tone (from polled queries),
-    // isRuntimeDisabled gates runtime-dependent fields (action, color+stream, list).
-    // Fields check ctx.isRuntimeDisabled; recovery actions (reload, pair) are exempt.
     const [statusTones, setStatusTones] = useState({});
 
     const reportStatusTone = useCallback((fieldId, tone) => {

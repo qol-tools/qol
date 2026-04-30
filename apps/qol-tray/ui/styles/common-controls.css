@@ -242,9 +242,6 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     transform: none;
 }
 
-/* --- Behavior: dropdown ---
-   Displays a current value, not a command. Dashed border signals
-   "this is a changeable selection". Opens a popover on click. */
 .btn-dropdown {
     border-style: dashed;
     border-color: var(--border-default);
@@ -263,9 +260,6 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     color: var(--text-primary);
 }
 
-/* --- Behavior: expander ---
-   Collapsed: looks like a normal button. Expanded: the button morphs —
-   its border stretches to wrap children below a divider. */
 .btn-expander {
     flex-direction: column;
     align-items: stretch;
@@ -316,7 +310,6 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     background: rgba(var(--paper-rgb), 0.06);
 }
 
-/* --- View tabs (shared by Logs, Dev, etc.) --- */
 .view-tabs {
     display: flex;
     gap: var(--space-2);

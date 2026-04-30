@@ -2,13 +2,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { applyRecordingKey } from './recorder.js';
 
-// ---------------------------------------------------------------------------
-// Pure recorder logic: applyRecordingKey takes the in-progress modal state plus
-// a synthetic KeyboardEvent and returns { modal, advance }. These tests lock
-// the canonical shortcut format used in profile/core/hotkeys.json — modifier
-// order Ctrl → Alt → Shift → Super → key, joined with `+`.
-// ---------------------------------------------------------------------------
-
 const baseModal = { key: '', recording: true };
 
 function ev(overrides = {}) {
@@ -20,10 +13,6 @@ function ev(overrides = {}) {
         ...overrides,
     };
 }
-
-// ---------------------------------------------------------------------------
-// Special keys must be recordable, including the keys browsers steal.
-// ---------------------------------------------------------------------------
 
 const RECORDABLE_SPECIAL_KEYS = [
     { name: 'Tab',          event: ev({ key: 'Tab', code: 'Tab' }),                                       expected: 'Tab' },
@@ -48,11 +37,6 @@ for (const row of RECORDABLE_SPECIAL_KEYS) {
     });
 }
 
-// ---------------------------------------------------------------------------
-// Escape must cancel recording without writing a key — it is the cancel signal,
-// not a recordable shortcut.
-// ---------------------------------------------------------------------------
-
 test('applyRecordingKey: Escape cancels recording without changing key', () => {
     const seeded = { key: 'Alt+F1', recording: true };
     const result = applyRecordingKey(seeded, ev({ key: 'Escape', code: 'Escape' }));
@@ -60,10 +44,6 @@ test('applyRecordingKey: Escape cancels recording without changing key', () => {
     assert.equal(result.modal.key, 'Alt+F1', 'Escape must not overwrite a previously recorded key');
     assert.equal(result.advance, false);
 });
-
-// ---------------------------------------------------------------------------
-// Pressing only a modifier shows the partial chord but does not advance.
-// ---------------------------------------------------------------------------
 
 test('applyRecordingKey: lone Alt shows partial chord, stays recording', () => {
     const result = applyRecordingKey(baseModal, ev({ key: 'Alt', code: 'AltLeft', altKey: true }));
@@ -81,10 +61,6 @@ test('applyRecordingKey: lone Shift+Ctrl shows partial chord, stays recording', 
     assert.equal(result.advance, false);
 });
 
-// ---------------------------------------------------------------------------
-// Modifier-only shortcuts (no concrete key) must not commit.
-// ---------------------------------------------------------------------------
-
 test('applyRecordingKey: unknown code with only modifiers does not advance', () => {
     const result = applyRecordingKey(baseModal, ev({
         key: 'Unidentified', code: 'Unidentified', altKey: true,
@@ -92,12 +68,6 @@ test('applyRecordingKey: unknown code with only modifiers does not advance', () 
     assert.equal(result.modal, baseModal, 'state must be unchanged on a non-recordable event');
     assert.equal(result.advance, false);
 });
-
-// ---------------------------------------------------------------------------
-// Property: across every combination of modifiers + a recordable key, the
-// emitted shortcut must (a) preserve canonical modifier order Ctrl→Alt→Shift→
-// Super→key, (b) join with `+`, (c) end in the key, (d) drop disabled mods.
-// ---------------------------------------------------------------------------
 
 const MODIFIER_ORDER = ['Ctrl', 'Alt', 'Shift', 'Super'];
 const TERMINAL_CASES = [
@@ -132,13 +102,6 @@ test('property: all 16 modifier combos × 5 keys produce canonical ordering', ()
         }
     }
 });
-
-// ---------------------------------------------------------------------------
-// macOS dead-keys: Option (Alt) + letter on a US keyboard layout produces a
-// composed character in `event.key` (e.g. Alt+Q → Œ, Alt+E → é). The recorder
-// must derive the terminal key from `event.code` (the physical key, e.g.
-// 'KeyQ') so the saved shortcut is `Alt+Shift+Q`, not `Alt+Shift+Œ`.
-// ---------------------------------------------------------------------------
 
 const MACOS_DEAD_KEYS = [
     {

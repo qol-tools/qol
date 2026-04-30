@@ -10,7 +10,6 @@
     gap: var(--space-4);
 }
 
-/* --- Status line (top of Cloud Sync section) --- */
 .profile-status-line {
     display: flex;
     align-items: center;
@@ -27,7 +26,6 @@
     font-size: var(--fs-sm);
 }
 
-/* --- Actions row (Pull, Push, spacer, Disconnect) --- */
 .profile-actions-row {
     display: flex;
     flex-wrap: wrap;
@@ -39,14 +37,12 @@
     flex: 1;
 }
 
-/* --- Centered connect button (not-connected state) --- */
 .profile-connect-row {
     display: flex;
     justify-content: center;
     padding: var(--space-2) 0;
 }
 
-/* --- Settings expander field rows --- */
 .profile-settings-field {
     display: flex;
     align-items: center;

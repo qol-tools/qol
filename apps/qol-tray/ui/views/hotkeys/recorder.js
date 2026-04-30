@@ -1,7 +1,3 @@
-// Pure recorder logic for the Hotkey editor's Shortcut field. No Preact deps —
-// safe to import from node:test. Canonical shortcut format matches profile/
-// core/hotkeys.json: modifier order Ctrl → Alt → Shift → Super → key.
-
 const MODIFIER_KEYS = ['Control', 'Alt', 'Shift', 'Meta'];
 const MODIFIER_NAMES = ['Ctrl', 'Alt', 'Shift', 'Super'];
 

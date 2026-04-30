@@ -3,10 +3,6 @@ import assert from 'node:assert/strict';
 import { register } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
-// Stub `preact/hooks` so we can drive the hook's contract from node:test
-// without pulling in a real Preact runtime. The stub records the
-// useState/useEffect calls; the test runs the hook as a plain function and
-// then invokes the captured effect/cleanup to simulate mount + unmount.
 const stubSource = `
 let bumpCount = 0;
 let stateInitial = null;

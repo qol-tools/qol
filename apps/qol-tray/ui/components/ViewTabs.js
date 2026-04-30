@@ -6,18 +6,6 @@ import { PageHeader } from './PageHeader.js';
 import { Surface } from '../lib/components/Surface.js';
 import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
 
-/**
- * Full tabbed view shell. Renders page header, content frame, tab bar,
- * and the active tab's content panel inside a SurfaceContainer.
- *
- * Usage:
- *   <${ViewTabs} title="Logs" subtitle="..." tabs=${TABS} vtRef=${vtRef}>
- *       ${(vt) => html`
- *           ${vt.activeTab === 'live' && html`<${LiveLog} />`}
- *           ${vt.activeTab === 'suppressed' && html`<${SuppressedList} />`}
- *       `}
- *   <//>
- */
 export function ViewTabs({ title, subtitle, scramble, tabs, onActivate, onContentBlur, trailing, children, vtRef, className, containerRef, initialTab }) {
     const vt = useViewTabs(tabs, { onActivate, initialTab });
 

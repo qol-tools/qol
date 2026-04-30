@@ -164,15 +164,6 @@ test('property: 200 random shapes — fallback always usable when any usable sur
     }
 });
 
-// ---------------------------------------------------------------------------
-// Regression: after ascend, the dive editor slot is empty (placeholder), but
-// other world-slots living far off-screen at distant world coordinates remain
-// connected and "visible" (have getClientRects). The previous viewport
-// fallback returned the first off-screen surface, causing the camera to chase
-// it across the world. Recovery must scope to a slot whose rect actually
-// intersects the viewport — i.e. the slot the camera is currently showing.
-// ---------------------------------------------------------------------------
-
 function makeSurfaceWithRect({ id, selected = false, rect }) {
     const s = makeSurface({ id, selected });
     s.getBoundingClientRect = () => rect;
@@ -181,7 +172,6 @@ function makeSurfaceWithRect({ id, selected = false, rect }) {
 
 test('pickFallbackSurface ignores off-screen world-slots in viewport fallback', () => {
     const VIEWPORT_RECT = { left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 };
-    // Off-screen plugins slot lives at world-x = -15578 in screen coords.
     const offscreen = makeSurfaceWithRect({
         id: 'plugin-card',
         rect: { left: -15578, top: 115, right: -15290, bottom: 277, width: 288, height: 162 },
@@ -191,7 +181,6 @@ test('pickFallbackSurface ignores off-screen world-slots in viewport fallback', 
         surfaces: [offscreen],
         rect: { left: -15600, top: 0, right: -14320, bottom: 900, width: 1280, height: 900 },
     });
-    // Active hotkeys slot is centered in viewport.
     const onscreen = makeSurfaceWithRect({
         id: 'hotkey-row',
         selected: true,

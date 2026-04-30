@@ -84,10 +84,6 @@ export function createNavigation({ registry, camera, getSettings, domHelpers, gr
     function setBounds(rect) {
         if (typeof camera.setBounds !== 'function') return;
         if (!rect) { camera.setBounds(null); return; }
-        // Pad at a fixed baseline zoom of 1 rather than current zoom. Padding
-        // by the current zoom shrinks as the user zooms in, which tightens
-        // bounds and raises the bounds-driven minZoom floor — trapping zoom
-        // at the zoomed-in state and making it impossible to escape back out.
         const vp = domHelpers.getViewportSize ? domHelpers.getViewportSize() : { w: 0, h: 0 };
         camera.setBounds(paddedWorldBounds(rect, vp, 1));
     }

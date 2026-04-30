@@ -29,7 +29,6 @@
     padding: var(--space-4) var(--space-7) var(--space-5);
 }
 
-/* Component catalog */
 .catalog {
     display: flex;
     flex-direction: column;

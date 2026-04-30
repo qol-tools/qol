@@ -5,7 +5,6 @@ import { SurfaceContainer } from '../../lib/components/SurfaceContainer.js';
 import { Button } from '../../lib/components/Button.js';
 import { createSharedSlot } from '../../lib/shared-slot.js';
 
-// TODO: replace with navigation-scoped payload (debt item #7).
 export const pluginActionsSlot = createSharedSlot({
     rowId: null,
     rowName: '',

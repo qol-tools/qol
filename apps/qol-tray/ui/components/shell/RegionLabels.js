@@ -11,9 +11,6 @@ function PlainText({ text }) {
     return html`<span>${text}</span>`;
 }
 
-// Data-driven renderer lookup — add a new label animation by adding an entry
-// here and setting `animation: 'your-key'` on the matching VIEW_LABELS entry.
-// Never branch on the animation string with if/else in this file.
 const ANIMATIONS = {
     scramble: ScrambleText,
 };
@@ -43,22 +40,12 @@ export function RegionLabels({ registry, cameraLayer, navigation, diveDepth, cam
         ? allEntries.filter(e => pages.includes(e.id))
         : allEntries;
 
-    // Labels render in screen space (outside #world) so they don't scale with
-    // the world transform. Per-frame positions are written imperatively inside
-    // the camera subscribe callback so labels update in the SAME frame as
-    // #world's transform (see world-camera.js::apply).
     const labelRefs = useRef(new Map());
     const entriesRef = useRef(entries);
     entriesRef.current = entries;
 
     useEffect(() => {
         if (!camera?.subscribe) return undefined;
-        // Write once on subscribe using live camera getters — the parent's
-        // mount-time `gotoAnchor` often settles BEFORE our subscription is
-        // registered (parent useLayoutEffect runs after child ones), so we
-        // can't rely on a future notify() to arrive. Without this sync, labels
-        // stay frozen at their initial stale position until the next camera
-        // interaction.
         writePositions(labelRefs, entriesRef.current, {
             x: camera.x, y: camera.y, zoom: camera.zoom,
         });
@@ -68,9 +55,6 @@ export function RegionLabels({ registry, cameraLayer, navigation, diveDepth, cam
         return unsub;
     }, [camera]);
 
-    // When the set of visible entries changes (layer switch, dive, confinement
-    // change), compute positions once immediately — the next camera tick might
-    // not come if nothing else is moving.
     const entriesKey = entries.map(e => e.id).join('|');
     useLayoutEffect(() => {
         if (!camera) return;
