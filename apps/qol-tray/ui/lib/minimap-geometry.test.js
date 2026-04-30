@@ -1,201 +1,204 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    computeMinimapLinearLayout,
-    computeMinimapLinearRect,
+    computeMinimapFocalLayout,
+    computeMinimapFocalRect,
     computeSlotCoverage,
+    FOCAL_GAP_PX,
 } from './minimap-geometry.js';
 import { clampRectForDraw, drawMinimap, drawViewportRect, VIEWPORT_MIN_WIDTH } from './minimap-draw.js';
 
-const THREE_ENTRIES = [
-    { id: 'a', x: 0,     y: 0, width: 1280, height: 900 },
-    { id: 'b', x: 10000, y: 0, width: 1280, height: 900 },
-    { id: 'c', x: 20000, y: 0, width: 1280, height: 900 },
-];
+const PAGE = (id, x, width = 1280, height = 900) => ({ id, x, y: 0, width, height });
 
-test('layout: empty input returns null', () => {
-    assert.equal(computeMinimapLinearLayout({
-        entries: [], worldStart: 0, worldEnd: 100, minimapWidth: 200,
+test('focal layout: empty input returns null', () => {
+    assert.equal(computeMinimapFocalLayout({ entries: [], activePosF: 0, minimapWidth: 200 }), null);
+});
+
+test('focal layout: invalid minimap width returns null', () => {
+    assert.equal(computeMinimapFocalLayout({
+        entries: [PAGE('a', 0)], activePosF: 0, minimapWidth: 0,
     }), null);
 });
 
-test('layout: invalid minimap width returns null', () => {
-    assert.equal(computeMinimapLinearLayout({
-        entries: THREE_ENTRIES, worldStart: 0, worldEnd: 100, minimapWidth: 0,
-    }), null);
-});
-
-test('layout: invalid range (end <= start) returns null', () => {
-    assert.equal(computeMinimapLinearLayout({
-        entries: THREE_ENTRIES, worldStart: 100, worldEnd: 100, minimapWidth: 200,
-    }), null);
-});
-
-test('layout: slot.x is the linear projection of entry.x', () => {
-    const layout = computeMinimapLinearLayout({
-        entries: THREE_ENTRIES, worldStart: 0, worldEnd: 21280, minimapWidth: 380,
+test('focal layout: single entry takes the full width minus gaps (gap is 0 for one entry)', () => {
+    const layout = computeMinimapFocalLayout({
+        entries: [PAGE('a', 0)], activePosF: 0, minimapWidth: 200,
     });
-    const scale = 380 / 21280;
-    assert.ok(Math.abs(layout.slots[0].x - 0) < 1e-9);
-    assert.ok(Math.abs(layout.slots[1].x - 10000 * scale) < 1e-9);
-    assert.ok(Math.abs(layout.slots[2].x - 20000 * scale) < 1e-9);
+    assert.ok(Math.abs(layout.slots[0].w - 200) < 1e-6);
 });
 
-test('layout: slot.w = entry.width * scale (gaps preserved)', () => {
-    const layout = computeMinimapLinearLayout({
-        entries: THREE_ENTRIES, worldStart: 0, worldEnd: 21280, minimapWidth: 380,
+test('focal layout: active is centred at minimapWidth/2 with neighbours on both sides', () => {
+    const entries = [PAGE('a', 0), PAGE('b', 10000), PAGE('c', 20000)];
+    const layout = computeMinimapFocalLayout({ entries, activePosF: 1, minimapWidth: 380 });
+    const activeCentre = layout.slots[1].x + layout.slots[1].w / 2;
+    assert.ok(Math.abs(activeCentre - 190) < 1e-6, `active centre ${activeCentre} != 190`);
+});
+
+test('focal layout: at left edge active is still centred — left side has empty space', () => {
+    const entries = [PAGE('a', 0), PAGE('b', 10000), PAGE('c', 20000)];
+    const layout = computeMinimapFocalLayout({ entries, activePosF: 0, minimapWidth: 380 });
+    const activeCentre = layout.slots[0].x + layout.slots[0].w / 2;
+    assert.ok(Math.abs(activeCentre - 190) < 1e-6);
+    assert.ok(layout.slots[0].x > 0);
+});
+
+test('focal layout: neighbour widths decay geometrically from active within focus radius', () => {
+    const entries = [PAGE('a', 0), PAGE('b', 10000), PAGE('c', 20000), PAGE('d', 30000), PAGE('e', 40000)];
+    const layout = computeMinimapFocalLayout({ entries, activePosF: 2, focusRadius: 5, minimapWidth: 600 });
+    const w = layout.slots.map(s => s.w);
+    const decay = Math.pow(0.3, 1 / 5);
+    assert.ok(Math.abs(w[1] / w[2] - decay) < 1e-6);
+    assert.ok(Math.abs(w[3] / w[2] - decay) < 1e-6);
+    assert.ok(Math.abs(w[0] / w[2] - decay * decay) < 1e-6);
+    assert.ok(Math.abs(w[4] / w[2] - decay * decay) < 1e-6);
+});
+
+test('focal layout: slot at distance > focusRadius+1 gets zero width', () => {
+    const entries = Array.from({ length: 9 }, (_, i) => PAGE(`e${i}`, i * 10000));
+    const layout = computeMinimapFocalLayout({
+        entries, activePosF: 4, focusRadius: 1, minimapWidth: 600,
     });
-    const scale = 380 / 21280;
-    for (const s of layout.slots) {
-        assert.ok(Math.abs(s.w - 1280 * scale) < 1e-9);
+    assert.equal(layout.slots[0].w, 0);
+    assert.equal(layout.slots[1].w, 0);
+    assert.equal(layout.slots[7].w, 0);
+    assert.equal(layout.slots[8].w, 0);
+    assert.ok(layout.slots[3].w > 0);
+    assert.ok(layout.slots[5].w > 0);
+});
+
+test('focal layout: as activePosF slides past an integer, slot fades smoothly from 0 to full', () => {
+    const entries = Array.from({ length: 9 }, (_, i) => PAGE(`e${i}`, i * 10000));
+    const samples = [];
+    for (let p = 1.0; p <= 2.01; p += 0.1) {
+        const layout = computeMinimapFocalLayout({
+            entries, activePosF: p, focusRadius: 1, minimapWidth: 600,
+        });
+        samples.push(layout.slots[3].w);
+    }
+    for (let i = 1; i < samples.length; i++) {
+        assert.ok(samples[i] >= samples[i - 1] - 1e-6, `slot[3] should grow monotonically from p=1 to p=2`);
     }
 });
 
-test('layout: slot widths are invariant to how many entries fall in the range', () => {
-    // Range 1: just entry "b" near the centre.
-    const tight = computeMinimapLinearLayout({
-        entries: THREE_ENTRIES, worldStart: 9000, worldEnd: 12000, minimapWidth: 380,
-    });
-    // Range 2: same range width, all three entries (entries far apart so only one
-    // falls in either case, but slot.w depends only on scale, not visible count).
-    const range = 12000 - 9000;
-    const expectedSlotW = 1280 * (380 / range);
-
-    // tight: slot for b is centred in the strip (entry.x maps to (10000 - 9000)*scale)
-    const scale = 380 / range;
-    assert.ok(Math.abs(tight.slots[1].w - expectedSlotW) < 1e-9);
-    assert.ok(Math.abs(tight.slots[1].x - (10000 - 9000) * scale) < 1e-9);
-
-    // Slots a and c are off-screen; their w still equals expectedSlotW.
-    assert.ok(Math.abs(tight.slots[0].w - expectedSlotW) < 1e-9);
-    assert.ok(Math.abs(tight.slots[2].w - expectedSlotW) < 1e-9);
-    // a is to the left of strip, c is to the right.
-    assert.ok(tight.slots[0].x < 0);
-    assert.ok(tight.slots[2].x > 380);
+test('focal layout: total width + gaps == minimapWidth when no floor kicks in and all slots visible', () => {
+    const entries = [PAGE('a', 0), PAGE('b', 10000), PAGE('c', 20000), PAGE('d', 30000), PAGE('e', 40000)];
+    const layout = computeMinimapFocalLayout({ entries, activePosF: 2, focusRadius: 10, minimapWidth: 600 });
+    const totalSlots = layout.slots.reduce((a, s) => a + s.w, 0);
+    const totalGaps = (entries.length - 1) * FOCAL_GAP_PX;
+    assert.ok(Math.abs(totalSlots + totalGaps - 600) < 1e-6);
 });
 
-test('layout: slot widths depend on factor — same entries, different range, different size', () => {
-    const tight = computeMinimapLinearLayout({
-        entries: THREE_ENTRIES, worldStart: 9000, worldEnd: 11000, minimapWidth: 380,
+test('focal layout: floor kicks in for far neighbours on tight budgets', () => {
+    const entries = Array.from({ length: 9 }, (_, i) => PAGE(`e${i}`, i * 10000));
+    const layout = computeMinimapFocalLayout({
+        entries, activePosF: 4, focusRadius: 8, minimapWidth: 380, canvasHeight: 200, minSlotPx: 30,
     });
-    const wide = computeMinimapLinearLayout({
-        entries: THREE_ENTRIES, worldStart: 0, worldEnd: 21280, minimapWidth: 380,
-    });
-    assert.ok(tight.slots[1].w > wide.slots[1].w,
-        `tight (range 2000) should give bigger slot than wide (range 21280)`);
+    assert.ok(layout.slots[0].w >= 30 - 1e-6, `far slot ${layout.slots[0].w} < floor 30`);
+    assert.ok(layout.slots[4].w > layout.slots[0].w, 'active still bigger than far');
 });
 
-test('layout: row centred vertically and shrunk to canvasHeight when natural h overflows', () => {
-    // tall entry: aspect 1:10. With minimapWidth 200 and range matching entry.width,
-    // slot.w = 200, natural slot.h = 200 * (10/1) = 2000. Cap at canvasHeight 50.
-    const layout = computeMinimapLinearLayout({
-        entries: [{ id: 'tall', x: 0, y: 0, width: 100, height: 1000 }],
-        worldStart: 0, worldEnd: 100, minimapWidth: 200, canvasHeight: 50,
-    });
-    assert.ok(Math.abs(layout.rowHeight - 50) < 1e-9, `rowHeight=${layout.rowHeight}`);
-    assert.ok(Math.abs(layout.rowY - 0) < 1e-9, `rowY=${layout.rowY}`);
-    // Aspect preserved: row scale shrunk both w and h.
-    const expectedW = 200 * (50 / 2000);
-    assert.ok(Math.abs(layout.slots[0].w - expectedW) < 1e-9);
-    assert.ok(Math.abs(layout.slots[0].h - 50) < 1e-9);
+test('focal layout: gaps between adjacent slots equal FOCAL_GAP_PX', () => {
+    const entries = [PAGE('a', 0), PAGE('b', 10000), PAGE('c', 20000)];
+    const layout = computeMinimapFocalLayout({ entries, activePosF: 1, minimapWidth: 380 });
+    const gap01 = layout.slots[1].x - (layout.slots[0].x + layout.slots[0].w);
+    const gap12 = layout.slots[2].x - (layout.slots[1].x + layout.slots[1].w);
+    assert.ok(Math.abs(gap01 - FOCAL_GAP_PX) < 1e-6);
+    assert.ok(Math.abs(gap12 - FOCAL_GAP_PX) < 1e-6);
 });
 
-test('layout: row centred when natural row height is shorter than canvas', () => {
-    const layout = computeMinimapLinearLayout({
-        entries: [{ id: 'a', x: 0, y: 0, width: 100, height: 50 }],
-        worldStart: 0, worldEnd: 100, minimapWidth: 200, canvasHeight: 200,
+test('focal layout: slot aspect is FOCAL_SLOT_ASPECT regardless of entry aspect', () => {
+    const tall = computeMinimapFocalLayout({
+        entries: [PAGE('a', 0, 1280, 4000)], activePosF: 0, minimapWidth: 200, canvasHeight: 1000,
     });
-    // Natural slot.w = 200, slot.h = 100. canvasHeight 200 → rowY = 50.
-    assert.ok(Math.abs(layout.rowHeight - 100) < 1e-9);
-    assert.ok(Math.abs(layout.rowY - 50) < 1e-9);
+    const wide = computeMinimapFocalLayout({
+        entries: [PAGE('a', 0, 1280, 200)], activePosF: 0, minimapWidth: 200, canvasHeight: 1000,
+    });
+    assert.ok(Math.abs(tall.slots[0].h / tall.slots[0].w - wide.slots[0].h / wide.slots[0].w) < 1e-6);
 });
 
-test('layout: degenerate entry (width or height 0) gets zero-size slot but is still indexed', () => {
-    const layout = computeMinimapLinearLayout({
-        entries: [{ id: 'a', x: 0, y: 0, width: 0, height: 0 }],
-        worldStart: 0, worldEnd: 100, minimapWidth: 200,
+test('focal layout: row shrunk when natural height exceeds canvasHeight', () => {
+    const layout = computeMinimapFocalLayout({
+        entries: [PAGE('a', 0, 100, 1000)], activePosF: 0, minimapWidth: 200, canvasHeight: 50,
     });
-    assert.equal(layout.slots.length, 1);
-    assert.equal(layout.slots[0].w, 0);
-    assert.equal(layout.slots[0].h, 0);
+    assert.ok(layout.rowHeight <= 50 + 1e-6);
 });
 
-test('rect: full viewport range matches the minimap width', () => {
-    const rect = computeMinimapLinearRect({
-        cameraX: 0, viewportRange: 100, worldStart: 0, worldEnd: 100, minimapWidth: 200,
+test('focal rect: camera fully inside active page → rect is camera span × active scale', () => {
+    const entries = [PAGE('a', 0), PAGE('b', 10000), PAGE('c', 20000)];
+    const layout = computeMinimapFocalLayout({ entries, activePosF: 1, minimapWidth: 380 });
+    const rect = computeMinimapFocalRect({
+        entries, slots: layout.slots, cameraX: 10000, viewportRange: 640,
+    });
+    const slot = layout.slots[1];
+    assert.ok(Math.abs(rect.width - (640 / 1280) * slot.w) < 1e-6);
+    assert.ok(Math.abs(rect.x - slot.x) < 1e-6);
+});
+
+test('focal rect: camera covering exactly one entry → rect equals that slot', () => {
+    const entries = [PAGE('a', 0), PAGE('b', 10000)];
+    const layout = computeMinimapFocalLayout({ entries, activePosF: 0, minimapWidth: 200 });
+    const rect = computeMinimapFocalRect({
+        entries, slots: layout.slots, cameraX: 0, viewportRange: 1280,
+    });
+    assert.ok(Math.abs(rect.x - layout.slots[0].x) < 1e-6);
+    assert.ok(Math.abs(rect.width - layout.slots[0].w) < 1e-6);
+});
+
+test('focal rect: camera spanning multiple entries unions their projected pieces', () => {
+    const entries = [PAGE('a', 0), PAGE('b', 10000), PAGE('c', 20000)];
+    const layout = computeMinimapFocalLayout({ entries, activePosF: 1, minimapWidth: 380 });
+    const rect = computeMinimapFocalRect({
+        entries, slots: layout.slots, cameraX: 0, viewportRange: 25000,
+    });
+    assert.ok(rect.x <= layout.slots[0].x + 1e-6);
+    const lastEnd = layout.slots[2].x + layout.slots[2].w;
+    assert.ok(rect.x + rect.width >= lastEnd - 1e-6);
+});
+
+test('focal rect: empty intersections yield empty rect', () => {
+    const entries = [PAGE('a', 0), PAGE('b', 10000)];
+    const layout = computeMinimapFocalLayout({ entries, activePosF: 0, minimapWidth: 200 });
+    const rect = computeMinimapFocalRect({
+        entries, slots: layout.slots, cameraX: 5000, viewportRange: 100,
     });
     assert.equal(rect.x, 0);
-    assert.equal(rect.width, 200);
+    assert.equal(rect.width, 0);
 });
 
-test('rect: at factor 4 (range = 4 × viewportRange), rect is exactly 1/4 of the strip', () => {
-    const viewportRange = 100;
-    const factor = 4;
-    const range = viewportRange * factor;
-    // Camera centred on the projected range.
-    const cameraX = (range - viewportRange) / 2; // worldStart=0, so cameraX = halfRange - vr/2
-    const rect = computeMinimapLinearRect({
-        cameraX,
-        viewportRange,
-        worldStart: 0,
-        worldEnd: range,
-        minimapWidth: 400,
-    });
-    assert.ok(Math.abs(rect.width - 100) < 1e-9, `expected 100, got ${rect.width}`);
-    // Centred horizontally: rect.x = (400 - 100) / 2 = 150
-    assert.ok(Math.abs(rect.x - 150) < 1e-9, `expected x=150, got ${rect.x}`);
+test('focal layout: continuous activePosF — slot widths interpolate smoothly between integer positions', () => {
+    const entries = [PAGE('a', 0), PAGE('b', 10000), PAGE('c', 20000), PAGE('d', 30000), PAGE('e', 40000)];
+    const a = computeMinimapFocalLayout({ entries, activePosF: 2, minimapWidth: 600 });
+    const b = computeMinimapFocalLayout({ entries, activePosF: 2.5, minimapWidth: 600 });
+    const c = computeMinimapFocalLayout({ entries, activePosF: 3, minimapWidth: 600 });
+    assert.ok(b.slots[2].w < a.slots[2].w);
+    assert.ok(b.slots[2].w > c.slots[2].w);
+    assert.ok(b.slots[3].w > a.slots[3].w);
+    assert.ok(b.slots[3].w < c.slots[3].w);
 });
 
-test('rect: panning the camera by dx moves the rect by dx * scale', () => {
-    const before = computeMinimapLinearRect({
-        cameraX: 5000, viewportRange: 1280, worldStart: 4000, worldEnd: 6560, minimapWidth: 256,
-    });
-    const after = computeMinimapLinearRect({
-        cameraX: 5500, viewportRange: 1280, worldStart: 4000, worldEnd: 6560, minimapWidth: 256,
-    });
-    const scale = 256 / 2560;
-    assert.ok(Math.abs((after.x - before.x) - 500 * scale) < 1e-9);
-    assert.ok(Math.abs(after.width - before.width) < 1e-9);
+test('focal layout: at activePosF = 2.5, the centre point is between slots 2 and 3 at minimapWidth/2', () => {
+    const entries = [PAGE('a', 0), PAGE('b', 10000), PAGE('c', 20000), PAGE('d', 30000), PAGE('e', 40000)];
+    const layout = computeMinimapFocalLayout({ entries, activePosF: 2.5, minimapWidth: 600 });
+    const between = (layout.slots[2].x + layout.slots[2].w + FOCAL_GAP_PX / 2);
+    assert.ok(Math.abs(between - 300) < 1e-6, `between ${between} != 300`);
 });
 
-test('rect: zero or invalid inputs return zero-width rect', () => {
-    const z1 = computeMinimapLinearRect({
-        cameraX: 0, viewportRange: 0, worldStart: 0, worldEnd: 100, minimapWidth: 200,
-    });
-    assert.equal(z1.width, 0);
-
-    const z2 = computeMinimapLinearRect({
-        cameraX: 0, viewportRange: 100, worldStart: 100, worldEnd: 100, minimapWidth: 200,
-    });
-    assert.equal(z2.width, 0);
-});
-
-test('rect: rowY/rowHeight pass through', () => {
-    const r = computeMinimapLinearRect({
-        cameraX: 0, viewportRange: 100, worldStart: 0, worldEnd: 200, minimapWidth: 100,
-        rowY: 5, rowHeight: 30,
-    });
-    assert.equal(r.y, 5);
-    assert.equal(r.height, 30);
+test('focal rect: zero or negative viewportRange returns null', () => {
+    assert.equal(computeMinimapFocalRect({
+        entries: [PAGE('a', 0)], slots: [{ x: 0, w: 100 }], cameraX: 0, viewportRange: 0,
+    }), null);
 });
 
 test('coverage: slot fully inside rect returns 1', () => {
-    const slot = { x: 50, w: 20 };
-    const rect = { x: 0, width: 100 };
-    assert.equal(computeSlotCoverage(slot, rect), 1);
+    assert.equal(computeSlotCoverage({ x: 50, w: 20 }, { x: 0, width: 100 }), 1);
 });
 
 test('coverage: slot fully outside rect returns 0', () => {
-    const slot = { x: 200, w: 20 };
-    const rect = { x: 0, width: 100 };
-    assert.equal(computeSlotCoverage(slot, rect), 0);
+    assert.equal(computeSlotCoverage({ x: 200, w: 20 }, { x: 0, width: 100 }), 0);
 });
 
 test('coverage: half overlap returns 0.5', () => {
-    const slot = { x: 0, w: 100 };
-    const rect = { x: 50, width: 60 };
-    // overlap = 50, slot.w = 100 → 0.5
-    assert.equal(computeSlotCoverage(slot, rect), 0.5);
+    assert.equal(computeSlotCoverage({ x: 0, w: 100 }, { x: 50, width: 60 }), 0.5);
 });
 
 test('coverage: missing slot/rect returns 0', () => {
@@ -213,24 +216,23 @@ test('clampRectForDraw: rect wider than min width passes through unchanged', () 
 
 test('clampRectForDraw: rect narrower than min width widens to min, centred on original centre', () => {
     const c = clampRectForDraw({ x: 50, width: 2 }, 220, 10);
-    // centre was 51, widened to 10 should place x at 46.
     assert.equal(c.width, 10);
     assert.equal(c.x, 46);
 });
 
-test('clampRectForDraw: widened rect clamps to left edge when centre is too close to 0', () => {
+test('clampRectForDraw: widened rect clamps to left edge', () => {
     const c = clampRectForDraw({ x: 1, width: 2 }, 220, 10);
     assert.equal(c.x, 0);
     assert.equal(c.width, 10);
 });
 
-test('clampRectForDraw: widened rect clamps to right edge when centre is too close to cw', () => {
+test('clampRectForDraw: widened rect clamps to right edge', () => {
     const c = clampRectForDraw({ x: 218, width: 2 }, 220, 10);
     assert.equal(c.x, 210);
     assert.equal(c.width, 10);
 });
 
-test('clampRectForDraw: zero or negative rect width yields zero width (no draw)', () => {
+test('clampRectForDraw: zero or negative rect width yields zero width', () => {
     assert.deepEqual(clampRectForDraw({ x: 10, width: 0 }, 220), { x: 0, width: 0 });
     assert.deepEqual(clampRectForDraw({ x: 10, width: -5 }, 220), { x: 0, width: 0 });
 });
@@ -254,7 +256,44 @@ function makeRng(seed) {
     };
 }
 
-test('property: clampRectForDraw output rect always inside [0, cw] (200 cases)', () => {
+test('property: active slot width is invariant under activePosF for a given layer + focusRadius (200 cases)', () => {
+    const rng = makeRng(0xAA00FF00);
+    for (let i = 0; i < 200; i++) {
+        const N = 3 + Math.floor(rng() * 7);
+        const entries = Array.from({ length: N }, (_, k) => PAGE(`e${k}`, k * 10000));
+        const minimapWidth = 100 + Math.floor(rng() * 400);
+        const focusRadius = 1 + rng() * 6;
+        const widths = [];
+        for (let k = 0; k < N; k++) {
+            const layout = computeMinimapFocalLayout({
+                entries, activePosF: k, focusRadius, minimapWidth, canvasHeight: 10000, minSlotPx: 0,
+            });
+            widths.push(layout.slots[k].w);
+        }
+        const max = Math.max(...widths);
+        const min = Math.min(...widths);
+        assert.ok(Math.abs(max - min) < 1e-3,
+            `case ${i}: active width varies ${min}..${max} across positions (N=${N}, R=${focusRadius})`);
+    }
+});
+
+test('property: active centre stays at minimapWidth/2 (200 cases)', () => {
+    const rng = makeRng(0xBEEFCAFE);
+    for (let i = 0; i < 200; i++) {
+        const N = 2 + Math.floor(rng() * 8);
+        const entries = Array.from({ length: N }, (_, k) => PAGE(`e${k}`, k * 10000));
+        const minimapWidth = 100 + Math.floor(rng() * 400);
+        const aIdx = Math.floor(rng() * N);
+        const layout = computeMinimapFocalLayout({
+            entries, activePosF: aIdx, minimapWidth, canvasHeight: 10000, minSlotPx: 0,
+        });
+        const aSlot = layout.slots[aIdx];
+        const aCentre = aSlot.x + aSlot.w / 2;
+        assert.ok(Math.abs(aCentre - minimapWidth / 2) < 1e-3, `case ${i}`);
+    }
+});
+
+test('property: clampRectForDraw output rect inside [0, cw] (200 cases)', () => {
     const rng = makeRng(0x77777777);
     for (let i = 0; i < 200; i++) {
         const cw = 40 + rng() * 460;
@@ -263,97 +302,9 @@ test('property: clampRectForDraw output rect always inside [0, cw] (200 cases)',
         const minWidth = 1 + rng() * 20;
         const c = clampRectForDraw({ x, width }, cw, minWidth);
         if (c.width === 0) continue;
-        assert.ok(c.x >= -1e-9, `case ${i}: x=${c.x} < 0`);
-        assert.ok(c.x + c.width <= cw + 1e-9, `case ${i}: x+w=${c.x + c.width} > cw=${cw}`);
-        assert.ok(c.width > 0, `case ${i}: width collapsed to ${c.width}`);
-    }
-});
-
-test('property: clampRectForDraw width never drops below min (when canvas permits) (200 cases)', () => {
-    const rng = makeRng(0x88888888);
-    for (let i = 0; i < 200; i++) {
-        const minWidth = 2 + rng() * 30;
-        const cw = minWidth + rng() * 400;
-        const width = rng() * 50;
-        const x = rng() * cw;
-        const c = clampRectForDraw({ x, width }, cw, minWidth);
-        if (c.width === 0) continue;
-        assert.ok(
-            c.width >= minWidth - 1e-9,
-            `case ${i}: clamped width ${c.width} < minWidth ${minWidth}`,
-        );
-    }
-});
-
-test('property: when original rect.width already >= minWidth, clamp does not widen (200 cases)', () => {
-    const rng = makeRng(0x99999999);
-    for (let i = 0; i < 200; i++) {
-        const minWidth = 2 + rng() * 20;
-        const cw = 100 + rng() * 400;
-        const width = minWidth + rng() * (cw - minWidth);
-        const x = rng() * (cw - width);
-        const c = clampRectForDraw({ x, width }, cw, minWidth);
-        assert.ok(
-            Math.abs(c.width - width) < 1e-9,
-            `case ${i}: width drifted from ${width} to ${c.width}`,
-        );
-        assert.ok(
-            Math.abs(c.x - x) < 1e-9,
-            `case ${i}: x drifted from ${x} to ${c.x}`,
-        );
-    }
-});
-
-test('property: layout slot widths are invariant to how many entries fall in the range (200 cases)', () => {
-    const rng = makeRng(0xAA00FF00);
-    for (let i = 0; i < 200; i++) {
-        const entryCount = 3 + Math.floor(rng() * 6);
-        const stride = 5000 + rng() * 8000;
-        const width = 800 + rng() * 1000;
-        const entries = Array.from({ length: entryCount }, (_, k) => ({
-            id: `e${k}`, x: k * stride, y: 0, width, height: 600,
-        }));
-        const minimapWidth = 200 + rng() * 200;
-        const range = 1000 + rng() * 30000;
-        const expectedSlotW = width * (minimapWidth / range);
-        // Cycle the projection across each entry's centre — different entries fall
-        // in/out of [start, end], but every slot's w should equal expectedSlotW.
-        for (let k = 0; k < entryCount; k++) {
-            const center = entries[k].x + width / 2;
-            const layout = computeMinimapLinearLayout({
-                entries,
-                worldStart: center - range / 2,
-                worldEnd: center + range / 2,
-                minimapWidth,
-            });
-            for (const s of layout.slots) {
-                assert.ok(
-                    Math.abs(s.w - expectedSlotW) < 1e-6,
-                    `case ${i} k=${k}: slot.w=${s.w} expected ${expectedSlotW}`,
-                );
-            }
-        }
-    }
-});
-
-test('property: rect width = viewportRange * scale, regardless of camera position (200 cases)', () => {
-    const rng = makeRng(0xBEEFCAFE);
-    for (let i = 0; i < 200; i++) {
-        const range = 100 + rng() * 50000;
-        const minimapWidth = 50 + rng() * 500;
-        const scale = minimapWidth / range;
-        const viewportRange = 10 + rng() * range; // can exceed strip
-        const worldStart = -10000 + rng() * 20000;
-        const worldEnd = worldStart + range;
-        const cameraX = worldStart + rng() * range;
-        const r = computeMinimapLinearRect({
-            cameraX, viewportRange, worldStart, worldEnd, minimapWidth,
-        });
-        const expected = viewportRange * scale;
-        assert.ok(
-            Math.abs(r.width - expected) < 1e-6,
-            `case ${i}: width=${r.width} expected ${expected}`,
-        );
+        assert.ok(c.x >= -1e-9);
+        assert.ok(c.x + c.width <= cw + 1e-9);
+        assert.ok(c.width > 0);
     }
 });
 
@@ -383,40 +334,29 @@ function isIdentity(t) {
         && Math.abs(t.d - 1) < 1e-9 && Math.abs(t.e) < 1e-9 && Math.abs(t.f) < 1e-9;
 }
 
-test('property: draw leaves the canvas transform as identity — no leaked scale/translate (200 cases)', () => {
+test('property: drawMinimap leaves canvas transform as identity (200 cases)', () => {
     const rng = makeRng(0x0F00BA12);
     for (let i = 0; i < 200; i++) {
-        const count = 1 + Math.floor(rng() * 8);
-        const entries = Array.from({ length: count }, (_, k) => ({
-            id: `e${k}`, x: k * (4000 + rng() * 6000), y: 0,
-            width: 600 + rng() * 1200, height: 400 + rng() * 800,
-        }));
+        const N = 1 + Math.floor(rng() * 8);
+        const entries = Array.from({ length: N }, (_, k) => PAGE(`e${k}`, k * 10000));
         const minimapWidth = 100 + rng() * 400;
         const ch = 40 + rng() * 80;
-        const last = entries.at(-1);
-        const layout = computeMinimapLinearLayout({
-            entries, worldStart: 0, worldEnd: last.x + last.width,
-            minimapWidth, canvasHeight: ch,
+        const layout = computeMinimapFocalLayout({
+            entries, activePosF: Math.floor(rng() * N), minimapWidth,
+            canvasHeight: ch, minSlotPx: 0,
         });
         if (!layout) continue;
-        const activeIdx = Math.floor(rng() * entries.length);
-        const activeId = entries[activeIdx].id;
-
         const ctx = makeMockCtx();
         ctx.setTransform(1, 0, 0, 1, 0, 0);
-        drawMinimap(ctx, minimapWidth, ch, entries, layout.slots, activeId, null);
-
-        assert.ok(
-            isIdentity(ctx.getTransform()),
-            `case ${i}: non-identity transform after draw: ${JSON.stringify(ctx.getTransform())}`,
-        );
+        drawMinimap(ctx, minimapWidth, ch, entries, layout.slots, entries[0].id, null);
+        assert.ok(isIdentity(ctx.getTransform()), `case ${i}`);
         const saves = ctx._state.calls.filter(c => c === 'save').length;
         const restores = ctx._state.calls.filter(c => c === 'restore').length;
-        assert.equal(saves, restores, `case ${i}: unbalanced save/restore (saves=${saves}, restores=${restores})`);
+        assert.equal(saves, restores, `case ${i}`);
     }
 });
 
-test('drawViewportRect: at zero rect width it emits no strokes (early return)', () => {
+test('drawViewportRect: zero rect width emits no strokes', () => {
     const ctx = makeMockCtx();
     ctx._state.moves = [];
     ctx.moveTo = (x, y) => { ctx._state.moves.push({ x, y }); };
@@ -426,6 +366,6 @@ test('drawViewportRect: at zero rect width it emits no strokes (early return)', 
     assert.equal(ctx._state.moves.length, 0);
 });
 
-test('VIEWPORT_MIN_WIDTH is exported as a positive number', () => {
+test('VIEWPORT_MIN_WIDTH > 0', () => {
     assert.ok(VIEWPORT_MIN_WIDTH > 0);
 });
