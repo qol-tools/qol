@@ -24,24 +24,26 @@ export function PathPromptModal({ open, onClose, onSubmit, title, placeholder, h
 
     return html`
         <${Modal} open=${open} onClose=${onClose} size="sm" className="path-prompt-modal" dismissOnBackdrop=${true}>
-            <div class="path-prompt-body">
-                <h3 class="path-prompt-title">${title}</h3>
-                ${hint && html`<p class="path-prompt-hint">${hint}</p>`}
-                <input
-                    ref=${inputRef}
-                    type="text"
-                    class="path-prompt-input"
-                    value=${value}
-                    onInput=${(e) => setValue(e.target.value)}
-                    onKeyDown=${handleKeyDown}
-                    placeholder=${placeholder}
+            <div class="path-prompt-dialog">
+                <div class="path-prompt-body">
+                    <h3 class="path-prompt-title">${title}</h3>
+                    ${hint && html`<p class="path-prompt-hint">${hint}</p>`}
+                    <input
+                        ref=${inputRef}
+                        type="text"
+                        class="path-prompt-input"
+                        value=${value}
+                        onInput=${(e) => setValue(e.target.value)}
+                        onKeyDown=${handleKeyDown}
+                        placeholder=${placeholder}
+                    />
+                </div>
+                <${ModalActions}
+                    onClose=${onClose}
+                    onSave=${handleSubmit}
+                    disabled=${!value.trim()}
                 />
             </div>
-            <${ModalActions}
-                onClose=${onClose}
-                onSave=${handleSubmit}
-                disabled=${!value.trim()}
-            />
         <//>
     `;
 }
