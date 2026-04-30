@@ -14,6 +14,7 @@ import { ToggleSwitch } from '../../lib/components/ToggleSwitch.js';
 import { CustomSelect } from '../../lib/components/CustomSelect.js';
 import { resolveViewport } from '../../lib/viewport-resolve.js';
 import { createDebug } from '../../lib/debug.js';
+import { useDevSwitchUnlock } from '../../lib/hooks/useDevSwitchUnlock.js';
 
 const log = createDebug('qol:minimap');
 
@@ -66,8 +67,11 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
     const minimapZoom = Number(settings.minimapZoomFactor ?? 4);
     const minimapZoomLabel = minimapZoom >= MINIMAP_NEIGHBOURS_MAX ? 'all' : `±${minimapZoom | 0}`;
 
+    const { revealed, bumpClick, feedKey } = useDevSwitchUnlock();
+    const onPanelKeyDown = (e) => feedKey(e.key);
+
     return html`
-        <div class="world-settings-panel">
+        <div class="world-settings-panel" onKeyDown=${onPanelKeyDown}>
             <div class="wsp-section">
                 <div class="wsp-heading">Navigation</div>
                 <div class="wsp-grid">
@@ -98,7 +102,8 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
                 <${WorktreeSection} worktrees=${worktrees} defaultWorktree=${defaultWorktree}
                     setDefaultWorktree=${setDefaultWorktree} repoBranch=${repoBranch} />
             `}
-            ${version && html`<${VersionSection} version=${version} updateState=${updateState} isDevMode=${isDevMode} onAction=${onAction} />`}
+            ${version && html`<${VersionSection} version=${version} updateState=${updateState} isDevMode=${isDevMode}
+                onAction=${onAction} unlockRevealed=${revealed} onVersionLabelClick=${bumpClick} />`}
         </div>
     `;
 }
@@ -135,7 +140,7 @@ function WorktreeSection({ worktrees, defaultWorktree, setDefaultWorktree, repoB
     `;
 }
 
-function VersionSection({ version, updateState, isDevMode, onAction }) {
+function VersionSection({ version, updateState, isDevMode, onAction, unlockRevealed, onVersionLabelClick }) {
     const status = updateState?.status || 'idle';
     const tag = isDevMode ? ' DEV' : '';
     const action = versionAction(status, isDevMode);
@@ -149,15 +154,24 @@ function VersionSection({ version, updateState, isDevMode, onAction }) {
         if (!action) return;
         onAction(action);
     };
+    const switchTarget = isDevMode ? 'Prod' : 'Dev';
+    const onSwitchClick = () => onAction('mode-switch');
 
     return html`
         <div class="wsp-section wsp-version ${progress !== null ? 'progress-track' : ''}">
             ${progress !== null && html`<div class="progress-fill" style=${{ '--progress-scale': toProgressScale(progress) }}></div>`}
             <div class="wsp-version-row">
-                <span class="wsp-version-label">v${version}${tag}</span>
+                <span class="wsp-version-label" onClick=${onVersionLabelClick}>v${version}${tag}</span>
                 <button class="wsp-version-btn ${hasUpdate ? 'has-update' : ''} ${status === 'error' ? 'is-error' : ''}"
                     onClick=${actionClick} disabled=${busy}>${actionLabel}</button>
             </div>
+            ${unlockRevealed && !busy && html`
+                <div class="wsp-version-row">
+                    <span class="wsp-version-label wsp-version-label-muted">Mode</span>
+                    <button class="wsp-version-btn wsp-mode-switch"
+                        onClick=${onSwitchClick}>Switch to ${switchTarget}</button>
+                </div>
+            `}
             ${detail && html`<div class="wsp-version-detail">${detail}</div>`}
         </div>
     `;
