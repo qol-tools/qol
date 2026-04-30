@@ -1,32 +1,25 @@
 export const FOCAL_GAP_PX = 5;
 export const FOCAL_SLOT_ASPECT = 0.62;
 
-export function computeMinimapFocalLayout({ entries, activePosF, focusRadius = 1, entryBoosts, minimapWidth, canvasHeight, minSlotPx = 0 }) {
+export function computeMinimapFocalLayout({ entries, activePosF, focusRadius = 1, minimapWidth, canvasHeight }) {
     if (!Array.isArray(entries) || entries.length === 0) return null;
     if (!(minimapWidth > 0)) return null;
     const N = entries.length;
     const posF = Math.max(0, Math.min(N - 1, Number(activePosF) || 0));
-    const floor = Math.max(0, Number(minSlotPx) || 0);
     const R = Math.max(0.5, Number(focusRadius) || 1);
     const decay = focusDecayFor(R);
-    const boost = (i) => {
-        if (!Array.isArray(entryBoosts)) return 1;
-        const b = Number(entryBoosts[i]);
-        return Number.isFinite(b) && b > 0 ? b : 1;
-    };
 
-    const weights = entries.map((_, i) => slotWeight(Math.abs(i - posF), decay, R) * boost(i));
+    const weights = entries.map((_, i) => slotWeight(Math.abs(i - posF), decay, R));
     const weightSum = weights.reduce((a, b) => a + b, 0);
     if (!(weightSum > 0)) return null;
 
-    const referenceDenom = referenceWeightSum(N, decay, R, boost);
-    const referenceGapCount = referenceVisibleSlotCount(N, decay, R, boost) - 1;
+    const referenceDenom = referenceWeightSum(N, decay, R);
+    const referenceGapCount = referenceVisibleSlotCount(N, decay, R) - 1;
     const gapTotal = Math.max(0, referenceGapCount) * FOCAL_GAP_PX;
     const availableW = Math.max(0, minimapWidth - gapTotal);
     const denom = Math.max(weightSum, referenceDenom);
 
-    let widths = weights.map(w => availableW * (w / denom));
-    if (floor > 0) widths = redistributeWithFloor(widths, weights, availableW, floor);
+    const widths = weights.map(w => availableW * (w / denom));
 
     let maxH = 0;
     const heights = widths.map(w => w * FOCAL_SLOT_ASPECT);
@@ -79,57 +72,26 @@ function slotWeight(distance, decay, R) {
     return Math.pow(decay, distance) * fade;
 }
 
-function referenceWeightSum(N, decay, R, boost) {
+function referenceWeightSum(N, decay, R) {
     let max = 0;
     for (let k = 0; k < N; k++) {
         let s = 0;
-        for (let i = 0; i < N; i++) s += slotWeight(Math.abs(i - k), decay, R) * boost(i);
+        for (let i = 0; i < N; i++) s += slotWeight(Math.abs(i - k), decay, R);
         if (s > max) max = s;
     }
     return max;
 }
 
-function referenceVisibleSlotCount(N, decay, R, boost) {
+function referenceVisibleSlotCount(N, decay, R) {
     let max = 0;
     for (let k = 0; k < N; k++) {
         let n = 0;
         for (let i = 0; i < N; i++) {
-            if (slotWeight(Math.abs(i - k), decay, R) * boost(i) > 1e-9) n++;
+            if (slotWeight(Math.abs(i - k), decay, R) > 1e-9) n++;
         }
         if (n > max) max = n;
     }
     return max;
-}
-
-function redistributeWithFloor(widths, weights, availableW, floor) {
-    const N = widths.length;
-    const eligible = weights.map(w => w > 1e-9);
-    const flooredAt = new Array(N).fill(false);
-    while (true) {
-        let changed = false;
-        let unflooredWeightSum = 0;
-        let flooredW = 0;
-        for (let i = 0; i < N; i++) {
-            if (!eligible[i]) continue;
-            if (flooredAt[i]) flooredW += floor;
-            else unflooredWeightSum += weights[i];
-        }
-        const remaining = Math.max(0, availableW - flooredW);
-        for (let i = 0; i < N; i++) {
-            if (!eligible[i]) { widths[i] = 0; continue; }
-            if (flooredAt[i]) { widths[i] = floor; continue; }
-            const w = unflooredWeightSum > 0 ? remaining * (weights[i] / unflooredWeightSum) : 0;
-            if (w < floor) { flooredAt[i] = true; changed = true; }
-            else widths[i] = w;
-        }
-        if (!changed) break;
-    }
-    const overrun = widths.reduce((a, b) => a + b, 0) - availableW;
-    if (overrun > 1e-6) {
-        const scale = availableW / (availableW + overrun);
-        for (let i = 0; i < N; i++) widths[i] = Math.max(0, widths[i] * scale);
-    }
-    return widths;
 }
 
 export function computeMinimapFocalRect({ entries, slots, cameraX, viewportRange }) {

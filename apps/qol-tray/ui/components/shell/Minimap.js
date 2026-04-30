@@ -57,8 +57,6 @@ const TRANSITION_STYLE_LABELS = { 'zoom-fade': 'Zoom + Fade', fade: 'Fade only',
 
 export const MINIMAP_NEIGHBOURS_MIN = 1;
 export const MINIMAP_NEIGHBOURS_MAX = 12;
-export const MINIMAP_MIN_SLOT_PX = 28;
-export const MINIMAP_MIN_SLOT_FRAC = 0.08;
 
 function WorldSettingsPanel({ settings, version, updateState, isDevMode, onAction, worktrees, defaultWorktree, setDefaultWorktree, repoBranch }) {
     const updateRange = (key) => (e) => setWorldSetting(key, Number(e.target.value));
@@ -255,44 +253,15 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
             canvas.height = ch * dpr;
         }
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-        const currentLayer = camera.layer;
-        const vp = resolveViewport(viewportRef);
-        const vpW = vp ? vp.clientWidth : 0;
-        const vpH = vp ? vp.clientHeight : 0;
-        const z = camera.zoom || 1;
-
-        const confinedPages = navigation?.getConfinedPages?.() || [];
-        const allEntries = registry.getEntriesForLayer(currentLayer);
-        const entries = visibleMinimapEntries({ allEntries, confinedPages, diveParent });
         ctx.clearRect(0, 0, cw, ch);
-        if (entries.length === 0) return;
 
-        const sortedAll = [...entries].sort((a, b) => a.x - b.x);
-        const settings = getWorldSettings();
-        const viewportRange = vpW > 0 && z > 0 ? vpW / z : 0;
-        const cx = camera.x + (viewportRange > 0 ? viewportRange / 2 : 0);
-        const activePosF = activePosFromCameraCentre(sortedAll, cx);
-        const activeIdInWorld = sortedAll[Math.round(activePosF)]?.id ?? null;
-
-        const factor = Number(settings.minimapZoomFactor) || 1;
-        const isShowAll = factor >= MINIMAP_NEIGHBOURS_MAX;
-        const pageWidth = sortedAll[0]?.width || 1280;
-        const viewportPagesSpan = viewportRange > 0 && pageWidth > 0
-            ? Math.max(1, viewportRange / pageWidth)
-            : 1;
-        const effectiveR = isShowAll
-            ? sortedAll.length * 100
-            : factor * Math.pow(viewportPagesSpan, 0.3);
-        const layout = computeMinimapFocalLayout({
-            entries: sortedAll,
-            activePosF,
-            focusRadius: effectiveR,
-            minimapWidth: cw,
-            canvasHeight: ch,
-            minSlotPx: 0,
+        const view = computeMinimapView({
+            camera, registry, viewportRef, navigation, diveParent,
+            minimapWidth: cw, canvasHeight: ch,
         });
-        if (!layout) return;
+        if (!view) return;
+
+        const { sortedAll, layout, activeIdInWorld, viewportRange, currentLayer, vpW, activePosF, pageWidth, viewportPagesSpan, effectiveR } = view;
 
         const rawRect = computeMinimapFocalRect({
             entries: sortedAll,
@@ -306,14 +275,14 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
         drawMinimap(ctx, cw, ch, sortedAll, layout.slots, activeIdInWorld, slotLabel, rect);
         drawViewportRect(ctx, cw, ch, rect);
 
-        log(
+        log.verbose(
             'render',
             'active=', activeIdInWorld,
             'posF=', activePosF.toFixed(3),
             'N=', sortedAll.length,
             'cw=', cw,
             'vpW=', vpW,
-            'z=', z.toFixed(3),
+            'z=', (camera.zoom || 1).toFixed(3),
             'vR=', viewportRange.toFixed(0),
             'pageW=', pageWidth,
             'span=', viewportPagesSpan.toFixed(3),
@@ -327,53 +296,26 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
     const onClick = (e) => {
         const canvas = canvasRef.current;
         if (!canvas) return;
-        const rect = canvas.getBoundingClientRect();
+        const bounds = canvas.getBoundingClientRect();
         const minimapWidth = canvas.clientWidth;
         const canvasHeight = canvas.clientHeight;
-        const clickX = Math.min(Math.max(e.clientX - rect.left, 0), minimapWidth - 1e-6);
-        const clickY = Math.min(Math.max(e.clientY - rect.top, 0), canvasHeight - 1e-6);
+        const clickX = Math.min(Math.max(e.clientX - bounds.left, 0), minimapWidth - 1e-6);
+        const clickY = Math.min(Math.max(e.clientY - bounds.top, 0), canvasHeight - 1e-6);
 
-        const currentLayer = camera.layer;
-        const confinedPages = navigation?.getConfinedPages?.() || [];
-        const allEntries = registry.getEntriesForLayer(currentLayer);
-        const entries = visibleMinimapEntries({ allEntries, confinedPages, diveParent });
-        if (entries.length === 0) return;
-
-        const vp = resolveViewport(viewportRef);
-        const z = camera.zoom || 1;
-        const vpW = vp ? vp.clientWidth : 0;
-        const vpH = vp ? vp.clientHeight : 0;
-
-        const sortedAll = [...entries].sort((a, b) => a.x - b.x);
-        const settings = getWorldSettings();
-        const viewportRange = vpW > 0 && z > 0 ? vpW / z : 0;
-        const cx = camera.x + (viewportRange > 0 ? viewportRange / 2 : 0);
-        const activePosF = activePosFromCameraCentre(sortedAll, cx);
-        const factor = Number(settings.minimapZoomFactor) || 1;
-        const isShowAll = factor >= MINIMAP_NEIGHBOURS_MAX;
-        const pageWidth = sortedAll[0]?.width || 1280;
-        const viewportPagesSpan = viewportRange > 0 && pageWidth > 0
-            ? Math.max(1, viewportRange / pageWidth)
-            : 1;
-        const effectiveR = isShowAll
-            ? sortedAll.length * 100
-            : factor * Math.pow(viewportPagesSpan, 0.3);
-        const layout = computeMinimapFocalLayout({
-            entries: sortedAll,
-            activePosF,
-            focusRadius: effectiveR,
-            minimapWidth,
-            canvasHeight,
-            minSlotPx: 0,
+        const view = computeMinimapView({
+            camera, registry, viewportRef, navigation, diveParent,
+            minimapWidth, canvasHeight,
         });
-        if (!layout) return;
+        if (!view) return;
+
+        const { sortedAll, layout, vpW, vpH } = view;
         const clicked = layout.slots.findIndex(s =>
             clickX >= s.x && clickX < s.x + s.w &&
             clickY >= s.y && clickY < s.y + s.h);
         if (clicked < 0) return;
 
         const target = sortedAll[clicked];
-        const cam = cameraTargetFor(target, vpW, vpH, z);
+        const cam = cameraTargetFor(target, vpW, vpH, camera.zoom || 1);
         camera.panTo(cam.x, cam.y);
     };
 
@@ -388,25 +330,52 @@ function Minimap({ camera, registry, viewportRef, width, diveParent, navigation 
     `;
 }
 
-function nearestEntryId(entries, camera, vpW, vpH, zoom) {
-    if (entries.length === 0) return null;
-    if (entries.length === 1) return entries[0].id;
-    const z = zoom || 1;
-    const cx = camera.x + vpW / (2 * z);
-    const cy = camera.y + vpH / (2 * z);
-    let bestId = null;
-    let bestDist = Infinity;
-    for (const e of entries) {
-        const ex = e.x + e.width / 2;
-        const ey = e.y + e.height / 2;
-        const d = Math.hypot(cx - ex, cy - ey);
-        if (d < bestDist) { bestId = e.id; bestDist = d; }
-    }
-    return bestId;
-}
-
 function slotLabel(entry) {
     return resolveViewLabel(entry).text;
+}
+
+function computeMinimapView({ camera, registry, viewportRef, navigation, diveParent, minimapWidth, canvasHeight }) {
+    const currentLayer = camera.layer;
+    const vp = resolveViewport(viewportRef);
+    const vpW = vp ? vp.clientWidth : 0;
+    const vpH = vp ? vp.clientHeight : 0;
+    const z = camera.zoom || 1;
+
+    const confinedPages = navigation?.getConfinedPages?.() || [];
+    const allEntries = registry.getEntriesForLayer(currentLayer);
+    const entries = visibleMinimapEntries({ allEntries, confinedPages, diveParent });
+    if (entries.length === 0) return null;
+
+    const sortedAll = [...entries].sort((a, b) => a.x - b.x);
+    const settings = getWorldSettings();
+    const viewportRange = vpW > 0 && z > 0 ? vpW / z : 0;
+    const cx = camera.x + (viewportRange > 0 ? viewportRange / 2 : 0);
+    const activePosF = activePosFromCameraCentre(sortedAll, cx);
+    const activeIdInWorld = sortedAll[Math.round(activePosF)]?.id ?? null;
+
+    const factor = Number(settings.minimapZoomFactor) || 1;
+    const isShowAll = factor >= MINIMAP_NEIGHBOURS_MAX;
+    const pageWidth = sortedAll[0]?.width || 1280;
+    const viewportPagesSpan = viewportRange > 0 && pageWidth > 0
+        ? Math.max(1, viewportRange / pageWidth)
+        : 1;
+    const effectiveR = isShowAll
+        ? sortedAll.length * 100
+        : factor * Math.pow(viewportPagesSpan, 0.3);
+    const layout = computeMinimapFocalLayout({
+        entries: sortedAll,
+        activePosF,
+        focusRadius: effectiveR,
+        minimapWidth,
+        canvasHeight,
+    });
+    if (!layout) return null;
+
+    return {
+        sortedAll, layout, activeIdInWorld, activePosF,
+        viewportRange, vpW, vpH, currentLayer,
+        pageWidth, viewportPagesSpan, effectiveR,
+    };
 }
 
 export function activePosFromCameraCentre(sortedAll, cameraCentreX) {
