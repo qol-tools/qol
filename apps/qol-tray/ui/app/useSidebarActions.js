@@ -16,7 +16,6 @@ export function useSidebarActions({
     beginDevRecompile,
     failDevRecompile,
     defaultWorktreeRef,
-    requestModeSwitch,
 }) {
     const handler = useCallback(async (action) => {
         if (action === 'check-update') {
@@ -34,12 +33,6 @@ export function useSidebarActions({
             } catch {
                 failSelfUpdate();
             }
-            return;
-        }
-
-        if (action === 'mode-switch') {
-            if (!requestModeSwitch) return;
-            requestModeSwitch(devEnabled ? 'prod' : 'dev');
             return;
         }
 
@@ -73,8 +66,7 @@ export function useSidebarActions({
         beginSelfUpdate,
         checkForUpdate,
         failDevRecompile,
-        failSelfUpdate,
-        requestModeSwitch,
+        failSelfUpdate
     ]);
 
     useEffect(() => {

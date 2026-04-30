@@ -15,6 +15,14 @@ import { CustomSelect } from '../../lib/components/CustomSelect.js';
 import { resolveViewport } from '../../lib/viewport-resolve.js';
 import { createDebug } from '../../lib/debug.js';
 import { useDevSwitchUnlock } from '../../lib/hooks/useDevSwitchUnlock.js';
+import {
+    clearModePath,
+    executeModeSwitch,
+    loadModePath,
+    saveModePath,
+    validateModePath,
+} from '../../lib/mode-switch.js';
+import { toast } from '../../lib/toast.js';
 
 const log = createDebug('qol:minimap');
 
@@ -158,8 +166,6 @@ function VersionSection({ version, updateState, isDevMode, onAction, unlockRevea
         if (!action) return;
         onAction(action);
     };
-    const switchTarget = isDevMode ? 'Prod' : 'Dev';
-    const onSwitchClick = () => onAction('mode-switch');
 
     return html`
         <div class="wsp-section wsp-version ${progress !== null ? 'progress-track' : ''}">
@@ -169,14 +175,101 @@ function VersionSection({ version, updateState, isDevMode, onAction, unlockRevea
                 <button class="wsp-version-btn ${hasUpdate ? 'has-update' : ''} ${status === 'error' ? 'is-error' : ''}"
                     onClick=${actionClick} disabled=${busy}>${actionLabel}</button>
             </div>
-            ${unlockRevealed && !busy && html`
-                <div class="wsp-version-row">
-                    <span class="wsp-version-label wsp-version-label-muted">Mode</span>
-                    <button class="wsp-version-btn wsp-mode-switch"
-                        onClick=${onSwitchClick}>Switch to ${switchTarget}</button>
-                </div>
-            `}
+            ${unlockRevealed && !busy && html`<${ModeSwitchRow} isDevMode=${isDevMode} />`}
             ${detail && html`<div class="wsp-version-detail">${detail}</div>`}
+        </div>
+    `;
+}
+
+function ModeSwitchRow({ isDevMode }) {
+    const target = isDevMode ? 'prod' : 'dev';
+    const label = isDevMode ? 'Switch to Prod' : 'Switch to Dev';
+    const placeholder = isDevMode ? '/usr/local/bin/qol-tray' : '/path/to/qol-tray';
+
+    const [editing, setEditing] = useState(false);
+    const [value, setValue] = useState('');
+    const [shake, setShake] = useState(false);
+    const inputRef = useRef(null);
+
+    useEffect(() => {
+        if (!editing) return;
+        const id = requestAnimationFrame(() => {
+            inputRef.current?.focus();
+            inputRef.current?.select?.();
+        });
+        return () => cancelAnimationFrame(id);
+    }, [editing]);
+
+    const cancel = useCallback(() => {
+        setEditing(false);
+        setValue('');
+    }, []);
+
+    const fire = useCallback(async (path) => {
+        const valid = await validateModePath(target, path);
+        if (!valid) {
+            setShake(true);
+            setTimeout(() => setShake(false), 400);
+            toast('error', `Invalid ${target} path: ${path}`);
+            return false;
+        }
+        saveModePath(target, path);
+        try { await executeModeSwitch(target, path); } catch {}
+        return true;
+    }, [target]);
+
+    const onSwitchClick = useCallback(async () => {
+        const saved = loadModePath(target);
+        if (saved) {
+            const ok = await fire(saved);
+            if (!ok) { clearModePath(target); setValue(saved); setEditing(true); }
+            return;
+        }
+        setEditing(true);
+    }, [target, fire]);
+
+    const onSubmit = useCallback(async () => {
+        const trimmed = value.trim();
+        if (!trimmed) return;
+        const ok = await fire(trimmed);
+        if (ok) cancel();
+    }, [value, fire, cancel]);
+
+    const onInputKeyDown = useCallback((e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            e.stopPropagation();
+            onSubmit();
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            cancel();
+        }
+    }, [onSubmit, cancel]);
+
+    if (editing) {
+        return html`
+            <div class="wsp-mode-edit ${shake ? 'wsp-mode-edit-shake' : ''}">
+                <input ref=${inputRef}
+                    type="text"
+                    class="wsp-mode-input"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder=${placeholder}
+                    value=${value}
+                    onInput=${(e) => setValue(e.currentTarget.value)}
+                    onKeyDown=${onInputKeyDown} />
+                <button class="wsp-version-btn" onClick=${cancel}>Cancel</button>
+                <button class="wsp-version-btn wsp-mode-switch"
+                    onClick=${onSubmit} disabled=${!value.trim()}>Save</button>
+            </div>
+        `;
+    }
+
+    return html`
+        <div class="wsp-version-row">
+            <span class="wsp-version-label wsp-version-label-muted">Mode</span>
+            <button class="wsp-version-btn wsp-mode-switch" onClick=${onSwitchClick}>${label}</button>
         </div>
     `;
 }
