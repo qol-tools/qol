@@ -233,8 +233,13 @@ async fn async_init_inner(
     let _state_server = qol_tray::runtime::RuntimeServer::start();
     let plugins_dir = qol_tray::plugins::PluginLoader::ensure_plugin_dir()?;
     let sync_service = Arc::new(qol_tray::sync::SyncService::new(plugins_dir)?);
-    if let Err(error) = sync_service.pull_on_launch().await {
-        log::error!("Failed to pull cloud profile on launch: {error:#}");
+    {
+        let sync_for_pull = Arc::clone(&sync_service);
+        tokio::spawn(async move {
+            if let Err(error) = sync_for_pull.pull_on_launch().await {
+                log::error!("Cloud profile pull on launch failed: {error:#}");
+            }
+        });
     }
     let mut plugin_manager = PluginManager::new();
     plugin_manager.load_plugins()?;
