@@ -311,17 +311,11 @@ test('gotoAnchor top-aligns the target page regardless of focus registry', () =>
     const nav = createNavigation({ registry, camera, getSettings, domHelpers });
     nav.setFocus('plugins', 'fake-selector');
     nav.gotoAnchor({ pageId: 'plugins' }, { respectKnob: false });
-    // X still centers the page: entry x-center 640, minus half viewport 400 → 240.
     assert.equal(camera.x, 640 - 800 / 2);
-    // Y top-aligns: entry top 0, minus PAGE_TOP_PAD_PX at zoom 1.
     assert.equal(camera.y, 0 - PAGE_TOP_PAD_PX);
 });
 
 test('inside a dive, heterogeneous page heights all top-align at the same camera.y', () => {
-    // This is the regression that prompted the padded-bounds refactor:
-    // dive confinements were bypassing the viewport-half pad, so the camera's
-    // center-when-viewport-exceeds-bounds branch pinned y to the claim midpoint
-    // instead of the requested entry.y - PAGE_TOP_PAD_PX.
     const { registry, camera, getSettings, domHelpers } = makeMocks();
     const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
     const pages = [
@@ -433,10 +427,6 @@ test('diveInto on an unknown selector is a no-op', () => {
 });
 
 test('dive sets camera bounds to the dive target claim padded by half the viewport', () => {
-    // Confinement rects are padded by vp/(2*zoom) in world units so the
-    // camera can anchor a page top at PAGE_TOP_PAD_PX regardless of how
-    // tight the claim is, and so bounds-driven minZoom doesn't force auto-
-    // zoom-in. makeMocks() reports viewport 800x600, and default zoom is 1.
     const { registry, camera, getSettings, domHelpers } = makeMocks();
     const claim = { x: 0, y: 0, width: 1280, height: 900, layer: -1 };
     registry.addDiveTarget({ sourceSelector: '#card-a', claim, pages: ['plugins-config'] });

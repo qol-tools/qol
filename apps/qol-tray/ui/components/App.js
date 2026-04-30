@@ -327,9 +327,6 @@ function AppShell() {
             const rect = boundsOfEntries(measured);
             const vpEl = resolveViewport(viewportRef);
             const vp = vpEl ? { w: vpEl.clientWidth, h: vpEl.clientHeight } : null;
-            // Pad at zoom=1 baseline so the bounds-driven minZoom floor stays
-            // low regardless of current zoom — otherwise zoom-in tightens the
-            // pad, raises minZoom, and traps the camera zoomed in.
             camera.setBounds(paddedWorldBounds({ ...rect, layer: 0 }, vp, 1, entries));
         };
         let rafId = 0;

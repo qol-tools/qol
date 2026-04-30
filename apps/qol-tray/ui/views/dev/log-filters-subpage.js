@@ -7,7 +7,6 @@ import { Surface } from '../../lib/components/Surface.js';
 import { createSharedSlot } from '../../lib/shared-slot.js';
 import { patternsFromInput, patternsToInput } from '../../lib/log-filter-patterns.js';
 
-// TODO: replace with navigation-scoped payload (debt item #7).
 export const logFiltersSlot = createSharedSlot({
     scope: null,
     pluginId: null,

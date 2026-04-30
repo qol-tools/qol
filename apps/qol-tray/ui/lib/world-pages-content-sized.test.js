@@ -4,13 +4,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Lock down which top-level views must be content-sized. Long lists
-// (hotkeys, logs) and grids (plugins, store) MUST size to their content
-// height — the canvas is the viewport, no inner scrollbars allowed.
-//
-// This is a source-text test rather than an import test because views.js
-// pulls in the whole Preact view graph; we just want to assert the manifest.
-
 const here = path.dirname(fileURLToPath(import.meta.url));
 const viewsPath = path.resolve(here, '..', 'app', 'views.js');
 const src = fs.readFileSync(viewsPath, 'utf8');

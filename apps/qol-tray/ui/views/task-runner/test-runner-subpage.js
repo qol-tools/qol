@@ -6,7 +6,6 @@ import { Button } from '../../lib/components/Button.js';
 import { createSharedSlot } from '../../lib/shared-slot.js';
 import { extractParams } from './data.js';
 
-// TODO: replace with navigation-scoped payload (debt item #7).
 export const testRunnerSlot = createSharedSlot({
     actionId: null,
     action: null,

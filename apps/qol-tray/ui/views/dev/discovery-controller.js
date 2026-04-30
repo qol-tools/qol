@@ -28,8 +28,6 @@ async function loadLogControls(ctx, skipUpdate = false) {
 async function loadCoreLogControls(ctx, skipUpdate = false) {
     const payload = await tryFetchJson('/api/dev/core-log-controls');
     if (payload) {
-        // Merge synthetic frontend-only sections — backend doesn't track these,
-        // mute state lives client-side (see frontend-log-sections.js).
         const synthetic = {};
         for (const section of FRONTEND_LOG_SECTIONS) {
             synthetic[section.id] = { muted: section.isMuted(), suppress_patterns: [] };

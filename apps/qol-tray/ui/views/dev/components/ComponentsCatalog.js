@@ -67,10 +67,6 @@ function MockControls({ actions }) {
     `;
 }
 
-// ---------------------------------------------------------------------------
-// Display
-// ---------------------------------------------------------------------------
-
 function ButtonShowcase() {
     return html`
         <${CatalogSection} title="Buttons">
@@ -146,10 +142,6 @@ function EmptyStateShowcase() {
         <//>
     `;
 }
-
-// ---------------------------------------------------------------------------
-// Interactive
-// ---------------------------------------------------------------------------
 
 function DropdownShowcase() {
     const options = ['github', 'folder', 'local'];
@@ -289,10 +281,6 @@ function DepthLevel({ level }) {
         </${SurfaceContainer}>
     `;
 }
-
-// ---------------------------------------------------------------------------
-// Rows
-// ---------------------------------------------------------------------------
 
 function DevPluginRowShowcase() {
     const sel = useListSelection();
@@ -449,10 +437,6 @@ function BackupRowShowcase() {
     `;
 }
 
-// ---------------------------------------------------------------------------
-// Tables
-// ---------------------------------------------------------------------------
-
 function HotkeyTableShowcase() {
     const sel = useListSelection();
     return html`
@@ -500,10 +484,6 @@ function ShortcutTableShowcase() {
         <//>
     `;
 }
-
-// ---------------------------------------------------------------------------
-// Cards
-// ---------------------------------------------------------------------------
 
 function StoreCardShowcase() {
     const sel = useListSelection();

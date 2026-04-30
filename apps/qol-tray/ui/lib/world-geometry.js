@@ -1,8 +1,3 @@
-// Pixels from the top of the viewport where every navigated page anchors.
-// Holding this constant across pages of different heights is what stops the
-// vertical bounce when cycling through dive pages. Also reserves enough
-// headroom for the world-region-label (positioned at entry.y - 56) to sit
-// fully above each page without being clipped by the viewport top.
 export const PAGE_TOP_PAD_PX = 96;
 
 export function cameraTargetFor(entry, viewportW, viewportH, zoom) {
@@ -57,11 +52,6 @@ export function viewportPadding(vp, zoom, entries) {
     return maxEntryExtent(entries);
 }
 
-// Screen-space projection of a world-region-label for an entry, given the
-// current camera. The label bottom is anchored LABEL_GAP_PX above the page
-// top in screen pixels (CSS `transform: translateY(-100%)` applied via class).
-// When the page's projected width falls below HIDE_BELOW_SCREEN_W, the label
-// is hidden — otherwise tiny labels pile up when zoomed far out.
 export const LABEL_GAP_PX = 10;
 export const HIDE_BELOW_SCREEN_W = 120;
 
@@ -79,30 +69,12 @@ export function regionLabelPosition(entry, cam) {
     };
 }
 
-// Single source of truth for camera bounds on any layer (root or dive).
-// Pads the raw confinement rect by half the viewport in world units so the
-// camera can always anchor a page top at PAGE_TOP_PAD_PX regardless of page
-// or confinement size, and so bounds-driven minZoom doesn't force auto-
-// zoom-in when the confinement is tighter than the viewport.
-// Falls back to the largest entry extent when viewport/zoom are unknown,
-// which is the best we can do before first measure.
 export function paddedWorldBounds(rect, vp, zoom, entries) {
     if (!rect) return null;
     const { padX, padY } = viewportPadding(vp, zoom, entries || [rect]);
     return { ...withPadding(rect, padX, padY), layer: rect.layer };
 }
 
-// Pages on the world canvas are CSS-scaled up via `transform: scale(--slot-scale)`
-// when the camera zooms below `ghostThreshold` and `uiScaleOnZoomOut` is on. The
-// scale is computed per-entry: full at `baseScale` near the camera centre, falling
-// off with distance. This is the same formula App.js's `applySlotScales` writes
-// to the DOM. We extract it here as a pure function so the minimap viewport rect
-// can use the *visually inflated* bounds when checking what the camera frames —
-// otherwise the rect under-represents what the user actually sees.
-//
-// IMPORTANT: keep WORLD_PAGE_STRIDE / WORLD_SLOT_GAP_FACTOR in sync with App.js's
-// PAGE_STRIDE/SLOT_GAP_FACTOR. Drift here means the minimap rect and the
-// rendered slots disagree.
 export const WORLD_PAGE_STRIDE = 10000;
 export const WORLD_SLOT_GAP_FACTOR = 0.85;
 const SLOT_SCALE_CENTER_FLOOR = 0.75;
@@ -115,8 +87,6 @@ export function computeBaseScale(zoom, threshold) {
     return Math.max(1, Math.pow(threshold / zoom, 0.85));
 }
 
-// Per-entry slot scale. Returns 1 when `baseScale === 1` so callers can short-
-// circuit the inflation pass cheaply. Pure: no DOM, no camera mutation.
 export function computeSlotScale({ entry, cameraX, cameraY, viewportW, viewportH, zoom, baseScale }) {
     if (!(baseScale > 1)) return 1;
     if (!entry || !(entry.width > 0)) return 1;
@@ -134,8 +104,6 @@ export function computeSlotScale({ entry, cameraX, cameraY, viewportW, viewportH
     return Math.min(1 + (baseScale - 1) * proximity, maxSlotScale);
 }
 
-// Visual world-x bounds of an entry after slot-scale inflation. Slots are
-// scaled around their centre, so the inflated range is `centre ± (width/2)*scale`.
 export function inflatedEntryRange(entry, slotScale) {
     if (!entry || !(entry.width > 0)) return { x0: entry?.x ?? 0, x1: (entry?.x ?? 0) + (entry?.width ?? 0) };
     if (!(slotScale > 1)) return { x0: entry.x, x1: entry.x + entry.width };

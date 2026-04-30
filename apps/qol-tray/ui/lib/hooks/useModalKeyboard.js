@@ -4,11 +4,6 @@ import { resolveModalKeyAction } from './modal-key-action.js';
 
 let activeModalContainer = null;
 
-/**
- * Registered by DiveEditorSubPage so useModalKeyboard (called in the parent
- * view's hook layer) can resolve the modal container without each caller
- * threading a ref through.
- */
 export function setActiveModalContainer(ref) {
     activeModalContainer = ref || null;
 }

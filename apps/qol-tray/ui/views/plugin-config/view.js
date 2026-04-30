@@ -49,8 +49,6 @@ export function PluginConfigView({ onClose }) {
         `;
     }
 
-    // Section titles come from the world-region-label above the page — don't
-    // duplicate them inside the body. Keep the subtitle copy when present.
     return html`
         <${SurfaceContainer} className="plugin-config-detail" tabIndex="-1">
             ${section && html`

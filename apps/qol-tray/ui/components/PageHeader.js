@@ -6,11 +6,6 @@ import { NoiseReveal } from '../lib/components/NoiseReveal.js';
 
 export function PageHeader({ title = '', subtitle = '', badge = null, scramble = false, noiseReveal = false, className = '' }) {
     const { active } = usePaletteContext();
-    // Titles for root views and plugin-config sections are rendered by the
-    // world-region-label above the page — don't duplicate them inside the
-    // page body. Detail/editor views (no region label) still pass a title.
-    // When a view passes no title, subtitle, or badge, render nothing at all —
-    // avoids a blank 48px strip at the top of body-only views.
     if (!title && !subtitle && !badge) return null;
     const cls = ['page-header', className].filter(Boolean).join(' ');
     const Title = title ? (scramble ? html`<${ScrambleText} text=${title} />` : title) : null;

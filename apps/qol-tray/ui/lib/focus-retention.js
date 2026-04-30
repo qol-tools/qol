@@ -25,11 +25,6 @@ function pickSelectedThenFirst(root) {
     return surfaces[0];
 }
 
-// World slots live at distant coordinates inside #viewport (transformed via
-// CSS). After ascend the lost editor slot is empty; we must NOT fall back to
-// a surface in another world slot that happens to be off-screen, or the
-// camera will chase it. Prefer a slot whose rect actually intersects the
-// viewport — that's the slot the camera is currently showing.
 function pickAnchoredSlotSurface(viewport) {
     if (!isUsable(viewport)) return null;
     const vr = viewportRect(viewport);

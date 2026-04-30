@@ -1,15 +1,3 @@
-// Pure helper that derives the visible context-menu items for a plugin card.
-// Kept separate from the view so it can be tested as a data-driven contract.
-//
-// The order here is the on-screen order. Visibility depends only on the plugin
-// capability flags; Delete is always shown. Adding a new item means adding one
-// row to the array — no new if/else branches, no new render code.
-//
-// Each item carries a `handler(ctx, pluginId)` that implements its action
-// given a `ctx` of { actions, modal }. The caller dispatches via
-// `items.find(i => i.id === id)?.handler?.(ctx, pluginId)` — adding a new
-// menu item never requires editing the dispatcher.
-
 const ITEMS = [
     {
         id: 'update',

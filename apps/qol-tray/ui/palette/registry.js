@@ -29,11 +29,6 @@ function bucketCommands(viewId) {
     return [...bucket.values()].flat();
 }
 
-// Contextual-only: commands registered for the active view's bucket.
-// Used by the action-mode palette (Ctrl+E with `>` prefix) so the result list
-// shows page-relevant actions instead of being drowned out by globals.
-// Falls back to globals when the active view has no commands of its own,
-// so the palette is never empty just because a view forgot to register actions.
 export function getContextualCommands(activeViewId) {
     const view = bucketCommands(activeViewId);
     if (view.length > 0) return view;

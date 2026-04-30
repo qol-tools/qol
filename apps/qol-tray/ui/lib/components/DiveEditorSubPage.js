@@ -6,19 +6,6 @@ import { setActiveModalContainer } from '../hooks/useModalKeyboard.js';
 import { PageHeader } from '../../components/PageHeader.js';
 import { SurfaceContainer } from './SurfaceContainer.js';
 
-/**
- * Shared shell for editor sub-pages reached by dive (hotkeys, shortcuts,
- * task-runner). Subscribes to a createSharedSlot, registers a view-keyboard
- * binding for the sub-page id, and wraps the form body in the canonical
- * five-deep page chrome.
- *
- * Props:
- *  - slot: createSharedSlot whose value carries `{ modal, handleKey, isBlocking, ... }`
- *  - viewId: keyboard registration id (e.g. 'hotkeys-editor')
- *  - fallbackTitle, fallbackSubtitle: shown when slot.modal is null
- *  - renderHeader(value): returns the PageHeader for the active editor
- *  - children(value): returns the form body (typically wrapping `.edit-modal-content`)
- */
 export function DiveEditorSubPage({
     slot,
     viewId,

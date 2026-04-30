@@ -121,7 +121,7 @@ export function ModalActions({ onClose, onSave, disabled }) {
 function normalizeKbd(kbd) {
     if (!kbd) return null;
     const lower = kbd.toLowerCase().trim();
-    if (lower === 'esc' || lower === 'escape') return null; // Modal handles ESC directly
+    if (lower === 'esc' || lower === 'escape') return null;
     return lower;
 }
 

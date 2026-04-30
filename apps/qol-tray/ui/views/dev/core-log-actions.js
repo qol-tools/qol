@@ -13,8 +13,6 @@ export function createCoreLogActions({ state, discoveryController, onNeedsRender
 async function toggleCoreLogs(state, discoveryController, onNeedsRender, sectionId) {
     const control = state.coreLogControls[sectionId] || {};
     const newMuted = !control.muted;
-    // Frontend-only sections (see frontend-log-sections.js) persist client-side;
-    // the backend rejects these section names, so don't round-trip through the API.
     const frontendSection = findFrontendLogSection(sectionId);
     if (frontendSection) {
         frontendSection.setMuted(newMuted);

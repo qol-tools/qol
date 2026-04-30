@@ -2,13 +2,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { pluginContextMenuItems, dispatchPluginContextAction, bindPluginContextMenuItems } from './plugin-context-menu-items.js';
 
-// ---------------------------------------------------------------------------
-// Exact-output table: every combination of capability flags is an observable
-// contract. The menu MUST always offer Delete, MUST offer Update only when
-// plugin.update_available is truthy, and MUST offer Config only when
-// plugin.has_config is truthy. Order is fixed: Update, Config, Delete.
-// ---------------------------------------------------------------------------
-
 const TABLE = [
     {
         name: 'null plugin yields empty list',
@@ -112,11 +105,6 @@ test('the returned array is fresh on every call (no shared mutation risk)', () =
     assert.equal(b.length, 3);
 });
 
-// ---------------------------------------------------------------------------
-// Dispatch table: every known action routes to the right handler with the
-// expected side effects, and unknown ids no-op without throwing.
-// ---------------------------------------------------------------------------
-
 function makeCtx() {
     const calls = [];
     const actions = {
@@ -156,7 +144,6 @@ test('dispatch: unknown action id returns false and triggers no handlers', () =>
 });
 
 test('dispatch: every visible menu item has a matching dispatch entry', () => {
-    // Guard against the menu data and the dispatcher drifting apart.
     const plugin = { update_available: true, has_config: true };
     const items = pluginContextMenuItems(plugin);
     const { ctx } = makeCtx();
@@ -168,13 +155,6 @@ test('dispatch: every visible menu item has a matching dispatch entry', () => {
         );
     }
 });
-
-// ---------------------------------------------------------------------------
-// bindPluginContextMenuItems: the same visibility rules as
-// pluginContextMenuItems, but each item carries a bound `run` that closes
-// over the ctx and the plugin id. This is what the plugin-actions subpage
-// renders; the binding must not require the caller to know action ids.
-// ---------------------------------------------------------------------------
 
 test('bind: null plugin yields empty list', () => {
     const { ctx } = makeCtx();

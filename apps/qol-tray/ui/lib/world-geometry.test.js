@@ -38,22 +38,14 @@ test('viewportPadding: divides by zoom for world-unit conversion', () => {
 });
 
 test('viewportPadding: allows any page center to reach viewport center', () => {
-    // A page bounding box sits at (0,0 wxh). With viewport-half padding,
-    // the clamp zone expands by vp/2 on each side in world units. That means
-    // the camera's top-left can go as low as `-vp/(2*zoom)` relative to the
-    // page's left edge, and the page center ends up at the viewport center.
     const vp = { w: 800, h: 600 };
     const zoom = 1;
     const entries = [{ x: 0, y: 0, width: 1280, height: 900 }];
     const { padX, padY } = viewportPadding(vp, zoom, entries);
     const pageCenterX = 640;
     const pageCenterY = 450;
-    // Camera top-left that puts page center at viewport center:
     const cameraX = pageCenterX - vp.w / (2 * zoom);
     const cameraY = pageCenterY - vp.h / (2 * zoom);
-    // After withPadding, bounds allow camera.x >= bounds.x = entry.x - padX = 0 - 400 = -400.
-    // cameraX = 640 - 400 = 240, which is within [-400, 1280 - (800/1) - (-400)] = [-400, 880].
-    // What matters is cameraX >= bounds.x (= -padX).
     assert.ok(cameraX >= -padX, 'camera.x reachable from left');
     assert.ok(cameraY >= -padY, 'camera.y reachable from top');
 });
@@ -171,9 +163,7 @@ test('withPadding: expands a rect uniformly on both axes', () => {
 
 test('cameraTargetFor: x centers the entry, y top-aligns it under PAGE_TOP_PAD_PX', () => {
     const c = cameraTargetFor({ x: 100, y: 100, width: 200, height: 100 }, 800, 600, 1);
-    // X is still centered: entry x-center 200, minus half viewport 400 → -200.
     assert.equal(c.x, 200 - 400);
-    // Y top-aligns: entry top 100, minus PAGE_TOP_PAD_PX of headroom (zoom 1).
     assert.equal(c.y, 100 - PAGE_TOP_PAD_PX);
 });
 
@@ -184,9 +174,6 @@ test('cameraTargetFor: padding shrinks proportionally with zoom', () => {
 });
 
 test('cameraTargetFor: page top lands at the same screen-Y for any height (no vertical bounce)', () => {
-    // The invariant the user actually cares about: cycling through pages of
-    // wildly different heights must not move the page top up and down.
-    // screen_top = (entry.y - camera.y) * zoom; we assert this is constant.
     const rng = seededRng(0x9c0f3611);
     for (let i = 0; i < 200; i++) {
         const zoom = 0.25 + rng() * 3.75;
@@ -223,10 +210,6 @@ test('cameraTargetFor: x centers the entry horizontally regardless of width (pro
 });
 
 test('regionLabelPosition: when camera is at cameraTargetFor, label.top lands PAGE_TOP_PAD_PX - LABEL_GAP_PX below viewport regardless of zoom', () => {
-    // The drift bug that prompted this helper: after zoom, the label would
-    // render somewhere that wasn't above the page top. This locks down the
-    // contract: for any zoom level, if the camera is at the top-align target,
-    // label.top = PAGE_TOP_PAD_PX - LABEL_GAP_PX in screen pixels.
     const rng = seededRng(0xabc12345);
     for (let i = 0; i < 200; i++) {
         const zoom = 0.25 + rng() * 3.75;
@@ -267,7 +250,6 @@ test('regionLabelPosition: label.left tracks the page and max-width scales with 
 });
 
 test('regionLabelPosition: hides below HIDE_BELOW_SCREEN_W screen pixels wide', () => {
-    // A 1280-wide page at zoom just below HIDE_BELOW_SCREEN_W / 1280 should be hidden.
     const entry = { x: 0, y: 0, width: 1280, height: 900 };
     const borderlineZoom = HIDE_BELOW_SCREEN_W / entry.width;
     const justBelow = regionLabelPosition(entry, { x: 0, y: 0, zoom: borderlineZoom * 0.99 });

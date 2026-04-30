@@ -1,8 +1,3 @@
-// Locks down the palette command registry: per-view registrations must surface
-// alongside global commands when the palette queries the active view's bucket.
-// Regression hook for the world-canvas overhaul, where per-view actions vanished
-// from the Ctrl+E palette while globals still appeared.
-
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 

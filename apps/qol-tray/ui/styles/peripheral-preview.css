@@ -48,9 +48,6 @@
 .peripheral-slot[data-distance="3"] { --visual-scale: 0.4; }
 .peripheral-slot[data-distance="4"] { --visual-scale: 0.28; }
 
-/* Edge anchoring: larger negative offsets push slots further off-screen so
- * only a sliver hugs the viewport edge. Distance-1 shows ~25%; deeper slots
- * progressively tuck further out. */
 .peripheral-slot-prev[data-distance="1"] {
     left: calc(-1 * clamp(250px, 34vw, 500px));
     transform: translateY(-50%) scale(var(--visual-scale));

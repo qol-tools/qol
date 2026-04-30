@@ -61,7 +61,6 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                             ${ctrl.lastImport && html`<${ImportFeedback} lastImport=${ctrl.lastImport} />`}
 
                             <section class="profile-section">
-                                <!-- Status line -->
                                 <div class="profile-status-line">
                                     <${HealthDot} health=${health} />
                                     <span class="profile-status-label">${profileHealthLabel(ctrl.syncStatus)}</span>
@@ -70,7 +69,6 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                                     `}
                                 </div>
 
-                                <!-- Alerts -->
                                 ${ctrl.syncStatus?.incident && html`
                                     <${Alert} variant="warning">${ctrl.syncStatus.incident.message}<//>
                                 `}
@@ -78,7 +76,6 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                                     <${Alert} variant="error">${ctrl.syncStatus.last_error}<//>
                                 `}
 
-                                <!-- Device code flow -->
                                 ${ctrl.authPrompt && html`
                                     <${DeviceCodePrompt}
                                         userCode=${ctrl.authPrompt.userCode}
@@ -87,7 +84,6 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                                     />
                                 `}
 
-                                <!-- Connected: action buttons -->
                                 ${!ctrl.authPrompt && ctrl.configured && html`
                                     <div class="profile-actions-row">
                                         <${ProfileActionButton} id="pull" ctrl=${ctrl} />
@@ -98,14 +94,12 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                                     </div>
                                 `}
 
-                                <!-- Not connected: centered connect button -->
                                 ${!ctrl.authPrompt && !ctrl.configured && html`
                                     <div class="profile-connect-row">
                                         <${ProfileActionButton} id="connect" ctrl=${ctrl} />
                                     </div>
                                 `}
 
-                                <!-- Settings expander -->
                                 ${!ctrl.authPrompt && html`
                                     <${Expander}
                                         open=${showSettings}
