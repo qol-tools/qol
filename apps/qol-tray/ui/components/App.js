@@ -16,6 +16,7 @@ import { useAppKeyboardRouting } from '../app/useAppKeyboardRouting.js';
 import { ViewKeyboardProvider } from '../app/view-keyboard-context.js';
 import { buildViewOrder, renderPageContent, renderWorldViews, CONTENT_SIZED_PAGES } from '../app/views.js';
 import { RecompileDissolve } from '../lib/components/RecompileDissolve.js';
+import { PathPromptModal } from '../lib/components/PathPromptModal.js';
 import { GlobalToast } from './ApiErrorToast.js';
 import { SelectionCursorOverlay } from '../lib/components/SelectionCursorOverlay.js';
 import { CommandPalette } from './CommandPalette.js';
@@ -237,6 +238,9 @@ function AppShell() {
         syncProviders,
         setSyncStatus,
         refreshSyncStatus,
+        modeSwitchPrompt,
+        handleModeSwitchSubmit,
+        closeModeSwitchPrompt,
     } = useApp({ onDissolve });
 
     const viewportRef = useRef(null);
@@ -608,6 +612,13 @@ function AppShell() {
                     <${SelectionCursorOverlay} camera=${camera} />
                     <${RecompileDissolve} triggerRef=${dissolveRef} />
                     <${GlobalToast} />
+                    <${PathPromptModal}
+                        open=${!!modeSwitchPrompt}
+                        onClose=${closeModeSwitchPrompt}
+                        onSubmit=${handleModeSwitchSubmit}
+                        title=${modeSwitchPrompt?.target === 'dev' ? 'Path to dev repo' : 'Path to prod binary'}
+                        placeholder=${modeSwitchPrompt?.target === 'dev' ? '/path/to/qol-tray' : '/usr/local/bin/qol-tray'}
+                        hint=${modeSwitchPrompt?.target === 'dev' ? 'Folder containing qol-tray Cargo.toml' : 'Built qol-tray binary to launch'} />
                 </div>
             <//>
         <//>

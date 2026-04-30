@@ -16,6 +16,13 @@ import {
 } from '../views/profile/actions.js';
 import { toast } from '../lib/toast.js';
 import { resolveInitialWorktree } from './worktree-selection.js';
+import {
+    clearModePath,
+    executeModeSwitch,
+    loadModePath,
+    saveModePath,
+    validateModePath,
+} from '../lib/mode-switch.js';
 
 const WT_KEY = 'dev.recompile.defaultWorktree';
 const SYNC_STATUS_POLL_MS = 5000;
@@ -85,6 +92,30 @@ export function useApp({ onDissolve } = {}) {
             .then(nextProviders => setSyncProviders(Array.isArray(nextProviders) ? nextProviders : []))
             .catch(() => {});
     }, []);
+    const [modeSwitchPrompt, setModeSwitchPrompt] = useState(null);
+    const startModeSwitch = useCallback(async (target, path) => {
+        const valid = await validateModePath(target, path);
+        if (!valid) {
+            clearModePath(target);
+            toast('error', `Invalid ${target} path: ${path}`);
+            return;
+        }
+        try { await executeModeSwitch(target, path); } catch {}
+    }, []);
+    const requestModeSwitch = useCallback((target) => {
+        const saved = loadModePath(target);
+        if (saved) { startModeSwitch(target, saved); return; }
+        setModeSwitchPrompt({ target });
+    }, [startModeSwitch]);
+    const handleModeSwitchSubmit = useCallback((path) => {
+        if (!modeSwitchPrompt) return;
+        const target = modeSwitchPrompt.target;
+        saveModePath(target, path);
+        setModeSwitchPrompt(null);
+        startModeSwitch(target, path);
+    }, [modeSwitchPrompt, startModeSwitch]);
+    const closeModeSwitchPrompt = useCallback(() => setModeSwitchPrompt(null), []);
+
     const handleSidebarAction = useSidebarActions({
         devEnabled,
         checkForUpdate,
@@ -92,7 +123,8 @@ export function useApp({ onDissolve } = {}) {
         failSelfUpdate,
         beginDevRecompile,
         failDevRecompile,
-        defaultWorktreeRef
+        defaultWorktreeRef,
+        requestModeSwitch,
     });
     const palette = usePaletteContext();
     useEffect(() => {
@@ -136,6 +168,9 @@ export function useApp({ onDissolve } = {}) {
         syncProviders,
         setSyncStatus,
         refreshSyncStatus,
+        modeSwitchPrompt,
+        handleModeSwitchSubmit,
+        closeModeSwitchPrompt,
     };
 }
 
