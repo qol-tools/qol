@@ -88,15 +88,6 @@ test('focal layout: total width + gaps == minimapWidth when no floor kicks in an
     assert.ok(Math.abs(totalSlots + totalGaps - 600) < 1e-6);
 });
 
-test('focal layout: floor kicks in for far neighbours on tight budgets', () => {
-    const entries = Array.from({ length: 9 }, (_, i) => PAGE(`e${i}`, i * 10000));
-    const layout = computeMinimapFocalLayout({
-        entries, activePosF: 4, focusRadius: 8, minimapWidth: 380, canvasHeight: 200, minSlotPx: 30,
-    });
-    assert.ok(layout.slots[0].w >= 30 - 1e-6, `far slot ${layout.slots[0].w} < floor 30`);
-    assert.ok(layout.slots[4].w > layout.slots[0].w, 'active still bigger than far');
-});
-
 test('focal layout: gaps between adjacent slots equal FOCAL_GAP_PX', () => {
     const entries = [PAGE('a', 0), PAGE('b', 10000), PAGE('c', 20000)];
     const layout = computeMinimapFocalLayout({ entries, activePosF: 1, minimapWidth: 380 });
@@ -266,7 +257,7 @@ test('property: active slot width is invariant under activePosF for a given laye
         const widths = [];
         for (let k = 0; k < N; k++) {
             const layout = computeMinimapFocalLayout({
-                entries, activePosF: k, focusRadius, minimapWidth, canvasHeight: 10000, minSlotPx: 0,
+                entries, activePosF: k, focusRadius, minimapWidth, canvasHeight: 10000,
             });
             widths.push(layout.slots[k].w);
         }
@@ -285,7 +276,7 @@ test('property: active centre stays at minimapWidth/2 (200 cases)', () => {
         const minimapWidth = 100 + Math.floor(rng() * 400);
         const aIdx = Math.floor(rng() * N);
         const layout = computeMinimapFocalLayout({
-            entries, activePosF: aIdx, minimapWidth, canvasHeight: 10000, minSlotPx: 0,
+            entries, activePosF: aIdx, minimapWidth, canvasHeight: 10000,
         });
         const aSlot = layout.slots[aIdx];
         const aCentre = aSlot.x + aSlot.w / 2;
@@ -343,7 +334,7 @@ test('property: drawMinimap leaves canvas transform as identity (200 cases)', ()
         const ch = 40 + rng() * 80;
         const layout = computeMinimapFocalLayout({
             entries, activePosF: Math.floor(rng() * N), minimapWidth,
-            canvasHeight: ch, minSlotPx: 0,
+            canvasHeight: ch,
         });
         if (!layout) continue;
         const ctx = makeMockCtx();
