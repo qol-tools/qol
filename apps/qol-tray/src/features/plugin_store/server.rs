@@ -23,6 +23,8 @@ mod dev_validation;
 mod helpers;
 mod logs_handlers;
 mod meta_handlers;
+mod mode_build;
+mod mode_handlers;
 mod plugin_handlers;
 mod plugin_services;
 #[cfg(feature = "dev")]
@@ -101,7 +103,8 @@ fn api_router(app_state: AppState) -> Router {
         .merge(settings::routes())
         .merge(crate::features::github_auth::routes())
         .merge(meta_handlers::routes())
-        .merge(logs_handlers::routes());
+        .merge(logs_handlers::routes())
+        .merge(mode_handlers::routes());
     #[cfg(feature = "dev")]
     let api = api
         .merge(dev_handlers::routes())
