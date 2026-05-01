@@ -1,13 +1,11 @@
 import { html } from '../../lib/html.js';
 import { useEffect, useRef, useMemo } from 'preact/hooks';
 import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
-import { useRegisterViewKeyboard } from '../../components/app/view-keyboard-context.js';
 
 import { useDevController } from './use-controller.js';
 import { DevLayout } from './components/DevLayout.js';
 
 export const id = 'dev';
-
 
 function useBuildOverlaySync(ctrl) {
     useEffect(() => {
@@ -21,7 +19,6 @@ export function DevViewInner() {
     const ctrl = useDevController(containerRef);
 
     useBuildOverlaySync(ctrl);
-    useRegisterViewKeyboard('dev', ctrl.handleKey);
 
     const ctrlRef = useRef(ctrl);
     ctrlRef.current = ctrl;

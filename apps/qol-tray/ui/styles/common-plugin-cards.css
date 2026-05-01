@@ -19,8 +19,8 @@
     border-color: var(--warning);
 }
 
-.plugin-grid-media .plugin-card.not-loaded.selected,
-.plugin-grid .plugin-card.not-loaded.selected {
+.plugin-grid-media .plugin-card.not-loaded[data-selected="true"],
+.plugin-grid .plugin-card.not-loaded[data-selected="true"] {
     box-shadow: 0 0 10px var(--warning-glow-soft);
 }
 
@@ -45,6 +45,19 @@
     font-size: var(--fs-base);
     border-bottom-left-radius: inherit;
     border-bottom-right-radius: inherit;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    min-width: 0;
+}
+
+.plugin-name-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .plugin-load-state {
@@ -74,8 +87,8 @@
     transition: border-color var(--transition), box-shadow var(--transition), transform var(--transition);
 }
 
-.plugin-grid-store .plugin-card:hover:not(.selected),
-.plugins-grid .plugin-card:hover:not(.selected) {
+.plugin-grid-store .plugin-card:hover:not([data-selected="true"]),
+.plugins-grid .plugin-card:hover:not([data-selected="true"]) {
     border-color: var(--border-hover);
     box-shadow: var(--elevation-2);
     transform: translateY(-1px);
@@ -100,11 +113,6 @@
 .plugin-grid-store .plugin-card .description,
 .plugins-grid .plugin-card .description {
     color: var(--text-secondary);
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 3;
-    line-clamp: 3;
-    overflow: hidden;
     min-height: calc(1.6em * 3);
 }
 
@@ -221,6 +229,24 @@
     overflow: visible;
 }
 
+.plugin-shift-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(2px);
+    border-radius: inherit;
+    color: var(--accent);
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-semibold);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    z-index: var(--z-control);
+    pointer-events: none;
+}
+
 .context-update,
 .context-delete {
     display: block;
@@ -294,32 +320,10 @@
     border-color: var(--success);
 }
 
-.plugin-grid-media .plugin-card.has-update.selected,
-.plugin-grid .plugin-card.has-update.selected {
+.plugin-grid-media .plugin-card.has-update[data-selected="true"],
+.plugin-grid .plugin-card.has-update[data-selected="true"] {
     border-color: var(--success);
     box-shadow: 0 0 12px var(--success-glow);
-}
-
-.plugin-ctrl-overlay {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(2px);
-    border-radius: inherit;
-    color: var(--accent);
-    font-size: var(--fs-lg);
-    font-weight: var(--fw-semibold);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    z-index: var(--z-popover);
-    pointer-events: none;
-}
-
-.plugin-ctrl-overlay.disabled {
-    color: var(--text-disabled);
 }
 
 .context-config {
@@ -339,4 +343,53 @@
 
 .context-config:hover {
     background: var(--bg-hover);
+}
+
+.plugin-status-chip {
+    flex-shrink: 0;
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-2xs);
+    border: var(--border-w-1) solid transparent;
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-bold);
+    line-height: var(--lh-snug);
+    letter-spacing: var(--ls-lg);
+    text-transform: uppercase;
+    white-space: nowrap;
+    pointer-events: auto;
+}
+
+.plugin-status-chip.chip-dev {
+    color: var(--accent);
+    background: rgba(var(--accent-rgb), 0.18);
+    border-color: rgba(var(--accent-rgb), 0.4);
+}
+
+.plugin-status-chip.chip-fallback {
+    color: var(--warning);
+    background: rgba(var(--warning-rgb), 0.18);
+    border-color: rgba(var(--warning-rgb), 0.4);
+}
+
+.plugin-status-chip.chip-unavailable {
+    color: var(--danger);
+    background: rgba(var(--danger-rgb), 0.22);
+    border-color: rgba(var(--danger-rgb), 0.5);
+}
+
+.plugin-grid-media .plugin-card.resolved-fallback,
+.plugin-grid .plugin-card.resolved-fallback {
+    border-color: rgba(var(--warning-rgb), 0.55);
+}
+
+.plugin-grid-media .plugin-card.unavailable,
+.plugin-grid .plugin-card.unavailable {
+    border-color: var(--danger);
+    opacity: 0.7;
+}
+
+.plugin-grid-media .plugin-card.unavailable[data-selected="true"],
+.plugin-grid .plugin-card.unavailable[data-selected="true"] {
+    box-shadow: 0 0 10px rgba(var(--danger-rgb), 0.35);
+    opacity: 1;
 }

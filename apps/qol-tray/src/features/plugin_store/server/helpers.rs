@@ -107,15 +107,47 @@ fn reload_manager_and_notify_inner(state: &AppState, sync_profile: bool) {
     };
     if reload_ok {
         if sync_profile {
-            if let Err(error) = crate::profile::sync_plugins_lock_from_plugins(manager.plugins()) {
+            if let Err(error) =
+                crate::features::profile::core::sync_plugins_lock_from_plugins(manager.plugins())
+            {
                 log::error!("Failed to sync profile plugins lock: {}", error);
             }
         }
         crate::features::launcher_apps::trigger_full_sync();
     }
+    let report = reload_ok.then(|| manager.last_resolution_report().clone());
     drop(manager);
     trigger_reload();
+    if let Some(report) = report {
+        emit_resolution_events(&state.daemon.events, &report);
+    }
     state.daemon.events.send_plugins_changed();
+}
+
+fn emit_resolution_events(
+    events: &crate::daemon::EventBus,
+    report: &crate::plugins::resolver::ResolutionReport,
+) {
+    use crate::daemon::DaemonEvent;
+    for plugin in &report.plugins {
+        if let Some(failure) = &plugin.active_failure {
+            events.send(DaemonEvent::PluginResolvedFromFallback {
+                plugin_id: plugin.id.as_str().to_string(),
+                active_path: failure.path.clone(),
+                active_reason: failure.reason.clone(),
+                fallback_path: plugin.path.clone(),
+            });
+        }
+    }
+    for u in &report.unavailable {
+        events.send(DaemonEvent::PluginUnavailable {
+            plugin_id: u.id.clone(),
+            active_path: u.active.path.clone(),
+            active_reason: u.active.reason.clone(),
+            fallback_path: u.fallback.as_ref().map(|f| f.path.clone()),
+            fallback_reason: u.fallback.as_ref().map(|f| f.reason.clone()),
+        });
+    }
 }
 
 pub(super) fn extract_actions(items: &[MenuItem]) -> Vec<PluginAction> {

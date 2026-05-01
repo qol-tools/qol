@@ -1,5 +1,3 @@
-mod config_export_handlers;
-mod github_token_handlers;
 mod hotkey_handlers;
 mod http_json;
 mod media_apps_handlers;
@@ -16,11 +14,10 @@ use axum::{
 
 use super::types::AppState;
 
-pub(super) use github_token_handlers::delete_github_token;
-pub(super) use github_token_handlers::get_token_status;
-pub(super) use github_token_handlers::set_github_token;
 pub(super) use hotkey_handlers::get_hotkey_errors;
 pub(super) use hotkey_handlers::get_hotkeys;
+pub(super) use hotkey_handlers::open_hotkeys_file;
+pub(super) use hotkey_handlers::open_shortcuts_file;
 pub(super) use hotkey_handlers::set_hotkeys;
 pub(super) use media_apps_handlers::list_apps;
 pub(super) use media_cover_handlers::serve_cover;
@@ -40,12 +37,11 @@ pub(super) fn routes() -> Router<AppState> {
             "/plugins/{id}/config",
             axum::routing::put(set_plugin_config),
         )
-        .route("/github-token", get(get_token_status))
-        .route("/github-token", post(set_github_token))
-        .route("/github-token", axum::routing::delete(delete_github_token))
         .route("/hotkeys", get(get_hotkeys))
         .route("/hotkeys", axum::routing::put(set_hotkeys))
         .route("/hotkeys/errors", get(get_hotkey_errors))
+        .route("/hotkeys/open-file", post(open_hotkeys_file))
+        .route("/shortcuts/open-file", post(open_shortcuts_file))
         .route("/shortcuts", get(shortcut_handlers::list_shortcuts))
         .route("/shortcuts", post(shortcut_handlers::create_shortcut))
         .route(
@@ -57,19 +53,5 @@ pub(super) fn routes() -> Router<AppState> {
             axum::routing::delete(shortcut_handlers::delete_shortcut),
         )
         .route("/shortcuts/{id}/run", post(shortcut_handlers::run_shortcut))
-        .route("/config/export", get(config_export_handlers::export_config))
-        .route(
-            "/config/import",
-            post(config_export_handlers::import_config),
-        )
-        .route("/sync/status", get(sync_handlers::get_sync_status))
-        .route("/sync/connect", post(sync_handlers::connect_sync))
-        .route("/sync/pull", post(sync_handlers::pull_sync))
-        .route("/sync/push", post(sync_handlers::push_sync))
-        .route("/sync/disconnect", post(sync_handlers::disconnect_sync))
-        .route("/sync/acknowledge", post(sync_handlers::acknowledge_sync))
-        .route(
-            "/sync/backups/open-dir",
-            post(sync_handlers::open_sync_backups_dir),
-        )
+        .merge(crate::features::profile::http::routes())
 }

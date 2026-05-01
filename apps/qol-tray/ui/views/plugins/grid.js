@@ -1,5 +1,6 @@
 import { html } from '../../lib/html.js';
-import { useModifierState } from '../../hooks/modifier-state-context.js';
+import { Card, CardGrid } from '../../lib/components/Card.js';
+import { useModifierState } from '../../lib/hooks/modifier-state-context.js';
 
 const brokenCovers = new Set();
 
@@ -10,9 +11,9 @@ const PLACEHOLDER_SVG = 'data:image/svg+xml,' + encodeURIComponent(
     '</svg>'
 );
 
-export function PluginsGrid({ plugins, ghostPlugins, selectedIndex, contextMenuOpen, updating, onCardClick }) {
+export function PluginsGrid({ plugins, ghostPlugins, selectedIndex, updating, onCardClick, onSelect, onToggleMenu }) {
     return html`
-        <div id="plugins-grid" class="plugin-grid-media grid-cards grid-cards--zoom">
+        <${CardGrid} id="plugins-grid" className="plugin-grid-media grid-cards--zoom">
             ${plugins.length === 0 && ghostPlugins.length === 0 && html`
                 <div class="empty">No plugins installed. Press Tab to open the store.</div>
             `}
@@ -23,40 +24,68 @@ export function PluginsGrid({ plugins, ghostPlugins, selectedIndex, contextMenuO
                 </div>
             `)}
             ${plugins.map((plugin, index) => html`
-                <${PluginCard} plugin=${plugin} index=${index} selectedIndex=${selectedIndex}
-                    contextMenuOpen=${contextMenuOpen} updating=${updating} onCardClick=${onCardClick} />
+                <${PluginCard} key=${plugin.id} plugin=${plugin} index=${index}
+                    selected=${index === selectedIndex}
+                    updating=${updating} onCardClick=${onCardClick} onSelect=${onSelect}
+                    onToggleMenu=${onToggleMenu} />
             `)}
-        </div>
+        <//>
     `;
 }
 
-function PluginCard({ plugin, index, selectedIndex, contextMenuOpen, updating, onCardClick }) {
-    const selected = index === selectedIndex;
-    const { ctrlHeld } = useModifierState();
+function PluginCard({ plugin, index, selected, updating, onCardClick, onSelect, onToggleMenu }) {
+    const cls = cardClassName(plugin);
+    const chip = pluginStatusChip(plugin);
+    const { shiftHeld } = useModifierState();
+    const showShiftHint = selected && shiftHeld;
+    const handleCogClick = (e) => {
+        e.stopPropagation();
+        onToggleMenu(index);
+    };
     return html`
-        <div key=${plugin.id}
-             class=${cardClassName(plugin, selected)}
-             data-selected-surface=""
-             data-selected=${selected ? 'true' : 'false'}
-             data-index="${index}" data-plugin-id="${plugin.id}"
-             onClick=${(e) => onCardClick(e, index, plugin.id)}>
+        <${Card} className=${cls}
+             index=${index} selected=${selected} onSelect=${onSelect}
+             onActivate=${(e) => onCardClick(e, index, plugin.id)}
+             data-plugin-id=${plugin.id}>
             <img src=${plugin.has_cover && !brokenCovers.has(plugin.id) ? `/api/cover/${plugin.id}` : PLACEHOLDER_SVG}
                  alt=${plugin.name}
                  onError=${(e) => { brokenCovers.add(plugin.id); e.target.src = PLACEHOLDER_SVG; }} />
-            <div class="plugin-name" data-selected-text="">${plugin.name}</div>
+            <div class="plugin-name" data-selected-text="">
+                <span class="plugin-name-text">${plugin.name}</span>
+                ${chip && html`<span class="plugin-status-chip ${chip.className}" title=${chip.tooltip}>${chip.label}</span>`}
+            </div>
             ${plugin.loaded === false && html`<div class="plugin-load-state" data-selected-text="">Not loaded</div>`}
             ${plugin.update_available && html`<${PluginUpdateButton} plugin=${plugin} updating=${updating} />`}
-            <${PluginCogButton} />
-            ${selected && ctrlHeld && html`
-                <div class="plugin-ctrl-overlay ${plugin.has_config ? '' : 'disabled'}">Config</div>
-            `}
-            <div class=${contextMenuClassName(contextMenuOpen, selected)}>
-                ${plugin.update_available && html`<button class="context-update">Update</button>`}
-                ${plugin.has_config && html`<button class="context-config">Config</button>`}
-                <button class="context-delete">Delete</button>
-            </div>
-        </div>
+            <${PluginCogButton} onClick=${handleCogClick} />
+            ${showShiftHint && html`<div class="plugin-shift-overlay">Menu</div>`}
+        <//>
     `;
+}
+
+function pluginStatusChip(plugin) {
+    if (plugin.unavailable) {
+        return {
+            label: 'Broken',
+            className: 'chip-unavailable',
+            tooltip: plugin.load_error || 'Plugin could not be resolved from registry.'
+        };
+    }
+    if (plugin.resolved_from === 'fallback') {
+        const reason = plugin.active_failure_reason || 'unknown reason';
+        return {
+            label: 'Fallback',
+            className: 'chip-fallback',
+            tooltip: `Dev-link unavailable: ${reason}. Showing installed copy.`
+        };
+    }
+    if (plugin.source === 'dev_linked') {
+        return {
+            label: 'Dev',
+            className: 'chip-dev',
+            tooltip: 'Running from a dev-link. Changes to the linked source take effect on reload.'
+        };
+    }
+    return null;
 }
 
 function PluginUpdateButton({ plugin, updating }) {
@@ -71,9 +100,9 @@ function PluginUpdateButton({ plugin, updating }) {
     `;
 }
 
-function PluginCogButton() {
+function PluginCogButton({ onClick }) {
     return html`
-        <button class="plugin-cog" aria-label="Plugin options">
+        <button class="plugin-cog" aria-label="Plugin options" onClick=${onClick}>
             <svg class="plugin-cog-icon" viewBox="0 0 12 20" fill="currentColor" aria-hidden="true" focusable="false">
                 <circle cx="6" cy="3.5" r="1.8"></circle>
                 <circle cx="6" cy="10" r="1.8"></circle>
@@ -83,16 +112,12 @@ function PluginCogButton() {
     `;
 }
 
-function cardClassName(plugin, selected) {
+function cardClassName(plugin) {
     const classes = ['plugin-card'];
-    if (!plugin.has_custom_ui && !plugin.has_config) classes.push('no-ui');
+    if (!plugin.has_config) classes.push('no-ui');
     if (plugin.update_available) classes.push('has-update');
     if (plugin.loaded === false) classes.push('not-loaded');
-    if (selected) classes.push('selected');
+    if (plugin.unavailable) classes.push('unavailable');
+    if (plugin.resolved_from === 'fallback') classes.push('resolved-fallback');
     return classes.join(' ');
-}
-
-function contextMenuClassName(contextMenuOpen, selected) {
-    if (contextMenuOpen && selected) return 'plugin-context-menu open';
-    return 'plugin-context-menu';
 }

@@ -1,5 +1,6 @@
 import { apiJson, apiResponse, jsonRequest, readResponseText } from '../../api/client.js';
 import { toast } from '../../lib/toast.js';
+import { importSummary } from './summary.js';
 
 export async function exportProfile() {
     const bundle = await apiJson('/api/config/export');
@@ -10,6 +11,16 @@ export async function exportProfile() {
 
 export async function fetchSyncStatus() {
     return apiJson('/api/sync/status');
+}
+
+export async function fetchSyncProviders() {
+    return apiJson('/api/sync/providers');
+}
+
+export async function bootstrapGitHubProfileSync() {
+    const result = await apiJson('/api/sync/github/bootstrap', { method: 'POST' });
+    toast(syncToastKind(result.status?.health), result.message);
+    return result;
 }
 
 export async function connectProfileSync(payload) {
@@ -52,9 +63,36 @@ export async function openProfileBackupsDir() {
     throw new Error(message);
 }
 
+export async function openProfileBackupFile(fileName) {
+    if (!fileName) throw new Error('Backup file is required');
+    const response = await apiResponse(
+        `/api/sync/backups/${encodeURIComponent(fileName)}/open`,
+        { method: 'POST' },
+    );
+    if (response.ok) return;
+    const message = (await readResponseText(response)) || 'Failed to open backup';
+    throw new Error(message);
+}
+
+export async function fetchProfileBackups() {
+    return apiJson('/api/sync/backups');
+}
+
+export async function fetchProfileBackupPreview(fileName) {
+    if (!fileName) {
+        throw new Error('Backup file is required');
+    }
+    return apiJson(`/api/sync/backups/${encodeURIComponent(fileName)}`);
+}
+
 export async function importProfileFile(file) {
     if (!file) throw new Error('No file selected');
     const text = await file.text();
+    return importProfileText(text);
+}
+
+export async function importProfileText(text) {
+    if (!text) throw new Error('Backup is empty');
     JSON.parse(text);
     const result = await apiJson('/api/config/import', {
         method: 'POST',
@@ -84,41 +122,6 @@ export function promptImportProfile(options = {}) {
         }
     };
     input.click();
-}
-
-export function importCounts(result) {
-    const counts = {
-        installed: 0,
-        updated: 0,
-        kept: 0,
-        skipped: 0,
-        failed: 0,
-    };
-    for (const plugin of result?.plugins || []) {
-        if (plugin.status === 'install') counts.installed += 1;
-        if (plugin.status === 'update') counts.updated += 1;
-        if (plugin.status === 'kept') counts.kept += 1;
-        if (plugin.status === 'skipped') counts.skipped += 1;
-        if (plugin.status === 'failed') counts.failed += 1;
-    }
-    return counts;
-}
-
-export function importSummary(result) {
-    const counts = importCounts(result);
-    const parts = [];
-    if (counts.installed) parts.push(`${counts.installed} installed`);
-    if (counts.updated) parts.push(`${counts.updated} updated`);
-    if (counts.kept) parts.push(`${counts.kept} unchanged`);
-    if (counts.skipped) parts.push(`${counts.skipped} skipped`);
-    if (counts.failed) parts.push(`${counts.failed} failed`);
-    if (parts.length === 0) {
-        return result?.success ? 'Profile imported' : 'Profile imported with warnings';
-    }
-    if (result?.success) {
-        return `Profile imported: ${parts.join(', ')}`;
-    }
-    return `Profile imported with warnings: ${parts.join(', ')}`;
 }
 
 function defaultImportError(error) {

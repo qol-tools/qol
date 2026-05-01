@@ -3,6 +3,13 @@
 @import "./styles/table.css";
 @import "./styles/common-components.css";
 @import "./styles/dev-page.css";
+@import "./styles/log-filters.css";
+@import "./styles/uninstall-confirm.css";
+@import "./styles/test-runner.css";
+@import "./styles/plugin-actions.css";
 @import "./styles/plugin-config.css";
 @import "./styles/logs.css";
 @import "./styles/profile.css";
+@import "./styles/world.css";
+@import "./styles/peripheral-preview.css";
+@import "./styles/atmosphere.css";

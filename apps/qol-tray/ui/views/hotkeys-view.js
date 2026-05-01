@@ -1,14 +1,31 @@
 import { html } from '../lib/html.js';
-import { useRef, useMemo } from 'preact/hooks';
+import { useRef, useMemo, useCallback } from 'preact/hooks';
 import { usePaletteContext } from '../palette/context.js';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
-import { useRegisterViewKeyboard } from '../components/app/view-keyboard-context.js';
+import { useRegisterViewKeyboard } from '../app/view-keyboard-context.js';
 import { matchesQuery } from '../utils/collections.js';
+import { ascend, diveViaSelector } from '../lib/world-navigation-singleton.js';
 
 import { PageHeader } from '../components/PageHeader.js';
-import { HotkeyEditModal } from './hotkeys/modal.js';
+import { ModalActions } from '../lib/components/ModalPreact.js';
+import { DiveEditorSubPage } from '../lib/components/DiveEditorSubPage.js';
+import { useDiveEditor } from '../lib/hooks/useDiveEditor.js';
+import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
+import { PluginSelect, ActionSelect, KeyInput } from './hotkeys/modal.js';
 import { useHotkeys } from './hotkeys/use-hotkeys.js';
 import { HotkeysList } from './hotkeys/list.js';
+
+import { createSharedSlot } from '../lib/shared-slot.js';
+const editSlot = createSharedSlot({
+    modal: null,
+    plugins: [],
+    recording: false,
+    fieldProps: () => ({}),
+    handlers: {},
+    handleKey: null,
+    isBlocking: null,
+});
+const HOTKEYS_EDITOR_DIVE_SELECTOR = '[data-view-id="hotkeys"]';
 
 function RegistrationWarnings({ errors }) {
     return html`
@@ -24,7 +41,27 @@ function RegistrationWarnings({ errors }) {
 }
 
 export function HotkeysView() {
-    const hk = useHotkeys();
+    const ascendIfDeep = useCallback(() => { ascend(); }, []);
+    const hk = useHotkeys({ onAfterSave: ascendIfDeep, onAfterClose: ascendIfDeep });
+    useDiveEditor({
+        slot: editSlot,
+        deps: [hk.editModal, hk.plugins, hk.recorder.isRecording, hk.handleKey, hk.isBlocking],
+        build: () => ({
+            modal: hk.editModal,
+            plugins: hk.plugins,
+            recording: hk.recorder.isRecording,
+            fieldProps: hk.fieldProps,
+            handlers: {
+                onPluginChange: hk.handlePluginChange,
+                onActionChange: hk.handleActionChange,
+                onStartRecording: hk.startRecording,
+                onClose: hk.closeModal,
+                onSave: hk.saveHotkey,
+            },
+            handleKey: hk.handleKey,
+            isBlocking: hk.isBlocking,
+        }),
+    });
     const { searchQuery } = usePaletteContext();
     const filtered = useMemo(
         () => searchQuery
@@ -42,27 +79,67 @@ export function HotkeysView() {
     const filteredRef = useRef(filtered);
     filteredRef.current = filtered;
     const commands = useMemo(() => [
-        { id: 'hotkeys:add', label: 'Add new hotkey', run: () => hkRef.current.openEditModal() },
+        { id: 'hotkeys:add', label: 'Add new hotkey', run: () => {
+            hkRef.current.openEditModal();
+            diveViaSelector(HOTKEYS_EDITOR_DIVE_SELECTOR);
+        } },
         { id: 'hotkeys:delete', label: 'Delete selected hotkey', run: () => hkRef.current.deleteSelected() },
-        { id: 'hotkeys:edit', label: 'Edit selected hotkey', run: () => { const h = filteredRef.current[hkRef.current.selectedIndex]; if (h) hkRef.current.openEditModal(h); } },
+        { id: 'hotkeys:edit', label: 'Edit selected hotkey', run: () => {
+            const h = filteredRef.current[hkRef.current.selectedIndex];
+            if (!h) return;
+            hkRef.current.openEditModal(h);
+            diveViaSelector(HOTKEYS_EDITOR_DIVE_SELECTOR);
+        } },
     ], []);
     useRegisterCommands('hotkeys', commands);
 
     return html`
         <div class="view-container content-shell">
-            <${PageHeader} title="Hotkeys" subtitle="Configure global keyboard shortcuts for plugin actions" />
+            <${PageHeader} subtitle="Configure global keyboard shortcuts for plugin actions" />
             ${hk.registrationErrors.length > 0 && html`<${RegistrationWarnings} errors=${hk.registrationErrors} />`}
             <div class="view-body content-shell-body">
                 <div class="content-shell-inner">
-                    <div class="content-frame">
+                    <${SurfaceContainer} className="content-frame">
                         <${HotkeysList} hotkeys=${filtered} plugins=${hk.plugins}
                             selectedIndex=${hk.selectedIndex} onSelect=${hk.setSelectedIndex} onEdit=${hk.openEditModal} />
-                    </div>
+                    <//>
                 </div>
             </div>
-            ${hk.editModal && html`<${HotkeyEditModal} modal=${hk.editModal} plugins=${hk.plugins}
-                fieldProps=${hk.fieldProps} onPluginChange=${hk.handlePluginChange} onActionChange=${hk.handleActionChange}
-                onStartRecording=${hk.startRecording} onClose=${hk.closeModal} onSave=${hk.saveHotkey} />`}
+        </div>
+    `;
+}
+
+export function HotkeyEditorSubPage() {
+    return html`<${DiveEditorSubPage}
+        slot=${editSlot}
+        viewId="hotkeys-editor"
+        fallbackTitle="Hotkey Editor"
+        fallbackSubtitle="Select a hotkey to edit"
+        renderHeader=${(v) => html`<${PageHeader}
+            title=${v.modal.hotkey ? 'Edit Hotkey' : 'Add Hotkey'}
+            subtitle=${v.modal.key || 'new hotkey'} />`}
+        children=${(v) => html`<${HotkeyEditorBody} value=${v} />`} />`;
+}
+
+function HotkeyEditorBody({ value }) {
+    const { modal, plugins, recording, fieldProps, handlers } = value;
+    const canSave = !!(modal.key && modal.pluginId && modal.action);
+    return html`
+        <div class="edit-modal-content">
+            <div class="form-group" ...${fieldProps(0)}>
+                <label>Plugin</label>
+                <${PluginSelect} modal=${modal} plugins=${plugins} onChange=${handlers.onPluginChange} />
+            </div>
+            <div class="form-group" ...${fieldProps(1)}>
+                <label>Action</label>
+                <${ActionSelect} modal=${modal} onChange=${handlers.onActionChange}
+                    disabled=${modal.availableActions.length === 0} />
+            </div>
+            <div class="form-group" ...${fieldProps(2)}>
+                <label>Shortcut</label>
+                <${KeyInput} modal=${modal} recording=${recording} onStartRecording=${handlers.onStartRecording} />
+            </div>
+            <${ModalActions} onClose=${handlers.onClose} onSave=${handlers.onSave} disabled=${!canSave} />
         </div>
     `;
 }

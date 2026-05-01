@@ -1,5 +1,5 @@
 import { useCallback } from 'preact/hooks';
-import { useStateRef } from '../../hooks/useStateRef.js';
+import { useStateRef } from '../../lib/hooks/useStateRef.js';
 import { runTaskActionTest } from './data.js';
 
 async function doRunTest(testingId, testRunning, testParams, setTestRunning, setTestResult) {

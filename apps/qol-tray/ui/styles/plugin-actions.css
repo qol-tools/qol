@@ -1,0 +1,11 @@
+.plugin-actions-frame {
+    padding: var(--space-7);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    max-width: var(--size-modal-md);
+}
+
+.plugin-actions-frame .btn {
+    justify-content: flex-start;
+}

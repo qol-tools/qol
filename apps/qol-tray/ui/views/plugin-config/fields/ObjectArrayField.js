@@ -2,8 +2,8 @@ import { html } from '../../../lib/html.js';
 import { useState, useCallback, useRef } from 'preact/hooks';
 import { usePluginConfigContext } from '../context.js';
 import { FieldLabel } from './FieldLabel.js';
-import { fieldSelectionClasses } from '../field-map.js';
-import { ToggleSwitch } from '../../../components/ToggleSwitch.js';
+import { fieldSurfaceAttrs } from '../field-map.js';
+import { ToggleSwitch } from '../../../lib/components/ToggleSwitch.js';
 import { groupFields } from '../../../auto-config/object-array-form.js';
 import { declaredFieldsToSchema } from '../../../auto-config/object-array-renderer.js';
 import { KNOWN_MODS, prettyLabel, getObjectArraySchema, guessSchemaFromKey } from '../../../auto-config/heuristics.js';
@@ -12,8 +12,6 @@ export function ObjectArrayField({ field }) {
     const ctx = usePluginConfigContext();
     const [, setTick] = useState(0);
     const values = ctx.getFieldValue(field) || [];
-    const selected = ctx.selectedFieldId === field.id;
-    const index = ctx.fieldIndexById[field.id];
     const schema = resolveSchema(field, values);
 
     const remove = useCallback((i) => {
@@ -33,11 +31,7 @@ export function ObjectArrayField({ field }) {
     }, [ctx, field.id]);
 
     return html`
-        <div tabIndex="-1" class="field-group ${fieldSelectionClasses(selected)}"
-            data-plugin-config-field-id=${field.id}
-            data-plugin-config-index=${index}
-            data-selected-surface=""
-            data-selected=${selected ? 'true' : 'false'}
+        <div ...${fieldSurfaceAttrs(field, ctx, 'field-group')}
             onMouseDown=${onSelect}
             onFocus=${onSelect}>
             <${FieldLabel} text=${field.label} description=${field.description || ''} />

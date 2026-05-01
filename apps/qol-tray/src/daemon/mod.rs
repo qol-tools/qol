@@ -31,6 +31,24 @@ pub enum DaemonEvent {
     PluginsChanged {
         revision: u64,
     },
+    PluginManifestInvalid {
+        plugin_id: String,
+        path: std::path::PathBuf,
+        reason: String,
+    },
+    PluginResolvedFromFallback {
+        plugin_id: String,
+        active_path: std::path::PathBuf,
+        active_reason: String,
+        fallback_path: std::path::PathBuf,
+    },
+    PluginUnavailable {
+        plugin_id: String,
+        active_path: std::path::PathBuf,
+        active_reason: String,
+        fallback_path: Option<std::path::PathBuf>,
+        fallback_reason: Option<String>,
+    },
     #[cfg(feature = "dev")]
     DiscoveryStarted,
     #[cfg(feature = "dev")]

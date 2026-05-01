@@ -13,10 +13,9 @@ import { handleStoreKey } from './keys.js';
 export function useStoreController() {
     const { searchQuery } = usePaletteContext();
     const installing = useInstalling();
-    const tokenInputRef = useRef(null);
     const loadRef = useRef(null);
 
-    const token = useTokenOps(tokenInputRef, loadRef);
+    const token = useTokenOps(loadRef);
     const data = useStoreData(token.hasTokenRef, token.onLoadResult);
     loadRef.current = data.loadPlugins;
     const nav = useStoreNav(data.plugins, searchQuery);
@@ -25,7 +24,7 @@ export function useStoreController() {
     const handleKey = useKeyHandler(token.showTokenInputRef, token.view, data, nav, install, installing.has);
     const handleCardClick = useCardClick(install.installPlugin, nav.setSelectedIndex, nav.selectedIndexRef);
     return {
-        tokenInputRef, handleKey, handleCardClick,
+        handleKey, handleCardClick,
         ...token.view, ...data, ...nav, isInstalling: installing.has,
         installPlugin: install.installPlugin
     };

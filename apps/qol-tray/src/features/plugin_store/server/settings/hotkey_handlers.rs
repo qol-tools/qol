@@ -18,6 +18,24 @@ pub(in super::super) async fn set_hotkeys(body: axum::body::Bytes) -> impl IntoR
     set_hotkeys_inner(body).unwrap_or_else(|response| *response)
 }
 
+pub(in super::super) async fn open_hotkeys_file() -> impl IntoResponse {
+    open_config_file(crate::paths::hotkeys_path())
+}
+
+pub(in super::super) async fn open_shortcuts_file() -> impl IntoResponse {
+    open_config_file(crate::paths::shortcuts_path())
+}
+
+fn open_config_file(path: anyhow::Result<std::path::PathBuf>) -> Response {
+    let Ok(path) = path else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Path unavailable").into_response();
+    };
+    match crate::features::profile::sync::platform::open_path(&path) {
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{error}")).into_response(),
+    }
+}
+
 fn get_hotkeys_inner() -> HttpResult<Response> {
     let manager = hotkey_manager()?;
     let config = manager

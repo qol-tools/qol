@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -36,14 +36,14 @@ impl PluginInstaller {
     pub(crate) async fn install(&self, repo_url: &str, plugin_id: &str) -> Result<()> {
         validate_plugin_id(plugin_id)?;
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
-        operations::ensure_no_dev_link_conflict(plugin_id)?;
         operations::install(
             &self.plugins_dir,
             repo_url,
             plugin_id,
             InstallSource::Latest,
         )
-        .await
+        .await?;
+        self.record_release_install(plugin_id)
     }
 
     pub(crate) async fn install_exact(
@@ -54,27 +54,27 @@ impl PluginInstaller {
     ) -> Result<()> {
         validate_plugin_id(plugin_id)?;
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
-        operations::ensure_no_dev_link_conflict(plugin_id)?;
         operations::install(
             &self.plugins_dir,
             repo_url,
             plugin_id,
             InstallSource::TaggedVersion(version.to_string()),
         )
-        .await
+        .await?;
+        self.record_release_install(plugin_id)
     }
 
     pub(crate) async fn update(&self, repo_url: &str, plugin_id: &str) -> Result<()> {
         validate_plugin_id(plugin_id)?;
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
-        operations::ensure_no_dev_link_conflict(plugin_id)?;
         operations::update(
             &self.plugins_dir,
             repo_url,
             plugin_id,
             InstallSource::Latest,
         )
-        .await
+        .await?;
+        self.record_release_install(plugin_id)
     }
 
     pub(crate) async fn update_exact(
@@ -85,20 +85,57 @@ impl PluginInstaller {
     ) -> Result<()> {
         validate_plugin_id(plugin_id)?;
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
-        operations::ensure_no_dev_link_conflict(plugin_id)?;
         operations::update(
             &self.plugins_dir,
             repo_url,
             plugin_id,
             InstallSource::TaggedVersion(version.to_string()),
         )
-        .await
+        .await?;
+        self.record_release_install(plugin_id)
     }
 
     pub(crate) async fn uninstall(&self, plugin_id: &str) -> Result<()> {
         validate_plugin_id(plugin_id)?;
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
-        operations::uninstall(&self.plugins_dir, plugin_id).await
+        operations::uninstall(&self.plugins_dir, plugin_id).await?;
+        self.record_release_uninstall(plugin_id)
+    }
+
+    fn record_release_install(&self, plugin_id: &str) -> Result<()> {
+        let config_dir = crate::paths::shared_config_dir()?;
+        let plugin_root = self.plugins_dir.join(plugin_id);
+        crate::plugins::registry::record_release_install(&config_dir, plugin_id, plugin_root)
+            .map_err(|e| anyhow::anyhow!("{}", e))
+            .context("Failed to update plugin registry after install")
+    }
+
+    fn record_release_uninstall(&self, plugin_id: &str) -> Result<()> {
+        let config_dir = crate::paths::shared_config_dir()?;
+        crate::plugins::registry::record_release_uninstall(&config_dir, plugin_id)
+            .map_err(|e| anyhow::anyhow!("{}", e))
+            .context("Failed to update plugin registry after uninstall")
+    }
+
+    pub(crate) async fn load_source_config_contract(
+        &self,
+        repo_url: &str,
+        plugin_id: &str,
+        version: Option<&str>,
+    ) -> Result<Option<qol_config::contract::ConfigSpec>> {
+        validate_plugin_id(plugin_id)?;
+        let staging_dir = staging::install_staging_dir(&self.plugins_dir, plugin_id);
+        let install_source = match version {
+            Some(version) if !version.is_empty() => {
+                InstallSource::TaggedVersion(version.to_string())
+            }
+            _ => InstallSource::Latest,
+        };
+        let result = source::clone_plugin_repo(repo_url, &staging_dir, &install_source)
+            .await
+            .and_then(|_| crate::plugins::config::load_config_contract_from_root(&staging_dir));
+        staging::cleanup_temp_dir(&staging_dir).await;
+        result
     }
 }
 

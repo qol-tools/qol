@@ -51,12 +51,14 @@ use types::*;
 pub(crate) async fn start_ui_server(
     plugin_manager: Arc<Mutex<PluginManager>>,
     daemon: &Daemon,
-    sync_service: Arc<crate::sync::SyncService>,
+    sync_service: Arc<crate::features::profile::sync::SyncService>,
     #[cfg(feature = "dev")] core_log_controls: crate::logging::CoreControlsHandle,
 ) -> Result<u16> {
+    let github_auth_service = Arc::new(crate::features::github_auth::GitHubAuthService::new());
     let (app_state, plugins_dir) = AppState::new(
         plugin_manager,
         daemon,
+        github_auth_service,
         sync_service,
         #[cfg(feature = "dev")]
         core_log_controls,
@@ -99,6 +101,7 @@ fn schedule_post_restart_rebuild(app_state: &AppState) {
 fn api_router(app_state: AppState) -> Router {
     let api = plugin_handlers::routes()
         .merge(settings::routes())
+        .merge(crate::features::github_auth::routes())
         .merge(meta_handlers::routes())
         .merge(logs_handlers::routes())
         .merge(mode_handlers::routes());
@@ -133,7 +136,9 @@ fn assemble_app(app_state: AppState, plugins_dir: PathBuf) -> Router {
 fn start_sync_loop(app_state: &AppState) {
     let state = app_state.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(crate::sync::SyncService::auto_push_interval());
+        let mut interval = tokio::time::interval(
+            crate::features::profile::sync::SyncService::auto_push_interval(),
+        );
         loop {
             interval.tick().await;
             let result = match state.sync_service.auto_push_if_dirty().await {

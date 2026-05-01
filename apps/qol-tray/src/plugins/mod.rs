@@ -11,6 +11,7 @@ pub mod loader;
 pub mod manager;
 pub mod manifest;
 pub(crate) mod paths;
+pub mod registry;
 pub mod resolver;
 
 pub use config::PluginConfigManager;

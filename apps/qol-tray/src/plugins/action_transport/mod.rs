@@ -7,7 +7,7 @@ mod platform;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DaemonActionDispatch {
-    Handled,
+    Handled { payload: Option<serde_json::Value> },
     Fallback,
     Error(String),
     Unavailable,

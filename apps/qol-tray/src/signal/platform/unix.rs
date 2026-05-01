@@ -28,11 +28,9 @@ pub(super) fn unregister_daemon_pid(pid: u32) {
 }
 
 pub(super) fn install_signal_handler() {
+    let handler: extern "C" fn(libc::c_int) = sigint_handler;
     unsafe {
-        libc::signal(
-            libc::SIGINT,
-            sigint_handler as *const () as libc::sighandler_t,
-        );
+        libc::signal(libc::SIGINT, handler as libc::sighandler_t);
     }
 }
 

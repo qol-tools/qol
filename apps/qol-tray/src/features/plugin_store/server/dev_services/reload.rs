@@ -87,19 +87,24 @@ fn run_build(task: &ReloadTask) {
     let dev_links: std::collections::HashMap<String, std::path::PathBuf> = task
         .config_dir
         .as_deref()
-        .map(dev::load_dev_links)
+        .map(crate::plugins::registry::dev_linked_paths)
         .unwrap_or_default()
         .into_iter()
         .filter(|(k, _)| task.plugin_filter.as_ref().is_none_or(|id| k == id))
         .collect();
 
+    let persisted_branch = task
+        .config_dir
+        .as_deref()
+        .and_then(dev::get_active_worktree_branch);
+    let branch = task
+        .worktree_branch
+        .as_deref()
+        .or(persisted_branch.as_deref());
+
     let event_sink = task.runtime.create_core_event_sink(task.events.clone());
     let build_service = dev::default_build_application_service(event_sink.as_ref());
-    build_service.run(
-        &dev_links,
-        task.config_dir.as_deref(),
-        task.worktree_branch.as_deref(),
-    );
+    build_service.run(&dev_links, task.config_dir.as_deref(), branch);
 }
 
 fn reload_plugins(

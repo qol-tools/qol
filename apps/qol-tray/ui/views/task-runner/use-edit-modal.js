@@ -1,5 +1,5 @@
 import { useCallback } from 'preact/hooks';
-import { useStateRef } from '../../hooks/useStateRef.js';
+import { useStateRef } from '../../lib/hooks/useStateRef.js';
 import { buildSavedActions, createEditModalState, persistTaskRunnerConfig } from './data.js';
 
 function doSave(actionsRef, editModal, setActions, setActionIds, setSelectedIndex, setEditModal) {

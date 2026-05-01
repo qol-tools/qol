@@ -174,6 +174,7 @@ mod tests {
             runtime: None,
             capabilities: Capabilities::default(),
             build: BuildInfo::default(),
+            traits: None,
         }
     }
 
