@@ -5,7 +5,6 @@ mod media_cover_handlers;
 mod media_icon_handlers;
 mod plugin_config_handlers;
 mod shortcut_handlers;
-mod sync_handlers;
 
 use axum::{
     routing::{get, post},
