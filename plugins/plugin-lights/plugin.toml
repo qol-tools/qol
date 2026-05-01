@@ -9,26 +9,28 @@ platforms = ["linux", "macos"]
 command = "plugin-lights"
 
 [runtime.actions]
-toggle-main = ["toggle-main"]
-on-main = ["on-main"]
-off-main = ["off-main"]
-brighter-main = ["brighter-main"]
-dimmer-main = ["dimmer-main"]
-warmer-main = ["warmer-main"]
-cooler-main = ["cooler-main"]
-preset-1 = ["preset-1"]
-preset-2 = ["preset-2"]
-preset-3 = ["preset-3"]
-preset-4 = ["preset-4"]
-preset-5 = ["preset-5"]
-preset-6 = ["preset-6"]
-preset-7 = ["preset-7"]
-preset-8 = ["preset-8"]
+toggle_main = ["toggle_main"]
+on_main = ["on_main"]
+off_main = ["off_main"]
+brighter_main = ["brighter_main"]
+dimmer_main = ["dimmer_main"]
+warmer_main = ["warmer_main"]
+cooler_main = ["cooler_main"]
+preset_1 = ["preset_1"]
+preset_2 = ["preset_2"]
+preset_3 = ["preset_3"]
+preset_4 = ["preset_4"]
+preset_5 = ["preset_5"]
+preset_6 = ["preset_6"]
+preset_7 = ["preset_7"]
+preset_8 = ["preset_8"]
 settings = ["settings"]
 pair = ["pair"]
-set-color-main = ["set-color-main"]
-set-brightness-main = ["set-brightness-main"]
-set-colortemp-main = ["set-colortemp-main"]
+stop_pair = ["stop_pair"]
+set_color_main = ["set_color_main"]
+set_brightness_main = ["set_brightness_main"]
+set_colortemp_main = ["set_colortemp_main"]
+reload = ["reload"]
 
 [capabilities]
 serial = true
@@ -41,21 +43,21 @@ socket = "/tmp/plugin-lights.sock"
 [menu]
 label = "Lights"
 items = [
-    { type = "action", id = "toggle-main", label = "Toggle Main Light", action = "run" },
-    { type = "action", id = "on-main", label = "Turn Main Light On", action = "run" },
-    { type = "action", id = "off-main", label = "Turn Main Light Off", action = "run" },
-    { type = "action", id = "brighter-main", label = "Brighten Main Light", action = "run" },
-    { type = "action", id = "dimmer-main", label = "Dim Main Light", action = "run" },
-    { type = "action", id = "warmer-main", label = "Warm Main Light", action = "run" },
-    { type = "action", id = "cooler-main", label = "Cool Main Light", action = "run" },
-    { type = "action", id = "preset-1", label = "Preset 1", action = "run" },
-    { type = "action", id = "preset-2", label = "Preset 2", action = "run" },
-    { type = "action", id = "preset-3", label = "Preset 3", action = "run" },
-    { type = "action", id = "preset-4", label = "Preset 4", action = "run" },
-    { type = "action", id = "preset-5", label = "Preset 5", action = "run" },
-    { type = "action", id = "preset-6", label = "Preset 6", action = "run" },
-    { type = "action", id = "preset-7", label = "Preset 7", action = "run" },
-    { type = "action", id = "preset-8", label = "Preset 8", action = "run" },
+    { type = "action", id = "toggle_main", label = "Toggle Main Light", action = "run" },
+    { type = "action", id = "on_main", label = "Turn Main Light On", action = "run" },
+    { type = "action", id = "off_main", label = "Turn Main Light Off", action = "run" },
+    { type = "action", id = "brighter_main", label = "Brighten Main Light", action = "run" },
+    { type = "action", id = "dimmer_main", label = "Dim Main Light", action = "run" },
+    { type = "action", id = "warmer_main", label = "Warm Main Light", action = "run" },
+    { type = "action", id = "cooler_main", label = "Cool Main Light", action = "run" },
+    { type = "action", id = "preset_1", label = "Preset 1", action = "run" },
+    { type = "action", id = "preset_2", label = "Preset 2", action = "run" },
+    { type = "action", id = "preset_3", label = "Preset 3", action = "run" },
+    { type = "action", id = "preset_4", label = "Preset 4", action = "run" },
+    { type = "action", id = "preset_5", label = "Preset 5", action = "run" },
+    { type = "action", id = "preset_6", label = "Preset 6", action = "run" },
+    { type = "action", id = "preset_7", label = "Preset 7", action = "run" },
+    { type = "action", id = "preset_8", label = "Preset 8", action = "run" },
     { type = "action", id = "settings", label = "Settings", action = "settings" },
     { type = "action", id = "pair", label = "Pair Device", action = "run" },
 ]
