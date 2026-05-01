@@ -608,14 +608,6 @@ function AppShell() {
                     <${SelectionCursorOverlay} camera=${camera} />
                     <${RecompileDissolve} triggerRef=${dissolveRef} />
                     <${GlobalToast} />
-                    <${PathPromptModal}
-                        open=${modeSwitchPrompt !== null}
-                        onClose=${() => setModeSwitchPrompt(null)}
-                        title=${modeSwitchPrompt?.target === 'dev' ? 'Dev repo path' : 'Prod binary path'}
-                        placeholder=${modeSwitchPrompt?.target === 'dev' ? '/path/to/qol-tray' : '/path/to/qol-tray-binary'}
-                        hint=${modeSwitchPrompt?.target === 'dev' ? 'Path to the qol-tray repo root (contains Cargo.toml)' : 'Path to the installed qol-tray binary'}
-                        onSubmit=${handleModeSwitchSubmit}
-                    />
                 </div>
             <//>
         <//>
