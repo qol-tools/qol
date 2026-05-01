@@ -120,6 +120,25 @@ impl ZigbeeController {
         )
     }
 
+    pub fn resolve_nwk_address(&self, ieee: &[u8; 8]) -> Result<u16> {
+        let nwk = coordinator::resolve_nwk_address(&self.engine, ieee)?;
+        let mut reg = self.registry.lock().unwrap();
+        if let Some(dev) = reg.by_ieee_address(ieee).cloned() {
+            if dev.network_address != nwk {
+                eprintln!(
+                    "[znp] device {} NWK updated: 0x{:04X} → 0x{:04X}",
+                    format_ieee(&dev.ieee_address),
+                    dev.network_address,
+                    nwk,
+                );
+                let mut updated = dev;
+                updated.network_address = nwk;
+                reg.register(updated);
+            }
+        }
+        Ok(nwk)
+    }
+
     pub fn events(&self) -> &Receiver<ZigbeeEvent> {
         &self.events_rx
     }
@@ -276,4 +295,11 @@ fn query_simple_desc(engine: &RequestEngine, nwk_addr: u16, endpoint_id: u8) -> 
         id: endpoint_id,
         input_clusters,
     })
+}
+
+fn format_ieee(addr: &[u8; 8]) -> String {
+    addr.iter()
+        .map(|b| format!("{:02X}", b))
+        .collect::<Vec<_>>()
+        .join(":")
 }

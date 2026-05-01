@@ -33,7 +33,7 @@ pub type CommandBuffer = Arc<Mutex<Option<PendingCommand>>>;
 
 pub fn start(
     buffer: CommandBuffer,
-    service: Arc<Mutex<LightService<ZigbeeBackend>>>,
+    service: Arc<Mutex<Option<LightService<ZigbeeBackend>>>>,
     target: LightTarget,
 ) {
     let listener = match TcpListener::bind(format!("127.0.0.1:{}", WS_PORT)) {
@@ -91,7 +91,9 @@ fn handle_client(stream: std::net::TcpStream, buffer: CommandBuffer) {
         let Some(pending) = parse_pending(&cmd) else {
             continue;
         };
-        *buffer.lock().unwrap() = Some(pending);
+        if let Ok(mut buf) = buffer.lock() {
+            *buf = Some(pending);
+        }
     }
 }
 
@@ -105,17 +107,22 @@ fn parse_pending(cmd: &WsCommand) -> Option<PendingCommand> {
 
 fn start_send_loop(
     buffer: CommandBuffer,
-    service: Arc<Mutex<LightService<ZigbeeBackend>>>,
+    service: Arc<Mutex<Option<LightService<ZigbeeBackend>>>>,
     target: LightTarget,
 ) {
     thread::Builder::new()
         .name("ws-send".into())
         .spawn(move || loop {
             thread::sleep(SEND_INTERVAL);
-            let Some(cmd) = buffer.lock().unwrap().take() else {
+            let Some(cmd) = buffer.lock().ok().and_then(|mut b| b.take()) else {
                 continue;
             };
-            dispatch(&mut service.lock().unwrap(), &target, cmd);
+            let Ok(mut guard) = service.lock() else {
+                continue;
+            };
+            if let Some(svc) = guard.as_mut() {
+                dispatch(svc, &target, cmd);
+            }
         })
         .ok();
 }
