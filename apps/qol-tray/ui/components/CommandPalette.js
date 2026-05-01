@@ -76,14 +76,7 @@ export function CommandPalette({ camera, navigation }) {
             deactivate();
             return;
         }
-        if (mode !== 'action') return;
-        if (isHiddenMode && e.key === 'Enter' && commands.length > 0) {
-            e.preventDefault();
-            e.stopPropagation();
-            executeCommand(commands[0]);
-            return;
-        }
-        if (commands.length === 0) return;
+        if (mode !== 'action' || commands.length === 0) return;
         if (e.key === 'ArrowDown') {
             e.preventDefault();
             setSelectedIndex(i => i + 1 >= commands.length ? 0 : i + 1);
@@ -100,7 +93,7 @@ export function CommandPalette({ camera, navigation }) {
             const cmd = commands[selectedIndex];
             if (cmd) executeCommand(cmd);
         }
-    }, [mode, commands, selectedIndex, isHiddenMode, deactivate, executeCommand]);
+    }, [mode, commands, selectedIndex, deactivate, executeCommand]);
 
     const handleClick = useCallback(() => {
         if (!active) activate();
@@ -121,7 +114,7 @@ export function CommandPalette({ camera, navigation }) {
                 value=${query} onInput=${handleInput} onKeyDown=${handleKeyDown} onBlur=${handleBlur}
                 placeholder=${mode === 'action' ? 'Type a command...' : 'Search...'} />
         </div>
-        ${mode === 'action' && !isHiddenMode && commands.length > 0 && html`
+        ${mode === 'action' && commands.length > 0 && html`
             <ul class="palette-dropdown">
                 ${commands.map((cmd, i) => html`
                     <${Surface} as="li" key=${cmd.id}

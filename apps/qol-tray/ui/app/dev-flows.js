@@ -10,8 +10,7 @@ export const FLOW_STATE = {
 
 const DEV_FLOW_CLEAR_MS = {
     recompile: 1800,
-    update: 2000,
-    mode_switch: 1800
+    update: 2000
 };
 
 const DEV_FLOW_EVENT_KEYS = {
@@ -20,10 +19,7 @@ const DEV_FLOW_EVENT_KEYS = {
     self_recompile_failed: 'recompile',
     update_progress: 'update',
     update_complete: 'update',
-    update_failed: 'update',
-    mode_switch_progress: 'mode_switch',
-    mode_switch_complete: 'mode_switch',
-    mode_switch_failed: 'mode_switch'
+    update_failed: 'update'
 };
 
 function idleFlow() {
@@ -33,17 +29,12 @@ function idleFlow() {
 export function initDevFlows() {
     return {
         update: idleFlow(),
-        recompile: idleFlow(),
-        mode_switch: idleFlow()
+        recompile: idleFlow()
     };
 }
 
 export function resolveDevSidebarState(devFlows) {
-    const { recompile, update, mode_switch } = devFlows;
-    if (mode_switch.state === FLOW_STATE.FAILED) return { status: 'error', message: mode_switch.message };
-    if (mode_switch.state === FLOW_STATE.ACTIVE) return { status: 'compiling', percent: mode_switch.percent, phase: mode_switch.phase || 'Switching mode' };
-    if (mode_switch.state === FLOW_STATE.RESTARTING) return { status: 'compiling', percent: 100, phase: 'Restarting...' };
-    if (mode_switch.state === FLOW_STATE.DONE) return { status: 'recompile_done' };
+    const { recompile, update } = devFlows;
     if (recompile.state === FLOW_STATE.FAILED) return { status: 'error', message: recompile.message };
     if (recompile.state === FLOW_STATE.ACTIVE) return { status: 'compiling', percent: recompile.percent, phase: recompile.phase || 'Recompiling QoL Tray' };
     if (recompile.state === FLOW_STATE.RESTARTING) return { status: 'compiling', percent: 100, phase: 'Restarting...' };
@@ -71,7 +62,7 @@ export function applyDevFlowTransition(devFlows, transition, scheduleDoneClear) 
     if (phase === 'progress') {
         flow.state = FLOW_STATE.ACTIVE;
         flow.percent = clampPercent(event.percent);
-        flow.phase = (key === 'recompile' || key === 'mode_switch') ? progressPhase(event) : null;
+        flow.phase = (key === 'recompile') ? progressPhase(event) : null;
         flow.message = null;
         return;
     }
@@ -98,13 +89,9 @@ export function startRecompileFlow(devFlows) {
     devFlows.recompile = { state: FLOW_STATE.ACTIVE, percent: 0, phase: 'Preparing build', message: null, restarts: true, clearTimer: null };
 }
 
-export function startModeSwitchFlow(devFlows) {
-    devFlows.mode_switch = { state: FLOW_STATE.ACTIVE, percent: 0, phase: 'Switching mode', message: null, restarts: true, clearTimer: null };
-}
-
 export function completeReconnectFlows(devFlows, scheduleDoneClear) {
     let restartedFlow = null;
-    for (const key of ['recompile', 'update', 'mode_switch']) {
+    for (const key of ['recompile', 'update']) {
         const flow = devFlows[key];
         const completed = flow.state === FLOW_STATE.RESTARTING
             || (flow.state === FLOW_STATE.ACTIVE && flow.restarts);
