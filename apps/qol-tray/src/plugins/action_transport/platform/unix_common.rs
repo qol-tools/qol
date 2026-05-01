@@ -6,7 +6,9 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
-const SOCKET_IO_TIMEOUT_MS: u64 = 80;
+// 10s: ZCL commands need up to 5s for DATA_CONFIRM + 3s for NWK_ADDR resolution.
+// The original 80ms caused every action to return "daemon unavailable".
+const SOCKET_IO_TIMEOUT_MS: u64 = 10_000;
 type DispatchResult<T> = Result<T, ()>;
 
 pub(super) fn dispatch_action(endpoint: &Path, action_id: &str) -> DaemonActionDispatch {

@@ -17,6 +17,8 @@ pub struct PluginManifest {
     pub capabilities: Capabilities,
     #[serde(default)]
     pub build: BuildInfo,
+    #[serde(default)]
+    pub traits: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]

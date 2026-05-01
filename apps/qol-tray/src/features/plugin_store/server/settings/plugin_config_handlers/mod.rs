@@ -43,10 +43,6 @@ fn get_plugin_config_inner(plugin_id: String) -> HttpResult<Response> {
 fn get_plugin_config_form_inner(plugin_id: String) -> HttpResult<Response> {
     let plugin_id = validated_plugin_id(plugin_id)?;
     let form = form::load_plugin_config_form(&plugin_id)?;
-    let form = match form {
-        Some(form) => form,
-        None => return Ok(config_form_not_found_response()),
-    };
     Ok(config_form_json_response(&form))
 }
 
@@ -83,8 +79,8 @@ fn config_json_response(config: &serde_json::Value) -> Response {
     http_json::json_response(json)
 }
 
-fn config_form_json_response(config: &qol_config::normalized::ResolvedConfig) -> Response {
-    let json = match http_json::encode_json(config, "Failed to serialize config form") {
+fn config_form_json_response(combined: &form::CombinedPluginForm) -> Response {
+    let json = match http_json::encode_json(combined, "Failed to serialize config form") {
         Ok(json) => json,
         Err(_) => return serialize_config_form_failed_response(),
     };
@@ -101,10 +97,6 @@ fn config_refresh_failed_response() -> Response {
         "Config saved but live daemon refresh failed",
     )
         .into_response()
-}
-
-fn config_form_not_found_response() -> Response {
-    (StatusCode::NOT_FOUND, "Config form not found").into_response()
 }
 
 fn serialize_config_failed_response() -> Response {

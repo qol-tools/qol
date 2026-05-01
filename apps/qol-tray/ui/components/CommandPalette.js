@@ -1,24 +1,32 @@
 import { html } from '../lib/html.js';
 import { useRef, useState, useEffect, useMemo, useCallback } from 'preact/hooks';
 import { usePaletteContext } from '../palette/context.js';
-import { getCommands } from '../palette/registry.js';
+import { getContextualCommands, subscribeRegistry, getRegistryVersion } from '../palette/registry.js';
 import init, { fuzzy_match as wasmFuzzyMatch } from '../wasm/qol_wasm.js';
+import { Surface } from '../lib/components/Surface.js';
+import { Peripheral } from './shell/Peripheral.js';
 
-function filterCommands(commands, query, hidden) {
-    const pool = commands.filter(c => hidden ? c.hidden : !c.hidden);
-    if (!query) return pool;
-    return pool
-        .map(c => ({ cmd: c, match: wasmFuzzyMatch(query, c.label) }))
-        .filter(({ match }) => match !== null)
-        .sort((a, b) => a.match.score - b.match.score)
-        .map(({ cmd }) => cmd);
+function filterCommands(commands, query, useWasm) {
+    if (!query) return commands;
+    if (useWasm) {
+        return commands
+            .map(c => ({ cmd: c, match: wasmFuzzyMatch(query, c.label) }))
+            .filter(({ match }) => match !== null)
+            .sort((a, b) => a.match.score - b.match.score)
+            .map(({ cmd }) => cmd);
+    }
+    const q = query.toLowerCase();
+    return commands.filter(c => c.label.toLowerCase().includes(q));
 }
 
-export function CommandPalette() {
+export function CommandPalette({ camera, navigation }) {
     const { active, query, mode, actionQuery, activeViewId, activate, deactivate, setQuery } = usePaletteContext();
     const inputRef = useRef(null);
     const [selectedIndex, setSelectedIndex] = useState(0);
     const [wasmLoaded, setWasmLoaded] = useState(false);
+    const [registryVersion, setRegistryVersion] = useState(getRegistryVersion);
+
+    useEffect(() => subscribeRegistry(setRegistryVersion), []);
 
     useEffect(() => {
         let cancelled = false;
@@ -33,13 +41,10 @@ export function CommandPalette() {
         };
     }, []);
 
-    const isHiddenMode = mode === 'action' && actionQuery.startsWith('>');
-    const effectiveQuery = isHiddenMode ? actionQuery.slice(1) : actionQuery;
-
-    const commands = useMemo(
-        () => mode === 'action' && wasmLoaded ? filterCommands(getCommands(activeViewId), effectiveQuery, isHiddenMode) : [],
-        [mode, activeViewId, effectiveQuery, isHiddenMode, wasmLoaded]
-    );
+    const commands = useMemo(() => {
+        if (!active || mode !== 'action') return [];
+        return filterCommands(getContextualCommands(activeViewId), actionQuery, wasmLoaded);
+    }, [active, mode, activeViewId, actionQuery, wasmLoaded, registryVersion]);
 
     useEffect(() => {
         setSelectedIndex(0);
@@ -104,9 +109,10 @@ export function CommandPalette() {
     const clampedIndex = Math.min(selectedIndex, Math.max(0, commands.length - 1));
 
     if (!active) {
-        return html`<div class="search-bar palette-hint" onClick=${handleClick}>
+        return html`<${Peripheral} camera=${camera} navigation=${navigation} edge="top"
+            className="search-bar palette-hint" onClick=${handleClick}>
             <span class="palette-hint-text">Ctrl+E to search & run actions...</span>
-        </div>`;
+        <//>`;
     }
 
     return html`<div class="command-palette">
@@ -118,10 +124,13 @@ export function CommandPalette() {
         ${mode === 'action' && !isHiddenMode && commands.length > 0 && html`
             <ul class="palette-dropdown">
                 ${commands.map((cmd, i) => html`
-                    <li key=${cmd.id} class="palette-item ${i === clampedIndex ? 'selected' : ''}" data-selected-surface="" data-selected=${i === clampedIndex ? 'true' : 'false'} data-selected-surface-priority="10" data-scroll-follow-mode="nearest"
+                    <${Surface} as="li" key=${cmd.id}
+                        className="palette-item ${i === clampedIndex ? 'selected' : ''}"
+                        selected=${i === clampedIndex}
+                        data-selected-surface-priority="10"
                         onMouseDown=${() => executeCommand(cmd)}>
                         <span class="palette-item-label" data-selected-text="">${cmd.label}</span>
-                    </li>
+                    <//>
                 `)}
             </ul>
         `}

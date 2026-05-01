@@ -238,22 +238,6 @@
     font-weight: 500;
 }
 
-.btn-copy {
-    padding: 0.25rem 0.6rem;
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--text-muted);
-    font-size: 0.75rem;
-    cursor: pointer;
-    transition: background var(--transition), border-color var(--transition);
-}
-
-.btn-copy:hover {
-    background: var(--bg-hover);
-    border-color: var(--accent);
-}
-
 .api-usage-content code {
     display: block;
     font-family: var(--font-mono);

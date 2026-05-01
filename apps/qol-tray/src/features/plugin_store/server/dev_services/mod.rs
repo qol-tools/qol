@@ -47,3 +47,8 @@ pub(super) fn list_worktrees() -> Vec<super::types::WorktreeInfo> {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     worktrees::scan(&root)
 }
+
+pub(super) fn current_repo_branch() -> Option<String> {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    worktrees::resolve_git_branch(&root)
+}

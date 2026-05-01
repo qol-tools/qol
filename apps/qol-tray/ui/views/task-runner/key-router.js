@@ -1,7 +1,7 @@
 import { useCallback } from 'preact/hooks';
-import { useListKeyboard } from '../../hooks/useListKeyboard.js';
-import { useModalKeyboard } from '../../hooks/useModalKeyboard.js';
-export function useTaskKeyHandler(data, edit, test) {
+import { useListKeyboard } from '../../lib/hooks/useListKeyboard.js';
+import { useModalKeyboard } from '../../lib/hooks/useModalKeyboard.js';
+export function useTaskKeyHandler(data, edit) {
     const modalNav = useModalKeyboard({
         onSave: edit.saveAction,
         onClose: edit.close,
@@ -10,7 +10,6 @@ export function useTaskKeyHandler(data, edit, test) {
     const listHandler = useListKeyboard({
         itemCount: data.actionIds.length,
         selectedIndex: data.selectedIndex,
-        setSelectedIndex: data.setSelectedIndex,
         onAdd: edit.openEditModal,
         onDelete: data.deleteAction,
         onEdit: useCallback(() => {
@@ -25,15 +24,11 @@ export function useTaskKeyHandler(data, edit, test) {
             modalNav.handleKey(e);
             return;
         }
-        if (test.testingIdRef.current) {
-            if (e.key === 'Escape') { e.preventDefault(); test.closeTestPanel(); }
-            return;
-        }
         listHandler(e);
-    }, [listHandler, modalNav.handleKey, test.closeTestPanel]);
+    }, [listHandler, modalNav.handleKey]);
 
     const isBlocking = useCallback(
-        () => edit.editModalRef.current !== null || test.testingIdRef.current !== null,
+        () => edit.editModalRef.current !== null,
         []
     );
     return { handleKey, isBlocking, modalNav };

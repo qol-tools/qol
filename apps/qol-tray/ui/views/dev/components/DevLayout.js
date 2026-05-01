@@ -1,22 +1,74 @@
 import { html } from '../../../lib/html.js';
-import { PageHeader } from '../../../components/PageHeader.js';
+import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
+import { useRegisterViewKeyboard } from '../../../app/view-keyboard-context.js';
+import { ViewTabs } from '../../../components/ViewTabs.js';
 import { PluginsSection } from './PluginsSection.js';
 import { CoreLogSection } from './CoreLogSection.js';
 import { ActionsSection } from './ActionsSection.js';
+import { useHashSubPath } from '../../../lib/hooks/useHashSubPath.js';
+import { ComponentsCatalog } from './ComponentsCatalog.js';
+
+const TABS = [
+    { id: 'dev', label: 'Dev' },
+    { id: 'components', label: 'Components' },
+];
 
 export function DevLayout({ ctrl, containerRef }) {
+    const vtRef = useRef(null);
+    const [subPath, setSubPath] = useHashSubPath('dev');
+    const [activeTab, setActiveTab] = useState(subPath[0] === 'components' ? 'components' : 'dev');
+    const [catalogId, setCatalogIdRaw] = useState(subPath[1] || 'buttons');
+
+    const setCatalogId = useCallback((id) => {
+        setCatalogIdRaw(id);
+        setSubPath(['components', id]);
+    }, [setSubPath]);
+
+    useEffect(() => {
+        if (activeTab !== 'components') {
+            setSubPath([]);
+            return;
+        }
+        setSubPath(['components', catalogId]);
+    }, [activeTab, catalogId, setSubPath]);
+
+    const onTabActivate = useCallback((tabId) => {
+        setActiveTab(tabId);
+        if (tabId !== 'components') setSubPath([]);
+        ctrl.setSelectedIndex(0);
+    }, [ctrl.setSelectedIndex, setSubPath]);
+
+    const onContentBlur = useCallback(() => {
+        ctrl.setSelectedIndex(-1);
+    }, [ctrl.setSelectedIndex]);
+
+    const handleKey = useCallback((event) => {
+        if (document.activeElement?.closest('[role="tablist"]')) return;
+        if (vtRef.current?.activeTab === 'dev') ctrl.handleKey(event);
+    }, [ctrl.handleKey]);
+
+    useRegisterViewKeyboard('dev', handleKey);
+
     return html`
-        <div ref=${containerRef} class="view-container dev-view-shell">
-            <${PageHeader} title="Developer Control" scramble />
-            <div class="view-body dev-view-body">
-                <div class="dev-view-content">
-                    <div class="dev-content-frame">
-                        <${PluginsSection} ctrl=${ctrl} />
-                        <${CoreLogSection} ctrl=${ctrl} />
-                        <${ActionsSection} ctrl=${ctrl} />
+        <${ViewTabs}
+            tabs=${TABS} vtRef=${vtRef} className="dev-view-shell" containerRef=${containerRef}
+            initialTab=${activeTab} onActivate=${onTabActivate} onContentBlur=${onContentBlur}>
+            ${(vt) => html`
+                ${vt.activeTab === 'dev' && html`
+                    <div class="dev-columns">
+                        <div class="dev-col-primary">
+                            <${PluginsSection} ctrl=${ctrl} />
+                        </div>
+                        <div class="dev-col-secondary">
+                            <${CoreLogSection} ctrl=${ctrl} />
+                            <${ActionsSection} ctrl=${ctrl} />
+                        </div>
                     </div>
-                </div>
-            </div>
-        </div>
+                `}
+                ${vt.activeTab === 'components' && html`
+                    <${ComponentsCatalog} activeId=${catalogId} />
+                `}
+            `}
+        <//>
     `;
 }

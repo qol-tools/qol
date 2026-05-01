@@ -1,4 +1,12 @@
-.PHONY: build release run dev test check lint lint-fix fmt fmt-check icons clean install
+.PHONY: build release run dev setup test check lint lint-fix fmt fmt-check icons clean install
+
+DEV_HOOKS := .qol-tray-dev-hooks
+
+setup:
+	@bash scripts/dev-setup.sh
+
+$(DEV_HOOKS):
+	@bash scripts/dev-setup.sh
 
 build: lint
 	cargo build
@@ -62,7 +70,8 @@ release:
 run: lint
 	cargo run --bin qol-tray
 
-dev: lint
+dev: $(DEV_HOOKS) lint
+	@if [ -x ./$(DEV_HOOKS) ]; then ./$(DEV_HOOKS); fi
 	-pkill -f 'qol-tray'
 	cargo run --bin qol-tray --features dev
 

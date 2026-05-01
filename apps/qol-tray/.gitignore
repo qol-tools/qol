@@ -1,5 +1,4 @@
 /target
-Cargo.lock
 .env
 *.swp
 *.swo
@@ -7,9 +6,11 @@ Cargo.lock
 .DS_Store
 .github-token
 .plugin-cache.json
+.qol-tray-dev-hooks
 /.cursor.idea/
 
 .cursor/
 .idea/
 .cargo/config.toml
 .worktrees/
+.superpowers/

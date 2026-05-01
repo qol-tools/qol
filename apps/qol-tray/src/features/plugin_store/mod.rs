@@ -37,7 +37,7 @@ impl Plugins {
     pub async fn start_server(
         plugin_manager: Arc<Mutex<PluginManager>>,
         daemon: &Daemon,
-        sync_service: Arc<crate::sync::SyncService>,
+        sync_service: Arc<crate::features::profile::sync::SyncService>,
         #[cfg(feature = "dev")] core_log_controls: crate::logging::CoreControlsHandle,
     ) -> Result<()> {
         log::info!("Starting plugin server with embedded UI");

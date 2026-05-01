@@ -29,6 +29,7 @@ fn base_manifest() -> PluginManifest {
         runtime: None,
         capabilities: Capabilities::default(),
         build: BuildInfo::default(),
+        traits: None,
     }
 }
 
@@ -42,7 +43,7 @@ mod manifest_rules {
     #[test]
     fn validate_rejects_unsupported_manifest_version() {
         let toml = r#"
-            manifest_version = 2
+            manifest_version = 999
 
             [plugin]
             name = "P"

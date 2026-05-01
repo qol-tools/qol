@@ -500,8 +500,6 @@ function tryInitGPU(canvas, s) {
 
 function runDissolveGPU(canvas, bgColor, targetColor, onComplete, opts) {
     if (!gpuModule) return null;
-    // Compute state on offscreen canvas — keeps main canvas free for WebGL
-    // (browsers only allow one context type per canvas)
     const offscreen = document.createElement('canvas');
     const s = createEvaporateState(offscreen, bgColor, targetColor, opts);
     canvas.width = s.W;

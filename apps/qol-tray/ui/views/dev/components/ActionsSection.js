@@ -1,12 +1,14 @@
 import { html } from '../../../lib/html.js';
 import { useState } from 'preact/hooks';
+import { Surface } from '../../../lib/components/Surface.js';
+import { RefreshButton } from '../../../lib/components/Button.js';
 import { BuildResults } from './BuildResults.js';
-import { SELF_UPDATE_EVENT } from '../../../components/app/useSidebarActions.js';
+import { SELF_UPDATE_EVENT } from '../../../app/useSidebarActions.js';
 
 function ReloadCard({ building, buildResults, lastReload, error, reloadPlugins }) {
     return html`
-        <div class="dev-card" onClick=${reloadPlugins}>
-            <button class=${'refresh-btn ' + (building ? 'spinning' : '')} tabindex="-1" aria-hidden="true"></button>
+        <${Surface} className="dev-card" onActivate=${reloadPlugins}>
+            <${RefreshButton} spinning=${building} tabIndex="-1" aria-hidden="true" />
             <div class="dev-card-content">
                 <h3>${building ? 'Building...' : 'Reload All Plugins'}</h3>
                 <p>${building ? 'Compiling linked plugins' : 'Build linked plugins and restart daemons.'}</p>
@@ -15,21 +17,21 @@ function ReloadCard({ building, buildResults, lastReload, error, reloadPlugins }
                 ${error && html`<span class="error-msg">${error}</span>`}
             </div>
             <div class="dev-card-hint"><kbd>Ctrl+r</kbd></div>
-        </div>
+        <//>
     `;
 }
 
 function MockCard({ mockTesting, triggerMockFlows }) {
     return html`
-        <div class=${'dev-card ' + (mockTesting ? 'is-loading' : '')} onClick=${triggerMockFlows}>
-            <button class=${'refresh-btn ' + (mockTesting ? 'spinning' : 'is-hidden')} tabindex="-1" aria-hidden="true"></button>
+        <${Surface} className=${'dev-card ' + (mockTesting ? 'is-loading' : '')} onActivate=${triggerMockFlows}>
+            <${RefreshButton} spinning=${mockTesting} className=${mockTesting ? '' : 'is-hidden'} tabIndex="-1" aria-hidden="true" />
             <div class="dev-card-content">
                 <h3>${mockTesting ? 'Stop testing mock flows' : 'Test mock flows'}</h3>
                 <p>${mockTesting
                     ? 'Mock progress simulation is running. Click to stop.'
                     : 'Runs all registered mock progress targets without real recompiles.'}</p>
             </div>
-        </div>
+        <//>
     `;
 }
 
@@ -54,13 +56,13 @@ function SelfUpdateCard() {
         }
     }
     return html`
-        <div class=${'dev-card' + (error ? ' has-error' : '')} onClick=${triggerLiveUpdate}>
+        <${Surface} className=${'dev-card' + (error ? ' has-error' : '')} onActivate=${triggerLiveUpdate}>
             <div class="dev-card-content">
                 <h3>${running ? 'Updating...' : 'Test Self-Update'}</h3>
                 <p>${running ? 'Installing fixture binary and restarting...' : 'Builds a test fixture from the running binary, installs it, and restarts.'}</p>
                 ${error && html`<span class="error-msg">${error}</span>`}
             </div>
-        </div>
+        <//>
     `;
 }
 

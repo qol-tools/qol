@@ -1,6 +1,6 @@
 import { useEffect, useCallback } from 'preact/hooks';
-import { useStateRef } from '../../hooks/useStateRef.js';
-import { usePersistedIndex } from '../../hooks/usePersistedIndex.js';
+import { useStateRef } from '../../lib/hooks/useStateRef.js';
+import { usePersistedIndex } from '../../lib/hooks/usePersistedIndex.js';
 import {
     buildApiExample,
     loadTaskRunnerData,

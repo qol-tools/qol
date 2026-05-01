@@ -54,6 +54,7 @@ fn make_plugin(
         runtime,
         capabilities: Capabilities::default(),
         build: BuildInfo::default(),
+        traits: None,
     };
 
     Plugin::new(

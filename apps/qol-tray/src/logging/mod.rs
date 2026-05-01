@@ -21,10 +21,17 @@ pub use control::upsert_core_control;
 #[cfg(feature = "dev")]
 pub use filter::CoreControlsHandle;
 
+fn rust_log_targets() -> tracing_subscriber::filter::Targets {
+    use tracing_subscriber::filter::{LevelFilter, Targets};
+    std::env::var("RUST_LOG")
+        .ok()
+        .and_then(|s| s.parse::<Targets>().ok())
+        .unwrap_or_else(|| Targets::new().with_default(LevelFilter::INFO))
+}
+
 #[cfg(feature = "dev")]
 pub fn init_logger() -> CoreControlsHandle {
     use tracing_subscriber::prelude::*;
-    use tracing_subscriber::EnvFilter;
 
     let controls = load_core_controls_from_shared_config();
     let handle = std::sync::Arc::new(std::sync::RwLock::new(controls));
@@ -33,7 +40,7 @@ pub fn init_logger() -> CoreControlsHandle {
 
     let dev_controls = handle.clone();
     let stderr_layer = tracing_subscriber::fmt::layer()
-        .with_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
+        .with_filter(rust_log_targets())
         .with_filter(tracing_subscriber::filter::filter_fn(move |metadata| {
             !filter::is_suppressed(&dev_controls, metadata.target(), "")
         }));
@@ -51,12 +58,10 @@ pub fn init_logger() -> CoreControlsHandle {
 #[cfg(not(feature = "dev"))]
 pub fn init_logger() {
     use tracing_subscriber::prelude::*;
-    use tracing_subscriber::EnvFilter;
 
     file_logger::init();
 
-    let stderr_layer = tracing_subscriber::fmt::layer()
-        .with_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()));
+    let stderr_layer = tracing_subscriber::fmt::layer().with_filter(rust_log_targets());
 
     tracing_subscriber::registry()
         .with(stderr_layer)

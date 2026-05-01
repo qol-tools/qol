@@ -38,6 +38,7 @@ pub enum ActionExecutionError {
         plugin_id: PluginId,
         action_id: String,
     },
+    ActionRejected(String),
     SpawnFailed(String),
 }
 
@@ -69,6 +70,7 @@ impl Display for ActionExecutionError {
             } => {
                 write!(f, "no execution target for {}::{}", plugin_id, action_id)
             }
+            Self::ActionRejected(message) => write!(f, "{}", message),
             Self::SpawnFailed(error) => write!(f, "spawn failed: {}", error),
         }
     }
@@ -105,6 +107,64 @@ pub fn try_execute_action(
 ) -> Result<(), ActionExecutionError> {
     let resolved = resolve_plugin_action(plugin_manager, plugin_id, action_id)?;
     execution::execute_resolved_action(&resolved)
+}
+
+pub fn dispatch_query(
+    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_id: &str,
+    query_name: &str,
+) -> Result<serde_json::Value, ActionExecutionError> {
+    let socket_path = resolve_plugin_daemon_socket(plugin_manager, plugin_id)?;
+    let dispatch =
+        crate::plugins::action_transport::dispatch_daemon_action(&socket_path, query_name);
+    match dispatch {
+        crate::plugins::action_transport::DaemonActionDispatch::Handled { payload } => {
+            Ok(payload.unwrap_or(serde_json::Value::Null))
+        }
+        crate::plugins::action_transport::DaemonActionDispatch::Fallback => {
+            Err(ActionExecutionError::ActionRejected(format!(
+                "query {query_name} rejected by {plugin_id} daemon"
+            )))
+        }
+        crate::plugins::action_transport::DaemonActionDispatch::Error(message) => {
+            Err(ActionExecutionError::ActionRejected(message))
+        }
+        crate::plugins::action_transport::DaemonActionDispatch::Unavailable => Err(
+            ActionExecutionError::ActionRejected(format!("daemon unavailable for {plugin_id}")),
+        ),
+    }
+}
+
+fn resolve_plugin_daemon_socket(
+    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_id: &str,
+) -> Result<std::path::PathBuf, ActionExecutionError> {
+    let plugins = plugin_manager
+        .lock()
+        .map_err(|_| ActionExecutionError::PluginManagerPoisoned)?;
+    let plugin = plugins
+        .get(plugin_id)
+        .ok_or_else(|| ActionExecutionError::PluginNotFound(PluginId::new(plugin_id)))?;
+    let socket = plugin
+        .manifest
+        .daemon
+        .as_ref()
+        .and_then(|daemon| daemon.socket.as_ref())
+        .ok_or_else(|| ActionExecutionError::NoExecutionTarget {
+            plugin_id: PluginId::new(plugin_id),
+            action_id: "<query>".to_string(),
+        })?;
+    Ok(std::path::PathBuf::from(socket))
+}
+
+pub fn dispatch_action_by_name(
+    plugin_manager: &Arc<Mutex<PluginManager>>,
+    plugin_id: &str,
+    action_name: &str,
+    _input: serde_json::Value,
+) -> Result<serde_json::Value, ActionExecutionError> {
+    try_execute_action(plugin_manager, plugin_id, action_name)?;
+    Ok(serde_json::Value::Null)
 }
 
 fn resolve_plugin_action(

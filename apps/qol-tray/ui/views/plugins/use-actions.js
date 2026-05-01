@@ -1,7 +1,7 @@
-import { useCallback } from 'preact/hooks';
-import { useStateRef } from '../../hooks/useStateRef.js';
-import { useGridNav } from '../../hooks/useGridNav.js';
-import { updateInstalledPlugin, uninstallInstalledPlugin } from './data.js';
+import { useCallback, useRef } from 'preact/hooks';
+import { useStateRef } from '../../lib/hooks/useStateRef.js';
+import { useGridNav } from '../../lib/hooks/useGridNav.js';
+import { updateInstalledPlugin } from './data.js';
 import { toast } from '../../lib/toast.js';
 
 async function doUpdate(pluginId, updatingRef, setUpdating, refreshPlugins) {
@@ -18,28 +18,11 @@ async function doUpdate(pluginId, updatingRef, setUpdating, refreshPlugins) {
     }
 }
 
-async function doUninstall(confirmPluginIdRef, clearConfirm, refreshPlugins) {
-    const pluginId = confirmPluginIdRef.current;
-    clearConfirm();
-    if (!pluginId) return;
-    try {
-        await uninstallInstalledPlugin(pluginId);
-        toast('success', `Uninstalled ${pluginId}`);
-        await refreshPlugins();
-    } catch (error) {
-        toast('error', `Failed to uninstall ${pluginId}: ${error.message}`);
-    }
-}
-
-async function doOpenSelected(pluginsRef, selectedIndexRef, onOpenPluginConfig, onOpenPluginUi) {
+async function doOpenSelected(pluginsRef, selectedIndexRef, onOpenPluginConfig) {
     const plugin = pluginsRef.current[selectedIndexRef.current];
     if (!plugin) return;
     if (plugin.loaded === false) {
         toast('error', `${plugin.name} failed to load: ${plugin.load_error}`);
-        return;
-    }
-    if (plugin.has_custom_ui) {
-        onOpenPluginUi(plugin.id);
         return;
     }
     if (plugin.has_config) {
@@ -49,19 +32,15 @@ async function doOpenSelected(pluginsRef, selectedIndexRef, onOpenPluginConfig, 
     }
 }
 
-export function usePluginActions(list, modal, onOpenPluginConfig, onOpenPluginUi) {
+export function usePluginActions(list, modal, onOpenPluginConfig) {
     const [updating, setUpdating, updatingRef] = useStateRef(new Set());
     const updatePlugin = useCallback(
         pluginId => doUpdate(pluginId, updatingRef, setUpdating, list.refreshPlugins),
         [list.refreshPlugins]
     );
-    const confirmUninstall = useCallback(
-        () => doUninstall(modal.confirmPluginIdRef, modal.clearConfirm, list.refreshPlugins),
-        [list.refreshPlugins, modal.clearConfirm]
-    );
     const openSelected = useCallback(
-        () => doOpenSelected(list.pluginsRef, list.selectedIndexRef, onOpenPluginConfig, onOpenPluginUi),
-        [onOpenPluginConfig, onOpenPluginUi]
+        () => doOpenSelected(list.pluginsRef, list.selectedIndexRef, onOpenPluginConfig),
+        [onOpenPluginConfig]
     );
     const openConfig = useCallback(() => {
         const plugin = list.pluginsRef.current?.[list.selectedIndexRef.current];
@@ -69,9 +48,22 @@ export function usePluginActions(list, modal, onOpenPluginConfig, onOpenPluginUi
         onOpenPluginConfig(plugin.id);
     }, [onOpenPluginConfig]);
     const navigateInGrid = useGridNav('#plugins-grid .plugin-card:not(.ghost)', list.selectedIndexRef, list.setSelectedIndex);
-    const isBlocking = useCallback(
-        () => modal.confirmPluginIdRef.current !== null || modal.contextMenuOpenRef.current,
-        []
-    );
-    return { updating, updatePlugin, confirmUninstall, openSelected, openConfig, navigateInGrid, isBlocking };
+    const focusSelectedCard = useCallback(() => {
+        const plugin = list.pluginsRef.current?.[list.selectedIndexRef.current];
+        if (!plugin) return;
+        const card = document.querySelector(`#plugins-grid [data-plugin-id="${CSS.escape(plugin.id)}"]`);
+        if (card instanceof HTMLElement) card.focus({ preventScroll: true });
+    }, []);
+    const apiRef = useRef(null);
+    const openActionsMenu = useCallback((pluginId) => {
+        const plugin = pluginId
+            ? list.pluginsRef.current?.find(p => p.id === pluginId)
+            : list.pluginsRef.current?.[list.selectedIndexRef.current];
+        if (!plugin) return;
+        modal.triggerActionsMenu(plugin.id, apiRef.current);
+    }, [modal.triggerActionsMenu]);
+    const isBlocking = useCallback(() => false, []);
+    const api = { updating, updatePlugin, openSelected, openConfig, navigateInGrid, focusSelectedCard, openActionsMenu, isBlocking };
+    apiRef.current = api;
+    return api;
 }

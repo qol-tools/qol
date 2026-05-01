@@ -29,11 +29,11 @@ The long term goal is a portable, personal environment that follows you across m
 What exists today:
 - Plugin system with a self-service store
 - Per-plugin configuration (local)
+- Profile export/import and cross-machine profile sync
 - Global hotkey binding
 - Task runner
 
 What is planned:
-- Config sync across machines
 - Windows support
 - Lower friction first-install (USB, wireless, etc.)
 

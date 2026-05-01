@@ -8,6 +8,7 @@ use crate::daemon::Daemon;
 #[cfg(feature = "dev")]
 use crate::dev::state::DiscoveredPluginInfo;
 use crate::plugins::{ActionType, PluginId, PluginLoader, PluginManager};
+use axum::extract::FromRef;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "dev")]
 use std::collections::HashMap;
@@ -30,7 +31,8 @@ pub(super) struct AppState {
     pub(super) plugins_dir: PathBuf,
     pub(super) plugin_manager: Arc<Mutex<PluginManager>>,
     pub(super) daemon: Daemon,
-    pub(super) sync_service: Arc<crate::sync::SyncService>,
+    pub(super) github_auth_service: Arc<crate::features::github_auth::GitHubAuthService>,
+    pub(super) sync_service: Arc<crate::features::profile::sync::SyncService>,
     #[cfg(feature = "dev")]
     pub(super) dev_state: Arc<crate::dev::state::DevState>,
     #[cfg(feature = "dev")]
@@ -48,7 +50,8 @@ impl AppState {
     pub(super) fn new(
         plugin_manager: Arc<Mutex<PluginManager>>,
         daemon: &Daemon,
-        sync_service: Arc<crate::sync::SyncService>,
+        github_auth_service: Arc<crate::features::github_auth::GitHubAuthService>,
+        sync_service: Arc<crate::features::profile::sync::SyncService>,
         #[cfg(feature = "dev")] core_log_controls: Arc<
             std::sync::RwLock<HashMap<String, crate::logging::LogControl>>,
         >,
@@ -60,6 +63,7 @@ impl AppState {
             plugin_cpu: DevPluginCpuService::start(plugin_manager.clone(), daemon.events.clone()),
             plugin_manager,
             daemon: daemon.clone(),
+            github_auth_service,
             sync_service,
             #[cfg(feature = "dev")]
             dev_state: Arc::new(crate::dev::state::DevState::new()),
@@ -71,11 +75,32 @@ impl AppState {
             core_log_controls,
         };
         if let Ok(manager) = state.plugin_manager.lock() {
-            if let Err(error) = crate::profile::sync_plugins_lock_from_plugins(manager.plugins()) {
+            if let Err(error) =
+                crate::features::profile::core::sync_plugins_lock_from_plugins(manager.plugins())
+            {
                 log::error!("Failed to sync profile plugins lock on startup: {}", error);
             }
         }
         Ok((state, plugins_dir))
+    }
+}
+
+impl FromRef<AppState> for crate::features::profile::http::ProfileHttpState {
+    fn from_ref(state: &AppState) -> Self {
+        Self {
+            plugins_dir: state.plugins_dir.clone(),
+            plugin_manager: state.plugin_manager.clone(),
+            daemon: state.daemon.clone(),
+            sync_service: state.sync_service.clone(),
+        }
+    }
+}
+
+impl FromRef<AppState> for crate::features::github_auth::GitHubAuthHttpState {
+    fn from_ref(state: &AppState) -> Self {
+        Self {
+            github_auth_service: state.github_auth_service.clone(),
+        }
     }
 }
 
@@ -140,22 +165,16 @@ pub(super) struct InstalledPlugin {
     pub(super) available_version: Option<String>,
     pub(super) update_available: bool,
     pub(super) actions: Vec<PluginAction>,
+    pub(super) source: Option<&'static str>,
+    pub(super) resolved_from: Option<&'static str>,
+    pub(super) active_failure_reason: Option<String>,
+    pub(super) unavailable: bool,
 }
 
 #[derive(Serialize)]
 pub(super) struct InstalledPluginsResponse {
     pub(super) revision: u64,
     pub(super) plugins: Vec<InstalledPlugin>,
-}
-
-#[derive(Deserialize)]
-pub(super) struct TokenRequest {
-    pub(super) token: String,
-}
-
-#[derive(Serialize)]
-pub(super) struct TokenStatus {
-    pub(super) has_token: bool,
 }
 
 #[cfg(feature = "dev")]
@@ -225,6 +244,15 @@ pub(super) struct ReloadRequest {
 pub(super) struct WorktreeInfo {
     pub(super) branch: String,
     pub(super) path: String,
+}
+
+#[cfg(feature = "dev")]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(super) struct ActiveWorktreeResponse {
+    pub(super) branch: Option<String>,
+    pub(super) path: Option<String>,
+    #[serde(rename = "repoBranch")]
+    pub(super) repo_branch: Option<String>,
 }
 
 #[cfg(all(test, feature = "dev"))]

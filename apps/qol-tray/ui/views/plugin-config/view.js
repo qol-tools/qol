@@ -1,7 +1,6 @@
 import { html } from '../../lib/html.js';
-import { useCallback, useRef } from 'preact/hooks';
+import { useCallback, useEffect, useRef } from 'preact/hooks';
 import { usePluginConfigContext } from './context.js';
-import { prettyLabel } from '../../auto-config/heuristics.js';
 import {
     buildBranchOwnerMap,
     collectVariantGroups,
@@ -10,44 +9,75 @@ import {
     selectorDensityClass,
     selectorGridTemplate,
 } from '../../auto-config/display-rules.js';
-import { renderField, fieldSelectionClasses } from './field-map.js';
+import { renderField, fieldSurfaceAttrs } from './field-map.js';
 import { dissolveIn, DISSOLVE_PRESETS } from '../../lib/dissolve.js';
+import { SurfaceContainer } from '../../lib/components/SurfaceContainer.js';
+
+function useEscapeFallback(onClose, active) {
+    useEffect(() => {
+        if (!active) return undefined;
+        const onKey = (event) => {
+            if (event.key !== 'Escape') return;
+            event.preventDefault();
+            event.stopPropagation();
+            onClose();
+        };
+        document.addEventListener('keydown', onKey, true);
+        return () => document.removeEventListener('keydown', onKey, true);
+    }, [onClose, active]);
+}
 
 export function PluginConfigView({ onClose }) {
     const ctx = usePluginConfigContext();
+    const isPlaceholder = !ctx || ctx.loading || (ctx && ctx.sections && ctx.sections.length === 0);
+    useEscapeFallback(onClose, isPlaceholder);
 
-    if (ctx?.mode === 'ui') {
+    const section = ctx?.activeSection;
+
+    if (!ctx || ctx.loading) {
         return html`
-            <div class="plugin-ui-container">
-                <div class="plugin-ui-toolbar">
-                    <span class="plugin-ui-toolbar-title">${ctx.pluginId}</span>
-                    <button class="plugin-ui-toolbar-close" onClick=${onClose}>\u00d7</button>
-                </div>
-                <iframe
-                    src=${`/plugins/${ctx.pluginId}/`}
-                    class="plugin-custom-ui"
-                />
+            <div class="plugin-config-loading" onClick=${onClose} title="Press Escape or click to return">
+                Loading configuration...
+            </div>
+        `;
+    }
+    if (ctx.sections.length === 0) {
+        return html`
+            <div class="plugin-config-loading" onClick=${onClose} title="Press Escape or click to return">
+                No settings available.
             </div>
         `;
     }
 
-    const section = ctx?.activeSection;
-
-    if (!ctx || ctx.loading) return html`<div class="plugin-config-loading">Loading configuration...</div>`;
-    if (ctx.sections.length === 0) return html`<div class="plugin-config-loading">No settings available.</div>`;
-
     return html`
-        <div class="plugin-config-detail" tabIndex="-1">
+        <${SurfaceContainer} className="plugin-config-detail" tabIndex="-1">
             ${section && html`
                 <div class="config-detail-content">
-                    <header class="config-detail-header">
-                        <h2>${section.label || prettyLabel(section.id)}</h2>
-                        ${section.description && html`<p class="section-copy">${section.description}</p>`}
-                    </header>
+                    ${section.id !== '_root' && section.description && html`
+                        <p class="section-copy">${section.description}</p>
+                    `}
                     <${ConfigSection} fields=${section.fields} />
                 </div>
             `}
-        </div>
+        <//>
+    `;
+}
+
+export function PluginConfigSectionView({ pluginId, sectionId, onClose }) {
+    const ctx = usePluginConfigContext();
+    if (!ctx || ctx.pluginId !== pluginId) return null;
+    if (ctx.loading || !ctx.sections) return null;
+    const section = ctx.sections.find(s => s.id === sectionId);
+    if (!section) return null;
+    return html`
+        <${SurfaceContainer} className="plugin-config-detail" tabIndex="-1">
+            <div class="config-detail-content">
+                ${section.id !== '_root' && section.description && html`
+                    <p class="section-copy">${section.description}</p>
+                `}
+                <${ConfigSection} fields=${section.fields} />
+            </div>
+        <//>
     `;
 }
 
@@ -79,8 +109,6 @@ function VariantPanel({ group }) {
     const ctx = usePluginConfigContext();
     const contentRef = useRef(null);
     const activeOption = ctx.getFieldValue(group.selector);
-    const selected = ctx.selectedFieldId === group.selector.id;
-    const index = ctx.fieldIndexById[group.selector.id];
     const densityClass = selectorDensityClass(group.selector);
     const widthStyle = `grid-template-columns: ${selectorGridTemplate(group.selector)}`;
 
@@ -99,11 +127,7 @@ function VariantPanel({ group }) {
 
     return html`
         <div class="variant-panel">
-            <div tabIndex="-1" class="variant-selector ${densityClass} ${fieldSelectionClasses(selected)}"
-                data-plugin-config-field-id=${group.selector.id}
-                data-plugin-config-index=${index}
-                data-selected-surface=""
-                data-selected=${selected ? 'true' : 'false'}
+            <div ...${fieldSurfaceAttrs(group.selector, ctx, `variant-selector ${densityClass}`)}
                 onMouseDown=${onFocusSelector}
                 onFocus=${onFocusSelector}>
                 <div class="variant-selector-label">${group.selector.label}</div>
@@ -112,7 +136,6 @@ function VariantPanel({ group }) {
                         ${group.selector.options.map(option => html`
                             <button key=${option} type="button"
                                 class="variant-option segmented-control__option ${option === activeOption ? 'active is-active' : ''}"
-                                tabIndex="-1"
                                 onClick=${() => onSelect(option)}>
                                 ${optionLabel(group.selector, option)}
                             </button>

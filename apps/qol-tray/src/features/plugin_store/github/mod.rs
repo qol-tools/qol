@@ -6,10 +6,7 @@ mod token;
 
 pub(crate) use cache::{cache_age_secs, read_cache, update_cached_version, write_cache};
 pub(crate) use catalog::PluginMetadata;
-pub(crate) use token::{
-    build_github_request, delete_token, get_stored_token, send_checked, store_token,
-    validate_token, TokenValidationError,
-};
+pub(crate) use token::{build_github_request, get_stored_token, send_checked, validate_token};
 
 use anyhow::Result;
 use catalog::{build_plugin_metadata, filter_plugin_repos, GitHubRepo};

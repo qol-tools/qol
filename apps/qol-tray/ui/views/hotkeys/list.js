@@ -1,4 +1,8 @@
 import { html } from '../../lib/html.js';
+import { Table, TableHeader, TableCell } from '../../lib/components/TableRow.js';
+import { HotkeyRow } from '../../components/domain-rows/HotkeyRow.js';
+import { openHotkeysFile } from '../../api/config-files.js';
+import { toast } from '../../lib/toast.js';
 
 function getActionLabel(plugin, actionId) {
     if (!plugin) return actionId;
@@ -8,34 +12,32 @@ function getActionLabel(plugin, actionId) {
 
 export function HotkeysList({ hotkeys, plugins, selectedIndex, onSelect, onEdit }) {
     if (hotkeys.length === 0) {
-        return html`<div class="hotkeys-list table-list">
+        return html`<${Table} className="hotkeys-list">
             <div class="empty">No hotkeys configured. Press <kbd>a</kbd> to add one.</div>
-        </div>`;
+        <//>`;
     }
-    return html`<div class="hotkeys-list table-list">
-        <div class="hotkey-header table-list-header table-grid">
-            <span class="col-key table-cell">Shortcut</span>
-            <span class="col-plugin table-cell">Plugin</span>
-            <span class="col-action table-cell">Action</span>
-        </div>
-        ${hotkeys.map((hk, i) => html`
-            <${HotkeyRow} key=${hk.id} hk=${hk} index=${i} plugin=${plugins.find(p => p.id === hk.plugin_id)}
-                selected=${i === selectedIndex}
-                onClick=${() => i !== selectedIndex ? onSelect(i) : onEdit(hk)} />
-        `)}
-    </div>`;
-}
-
-function HotkeyRow({ hk, plugin, index, selected, onClick }) {
-    return html`
-        <div class="hotkey-row table-list-row table-grid"
-             data-selected-surface=""
-             data-status="${plugin?.status || 'installed'}"
-             data-selected="${selected ? 'true' : 'false'}"
-             data-index="${index}" onClick=${onClick}>
-            <span class="col-key table-cell" data-selected-text=""><kbd>${hk.key}</kbd></span>
-            <span class="col-plugin table-cell" data-selected-text="">${plugin?.name || hk.plugin_id}</span>
-            <span class="col-action table-cell" data-selected-text="">${getActionLabel(plugin, hk.action)}</span>
-        </div>
-    `;
+    return html`<${Table} className="hotkeys-list">
+        <${TableHeader}>
+            <${TableCell}>Shortcut<//>
+            <${TableCell}>Plugin<//>
+            <${TableCell}>Action<//>
+        <//>
+        ${hotkeys.map((hk, i) => {
+            const plugin = plugins.find(p => p.id === hk.plugin_id);
+            return html`
+                <${HotkeyRow} key=${hk.id}
+                    shortcut=${hk.key}
+                    pluginName=${plugin?.name || hk.plugin_id}
+                    actionLabel=${getActionLabel(plugin, hk.action)}
+                    status=${plugin?.status || 'installed'}
+                    index=${i} selected=${i === selectedIndex} onSelect=${onSelect}
+                    data-dive-target="hotkeys-editor"
+                    data-secondary-label="Open hotkeys.json"
+                    onActivate=${() => { if (i !== selectedIndex) onSelect(i); onEdit(hk); }}
+                    onSecondaryActivate=${() => {
+                        openHotkeysFile().catch((err) => toast('error', `Failed to open hotkeys file: ${err.message}`));
+                    }} />
+            `;
+        })}
+    <//>`;
 }

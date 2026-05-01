@@ -3,7 +3,7 @@ use std::path::Path;
 
 pub fn run_startup_cleanup(config_dir: &Path) -> Result<()> {
     migrate_dev_files(config_dir);
-    migrate_profile_files(config_dir)?;
+    crate::features::profile::run_startup_cleanup(config_dir)?;
     clean_legacy_ephemeral(config_dir);
     clean_stale_staging(config_dir);
     Ok(())

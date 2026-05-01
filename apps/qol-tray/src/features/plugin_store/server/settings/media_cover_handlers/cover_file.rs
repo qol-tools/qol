@@ -2,6 +2,7 @@ use axum::{http::StatusCode, response::IntoResponse, response::Response};
 use std::path::{Path, PathBuf};
 
 use super::super::super::types::MAX_COVER_SIZE;
+use crate::plugins::paths as plugin_paths;
 
 struct CoverPaths {
     plugin_root: PathBuf,
@@ -21,7 +22,7 @@ pub(super) async fn load_cover_bytes(
 }
 
 async fn cover_paths(base_dir: &Path, plugin_id: &str) -> Result<CoverPaths, Box<Response>> {
-    let plugin_root = base_dir.join(plugin_id);
+    let plugin_root = plugin_paths::resolve_plugin_root_from_plugins_dir(base_dir, plugin_id);
     ensure_existing_non_symlink(&plugin_root).await?;
     let cover_path = plugin_root.join("cover.png");
     ensure_cover_file(&cover_path).await?;

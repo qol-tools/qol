@@ -1,70 +1,54 @@
 import { html } from '../../../lib/html.js';
-import { DropdownMenu } from '../../../components/DropdownMenu.js';
+import { Table } from '../../../lib/components/TableRow.js';
+import { DevPluginRow } from '../../../components/domain-rows/DevPluginRow.js';
+import { useListSelection } from '../../../lib/hooks/useListSelection.js';
+import { FRONTEND_LOG_SECTIONS } from '../frontend-log-sections.js';
 
-const CORE_SECTIONS = [
+const CORE_BACKEND_SECTIONS = [
     { id: 'runtime', name: 'Runtime', description: 'Socket, state, polling' },
     { id: 'plugins', name: 'Plugins', description: 'Daemon lifecycle, loading' },
     { id: 'core', name: 'Core', description: 'Tray, hotkeys, menu, updates' }
 ];
 
-function CoreLogMenu({ section, muted, filterCount, menuOpen, ctrl }) {
-    const onToggle = () => ctrl.toggleCoreMenu(section.id);
-    const onMute = () => { ctrl.closeMenus(); ctrl.toggleCoreLogs(section.id); };
-    const onFilters = () => { ctrl.closeMenus(); ctrl.editCoreLogFilters(section.id); };
-    return html`
-        <${DropdownMenu}
-            open=${menuOpen}
-            onToggle=${onToggle}
-            onClose=${ctrl.closeMenus}
-            triggerLabel=${`Log options for ${section.name}`}
-        >
-            <button type="button" class="context-action" onClick=${onMute} aria-label=${(muted ? 'Unmute' : 'Mute') + ' ' + section.name + ' logs'}>
-                ${muted ? 'Unmute Logs' : 'Mute Logs'}
-            </button>
-            <button type="button" class="context-action" onClick=${onFilters} aria-label=${`Edit log filters for ${section.name}`}>
-                ${filterCount > 0 ? `Edit Filters (${filterCount})` : 'Edit Filters'}
-            </button>
-        </${DropdownMenu}>
-    `;
-}
+const CORE_SECTIONS = [
+    ...CORE_BACKEND_SECTIONS,
+    ...FRONTEND_LOG_SECTIONS.map(({ id, name, description }) => ({ id, name, description }))
+];
 
-function CoreLogInfo({ section, muted }) {
-    return html`
-        <div class="plugin-info table-col">
-            <div class="plugin-copy">
-                <div class="plugin-title-row"><span class="plugin-name">${section.name}</span></div>
-                <span class="plugin-path">${section.description}</span>
-            </div>
-            ${muted && html`<div class="plugin-status-badges"><span class="status-badge badge-muted">Muted</span></div>`}
-        </div>
-    `;
-}
-
-function CoreLogRow({ section, ctrl }) {
+function CoreLogRow({ section, ctrl, index, selected, onSelect }) {
     const control = ctrl.coreLogControls[section.id] || {};
     const muted = !!control.muted;
     const patterns = Array.isArray(control.suppress_patterns) ? control.suppress_patterns : [];
-    const menuOpen = ctrl.openCoreMenuId === section.id;
+    const actions = [
+        { label: muted ? 'Unmute Logs' : 'Mute Logs', run: () => ctrl.toggleCoreLogs(section.id) },
+        { label: patterns.length > 0 ? `Edit Filters (${patterns.length})` : 'Edit Filters', run: () => ctrl.editCoreLogFilters(section.id) },
+    ];
     return html`
-        <div class="plugin-row table-list-row status-linked core-log-row" data-core-section=${section.id}>
-            <div class="plugin-main table-grid">
-                <${CoreLogInfo} section=${section} muted=${muted} />
-                <div class="plugin-action-column table-col">
-                    <${CoreLogMenu} section=${section} muted=${muted} filterCount=${patterns.length} menuOpen=${menuOpen} ctrl=${ctrl} />
-                </div>
-            </div>
-        </div>
+        <${DevPluginRow}
+            name=${section.name}
+            path=${section.description}
+            status="linked"
+            index=${index}
+            selected=${selected}
+            onSelect=${onSelect}
+            actions=${actions}
+            badges=${muted && html`<div class="plugin-status-badges"><span class="status-badge badge-muted">Muted</span></div>`}
+            className="core-log-row"
+            data-core-section=${section.id}
+        />
     `;
 }
 
 export function CoreLogSection({ ctrl }) {
+    const sel = useListSelection();
     return html`
         <section class="dev-section">
-            <div class="section-header"><h2>Core Logs</h2></div>
+            <div class="section-header"><h2>Logs</h2></div>
             <div class="plugin-list-container">
-                <div class="plugin-list table-list">
-                    ${CORE_SECTIONS.map(s => html`<${CoreLogRow} key=${s.id} section=${s} ctrl=${ctrl} />`)}
-                </div>
+                <${Table} className="plugin-list" onDeselect=${sel.deselect}>
+                    ${CORE_SECTIONS.map((s, i) => html`<${CoreLogRow} key=${s.id} section=${s} ctrl=${ctrl}
+                        index=${i} selected=${sel.selected(i)} onSelect=${sel.select} />`)}
+                <//>
             </div>
         </section>
     `;

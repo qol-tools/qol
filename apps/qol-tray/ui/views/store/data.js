@@ -1,7 +1,5 @@
 import {
     fetchTokenStatus,
-    saveTokenRequest,
-    deleteTokenRequest,
     fetchPluginsRequest,
     installPluginRequest
 } from './effects.js';
@@ -19,14 +17,6 @@ export async function loadStorePlugins({ forceRefresh = false, hasToken = false 
         cacheAgeSecs: data.cache_age_secs ?? null,
         rateLimited: isRateLimitedWithoutToken(plugins, hasToken)
     };
-}
-
-export async function saveStoreToken(token) {
-    await saveTokenRequest(token);
-}
-
-export async function deleteStoreToken() {
-    await deleteTokenRequest();
 }
 
 export async function installStorePlugin(pluginId) {
