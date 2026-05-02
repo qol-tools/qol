@@ -260,6 +260,22 @@ async fn async_init_inner(
         core_log_controls,
     )
     .await?;
+    #[cfg(all(target_os = "linux", feature = "linux_evdev"))]
+    {
+        match hotkeys::start_evdev_capture(plugin_manager.clone()) {
+            Ok(()) => log::info!("Hotkey capture: evdev (kernel-level)"),
+            Err(e) => {
+                log::warn!(
+                    "Failed to start evdev hotkey capture (falling back to global_hotkey): {}",
+                    e
+                );
+                if let Err(e) = hotkeys::start_hotkey_listener(plugin_manager.clone()) {
+                    log::warn!("Failed to start hotkey listener: {}", e);
+                }
+            }
+        }
+    }
+    #[cfg(not(all(target_os = "linux", feature = "linux_evdev")))]
     if let Err(e) = hotkeys::start_hotkey_listener(plugin_manager.clone()) {
         log::warn!("Failed to start hotkey listener: {}", e);
     }
