@@ -194,6 +194,16 @@ mod tests {
         .unwrap();
     }
 
+    fn write_daemon_manifest(plugin_dir: &Path, name: &str, command: &str) {
+        fs::write(
+            plugin_dir.join("plugin.toml"),
+            format!(
+                "[plugin]\nname = \"{name}\"\ndescription = \"\"\nversion = \"1.0.0\"\n\n[menu]\nlabel = \"Test\"\nitems = []\n\n[daemon]\nenabled = true\ncommand = \"{command}\"\n",
+            ),
+        )
+        .unwrap();
+    }
+
     fn write_executable(path: &Path) {
         fs::write(path, "#!/bin/sh\nexit 0\n").unwrap();
         #[cfg(unix)]
@@ -425,6 +435,93 @@ mod tests {
         assert!(u.active.reason.contains("binary"), "{}", u.active.reason);
         let fallback = u.fallback.as_ref().expect("fallback failure recorded");
         assert!(fallback.reason.contains("binary"), "{}", fallback.reason);
+    }
+
+    #[test]
+    fn falls_back_when_active_daemon_binary_missing_and_fallback_present() {
+        let tmp = TempDir::new().unwrap();
+        let active_dir = tmp.path().join("active");
+        let fallback_dir = tmp.path().join("fallback");
+        fs::create_dir(&active_dir).unwrap();
+        fs::create_dir(&fallback_dir).unwrap();
+        write_daemon_manifest(&active_dir, "plugin-foo", "plugin-foo");
+        write_daemon_manifest(&fallback_dir, "plugin-foo", "plugin-foo");
+        write_executable(&fallback_dir.join("plugin-foo"));
+
+        let entry = Entry {
+            id: "plugin-foo".to_string(),
+            active: Slot {
+                path: active_dir.clone(),
+                source: SlotSource::ReleaseAsset,
+            },
+            fallback: Some(Slot {
+                path: fallback_dir.clone(),
+                source: SlotSource::ReleaseAsset,
+            }),
+        };
+        let registry = Registry {
+            version: 1,
+            entries: vec![entry],
+        };
+        let report = resolve_from_registry(&registry);
+
+        assert_eq!(report.plugins.len(), 1, "fallback chosen");
+        assert_eq!(report.unavailable.len(), 0);
+        assert_eq!(report.plugins[0].resolved_from, ResolutionOrigin::Fallback);
+        assert_eq!(report.plugins[0].path, fallback_dir);
+        let failure = report.plugins[0]
+            .active_failure
+            .as_ref()
+            .expect("active failure recorded");
+        assert_eq!(failure.path, active_dir);
+        assert!(
+            failure.reason.contains("daemon.command"),
+            "failure should describe daemon.command contract: {}",
+            failure.reason
+        );
+    }
+
+    #[test]
+    fn unavailable_when_active_and_fallback_daemon_binaries_missing() {
+        let tmp = TempDir::new().unwrap();
+        let active_dir = tmp.path().join("active");
+        let fallback_dir = tmp.path().join("fallback");
+        fs::create_dir(&active_dir).unwrap();
+        fs::create_dir(&fallback_dir).unwrap();
+        write_daemon_manifest(&active_dir, "plugin-foo", "plugin-foo");
+        write_daemon_manifest(&fallback_dir, "plugin-foo", "plugin-foo");
+
+        let entry = Entry {
+            id: "plugin-foo".to_string(),
+            active: Slot {
+                path: active_dir,
+                source: SlotSource::ReleaseAsset,
+            },
+            fallback: Some(Slot {
+                path: fallback_dir,
+                source: SlotSource::ReleaseAsset,
+            }),
+        };
+        let registry = Registry {
+            version: 1,
+            entries: vec![entry],
+        };
+        let report = resolve_from_registry(&registry);
+
+        assert_eq!(report.plugins.len(), 0);
+        assert_eq!(report.unavailable.len(), 1);
+        let u = &report.unavailable[0];
+        assert!(
+            u.active.reason.contains("daemon.command"),
+            "{}",
+            u.active.reason
+        );
+        let fallback = u.fallback.as_ref().expect("fallback failure recorded");
+        assert!(
+            fallback.reason.contains("daemon.command"),
+            "{}",
+            fallback.reason
+        );
     }
 
     #[test]
