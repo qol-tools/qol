@@ -23,6 +23,48 @@ pub(super) fn clean_stale_sockets(plugins: &[Plugin], policy: SocketPathPolicy) 
         }
         remove_socket(&candidate);
     }
+    clean_orphan_managed_sockets(&policy);
+}
+
+fn clean_orphan_managed_sockets(policy: &SocketPathPolicy) {
+    for dir in scan_dirs() {
+        clean_orphan_sockets_in(&dir, policy);
+    }
+}
+
+fn scan_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![std::env::temp_dir()];
+    if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+        dirs.push(PathBuf::from(runtime_dir));
+    }
+    dirs
+}
+
+fn clean_orphan_sockets_in(dir: &Path, policy: &SocketPathPolicy) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let Some(candidate) = orphan_socket_candidate(&path, policy) else {
+            continue;
+        };
+        if has_live_listener(&candidate) {
+            continue;
+        }
+        remove_socket(&candidate);
+    }
+}
+
+fn orphan_socket_candidate(path: &Path, policy: &SocketPathPolicy) -> Option<SocketCandidate> {
+    if !is_managed_daemon_socket_path(path, policy) {
+        return None;
+    }
+    let socket = path.to_string_lossy().to_string();
+    socket_file(SocketCandidate {
+        path: path.to_path_buf(),
+        socket,
+    })
 }
 
 fn socket_candidate(plugin: &Plugin, policy: &SocketPathPolicy) -> Option<SocketCandidate> {
@@ -127,4 +169,75 @@ fn starts_in_macos_temp_root(path: &Path) -> bool {
 
 fn starts_in_root(path: &Path, root: &str) -> bool {
     path.starts_with(Path::new(root))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::net::UnixListener;
+
+    #[cfg(target_os = "linux")]
+    fn policy() -> SocketPathPolicy {
+        SocketPathPolicy::StandardUnix
+    }
+    #[cfg(target_os = "macos")]
+    fn policy() -> SocketPathPolicy {
+        SocketPathPolicy::MacOs
+    }
+
+    #[test]
+    fn orphan_socket_without_listener_is_removed() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let socket_path = tmp.path().join("qol-foo.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        drop(listener);
+        assert!(socket_path.exists(), "socket file should remain after drop");
+
+        clean_orphan_sockets_in(tmp.path(), &policy());
+
+        assert!(!socket_path.exists(), "orphan socket should be removed");
+    }
+
+    #[test]
+    fn orphan_socket_with_live_listener_is_kept() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let socket_path = tmp.path().join("qol-foo.sock");
+        let _listener = UnixListener::bind(&socket_path).unwrap();
+
+        clean_orphan_sockets_in(tmp.path(), &policy());
+
+        assert!(
+            socket_path.exists(),
+            "live socket should not be removed by orphan scan"
+        );
+    }
+
+    #[test]
+    fn non_qol_socket_is_kept() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let socket_path = tmp.path().join("other-foo.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        drop(listener);
+
+        clean_orphan_sockets_in(tmp.path(), &policy());
+
+        assert!(
+            socket_path.exists(),
+            "non-qol-*.sock filenames are not managed and must be left alone"
+        );
+    }
+
+    #[test]
+    fn regular_file_named_qol_sock_is_kept() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("qol-bar.sock");
+        std::fs::write(&path, "not a socket").unwrap();
+
+        clean_orphan_sockets_in(tmp.path(), &policy());
+
+        assert!(
+            path.exists(),
+            "regular files must not be removed even if name matches"
+        );
+    }
 }
