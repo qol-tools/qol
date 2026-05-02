@@ -269,6 +269,10 @@ async fn async_init_inner(
             }
         }
     }
+    qol_tray::plugins::daemon_supervisor::spawn_supervisor(
+        plugin_manager.clone(),
+        shutdown_tx.subscribe(),
+    );
     tokio::task::spawn_blocking(sync_launcher_apps);
     Ok(InitResult {
         shutdown_tx,
