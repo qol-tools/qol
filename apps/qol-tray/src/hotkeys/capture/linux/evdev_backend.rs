@@ -1,14 +1,6 @@
-//! Linux evdev + uinput capture backend.
-//!
-//! Reads `/dev/input/event*` keyboards directly, EVIOCGRAB-s each one so
-//! X11 / Wayland never see the raw events, and re-emits everything except
-//! configured hotkey presses through a single uinput virtual device.
-//!
-//! Requires udev permission on `/dev/input/event*` (typically `input` group)
-//! and on `/dev/uinput` (typically `input` or a dedicated `uinput` group).
-//! The `uinput` kernel module must be loaded.
+//! evdev + uinput implementation. Only compiled with `linux_evdev` feature.
 
-use super::{keycodes, Binding, BindingMatcher, CaptureDecision};
+use super::super::{keycodes, Binding, BindingMatcher, CaptureDecision};
 use anyhow::{Context, Result};
 use evdev::{uinput::VirtualDevice, AttributeSet, Device, EventSummary, InputEvent, KeyCode};
 use std::path::PathBuf;
@@ -33,59 +25,45 @@ fn install_panic_safety_hook() {
     });
 }
 
-/// Marker handle returned by `install`. Reader threads are detached on spawn —
-/// they own their `Device` and live until the process dies (which closes the
-/// fd and releases EVIOCGRAB). Holding `EvdevCapture` keeps no resources.
-pub(crate) struct EvdevCapture;
+/// Open every keyboard device, grab it, build the shared virtual device,
+/// and spawn one reader thread per grabbed device. Reader threads are
+/// detached on spawn — they own their `Device` and live until the process
+/// dies (which closes the fd and releases EVIOCGRAB).
+pub(super) fn install(
+    bindings: Vec<Binding>,
+    on_fire: Box<dyn Fn(&Binding) + Send + Sync>,
+) -> Result<()> {
+    install_panic_safety_hook();
 
-impl EvdevCapture {
-    /// Open every keyboard device, grab it, build the shared virtual device,
-    /// and spawn one reader thread per grabbed device.
-    ///
-    /// Safety story: every grabbed device's fd is closed when its reader thread
-    /// drops it, and the kernel releases EVIOCGRAB automatically on fd close.
-    /// To guarantee fds close on a panic too — otherwise a panic in another
-    /// thread would leave the keyboard frozen — `install` registers a panic
-    /// hook that calls `std::process::abort()`, which terminates the process
-    /// and lets the kernel reclaim every fd. Default signal handling (SIGTERM,
-    /// SIGINT, SIGSEGV, SIGABRT) likewise terminates the process and closes
-    /// fds, so explicit signal hooks are not required for correctness.
-    pub(crate) fn install<F>(bindings: Vec<Binding>, on_fire: F) -> Result<Self>
-    where
-        F: Fn(&Binding) + Send + Sync + 'static,
-    {
-        install_panic_safety_hook();
+    let matcher = Arc::new(Mutex::new(BindingMatcher::new(bindings)));
+    let key_caps = matcher_keycodes_as_attribute_set(&matcher.lock().unwrap());
+    let virtual_device = build_virtual_device(&key_caps)?;
+    let virtual_device = Arc::new(Mutex::new(virtual_device));
 
-        let matcher = Arc::new(Mutex::new(BindingMatcher::new(bindings)));
-        let key_caps = matcher_keycodes_as_attribute_set(&matcher.lock().unwrap());
-        let virtual_device = build_virtual_device(&key_caps)?;
-        let virtual_device = Arc::new(Mutex::new(virtual_device));
-
-        let keyboards = open_keyboards()?;
-        if keyboards.is_empty() {
-            anyhow::bail!("no keyboard input devices found under /dev/input");
-        }
-
-        let on_fire: Arc<dyn Fn(&Binding) + Send + Sync> = Arc::new(on_fire);
-
-        for (path, mut device) in keyboards {
-            if let Err(error) = device.grab() {
-                log::warn!("evdev: failed to grab {}: {error}", path.display());
-                continue;
-            }
-            log::info!("evdev: grabbed {}", path.display());
-
-            let matcher = matcher.clone();
-            let virtual_device = virtual_device.clone();
-            let on_fire = on_fire.clone();
-
-            std::thread::spawn(move || {
-                run_reader(path, device, matcher, virtual_device, on_fire);
-            });
-        }
-
-        Ok(Self)
+    let keyboards = open_keyboards()?;
+    if keyboards.is_empty() {
+        anyhow::bail!("no keyboard input devices found under /dev/input");
     }
+
+    let on_fire: Arc<dyn Fn(&Binding) + Send + Sync> = Arc::from(on_fire);
+
+    for (path, mut device) in keyboards {
+        if let Err(error) = device.grab() {
+            log::warn!("evdev: failed to grab {}: {error}", path.display());
+            continue;
+        }
+        log::info!("evdev: grabbed {}", path.display());
+
+        let matcher = matcher.clone();
+        let virtual_device = virtual_device.clone();
+        let on_fire = on_fire.clone();
+
+        std::thread::spawn(move || {
+            run_reader(path, device, matcher, virtual_device, on_fire);
+        });
+    }
+
+    Ok(())
 }
 
 fn run_reader(
@@ -188,8 +166,8 @@ fn matcher_keycodes_as_attribute_set(matcher: &BindingMatcher) -> AttributeSet<K
         set.insert(KeyCode(code));
     }
     // The forwarded stream needs all the keys the user types, not just the
-    // configured combos. Expose the full A-Z, 0-9, F1-F12, and the symbol keys
-    // we know about so a virtual device can re-emit them.
+    // configured combos. Expose A-Z, 0-9, F1-F12, and the symbol keys so the
+    // virtual device can re-emit them.
     for raw in PASSTHROUGH_KEYS {
         set.insert(KeyCode(*raw));
     }
