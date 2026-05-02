@@ -100,6 +100,6 @@ clean:
 	cargo clean
 
 install:
-	cargo build --release --bins
+	cargo build --release --bins --features dev
 	target/release/qol-tray-install
 
