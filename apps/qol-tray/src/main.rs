@@ -15,6 +15,9 @@ use tokio::sync::broadcast;
 const DEFAULT_PORT: u16 = 42700;
 
 fn main() -> Result<()> {
+    if let Some(code) = try_handle_cli_flag() {
+        std::process::exit(code);
+    }
     if let Some(code) = try_exec_subcommand() {
         std::process::exit(code);
     }
@@ -63,6 +66,43 @@ fn main() -> Result<()> {
 
     #[cfg(not(feature = "dev"))]
     tray::platform::run_app(app_init)
+}
+
+fn try_handle_cli_flag() -> Option<i32> {
+    let args: Vec<String> = std::env::args().collect();
+    let flag = args.get(1).map(|s| s.as_str())?;
+    match flag {
+        "--version" | "-V" => {
+            println!("qol-tray {}", qol_tray_version());
+            Some(0)
+        }
+        "--help" | "-h" => {
+            print_usage();
+            Some(0)
+        }
+        _ => None,
+    }
+}
+
+fn qol_tray_version() -> String {
+    #[cfg(feature = "dev")]
+    if let Some(override_version) = qol_tray::version::test_version_override() {
+        return override_version.to_string();
+    }
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+fn print_usage() {
+    println!("qol-tray {}", qol_tray_version());
+    println!();
+    println!("USAGE:");
+    println!("    qol-tray                              Run the tray daemon");
+    println!(
+        "    qol-tray exec <plugin_id> <action>    Trigger a plugin action via the running daemon"
+    );
+    println!("    qol-tray exec shortcut <id>           Run a shortcut via the running daemon");
+    println!("    qol-tray --version, -V                Print version and exit");
+    println!("    qol-tray --help, -h                   Print this message and exit");
 }
 
 fn try_exec_subcommand() -> Option<i32> {
