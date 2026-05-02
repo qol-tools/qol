@@ -1,4 +1,3 @@
-#[cfg(all(target_os = "linux", feature = "linux_evdev"))]
 mod capture;
 mod catalog;
 mod listener;
@@ -17,8 +16,7 @@ pub use manager::HotkeyManager;
 pub use registration_status::{get_registration_errors, RegistrationError};
 pub use types::{HotkeyAction, HotkeyBinding, HotkeyConfig};
 
-#[cfg(all(target_os = "linux", feature = "linux_evdev"))]
-pub fn start_evdev_capture(
+pub fn start_capture(
     plugin_manager: std::sync::Arc<std::sync::Mutex<crate::plugins::PluginManager>>,
 ) -> anyhow::Result<()> {
     use crate::plugins::action_executor;
@@ -37,8 +35,11 @@ pub fn start_evdev_capture(
         })
         .collect();
 
-    capture::evdev_capture::EvdevCapture::install(bindings, move |binding| {
-        action_executor::execute_action(&plugin_manager, &binding.plugin_id, &binding.action);
-    })?;
-    Ok(())
+    let plugin_manager = plugin_manager.clone();
+    capture::install(
+        bindings,
+        Box::new(move |binding| {
+            action_executor::execute_action(&plugin_manager, &binding.plugin_id, &binding.action);
+        }),
+    )
 }
