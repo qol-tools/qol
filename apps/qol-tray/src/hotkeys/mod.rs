@@ -13,4 +13,4 @@ mod registration_status;
 pub use listener::{start_hotkey_listener, trigger_reload};
 pub use manager::HotkeyManager;
 pub use registration_status::{get_registration_errors, RegistrationError};
-pub use types::{HotkeyAction, HotkeyConfig};
+pub use types::{HotkeyAction, HotkeyBinding, HotkeyConfig};
