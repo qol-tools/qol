@@ -5,7 +5,7 @@
 //! Err so the caller falls back to the `global_hotkey` listener — which works
 //! on Windows via RegisterHotKey.
 
-use super::Binding;
+use super::super::Binding;
 use anyhow::{bail, Result};
 
 pub(crate) fn install(

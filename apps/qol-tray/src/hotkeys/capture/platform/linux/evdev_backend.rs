@@ -1,6 +1,6 @@
 //! evdev + uinput implementation. Only compiled with `linux_evdev` feature.
 
-use super::super::{keycodes, Binding, BindingMatcher, CaptureDecision};
+use super::super::super::{keycodes, Binding, BindingMatcher, CaptureDecision};
 use anyhow::{Context, Result};
 use evdev::{uinput::VirtualDevice, AttributeSet, Device, EventSummary, InputEvent, KeyCode};
 use std::path::PathBuf;

@@ -5,7 +5,7 @@
 //! falls back to the `global_hotkey` listener — which works on macOS via
 //! Carbon RegisterEventHotKey.
 
-use super::Binding;
+use super::super::Binding;
 use anyhow::{bail, Result};
 
 pub(crate) fn install(

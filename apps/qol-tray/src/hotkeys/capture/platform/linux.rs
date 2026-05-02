@@ -12,7 +12,7 @@
 //! and on `/dev/uinput` (typically `input` or a dedicated `uinput` group).
 //! The `uinput` kernel module must be loaded.
 
-use super::Binding;
+use super::super::Binding;
 use anyhow::Result;
 
 #[cfg(feature = "linux_evdev")]
@@ -34,7 +34,7 @@ pub(crate) fn install(
     // Construct the matcher so its supporting types stay reachable from this
     // build configuration (otherwise BindingMatcher / CaptureDecision /
     // ModifierState would be dead code without the linux_evdev feature).
-    let mut matcher = super::BindingMatcher::new(bindings);
+    let mut matcher = super::super::BindingMatcher::new(bindings);
     let _ = matcher.observe(0, 0);
     let _ = matcher.referenced_keycodes();
     anyhow::bail!("evdev capture not compiled in (rebuild qol-tray with --features linux_evdev)")
