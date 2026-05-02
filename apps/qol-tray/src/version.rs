@@ -79,9 +79,24 @@ pub fn normalize_semver_tag(tag: &str) -> Option<String> {
         .map(|v| v.to_string())
 }
 
+pub const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cargo_pkg_version_is_non_empty_and_parses() {
+        assert!(
+            !CARGO_PKG_VERSION.is_empty(),
+            "CARGO_PKG_VERSION must not be empty"
+        );
+        let parsed = Version::parse(CARGO_PKG_VERSION);
+        assert!(
+            !parsed.parts.is_empty(),
+            "CARGO_PKG_VERSION ({CARGO_PKG_VERSION:?}) must parse into at least one numeric component"
+        );
+    }
 
     #[test]
     fn parse_version_cases() {
