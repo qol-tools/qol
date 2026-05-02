@@ -12,20 +12,9 @@
 
 mod binding;
 mod modstate;
+mod platform;
 
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(target_os = "macos")]
-mod macos;
-#[cfg(target_os = "windows")]
-mod windows;
-
-#[cfg(target_os = "linux")]
-pub(crate) use linux::install;
-#[cfg(target_os = "macos")]
-pub(crate) use macos::install;
-#[cfg(target_os = "windows")]
-pub(crate) use windows::install;
+pub(crate) use platform::install;
 
 #[cfg(test)]
 pub(crate) use binding::Mod;
