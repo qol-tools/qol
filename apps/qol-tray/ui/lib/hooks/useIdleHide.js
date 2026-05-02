@@ -111,7 +111,15 @@ function wireListeners(ctx, camera, navigation, recompute, remeasure) {
     const unsubAnchor = navigation?.subscribeAnchor?.(recompute);
     const ro = new ResizeObserver(remeasure);
     ro.observe(ctx.el);
-    const mo = new MutationObserver(recompute);
+    const slotRo = new ResizeObserver(recompute);
+    const observeSlots = () => {
+        for (const el of document.querySelectorAll(ctx.occludeSelector)) {
+            if (ctx.el.contains(el) || el.contains(ctx.el)) continue;
+            slotRo.observe(el);
+        }
+    };
+    observeSlots();
+    const mo = new MutationObserver(() => { observeSlots(); recompute(); });
     mo.observe(document.getElementById('world') || document.body, { childList: true, subtree: true });
     window.addEventListener('resize', remeasure);
     return () => {
@@ -120,6 +128,7 @@ function wireListeners(ctx, camera, navigation, recompute, remeasure) {
         unsubCam?.();
         unsubAnchor?.();
         ro.disconnect();
+        slotRo.disconnect();
         mo.disconnect();
         window.removeEventListener('resize', remeasure);
     };
