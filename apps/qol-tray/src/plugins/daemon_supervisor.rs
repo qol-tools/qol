@@ -17,6 +17,7 @@ struct DaemonSnapshot {
 enum LivenessTransition {
     AliveToDead,
     DeadStaysDead,
+    DeadToAlive,
     Alive,
 }
 
@@ -56,16 +57,18 @@ fn supervise_once(plugin_manager: &Arc<Mutex<PluginManager>>, state: &mut Superv
         state.observe_alive(id);
     }
 
-    let mut any_dead_observed = !outcome.fresh_deaths.is_empty();
+    let mut any_state_change =
+        !outcome.fresh_deaths.is_empty() || !outcome.fresh_recoveries.is_empty();
     for plugin_id in outcome.retriable_dead {
         match restart_daemon(plugin_manager, &plugin_id) {
             Ok(()) => {
                 state.observe_alive(&plugin_id);
+                any_state_change = true;
                 log::info!("Restarted dead daemon for plugin {}", plugin_id);
             }
             Err(e) => {
                 state.record_failure(&plugin_id);
-                any_dead_observed = true;
+                any_state_change = true;
                 log::warn!("Failed to restart daemon for plugin {}: {}", plugin_id, e);
             }
         }
@@ -73,7 +76,7 @@ fn supervise_once(plugin_manager: &Arc<Mutex<PluginManager>>, state: &mut Superv
 
     state.prune_unknown_plugins();
 
-    if any_dead_observed {
+    if any_state_change {
         crate::hotkeys::trigger_reload();
     }
 }
@@ -82,6 +85,7 @@ fn supervise_once(plugin_manager: &Arc<Mutex<PluginManager>>, state: &mut Superv
 struct TickOutcome {
     alive: Vec<PluginId>,
     fresh_deaths: Vec<PluginId>,
+    fresh_recoveries: Vec<PluginId>,
     retriable_dead: Vec<PluginId>,
 }
 
@@ -90,6 +94,10 @@ fn classify_snapshots(snapshots: &[DaemonSnapshot], state: &SupervisorState) -> 
     for snap in snapshots {
         match state.transition_for(&snap.plugin_id, snap.daemon_pid) {
             LivenessTransition::Alive => outcome.alive.push(snap.plugin_id.clone()),
+            LivenessTransition::DeadToAlive => {
+                outcome.alive.push(snap.plugin_id.clone());
+                outcome.fresh_recoveries.push(snap.plugin_id.clone());
+            }
             LivenessTransition::AliveToDead => {
                 outcome.fresh_deaths.push(snap.plugin_id.clone());
                 if state.can_retry(&snap.plugin_id) {
@@ -176,7 +184,10 @@ impl SupervisorState {
 
     fn transition_for(&self, plugin_id: &PluginId, pid: Option<u32>) -> LivenessTransition {
         if is_daemon_alive(pid) {
-            return LivenessTransition::Alive;
+            return match self.last_seen.get(plugin_id) {
+                Some(LastSeen::Dead) => LivenessTransition::DeadToAlive,
+                Some(LastSeen::Alive) | None => LivenessTransition::Alive,
+            };
         }
         match self.last_seen.get(plugin_id) {
             Some(LastSeen::Dead) => LivenessTransition::DeadStaysDead,
@@ -314,6 +325,33 @@ mod tests {
                 "{label}"
             );
         }
+    }
+
+    #[test]
+    fn transition_classifies_dead_to_alive_when_pid_recovers() {
+        let mut state = SupervisorState::default();
+        let recovered = pid("plugin-recovered");
+        state.last_seen.insert(recovered.clone(), LastSeen::Dead);
+
+        assert_eq!(
+            state.transition_for(&recovered, Some(alive_pid())),
+            LivenessTransition::DeadToAlive
+        );
+    }
+
+    #[test]
+    fn classify_snapshots_emits_fresh_recovery_when_dead_plugin_returns() {
+        let mut state = SupervisorState::default();
+        let recovered_id = pid("plugin-recovered");
+        state.last_seen.insert(recovered_id.clone(), LastSeen::Dead);
+
+        let snapshots = vec![snapshot("plugin-recovered", Some(alive_pid()))];
+        let outcome = classify_snapshots(&snapshots, &state);
+
+        assert_eq!(outcome.alive, vec![recovered_id.clone()]);
+        assert_eq!(outcome.fresh_recoveries, vec![recovered_id]);
+        assert!(outcome.fresh_deaths.is_empty());
+        assert!(outcome.retriable_dead.is_empty());
     }
 
     #[test]
