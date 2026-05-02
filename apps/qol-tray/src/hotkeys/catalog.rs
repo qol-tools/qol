@@ -64,7 +64,7 @@ fn daemon_actions_published(
         return true;
     }
     let Some(socket) = daemon.socket.as_deref() else {
-        return true;
+        return false;
     };
     is_reachable(Path::new(socket))
 }
@@ -131,10 +131,16 @@ mod tests {
                 expected: true,
             },
             Case {
-                name: "daemon enabled no socket declared -> publish",
+                name: "daemon enabled no socket declared -> withhold (no liveness probe)",
                 daemon: Some(daemon(true, None)),
                 reachable: never,
-                expected: true,
+                expected: false,
+            },
+            Case {
+                name: "daemon enabled no socket declared, reachable irrelevant -> withhold",
+                daemon: Some(daemon(true, None)),
+                reachable: always,
+                expected: false,
             },
             Case {
                 name: "daemon enabled and socket reachable -> publish",
