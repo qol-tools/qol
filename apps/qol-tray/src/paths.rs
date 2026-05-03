@@ -1,13 +1,10 @@
 use anyhow::{anyhow, Context, Result};
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::file_io;
 
 const APP_NAME: &str = "qol-tray";
-const INSTALL_ID_ENV: &str = "QOL_TRAY_INSTALL_ID";
-const INSTALL_ID_FILE: &str = "qol-tray.install-id";
 const ACTIVE_INSTALL_ID_FILE: &str = "active-install-id";
 
 pub const STATE_SOCKET_PATH: &str = "/tmp/qol-tray-state.sock";
@@ -54,38 +51,12 @@ fn validated_install_id(raw: &str) -> Option<String> {
     valid_install_id(trimmed).then(|| trimmed.to_string())
 }
 
-fn install_id_from_env() -> Option<String> {
-    validated_install_id(&env::var(INSTALL_ID_ENV).ok()?)
-}
-
-fn install_id_from_marker_file() -> Option<String> {
-    let marker_path = env::current_exe().ok()?.parent()?.join(INSTALL_ID_FILE);
-    validated_install_id(&fs::read_to_string(marker_path).ok()?)
-}
-
 fn active_install_id_path() -> Result<PathBuf> {
     base_data_dir().map(|p| p.join(ACTIVE_INSTALL_ID_FILE))
 }
 
 fn install_id_from_active_file() -> Option<String> {
     validated_install_id(&fs::read_to_string(active_install_id_path().ok()?).ok()?)
-}
-
-pub fn config_dir_for_install_id(install_id: &str) -> Result<PathBuf> {
-    if !valid_install_id(install_id) {
-        return Err(anyhow!("invalid install id"));
-    }
-    installs_dir().map(|p| p.join(install_id))
-}
-
-pub fn config_dir() -> Result<PathBuf> {
-    if let Some(install_id) = install_id_from_env()
-        .or_else(install_id_from_marker_file)
-        .or_else(install_id_from_active_file)
-    {
-        return config_dir_for_install_id(&install_id);
-    }
-    legacy_config_dir()
 }
 
 pub fn set_active_install_id(install_id: &str) -> Result<()> {
@@ -260,13 +231,6 @@ mod tests {
             (sync_state_path(), "state.json"),
             (sync_backups_dir(), "backups"),
         ];
-
-        let config_path = config_dir().unwrap();
-        assert!(
-            config_path.to_string_lossy().contains("qol-tray"),
-            "config path {:?} should contain qol-tray",
-            config_path
-        );
 
         for (result, expected_suffix) in cases {
             let path = result.unwrap();

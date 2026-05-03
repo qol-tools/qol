@@ -31,10 +31,7 @@ impl PluginConfigManager {
         if !is_safe_path_component(plugin_id) {
             anyhow::bail!("Invalid plugin ID: {}", plugin_id);
         }
-        Ok(paths::config_dir()?
-            .join("plugins")
-            .join(plugin_id)
-            .join("config.json"))
+        Ok(paths::plugins_dir()?.join(plugin_id).join("config.json"))
     }
 
     pub fn load_configs(&self) -> Result<PluginConfigs> {

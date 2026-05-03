@@ -75,7 +75,7 @@ fn plugin_config_path_returns_plugin_directory() {
 }
 
 #[test]
-fn plugin_config_path_prefers_active_install_root() {
+fn plugin_config_path_uses_shared_plugin_directory() {
     let _guard = crate::test_support::env_lock().blocking_lock();
     let root = TempDir::new().unwrap();
     let _env = ConfigEnvGuard::new(root.path());
@@ -88,11 +88,11 @@ fn plugin_config_path_prefers_active_install_root() {
 
     let path = PluginConfigManager::plugin_config_path("plugin-test").unwrap();
 
-    assert!(path.to_string_lossy().contains("installs"));
-    assert!(path.to_string_lossy().contains(install_id));
+    assert!(!path.to_string_lossy().contains("installs"));
+    assert!(!path.to_string_lossy().contains(install_id));
     assert!(path
         .to_string_lossy()
-        .ends_with("plugins/plugin-test/config.json"));
+        .ends_with("qol-tray/plugins/plugin-test/config.json"));
 }
 
 #[test]
