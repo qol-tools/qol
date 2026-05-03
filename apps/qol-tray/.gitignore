@@ -8,6 +8,7 @@
 .plugin-cache.json
 .qol-tray-dev-hooks
 /.cursor.idea/
+proptest-regressions/
 
 .cursor/
 .idea/

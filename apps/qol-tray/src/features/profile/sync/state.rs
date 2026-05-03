@@ -194,33 +194,6 @@ pub(crate) fn hash_text(content: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-pub(crate) fn is_local_document_empty(local_json: &str) -> bool {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(local_json) else {
-        return false;
-    };
-    let array_field_empty = |key: &str| {
-        value
-            .get(key)
-            .and_then(|v| v.as_array())
-            .is_none_or(Vec::is_empty)
-    };
-    let object_field_empty = |key: &str| {
-        value
-            .get(key)
-            .and_then(|v| v.as_object())
-            .is_none_or(serde_json::Map::is_empty)
-    };
-    let task_runner_empty = value
-        .get("task_runner")
-        .is_none_or(|v| v.is_null() || v.as_object().is_some_and(serde_json::Map::is_empty));
-
-    array_field_empty("hotkeys")
-        && array_field_empty("shortcuts")
-        && array_field_empty("plugins")
-        && object_field_empty("plugin_configs")
-        && task_runner_empty
-}
-
 pub(crate) fn now_rfc3339() -> String {
     chrono::Local::now().to_rfc3339()
 }
@@ -433,56 +406,6 @@ mod tests {
                 let hash = hash_text(&input);
                 assert_eq!(hash, hash.to_lowercase());
             }
-        }
-    }
-
-    #[test]
-    fn is_local_document_empty_classifies_states() {
-        let cases = [
-            (
-                r#"{"version":1,"hotkeys":[],"shortcuts":[],"task_runner":{},"plugin_configs":{},"plugins":[]}"#,
-                true,
-                "fresh defaults",
-            ),
-            (
-                r#"{"version":1,"hotkeys":[],"shortcuts":[],"task_runner":null,"plugin_configs":{},"plugins":[]}"#,
-                true,
-                "task_runner null",
-            ),
-            (
-                r#"{}"#,
-                true,
-                "empty object — every check defaults to empty",
-            ),
-            (
-                r#"{"hotkeys":[{"id":"a"}],"shortcuts":[],"task_runner":{},"plugin_configs":{},"plugins":[]}"#,
-                false,
-                "hotkeys present",
-            ),
-            (
-                r#"{"hotkeys":[],"shortcuts":[{"id":"a"}],"task_runner":{},"plugin_configs":{},"plugins":[]}"#,
-                false,
-                "shortcuts present",
-            ),
-            (
-                r#"{"hotkeys":[],"shortcuts":[],"task_runner":{"actions":{"x":1}},"plugin_configs":{},"plugins":[]}"#,
-                false,
-                "task_runner populated",
-            ),
-            (
-                r#"{"hotkeys":[],"shortcuts":[],"task_runner":{},"plugin_configs":{"plugin-lights":{}},"plugins":[]}"#,
-                false,
-                "plugin_configs populated",
-            ),
-            (
-                r#"{"hotkeys":[],"shortcuts":[],"task_runner":{},"plugin_configs":{},"plugins":[{"id":"x"}]}"#,
-                false,
-                "plugins lock entries present",
-            ),
-            (r#"not json"#, false, "invalid json never counts as empty"),
-        ];
-        for (input, expected, label) in cases {
-            assert_eq!(is_local_document_empty(input), expected, "{label}: {input}");
         }
     }
 

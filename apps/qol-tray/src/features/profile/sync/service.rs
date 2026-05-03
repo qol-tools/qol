@@ -12,9 +12,9 @@ use super::providers::{
 use super::resolve::{resolve_sync_action, SyncAction};
 use super::state::{
     backup_file_path, build_status, ensure_sync_dirs, filename_string, hash_text, incident_kind,
-    is_local_document_empty, list_backup_entries, load_state_file, now_rfc3339,
-    pull_conflict_message, pull_local_ahead_message, pull_noop_message, pull_success_message,
-    sanitize_reason, save_state_file, PullMode, SyncStateFile,
+    list_backup_entries, load_state_file, now_rfc3339, pull_conflict_message,
+    pull_local_ahead_message, pull_noop_message, pull_success_message, sanitize_reason,
+    save_state_file, PullMode, SyncStateFile,
 };
 use super::types::{
     SyncActionResult, SyncBackupEntry, SyncBackupPreview, SyncConnectRequest, SyncConnection,
@@ -377,9 +377,7 @@ impl SyncService {
         };
 
         let action = match mode {
-            PullMode::Connect if is_local_document_empty(&local_json) => {
-                SyncAction::FastForwardFromRemote
-            }
+            PullMode::Connect if local_hash != remote_hash => SyncAction::FastForwardFromRemote,
             _ => resolve_sync_action(&local_hash, &remote_hash, last_synced.as_deref()),
         };
 

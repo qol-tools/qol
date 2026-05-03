@@ -2,14 +2,16 @@ use crate::file_io;
 use crate::paths;
 use std::path::{Path, PathBuf};
 
-fn legacy_daemon_pids_path() -> Option<PathBuf> {
-    paths::config_dir().ok().map(|p| p.join(".daemon-pids"))
+fn shared_daemon_pids_path() -> Option<PathBuf> {
+    paths::shared_config_dir()
+        .ok()
+        .map(|p| p.join(".daemon-pids"))
 }
 
 fn legacy_pid_files() -> Vec<PathBuf> {
     let mut files = Vec::new();
 
-    if let Some(current) = legacy_daemon_pids_path() {
+    if let Some(current) = shared_daemon_pids_path() {
         files.push(current);
     }
 

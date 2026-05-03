@@ -343,6 +343,12 @@ mod tests {
         }
     }
 
+    #[test]
+    fn truncate_id_handles_multibyte_boundary() {
+        let input = "  ࠀ𐀀";
+        assert_eq!(truncate_id(input), "  ࠀ");
+    }
+
     mod prop_tests {
         use super::*;
         use proptest::prelude::*;

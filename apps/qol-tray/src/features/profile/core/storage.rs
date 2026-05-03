@@ -65,7 +65,7 @@ pub fn save_plugin_config(plugin_id: &str, config: &Value) -> Result<()> {
 
 pub fn read_plugin_configs() -> Result<HashMap<String, Value>> {
     ensure_profile_dirs()?;
-    let installed_configs_dir = crate::paths::config_dir()?.join("plugins");
+    let installed_configs_dir = crate::paths::plugins_dir()?;
     read_plugin_configs_from_dirs(
         &crate::paths::profile_plugin_configs_dir()?,
         &installed_configs_dir,
