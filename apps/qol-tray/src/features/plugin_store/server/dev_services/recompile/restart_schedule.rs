@@ -136,7 +136,7 @@ fn shutdown_plugin_manager(plugin_manager: &Arc<Mutex<crate::plugins::PluginMana
 }
 
 fn verify_plugin_process_leaks() -> Result<(), String> {
-    let report = crate::doctor::fix_plugin_process_leaks();
+    let report = crate::doctor::fix_single(crate::doctor::CheckId::PluginProcessLeaks);
     if !report.failures.is_empty() {
         return Err(format!(
             "plugin process leak cleanup failed: {}",

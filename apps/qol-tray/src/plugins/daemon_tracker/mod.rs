@@ -29,6 +29,14 @@ pub fn leaked_processes() -> Vec<ManagedProcess> {
     untracked_managed_processes(managed_processes(), &tracked)
 }
 
+pub fn kill_managed_processes(processes: &[ManagedProcess]) -> usize {
+    let roots = ManagedRoots::load();
+    processes
+        .iter()
+        .filter(|process| kill_managed_process(process, &roots))
+        .count()
+}
+
 pub fn save_plugin_pid(pids_dir: &Path, plugin_id: &str, pid: u32) {
     let path = pids_dir.join(format!("{}.pid", plugin_id));
     let _ = std::fs::write(&path, pid.to_string());
@@ -84,7 +92,37 @@ fn untracked_managed_processes(
 }
 
 #[cfg(unix)]
+fn kill_managed_process(process: &ManagedProcess, roots: &ManagedRoots) -> bool {
+    let Some(current_executable) = platform::pid_exe_path(process.pid) else {
+        return false;
+    };
+    if current_executable != process.executable {
+        return false;
+    }
+    if !roots.contains(&current_executable) {
+        return false;
+    }
+    crate::process_utils::terminate_pid(process.pid, std::time::Duration::from_millis(100));
+    true
+}
+
+#[cfg(not(unix))]
+fn kill_managed_process(_process: &ManagedProcess, _roots: &ManagedRoots) -> bool {
+    false
+}
+
+#[cfg(unix)]
 pub(crate) use orphan_kill::{kill_from_pid_files, ManagedRoots};
+
+#[cfg(not(unix))]
+struct ManagedRoots;
+
+#[cfg(not(unix))]
+impl ManagedRoots {
+    fn load() -> Self {
+        Self
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -172,5 +210,16 @@ mod tests {
                 executable: PathBuf::from("/plugins/a"),
             }]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kill_managed_process_rejects_changed_executable() {
+        let process = ManagedProcess {
+            pid: std::process::id() as i32,
+            executable: PathBuf::from("/different/plugin-binary"),
+        };
+
+        assert!(!kill_managed_process(&process, &ManagedRoots::load()));
     }
 }

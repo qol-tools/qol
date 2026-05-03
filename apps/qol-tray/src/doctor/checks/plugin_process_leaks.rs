@@ -12,10 +12,11 @@ fn diagnose(leaks: Vec<ManagedProcess>) -> Diagnosis {
         return ok_outcome(ID, "no leaked plugin processes detected".to_string());
     }
 
+    let message = format!("leaked plugin processes detected: {}", format_leaks(&leaks));
     warn_outcome(
         ID,
-        format!("leaked plugin processes detected: {}", format_leaks(&leaks)),
-        Some(FixAction::KillPluginProcessLeaks),
+        message,
+        Some(FixAction::KillPluginProcessLeaks { processes: leaks }),
     )
 }
 
@@ -52,5 +53,10 @@ mod tests {
         assert!(diagnosis.outcome.fix_available);
         assert!(diagnosis.outcome.message.contains("42"));
         assert!(diagnosis.outcome.message.contains("plugin-lights"));
+        assert!(matches!(
+            diagnosis.fixes.as_slice(),
+            [FixAction::KillPluginProcessLeaks { processes }]
+                if processes.len() == 1 && processes[0].pid == 42
+        ));
     }
 }

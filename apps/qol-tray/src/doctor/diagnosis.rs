@@ -1,6 +1,7 @@
 use super::de_bindings::{filter_unshadow, parse_gsettings_list, serialize_gsettings_list};
 use super::install_id::write_install_id_file;
 use super::report::{Outcome, OutcomeStatus};
+use crate::plugins::daemon_tracker::ManagedProcess;
 use anyhow::{anyhow, Context, Result};
 use std::fs;
 use std::path::PathBuf;
@@ -23,7 +24,9 @@ pub(super) enum FixAction {
     EnsurePluginsDir {
         path: PathBuf,
     },
-    KillPluginProcessLeaks,
+    KillPluginProcessLeaks {
+        processes: Vec<ManagedProcess>,
+    },
     UnshadowDeBinding {
         schema: String,
         key: String,
@@ -38,7 +41,7 @@ impl FixAction {
             | FixAction::WriteInstallMarker { .. }
             | FixAction::WriteAutostartEntry { .. }
             | FixAction::EnsurePluginsDir { .. }
-            | FixAction::KillPluginProcessLeaks => true,
+            | FixAction::KillPluginProcessLeaks { .. } => true,
             FixAction::UnshadowDeBinding { .. } => false,
         }
     }
@@ -59,8 +62,8 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
         FixAction::EnsurePluginsDir { path } => {
             fs::create_dir_all(path).with_context(|| format!("failed to create {}", path.display()))
         }
-        FixAction::KillPluginProcessLeaks => {
-            crate::plugins::daemon_tracker::kill_orphan_daemons();
+        FixAction::KillPluginProcessLeaks { processes } => {
+            crate::plugins::daemon_tracker::kill_managed_processes(processes);
             Ok(())
         }
         FixAction::UnshadowDeBinding {
@@ -253,7 +256,12 @@ mod tests {
                 },
                 true,
             ),
-            (FixAction::KillPluginProcessLeaks, true),
+            (
+                FixAction::KillPluginProcessLeaks {
+                    processes: Vec::new(),
+                },
+                true,
+            ),
             (
                 FixAction::UnshadowDeBinding {
                     schema: "org.cinnamon.desktop.keybindings.wm".into(),
