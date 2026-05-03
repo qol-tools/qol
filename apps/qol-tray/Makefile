@@ -1,4 +1,4 @@
-.PHONY: build release run dev setup test check lint lint-fix fmt fmt-check icons clean install
+.PHONY: build release run dev setup test check lint lint-fix fmt fmt-check icons clean install install-dev
 
 DEV_HOOKS := .qol-tray-dev-hooks
 
@@ -100,6 +100,10 @@ clean:
 	cargo clean
 
 install:
+	cargo build --release --bins
+	target/release/qol-tray-install
+
+install-dev:
 	cargo build --release --bins --features dev
 	target/release/qol-tray-install
 
