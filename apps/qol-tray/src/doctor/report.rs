@@ -55,6 +55,7 @@ pub struct FixReport {
     pub after: Report,
     pub attempted: usize,
     pub applied: usize,
+    pub skipped: usize,
     pub failures: Vec<String>,
 }
 
