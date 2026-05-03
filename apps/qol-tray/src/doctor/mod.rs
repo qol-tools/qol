@@ -48,6 +48,26 @@ pub fn fix_safe() -> FixReport {
     fix_with_policy(FixPolicy::safe())
 }
 
+pub fn check_plugin_process_leaks() -> Report {
+    let diagnosis = checks::collect_plugin_process_leak_diagnosis();
+    report::report(vec![diagnosis.outcome])
+}
+
+pub fn fix_plugin_process_leaks() -> FixReport {
+    let diagnoses = vec![checks::collect_plugin_process_leak_diagnosis()];
+    let before = report_from_diagnoses(&diagnoses);
+    let summary = apply_fixes(diagnoses, FixPolicy::safe());
+    let after = check_plugin_process_leaks();
+    FixReport {
+        before,
+        after,
+        attempted: summary.attempted,
+        applied: summary.applied,
+        skipped: summary.skipped,
+        failures: summary.failures,
+    }
+}
+
 pub fn fix_with_policy(policy: FixPolicy) -> FixReport {
     let diagnoses = checks::collect_diagnoses();
     let before = report_from_diagnoses(&diagnoses);

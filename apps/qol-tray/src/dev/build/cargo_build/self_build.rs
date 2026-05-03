@@ -19,13 +19,7 @@ pub(super) fn build_qol_tray_self_with_progress<F>(
 where
     F: FnMut(u8, String),
 {
-    let mut repo_root = repo_root
-        .map(Path::to_path_buf)
-        .unwrap_or_else(paths::repo_root_from_manifest_dir);
-
-    if !manifest_is_qol_tray(&repo_root) {
-        repo_root = resolve_missing_tray_root(&repo_root);
-    }
+    let repo_root = resolve_qol_tray_self_root(repo_root);
 
     let manifest_path = repo_root.join("Cargo.toml");
     if let Err(error) = ensure_manifest(&manifest_path) {
@@ -43,6 +37,18 @@ where
     readers.emit_progress(&mut on_progress);
     let (actual_done, combined) = readers.join();
     finish_build(&mut child, actual_done, combined, &mut on_progress)
+}
+
+pub(super) fn resolve_qol_tray_self_root(repo_root: Option<&Path>) -> std::path::PathBuf {
+    let repo_root = repo_root
+        .map(Path::to_path_buf)
+        .unwrap_or_else(paths::repo_root_from_manifest_dir);
+
+    if manifest_is_qol_tray(&repo_root) {
+        return repo_root;
+    }
+
+    resolve_missing_tray_root(&repo_root)
 }
 
 fn resolve_missing_tray_root(repo_root: &Path) -> std::path::PathBuf {
@@ -128,8 +134,7 @@ fn spawn_build(repo_root: &Path, manifest_path: &Path) -> Result<CargoChild, Str
     command
         .args([
             "build",
-            "--bin",
-            "qol-tray",
+            "--bins",
             "--features",
             "dev",
             "--message-format",
@@ -264,20 +269,17 @@ path = \"src/main.rs\"
         let tmp = TempDir::new().unwrap();
         write_manifest(&tmp.path().join("qol-tray"), qol_tray_manifest());
         assert_eq!(
-            resolve_missing_tray_root(tmp.path()),
+            resolve_qol_tray_self_root(Some(tmp.path())),
             tmp.path().join("qol-tray")
         );
     }
 
     #[test]
     fn resolve_missing_tray_root_falls_through_nested_plugin() {
-        // Simulates a plugin-only worktree: <worktree>/plugin-alt-tab with its Cargo.toml.
-        // Neither the worktree root nor a nested qol-tray/ contain qol-tray,
-        // so we expect the sibling probe (which also misses here) or the base fallback.
         let tmp = TempDir::new().unwrap();
         let plugin_dir = tmp.path().join("plugin-alt-tab");
         write_manifest(&plugin_dir, &plugin_manifest("alt-tab"));
-        let resolved = resolve_missing_tray_root(&plugin_dir);
+        let resolved = resolve_qol_tray_self_root(Some(&plugin_dir));
         assert_ne!(resolved, plugin_dir, "should not return the plugin dir");
         assert!(
             manifest_is_qol_tray(&resolved),
@@ -287,7 +289,6 @@ path = \"src/main.rs\"
 
     #[test]
     fn resolve_missing_tray_root_finds_sibling_qol_tray() {
-        // Simulates: <feature-root>/plugin-alt-tab and <feature-root>/qol-tray.
         let tmp = TempDir::new().unwrap();
         let feature_root = tmp.path();
         write_manifest(
@@ -295,7 +296,7 @@ path = \"src/main.rs\"
             &plugin_manifest("alt-tab"),
         );
         write_manifest(&feature_root.join("qol-tray"), qol_tray_manifest());
-        let resolved = resolve_missing_tray_root(&feature_root.join("plugin-alt-tab"));
+        let resolved = resolve_qol_tray_self_root(Some(&feature_root.join("plugin-alt-tab")));
         assert_eq!(resolved, feature_root.join("qol-tray"));
     }
 }

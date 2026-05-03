@@ -23,6 +23,7 @@ pub(super) enum FixAction {
     EnsurePluginsDir {
         path: PathBuf,
     },
+    KillPluginProcessLeaks,
     UnshadowDeBinding {
         schema: String,
         key: String,
@@ -36,7 +37,8 @@ impl FixAction {
             FixAction::SetActiveInstallId(_)
             | FixAction::WriteInstallMarker { .. }
             | FixAction::WriteAutostartEntry { .. }
-            | FixAction::EnsurePluginsDir { .. } => true,
+            | FixAction::EnsurePluginsDir { .. }
+            | FixAction::KillPluginProcessLeaks => true,
             FixAction::UnshadowDeBinding { .. } => false,
         }
     }
@@ -56,6 +58,10 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
         }
         FixAction::EnsurePluginsDir { path } => {
             fs::create_dir_all(path).with_context(|| format!("failed to create {}", path.display()))
+        }
+        FixAction::KillPluginProcessLeaks => {
+            crate::plugins::daemon_tracker::kill_orphan_daemons();
+            Ok(())
         }
         FixAction::UnshadowDeBinding {
             schema,
@@ -247,6 +253,7 @@ mod tests {
                 },
                 true,
             ),
+            (FixAction::KillPluginProcessLeaks, true),
             (
                 FixAction::UnshadowDeBinding {
                     schema: "org.cinnamon.desktop.keybindings.wm".into(),

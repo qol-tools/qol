@@ -11,7 +11,8 @@ pub(super) fn schedule_self_restart_after_idle(
     plugin_manager: Arc<Mutex<crate::plugins::PluginManager>>,
     runtime: Arc<DevRuntimeService>,
     restart: Arc<dyn RestartPort>,
-    worktree_path: Option<PathBuf>,
+    repo_root: PathBuf,
+    worktree_branch: Option<String>,
     events: Arc<crate::daemon::EventBus>,
 ) {
     if !runtime.try_mark_restart_pending() {
@@ -20,21 +21,23 @@ pub(super) fn schedule_self_restart_after_idle(
 
     tokio::spawn(async move {
         wait_for_restart_idle(runtime.as_ref()).await;
-        let Some(restart_binary) =
-            resolve_restart_binary(runtime.as_ref(), restart.as_ref(), worktree_path.as_deref())
-        else {
+        let Some(restart_binary) = resolve_restart_binary(
+            runtime.as_ref(),
+            restart.as_ref(),
+            Some(repo_root.as_path()),
+        ) else {
             events.send(crate::daemon::DaemonEvent::SelfRecompileFailed {
                 message: "Restart binary not found after build".to_string(),
             });
             return;
         };
-        let worktree_branch = worktree_path.as_deref().and_then(resolve_branch_from_path);
         exec_restart_after_cleanup(
             plugin_manager,
             runtime.as_ref(),
             restart.as_ref(),
             &restart_binary,
             worktree_branch.as_deref(),
+            events.as_ref(),
         );
     });
 }
@@ -87,13 +90,15 @@ fn exec_restart_after_cleanup(
     restart: &dyn RestartPort,
     restart_binary: &Path,
     worktree_branch: Option<&str>,
+    events: &crate::daemon::EventBus,
 ) {
-    match plugin_manager.lock() {
-        Ok(mut manager) => manager.shutdown(),
-        Err(error) => log::error!(
-            "Plugin manager lock poisoned during self restart: {}",
-            error
-        ),
+    if let Err(message) = cleanup_before_restart(&plugin_manager) {
+        log::error!("Self recompile cleanup failed: {}", message);
+        events.send(crate::daemon::DaemonEvent::SelfRecompileFailed {
+            message: message.clone(),
+        });
+        runtime.clear_restart_pending();
+        return;
     }
 
     worktree_branch.map_or_else(
@@ -110,4 +115,52 @@ fn exec_restart_after_cleanup(
         std::process::exit(1);
     }
     std::process::exit(0);
+}
+
+fn cleanup_before_restart(
+    plugin_manager: &Arc<Mutex<crate::plugins::PluginManager>>,
+) -> Result<(), String> {
+    shutdown_plugin_manager(plugin_manager);
+    verify_plugin_process_leaks()
+}
+
+fn shutdown_plugin_manager(plugin_manager: &Arc<Mutex<crate::plugins::PluginManager>>) {
+    let mut manager = plugin_manager.lock().unwrap_or_else(|poisoned| {
+        log::error!(
+            "Plugin manager lock poisoned during self restart: {}",
+            poisoned
+        );
+        poisoned.into_inner()
+    });
+    manager.shutdown();
+}
+
+fn verify_plugin_process_leaks() -> Result<(), String> {
+    let report = crate::doctor::fix_plugin_process_leaks();
+    if !report.failures.is_empty() {
+        return Err(format!(
+            "plugin process leak cleanup failed: {}",
+            report.failures.join("; ")
+        ));
+    }
+    if report.after.has_warnings() || report.after.has_errors() {
+        return Err(format_plugin_leak_report(&report.after));
+    }
+    if report.applied > 0 {
+        log::warn!(
+            "Self recompile applied {} plugin process leak cleanup fix(es) before restart",
+            report.applied
+        );
+    }
+    Ok(())
+}
+
+fn format_plugin_leak_report(report: &crate::doctor::Report) -> String {
+    report
+        .outcomes
+        .iter()
+        .filter(|outcome| !matches!(outcome.status, crate::doctor::OutcomeStatus::Ok))
+        .map(|outcome| outcome.message.clone())
+        .collect::<Vec<_>>()
+        .join("; ")
 }

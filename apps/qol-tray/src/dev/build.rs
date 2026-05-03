@@ -5,7 +5,7 @@ pub(super) mod planning;
 mod service;
 mod types;
 
-pub use cargo_build::build_qol_tray_self_with_progress;
+pub use cargo_build::{build_qol_tray_self_with_progress, resolve_qol_tray_self_root};
 pub use fingerprint_store::{load_build_fingerprints, save_build_fingerprints};
 pub(super) use planning::plan_linked_plugin_builds;
 pub use service::{
