@@ -10,6 +10,11 @@ use anyhow::Result;
 use diagnosis::{apply_fix, Diagnosis, FixAction};
 pub use report::{FixReport, Outcome, OutcomeStatus, Report};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CheckId {
+    PluginProcessLeaks,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FixPolicy {
     pub apply_de_fixes: bool,
@@ -48,16 +53,16 @@ pub fn fix_safe() -> FixReport {
     fix_with_policy(FixPolicy::safe())
 }
 
-pub fn check_plugin_process_leaks() -> Report {
-    let diagnosis = checks::collect_plugin_process_leak_diagnosis();
+pub fn check_single(id: CheckId) -> Report {
+    let diagnosis = checks::collect_diagnosis(id);
     report::report(vec![diagnosis.outcome])
 }
 
-pub fn fix_plugin_process_leaks() -> FixReport {
-    let diagnoses = vec![checks::collect_plugin_process_leak_diagnosis()];
+pub fn fix_single(id: CheckId) -> FixReport {
+    let diagnoses = vec![checks::collect_diagnosis(id)];
     let before = report_from_diagnoses(&diagnoses);
     let summary = apply_fixes(diagnoses, FixPolicy::safe());
-    let after = check_plugin_process_leaks();
+    let after = check_single(id);
     FixReport {
         before,
         after,

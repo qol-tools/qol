@@ -8,6 +8,7 @@ mod plugin_staleness;
 mod runtime_prereqs;
 
 use super::diagnosis::Diagnosis;
+use super::CheckId;
 
 pub(super) fn collect_diagnoses() -> Vec<Diagnosis> {
     let mut diagnoses = vec![
@@ -23,6 +24,8 @@ pub(super) fn collect_diagnoses() -> Vec<Diagnosis> {
     diagnoses
 }
 
-pub(super) fn collect_plugin_process_leak_diagnosis() -> Diagnosis {
-    plugin_process_leaks::check()
+pub(super) fn collect_diagnosis(id: CheckId) -> Diagnosis {
+    match id {
+        CheckId::PluginProcessLeaks => plugin_process_leaks::check(),
+    }
 }
