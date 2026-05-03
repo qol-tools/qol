@@ -1,30 +1,51 @@
-use super::{check, fix_safe, FixReport, Outcome, OutcomeStatus, Report};
+use super::{check, fix_with_policy, FixPolicy, FixReport, Outcome, OutcomeStatus, Report};
 use anyhow::{anyhow, Result};
 
 pub(super) fn run_cli_from_env() -> Result<i32> {
     match command()? {
         DoctorCommand::Check => run_check(),
-        DoctorCommand::Fix => run_fix(),
+        DoctorCommand::Fix(policy) => run_fix(policy),
     }
 }
 
 enum DoctorCommand {
     Check,
-    Fix,
+    Fix(FixPolicy),
 }
 
 fn command() -> Result<DoctorCommand> {
     let mut args = std::env::args().skip(1);
     let command = args.next().unwrap_or_else(|| "check".to_string());
-    if args.next().is_some() {
-        return Err(anyhow!("Usage: qol-tray-doctor [check|fix]"));
-    }
+    let rest: Vec<String> = args.collect();
 
     match command.as_str() {
-        "check" => Ok(DoctorCommand::Check),
-        "fix" => Ok(DoctorCommand::Fix),
+        "check" => {
+            if !rest.is_empty() {
+                return Err(unknown_args_error(&rest));
+            }
+            Ok(DoctorCommand::Check)
+        }
+        "fix" => Ok(DoctorCommand::Fix(parse_fix_flags(&rest)?)),
         _ => Err(anyhow!("Unknown command: {}", command)),
     }
+}
+
+fn parse_fix_flags(rest: &[String]) -> Result<FixPolicy> {
+    let mut policy = FixPolicy::safe();
+    for arg in rest {
+        match arg.as_str() {
+            "--apply-de-fixes" => policy.apply_de_fixes = true,
+            other => return Err(anyhow!("Unknown flag: {}", other)),
+        }
+    }
+    Ok(policy)
+}
+
+fn unknown_args_error(rest: &[String]) -> anyhow::Error {
+    anyhow!(
+        "Usage: qol-tray-doctor [check|fix [--apply-de-fixes]] (got extras: {})",
+        rest.join(" ")
+    )
 }
 
 fn run_check() -> Result<i32> {
@@ -33,8 +54,8 @@ fn run_check() -> Result<i32> {
     Ok(exit_code_for_report(&report))
 }
 
-fn run_fix() -> Result<i32> {
-    let report = fix_safe();
+fn run_fix(policy: FixPolicy) -> Result<i32> {
+    let report = fix_with_policy(policy);
     print_fix_report(&report);
     Ok(exit_code_for_report(&report.after))
 }
@@ -43,9 +64,10 @@ fn print_fix_report(report: &FixReport) {
     print_report("Doctor Check (Before)", &report.before);
     println!();
     println!(
-        "Fixes attempted={}, applied={}, failures={}",
+        "Fixes attempted={}, applied={}, skipped={}, failures={}",
         report.attempted,
         report.applied,
+        report.skipped,
         report.failures.len()
     );
     print_failures(&report.failures);
