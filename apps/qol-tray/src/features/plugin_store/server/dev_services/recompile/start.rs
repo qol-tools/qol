@@ -17,14 +17,12 @@ pub(super) fn queue_self_recompile(
     }
     log::info!("Developer self recompile requested");
 
-    let branch = worktree_path
-        .as_deref()
-        .and_then(super::restart_schedule::resolve_branch_from_path);
+    let repo_root = dev::resolve_qol_tray_self_root(worktree_path.as_deref());
+    let branch = resolve_recompile_branch(worktree_path.as_deref(), &repo_root);
     super::super::super::helpers::persist_worktree_branch(branch.as_deref());
 
     tokio::spawn(run_self_recompile(SelfRecompileTask::from_state(
-        state,
-        worktree_path,
+        state, repo_root, branch,
     )));
     Ok(())
 }
@@ -43,19 +41,25 @@ async fn run_self_recompile(task: SelfRecompileTask) {
     let _guard = RecompileGuard {
         runtime: Arc::clone(&task.runtime),
     };
-    let worktree_path = task.worktree_path.clone();
-    let result = spawn_self_recompile(Arc::clone(&task.events), worktree_path).await;
+    let repo_root = task.repo_root.clone();
+    let result = spawn_self_recompile(Arc::clone(&task.events), repo_root).await;
     result::handle_recompile_result(task, result);
 }
 
-async fn spawn_self_recompile(
-    events: Arc<EventBus>,
-    worktree_path: Option<PathBuf>,
-) -> RecompileResult {
+async fn spawn_self_recompile(events: Arc<EventBus>, repo_root: PathBuf) -> RecompileResult {
     tokio::task::spawn_blocking(move || {
-        dev::build_qol_tray_self_with_progress(worktree_path.as_deref(), |percent, phase| {
+        dev::build_qol_tray_self_with_progress(Some(&repo_root), |percent, phase| {
             events.send(DaemonEvent::SelfRecompileProgress { percent, phase });
         })
     })
     .await
+}
+
+pub(super) fn resolve_recompile_branch(
+    selected_path: Option<&std::path::Path>,
+    repo_root: &std::path::Path,
+) -> Option<String> {
+    selected_path
+        .and_then(super::restart_schedule::resolve_branch_from_path)
+        .or_else(|| super::restart_schedule::resolve_branch_from_path(repo_root))
 }

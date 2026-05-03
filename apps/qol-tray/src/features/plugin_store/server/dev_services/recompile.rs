@@ -27,17 +27,19 @@ struct SelfRecompileTask {
     plugin_manager: Arc<Mutex<crate::plugins::PluginManager>>,
     runtime: Arc<DevRuntimeService>,
     restart: Arc<dyn RestartPort>,
-    worktree_path: Option<PathBuf>,
+    repo_root: PathBuf,
+    worktree_branch: Option<String>,
 }
 
 impl SelfRecompileTask {
-    fn from_state(state: &AppState, worktree_path: Option<PathBuf>) -> Self {
+    fn from_state(state: &AppState, repo_root: PathBuf, worktree_branch: Option<String>) -> Self {
         Self {
             events: state.daemon.events.clone(),
             plugin_manager: state.plugin_manager.clone(),
             runtime: state.runtime.clone(),
             restart: state.restart.clone(),
-            worktree_path,
+            repo_root,
+            worktree_branch,
         }
     }
 }

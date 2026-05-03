@@ -1,5 +1,12 @@
 use super::Plugin;
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ManagedProcess {
+    pub pid: i32,
+    pub executable: PathBuf,
+}
 
 #[cfg(unix)]
 mod orphan_kill;
@@ -11,6 +18,15 @@ pub fn kill_orphan_daemons() {
 
 pub fn clean_stale_sockets(plugins: &[Plugin]) {
     platform::clean_stale_sockets(plugins);
+}
+
+pub fn managed_processes() -> Vec<ManagedProcess> {
+    platform::managed_processes()
+}
+
+pub fn leaked_processes() -> Vec<ManagedProcess> {
+    let tracked = tracked_pid_set(&crate::paths::runtime_pids_dir());
+    untracked_managed_processes(managed_processes(), &tracked)
 }
 
 pub fn save_plugin_pid(pids_dir: &Path, plugin_id: &str, pid: u32) {
@@ -49,6 +65,22 @@ pub fn clear_all_pids(pids_dir: &Path) {
             let _ = std::fs::remove_file(&path);
         }
     }
+}
+
+fn tracked_pid_set(pids_dir: &Path) -> HashSet<i32> {
+    list_tracked_pids(pids_dir)
+        .map(|(_, pid)| pid as i32)
+        .collect()
+}
+
+fn untracked_managed_processes(
+    processes: Vec<ManagedProcess>,
+    tracked: &HashSet<i32>,
+) -> Vec<ManagedProcess> {
+    processes
+        .into_iter()
+        .filter(|process| !tracked.contains(&process.pid))
+        .collect()
 }
 
 #[cfg(unix)]
@@ -117,5 +149,28 @@ mod tests {
         save_plugin_pid(tmp.path(), "b", 2);
         clear_all_pids(tmp.path());
         assert!(list_tracked_pids(tmp.path()).next().is_none());
+    }
+
+    #[test]
+    fn untracked_managed_processes_filters_tracked_pids() {
+        let processes = vec![
+            ManagedProcess {
+                pid: 10,
+                executable: PathBuf::from("/plugins/a"),
+            },
+            ManagedProcess {
+                pid: 20,
+                executable: PathBuf::from("/plugins/b"),
+            },
+        ];
+        let tracked = HashSet::from([20]);
+
+        assert_eq!(
+            untracked_managed_processes(processes, &tracked),
+            vec![ManagedProcess {
+                pid: 10,
+                executable: PathBuf::from("/plugins/a"),
+            }]
+        );
     }
 }

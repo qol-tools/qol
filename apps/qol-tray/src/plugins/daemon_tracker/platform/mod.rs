@@ -31,6 +31,21 @@ pub(super) fn kill_orphan_daemons() {
     macos::kill_orphan_daemons();
 }
 
+#[cfg(target_os = "linux")]
+pub(super) fn managed_processes() -> Vec<super::ManagedProcess> {
+    linux::managed_processes()
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn managed_processes() -> Vec<super::ManagedProcess> {
+    macos::managed_processes()
+}
+
+#[cfg(target_os = "windows")]
+pub(super) fn managed_processes() -> Vec<super::ManagedProcess> {
+    Vec::new()
+}
+
 pub(super) fn clean_stale_sockets(plugins: &[Plugin]) {
     #[cfg(target_os = "linux")]
     linux::clean_stale_sockets(plugins);

@@ -1,6 +1,8 @@
 use crate::plugins::Plugin;
 use std::path::{Path, PathBuf};
 
+use super::super::ManagedProcess;
+
 const PROC_PIDPATHINFO_MAXSIZE: u32 = 4096;
 
 #[link(name = "proc", kind = "dylib")]
@@ -28,14 +30,20 @@ pub(super) fn kill_orphan_daemons() {
 }
 
 fn kill_orphan_plugin_processes() {
+    for process in managed_processes() {
+        terminate_process(process.pid, &process.executable);
+    }
+}
+
+pub(super) fn managed_processes() -> Vec<ManagedProcess> {
     let roots = super::super::ManagedRoots::load();
     let Some(pids) = all_pids() else {
-        return;
+        return Vec::new();
     };
 
-    for pid in pids {
-        kill_managed_process(pid, &roots);
-    }
+    pids.into_iter()
+        .filter_map(|pid| managed_process(pid, &roots))
+        .collect()
 }
 
 fn all_pids() -> Option<Vec<i32>> {
@@ -70,14 +78,15 @@ fn truncate_pids(pids: &mut Vec<i32>, actual: i32) {
     pids.retain(|pid| *pid > 0);
 }
 
-fn kill_managed_process(pid: i32, roots: &super::super::ManagedRoots) {
-    let Some(exe) = pid_exe_path(pid) else {
-        return;
-    };
+fn managed_process(pid: i32, roots: &super::super::ManagedRoots) -> Option<ManagedProcess> {
+    let exe = pid_exe_path(pid)?;
     if !roots.contains(&exe) {
-        return;
+        return None;
     }
-    terminate_process(pid, &exe);
+    Some(ManagedProcess {
+        pid,
+        executable: exe,
+    })
 }
 
 fn terminate_process(pid: i32, exe: &Path) {

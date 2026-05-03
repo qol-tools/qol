@@ -103,3 +103,7 @@ where
 {
     self_build::build_qol_tray_self_with_progress(repo_root, on_progress)
 }
+
+pub fn resolve_qol_tray_self_root(repo_root: Option<&Path>) -> std::path::PathBuf {
+    self_build::resolve_qol_tray_self_root(repo_root)
+}

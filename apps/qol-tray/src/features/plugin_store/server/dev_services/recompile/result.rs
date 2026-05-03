@@ -19,7 +19,8 @@ fn handle_recompile_success(task: SelfRecompileTask) {
         task.plugin_manager,
         task.runtime,
         task.restart,
-        task.worktree_path,
+        task.repo_root,
+        task.worktree_branch,
         task.events,
     );
 }
