@@ -20,10 +20,12 @@ struct ConfigEnvGuard {
     local_app_data: Option<OsString>,
     xdg_config_home: Option<OsString>,
     xdg_data_home: Option<OsString>,
+    _path_root: crate::paths::TestPathRootGuard,
 }
 
 impl ConfigEnvGuard {
     fn new(root: &std::path::Path) -> Self {
+        let path_root = crate::paths::push_test_path_root(root);
         let home = std::env::var_os("HOME");
         let user_profile = std::env::var_os("USERPROFILE");
         let app_data = std::env::var_os("APPDATA");
@@ -53,6 +55,7 @@ impl ConfigEnvGuard {
             local_app_data,
             xdg_config_home,
             xdg_data_home,
+            _path_root: path_root,
         }
     }
 }
