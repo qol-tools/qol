@@ -17,21 +17,37 @@ use tempfile::TempDir;
 
 struct ConfigEnvGuard {
     home: Option<OsString>,
+    user_profile: Option<OsString>,
+    app_data: Option<OsString>,
+    local_app_data: Option<OsString>,
     xdg_config_home: Option<OsString>,
 }
 
 impl ConfigEnvGuard {
     fn new(root: &Path) -> Self {
         let home = std::env::var_os("HOME");
+        let user_profile = std::env::var_os("USERPROFILE");
+        let app_data = std::env::var_os("APPDATA");
+        let local_app_data = std::env::var_os("LOCALAPPDATA");
         let xdg_config_home = std::env::var_os("XDG_CONFIG_HOME");
         let home_dir = root.join("home");
+        let app_data_dir = root.join("app-data");
+        let local_app_data_dir = root.join("local-app-data");
         let xdg_dir = root.join("xdg-config");
         fs::create_dir_all(&home_dir).unwrap();
+        fs::create_dir_all(&app_data_dir).unwrap();
+        fs::create_dir_all(&local_app_data_dir).unwrap();
         fs::create_dir_all(&xdg_dir).unwrap();
         std::env::set_var("HOME", &home_dir);
+        std::env::set_var("USERPROFILE", &home_dir);
+        std::env::set_var("APPDATA", &app_data_dir);
+        std::env::set_var("LOCALAPPDATA", &local_app_data_dir);
         std::env::set_var("XDG_CONFIG_HOME", &xdg_dir);
         Self {
             home,
+            user_profile,
+            app_data,
+            local_app_data,
             xdg_config_home,
         }
     }
@@ -44,6 +60,24 @@ impl Drop for ConfigEnvGuard {
         }
         if self.home.is_none() {
             std::env::remove_var("HOME");
+        }
+        if let Some(value) = &self.user_profile {
+            std::env::set_var("USERPROFILE", value);
+        }
+        if self.user_profile.is_none() {
+            std::env::remove_var("USERPROFILE");
+        }
+        if let Some(value) = &self.app_data {
+            std::env::set_var("APPDATA", value);
+        }
+        if self.app_data.is_none() {
+            std::env::remove_var("APPDATA");
+        }
+        if let Some(value) = &self.local_app_data {
+            std::env::set_var("LOCALAPPDATA", value);
+        }
+        if self.local_app_data.is_none() {
+            std::env::remove_var("LOCALAPPDATA");
         }
         if let Some(value) = &self.xdg_config_home {
             std::env::set_var("XDG_CONFIG_HOME", value);
