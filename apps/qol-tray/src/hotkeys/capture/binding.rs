@@ -1,5 +1,30 @@
-use super::keycodes;
 use std::collections::BTreeSet;
+
+/// Linux evdev keycode constants used by the cross-platform combo parser.
+/// Only non-modifier keys live here; modifier KEY_* constants and the
+/// `Mod -> [u16; 2]` mapping live with the Linux matcher
+/// (`super::platform::linux::matcher::keycodes`).
+mod keycodes {
+    pub(super) const KEY_ESC: u16 = 1;
+    pub(super) const KEY_BACKSPACE: u16 = 14;
+    pub(super) const KEY_TAB: u16 = 15;
+    pub(super) const KEY_ENTER: u16 = 28;
+    pub(super) const KEY_SPACE: u16 = 57;
+    pub(super) const KEY_F1: u16 = 59;
+    pub(super) const KEY_F12: u16 = 88;
+    pub(super) const KEY_PRINTSCREEN: u16 = 99;
+    pub(super) const KEY_HOME: u16 = 102;
+    pub(super) const KEY_UP: u16 = 103;
+    pub(super) const KEY_PAGEUP: u16 = 104;
+    pub(super) const KEY_LEFT: u16 = 105;
+    pub(super) const KEY_RIGHT: u16 = 106;
+    pub(super) const KEY_END: u16 = 107;
+    pub(super) const KEY_DOWN: u16 = 108;
+    pub(super) const KEY_PAGEDOWN: u16 = 109;
+    pub(super) const KEY_INSERT: u16 = 110;
+    pub(super) const KEY_DELETE: u16 = 111;
+    pub(super) const KEY_PAUSE: u16 = 119;
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum Mod {
@@ -7,18 +32,6 @@ pub(crate) enum Mod {
     Ctrl,
     Alt,
     Super,
-}
-
-impl Mod {
-    /// Both left and right keycodes that count as this modifier.
-    pub(crate) fn evdev_codes(self) -> [u16; 2] {
-        match self {
-            Mod::Shift => [keycodes::KEY_LEFTSHIFT, keycodes::KEY_RIGHTSHIFT],
-            Mod::Ctrl => [keycodes::KEY_LEFTCTRL, keycodes::KEY_RIGHTCTRL],
-            Mod::Alt => [keycodes::KEY_LEFTALT, keycodes::KEY_RIGHTALT],
-            Mod::Super => [keycodes::KEY_LEFTMETA, keycodes::KEY_RIGHTMETA],
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

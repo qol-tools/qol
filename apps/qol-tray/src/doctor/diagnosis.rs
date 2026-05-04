@@ -27,6 +27,11 @@ pub(super) enum FixAction {
     KillPluginProcessLeaks {
         processes: Vec<ManagedProcess>,
     },
+    // Producer (`hotkey_shadows`) is gated `#[cfg(target_os = "linux")]`,
+    // so on macOS / Windows the variant has no constructor. Variant cannot
+    // itself be cfg-gated without making the `match` arms in
+    // `is_safe_to_auto_apply` / `apply_fix` inconsistent across platforms.
+    #[allow(dead_code)]
     UnshadowDeBinding {
         schema: String,
         key: String,
