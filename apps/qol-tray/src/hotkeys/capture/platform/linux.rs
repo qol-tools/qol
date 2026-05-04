@@ -17,6 +17,8 @@ use anyhow::Result;
 
 #[cfg(feature = "linux_evdev")]
 mod evdev_backend;
+#[cfg(feature = "linux_evdev")]
+mod matcher;
 
 #[cfg(feature = "linux_evdev")]
 pub(crate) fn install(
@@ -28,14 +30,8 @@ pub(crate) fn install(
 
 #[cfg(not(feature = "linux_evdev"))]
 pub(crate) fn install(
-    bindings: Vec<Binding>,
+    _bindings: Vec<Binding>,
     _on_fire: Box<dyn Fn(&Binding) + Send + Sync>,
 ) -> Result<()> {
-    // Construct the matcher so its supporting types stay reachable from this
-    // build configuration (otherwise BindingMatcher / CaptureDecision /
-    // ModifierState would be dead code without the linux_evdev feature).
-    let mut matcher = super::super::BindingMatcher::new(bindings);
-    let _ = matcher.observe(0, 0);
-    let _ = matcher.referenced_keycodes();
     anyhow::bail!("evdev capture not compiled in (rebuild qol-tray with --features linux_evdev)")
 }

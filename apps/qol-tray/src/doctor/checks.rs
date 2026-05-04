@@ -11,6 +11,9 @@ use super::diagnosis::Diagnosis;
 use super::CheckId;
 
 pub(super) fn collect_diagnoses() -> Vec<Diagnosis> {
+    // `mut` is conditionally needed (linux push, dev push). Suppress
+    // unused_mut on builds where neither branch fires.
+    #[allow(unused_mut)]
     let mut diagnoses = vec![
         install_identity::check(),
         autostart_target::check(),
