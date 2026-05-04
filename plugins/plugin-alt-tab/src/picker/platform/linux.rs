@@ -107,17 +107,11 @@ pub fn show_picker_onscreen() {}
 
 pub fn prepare_picker_for_show() {}
 
-pub fn hide_picker_offscreen() {}
-
 pub fn pre_create_if_supported(
     _config: &crate::config::AltTabConfig,
     _current: &crate::PickerWindowState,
     _cx: &mut gpui::App,
 ) {
-}
-
-pub fn offscreen_origin() -> (f64, f64) {
-    (0.0, 0.0)
 }
 
 pub fn destroy_non_target_windows(

@@ -333,13 +333,6 @@ fn resolve_minimized(idx: usize, props: &mut ResolvedProps, hidden_atom: u32) ->
         .unwrap_or(false)
 }
 
-pub fn get_on_screen_windows() -> Vec<WindowInfo> {
-    get_open_windows()
-        .into_iter()
-        .filter(|w| !w.is_minimized)
-        .collect()
-}
-
 fn extract_x11_icon(reply: &GetPropertyReply) -> Option<RgbaImage> {
     let values: Vec<u32> = reply.value32()?.collect();
     if values.len() < 2 {

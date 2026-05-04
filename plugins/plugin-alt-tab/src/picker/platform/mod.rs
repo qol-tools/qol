@@ -93,6 +93,7 @@ pub fn prepare_picker_for_show() {
     imp::prepare_picker_for_show()
 }
 /// Hide the picker without destroying its NSWindow (bootstrap path). No-op where unsupported.
+#[cfg(target_os = "macos")]
 pub fn hide_picker_offscreen() {
     imp::hide_picker_offscreen()
 }
@@ -108,7 +109,7 @@ pub fn pre_create_if_supported(
 
 /// Offscreen origin for the keep-alive picker. Far off-monitor on macOS; (0, 0)
 /// elsewhere (unused — pre_create_if_supported is a no-op there).
-#[allow(dead_code)] // only consumed on macOS through create::pre_create_offscreen
+#[cfg(target_os = "macos")]
 pub fn offscreen_origin() -> (f64, f64) {
     imp::offscreen_origin()
 }

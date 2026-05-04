@@ -98,6 +98,7 @@ impl PickerInit {
         }
     }
 
+    #[cfg(target_os = "macos")]
     pub(crate) fn empty(config: &AltTabConfig) -> Self {
         Self::new(
             config,
@@ -161,6 +162,7 @@ fn on_open_failure() {
 /// Pre-create an offscreen, alpha-0 picker window at daemon boot and register it under the
 /// `BOOTSTRAP_KEY` sentinel. Mirrors lwouis/alt-tab-macos's `TilesPanel` keep-alive pattern so
 /// subsequent opens reuse the same NSWindow instead of paying cold Metal/WindowServer costs.
+#[cfg(target_os = "macos")]
 pub(crate) fn pre_create_offscreen(
     config: &AltTabConfig,
     current: &PickerWindowState,
@@ -182,6 +184,7 @@ pub(crate) fn pre_create_offscreen(
     eprintln!("[alt-tab/boot] pre-created picker window (hidden offscreen)");
 }
 
+#[cfg(target_os = "macos")]
 fn offscreen_bounds() -> Bounds<Pixels> {
     let (x, y) = super::platform::offscreen_origin();
     Bounds {
