@@ -9,6 +9,37 @@ const ACTIVE_INSTALL_ID_FILE: &str = "active-install-id";
 
 pub const STATE_SOCKET_PATH: &str = "/tmp/qol-tray-state.sock";
 
+#[cfg(test)]
+thread_local! {
+    static TEST_PATH_ROOTS: std::cell::RefCell<Vec<PathBuf>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+pub(crate) struct TestPathRootGuard;
+
+#[cfg(test)]
+impl Drop for TestPathRootGuard {
+    fn drop(&mut self) {
+        TEST_PATH_ROOTS.with(|roots| {
+            roots.borrow_mut().pop();
+        });
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn push_test_path_root(root: &Path) -> TestPathRootGuard {
+    TEST_PATH_ROOTS.with(|roots| {
+        roots.borrow_mut().push(root.to_path_buf());
+    });
+    TestPathRootGuard
+}
+
+#[cfg(test)]
+fn test_path_root() -> Option<PathBuf> {
+    TEST_PATH_ROOTS.with(|roots| roots.borrow().last().cloned())
+}
+
 pub fn is_safe_path_component(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 64
@@ -18,6 +49,11 @@ pub fn is_safe_path_component(s: &str) -> bool {
 }
 
 fn legacy_config_dir() -> Result<PathBuf> {
+    #[cfg(test)]
+    if let Some(root) = test_path_root() {
+        return Ok(root.join("config").join(APP_NAME));
+    }
+
     dirs::config_dir()
         .context("Could not determine config directory")
         .map(|p| p.join(APP_NAME))
@@ -28,6 +64,11 @@ pub fn shared_config_dir() -> Result<PathBuf> {
 }
 
 pub(crate) fn base_data_dir() -> Result<PathBuf> {
+    #[cfg(test)]
+    if let Some(root) = test_path_root() {
+        return Ok(root.join("data").join(APP_NAME));
+    }
+
     dirs::data_local_dir()
         .or_else(dirs::data_dir)
         .context("Could not determine local data directory")
