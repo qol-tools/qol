@@ -13,20 +13,20 @@ use std::collections::BTreeSet;
 /// `linux/input-event-codes.h`.
 ///
 /// Module visibility is `pub(super)` so the parent (`linux/`) can re-use the
-/// table from `evdev_backend.rs`. Items inside the module are plain `pub`,
-/// inheriting the module's narrower visibility.
+/// table from `evdev_backend.rs`.
 pub(super) mod keycodes {
-    pub const KEY_LEFTCTRL: u16 = 29;
-    pub const KEY_LEFTSHIFT: u16 = 42;
-    pub const KEY_RIGHTSHIFT: u16 = 54;
-    pub const KEY_LEFTALT: u16 = 56;
-    pub const KEY_SPACE: u16 = 57;
-    pub const KEY_RIGHTCTRL: u16 = 97;
-    pub const KEY_RIGHTALT: u16 = 100;
-    pub const KEY_LEFTMETA: u16 = 125;
-    pub const KEY_RIGHTMETA: u16 = 126;
+    pub(crate) const KEY_LEFTCTRL: u16 = 29;
+    pub(crate) const KEY_LEFTSHIFT: u16 = 42;
+    pub(crate) const KEY_RIGHTSHIFT: u16 = 54;
+    pub(crate) const KEY_LEFTALT: u16 = 56;
+    #[cfg(test)]
+    pub(super) const KEY_SPACE: u16 = 57;
+    pub(crate) const KEY_RIGHTCTRL: u16 = 97;
+    pub(crate) const KEY_RIGHTALT: u16 = 100;
+    pub(crate) const KEY_LEFTMETA: u16 = 125;
+    pub(crate) const KEY_RIGHTMETA: u16 = 126;
 
-    pub fn is_modifier(code: u16) -> bool {
+    pub(crate) fn is_modifier(code: u16) -> bool {
         matches!(
             code,
             KEY_LEFTSHIFT
