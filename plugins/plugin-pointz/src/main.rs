@@ -3,7 +3,6 @@ mod domain;
 mod features;
 mod input;
 mod platform;
-mod status_server;
 mod utils;
 
 use crate::features::command::command_service::CommandService;
@@ -114,12 +113,6 @@ async fn run_daemon() {
     tokio::spawn(async move {
         if let Err(e) = discovery_service.run().await {
             log::error!("Discovery loop error: {}", e);
-        }
-    });
-
-    tokio::spawn(async move {
-        if let Err(e) = status_server::run().await {
-            log::error!("Status server error: {}", e);
         }
     });
 

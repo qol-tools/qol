@@ -1,0 +1,12 @@
+schema_version = 1
+
+[action.settings]
+description = "Open the PointZ settings window"
+
+[query.connection_status]
+description = "Current pointzerver daemon state"
+poll_interval_ms = 3000
+
+[query.connection_info]
+description = "Hostname, IP, ports, and app download URL"
+poll_interval_ms = 5000
