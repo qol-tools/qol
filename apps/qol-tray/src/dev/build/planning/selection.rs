@@ -18,7 +18,7 @@ pub(super) fn select_linked_plugins(dev_links: &HashMap<String, PathBuf>) -> Vec
 
 fn sorted_links(dev_links: &HashMap<String, PathBuf>) -> Vec<(&String, &PathBuf)> {
     let mut links: Vec<_> = dev_links.iter().collect();
-    links.sort_by(|(left, _), (right, _)| left.cmp(right));
+    links.sort_by_key(|(plugin_id, _)| *plugin_id);
     links
 }
 
