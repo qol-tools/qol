@@ -6,6 +6,8 @@ use crate::file_io;
 
 const APP_NAME: &str = "qol-tray";
 const ACTIVE_INSTALL_ID_FILE: &str = "active-install-id";
+#[cfg(any(test, debug_assertions))]
+const TEST_PATH_ROOT_ENV: &str = "QOL_TRAY_TEST_PATH_ROOT";
 
 pub const STATE_SOCKET_PATH: &str = "/tmp/qol-tray-state.sock";
 
@@ -37,7 +39,19 @@ pub(crate) fn push_test_path_root(root: &Path) -> TestPathRootGuard {
 
 #[cfg(test)]
 fn test_path_root() -> Option<PathBuf> {
-    TEST_PATH_ROOTS.with(|roots| roots.borrow().last().cloned())
+    TEST_PATH_ROOTS
+        .with(|roots| roots.borrow().last().cloned())
+        .or_else(test_env_path_root)
+}
+
+#[cfg(all(not(test), debug_assertions))]
+fn test_path_root() -> Option<PathBuf> {
+    test_env_path_root()
+}
+
+#[cfg(any(test, debug_assertions))]
+fn test_env_path_root() -> Option<PathBuf> {
+    std::env::var_os(TEST_PATH_ROOT_ENV).map(PathBuf::from)
 }
 
 pub fn is_safe_path_component(s: &str) -> bool {
@@ -49,7 +63,7 @@ pub fn is_safe_path_component(s: &str) -> bool {
 }
 
 fn legacy_config_dir() -> Result<PathBuf> {
-    #[cfg(test)]
+    #[cfg(any(test, debug_assertions))]
     if let Some(root) = test_path_root() {
         return Ok(root.join("config").join(APP_NAME));
     }
@@ -64,7 +78,7 @@ pub fn shared_config_dir() -> Result<PathBuf> {
 }
 
 pub(crate) fn base_data_dir() -> Result<PathBuf> {
-    #[cfg(test)]
+    #[cfg(any(test, debug_assertions))]
     if let Some(root) = test_path_root() {
         return Ok(root.join("data").join(APP_NAME));
     }

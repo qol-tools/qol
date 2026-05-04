@@ -16,6 +16,7 @@ fn env_lock() -> &'static Mutex<()> {
 
 struct TestEnv {
     _root: TempDir,
+    root_dir: PathBuf,
     home_dir: PathBuf,
     xdg_config_dir: PathBuf,
     plugins_dir: PathBuf,
@@ -24,18 +25,20 @@ struct TestEnv {
 impl TestEnv {
     fn new() -> Self {
         let root = TempDir::new().unwrap();
+        let root_dir = root.path().to_path_buf();
         let home_dir = root.path().join("home");
         let xdg_config_dir = root.path().join("xdg-config");
         fs::create_dir_all(&home_dir).unwrap();
         fs::create_dir_all(&xdg_config_dir).unwrap();
 
-        let _ctx = EnvContext::new(&home_dir, &xdg_config_dir);
+        let _ctx = EnvContext::new(&root_dir, &home_dir, &xdg_config_dir);
         let config_dir = paths::shared_config_dir().unwrap();
         let plugins_dir = config_dir.join("plugins");
         fs::create_dir_all(&plugins_dir).unwrap();
 
         Self {
             _root: root,
+            root_dir,
             home_dir,
             xdg_config_dir,
             plugins_dir,
@@ -43,22 +46,26 @@ impl TestEnv {
     }
 
     fn enter(&self) -> EnvContext {
-        EnvContext::new(&self.home_dir, &self.xdg_config_dir)
+        EnvContext::new(&self.root_dir, &self.home_dir, &self.xdg_config_dir)
     }
 }
 
 struct EnvContext {
+    test_path_root: Option<OsString>,
     home: Option<OsString>,
     xdg_config_home: Option<OsString>,
 }
 
 impl EnvContext {
-    fn new(home_dir: &Path, xdg_config_dir: &Path) -> Self {
+    fn new(root_dir: &Path, home_dir: &Path, xdg_config_dir: &Path) -> Self {
+        let test_path_root = std::env::var_os("QOL_TRAY_TEST_PATH_ROOT");
         let home = std::env::var_os("HOME");
         let xdg_config_home = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("QOL_TRAY_TEST_PATH_ROOT", root_dir);
         std::env::set_var("HOME", home_dir);
         std::env::set_var("XDG_CONFIG_HOME", xdg_config_dir);
         Self {
+            test_path_root,
             home,
             xdg_config_home,
         }
@@ -67,6 +74,12 @@ impl EnvContext {
 
 impl Drop for EnvContext {
     fn drop(&mut self) {
+        if let Some(value) = &self.test_path_root {
+            std::env::set_var("QOL_TRAY_TEST_PATH_ROOT", value);
+        }
+        if self.test_path_root.is_none() {
+            std::env::remove_var("QOL_TRAY_TEST_PATH_ROOT");
+        }
         if let Some(value) = &self.home {
             std::env::set_var("HOME", value);
         }
