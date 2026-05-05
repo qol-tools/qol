@@ -21,21 +21,6 @@ jobs:
           repository: qol-tools/qol-config
           path: qol-config
 
-      - name: Use CI qol-config path
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          manifest = Path("Cargo.toml")
-          text = manifest.read_text()
-          text = text.replace(
-              'qol-config = { path = "../qol-config" }',
-              'qol-config = { path = "qol-config" }',
-          )
-          manifest.write_text(text)
-          PY
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -68,21 +53,6 @@ jobs:
         with:
           repository: qol-tools/qol-config
           path: qol-config
-
-      - name: Use CI qol-config path
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          manifest = Path("Cargo.toml")
-          text = manifest.read_text()
-          text = text.replace(
-              'qol-config = { path = "../qol-config" }',
-              'qol-config = { path = "qol-config" }',
-          )
-          manifest.write_text(text)
-          PY
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
