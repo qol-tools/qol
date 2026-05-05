@@ -5,6 +5,7 @@ import { ViewTabs } from '../../../components/ViewTabs.js';
 import { PluginsSection } from './PluginsSection.js';
 import { CoreLogSection } from './CoreLogSection.js';
 import { ActionsSection } from './ActionsSection.js';
+import { ToolingGhAccountSection } from './ToolingGhAccountSection.js';
 import { useHashSubPath } from '../../../lib/hooks/useHashSubPath.js';
 import { ComponentsCatalog } from './ComponentsCatalog.js';
 
@@ -62,6 +63,7 @@ export function DevLayout({ ctrl, containerRef }) {
                         <div class="dev-col-secondary">
                             <${CoreLogSection} ctrl=${ctrl} />
                             <${ActionsSection} ctrl=${ctrl} />
+                            <${ToolingGhAccountSection} />
                         </div>
                     </div>
                 `}
