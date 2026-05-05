@@ -255,6 +255,13 @@ pub(super) struct ActiveWorktreeResponse {
     pub(super) repo_branch: Option<String>,
 }
 
+#[cfg(feature = "dev")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub(super) struct ToolingGhAccountPayload {
+    #[serde(default)]
+    pub(super) value: Option<String>,
+}
+
 #[cfg(all(test, feature = "dev"))]
 mod tests {
     use super::RecompileSelfRequest;
