@@ -83,7 +83,7 @@ tar = "0.4"
 qol-runtime = { git = "https://github.com/qol-tools/qol-runtime" }
 qol-plugin-api = { git = "https://github.com/qol-tools/qol-plugin-api", rev = "8aeb848598e4aa3ce983175677fa0efb2126b1b2", default-features = false, features = ["app-icons"] }
 png = "0.17"
-qol-config = { path = "../qol-config" }
+qol-config = { git = "https://github.com/qol-tools/qol-config" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
