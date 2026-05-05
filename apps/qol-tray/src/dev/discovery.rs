@@ -162,6 +162,7 @@ items = []
 
         let config = DevConfig {
             search_paths: vec![tmp.path().to_path_buf(), tmp.path().join("sub")],
+            ..DevConfig::default()
         };
 
         let discovered = discover_plugins(&config, tmp.path());
@@ -189,6 +190,7 @@ version = "0.1.0"
 
         let config = DevConfig {
             search_paths: vec![tmp.path().to_path_buf()],
+            ..DevConfig::default()
         };
 
         let discovered = discover_plugins(&config, tmp.path());
