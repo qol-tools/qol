@@ -1,6 +1,6 @@
 [package]
 name = "qol-tray"
-version = "3.10.0"
+version = "3.11.0"
 edition = "2021"
 description = "Quality of Life Tray - Pluggable system tray daemon for utility scripts"
 license = "PolyForm-Noncommercial-1.0.0"
