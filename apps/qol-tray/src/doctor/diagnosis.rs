@@ -27,6 +27,7 @@ pub(super) enum FixAction {
     KillPluginProcessLeaks {
         processes: Vec<ManagedProcess>,
     },
+    InstallShellHook,
     // Producer (`hotkey_shadows`) is gated `#[cfg(target_os = "linux")]`,
     // so on macOS / Windows the variant has no constructor. Variant cannot
     // itself be cfg-gated without making the `match` arms in
@@ -46,7 +47,8 @@ impl FixAction {
             | FixAction::WriteInstallMarker { .. }
             | FixAction::WriteAutostartEntry { .. }
             | FixAction::EnsurePluginsDir { .. }
-            | FixAction::KillPluginProcessLeaks { .. } => true,
+            | FixAction::KillPluginProcessLeaks { .. }
+            | FixAction::InstallShellHook => true,
             FixAction::UnshadowDeBinding { .. } => false,
         }
     }
@@ -71,6 +73,7 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
             crate::plugins::daemon_tracker::kill_managed_processes(processes);
             Ok(())
         }
+        FixAction::InstallShellHook => crate::installer::install_shell_hook(),
         FixAction::UnshadowDeBinding {
             schema,
             key,
@@ -267,6 +270,7 @@ mod tests {
                 },
                 true,
             ),
+            (FixAction::InstallShellHook, true),
             (
                 FixAction::UnshadowDeBinding {
                     schema: "org.cinnamon.desktop.keybindings.wm".into(),

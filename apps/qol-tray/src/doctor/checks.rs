@@ -6,6 +6,7 @@ mod plugin_process_leaks;
 #[cfg(feature = "dev")]
 mod plugin_staleness;
 mod runtime_prereqs;
+mod shell_hook_present;
 
 use super::diagnosis::Diagnosis;
 use super::CheckId;
@@ -19,6 +20,7 @@ pub(super) fn collect_diagnoses() -> Vec<Diagnosis> {
         autostart_target::check(),
         runtime_prereqs::check_plugins_dir(),
         plugin_process_leaks::check(),
+        shell_hook_present::check(),
     ];
     #[cfg(target_os = "linux")]
     diagnoses.push(hotkey_shadows::check());

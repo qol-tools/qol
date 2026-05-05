@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 mod files;
 mod platform;
+mod shell_hook;
 mod source;
 
 const INSTALL_ID_FILE: &str = "qol-tray.install-id";
@@ -16,6 +17,16 @@ pub fn autostart_path() -> Result<PathBuf> {
 
 pub fn write_autostart_entry(binary_path: &Path) -> Result<()> {
     platform::write_autostart_entry(binary_path)
+}
+
+pub fn install_shell_hook() -> Result<()> {
+    shell_hook::install()
+}
+
+pub(crate) use shell_hook::{is_installed as shell_hook_status, ShellHookStatus};
+
+pub(crate) fn shell_hook_any_rc_exists() -> Result<bool> {
+    shell_hook::any_rc_file_exists()
 }
 
 pub fn bootstrap_current_install() -> Result<()> {
@@ -37,9 +48,21 @@ pub fn bootstrap_current_install() -> Result<()> {
 }
 
 pub fn run() -> Result<()> {
+    let args = source::parse_args()?;
+    if args.help {
+        print_help();
+        return Ok(());
+    }
+    match args.mode {
+        source::Mode::Install => run_install(args.source.as_deref(), args.skip_shell_hook),
+        source::Mode::Uninstall => run_uninstall(args.skip_shell_hook),
+    }
+}
+
+fn run_install(source_override: Option<&Path>, skip_shell_hook: bool) -> Result<()> {
     println!("Installing QoL Tray...");
     let repo_root = env::current_dir().context("Failed to determine current directory")?;
-    let source_binary = source::resolve_source_binary(&repo_root)?;
+    let source_binary = source::resolve_source_binary(&repo_root, source_override)?;
     let install_dir = platform::install_dir()?;
     fs::create_dir_all(&install_dir).with_context(|| {
         format!(
@@ -58,9 +81,55 @@ pub fn run() -> Result<()> {
     platform::write_autostart_entry(&installed_binary)?;
     platform::warn_system_install_conflict();
     platform::register_application(&installed_binary)?;
+    install_shell_hook_warn_only(skip_shell_hook);
     platform::start_now(&installed_binary)?;
     open_ui_after_start();
     print_summary(&installed_binary, &install_id, &plugins_dir, &install_dir)
+}
+
+fn run_uninstall(skip_shell_hook: bool) -> Result<()> {
+    println!("Uninstalling QoL Tray shell hook...");
+    if skip_shell_hook {
+        println!("Skipping shell hook removal (--skip-shell-hook).");
+        return Ok(());
+    }
+    if let Err(error) = shell_hook::uninstall() {
+        eprintln!("Warning: failed to remove shell hook: {error}");
+        return Err(error);
+    }
+    println!("Shell hook removed. Open a new terminal for changes to take effect.");
+    Ok(())
+}
+
+fn install_shell_hook_warn_only(skip_shell_hook: bool) {
+    if skip_shell_hook {
+        println!("Skipping shell hook installation (--skip-shell-hook).");
+        return;
+    }
+    if let Err(error) = shell_hook::install() {
+        eprintln!("Warning: failed to install shell hook: {error}");
+        return;
+    }
+    println!("Shell hook installed. Open a new terminal for changes to take effect.");
+}
+
+fn print_help() {
+    println!(
+        "qol-tray-install\n\
+         \n\
+         Install or uninstall the QoL Tray binary, autostart entry, and shell hook.\n\
+         \n\
+         Usage:\n  \
+           qol-tray-install [--source <path>] [--skip-shell-hook]\n  \
+           qol-tray-install --uninstall [--skip-shell-hook]\n  \
+           qol-tray-install --help\n\
+         \n\
+         Flags:\n  \
+           --source <path>      Use the binary at <path> as the install source.\n  \
+           --uninstall          Remove the qol-tools shell hook from rc files.\n  \
+           --skip-shell-hook    Do not touch ~/.zshrc or ~/.bashrc.\n  \
+           --help, -h           Print this help message.\n"
+    );
 }
 
 fn register_install_id(installed_binary: &Path) -> Result<String> {
