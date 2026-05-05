@@ -104,12 +104,10 @@ fn try_reuse_existing(
             None => return false,
         },
     };
-    let source_origin = point(px(source_key.x as f32), px(source_key.y as f32));
     let input = reuse::LayoutInput {
         config: req.config,
         window_count: gathered.windows.len(),
         placement,
-        created_on_origin: source_origin,
     };
     let layout = reuse::compute_layout(&input, cx);
     let reuse_req = reuse::ReuseRequest {

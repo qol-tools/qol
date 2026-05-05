@@ -9,6 +9,7 @@ use crate::picker::gather::GatheredWindows;
 use crate::picker::state::PickerState;
 use crate::{IconMap, PreviewMap};
 use gpui::*;
+use qol_plugin_api::window::MonitorKey;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -26,6 +27,10 @@ pub(crate) struct AltTabApp {
     pub(crate) blur_guard_armed: bool,
     pub(crate) _alt_poll_task: Option<Task<()>>,
     _live_preview_task: Option<Task<()>>,
+    // TODO(issue #1): subscribe to MonitorsChanged once qol_runtime exposes that event;
+    // until then last_applied is invalidated only by the next reposition attempt, which
+    // can lag inside qol-tray's 5 s MonitorsChannel cache window.
+    last_applied: Option<MonitorKey>,
     _focus_out_sub: gpui::Subscription,
 }
 
@@ -58,6 +63,7 @@ impl AltTabApp {
             blur_guard_until: Instant::now() + Duration::from_millis(BLUR_GUARD_MS),
             blur_guard_armed: true,
             _alt_poll_task: None,
+            last_applied: None,
         };
 
         if action_mode == ActionMode::HoldToSwitch {
@@ -82,22 +88,26 @@ impl AltTabApp {
         true
     }
 
-    fn reposition_if_needed(&self, req: &crate::picker::ReuseRequest) -> bool {
-        let reposition_needed = req.layout.monitor_changed;
+    fn reposition_if_needed(&mut self, req: &crate::picker::ReuseRequest) -> bool {
         #[cfg(debug_assertions)]
         eprintln!(
-            "[alt-tab/hold] reuse path (poll_task={}) — reset={} reposition_needed={}",
+            "[alt-tab/hold] reuse path (poll_task={}) — reset={} last_applied={:?} target={:?}",
             self._alt_poll_task.is_some(),
             req.config.reset_selection_on_open,
-            reposition_needed,
+            self.last_applied,
+            req.layout.target,
         );
-        if !reposition_needed {
+        if self.last_applied == Some(req.layout.target) {
             return true;
         }
-        picker::platform::reposition_picker_window(
+        let ok = picker::platform::reposition_picker_window(
             req.layout.bounds.origin.x.to_f64(),
             req.layout.bounds.origin.y.to_f64(),
-        )
+        );
+        if ok {
+            self.last_applied = Some(req.layout.target);
+        }
+        ok
     }
 
     /// Apply config changes to a reused picker window. Handles window-level
