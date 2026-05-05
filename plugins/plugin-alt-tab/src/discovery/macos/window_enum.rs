@@ -397,15 +397,22 @@ fn allowed_minimized_count(
     usize::MAX
 }
 
-fn detect_other_space_pids(state: &WindowEnumeration, ax_cache: &mut AxCache) -> HashSet<i32> {
+fn detect_other_space_pids(
+    state: &WindowEnumeration,
+    ax_cache: &AxCache,
+    candidate_pids: &HashSet<i32>,
+) -> HashSet<i32> {
     let mut result = HashSet::new();
-    for &pid in &state.on_screen_pids {
-        let entry = ax_cache.entry(pid).or_insert_with(|| ax::ax_windows(pid));
+    for &pid in candidate_pids {
+        if !state.on_screen_pids.contains(&pid) {
+            continue;
+        }
+        let Some(entry) = ax_cache.get(&pid) else {
+            continue;
+        };
         let Some((id_map, _, accepted)) = entry else {
             continue;
         };
-        // Without _AXWindowID (id_map empty), accepted count includes transient
-        // windows — can't reliably distinguish other-space from transient overlays.
         if id_map.is_empty() {
             continue;
         }
@@ -424,13 +431,16 @@ fn passes_ax_filter(
 ) -> bool {
     let is_on_screen_pid = state.on_screen_pids.contains(&window.pid);
     let is_other_space_pid = other_space_pids.contains(&window.pid);
-    if !is_on_screen_pid {
-        return true;
-    }
-    let Some(Some((id_map, all_meta, _))) = ax_cache.get(&window.pid) else {
-        return ax_fallback(window, is_other_space_pid);
+    let Some(ax_result) = ax_cache.get(&window.pid) else {
+        return false;
+    };
+    let Some((id_map, all_meta, _)) = ax_result else {
+        return false;
     };
     if !id_map.is_empty() {
+        if !is_on_screen_pid {
+            return id_map.get(&window.id).is_some_and(|m| m.is_minimized);
+        }
         if is_other_space_pid {
             return id_map.contains_key(&window.id);
         }
@@ -439,7 +449,7 @@ fn passes_ax_filter(
     if !all_meta.is_empty() {
         return ax_title_match(window, all_meta, is_other_space_pid);
     }
-    ax_fallback(window, is_other_space_pid)
+    false
 }
 
 fn ax_title_match(window: &CgWindow, all_meta: &[AxWindowMeta], is_other_space: bool) -> bool {
@@ -454,13 +464,6 @@ fn ax_title_match(window: &CgWindow, all_meta: &[AxWindowMeta], is_other_space: 
         return all_meta[0].is_minimized;
     }
     false
-}
-
-fn ax_fallback(window: &CgWindow, is_other_space: bool) -> bool {
-    if is_other_space {
-        return ax::ax_is_window_real(window.pid, window.id, &window.title);
-    }
-    ax::ax_is_window_minimized(window.pid, window.id, &window.title)
 }
 
 struct ResolvedWindow {
@@ -573,8 +576,10 @@ pub(super) fn collect_minimized_windows(
         off_screen.len()
     );
 
-    let other_space_pids = detect_other_space_pids(state, ax_cache);
     let candidates = filter_minimized_candidates(off_screen, state);
+    let candidate_pids = candidate_pids(&candidates);
+    prefetch_missing_ax(&candidate_pids, ax_cache);
+    let other_space_pids = detect_other_space_pids(state, ax_cache, &candidate_pids);
     let mut budget_counts: HashMap<i32, usize> = HashMap::new();
 
     for window in candidates {
@@ -605,6 +610,22 @@ pub(super) fn collect_minimized_windows(
         "[alt-tab/enum] total windows after minimized: {}",
         state.windows.len()
     );
+}
+
+fn candidate_pids(candidates: &[CgWindow]) -> HashSet<i32> {
+    candidates.iter().map(|window| window.pid).collect()
+}
+
+fn prefetch_missing_ax(pids: &HashSet<i32>, ax_cache: &mut AxCache) {
+    let missing = pids
+        .iter()
+        .filter(|pid| !ax_cache.contains_key(pid))
+        .copied()
+        .collect::<HashSet<_>>();
+    if missing.is_empty() {
+        return;
+    }
+    ax_cache.extend(ax::prefetch_ax_parallel(missing));
 }
 
 fn filter_minimized_candidates(

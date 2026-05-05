@@ -6,6 +6,8 @@ use std::ffi::c_void;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+const AX_MESSAGING_TIMEOUT_SECONDS: f32 = 0.05;
+
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXUIElementCreateSystemWide() -> *const c_void;
@@ -18,19 +20,22 @@ extern "C" {
     fn AXUIElementSetMessagingTimeout(el: *const c_void, timeout: f32) -> i32;
 }
 
-/// Cap blocking time for every AX mach-IPC call. Default is 6s — a single unresponsive
-/// app can stall window enumeration for that long. Setting the timeout on the system-wide
-/// element propagates it as the default to every element created afterwards.
-/// Mirrors alt-tab-macos's `AXUIElement.swift` (1s cap).
 pub(crate) fn init_messaging_timeout() {
     unsafe {
         let system = AXUIElementCreateSystemWide();
         if system.is_null() {
             return;
         }
-        AXUIElementSetMessagingTimeout(system, 1.0);
+        AXUIElementSetMessagingTimeout(system, AX_MESSAGING_TIMEOUT_SECONDS);
         CFRelease(system);
     }
+}
+
+unsafe fn cap_messaging_timeout(el: *const c_void) {
+    if el.is_null() {
+        return;
+    }
+    AXUIElementSetMessagingTimeout(el, AX_MESSAGING_TIMEOUT_SECONDS);
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -49,6 +54,7 @@ unsafe fn ax_open_window_list(pid: i32) -> *const c_void {
     if app.is_null() {
         return std::ptr::null();
     }
+    cap_messaging_timeout(app);
     let attr = ffi::cfstr(b"AXWindows");
     let mut val: *const c_void = std::ptr::null();
     let err = AXUIElementCopyAttributeValue(app, attr, &mut val);
@@ -61,6 +67,7 @@ unsafe fn ax_open_window_list(pid: i32) -> *const c_void {
 }
 
 unsafe fn ax_copy_attr(el: *const c_void, attr: *const c_void) -> *const c_void {
+    cap_messaging_timeout(el);
     let mut val: *const c_void = std::ptr::null();
     let err = AXUIElementCopyAttributeValue(el, attr, &mut val);
     if err != 0 || val.is_null() {
@@ -297,27 +304,6 @@ fn collect_ax_window_meta(
         }
     }
     (id_map, all_meta, accepted)
-}
-
-pub(super) fn ax_is_window_real(pid: i32, cg_window_id: u32, title: &str) -> bool {
-    let win = unsafe { ax_find_window(pid, cg_window_id, title) };
-    if win.is_null() {
-        return false;
-    }
-    unsafe { CFRelease(win) };
-    true
-}
-
-pub(super) fn ax_is_window_minimized(pid: i32, cg_window_id: u32, title: &str) -> bool {
-    let win = unsafe { ax_find_window(pid, cg_window_id, title) };
-    if win.is_null() {
-        return false;
-    }
-    let attr = ffi::cfstr(b"AXMinimized");
-    let result = unsafe { ax_read_bool(win, attr) };
-    unsafe { CFRelease(attr) };
-    unsafe { CFRelease(win) };
-    result
 }
 
 pub(super) type AxCache =
