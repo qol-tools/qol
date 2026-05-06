@@ -1,35 +1,27 @@
 # qol-search
 
-Fuzzy search algorithm used across qol-tools. Compiles to both native Rust and WebAssembly.
+[![CI](https://github.com/qol-tools/qol-search/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/qol-search/actions/workflows/ci.yml)
 
-Runs four scoring strategies (greedy, boundary-aware, contiguous substring, whole-word match) and picks the best result. Scoring rewards boundary alignment, case matches, and contiguity.
+Fuzzy search algorithm used across qol-tools. Compiles to native Rust and WebAssembly.
 
-## Usage
+## Quick start
+
+```toml
+[dependencies]
+qol-search = { git = "https://github.com/qol-tools/qol-search" }
+```
 
 ```rust
-use qol_search::{fuzzy_match, FuzzyMatch};
+use qol_search::fuzzy_match;
 
 let m = fuzzy_match("code", "Visual Studio Code").unwrap();
-// m.score: lower is better
-// m.positions: matched character indices
 ```
 
-For batch matching against the same query, prepare it once:
+For batch matching against the same query, prepare it once with `prepare_fuzzy_query` + `fuzzy_match_prepared`.
 
-```rust
-use qol_search::{prepare_fuzzy_query, fuzzy_match_prepared};
+## About
 
-let query = prepare_fuzzy_query("code");
-for candidate in candidates {
-    if let Some(m) = fuzzy_match_prepared(&query, candidate) {
-        // ...
-    }
-}
-```
-
-## WebAssembly
-
-This crate is wrapped by [qol-wasm](https://github.com/qol-tools/qol-wasm) for use in browser contexts. The qol-tray CommandPalette uses the wasm build for fuzzy filtering.
+Runs four scoring strategies (greedy, boundary-aware, contiguous substring, whole-word match) and picks the best result. Wrapped by [qol-wasm](https://github.com/qol-tools/qol-wasm) for browser contexts.
 
 ## License
 
