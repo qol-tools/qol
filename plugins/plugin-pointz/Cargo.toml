@@ -10,7 +10,7 @@ tokio = { version = "1.35", features = ["rt-multi-thread", "net", "macros"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
-qol-plugin-api = { path = "../qol-plugin-api", default-features = false }
+qol-plugin-api = { git = "https://github.com/qol-tools/qol-plugin-api", default-features = false }
 log = "0.4"
 env_logger = "0.11"
 chrono = "0.4"
