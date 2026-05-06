@@ -1,35 +1,19 @@
 # Launcher Plugin for QoL Tray
 
-A keyboard-driven application and file launcher for [QoL Tray](https://github.com/qol-tools/qol-tray). Fuzzy search with frecency ranking, activated via global hotkey.
+[![CI](https://github.com/qol-tools/plugin-launcher/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/plugin-launcher/actions/workflows/ci.yml)
 
-## Features
+A keyboard-driven application and file launcher for [QoL Tray](https://github.com/qol-tools/qol-tray).
 
-- **Fuzzy search** with multi-pass matching for fast results with minimal keystrokes
-- **Frecency ranking** learns your habits — frequently and recently used items rank higher
-- **Application indexing**: desktop entries, Flatpaks, Snaps (Linux); `.app` bundles (macOS)
-- **File indexing**: Desktop, Documents, Downloads, Projects, and .config directories
-- **Action modifiers**:
-  - `Enter` — Launch / Open
-  - `Ctrl+Enter` — Open in terminal
-  - `Shift+Enter` — Open containing folder
-  - `Alt+Enter` — Copy path to clipboard
-- **Monitor-aware** positioning across multi-monitor setups
+## Quick start
 
-## Controls
+Install from the [qol-tray](https://github.com/qol-tools/qol-tray) plugin store, or build from source:
 
-| Key | Action |
-|-----|--------|
-| Type | Fuzzy search |
-| Tab / Shift+Tab | Toggle between Apps and Files |
-| Up / Down | Navigate results |
-| Enter | Launch / Open |
-| Escape | Dismiss |
+```bash
+git clone https://github.com/qol-tools/plugin-launcher
+cd plugin-launcher
+make build
+```
 
-## Platform Support
+## License
 
-| Platform | Status |
-|----------|--------|
-| macOS | Supported |
-| Linux (X11) | Supported |
-
-License: PolyForm Noncommercial 1.0.0
+PolyForm Noncommercial 1.0.0
