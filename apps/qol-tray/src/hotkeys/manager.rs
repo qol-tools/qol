@@ -84,6 +84,12 @@ impl HotkeyManager {
                 registration.binding_key,
                 msg
             );
+            if let Err(write_err) = crate::doctor::trigger::mark_needed(
+                "hotkey_shadows",
+                &format!("{} failed to grab: {}", registration.binding_key, msg),
+            ) {
+                log::warn!("doctor trigger: mark_needed failed: {}", write_err);
+            }
             return Some(RegistrationError {
                 key: registration.binding_key,
                 error: msg,

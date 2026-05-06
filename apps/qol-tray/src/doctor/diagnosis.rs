@@ -12,6 +12,7 @@ pub(super) struct Diagnosis {
     pub(super) fixes: Vec<FixAction>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum FixAction {
     SetActiveInstallId(String),
     WriteInstallMarker {
@@ -28,14 +29,17 @@ pub(super) enum FixAction {
         processes: Vec<ManagedProcess>,
     },
     InstallShellHook,
-    // Producer (`hotkey_shadows`) is gated `#[cfg(target_os = "linux")]`,
-    // so on macOS / Windows the variant has no constructor. Variant cannot
-    // itself be cfg-gated without making the `match` arms in
-    // `is_safe_to_auto_apply` / `apply_fix` inconsistent across platforms.
-    #[allow(dead_code)]
     UnshadowDeBinding {
         schema: String,
         key: String,
+        qol_combo: String,
+    },
+    DisableSymbolicHotkey {
+        hotkey_id: u32,
+        qol_combo: String,
+    },
+    ClearWindowsAppKey {
+        app_key: String,
         qol_combo: String,
     },
 }
@@ -49,7 +53,9 @@ impl FixAction {
             | FixAction::EnsurePluginsDir { .. }
             | FixAction::KillPluginProcessLeaks { .. }
             | FixAction::InstallShellHook => true,
-            FixAction::UnshadowDeBinding { .. } => false,
+            FixAction::UnshadowDeBinding { .. }
+            | FixAction::DisableSymbolicHotkey { .. }
+            | FixAction::ClearWindowsAppKey { .. } => false,
         }
     }
 }
@@ -79,7 +85,106 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
             key,
             qol_combo,
         } => apply_unshadow(schema, key, qol_combo, &mut GsettingsCli),
+        FixAction::DisableSymbolicHotkey {
+            hotkey_id,
+            qol_combo,
+        } => apply_disable_symbolic_hotkey(*hotkey_id, qol_combo, &mut DefaultsCli),
+        FixAction::ClearWindowsAppKey { app_key, qol_combo } => {
+            apply_clear_windows_app_key(app_key, qol_combo, &mut RegEditor)
+        }
     }
+}
+
+pub(super) trait SymbolicHotkeyWriter {
+    fn disable(&mut self, hotkey_id: u32) -> Result<()>;
+}
+
+struct DefaultsCli;
+
+impl SymbolicHotkeyWriter for DefaultsCli {
+    fn disable(&mut self, hotkey_id: u32) -> Result<()> {
+        let value =
+            "{ enabled = 0; value = { parameters = (0, 0, 0); type = standard; }; }".to_string();
+        let output = Command::new("defaults")
+            .args([
+                "write",
+                "com.apple.symbolichotkeys",
+                "AppleSymbolicHotKeys",
+                "-dict-add",
+                &hotkey_id.to_string(),
+                &value,
+            ])
+            .output()
+            .with_context(|| {
+                format!("failed to invoke defaults write for symbolichotkey {hotkey_id}")
+            })?;
+        if !output.status.success() {
+            return Err(anyhow!(
+                "defaults write symbolichotkey {hotkey_id} exited with status {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn apply_disable_symbolic_hotkey(
+    hotkey_id: u32,
+    qol_combo: &str,
+    backend: &mut dyn SymbolicHotkeyWriter,
+) -> Result<()> {
+    if qol_combo.is_empty() {
+        return Err(anyhow!("empty qol combo for symbolichotkey {hotkey_id}"));
+    }
+    backend.disable(hotkey_id)
+}
+
+pub(super) trait AppKeyWriter {
+    fn clear(&mut self, app_key: &str) -> Result<()>;
+}
+
+struct RegEditor;
+
+impl AppKeyWriter for RegEditor {
+    fn clear(&mut self, app_key: &str) -> Result<()> {
+        if !is_safe_app_key(app_key) {
+            return Err(anyhow!("unsafe Windows AppKey identifier: {app_key}"));
+        }
+        let key_path =
+            format!(r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AppKey\{app_key}");
+        let output = Command::new("reg")
+            .args(["delete", &key_path, "/v", "ShortcutKeys", "/f"])
+            .output()
+            .with_context(|| format!("failed to invoke reg delete for AppKey {app_key}"))?;
+        if !output.status.success() {
+            return Err(anyhow!(
+                "reg delete AppKey {app_key} exited with status {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn apply_clear_windows_app_key(
+    app_key: &str,
+    qol_combo: &str,
+    backend: &mut dyn AppKeyWriter,
+) -> Result<()> {
+    if qol_combo.is_empty() {
+        return Err(anyhow!("empty qol combo for AppKey {app_key}"));
+    }
+    backend.clear(app_key)
+}
+
+fn is_safe_app_key(app_key: &str) -> bool {
+    !app_key.is_empty()
+        && app_key.len() <= 16
+        && app_key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 pub(super) trait GsettingsBackend {
@@ -279,6 +384,20 @@ mod tests {
                 },
                 false,
             ),
+            (
+                FixAction::DisableSymbolicHotkey {
+                    hotkey_id: 64,
+                    qol_combo: "Cmd+Space".into(),
+                },
+                false,
+            ),
+            (
+                FixAction::ClearWindowsAppKey {
+                    app_key: "17".into(),
+                    qol_combo: "Win+E".into(),
+                },
+                false,
+            ),
         ];
         for (action, expected) in cases {
             assert_eq!(
@@ -288,6 +407,123 @@ mod tests {
                 std::mem::discriminant(&action)
             );
         }
+    }
+
+    struct StubSymbolicWriter {
+        disabled: RefCell<Vec<u32>>,
+        fail_on: Option<u32>,
+    }
+
+    impl StubSymbolicWriter {
+        fn new() -> Self {
+            Self {
+                disabled: RefCell::new(Vec::new()),
+                fail_on: None,
+            }
+        }
+
+        fn fail_on(mut self, id: u32) -> Self {
+            self.fail_on = Some(id);
+            self
+        }
+    }
+
+    impl SymbolicHotkeyWriter for StubSymbolicWriter {
+        fn disable(&mut self, hotkey_id: u32) -> Result<()> {
+            if Some(hotkey_id) == self.fail_on {
+                return Err(anyhow!("disable failed"));
+            }
+            self.disabled.borrow_mut().push(hotkey_id);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn apply_disable_symbolic_hotkey_writes_through_to_backend() {
+        let mut backend = StubSymbolicWriter::new();
+        apply_disable_symbolic_hotkey(64, "Cmd+Space", &mut backend).expect("ok");
+        apply_disable_symbolic_hotkey(60, "Ctrl+Space", &mut backend).expect("ok");
+        assert_eq!(backend.disabled.borrow().as_slice(), &[64, 60]);
+    }
+
+    #[test]
+    fn apply_disable_symbolic_hotkey_propagates_backend_failure() {
+        let mut backend = StubSymbolicWriter::new().fail_on(64);
+        let err = apply_disable_symbolic_hotkey(64, "Cmd+Space", &mut backend)
+            .expect_err("backend failure must propagate");
+        assert_eq!(err.to_string(), "disable failed");
+        assert!(backend.disabled.borrow().is_empty());
+    }
+
+    #[test]
+    fn apply_disable_symbolic_hotkey_rejects_empty_combo() {
+        let mut backend = StubSymbolicWriter::new();
+        let err = apply_disable_symbolic_hotkey(64, "", &mut backend)
+            .expect_err("empty combo must be rejected");
+        assert!(err.to_string().contains("empty qol combo"));
+        assert!(
+            backend.disabled.borrow().is_empty(),
+            "backend must not be called for empty combo"
+        );
+    }
+
+    struct StubAppKeyWriter {
+        cleared: RefCell<Vec<String>>,
+        fail_on: Option<String>,
+    }
+
+    impl StubAppKeyWriter {
+        fn new() -> Self {
+            Self {
+                cleared: RefCell::new(Vec::new()),
+                fail_on: None,
+            }
+        }
+
+        fn fail_on(mut self, key: &str) -> Self {
+            self.fail_on = Some(key.to_string());
+            self
+        }
+    }
+
+    impl AppKeyWriter for StubAppKeyWriter {
+        fn clear(&mut self, app_key: &str) -> Result<()> {
+            if self.fail_on.as_deref() == Some(app_key) {
+                return Err(anyhow!("clear failed"));
+            }
+            self.cleared.borrow_mut().push(app_key.to_string());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn apply_clear_windows_app_key_round_trip_cases() {
+        let cases = [("17", "Win+E", true), ("18", "Win+Q", true)];
+        let mut backend = StubAppKeyWriter::new();
+        for (key, combo, expected_ok) in cases {
+            let result = apply_clear_windows_app_key(key, combo, &mut backend);
+            assert_eq!(result.is_ok(), expected_ok, "key={key}, combo={combo}");
+        }
+        assert_eq!(
+            backend.cleared.borrow().as_slice(),
+            &["17".to_string(), "18".to_string()]
+        );
+    }
+
+    #[test]
+    fn apply_clear_windows_app_key_propagates_backend_failure() {
+        let mut backend = StubAppKeyWriter::new().fail_on("17");
+        let err = apply_clear_windows_app_key("17", "Win+E", &mut backend)
+            .expect_err("backend failure must propagate");
+        assert_eq!(err.to_string(), "clear failed");
+    }
+
+    #[test]
+    fn apply_clear_windows_app_key_rejects_empty_combo() {
+        let mut backend = StubAppKeyWriter::new();
+        let err = apply_clear_windows_app_key("17", "", &mut backend)
+            .expect_err("empty combo must be rejected");
+        assert!(err.to_string().contains("empty qol combo"));
     }
 
     #[test]
