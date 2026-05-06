@@ -258,16 +258,58 @@ fn subscribe_focus_out(
     window: &mut Window,
     cx: &mut Context<AltTabApp>,
 ) -> gpui::Subscription {
-    cx.on_focus_out(handle, window, |this, _event, window, cx| {
-        // Absorb only the first post-create blur; later blurs are real dismiss requests.
-        if this.blur_guard_armed && Instant::now() < this.blur_guard_until {
-            this.blur_guard_armed = false;
-            #[cfg(debug_assertions)]
-            eprintln!("[alt-tab/blur] absorbed spurious post-create blur");
-            return;
-        }
-        this.dismiss("focus-out", window, cx);
-    })
+    cx.on_focus_out(
+        handle,
+        window,
+        |this, _event, window, cx| match focus_out_decision(
+            &this.action_mode,
+            this.blur_guard_armed,
+            Instant::now() < this.blur_guard_until,
+            picker::is_modifier_held(),
+        ) {
+            FocusOutDecision::IgnoreBlurGuard => {
+                this.blur_guard_armed = false;
+                #[cfg(debug_assertions)]
+                eprintln!("[alt-tab/blur] absorbed spurious post-create blur");
+            }
+            FocusOutDecision::IgnoreAltHeld => {
+                #[cfg(debug_assertions)]
+                eprintln!("[alt-tab/blur] ignored focus-out while Alt is still held");
+            }
+            FocusOutDecision::ActivateAndDismiss => {
+                this.delegate
+                    .update(cx, |s, _| s.activate_selected_target());
+                this.dismiss("focus-out/alt-up", window, cx);
+            }
+            FocusOutDecision::Dismiss => this.dismiss("focus-out", window, cx),
+        },
+    )
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum FocusOutDecision {
+    IgnoreBlurGuard,
+    IgnoreAltHeld,
+    ActivateAndDismiss,
+    Dismiss,
+}
+
+fn focus_out_decision(
+    action_mode: &ActionMode,
+    blur_guard_armed: bool,
+    in_blur_guard: bool,
+    modifier_held: bool,
+) -> FocusOutDecision {
+    if blur_guard_armed && in_blur_guard {
+        return FocusOutDecision::IgnoreBlurGuard;
+    }
+    if action_mode != &ActionMode::HoldToSwitch {
+        return FocusOutDecision::Dismiss;
+    }
+    if modifier_held {
+        return FocusOutDecision::IgnoreAltHeld;
+    }
+    FocusOutDecision::ActivateAndDismiss
 }
 
 impl AltTabApp {
@@ -281,6 +323,7 @@ impl AltTabApp {
         eprintln!("[alt-tab/dismiss] from={}", _source);
         self._alt_poll_task = None;
         self.blur_guard_armed = false;
+        self.last_applied = None;
         PICKER_VISIBLE.store(false, Ordering::Relaxed);
         picker::dismiss_picker(window);
         cx.notify();
@@ -290,5 +333,43 @@ impl AltTabApp {
 impl Focusable for AltTabApp {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
+    }
+}
+
+#[cfg(test)]
+mod focus_out_tests {
+    use super::{focus_out_decision, FocusOutDecision};
+    use crate::config::ActionMode;
+
+    #[test]
+    fn blur_guard_absorbs_first_focus_out() {
+        assert_eq!(
+            focus_out_decision(&ActionMode::HoldToSwitch, true, true, true),
+            FocusOutDecision::IgnoreBlurGuard
+        );
+    }
+
+    #[test]
+    fn hold_mode_ignores_focus_out_while_alt_is_held() {
+        assert_eq!(
+            focus_out_decision(&ActionMode::HoldToSwitch, false, false, true),
+            FocusOutDecision::IgnoreAltHeld
+        );
+    }
+
+    #[test]
+    fn hold_mode_activates_if_focus_out_races_alt_release() {
+        assert_eq!(
+            focus_out_decision(&ActionMode::HoldToSwitch, false, false, false),
+            FocusOutDecision::ActivateAndDismiss
+        );
+    }
+
+    #[test]
+    fn sticky_mode_keeps_focus_out_as_plain_dismiss() {
+        assert_eq!(
+            focus_out_decision(&ActionMode::Sticky, false, false, true),
+            FocusOutDecision::Dismiss
+        );
     }
 }

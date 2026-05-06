@@ -24,7 +24,12 @@ pub(super) struct CreateRequest<'a> {
 pub(super) fn create_new(req: &CreateRequest, gathered: GatheredWindows, cx: &mut App) {
     let layout = compute_create_layout(req, &gathered, cx);
     let post = PostCreateData::new(req.config, &gathered);
-    let handle = open_picker_window(layout.bounds, PickerInit::new(req.config, gathered), cx);
+    let handle = open_picker_window(
+        layout.bounds,
+        PickerInit::new(req.config, gathered),
+        true,
+        cx,
+    );
     let Some(handle) = handle else {
         return on_open_failure();
     };
@@ -98,7 +103,6 @@ impl PickerInit {
         }
     }
 
-    #[cfg(target_os = "macos")]
     pub(crate) fn empty(config: &AltTabConfig) -> Self {
         Self::new(
             config,
@@ -118,20 +122,23 @@ impl PickerInit {
 fn open_picker_window(
     bounds: Bounds<Pixels>,
     init: PickerInit,
+    activate: bool,
     cx: &mut App,
 ) -> Option<WindowHandle<AltTabApp>> {
-    let opts = picker_window_options(bounds, init.transparent_bg);
+    let opts = picker_window_options(bounds, init.transparent_bg, activate);
     cx.open_window(opts, move |window, cx| {
         window.set_window_title(PICKER_WINDOW_TITLE);
         let view = cx.new(|cx| init.into_app(window, cx));
-        window.focus(&view.focus_handle(cx));
-        window.activate_window();
+        if activate {
+            window.focus(&view.focus_handle(cx));
+            window.activate_window();
+        }
         view
     })
     .ok()
 }
 
-fn picker_window_options(bounds: Bounds<Pixels>, transparent: bool) -> WindowOptions {
+fn picker_window_options(bounds: Bounds<Pixels>, transparent: bool, focus: bool) -> WindowOptions {
     let bg = if transparent {
         WindowBackgroundAppearance::Transparent
     } else {
@@ -147,7 +154,7 @@ fn picker_window_options(bounds: Bounds<Pixels>, transparent: bool) -> WindowOpt
         titlebar: None,
         window_decorations: Some(decor),
         kind: super::platform::picker_window_kind(),
-        focus: true,
+        focus,
         window_background: bg,
         ..Default::default()
     }
@@ -159,10 +166,9 @@ fn on_open_failure() {
     PICKER_VISIBLE.store(false, Ordering::Relaxed);
 }
 
-/// Pre-create an offscreen, alpha-0 picker window at daemon boot and register it under the
-/// `BOOTSTRAP_KEY` sentinel. Mirrors lwouis/alt-tab-macos's `TilesPanel` keep-alive pattern so
-/// subsequent opens reuse the same NSWindow instead of paying cold Metal/WindowServer costs.
-#[cfg(target_os = "macos")]
+/// Pre-create an offscreen picker window at daemon boot and register it under the
+/// `BOOTSTRAP_KEY` sentinel so subsequent opens reuse one GPUI window instead of paying
+/// platform window creation cost on the hotkey path.
 pub(crate) fn pre_create_offscreen(
     config: &AltTabConfig,
     current: &PickerWindowState,
@@ -170,7 +176,7 @@ pub(crate) fn pre_create_offscreen(
 ) {
     let init = PickerInit::empty(config);
     let bounds = offscreen_bounds();
-    let Some(handle) = open_picker_window(bounds, init, cx) else {
+    let Some(handle) = open_picker_window(bounds, init, false, cx) else {
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/boot] pre-create failed — falling back to on-demand creation");
         return;
@@ -184,7 +190,6 @@ pub(crate) fn pre_create_offscreen(
     eprintln!("[alt-tab/boot] pre-created picker window (hidden offscreen)");
 }
 
-#[cfg(target_os = "macos")]
 fn offscreen_bounds() -> Bounds<Pixels> {
     let (x, y) = super::platform::offscreen_origin();
     Bounds {

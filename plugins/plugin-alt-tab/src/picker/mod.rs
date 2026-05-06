@@ -23,10 +23,9 @@ use std::sync::Arc;
 
 const DEFAULT_ESTIMATED_WINDOW_COUNT: usize = 8;
 
-/// Sentinel MonitorKey slot that holds the pre-created keep-alive picker on macOS before
-/// it has ever been shown on a real monitor. Chosen to not collide with any real monitor
+/// Sentinel MonitorKey slot that holds the pre-created keep-alive picker before it has
+/// ever been shown on a real monitor. Chosen to not collide with any real monitor
 /// (negative width/height) nor with `MonitorKey::fallback()` (all zeroes).
-#[cfg(target_os = "macos")]
 pub(crate) const BOOTSTRAP_KEY: MonitorKey = MonitorKey {
     x: i32::MIN,
     y: i32::MIN,

@@ -26,9 +26,9 @@ pub(super) struct LayoutInput<'a> {
 }
 
 pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
-    // On macOS the picker window is pre-created at boot and kept alive across dismisses, so the
-    // handle is never stale; Linux destroys on dismiss, so the handle update simply fails for a
-    // missing window and we fall through to the create path.
+    // The picker window is pre-created at boot and kept alive across dismisses, so the
+    // normal path updates an existing view instead of paying GPUI window creation cost.
+    // Stale handles can still happen after platform failures; those fall through to create.
     req.handle
         .update(cx, |view, window: &mut Window, cx| {
             super::platform::prepare_picker_for_show();

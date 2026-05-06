@@ -92,8 +92,7 @@ pub fn show_picker_onscreen() {
 pub fn prepare_picker_for_show() {
     imp::prepare_picker_for_show()
 }
-/// Hide the picker without destroying its NSWindow (bootstrap path). No-op where unsupported.
-#[cfg(target_os = "macos")]
+/// Hide the picker without destroying the underlying platform window.
 pub fn hide_picker_offscreen() {
     imp::hide_picker_offscreen()
 }
@@ -107,9 +106,7 @@ pub fn pre_create_if_supported(
     imp::pre_create_if_supported(config, current, cx)
 }
 
-/// Offscreen origin for the keep-alive picker. Far off-monitor on macOS; (0, 0)
-/// elsewhere (unused — pre_create_if_supported is a no-op there).
-#[cfg(target_os = "macos")]
+/// Offscreen origin for the keep-alive picker.
 pub fn offscreen_origin() -> (f64, f64) {
     imp::offscreen_origin()
 }
@@ -125,8 +122,8 @@ pub fn destroy_non_target_windows(
 }
 
 /// Discard a picker window handle whose reuse attempt failed. macOS only drops
-/// the `ActiveWindows` slot (keep-alive NSWindow must live); others remove the
-/// underlying window too.
+/// the `ActiveWindows` slot where the platform keep-alive window must live; others
+/// remove the underlying window too.
 pub fn discard_old_window(
     current: &crate::PickerWindowState,
     target: qol_plugin_api::window::MonitorKey,
