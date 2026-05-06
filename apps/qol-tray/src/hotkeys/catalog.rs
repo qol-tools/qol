@@ -1,9 +1,5 @@
-use crate::plugins::{
-    manifest::{walk_menu_items, DaemonConfig},
-    MenuItem, PluginId, PluginManager,
-};
+use crate::plugins::{manifest::walk_menu_items, MenuItem, Plugin, PluginId, PluginManager};
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 pub(super) type AvailableActions = HashMap<PluginId, HashSet<String>>;
@@ -11,72 +7,29 @@ pub(super) type AvailableActions = HashMap<PluginId, HashSet<String>>;
 pub(super) fn load_available_actions(
     plugin_manager: &Arc<Mutex<PluginManager>>,
 ) -> AvailableActions {
-    load_available_actions_with(plugin_manager, &default_socket_reachable)
-}
-
-fn load_available_actions_with(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
-    is_reachable: &dyn Fn(&Path) -> bool,
-) -> AvailableActions {
-    match available_actions(plugin_manager, is_reachable) {
-        Ok(actions) => actions,
-        Err(error) => {
-            log::error!("Failed to resolve available plugin actions: {}", error);
-            HashMap::new()
+    let manager = match plugin_manager.lock() {
+        Ok(manager) => manager,
+        Err(_) => {
+            log::error!("Failed to resolve available plugin actions: plugin manager lock failed");
+            return HashMap::new();
         }
-    }
-}
-
-fn available_actions(
-    plugin_manager: &Arc<Mutex<PluginManager>>,
-    is_reachable: &dyn Fn(&Path) -> bool,
-) -> anyhow::Result<AvailableActions> {
-    let manager = plugin_manager
-        .lock()
-        .map_err(|_| anyhow::anyhow!("plugin manager lock failed"))?;
-    let mut actions_by_plugin = HashMap::new();
-
-    for plugin in manager.plugins() {
-        if !daemon_actions_published(plugin.manifest.daemon.as_ref(), is_reachable) {
-            log::warn!(
-                "Skipping hotkey actions for plugin {}: daemon enabled but socket unreachable",
-                plugin.id
-            );
-            continue;
-        }
-        actions_by_plugin.insert(
-            plugin.id.clone(),
-            collect_action_ids(&plugin.manifest.menu.items),
-        );
-    }
-
-    Ok(actions_by_plugin)
-}
-
-fn daemon_actions_published(
-    daemon: Option<&DaemonConfig>,
-    is_reachable: &dyn Fn(&Path) -> bool,
-) -> bool {
-    let Some(daemon) = daemon else {
-        return true;
     };
-    if !daemon.enabled {
-        return true;
-    }
-    let Some(socket) = daemon.socket.as_deref() else {
-        return false;
-    };
-    is_reachable(Path::new(socket))
+    catalog_for_plugins(manager.plugins())
 }
 
-#[cfg(unix)]
-fn default_socket_reachable(path: &Path) -> bool {
-    std::os::unix::net::UnixStream::connect(path).is_ok()
-}
-
-#[cfg(not(unix))]
-fn default_socket_reachable(_path: &Path) -> bool {
-    false
+pub(super) fn catalog_for_plugins<'a, I>(plugins: I) -> AvailableActions
+where
+    I: IntoIterator<Item = &'a Plugin>,
+{
+    plugins
+        .into_iter()
+        .map(|plugin| {
+            (
+                plugin.id.clone(),
+                collect_action_ids(&plugin.manifest.menu.items),
+            )
+        })
+        .collect()
 }
 
 fn collect_action_ids(items: &[MenuItem]) -> HashSet<String> {
@@ -95,88 +48,174 @@ fn collect_action_ids(items: &[MenuItem]) -> HashSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugins::manifest::DaemonConfig;
+    use crate::plugins::manifest::{
+        ActionType, BuildInfo, Capabilities, DaemonConfig, MenuConfig, PluginInfo, PluginManifest,
+    };
+    use crate::plugins::{Plugin, PluginId, PluginSource};
+    use std::path::PathBuf;
 
-    fn daemon(enabled: bool, socket: Option<&str>) -> DaemonConfig {
-        DaemonConfig {
-            enabled,
-            command: "plugin-foo".to_string(),
-            socket: socket.map(|s| s.to_string()),
+    fn run_action(id: &str) -> MenuItem {
+        MenuItem::Action {
+            id: id.to_string(),
+            label: id.to_string(),
+            action: ActionType::Run,
+            config_key: None,
         }
     }
 
-    #[test]
-    fn daemon_actions_published_table() {
-        let always: fn(&Path) -> bool = |_| true;
-        let never: fn(&Path) -> bool = |_| false;
-
-        struct Case {
-            name: &'static str,
-            daemon: Option<DaemonConfig>,
-            reachable: fn(&Path) -> bool,
-            expected: bool,
+    fn checkbox(id: &str) -> MenuItem {
+        MenuItem::Checkbox {
+            id: id.to_string(),
+            label: id.to_string(),
+            checked: false,
+            action: ActionType::ToggleConfig,
+            config_key: None,
         }
+    }
 
-        let cases = [
-            Case {
-                name: "no daemon -> publish",
-                daemon: None,
-                reachable: never,
-                expected: true,
+    fn submenu(id: &str, items: Vec<MenuItem>) -> MenuItem {
+        MenuItem::Submenu {
+            id: id.to_string(),
+            label: id.to_string(),
+            items,
+        }
+    }
+
+    fn sorted(ids: HashSet<String>) -> Vec<String> {
+        let mut out: Vec<_> = ids.into_iter().collect();
+        out.sort();
+        out
+    }
+
+    fn manifest(daemon: Option<DaemonConfig>, items: Vec<MenuItem>) -> PluginManifest {
+        PluginManifest {
+            manifest_version: 1,
+            plugin: PluginInfo {
+                name: "Plugin Foo".to_string(),
+                description: "test".to_string(),
+                version: "0.0.0".to_string(),
+                author: None,
+                platforms: None,
             },
-            Case {
-                name: "daemon disabled -> publish",
-                daemon: Some(daemon(false, Some("/tmp/qol-foo.sock"))),
-                reachable: never,
-                expected: true,
+            menu: MenuConfig {
+                label: "Foo".to_string(),
+                icon: None,
+                items,
             },
-            Case {
-                name: "daemon enabled no socket declared -> withhold (no liveness probe)",
-                daemon: Some(daemon(true, None)),
-                reachable: never,
-                expected: false,
-            },
-            Case {
-                name: "daemon enabled no socket declared, reachable irrelevant -> withhold",
-                daemon: Some(daemon(true, None)),
-                reachable: always,
-                expected: false,
-            },
-            Case {
-                name: "daemon enabled and socket reachable -> publish",
-                daemon: Some(daemon(true, Some("/tmp/qol-foo.sock"))),
-                reachable: always,
-                expected: true,
-            },
-            Case {
-                name: "daemon enabled and socket unreachable -> withhold",
-                daemon: Some(daemon(true, Some("/tmp/qol-foo.sock"))),
-                reachable: never,
-                expected: false,
-            },
+            daemon,
+            dependencies: None,
+            runtime: None,
+            capabilities: Capabilities::default(),
+            build: BuildInfo::default(),
+            traits: None,
+        }
+    }
+
+    fn make_plugin(id: &str, daemon: Option<DaemonConfig>, items: Vec<MenuItem>) -> Plugin {
+        Plugin::new_with_source(
+            PluginId::new(id),
+            manifest(daemon, items),
+            PathBuf::from(format!("/tmp/plugins/{}", id)),
+            PluginSource::Installed,
+        )
+    }
+
+    #[test]
+    fn collect_action_ids_extracts_top_level_actions() {
+        let items = vec![
+            run_action("alpha"),
+            MenuItem::Separator,
+            run_action("beta"),
+            checkbox("gamma"),
+        ];
+        assert_eq!(
+            sorted(collect_action_ids(&items)),
+            vec!["alpha", "beta", "gamma"]
+        );
+    }
+
+    #[test]
+    fn collect_action_ids_descends_into_submenus() {
+        let items = vec![submenu(
+            "top",
+            vec![
+                run_action("inner"),
+                submenu("deeper", vec![run_action("deepest")]),
+            ],
+        )];
+        assert_eq!(sorted(collect_action_ids(&items)), vec!["deepest", "inner"]);
+    }
+
+    #[test]
+    fn catalog_includes_action_for_daemon_plugin_when_socket_unreachable() {
+        let unreachable_socket = PathBuf::from("/tmp/qol-this-socket-does-not-exist.sock");
+        assert!(
+            std::os::unix::net::UnixStream::connect(&unreachable_socket).is_err(),
+            "precondition: socket must be unreachable"
+        );
+
+        let plugin = make_plugin(
+            "plugin-foo",
+            Some(DaemonConfig {
+                enabled: true,
+                command: "plugin-foo".to_string(),
+                socket: Some(unreachable_socket.to_string_lossy().to_string()),
+            }),
+            vec![run_action("toggle")],
+        );
+
+        let catalog = catalog_for_plugins(std::iter::once(&plugin));
+
+        let actions = catalog
+            .get("plugin-foo")
+            .expect("daemon-backed plugin must be in the catalog");
+        assert!(
+            actions.contains("toggle"),
+            "daemon-backed action must remain registered when socket is unreachable; got {:?}",
+            actions
+        );
+    }
+
+    #[test]
+    fn catalog_includes_actions_for_disabled_daemon_and_no_daemon_plugins() {
+        let plugins = [
+            make_plugin(
+                "plugin-no-daemon",
+                None,
+                vec![run_action("alpha"), run_action("beta")],
+            ),
+            make_plugin(
+                "plugin-disabled-daemon",
+                Some(DaemonConfig {
+                    enabled: false,
+                    command: "plugin-disabled-daemon".to_string(),
+                    socket: None,
+                }),
+                vec![run_action("gamma")],
+            ),
         ];
 
-        for case in cases {
-            let actual = daemon_actions_published(case.daemon.as_ref(), &case.reachable);
-            assert_eq!(actual, case.expected, "{}", case.name);
-        }
+        let catalog = catalog_for_plugins(plugins.iter());
+
+        assert_eq!(
+            sorted(catalog.get("plugin-no-daemon").unwrap().clone()),
+            vec!["alpha", "beta"]
+        );
+        assert_eq!(
+            sorted(catalog.get("plugin-disabled-daemon").unwrap().clone()),
+            vec!["gamma"]
+        );
     }
 
-    #[cfg(unix)]
     #[test]
-    fn default_socket_reachable_returns_true_for_real_listener() {
-        use std::os::unix::net::UnixListener;
-        let tmp = tempfile::TempDir::new().unwrap();
-        let socket_path = tmp.path().join("qol-test.sock");
-        let _listener = UnixListener::bind(&socket_path).unwrap();
-        assert!(default_socket_reachable(&socket_path));
-    }
+    fn catalog_omits_plugins_that_declare_no_actions() {
+        let plugin = make_plugin("plugin-empty", None, vec![]);
+        let catalog = catalog_for_plugins(std::iter::once(&plugin));
 
-    #[cfg(unix)]
-    #[test]
-    fn default_socket_reachable_returns_false_when_no_listener() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let socket_path = tmp.path().join("qol-missing.sock");
-        assert!(!default_socket_reachable(&socket_path));
+        assert_eq!(
+            catalog.get("plugin-empty").map(|s| s.is_empty()),
+            Some(true),
+            "plugin with no menu actions appears with an empty action set"
+        );
     }
 }
