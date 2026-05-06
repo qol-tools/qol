@@ -1,4 +1,4 @@
-.PHONY: build release run dev setup test check lint lint-fix fmt fmt-check icons clean install install-dev ci-local
+.PHONY: build release run dev setup test check lint lint-fix fmt fmt-check icons clean install install-dev ci-local sync
 
 DEV_HOOKS := .qol-tray-dev-hooks
 
@@ -70,7 +70,16 @@ release:
 run: lint
 	cargo run --bin qol-tray
 
-dev: $(DEV_HOOKS) lint
+sync:
+	@if command -v qol-sync >/dev/null 2>&1; then \
+		qol-sync; \
+	elif [ -x ../qol-cicd/bin/qol-sync ]; then \
+		../qol-cicd/bin/qol-sync; \
+	else \
+		echo "sync: qol-sync not found, skipping"; \
+	fi
+
+dev: sync $(DEV_HOOKS) lint
 	@if [ -x ./$(DEV_HOOKS) ]; then ./$(DEV_HOOKS); fi
 	-pkill -f 'qol-tray'
 	cargo run --bin qol-tray --features dev
