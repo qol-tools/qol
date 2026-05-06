@@ -28,15 +28,6 @@ pub(crate) enum SymbolicKey {
     Virtual(u32),
 }
 
-const APPLE_MOD_SHIFT: u32 = 0x20000;
-const APPLE_MOD_CONTROL: u32 = 0x40000;
-const APPLE_MOD_OPTION: u32 = 0x80000;
-const APPLE_MOD_COMMAND: u32 = 0x100000;
-
-const VK_SPACE: u32 = 49;
-const VK_TAB: u32 = 48;
-const VK_BACKTICK: u32 = 50;
-
 pub(crate) struct ReservedDefinition {
     pub id: u32,
     pub label: &'static str,
