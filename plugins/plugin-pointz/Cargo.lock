@@ -1715,7 +1715,7 @@ dependencies = [
  "hostname",
  "if-addrs",
  "log",
- "qol-plugin-api 0.2.1 (git+https://github.com/qol-tools/qol-plugin-api)",
+ "qol-plugin-api",
  "qol-tray",
  "rdev",
  "serde",
@@ -1841,23 +1841,6 @@ dependencies = [
 [[package]]
 name = "qol-plugin-api"
 version = "0.2.1"
-source = "git+https://github.com/qol-tools/qol-plugin-api?rev=8aeb848598e4aa3ce983175677fa0efb2126b1b2#8aeb848598e4aa3ce983175677fa0efb2126b1b2"
-dependencies = [
- "objc2",
- "objc2-app-kit",
- "objc2-core-graphics",
- "objc2-foundation",
- "qol-platform",
- "qol-runtime",
- "serde",
- "serde_json",
- "x11rb",
-]
-
-[[package]]
-name = "qol-plugin-api"
-version = "0.2.1"
-source = "git+https://github.com/qol-tools/qol-plugin-api#8aeb848598e4aa3ce983175677fa0efb2126b1b2"
 dependencies = [
  "objc2",
  "objc2-app-kit",
@@ -1873,7 +1856,6 @@ dependencies = [
 [[package]]
 name = "qol-runtime"
 version = "0.1.0"
-source = "git+https://github.com/qol-tools/qol-runtime#ba1781ac89ae72b5eb977da51ca4463085d0a650"
 dependencies = [
  "serde",
  "serde_json",
@@ -1900,7 +1882,7 @@ dependencies = [
  "open",
  "png",
  "qol-config",
- "qol-plugin-api 0.2.1 (git+https://github.com/qol-tools/qol-plugin-api?rev=8aeb848598e4aa3ce983175677fa0efb2126b1b2)",
+ "qol-plugin-api",
  "qol-runtime",
  "rand",
  "reqwest",
@@ -3622,3 +3604,7 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
+
+[[patch.unused]]
+name = "qol-tray"
+version = "3.13.0"
