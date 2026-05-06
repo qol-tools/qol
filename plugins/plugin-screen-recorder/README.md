@@ -1,90 +1,19 @@
-# 🎬 Screen Recorder
+# Screen Recorder
 
-A [qol-tray](https://github.com/qol-tools/qol-tray) plugin for recording screen regions with optional audio.
+[![CI](https://github.com/qol-tools/plugin-screen-recorder/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/plugin-screen-recorder/actions/workflows/ci.yml)
 
-## Features
+A [QoL Tray](https://github.com/qol-tools/qol-tray) plugin for recording screen regions with optional audio.
 
-- **Region selection** — click and drag to select any area
-- **Audio capture** — mic, system audio, or both
-- **Edge snapping** — automatically snaps to monitor edges
-- **One-click toggle** — same hotkey starts and stops
+## Quick start
 
-## Dependencies
+Install from the [qol-tray](https://github.com/qol-tools/qol-tray) plugin store, or build from source:
 
 ```bash
-# Ubuntu/Debian
-sudo apt install slop ffmpeg x11-xserver-utils libnotify-bin
-
-# Arch
-sudo pacman -S slop ffmpeg xorg-xrandr libnotify
+git clone https://github.com/qol-tools/plugin-screen-recorder
+cd plugin-screen-recorder
+make build
 ```
-
-## Installation
-
-```bash
-git clone https://github.com/qol-tools/plugin-screen-recorder ~/.config/qol-tray/plugins/plugin-screen-recorder
-```
-
-## Development
-
-```bash
-# Run contract validation tests
-cargo test
-
-# Run in development mode (as a tray plugin)
-# qol-tray will automatically resolve the binary from target/debug
-```
-
-## Usage
-
-1. Click **Screen Recorder → Start/Stop Recording** in the tray
-2. Select a region with your mouse
-3. Recording starts immediately
-4. Click again to stop — saved to `~/Videos/`
-
-## Configuration
-
-Edit `config.json`:
-
-```json
-{
-  "audio": {
-    "enabled": true,
-    "inputs": ["mic", "system"],
-    "mic_device": "default",
-    "system_device": "default"
-  },
-  "video": {
-    "crf": 18,
-    "preset": "veryfast",
-    "framerate": 60,
-    "format": "mkv"
-  }
-}
-```
-
-| Option | Description |
-|--------|-------------|
-| `audio.enabled` | Toggle audio capture (also in tray menu) |
-| `audio.inputs` | Array: `["mic"]`, `["system"]`, or `["mic", "system"]` |
-| `video.crf` | Quality (0-51, lower = better, 18 is visually lossless) |
-| `video.preset` | Encoding speed: `ultrafast`, `veryfast`, `fast`, `medium` |
-| `video.framerate` | FPS (30 or 60) |
-| `video.format` | Container format (`mkv` or `mp4`) |
-
-## Tips
-
-- Use `pavucontrol` to find your audio device names
-- Bind to a global hotkey for quick access
-- MKV is more resilient if recording crashes; convert to MP4 later if needed
 
 ## License
 
 PolyForm Noncommercial 1.0.0
-
-
-
-
-
-
-
