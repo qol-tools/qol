@@ -1,21 +1,23 @@
 # Key Remap Plugin for QoL Tray
 
-A keyboard and mouse remapping plugin for [QoL Tray](https://github.com/qol-tools/qol-tray). Runs as a background daemon that intercepts and transforms input events in real time.
+[![CI](https://github.com/qol-tools/plugin-keyremap/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/plugin-keyremap/actions/workflows/ci.yml)
 
-## Features
+A keyboard and mouse remapping plugin for [QoL Tray](https://github.com/qol-tools/qol-tray).
 
-- **Key remapping** — swap keys, remap modifiers (e.g. Ctrl to Cmd)
-- **Mouse button remapping** — remap mouse buttons to keys or other buttons
-- **Per-app rules** — different remaps for different applications
-- **Web-based settings** with live rule editor
-- **Hot reload** — apply changes without restarting
+## Quick start
 
-## Platform Support
+Install from the [qol-tray](https://github.com/qol-tools/qol-tray) plugin store, or build from source:
 
-| Platform | Status |
-|----------|--------|
-| macOS | Supported |
+```bash
+git clone https://github.com/qol-tools/plugin-keyremap
+cd plugin-keyremap
+make build
+```
 
-Requires Accessibility permission (System Settings > Privacy & Security > Accessibility).
+## About
 
-License: PolyForm Noncommercial 1.0.0
+Runs as a background daemon that intercepts and transforms input events in real time.
+
+## License
+
+PolyForm Noncommercial 1.0.0
