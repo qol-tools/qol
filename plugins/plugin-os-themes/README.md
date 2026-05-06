@@ -1,29 +1,22 @@
-# plugin-os-themes
+# Plugin OS Themes
 
-A [qol-tray](https://github.com/qol-tools/qol-tray) plugin for OS-wide theming. GTK, Qt, icons, cursors, and more.
+[![CI](https://github.com/qol-tools/plugin-os-themes/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/plugin-os-themes/actions/workflows/ci.yml)
 
-OS theming on Linux has no unified API. This plugin aims to be the single place to manage it all from qol-tray. The scope is broad; implementation is incremental.
+A [QoL Tray](https://github.com/qol-tools/qol-tray) plugin for OS-wide theming — GTK, Qt, icons, cursors.
 
-## Current Features
+## Quick start
 
-**Shake-to-grow:** shake your cursor to temporarily scale it up, then it smoothly animates back to normal.
+Install from the [qol-tray](https://github.com/qol-tools/qol-tray) plugin store, or build from source:
 
-## Planned
+```bash
+git clone https://github.com/qol-tools/plugin-os-themes
+cd plugin-os-themes
+make build
+```
 
-- GTK theme switching
-- Qt theme switching
-- Icon theme management
-- Cursor theme management
-- Wayland support (deferred)
+## About
 
-## Build
-
-- `make dev` builds and installs to the plugin root
-- `make release` optimized build
-
-## Configuration
-
-Settings are editable via the qol-tray UI under OS Themes.
+OS theming on Linux has no unified API. This plugin aims to be the single place to manage it all from qol-tray.
 
 ## License
 
