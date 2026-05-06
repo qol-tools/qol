@@ -5,6 +5,7 @@ mod diagnosis;
 mod install_id;
 mod platform;
 mod report;
+pub mod trigger;
 
 use anyhow::Result;
 use diagnosis::{apply_fix, Diagnosis, FixAction};
@@ -13,6 +14,17 @@ pub use report::{FixReport, Outcome, OutcomeStatus, Report};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CheckId {
     PluginProcessLeaks,
+    HotkeyShadows,
+}
+
+impl CheckId {
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "plugin_process_leaks" => Some(Self::PluginProcessLeaks),
+            "hotkey_shadows" => Some(Self::HotkeyShadows),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -89,11 +101,48 @@ pub fn fix_with_policy(policy: FixPolicy) -> FixReport {
 }
 
 pub fn auto_fix_startup() -> FixReport {
-    let report = fix_with_policy(FixPolicy::safe());
+    if let Some(trigger) = trigger::take() {
+        run_triggered_check(&trigger);
+    }
+    let report = fix_with_policy(FixPolicy::with_de_fixes());
     log_fix_attempts(&report);
     log_fix_failures(&report);
     log_remaining_outcomes(&report.after);
     report
+}
+
+fn run_triggered_check(trigger: &trigger::Trigger) {
+    let Some(check_id) = CheckId::from_str(&trigger.check_id) else {
+        log::warn!(
+            "doctor: triggered run skipped, unknown check_id={} (reason={})",
+            trigger.check_id,
+            trigger.reason
+        );
+        return;
+    };
+    log::info!(
+        "doctor: triggered run for {} (reason={})",
+        trigger.check_id,
+        trigger.reason
+    );
+    let report = fix_single_with_policy(check_id, FixPolicy::with_de_fixes());
+    log_fix_attempts(&report);
+    log_fix_failures(&report);
+}
+
+fn fix_single_with_policy(id: CheckId, policy: FixPolicy) -> FixReport {
+    let diagnoses = vec![checks::collect_diagnosis(id)];
+    let before = report_from_diagnoses(&diagnoses);
+    let summary = apply_fixes(diagnoses, policy);
+    let after = check_single(id);
+    FixReport {
+        before,
+        after,
+        attempted: summary.attempted,
+        applied: summary.applied,
+        skipped: summary.skipped,
+        failures: summary.failures,
+    }
 }
 
 pub fn run_cli_from_env() -> Result<i32> {
@@ -131,6 +180,7 @@ fn apply_diagnosis_fixes(summary: &mut FixSummary, diagnosis: Diagnosis, policy:
             continue;
         }
         summary.applied += 1;
+        log_applied(&action);
     }
 }
 
@@ -148,6 +198,46 @@ fn log_fix_attempts(report: &FixReport) {
 fn log_fix_failures(report: &FixReport) {
     for failure in &report.failures {
         log::warn!("doctor startup fix failed: {}", failure);
+    }
+}
+
+fn log_applied(action: &FixAction) {
+    match action {
+        FixAction::UnshadowDeBinding {
+            schema,
+            key,
+            qol_combo,
+        } => {
+            log::info!(
+                "doctor: removed {} from {}.{} (qol-tray's hotkey takes priority)",
+                qol_combo,
+                schema,
+                key
+            );
+        }
+        FixAction::DisableSymbolicHotkey {
+            hotkey_id,
+            qol_combo,
+        } => {
+            log::info!(
+                "doctor: disabled macOS symbolic hotkey id={} ({} now reaches qol-tray)",
+                hotkey_id,
+                qol_combo
+            );
+        }
+        FixAction::ClearWindowsAppKey { app_key, qol_combo } => {
+            log::info!(
+                "doctor: cleared Windows AppKey {} ({} now reaches qol-tray)",
+                app_key,
+                qol_combo
+            );
+        }
+        FixAction::SetActiveInstallId(_)
+        | FixAction::WriteInstallMarker { .. }
+        | FixAction::WriteAutostartEntry { .. }
+        | FixAction::EnsurePluginsDir { .. }
+        | FixAction::KillPluginProcessLeaks { .. }
+        | FixAction::InstallShellHook => {}
     }
 }
 
@@ -190,11 +280,31 @@ mod tests {
         let summary = apply_fixes(vec![unshadow_diagnosis()], FixPolicy::safe());
         assert_eq!(
             summary.attempted, 0,
-            "auto-startup must not attempt DE fixes"
+            "FixPolicy::safe (CLI default `fix` without --apply-de-fixes) must not attempt DE fixes"
         );
         assert_eq!(summary.applied, 0);
         assert_eq!(summary.skipped, 1);
         assert!(summary.failures.is_empty(), "got: {:?}", summary.failures);
+    }
+
+    #[test]
+    fn with_de_fixes_policy_attempts_de_fixes_at_startup() {
+        let summary = apply_fixes(vec![unshadow_diagnosis()], FixPolicy::with_de_fixes());
+        assert_eq!(
+            summary.attempted, 1,
+            "auto_fix_startup uses with_de_fixes and must attempt the unshadow"
+        );
+        assert_eq!(
+            summary.skipped, 0,
+            "with_de_fixes must not skip UnshadowDeBinding"
+        );
+        assert_eq!(
+            summary.applied + summary.failures.len(),
+            1,
+            "exactly one outcome (apply or fail) must be recorded; got applied={}, failures={:?}",
+            summary.applied,
+            summary.failures
+        );
     }
 
     #[test]
@@ -233,6 +343,38 @@ mod tests {
                     schema: "x".into(),
                     key: "y".into(),
                     qol_combo: "Super+Space".into(),
+                },
+                FixPolicy::with_de_fixes(),
+                true,
+            ),
+            (
+                FixAction::DisableSymbolicHotkey {
+                    hotkey_id: 64,
+                    qol_combo: "Cmd+Space".into(),
+                },
+                FixPolicy::safe(),
+                false,
+            ),
+            (
+                FixAction::DisableSymbolicHotkey {
+                    hotkey_id: 64,
+                    qol_combo: "Cmd+Space".into(),
+                },
+                FixPolicy::with_de_fixes(),
+                true,
+            ),
+            (
+                FixAction::ClearWindowsAppKey {
+                    app_key: "17".into(),
+                    qol_combo: "Win+E".into(),
+                },
+                FixPolicy::safe(),
+                false,
+            ),
+            (
+                FixAction::ClearWindowsAppKey {
+                    app_key: "17".into(),
+                    qol_combo: "Win+E".into(),
                 },
                 FixPolicy::with_de_fixes(),
                 true,
