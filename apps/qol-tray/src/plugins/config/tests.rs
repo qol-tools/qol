@@ -21,10 +21,12 @@ struct ConfigEnvGuard {
     xdg_config_home: Option<OsString>,
     xdg_data_home: Option<OsString>,
     _path_root: crate::paths::TestPathRootGuard,
+    _env_lock: tokio::sync::MutexGuard<'static, ()>,
 }
 
 impl ConfigEnvGuard {
     fn new(root: &std::path::Path) -> Self {
+        let env_lock = crate::test_support::env_lock().blocking_lock();
         let path_root = crate::paths::push_test_path_root(root);
         let home = std::env::var_os("HOME");
         let user_profile = std::env::var_os("USERPROFILE");
@@ -56,6 +58,7 @@ impl ConfigEnvGuard {
             xdg_config_home,
             xdg_data_home,
             _path_root: path_root,
+            _env_lock: env_lock,
         }
     }
 }
@@ -113,7 +116,6 @@ fn plugin_config_path_returns_plugin_directory() {
 
 #[test]
 fn plugin_config_path_uses_shared_plugin_directory() {
-    let _guard = crate::test_support::env_lock().blocking_lock();
     let root = TempDir::new().unwrap();
     let _env = ConfigEnvGuard::new(root.path());
     let install_id = "install-test-123";
@@ -223,6 +225,8 @@ fn restore_from_backup_returns_none_when_no_backup_exists() {
 
 #[test]
 fn restore_from_backup_returns_config_when_backup_exists() {
+    let env_root = TempDir::new().unwrap();
+    let _env = ConfigEnvGuard::new(env_root.path());
     let (manager, _temp_base, _temp_plugins) = setup_test_env();
     let mut configs = PluginConfigs::default();
     let expected_config = json!({"restored": true, "value": 123});
@@ -232,12 +236,6 @@ fn restore_from_backup_returns_config_when_backup_exists() {
     manager.save_configs(&configs).unwrap();
     let result = manager.restore_from_backup("test-plugin").unwrap();
     assert_eq!(result, Some(expected_config));
-    let _ = std::fs::remove_dir_all(
-        PluginConfigManager::plugin_config_path("test-plugin")
-            .unwrap()
-            .parent()
-            .unwrap(),
-    );
 }
 
 #[test]
