@@ -147,19 +147,13 @@ mod tests {
     }
 
     #[test]
-    fn catalog_includes_action_for_daemon_plugin_when_socket_unreachable() {
-        let unreachable_socket = PathBuf::from("/tmp/qol-this-socket-does-not-exist.sock");
-        assert!(
-            std::os::unix::net::UnixStream::connect(&unreachable_socket).is_err(),
-            "precondition: socket must be unreachable"
-        );
-
+    fn catalog_includes_action_for_daemon_plugin_with_socket_path() {
         let plugin = make_plugin(
             "plugin-foo",
             Some(DaemonConfig {
                 enabled: true,
                 command: "plugin-foo".to_string(),
-                socket: Some(unreachable_socket.to_string_lossy().to_string()),
+                socket: Some("qol-this-socket-does-not-exist.sock".to_string()),
             }),
             vec![run_action("toggle")],
         );
@@ -171,7 +165,7 @@ mod tests {
             .expect("daemon-backed plugin must be in the catalog");
         assert!(
             actions.contains("toggle"),
-            "daemon-backed action must remain registered when socket is unreachable; got {:?}",
+            "daemon-backed action must remain registered when a socket path is configured; got {:?}",
             actions
         );
     }
