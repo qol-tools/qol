@@ -1,8 +1,15 @@
 # qol-platform
 
-Platform detection and capability reporting for qol-tools. Detects the Linux display backend (X11, Wayland, or unknown) and reports what features are available on the current platform.
+[![CI](https://github.com/qol-tools/qol-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/qol-platform/actions/workflows/ci.yml)
 
-## Usage
+Platform detection and capability reporting for qol-tools.
+
+## Quick start
+
+```toml
+[dependencies]
+qol-platform = { git = "https://github.com/qol-tools/qol-platform" }
+```
 
 ```rust
 use qol_platform::{current_capabilities, linux_display_backend, LinuxDisplayBackend};
@@ -16,10 +23,6 @@ if linux_display_backend() == LinuxDisplayBackend::Wayland {
     // wayland-specific path
 }
 ```
-
-On macOS, all capabilities are reported as available. On Linux, it depends on the display backend.
-
-`launch_working_dir()` returns a sensible working directory for spawning child processes (home dir, falling back to cwd).
 
 ## License
 
