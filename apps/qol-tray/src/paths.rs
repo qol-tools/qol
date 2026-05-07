@@ -207,6 +207,10 @@ pub fn dev_config_path() -> Result<PathBuf> {
     shared_config_dir().map(|p| p.join("dev/config.json"))
 }
 
+pub fn mode_config_path() -> Result<PathBuf> {
+    shared_config_dir().map(|p| p.join("mode.json"))
+}
+
 const RUNTIME_DIR: &str = "/tmp/qol-tray";
 
 pub fn runtime_dir() -> PathBuf {

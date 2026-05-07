@@ -91,14 +91,6 @@ pub enum DaemonEvent {
     UpdateFailed {
         message: String,
     },
-    ModeSwitchProgress {
-        percent: u8,
-        phase: String,
-    },
-    ModeSwitchComplete,
-    ModeSwitchFailed {
-        message: String,
-    },
 }
 
 #[cfg(test)]

@@ -17,7 +17,10 @@ pub(super) fn routes() -> Router<AppState> {
 }
 
 pub(super) async fn dev_enabled() -> Json<bool> {
-    Json(cfg!(feature = "dev"))
+    let mode_is_dev = crate::mode::ModeConfig::load()
+        .map(|c| c.is_dev())
+        .unwrap_or(false);
+    Json(cfg!(feature = "dev") && mode_is_dev)
 }
 
 pub(super) async fn get_version() -> &'static str {
@@ -45,4 +48,52 @@ pub(super) async fn self_update(State(state): State<AppState>) -> impl IntoRespo
         }
     });
     StatusCode::ACCEPTED
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mode::{ModeConfig, ModeFlag};
+    use tempfile::TempDir;
+
+    async fn isolated_env() -> (
+        tokio::sync::MutexGuard<'static, ()>,
+        TempDir,
+        crate::paths::TestPathRootGuard,
+    ) {
+        let guard = crate::test_support::env_lock().lock().await;
+        let tmp = TempDir::new().unwrap();
+        let path_guard = crate::paths::push_test_path_root(tmp.path());
+        (guard, tmp, path_guard)
+    }
+
+    #[tokio::test]
+    async fn dev_enabled_defaults_false_when_mode_config_missing() {
+        let (_guard, _tmp, _path_guard) = isolated_env().await;
+
+        let Json(enabled) = dev_enabled().await;
+        assert!(!enabled);
+    }
+
+    #[cfg(feature = "dev")]
+    #[tokio::test]
+    async fn dev_enabled_true_when_dev_feature_and_mode_dev() {
+        let (_guard, _tmp, _path_guard) = isolated_env().await;
+
+        ModeConfig::set(ModeFlag::Dev).unwrap();
+
+        let Json(enabled) = dev_enabled().await;
+        assert!(enabled);
+    }
+
+    #[cfg(not(feature = "dev"))]
+    #[tokio::test]
+    async fn dev_enabled_false_when_mode_dev_without_dev_feature() {
+        let (_guard, _tmp, _path_guard) = isolated_env().await;
+
+        ModeConfig::set(ModeFlag::Dev).unwrap();
+
+        let Json(enabled) = dev_enabled().await;
+        assert!(!enabled);
+    }
 }

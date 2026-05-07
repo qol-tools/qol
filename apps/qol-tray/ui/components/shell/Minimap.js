@@ -18,15 +18,6 @@ import { Surface } from '../../lib/components/Surface.js';
 import { SurfaceContainer } from '../../lib/components/SurfaceContainer.js';
 import { resolveViewport } from '../../lib/viewport-resolve.js';
 import { createDebug } from '../../lib/debug.js';
-import { useDevSwitchUnlock } from '../../lib/hooks/useDevSwitchUnlock.js';
-import {
-    clearModePath,
-    executeModeSwitch,
-    loadModePath,
-    saveModePath,
-    validateModePath,
-} from '../../lib/mode-switch.js';
-import { toast } from '../../lib/toast.js';
 
 const log = createDebug('qol:minimap');
 
@@ -108,13 +99,6 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
     const minimapZoom = Number(settings.minimapZoomFactor ?? 4);
     const minimapZoomLabel = minimapZoom >= MINIMAP_NEIGHBOURS_MAX ? 'all' : `±${minimapZoom | 0}`;
 
-    const { revealed, bumpClick, feedKey } = useDevSwitchUnlock();
-    useEffect(() => {
-        const onKey = (e) => feedKey(e.key);
-        document.addEventListener('keydown', onKey);
-        return () => document.removeEventListener('keydown', onKey);
-    }, [feedKey]);
-
     return html`
         <${SurfaceContainer} className="world-settings-panel" containerRef=${containerRef} onKeyDown=${onKeyDown}
             data-surface-depth-base="1">
@@ -148,7 +132,7 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
                     setDefaultWorktree=${setDefaultWorktree} repoBranch=${repoBranch} />
             `}
             ${version && html`<${VersionSection} version=${version} updateState=${updateState} isDevMode=${isDevMode}
-                onAction=${onAction} unlockRevealed=${revealed} onVersionLabelClick=${bumpClick} />`}
+                onAction=${onAction} />`}
         <//>
     `;
 }
@@ -203,7 +187,7 @@ function WorktreeSection({ worktrees, defaultWorktree, setDefaultWorktree, repoB
     `;
 }
 
-function VersionSection({ version, updateState, isDevMode, onAction, unlockRevealed, onVersionLabelClick }) {
+function VersionSection({ version, updateState, isDevMode, onAction }) {
     const status = updateState?.status || 'idle';
     const tag = isDevMode ? ' DEV' : '';
     const action = versionAction(status, isDevMode);
@@ -222,105 +206,11 @@ function VersionSection({ version, updateState, isDevMode, onAction, unlockRevea
         <div class="wsp-section wsp-version ${progress !== null ? 'progress-track' : ''}">
             ${progress !== null && html`<div class="progress-fill" style=${{ '--progress-scale': toProgressScale(progress) }}></div>`}
             <div class="wsp-version-row">
-                <span class="wsp-version-label" onClick=${onVersionLabelClick}>v${version}${tag}</span>
+                <span class="wsp-version-label">v${version}${tag}</span>
                 <${Surface} as="button" className=${`wsp-version-btn ${hasUpdate ? 'has-update' : ''} ${status === 'error' ? 'is-error' : ''}`}
                     onActivate=${actionClick} disabled=${busy}>${actionLabel}<//>
             </div>
-            ${unlockRevealed && !busy && html`<${ModeSwitchRow} isDevMode=${isDevMode} />`}
             ${detail && html`<div class="wsp-version-detail">${detail}</div>`}
-        </div>
-    `;
-}
-
-function ModeSwitchRow({ isDevMode }) {
-    const target = isDevMode ? 'prod' : 'dev';
-    const label = isDevMode ? 'Switch to Prod' : 'Switch to Dev';
-    const placeholder = isDevMode ? '/usr/local/bin/qol-tray' : '/path/to/qol-tray';
-
-    const [editing, setEditing] = useState(false);
-    const [value, setValue] = useState('');
-    const [shake, setShake] = useState(false);
-    const inputRef = useRef(null);
-
-    useEffect(() => {
-        if (!editing) return;
-        const id = requestAnimationFrame(() => {
-            inputRef.current?.focus();
-            inputRef.current?.select?.();
-        });
-        return () => cancelAnimationFrame(id);
-    }, [editing]);
-
-    const cancel = useCallback(() => {
-        setEditing(false);
-        setValue('');
-    }, []);
-
-    const fire = useCallback(async (path) => {
-        const valid = await validateModePath(target, path);
-        if (!valid) {
-            setShake(true);
-            setTimeout(() => setShake(false), 400);
-            toast('error', `Invalid ${target} path: ${path}`);
-            return false;
-        }
-        saveModePath(target, path);
-        try { await executeModeSwitch(target, path); } catch {}
-        return true;
-    }, [target]);
-
-    const onSwitchClick = useCallback(async () => {
-        const saved = loadModePath(target);
-        if (saved) {
-            const ok = await fire(saved);
-            if (!ok) { clearModePath(target); setValue(saved); setEditing(true); }
-            return;
-        }
-        setEditing(true);
-    }, [target, fire]);
-
-    const onSubmit = useCallback(async () => {
-        const trimmed = value.trim();
-        if (!trimmed) return;
-        const ok = await fire(trimmed);
-        if (ok) cancel();
-    }, [value, fire, cancel]);
-
-    const onInputKeyDown = useCallback((e) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            e.stopPropagation();
-            onSubmit();
-        } else if (e.key === 'Escape') {
-            e.preventDefault();
-            e.stopPropagation();
-            cancel();
-        }
-    }, [onSubmit, cancel]);
-
-    if (editing) {
-        return html`
-            <div class="wsp-mode-edit ${shake ? 'wsp-mode-edit-shake' : ''}">
-                <input ref=${inputRef}
-                    type="text"
-                    class="wsp-mode-input"
-                    autocomplete="off"
-                    spellcheck="false"
-                    placeholder=${placeholder}
-                    value=${value}
-                    onInput=${(e) => setValue(e.currentTarget.value)}
-                    onKeyDown=${onInputKeyDown} />
-                <${Surface} as="button" className="wsp-version-btn" onActivate=${cancel}>Cancel<//>
-                <${Surface} as="button" className="wsp-version-btn wsp-mode-switch"
-                    onActivate=${onSubmit} disabled=${!value.trim()}>Save<//>
-            </div>
-        `;
-    }
-
-    return html`
-        <div class="wsp-version-row">
-            <span class="wsp-version-label wsp-version-label-muted">Mode</span>
-            <${Surface} as="button" className="wsp-version-btn wsp-mode-switch" onActivate=${onSwitchClick}>${label}<//>
         </div>
     `;
 }

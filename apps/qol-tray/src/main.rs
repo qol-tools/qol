@@ -291,6 +291,8 @@ async fn async_init_inner(
     let daemon = Daemon::new();
     let mut feature_registry = FeatureRegistry::new();
     feature_registry.register(Box::new(features::plugin_store::Plugins::new()));
+    #[cfg(feature = "dev")]
+    feature_registry.register(Box::new(features::mode_toggle::ModeToggle::new()));
     let feature_registry = Arc::new(feature_registry);
     features::plugin_store::Plugins::start_server(
         plugin_manager.clone(),

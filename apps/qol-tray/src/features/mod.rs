@@ -1,5 +1,7 @@
 pub mod github_auth;
 pub mod launcher_apps;
+#[cfg(feature = "dev")]
+pub mod mode_toggle;
 pub mod plugin_store;
 pub mod profile;
 pub mod task_runner;
