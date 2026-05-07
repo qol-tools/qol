@@ -3,6 +3,8 @@ pub(crate) mod assets;
 #[cfg(feature = "dev")]
 mod dev_core_log_handlers;
 #[cfg(feature = "dev")]
+mod dev_gate;
+#[cfg(feature = "dev")]
 mod dev_handlers;
 #[cfg(feature = "dev")]
 mod dev_link_handlers;
@@ -23,8 +25,6 @@ mod dev_validation;
 mod helpers;
 mod logs_handlers;
 mod meta_handlers;
-mod mode_build;
-mod mode_handlers;
 mod plugin_handlers;
 mod plugin_services;
 #[cfg(feature = "dev")]
@@ -103,17 +103,22 @@ fn api_router(app_state: AppState) -> Router {
         .merge(settings::routes())
         .merge(crate::features::github_auth::routes())
         .merge(meta_handlers::routes())
-        .merge(logs_handlers::routes())
-        .merge(mode_handlers::routes());
+        .merge(logs_handlers::routes());
     #[cfg(feature = "dev")]
-    let api = api
+    let api = api.merge(dev_api_router());
+    api.with_state(app_state)
+        .layer(middleware::from_fn(security::reject_cross_site_mutations))
+}
+
+#[cfg(feature = "dev")]
+fn dev_api_router() -> Router<AppState> {
+    Router::new()
         .merge(dev_handlers::routes())
         .merge(dev_link_handlers::routes())
         .merge(dev_state_handlers::routes())
         .merge(dev_mock_handlers::routes())
-        .merge(dev_core_log_handlers::routes());
-    api.with_state(app_state)
-        .layer(middleware::from_fn(security::reject_cross_site_mutations))
+        .merge(dev_core_log_handlers::routes())
+        .route_layer(middleware::from_fn(dev_gate::require_dev_mode))
 }
 
 fn assemble_app(app_state: AppState, plugins_dir: PathBuf) -> Router {

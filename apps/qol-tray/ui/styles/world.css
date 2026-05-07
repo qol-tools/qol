@@ -370,57 +370,6 @@ html.qol-bootstrapping-dive #app {
     text-overflow: ellipsis;
 }
 
-.wsp-version-label-muted {
-    opacity: 0.6;
-    font-size: var(--fs-sm);
-}
-
-.wsp-mode-switch {
-    color: var(--accent);
-    border-color: var(--layer-paper-16);
-}
-
-.wsp-mode-switch:hover {
-    background: var(--layer-paper-12);
-    border-color: var(--accent);
-}
-
-.wsp-mode-edit {
-    display: flex;
-    gap: var(--space-2);
-    align-items: center;
-    margin-top: var(--space-2);
-    position: relative;
-    z-index: var(--z-1);
-}
-
-.wsp-mode-input {
-    flex: 1;
-    min-width: 0;
-    font-family: inherit;
-    font-size: var(--fs-sm);
-    padding: var(--space-1-5) var(--space-3);
-    border-radius: var(--radius-md);
-    border: 1px solid var(--layer-paper-16);
-    background: var(--layer-paper-02);
-    color: var(--text-primary);
-}
-
-.wsp-mode-input:focus {
-    outline: none;
-    border-color: var(--accent);
-}
-
-@keyframes wsp-mode-edit-shake {
-    0%, 100% { transform: translateX(0); }
-    20%, 60% { transform: translateX(-4px); }
-    40%, 80% { transform: translateX(4px); }
-}
-
-.wsp-mode-edit-shake {
-    animation: wsp-mode-edit-shake 320ms ease-in-out;
-}
-
 .app-container > .command-palette,
 .app-container > .palette-hint {
     position: fixed;

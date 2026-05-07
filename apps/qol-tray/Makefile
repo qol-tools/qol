@@ -138,5 +138,5 @@ install:
 
 install-dev:
 	cargo build --release --bins --features dev
-	target/release/qol-tray-install
+	target/release/qol-tray-install --dev
 

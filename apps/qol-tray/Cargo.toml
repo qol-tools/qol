@@ -105,6 +105,7 @@ libc = "0.2"
 [dev-dependencies]
 proptest = "1.6"
 tempfile = "3.8"
+tower = { version = "0.5", features = ["util"] }
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

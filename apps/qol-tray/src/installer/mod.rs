@@ -1,8 +1,10 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::mode::{ModeConfig, ModeFlag};
 
 mod files;
 mod platform;
@@ -54,15 +56,26 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
     match args.mode {
-        source::Mode::Install => run_install(args.source.as_deref(), args.skip_shell_hook),
+        source::Mode::Install => {
+            run_install(args.source.as_deref(), args.skip_shell_hook, args.dev_mode)
+        }
         source::Mode::Uninstall => run_uninstall(args.skip_shell_hook),
     }
 }
 
-fn run_install(source_override: Option<&Path>, skip_shell_hook: bool) -> Result<()> {
+fn run_install(
+    source_override: Option<&Path>,
+    skip_shell_hook: bool,
+    dev_mode: bool,
+) -> Result<()> {
+    if dev_mode && !cfg!(feature = "dev") {
+        return Err(anyhow!(
+            "--dev requires a binary built with --features dev. Use `make install-dev` or pass --features dev to cargo build."
+        ));
+    }
     println!("Installing QoL Tray...");
     let repo_root = env::current_dir().context("Failed to determine current directory")?;
-    let source_binary = source::resolve_source_binary(&repo_root, source_override)?;
+    let source_binary = source::resolve_source_binary(&repo_root, source_override, dev_mode)?;
     let install_dir = platform::install_dir()?;
     fs::create_dir_all(&install_dir).with_context(|| {
         format!(
@@ -82,6 +95,7 @@ fn run_install(source_override: Option<&Path>, skip_shell_hook: bool) -> Result<
     platform::warn_system_install_conflict();
     platform::register_application(&installed_binary)?;
     install_shell_hook_warn_only(skip_shell_hook);
+    write_mode_config(dev_mode)?;
     platform::start_now(&installed_binary)?;
     open_ui_after_start();
     print_summary(&installed_binary, &install_id, &plugins_dir, &install_dir)
@@ -98,6 +112,17 @@ fn run_uninstall(skip_shell_hook: bool) -> Result<()> {
         return Err(error);
     }
     println!("Shell hook removed. Open a new terminal for changes to take effect.");
+    Ok(())
+}
+
+fn write_mode_config(dev_mode: bool) -> Result<()> {
+    let target = if dev_mode {
+        ModeFlag::Dev
+    } else {
+        ModeFlag::Prod
+    };
+    ModeConfig::set(target).with_context(|| format!("Failed to write mode config ({target:?})"))?;
+    println!("Runtime mode: {}", if dev_mode { "dev" } else { "prod" });
     Ok(())
 }
 
@@ -120,7 +145,7 @@ fn print_help() {
          Install or uninstall the QoL Tray binary, autostart entry, and shell hook.\n\
          \n\
          Usage:\n  \
-           qol-tray-install [--source <path>] [--skip-shell-hook]\n  \
+           qol-tray-install [--source <path>] [--skip-shell-hook] [--dev]\n  \
            qol-tray-install --uninstall [--skip-shell-hook]\n  \
            qol-tray-install --help\n\
          \n\
@@ -128,6 +153,7 @@ fn print_help() {
            --source <path>      Use the binary at <path> as the install source.\n  \
            --uninstall          Remove the qol-tools shell hook from rc files.\n  \
            --skip-shell-hook    Do not touch ~/.zshrc or ~/.bashrc.\n  \
+           --dev                Write runtime mode = dev. Requires --features dev.\n  \
            --help, -h           Print this help message.\n"
     );
 }
