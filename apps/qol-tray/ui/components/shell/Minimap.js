@@ -1,6 +1,8 @@
 import { html } from '../../lib/html.js';
-import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { resolveViewLabel } from '../../app/views.js';
+import { ALWAYS_ID } from '../../palette/registry.js';
+import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
 import { getWorldSettings, setWorldSetting, subscribeWorldSettings } from '../../lib/world-settings.js';
 import { IconCog } from '../../assets/icon-cog.js';
 import { useClickOutside } from '../../lib/hooks/useClickOutside.js';
@@ -12,6 +14,8 @@ import { drawMinimap, drawViewportRect } from '../../lib/minimap-draw.js';
 import { cameraTargetFor } from '../../lib/world-geometry.js';
 import { ToggleSwitch } from '../../lib/components/ToggleSwitch.js';
 import { CustomSelect } from '../../lib/components/CustomSelect.js';
+import { Surface } from '../../lib/components/Surface.js';
+import { SurfaceContainer } from '../../lib/components/SurfaceContainer.js';
 import { resolveViewport } from '../../lib/viewport-resolve.js';
 import { createDebug } from '../../lib/debug.js';
 import { useDevSwitchUnlock } from '../../lib/hooks/useDevSwitchUnlock.js';
@@ -32,14 +36,38 @@ export function MinimapContainer({ camera, registry, viewportRef, diveParent, di
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [settings, setSettings] = useState(getWorldSettings);
     const cogRef = useRef(null);
+    const panelRef = useRef(null);
 
     useEffect(() => subscribeWorldSettings(setSettings), []);
 
+    const openSettings = useCallback(() => {
+        setSettingsOpen(true);
+        focusSettingsPanel(panelRef);
+    }, []);
+    useLayoutEffect(() => {
+        if (!settingsOpen) return;
+        focusSettingsPanel(panelRef);
+    }, [settingsOpen]);
+    const commands = useMemo(() => [
+        { id: 'world:settings', label: 'Settings', run: openSettings },
+    ], [openSettings]);
+    useRegisterCommands(ALWAYS_ID, commands);
+
     const toggle = useCallback((e) => {
         e.stopPropagation();
-        setSettingsOpen(v => !v);
-    }, []);
+        if (settingsOpen) {
+            setSettingsOpen(false);
+            return;
+        }
+        openSettings();
+    }, [openSettings, settingsOpen]);
     const close = useCallback(() => setSettingsOpen(false), []);
+    const onSettingsKeyDown = useCallback((e) => {
+        if (e.key !== 'Escape') return;
+        e.preventDefault();
+        e.stopPropagation();
+        setSettingsOpen(false);
+    }, []);
     useClickOutside(cogRef, settingsOpen, close);
 
     return html`
@@ -56,9 +84,14 @@ export function MinimapContainer({ camera, registry, viewportRef, diveParent, di
             ${settingsOpen && html`<${WorldSettingsPanel} settings=${settings}
                 version=${version} updateState=${updateState} isDevMode=${isDevMode} onAction=${onAction}
                 worktrees=${worktrees} defaultWorktree=${defaultWorktree} setDefaultWorktree=${setDefaultWorktree}
-                repoBranch=${repoBranch} />`}
+                repoBranch=${repoBranch} containerRef=${panelRef} onKeyDown=${onSettingsKeyDown} />`}
         <//>
     `;
+}
+
+function focusSettingsPanel(panelRef) {
+    const first = panelRef.current?.querySelector?.('[data-selected-surface]');
+    if (first instanceof HTMLElement) first.focus({ preventScroll: true });
 }
 
 const TRANSITION_STYLE_OPTIONS = ['zoom-fade', 'fade', 'instant'];
@@ -67,7 +100,7 @@ const TRANSITION_STYLE_LABELS = { 'zoom-fade': 'Zoom + Fade', fade: 'Fade only',
 export const MINIMAP_NEIGHBOURS_MIN = 1;
 export const MINIMAP_NEIGHBOURS_MAX = 12;
 
-function WorldSettingsPanel({ settings, version, updateState, isDevMode, onAction, worktrees, defaultWorktree, setDefaultWorktree, repoBranch }) {
+function WorldSettingsPanel({ settings, version, updateState, isDevMode, onAction, worktrees, defaultWorktree, setDefaultWorktree, repoBranch, containerRef, onKeyDown }) {
     const updateRange = (key) => (e) => setWorldSetting(key, Number(e.target.value));
     const updateToggle = (key) => (value) => setWorldSetting(key, value);
     const updateSelect = (key) => (value) => setWorldSetting(key, value);
@@ -83,15 +116,16 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
     }, [feedKey]);
 
     return html`
-        <div class="world-settings-panel">
+        <${SurfaceContainer} className="world-settings-panel" containerRef=${containerRef} onKeyDown=${onKeyDown}
+            data-surface-depth-base="1">
             <div class="wsp-section">
                 <div class="wsp-heading">Navigation</div>
                 <div class="wsp-grid">
-                    ${rangeRow({ label: 'Pan speed', key: 'panSpeed', min: 4, max: 30, value: settings.panSpeed, onInput: updateRange('panSpeed') })}
-                    ${rangeRow({ label: 'Minimap size', key: 'minimapSize', min: 200, max: 500, value: settings.minimapSize, onInput: updateRange('minimapSize') })}
-                    ${rangeRow({ label: 'Minimap zoom', key: 'minimapZoomFactor', min: MINIMAP_NEIGHBOURS_MIN, max: MINIMAP_NEIGHBOURS_MAX, step: 1, value: minimapZoom, onInput: updateRange('minimapZoomFactor'), display: minimapZoomLabel })}
-                    ${rangeRow({ label: 'Default zoom', key: 'defaultZoom', min: 0.5, max: 2, step: 0.05, value: settings.defaultZoom, onInput: updateRange('defaultZoom'), display: `${Number(settings.defaultZoom).toFixed(2)}×` })}
-                    ${rangeRow({ label: 'Ghost threshold', key: 'ghostThreshold', min: 0.2, max: 1, step: 0.05, value: settings.ghostThreshold, onInput: updateRange('ghostThreshold'), display: `${Number(settings.ghostThreshold).toFixed(2)}×` })}
+                    <${RangeRow} label="Pan speed" settingKey="panSpeed" min=${4} max=${30} value=${settings.panSpeed} onInput=${updateRange('panSpeed')} selected=${true} />
+                    <${RangeRow} label="Minimap size" settingKey="minimapSize" min=${200} max=${500} value=${settings.minimapSize} onInput=${updateRange('minimapSize')} />
+                    <${RangeRow} label="Minimap zoom" settingKey="minimapZoomFactor" min=${MINIMAP_NEIGHBOURS_MIN} max=${MINIMAP_NEIGHBOURS_MAX} step=${1} value=${minimapZoom} onInput=${updateRange('minimapZoomFactor')} display=${minimapZoomLabel} />
+                    <${RangeRow} label="Default zoom" settingKey="defaultZoom" min=${0.5} max=${2} step=${0.05} value=${settings.defaultZoom} onInput=${updateRange('defaultZoom')} display=${`${Number(settings.defaultZoom).toFixed(2)}×`} />
+                    <${RangeRow} label="Ghost threshold" settingKey="ghostThreshold" min=${0.2} max=${1} step=${0.05} value=${settings.ghostThreshold} onInput=${updateRange('ghostThreshold')} display=${`${Number(settings.ghostThreshold).toFixed(2)}×`} />
                 </div>
                 <div class="wsp-toggles">
                     <${ToggleSwitch} checked=${settings.anchorToPages} onChange=${updateToggle('anchorToPages')} label="Anchor view to pages" />
@@ -102,12 +136,11 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
             <div class="wsp-section">
                 <div class="wsp-heading">Transitions</div>
                 <div class="wsp-grid">
-                    ${rangeRow({ label: 'Speed', key: 'transitionSpeed', min: 40, max: 300, value: settings.transitionSpeed, onInput: updateRange('transitionSpeed') })}
-                    <span class="wsp-label">Style</span>
-                    <div class="wsp-control">
+                    <${RangeRow} label="Speed" settingKey="transitionSpeed" min=${40} max=${300} value=${settings.transitionSpeed} onInput=${updateRange('transitionSpeed')} />
+                    <${SelectRow} label="Style">
                         <${CustomSelect} value=${settings.transitionStyle} options=${TRANSITION_STYLE_OPTIONS}
                             labels=${TRANSITION_STYLE_LABELS} onChange=${updateSelect('transitionStyle')} compact=${true} />
-                    </div>
+                    <//>
                 </div>
             </div>
             ${isDevMode && worktrees && worktrees.length > 0 && html`
@@ -116,16 +149,35 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
             `}
             ${version && html`<${VersionSection} version=${version} updateState=${updateState} isDevMode=${isDevMode}
                 onAction=${onAction} unlockRevealed=${revealed} onVersionLabelClick=${bumpClick} />`}
-        </div>
+        <//>
     `;
 }
 
-function rangeRow({ label, key, min, max, step, value, onInput, display }) {
+function RangeRow({ label, settingKey, min, max, step, value, onInput, display, selected }) {
+    const inputRef = useRef(null);
+    const focusInput = useCallback(() => inputRef.current?.focus({ preventScroll: true }), []);
+    const onInputKeyDown = useCallback((e) => {
+        if (e.key !== 'Enter' && e.key !== 'Escape') return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.currentTarget.closest('[data-selected-surface]')?.focus({ preventScroll: true });
+    }, []);
     return html`
-        <span class="wsp-label">${label}</span>
-        <input class="wsp-range" type="range" min=${min} max=${max} step=${step ?? 'any'}
-            value=${value} onInput=${onInput} aria-label=${label} data-setting=${key} />
-        <span class="wsp-value">${display ?? ''}</span>
+        <${Surface} className="wsp-range-row" onActivate=${focusInput} selected=${selected}>
+            <span class="wsp-label">${label}</span>
+            <input ref=${inputRef} class="wsp-range" type="range" min=${min} max=${max} step=${step ?? 'any'}
+                value=${value} onInput=${onInput} onKeyDown=${onInputKeyDown} aria-label=${label} data-setting=${settingKey} />
+            <span class="wsp-value">${display ?? ''}</span>
+        <//>
+    `;
+}
+
+function SelectRow({ label, children }) {
+    return html`
+        <div class="wsp-select-row">
+            <span class="wsp-label">${label}</span>
+            <div class="wsp-control">${children}</div>
+        </div>
     `;
 }
 
@@ -142,11 +194,10 @@ function WorktreeSection({ worktrees, defaultWorktree, setDefaultWorktree, repoB
                 ${repoBranch && html`<span class="wsp-pill" title="Base repo HEAD">${repoBranch}</span>`}
             </div>
             <div class="wsp-grid">
-                <span class="wsp-label">Branch</span>
-                <div class="wsp-control">
+                <${SelectRow} label="Branch">
                     <${CustomSelect} value=${defaultWorktree || ''} options=${options}
                         labels=${labels} onChange=${onChange} compact=${true} />
-                </div>
+                <//>
             </div>
         </div>
     `;
@@ -172,8 +223,8 @@ function VersionSection({ version, updateState, isDevMode, onAction, unlockRevea
             ${progress !== null && html`<div class="progress-fill" style=${{ '--progress-scale': toProgressScale(progress) }}></div>`}
             <div class="wsp-version-row">
                 <span class="wsp-version-label" onClick=${onVersionLabelClick}>v${version}${tag}</span>
-                <button class="wsp-version-btn ${hasUpdate ? 'has-update' : ''} ${status === 'error' ? 'is-error' : ''}"
-                    onClick=${actionClick} disabled=${busy}>${actionLabel}</button>
+                <${Surface} as="button" className=${`wsp-version-btn ${hasUpdate ? 'has-update' : ''} ${status === 'error' ? 'is-error' : ''}`}
+                    onActivate=${actionClick} disabled=${busy}>${actionLabel}<//>
             </div>
             ${unlockRevealed && !busy && html`<${ModeSwitchRow} isDevMode=${isDevMode} />`}
             ${detail && html`<div class="wsp-version-detail">${detail}</div>`}
@@ -259,9 +310,9 @@ function ModeSwitchRow({ isDevMode }) {
                     value=${value}
                     onInput=${(e) => setValue(e.currentTarget.value)}
                     onKeyDown=${onInputKeyDown} />
-                <button class="wsp-version-btn" onClick=${cancel}>Cancel</button>
-                <button class="wsp-version-btn wsp-mode-switch"
-                    onClick=${onSubmit} disabled=${!value.trim()}>Save</button>
+                <${Surface} as="button" className="wsp-version-btn" onActivate=${cancel}>Cancel<//>
+                <${Surface} as="button" className="wsp-version-btn wsp-mode-switch"
+                    onActivate=${onSubmit} disabled=${!value.trim()}>Save<//>
             </div>
         `;
     }
@@ -269,7 +320,7 @@ function ModeSwitchRow({ isDevMode }) {
     return html`
         <div class="wsp-version-row">
             <span class="wsp-version-label wsp-version-label-muted">Mode</span>
-            <button class="wsp-version-btn wsp-mode-switch" onClick=${onSwitchClick}>${label}</button>
+            <${Surface} as="button" className="wsp-version-btn wsp-mode-switch" onActivate=${onSwitchClick}>${label}<//>
         </div>
     `;
 }
@@ -507,5 +558,3 @@ export function activePosFromCameraCentre(sortedAll, cameraCentreX) {
     }
     return centres.length - 1;
 }
-
-

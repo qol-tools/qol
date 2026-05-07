@@ -11,6 +11,7 @@ import {
     MODAL_SELECTOR,
     parentContainer,
     surfaceContainsChildContainer,
+    surfaceDepth,
 } from '../lib/surface-traits.js';
 import { nearestSurfaceInDirection, surfaceLabel } from '../lib/spatial-nav.js';
 import { focusGridRows, nextFocusGridElement } from '../lib/focus-grid.js';
@@ -162,10 +163,17 @@ function routeToView(event, viewKeyboard, cycleView) {
         return;
     }
     const active = document.activeElement;
-    if (active && active !== document.body && !active.closest(MODAL_SELECTOR)) {
+    if (shouldDelegateToViewKeyboard(active)) {
         if (viewKeyboard?.handleKey) viewKeyboard.handleKey(event);
     }
     if (!event.defaultPrevented) globalSurfaceNav(event);
+}
+
+function shouldDelegateToViewKeyboard(active) {
+    if (!(active instanceof HTMLElement)) return false;
+    if (active === document.body) return false;
+    if (active.closest(MODAL_SELECTOR)) return false;
+    return Boolean(active.closest('[data-view-id]'));
 }
 
 function isEditableInput(el) {
@@ -212,13 +220,29 @@ function findSelectedSurface() {
         const surface = focused.closest('[data-selected-surface]');
         if (surface && isVisible(surface)) return surface;
     }
+    let best = null;
     for (const container of document.querySelectorAll('[data-surface-container]')) {
         if (!isVisible(container)) continue;
-        for (const el of directSurfaces(container)) {
-            if (el.getAttribute('data-selected') === 'true' && isInViewport(el, vp)) return el;
-        }
+        const surfaces = directSurfaces(container).filter(el => isReachableSurface(el, vp));
+        if (surfaces.length === 0) continue;
+        const selected = surfaces.find(el => el.getAttribute('data-selected') === 'true');
+        best = betterSurfaceCandidate(best, selected || surfaces[0], Boolean(selected));
     }
-    return null;
+    return best?.surface || null;
+}
+
+function isReachableSurface(el, vp) {
+    if (!el.closest('#viewport')) return true;
+    return isInViewport(el, vp);
+}
+
+function betterSurfaceCandidate(best, surface, selected) {
+    const depth = surfaceDepth(surface);
+    if (!best) return { surface, selected, depth };
+    if (depth > best.depth) return { surface, selected, depth };
+    if (depth < best.depth) return best;
+    if (selected && !best.selected) return { surface, selected, depth };
+    return best;
 }
 
 function navigateInActiveContainer(direction) {
