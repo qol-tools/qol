@@ -7,6 +7,7 @@ import {
     getContextualCommands,
     getRegistryVersion,
     subscribeRegistry,
+    ALWAYS_ID,
     GLOBAL_ID,
 } from './registry.js';
 
@@ -74,6 +75,34 @@ test('getContextualCommands falls back to globals when active view has no comman
     const ids = getContextualCommands('view-with-no-commands').map(c => c.id);
     assert.deepEqual(ids, ['g:nav:plugins']);
     clearKnown([[GLOBAL_ID, sG]]);
+});
+
+test('getContextualCommands keeps active view commands before always commands', () => {
+    const sP = Symbol('p');
+    const sA = Symbol('a');
+    registerCommands('plugins', sP, [
+        { id: 'plugins:settings', label: 'Open plugin settings', run: () => {} },
+    ]);
+    registerCommands(ALWAYS_ID, sA, [
+        { id: 'settings', label: 'Settings', run: () => {} },
+    ]);
+    const ids = getContextualCommands('plugins').map(c => c.id);
+    assert.deepEqual(ids, ['plugins:settings', 'settings']);
+    clearKnown([['plugins', sP], [ALWAYS_ID, sA]]);
+});
+
+test('getContextualCommands keeps global commands before always commands', () => {
+    const sG = Symbol('g');
+    const sA = Symbol('a');
+    registerCommands(GLOBAL_ID, sG, [
+        { id: 'global:navigate', label: 'Go to Plugins', run: () => {} },
+    ]);
+    registerCommands(ALWAYS_ID, sA, [
+        { id: 'settings', label: 'Settings', run: () => {} },
+    ]);
+    const ids = getContextualCommands('missing-view').map(c => c.id);
+    assert.deepEqual(ids, ['global:navigate', 'settings']);
+    clearKnown([[GLOBAL_ID, sG], [ALWAYS_ID, sA]]);
 });
 
 test('getContextualCommands returns empty when neither view nor globals registered', () => {

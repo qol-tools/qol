@@ -236,20 +236,36 @@ html.qol-bootstrapping-dive #app {
 }
 
 .wsp-grid {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.wsp-range-row,
+.wsp-select-row {
     display: grid;
     grid-template-columns: max-content minmax(0, 1fr) auto;
     column-gap: var(--space-4);
-    row-gap: var(--space-3);
     align-items: center;
+    min-height: 28px;
 }
 
-.wsp-grid .wsp-label {
+.wsp-range-row {
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    box-sizing: border-box;
+    padding: 2px var(--space-1);
+}
+
+.wsp-grid .wsp-label,
+.wsp-range-row .wsp-label,
+.wsp-select-row .wsp-label {
     font-size: var(--fs-md);
     color: var(--text-secondary);
     white-space: nowrap;
 }
 
-.wsp-grid .wsp-range {
+.wsp-range-row .wsp-range {
     width: 100%;
     max-width: 220px;
     height: 6px;
@@ -257,7 +273,7 @@ html.qol-bootstrapping-dive #app {
     justify-self: end;
 }
 
-.wsp-grid .wsp-value {
+.wsp-range-row .wsp-value {
     font-variant-numeric: tabular-nums;
     color: var(--text-muted);
     font-size: var(--fs-sm);
@@ -265,13 +281,13 @@ html.qol-bootstrapping-dive #app {
     text-align: right;
 }
 
-.wsp-grid .wsp-control {
+.wsp-select-row .wsp-control {
     grid-column: 2 / -1;
     justify-self: stretch;
     min-width: 0;
 }
 
-.wsp-grid .wsp-control .custom-select {
+.wsp-select-row .wsp-control .custom-select {
     width: 100%;
 }
 

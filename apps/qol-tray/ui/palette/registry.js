@@ -1,4 +1,5 @@
 const GLOBAL_ID = '__global__';
+const ALWAYS_ID = '__always__';
 const registry = new Map();
 const listeners = new Set();
 let version = 0;
@@ -30,9 +31,10 @@ function bucketCommands(viewId) {
 }
 
 export function getContextualCommands(activeViewId) {
+    const always = bucketCommands(ALWAYS_ID);
     const view = bucketCommands(activeViewId);
-    if (view.length > 0) return view;
-    return bucketCommands(GLOBAL_ID);
+    if (view.length > 0) return [...view, ...always];
+    return [...bucketCommands(GLOBAL_ID), ...always];
 }
 
 export function subscribeRegistry(fn) {
@@ -44,4 +46,4 @@ export function getRegistryVersion() {
     return version;
 }
 
-export { GLOBAL_ID };
+export { ALWAYS_ID, GLOBAL_ID };
