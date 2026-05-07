@@ -4,6 +4,7 @@ use crate::config::AltTabConfig;
 use crate::shared::layout::*;
 use gpui::*;
 use qol_plugin_api::window::{MonitorKey, PopupPlacement};
+use std::sync::atomic::AtomicBool;
 
 pub(crate) struct ReuseLayout {
     pub bounds: Bounds<Pixels>,
@@ -17,6 +18,7 @@ pub(crate) struct ReuseRequest<'a> {
     pub config: &'a AltTabConfig,
     pub gathered: &'a GatheredWindows,
     pub reverse: bool,
+    pub placement_dirty: &'a AtomicBool,
 }
 
 pub(super) struct LayoutInput<'a> {

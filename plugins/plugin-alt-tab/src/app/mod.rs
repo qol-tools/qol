@@ -27,9 +27,6 @@ pub(crate) struct AltTabApp {
     pub(crate) blur_guard_armed: bool,
     pub(crate) _alt_poll_task: Option<Task<()>>,
     _live_preview_task: Option<Task<()>>,
-    // TODO(issue #1): subscribe to MonitorsChanged once qol_runtime exposes that event;
-    // until then last_applied is invalidated only by the next reposition attempt, which
-    // can lag inside qol-tray's 5 s MonitorsChannel cache window.
     last_applied: Option<MonitorKey>,
     _focus_out_sub: gpui::Subscription,
 }
@@ -38,6 +35,7 @@ impl AltTabApp {
     pub(crate) fn new(init: PickerInit, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let should_cycle = init.cycle_on_open && init.windows.len() >= 2;
         let action_mode = init.action_mode.clone();
+        let last_applied = init.applied_layout;
         let delegate = cx.new(|_| PickerState::from_init(init));
 
         if should_cycle {
@@ -63,7 +61,7 @@ impl AltTabApp {
             blur_guard_until: Instant::now() + Duration::from_millis(BLUR_GUARD_MS),
             blur_guard_armed: true,
             _alt_poll_task: None,
-            last_applied: None,
+            last_applied,
         };
 
         if action_mode == ActionMode::HoldToSwitch {
@@ -89,15 +87,17 @@ impl AltTabApp {
     }
 
     fn reposition_if_needed(&mut self, req: &crate::picker::ReuseRequest) -> bool {
+        let dirty = req.placement_dirty.load(Ordering::Acquire);
         #[cfg(debug_assertions)]
         eprintln!(
-            "[alt-tab/hold] reuse path (poll_task={}) — reset={} last_applied={:?} target={:?}",
+            "[alt-tab/hold] reuse path (poll_task={}) — reset={} dirty={} last_applied={:?} target={:?}",
             self._alt_poll_task.is_some(),
             req.config.reset_selection_on_open,
+            dirty,
             self.last_applied,
             req.layout.target,
         );
-        if self.last_applied == Some(req.layout.target) {
+        if !layout_needs_reposition(self.last_applied, req.layout.target, dirty) {
             return true;
         }
         let ok = picker::platform::reposition_picker_window(
@@ -106,6 +106,7 @@ impl AltTabApp {
         );
         if ok {
             self.last_applied = Some(req.layout.target);
+            req.placement_dirty.store(false, Ordering::Release);
         }
         ok
     }
@@ -162,13 +163,7 @@ impl AltTabApp {
         if req.gathered.windows.len() < 2 {
             return;
         }
-        self.delegate.update(cx, |s, _| {
-            if req.reverse {
-                s.select_prev();
-            } else {
-                s.select_next();
-            }
-        });
+        self.delegate.update(cx, |s, _| s.cycle(req.reverse));
     }
 
     fn apply_gathered(&mut self, gathered: &GatheredWindows, reset: bool, cx: &mut Context<Self>) {
@@ -215,6 +210,21 @@ impl AltTabApp {
             alt_release_check(this, delegate, window_handle, cx.clone())
         }));
     }
+
+    pub(crate) fn can_cycle_without_layout(&self, placement_dirty: bool) -> bool {
+        self.last_applied.is_some() && !placement_dirty
+    }
+}
+
+fn layout_needs_reposition(
+    last_applied: Option<MonitorKey>,
+    target: MonitorKey,
+    placement_dirty: bool,
+) -> bool {
+    if placement_dirty {
+        return true;
+    }
+    last_applied != Some(target)
 }
 
 // on_modifiers_changed drives the common case, but it can be lost when the picker isn't yet
@@ -323,7 +333,6 @@ impl AltTabApp {
         eprintln!("[alt-tab/dismiss] from={}", _source);
         self._alt_poll_task = None;
         self.blur_guard_armed = false;
-        self.last_applied = None;
         PICKER_VISIBLE.store(false, Ordering::Relaxed);
         picker::dismiss_picker(window);
         cx.notify();
@@ -338,8 +347,9 @@ impl Focusable for AltTabApp {
 
 #[cfg(test)]
 mod focus_out_tests {
-    use super::{focus_out_decision, FocusOutDecision};
+    use super::{focus_out_decision, layout_needs_reposition, FocusOutDecision};
     use crate::config::ActionMode;
+    use qol_plugin_api::window::MonitorKey;
 
     #[test]
     fn blur_guard_absorbs_first_focus_out() {
@@ -371,5 +381,34 @@ mod focus_out_tests {
             focus_out_decision(&ActionMode::Sticky, false, false, true),
             FocusOutDecision::Dismiss
         );
+    }
+
+    #[test]
+    fn dirty_layout_repositions_even_when_target_matches() {
+        let target = key(10, 20, 300, 200);
+        assert!(layout_needs_reposition(Some(target), target, true));
+    }
+
+    #[test]
+    fn clean_matching_layout_skips_reposition() {
+        let target = key(10, 20, 300, 200);
+        assert!(!layout_needs_reposition(Some(target), target, false));
+    }
+
+    #[test]
+    fn missing_or_different_layout_repositions() {
+        let target = key(10, 20, 300, 200);
+        let previous = key(30, 40, 300, 200);
+        assert!(layout_needs_reposition(None, target, false));
+        assert!(layout_needs_reposition(Some(previous), target, false));
+    }
+
+    fn key(x: i32, y: i32, width: i32, height: i32) -> MonitorKey {
+        MonitorKey {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 }
