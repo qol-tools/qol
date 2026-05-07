@@ -80,12 +80,12 @@ export function ToolingGhAccountSection() {
         <section class="dev-section">
             <h2>Tooling gh account</h2>
             <p class="dev-section-hint">
-                Username (e.g. <code>KMRH47</code>) used by qol-cicd's <code>activate.sh</code>
+                Username (e.g. <code>example-user</code>) used by qol-cicd's <code>activate.sh</code>
                 to scope <code>GH_TOKEN</code> to qol-tools repos. Leave blank to disable.
             </p>
             <div class="link-input-row">
                 <input type="text" id="tooling-gh-account-input"
-                    placeholder="KMRH47"
+                    placeholder="example-user"
                     value=${draft}
                     onInput=${(e) => setDraft(e.target.value)}
                     onKeyDown=${onKeyDown}
