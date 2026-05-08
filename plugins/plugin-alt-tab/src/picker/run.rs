@@ -8,7 +8,7 @@ use crate::{PickerWindowState, SharedIconCache};
 use gpui::*;
 use qol_plugin_api::monitor::MonitorTracker;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 
 pub(crate) type WindowCache = Arc<Mutex<Vec<WindowInfo>>>;
@@ -27,6 +27,7 @@ struct PickerState {
     current: PickerWindowState,
     tracker: MonitorTracker,
     caches: PickerCaches,
+    placement_dirty: Arc<AtomicBool>,
 }
 
 impl PickerCaches {
@@ -50,6 +51,7 @@ impl PickerState {
             icon_cache: self.caches.icon_cache.clone(),
             window_cache: self.caches.window_cache.clone(),
             preview_cache: self.caches.preview_cache.clone(),
+            placement_dirty: &self.placement_dirty,
             reverse,
         };
         open_picker(&req, cx);
@@ -71,8 +73,10 @@ pub(crate) fn run_app(
             current: picker_window_state(),
             tracker: MonitorTracker::start(cx),
             caches: PickerCaches::new(),
+            placement_dirty: Arc::new(AtomicBool::new(true)),
         };
 
+        spawn_monitor_dirty_listener(state.placement_dirty.clone());
         super::platform::pre_create_if_supported(&config, &state.current, cx);
 
         if show_on_start {
@@ -81,6 +85,31 @@ pub(crate) fn run_app(
         spawn_daemon_loop(cx, rx, state);
     });
 }
+
+fn spawn_monitor_dirty_listener(placement_dirty: Arc<AtomicBool>) {
+    std::thread::spawn(move || monitor_dirty_loop(placement_dirty));
+}
+
+#[cfg(unix)]
+fn monitor_dirty_loop(placement_dirty: Arc<AtomicBool>) {
+    use qol_plugin_api::protocol::{RuntimeEvent, RuntimeEventKind};
+
+    let client = qol_plugin_api::PlatformStateClient::from_env();
+    let Some(mut subscription) = client.subscribe(vec![RuntimeEventKind::MonitorsChanged]) else {
+        return;
+    };
+    while let Some(event) = subscription.next_event() {
+        let RuntimeEvent::MonitorsChanged { .. } = event else {
+            continue;
+        };
+        placement_dirty.store(true, Ordering::Release);
+        #[cfg(debug_assertions)]
+        eprintln!("[alt-tab/monitor] placement dirty: monitors changed");
+    }
+}
+
+#[cfg(not(unix))]
+fn monitor_dirty_loop(_placement_dirty: Arc<AtomicBool>) {}
 
 fn picker_window_state() -> PickerWindowState {
     std::rc::Rc::new(std::cell::RefCell::new(

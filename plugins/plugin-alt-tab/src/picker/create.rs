@@ -6,8 +6,8 @@ use crate::picker::run::SharedPreviewCache;
 use crate::shared::layout::*;
 use crate::{IconMap, PickerWindowState, PreviewMap, SharedIconCache};
 use gpui::*;
-use qol_plugin_api::window::PopupPlacement;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use qol_plugin_api::window::{MonitorKey, PopupPlacement};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 pub(crate) const PICKER_WINDOW_TITLE: &str = "qol-alt-tab-picker";
@@ -19,17 +19,24 @@ pub(super) struct CreateRequest<'a> {
     pub icon_cache: SharedIconCache,
     pub preview_cache: SharedPreviewCache,
     pub current: &'a PickerWindowState,
+    pub placement_dirty: &'a AtomicBool,
 }
 
 pub(super) fn create_new(req: &CreateRequest, gathered: GatheredWindows, cx: &mut App) {
     let layout = compute_create_layout(req, &gathered, cx);
     let post = PostCreateData::new(req.config, &gathered);
-    let handle = open_picker_window(layout.bounds, PickerInit::new(req.config, gathered), cx);
+    let handle = open_picker_window(
+        layout.bounds,
+        PickerInit::new(req.config, gathered, Some(layout.target)),
+        true,
+        cx,
+    );
     let Some(handle) = handle else {
         return on_open_failure();
     };
     let target = req.placement.target();
     req.current.borrow_mut().insert(target, handle);
+    req.placement_dirty.store(false, Ordering::Release);
     post.finalize(
         handle,
         req.icon_cache.clone(),
@@ -40,6 +47,7 @@ pub(super) fn create_new(req: &CreateRequest, gathered: GatheredWindows, cx: &mu
 
 struct CreateLayout {
     bounds: Bounds<Pixels>,
+    target: MonitorKey,
 }
 
 fn compute_create_layout(
@@ -49,7 +57,8 @@ fn compute_create_layout(
 ) -> CreateLayout {
     let size = estimate_picker_size(req, gathered);
     let bounds = req.placement.centered_bounds(size, cx);
-    CreateLayout { bounds }
+    let target = MonitorKey::from_bounds(&bounds);
+    CreateLayout { bounds, target }
 }
 
 fn estimate_picker_size(req: &CreateRequest, gathered: &GatheredWindows) -> Size<Pixels> {
@@ -78,10 +87,15 @@ pub(crate) struct PickerInit {
     pub(crate) windows: Vec<WindowInfo>,
     pub(crate) previews: PreviewMap,
     pub(crate) icons: IconMap,
+    pub(crate) applied_layout: Option<MonitorKey>,
 }
 
 impl PickerInit {
-    fn new(config: &AltTabConfig, gathered: GatheredWindows) -> Self {
+    fn new(
+        config: &AltTabConfig,
+        gathered: GatheredWindows,
+        applied_layout: Option<MonitorKey>,
+    ) -> Self {
         let (card_color, card_opacity) = super::resolve_card_bg(&config.display);
         Self {
             action_mode: config.action_mode.clone(),
@@ -95,6 +109,7 @@ impl PickerInit {
             windows: gathered.windows,
             previews: gathered.previews,
             icons: gathered.icons,
+            applied_layout,
         }
     }
 
@@ -106,6 +121,7 @@ impl PickerInit {
                 previews: PreviewMap::new(),
                 icons: IconMap::new(),
             },
+            None,
         )
     }
 
@@ -117,20 +133,23 @@ impl PickerInit {
 fn open_picker_window(
     bounds: Bounds<Pixels>,
     init: PickerInit,
+    activate: bool,
     cx: &mut App,
 ) -> Option<WindowHandle<AltTabApp>> {
-    let opts = picker_window_options(bounds, init.transparent_bg);
+    let opts = picker_window_options(bounds, init.transparent_bg, activate);
     cx.open_window(opts, move |window, cx| {
         window.set_window_title(PICKER_WINDOW_TITLE);
         let view = cx.new(|cx| init.into_app(window, cx));
-        window.focus(&view.focus_handle(cx));
-        window.activate_window();
+        if activate {
+            window.focus(&view.focus_handle(cx));
+            window.activate_window();
+        }
         view
     })
     .ok()
 }
 
-fn picker_window_options(bounds: Bounds<Pixels>, transparent: bool) -> WindowOptions {
+fn picker_window_options(bounds: Bounds<Pixels>, transparent: bool, focus: bool) -> WindowOptions {
     let bg = if transparent {
         WindowBackgroundAppearance::Transparent
     } else {
@@ -146,7 +165,7 @@ fn picker_window_options(bounds: Bounds<Pixels>, transparent: bool) -> WindowOpt
         titlebar: None,
         window_decorations: Some(decor),
         kind: super::platform::picker_window_kind(),
-        focus: true,
+        focus,
         window_background: bg,
         ..Default::default()
     }
@@ -158,9 +177,9 @@ fn on_open_failure() {
     PICKER_VISIBLE.store(false, Ordering::Relaxed);
 }
 
-/// Pre-create an offscreen, alpha-0 picker window at daemon boot and register it under the
-/// `BOOTSTRAP_KEY` sentinel. Mirrors lwouis/alt-tab-macos's `TilesPanel` keep-alive pattern so
-/// subsequent opens reuse the same NSWindow instead of paying cold Metal/WindowServer costs.
+/// Pre-create an offscreen picker window at daemon boot and register it under the
+/// `BOOTSTRAP_KEY` sentinel so subsequent opens reuse one GPUI window instead of paying
+/// platform window creation cost on the hotkey path.
 pub(crate) fn pre_create_offscreen(
     config: &AltTabConfig,
     current: &PickerWindowState,
@@ -168,7 +187,7 @@ pub(crate) fn pre_create_offscreen(
 ) {
     let init = PickerInit::empty(config);
     let bounds = offscreen_bounds();
-    let Some(handle) = open_picker_window(bounds, init, cx) else {
+    let Some(handle) = open_picker_window(bounds, init, false, cx) else {
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/boot] pre-create failed — falling back to on-demand creation");
         return;

@@ -192,13 +192,13 @@ fn parse_cg_entry(dict: CFDictionaryRef, own_pid: i32, keys: &CgKeys) -> Option<
 fn discover_live_windows(include_minimized: bool) -> Vec<WindowInfo> {
     let own_pid = std::process::id() as i32;
 
-    // ON_SCREEN_ONLY is required for correct z-ordering (most-recently-focused first).
     let on_screen_opts =
         K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
     let on_screen = fetch_cg_windows(on_screen_opts, own_pid);
 
-    let (all_windows, pids) = gather_pids_for_ax(&on_screen, own_pid, include_minimized);
-    let mut ax_cache = ax::prefetch_ax_parallel(pids);
+    let all_windows = include_minimized
+        .then(|| fetch_cg_windows(K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS, own_pid));
+    let mut ax_cache = prefetch_on_screen_ax(&on_screen);
 
     let mut state = WindowEnumeration::default();
     let mut tracker = KnownWindowTracker::new();
@@ -222,20 +222,18 @@ fn discover_live_windows(include_minimized: bool) -> Vec<WindowInfo> {
     state.windows
 }
 
-fn gather_pids_for_ax(
-    on_screen: &[CgWindow],
-    own_pid: i32,
-    include_minimized: bool,
-) -> (Option<Vec<CgWindow>>, HashSet<i32>) {
-    let mut pids: HashSet<i32> = on_screen.iter().map(|w| w.pid).collect();
-    if !include_minimized {
-        return (None, pids);
-    }
-    let all_windows = fetch_cg_windows(K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS, own_pid);
-    for w in &all_windows {
-        if !w.is_onscreen {
-            pids.insert(w.pid);
+fn prefetch_on_screen_ax(on_screen: &[CgWindow]) -> ax::AxCache {
+    ax::prefetch_ax_parallel(pids_with_multiple_windows(on_screen))
+}
+
+fn pids_with_multiple_windows(windows: &[CgWindow]) -> HashSet<i32> {
+    let mut seen = HashSet::new();
+    let mut repeated = HashSet::new();
+    for window in windows {
+        if seen.insert(window.pid) {
+            continue;
         }
+        repeated.insert(window.pid);
     }
-    (Some(all_windows), pids)
+    repeated
 }

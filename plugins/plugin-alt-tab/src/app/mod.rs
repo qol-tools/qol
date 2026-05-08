@@ -9,6 +9,7 @@ use crate::picker::gather::GatheredWindows;
 use crate::picker::state::PickerState;
 use crate::{IconMap, PreviewMap};
 use gpui::*;
+use qol_plugin_api::window::MonitorKey;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -26,6 +27,7 @@ pub(crate) struct AltTabApp {
     pub(crate) blur_guard_armed: bool,
     pub(crate) _alt_poll_task: Option<Task<()>>,
     _live_preview_task: Option<Task<()>>,
+    last_applied: Option<MonitorKey>,
     _focus_out_sub: gpui::Subscription,
 }
 
@@ -33,6 +35,7 @@ impl AltTabApp {
     pub(crate) fn new(init: PickerInit, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let should_cycle = init.cycle_on_open && init.windows.len() >= 2;
         let action_mode = init.action_mode.clone();
+        let last_applied = init.applied_layout;
         let delegate = cx.new(|_| PickerState::from_init(init));
 
         if should_cycle {
@@ -58,6 +61,7 @@ impl AltTabApp {
             blur_guard_until: Instant::now() + Duration::from_millis(BLUR_GUARD_MS),
             blur_guard_armed: true,
             _alt_poll_task: None,
+            last_applied,
         };
 
         if action_mode == ActionMode::HoldToSwitch {
@@ -82,22 +86,29 @@ impl AltTabApp {
         true
     }
 
-    fn reposition_if_needed(&self, req: &crate::picker::ReuseRequest) -> bool {
-        let reposition_needed = req.layout.monitor_changed;
+    fn reposition_if_needed(&mut self, req: &crate::picker::ReuseRequest) -> bool {
+        let dirty = req.placement_dirty.load(Ordering::Acquire);
         #[cfg(debug_assertions)]
         eprintln!(
-            "[alt-tab/hold] reuse path (poll_task={}) — reset={} reposition_needed={}",
+            "[alt-tab/hold] reuse path (poll_task={}) — reset={} dirty={} last_applied={:?} target={:?}",
             self._alt_poll_task.is_some(),
             req.config.reset_selection_on_open,
-            reposition_needed,
+            dirty,
+            self.last_applied,
+            req.layout.target,
         );
-        if !reposition_needed {
+        if !layout_needs_reposition(self.last_applied, req.layout.target, dirty) {
             return true;
         }
-        picker::platform::reposition_picker_window(
+        let ok = picker::platform::reposition_picker_window(
             req.layout.bounds.origin.x.to_f64(),
             req.layout.bounds.origin.y.to_f64(),
-        )
+        );
+        if ok {
+            self.last_applied = Some(req.layout.target);
+            req.placement_dirty.store(false, Ordering::Release);
+        }
+        ok
     }
 
     /// Apply config changes to a reused picker window. Handles window-level
@@ -152,13 +163,7 @@ impl AltTabApp {
         if req.gathered.windows.len() < 2 {
             return;
         }
-        self.delegate.update(cx, |s, _| {
-            if req.reverse {
-                s.select_prev();
-            } else {
-                s.select_next();
-            }
-        });
+        self.delegate.update(cx, |s, _| s.cycle(req.reverse));
     }
 
     fn apply_gathered(&mut self, gathered: &GatheredWindows, reset: bool, cx: &mut Context<Self>) {
@@ -205,6 +210,21 @@ impl AltTabApp {
             alt_release_check(this, delegate, window_handle, cx.clone())
         }));
     }
+
+    pub(crate) fn can_cycle_without_layout(&self, placement_dirty: bool) -> bool {
+        self.last_applied.is_some() && !placement_dirty
+    }
+}
+
+fn layout_needs_reposition(
+    last_applied: Option<MonitorKey>,
+    target: MonitorKey,
+    placement_dirty: bool,
+) -> bool {
+    if placement_dirty {
+        return true;
+    }
+    last_applied != Some(target)
 }
 
 // on_modifiers_changed drives the common case, but it can be lost when the picker isn't yet
@@ -248,16 +268,58 @@ fn subscribe_focus_out(
     window: &mut Window,
     cx: &mut Context<AltTabApp>,
 ) -> gpui::Subscription {
-    cx.on_focus_out(handle, window, |this, _event, window, cx| {
-        // Absorb only the first post-create blur; later blurs are real dismiss requests.
-        if this.blur_guard_armed && Instant::now() < this.blur_guard_until {
-            this.blur_guard_armed = false;
-            #[cfg(debug_assertions)]
-            eprintln!("[alt-tab/blur] absorbed spurious post-create blur");
-            return;
-        }
-        this.dismiss("focus-out", window, cx);
-    })
+    cx.on_focus_out(
+        handle,
+        window,
+        |this, _event, window, cx| match focus_out_decision(
+            &this.action_mode,
+            this.blur_guard_armed,
+            Instant::now() < this.blur_guard_until,
+            picker::is_modifier_held(),
+        ) {
+            FocusOutDecision::IgnoreBlurGuard => {
+                this.blur_guard_armed = false;
+                #[cfg(debug_assertions)]
+                eprintln!("[alt-tab/blur] absorbed spurious post-create blur");
+            }
+            FocusOutDecision::IgnoreAltHeld => {
+                #[cfg(debug_assertions)]
+                eprintln!("[alt-tab/blur] ignored focus-out while Alt is still held");
+            }
+            FocusOutDecision::ActivateAndDismiss => {
+                this.delegate
+                    .update(cx, |s, _| s.activate_selected_target());
+                this.dismiss("focus-out/alt-up", window, cx);
+            }
+            FocusOutDecision::Dismiss => this.dismiss("focus-out", window, cx),
+        },
+    )
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum FocusOutDecision {
+    IgnoreBlurGuard,
+    IgnoreAltHeld,
+    ActivateAndDismiss,
+    Dismiss,
+}
+
+fn focus_out_decision(
+    action_mode: &ActionMode,
+    blur_guard_armed: bool,
+    in_blur_guard: bool,
+    modifier_held: bool,
+) -> FocusOutDecision {
+    if blur_guard_armed && in_blur_guard {
+        return FocusOutDecision::IgnoreBlurGuard;
+    }
+    if action_mode != &ActionMode::HoldToSwitch {
+        return FocusOutDecision::Dismiss;
+    }
+    if modifier_held {
+        return FocusOutDecision::IgnoreAltHeld;
+    }
+    FocusOutDecision::ActivateAndDismiss
 }
 
 impl AltTabApp {
@@ -280,5 +342,73 @@ impl AltTabApp {
 impl Focusable for AltTabApp {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
+    }
+}
+
+#[cfg(test)]
+mod focus_out_tests {
+    use super::{focus_out_decision, layout_needs_reposition, FocusOutDecision};
+    use crate::config::ActionMode;
+    use qol_plugin_api::window::MonitorKey;
+
+    #[test]
+    fn blur_guard_absorbs_first_focus_out() {
+        assert_eq!(
+            focus_out_decision(&ActionMode::HoldToSwitch, true, true, true),
+            FocusOutDecision::IgnoreBlurGuard
+        );
+    }
+
+    #[test]
+    fn hold_mode_ignores_focus_out_while_alt_is_held() {
+        assert_eq!(
+            focus_out_decision(&ActionMode::HoldToSwitch, false, false, true),
+            FocusOutDecision::IgnoreAltHeld
+        );
+    }
+
+    #[test]
+    fn hold_mode_activates_if_focus_out_races_alt_release() {
+        assert_eq!(
+            focus_out_decision(&ActionMode::HoldToSwitch, false, false, false),
+            FocusOutDecision::ActivateAndDismiss
+        );
+    }
+
+    #[test]
+    fn sticky_mode_keeps_focus_out_as_plain_dismiss() {
+        assert_eq!(
+            focus_out_decision(&ActionMode::Sticky, false, false, true),
+            FocusOutDecision::Dismiss
+        );
+    }
+
+    #[test]
+    fn dirty_layout_repositions_even_when_target_matches() {
+        let target = key(10, 20, 300, 200);
+        assert!(layout_needs_reposition(Some(target), target, true));
+    }
+
+    #[test]
+    fn clean_matching_layout_skips_reposition() {
+        let target = key(10, 20, 300, 200);
+        assert!(!layout_needs_reposition(Some(target), target, false));
+    }
+
+    #[test]
+    fn missing_or_different_layout_repositions() {
+        let target = key(10, 20, 300, 200);
+        let previous = key(30, 40, 300, 200);
+        assert!(layout_needs_reposition(None, target, false));
+        assert!(layout_needs_reposition(Some(previous), target, false));
+    }
+
+    fn key(x: i32, y: i32, width: i32, height: i32) -> MonitorKey {
+        MonitorKey {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 }

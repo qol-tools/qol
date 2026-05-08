@@ -18,13 +18,13 @@ use gpui::*;
 use qol_plugin_api::monitor::MonitorTracker;
 use qol_plugin_api::window::{MonitorKey, PopupPlacement};
 use run::{SharedPreviewCache, WindowCache};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 const DEFAULT_ESTIMATED_WINDOW_COUNT: usize = 8;
 
-/// Sentinel MonitorKey slot that holds the pre-created keep-alive picker on macOS before
-/// it has ever been shown on a real monitor. Chosen to not collide with any real monitor
+/// Sentinel MonitorKey slot that holds the pre-created keep-alive picker before it has
+/// ever been shown on a real monitor. Chosen to not collide with any real monitor
 /// (negative width/height) nor with `MonitorKey::fallback()` (all zeroes).
 pub(crate) const BOOTSTRAP_KEY: MonitorKey = MonitorKey {
     x: i32::MIN,
@@ -45,6 +45,7 @@ pub(crate) struct OpenPickerRequest<'a> {
     pub icon_cache: SharedIconCache,
     pub window_cache: WindowCache,
     pub preview_cache: SharedPreviewCache,
+    pub placement_dirty: &'a AtomicBool,
     pub reverse: bool,
 }
 
@@ -81,7 +82,7 @@ fn try_cycle_existing(req: &OpenPickerRequest, cx: &mut App) -> bool {
         Some((_, h)) => h,
         None => return false,
     };
-    if !try_cycle_selection(&handle, req.reverse, cx) {
+    if !try_cycle_selection(&handle, req.reverse, req.placement_dirty, cx) {
         return false;
     }
     PICKER_VISIBLE.store(true, Ordering::Relaxed);
@@ -103,12 +104,10 @@ fn try_reuse_existing(
             None => return false,
         },
     };
-    let source_origin = point(px(source_key.x as f32), px(source_key.y as f32));
     let input = reuse::LayoutInput {
         config: req.config,
         window_count: gathered.windows.len(),
         placement,
-        created_on_origin: source_origin,
     };
     let layout = reuse::compute_layout(&input, cx);
     let reuse_req = reuse::ReuseRequest {
@@ -117,6 +116,7 @@ fn try_reuse_existing(
         config: req.config,
         gathered,
         reverse: req.reverse,
+        placement_dirty: req.placement_dirty,
     };
     if reuse::try_reuse(&reuse_req, cx) {
         if source_key != target {
@@ -160,13 +160,23 @@ fn create_from_request(
         icon_cache: req.icon_cache.clone(),
         preview_cache: req.preview_cache.clone(),
         current: req.current,
+        placement_dirty: req.placement_dirty,
     };
     create::create_new(&create_req, gathered, cx);
 }
 
-fn try_cycle_selection(handle: &WindowHandle<AltTabApp>, reverse: bool, cx: &mut App) -> bool {
+fn try_cycle_selection(
+    handle: &WindowHandle<AltTabApp>,
+    reverse: bool,
+    placement_dirty: &AtomicBool,
+    cx: &mut App,
+) -> bool {
     handle
         .update(cx, |view, window: &mut Window, cx| -> bool {
+            let dirty = placement_dirty.load(Ordering::Acquire);
+            if !view.can_cycle_without_layout(dirty) {
+                return false;
+            }
             if !PICKER_VISIBLE.load(Ordering::Relaxed) {
                 return false;
             }
@@ -182,10 +192,7 @@ fn try_cycle_selection(handle: &WindowHandle<AltTabApp>, reverse: bool, cx: &mut
                 "[alt-tab/hold] window already visible (reverse={}) — cycling",
                 reverse
             );
-            view.delegate.update(cx, |s, _| match reverse {
-                true => s.select_prev(),
-                false => s.select_next(),
-            });
+            view.delegate.update(cx, |s, _| s.cycle(reverse));
             cx.notify();
             true
         })
@@ -380,6 +387,14 @@ pub(crate) mod state {
             });
         }
 
+        pub(crate) fn cycle(&mut self, reverse: bool) {
+            if reverse {
+                self.select_prev();
+                return;
+            }
+            self.select_next();
+        }
+
         pub(crate) fn select_left(&mut self, columns: usize) {
             self.move_in_grid(GridDirection::Left, columns);
         }
@@ -555,6 +570,7 @@ pub(crate) mod state {
                 cycle_on_open: false,
                 previews: HashMap::new(),
                 icons: HashMap::new(),
+                applied_layout: None,
             })
         }
 
