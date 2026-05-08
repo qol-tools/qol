@@ -166,12 +166,7 @@ impl AltTabApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.apply_gathered(
-            req.gathered,
-            req.config.reset_selection_on_open,
-            window,
-            cx,
-        );
+        self.apply_gathered(req.gathered, req.config.reset_selection_on_open, window, cx);
         if req.config.open_behavior != crate::config::OpenBehavior::CycleOnce {
             return;
         }
@@ -210,8 +205,9 @@ impl AltTabApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.delegate
-            .update(cx, |state, ctx| state.insert_icons(icons, ctx, Some(window)));
+        self.delegate.update(cx, |state, ctx| {
+            state.insert_icons(icons, ctx, Some(window))
+        });
         cx.notify();
     }
 
@@ -221,8 +217,9 @@ impl AltTabApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.delegate
-            .update(cx, |state, ctx| state.insert_previews(previews, ctx, Some(window)));
+        self.delegate.update(cx, |state, ctx| {
+            state.insert_previews(previews, ctx, Some(window))
+        });
         cx.notify();
     }
 

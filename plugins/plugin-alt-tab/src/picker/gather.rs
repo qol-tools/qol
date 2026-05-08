@@ -110,12 +110,7 @@ fn commit_icons_foreground(
         // None. View update enters handle.update where window IS leased and
         // forwards Some(window) into the registry release path.
         if let Ok(mut icache) = cache.lock() {
-            crate::shared::image_registry::extend_with(
-                &mut *icache,
-                rendered.clone(),
-                cx,
-                None,
-            );
+            crate::shared::image_registry::extend_with(&mut *icache, rendered.clone(), cx, None);
         }
         let _ = handle.update(cx, |view, window, cx| {
             view.update_icons(rendered, window, cx);
@@ -251,12 +246,7 @@ fn commit_previews_foreground(
 ) {
     let _ = cx.update(|cx| {
         if let Ok(mut pcache) = cache.lock() {
-            crate::shared::image_registry::extend_with(
-                &mut *pcache,
-                previews.clone(),
-                cx,
-                None,
-            );
+            crate::shared::image_registry::extend_with(&mut *pcache, previews.clone(), cx, None);
         }
         let _ = handle.update(cx, |view, window, cx| {
             view.update_previews(previews, window, cx);

@@ -210,8 +210,9 @@ fn finalize_reuse(
     PICKER_VISIBLE.store(true, Ordering::Relaxed);
     let _ = handle.update(cx, |view, window, cx| {
         view.ensure_live_preview(cx);
-        view.delegate
-            .update(cx, |state, ctx| state.insert_previews(previews, ctx, Some(window)));
+        view.delegate.update(cx, |state, ctx| {
+            state.insert_previews(previews, ctx, Some(window))
+        });
         cx.notify();
     });
     let icon_req = IconFillRequest {
@@ -240,9 +241,7 @@ pub(crate) mod state {
     use crate::config::{AltTabConfig, LabelConfig};
     use crate::discovery::WindowInfo;
     use crate::picker::create::PickerInit;
-    use crate::shared::image_registry::{
-        extend_with, replace_map, retain_or_release, REGISTRY,
-    };
+    use crate::shared::image_registry::{extend_with, replace_map, retain_or_release, REGISTRY};
     use crate::{IconMap, PreviewMap};
     use gpui::{App, Window};
 
@@ -374,7 +373,12 @@ pub(crate) mod state {
             mut window: Option<&mut Window>,
         ) {
             if !previews.is_empty() {
-                replace_map(&mut self.live_previews, previews, app, window.as_deref_mut());
+                replace_map(
+                    &mut self.live_previews,
+                    previews,
+                    app,
+                    window.as_deref_mut(),
+                );
             }
             if !icons.is_empty() {
                 replace_map(&mut self.icon_cache, icons, app, window);

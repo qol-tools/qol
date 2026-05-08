@@ -71,10 +71,7 @@ impl ImageRegistry {
             };
             let Some(count) = inner.refs.get_mut(&image.id) else {
                 #[cfg(debug_assertions)]
-                eprintln!(
-                    "[image-registry] release without retain: id={:?}",
-                    image.id
-                );
+                eprintln!("[image-registry] release without retain: id={:?}", image.id);
                 return;
             };
             *count = count.saturating_sub(1);
@@ -89,7 +86,6 @@ impl ImageRegistry {
             app.drop_image(image, current_window);
         }
     }
-
 }
 
 /// Insert into a cache keyed by `K`, retaining the new image and releasing any
@@ -120,11 +116,7 @@ pub fn retain_or_release<K, S>(
     K: std::hash::Hash + Eq + Clone,
     S: std::hash::BuildHasher,
 {
-    let to_remove: Vec<K> = cache
-        .keys()
-        .filter(|k| !keep(k))
-        .cloned()
-        .collect();
+    let to_remove: Vec<K> = cache.keys().filter(|k| !keep(k)).cloned().collect();
     for key in to_remove {
         if let Some(arc) = cache.remove(&key) {
             REGISTRY.release(arc, app, window.as_deref_mut());

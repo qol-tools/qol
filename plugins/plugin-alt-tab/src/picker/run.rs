@@ -170,8 +170,7 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
 
     #[cfg(debug_assertions)]
     let t_icon = std::time::Instant::now();
-    let rendered_icons =
-        refresh_icon_cache(&executor, &windows, &state.caches.icon_cache).await;
+    let rendered_icons = refresh_icon_cache(&executor, &windows, &state.caches.icon_cache).await;
     #[cfg(debug_assertions)]
     let icon_ms = t_icon.elapsed().as_millis();
 
