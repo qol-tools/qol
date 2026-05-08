@@ -68,6 +68,9 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # Global hotkeys
 global-hotkey = "0.7"
 
+# Event-driven channels for the hotkey listener (select! over reload + hotkey receivers)
+crossbeam-channel = "0.5"
+
 # Embed static files
 rust-embed = "8.0"
 
