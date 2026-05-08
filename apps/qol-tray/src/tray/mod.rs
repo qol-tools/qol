@@ -3,14 +3,12 @@ pub mod platform;
 
 use crate::daemon::EventBus;
 use crate::features::FeatureRegistry;
-use crate::shortcuts::watcher::ShortcutWatcher;
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
 pub struct TrayManager {
     _tray: platform::PlatformTray,
-    _shortcuts_watcher: ShortcutWatcher,
 }
 
 impl TrayManager {
@@ -34,10 +32,6 @@ impl TrayManager {
             update_available,
             events,
         )?;
-        let shortcuts_watcher = ShortcutWatcher::start();
-        Ok(Self {
-            _tray: tray,
-            _shortcuts_watcher: shortcuts_watcher,
-        })
+        Ok(Self { _tray: tray })
     }
 }
