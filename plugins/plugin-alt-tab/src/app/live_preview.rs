@@ -122,9 +122,12 @@ fn push_updates(
     let delegate = delegate.clone();
     let this = this.clone();
     let _ = cx.update(|app_cx| {
-        delegate.update(app_cx, |state, _cx| {
+        // App-level: no Window leased here, so insert_preview's release path
+        // passes None. The picker window stays in App::windows and gets
+        // touched via the iteration in App::drop_image.
+        delegate.update(app_cx, |state, ctx| {
             for (wid, img) in updates {
-                state.live_previews.insert(wid, img);
+                state.insert_preview(wid, img, ctx, None);
             }
         });
         let _ = this.update(app_cx, |_, cx: &mut gpui::Context<AltTabApp>| cx.notify());

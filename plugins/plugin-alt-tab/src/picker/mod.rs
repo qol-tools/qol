@@ -208,10 +208,10 @@ fn finalize_reuse(
 ) {
     let previews = gathered.previews.clone();
     PICKER_VISIBLE.store(true, Ordering::Relaxed);
-    let _ = handle.update(cx, |view, _window, cx| {
+    let _ = handle.update(cx, |view, window, cx| {
         view.ensure_live_preview(cx);
         view.delegate
-            .update(cx, |state, _| state.insert_previews(previews));
+            .update(cx, |state, ctx| state.insert_previews(previews, ctx, Some(window)));
         cx.notify();
     });
     let icon_req = IconFillRequest {
@@ -240,7 +240,11 @@ pub(crate) mod state {
     use crate::config::{AltTabConfig, LabelConfig};
     use crate::discovery::WindowInfo;
     use crate::picker::create::PickerInit;
+    use crate::shared::image_registry::{
+        extend_with, replace_map, retain_or_release, REGISTRY,
+    };
     use crate::{IconMap, PreviewMap};
+    use gpui::{App, Window};
 
     pub(crate) struct PickerState {
         pub(crate) windows: Vec<WindowInfo>,
@@ -262,6 +266,13 @@ pub(crate) mod state {
             } else {
                 Some(0)
             };
+            // Construction is the first long-lived owner of these images.
+            for v in init.previews.values() {
+                REGISTRY.retain(v);
+            }
+            for v in init.icons.values() {
+                REGISTRY.retain(v);
+            }
             Self {
                 windows: init.windows,
                 selected_index,
@@ -276,11 +287,35 @@ pub(crate) mod state {
             }
         }
 
-        pub(crate) fn set_windows(&mut self, windows: Vec<WindowInfo>, reset_selection: bool) {
+        /// Release every image this state still owns to the registry. Called
+        /// from `Context::on_release` when GPUI tears down the entity (the
+        /// Linux destroy paths in `picker/platform/linux.rs` and any future
+        /// macOS teardown). Without this drain, refcounts stay inflated and
+        /// future releases never reach zero, so `drop_image` never fires for
+        /// successor windows. The dying window's atlas is GC'd by the platform
+        /// regardless, so passing `None` is correct here.
+        pub(crate) fn drain_to_registry(&mut self, app: &mut App) {
+            for (_, arc) in self.live_previews.drain() {
+                REGISTRY.release(arc, app, None);
+            }
+            for (_, arc) in self.icon_cache.drain() {
+                REGISTRY.release(arc, app, None);
+            }
+        }
+
+        pub(crate) fn set_windows(
+            &mut self,
+            windows: Vec<WindowInfo>,
+            reset_selection: bool,
+            app: &mut App,
+            window: Option<&mut Window>,
+        ) {
             self.windows = windows;
             let active_ids: std::collections::HashSet<u32> =
                 self.windows.iter().map(|w| w.id).collect();
-            self.live_previews.retain(|id, _| active_ids.contains(id));
+            retain_or_release(&mut self.live_previews, app, window, |id| {
+                active_ids.contains(id)
+            });
 
             self.selected_index = match (self.windows.is_empty(), reset_selection) {
                 (true, _) => None,
@@ -297,12 +332,53 @@ pub(crate) mod state {
             );
         }
 
-        pub(crate) fn insert_icons(&mut self, icons: IconMap) {
-            self.icon_cache.extend(icons);
+        pub(crate) fn insert_icons(
+            &mut self,
+            icons: IconMap,
+            app: &mut App,
+            window: Option<&mut Window>,
+        ) {
+            extend_with(&mut self.icon_cache, icons, app, window);
         }
 
-        pub(crate) fn insert_previews(&mut self, previews: PreviewMap) {
-            self.live_previews.extend(previews);
+        pub(crate) fn insert_previews(
+            &mut self,
+            previews: PreviewMap,
+            app: &mut App,
+            window: Option<&mut Window>,
+        ) {
+            extend_with(&mut self.live_previews, previews, app, window);
+        }
+
+        pub(crate) fn insert_preview(
+            &mut self,
+            wid: u32,
+            img: std::sync::Arc<gpui::RenderImage>,
+            app: &mut App,
+            window: Option<&mut Window>,
+        ) {
+            crate::shared::image_registry::replace_into(
+                &mut self.live_previews,
+                wid,
+                img,
+                app,
+                window,
+            );
+        }
+
+        pub(crate) fn replace_caches(
+            &mut self,
+            previews: PreviewMap,
+            icons: IconMap,
+            app: &mut App,
+            mut window: Option<&mut Window>,
+        ) {
+            if !previews.is_empty() {
+                replace_map(&mut self.live_previews, previews, app, window.as_deref_mut());
+            }
+            if !icons.is_empty() {
+                replace_map(&mut self.icon_cache, icons, app, window);
+            }
         }
 
         pub(crate) fn apply_config(
@@ -319,27 +395,42 @@ pub(crate) mod state {
             self.show_hotkey_hints = config.display.show_hotkey_hints;
         }
 
-        pub(crate) fn remove_window(&mut self, window_id: u32) {
+        pub(crate) fn remove_window(
+            &mut self,
+            window_id: u32,
+            app: &mut App,
+            window: Option<&mut Window>,
+        ) {
             let remaining: Vec<_> = self
                 .windows
                 .iter()
                 .filter(|w| w.id != window_id)
                 .cloned()
                 .collect();
-            self.set_windows(remaining, false);
+            self.set_windows(remaining, false, app, window);
         }
 
-        pub(crate) fn remove_app_windows(&mut self, app_name: &str) {
+        pub(crate) fn remove_app_windows(
+            &mut self,
+            app_name: &str,
+            app: &mut App,
+            window: Option<&mut Window>,
+        ) {
             let remaining: Vec<_> = self
                 .windows
                 .iter()
                 .filter(|w| w.app_name != app_name)
                 .cloned()
                 .collect();
-            self.set_windows(remaining, false);
+            self.set_windows(remaining, false, app, window);
         }
 
-        pub(crate) fn mark_minimized(&mut self, window_id: u32) {
+        pub(crate) fn mark_minimized(
+            &mut self,
+            window_id: u32,
+            app: &mut App,
+            window: Option<&mut Window>,
+        ) {
             let Some(idx) = self.windows.iter().position(|w| w.id == window_id) else {
                 return;
             };
@@ -347,7 +438,7 @@ pub(crate) mod state {
             w.is_minimized = true;
             self.windows.push(w);
             let reordered = std::mem::take(&mut self.windows);
-            self.set_windows(reordered, false);
+            self.set_windows(reordered, false, app, window);
         }
 
         // Caller is responsible for dismissing the picker after this returns.

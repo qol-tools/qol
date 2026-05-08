@@ -36,7 +36,15 @@ impl AltTabApp {
         let should_cycle = init.cycle_on_open && init.windows.len() >= 2;
         let action_mode = init.action_mode.clone();
         let last_applied = init.applied_layout;
-        let delegate = cx.new(|_| PickerState::from_init(init));
+        let delegate: Entity<PickerState> = cx.new(|state_cx| {
+            let state = PickerState::from_init(init);
+            state_cx
+                .on_release(|state: &mut PickerState, app: &mut App| {
+                    state.drain_to_registry(app);
+                })
+                .detach();
+            state
+        });
 
         if should_cycle {
             delegate.update(cx, |s, _| s.select_next());
@@ -82,7 +90,7 @@ impl AltTabApp {
         }
         self.apply_reuse_config(req, window, cx);
         self.sync_alt_poll(window, cx);
-        self.apply_reuse_windows(req, cx);
+        self.apply_reuse_windows(req, window, cx);
         true
     }
 
@@ -152,8 +160,18 @@ impl AltTabApp {
         self._alt_poll_task = None;
     }
 
-    fn apply_reuse_windows(&mut self, req: &crate::picker::ReuseRequest, cx: &mut Context<Self>) {
-        self.apply_gathered(req.gathered, req.config.reset_selection_on_open, cx);
+    fn apply_reuse_windows(
+        &mut self,
+        req: &crate::picker::ReuseRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_gathered(
+            req.gathered,
+            req.config.reset_selection_on_open,
+            window,
+            cx,
+        );
         if req.config.open_behavior != crate::config::OpenBehavior::CycleOnce {
             return;
         }
@@ -166,29 +184,45 @@ impl AltTabApp {
         self.delegate.update(cx, |s, _| s.cycle(req.reverse));
     }
 
-    fn apply_gathered(&mut self, gathered: &GatheredWindows, reset: bool, cx: &mut Context<Self>) {
-        self.delegate.update(cx, |state, cx| {
-            state.set_windows(gathered.windows.clone(), reset);
-            if !gathered.previews.is_empty() {
-                state.live_previews = gathered.previews.clone();
-            }
-            if !gathered.icons.is_empty() {
-                state.icon_cache = gathered.icons.clone();
-            }
-            cx.notify();
+    fn apply_gathered(
+        &mut self,
+        gathered: &GatheredWindows,
+        reset: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.delegate.update(cx, |state, ctx| {
+            state.set_windows(gathered.windows.clone(), reset, ctx, Some(&mut *window));
+            state.replace_caches(
+                gathered.previews.clone(),
+                gathered.icons.clone(),
+                ctx,
+                Some(&mut *window),
+            );
+            ctx.notify();
         });
         cx.notify();
     }
 
-    pub(crate) fn update_icons(&mut self, icons: IconMap, cx: &mut Context<Self>) {
+    pub(crate) fn update_icons(
+        &mut self,
+        icons: IconMap,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.delegate
-            .update(cx, |state, _| state.insert_icons(icons));
+            .update(cx, |state, ctx| state.insert_icons(icons, ctx, Some(window)));
         cx.notify();
     }
 
-    pub(crate) fn update_previews(&mut self, previews: PreviewMap, cx: &mut Context<Self>) {
+    pub(crate) fn update_previews(
+        &mut self,
+        previews: PreviewMap,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.delegate
-            .update(cx, |state, _| state.insert_previews(previews));
+            .update(cx, |state, ctx| state.insert_previews(previews, ctx, Some(window)));
         cx.notify();
     }
 
