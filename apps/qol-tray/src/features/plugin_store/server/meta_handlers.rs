@@ -17,9 +17,7 @@ pub(super) fn routes() -> Router<AppState> {
 }
 
 pub(super) async fn dev_enabled() -> Json<bool> {
-    let mode_is_dev = crate::mode::ModeConfig::load()
-        .map(|c| c.is_dev())
-        .unwrap_or(false);
+    let mode_is_dev = crate::mode::ModeConfig::load().unwrap_or_default().is_dev();
     Json(cfg!(feature = "dev") && mode_is_dev)
 }
 
@@ -68,11 +66,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dev_enabled_defaults_false_when_mode_config_missing() {
+    async fn dev_enabled_default_matches_capability_when_mode_config_missing() {
         let (_guard, _tmp, _path_guard) = isolated_env().await;
 
         let Json(enabled) = dev_enabled().await;
-        assert!(!enabled);
+        assert_eq!(enabled, cfg!(feature = "dev"));
     }
 
     #[cfg(feature = "dev")]

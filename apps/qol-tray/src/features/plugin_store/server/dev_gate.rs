@@ -13,9 +13,7 @@ pub(super) async fn require_dev_mode(request: Request, next: Next) -> Response {
 }
 
 fn dev_routes_enabled() -> bool {
-    crate::mode::ModeConfig::load()
-        .map(|config| config.is_dev())
-        .unwrap_or(false)
+    crate::mode::ModeConfig::load().unwrap_or_default().is_dev()
 }
 
 #[cfg(test)]
@@ -29,12 +27,12 @@ mod tests {
     use tower::ServiceExt;
 
     #[test]
-    fn dev_routes_disabled_when_mode_file_missing() {
+    fn dev_routes_default_matches_capability_when_mode_file_missing() {
         let _guard = crate::test_support::env_lock().blocking_lock();
         let tmp = tempfile::TempDir::new().unwrap();
         let _path_guard = crate::paths::push_test_path_root(tmp.path());
 
-        assert!(!dev_routes_enabled());
+        assert_eq!(dev_routes_enabled(), cfg!(feature = "dev"));
     }
 
     #[test]
@@ -65,10 +63,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn route_layer_404s_in_default_prod_mode() {
+    async fn route_layer_404s_in_prod_mode() {
         let _guard = crate::test_support::env_lock().lock().await;
         let tmp = tempfile::TempDir::new().unwrap();
         let _path_guard = crate::paths::push_test_path_root(tmp.path());
+
+        ModeConfig::set(ModeFlag::Prod).unwrap();
 
         assert_eq!(probe_status(gated_router()).await, StatusCode::NOT_FOUND);
     }
