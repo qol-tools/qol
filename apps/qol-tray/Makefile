@@ -85,6 +85,7 @@ recompile-linked:
 dev: sync recompile-linked $(DEV_HOOKS) lint
 	@if [ -x ./$(DEV_HOOKS) ]; then ./$(DEV_HOOKS); fi
 	-pkill -f 'qol-tray'
+	cargo run --bin qol-tray --features dev -- --write-mode=dev
 	cargo run --bin qol-tray --features dev
 
 test: lint
