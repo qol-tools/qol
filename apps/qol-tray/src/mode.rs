@@ -1,12 +1,21 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ModeFlag {
     Dev,
-    #[default]
     Prod,
+}
+
+impl Default for ModeFlag {
+    fn default() -> Self {
+        if cfg!(feature = "dev") {
+            ModeFlag::Dev
+        } else {
+            ModeFlag::Prod
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -48,10 +57,24 @@ impl ModeConfig {
 mod tests {
     use super::*;
 
+    fn capability_default() -> ModeFlag {
+        if cfg!(feature = "dev") {
+            ModeFlag::Dev
+        } else {
+            ModeFlag::Prod
+        }
+    }
+
     #[test]
-    fn default_is_prod() {
-        assert_eq!(ModeConfig::default().mode, ModeFlag::Prod);
-        assert!(ModeConfig::default().is_prod());
+    fn default_matches_capability() {
+        let expected = capability_default();
+        assert_eq!(ModeConfig::default().mode, expected);
+        assert_eq!(ModeFlag::default(), expected);
+        if cfg!(feature = "dev") {
+            assert!(ModeConfig::default().is_dev());
+        } else {
+            assert!(ModeConfig::default().is_prod());
+        }
     }
 
     #[test]
@@ -59,7 +82,7 @@ mod tests {
         let cases = [
             (r#"{"mode":"dev"}"#, ModeFlag::Dev),
             (r#"{"mode":"prod"}"#, ModeFlag::Prod),
-            (r#"{}"#, ModeFlag::Prod),
+            (r#"{}"#, capability_default()),
         ];
         for (raw, expected) in cases {
             let parsed: ModeConfig = serde_json::from_str(raw).unwrap();
@@ -74,7 +97,7 @@ mod tests {
         let _path_guard = crate::paths::push_test_path_root(tmp.path());
 
         let loaded = ModeConfig::load().unwrap();
-        assert_eq!(loaded.mode, ModeFlag::Prod);
+        assert_eq!(loaded.mode, capability_default());
     }
 
     #[test]

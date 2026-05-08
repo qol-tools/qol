@@ -21,7 +21,7 @@ impl ModeToggle {
 
 impl MenuProvider for ModeToggle {
     fn menu_items(&self) -> Vec<PluginMenuItem> {
-        let is_dev = ModeConfig::load().map(|c| c.is_dev()).unwrap_or(false);
+        let is_dev = ModeConfig::load().unwrap_or_default().is_dev();
         let label = if is_dev {
             "Mode: dev (active)".to_string()
         } else {
