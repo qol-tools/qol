@@ -50,7 +50,6 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "registry"] }
 tracing-appender = "0.2"
 tracing-log = "0.2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-notify-debouncer-full = "0.7.0"
 
 # System tray
 tray-icon = "0.21.2"
