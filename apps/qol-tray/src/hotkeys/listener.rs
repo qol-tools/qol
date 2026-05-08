@@ -2,13 +2,12 @@ use super::catalog::load_available_actions;
 use super::HotkeyManager;
 use crate::plugins::PluginManager;
 use anyhow::{anyhow, Result};
+use crossbeam_channel::{select, Receiver, Sender};
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyEventReceiver, HotKeyState};
-use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 static RELOAD_SENDER: OnceLock<Sender<()>> = OnceLock::new();
-const HOTKEY_LOOP_SLEEP_MS: u64 = 10;
 const INITIAL_BACKOFF: Duration = Duration::from_millis(500);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
@@ -122,28 +121,31 @@ impl<'a> HotkeyListenerLoop<'a> {
 
     fn run(mut self) {
         self.register_initial_hotkeys();
-        let hotkey_receiver = GlobalHotKeyEvent::receiver();
+        let hotkey_receiver: &GlobalHotKeyEventReceiver = GlobalHotKeyEvent::receiver();
 
         loop {
-            self.try_reload_hotkeys();
-            self.try_handle_hotkeys(hotkey_receiver);
-            sleep_between_polls();
+            select! {
+                recv(self.reload_rx) -> reload => {
+                    if reload.is_err() {
+                        return;
+                    }
+                    self.drain_reload_signals();
+                    self.handle_reload();
+                }
+                recv(hotkey_receiver) -> event => {
+                    let Ok(event) = event else { return };
+                    self.handle_hotkey_event(event);
+                }
+            }
         }
     }
 
-    fn try_handle_hotkeys(&self, receiver: &GlobalHotKeyEventReceiver) {
-        while let Ok(event) = receiver.try_recv() {
-            self.handle_hotkey_event(event);
-        }
+    fn drain_reload_signals(&self) {
+        while self.reload_rx.try_recv().is_ok() {}
     }
 
-    fn try_reload_hotkeys(&mut self) {
-        if !reload_requested(self.reload_rx) {
-            return;
-        }
-
+    fn handle_reload(&mut self) {
         log::info!("Reloading hotkeys...");
-
         match self.reload_hotkeys() {
             Ok(()) => log::info!("Hotkeys reloaded successfully"),
             Err(error) => log::error!("Failed to register hotkeys: {}", error),
@@ -169,23 +171,9 @@ impl<'a> HotkeyListenerLoop<'a> {
     }
 }
 fn install_reload_channel() -> Receiver<()> {
-    let (reload_tx, reload_rx) = mpsc::channel::<()>();
+    let (reload_tx, reload_rx) = crossbeam_channel::unbounded::<()>();
     let _ = RELOAD_SENDER.set(reload_tx);
     reload_rx
-}
-
-fn reload_requested(reload_rx: &Receiver<()>) -> bool {
-    let mut requested = false;
-
-    while reload_rx.try_recv().is_ok() {
-        requested = true;
-    }
-
-    requested
-}
-
-fn sleep_between_polls() {
-    std::thread::sleep(std::time::Duration::from_millis(HOTKEY_LOOP_SLEEP_MS));
 }
 
 #[cfg(test)]
@@ -218,7 +206,7 @@ mod tests {
         let sleeps: Mutex<Vec<Duration>> = Mutex::new(Vec::new());
         let max_attempts = 3;
 
-        let (_tx, rx) = mpsc::channel::<()>();
+        let (_tx, rx) = crossbeam_channel::unbounded::<()>();
         let mut runner = |_rx: &Receiver<()>| -> Result<()> {
             attempts.fetch_add(1, Ordering::SeqCst);
             Err(anyhow!("simulated transient failure"))
@@ -244,7 +232,7 @@ mod tests {
         let sleeps: Mutex<Vec<Duration>> = Mutex::new(Vec::new());
         let max_attempts = 3;
 
-        let (_tx, rx) = mpsc::channel::<()>();
+        let (_tx, rx) = crossbeam_channel::unbounded::<()>();
         let mut runner = |_rx: &Receiver<()>| -> Result<()> {
             attempts.fetch_add(1, Ordering::SeqCst);
             Ok(())
@@ -272,7 +260,7 @@ mod tests {
         let sleeps: Mutex<Vec<Duration>> = Mutex::new(Vec::new());
         let total_attempts = 12;
 
-        let (_tx, rx) = mpsc::channel::<()>();
+        let (_tx, rx) = crossbeam_channel::unbounded::<()>();
         let mut runner = |_rx: &Receiver<()>| -> Result<()> {
             attempts.fetch_add(1, Ordering::SeqCst);
             Err(anyhow!("always fail"))
@@ -298,7 +286,7 @@ mod tests {
         let attempts = AtomicU32::new(0);
         let sleeps: Mutex<Vec<Duration>> = Mutex::new(Vec::new());
 
-        let (_tx, rx) = mpsc::channel::<()>();
+        let (_tx, rx) = crossbeam_channel::unbounded::<()>();
         let mut runner = |_rx: &Receiver<()>| -> Result<()> {
             attempts.fetch_add(1, Ordering::SeqCst);
             Ok(())
@@ -321,7 +309,7 @@ mod tests {
         let triggers: Mutex<Vec<String>> = Mutex::new(Vec::new());
         let total_attempts = 3;
 
-        let (_tx, rx) = mpsc::channel::<()>();
+        let (_tx, rx) = crossbeam_channel::unbounded::<()>();
         let mut runner = |_rx: &Receiver<()>| -> Result<()> {
             attempts.fetch_add(1, Ordering::SeqCst);
             Err(anyhow!("transient flap"))
@@ -347,7 +335,7 @@ mod tests {
         let triggers: Mutex<Vec<String>> = Mutex::new(Vec::new());
         let total_attempts = 12;
 
-        let (_tx, rx) = mpsc::channel::<()>();
+        let (_tx, rx) = crossbeam_channel::unbounded::<()>();
         let mut runner = |_rx: &Receiver<()>| -> Result<()> {
             attempts.fetch_add(1, Ordering::SeqCst);
             Err(anyhow!("permanent failure"))
@@ -380,7 +368,7 @@ mod tests {
         let triggers: Mutex<Vec<String>> = Mutex::new(Vec::new());
         let total_attempts = 12;
 
-        let (_tx, rx) = mpsc::channel::<()>();
+        let (_tx, rx) = crossbeam_channel::unbounded::<()>();
         let mut runner = |_rx: &Receiver<()>| -> Result<()> {
             attempts.fetch_add(1, Ordering::SeqCst);
             Ok(())
