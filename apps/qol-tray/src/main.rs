@@ -80,8 +80,25 @@ fn try_handle_cli_flag() -> Option<i32> {
             print_usage();
             Some(0)
         }
+        s if s.starts_with("--write-mode=") => Some(write_mode_flag(&s["--write-mode=".len()..])),
         _ => None,
     }
+}
+
+fn write_mode_flag(value: &str) -> i32 {
+    let mode = match qol_tray::mode::ModeFlag::parse_cli(value) {
+        Ok(m) => m,
+        Err(msg) => {
+            eprintln!("{}", msg);
+            return 1;
+        }
+    };
+    if let Err(e) = qol_tray::mode::ModeConfig::set(mode) {
+        eprintln!("Failed to write mode.json: {}", e);
+        return 1;
+    }
+    println!("mode.json set to {:?}", mode);
+    0
 }
 
 fn qol_tray_version() -> String {
@@ -101,6 +118,7 @@ fn print_usage() {
         "    qol-tray exec <plugin_id> <action>    Trigger a plugin action via the running daemon"
     );
     println!("    qol-tray exec shortcut <id>           Run a shortcut via the running daemon");
+    println!("    qol-tray --write-mode=<dev|prod>      Write mode.json and exit");
     println!("    qol-tray --version, -V                Print version and exit");
     println!("    qol-tray --help, -h                   Print this message and exit");
 }

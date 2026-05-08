@@ -53,6 +53,19 @@ impl ModeConfig {
     }
 }
 
+impl ModeFlag {
+    pub fn parse_cli(value: &str) -> Result<Self, String> {
+        match value {
+            "dev" => Ok(ModeFlag::Dev),
+            "prod" => Ok(ModeFlag::Prod),
+            other => Err(format!(
+                "Invalid mode value: '{}' (expected 'dev' or 'prod')",
+                other
+            )),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,6 +111,33 @@ mod tests {
 
         let loaded = ModeConfig::load().unwrap();
         assert_eq!(loaded.mode, capability_default());
+    }
+
+    #[test]
+    fn parse_cli_table() {
+        let valid: &[(&str, ModeFlag)] = &[("dev", ModeFlag::Dev), ("prod", ModeFlag::Prod)];
+        for (raw, expected) in valid {
+            assert_eq!(ModeFlag::parse_cli(raw).unwrap(), *expected, "raw={raw}");
+        }
+        let invalid = [
+            "",
+            "Dev",
+            "PROD",
+            " dev",
+            "dev ",
+            "development",
+            "production",
+            "1",
+            "true",
+        ];
+        for raw in invalid {
+            let err = ModeFlag::parse_cli(raw).unwrap_err();
+            assert!(err.contains(&format!("'{}'", raw)), "raw={raw} err={err}");
+            assert!(
+                err.contains("expected 'dev' or 'prod'"),
+                "raw={raw} err={err}"
+            );
+        }
     }
 
     #[test]
