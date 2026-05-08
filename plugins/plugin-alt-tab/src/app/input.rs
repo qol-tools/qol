@@ -17,9 +17,9 @@ pub(crate) fn handle_key_down(
     match event.keystroke.key.as_str() {
         "escape" | "esc" => this.dismiss("key/escape", window, cx),
         "enter" => on_activate(this, window, cx),
-        "w" => on_close(this, cx),
-        "q" => on_quit(this, cx),
-        "r" => on_minimize(this, cx),
+        "w" => on_close(this, window, cx),
+        "q" => on_quit(this, window, cx),
+        "r" => on_minimize(this, window, cx),
         "tab" => on_tab(this, event.keystroke.modifiers.shift, cx),
         "backtab" => on_tab(this, true, cx),
         "right" | "arrowright" => on_arrow(this, |s, c| s.select_right(c), window, cx),
@@ -39,16 +39,17 @@ fn on_activate(this: &mut AltTabApp, window: &mut Window, cx: &mut Context<AltTa
     this.dismiss("key/enter", window, cx);
 }
 
-fn on_close(this: &mut AltTabApp, cx: &mut Context<AltTabApp>) {
+fn on_close(this: &mut AltTabApp, window: &mut Window, cx: &mut Context<AltTabApp>) {
     let Some(win_id) = selected_window_id(this, cx) else {
         return;
     };
     actions::close_window(win_id);
-    this.delegate.update(cx, |s, _| s.remove_window(win_id));
+    this.delegate
+        .update(cx, |s, ctx| s.remove_window(win_id, ctx, Some(window)));
     cx.notify();
 }
 
-fn on_quit(this: &mut AltTabApp, cx: &mut Context<AltTabApp>) {
+fn on_quit(this: &mut AltTabApp, window: &mut Window, cx: &mut Context<AltTabApp>) {
     let Some(win_id) = selected_window_id(this, cx) else {
         return;
     };
@@ -61,17 +62,19 @@ fn on_quit(this: &mut AltTabApp, cx: &mut Context<AltTabApp>) {
         .map(|w| w.app_name.clone());
     actions::quit_app(win_id);
     if let Some(name) = app_name {
-        this.delegate.update(cx, |s, _| s.remove_app_windows(&name));
+        this.delegate
+            .update(cx, |s, ctx| s.remove_app_windows(&name, ctx, Some(window)));
     }
     cx.notify();
 }
 
-fn on_minimize(this: &mut AltTabApp, cx: &mut Context<AltTabApp>) {
+fn on_minimize(this: &mut AltTabApp, window: &mut Window, cx: &mut Context<AltTabApp>) {
     let Some(win_id) = selected_window_id(this, cx) else {
         return;
     };
     actions::minimize_window_by_id(win_id);
-    this.delegate.update(cx, |s, _| s.mark_minimized(win_id));
+    this.delegate
+        .update(cx, |s, ctx| s.mark_minimized(win_id, ctx, Some(window)));
     cx.notify();
 }
 

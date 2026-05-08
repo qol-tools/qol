@@ -96,21 +96,29 @@ async fn fill_missing_icons(cx: &mut AsyncApp, req: IconFillRequest) {
         return;
     }
     let rendered = build_icon_cache(raw);
-    merge_into_shared_cache(&req.icon_cache, &rendered);
-    update_view_icons(cx, req.handle, rendered);
+    commit_icons_foreground(cx, req.handle, req.icon_cache.clone(), rendered);
 }
 
-fn merge_into_shared_cache(cache: &SharedIconCache, rendered: &IconMap) {
-    let Ok(mut icache) = cache.lock() else { return };
-    for (k, v) in rendered {
-        icache.insert(k.clone(), v.clone());
-    }
-}
-
-fn update_view_icons(cx: &mut AsyncApp, handle: WindowHandle<AltTabApp>, icons: IconMap) {
+fn commit_icons_foreground(
+    cx: &mut AsyncApp,
+    handle: WindowHandle<AltTabApp>,
+    cache: SharedIconCache,
+    rendered: IconMap,
+) {
     let _ = cx.update(|cx| {
-        let _ = handle.update(cx, |view, _window, cx| {
-            view.update_icons(icons, cx);
+        // SharedCache mutation runs at App level (no Window leased): pass
+        // None. View update enters handle.update where window IS leased and
+        // forwards Some(window) into the registry release path.
+        if let Ok(mut icache) = cache.lock() {
+            crate::shared::image_registry::extend_with(
+                &mut *icache,
+                rendered.clone(),
+                cx,
+                None,
+            );
+        }
+        let _ = handle.update(cx, |view, window, cx| {
+            view.update_icons(rendered, window, cx);
         });
     });
 }
@@ -216,8 +224,7 @@ async fn fill_previews(cx: &mut AsyncApp, req: PreviewFillRequest) {
     if previews.is_empty() {
         return;
     }
-    merge_into_shared_preview_cache(&req.preview_cache, &previews);
-    update_view_previews(cx, req.handle, previews);
+    commit_previews_foreground(cx, req.handle, req.preview_cache.clone(), previews);
 
     #[cfg(debug_assertions)]
     eprintln!(
@@ -236,17 +243,23 @@ fn snapshot_preview_keys(cache: &SharedPreviewCache) -> HashSet<u32> {
         .unwrap_or_default()
 }
 
-fn merge_into_shared_preview_cache(cache: &SharedPreviewCache, previews: &PreviewMap) {
-    let Ok(mut pcache) = cache.lock() else { return };
-    for (k, v) in previews {
-        pcache.insert(*k, v.clone());
-    }
-}
-
-fn update_view_previews(cx: &mut AsyncApp, handle: WindowHandle<AltTabApp>, previews: PreviewMap) {
+fn commit_previews_foreground(
+    cx: &mut AsyncApp,
+    handle: WindowHandle<AltTabApp>,
+    cache: SharedPreviewCache,
+    previews: PreviewMap,
+) {
     let _ = cx.update(|cx| {
-        let _ = handle.update(cx, |view, _window, cx| {
-            view.update_previews(previews, cx);
+        if let Ok(mut pcache) = cache.lock() {
+            crate::shared::image_registry::extend_with(
+                &mut *pcache,
+                previews.clone(),
+                cx,
+                None,
+            );
+        }
+        let _ = handle.update(cx, |view, window, cx| {
+            view.update_previews(previews, window, cx);
         });
     });
 }

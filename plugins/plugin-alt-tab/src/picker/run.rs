@@ -170,7 +170,8 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
 
     #[cfg(debug_assertions)]
     let t_icon = std::time::Instant::now();
-    refresh_icon_cache(&executor, &windows, &state.caches.icon_cache).await;
+    let rendered_icons =
+        refresh_icon_cache(&executor, &windows, &state.caches.icon_cache).await;
     #[cfg(debug_assertions)]
     let icon_ms = t_icon.elapsed().as_millis();
 
@@ -180,7 +181,13 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     // Previews are refreshed from inside open_picker via spawn_preview_fill so the show
     // path stays snappy and the fresh frames land in the live view as they arrive.
     let _ = cx.update(move |app_cx| {
-        apply_show_windows(&state_for_update.caches, windows);
+        // App-level: no Window is leased here, so the SharedCache mutations
+        // pass None to drop_image. open_picker may itself call into a
+        // WindowHandle::update where window-aware releases run.
+        apply_show_windows(&state_for_update.caches, windows, app_cx);
+        if let Some(icons) = rendered_icons {
+            commit_icons_to_shared_cache(&state_for_update.caches.icon_cache, icons, app_cx);
+        }
         state_for_update.open_picker(&config, reverse, app_cx);
     });
     #[cfg(debug_assertions)]
@@ -196,12 +203,14 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     }
 }
 
-fn apply_show_windows(caches: &PickerCaches, windows: Vec<WindowInfo>) {
+fn apply_show_windows(caches: &PickerCaches, windows: Vec<WindowInfo>, app: &mut App) {
+    // App-level path: no Window is currently leased, so passing None to
+    // drop_image is correct (every window remains in App::windows).
     caches
         .last_window_count
         .store(windows.len().max(1), Ordering::Relaxed);
-    prune_previews(&caches.preview_cache, &windows);
-    prune_icons(&caches.icon_cache, &windows);
+    prune_previews(&caches.preview_cache, &windows, app);
+    prune_icons(&caches.icon_cache, &windows, app);
     replace_window_cache(&caches.window_cache, windows);
 }
 
@@ -212,40 +221,43 @@ fn replace_window_cache(window_cache: &WindowCache, windows: Vec<WindowInfo>) {
     *cache = windows;
 }
 
-fn prune_previews(preview_cache: &SharedPreviewCache, windows: &[WindowInfo]) {
+fn prune_previews(preview_cache: &SharedPreviewCache, windows: &[WindowInfo], app: &mut App) {
     let active: HashSet<u32> = windows.iter().map(|w| w.id).collect();
     let Ok(mut cache) = preview_cache.lock() else {
         return;
     };
-    cache.retain(|id, _| active.contains(id));
+    crate::shared::image_registry::retain_or_release(&mut *cache, app, None, |id| {
+        active.contains(id)
+    });
 }
 
-fn prune_icons(icon_cache: &SharedIconCache, windows: &[WindowInfo]) {
-    let active: HashSet<&str> = windows.iter().map(|w| w.app_name.as_str()).collect();
+fn prune_icons(icon_cache: &SharedIconCache, windows: &[WindowInfo], app: &mut App) {
+    let active: HashSet<String> = windows.iter().map(|w| w.app_name.clone()).collect();
     let Ok(mut cache) = icon_cache.lock() else {
         return;
     };
-    cache.retain(|name, _| active.contains(name.as_str()));
+    crate::shared::image_registry::retain_or_release(&mut *cache, app, None, |name| {
+        active.contains(name)
+    });
 }
 
 async fn refresh_icon_cache(
     executor: &gpui::BackgroundExecutor,
     windows: &[WindowInfo],
     icon_cache: &SharedIconCache,
-) {
+) -> Option<crate::IconMap> {
     let cached_names = cached_icon_names(icon_cache);
     let icon_windows = missing_icon_windows(windows, &cached_names);
     if icon_windows.is_empty() {
-        return;
+        return None;
     }
     let raw_icons = executor
         .spawn(async move { capture::get_app_icons(&icon_windows) })
         .await;
     if raw_icons.is_empty() {
-        return;
+        return None;
     }
-    let rendered = build_icon_cache(raw_icons);
-    merge_icons(icon_cache, rendered);
+    Some(build_icon_cache(raw_icons))
 }
 
 fn cached_icon_names(icon_cache: &SharedIconCache) -> HashSet<String> {
@@ -264,13 +276,15 @@ fn missing_icon_windows(windows: &[WindowInfo], cached_names: &HashSet<String>) 
         .collect()
 }
 
-fn merge_icons(icon_cache: &SharedIconCache, rendered: crate::IconMap) {
+fn commit_icons_to_shared_cache(
+    icon_cache: &SharedIconCache,
+    rendered: crate::IconMap,
+    app: &mut App,
+) {
     let Ok(mut cache) = icon_cache.lock() else {
         return;
     };
-    for (name, img) in rendered {
-        cache.insert(name, img);
-    }
+    crate::shared::image_registry::extend_with(&mut *cache, rendered, app, None);
 }
 
 fn shutdown_daemon(cx: &AsyncApp) {
