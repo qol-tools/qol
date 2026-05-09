@@ -714,7 +714,9 @@ fn should_resolve_push_conflict(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::features::profile::sync::types::{GitHubSyncConnection, SyncIncident};
+    use crate::features::profile::sync::types::{
+        GitHubSyncConnection, LocalFolderSyncConnection, SyncIncident,
+    };
 
     #[test]
     fn push_conflict_check_only_applies_to_current_connection() {
@@ -856,4 +858,255 @@ mod tests {
     }
 
     const CONFLICT_SKIP: &str = "Cloud sync pull skipped: unresolved conflict";
+
+    struct SyncTestEnv {
+        _config_root: tempfile::TempDir,
+        remote_dir: tempfile::TempDir,
+        _path_guard: crate::paths::TestPathRootGuard,
+    }
+
+    impl SyncTestEnv {
+        fn new() -> Self {
+            let _config_root = tempfile::TempDir::new().unwrap();
+            let _path_guard = crate::paths::push_test_path_root(_config_root.path());
+            let remote_dir = tempfile::TempDir::new().unwrap();
+            std::fs::create_dir_all(crate::paths::plugins_dir().unwrap()).unwrap();
+            Self {
+                _config_root,
+                remote_dir,
+                _path_guard,
+            }
+        }
+
+        fn plugins_dir(&self) -> std::path::PathBuf {
+            crate::paths::plugins_dir().unwrap()
+        }
+
+        fn folder_request(&self, pull_on_launch: bool, push_on_change: bool) -> SyncConnectRequest {
+            SyncConnectRequest::Folder {
+                folder_path: self.remote_dir.path().display().to_string(),
+                path: "profile.json".to_string(),
+                pull_on_launch,
+                push_on_change,
+            }
+        }
+
+        fn folder_connection(&self, pull_on_launch: bool) -> SyncConnection {
+            SyncConnection::Folder(LocalFolderSyncConnection {
+                folder_path: self.remote_dir.path().display().to_string(),
+                path: "profile.json".to_string(),
+                pull_on_launch,
+                push_on_change: true,
+            })
+        }
+
+        fn write_remote_bundle(&self, bundle: serde_json::Value) {
+            std::fs::write(
+                self.remote_dir.path().join("profile.json"),
+                bundle.to_string(),
+            )
+            .unwrap();
+        }
+
+        fn write_local_hotkeys(&self, hotkeys: serde_json::Value) {
+            let path = crate::paths::hotkeys_path().unwrap();
+            crate::file_io::ensure_parent_dir(&path).unwrap();
+            std::fs::write(path, serde_json::json!({ "hotkeys": hotkeys }).to_string()).unwrap();
+        }
+
+        fn read_local_hotkeys(&self) -> serde_json::Value {
+            let path = crate::paths::hotkeys_path().unwrap();
+            let content = std::fs::read_to_string(&path).unwrap_or_default();
+            serde_json::from_str::<serde_json::Value>(&content)
+                .ok()
+                .and_then(|v| v.get("hotkeys").cloned())
+                .unwrap_or(serde_json::Value::Null)
+        }
+
+        fn list_backups(&self) -> Vec<String> {
+            let dir = match crate::paths::sync_backups_dir() {
+                Ok(dir) => dir,
+                Err(_) => return Vec::new(),
+            };
+            std::fs::read_dir(&dir)
+                .map(|entries| {
+                    entries
+                        .filter_map(|entry| entry.ok())
+                        .filter_map(|entry| entry.file_name().into_string().ok())
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+
+        fn load_persisted_state(&self) -> SyncStateFile {
+            super::load_state_file().unwrap()
+        }
+    }
+
+    #[tokio::test]
+    async fn connect_with_diverging_remote_writes_backup_and_applies_remote() {
+        let env = SyncTestEnv::new();
+        env.write_local_hotkeys(serde_json::json!([{ "id": "h1" }, { "id": "h2" }]));
+        env.write_remote_bundle(serde_json::json!({ "hotkeys": [] }));
+
+        let service = SyncService::new(env.plugins_dir()).unwrap();
+        let result = service
+            .connect(env.folder_request(true, true))
+            .await
+            .unwrap();
+
+        assert!(result.applied_remote, "Connect must apply diverging remote");
+        assert_eq!(
+            env.read_local_hotkeys(),
+            serde_json::json!([]),
+            "local hotkeys overwritten by empty remote (this is the user-reported wipe vector)",
+        );
+        let backups = env.list_backups();
+        assert_eq!(backups.len(), 1, "exactly one backup, got: {backups:?}");
+        assert!(
+            backups[0].contains("remote-applied"),
+            "backup name should include 'remote-applied' tag, got: {}",
+            backups[0],
+        );
+        let state = env.load_persisted_state();
+        assert_eq!(
+            state.incident.as_ref().map(|i| i.kind.as_str()),
+            Some("connect_pull_review"),
+            "Connect mode incident is review, NOT 'conflict' - so the launch-pull conflict gate does NOT block subsequent pulls in this scenario",
+        );
+    }
+
+    #[tokio::test]
+    async fn pull_returns_conflict_when_local_and_remote_diverge_from_last_synced() {
+        let env = SyncTestEnv::new();
+        env.write_local_hotkeys(serde_json::json!([{ "id": "shared" }]));
+        env.write_remote_bundle(serde_json::json!({ "hotkeys": [{ "id": "shared" }] }));
+
+        let service = SyncService::new(env.plugins_dir()).unwrap();
+        service
+            .connect(env.folder_request(true, true))
+            .await
+            .unwrap();
+
+        env.write_local_hotkeys(serde_json::json!([{ "id": "local-only" }]));
+        env.write_remote_bundle(serde_json::json!({ "hotkeys": [{ "id": "remote-only" }] }));
+
+        let result = service.manual_pull().await.unwrap();
+
+        assert!(
+            !result.applied_remote,
+            "conflict path must not apply remote"
+        );
+        assert_eq!(
+            env.read_local_hotkeys(),
+            serde_json::json!([{ "id": "local-only" }]),
+            "local must be preserved through a conflict",
+        );
+        let state = env.load_persisted_state();
+        assert_eq!(
+            state.incident.as_ref().map(|i| i.kind.as_str()),
+            Some("conflict"),
+            "incident kind must be 'conflict' so the launch-pull gate fires next restart",
+        );
+        assert!(
+            env.list_backups()
+                .iter()
+                .any(|name| name.contains("conflict")),
+            "conflict path must write a backup of local-at-divergence",
+        );
+    }
+
+    #[tokio::test]
+    async fn pull_on_launch_is_gated_when_persisted_state_has_conflict_incident() {
+        let env = SyncTestEnv::new();
+        env.write_local_hotkeys(serde_json::json!([{ "id": "preserved" }]));
+        env.write_remote_bundle(serde_json::json!({ "hotkeys": [{ "id": "tempting-but-stale" }] }));
+
+        let pre_state = SyncStateFile {
+            connection: Some(env.folder_connection(true)),
+            last_synced_hash: Some("any-stale-hash".to_string()),
+            incident: Some(SyncIncident {
+                kind: "conflict".to_string(),
+                message: "diverged".to_string(),
+                backup_file: None,
+                created_at: now_rfc3339(),
+            }),
+            ..SyncStateFile::default()
+        };
+        save_state_file(&pre_state).unwrap();
+
+        let service = SyncService::new(env.plugins_dir()).unwrap();
+        let result = service.pull_on_launch().await.unwrap();
+
+        assert_eq!(result.message, CONFLICT_SKIP);
+        assert!(!result.applied_remote);
+        assert_eq!(
+            env.read_local_hotkeys(),
+            serde_json::json!([{ "id": "preserved" }]),
+            "gate must keep local intact across restart",
+        );
+    }
+
+    #[tokio::test]
+    async fn acknowledge_incident_clears_only_the_incident_field() {
+        let env = SyncTestEnv::new();
+        let pre_state = SyncStateFile {
+            connection: Some(env.folder_connection(true)),
+            last_synced_hash: Some("preserved-hash".to_string()),
+            remote_revision: Some("preserved-rev".to_string()),
+            last_sync_at: Some("2026-05-01T00:00:00Z".to_string()),
+            incident: Some(SyncIncident {
+                kind: "conflict".to_string(),
+                message: "diverged".to_string(),
+                backup_file: Some("20260501-000000-conflict.json".to_string()),
+                created_at: now_rfc3339(),
+            }),
+            last_error: None,
+        };
+        save_state_file(&pre_state).unwrap();
+
+        let service = SyncService::new(env.plugins_dir()).unwrap();
+        service.acknowledge_incident().await.unwrap();
+
+        let state = env.load_persisted_state();
+        assert!(state.incident.is_none(), "incident must clear");
+        assert_eq!(
+            state.last_synced_hash.as_deref(),
+            Some("preserved-hash"),
+            "last_synced_hash is intentionally preserved by acknowledge",
+        );
+        assert_eq!(state.remote_revision.as_deref(), Some("preserved-rev"));
+        assert_eq!(state.last_sync_at.as_deref(), Some("2026-05-01T00:00:00Z"));
+        assert!(state.connection.is_some());
+    }
+
+    #[tokio::test]
+    async fn disconnect_zeroes_every_state_field() {
+        let env = SyncTestEnv::new();
+        let pre_state = SyncStateFile {
+            connection: Some(env.folder_connection(true)),
+            last_synced_hash: Some("hash".to_string()),
+            remote_revision: Some("rev".to_string()),
+            last_sync_at: Some("2026-01-01T00:00:00Z".to_string()),
+            incident: Some(SyncIncident {
+                kind: "conflict".to_string(),
+                message: "test".to_string(),
+                backup_file: None,
+                created_at: now_rfc3339(),
+            }),
+            last_error: Some("err".to_string()),
+        };
+        save_state_file(&pre_state).unwrap();
+
+        let service = SyncService::new(env.plugins_dir()).unwrap();
+        service.disconnect().await.unwrap();
+
+        let state = env.load_persisted_state();
+        assert!(state.connection.is_none());
+        assert!(state.last_synced_hash.is_none());
+        assert!(state.remote_revision.is_none());
+        assert!(state.last_sync_at.is_none());
+        assert!(state.incident.is_none());
+        assert!(state.last_error.is_none());
+    }
 }
