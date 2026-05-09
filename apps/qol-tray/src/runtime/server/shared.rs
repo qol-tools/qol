@@ -11,7 +11,7 @@ use qol_runtime::MonitorBounds;
 use super::super::state::InputState;
 use subscribers::SubscriberEntry;
 
-pub(super) struct SharedState {
+pub(crate) struct SharedState {
     input: Mutex<InputState>,
     monitors: Mutex<Vec<MonitorBounds>>,
     cursor_pos: Mutex<Option<(f32, f32)>>,
@@ -21,7 +21,7 @@ pub(super) struct SharedState {
 }
 
 impl SharedState {
-    pub(super) fn new(monitors: Vec<MonitorBounds>) -> Self {
+    pub(crate) fn new(monitors: Vec<MonitorBounds>) -> Self {
         Self {
             input: Mutex::new(InputState::default()),
             monitors: Mutex::new(monitors),
@@ -64,7 +64,7 @@ impl SharedState {
         lock_or_recover(&self.monitors).clone()
     }
 
-    pub(super) fn publish(&self, events: &[RuntimeEvent]) {
+    pub(crate) fn publish(&self, events: &[RuntimeEvent]) {
         subscribers::publish(&self.subscribers, events);
     }
 

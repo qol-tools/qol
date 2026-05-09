@@ -2,6 +2,8 @@ mod channels;
 mod poller;
 mod server;
 mod state;
+#[doc(hidden)]
+pub mod testing;
 
 use std::time::Duration;
 
