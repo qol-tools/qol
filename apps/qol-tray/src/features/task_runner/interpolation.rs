@@ -305,6 +305,61 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(50))]
+
+        #[test]
+        fn prop_interpolate_shell_round_trips_through_bash(
+            value in "[\x20-\x7e]{0,40}".prop_filter("no NUL", |s| !s.contains('\0')),
+        ) {
+            let map = [("value".to_string(), value.clone())].into_iter().collect();
+            let escaped = interpolate_shell("{{value}}", &map);
+            let script = format!("printf '%s' {escaped}");
+            let output = std::process::Command::new("bash")
+                .arg("-c")
+                .arg(&script)
+                .output()
+                .expect("bash must run");
+            prop_assert!(
+                output.status.success(),
+                "bash failed for value={:?} escaped={:?} stderr={:?}",
+                value,
+                escaped,
+                String::from_utf8_lossy(&output.stderr),
+            );
+            let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+            prop_assert_eq!(
+                &stdout, &value,
+                "shell-escaped payload must round-trip; escaped={:?}",
+                escaped,
+            );
+        }
+
+        #[test]
+        fn prop_interpolate_shell_in_command_position_does_not_split_words(
+            value in "[\x20-\x7e]{1,40}".prop_filter("no NUL", |s| !s.contains('\0')),
+        ) {
+            // Any payload, when interpolated into an argv slot, must read as ONE arg.
+            let map = [("value".to_string(), value.clone())].into_iter().collect();
+            let escaped = interpolate_shell("{{value}}", &map);
+            let script = format!("set -- {escaped}; printf '%d' \"$#\"");
+            let output = std::process::Command::new("bash")
+                .arg("-c")
+                .arg(&script)
+                .output()
+                .expect("bash must run");
+            let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+            prop_assert_eq!(
+                &stdout, "1",
+                "escaped payload must be a single arg; value={:?} escaped={:?} got={:?}",
+                value,
+                escaped,
+                stdout,
+            );
+        }
+    }
+
     fn param_map<K, V>(params: &[(K, V)]) -> HashMap<String, String>
     where
         K: AsRef<str>,

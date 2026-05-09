@@ -55,6 +55,7 @@ pub(super) fn write_state(writer: &mut UnixStream, shared: &SharedState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use serde::Deserialize;
     use std::io::Read;
 
@@ -156,5 +157,54 @@ mod tests {
             prepared.is_some(),
             "prepare_stream must clone writable half"
         );
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(200))]
+
+        #[test]
+        fn prop_read_request_returns_trimmed_payload_when_non_blank(
+            ws_left in "[ \\t]{0,8}",
+            ws_right in "[ \\t]{0,8}",
+            payload in "[A-Za-z0-9 _.,:!?@/=+-]{1,64}",
+        ) {
+            let payload_trim = payload.trim();
+            prop_assume!(!payload_trim.is_empty());
+            let line = format!("{ws_left}{payload}{ws_right}\n");
+            let (mut tx, rx) = pair();
+            tx.write_all(line.as_bytes()).unwrap();
+            drop(tx);
+            let mut reader = BufReader::new(rx);
+            let got = read_request(&mut reader);
+            prop_assert_eq!(got.as_deref(), Some(line.trim()));
+        }
+
+        #[test]
+        fn prop_read_request_returns_none_for_pure_whitespace(
+            ws in "[ \\t]{0,32}",
+        ) {
+            let line = format!("{ws}\n");
+            let (mut tx, rx) = pair();
+            tx.write_all(line.as_bytes()).unwrap();
+            drop(tx);
+            let mut reader = BufReader::new(rx);
+            prop_assert!(read_request(&mut reader).is_none(), "ws={ws:?}");
+        }
+
+        #[test]
+        fn prop_write_json_line_round_trips_payload(
+            name in "[A-Za-z0-9 _-]{0,64}",
+            value in i32::MIN..i32::MAX,
+        ) {
+            let (mut writer, mut reader) = pair();
+            let sample = Sample { name, value };
+            prop_assert!(write_json_line(&mut writer, &sample));
+            drop(writer);
+            let mut buf = String::new();
+            reader.read_to_string(&mut buf).unwrap();
+            prop_assert!(buf.ends_with('\n'));
+            let parsed: Sample = serde_json::from_str(buf.trim()).unwrap();
+            prop_assert_eq!(parsed, sample);
+        }
     }
 }
