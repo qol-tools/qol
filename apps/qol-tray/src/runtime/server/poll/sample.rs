@@ -87,3 +87,102 @@ fn zero_monitor() -> MonitorBounds {
         height: 0.0,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    fn mon(x: f32) -> MonitorBounds {
+        MonitorBounds {
+            x,
+            y: 0.0,
+            width: 1000.0,
+            height: 1000.0,
+        }
+    }
+
+    fn empty_sample(now: Instant) -> TickSample {
+        TickSample {
+            committed: false,
+            cursor_monitor: None,
+            cursor_moved: false,
+            focus_bounds: None,
+            focus_changed: false,
+            focus_monitor: None,
+            now,
+        }
+    }
+
+    #[test]
+    fn apply_updates_returns_false_when_nothing_to_apply() {
+        let mut input = InputState::default();
+        let sample = empty_sample(Instant::now());
+        assert!(!apply_updates(&mut input, &sample));
+        assert!(input.cursor.is_none());
+        assert!(input.focus.is_none());
+    }
+
+    #[test]
+    fn apply_updates_returns_true_when_cursor_actually_moved_to_new_monitor() {
+        let mut input = InputState::default();
+        let m = mon(0.0);
+        let sample = TickSample {
+            cursor_monitor: Some(m),
+            cursor_moved: true,
+            ..empty_sample(Instant::now())
+        };
+        assert!(apply_updates(&mut input, &sample));
+        assert_eq!(input.cursor.as_ref().map(|c| c.monitor), Some(m));
+    }
+
+    #[test]
+    fn apply_updates_returns_true_when_focus_changed_flag_and_monitor_set() {
+        let mut input = InputState::default();
+        let m = mon(100.0);
+        let sample = TickSample {
+            focus_monitor: Some(m),
+            focus_changed: true,
+            ..empty_sample(Instant::now())
+        };
+        assert!(apply_updates(&mut input, &sample));
+        assert_eq!(input.focus.as_ref().map(|f| f.monitor), Some(m));
+    }
+
+    #[test]
+    fn apply_updates_skips_focus_update_when_focus_changed_flag_is_false() {
+        let mut input = InputState::default();
+        let m = mon(100.0);
+        let sample = TickSample {
+            focus_monitor: Some(m),
+            focus_changed: false,
+            ..empty_sample(Instant::now())
+        };
+        assert!(
+            !apply_updates(&mut input, &sample),
+            "focus_monitor without focus_changed must not stamp",
+        );
+        assert!(input.focus.is_none(), "focus must remain unset");
+    }
+
+    #[test]
+    fn apply_updates_returns_true_for_cursor_moved_even_when_state_does_not_observably_change() {
+        // moved=true with same monitor that's already stamped: state may not change,
+        // but the function returns true because cursor_moved itself is "activity".
+        let mut input = InputState::default();
+        let m = mon(0.0);
+        input.cursor = Some(crate::runtime::state::Stamped {
+            monitor: m,
+            at: Instant::now(),
+        });
+        let sample = TickSample {
+            cursor_monitor: Some(m),
+            cursor_moved: true,
+            ..empty_sample(Instant::now())
+        };
+        assert!(
+            apply_updates(&mut input, &sample),
+            "cursor_moved alone signals activity even when stamp is unchanged",
+        );
+    }
+}
