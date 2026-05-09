@@ -159,23 +159,19 @@ impl SyncService {
     }
 
     pub async fn pull_on_launch(&self) -> Result<SyncActionResult> {
-        let should_pull = {
+        let decision = {
             let state = self
                 .state
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            state
-                .connection
-                .as_ref()
-                .map(SyncConnection::pull_on_launch)
-                .unwrap_or(false)
+            launch_pull_decision(&state)
         };
-        if !should_pull {
-            return Ok(self.noop("Cloud sync launch pull is disabled"));
-        }
-        match self.pull(PullMode::Launch).await {
-            Ok(result) => Ok(result),
-            Err(error) => self.return_error(error),
+        match decision {
+            LaunchPullDecision::Skip(message) => Ok(self.noop(message)),
+            LaunchPullDecision::Proceed => match self.pull(PullMode::Launch).await {
+                Ok(result) => Ok(result),
+                Err(error) => self.return_error(error),
+            },
         }
     }
 
@@ -669,6 +665,35 @@ impl SyncService {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum LaunchPullDecision {
+    Skip(&'static str),
+    Proceed,
+}
+
+pub(crate) fn launch_pull_decision(state: &SyncStateFile) -> LaunchPullDecision {
+    if state
+        .incident
+        .as_ref()
+        .is_some_and(|incident| is_blocking_incident_kind(&incident.kind))
+    {
+        return LaunchPullDecision::Skip("Cloud sync pull skipped: unresolved conflict");
+    }
+    let pull_on_launch_enabled = state
+        .connection
+        .as_ref()
+        .map(SyncConnection::pull_on_launch)
+        .unwrap_or(false);
+    if !pull_on_launch_enabled {
+        return LaunchPullDecision::Skip("Cloud sync launch pull is disabled");
+    }
+    LaunchPullDecision::Proceed
+}
+
+pub(crate) fn is_blocking_incident_kind(kind: &str) -> bool {
+    matches!(kind, "conflict" | "push_conflict")
+}
+
 fn should_resolve_push_conflict(
     uses_current_connection: bool,
     stored_revision: Option<&str>,
@@ -688,7 +713,8 @@ fn should_resolve_push_conflict(
 
 #[cfg(test)]
 mod tests {
-    use super::should_resolve_push_conflict;
+    use super::*;
+    use crate::features::profile::sync::types::{GitHubSyncConnection, SyncIncident};
 
     #[test]
     fn push_conflict_check_only_applies_to_current_connection() {
@@ -713,4 +739,121 @@ mod tests {
             );
         }
     }
+
+    fn github_connection(pull_on_launch: bool) -> SyncConnection {
+        SyncConnection::Github(GitHubSyncConnection {
+            gist_id: "abc123".to_string(),
+            pull_on_launch,
+            push_on_change: true,
+        })
+    }
+
+    fn incident_with_kind(kind: &str) -> SyncIncident {
+        SyncIncident {
+            kind: kind.to_string(),
+            message: String::new(),
+            backup_file: None,
+            created_at: now_rfc3339(),
+        }
+    }
+
+    #[test]
+    fn launch_pull_decision_skips_without_connection() {
+        let state = SyncStateFile::default();
+        assert_eq!(
+            launch_pull_decision(&state),
+            LaunchPullDecision::Skip("Cloud sync launch pull is disabled"),
+        );
+    }
+
+    #[test]
+    fn launch_pull_decision_skips_when_pull_on_launch_disabled() {
+        let state = SyncStateFile {
+            connection: Some(github_connection(false)),
+            ..SyncStateFile::default()
+        };
+        assert_eq!(
+            launch_pull_decision(&state),
+            LaunchPullDecision::Skip("Cloud sync launch pull is disabled"),
+        );
+    }
+
+    #[test]
+    fn launch_pull_decision_proceeds_when_connected_and_no_incident() {
+        let state = SyncStateFile {
+            connection: Some(github_connection(true)),
+            ..SyncStateFile::default()
+        };
+        assert_eq!(launch_pull_decision(&state), LaunchPullDecision::Proceed);
+    }
+
+    #[test]
+    fn launch_pull_decision_blocks_only_on_conflict_kinds() {
+        let cases = [
+            ("conflict", LaunchPullDecision::Skip(CONFLICT_SKIP)),
+            ("push_conflict", LaunchPullDecision::Skip(CONFLICT_SKIP)),
+            ("launch_pull_review", LaunchPullDecision::Proceed),
+            ("manual_pull_review", LaunchPullDecision::Proceed),
+            ("connect_pull_review", LaunchPullDecision::Proceed),
+            ("review", LaunchPullDecision::Proceed),
+            ("future_unknown_kind", LaunchPullDecision::Proceed),
+            ("", LaunchPullDecision::Proceed),
+        ];
+        for (kind, expected) in cases {
+            let state = SyncStateFile {
+                connection: Some(github_connection(true)),
+                incident: Some(incident_with_kind(kind)),
+                ..SyncStateFile::default()
+            };
+            assert_eq!(launch_pull_decision(&state), expected, "kind: {kind:?}");
+        }
+    }
+
+    #[test]
+    fn launch_pull_decision_blocks_even_when_pull_on_launch_disabled() {
+        let state = SyncStateFile {
+            connection: Some(github_connection(false)),
+            incident: Some(incident_with_kind("conflict")),
+            ..SyncStateFile::default()
+        };
+        assert_eq!(
+            launch_pull_decision(&state),
+            LaunchPullDecision::Skip(CONFLICT_SKIP),
+            "conflict gate runs before the pull_on_launch flag check",
+        );
+    }
+
+    #[test]
+    fn launch_pull_decision_ignores_last_error() {
+        let state = SyncStateFile {
+            connection: Some(github_connection(true)),
+            last_error: Some("network unreachable".to_string()),
+            ..SyncStateFile::default()
+        };
+        assert_eq!(
+            launch_pull_decision(&state),
+            LaunchPullDecision::Proceed,
+            "last_error gates auto_push_if_dirty but not pull_on_launch",
+        );
+    }
+
+    #[test]
+    fn is_blocking_incident_kind_only_matches_conflict_variants() {
+        let cases = [
+            ("conflict", true),
+            ("push_conflict", true),
+            ("launch_pull_review", false),
+            ("manual_pull_review", false),
+            ("connect_pull_review", false),
+            ("review", false),
+            ("", false),
+            ("Conflict", false),
+            ("conflict ", false),
+        ];
+        for (kind, expected) in cases {
+            assert_eq!(is_blocking_incident_kind(kind), expected, "kind: {kind:?}",);
+        }
+    }
+
+    const CONFLICT_SKIP: &str = "Cloud sync pull skipped: unresolved conflict";
 }
