@@ -99,3 +99,141 @@ fn apply_focus(shared: &SharedState, monitor_idx: usize, label: &str) {
 
     shared.with_input(|input| input.update_focus(monitor, Instant::now()));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use qol_runtime::MonitorBounds;
+    use std::io::Read;
+    use std::os::unix::net::UnixStream;
+
+    fn mon(x: f32) -> MonitorBounds {
+        MonitorBounds {
+            x,
+            y: 0.0,
+            width: 1000.0,
+            height: 1000.0,
+        }
+    }
+
+    fn pair() -> (UnixStream, UnixStream) {
+        UnixStream::pair().expect("UnixStream::pair")
+    }
+
+    fn read_to_string(stream: &mut UnixStream) -> String {
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(100)));
+        let mut buf = [0u8; 4096];
+        let n = stream.read(&mut buf).unwrap_or(0);
+        String::from_utf8_lossy(&buf[..n]).into_owned()
+    }
+
+    #[test]
+    fn handle_request_dispatches_text_get_state_case_insensitive() {
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let cases = ["GET_STATE", "get_state", "Get_State"];
+        for input in cases {
+            let (mut writer, mut reader) = pair();
+            handle_request(input, &mut writer, &shared);
+            drop(writer);
+            let response = read_to_string(&mut reader);
+            assert!(
+                response.contains("monitors"),
+                "input {input:?} response: {response:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn handle_request_text_set_focus_updates_focus_when_index_in_range() {
+        let monitors = vec![mon(0.0), mon(2000.0)];
+        let shared = SharedState::new(monitors.clone());
+        let (mut writer, _reader) = pair();
+
+        handle_request("SET_FOCUS 1", &mut writer, &shared);
+
+        let focus = shared.input().focus.expect("focus stamped");
+        assert_eq!(focus.monitor, monitors[1], "idx=1 picks second monitor");
+    }
+
+    #[test]
+    fn handle_request_text_set_focus_ignores_out_of_range_index() {
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let (mut writer, _reader) = pair();
+
+        handle_request("SET_FOCUS 99", &mut writer, &shared);
+
+        assert!(
+            shared.input().focus.is_none(),
+            "out-of-range idx must not stamp focus",
+        );
+    }
+
+    #[test]
+    fn handle_request_text_set_focus_ignores_non_numeric_index() {
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let (mut writer, _reader) = pair();
+
+        handle_request("SET_FOCUS not_a_number", &mut writer, &shared);
+
+        assert!(
+            shared.input().focus.is_none(),
+            "non-numeric idx parsed as Err, no stamp",
+        );
+    }
+
+    #[test]
+    fn handle_request_ignores_unknown_text_payloads() {
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let (mut writer, mut reader) = pair();
+        handle_request("PLEASE_REBOOT", &mut writer, &shared);
+        drop(writer);
+        let response = read_to_string(&mut reader);
+        assert!(
+            response.is_empty(),
+            "unknown text payload returns nothing: {response:?}",
+        );
+    }
+
+    #[test]
+    fn handle_request_dispatches_json_get_state() {
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let (mut writer, mut reader) = pair();
+        handle_request(r#"{"cmd":"get_state"}"#, &mut writer, &shared);
+        drop(writer);
+        let response = read_to_string(&mut reader);
+        assert!(
+            response.contains("monitors"),
+            "json get_state should respond: {response:?}",
+        );
+    }
+
+    #[test]
+    fn handle_request_dispatches_json_set_focus() {
+        let monitors = vec![mon(0.0), mon(2000.0)];
+        let shared = SharedState::new(monitors.clone());
+        let (mut writer, _reader) = pair();
+        handle_request(
+            r#"{"cmd":"set_focus","monitor_idx":1}"#,
+            &mut writer,
+            &shared,
+        );
+        let focus = shared.input().focus.expect("focus stamped via json");
+        assert_eq!(focus.monitor, monitors[1]);
+    }
+
+    #[test]
+    fn apply_focus_no_op_when_index_out_of_range() {
+        let shared = SharedState::new(vec![mon(0.0)]);
+        apply_focus(&shared, 5, "test");
+        assert!(shared.input().focus.is_none());
+    }
+
+    #[test]
+    fn apply_focus_stamps_focus_when_index_resolves_to_monitor() {
+        let monitors = vec![mon(0.0), mon(2000.0)];
+        let shared = SharedState::new(monitors.clone());
+        apply_focus(&shared, 1, "test");
+        let focus = shared.input().focus.expect("focus must be stamped");
+        assert_eq!(focus.monitor, monitors[1]);
+    }
+}
