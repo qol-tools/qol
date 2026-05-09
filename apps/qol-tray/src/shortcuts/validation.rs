@@ -111,3 +111,191 @@ fn reject_traversal(path: &str, field: &str) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shortcut(id: &str, name: &str, action: ShortcutAction) -> Shortcut {
+        Shortcut {
+            id: id.to_string(),
+            name: name.to_string(),
+            enabled: true,
+            export_to_launcher: false,
+            action,
+        }
+    }
+
+    fn url_action(url: &str) -> ShortcutAction {
+        ShortcutAction::OpenUrl {
+            url: url.to_string(),
+            browser_override: None,
+        }
+    }
+
+    #[test]
+    fn validate_id_accepts_typical_kebab_and_underscore_ids() {
+        for id in ["x", "open-docs", "open_docs", "abc123", "A", "Z9"] {
+            assert!(validate_id(id).is_ok(), "id should accept: {id:?}");
+        }
+    }
+
+    #[test]
+    fn validate_id_rejects_invalid_shapes() {
+        let cases: &[(&str, &str)] = &[
+            ("", "empty"),
+            ("-leading-dash", "leading dash"),
+            ("has space", "space"),
+            ("dot.in.id", "dot"),
+            ("slash/in/id", "slash"),
+        ];
+        for (id, label) in cases {
+            assert!(validate_id(id).is_err(), "{label} should reject: {id:?}");
+        }
+        assert!(
+            validate_id("emoji-\u{1F525}").is_err(),
+            "non-ascii must reject"
+        );
+    }
+
+    #[test]
+    fn validate_id_accepts_64_chars_and_rejects_65() {
+        assert!(validate_id(&"a".repeat(64)).is_ok());
+        assert!(validate_id(&"a".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn validate_shortcut_rejects_empty_or_whitespace_name() {
+        for name in ["", " ", "\t", "\n"] {
+            let r = validate_shortcut(&shortcut("ok", name, url_action("https://x.io")));
+            assert!(r.is_err(), "name {name:?} should reject");
+        }
+    }
+
+    #[test]
+    fn validate_shortcut_rejects_overlong_name() {
+        let long = "x".repeat(MAX_NAME_LEN + 1);
+        let r = validate_shortcut(&shortcut("ok", &long, url_action("https://x.io")));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn validate_url_requires_http_or_https_scheme() {
+        let invalid = [
+            "",
+            "x.io",
+            "ftp://x.io",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "data:text/html,<script>",
+        ];
+        for url in invalid {
+            let r = validate_shortcut(&shortcut("ok", "Open", url_action(url)));
+            assert!(r.is_err(), "url {url:?} should reject");
+        }
+        for url in ["http://x.io", "https://x.io", "https://x.io/path?q=v#frag"] {
+            let r = validate_shortcut(&shortcut("ok", "Open", url_action(url)));
+            assert!(r.is_ok(), "url {url:?} should accept");
+        }
+    }
+
+    #[test]
+    fn validate_url_rejects_overlong_payload() {
+        let url = format!("https://x.io/{}", "a".repeat(MAX_URL_LEN));
+        let r = validate_shortcut(&shortcut("ok", "Open", url_action(&url)));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn validate_path_app_rejects_traversal_and_overlong() {
+        for path in ["../etc/passwd", "/safe/../escape", ".."] {
+            let r = validate_shortcut(&shortcut(
+                "ok",
+                "Open",
+                ShortcutAction::LaunchApp {
+                    app: AppRef::Path {
+                        path: path.to_string(),
+                    },
+                },
+            ));
+            assert!(r.is_err(), "traversal {path:?} should reject");
+        }
+        let overlong = "a".repeat(MAX_PATH_LEN + 1);
+        let r = validate_shortcut(&shortcut(
+            "ok",
+            "Open",
+            ShortcutAction::LaunchApp {
+                app: AppRef::Path { path: overlong },
+            },
+        ));
+        assert!(r.is_err(), "overlong path should reject");
+    }
+
+    #[test]
+    fn validate_app_ref_rejects_empty_for_every_variant() {
+        let empties = [
+            ShortcutAction::LaunchApp {
+                app: AppRef::BundleId { id: " ".into() },
+            },
+            ShortcutAction::LaunchApp {
+                app: AppRef::Path { path: "".into() },
+            },
+            ShortcutAction::LaunchApp {
+                app: AppRef::Name { name: "".into() },
+            },
+        ];
+        for action in empties {
+            let r = validate_shortcut(&shortcut("ok", "n", action));
+            assert!(r.is_err(), "empty app ref must reject");
+        }
+    }
+
+    #[test]
+    fn validate_rejects_null_byte_in_any_field() {
+        let cases = [
+            ShortcutAction::OpenUrl {
+                url: "https://x.io/\0evil".into(),
+                browser_override: None,
+            },
+            ShortcutAction::LaunchApp {
+                app: AppRef::Path {
+                    path: "/safe\0/path".into(),
+                },
+            },
+            ShortcutAction::LaunchApp {
+                app: AppRef::BundleId {
+                    id: "com.app\0evil".into(),
+                },
+            },
+            ShortcutAction::LaunchApp {
+                app: AppRef::Name {
+                    name: "App\0".into(),
+                },
+            },
+        ];
+        for action in cases {
+            let r = validate_shortcut(&shortcut("ok", "Open", action));
+            assert!(r.is_err(), "null byte must reject");
+        }
+        let r = validate_shortcut(&shortcut("ok", "Op\0en", url_action("https://x.io")));
+        assert!(r.is_err(), "null byte in name must reject");
+    }
+
+    #[test]
+    fn validate_open_url_validates_browser_override_too() {
+        let r = validate_shortcut(&shortcut(
+            "ok",
+            "Open",
+            ShortcutAction::OpenUrl {
+                url: "https://x.io".into(),
+                browser_override: Some(AppRef::Path {
+                    path: "../escape".into(),
+                }),
+            },
+        ));
+        assert!(
+            r.is_err(),
+            "browser_override must be validated, not just url"
+        );
+    }
+}

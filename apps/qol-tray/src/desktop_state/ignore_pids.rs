@@ -28,3 +28,41 @@ pub(crate) fn is_ignored_pid(pid: u32) -> bool {
         .map(|set| set.contains(&pid))
         .unwrap_or(false)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn snapshot() -> HashSet<u32> {
+        ignore_pids().read().unwrap().clone()
+    }
+
+    #[test]
+    fn add_then_remove_round_trip() {
+        let pid = 700_001;
+        add_ignore_pid(pid);
+        assert!(snapshot().contains(&pid));
+        remove_ignore_pid(pid);
+        assert!(!snapshot().contains(&pid));
+    }
+
+    #[test]
+    fn add_is_idempotent_for_same_pid() {
+        let pid = 700_002;
+        add_ignore_pid(pid);
+        add_ignore_pid(pid);
+        let count = snapshot().iter().filter(|&&p| p == pid).count();
+        assert_eq!(count, 1);
+        remove_ignore_pid(pid);
+    }
+
+    #[test]
+    fn remove_unknown_pid_does_not_panic_or_clear_others() {
+        let kept = 700_003;
+        add_ignore_pid(kept);
+        remove_ignore_pid(900_001);
+        assert!(snapshot().contains(&kept));
+        remove_ignore_pid(kept);
+    }
+}
