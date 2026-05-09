@@ -212,4 +212,82 @@ mod tests {
             "{\n  \"enabled\": true,\n  \"mode\": \"cursor\"\n}"
         );
     }
+
+    #[test]
+    fn migrate_core_file_keeps_target_when_target_already_exists() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = tmp.path();
+        std::fs::create_dir_all(cfg.join("profile/core")).unwrap();
+        std::fs::write(
+            cfg.join("profile/core/hotkeys.json"),
+            r#"{"hotkeys":[{"id":"existing"}]}"#,
+        )
+        .unwrap();
+        std::fs::write(cfg.join("hotkeys.json"), r#"{"hotkeys":[{"id":"legacy"}]}"#).unwrap();
+
+        run_startup_cleanup(cfg).unwrap();
+
+        let kept = std::fs::read_to_string(cfg.join("profile/core/hotkeys.json")).unwrap();
+        assert!(
+            kept.contains("existing"),
+            "target preserved when both files exist: {kept}"
+        );
+        assert!(
+            cfg.join("hotkeys.json").exists(),
+            "legacy file is left in place when target already exists",
+        );
+    }
+
+    #[test]
+    fn migrate_core_file_skips_when_legacy_missing() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = tmp.path();
+
+        run_startup_cleanup(cfg).unwrap();
+
+        for legacy_name in ["hotkeys.json", "shortcuts.json", "task-runner.json"] {
+            assert!(
+                !cfg.join("profile/core").join(legacy_name).exists(),
+                "no migration target should be created for {legacy_name} when no legacy file exists",
+            );
+        }
+    }
+
+    #[test]
+    fn migrate_core_file_moves_empty_legacy_payload() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = tmp.path();
+        let cases = [
+            ("hotkeys.json", r#"{"hotkeys":[]}"#),
+            ("shortcuts.json", r#"{"shortcuts":[]}"#),
+            ("task-runner.json", r#"{"actions":{}}"#),
+        ];
+        for (file_name, content) in cases {
+            std::fs::write(cfg.join(file_name), content).unwrap();
+        }
+
+        run_startup_cleanup(cfg).unwrap();
+
+        for (file_name, content) in cases {
+            assert!(!cfg.join(file_name).exists(), "legacy {file_name} removed",);
+            let migrated_path = cfg.join("profile/core").join(file_name);
+            let migrated = std::fs::read_to_string(&migrated_path).unwrap();
+            assert_eq!(migrated, content, "{file_name} content preserved verbatim");
+        }
+    }
+
+    #[test]
+    fn migrate_core_file_preserves_corrupt_legacy_bytes() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = tmp.path();
+        std::fs::write(cfg.join("hotkeys.json"), "this is not valid json").unwrap();
+
+        run_startup_cleanup(cfg).unwrap();
+
+        let migrated = std::fs::read_to_string(cfg.join("profile/core/hotkeys.json")).unwrap();
+        assert_eq!(
+            migrated, "this is not valid json",
+            "migration is a pure rename and does not validate content",
+        );
+    }
 }

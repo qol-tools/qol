@@ -489,4 +489,98 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn sync_state_file_round_trip_preserves_all_fields() {
+        let original = SyncStateFile {
+            connection: Some(SyncConnection::Github(GitHubSyncConnection {
+                gist_id: "abc123def456".to_string(),
+                pull_on_launch: true,
+                push_on_change: false,
+            })),
+            remote_revision: Some("rev-7".to_string()),
+            last_synced_hash: Some("ff".repeat(32)),
+            last_sync_at: Some("2026-05-09T07:00:00+02:00".to_string()),
+            incident: Some(SyncIncident {
+                kind: "conflict".to_string(),
+                message: "diverged".to_string(),
+                backup_file: Some("20260509-070000-conflict.json".to_string()),
+                created_at: "2026-05-09T07:00:00+02:00".to_string(),
+            }),
+            last_error: Some("network unreachable".to_string()),
+        };
+
+        let serialized = serde_json::to_string(&original).unwrap();
+        let round_tripped: SyncStateFile = serde_json::from_str(&serialized).unwrap();
+
+        let original_json = serde_json::to_value(&original).unwrap();
+        let round_tripped_json = serde_json::to_value(&round_tripped).unwrap();
+        assert_eq!(
+            original_json, round_tripped_json,
+            "every persisted field must survive a JSON round-trip"
+        );
+    }
+
+    #[test]
+    fn sync_state_file_default_serializes_with_all_nulls() {
+        let value = serde_json::to_value(SyncStateFile::default()).unwrap();
+        let expected = serde_json::json!({
+            "connection": null,
+            "remote_revision": null,
+            "last_synced_hash": null,
+            "last_sync_at": null,
+            "incident": null,
+            "last_error": null,
+        });
+        assert_eq!(value, expected);
+    }
+
+    #[test]
+    fn sync_state_file_loads_partial_payloads() {
+        let cases = [
+            (serde_json::json!({}), "empty object"),
+            (
+                serde_json::json!({
+                    "last_synced_hash": "abc",
+                }),
+                "single field set",
+            ),
+            (
+                serde_json::json!({
+                    "connection": null,
+                    "extra_unknown_field": "ignored-for-forward-compat",
+                }),
+                "unknown field tolerated",
+            ),
+        ];
+        for (payload, label) in cases {
+            let parsed: SyncStateFile = serde_json::from_value(payload).unwrap_or_else(|err| {
+                panic!("{label} failed to parse: {err}");
+            });
+            assert!(parsed.connection.is_none(), "{label}");
+        }
+    }
+
+    #[test]
+    fn sync_incident_kind_field_is_a_free_string() {
+        let cases = [
+            "conflict",
+            "push_conflict",
+            "launch_pull_review",
+            "manual_pull_review",
+            "connect_pull_review",
+            "future_kind_we_haven_t_invented",
+        ];
+        for kind in cases {
+            let incident = SyncIncident {
+                kind: kind.to_string(),
+                message: "msg".to_string(),
+                backup_file: Some("backup.json".to_string()),
+                created_at: now_rfc3339(),
+            };
+            let serialized = serde_json::to_string(&incident).unwrap();
+            let parsed: SyncIncident = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(parsed.kind, kind);
+        }
+    }
 }

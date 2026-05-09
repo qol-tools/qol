@@ -60,4 +60,71 @@ mod tests {
     fn conflict_when_last_synced_is_unknown_and_hashes_differ() {
         assert_eq!(resolve_sync_action("A", "B", None), SyncAction::Conflict);
     }
+
+    #[test]
+    fn resolve_action_full_table() {
+        let cases: &[(&str, &str, Option<&str>, SyncAction, &str)] = &[
+            ("A", "A", Some("A"), SyncAction::NoOp, "fully-synced"),
+            ("A", "A", None, SyncAction::NoOp, "matched-without-history"),
+            (
+                "A",
+                "A",
+                Some("Z"),
+                SyncAction::NoOp,
+                "matched-overrides-stale-history",
+            ),
+            (
+                "A",
+                "B",
+                Some("A"),
+                SyncAction::FastForwardFromRemote,
+                "remote-advanced-from-known-base",
+            ),
+            (
+                "B",
+                "A",
+                Some("A"),
+                SyncAction::PushLocal,
+                "local-advanced-from-known-base",
+            ),
+            (
+                "B",
+                "C",
+                Some("A"),
+                SyncAction::Conflict,
+                "both-diverged-from-known-base",
+            ),
+            ("A", "B", None, SyncAction::Conflict, "first-sync-disagrees"),
+            (
+                "",
+                "B",
+                Some(""),
+                SyncAction::FastForwardFromRemote,
+                "empty-local-matches-empty-history",
+            ),
+            (
+                "A",
+                "",
+                Some("A"),
+                SyncAction::FastForwardFromRemote,
+                "remote-cleared-from-known-base-this-is-the-wipe-path",
+            ),
+            ("", "", Some("A"), SyncAction::NoOp, "both-cleared"),
+            ("", "", None, SyncAction::NoOp, "both-empty-no-history"),
+            (
+                "B",
+                "B",
+                Some("A"),
+                SyncAction::NoOp,
+                "drifted-but-now-aligned",
+            ),
+        ];
+        for (local, remote, last, expected, label) in cases {
+            assert_eq!(
+                &resolve_sync_action(local, remote, *last),
+                expected,
+                "{label}: local={local:?} remote={remote:?} last_synced={last:?}",
+            );
+        }
+    }
 }
