@@ -2,6 +2,7 @@ mod io;
 mod requests;
 
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::Path;
 use std::sync::Arc;
 
 use super::shared::SharedState;
@@ -10,26 +11,30 @@ use io::{prepare_stream, read_request};
 use requests::handle_request;
 
 pub(super) fn run(shared: Arc<SharedState>) {
-    let _ = std::fs::remove_file(STATE_SOCKET_PATH);
+    run_at(shared, Path::new(STATE_SOCKET_PATH));
+}
 
-    let Some(listener) = bind_listener() else {
+pub(crate) fn run_at(shared: Arc<SharedState>, path: &Path) {
+    let _ = std::fs::remove_file(path);
+
+    let Some(listener) = bind_listener(path) else {
         return;
     };
 
-    log::info!("Runtime socket listening on {}", STATE_SOCKET_PATH);
+    log::info!("Runtime socket listening on {}", path.display());
 
     for stream in listener.incoming() {
         spawn_connection(stream, Arc::clone(&shared));
     }
 }
 
-fn bind_listener() -> Option<UnixListener> {
-    match UnixListener::bind(STATE_SOCKET_PATH) {
+fn bind_listener(path: &Path) -> Option<UnixListener> {
+    match UnixListener::bind(path) {
         Ok(listener) => Some(listener),
         Err(error) => {
             log::error!(
                 "Failed to bind runtime socket at {}: {}",
-                STATE_SOCKET_PATH,
+                path.display(),
                 error
             );
             None

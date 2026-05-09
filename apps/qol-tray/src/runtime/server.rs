@@ -1,6 +1,6 @@
 mod poll;
-mod shared;
-mod socket;
+pub(crate) mod shared;
+pub(crate) mod socket;
 
 use std::sync::Arc;
 
