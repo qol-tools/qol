@@ -160,6 +160,7 @@ fn intersection_area(a: &MonitorBounds, b: &MonitorBounds) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use std::time::{Duration, Instant};
 
     fn mon(x: f32, y: f32, w: f32, h: f32) -> MonitorBounds {
@@ -459,5 +460,92 @@ mod tests {
             Some(at(base, 200)),
             "moved within same monitor with newer focus: stamp refreshed so cursor wins again",
         );
+    }
+
+    fn monitor_strategy() -> impl Strategy<Value = MonitorBounds> {
+        (
+            -4000.0f32..4000.0,
+            -4000.0f32..4000.0,
+            1.0f32..2000.0,
+            1.0f32..2000.0,
+        )
+            .prop_map(|(x, y, w, h)| mon(x, y, w, h))
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(200))]
+
+        #[test]
+        fn prop_monitor_for_point_inside_returns_some_inclusive_left_top(
+            m in monitor_strategy(),
+            dx in 0.0f32..1.0,
+            dy in 0.0f32..1.0,
+        ) {
+            let x = m.x + dx * (m.width - 0.001).max(0.0);
+            let y = m.y + dy * (m.height - 0.001).max(0.0);
+            prop_assert_eq!(monitor_for_point(&[m], x, y), Some(m));
+        }
+
+        #[test]
+        fn prop_monitor_for_point_outside_returns_none(
+            m in monitor_strategy(),
+            offset in 1.0f32..1000.0,
+            side in 0u8..4,
+        ) {
+            let (x, y) = match side {
+                0 => (m.x - offset, m.y + 1.0),
+                1 => (m.x + m.width + offset, m.y + 1.0),
+                2 => (m.x + 1.0, m.y - offset),
+                _ => (m.x + 1.0, m.y + m.height + offset),
+            };
+            prop_assert_eq!(monitor_for_point(&[m], x, y), None, "side={}", side);
+        }
+
+        #[test]
+        fn prop_monitor_for_point_right_bottom_edges_excluded(m in monitor_strategy()) {
+            let monitors = [m];
+            prop_assert_eq!(monitor_for_point(&monitors, m.x + m.width, m.y), None);
+            prop_assert_eq!(monitor_for_point(&monitors, m.x, m.y + m.height), None);
+        }
+
+        #[test]
+        fn prop_pick_active_monitor_returns_newer_stamp(
+            cursor_mon in monitor_strategy(),
+            focus_mon in monitor_strategy(),
+            cursor_first in any::<bool>(),
+        ) {
+            let base = Instant::now();
+            let (cursor_at, focus_at) = if cursor_first {
+                (at(base, 0), at(base, 100))
+            } else {
+                (at(base, 100), at(base, 0))
+            };
+            let state = InputState {
+                cursor: Some(Stamped { monitor: cursor_mon, at: cursor_at }),
+                focus: Some(Stamped { monitor: focus_mon, at: focus_at }),
+            };
+            let fallback = mon(0.0, 0.0, 1.0, 1.0);
+            let picked = pick_active_monitor(&state, fallback);
+            let expected = if cursor_at > focus_at { cursor_mon } else { focus_mon };
+            prop_assert_eq!(picked, expected);
+        }
+
+        #[test]
+        fn prop_pick_active_monitor_falls_back_when_both_absent(m in monitor_strategy()) {
+            let picked = pick_active_monitor(&InputState::default(), m);
+            prop_assert_eq!(picked, m);
+        }
+
+        #[test]
+        fn prop_monitor_for_bounds_picks_max_overlap(
+            ax in -1000.0f32..1000.0,
+            ay in -1000.0f32..1000.0,
+        ) {
+            let small = mon(ax, ay, 100.0, 100.0);
+            let big = mon(ax, ay, 200.0, 200.0);
+            let monitors = vec![small, big];
+            let window = mon(ax, ay, 200.0, 200.0);
+            prop_assert_eq!(monitor_for_bounds(&monitors, &window), Some(big));
+        }
     }
 }

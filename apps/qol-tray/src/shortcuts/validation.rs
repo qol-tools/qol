@@ -115,6 +115,7 @@ fn reject_traversal(path: &str, field: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     fn shortcut(id: &str, name: &str, action: ShortcutAction) -> Shortcut {
         Shortcut {
@@ -297,5 +298,93 @@ mod tests {
             r.is_err(),
             "browser_override must be validated, not just url"
         );
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(200))]
+
+        #[test]
+        fn prop_id_accepts_any_charset_within_length(id in "[A-Za-z0-9_][A-Za-z0-9_-]{0,63}") {
+            prop_assert!(validate_id(&id).is_ok(), "id={id:?}");
+        }
+
+        #[test]
+        fn prop_id_rejects_overlong_input(id in "[A-Za-z0-9_]{65,200}") {
+            prop_assert!(validate_id(&id).is_err(), "len {} should reject", id.len());
+        }
+
+        #[test]
+        fn prop_id_rejects_leading_dash(rest in "[A-Za-z0-9_-]{0,63}") {
+            let id = format!("-{rest}");
+            prop_assert!(validate_id(&id).is_err(), "id={id:?}");
+        }
+
+        #[test]
+        fn prop_id_rejects_disallowed_chars(
+            prefix in "[A-Za-z0-9_]{0,16}",
+            bad in "[^A-Za-z0-9_\\-]",
+            suffix in "[A-Za-z0-9_-]{0,16}",
+        ) {
+            let id = format!("{prefix}{bad}{suffix}");
+            prop_assert!(validate_id(&id).is_err(), "id={id:?} bad={bad:?}");
+        }
+
+        #[test]
+        fn prop_url_accepts_only_http_or_https_scheme(
+            scheme in "(http|https)",
+            host in "[A-Za-z0-9.-]{1,32}",
+            path in "[A-Za-z0-9/_.?=&-]{0,128}",
+        ) {
+            let url = format!("{scheme}://{host}/{path}");
+            let r = validate_shortcut(&shortcut("ok", "n", url_action(&url)));
+            prop_assert!(r.is_ok(), "url {url:?}");
+        }
+
+        #[test]
+        fn prop_url_rejects_non_http_schemes(
+            scheme in "(ftp|file|javascript|data|gopher|ssh|chrome|about)",
+            rest in "[A-Za-z0-9/:.,_-]{0,64}",
+        ) {
+            let url = format!("{scheme}:{rest}");
+            let r = validate_shortcut(&shortcut("ok", "n", url_action(&url)));
+            prop_assert!(r.is_err(), "url {url:?}");
+        }
+
+        #[test]
+        fn prop_path_rejects_traversal_anywhere(
+            prefix in "[A-Za-z0-9/_-]{0,32}",
+            suffix in "[A-Za-z0-9/_-]{0,32}",
+        ) {
+            let path = format!("{prefix}..{suffix}");
+            let r = validate_shortcut(
+                &shortcut(
+                    "ok",
+                    "n",
+                    ShortcutAction::LaunchApp { app: AppRef::Path { path } },
+                ),
+            );
+            prop_assert!(r.is_err());
+        }
+
+        #[test]
+        fn prop_null_byte_in_url_or_name_rejects(
+            prefix in "[A-Za-z0-9 ]{0,16}",
+            suffix in "[A-Za-z0-9 ]{0,16}",
+        ) {
+            let name = format!("{prefix}\0{suffix}");
+            let r = validate_shortcut(&shortcut("ok", &name, url_action("https://x.io")));
+            prop_assert!(r.is_err(), "null in name must reject");
+        }
+
+        #[test]
+        fn prop_name_length_boundary(extra in 0usize..200) {
+            let name: String = "a".repeat(MAX_NAME_LEN + extra);
+            let r = validate_shortcut(&shortcut("ok", &name, url_action("https://x.io")));
+            if extra == 0 {
+                prop_assert!(r.is_ok(), "len = MAX_NAME_LEN must accept");
+            } else {
+                prop_assert!(r.is_err(), "len > MAX_NAME_LEN must reject");
+            }
+        }
     }
 }

@@ -52,6 +52,7 @@ fn event_kind(event: &RuntimeEvent) -> RuntimeEventKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use std::sync::mpsc as std_mpsc;
     use std::time::Duration;
 
@@ -217,5 +218,84 @@ mod tests {
             &entry,
             &[cursor_moved(1.0, 1.0), focus_changed()],
         ));
+    }
+
+    fn event_strategy() -> impl Strategy<Value = RuntimeEvent> {
+        prop_oneof![
+            (any::<f32>(), any::<f32>()).prop_map(|(x, y)| cursor_moved(x, y)),
+            Just(active_monitor_changed()),
+            Just(focus_changed()),
+            Just(monitors_changed()),
+        ]
+    }
+
+    fn interest_set() -> impl Strategy<Value = HashSet<RuntimeEventKind>> {
+        proptest::collection::hash_set(
+            prop_oneof![
+                Just(RuntimeEventKind::CursorMoved),
+                Just(RuntimeEventKind::FocusChanged),
+                Just(RuntimeEventKind::ActiveMonitorChanged),
+                Just(RuntimeEventKind::MonitorsChanged),
+            ],
+            0..=4,
+        )
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(200))]
+
+        #[test]
+        fn prop_publish_delivers_exactly_subscribed_kinds(
+            interests_a in interest_set(),
+            interests_b in interest_set(),
+            events in proptest::collection::vec(event_strategy(), 0..32),
+        ) {
+            let subs = Mutex::new(Vec::new());
+            let (tx_a, rx_a) = std_mpsc::channel();
+            let (tx_b, rx_b) = std_mpsc::channel();
+            push(&subs, interests_a.clone(), tx_a);
+            push(&subs, interests_b.clone(), tx_b);
+
+            publish(&subs, &events);
+
+            let received_a = drain(&rx_a);
+            let received_b = drain(&rx_b);
+            let expected_a: Vec<_> = events.iter()
+                .filter(|event| interests_a.contains(&event_kind(event)))
+                .cloned()
+                .collect();
+            let expected_b: Vec<_> = events.iter()
+                .filter(|event| interests_b.contains(&event_kind(event)))
+                .cloned()
+                .collect();
+            prop_assert_eq!(received_a.len(), expected_a.len());
+            prop_assert_eq!(received_b.len(), expected_b.len());
+            for (got, exp) in received_a.iter().zip(expected_a.iter()) {
+                prop_assert_eq!(event_kind(got), event_kind(exp));
+            }
+            for (got, exp) in received_b.iter().zip(expected_b.iter()) {
+                prop_assert_eq!(event_kind(got), event_kind(exp));
+            }
+        }
+
+        #[test]
+        fn prop_publish_evicts_disconnected_subscribers(
+            interests in interest_set(),
+            events in proptest::collection::vec(event_strategy(), 1..16),
+        ) {
+            // Only meaningful when at least one event matches an interest, otherwise
+            // send is never attempted and eviction is impossible.
+            let any_match = events.iter().any(|event| interests.contains(&event_kind(event)));
+            prop_assume!(any_match);
+
+            let subs = Mutex::new(Vec::new());
+            let (tx, rx) = std_mpsc::channel();
+            push(&subs, interests, tx);
+            drop(rx);
+
+            publish(&subs, &events);
+
+            prop_assert!(!has_subscribers(&subs), "disconnected sub must be evicted");
+        }
     }
 }
