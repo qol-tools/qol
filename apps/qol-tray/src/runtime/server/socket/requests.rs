@@ -9,6 +9,10 @@ use super::super::shared::SharedState;
 use super::io::{write_flushed_json_line, write_state};
 
 const SUBSCRIBER_WRITE_TIMEOUT_SECS: u64 = 5;
+#[cfg(not(test))]
+const SUBSCRIBER_KEEPALIVE_PROBE: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const SUBSCRIBER_KEEPALIVE_PROBE: Duration = Duration::from_millis(50);
 
 pub(super) fn handle_request(request: &str, writer: &mut UnixStream, shared: &SharedState) {
     if handle_json_request(request, writer, shared) {
@@ -57,11 +61,42 @@ fn handle_subscription(
 }
 
 fn forward_events(writer: &mut UnixStream, rx: std_mpsc::Receiver<RuntimeEvent>) {
-    for event in rx {
-        if !write_flushed_json_line(writer, &event) {
-            return;
+    loop {
+        match rx.recv_timeout(SUBSCRIBER_KEEPALIVE_PROBE) {
+            Ok(event) => {
+                if !write_flushed_json_line(writer, &event) {
+                    return;
+                }
+            }
+            Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                if !peer_is_alive(writer) {
+                    return;
+                }
+            }
+            Err(std_mpsc::RecvTimeoutError::Disconnected) => return,
         }
     }
+}
+
+fn peer_is_alive(writer: &UnixStream) -> bool {
+    use std::os::unix::io::AsRawFd;
+    let fd = writer.as_raw_fd();
+    let mut buf = [0u8; 1];
+    let n = unsafe {
+        libc::recv(
+            fd,
+            buf.as_mut_ptr() as *mut libc::c_void,
+            buf.len(),
+            libc::MSG_PEEK | libc::MSG_DONTWAIT,
+        )
+    };
+    if n == 0 {
+        return false;
+    }
+    if n > 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock
 }
 
 fn handle_text_request(request: &str, writer: &mut UnixStream, shared: &SharedState) {
@@ -235,5 +270,77 @@ mod tests {
         apply_focus(&shared, 1, "test");
         let focus = shared.input().focus.expect("focus must be stamped");
         assert_eq!(focus.monitor, monitors[1]);
+    }
+
+    #[test]
+    fn peer_is_alive_returns_false_when_peer_closed() {
+        let (writer, reader) = pair();
+        drop(reader);
+        assert!(!peer_is_alive(&writer));
+    }
+
+    #[test]
+    fn peer_is_alive_returns_true_while_peer_holds_handle() {
+        let (writer, _reader) = pair();
+        assert!(peer_is_alive(&writer));
+    }
+
+    #[test]
+    fn forward_events_exits_after_peer_disconnects_without_any_publish() {
+        let (writer, reader) = pair();
+        let (_tx, rx) = std_mpsc::channel::<RuntimeEvent>();
+        drop(reader);
+
+        let handle = std::thread::spawn(move || {
+            let mut writer = writer;
+            forward_events(&mut writer, rx);
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !handle.is_finished() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            handle.is_finished(),
+            "forward_events must exit on peer-close within keepalive window",
+        );
+        handle.join().expect("forward_events thread");
+    }
+
+    #[test]
+    fn forward_events_exits_immediately_when_channel_disconnects() {
+        let (writer, _reader) = pair();
+        let (tx, rx) = std_mpsc::channel::<RuntimeEvent>();
+        drop(tx);
+
+        let handle = std::thread::spawn(move || {
+            let mut writer = writer;
+            forward_events(&mut writer, rx);
+        });
+
+        handle
+            .join()
+            .expect("forward_events must return on Disconnected");
+    }
+
+    #[test]
+    fn forward_events_writes_event_when_peer_alive() {
+        let (writer, mut reader) = pair();
+        let (tx, rx) = std_mpsc::channel::<RuntimeEvent>();
+        tx.send(RuntimeEvent::CursorMoved { x: 7.0, y: 11.0 })
+            .unwrap();
+        drop(tx);
+
+        let handle = std::thread::spawn(move || {
+            let mut writer = writer;
+            forward_events(&mut writer, rx);
+        });
+
+        handle.join().expect("forward_events thread");
+        let mut buf = [0u8; 256];
+        let _ = reader.set_read_timeout(Some(Duration::from_millis(200)));
+        let n = reader.read(&mut buf).unwrap_or(0);
+        let body = String::from_utf8_lossy(&buf[..n]);
+        assert!(body.contains("cursor_moved"), "got: {body:?}");
     }
 }
