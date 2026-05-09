@@ -33,9 +33,27 @@ pub struct LocalFolderSyncConnection {
     pub push_on_change: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncIncidentKind {
+    Conflict,
+    PushConflict,
+    LaunchPullReview,
+    ManualPullReview,
+    ConnectPullReview,
+    #[serde(other)]
+    Unknown,
+}
+
+impl SyncIncidentKind {
+    pub fn blocks_auto_sync(self) -> bool {
+        matches!(self, Self::Conflict | Self::PushConflict)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SyncIncident {
-    pub kind: String,
+    pub kind: SyncIncidentKind,
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backup_file: Option<String>,

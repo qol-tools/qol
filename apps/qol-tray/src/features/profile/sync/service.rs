@@ -18,7 +18,7 @@ use super::state::{
 };
 use super::types::{
     SyncActionResult, SyncBackupEntry, SyncBackupPreview, SyncConnectRequest, SyncConnection,
-    SyncProviderDefinition,
+    SyncIncidentKind, SyncProviderDefinition,
 };
 use super::AUTO_PUSH_INTERVAL_SECS;
 
@@ -202,8 +202,7 @@ impl SyncService {
             let blocked_by_conflict = state
                 .incident
                 .as_ref()
-                .map(|incident| incident.kind == "conflict" || incident.kind == "push_conflict")
-                .unwrap_or(false);
+                .is_some_and(|incident| incident.kind.blocks_auto_sync());
             if blocked_by_conflict || state.last_error.is_some() {
                 false
             } else {
@@ -401,7 +400,7 @@ impl SyncService {
                     remote_revision: remote.revision,
                     last_synced_hash_update: None,
                     incident: Some(super::types::SyncIncident {
-                        kind: "conflict".to_string(),
+                        kind: SyncIncidentKind::Conflict,
                         message,
                         backup_file: Some(filename_string(&backup_file)),
                         created_at: now_rfc3339(),
@@ -424,7 +423,7 @@ impl SyncService {
                 let message = pull_success_message(mode, backup_required, result.success);
                 let incident = if backup_required || !result.success {
                     Some(super::types::SyncIncident {
-                        kind: incident_kind(mode).to_string(),
+                        kind: incident_kind(mode),
                         message: message.clone(),
                         backup_file: backup_file.as_ref().map(|path| filename_string(path)),
                         created_at: now_rfc3339(),
@@ -537,7 +536,7 @@ impl SyncService {
             remote_revision: remote.revision,
             last_synced_hash_update: Some(remote_hash),
             incident: Some(super::types::SyncIncident {
-                kind: "push_conflict".to_string(),
+                kind: SyncIncidentKind::PushConflict,
                 message: message.to_string(),
                 backup_file: Some(filename_string(&backup_file)),
                 created_at: now_rfc3339(),
@@ -675,7 +674,7 @@ pub(crate) fn launch_pull_decision(state: &SyncStateFile) -> LaunchPullDecision 
     if state
         .incident
         .as_ref()
-        .is_some_and(|incident| is_blocking_incident_kind(&incident.kind))
+        .is_some_and(|incident| incident.kind.blocks_auto_sync())
     {
         return LaunchPullDecision::Skip("Cloud sync pull skipped: unresolved conflict");
     }
@@ -688,10 +687,6 @@ pub(crate) fn launch_pull_decision(state: &SyncStateFile) -> LaunchPullDecision 
         return LaunchPullDecision::Skip("Cloud sync launch pull is disabled");
     }
     LaunchPullDecision::Proceed
-}
-
-pub(crate) fn is_blocking_incident_kind(kind: &str) -> bool {
-    matches!(kind, "conflict" | "push_conflict")
 }
 
 fn should_resolve_push_conflict(
@@ -750,9 +745,9 @@ mod tests {
         })
     }
 
-    fn incident_with_kind(kind: &str) -> SyncIncident {
+    fn incident_with_kind(kind: SyncIncidentKind) -> SyncIncident {
         SyncIncident {
-            kind: kind.to_string(),
+            kind,
             message: String::new(),
             backup_file: None,
             created_at: now_rfc3339(),
@@ -792,14 +787,27 @@ mod tests {
     #[test]
     fn launch_pull_decision_blocks_only_on_conflict_kinds() {
         let cases = [
-            ("conflict", LaunchPullDecision::Skip(CONFLICT_SKIP)),
-            ("push_conflict", LaunchPullDecision::Skip(CONFLICT_SKIP)),
-            ("launch_pull_review", LaunchPullDecision::Proceed),
-            ("manual_pull_review", LaunchPullDecision::Proceed),
-            ("connect_pull_review", LaunchPullDecision::Proceed),
-            ("review", LaunchPullDecision::Proceed),
-            ("future_unknown_kind", LaunchPullDecision::Proceed),
-            ("", LaunchPullDecision::Proceed),
+            (
+                SyncIncidentKind::Conflict,
+                LaunchPullDecision::Skip(CONFLICT_SKIP),
+            ),
+            (
+                SyncIncidentKind::PushConflict,
+                LaunchPullDecision::Skip(CONFLICT_SKIP),
+            ),
+            (
+                SyncIncidentKind::LaunchPullReview,
+                LaunchPullDecision::Proceed,
+            ),
+            (
+                SyncIncidentKind::ManualPullReview,
+                LaunchPullDecision::Proceed,
+            ),
+            (
+                SyncIncidentKind::ConnectPullReview,
+                LaunchPullDecision::Proceed,
+            ),
+            (SyncIncidentKind::Unknown, LaunchPullDecision::Proceed),
         ];
         for (kind, expected) in cases {
             let state = SyncStateFile {
@@ -815,7 +823,7 @@ mod tests {
     fn launch_pull_decision_blocks_even_when_pull_on_launch_disabled() {
         let state = SyncStateFile {
             connection: Some(github_connection(false)),
-            incident: Some(incident_with_kind("conflict")),
+            incident: Some(incident_with_kind(SyncIncidentKind::Conflict)),
             ..SyncStateFile::default()
         };
         assert_eq!(
@@ -837,24 +845,6 @@ mod tests {
             LaunchPullDecision::Proceed,
             "last_error gates auto_push_if_dirty but not pull_on_launch",
         );
-    }
-
-    #[test]
-    fn is_blocking_incident_kind_only_matches_conflict_variants() {
-        let cases = [
-            ("conflict", true),
-            ("push_conflict", true),
-            ("launch_pull_review", false),
-            ("manual_pull_review", false),
-            ("connect_pull_review", false),
-            ("review", false),
-            ("", false),
-            ("Conflict", false),
-            ("conflict ", false),
-        ];
-        for (kind, expected) in cases {
-            assert_eq!(is_blocking_incident_kind(kind), expected, "kind: {kind:?}",);
-        }
     }
 
     const CONFLICT_SKIP: &str = "Cloud sync pull skipped: unresolved conflict";
@@ -970,9 +960,9 @@ mod tests {
         );
         let state = env.load_persisted_state();
         assert_eq!(
-            state.incident.as_ref().map(|i| i.kind.as_str()),
-            Some("connect_pull_review"),
-            "Connect mode incident is review, NOT 'conflict' - so the launch-pull conflict gate does NOT block subsequent pulls in this scenario",
+            state.incident.as_ref().map(|i| i.kind),
+            Some(SyncIncidentKind::ConnectPullReview),
+            "Connect mode incident is review, NOT Conflict - so the launch-pull conflict gate does NOT block subsequent pulls in this scenario",
         );
     }
 
@@ -1004,9 +994,9 @@ mod tests {
         );
         let state = env.load_persisted_state();
         assert_eq!(
-            state.incident.as_ref().map(|i| i.kind.as_str()),
-            Some("conflict"),
-            "incident kind must be 'conflict' so the launch-pull gate fires next restart",
+            state.incident.as_ref().map(|i| i.kind),
+            Some(SyncIncidentKind::Conflict),
+            "incident kind must be Conflict so the launch-pull gate fires next restart",
         );
         assert!(
             env.list_backups()
@@ -1026,7 +1016,7 @@ mod tests {
             connection: Some(env.folder_connection(true)),
             last_synced_hash: Some("any-stale-hash".to_string()),
             incident: Some(SyncIncident {
-                kind: "conflict".to_string(),
+                kind: SyncIncidentKind::Conflict,
                 message: "diverged".to_string(),
                 backup_file: None,
                 created_at: now_rfc3339(),
@@ -1056,7 +1046,7 @@ mod tests {
             remote_revision: Some("preserved-rev".to_string()),
             last_sync_at: Some("2026-05-01T00:00:00Z".to_string()),
             incident: Some(SyncIncident {
-                kind: "conflict".to_string(),
+                kind: SyncIncidentKind::Conflict,
                 message: "diverged".to_string(),
                 backup_file: Some("20260501-000000-conflict.json".to_string()),
                 created_at: now_rfc3339(),
@@ -1089,7 +1079,7 @@ mod tests {
             remote_revision: Some("rev".to_string()),
             last_sync_at: Some("2026-01-01T00:00:00Z".to_string()),
             incident: Some(SyncIncident {
-                kind: "conflict".to_string(),
+                kind: SyncIncidentKind::Conflict,
                 message: "test".to_string(),
                 backup_file: None,
                 created_at: now_rfc3339(),

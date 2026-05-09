@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-use super::types::{SyncBackupEntry, SyncHealth, SyncIncident, SyncStatus};
+use super::types::{SyncBackupEntry, SyncHealth, SyncIncident, SyncIncidentKind, SyncStatus};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct SyncStateFile {
@@ -233,11 +233,11 @@ pub(crate) fn pull_success_message(
     "Remote profile pulled with warnings".to_string()
 }
 
-pub(crate) fn incident_kind(mode: PullMode) -> &'static str {
+pub(crate) fn incident_kind(mode: PullMode) -> SyncIncidentKind {
     match mode {
-        PullMode::Launch => "launch_pull_review",
-        PullMode::Manual => "manual_pull_review",
-        PullMode::Connect => "connect_pull_review",
+        PullMode::Launch => SyncIncidentKind::LaunchPullReview,
+        PullMode::Manual => SyncIncidentKind::ManualPullReview,
+        PullMode::Connect => SyncIncidentKind::ConnectPullReview,
     }
 }
 
@@ -285,7 +285,7 @@ mod tests {
 
         let attention = SyncStateFile {
             incident: Some(SyncIncident {
-                kind: "review".to_string(),
+                kind: SyncIncidentKind::Unknown,
                 message: "needs review".to_string(),
                 backup_file: None,
                 created_at: now_rfc3339(),
@@ -337,7 +337,7 @@ mod tests {
                 push_on_change: true,
             })),
             incident: Some(SyncIncident {
-                kind: "review".to_string(),
+                kind: SyncIncidentKind::Unknown,
                 message: "needs review".to_string(),
                 backup_file: None,
                 created_at: now_rfc3339(),
@@ -471,9 +471,18 @@ mod tests {
 
     #[test]
     fn incident_kind_maps_all_modes() {
-        assert_eq!(incident_kind(PullMode::Launch), "launch_pull_review");
-        assert_eq!(incident_kind(PullMode::Manual), "manual_pull_review");
-        assert_eq!(incident_kind(PullMode::Connect), "connect_pull_review");
+        assert_eq!(
+            incident_kind(PullMode::Launch),
+            SyncIncidentKind::LaunchPullReview
+        );
+        assert_eq!(
+            incident_kind(PullMode::Manual),
+            SyncIncidentKind::ManualPullReview
+        );
+        assert_eq!(
+            incident_kind(PullMode::Connect),
+            SyncIncidentKind::ConnectPullReview
+        );
     }
 
     #[test]
@@ -502,7 +511,7 @@ mod tests {
             last_synced_hash: Some("ff".repeat(32)),
             last_sync_at: Some("2026-05-09T07:00:00+02:00".to_string()),
             incident: Some(SyncIncident {
-                kind: "conflict".to_string(),
+                kind: SyncIncidentKind::Conflict,
                 message: "diverged".to_string(),
                 backup_file: Some("20260509-070000-conflict.json".to_string()),
                 created_at: "2026-05-09T07:00:00+02:00".to_string(),
@@ -562,25 +571,59 @@ mod tests {
     }
 
     #[test]
-    fn sync_incident_kind_field_is_a_free_string() {
+    fn sync_incident_kind_round_trips_through_json_for_known_variants() {
         let cases = [
-            "conflict",
-            "push_conflict",
-            "launch_pull_review",
-            "manual_pull_review",
-            "connect_pull_review",
-            "future_kind_we_haven_t_invented",
+            (SyncIncidentKind::Conflict, "\"conflict\""),
+            (SyncIncidentKind::PushConflict, "\"push_conflict\""),
+            (SyncIncidentKind::LaunchPullReview, "\"launch_pull_review\""),
+            (SyncIncidentKind::ManualPullReview, "\"manual_pull_review\""),
+            (
+                SyncIncidentKind::ConnectPullReview,
+                "\"connect_pull_review\"",
+            ),
         ];
-        for kind in cases {
-            let incident = SyncIncident {
-                kind: kind.to_string(),
-                message: "msg".to_string(),
-                backup_file: Some("backup.json".to_string()),
-                created_at: now_rfc3339(),
-            };
-            let serialized = serde_json::to_string(&incident).unwrap();
-            let parsed: SyncIncident = serde_json::from_str(&serialized).unwrap();
-            assert_eq!(parsed.kind, kind);
+        for (variant, expected_json) in cases {
+            let serialized = serde_json::to_string(&variant).unwrap();
+            assert_eq!(serialized, expected_json, "variant: {variant:?}");
+            let parsed: SyncIncidentKind = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(parsed, variant, "round-trip variant: {variant:?}");
+        }
+    }
+
+    #[test]
+    fn sync_incident_kind_decodes_unknown_kinds_as_unknown_for_forward_compat() {
+        let cases = [
+            "\"future_kind_we_haven_t_invented\"",
+            "\"\"",
+            "\"Conflict\"",
+            "\"conflict \"",
+        ];
+        for payload in cases {
+            let parsed: SyncIncidentKind = serde_json::from_str(payload).unwrap();
+            assert_eq!(
+                parsed,
+                SyncIncidentKind::Unknown,
+                "non-canonical kind {payload} must deserialize as Unknown so a state file written by a newer or buggy build does not fail to load"
+            );
+            assert!(
+                !parsed.blocks_auto_sync(),
+                "Unknown does not block auto-sync (matches old free-string behaviour for unrecognised kinds)"
+            );
+        }
+    }
+
+    #[test]
+    fn sync_incident_kind_blocks_auto_sync_only_for_conflict_variants() {
+        let cases = [
+            (SyncIncidentKind::Conflict, true),
+            (SyncIncidentKind::PushConflict, true),
+            (SyncIncidentKind::LaunchPullReview, false),
+            (SyncIncidentKind::ManualPullReview, false),
+            (SyncIncidentKind::ConnectPullReview, false),
+            (SyncIncidentKind::Unknown, false),
+        ];
+        for (kind, expected) in cases {
+            assert_eq!(kind.blocks_auto_sync(), expected, "kind: {kind:?}");
         }
     }
 }

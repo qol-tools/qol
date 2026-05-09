@@ -12,6 +12,6 @@ pub use service::SyncService;
 pub use types::{
     GitHubSyncConnection, LocalFolderSyncConnection, SyncActionResult, SyncBackupEntry,
     SyncBackupPreview, SyncConnectRequest, SyncConnection, SyncHealth, SyncIncident,
-    SyncProviderDefinition, SyncProviderFieldDefinition, SyncProviderFieldKey,
+    SyncIncidentKind, SyncProviderDefinition, SyncProviderFieldDefinition, SyncProviderFieldKey,
     SyncProviderFieldKind, SyncProviderFieldSection, SyncProviderKind, SyncStatus,
 };
