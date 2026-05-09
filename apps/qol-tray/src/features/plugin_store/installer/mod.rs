@@ -10,6 +10,9 @@ mod operations;
 mod source;
 mod staging;
 
+#[doc(hidden)]
+pub mod testing;
+
 const GIT_TIMEOUT: Duration = Duration::from_secs(120);
 const DEFAULT_CARGO_BUILD_JOBS: usize = 4;
 const CARGO_BUILD_TIMEOUT: Duration = Duration::from_secs(300);

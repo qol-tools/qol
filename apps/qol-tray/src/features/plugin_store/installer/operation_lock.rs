@@ -20,6 +20,7 @@ pub(super) fn acquire_operation_lock(
     }
 }
 
+#[derive(Debug)]
 pub(super) struct PluginOperationLock {
     path: PathBuf,
 }
@@ -39,7 +40,7 @@ fn ensure_plugins_dir(plugins_dir: &Path) -> Result<()> {
     })
 }
 
-fn lock_path(plugins_dir: &Path, plugin_id: &str) -> PathBuf {
+pub(super) fn lock_path(plugins_dir: &Path, plugin_id: &str) -> PathBuf {
     plugins_dir.join(format!(".{}.lock", plugin_id))
 }
 
