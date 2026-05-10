@@ -57,5 +57,5 @@ export function useGalleryShortcutEditorController() {
 }
 
 export function GalleryShortcutEditorSubPage() {
-    return html`<${ShortcutEditorSubPage} slot=${galleryShortcutEditorSlot} />`;
+    return html`<${ShortcutEditorSubPage} slot=${galleryShortcutEditorSlot} viewId="dev-gallery-shortcut-row-editor" />`;
 }

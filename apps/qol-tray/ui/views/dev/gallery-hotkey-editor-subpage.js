@@ -87,5 +87,5 @@ export function useGalleryHotkeyEditorController() {
 }
 
 export function GalleryHotkeyEditorSubPage() {
-    return html`<${HotkeyEditorSubPage} slot=${galleryHotkeyEditorSlot} />`;
+    return html`<${HotkeyEditorSubPage} slot=${galleryHotkeyEditorSlot} viewId="dev-gallery-hotkey-row-editor" />`;
 }
