@@ -1,6 +1,7 @@
 # qol-color
 
-[![CI](https://github.com/qol-tools/qol-color/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/qol-color/actions/workflows/ci.yml)
+[![tests](https://github.com/qol-tools/qol-color/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/qol-color/actions/workflows/tests.yml)
+[![lint](https://github.com/qol-tools/qol-color/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/qol-color/actions/workflows/lint.yml)
 
 Hex color parsing for qol-tools.
 
