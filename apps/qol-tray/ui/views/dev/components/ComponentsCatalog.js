@@ -60,6 +60,25 @@ function CatalogSection({ title, children }) {
     `;
 }
 
+function Interactive({ inert, children }) {
+    return html`
+        <div class="catalog-column">
+            <div class="catalog-column-label">Interactive</div>
+            <div class="catalog-try" inert=${inert || null}>${children}</div>
+        </div>
+    `;
+}
+
+function States({ className, children }) {
+    const cls = ['catalog-states', className].filter(Boolean).join(' ');
+    return html`
+        <div class="catalog-column">
+            <div class="catalog-column-label">States</div>
+            <div class=${cls} inert>${children}</div>
+        </div>
+    `;
+}
+
 function StateLabel({ children }) {
     return html`<div class="catalog-state-label">${children}</div>`;
 }
@@ -77,10 +96,10 @@ function ButtonShowcase() {
     return html`
         <${CatalogSection} title="Buttons">
             <div class="catalog-showcase">
-                <div class="catalog-try">
+                <${Interactive}>
                     <div><${Button} variant="btn-primary" onActivate=${() => {}}>Interactive<//></div>
-                </div>
-                <div class="catalog-states" inert>
+                <//>
+                <${States}>
                     <${StateLabel}>variants<//>
                     <div class="catalog-state-inline">
                         <${Button}>Secondary<//> <${Button} variant="btn-primary">Primary<//> <${Button} variant="btn-ghost">Ghost<//> <${Button} variant="btn-danger">Danger<//> <${Button} disabled>Disabled<//>
@@ -89,7 +108,7 @@ function ButtonShowcase() {
                     <div class="catalog-state-inline">
                         <${Button} small>Secondary<//> <${Button} small variant="btn-primary">Primary<//> <${Button} small variant="btn-ghost">Ghost<//>
                     </div>
-                </div>
+                <//>
             </div>
         <//>
     `;
@@ -99,14 +118,14 @@ function StatusShowcase() {
     return html`
         <${CatalogSection} title="Status indicators">
             <div class="catalog-showcase">
-                <div class="catalog-try" inert>
+                <${Interactive} inert>
                     <div class="catalog-state-inline">
                         <${Badge}>3<//>
                         <${Badge} style=${{ background: 'rgba(var(--success-rgb),0.14)', borderColor: 'rgba(var(--success-rgb),0.26)' }}>OK<//>
                         <${Badge} style=${{ background: 'rgba(var(--warning-rgb),0.16)', borderColor: 'rgba(var(--warning-rgb),0.3)' }}>Review<//>
                     </div>
-                </div>
-                <div class="catalog-states" inert>
+                <//>
+                <${States}>
                     <${StateLabel}>health dots<//>
                     <div class="catalog-state-inline">
                         <span class="catalog-status-row"><${HealthDot} /> None</span>
@@ -117,7 +136,7 @@ function StatusShowcase() {
                     <${StateLabel}>alerts<//>
                     <${Alert} variant="warning">Warning alert<//>
                     <${Alert} variant="error">Error alert<//>
-                </div>
+                <//>
             </div>
         <//>
     `;
@@ -127,13 +146,13 @@ function SpinnerShowcase() {
     return html`
         <${CatalogSection} title="Spinner">
             <div class="catalog-showcase">
-                <div class="catalog-try" inert><${RefreshButton} /></div>
-                <div class="catalog-states" inert>
+                <${Interactive} inert><${RefreshButton} /><//>
+                <${States}>
                     <${StateLabel}>idle<//>
                     <${RefreshButton} />
                     <${StateLabel}>spinning<//>
                     <${RefreshButton} spinning />
-                </div>
+                <//>
             </div>
         <//>
     `;
@@ -156,8 +175,8 @@ function DropdownShowcase() {
     return html`
         <${CatalogSection} title="Dropdown">
             <div class="catalog-showcase">
-                <div class="catalog-try"><${CustomSelect} value=${value} options=${options} labels=${labels} onChange=${setValue} /></div>
-                <div class="catalog-states" inert>
+                <${Interactive}><${CustomSelect} value=${value} options=${options} labels=${labels} onChange=${setValue} /><//>
+                <${States}>
                     <${StateLabel}>closed<//>
                     <${CustomSelect} value="github" options=${options} labels=${labels} onChange=${() => {}} />
                     <${StateLabel}>compact<//>
@@ -176,7 +195,7 @@ function DropdownShowcase() {
                             </div>
                         </div>
                     </div>
-                </div>
+                <//>
             </div>
         <//>
     `;
@@ -187,13 +206,13 @@ function ExpanderShowcase() {
     return html`
         <${CatalogSection} title="Expander">
             <div class="catalog-showcase">
-                <div class="catalog-try">
+                <${Interactive}>
                     <${Expander} open=${open} onToggle=${() => setOpen(!open)}>
                         <${ExpanderTrigger}>${open ? 'Expanded' : 'Collapsed'}<//>
                         <${ExpanderBody}><span style="color:var(--text-muted); font-size:var(--fs-sm);">Content here.</span><//>
                     <//>
-                </div>
-                <div class="catalog-states" inert>
+                <//>
+                <${States}>
                     <${StateLabel}>collapsed<//>
                     <${Expander} open=${false} onToggle=${() => {}}>
                         <${ExpanderTrigger}>Section A<//>
@@ -203,7 +222,7 @@ function ExpanderShowcase() {
                         <${ExpanderTrigger}>Section B<//>
                         <${ExpanderBody}><span style="color:var(--text-muted); font-size:var(--fs-sm);">Visible content.</span><//>
                     <//>
-                </div>
+                <//>
             </div>
         <//>
     `;
@@ -214,15 +233,15 @@ function ToggleShowcase() {
     return html`
         <${CatalogSection} title="Toggle">
             <div class="catalog-showcase">
-                <div class="catalog-try">
+                <${Interactive}>
                     <${ToggleSwitch} checked=${on} onChange=${setOn} label="Push on change" description="Automatically sync when profile changes" />
-                </div>
-                <div class="catalog-states" inert>
+                <//>
+                <${States}>
                     <${StateLabel}>on<//>
                     <${ToggleSwitch} checked=${true} onChange=${() => {}} label="Enabled" />
                     <${StateLabel}>off<//>
                     <${ToggleSwitch} checked=${false} onChange=${() => {}} label="Disabled" />
-                </div>
+                <//>
             </div>
         <//>
     `;
@@ -329,7 +348,7 @@ function DevPluginRowShowcase() {
     return html`
         <${CatalogSection} title="Dev plugin row">
             <div class="catalog-showcase">
-                <div class="catalog-try">
+                <${Interactive}>
                     <div class="plugin-list">
                         <${DevPluginRow} name="qol-window-actions" path="~/repos/qol-tools/qol-window-actions"
                             status=${status}
@@ -340,8 +359,8 @@ function DevPluginRowShowcase() {
                             meta=${html`<span style="font-size:var(--fs-xs); color:var(--text-faint)">${busy ? 'Compiling...' : rebuildActive ? 'Source changed • fp a3b2c1d0' : linked ? 'fp a3b2c1d0 • Built 2m ago' : ''}</span>`} />
                     </div>
                     <${MockControls} actions=${mockActions} />
-                </div>
-                <div class="catalog-states" inert>
+                <//>
+                <${States}>
                     <${StateLabel}>linked (idle)<//>
                     <div class="plugin-list"><${DevPluginRow} name="qol-alt-tab" path="~/repos/qol-tools/qol-alt-tab"
                         status="linked" actionIcon=${rebuildIcon('rebuild-idle')} /></div>
@@ -357,7 +376,7 @@ function DevPluginRowShowcase() {
                     <div class="plugin-list"><${DevPluginRow} name="qol-alt-tab" path="~/repos/qol-tools/qol-alt-tab"
                         status="local" actionIcon=${rebuildIcon('rebuild-idle')}
                         badges=${html`<${Badge} style=${{ background: 'rgba(var(--warning-rgb),0.16)', borderColor: 'rgba(var(--warning-rgb),0.3)' }}>Local<//>`} /></div>
-                </div>
+                <//>
             </div>
         <//>
     `;
@@ -398,19 +417,19 @@ function SuppressedRowShowcase() {
     return html`
         <${CatalogSection} title="Suppressed row">
             <div class="catalog-showcase">
-                <div class="catalog-try">
+                <${Interactive}>
                     <${ListGroup} className="logs-suppressed-list" onDeselect=${sel.deselect}>
                         <${SuppressedRow} sigKey="qol-alt-tab::hotkey_register_failed" entry=${entry}
                             expanded=${expanded} index=${0} selected=${sel.selected(0)}
                             onSelect=${sel.select} onToggle=${() => setExpanded(e => !e)} onUnsuppress=${() => {}} />
                     <//>
-                </div>
-                <div class="catalog-states logs-suppressed-list" inert>
+                <//>
+                <${States} className="logs-suppressed-list">
                     <${StateLabel}>collapsed<//>
                     <${SuppressedRow} sigKey="qol-fx::vsync_miss" entry=${{ count: 47, last_message: 'Animation frame dropped' }} expanded=${false} onToggle=${() => {}} />
                     <${StateLabel}>expanded<//>
                     <${SuppressedRow} sigKey="qol-alt-tab::event_loop_stall" entry=${{ count: 312, source: 'qol-alt-tab', first_seen: '2026-04-01T08:00:00', last_seen: '2026-04-02T14:32:00' }} expanded=${true} onToggle=${() => {}} />
-                </div>
+                <//>
             </div>
         <//>
     `;
@@ -467,19 +486,19 @@ function HotkeyTableShowcase() {
     return html`
         <${CatalogSection} title="Hotkey table">
             <div class="catalog-showcase">
-                <div class="catalog-try">
+                <${Interactive}>
                     <${Table} columns="8rem 1fr 1fr" onDeselect=${sel.deselect}>
                         <${TableHeader}><${TableCell}>Shortcut<//><${TableCell}>Plugin<//><${TableCell}>Action<//><//>
                         <${HotkeyRow} shortcut="Alt+Tab" pluginName="qol-alt-tab" actionLabel="Open switcher"
                             index=${0} selected=${sel.selected(0)} onSelect=${sel.select} accent="accent" />
                     <//>
-                </div>
-                <div class="catalog-states" inert>
+                <//>
+                <${States}>
                     <${StateLabel}>enabled<//>
                     <${Table} columns="8rem 1fr 1fr"><${HotkeyRow} shortcut="Alt+Tab" pluginName="qol-alt-tab" actionLabel="Open switcher" accent="accent" /><//>
                     <${StateLabel}>disabled<//>
                     <${Table} columns="8rem 1fr 1fr"><${HotkeyRow} shortcut="Super+E" pluginName="qol-launcher" actionLabel="Open launcher" className="disabled" /><//>
-                </div>
+                <//>
             </div>
         <//>
     `;
@@ -490,21 +509,21 @@ function ShortcutTableShowcase() {
     return html`
         <${CatalogSection} title="Shortcut table">
             <div class="catalog-showcase">
-                <div class="catalog-try">
+                <${Interactive}>
                     <${Table} columns="1fr 5rem 1fr 5rem" onDeselect=${sel.deselect}>
                         <${TableHeader}><${TableCell}>Name<//><${TableCell}>Type<//><${TableCell}>Target<//><${TableCell}>Launcher<//><//>
                         <${ShortcutRow} name="GitHub" type="URL" target="https://github.com" launcher=${true} enabled=${true}
                             selectValue="github" index=${0} selected=${sel.selected('github')} onSelect=${sel.select} />
                     <//>
-                </div>
-                <div class="catalog-states" inert>
+                <//>
+                <${States}>
                     <${StateLabel}>enabled + launcher<//>
                     <${Table} columns="1fr 5rem 1fr 5rem"><${ShortcutRow} name="GitHub" type="URL" target="https://github.com" launcher=${true} enabled=${true} /><//>
                     <${StateLabel}>enabled, no launcher<//>
                     <${Table} columns="1fr 5rem 1fr 5rem"><${ShortcutRow} name="Terminal" type="App" target="com.apple.Terminal" launcher=${false} enabled=${true} /><//>
                     <${StateLabel}>disabled<//>
                     <${Table} columns="1fr 5rem 1fr 5rem"><${ShortcutRow} name="Notes" type="App" target="/usr/bin/notes" launcher=${false} enabled=${false} /><//>
-                </div>
+                <//>
             </div>
         <//>
     `;
@@ -536,7 +555,7 @@ function StoreCardShowcase() {
     return html`
         <${CatalogSection} title="Store cards">
             <div class="catalog-showcase">
-                <div class="catalog-try">
+                <${Interactive}>
                     <${StoreCardGrid} onDeselect=${sel.deselect}>
                         <${StoreCard} name="Alt Tab" version=${version} description="Window switcher with live previews"
                             installed=${installed} installing=${installing} hasUpdate=${hasUpdate}
@@ -547,8 +566,8 @@ function StoreCardShowcase() {
                         ...(installed && !installing ? [{ label: 'Uninstall', run: doUninstall }] : []),
                         ...(installed || installing ? [{ label: 'Reset', run: () => { setInstalled(false); setInstalling(false); setHasUpdate(false); setVer('1.2.0'); } }] : []),
                     ]} />
-                </div>
-                <div class="catalog-states" inert>
+                <//>
+                <${States}>
                     <${StateLabel}>not installed<//>
                     <${StoreCardGrid}><${StoreCard} name="Screen Recorder" version=${{ current: '0.3.0' }} description="Record screen" /><//>
                     <${StateLabel}>installing<//>
@@ -557,7 +576,7 @@ function StoreCardShowcase() {
                     <${StoreCardGrid}><${StoreCard} name="Alt Tab" version=${{ current: '1.2.0' }} description="Window switcher" installed=${true} /><//>
                     <${StateLabel}>update available<//>
                     <${StoreCardGrid}><${StoreCard} name="Launcher" version=${{ from: '2.0.1', to: '2.1.0' }} description="App launcher" installed=${true} hasUpdate=${true} /><//>
-                </div>
+                <//>
             </div>
         <//>
     `;
