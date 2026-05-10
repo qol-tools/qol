@@ -111,7 +111,10 @@ export function useAppKeyboardRouting({
             }
             const surface = slot.querySelector('[data-selected-surface]');
             log('viewChange:', activeViewId, '→', surface ? surfaceLabel(surface) : 'no surfaces');
-            if (!surface) return;
+            if (!surface) {
+                if (focused instanceof HTMLElement && focused !== document.body) focused.blur();
+                return;
+            }
             surface.focus({ preventScroll: true });
             if (surface instanceof HTMLInputElement || surface instanceof HTMLTextAreaElement) {
                 const end = surface.value?.length ?? 0;
@@ -169,7 +172,7 @@ function routeToView(event, viewKeyboard, cycleView) {
 
 function shouldDelegateToViewKeyboard(active) {
     if (!(active instanceof HTMLElement)) return false;
-    if (active === document.body) return false;
+    if (active === document.body) return true;
     if (active.closest(MODAL_SELECTOR)) return false;
     return Boolean(active.closest('[data-view-id]'));
 }

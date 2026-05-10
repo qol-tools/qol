@@ -14,17 +14,18 @@ export function useListKeyboard({ itemCount, selectedIndex, onAdd, onDelete, onE
         if (!action) return;
         if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
 
-        e.preventDefault();
-
         if (action === 'add' && onAdd) {
+            e.preventDefault();
             onAdd();
             return;
         }
         if (action === 'delete' && onDelete) {
+            e.preventDefault();
             onDelete();
             return;
         }
         if (action === 'edit' && onEdit && itemCount > 0 && selectedIndex >= 0) {
+            e.preventDefault();
             onEdit();
             return;
         }

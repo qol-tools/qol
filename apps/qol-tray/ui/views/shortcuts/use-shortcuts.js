@@ -3,6 +3,9 @@ import { useStateRef } from '../../lib/hooks/useStateRef.js';
 import { usePersistedId } from '../../lib/hooks/usePersistedIndex.js';
 import { useListKeyboard } from '../../lib/hooks/useListKeyboard.js';
 import { useModalKeyboard } from '../../lib/hooks/useModalKeyboard.js';
+import { diveViaSelector } from '../../lib/world-navigation-singleton.js';
+
+const SHORTCUTS_EDITOR_DIVE_SELECTOR = '[data-view-id="shortcuts"]';
 import { matchesQuery } from '../../utils/collections.js';
 import {
     loadShortcuts, createShortcut, updateShortcut,
@@ -135,12 +138,16 @@ function useKeyboard(d, m, deleteById, runById) {
         onClose: m.closeModal,
     });
 
+    const onAdd = useCallback(() => {
+        m.openEditModal();
+        diveViaSelector(SHORTCUTS_EDITOR_DIVE_SELECTOR);
+    }, [m.openEditModal]);
+
     const listHandler = useListKeyboard({
         itemCount: filtered.length,
         selectedIndex,
-        onAdd: m.openEditModal,
+        onAdd,
         onDelete: useCallback(() => { if (selected) deleteById(selected.id); }, [selected, deleteById]),
-        onEdit: useCallback(() => { if (selected) m.openEditModal(selected); }, [selected, m.openEditModal]),
     });
 
     const handleKey = useCallback((e) => {
