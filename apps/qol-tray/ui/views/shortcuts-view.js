@@ -11,6 +11,8 @@ import { useDiveEditor } from '../lib/hooks/useDiveEditor.js';
 import { ShortcutEditForm } from './shortcuts/modal.js';
 import { useShortcuts } from './shortcuts/use-shortcuts.js';
 import { ShortcutsList } from './shortcuts/list.js';
+import { KeyLegend } from '../lib/components/KeyLegend.js';
+import { useViewBindings } from '../lib/hooks/useViewBindings.js';
 
 import { createSharedSlot } from '../lib/shared-slot.js';
 export const shortcutEditorSlot = createSharedSlot({
@@ -51,6 +53,7 @@ export function ShortcutsView() {
     ], [selected, sc.openEditModal, sc.deleteById, sc.runById]);
     useRegisterCommands('shortcuts', commands);
 
+    const bindings = useViewBindings('shortcuts');
     return html`
         <div class="view-container content-shell">
             <${PageHeader} subtitle="User-defined launcher shortcuts for URLs and apps" />
@@ -61,6 +64,7 @@ export function ShortcutsView() {
                             selectedIndex=${sc.selectedIndex} onSelect=${sc.setSelectedId} onEdit=${sc.openEditModal} />
                     <//>
                 </div>
+                <${KeyLegend} bindings=${bindings} />
             </div>
         </div>
     `;

@@ -16,6 +16,8 @@ import { useTaskKeyHandler } from './task-runner/key-router.js';
 import { ActionList } from './task-runner/action-list.js';
 import { testRunnerSlot } from './task-runner/test-runner-subpage.js';
 import { diveViaSelector } from '../lib/world-navigation-singleton.js';
+import { KeyLegend } from '../lib/components/KeyLegend.js';
+import { useViewBindings } from '../lib/hooks/useViewBindings.js';
 
 import { createSharedSlot } from '../lib/shared-slot.js';
 export const actionEditorSlot = createSharedSlot({
@@ -110,11 +112,13 @@ export function TaskRunnerView() {
     ], []);
     useRegisterCommands('task-runner', commands);
 
+    const bindings = useViewBindings('task-runner');
     return html`<div class="view-container content-shell">
         <${PageHeader} subtitle="HTTP API for browser extensions to run local commands" />
         <${SurfaceContainer} className="view-body">
             <${ApiUsage} actions=${data.actions} actionIds=${data.actionIds} copyApiExample=${data.copyApiExample} />
             <${ActionList} data=${data} edit=${edit} />
+            <${KeyLegend} bindings=${bindings} />
         <//>
     </div>`;
 }
