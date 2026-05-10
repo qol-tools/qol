@@ -1,6 +1,7 @@
 # qol-config
 
-[![CI](https://github.com/qol-tools/qol-config/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/qol-config/actions/workflows/ci.yml)
+[![tests](https://github.com/qol-tools/qol-config/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/qol-config/actions/workflows/tests.yml)
+[![lint](https://github.com/qol-tools/qol-config/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/qol-config/actions/workflows/lint.yml)
 
 Versioned plugin configuration contract for the QoL ecosystem.
 
