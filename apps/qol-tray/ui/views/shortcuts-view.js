@@ -13,7 +13,7 @@ import { useShortcuts } from './shortcuts/use-shortcuts.js';
 import { ShortcutsList } from './shortcuts/list.js';
 
 import { createSharedSlot } from '../lib/shared-slot.js';
-const editSlot = createSharedSlot({
+export const shortcutEditorSlot = createSharedSlot({
     modal: null,
     fieldProps: () => ({}),
     handlers: {},
@@ -27,7 +27,7 @@ export function ShortcutsView() {
     useRegisterViewKeyboard('shortcuts', sc.handleKey, sc.isBlocking);
 
     useDiveEditor({
-        slot: editSlot,
+        slot: shortcutEditorSlot,
         deps: [sc.editModal, sc.handleKey, sc.isBlocking],
         build: () => ({
             modal: sc.editModal,
@@ -66,9 +66,9 @@ export function ShortcutsView() {
     `;
 }
 
-export function ShortcutEditorSubPage() {
+export function ShortcutEditorSubPage({ slot }) {
     return html`<${DiveEditorSubPage}
-        slot=${editSlot}
+        slot=${slot}
         viewId="shortcuts-editor"
         fallbackTitle="Shortcut Editor"
         fallbackSubtitle="Select a shortcut to edit"

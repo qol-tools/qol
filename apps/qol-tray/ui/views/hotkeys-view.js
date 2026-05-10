@@ -16,7 +16,7 @@ import { useHotkeys } from './hotkeys/use-hotkeys.js';
 import { HotkeysList } from './hotkeys/list.js';
 
 import { createSharedSlot } from '../lib/shared-slot.js';
-const editSlot = createSharedSlot({
+export const hotkeyEditorSlot = createSharedSlot({
     modal: null,
     plugins: [],
     recording: false,
@@ -44,7 +44,7 @@ export function HotkeysView() {
     const ascendIfDeep = useCallback(() => { ascend(); }, []);
     const hk = useHotkeys({ onAfterSave: ascendIfDeep, onAfterClose: ascendIfDeep });
     useDiveEditor({
-        slot: editSlot,
+        slot: hotkeyEditorSlot,
         deps: [hk.editModal, hk.plugins, hk.recorder.isRecording, hk.handleKey, hk.isBlocking],
         build: () => ({
             modal: hk.editModal,
@@ -109,9 +109,9 @@ export function HotkeysView() {
     `;
 }
 
-export function HotkeyEditorSubPage() {
+export function HotkeyEditorSubPage({ slot }) {
     return html`<${DiveEditorSubPage}
-        slot=${editSlot}
+        slot=${slot}
         viewId="hotkeys-editor"
         fallbackTitle="Hotkey Editor"
         fallbackSubtitle="Select a hotkey to edit"

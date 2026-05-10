@@ -20,43 +20,43 @@ function dispatchEscape() {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
 }
 
-export function LogFiltersSubPage() {
+export function LogFiltersSubPage({ slot }) {
     const [, bump] = useState(0);
-    useEffect(() => logFiltersSlot.subscribe(() => bump(t => t + 1)), []);
+    useEffect(() => slot.subscribe(() => bump(t => t + 1)), [slot]);
 
-    const slot = logFiltersSlot.get();
-    const [draft, setDraft] = useState(patternsToInput(slot.current));
+    const value = slot.get();
+    const [draft, setDraft] = useState(patternsToInput(value.current));
     const inputRef = useRef(null);
 
     useEffect(() => {
-        setDraft(patternsToInput(logFiltersSlot.get().current));
-    }, [slot.scope, slot.pluginId, slot.sectionId]);
+        setDraft(patternsToInput(slot.get().current));
+    }, [value.scope, value.pluginId, value.sectionId]);
 
     useEffect(() => {
         if (inputRef.current) inputRef.current.focus({ preventScroll: true });
-    }, [slot.scope, slot.pluginId, slot.sectionId]);
+    }, [value.scope, value.pluginId, value.sectionId]);
 
     const onSave = useCallback(async () => {
-        const fn = logFiltersSlot.get().save;
+        const fn = slot.get().save;
         if (!fn) { dispatchEscape(); return; }
         try {
             await fn(patternsFromInput(draft));
         } finally {
             dispatchEscape();
         }
-    }, [draft]);
+    }, [slot, draft]);
 
     const onCancel = useCallback(() => dispatchEscape(), []);
 
-    if (!slot.scope) {
+    if (!value.scope) {
         return html`<div class="view-container content-shell">
             <${PageHeader} title="Edit Log Filters" subtitle="Open from a Dev row" />
         </div>`;
     }
 
-    const subtitle = slot.scope === 'core'
-        ? `Core section: ${slot.label || slot.sectionId}`
-        : `Plugin: ${slot.label || slot.pluginId}`;
+    const subtitle = value.scope === 'core'
+        ? `Core section: ${value.label || value.sectionId}`
+        : `Plugin: ${value.label || value.pluginId}`;
 
     const onInputKey = (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {

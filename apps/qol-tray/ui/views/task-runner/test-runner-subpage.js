@@ -20,53 +20,53 @@ function dispatchEscape() {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
 }
 
-export function TestRunnerSubPage() {
+export function TestRunnerSubPage({ slot }) {
     const [, bump] = useState(0);
-    useEffect(() => testRunnerSlot.subscribe(() => bump(t => t + 1)), []);
-    const slot = testRunnerSlot.get();
+    useEffect(() => slot.subscribe(() => bump(t => t + 1)), [slot]);
+    const value = slot.get();
     const firstInputRef = useRef(null);
 
     useEffect(() => {
-        if (slot.actionId && firstInputRef.current) {
+        if (value.actionId && firstInputRef.current) {
             firstInputRef.current.focus({ preventScroll: true });
         }
-    }, [slot.actionId]);
+    }, [value.actionId]);
 
     const onCancel = useCallback(() => dispatchEscape(), []);
     const onRun = useCallback(() => {
-        const fn = testRunnerSlot.get().onRun;
+        const fn = slot.get().onRun;
         if (fn) fn();
-    }, []);
+    }, [slot]);
 
-    if (!slot.actionId || !slot.action) {
+    if (!value.actionId || !value.action) {
         return html`<div class="view-container content-shell">
             <${PageHeader} title="Test Action" subtitle="Select an action to test" />
         </div>`;
     }
 
-    const params = extractParams(slot.action.command);
+    const params = extractParams(value.action.command);
     const onKey = (e) => {
-        if (e.key === 'Enter' && !slot.running) { e.preventDefault(); onRun(); }
+        if (e.key === 'Enter' && !value.running) { e.preventDefault(); onRun(); }
     };
 
     return html`
         <div class="view-container content-shell">
-            <${PageHeader} title="Test Action" subtitle=${slot.actionId} />
+            <${PageHeader} title="Test Action" subtitle=${value.actionId} />
             <div class="view-body content-shell-body">
                 <div class="content-shell-inner">
                     <${SurfaceContainer} className="content-frame test-runner-frame" onKeyDown=${onKey}>
                         <${TestParams}
                             params=${params}
-                            testParams=${slot.testParams}
-                            onParamChange=${slot.onParamChange}
+                            testParams=${value.testParams}
+                            onParamChange=${value.onParamChange}
                             firstInputRef=${firstInputRef} />
-                        ${slot.running && html`<div class="test-running">Running...</div>`}
-                        <${TestResult} result=${slot.result} />
+                        ${value.running && html`<div class="test-running">Running...</div>`}
+                        <${TestResult} result=${value.result} />
                         <div class="test-runner-actions">
                             <${Button} variant="btn-ghost" onActivate=${onCancel}>
                                 Close <kbd>Esc</kbd>
                             <//>
-                            <${Button} variant="btn-primary" onActivate=${onRun} disabled=${slot.running}>
+                            <${Button} variant="btn-primary" onActivate=${onRun} disabled=${value.running}>
                                 Run <kbd>Enter</kbd>
                             <//>
                         </div>

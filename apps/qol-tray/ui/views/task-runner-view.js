@@ -18,7 +18,7 @@ import { testRunnerSlot } from './task-runner/test-runner-subpage.js';
 import { diveViaSelector } from '../lib/world-navigation-singleton.js';
 
 import { createSharedSlot } from '../lib/shared-slot.js';
-const editSlot = createSharedSlot({
+export const actionEditorSlot = createSharedSlot({
     modal: null,
     fieldProps: () => ({}),
     handlers: {},
@@ -63,7 +63,7 @@ export function TaskRunnerView() {
     useRegisterViewKeyboard('task-runner', handleKey, isBlocking);
 
     useDiveEditor({
-        slot: editSlot,
+        slot: actionEditorSlot,
         deps: [edit.editModal, handleKey, isBlocking],
         build: () => ({
             modal: edit.editModal,
@@ -119,9 +119,9 @@ export function TaskRunnerView() {
     </div>`;
 }
 
-export function ActionEditorSubPage() {
+export function ActionEditorSubPage({ slot }) {
     return html`<${DiveEditorSubPage}
-        slot=${editSlot}
+        slot=${slot}
         viewId="task-runner-editor"
         fallbackTitle="Action Editor"
         fallbackSubtitle="Select an action to edit"

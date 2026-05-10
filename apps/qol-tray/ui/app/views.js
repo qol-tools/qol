@@ -3,21 +3,21 @@ import { isSlotVisible, slotStyle } from '../lib/world-slot-style.js';
 import { PluginsView } from '../views/plugins-view.js';
 import { PluginConfigSectionView } from '../views/plugin-config/view.js';
 import { StoreView } from '../views/store-view.js';
-import { HotkeysView, HotkeyEditorSubPage } from '../views/hotkeys-view.js';
-import { ShortcutsView, ShortcutEditorSubPage } from '../views/shortcuts-view.js';
-import { TaskRunnerView, ActionEditorSubPage } from '../views/task-runner-view.js';
-import { TestRunnerSubPage } from '../views/task-runner/test-runner-subpage.js';
+import { HotkeysView, HotkeyEditorSubPage, hotkeyEditorSlot } from '../views/hotkeys-view.js';
+import { ShortcutsView, ShortcutEditorSubPage, shortcutEditorSlot } from '../views/shortcuts-view.js';
+import { TaskRunnerView, ActionEditorSubPage, actionEditorSlot } from '../views/task-runner-view.js';
+import { TestRunnerSubPage, testRunnerSlot } from '../views/task-runner/test-runner-subpage.js';
 import { ProfileView, BackupDetailSubPage, prodBackupDetailConfig } from '../views/profile/view.js';
 import { backupPreviewSlot } from '../views/profile/use-backups.js';
 import { DevView } from '../views/dev/view.js';
 import { LogsView, LogDetailSubPage, detailSlot as logDetailSlot } from '../views/logs-view.js';
-import { LogFiltersSubPage } from '../views/dev/log-filters-subpage.js';
+import { LogFiltersSubPage, logFiltersSlot } from '../views/dev/log-filters-subpage.js';
 import { GalleryShowcasePage } from '../views/dev/gallery-showcase-page.js';
 import { GalleryLogRowDetailSubPage } from '../views/dev/gallery-log-row-detail-subpage.js';
 import { GalleryBackupRowDetailSubPage } from '../views/dev/gallery-backup-row-detail-subpage.js';
 import { SHOWCASE_KEYS } from '../views/dev/components/ComponentsCatalog.js';
-import { UninstallConfirmSubPage } from '../views/plugins/uninstall-confirm-subpage.js';
-import { PluginActionsSubPage } from '../views/plugins/plugin-actions-subpage.js';
+import { UninstallConfirmSubPage, uninstallConfirmSlot } from '../views/plugins/uninstall-confirm-subpage.js';
+import { PluginActionsSubPage, pluginActionsSlot } from '../views/plugins/plugin-actions-subpage.js';
 
 export { VIEW_LABELS, getViewLabel, resolveViewLabel } from './view-labels.js';
 
@@ -36,18 +36,18 @@ const WORLD_PAGES = [
     { id: 'profile',           contentSized: true, render: (ctx) => html`<${ProfileView} syncStatus=${ctx.syncStatus} syncProviders=${ctx.syncProviders} onSyncStatusChange=${ctx.onSyncStatusChange} refreshSyncStatus=${ctx.refreshSyncStatus} />` },
     { id: 'logs',              contentSized: true, render: () => html`<${LogsView} active=${true} />` },
     { id: 'dev',               devOnly: true, contentSized: true, render: () => html`<${DevView} />` },
-    { id: 'hotkeys-editor',    render: () => html`<${HotkeyEditorSubPage} />` },
-    { id: 'shortcuts-editor',  render: () => html`<${ShortcutEditorSubPage} />` },
+    { id: 'hotkeys-editor',    render: () => html`<${HotkeyEditorSubPage} slot=${hotkeyEditorSlot} />` },
+    { id: 'shortcuts-editor',  render: () => html`<${ShortcutEditorSubPage} slot=${shortcutEditorSlot} />` },
     { id: 'logs-detail',       render: () => html`<${LogDetailSubPage} slot=${logDetailSlot} />` },
-    { id: 'task-runner-editor', render: () => html`<${ActionEditorSubPage} />` },
-    { id: 'task-runner-test-runner', render: () => html`<${TestRunnerSubPage} />` },
+    { id: 'task-runner-editor', render: () => html`<${ActionEditorSubPage} slot=${actionEditorSlot} />` },
+    { id: 'task-runner-test-runner', render: () => html`<${TestRunnerSubPage} slot=${testRunnerSlot} />` },
     { id: 'profile-backup-detail', render: () => html`<${BackupDetailSubPage} slot=${backupPreviewSlot} config=${prodBackupDetailConfig} />` },
-    { id: 'dev-log-filters',   devOnly: true, render: () => html`<${LogFiltersSubPage} />` },
+    { id: 'dev-log-filters',   devOnly: true, render: () => html`<${LogFiltersSubPage} slot=${logFiltersSlot} />` },
     { id: 'dev-gallery-log-row-detail', devOnly: true, render: () => html`<${GalleryLogRowDetailSubPage} />` },
     { id: 'dev-gallery-backup-row-detail', devOnly: true, render: () => html`<${GalleryBackupRowDetailSubPage} />` },
-    { id: 'plugins-uninstall-confirm', render: () => html`<${UninstallConfirmSubPage} />` },
-    { id: 'plugins-actions',   render: () => html`<${PluginActionsSubPage} />` },
-    { id: 'dev-plugin-actions', devOnly: true, render: () => html`<${PluginActionsSubPage} />` },
+    { id: 'plugins-uninstall-confirm', render: () => html`<${UninstallConfirmSubPage} slot=${uninstallConfirmSlot} />` },
+    { id: 'plugins-actions',   render: () => html`<${PluginActionsSubPage} slot=${pluginActionsSlot} />` },
+    { id: 'dev-plugin-actions', devOnly: true, render: () => html`<${PluginActionsSubPage} slot=${pluginActionsSlot} />` },
 ];
 
 const PAGES_BY_ID = new Map(WORLD_PAGES.map(p => [p.id, p]));
