@@ -174,7 +174,7 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     #[cfg(debug_assertions)]
     let icon_ms = t_icon.elapsed().as_millis();
 
-    if windows.is_empty() {
+    if !has_windows(&windows) {
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/daemon] no windows, skipping open");
         return;
@@ -289,6 +289,49 @@ fn commit_icons_to_shared_cache(
         return;
     };
     crate::shared::image_registry::extend_with(&mut *cache, rendered, app, None);
+}
+
+fn has_windows(windows: &[WindowInfo]) -> bool {
+    !windows.is_empty()
+}
+
+#[cfg(test)]
+mod show_guard_tests {
+    use super::has_windows;
+    use crate::discovery::WindowInfo;
+
+    fn w(id: u32) -> WindowInfo {
+        WindowInfo {
+            id,
+            title: String::new(),
+            app_name: String::new(),
+            preview_path: None,
+            icon: None,
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+            is_minimized: false,
+        }
+    }
+
+    #[test]
+    fn empty_list_does_not_show() {
+        let cases: &[(&[WindowInfo], bool)] = &[
+            (&[], false),
+            (&[w(1)], true),
+            (&[w(1), w(2)], true),
+            (&[w(1), w(2), w(3)], true),
+        ];
+        for (windows, expected) in cases {
+            assert_eq!(
+                has_windows(windows),
+                *expected,
+                "windows.len()={}",
+                windows.len()
+            );
+        }
+    }
 }
 
 fn shutdown_daemon(cx: &AsyncApp) {
