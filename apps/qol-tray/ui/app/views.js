@@ -13,6 +13,7 @@ import { LogsView, LogDetailSubPage } from '../views/logs-view.js';
 import { LogFiltersSubPage } from '../views/dev/log-filters-subpage.js';
 import { GalleryShowcasePage } from '../views/dev/gallery-showcase-page.js';
 import { GalleryLogRowDetailSubPage } from '../views/dev/gallery-log-row-detail-subpage.js';
+import { GalleryBackupRowDetailSubPage } from '../views/dev/gallery-backup-row-detail-subpage.js';
 import { SHOWCASE_KEYS } from '../views/dev/components/ComponentsCatalog.js';
 import { UninstallConfirmSubPage } from '../views/plugins/uninstall-confirm-subpage.js';
 import { PluginActionsSubPage } from '../views/plugins/plugin-actions-subpage.js';
@@ -42,6 +43,7 @@ const WORLD_PAGES = [
     { id: 'profile-backup-detail', render: () => html`<${BackupDetailSubPage} />` },
     { id: 'dev-log-filters',   devOnly: true, render: () => html`<${LogFiltersSubPage} />` },
     { id: 'dev-gallery-log-row-detail', devOnly: true, render: () => html`<${GalleryLogRowDetailSubPage} />` },
+    { id: 'dev-gallery-backup-row-detail', devOnly: true, render: () => html`<${GalleryBackupRowDetailSubPage} />` },
     { id: 'plugins-uninstall-confirm', render: () => html`<${UninstallConfirmSubPage} />` },
     { id: 'plugins-actions',   render: () => html`<${PluginActionsSubPage} />` },
     { id: 'dev-plugin-actions', devOnly: true, render: () => html`<${PluginActionsSubPage} />` },

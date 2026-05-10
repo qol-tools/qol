@@ -17,6 +17,7 @@ import { LogRow } from '../../../components/domain-rows/LogRow.js';
 import { galleryLogRowSlot } from '../gallery-log-row-detail-subpage.js';
 import { SuppressedRow } from '../../../components/domain-rows/SuppressedRow.js';
 import { BackupRow } from '../../../components/domain-rows/BackupRow.js';
+import { galleryBackupRowSlot } from '../gallery-backup-row-detail-subpage.js';
 import { HotkeyRow } from '../../../components/domain-rows/HotkeyRow.js';
 import { ShortcutRow } from '../../../components/domain-rows/ShortcutRow.js';
 import { DevPluginRow } from '../../../components/domain-rows/DevPluginRow.js';
@@ -414,24 +415,42 @@ function SuppressedRowShowcase() {
     `;
 }
 
+const SAMPLE_BACKUP_TOML = `# qol-tray profile backup
+schema_version = 1
+
+[hotkeys]
+toggle-alt-tab = "Alt+Tab"
+launch-terminal = "Ctrl+Alt+T"
+
+[plugins.alt-tab]
+enabled = true
+preview_size = 220
+
+[plugins.lights]
+enabled = false
+`;
+
+const SAMPLE_BACKUP_ENTRIES = [
+    { time: '2026-04-02 14:30', fileName: 'profile-backup-2026-04-02T143001.toml',
+      size: '2.4 KB', review: true, content: SAMPLE_BACKUP_TOML },
+    { time: '2026-04-02 14:30', fileName: 'profile-backup.toml',
+      size: '2.4 KB', review: true, content: SAMPLE_BACKUP_TOML },
+    { time: '2026-04-01 09:15', fileName: 'profile-backup.toml',
+      size: '1.8 KB', content: SAMPLE_BACKUP_TOML },
+];
+
 function BackupRowShowcase() {
     const sel = useListSelection();
     return html`
         <${CatalogSection} title="Backup row">
-            <div class="catalog-showcase">
-                <div class="catalog-try">
-                    <${ListGroup} onDeselect=${sel.deselect}>
-                        <${BackupRow} time="2026-04-02 14:30" fileName="profile-backup-2026-04-02T143001.toml" size="2.4 KB" review=${true}
-                            index=${0} selected=${sel.selected(0)} onSelect=${sel.select} />
-                    <//>
-                </div>
-                <div class="catalog-states" inert>
-                    <${StateLabel}>with review<//>
-                    <${BackupRow} time="2026-04-02 14:30" fileName="profile-backup.toml" size="2.4 KB" review=${true} />
-                    <${StateLabel}>without review<//>
-                    <${BackupRow} time="2026-04-01 09:15" fileName="profile-backup.toml" size="1.8 KB" />
-                </div>
-            </div>
+            <${ListGroup} onDeselect=${sel.deselect}>
+                ${SAMPLE_BACKUP_ENTRIES.map((entry, i) => html`
+                    <${BackupRow} key=${i} ...${entry}
+                        index=${i} selected=${sel.selected(i)} onSelect=${sel.select}
+                        data-dive-target="profile-backup-detail"
+                        onActivate=${() => galleryBackupRowSlot.set({ entry })} />
+                `)}
+            <//>
         <//>
     `;
 }
