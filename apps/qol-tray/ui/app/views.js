@@ -12,6 +12,8 @@ import { DevView } from '../views/dev/view.js';
 import { LogsView, LogDetailSubPage } from '../views/logs-view.js';
 import { LogFiltersSubPage } from '../views/dev/log-filters-subpage.js';
 import { GalleryShowcasePage } from '../views/dev/gallery-showcase-page.js';
+import { GalleryLogRowDetailSubPage } from '../views/dev/gallery-log-row-detail-subpage.js';
+import { SHOWCASE_KEYS } from '../views/dev/components/ComponentsCatalog.js';
 import { UninstallConfirmSubPage } from '../views/plugins/uninstall-confirm-subpage.js';
 import { PluginActionsSubPage } from '../views/plugins/plugin-actions-subpage.js';
 
@@ -39,6 +41,7 @@ const WORLD_PAGES = [
     { id: 'task-runner-test-runner', render: () => html`<${TestRunnerSubPage} />` },
     { id: 'profile-backup-detail', render: () => html`<${BackupDetailSubPage} />` },
     { id: 'dev-log-filters',   devOnly: true, render: () => html`<${LogFiltersSubPage} />` },
+    { id: 'dev-gallery-log-row-detail', devOnly: true, render: () => html`<${GalleryLogRowDetailSubPage} />` },
     { id: 'plugins-uninstall-confirm', render: () => html`<${UninstallConfirmSubPage} />` },
     { id: 'plugins-actions',   render: () => html`<${PluginActionsSubPage} />` },
     { id: 'dev-plugin-actions', devOnly: true, render: () => html`<${PluginActionsSubPage} />` },
@@ -56,7 +59,8 @@ export function renderPageContent(pageId, ctx) {
         return html`<${PluginConfigSectionView} pluginId=${ctx.activePluginId} sectionId=${sectionId} onClose=${ctx.closePluginConfig} />`;
     }
     if (pageId.startsWith('dev-gallery-') && ctx.devEnabled) {
-        return html`<${GalleryShowcasePage} showcaseId=${pageId.slice('dev-gallery-'.length)} />`;
+        const key = pageId.slice('dev-gallery-'.length);
+        if (SHOWCASE_KEYS.includes(key)) return html`<${GalleryShowcasePage} showcaseId=${key} />`;
     }
     return null;
 }
@@ -83,8 +87,9 @@ export function renderWorldViews(ctx) {
         ${activePluginId && registry.getAllEntries()
             .filter(e => e.layer === -1 && e.id.startsWith(`${activePluginId}-`))
             .map(e => slotFor(e, renderPageContent(e.id, ctx)))}
-        ${ctx.devEnabled && registry.getAllEntries()
-            .filter(e => e.id.startsWith('dev-gallery-'))
-            .map(e => slotFor(e, renderPageContent(e.id, ctx)))}
+        ${ctx.devEnabled && SHOWCASE_KEYS.map(key => {
+            const id = `dev-gallery-${key}`;
+            return slotFor(registry.getEntry(id), renderPageContent(id, ctx));
+        })}
     `;
 }
