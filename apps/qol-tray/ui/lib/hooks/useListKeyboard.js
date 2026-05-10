@@ -12,6 +12,7 @@ export function useListKeyboard({ itemCount, selectedIndex, onAdd, onDelete, onE
     return useCallback((e) => {
         const action = ACTION_KEYS[e.key];
         if (!action) return;
+        if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
 
         e.preventDefault();
 
