@@ -1,6 +1,7 @@
 # Launcher Plugin for QoL Tray
 
-[![CI](https://github.com/qol-tools/plugin-launcher/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/plugin-launcher/actions/workflows/ci.yml)
+[![tests](https://github.com/qol-tools/plugin-launcher/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/plugin-launcher/actions/workflows/tests.yml)
+[![lint](https://github.com/qol-tools/plugin-launcher/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/plugin-launcher/actions/workflows/lint.yml)
 
 A keyboard-driven application and file launcher for [QoL Tray](https://github.com/qol-tools/qol-tray).
 
