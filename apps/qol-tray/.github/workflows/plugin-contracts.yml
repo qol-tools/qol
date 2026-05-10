@@ -1,4 +1,4 @@
-name: CI
+name: plugin-contracts
 
 on:
   push:
@@ -8,70 +8,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  lint:
-    runs-on: ubuntu-latest
-    env:
-      RUSTFLAGS: -D warnings
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Checkout qol-config
-        uses: actions/checkout@v4
-        with:
-          repository: qol-tools/qol-config
-          path: qol-config
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy,rustfmt
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev libxdo-dev
-
-      - name: Lint
-        run: make lint
-
-  build:
-    if: github.ref == 'refs/heads/main' || contains(github.event.head_commit.message, '(ci)') || contains(github.event.head_commit.message, 'ci,') || contains(github.event.head_commit.message, ', ci')
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    env:
-      RUSTFLAGS: -D warnings
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Checkout qol-config
-        uses: actions/checkout@v4
-        with:
-          repository: qol-tools/qol-config
-          path: qol-config
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install Linux dependencies
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev libxdo-dev
-
-      - name: Build
-        run: cargo build
-
-      - name: Test
-        run: cargo test
-
   plugin-contracts:
     if: github.ref == 'refs/heads/main' || contains(github.event.head_commit.message, '(ci)') || contains(github.event.head_commit.message, 'ci,') || contains(github.event.head_commit.message, ', ci')
     runs-on: ubuntu-latest
