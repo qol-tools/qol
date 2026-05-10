@@ -1,6 +1,7 @@
 # Plugin Template
 
-[![CI](https://github.com/qol-tools/plugin-template/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/plugin-template/actions/workflows/ci.yml)
+[![tests](https://github.com/qol-tools/plugin-template/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/plugin-template/actions/workflows/tests.yml)
+[![lint](https://github.com/qol-tools/plugin-template/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/plugin-template/actions/workflows/lint.yml)
 
 A starting point for building [QoL Tray](https://github.com/qol-tools/qol-tray) plugins.
 
