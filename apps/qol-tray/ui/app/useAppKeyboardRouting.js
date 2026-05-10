@@ -101,27 +101,19 @@ export function useAppKeyboardRouting({
         const prev = prevViewIdRef.current;
         prevViewIdRef.current = activeViewId;
         if (prev === activeViewId) return;
-        requestAnimationFrame(() => {
-            const slot = document.querySelector(`.world-view-slot[data-view-id="${activeViewId}"]`);
-            if (!slot) { log('viewChange: no slot for', activeViewId); return; }
-            const focused = document.activeElement;
-            if (focused && focused !== document.body && slot.contains(focused)) {
-                log('viewChange:', activeViewId, '→ already focused:', surfaceLabel(focused));
-                return;
-            }
-            const surface = slot.querySelector('[data-selected-surface]');
-            log('viewChange:', activeViewId, '→', surface ? surfaceLabel(surface) : 'no surfaces');
-            if (!surface) {
-                if (focused instanceof HTMLElement && focused !== document.body) focused.blur();
-                return;
-            }
-            surface.focus({ preventScroll: true });
-            if (surface instanceof HTMLInputElement || surface instanceof HTMLTextAreaElement) {
-                const end = surface.value?.length ?? 0;
-                surface.setSelectionRange?.(end, end);
-            }
-        });
+        requestAnimationFrame(() => reconcileFocusForSlot(activeViewId, 'viewChange'));
     }, [activeViewId]);
+
+    useEffect(() => {
+        if (!navigation?.subscribeAnchor) return undefined;
+        let prevPageId = navigation.getCurrentAnchor?.()?.pageId || null;
+        return navigation.subscribeAnchor(() => {
+            const nextPageId = navigation.getCurrentAnchor?.()?.pageId || null;
+            if (!nextPageId || nextPageId === prevPageId) return;
+            prevPageId = nextPageId;
+            requestAnimationFrame(() => reconcileFocusForSlot(nextPageId, 'anchorChange'));
+        });
+    }, [navigation]);
 
     useKeyboard(useCallback((event) => {
         const anchorPageId = navigation?.getCurrentAnchor?.()?.pageId || null;
@@ -136,6 +128,27 @@ export function useAppKeyboardRouting({
         if (activePluginId) return delegateToPluginConfig(event, pluginConfig, closePluginConfig);
         routeToView(event, viewKeyboard, cycleView);
     }, [activePluginId, activeViewId, closePluginConfig, cycleView, getViewKeyboard, navigation, palette, pluginConfig]));
+}
+
+function reconcileFocusForSlot(pageId, label) {
+    const slot = document.querySelector(`.world-view-slot[data-view-id="${pageId}"]`);
+    if (!slot) { log(`${label}: no slot for`, pageId); return; }
+    const focused = document.activeElement;
+    if (focused && focused !== document.body && slot.contains(focused)) {
+        log(`${label}:`, pageId, '→ already focused:', surfaceLabel(focused));
+        return;
+    }
+    const surface = slot.querySelector('[data-selected-surface]');
+    log(`${label}:`, pageId, '→', surface ? surfaceLabel(surface) : 'no surfaces');
+    if (!surface) {
+        if (focused instanceof HTMLElement && focused !== document.body) focused.blur();
+        return;
+    }
+    surface.focus({ preventScroll: true });
+    if (surface instanceof HTMLInputElement || surface instanceof HTMLTextAreaElement) {
+        const end = surface.value?.length ?? 0;
+        surface.setSelectionRange?.(end, end);
+    }
 }
 
 function handlePaletteToggle(event, palette, activePluginId) {
