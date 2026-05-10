@@ -1,6 +1,7 @@
 # QoL Tray
 
-[![CI](https://github.com/qol-tools/qol-tray/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/qol-tray/actions/workflows/ci.yml)
+[![tests](https://github.com/qol-tools/qol-tray/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/qol-tray/actions/workflows/tests.yml)
+[![lint](https://github.com/qol-tools/qol-tray/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/qol-tray/actions/workflows/lint.yml)
 
 A system tray daemon for running desktop behavior plugins.
 
