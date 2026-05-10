@@ -11,6 +11,7 @@ import { ProfileView, BackupDetailSubPage } from '../views/profile/view.js';
 import { DevView } from '../views/dev/view.js';
 import { LogsView, LogDetailSubPage } from '../views/logs-view.js';
 import { LogFiltersSubPage } from '../views/dev/log-filters-subpage.js';
+import { ComponentGallerySubPage } from '../views/dev/component-gallery-subpage.js';
 import { UninstallConfirmSubPage } from '../views/plugins/uninstall-confirm-subpage.js';
 import { PluginActionsSubPage } from '../views/plugins/plugin-actions-subpage.js';
 
@@ -38,6 +39,7 @@ const WORLD_PAGES = [
     { id: 'task-runner-test-runner', render: () => html`<${TestRunnerSubPage} />` },
     { id: 'profile-backup-detail', render: () => html`<${BackupDetailSubPage} />` },
     { id: 'dev-log-filters',   devOnly: true, render: () => html`<${LogFiltersSubPage} />` },
+    { id: 'dev-component-gallery', devOnly: true, render: () => html`<${ComponentGallerySubPage} />` },
     { id: 'plugins-uninstall-confirm', render: () => html`<${UninstallConfirmSubPage} />` },
     { id: 'plugins-actions',   render: () => html`<${PluginActionsSubPage} />` },
     { id: 'dev-plugin-actions', devOnly: true, render: () => html`<${PluginActionsSubPage} />` },
