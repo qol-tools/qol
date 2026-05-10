@@ -1,6 +1,7 @@
 # Window Actions
 
-[![CI](https://github.com/qol-tools/plugin-window-actions/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/plugin-window-actions/actions/workflows/ci.yml)
+[![tests](https://github.com/qol-tools/plugin-window-actions/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/plugin-window-actions/actions/workflows/tests.yml)
+[![lint](https://github.com/qol-tools/plugin-window-actions/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/plugin-window-actions/actions/workflows/lint.yml)
 
 Window snapping, centering, minimize/restore, and multi-monitor management for [QoL Tray](https://github.com/qol-tools/qol-tray).
 
