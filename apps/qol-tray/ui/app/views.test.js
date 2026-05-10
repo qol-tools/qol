@@ -43,7 +43,6 @@ test('resolveViewLabel does NOT return kebab id when entry has a label', () => {
         { id: 'plugins-actions', label: 'Plugin Actions' },
         { id: 'dev-log-filters', label: 'Edit Log Filters' },
         { id: 'dev-plugin-actions', label: 'Plugin Actions' },
-        { id: 'dev-component-gallery', label: 'Component Gallery' },
         { id: 'task-runner-test-runner', label: 'Test Runner' },
         { id: 'task-runner-editor', label: 'Action Editor' },
         { id: 'profile-backup-detail', label: 'Backup Detail' },
