@@ -1,6 +1,7 @@
 # Alt Tab Plugin for QoL Tray
 
-[![CI](https://github.com/qol-tools/plugin-alt-tab/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/plugin-alt-tab/actions/workflows/ci.yml)
+[![tests](https://github.com/qol-tools/plugin-alt-tab/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/plugin-alt-tab/actions/workflows/tests.yml)
+[![lint](https://github.com/qol-tools/plugin-alt-tab/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/plugin-alt-tab/actions/workflows/lint.yml)
 
 A window switcher with live previews for [QoL Tray](https://github.com/qol-tools/qol-tray).
 
