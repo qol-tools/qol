@@ -1,6 +1,7 @@
 # Key Remap Plugin for QoL Tray
 
-[![CI](https://github.com/qol-tools/plugin-keyremap/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/plugin-keyremap/actions/workflows/ci.yml)
+[![tests](https://github.com/qol-tools/plugin-keyremap/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/plugin-keyremap/actions/workflows/tests.yml)
+[![lint](https://github.com/qol-tools/plugin-keyremap/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/plugin-keyremap/actions/workflows/lint.yml)
 
 A keyboard and mouse remapping plugin for [QoL Tray](https://github.com/qol-tools/qol-tray).
 
