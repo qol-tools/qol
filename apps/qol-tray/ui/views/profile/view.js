@@ -196,7 +196,7 @@ export const prodBackupDetailConfig = {
     onAcknowledge: (slotAcknowledge) => { slotAcknowledge?.(); dispatchEscape(); },
 };
 
-export function BackupDetailSubPage({ slot = backupPreviewSlot, config = prodBackupDetailConfig } = {}) {
+export function BackupDetailSubPage({ slot, config }) {
     const [, bump] = useState(0);
     useEffect(() => slot.subscribe(() => bump(t => t + 1)), [slot]);
 
