@@ -5,9 +5,7 @@ import { SurfaceContainer } from '../../lib/components/SurfaceContainer.js';
 import { Surface } from '../../lib/components/Surface.js';
 import { Expander, ExpanderTrigger, ExpanderBody } from '../../lib/components/Expander.js';
 import { Badge, HealthDot, Alert } from '../../lib/components/StatusIndicators.js';
-import { Button } from '../../lib/components/Button.js';
-import { ConfirmButton } from '../../lib/components/ConfirmButton.js';
-import { CodeBlock } from '../../lib/components/CodeBlock.js';
+import { BackupDetailContent } from '../../components/domain-rows/BackupRow.js';
 import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../../app/view-keyboard-context.js';
 import { toast } from '../../lib/toast.js';
@@ -194,40 +192,27 @@ export function BackupDetailSubPage() {
         </div>`;
     }
     const isIncidentBackup = incident?.backup_file === preview.file_name;
-    const copy = () => {
-        navigator.clipboard.writeText(preview.content);
-        toast('success', 'Copied to clipboard');
-    };
-    const acknowledge = () => { onAcknowledge?.(); dispatchEscape(); };
-    const restore = () => {
-        importProfileText(preview.content)
-            .then(() => dispatchEscape())
-            .catch((err) => toast('error', `Failed to restore backup: ${err.message}`));
-    };
+    const openExternal = () => openProfileBackupFile(preview.file_name)
+        .catch((err) => toast('error', `Failed to open: ${err.message}`));
     return html`
         <div class="view-container content-shell">
             <${PageHeader} title=${preview.file_name} subtitle=${isIncidentBackup ? 'Backup awaiting review' : 'Backup preview'} />
             <div class="view-body content-shell-body">
                 <div class="content-shell-inner">
                     <${SurfaceContainer} className="content-frame backup-detail-frame">
-                        <${CodeBlock}
+                        <${BackupDetailContent}
                             text=${formatBackupPreview(preview.content)}
-                            onSecondaryActivate=${() => {
-                                openProfileBackupFile(preview.file_name)
-                                    .catch((err) => toast('error', `Failed to open: ${err.message}`));
+                            isIncidentBackup=${isIncidentBackup}
+                            onClose=${dispatchEscape}
+                            onOpenExternal=${openExternal}
+                            onCopy=${() => {
+                                navigator.clipboard.writeText(preview.content);
+                                toast('success', 'Copied to clipboard');
                             }}
-                            secondaryLabel="Open in editor"
-                        />
-                        <div class="backup-detail-actions">
-                            <${Button} variant="btn-ghost" onActivate=${dispatchEscape}>Close <kbd>Esc</kbd><//>
-                            <${Button} variant="btn-ghost" onActivate=${() => {
-                                openProfileBackupFile(preview.file_name)
-                                    .catch((err) => toast('error', `Failed to open: ${err.message}`));
-                            }}>Open in editor<//>
-                            <${Button} variant="btn-ghost" onActivate=${copy}>Copy<//>
-                            <${ConfirmButton} confirmWith="restore" onActivate=${restore}>Restore this backup<//>
-                            ${isIncidentBackup && html`<${Button} variant="btn-ghost" onActivate=${acknowledge}>Looks Good<//>`}
-                        </div>
+                            onRestore=${() => importProfileText(preview.content)
+                                .then(() => dispatchEscape())
+                                .catch((err) => toast('error', `Failed to restore backup: ${err.message}`))}
+                            onAcknowledge=${() => { onAcknowledge?.(); dispatchEscape(); }} />
                     <//>
                 </div>
             </div>

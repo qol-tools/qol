@@ -18,6 +18,7 @@ import { galleryLogRowSlot } from '../gallery-log-row-detail-subpage.js';
 import { SuppressedRow } from '../../../components/domain-rows/SuppressedRow.js';
 import { BackupRow } from '../../../components/domain-rows/BackupRow.js';
 import { galleryBackupRowSlot } from '../gallery-backup-row-detail-subpage.js';
+import { toast } from '../../../lib/toast.js';
 import { HotkeyRow } from '../../../components/domain-rows/HotkeyRow.js';
 import { ShortcutRow } from '../../../components/domain-rows/ShortcutRow.js';
 import { DevPluginRow } from '../../../components/domain-rows/DevPluginRow.js';
@@ -448,7 +449,9 @@ function BackupRowShowcase() {
                     <${BackupRow} key=${i} ...${entry}
                         index=${i} selected=${sel.selected(i)} onSelect=${sel.select}
                         data-dive-target="profile-backup-detail"
-                        onActivate=${() => galleryBackupRowSlot.set({ entry })} />
+                        data-secondary-label="Open in editor"
+                        onActivate=${() => galleryBackupRowSlot.set({ entry })}
+                        onSecondaryActivate=${() => toast('info', 'Open in editor (gallery sandbox)')} />
                 `)}
             <//>
         <//>
