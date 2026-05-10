@@ -66,10 +66,10 @@ export function ShortcutsView() {
     `;
 }
 
-export function ShortcutEditorSubPage({ slot }) {
+export function ShortcutEditorSubPage({ slot, viewId = 'shortcuts-editor' }) {
     return html`<${DiveEditorSubPage}
         slot=${slot}
-        viewId="shortcuts-editor"
+        viewId=${viewId}
         fallbackTitle="Shortcut Editor"
         fallbackSubtitle="Select a shortcut to edit"
         renderHeader=${(v) => html`<${PageHeader}

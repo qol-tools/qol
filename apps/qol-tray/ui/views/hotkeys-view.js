@@ -109,10 +109,10 @@ export function HotkeysView() {
     `;
 }
 
-export function HotkeyEditorSubPage({ slot }) {
+export function HotkeyEditorSubPage({ slot, viewId = 'hotkeys-editor' }) {
     return html`<${DiveEditorSubPage}
         slot=${slot}
-        viewId="hotkeys-editor"
+        viewId=${viewId}
         fallbackTitle="Hotkey Editor"
         fallbackSubtitle="Select a hotkey to edit"
         renderHeader=${(v) => html`<${PageHeader}
