@@ -33,10 +33,7 @@ export function GalleryBackupRowDetailSubPage() {
                             isIncidentBackup=${entry.review}
                             onClose=${dispatchEscape}
                             onOpenExternal=${sandbox('Open in editor')}
-                            onCopy=${() => {
-                                navigator.clipboard.writeText(entry.content);
-                                toast('success', 'Copied to clipboard');
-                            }}
+                            onCopy=${sandbox('Copy')}
                             onRestore=${sandbox('Restore')}
                             onAcknowledge=${() => { sandbox('Acknowledge')(); dispatchEscape(); }} />
                     <//>
