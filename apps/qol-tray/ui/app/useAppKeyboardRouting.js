@@ -325,15 +325,14 @@ function descendInto(container) {
 }
 
 function ascendLayer() {
-    const camera = _cameraRef.current;
-    if (camera && camera.layer < 0 && _ascendRef.current) {
-        const result = _ascendRef.current();
-        requestAnimationFrame(restoreDiveSourceFocus);
-        return result;
-    }
+    if (ascendWithinPage()) return true;
+    return ascendWorldLayer();
+}
 
+function ascendWithinPage() {
     const current = findSelectedSurface();
-    const container = current ? activeContainer(current) : null;
+    if (!current) return false;
+    const container = activeContainer(current);
     if (!container) return false;
     if (container.closest(MODAL_SELECTOR)) return false;
 
@@ -351,6 +350,14 @@ function ascendLayer() {
 
     anchor.focus({ preventScroll: true });
     return true;
+}
+
+function ascendWorldLayer() {
+    const camera = _cameraRef.current;
+    if (!camera || camera.layer >= 0 || !_ascendRef.current) return false;
+    const result = _ascendRef.current();
+    requestAnimationFrame(restoreDiveSourceFocus);
+    return result;
 }
 
 function activeSectionDetail(pluginConfig) {
