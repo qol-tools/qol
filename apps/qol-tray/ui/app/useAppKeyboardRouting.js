@@ -42,7 +42,6 @@ export function useAppKeyboardRouting({
     palette,
     ascend,
     navigation,
-    registry,
 }) {
     const pluginConfig = usePluginConfigContext();
     const { getViewKeyboard } = useViewKeyboardContext();
@@ -52,10 +51,9 @@ export function useAppKeyboardRouting({
     viewOrderRef.current = viewOrder;
     const switchViewRef = useRef(switchView);
     switchViewRef.current = switchView;
-    const cyclePluginSection = useCallback((shiftKey) => {
-        if (!activePluginId || !navigation?.getCurrentConfinement?.()) return false;
-        const target = registry?.getDiveTargetForSource?.(`[data-plugin-id="${activePluginId}"]`);
-        const pages = target?.pages || [];
+    const cycleSubPages = useCallback((shiftKey) => {
+        if ((navigation?.stackDepth?.() ?? 0) === 0) return false;
+        const pages = navigation.getConfinedPages?.() || [];
         if (pages.length <= 1) return false;
         const current = navigation.getCurrentAnchor()?.pageId;
         const idx = Math.max(0, pages.indexOf(current));
@@ -68,7 +66,7 @@ export function useAppKeyboardRouting({
             { respectKnob: false, resetZoom: s.resetZoomOnNav ? s.defaultZoom : null },
         );
         return true;
-    }, [activePluginId, navigation, registry]);
+    }, [navigation]);
 
     const cycleTopLevelView = useCallback((shiftKey) => {
         const order = viewOrderRef.current;
@@ -81,10 +79,10 @@ export function useAppKeyboardRouting({
 
     const cycleView = useCallback((event) => {
         event.preventDefault();
-        if (cyclePluginSection(event.shiftKey)) return;
+        if (cycleSubPages(event.shiftKey)) return;
         if ((navigation?.stackDepth?.() ?? 0) > 0) return;
         cycleTopLevelView(event.shiftKey);
-    }, [cyclePluginSection, cycleTopLevelView, navigation]);
+    }, [cycleSubPages, cycleTopLevelView, navigation]);
 
     const prevPluginIdRef = useRef(activePluginId);
     useLayoutEffect(() => {
