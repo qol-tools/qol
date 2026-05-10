@@ -24,6 +24,7 @@ import { ShortcutRow } from '../../../components/domain-rows/ShortcutRow.js';
 import { useGalleryShortcutEditorController } from '../gallery-shortcut-editor-subpage.js';
 import { DevPluginRow } from '../../../components/domain-rows/DevPluginRow.js';
 import { StoreCard, StoreCardGrid } from '../../../components/domain-rows/StoreCard.js';
+import { KeyLegend } from '../../../lib/components/KeyLegend.js';
 
 const SHOWCASES = {
     buttons: ButtonShowcase,
@@ -34,6 +35,7 @@ const SHOWCASES = {
     expander: ExpanderShowcase,
     toggle: ToggleShowcase,
     'depth-diver': DepthDiver,
+    'key-legend': KeyLegendShowcase,
     'dev-plugin-row': DevPluginRowShowcase,
     'log-row': LogRowShowcase,
     'suppressed-row': SuppressedRowShowcase,
@@ -280,6 +282,34 @@ function DepthLevel({ level }) {
                 </div>
             `}
         </${SurfaceContainer}>
+    `;
+}
+
+function KeyLegendShowcase() {
+    return html`
+        <${CatalogSection} title="Key legend">
+            <div class="catalog-showcase">
+                <${Interactive} inert>
+                    <${KeyLegend} bindings=${[
+                        { action: 'add', key: 'a', label: 'add' },
+                        { action: 'edit', key: 'Enter', label: 'edit' },
+                        { action: 'delete', key: 'Delete', label: 'delete' },
+                        { action: 'run', key: 'r', label: 'run' },
+                    ]} />
+                <//>
+                <${States}>
+                    <${StateLabel}>minimal<//>
+                    <${KeyLegend} bindings=${[{ action: 'add', key: 'a', label: 'add' }]} />
+                    <${StateLabel}>with modifier<//>
+                    <${KeyLegend} bindings=${[
+                        { action: 'save', key: 'Ctrl+Enter', label: 'save' },
+                        { action: 'close', key: 'Esc', label: 'close' },
+                    ]} />
+                    <${StateLabel}>empty (renders nothing)<//>
+                    <${KeyLegend} bindings=${[]} />
+                <//>
+            </div>
+        <//>
     `;
 }
 

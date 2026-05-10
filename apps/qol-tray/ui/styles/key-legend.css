@@ -3,8 +3,8 @@
     flex-wrap: wrap;
     gap: var(--space-4);
     padding: var(--space-2) var(--space-4);
-    margin-top: var(--space-3);
-    border-top: var(--border-w-1) solid var(--border-subtle);
+    margin-bottom: var(--space-3);
+    border-bottom: var(--border-w-1) solid var(--border-subtle);
     color: var(--text-faint);
     font-size: var(--fs-sm);
 }

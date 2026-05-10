@@ -99,6 +99,7 @@ export function HotkeysView() {
     return html`
         <div class="view-container content-shell">
             <${PageHeader} subtitle="Configure global keyboard shortcuts for plugin actions" />
+            <${KeyLegend} bindings=${bindings} />
             ${hk.registrationErrors.length > 0 && html`<${RegistrationWarnings} errors=${hk.registrationErrors} />`}
             <div class="view-body content-shell-body">
                 <div class="content-shell-inner">
@@ -107,7 +108,6 @@ export function HotkeysView() {
                             selectedIndex=${hk.selectedIndex} onSelect=${hk.setSelectedIndex} onEdit=${hk.openEditModal} />
                     <//>
                 </div>
-                <${KeyLegend} bindings=${bindings} />
             </div>
         </div>
     `;
