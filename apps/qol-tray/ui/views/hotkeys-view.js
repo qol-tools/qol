@@ -11,6 +11,8 @@ import { ModalActions } from '../lib/components/ModalPreact.js';
 import { DiveEditorSubPage } from '../lib/components/DiveEditorSubPage.js';
 import { useDiveEditor } from '../lib/hooks/useDiveEditor.js';
 import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
+import { KeyLegend } from '../lib/components/KeyLegend.js';
+import { useViewBindings } from '../lib/hooks/useViewBindings.js';
 import { PluginSelect, ActionSelect, KeyInput } from './hotkeys/modal.js';
 import { useHotkeys } from './hotkeys/use-hotkeys.js';
 import { HotkeysList } from './hotkeys/list.js';
@@ -93,6 +95,7 @@ export function HotkeysView() {
     ], []);
     useRegisterCommands('hotkeys', commands);
 
+    const bindings = useViewBindings('hotkeys');
     return html`
         <div class="view-container content-shell">
             <${PageHeader} subtitle="Configure global keyboard shortcuts for plugin actions" />
@@ -104,6 +107,7 @@ export function HotkeysView() {
                             selectedIndex=${hk.selectedIndex} onSelect=${hk.setSelectedIndex} onEdit=${hk.openEditModal} />
                     <//>
                 </div>
+                <${KeyLegend} bindings=${bindings} />
             </div>
         </div>
     `;
