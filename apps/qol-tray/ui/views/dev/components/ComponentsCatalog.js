@@ -2,7 +2,6 @@ import { html } from '../../../lib/html.js';
 import { useCallback, useRef, useState } from 'preact/hooks';
 import { SurfaceContainer } from '../../../lib/components/SurfaceContainer.js';
 import { directSurfaces } from '../../../lib/surface-traits.js';
-import { Modal, ModalFooter } from '../../../lib/components/ModalPreact.js';
 import { ToggleSwitch } from '../../../lib/components/ToggleSwitch.js';
 import { CustomSelect } from '../../../lib/components/CustomSelect.js';
 import { Expander, ExpanderTrigger, ExpanderBody } from '../../../lib/components/Expander.js';
@@ -34,7 +33,6 @@ const SHOWCASES = {
     dropdown: DropdownShowcase,
     expander: ExpanderShowcase,
     toggle: ToggleShowcase,
-    modal: ModalShowcase,
     'depth-diver': DepthDiver,
     'dev-plugin-row': DevPluginRowShowcase,
     'log-row': LogRowShowcase,
@@ -246,30 +244,6 @@ function ToggleShowcase() {
                 <//>
             </div>
         <//>
-    `;
-}
-
-function ModalShowcase() {
-    const [open, setOpen] = useState(false);
-    const close = useCallback(() => setOpen(false), []);
-    return html`
-        <${CatalogSection} title="Modal">
-            <${Button} onActivate=${() => setOpen(true)}>Open test modal<//>
-        <//>
-        ${open && html`
-            <${Modal} open=${true} onClose=${close} dismissOnBackdrop=${true} className="edit-modal">
-                <div class="edit-modal-content">
-                    <h3>Test Modal</h3>
-                    <p style="color:var(--text-secondary); margin:var(--space-3) 0;">
-                        Arrow keys navigate between buttons. ESC returns to the previous layer.
-                    </p>
-                    <${ModalFooter} actions=${[
-                        { label: 'Close', kbd: 'Esc', onClick: close },
-                        { label: 'Action', variant: 'btn-primary', onClick: () => {} },
-                    ]} />
-                </div>
-            <//>
-        `}
     `;
 }
 

@@ -1,9 +1,6 @@
 import { html } from '../../lib/html.js';
-import { useCallback } from 'preact/hooks';
 import { ListRow } from '../../lib/components/ListRow.js';
-import { Modal, ModalFooter } from '../../lib/components/ModalPreact.js';
 import { CodeBlock } from '../../lib/components/CodeBlock.js';
-import { toast } from '../../lib/toast.js';
 
 const LEVEL_ACCENT = { startup: 'accent', error: 'danger', suppressed: 'muted' };
 
@@ -23,27 +20,6 @@ export function LogRow({ time, level, src, msg, loc, count, severity, index, sel
             </div>
             <div class="log-row-bottom">
                 <span class="log-msg" data-selected-text="">${msg}</span>
-            </div>
-        <//>
-    `;
-}
-
-export function LogDetailModal({ entry, onClose }) {
-    const text = formatLogDetail(entry);
-    const copy = useCallback(() => {
-        navigator.clipboard.writeText(text);
-        toast('success', 'Copied to clipboard');
-    }, [text]);
-
-    return html`
-        <${Modal} open=${true} onClose=${onClose} size="xl" dismissOnBackdrop=${true} className="edit-modal">
-            <div class="edit-modal-content" tabIndex="-1">
-                <h3>Log Entry</h3>
-                <${CodeBlock} text=${text} />
-                <${ModalFooter} actions=${[
-                    { label: 'Close', kbd: 'Esc', onClick: onClose },
-                    { label: 'Copy', kbd: 'C', variant: 'btn-primary', onClick: copy },
-                ]} />
             </div>
         <//>
     `;
