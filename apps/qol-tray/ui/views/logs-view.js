@@ -15,7 +15,7 @@ import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
 import { SuppressedRow } from '../components/domain-rows/SuppressedRow.js';
 
 import { createSharedSlot } from '../lib/shared-slot.js';
-const detailSlot = createSharedSlot({ entry: null, onClose: null });
+export const detailSlot = createSharedSlot({ entry: null, onClose: null });
 
 const TABS = [
     { id: 'live', label: 'Live Log' },
@@ -264,7 +264,7 @@ function SuppressedList({ keys, items, onUnsuppress, selectedIndex, setSelectedI
     `;
 }
 
-export function LogDetailSubPage({ slot = detailSlot } = {}) {
+export function LogDetailSubPage({ slot }) {
     const [, bump] = useState(0);
     useEffect(() => slot.subscribe(() => bump(t => t + 1)), [slot]);
 

@@ -7,9 +7,10 @@ import { HotkeysView, HotkeyEditorSubPage } from '../views/hotkeys-view.js';
 import { ShortcutsView, ShortcutEditorSubPage } from '../views/shortcuts-view.js';
 import { TaskRunnerView, ActionEditorSubPage } from '../views/task-runner-view.js';
 import { TestRunnerSubPage } from '../views/task-runner/test-runner-subpage.js';
-import { ProfileView, BackupDetailSubPage } from '../views/profile/view.js';
+import { ProfileView, BackupDetailSubPage, prodBackupDetailConfig } from '../views/profile/view.js';
+import { backupPreviewSlot } from '../views/profile/use-backups.js';
 import { DevView } from '../views/dev/view.js';
-import { LogsView, LogDetailSubPage } from '../views/logs-view.js';
+import { LogsView, LogDetailSubPage, detailSlot as logDetailSlot } from '../views/logs-view.js';
 import { LogFiltersSubPage } from '../views/dev/log-filters-subpage.js';
 import { GalleryShowcasePage } from '../views/dev/gallery-showcase-page.js';
 import { GalleryLogRowDetailSubPage } from '../views/dev/gallery-log-row-detail-subpage.js';
@@ -37,10 +38,10 @@ const WORLD_PAGES = [
     { id: 'dev',               devOnly: true, contentSized: true, render: () => html`<${DevView} />` },
     { id: 'hotkeys-editor',    render: () => html`<${HotkeyEditorSubPage} />` },
     { id: 'shortcuts-editor',  render: () => html`<${ShortcutEditorSubPage} />` },
-    { id: 'logs-detail',       render: () => html`<${LogDetailSubPage} />` },
+    { id: 'logs-detail',       render: () => html`<${LogDetailSubPage} slot=${logDetailSlot} />` },
     { id: 'task-runner-editor', render: () => html`<${ActionEditorSubPage} />` },
     { id: 'task-runner-test-runner', render: () => html`<${TestRunnerSubPage} />` },
-    { id: 'profile-backup-detail', render: () => html`<${BackupDetailSubPage} />` },
+    { id: 'profile-backup-detail', render: () => html`<${BackupDetailSubPage} slot=${backupPreviewSlot} config=${prodBackupDetailConfig} />` },
     { id: 'dev-log-filters',   devOnly: true, render: () => html`<${LogFiltersSubPage} />` },
     { id: 'dev-gallery-log-row-detail', devOnly: true, render: () => html`<${GalleryLogRowDetailSubPage} />` },
     { id: 'dev-gallery-backup-row-detail', devOnly: true, render: () => html`<${GalleryBackupRowDetailSubPage} />` },
