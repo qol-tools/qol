@@ -1,6 +1,7 @@
 # PointZ
 
-[![CI](https://github.com/qol-tools/plugin-pointz/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/plugin-pointz/actions/workflows/ci.yml)
+[![tests](https://github.com/qol-tools/plugin-pointz/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/plugin-pointz/actions/workflows/tests.yml)
+[![lint](https://github.com/qol-tools/plugin-pointz/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/plugin-pointz/actions/workflows/lint.yml)
 
 A [QoL Tray](https://github.com/qol-tools/qol-tray) plugin for remote PC control from mobile devices.
 
