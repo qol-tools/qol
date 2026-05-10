@@ -56,8 +56,9 @@ export function ShortcutsView() {
     const bindings = useViewBindings('shortcuts');
     return html`
         <div class="view-container content-shell">
-            <${PageHeader} subtitle="User-defined launcher shortcuts for URLs and apps" />
-            <${KeyLegend} bindings=${bindings} />
+            <${PageHeader}
+                subtitle="User-defined launcher shortcuts for URLs and apps"
+                aside=${html`<${KeyLegend} bindings=${bindings} />`} />
             <div class="view-body content-shell-body">
                 <div class="content-shell-inner">
                     <${SurfaceContainer} className="content-frame">

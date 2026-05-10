@@ -27,7 +27,7 @@ function ActionCard({ actionId, action, isSelected, index, onSelect, onEdit }) {
 export function ActionList({ data, edit }) {
     if (data.actionIds.length === 0) {
         return html`<div class="actions-list">
-            <div class="empty">No actions configured. Press <kbd>a</kbd> to add one.</div>
+            <div class="empty">No actions configured.</div>
         </div>`;
     }
     return html`<div class="actions-list">
