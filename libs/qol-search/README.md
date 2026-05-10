@@ -1,6 +1,7 @@
 # qol-search
 
-[![CI](https://github.com/qol-tools/qol-search/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/qol-search/actions/workflows/ci.yml)
+[![tests](https://github.com/qol-tools/qol-search/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/qol-search/actions/workflows/tests.yml)
+[![lint](https://github.com/qol-tools/qol-search/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/qol-search/actions/workflows/lint.yml)
 
 Fuzzy search algorithm used across qol-tools. Compiles to native Rust and WebAssembly.
 
