@@ -1,6 +1,9 @@
 import { html } from '../../lib/html.js';
 import { ListRow, ListRowHeader, ListRowBody, ListRowText } from '../../lib/components/ListRow.js';
 import { Badge } from '../../lib/components/StatusIndicators.js';
+import { CodeBlock } from '../../lib/components/CodeBlock.js';
+import { Button } from '../../lib/components/Button.js';
+import { ConfirmButton } from '../../lib/components/ConfirmButton.js';
 
 export function BackupRow({
     time, fileName, size, review,
@@ -23,5 +26,29 @@ export function BackupRow({
                 <${ListRowText} mono>${fileName}<//>
             <//>
         <//>
+    `;
+}
+
+export function BackupDetailContent({
+    text,
+    isIncidentBackup,
+    onClose,
+    onOpenExternal,
+    onCopy,
+    onRestore,
+    onAcknowledge,
+}) {
+    return html`
+        <${CodeBlock}
+            text=${text}
+            onSecondaryActivate=${onOpenExternal}
+            secondaryLabel="Open in editor" />
+        <div class="backup-detail-actions">
+            <${Button} variant="btn-ghost" onActivate=${onClose}>Close <kbd>Esc</kbd><//>
+            <${Button} variant="btn-ghost" onActivate=${onOpenExternal}>Open in editor<//>
+            <${Button} variant="btn-ghost" onActivate=${onCopy}>Copy<//>
+            <${ConfirmButton} confirmWith="restore" onActivate=${onRestore}>Restore this backup<//>
+            ${isIncidentBackup && html`<${Button} variant="btn-ghost" onActivate=${onAcknowledge}>Looks Good<//>`}
+        </div>
     `;
 }
