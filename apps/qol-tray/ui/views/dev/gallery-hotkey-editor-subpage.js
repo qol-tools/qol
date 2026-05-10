@@ -6,6 +6,7 @@ import { useModalKeyboard } from '../../lib/hooks/useModalKeyboard.js';
 import { ascend } from '../../lib/world-navigation-singleton.js';
 import { HotkeyEditorSubPage } from '../hotkeys-view.js';
 import { changeEditModalPlugin, createEditModalState } from '../hotkeys/modal.js';
+import { useRecorder } from '../hotkeys/useRecorder.js';
 
 const GALLERY_PLUGINS = [
     { id: 'qol-alt-tab', name: 'Alt Tab', actions: [
@@ -49,28 +50,39 @@ export const galleryHotkeyEditorSlot = createSharedSlot({
 
 export function useGalleryHotkeyEditorController() {
     const [modal, setModal] = useState(() => createEditModalState(SAMPLE_HOTKEY, null, galleryGetActions));
+    const recorder = useRecorder({
+        onCapture: useCallback((key) => {
+            setModal(prev => prev ? { ...prev, key } : prev);
+        }, []),
+    });
     const onPluginChange = useCallback((id) => {
         setModal(prev => prev ? changeEditModalPlugin(prev, id, galleryGetActions) : prev);
     }, []);
     const onActionChange = useCallback((action) => {
         setModal(prev => prev ? { ...prev, action } : prev);
     }, []);
-    const onClose = useCallback(() => ascend(), []);
-    const onSave = useCallback(() => ascend(), []);
-    const { fieldProps, handleKey } = useModalKeyboard({ onSave, onClose });
+    const onStartRecording = useCallback(() => recorder.start(''), [recorder.start]);
+    const onClose = useCallback(() => { recorder.cancel(); ascend(); }, [recorder.cancel]);
+    const onSave = useCallback(() => { recorder.cancel(); ascend(); }, [recorder.cancel]);
+    const { fieldProps, handleKey: modalHandleKey } = useModalKeyboard({ onSave, onClose });
+
+    const handleKey = useCallback((e) => {
+        if (recorder.handleKey(e)) return;
+        modalHandleKey(e);
+    }, [recorder.handleKey, modalHandleKey]);
 
     useDiveEditor({
         slot: galleryHotkeyEditorSlot,
-        deps: [modal, fieldProps, handleKey],
+        deps: [modal, fieldProps, handleKey, recorder.isRecording],
         build: () => ({
             modal,
             plugins: GALLERY_PLUGINS,
-            recording: false,
+            recording: recorder.isRecording,
             fieldProps,
             handlers: {
                 onPluginChange,
                 onActionChange,
-                onStartRecording: () => {},
+                onStartRecording,
                 onClose,
                 onSave,
             },
@@ -81,8 +93,9 @@ export function useGalleryHotkeyEditorController() {
 
     return {
         open: useCallback((hotkey) => {
+            recorder.cancel();
             setModal(createEditModalState(hotkey, null, galleryGetActions));
-        }, []),
+        }, [recorder.cancel]),
     };
 }
 
