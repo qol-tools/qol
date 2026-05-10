@@ -20,7 +20,9 @@ import { BackupRow } from '../../../components/domain-rows/BackupRow.js';
 import { galleryBackupRowSlot } from '../gallery-backup-row-detail-subpage.js';
 import { toast } from '../../../lib/toast.js';
 import { HotkeyRow } from '../../../components/domain-rows/HotkeyRow.js';
+import { useGalleryHotkeyEditorController } from '../gallery-hotkey-editor-subpage.js';
 import { ShortcutRow } from '../../../components/domain-rows/ShortcutRow.js';
+import { useGalleryShortcutEditorController } from '../gallery-shortcut-editor-subpage.js';
 import { DevPluginRow } from '../../../components/domain-rows/DevPluginRow.js';
 import { StoreCard, StoreCardGrid } from '../../../components/domain-rows/StoreCard.js';
 
@@ -483,6 +485,8 @@ function BackupRowShowcase() {
 
 function HotkeyTableShowcase() {
     const sel = useListSelection();
+    const editor = useGalleryHotkeyEditorController();
+    const sample = { id: 'gallery-1', plugin_id: 'qol-alt-tab', action: 'open-switcher', key: 'Alt+Tab' };
     return html`
         <${CatalogSection} title="Hotkey table">
             <div class="catalog-showcase">
@@ -490,7 +494,9 @@ function HotkeyTableShowcase() {
                     <${Table} columns="8rem 1fr 1fr" onDeselect=${sel.deselect}>
                         <${TableHeader}><${TableCell}>Shortcut<//><${TableCell}>Plugin<//><${TableCell}>Action<//><//>
                         <${HotkeyRow} shortcut="Alt+Tab" pluginName="qol-alt-tab" actionLabel="Open switcher"
-                            index=${0} selected=${sel.selected(0)} onSelect=${sel.select} accent="accent" />
+                            index=${0} selected=${sel.selected(0)} onSelect=${sel.select} accent="accent"
+                            data-dive-target="dev-gallery-hotkey-row-editor"
+                            onActivate=${() => editor.open(sample)} />
                     <//>
                 <//>
                 <${States}>
@@ -506,6 +512,11 @@ function HotkeyTableShowcase() {
 
 function ShortcutTableShowcase() {
     const sel = useListSelection();
+    const editor = useGalleryShortcutEditorController();
+    const sample = {
+        id: 'github', name: 'GitHub', enabled: true, export_to_launcher: true,
+        action: { type: 'open_url', url: 'https://github.com' },
+    };
     return html`
         <${CatalogSection} title="Shortcut table">
             <div class="catalog-showcase">
@@ -513,7 +524,9 @@ function ShortcutTableShowcase() {
                     <${Table} columns="1fr 5rem 1fr 5rem" onDeselect=${sel.deselect}>
                         <${TableHeader}><${TableCell}>Name<//><${TableCell}>Type<//><${TableCell}>Target<//><${TableCell}>Launcher<//><//>
                         <${ShortcutRow} name="GitHub" type="URL" target="https://github.com" launcher=${true} enabled=${true}
-                            selectValue="github" index=${0} selected=${sel.selected('github')} onSelect=${sel.select} />
+                            selectValue="github" index=${0} selected=${sel.selected('github')} onSelect=${sel.select}
+                            data-dive-target="dev-gallery-shortcut-row-editor"
+                            onActivate=${() => editor.open(sample)} />
                     <//>
                 <//>
                 <${States}>
