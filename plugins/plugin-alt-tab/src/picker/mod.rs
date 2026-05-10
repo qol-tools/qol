@@ -315,7 +315,19 @@ pub(crate) mod state {
             retain_or_release(&mut self.live_previews, app, window, |id| {
                 active_ids.contains(id)
             });
+            self.update_selection_after_resize(reset_selection);
+        }
 
+        pub(crate) fn replace_windows_for_test(
+            &mut self,
+            windows: Vec<WindowInfo>,
+            reset_selection: bool,
+        ) {
+            self.windows = windows;
+            self.update_selection_after_resize(reset_selection);
+        }
+
+        fn update_selection_after_resize(&mut self, reset_selection: bool) {
             self.selected_index = match (self.windows.is_empty(), reset_selection) {
                 (true, _) => None,
                 (_, true) => Some(0),
@@ -768,6 +780,7 @@ pub(crate) mod state {
                 cycle_on_open: false,
                 previews: HashMap::new(),
                 icons: HashMap::new(),
+                applied_layout: None,
             });
             s.selected_index = selected;
             s
@@ -851,7 +864,7 @@ pub(crate) mod state {
             ];
             for c in &cases {
                 let mut s = picker_at(c.initial, c.start_idx);
-                s.set_windows(windows(c.new_count), c.reset);
+                s.replace_windows_for_test(windows(c.new_count), c.reset);
                 assert_eq!(s.selected_index, c.want, "{}", c.label);
             }
         }
