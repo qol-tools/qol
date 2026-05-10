@@ -57,6 +57,7 @@ export function ShortcutsView() {
     return html`
         <div class="view-container content-shell">
             <${PageHeader} subtitle="User-defined launcher shortcuts for URLs and apps" />
+            <${KeyLegend} bindings=${bindings} />
             <div class="view-body content-shell-body">
                 <div class="content-shell-inner">
                     <${SurfaceContainer} className="content-frame">
@@ -64,7 +65,6 @@ export function ShortcutsView() {
                             selectedIndex=${sc.selectedIndex} onSelect=${sc.setSelectedId} onEdit=${sc.openEditModal} />
                     <//>
                 </div>
-                <${KeyLegend} bindings=${bindings} />
             </div>
         </div>
     `;
