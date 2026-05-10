@@ -264,11 +264,11 @@ function SuppressedList({ keys, items, onUnsuppress, selectedIndex, setSelectedI
     `;
 }
 
-export function LogDetailSubPage() {
+export function LogDetailSubPage({ slot = detailSlot } = {}) {
     const [, bump] = useState(0);
-    useEffect(() => detailSlot.subscribe(() => bump(t => t + 1)), []);
+    useEffect(() => slot.subscribe(() => bump(t => t + 1)), [slot]);
 
-    const { entry } = detailSlot.get();
+    const { entry } = slot.get();
     if (!entry) {
         return html`<div class="view-container content-shell">
             <${PageHeader} title="Log Detail" subtitle="Select a log entry to view" />
