@@ -593,7 +593,7 @@ impl CursorSession {
             if notify.subtype != XFIXES_DISPLAY_CURSOR_NOTIFY {
                 continue;
             }
-            let serial = notify.cursor_serial as u64;
+            let serial = notify.cursor_serial;
             if self.ignored_cursor_serials.contains(&serial) {
                 eprintln!("[shake-to-grow] live refresh cursor-notify ignored serial={serial} reason=self");
                 continue;
@@ -1631,6 +1631,7 @@ fn log_raw_live_cursor_state(
     unsafe { xlib::XFree(image as *mut _) };
 }
 
+#[allow(clippy::too_many_arguments)]
 fn log_scale_plan(
     prefix: &str,
     display: *mut xlib::Display,
@@ -1852,7 +1853,7 @@ fn scaled_dimension(base: u32, factor: f32) -> Option<u32> {
     if !scaled.is_finite() || scaled < 1.0 || scaled > i32::MAX as f32 {
         return None;
     }
-    Some((scaled as u32).min(MAX_CURSOR_DIMENSION).max(1))
+    Some((scaled as u32).clamp(1, MAX_CURSOR_DIMENSION))
 }
 
 fn scaled_raster_hotspot(hotspot: u32, source_bound: u32, target_bound: u32) -> u32 {
