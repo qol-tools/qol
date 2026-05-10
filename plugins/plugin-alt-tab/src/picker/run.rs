@@ -174,6 +174,11 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     #[cfg(debug_assertions)]
     let icon_ms = t_icon.elapsed().as_millis();
 
+    if windows.is_empty() {
+        #[cfg(debug_assertions)]
+        eprintln!("[alt-tab/daemon] no windows, skipping open");
+        return;
+    }
     let state_for_update = state.clone();
     #[cfg(debug_assertions)]
     let t_update = std::time::Instant::now();
