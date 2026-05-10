@@ -155,6 +155,29 @@ function registerStaticDiveTargets(registry) {
             pages,
         });
     }
+
+    const logRowPage = registry.getEntry('dev-gallery-log-row');
+    if (logRowPage) {
+        const claim = {
+            x: logRowPage.x,
+            y: logRowPage.y,
+            width: PLUGIN_PAGE_WIDTH,
+            height: PLUGIN_PAGE_HEIGHT,
+            layer: logRowPage.layer - 1,
+        };
+        registry.addEntry({
+            id: 'dev-gallery-log-row-detail',
+            x: claim.x, y: claim.y,
+            width: PLUGIN_PAGE_WIDTH, height: PLUGIN_PAGE_HEIGHT,
+            layer: claim.layer, label: 'Log Detail',
+            contentSized: true,
+        });
+        registry.addDiveTarget({
+            sourceSelector: '[data-view-id="dev-gallery-log-row"]',
+            claim,
+            pages: ['dev-gallery-log-row-detail'],
+        });
+    }
 }
 
 const PLUGIN_PAGE_WIDTH = 1280;

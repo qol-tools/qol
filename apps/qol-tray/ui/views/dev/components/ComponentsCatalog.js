@@ -13,7 +13,8 @@ import { Surface } from '../../../lib/components/Surface.js';
 import { Button, RefreshButton } from '../../../lib/components/Button.js';
 import { EmptyState } from '../../../lib/components/EmptyState.js';
 import { useListSelection } from '../../../lib/hooks/useListSelection.js';
-import { LogRow, LogDetailModal } from '../../../components/domain-rows/LogRow.js';
+import { LogRow } from '../../../components/domain-rows/LogRow.js';
+import { galleryLogRowSlot } from '../gallery-log-row-detail-subpage.js';
 import { SuppressedRow } from '../../../components/domain-rows/SuppressedRow.js';
 import { BackupRow } from '../../../components/domain-rows/BackupRow.js';
 import { HotkeyRow } from '../../../components/domain-rows/HotkeyRow.js';
@@ -360,32 +361,27 @@ function DevPluginRowShowcase() {
     `;
 }
 
+const SAMPLE_LOG_ENTRIES = [
+    { time: '14:32:01', level: 'startup', src: 'qol-window-actions', loc: 'src/lib.rs:18',
+      msg: 'Plugin initialized successfully' },
+    { time: '14:32:05', level: 'error', src: 'qol-alt-tab', loc: 'src/main.rs:42',
+      count: 3, severity: 'warning', msg: 'Failed to register hotkey: already registered' },
+    { time: '14:32:08', level: 'suppressed', src: 'qol-fx',
+      msg: 'Animation frame dropped (vsync miss)' },
+];
+
 function LogRowShowcase() {
     const sel = useListSelection();
-    const [modalEntry, setModalEntry] = useState(null);
-    const close = useCallback(() => setModalEntry(null), []);
     return html`
         <${CatalogSection} title="Log row">
-            <div class="catalog-showcase">
-                <div class="catalog-try">
-                    <${ListGroup} onDeselect=${sel.deselect}>
-                        <${LogRow} time="14:32:05" level="error" src="qol-alt-tab" loc="src/main.rs:42" count=${3} severity="warning"
-                            msg="Failed to register hotkey: already registered"
-                            index=${0} selected=${sel.selected(0)} onSelect=${sel.select}
-                            onActivate=${() => setModalEntry({ src: 'qol-alt-tab', msg: 'Failed to register hotkey', loc: 'src/main.rs:42' })} />
-                    <//>
-                </div>
-                <div class="catalog-states" inert>
-                    <${StateLabel}>startup<//>
-                    <${LogRow} time="14:32:01" level="startup" src="qol-window-actions" msg="Plugin initialized successfully" />
-                    <${StateLabel}>error + count<//>
-                    <${LogRow} time="14:32:05" level="error" src="qol-alt-tab" loc="src/main.rs:42" count=${3} severity="warning" msg="Failed to register hotkey" />
-                    <${StateLabel}>suppressed<//>
-                    <${LogRow} time="14:32:08" level="suppressed" src="qol-fx" msg="Animation frame dropped (vsync miss)" />
-                </div>
-            </div>
+            <${ListGroup} onDeselect=${sel.deselect}>
+                ${SAMPLE_LOG_ENTRIES.map((entry, i) => html`
+                    <${LogRow} key=${i} ...${entry}
+                        index=${i} selected=${sel.selected(i)} onSelect=${sel.select}
+                        onActivate=${() => galleryLogRowSlot.set({ entry })} />
+                `)}
+            <//>
         <//>
-        ${modalEntry && html`<${LogDetailModal} entry=${modalEntry} onClose=${close} />`}
     `;
 }
 
