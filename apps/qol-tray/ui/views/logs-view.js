@@ -15,7 +15,7 @@ import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
 import { SuppressedRow } from '../components/domain-rows/SuppressedRow.js';
 
 import { createSharedSlot } from '../lib/shared-slot.js';
-export const detailSlot = createSharedSlot({ entry: null, onClose: null });
+export const detailSlot = createSharedSlot({ entry: null });
 
 const TABS = [
     { id: 'live', label: 'Live Log' },
@@ -50,7 +50,6 @@ export function LogsView({ active }) {
     const [suppressed, setSuppressed] = useState({});
     const [selectedIndex, setSelectedIndex] = useState(-1);
     const [expandedKeys, setExpandedKeys] = useState(new Set());
-    const [detailEntry, setDetailEntry] = useState(null);
     const contentRef = useRef(null);
     const { searchQuery } = usePaletteContext();
 
@@ -131,7 +130,7 @@ export function LogsView({ active }) {
         if (!vt) return;
         if (vt.activeTab === 'live') {
             const entry = collapsedEntries[selectedIndex];
-            if (entry) setDetailEntry(entry);
+            if (entry) detailSlot.set({ entry });
         }
         if (vt.activeTab === 'suppressed') {
             const key = filteredSuppressedKeys[selectedIndex];
@@ -150,14 +149,6 @@ export function LogsView({ active }) {
         selectedIndex,
         onEdit,
     });
-
-    const closeDetail = useCallback(() => {
-        setDetailEntry(null);
-    }, []);
-
-    useEffect(() => {
-        detailSlot.set({ entry: detailEntry, onClose: closeDetail });
-    }, [detailEntry]);
 
     const handleKey = useCallback((event) => {
         if (document.activeElement?.closest('[role="tablist"]')) return;
@@ -189,7 +180,7 @@ export function LogsView({ active }) {
                 <div class="logs-content" ref=${contentRef}>
                     ${vt.activeTab === 'live' && html`<${LiveLog} entries=${collapsedEntries} selectedIndex=${selectedIndex}
                         setSelectedIndex=${setSelectedIndex}
-                        onEntryClick=${(entry) => setDetailEntry(entry)} />`}
+                        onEntryClick=${(entry) => detailSlot.set({ entry })} />`}
                     ${vt.activeTab === 'suppressed' && html`<${SuppressedList}
                         keys=${filteredSuppressedKeys}
                         items=${suppressed}
