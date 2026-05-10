@@ -114,8 +114,9 @@ export function TaskRunnerView() {
 
     const bindings = useViewBindings('task-runner');
     return html`<div class="view-container content-shell">
-        <${PageHeader} subtitle="HTTP API for browser extensions to run local commands" />
-        <${KeyLegend} bindings=${bindings} />
+        <${PageHeader}
+            subtitle="HTTP API for browser extensions to run local commands"
+            aside=${html`<${KeyLegend} bindings=${bindings} />`} />
         <${SurfaceContainer} className="view-body">
             <${ApiUsage} actions=${data.actions} actionIds=${data.actionIds} copyApiExample=${data.copyApiExample} />
             <${ActionList} data=${data} edit=${edit} />

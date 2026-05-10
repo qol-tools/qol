@@ -98,8 +98,9 @@ export function HotkeysView() {
     const bindings = useViewBindings('hotkeys');
     return html`
         <div class="view-container content-shell">
-            <${PageHeader} subtitle="Configure global keyboard shortcuts for plugin actions" />
-            <${KeyLegend} bindings=${bindings} />
+            <${PageHeader}
+                subtitle="Configure global keyboard shortcuts for plugin actions"
+                aside=${html`<${KeyLegend} bindings=${bindings} />`} />
             ${hk.registrationErrors.length > 0 && html`<${RegistrationWarnings} errors=${hk.registrationErrors} />`}
             <div class="view-body content-shell-body">
                 <div class="content-shell-inner">
