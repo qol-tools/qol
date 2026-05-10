@@ -729,4 +729,131 @@ pub(crate) mod state {
             assert_eq!(s.selected_index, None);
         }
     }
+
+    #[cfg(test)]
+    mod set_windows_tests {
+        use super::PickerState;
+        use crate::config::{ActionMode, LabelConfig};
+        use crate::discovery::WindowInfo;
+        use crate::picker::create::PickerInit;
+        use std::collections::HashMap;
+
+        fn windows(n: usize) -> Vec<WindowInfo> {
+            (0..n)
+                .map(|i| WindowInfo {
+                    id: i as u32,
+                    title: String::new(),
+                    app_name: String::new(),
+                    preview_path: None,
+                    icon: None,
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.0,
+                    height: 0.0,
+                    is_minimized: false,
+                })
+                .collect()
+        }
+
+        fn picker_at(count: usize, selected: Option<usize>) -> PickerState {
+            let mut s = PickerState::from_init(PickerInit {
+                windows: windows(count),
+                label_config: LabelConfig::default(),
+                transparent_bg: false,
+                card_color: 0,
+                card_opacity: 1.0,
+                show_debug_overlay: false,
+                show_hotkey_hints: false,
+                action_mode: ActionMode::HoldToSwitch,
+                cycle_on_open: false,
+                previews: HashMap::new(),
+                icons: HashMap::new(),
+            });
+            s.selected_index = selected;
+            s
+        }
+
+        #[test]
+        fn selection_tracks_window_list_changes() {
+            struct Case {
+                initial: usize,
+                start_idx: Option<usize>,
+                new_count: usize,
+                reset: bool,
+                want: Option<usize>,
+                label: &'static str,
+            }
+            let cases = [
+                Case {
+                    initial: 3,
+                    start_idx: Some(1),
+                    new_count: 3,
+                    reset: false,
+                    want: Some(1),
+                    label: "stable: same size, no reset",
+                },
+                Case {
+                    initial: 3,
+                    start_idx: Some(1),
+                    new_count: 3,
+                    reset: true,
+                    want: Some(0),
+                    label: "reset clears to 0",
+                },
+                Case {
+                    initial: 3,
+                    start_idx: Some(2),
+                    new_count: 1,
+                    reset: false,
+                    want: Some(0),
+                    label: "shrink: clamp to new len-1",
+                },
+                Case {
+                    initial: 3,
+                    start_idx: Some(1),
+                    new_count: 0,
+                    reset: false,
+                    want: None,
+                    label: "empty list clears selection",
+                },
+                Case {
+                    initial: 3,
+                    start_idx: Some(1),
+                    new_count: 0,
+                    reset: true,
+                    want: None,
+                    label: "empty list overrides reset=true",
+                },
+                Case {
+                    initial: 0,
+                    start_idx: None,
+                    new_count: 3,
+                    reset: true,
+                    want: Some(0),
+                    label: "from-empty with reset",
+                },
+                Case {
+                    initial: 0,
+                    start_idx: None,
+                    new_count: 3,
+                    reset: false,
+                    want: Some(0),
+                    label: "from-empty no-reset defaults to 0",
+                },
+                Case {
+                    initial: 1,
+                    start_idx: Some(0),
+                    new_count: 4,
+                    reset: false,
+                    want: Some(0),
+                    label: "grow preserves selection",
+                },
+            ];
+            for c in &cases {
+                let mut s = picker_at(c.initial, c.start_idx);
+                s.set_windows(windows(c.new_count), c.reset);
+                assert_eq!(s.selected_index, c.want, "{}", c.label);
+            }
+        }
+    }
 }
