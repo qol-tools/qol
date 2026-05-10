@@ -295,6 +295,12 @@ fn has_windows(windows: &[WindowInfo]) -> bool {
     !windows.is_empty()
 }
 
+fn shutdown_daemon(cx: &AsyncApp) {
+    #[cfg(debug_assertions)]
+    eprintln!("[alt-tab/daemon] shutting down");
+    cx.update(|app_cx| app_cx.quit()).ok();
+}
+
 #[cfg(test)]
 mod show_guard_tests {
     use super::has_windows;
@@ -332,10 +338,4 @@ mod show_guard_tests {
             );
         }
     }
-}
-
-fn shutdown_daemon(cx: &AsyncApp) {
-    #[cfg(debug_assertions)]
-    eprintln!("[alt-tab/daemon] shutting down");
-    cx.update(|app_cx| app_cx.quit()).ok();
 }

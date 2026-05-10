@@ -318,6 +318,7 @@ pub(crate) mod state {
             self.update_selection_after_resize(reset_selection);
         }
 
+        #[cfg(test)]
         pub(crate) fn replace_windows_for_test(
             &mut self,
             windows: Vec<WindowInfo>,
