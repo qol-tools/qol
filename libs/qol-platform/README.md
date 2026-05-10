@@ -1,6 +1,7 @@
 # qol-platform
 
-[![CI](https://github.com/qol-tools/qol-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/qol-platform/actions/workflows/ci.yml)
+[![tests](https://github.com/qol-tools/qol-platform/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/qol-platform/actions/workflows/tests.yml)
+[![lint](https://github.com/qol-tools/qol-platform/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/qol-platform/actions/workflows/lint.yml)
 
 Platform detection and capability reporting for qol-tools.
 
