@@ -15,12 +15,12 @@ function dispatchEscape() {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
 }
 
-export function PluginActionsSubPage() {
+export function PluginActionsSubPage({ slot }) {
     const [, bump] = useState(0);
-    useEffect(() => pluginActionsSlot.subscribe(() => bump(t => t + 1)), []);
-    const slot = pluginActionsSlot.get();
+    useEffect(() => slot.subscribe(() => bump(t => t + 1)), [slot]);
+    const value = slot.get();
 
-    if (!slot.rowId || !slot.items?.length) {
+    if (!value.rowId || !value.items?.length) {
         return html`<div class="view-container content-shell">
             <${PageHeader} title="Actions" subtitle="Select a row from the list" />
         </div>`;
@@ -33,11 +33,11 @@ export function PluginActionsSubPage() {
 
     return html`
         <div class="view-container content-shell">
-            <${PageHeader} title="Actions" subtitle=${slot.rowName || slot.rowId} />
+            <${PageHeader} title="Actions" subtitle=${value.rowName || value.rowId} />
             <div class="view-body content-shell-body">
                 <div class="content-shell-inner">
                     <${SurfaceContainer} className="content-frame plugin-actions-frame">
-                        ${slot.items.map(item => html`
+                        ${value.items.map(item => html`
                             <${Button} key=${item.id || item.label} variant="btn-ghost"
                                 onActivate=${() => onActivate(item)}>
                                 ${item.label}

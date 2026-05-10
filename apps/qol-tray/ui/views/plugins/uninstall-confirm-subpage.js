@@ -15,28 +15,28 @@ function dispatchEscape() {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
 }
 
-export function UninstallConfirmSubPage() {
+export function UninstallConfirmSubPage({ slot }) {
     const [, bump] = useState(0);
-    useEffect(() => uninstallConfirmSlot.subscribe(() => bump(t => t + 1)), []);
-    const slot = uninstallConfirmSlot.get();
+    useEffect(() => slot.subscribe(() => bump(t => t + 1)), [slot]);
+    const value = slot.get();
 
     const onCancel = useCallback(() => dispatchEscape(), []);
     const onConfirm = useCallback(async () => {
-        const fn = uninstallConfirmSlot.get().confirm;
+        const fn = slot.get().confirm;
         try {
             if (fn) await fn();
         } finally {
             dispatchEscape();
         }
-    }, []);
+    }, [slot]);
 
-    if (!slot.pluginId) {
+    if (!value.pluginId) {
         return html`<div class="view-container content-shell">
             <${PageHeader} title="Confirm Uninstall" subtitle="Select a plugin from the grid" />
         </div>`;
     }
 
-    const displayName = slot.pluginName || slot.pluginId;
+    const displayName = value.pluginName || value.pluginId;
     return html`
         <div class="view-container content-shell">
             <${PageHeader} title="Delete plugin?" subtitle=${displayName} />
