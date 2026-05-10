@@ -2,8 +2,6 @@ import { html } from '../lib/html.js';
 import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
 import { usePaletteContext } from '../palette/context.js';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
-import { useRegisterViewKeyboard } from '../app/view-keyboard-context.js';
-import { useListKeyboard } from '../lib/hooks/useListKeyboard.js';
 import { matchesQuery } from '../utils/collections.js';
 import { ViewTabs } from '../components/ViewTabs.js';
 import { Button } from '../lib/components/Button.js';
@@ -124,39 +122,6 @@ export function LogsView({ active }) {
     const openLogDir = useCallback(async () => {
         try { await fetch('/api/logs/open-dir', { method: 'POST' }); } catch (_) {}
     }, []);
-
-    const onEdit = useCallback(() => {
-        const vt = vtRef.current;
-        if (!vt) return;
-        if (vt.activeTab === 'live') {
-            const entry = collapsedEntries[selectedIndex];
-            if (entry) detailSlot.set({ entry });
-        }
-        if (vt.activeTab === 'suppressed') {
-            const key = filteredSuppressedKeys[selectedIndex];
-            if (key) toggleExpand(key);
-        }
-    }, [collapsedEntries, filteredSuppressedKeys, selectedIndex, toggleExpand]);
-
-    const itemCount = useMemo(() => {
-        const vt = vtRef.current;
-        const tab = vt?.activeTab || 'live';
-        return tab === 'live' ? collapsedEntries.length : filteredSuppressedKeys.length;
-    });
-
-    const listHandler = useListKeyboard({
-        itemCount,
-        selectedIndex,
-        onEdit,
-    });
-
-    const handleKey = useCallback((event) => {
-        if (document.activeElement?.closest('[role="tablist"]')) return;
-        listHandler(event);
-    }, [listHandler]);
-
-    const isBlocking = useCallback(() => false, []);
-    useRegisterViewKeyboard('logs', handleKey, isBlocking);
 
     const commands = useMemo(() => [
         { id: 'refresh', label: 'Refresh Logs', action: () => { fetchEntries(); fetchSuppressed(); } },
