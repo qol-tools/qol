@@ -21,28 +21,27 @@ import { ShortcutRow } from '../../../components/domain-rows/ShortcutRow.js';
 import { DevPluginRow } from '../../../components/domain-rows/DevPluginRow.js';
 import { StoreCard, StoreCardGrid } from '../../../components/domain-rows/StoreCard.js';
 
-export function ComponentsCatalog({ activeId }) {
-    const showcases = {
-        'buttons': ButtonShowcase,
-        'status': StatusShowcase,
-        'spinner': SpinnerShowcase,
-        'empty-state': EmptyStateShowcase,
-        'dropdown': DropdownShowcase,
-        'expander': ExpanderShowcase,
-        'toggle': ToggleShowcase,
-        'modal': ModalShowcase,
-        'depth-diver': DepthDiver,
-        'dev-plugin-row': DevPluginRowShowcase,
-        'log-row': LogRowShowcase,
-        'suppressed-row': SuppressedRowShowcase,
-        'backup-row': BackupRowShowcase,
-        'hotkey-row': HotkeyTableShowcase,
-        'shortcut-row': ShortcutTableShowcase,
-        'store-card': StoreCardShowcase,
-    };
-    const Showcase = showcases[activeId];
-    if (!Showcase) return null;
-    return html`<div class="catalog"><${Showcase} /></div>`;
+const SHOWCASES = [
+    ['buttons', ButtonShowcase],
+    ['status', StatusShowcase],
+    ['spinner', SpinnerShowcase],
+    ['empty-state', EmptyStateShowcase],
+    ['dropdown', DropdownShowcase],
+    ['expander', ExpanderShowcase],
+    ['toggle', ToggleShowcase],
+    ['modal', ModalShowcase],
+    ['depth-diver', DepthDiver],
+    ['dev-plugin-row', DevPluginRowShowcase],
+    ['log-row', LogRowShowcase],
+    ['suppressed-row', SuppressedRowShowcase],
+    ['backup-row', BackupRowShowcase],
+    ['hotkey-row', HotkeyTableShowcase],
+    ['shortcut-row', ShortcutTableShowcase],
+    ['store-card', StoreCardShowcase],
+];
+
+export function ComponentsCatalog() {
+    return html`<div class="catalog">${SHOWCASES.map(([, S]) => html`<${S} />`)}</div>`;
 }
 
 function CatalogSection({ title, children }) {

@@ -4,6 +4,9 @@ import { Surface } from '../../../lib/components/Surface.js';
 import { RefreshButton } from '../../../lib/components/Button.js';
 import { BuildResults } from './BuildResults.js';
 import { SELF_UPDATE_EVENT } from '../../../app/useSidebarActions.js';
+import { diveViaSelector } from '../../../lib/world-navigation-singleton.js';
+
+const GALLERY_DIVE_SELECTOR = '[data-dive-source="dev-component-gallery"]';
 
 function ReloadCard({ building, buildResults, lastReload, error, reloadPlugins }) {
     return html`
@@ -66,6 +69,18 @@ function SelfUpdateCard() {
     `;
 }
 
+function ComponentGalleryCard() {
+    return html`
+        <${Surface} className="dev-card" data-dive-source="dev-component-gallery"
+            onActivate=${() => diveViaSelector(GALLERY_DIVE_SELECTOR)}>
+            <div class="dev-card-content">
+                <h3>Component Gallery</h3>
+                <p>Browse all UI components and their states.</p>
+            </div>
+        <//>
+    `;
+}
+
 export function ActionsSection({ ctrl }) {
     return html`
         <section class="dev-section">
@@ -79,6 +94,7 @@ export function ActionsSection({ ctrl }) {
             />
             <${MockCard} mockTesting=${ctrl.mockTesting} triggerMockFlows=${ctrl.triggerMockFlows} />
             <${SelfUpdateCard} />
+            <${ComponentGalleryCard} />
         </section>
     `;
 }
