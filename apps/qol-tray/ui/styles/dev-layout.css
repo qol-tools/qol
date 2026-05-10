@@ -133,7 +133,7 @@
 
 .catalog-column-label {
     color: var(--text-faint);
-    font-size: 10px;
+    font-size: var(--fs-sm);
     font-weight: var(--fw-semibold);
     letter-spacing: var(--ls-md);
     text-transform: uppercase;
