@@ -1,5 +1,5 @@
 import { html } from '../html.js';
-import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { Button } from './Button.js';
 
 export function ConfirmButton({
@@ -15,7 +15,9 @@ export function ConfirmButton({
     const [value, setValue] = useState('');
     const [shake, setShake] = useState(false);
     const inputRef = useRef(null);
+    const buttonRef = useRef(null);
     const armedRef = useRef(false);
+    const prevConfirmingRef = useRef(false);
 
     useEffect(() => {
         if (!confirming) return;
@@ -28,6 +30,14 @@ export function ConfirmButton({
             cancelAnimationFrame(id);
             armedRef.current = false;
         };
+    }, [confirming]);
+
+    useLayoutEffect(() => {
+        const wasConfirming = prevConfirmingRef.current;
+        prevConfirmingRef.current = confirming;
+        if (!wasConfirming || confirming) return;
+        if (document.activeElement && document.activeElement !== document.body) return;
+        buttonRef.current?.focus({ preventScroll: true });
     }, [confirming]);
 
     const enterConfirm = useCallback(() => {
@@ -87,5 +97,5 @@ export function ConfirmButton({
         `;
     }
 
-    return html`<${Button} variant=${variant} className=${className} onActivate=${enterConfirm} ...${rest}>${children}<//>`;
+    return html`<${Button} ref=${buttonRef} variant=${variant} className=${className} onActivate=${enterConfirm} ...${rest}>${children}<//>`;
 }
