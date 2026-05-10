@@ -155,7 +155,7 @@ function PeripheralSlot({ slotKey, slot, entry, renderPage, miniScale, coverageO
             ref=${setRef}
         >
             ${slot.id && renderPage
-                ? html`<div class="peripheral-mini">
+                ? html`<div class="peripheral-mini" inert>
                     <div class="peripheral-mini-content" style=${contentStyle}>${renderPage(slot.id)}</div>
                 </div>`
                 : html`<div class="peripheral-edge"></div>`}

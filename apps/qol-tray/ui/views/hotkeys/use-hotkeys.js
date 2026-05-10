@@ -4,6 +4,9 @@ import { usePersistedIndex } from '../../lib/hooks/usePersistedIndex.js';
 import { useSSEDebounce } from '../../hooks/useSSEDebounce.js';
 import { useListKeyboard } from '../../lib/hooks/useListKeyboard.js';
 import { useModalKeyboard } from '../../lib/hooks/useModalKeyboard.js';
+import { diveViaSelector } from '../../lib/world-navigation-singleton.js';
+
+const HOTKEYS_EDITOR_DIVE_SELECTOR = '[data-view-id="hotkeys"]';
 import { useRecorder } from './useRecorder.js';
 import {
     buildSavedHotkeys,
@@ -147,15 +150,16 @@ function useKeyboard(d, m, deleteSelected, recorder) {
         onClose: m.closeModal,
     });
 
+    const onAdd = useCallback(() => {
+        m.openEditModal();
+        diveViaSelector(HOTKEYS_EDITOR_DIVE_SELECTOR);
+    }, [m.openEditModal]);
+
     const listHandler = useListKeyboard({
         itemCount: d.hotkeys.length,
         selectedIndex: d.selectedIndex,
-        onAdd: m.openEditModal,
+        onAdd,
         onDelete: deleteSelected,
-        onEdit: useCallback(() => {
-            const hk = d.hotkeysRef.current[d.selectedIndexRef.current];
-            if (hk) m.openEditModal(hk);
-        }, [m.openEditModal]),
     });
 
     const handleKey = useCallback((e) => {
