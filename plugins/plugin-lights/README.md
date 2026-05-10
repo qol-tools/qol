@@ -1,6 +1,7 @@
 # Plugin Lights
 
-[![CI](https://github.com/qol-tools/plugin-lights/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/plugin-lights/actions/workflows/ci.yml)
+[![tests](https://github.com/qol-tools/plugin-lights/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/plugin-lights/actions/workflows/tests.yml)
+[![lint](https://github.com/qol-tools/plugin-lights/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/plugin-lights/actions/workflows/lint.yml)
 
 A lights control plugin for [QoL Tray](https://github.com/qol-tools/qol-tray).
 
