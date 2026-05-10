@@ -35,17 +35,17 @@ export function useGalleryShortcutEditorController() {
     }, []);
     const onClose = useCallback(() => ascend(), []);
     const onSave = useCallback(() => ascend(), []);
-    const { fieldProps } = useModalKeyboard({ onSave, onClose });
+    const { fieldProps, handleKey } = useModalKeyboard({ onSave, onClose });
 
     useDiveEditor({
         slot: galleryShortcutEditorSlot,
-        deps: [modal, fieldProps],
+        deps: [modal, fieldProps, handleKey],
         build: () => ({
             modal,
             fieldProps,
             handlers: { onChange, onClose, onSave },
-            handleKey: null,
-            isBlocking: () => false,
+            handleKey,
+            isBlocking: () => !!modal,
         }),
     });
 
