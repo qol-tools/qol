@@ -135,6 +135,19 @@
     padding-left: var(--space-5);
 }
 
+.catalog-try::before,
+.catalog-states::before {
+    color: var(--text-faint);
+    font-size: 10px;
+    font-weight: var(--fw-semibold);
+    letter-spacing: var(--ls-md);
+    text-transform: uppercase;
+    margin-bottom: var(--space-3);
+}
+
+.catalog-try::before { content: "Interactive"; }
+.catalog-states::before { content: "States"; }
+
 .catalog-states[inert] [data-selected-surface] {
     cursor: default;
 }
