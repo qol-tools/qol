@@ -15,6 +15,8 @@ import { LogFiltersSubPage, logFiltersSlot } from '../views/dev/log-filters-subp
 import { GalleryShowcasePage } from '../views/dev/gallery-showcase-page.js';
 import { GalleryLogRowDetailSubPage } from '../views/dev/gallery-log-row-detail-subpage.js';
 import { GalleryBackupRowDetailSubPage } from '../views/dev/gallery-backup-row-detail-subpage.js';
+import { GalleryHotkeyEditorSubPage } from '../views/dev/gallery-hotkey-editor-subpage.js';
+import { GalleryShortcutEditorSubPage } from '../views/dev/gallery-shortcut-editor-subpage.js';
 import { SHOWCASE_KEYS } from '../views/dev/components/ComponentsCatalog.js';
 import { UninstallConfirmSubPage, uninstallConfirmSlot } from '../views/plugins/uninstall-confirm-subpage.js';
 import { PluginActionsSubPage, pluginActionsSlot } from '../views/plugins/plugin-actions-subpage.js';
@@ -45,6 +47,8 @@ const WORLD_PAGES = [
     { id: 'dev-log-filters',   devOnly: true, render: () => html`<${LogFiltersSubPage} slot=${logFiltersSlot} />` },
     { id: 'dev-gallery-log-row-detail', devOnly: true, render: () => html`<${GalleryLogRowDetailSubPage} />` },
     { id: 'dev-gallery-backup-row-detail', devOnly: true, render: () => html`<${GalleryBackupRowDetailSubPage} />` },
+    { id: 'dev-gallery-hotkey-row-editor', devOnly: true, render: () => html`<${GalleryHotkeyEditorSubPage} />` },
+    { id: 'dev-gallery-shortcut-row-editor', devOnly: true, render: () => html`<${GalleryShortcutEditorSubPage} />` },
     { id: 'plugins-uninstall-confirm', render: () => html`<${UninstallConfirmSubPage} slot=${uninstallConfirmSlot} />` },
     { id: 'plugins-actions',   render: () => html`<${PluginActionsSubPage} slot=${pluginActionsSlot} />` },
     { id: 'dev-plugin-actions', devOnly: true, render: () => html`<${PluginActionsSubPage} slot=${pluginActionsSlot} />` },

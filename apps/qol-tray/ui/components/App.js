@@ -158,6 +158,8 @@ function registerStaticDiveTargets(registry) {
 
     registerRowDetailDive(registry, 'dev-gallery-log-row', 'dev-gallery-log-row-detail', 'Log Detail');
     registerRowDetailDive(registry, 'dev-gallery-backup-row', 'dev-gallery-backup-row-detail', 'Backup Preview');
+    registerRowDetailDive(registry, 'dev-gallery-hotkey-row', 'dev-gallery-hotkey-row-editor', 'Hotkey Editor');
+    registerRowDetailDive(registry, 'dev-gallery-shortcut-row', 'dev-gallery-shortcut-row-editor', 'Shortcut Editor');
 }
 
 function registerRowDetailDive(registry, hostId, detailId, label) {
