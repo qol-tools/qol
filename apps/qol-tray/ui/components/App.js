@@ -37,6 +37,7 @@ import { WorldViewport } from './shell/WorldViewport.js';
 import { MinimapContainer } from './shell/Minimap.js';
 import { RegionLabels } from './shell/RegionLabels.js';
 import { useWorldNav } from '../app/WorldNav.js';
+import { SHOWCASE_KEYS } from '../views/dev/components/ComponentsCatalog.js';
 
 function applySlotScales(worldEl, registry, camera, baseScale, viewportRef) {
     const slots = worldEl.querySelectorAll('.world-view-slot');
@@ -93,7 +94,6 @@ function registerStaticDiveTargets(registry) {
         { parentId: 'profile', subId: 'profile-backup-detail', label: 'Backup Detail' },
         { parentId: 'dev', subId: 'dev-log-filters', label: 'Edit Log Filters' },
         { parentId: 'dev', subId: 'dev-plugin-actions', label: 'Plugin Actions', sourceSelector: '[data-dive-source="dev-plugin-actions"]' },
-        { parentId: 'dev', subId: 'dev-component-gallery', label: 'Component Gallery', sourceSelector: '[data-dive-source="dev-component-gallery"]' },
         { parentId: 'plugins', subId: 'plugins-uninstall-confirm', label: 'Confirm Uninstall' },
         { parentId: 'plugins', subId: 'plugins-actions', label: 'Plugin Actions', sourceSelector: '[data-dive-source="plugins-actions"]' },
     ];
@@ -121,6 +121,38 @@ function registerStaticDiveTargets(registry) {
             sourceSelector: t.sourceSelector || `[data-view-id="${t.parentId}"]`,
             claim,
             pages: [t.subId],
+        });
+    }
+
+    const devEntry = registry.getEntry('dev');
+    if (devEntry) {
+        const N = SHOWCASE_KEYS.length;
+        const inner = {
+            x: devEntry.x,
+            y: devEntry.y,
+            width: (N - 1) * PLUGIN_PAGE_STRIDE + PLUGIN_PAGE_WIDTH,
+            height: PLUGIN_PAGE_HEIGHT,
+            layer: devEntry.layer - 1,
+        };
+        const claim = withPadding(inner, PLUGIN_PAGE_WIDTH, PLUGIN_PAGE_HEIGHT);
+        const pages = SHOWCASE_KEYS.map((key, i) => {
+            const id = `dev-gallery-${key}`;
+            registry.addEntry({
+                id,
+                x: inner.x + i * PLUGIN_PAGE_STRIDE,
+                y: inner.y,
+                width: PLUGIN_PAGE_WIDTH,
+                height: PLUGIN_PAGE_HEIGHT,
+                layer: inner.layer,
+                label: key,
+                contentSized: true,
+            });
+            return id;
+        });
+        registry.addDiveTarget({
+            sourceSelector: '[data-dive-source="dev-component-gallery"]',
+            claim,
+            pages,
         });
     }
 }
