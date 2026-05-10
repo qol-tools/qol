@@ -1,6 +1,7 @@
 # qol-frecency
 
-[![CI](https://github.com/qol-tools/qol-frecency/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/qol-frecency/actions/workflows/ci.yml)
+[![tests](https://github.com/qol-tools/qol-frecency/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/qol-frecency/actions/workflows/tests.yml)
+[![lint](https://github.com/qol-tools/qol-frecency/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/qol-frecency/actions/workflows/lint.yml)
 
 Frequency + recency ranking for qol-tools plugins.
 
