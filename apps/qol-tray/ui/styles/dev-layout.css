@@ -119,6 +119,26 @@
     align-items: start;
 }
 
+.catalog-column {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-width: 0;
+}
+
+.catalog-column + .catalog-column {
+    border-left: var(--border-w-1) solid var(--border-subtle);
+    padding-left: var(--space-5);
+}
+
+.catalog-column-label {
+    color: var(--text-faint);
+    font-size: 10px;
+    font-weight: var(--fw-semibold);
+    letter-spacing: var(--ls-md);
+    text-transform: uppercase;
+}
+
 .catalog-try {
     min-width: 0;
     display: flex;
@@ -131,22 +151,7 @@
     flex-direction: column;
     gap: var(--space-1);
     min-width: 0;
-    border-left: var(--border-w-1) solid var(--border-subtle);
-    padding-left: var(--space-5);
 }
-
-.catalog-try::before,
-.catalog-states::before {
-    color: var(--text-faint);
-    font-size: 10px;
-    font-weight: var(--fw-semibold);
-    letter-spacing: var(--ls-md);
-    text-transform: uppercase;
-    margin-bottom: var(--space-3);
-}
-
-.catalog-try::before { content: "Interactive"; }
-.catalog-states::before { content: "States"; }
 
 .catalog-states[inert] [data-selected-surface] {
     cursor: default;
