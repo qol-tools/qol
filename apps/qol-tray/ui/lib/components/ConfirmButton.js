@@ -15,7 +15,7 @@ export function ConfirmButton({
     const [value, setValue] = useState('');
     const [shake, setShake] = useState(false);
     const inputRef = useRef(null);
-    const buttonRef = useRef(null);
+    const wrapperRef = useRef(null);
     const armedRef = useRef(false);
     const prevConfirmingRef = useRef(false);
 
@@ -37,7 +37,7 @@ export function ConfirmButton({
         prevConfirmingRef.current = confirming;
         if (!wasConfirming || confirming) return;
         if (document.activeElement && document.activeElement !== document.body) return;
-        buttonRef.current?.focus({ preventScroll: true });
+        wrapperRef.current?.querySelector('button')?.focus({ preventScroll: true });
     }, [confirming]);
 
     const enterConfirm = useCallback(() => {
@@ -65,37 +65,41 @@ export function ConfirmButton({
         if (onActivate) onActivate(event);
     }, [value, onActivate]);
 
-    if (confirming) {
-        const wrapperCls = [
-            'btn', 'btn-confirm', variant,
-            shake && 'btn-confirm-shake',
-            className,
-        ].filter(Boolean).join(' ');
-        return html`
-            <span class=${wrapperCls} role="presentation">
-                <input ref=${inputRef}
-                    class="btn-confirm-input"
-                    type="text"
-                    autocomplete="off"
-                    spellcheck="false"
-                    placeholder=${`Type "${confirmWith}" + Enter`}
-                    value=${value}
-                    onInput=${(e) => setValue(e.currentTarget.value)}
-                    onKeyDown=${(e) => {
-                        if (e.key === 'Enter') {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            submit(e);
-                        } else if (e.key === 'Escape') {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            cancel();
-                        }
-                    }}
-                    onBlur=${cancel} />
-            </span>
-        `;
-    }
+    const confirmingCls = [
+        'btn', 'btn-confirm', variant,
+        shake && 'btn-confirm-shake',
+        className,
+    ].filter(Boolean).join(' ');
 
-    return html`<${Button} ref=${buttonRef} variant=${variant} className=${className} onActivate=${enterConfirm} ...${rest}>${children}<//>`;
+    return html`
+        <span ref=${wrapperRef}
+            class=${confirming ? confirmingCls : ''}
+            style=${confirming ? null : 'display: contents'}
+            role=${confirming ? 'presentation' : null}>
+            ${confirming
+                ? html`
+                    <input ref=${inputRef}
+                        class="btn-confirm-input"
+                        type="text"
+                        autocomplete="off"
+                        spellcheck="false"
+                        placeholder=${`Type "${confirmWith}" + Enter`}
+                        value=${value}
+                        onInput=${(e) => setValue(e.currentTarget.value)}
+                        onKeyDown=${(e) => {
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                submit(e);
+                            } else if (e.key === 'Escape') {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                cancel();
+                            }
+                        }}
+                        onBlur=${cancel} />
+                `
+                : html`<${Button} variant=${variant} className=${className} onActivate=${enterConfirm} ...${rest}>${children}<//>`}
+        </span>
+    `;
 }
