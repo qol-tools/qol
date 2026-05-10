@@ -1,6 +1,7 @@
 # QoL Plugin API
 
-[![CI](https://github.com/qol-tools/qol-plugin-api/actions/workflows/ci.yml/badge.svg)](https://github.com/qol-tools/qol-plugin-api/actions/workflows/ci.yml)
+[![tests](https://github.com/qol-tools/qol-plugin-api/actions/workflows/tests.yml/badge.svg)](https://github.com/qol-tools/qol-plugin-api/actions/workflows/tests.yml)
+[![lint](https://github.com/qol-tools/qol-plugin-api/actions/workflows/lint.yml/badge.svg)](https://github.com/qol-tools/qol-plugin-api/actions/workflows/lint.yml)
 
 Shared library for [QoL Tray](https://github.com/qol-tools/qol-tray) plugins.
 
