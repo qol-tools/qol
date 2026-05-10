@@ -181,19 +181,32 @@ function dispatchEscape() {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
 }
 
-export function BackupDetailSubPage() {
-    const [, bump] = useState(0);
-    useEffect(() => backupPreviewSlot.subscribe(() => bump(t => t + 1)), []);
+export const prodBackupDetailConfig = {
+    formatText: formatBackupPreview,
+    onClose: dispatchEscape,
+    onOpenExternal: (fileName) => openProfileBackupFile(fileName)
+        .catch((err) => toast('error', `Failed to open: ${err.message}`)),
+    onCopy: (content) => {
+        navigator.clipboard.writeText(content);
+        toast('success', 'Copied to clipboard');
+    },
+    onRestore: (content) => importProfileText(content)
+        .then(() => dispatchEscape())
+        .catch((err) => toast('error', `Failed to restore backup: ${err.message}`)),
+    onAcknowledge: (slotAcknowledge) => { slotAcknowledge?.(); dispatchEscape(); },
+};
 
-    const { preview, incident, onAcknowledge } = backupPreviewSlot.get();
+export function BackupDetailSubPage({ slot = backupPreviewSlot, config = prodBackupDetailConfig } = {}) {
+    const [, bump] = useState(0);
+    useEffect(() => slot.subscribe(() => bump(t => t + 1)), [slot]);
+
+    const { preview, incident, onAcknowledge } = slot.get();
     if (!preview) {
         return html`<div class="view-container content-shell">
             <${PageHeader} title="Backup Preview" subtitle="Select a backup to view" />
         </div>`;
     }
     const isIncidentBackup = incident?.backup_file === preview.file_name;
-    const openExternal = () => openProfileBackupFile(preview.file_name)
-        .catch((err) => toast('error', `Failed to open: ${err.message}`));
     return html`
         <div class="view-container content-shell">
             <${PageHeader} title=${preview.file_name} subtitle=${isIncidentBackup ? 'Backup awaiting review' : 'Backup preview'} />
@@ -201,18 +214,13 @@ export function BackupDetailSubPage() {
                 <div class="content-shell-inner">
                     <${SurfaceContainer} className="content-frame backup-detail-frame">
                         <${BackupDetailContent}
-                            text=${formatBackupPreview(preview.content)}
+                            text=${config.formatText(preview.content)}
                             isIncidentBackup=${isIncidentBackup}
-                            onClose=${dispatchEscape}
-                            onOpenExternal=${openExternal}
-                            onCopy=${() => {
-                                navigator.clipboard.writeText(preview.content);
-                                toast('success', 'Copied to clipboard');
-                            }}
-                            onRestore=${() => importProfileText(preview.content)
-                                .then(() => dispatchEscape())
-                                .catch((err) => toast('error', `Failed to restore backup: ${err.message}`))}
-                            onAcknowledge=${() => { onAcknowledge?.(); dispatchEscape(); }} />
+                            onClose=${config.onClose}
+                            onOpenExternal=${() => config.onOpenExternal(preview.file_name)}
+                            onCopy=${() => config.onCopy(preview.content)}
+                            onRestore=${() => config.onRestore(preview.content)}
+                            onAcknowledge=${() => config.onAcknowledge(onAcknowledge)} />
                     <//>
                 </div>
             </div>

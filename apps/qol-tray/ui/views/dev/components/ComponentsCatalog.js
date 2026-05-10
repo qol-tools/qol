@@ -450,7 +450,11 @@ function BackupRowShowcase() {
                         index=${i} selected=${sel.selected(i)} onSelect=${sel.select}
                         data-dive-target="profile-backup-detail"
                         data-secondary-label="Open in editor"
-                        onActivate=${() => galleryBackupRowSlot.set({ entry })}
+                        onActivate=${() => galleryBackupRowSlot.set({
+                            preview: { file_name: entry.fileName, content: entry.content },
+                            incident: entry.review ? { backup_file: entry.fileName } : null,
+                            onAcknowledge: null,
+                        })}
                         onSecondaryActivate=${() => toast('info', 'Open in editor (gallery sandbox)')} />
                 `)}
             <//>
