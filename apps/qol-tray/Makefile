@@ -109,13 +109,23 @@ fmt-check:
 icons:
 	bash scripts/generate-icons.sh
 
+SIBLINGS := $(shell for d in ../plugin-* ../qol-*; do \
+  [ -d "$$d" ] && [ -f "$$d/Cargo.toml" ] && [ "$$d" != "../qol-tray" ] && basename "$$d"; \
+done | sort)
+
+# `make clean`              clean qol-tray + every sibling plugin / qol-* crate
+# `make clean KEEP_PLUGINS=1`  clean qol-tray only
 clean:
-	cargo clean
-	@for d in ../plugin-* ../qol-*; do \
-	  [ -d "$$d" ] && [ -f "$$d/Cargo.toml" ] && [ "$$d" != "../qol-tray" ] || continue; \
-	  echo "==> cargo clean in $$(basename $$d)"; \
-	  (cd "$$d" && cargo clean) || true; \
-	done
+	@echo "==> Cleaning:"
+	@echo "    qol-tray"
+ifeq ($(KEEP_PLUGINS),)
+	@for d in $(SIBLINGS); do echo "    $$d"; done
+endif
+	@cargo clean -q
+ifeq ($(KEEP_PLUGINS),)
+	@for d in $(SIBLINGS); do (cd ../$$d && cargo clean -q) || true; done
+endif
+	@echo "==> Done."
 
 ci-local:
 	@echo "==> cargo fmt --check"
