@@ -111,6 +111,11 @@ icons:
 
 clean:
 	cargo clean
+	@for d in ../plugin-* ../qol-*; do \
+	  [ -d "$$d" ] && [ -f "$$d/Cargo.toml" ] && [ "$$d" != "../qol-tray" ] || continue; \
+	  echo "==> cargo clean in $$(basename $$d)"; \
+	  (cd "$$d" && cargo clean) || true; \
+	done
 
 ci-local:
 	@echo "==> cargo fmt --check"
