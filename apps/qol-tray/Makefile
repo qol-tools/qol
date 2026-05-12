@@ -113,18 +113,22 @@ SIBLINGS := $(shell for d in ../plugin-* ../qol-*; do \
   [ -d "$$d" ] && [ -f "$$d/Cargo.toml" ] && [ "$$d" != "../qol-tray" ] && basename "$$d"; \
 done | sort)
 
-# `make clean`              clean qol-tray + every sibling plugin / qol-* crate
-# `make clean KEEP_PLUGINS=1`  clean qol-tray only
+# `make clean`      clean qol-tray only
+# `make clean-all`  clean qol-tray and every sibling plugin / qol-* crate
+.PHONY: clean clean-all
+
 clean:
 	@echo "==> Cleaning:"
 	@echo "    qol-tray"
-ifeq ($(KEEP_PLUGINS),)
-	@for d in $(SIBLINGS); do echo "    $$d"; done
-endif
 	@cargo clean -q
-ifeq ($(KEEP_PLUGINS),)
+	@echo "==> Done."
+
+clean-all:
+	@echo "==> Cleaning:"
+	@echo "    qol-tray"
+	@for d in $(SIBLINGS); do echo "    $$d"; done
+	@cargo clean -q
 	@for d in $(SIBLINGS); do (cd ../$$d && cargo clean -q) || true; done
-endif
 	@echo "==> Done."
 
 ci-local:
