@@ -89,7 +89,7 @@ function MockControls({ actions }) {
     if (!actions?.length) return null;
     return html`
         <div class="catalog-mock-controls">
-            ${actions.map(a => html`<button key=${a.label} class="btn btn-sm btn-ghost" onClick=${a.run}>${a.label}</button>`)}
+            ${actions.map(a => html`<${Button} key=${a.label} small variant="btn-ghost" onActivate=${a.run}>${a.label}<//>`)}
         </div>
     `;
 }
