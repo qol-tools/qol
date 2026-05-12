@@ -14,16 +14,6 @@ set -uo pipefail
 # - cargo build failure: report once at the end, exit 0 so the user can still
 #   reach the GUI Recompile pane.
 
-# Each plugin has its own target/ dir, so common deps (libc, objc2, serde)
-# would normally recompile per plugin on a cold build. sccache caches by
-# content hash across every target/, so deps compile once per machine.
-if [ -z "${RUSTC_WRAPPER:-}" ] && command -v sccache >/dev/null 2>&1; then
-    export RUSTC_WRAPPER=sccache
-    printf 'recompile-linked: using sccache as RUSTC_WRAPPER\n'
-elif [ -z "${RUSTC_WRAPPER:-}" ]; then
-    printf 'recompile-linked: sccache not found - install via `brew install sccache` to dedupe deps across plugins.\n' >&2
-fi
-
 script_dir=$(cd "$(dirname "$0")" && pwd)
 workspace_root=$(cd "$script_dir/../.." && pwd)
 
