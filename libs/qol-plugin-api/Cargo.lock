@@ -3950,6 +3950,7 @@ dependencies = [
  "qol-runtime",
  "serde",
  "serde_json",
+ "toml 0.8.23",
  "x11rb",
 ]
 
@@ -3957,6 +3958,7 @@ dependencies = [
 name = "qol-runtime"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
 ]
@@ -7308,4 +7310,4 @@ dependencies = [
 
 [[patch.unused]]
 name = "qol-tray"
-version = "3.7.1"
+version = "3.15.1"

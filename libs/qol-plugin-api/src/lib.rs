@@ -1,5 +1,9 @@
 pub mod activation;
+pub mod capability;
 pub mod focus;
+pub mod restore;
+
+pub use restore::{ForegroundProc, PaneSnapshot, RestoreClaim};
 
 #[cfg(feature = "app-icons")]
 pub mod app_icon;
