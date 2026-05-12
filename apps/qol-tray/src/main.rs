@@ -80,7 +80,14 @@ fn try_handle_cli_flag() -> Option<i32> {
             print_usage();
             Some(0)
         }
-        s if s.starts_with("--write-mode=") => Some(write_mode_flag(&s["--write-mode=".len()..])),
+        s if s.starts_with("--write-mode=") => {
+            let exit = write_mode_flag(&s["--write-mode=".len()..]);
+            if exit != 0 {
+                Some(exit)
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }
@@ -118,7 +125,7 @@ fn print_usage() {
         "    qol-tray exec <plugin_id> <action>    Trigger a plugin action via the running daemon"
     );
     println!("    qol-tray exec shortcut <id>           Run a shortcut via the running daemon");
-    println!("    qol-tray --write-mode=<dev|prod>      Write mode.json and exit");
+    println!("    qol-tray --write-mode=<dev|prod>      Write mode.json then run the tray");
     println!("    qol-tray --version, -V                Print version and exit");
     println!("    qol-tray --help, -h                   Print this message and exit");
 }
