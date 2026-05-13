@@ -117,8 +117,9 @@ pub struct DaemonConfig {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct Capabilities {
     #[serde(default)]
     pub serial: bool,
+    #[serde(flatten)]
+    pub extras: HashMap<String, toml::Value>,
 }

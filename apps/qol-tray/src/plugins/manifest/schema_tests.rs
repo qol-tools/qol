@@ -219,6 +219,34 @@ fn parse_capabilities_section() {
 }
 
 #[test]
+fn parse_forward_compat_unknown_capability() {
+    // A newer qol-plugin-api may add capabilities (e.g. restore-rule) that the
+    // running qol-tray binary does not yet know. Unknown entries must parse
+    // into `extras` rather than rejecting the whole manifest, so plugins keep
+    // loading across schema gaps.
+    let toml = r#"
+        [plugin]
+        name = "Forward"
+        description = ""
+        version = "0.0.1"
+
+        [menu]
+        label = "M"
+        items = []
+
+        [capabilities]
+        serial = true
+
+        [capabilities.restore-rule]
+        templates = ["terminal-pane"]
+    "#;
+
+    let manifest: PluginManifest = toml::from_str(toml).unwrap();
+    assert!(manifest.capabilities.serial);
+    assert!(manifest.capabilities.extras.contains_key("restore-rule"));
+}
+
+#[test]
 fn parse_runtime_config() {
     let toml = r#"
         [plugin]
