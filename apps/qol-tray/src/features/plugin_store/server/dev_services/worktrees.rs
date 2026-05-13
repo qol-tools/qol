@@ -72,10 +72,37 @@ where
 {
     read_child_dirs(worktrees_dir)
         .into_iter()
-        .filter_map(|feature_dir| {
+        .flat_map(|feature_dir| {
+            if is_repo_grouping_dir(&feature_dir) {
+                return read_child_dirs(&feature_dir)
+                    .into_iter()
+                    .filter_map(|branch_dir| {
+                        worktree_info_from_feature_dir(&branch_dir, repo_name, resolve_branch)
+                    })
+                    .collect();
+            }
             worktree_info_from_feature_dir(&feature_dir, repo_name, resolve_branch)
+                .into_iter()
+                .collect::<Vec<_>>()
         })
         .collect()
+}
+
+/// True when `dir` looks like a `worktrees/<repo>/` grouping: the dir
+/// itself has no Cargo.toml AND no immediate `.git`, but its children
+/// look like individual repo worktrees (Cargo.toml + .git). The
+/// `<repo>/<branch>` layout coexists with the canonical
+/// `<feature>/<repo>` layout; both need to surface in the picker.
+fn is_repo_grouping_dir(dir: &Path) -> bool {
+    if dir.join("Cargo.toml").is_file() {
+        return false;
+    }
+    if dir.join(".git").exists() {
+        return false;
+    }
+    read_child_dirs(dir)
+        .into_iter()
+        .any(|child| child.join("Cargo.toml").is_file() && child.join(".git").exists())
 }
 
 fn worktree_info_from_feature_dir<F>(
@@ -265,6 +292,26 @@ mod tests {
 
         assert_eq!(result.len(), 1, "result: {:?}", result);
         assert_eq!(result[0].path, flat_wt.to_string_lossy());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_descends_repo_grouped_layout_listing_each_branch() {
+        let tmp = TempDir::new().unwrap();
+        let manifest_dir = create_manifest_dir(tmp.path(), "qol-tray");
+        let grouping = tmp.path().join("worktrees").join("qol-tray");
+        for branch in ["wasm", "tray-6-devprod", "tray-2-boot"] {
+            create_git_worktree(&grouping.join(branch));
+        }
+        let mut result = scan_with_branch_resolver(&manifest_dir, fake_branch_resolver);
+        result.sort_by(|a, b| a.path.cmp(&b.path));
+        assert_eq!(result.len(), 3, "result: {:?}", result);
+        let paths: Vec<String> = result.iter().map(|w| w.path.clone()).collect();
+        assert!(
+            paths.iter().all(|p| p.contains("worktrees/qol-tray/")),
+            "all repo-grouped worktrees should be listed, got: {:?}",
+            paths
+        );
     }
 
     #[cfg(unix)]
