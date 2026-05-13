@@ -1,25 +1,12 @@
-import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
+import { useState, useEffect, useCallback } from 'preact/hooks';
 import { tryFetchJson } from '../api/client.js';
 import { preloadConfigForm } from '../views/plugin-config/usePluginConfig.js';
 
 const VIEW_STORAGE_KEY = 'qoltray.activeView';
 const PLUGIN_STORAGE_KEY = 'qoltray.activePlugin';
 
-function readStoredPlugin() {
-    try {
-        const raw = window.localStorage.getItem(PLUGIN_STORAGE_KEY);
-        if (!raw) return null;
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed.pluginId === 'string') return parsed;
-    } catch {}
-    return null;
-}
-
-function persistPlugin(pluginId) {
-    try {
-        if (pluginId) window.localStorage.setItem(PLUGIN_STORAGE_KEY, JSON.stringify({ pluginId }));
-        else window.localStorage.removeItem(PLUGIN_STORAGE_KEY);
-    } catch {}
+function clearLegacyStoredPlugin() {
+    try { window.localStorage.removeItem(PLUGIN_STORAGE_KEY); } catch {}
 }
 
 function parseHashRoute() {
@@ -105,12 +92,11 @@ export function useRouter({ viewOrder }) {
         return true;
     }, []);
     useEffect(() => {
+        clearLegacyStoredPlugin();
         const route = parseHashRoute();
-        const stored = readStoredPlugin();
-        const pluginId = route.pluginId || stored?.pluginId;
-        if (!pluginId) return;
-        validatePluginConfig(pluginId).then(valid => {
-            if (valid) setActivePluginId(pluginId);
+        if (!route.pluginId) return;
+        validatePluginConfig(route.pluginId).then(valid => {
+            if (valid) setActivePluginId(route.pluginId);
         });
     }, []);
     const closePluginConfig = useCallback(() => doClosePluginConfig(setActivePluginId, setActiveViewId), []);
@@ -120,13 +106,5 @@ export function useRouter({ viewOrder }) {
         return () => window.removeEventListener('hashchange', handler);
     }, [viewOrder]);
     useEffect(() => { if (!activePluginId) persistView(activeViewId); }, [activeViewId, activePluginId]);
-    const firstPersistRef = useRef(true);
-    useEffect(() => {
-        if (firstPersistRef.current) {
-            firstPersistRef.current = false;
-            return;
-        }
-        persistPlugin(activePluginId);
-    }, [activePluginId]);
     return { activeViewId, activePluginId, switchView, openPluginConfig, closePluginConfig, viewOrder };
 }
