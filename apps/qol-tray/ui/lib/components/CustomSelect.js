@@ -155,7 +155,7 @@ function hiddenMarkerStyle() {
 function settledMarkerStyle(list, item) {
     return {
         opacity: 1,
-        height: 'var(--custom-select-option-height, 36px)',
+        height: `${item.offsetHeight}px`,
         transform: `translate(0px, ${item.offsetTop - list.scrollTop}px)`,
     };
 }
