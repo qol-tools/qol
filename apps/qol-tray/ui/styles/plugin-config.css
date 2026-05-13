@@ -385,6 +385,11 @@
     overflow: visible;
 }
 
+.custom-select-popover[data-direction="up"] {
+    top: auto;
+    bottom: calc(100% + 5px);
+}
+
 .custom-select-list {
     position: relative;
     max-height: 220px;
