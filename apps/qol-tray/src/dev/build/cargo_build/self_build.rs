@@ -134,7 +134,8 @@ fn spawn_build(repo_root: &Path, manifest_path: &Path) -> Result<CargoChild, Str
     command
         .args([
             "build",
-            "--bins",
+            "--bin",
+            "qol-tray",
             "--features",
             "dev",
             "--message-format",
