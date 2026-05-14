@@ -333,6 +333,11 @@ async fn async_init_inner(
             log::info!("Hotkey capture fallback to global_hotkey ({e})");
             if let Err(e) = hotkeys::start_hotkey_listener(plugin_manager.clone()) {
                 log::warn!("Failed to start hotkey listener: {}", e);
+            } else {
+                tokio::spawn(async {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    hotkeys::trigger_reload();
+                });
             }
         }
     }
