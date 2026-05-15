@@ -15,13 +15,19 @@ import {
     promptImportProfile,
 } from '../views/profile/actions.js';
 import { toast } from '../lib/toast.js';
-import { resolveInitialWorktree } from './worktree-selection.js';
+import { resolveInitialBranch } from './worktree-selection.js';
 
-const WT_KEY = 'dev.recompile.defaultWorktree';
+const BRANCH_KEY = 'dev.recompile.defaultBranch';
+const LEGACY_PATH_KEY = 'dev.recompile.defaultWorktree';
 const SYNC_STATUS_POLL_MS = 5000;
 
-function readDefaultWorktree() {
-    try { return localStorage.getItem(WT_KEY) || null; } catch { return null; }
+function readDefaultBranch() {
+    try {
+        const current = localStorage.getItem(BRANCH_KEY);
+        if (current) return current;
+        if (localStorage.getItem(LEGACY_PATH_KEY)) localStorage.removeItem(LEGACY_PATH_KEY);
+        return null;
+    } catch { return null; }
 }
 
 export function useApp({ onDissolve } = {}) {
@@ -30,21 +36,21 @@ export function useApp({ onDissolve } = {}) {
     const { activeViewId, activePluginId, switchView, openPluginConfig, closePluginConfig } = useRouter({ viewOrder });
     const mounted = useMountedViews(activeViewId);
     const { updateState, checkForUpdate, beginSelfUpdate, failSelfUpdate, beginDevRecompile, failDevRecompile } = useAppUpdateCoordinator({ devEnabled, appVersion, onDissolve });
-    const [worktrees, setWorktrees] = useState([]);
+    const [branches, setBranches] = useState([]);
     const [repoBranch, setRepoBranch] = useState(null);
-    const [defaultWorktree, setDefaultWorktreeState] = useState(readDefaultWorktree);
+    const [defaultBranch, setDefaultBranchState] = useState(readDefaultBranch);
     const [syncStatus, setSyncStatus] = useState(defaultSyncStatus);
     const [syncProviders, setSyncProviders] = useState([]);
-    const defaultWorktreeRef = useRef(defaultWorktree);
-    defaultWorktreeRef.current = defaultWorktree;
-    const setDefaultWorktree = useCallback(path => {
-        const v = path || null;
-        defaultWorktreeRef.current = v;
+    const defaultBranchRef = useRef(defaultBranch);
+    defaultBranchRef.current = defaultBranch;
+    const setDefaultBranch = useCallback(branch => {
+        const v = branch || null;
+        defaultBranchRef.current = v;
         try {
-            if (v) localStorage.setItem(WT_KEY, v);
-            if (!v) localStorage.removeItem(WT_KEY);
+            if (v) localStorage.setItem(BRANCH_KEY, v);
+            if (!v) localStorage.removeItem(BRANCH_KEY);
         } catch {}
-        setDefaultWorktreeState(v);
+        setDefaultBranchState(v);
     }, []);
     useEffect(() => {
         if (!devEnabled) return;
@@ -52,17 +58,17 @@ export function useApp({ onDissolve } = {}) {
         Promise.all([
             fetch('/api/dev/worktrees').then(r => r.ok ? r.json() : []).catch(() => []),
             fetch('/api/dev/active-worktree').then(r => r.ok ? r.json() : null).catch(() => null),
-        ]).then(([nextWorktrees, active]) => {
+        ]).then(([nextBranches, active]) => {
             if (cancelled) return;
-            setWorktrees(nextWorktrees);
+            setBranches(nextBranches);
             setRepoBranch(active?.repoBranch ?? null);
-            const resolved = resolveInitialWorktree({
-                persisted: defaultWorktreeRef.current,
-                serverActive: active?.path ?? null,
-                worktrees: nextWorktrees,
+            const resolved = resolveInitialBranch({
+                persisted: defaultBranchRef.current,
+                serverActive: active?.branch ?? null,
+                branches: nextBranches,
             });
-            if (resolved === defaultWorktreeRef.current) return;
-            setDefaultWorktree(resolved);
+            if (resolved === defaultBranchRef.current) return;
+            setDefaultBranch(resolved);
         });
         return () => { cancelled = true; };
     }, [devEnabled]);
@@ -92,7 +98,7 @@ export function useApp({ onDissolve } = {}) {
         failSelfUpdate,
         beginDevRecompile,
         failDevRecompile,
-        defaultWorktreeRef,
+        defaultBranchRef,
     });
     const palette = usePaletteContext();
     useEffect(() => {
@@ -128,10 +134,10 @@ export function useApp({ onDissolve } = {}) {
         updateState,
         handleSidebarAction,
         handleViewClick,
-        worktrees,
+        branches,
         repoBranch,
-        defaultWorktree,
-        setDefaultWorktree,
+        defaultBranch,
+        setDefaultBranch,
         syncStatus,
         syncProviders,
         setSyncStatus,

@@ -15,7 +15,7 @@ export function useSidebarActions({
     failSelfUpdate,
     beginDevRecompile,
     failDevRecompile,
-    defaultWorktreeRef,
+    defaultBranchRef,
 }) {
     const handler = useCallback(async (action) => {
         if (action === 'check-update') {
@@ -44,9 +44,9 @@ export function useSidebarActions({
         }
 
         try {
-            const worktreePath = defaultWorktreeRef?.current || null;
-            const fetchOpts = worktreePath
-                ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ worktree_path: worktreePath }) }
+            const branch = defaultBranchRef?.current || null;
+            const fetchOpts = branch
+                ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ worktree_branch: branch }) }
                 : { method: 'POST' };
             const res = await fetch('/api/dev/recompile-self', fetchOpts);
             if (!res.ok) {

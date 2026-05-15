@@ -288,10 +288,10 @@ function AppShell() {
         closePluginConfig,
         updateState,
         handleSidebarAction,
-        worktrees,
+        branches,
         repoBranch,
-        defaultWorktree,
-        setDefaultWorktree,
+        defaultBranch,
+        setDefaultBranch,
         syncStatus,
         syncProviders,
         setSyncStatus,
@@ -662,7 +662,7 @@ function AppShell() {
                     <${MinimapContainer} camera=${camera} registry=${registry} viewportRef=${viewportRef} diveParent=${diveParent}
                         diveDepth=${diveDepth} navigation=${navigation}
                         version=${appVersion} updateState=${updateState} isDevMode=${devEnabled} onAction=${handleSidebarAction}
-                        worktrees=${worktrees} defaultWorktree=${defaultWorktree} setDefaultWorktree=${setDefaultWorktree}
+                        branches=${branches} defaultBranch=${defaultBranch} setDefaultBranch=${setDefaultBranch}
                         repoBranch=${repoBranch} />
                     <${SelectionCursorOverlay} camera=${camera} />
                     <${RecompileDissolve} triggerRef=${dissolveRef} />

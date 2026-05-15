@@ -1,97 +1,68 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveInitialWorktree, parentDir } from './worktree-selection.js';
+import { resolveInitialBranch } from './worktree-selection.js';
 
-const WORKTREES = [
-    { branch: 'main', path: '/repo/main' },
-    { branch: 'feat/x', path: '/repo/worktrees/feat-x/qol-tray' },
-    { branch: 'fix/y', path: '/repo/worktrees/fix-y/plugin-alt-tab' },
-];
+const BRANCHES = ['main', 'feat/x', 'fix/y'];
 
-test('server active path wins over persisted when both valid', () => {
-    const result = resolveInitialWorktree({
-        persisted: '/repo/worktrees/feat-x/qol-tray',
-        serverActive: '/repo/worktrees/fix-y/plugin-alt-tab',
-        worktrees: WORKTREES,
+test('server active branch wins over persisted when both valid', () => {
+    const result = resolveInitialBranch({
+        persisted: 'feat/x',
+        serverActive: 'fix/y',
+        branches: BRANCHES,
     });
-    assert.equal(result, '/repo/worktrees/fix-y/plugin-alt-tab');
+    assert.equal(result, 'fix/y');
 });
 
-test('falls back to persisted when server has no active path', () => {
-    const result = resolveInitialWorktree({
-        persisted: '/repo/worktrees/feat-x/qol-tray',
+test('falls back to persisted when server has no active branch', () => {
+    const result = resolveInitialBranch({
+        persisted: 'feat/x',
         serverActive: null,
-        worktrees: WORKTREES,
+        branches: BRANCHES,
     });
-    assert.equal(result, '/repo/worktrees/feat-x/qol-tray');
+    assert.equal(result, 'feat/x');
 });
 
-test('ignores server active path not present in worktrees', () => {
-    const result = resolveInitialWorktree({
-        persisted: '/repo/worktrees/feat-x/qol-tray',
-        serverActive: '/gone/from/disk',
-        worktrees: WORKTREES,
+test('ignores server active branch not present in list', () => {
+    const result = resolveInitialBranch({
+        persisted: 'feat/x',
+        serverActive: 'gone',
+        branches: BRANCHES,
     });
-    assert.equal(result, '/repo/worktrees/feat-x/qol-tray');
+    assert.equal(result, 'feat/x');
 });
 
 test('returns null when neither server nor persisted match', () => {
-    const result = resolveInitialWorktree({
-        persisted: '/nope',
-        serverActive: '/also-nope',
-        worktrees: WORKTREES,
+    const result = resolveInitialBranch({
+        persisted: 'nope',
+        serverActive: 'also-nope',
+        branches: BRANCHES,
     });
     assert.equal(result, null);
 });
 
 test('returns null when both inputs are empty', () => {
-    const result = resolveInitialWorktree({
+    const result = resolveInitialBranch({
         persisted: null,
         serverActive: null,
-        worktrees: WORKTREES,
+        branches: BRANCHES,
     });
     assert.equal(result, null);
 });
 
-test('resolves persisted parent-dir selection to a worktree path', () => {
-    const result = resolveInitialWorktree({
-        persisted: '/repo/worktrees/feat-x',
-        serverActive: null,
-        worktrees: WORKTREES,
-    });
-    assert.equal(result, '/repo/worktrees/feat-x/qol-tray');
-});
-
-test('treats empty worktrees list as empty array', () => {
-    const result = resolveInitialWorktree({
-        persisted: '/repo/worktrees/feat-x/qol-tray',
-        serverActive: '/repo/worktrees/feat-x/qol-tray',
-        worktrees: null,
+test('treats non-array branches as empty', () => {
+    const result = resolveInitialBranch({
+        persisted: 'feat/x',
+        serverActive: 'feat/x',
+        branches: null,
     });
     assert.equal(result, null);
 });
 
-test('server active match is case- and boundary-sensitive', () => {
-    const result = resolveInitialWorktree({
+test('branch match is exact, not substring', () => {
+    const result = resolveInitialBranch({
         persisted: null,
-        serverActive: '/repo/main/',
-        worktrees: WORKTREES,
+        serverActive: 'feat/x-suffix',
+        branches: ['feat/x', 'feat/x-suffix'],
     });
-    assert.equal(result, null, 'trailing slash should not match /repo/main');
-});
-
-test('parentDir strips final segment', () => {
-    assert.equal(parentDir('/a/b/c'), '/a/b');
-    assert.equal(parentDir('/only'), null);
-    assert.equal(parentDir(''), null);
-    assert.equal(parentDir(null), null);
-});
-
-test('switching selection after recompile: server now points at new path', () => {
-    const result = resolveInitialWorktree({
-        persisted: '/repo/main',
-        serverActive: '/repo/worktrees/fix-y/plugin-alt-tab',
-        worktrees: WORKTREES,
-    });
-    assert.equal(result, '/repo/worktrees/fix-y/plugin-alt-tab');
+    assert.equal(result, 'feat/x-suffix');
 });

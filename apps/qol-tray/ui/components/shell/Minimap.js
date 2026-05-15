@@ -23,7 +23,7 @@ const log = createDebug('qol:minimap');
 
 const ARROW_FLASH_MS = 350;
 
-export function MinimapContainer({ camera, registry, viewportRef, diveParent, diveDepth, navigation, version, updateState, isDevMode, onAction, worktrees, defaultWorktree, setDefaultWorktree, repoBranch }) {
+export function MinimapContainer({ camera, registry, viewportRef, diveParent, diveDepth, navigation, version, updateState, isDevMode, onAction, branches, defaultBranch, setDefaultBranch, repoBranch }) {
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [settings, setSettings] = useState(getWorldSettings);
     const cogRef = useRef(null);
@@ -74,7 +74,7 @@ export function MinimapContainer({ camera, registry, viewportRef, diveParent, di
             </button>
             ${settingsOpen && html`<${WorldSettingsPanel} settings=${settings}
                 version=${version} updateState=${updateState} isDevMode=${isDevMode} onAction=${onAction}
-                worktrees=${worktrees} defaultWorktree=${defaultWorktree} setDefaultWorktree=${setDefaultWorktree}
+                branches=${branches} defaultBranch=${defaultBranch} setDefaultBranch=${setDefaultBranch}
                 repoBranch=${repoBranch} containerRef=${panelRef} onKeyDown=${onSettingsKeyDown} />`}
         <//>
     `;
@@ -91,7 +91,7 @@ const TRANSITION_STYLE_LABELS = { 'zoom-fade': 'Zoom + Fade', fade: 'Fade only',
 export const MINIMAP_NEIGHBOURS_MIN = 1;
 export const MINIMAP_NEIGHBOURS_MAX = 12;
 
-function WorldSettingsPanel({ settings, version, updateState, isDevMode, onAction, worktrees, defaultWorktree, setDefaultWorktree, repoBranch, containerRef, onKeyDown }) {
+function WorldSettingsPanel({ settings, version, updateState, isDevMode, onAction, branches, defaultBranch, setDefaultBranch, repoBranch, containerRef, onKeyDown }) {
     const updateRange = (key) => (e) => setWorldSetting(key, Number(e.target.value));
     const updateToggle = (key) => (value) => setWorldSetting(key, value);
     const updateSelect = (key) => (value) => setWorldSetting(key, value);
@@ -127,9 +127,9 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
                     <//>
                 </div>
             </div>
-            ${isDevMode && worktrees && worktrees.length > 0 && html`
-                <${WorktreeSection} worktrees=${worktrees} defaultWorktree=${defaultWorktree}
-                    setDefaultWorktree=${setDefaultWorktree} repoBranch=${repoBranch} />
+            ${isDevMode && branches && branches.length > 0 && html`
+                <${WorktreeSection} branches=${branches} defaultBranch=${defaultBranch}
+                    setDefaultBranch=${setDefaultBranch} repoBranch=${repoBranch} />
             `}
             ${version && html`<${VersionSection} version=${version} updateState=${updateState} isDevMode=${isDevMode}
                 onAction=${onAction} />`}
@@ -165,21 +165,36 @@ function SelectRow({ label, children }) {
     `;
 }
 
-function WorktreeSection({ worktrees, defaultWorktree, setDefaultWorktree, repoBranch }) {
-    const baseLabel = repoBranch || 'main';
-    const options = ['', ...worktrees.map(w => w.path)];
-    const labels = { '': `${baseLabel} (base)` };
-    for (const w of worktrees) labels[w.path] = w.branch;
-    const onChange = useCallback((value) => setDefaultWorktree(value || null), [setDefaultWorktree]);
+function WorktreeSection({ branches, defaultBranch, setDefaultBranch, repoBranch }) {
+    const head = repoBranch || 'main';
+    const options = useMemo(() => {
+        const seen = new Set();
+        const out = [];
+        for (const branch of [head, ...branches]) {
+            if (!branch || seen.has(branch)) continue;
+            seen.add(branch);
+            out.push(branch);
+        }
+        return out;
+    }, [head, branches]);
+    const labels = useMemo(() => {
+        const acc = { [head]: `${head} (current)` };
+        for (const branch of branches) if (branch && branch !== head) acc[branch] = branch;
+        return acc;
+    }, [head, branches]);
+    const value = defaultBranch || head;
+    const onChange = useCallback(
+        (next) => setDefaultBranch(next === head ? null : next),
+        [setDefaultBranch, head]
+    );
     return html`
         <div class="wsp-section">
             <div class="wsp-heading">
                 <span>Worktree</span>
-                ${repoBranch && html`<span class="wsp-pill" title="Base repo HEAD">${repoBranch}</span>`}
             </div>
             <div class="wsp-grid">
                 <${SelectRow} label="Branch">
-                    <${CustomSelect} value=${defaultWorktree || ''} options=${options}
+                    <${CustomSelect} value=${value} options=${options}
                         labels=${labels} onChange=${onChange} compact=${true} />
                 <//>
             </div>
