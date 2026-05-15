@@ -230,13 +230,13 @@ pub(super) struct SetPluginCpuMonitoringRequest {
 #[cfg(feature = "dev")]
 #[derive(Debug, Clone, Deserialize, Default)]
 pub(super) struct RecompileSelfRequest {
-    pub(super) worktree_path: Option<String>,
+    pub(super) worktree_branch: Option<String>,
 }
 
 #[cfg(feature = "dev")]
 #[derive(Debug, Clone, Deserialize, Default)]
 pub(super) struct ReloadRequest {
-    pub(super) worktree_path: Option<String>,
+    pub(super) worktree_branch: Option<String>,
 }
 
 #[cfg(feature = "dev")]
@@ -250,7 +250,6 @@ pub(super) struct WorktreeInfo {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(super) struct ActiveWorktreeResponse {
     pub(super) branch: Option<String>,
-    pub(super) path: Option<String>,
     #[serde(rename = "repoBranch")]
     pub(super) repo_branch: Option<String>,
 }
@@ -267,18 +266,18 @@ mod tests {
     use super::RecompileSelfRequest;
 
     #[test]
-    fn recompile_request_path_is_optional() {
+    fn recompile_request_branch_is_optional() {
         let cases = [
             (r#"{}"#, None),
-            (r#"{"worktree_path":null}"#, None),
-            (r#"{"worktree_path":"/a/b/c"}"#, Some("/a/b/c")),
+            (r#"{"worktree_branch":null}"#, None),
+            (r#"{"worktree_branch":"feat/x"}"#, Some("feat/x")),
         ];
-        for (input, expected_path) in cases {
+        for (input, expected_branch) in cases {
             let req: RecompileSelfRequest = serde_json::from_str(input)
                 .unwrap_or_else(|e| panic!("failed to parse {:?}: {}", input, e));
             assert_eq!(
-                req.worktree_path.as_deref(),
-                expected_path,
+                req.worktree_branch.as_deref(),
+                expected_branch,
                 "input: {}",
                 input
             );
