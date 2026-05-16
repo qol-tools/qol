@@ -1,0 +1,14 @@
+{
+  "name": "qol-tray-diagram",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Local build pipeline for the QoL Tray Runtime Architecture Map. Compiles .jsx -> .js so the HTML opens with plain file:// (no @babel/standalone, no HTTP server).",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.26.0",
+    "@babel/preset-react": "^7.26.0"
+  }
+}
