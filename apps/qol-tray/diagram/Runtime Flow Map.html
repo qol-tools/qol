@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QoL Tray · Execution Spine</title>
+  <style>
+    :root {
+      --paper: #fbfaf7;
+      --ink: #1e1f22;
+      --muted: #6b6f76;
+      --line: #d9d5cc;
+      --input: #ef6f6c;
+      --input-soft: #fff0ef;
+      --core: #7d57d8;
+      --core-soft: #f2ecff;
+      --sink: #2e8a55;
+      --sink-soft: #e8f6ed;
+      --dep: #c7871f;
+      --dep-soft: #fff6dd;
+      --bg: #3f73a8;
+      --bg-soft: #eaf2fa;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      min-width: 1120px;
+      padding: 28px 34px 42px;
+    }
+
+    header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      letter-spacing: -0.03em;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .rule {
+      max-width: 980px;
+      margin: 22px 0 24px;
+      padding: 14px 18px;
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      font-size: 15px;
+      line-height: 1.55;
+    }
+
+    code {
+      font-family: "SFMono-Regular", Consolas, ui-monospace, monospace;
+      font-size: 0.92em;
+      padding: 1px 5px;
+      background: #f2efe8;
+      border-radius: 4px;
+    }
+
+    .board {
+      width: 100%;
+      overflow-x: auto;
+      padding: 20px;
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+    }
+
+    svg {
+      display: block;
+      width: 1480px;
+      height: 860px;
+    }
+
+    .frame {
+      fill: transparent;
+      stroke: var(--line);
+      stroke-width: 1.2;
+    }
+
+    .frame-label {
+      font-size: 13px;
+      font-weight: 800;
+      fill: var(--muted);
+      letter-spacing: 0.04em;
+    }
+
+    .box {
+      rx: 10;
+      ry: 10;
+      stroke-width: 1.6;
+      filter: drop-shadow(0 8px 16px rgb(25 25 25 / 0.05));
+    }
+
+    .input {
+      fill: var(--input-soft);
+      stroke: var(--input);
+    }
+
+    .core {
+      fill: var(--core-soft);
+      stroke: var(--core);
+    }
+
+    .sink {
+      fill: var(--sink-soft);
+      stroke: var(--sink);
+    }
+
+    .dep {
+      fill: var(--dep-soft);
+      stroke: var(--dep);
+    }
+
+    .runtime {
+      fill: var(--bg-soft);
+      stroke: var(--bg);
+    }
+
+    .title {
+      font-size: 17px;
+      font-weight: 800;
+      fill: var(--ink);
+    }
+
+    .small-title {
+      font-size: 14px;
+      font-weight: 800;
+      fill: var(--ink);
+    }
+
+    .text {
+      font-size: 13px;
+      fill: var(--ink);
+    }
+
+    .muted {
+      font-size: 12px;
+      fill: var(--muted);
+    }
+
+    .mono {
+      font-family: "SFMono-Regular", Consolas, ui-monospace, monospace;
+      font-size: 12px;
+      fill: var(--ink);
+    }
+
+    .solid {
+      fill: none;
+      stroke: #24262a;
+      stroke-width: 2;
+      marker-end: url(#arrow);
+    }
+
+    .no-arrow {
+      marker-end: none;
+    }
+
+    .dashed {
+      fill: none;
+      stroke: #777b82;
+      stroke-width: 1.6;
+      stroke-dasharray: 6 6;
+      marker-end: url(#arrow-muted);
+    }
+
+    .label-bg {
+      fill: white;
+      opacity: 0.95;
+    }
+
+    .edge-label {
+      font-size: 12px;
+      fill: var(--muted);
+      font-weight: 700;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 18px;
+      margin-top: 16px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .chip {
+      width: 14px;
+      height: 14px;
+      border: 1.5px solid;
+      border-radius: 4px;
+      background: white;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>QoL Tray</h1>
+      <div class="subtitle">execution spine · dependencies as sidecars</div>
+    </header>
+
+    <p class="rule">
+      Read the solid arrows left to right: <strong>event source → adapter → <code>action_executor</code> → <code>resolve_action</code> → one plugin sink</strong>.
+      Dashed arrows are dependencies or lifecycle feedback. They matter, but they are not the action dispatch path.
+    </p>
+
+    <section class="board" aria-label="QoL Tray execution spine diagram">
+      <svg viewBox="0 0 1480 860" role="img" aria-labelledby="diagram-title diagram-desc">
+        <title id="diagram-title">QoL Tray execution spine</title>
+        <desc id="diagram-desc">Three input surfaces converge on action_executor, resolve_action chooses daemon socket or runtime spawn, and lifecycle dependencies sit around that path as dashed edges.</desc>
+
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M 0 1 L 9 5 L 0 9 Z" fill="#24262a"></path>
+          </marker>
+          <marker id="arrow-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M 0 1 L 9 5 L 0 9 Z" fill="#777b82"></path>
+          </marker>
+        </defs>
+
+        <rect class="frame" x="28" y="22" width="1424" height="126" rx="12"></rect>
+        <text class="frame-label" x="48" y="48">RUNTIMES CREATED AT BOOT</text>
+
+        <rect class="box runtime" x="62" y="72" width="300" height="50"></rect>
+        <text class="small-title" x="212" y="94" text-anchor="middle">OS event loop</text>
+        <text class="muted" x="212" y="113" text-anchor="middle">gtk · NSApplication · win32</text>
+
+        <rect class="box runtime" x="430" y="72" width="300" height="50"></rect>
+        <text class="small-title" x="580" y="94" text-anchor="middle">Tokio runtime</text>
+        <text class="muted" x="580" y="113" text-anchor="middle">axum · sync · features · supervisor</text>
+
+        <rect class="box runtime" x="798" y="72" width="300" height="50"></rect>
+        <text class="small-title" x="948" y="94" text-anchor="middle">Aux std::threads</text>
+        <text class="muted" x="948" y="113" text-anchor="middle">menu receiver · runtime poll/socket</text>
+
+        <rect class="frame" x="28" y="194" width="334" height="390" rx="12"></rect>
+        <text class="frame-label" x="48" y="220">EVENT SOURCES</text>
+
+        <rect class="frame" x="406" y="194" width="274" height="390" rx="12"></rect>
+        <text class="frame-label" x="426" y="220">ADAPTERS</text>
+
+        <rect class="frame" x="1108" y="194" width="344" height="390" rx="12"></rect>
+        <text class="frame-label" x="1128" y="220">PLUGIN SINKS</text>
+
+        <rect class="box input" x="72" y="262" width="242" height="66"></rect>
+        <text class="title" x="193" y="290" text-anchor="middle">Tray menu click</text>
+        <text class="muted" x="193" y="311" text-anchor="middle">tray-icon MenuEvent</text>
+
+        <rect class="box input" x="72" y="388" width="242" height="66"></rect>
+        <text class="title" x="193" y="416" text-anchor="middle">Dashboard / CLI</text>
+        <text class="muted" x="193" y="437" text-anchor="middle">HTTP on 127.0.0.1:42700</text>
+
+        <rect class="box input" x="72" y="514" width="242" height="66"></rect>
+        <text class="title" x="193" y="542" text-anchor="middle">Hotkey</text>
+        <text class="muted" x="193" y="563" text-anchor="middle">evdev/uinput or global_hotkey</text>
+
+        <rect class="box input" x="430" y="262" width="226" height="66"></rect>
+        <text class="title" x="543" y="290" text-anchor="middle">EventRouter</text>
+        <text class="mono" x="543" y="311" text-anchor="middle">menu_id → action</text>
+
+        <rect class="box input" x="430" y="388" width="226" height="66"></rect>
+        <text class="title" x="543" y="416" text-anchor="middle">axum handler</text>
+        <text class="mono" x="543" y="437" text-anchor="middle">POST /api/plugins/...</text>
+
+        <rect class="box input" x="430" y="514" width="226" height="66"></rect>
+        <text class="title" x="543" y="542" text-anchor="middle">hotkey callback</text>
+        <text class="mono" x="543" y="563" text-anchor="middle">execute_action</text>
+
+        <rect class="box core" x="742" y="368" width="230" height="88"></rect>
+        <text class="title" x="857" y="398" text-anchor="middle">action_executor</text>
+        <text class="muted" x="857" y="421" text-anchor="middle">fan-in point</text>
+        <text class="mono" x="857" y="441" text-anchor="middle">same function, 3 callers</text>
+
+        <rect class="box core" x="980" y="368" width="214" height="88"></rect>
+        <text class="title" x="1087" y="398" text-anchor="middle">resolve_action</text>
+        <text class="muted" x="1087" y="421" text-anchor="middle">manifest · registry · socket</text>
+        <text class="mono" x="1087" y="441" text-anchor="middle">chooses one sink</text>
+
+        <rect class="box sink" x="1220" y="254" width="210" height="92"></rect>
+        <text class="title" x="1325" y="282" text-anchor="middle">Plugin daemon</text>
+        <text class="muted" x="1325" y="305" text-anchor="middle">long-lived process</text>
+        <text class="mono" x="1325" y="326" text-anchor="middle">Unix socket · qol_runtime</text>
+
+        <rect class="box sink" x="1220" y="486" width="210" height="92"></rect>
+        <text class="title" x="1325" y="514" text-anchor="middle">Runtime spawn</text>
+        <text class="muted" x="1325" y="537" text-anchor="middle">one-shot subprocess</text>
+        <text class="mono" x="1325" y="558" text-anchor="middle">std::process::Command</text>
+
+        <path class="solid" d="M 314 295 L 430 295"></path>
+        <path class="solid" d="M 314 421 L 430 421"></path>
+        <path class="solid" d="M 314 547 L 430 547"></path>
+        <path class="solid no-arrow" d="M 656 295 L 704 295"></path>
+        <path class="solid no-arrow" d="M 656 421 L 704 421"></path>
+        <path class="solid no-arrow" d="M 656 547 L 704 547"></path>
+        <path class="solid no-arrow" d="M 704 295 L 704 547"></path>
+        <path class="solid" d="M 704 412 L 742 412"></path>
+        <path class="solid" d="M 972 412 L 980 412"></path>
+        <path class="solid" d="M 1194 412 L 1208 412 L 1208 300 L 1220 300"></path>
+        <path class="solid" d="M 1194 412 L 1208 412 L 1208 532 L 1220 532"></path>
+
+        <rect class="label-bg" x="1132" y="318" width="120" height="20"></rect>
+        <text class="edge-label" x="1192" y="333" text-anchor="middle">daemon_socket</text>
+        <rect class="label-bg" x="1124" y="484" width="124" height="20"></rect>
+        <text class="edge-label" x="1186" y="499" text-anchor="middle">runtime.command</text>
+
+        <rect class="frame" x="28" y="640" width="1424" height="178" rx="12"></rect>
+        <text class="frame-label" x="48" y="666">SIDE DEPENDENCIES · NOT ON THE SOLID DISPATCH PATH</text>
+
+        <rect class="box dep" x="72" y="700" width="242" height="68"></rect>
+        <text class="small-title" x="193" y="728" text-anchor="middle">PluginManager.reload</text>
+        <text class="muted" x="193" y="749" text-anchor="middle">loads manifests · autostarts daemons</text>
+
+        <rect class="box dep" x="400" y="700" width="242" height="68"></rect>
+        <text class="small-title" x="521" y="728" text-anchor="middle">plugin-registry.json</text>
+        <text class="muted" x="521" y="749" text-anchor="middle">active/fallback execution source</text>
+
+        <rect class="box dep" x="728" y="700" width="242" height="68"></rect>
+        <text class="small-title" x="849" y="728" text-anchor="middle">daemon_supervisor</text>
+        <text class="muted" x="849" y="749" text-anchor="middle">5s liveness monitor</text>
+
+        <rect class="box dep" x="1056" y="700" width="242" height="68"></rect>
+        <text class="small-title" x="1177" y="728" text-anchor="middle">EventBus</text>
+        <text class="muted" x="1177" y="749" text-anchor="middle">outbound SSE/menu updates only</text>
+
+        <path class="dashed" d="M 193 700 L 193 626 L 1438 626 L 1438 300 L 1430 300"></path>
+        <path class="dashed" d="M 521 700 L 521 666 L 1087 666 L 1087 456"></path>
+        <path class="dashed" d="M 849 700 L 849 610 L 1420 610 L 1420 346"></path>
+
+        <rect class="label-bg" x="214" y="616" width="140" height="20"></rect>
+        <text class="edge-label" x="284" y="631" text-anchor="middle">spawn on reload</text>
+        <rect class="label-bg" x="588" y="656" width="118" height="20"></rect>
+        <text class="edge-label" x="647" y="671" text-anchor="middle">resolver input</text>
+        <rect class="label-bg" x="944" y="600" width="104" height="20"></rect>
+        <text class="edge-label" x="996" y="615" text-anchor="middle">monitors</text>
+      </svg>
+    </section>
+
+    <div class="legend">
+      <span><span class="chip" style="background: var(--input-soft); border-color: var(--input)"></span>event source or adapter</span>
+      <span><span class="chip" style="background: var(--core-soft); border-color: var(--core)"></span>dispatch core</span>
+      <span><span class="chip" style="background: var(--sink-soft); border-color: var(--sink)"></span>plugin process sink</span>
+      <span><span class="chip" style="background: var(--dep-soft); border-color: var(--dep)"></span>side dependency</span>
+      <span><svg width="28" height="10" viewBox="0 0 28 10"><path d="M 0 5 L 28 5" stroke="#777b82" stroke-width="1.6" stroke-dasharray="5 5"></path></svg>dashed = dependency/lifecycle, not dispatch</span>
+    </div>
+  </main>
+</body>
+</html>

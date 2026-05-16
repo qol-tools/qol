@@ -1,0 +1,1715 @@
+/* QoL Tray — Runtime Architecture Map
+   Engineering-schematic aesthetic. Warm paper, ink hairlines, two muted accents.
+   All sizes are in canvas px; the stage is transform-scaled to fit the viewport. */
+
+:root {
+  /* Light "paper" palette */
+  --paper:   oklch(0.972 0.006 80);
+  --paper-2: oklch(0.945 0.007 80);
+  --paper-3: oklch(0.920 0.008 80);
+  --ink:     oklch(0.185 0.006 80);
+  --ink-2:   oklch(0.380 0.006 80);
+  --ink-3:   oklch(0.560 0.006 80);
+  --ink-4:   oklch(0.720 0.005 80);
+  --hair:    oklch(0.860 0.005 80);
+  --hair-2:  oklch(0.920 0.005 80);
+
+  --amber:   var(--accent-amber-hex, oklch(0.72 0.16 55));
+  --amber-2: color-mix(in srgb, var(--amber) 22%, var(--paper));
+  --slate:   var(--accent-slate-hex, oklch(0.58 0.10 245));
+  --slate-2: color-mix(in srgb, var(--slate) 18%, var(--paper));
+  --sage:    oklch(0.62 0.11 150);
+  --sage-2:  color-mix(in srgb, var(--sage) 18%, var(--paper));
+
+  /* Region-coded hues. Together with amber/slate/sage they read as a warm-to-cool
+     progression across the six regions, giving each region a distinct identity
+     instead of the previous mostly-monotone palette. */
+  --rose:    oklch(0.74 0.13 22);
+  --rose-2:  color-mix(in srgb, var(--rose) 20%, var(--paper));
+  --violet:  oklch(0.62 0.14 290);
+  --violet-2: color-mix(in srgb, var(--violet) 18%, var(--paper));
+  --teal:    oklch(0.66 0.11 200);
+  --teal-2:  color-mix(in srgb, var(--teal) 20%, var(--paper));
+  --indigo:  oklch(0.55 0.11 270);
+  --indigo-2: color-mix(in srgb, var(--indigo) 18%, var(--paper));
+
+  --grid:    oklch(0.92 0.005 80);
+  --dot:     oklch(0.86 0.005 80);
+
+  --font-display: "Manrope", "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono:    "JetBrains Mono", "Geist Mono", ui-monospace, monospace;
+}
+
+[data-theme="dark"] {
+  --paper:   oklch(0.16 0.008 250);
+  --paper-2: oklch(0.19 0.010 250);
+  --paper-3: oklch(0.22 0.010 250);
+  --ink:     oklch(0.94 0.006 80);
+  --ink-2:   oklch(0.80 0.005 80);
+  --ink-3:   oklch(0.62 0.005 80);
+  --ink-4:   oklch(0.45 0.005 80);
+  --hair:    oklch(0.30 0.008 250);
+  --hair-2:  oklch(0.24 0.008 250);
+  --grid:    oklch(0.22 0.008 250);
+  --dot:     oklch(0.27 0.010 250);
+  --sage:    oklch(0.72 0.07 150);
+  --sage-2:  color-mix(in srgb, var(--sage) 16%, var(--paper));
+}
+
+/* Roomy = default. Compact crunches plate-marks and panel padding. */
+[data-density="compact"] .topbar { padding: 10px 18px; }
+[data-density="compact"] .detail-panel { width: 320px; padding: 14px; }
+[data-density="compact"] .plate { font-size: 9px; }
+
+/* Plate-marks visibility */
+[data-annotations="off"] .plate-annotations { display: none; }
+[data-annotations="off"] .corner-marks { opacity: 0.4; }
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0; padding: 0; height: 100%; width: 100%;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: -0.005em;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.diagram-root {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background:
+    radial-gradient(circle at 50% 30%, var(--paper-2), var(--paper) 60%),
+    var(--paper);
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   TOPBAR
+   ────────────────────────────────────────────────────────────────────────── */
+
+.topbar {
+  position: relative;
+  z-index: 30;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  row-gap: 8px;
+  column-gap: 18px;
+  padding: 10px 22px;
+  border-bottom: 1px solid var(--hair);
+  background: color-mix(in srgb, var(--paper) 92%, transparent);
+  backdrop-filter: blur(8px);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.topbar-left {
+  display: flex; align-items: baseline; gap: 10px;
+}
+.topbar-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+}
+.topbar-sub {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+.topbar-sep { color: var(--ink-4); }
+
+.topbar-center {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  position: relative;
+}
+.topbar-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ink-4);
+  margin-right: 4px;
+  white-space: nowrap;
+}
+
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--hair);
+  background: var(--paper);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.pill:hover { color: var(--ink); border-color: var(--ink-3); }
+.pill.is-on {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+.pill { text-transform: lowercase; }
+
+/* Trace toggle button (replaces the always-visible trace row) */
+.trace-toggle {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--hair);
+  background: var(--paper);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.trace-toggle:hover { border-color: var(--ink-3); color: var(--ink); }
+.trace-toggle.is-active {
+  border-color: var(--ink);
+  background: var(--paper);
+  color: var(--ink);
+}
+.trace-toggle-ico { color: var(--ink-3); font-size: 9px; }
+.trace-toggle.is-active .trace-toggle-ico { color: var(--ink); }
+.trace-toggle-label b { font-weight: 600; }
+.trace-toggle-caret { color: var(--ink-4); font-size: 10px; }
+.trace-toggle-stop {
+  display: inline-grid; place-items: center;
+  width: 16px; height: 16px;
+  border: 1px solid var(--hair);
+  background: var(--paper);
+  color: var(--ink-3);
+  font-size: 11px;
+  line-height: 1;
+  margin-left: 2px;
+}
+.trace-toggle-stop:hover { color: var(--ink); border-color: var(--ink); }
+
+/* Popover menu below the trace toggle */
+.trace-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 50;
+  background: var(--paper);
+  border: 1px solid var(--ink);
+  border-radius: 6px;
+  padding: 8px;
+  display: flex; flex-direction: column;
+  gap: 4px;
+  min-width: 240px;
+  box-shadow: 0 10px 24px -16px color-mix(in srgb, var(--ink) 40%, transparent);
+}
+.trace-menu-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-4);
+  padding: 2px 4px 4px 4px;
+  border-bottom: 1px solid var(--hair);
+  margin-bottom: 2px;
+}
+.trace-menu-item {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  background: var(--paper);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  cursor: pointer;
+  text-align: left;
+}
+.trace-menu-item:hover { background: var(--paper-2); color: var(--ink); }
+.trace-menu-item .trace-ord {
+  font-size: 9px; color: var(--ink-4); letter-spacing: 0.12em;
+  width: 22px;
+}
+.trace-menu-item .trace-label { flex: 1; }
+.trace-menu-item .trace-play { font-size: 9px; color: var(--ink-3); }
+.trace-menu-item.is-on {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+.trace-menu-item.is-on .trace-ord,
+.trace-menu-item.is-on .trace-play { color: var(--paper-3); }
+.trace-menu-item.tone-amber.is-on {
+  background: var(--amber);
+  border-color: var(--amber);
+}
+
+.topbar-right {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   STAGE
+   ────────────────────────────────────────────────────────────────────────── */
+
+.stage-outer {
+  flex: 1;
+  position: relative;
+  overflow: auto;
+  padding: 28px 32px 32px 32px;
+}
+
+.stage-wrap {
+  position: relative;
+  margin: 0 auto;
+}
+
+.stage {
+  position: absolute;
+  top: 0; left: 0;
+  transform-origin: top left;
+  background: var(--paper);
+  outline: 1px solid var(--hair);
+}
+
+.paper-backdrop {
+  position: absolute; inset: 0;
+  background-image:
+    radial-gradient(var(--dot) 1px, transparent 1.2px);
+  background-size: 22px 22px;
+  background-position: 0 0;
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   REGIONS
+   ────────────────────────────────────────────────────────────────────────── */
+
+.region {
+  position: absolute;
+  border-radius: 12px;
+  /* Color identity comes from --region-accent (set inline from data.js
+     region.accent). Adding a region = one row in data.js, no CSS edit.
+     Border removed so bezier edges crossing region boundaries don't
+     visually collide with the rectangle outline — the tinted background
+     and the ord numeral on the left already carry region identity. */
+  background: color-mix(in srgb, var(--region-accent, var(--ink-3)) 18%, var(--paper));
+  border: none;
+}
+
+.region[data-boundary="external"] {
+  /* Dashed border still useful for external boundaries (plugin processes
+     run out-of-process) — but as an inset shadow, not a true border, so
+     edge lines passing through still don't fight a 1px outline. */
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--slate) 60%, var(--hair));
+}
+
+.region-label {
+  position: absolute;
+  top: -16px;
+  left: 22px;
+  background: var(--paper);
+  padding: 6px 14px 6px 12px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 12px;
+  border: 1.5px solid var(--region-accent, var(--ink-3));
+  border-radius: 8px;
+  line-height: 1;
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--region-accent, var(--ink-3)) 18%, transparent);
+}
+.region-ord {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--region-accent, var(--ink-3));
+  letter-spacing: 0.08em;
+  font-weight: 700;
+}
+.region-title {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: -0.005em;
+  text-transform: none;
+}
+.region-caption {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-2);
+  letter-spacing: 0.02em;
+}
+.region-lifetime {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-3);
+  letter-spacing: 0.06em;
+  margin-left: 2px;
+  padding: 2px 6px;
+  border: 1px dashed var(--hair);
+  border-radius: 6px;
+}
+
+/* Nodes set --region-accent inline (via the Node component) using the
+   accent looked up from REGIONS in data.js. No per-region rules here. */
+
+/* ──────────────────────────────────────────────────────────────────────────
+   NODES
+   ────────────────────────────────────────────────────────────────────────── */
+
+.node {
+  position: absolute;
+  background: var(--paper);
+  border: 1px solid var(--hair);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-family: var(--font-display);
+  font-size: 12px;
+  color: var(--ink);
+  line-height: 1.35;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, transform 160ms ease, opacity 160ms ease, box-shadow 160ms ease;
+  z-index: 2;
+  overflow: hidden;
+}
+.node:hover { border-color: var(--ink-3); }
+.node.is-hover {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 1px var(--ink);
+  z-index: 5;
+}
+.node.is-dim { opacity: 0.22; }
+
+.node.is-traced {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 1.5px var(--ink), 0 6px 14px -10px color-mix(in srgb, var(--ink) 50%, transparent);
+  z-index: 5;
+}
+
+/* generic node body */
+.generic-label {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: -0.008em;
+  color: var(--ink);
+}
+.generic-sub {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-2);
+  margin-top: 3px;
+  letter-spacing: 0.01em;
+}
+
+/* code reference line under sub — makes the diagram navigable as a codebase map */
+.node-code {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--ink-4);
+  margin-top: 6px;
+  letter-spacing: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* store concrete path */
+.store-card { display: flex; flex-direction: column; height: 100%; }
+.store-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.store-badge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: var(--paper);
+  background: var(--ink-2);
+  padding: 2px 6px;
+  border-radius: 6px;
+  text-transform: uppercase;
+}
+.store-path {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--sage);
+  margin-top: auto;
+  padding-top: 4px;
+  letter-spacing: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.store-card.is-ephemeral .store-path { color: var(--ink-2); }
+.kind-store .store-card.is-ephemeral {
+  /* applied via parent — uses dashed border */
+}
+/* Ephemeral runtime store has dashed border + ink tint */
+.kind-store:has(.is-ephemeral) {
+  background: color-mix(in srgb, var(--paper) 95%, var(--ink-4));
+  border: 1px dashed var(--ink-3);
+}
+.kind-store:has(.is-ephemeral) .generic-label::before {
+  content: "◌";
+  color: var(--ink-3);
+}
+
+/* generic bullets list (used inside core nodes like event-bus) */
+.generic-bullets {
+  margin: 6px 0 0 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-2);
+  line-height: 1.5;
+  letter-spacing: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 6px;
+}
+.generic-bullets li {
+  background: color-mix(in srgb, var(--paper) 70%, var(--paper-2));
+  border: 1px solid var(--hair);
+  padding: 1px 5px;
+  border-radius: 6px;
+}
+
+/* plugin process internals */
+.ext-internals {
+  margin: 4px 12px 4px 12px;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--ink-2);
+  line-height: 1.55;
+}
+.ext-internals li {
+  position: relative;
+  padding-left: 14px;
+}
+.ext-internals li::before {
+  content: "▸";
+  position: absolute;
+  left: 0;
+  color: var(--slate);
+  font-size: 9px;
+  top: 1px;
+}
+
+/* ── input chips (user surface) ── */
+.kind-input {
+  background: var(--paper);
+  border: 1px solid var(--ink);
+  padding-left: 14px;
+}
+.kind-input .generic-label::before {
+  content: "▷";
+  color: var(--ink);
+  margin-right: 8px;
+  font-size: 11px;
+  position: relative; top: -1px;
+}
+
+/* ── daemon-core modules ── */
+.kind-core {
+  background: var(--paper);
+  border: 1px solid var(--ink-3);
+  padding: 12px 14px;
+}
+.kind-core .generic-label {
+  font-size: 14px;
+}
+/* Tokio runtime — the spine; rendered as a dark inverted bar */
+.node[data-node-id="d-tokio"] {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 22px;
+}
+.node[data-node-id="d-tokio"] .generic-label {
+  color: var(--paper);
+  font-size: 16px;
+  letter-spacing: -0.005em;
+}
+.node[data-node-id="d-tokio"] .generic-sub {
+  color: color-mix(in srgb, var(--paper) 70%, var(--ink));
+  margin-top: 0;
+  font-size: 11px;
+}
+.node[data-node-id="d-tokio"] .node-code {
+  color: color-mix(in srgb, var(--paper) 55%, var(--ink));
+  margin-top: 0;
+  margin-left: auto;
+}
+.node[data-node-id="d-tokio"] .generic {
+  display: flex; align-items: baseline; gap: 18px; width: 100%;
+}
+
+/* ── plugin system ── */
+.kind-plug {
+  background: color-mix(in srgb, var(--slate) 8%, var(--paper));
+  border: 1px solid color-mix(in srgb, var(--slate) 40%, var(--hair));
+}
+.kind-plug .generic-label { color: var(--ink); }
+.kind-plug .generic-sub { color: color-mix(in srgb, var(--slate) 60%, var(--ink-2)); }
+
+/* Action executor — the fan-in anchor. Heavier, slate-filled, white text. */
+.kind-plug-anchor {
+  background: var(--slate);
+  border: 1.5px solid var(--slate);
+  color: var(--paper);
+  padding: 12px 14px;
+}
+.kind-plug-anchor .generic-label { color: var(--paper); font-size: 16px; font-weight: 700; }
+.kind-plug-anchor .generic-sub   { color: color-mix(in srgb, var(--paper) 75%, var(--slate)); }
+.kind-plug-anchor .generic-bullets li {
+  background: color-mix(in srgb, var(--slate) 70%, var(--paper));
+  border-color: color-mix(in srgb, var(--paper) 35%, var(--slate));
+  color: var(--paper);
+  font-size: 9.5px;
+}
+.kind-plug-anchor .node-code { color: color-mix(in srgb, var(--paper) 55%, var(--slate)); }
+
+/* generic-note: italic footer used by plug nodes for non-obvious annotations
+   (e.g. "transition → hotkey reload", "wire: qol_runtime::DaemonResponse"). */
+.generic-note {
+  font-family: var(--font-mono);
+  font-style: italic;
+  font-size: 10px;
+  color: var(--amber);
+  margin-top: 6px;
+  letter-spacing: 0;
+  line-height: 1.35;
+}
+.kind-plug-anchor .generic-note { color: var(--amber-2); }
+
+/* ── menu router — OS thread, NOT tokio ── */
+.kind-router {
+  background: color-mix(in srgb, var(--amber) 10%, var(--paper));
+  border: 1.5px solid var(--amber);
+  border-radius: 6px;
+  padding: 12px 14px;
+}
+.router-card { display: flex; flex-direction: column; gap: 6px; height: 100%; }
+.router-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--paper);
+  background: var(--amber);
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+
+/* ── runtime state socket — second IPC channel ── */
+.kind-state {
+  background: color-mix(in srgb, var(--slate) 8%, var(--paper));
+  border: 1.5px solid var(--slate);
+  border-radius: 6px;
+  padding: 12px 14px;
+}
+.state-card { display: flex; flex-direction: column; gap: 6px; height: 100%; }
+.state-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--paper);
+  background: var(--slate);
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+.api-ipc {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--ink-2);
+  letter-spacing: 0.01em;
+  padding-top: 2px;
+  border-top: 1px dashed color-mix(in srgb, var(--hair) 100%, transparent);
+  margin-top: 4px;
+}
+
+/* ── persistence stores (existing) — add ephemeral variant ── */
+.kind-store {
+  background: color-mix(in srgb, var(--sage) 10%, var(--paper));
+  border: 1px solid color-mix(in srgb, var(--sage) 40%, var(--hair));
+  padding: 12px 14px;
+}
+.kind-store .generic-label::before {
+  content: "▤";
+  color: var(--sage);
+  margin-right: 8px;
+  font-size: 14px;
+}
+
+/* actor (user · desktop) */
+.actor-card {
+  display: flex; flex-direction: column; justify-content: space-between;
+  height: 100%;
+}
+.kind-actor {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+.actor-label {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 18px;
+  letter-spacing: -0.01em;
+}
+.actor-sub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--paper-3);
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+}
+
+/* platform card */
+.kind-platform {
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--amber) 40%, var(--hair));
+  background: var(--paper);
+  overflow: hidden;
+}
+.platform-card {
+  display: flex; flex-direction: column;
+  height: 100%;
+}
+.platform-header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--amber) 22%, var(--paper));
+  border-bottom: 1px solid color-mix(in srgb, var(--amber) 40%, var(--hair));
+}
+.platform-glyph {
+  display: inline-grid; place-items: center;
+  width: 24px; height: 24px;
+  background: var(--amber);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 6px;
+}
+.platform-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: -0.01em;
+}
+.platform-bullets {
+  margin: 0; padding: 10px 14px 4px 14px;
+  list-style: none;
+  flex: 1;
+}
+.platform-bullets li {
+  position: relative;
+  padding-left: 14px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink);
+  letter-spacing: 0;
+  line-height: 1.55;
+}
+.platform-bullets li::before {
+  content: "—";
+  position: absolute;
+  left: 0;
+  color: var(--amber);
+  font-weight: 600;
+}
+.platform-note {
+  padding: 6px 14px 10px 14px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--ink-2);
+  border-top: 1px dashed color-mix(in srgb, var(--amber) 40%, var(--hair));
+  letter-spacing: 0.01em;
+}
+
+/* api card */
+.kind-api {
+  background: color-mix(in srgb, var(--paper) 80%, var(--amber-2) 30%);
+  border: 1px solid var(--amber);
+  border-radius: 6px;
+  padding: 12px 14px;
+}
+.api-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 10px;
+}
+.api-label {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: -0.01em;
+}
+.api-port {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1.5px solid var(--amber);
+  padding: 4px 10px;
+  letter-spacing: 0.02em;
+}
+.api-sub {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-2);
+  margin-top: 6px;
+  letter-spacing: 0.01em;
+}
+
+/* external plugin process */
+.kind-ext {
+  background: color-mix(in srgb, var(--paper) 86%, var(--slate-2) 40%);
+  border: 1px dashed var(--slate);
+  padding: 0;
+  overflow: hidden;
+}
+.ext-card {
+  display: flex; flex-direction: column;
+  height: 100%;
+}
+.ext-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 10px 12px 4px 12px;
+}
+.ext-label {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--ink);
+  letter-spacing: -0.005em;
+}
+.ext-pid {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--slate);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+.ext-sub {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-2);
+  padding: 0 12px;
+  line-height: 1.5;
+}
+.ext-meta {
+  margin-top: auto;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 12px;
+  border-top: 1px dashed color-mix(in srgb, var(--slate) 50%, var(--hair));
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-3);
+}
+.ext-daemon.on { color: var(--slate); }
+.ext-daemon.off { color: var(--ink-4); }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   QUADRANTS — Region 06 conversational frame (scope × lifetime)
+   ────────────────────────────────────────────────────────────────────────── */
+
+.quadrant {
+  position: absolute;
+  z-index: 1;
+  background: color-mix(in srgb, var(--sage) 5%, var(--paper));
+  border-radius: 6px;
+  pointer-events: none;
+}
+.quadrant-tl { background: color-mix(in srgb, var(--ink-3) 4%, var(--paper)); }
+.quadrant-tr { background: color-mix(in srgb, var(--sage) 8%, var(--paper)); }
+.quadrant-bl { background: color-mix(in srgb, var(--paper) 88%, var(--paper-2)); }
+.quadrant-br { background: color-mix(in srgb, var(--slate) 6%, var(--paper)); }
+.quadrant-label {
+  position: absolute;
+  top: 8px; left: 12px;
+  display: inline-flex; align-items: baseline; gap: 8px;
+  padding: 2px 8px 2px 6px;
+  background: var(--paper);
+  border: 1px solid var(--hair);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  line-height: 1;
+  pointer-events: auto;
+}
+.quadrant-glyph { font-size: 12px; color: var(--ink-3); }
+.quadrant-ord { color: var(--ink-4); font-size: 9px; letter-spacing: 0.16em; }
+.quadrant-title { color: var(--ink); font-weight: 600; letter-spacing: 0.04em; }
+.quadrant-axes {
+  color: var(--ink-3);
+  text-transform: none;
+  letter-spacing: 0.01em;
+  font-size: 9.5px;
+  padding-left: 6px;
+  margin-left: 4px;
+  border-left: 1px solid var(--hair);
+}
+.quadrant-axes .axes-dot { padding: 0 4px; color: var(--ink-4); }
+
+.quadrant-cross {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+.qcross-line {
+  stroke: var(--ink-3);
+  stroke-width: 0.8;
+  stroke-dasharray: 2 4;
+  opacity: 0.6;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   PS-FILE — persistence file chips inside Region 06 quadrants
+   ────────────────────────────────────────────────────────────────────────── */
+
+.kind-ps-file {
+  background: transparent;
+  border: none;
+  padding: 8px 11px;
+}
+/* Restore the boxed look when a chip is focused so any one chip you're
+   reading reads with full structure - the quadrant tint + the per-category
+   left-accent border below already carry grouping at rest. */
+.kind-ps-file.is-hover,
+.kind-ps-file.is-traced {
+  background: var(--paper);
+  border: 1px solid var(--hair);
+}
+.psfile-card { display: flex; flex-direction: column; gap: 3px; height: 100%; }
+.psfile-head {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+}
+.psfile-label {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--ink);
+  letter-spacing: -0.005em;
+}
+.psfile-env {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 12%, var(--paper));
+  border: 1px solid var(--amber);
+  padding: 1px 5px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.psfile-path {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-2);
+  letter-spacing: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.psfile-rw {
+  display: flex; gap: 10px; flex-wrap: wrap;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--ink-3);
+  letter-spacing: 0;
+  margin-top: 1px;
+}
+.psfile-w, .psfile-r { display: inline-flex; align-items: baseline; gap: 4px; }
+.psfile-w { color: color-mix(in srgb, var(--amber) 60%, var(--ink-2)); }
+.psfile-r { color: color-mix(in srgb, var(--slate) 60%, var(--ink-2)); }
+.rw-glyph {
+  display: inline-grid; place-items: center;
+  width: 12px; height: 12px;
+  font-weight: 700;
+  font-size: 9px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  color: inherit;
+}
+
+/* Per-quadrant accent stripe on ps-file chips */
+.kind-ps-file[data-node-id^="ps-regfile"],
+.kind-ps-file[data-node-id^="ps-mode"],
+.kind-ps-file[data-node-id^="ps-gh"],
+.kind-ps-file[data-node-id^="ps-marker"]   { border-left: 2px solid var(--ink-3); }
+.kind-ps-file[data-node-id^="ps-prof"],
+.kind-ps-file[data-node-id^="ps-lock"],
+.kind-ps-file[data-node-id^="ps-core"],
+.kind-ps-file[data-node-id^="ps-pcfg"]     { border-left: 2px solid var(--sage); }
+.kind-ps-file[data-node-id^="ps-pids"],
+.kind-ps-file[data-node-id^="ps-cache"],
+.kind-ps-file[data-node-id^="ps-statesk"],
+.kind-ps-file[data-node-id^="ps-pluginsk"] { border-left: 2px solid var(--ink-4); border-style: dashed; }
+.kind-ps-file[data-node-id^="ps-sync"],
+.kind-ps-file[data-node-id^="ps-backup"],
+.kind-ps-file[data-node-id^="ps-logs"]     { border-left: 2px solid var(--slate); }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   LANE LABELS — left margin glyphs for region 04 sub-lanes
+   ────────────────────────────────────────────────────────────────────────── */
+
+.lane-labels {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  z-index: 1;
+}
+.lane-label-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  fill: var(--slate);
+  letter-spacing: 0.20em;
+  text-anchor: middle;
+  font-weight: 600;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   TOKIO BOUNDARY — visual divider inside band 03
+   ────────────────────────────────────────────────────────────────────────── */
+
+.tokio-boundary {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  z-index: 1;
+}
+.tokio-rule {
+  stroke: var(--ink-2);
+  stroke-width: 1.4;
+  stroke-dasharray: 8 5;
+}
+.tokio-tick {
+  stroke: var(--ink-2);
+  stroke-width: 1.4;
+}
+.tokio-label-bg {
+  fill: var(--paper);
+  stroke: var(--ink-2);
+  stroke-width: 1.2;
+  rx: 2; ry: 2;
+}
+.tokio-label-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  fill: var(--ink);
+  text-anchor: middle;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.tokio-phase-text {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  fill: var(--ink-3);
+  letter-spacing: 0.06em;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   GUTTERS — band-to-band flow chevrons
+   ────────────────────────────────────────────────────────────────────────── */
+
+.gutters {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  z-index: 1;
+}
+.gutter .gutter-line { stroke: var(--ink-3); stroke-width: 1.2; }
+.gutter .gutter-chev { fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.gutter .gutter-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  fill: var(--ink-3);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.gutter.is-dashed .gutter-line { stroke-dasharray: 4 4; }
+.gutter.tone-slate .gutter-chev { stroke: var(--slate); }
+.gutter.tone-slate .gutter-line { stroke: var(--slate); }
+.gutter.tone-slate .gutter-label { fill: var(--slate); }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   EDGES
+   ────────────────────────────────────────────────────────────────────────── */
+
+.edges {
+  position: absolute;
+  inset: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  /* Sit ABOVE regions (no z-index → auto) but BELOW nodes (z-index: 2) so
+     edge lines aren't masked by region rectangles where they cross
+     boundaries, but arrowheads/dashes don't paint over card content. */
+  z-index: 3;
+}
+/* Nodes need to sit above the lifted edges layer so card content stays
+   crisp where arrows terminate on a card edge. */
+.node { z-index: 4; }
+.node.is-hover, .node.is-traced, .node.is-expanded { z-index: 6; }
+
+.edge {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1.4;
+  opacity: 0.55;
+  transition: opacity 200ms ease, stroke-width 200ms ease;
+}
+.edge.is-hairline { stroke-width: 0.9; opacity: 0.32; }
+.edge.is-internal { opacity: 0.85; stroke-width: 1.6; }
+.edge.is-internal.is-hairline { stroke-width: 1; opacity: 0.5; }
+.edge.is-bypass { stroke-width: 1.2; opacity: 0.6; stroke-dasharray: 1 2; }
+.edge.is-longrail {
+  stroke-width: 1.2;
+  opacity: 0.5;
+  stroke-dasharray: 6 5;
+}
+.edge.is-longrail.tone-amber { stroke: var(--amber); }
+.edge.tone-amber  { stroke: var(--amber); }
+.edge.tone-slate  { stroke: var(--slate); }
+.edge.is-dashed   { stroke-dasharray: 4 4; }
+.edge.is-fade     { opacity: 0.10; }
+
+.trace-edge {
+  stroke-width: 2.2;
+  opacity: 1;
+  stroke-dasharray: 8 6;
+  animation: trace-flow 1.4s linear infinite;
+}
+.trace-edge.tone-amber { stroke: var(--amber); }
+.trace-edge.tone-ink   { stroke: var(--ink); }
+
+@keyframes trace-flow {
+  from { stroke-dashoffset: 24; }
+  to   { stroke-dashoffset: 0;  }
+}
+
+.arrow-ink   { fill: var(--ink); }
+.arrow-amber { fill: var(--amber); }
+.arrow-slate { fill: var(--slate); }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   PLATE / CORNER MARKS
+   ────────────────────────────────────────────────────────────────────────── */
+
+.corner-marks {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+}
+.corner-marks .mark {
+  stroke: var(--ink);
+  stroke-width: 1.2;
+  opacity: 0.45;
+}
+
+.plate-annotations {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-3);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.plate {
+  position: absolute;
+  display: flex; flex-direction: column;
+  gap: 2px;
+}
+.plate-mono { letter-spacing: 0.04em; color: var(--ink-3); }
+.plate-tl { top: 22px;  left: 22px; }
+.plate-tr { top: 22px;  right: 22px; text-align: right; align-items: flex-end; }
+.plate-bl { bottom: 18px; left: 22px; }
+.plate-br { bottom: 18px; right: 22px; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   DETAIL PANEL
+   ────────────────────────────────────────────────────────────────────────── */
+
+.detail-panel {
+  position: absolute;
+  z-index: 40;
+  right: 22px;
+  bottom: 22px;
+  width: 440px;
+  max-height: calc(100vh - 120px);
+  overflow: auto;
+  background: var(--paper);
+  border: 1px solid var(--ink);
+  border-radius: 6px;
+  padding: 18px 18px 16px 18px;
+  box-shadow: 0 12px 32px -16px color-mix(in srgb, var(--ink) 35%, transparent);
+  font-family: var(--font-display);
+  color: var(--ink);
+}
+.detail-close {
+  position: absolute;
+  top: 8px; right: 8px;
+  background: transparent;
+  border: none;
+  color: var(--ink-3);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 6px;
+  line-height: 1;
+}
+.detail-close:hover { color: var(--ink); }
+.detail-section + .detail-section {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--hair);
+}
+.detail-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-4);
+  margin-bottom: 4px;
+}
+.detail-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 18px;
+  letter-spacing: -0.01em;
+}
+.detail-sub {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-2);
+  margin-top: 4px;
+}
+.detail-body {
+  font-family: var(--font-display);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  margin-top: 8px;
+  text-wrap: pretty;
+}
+.detail-bullets {
+  margin: 8px 0 0 0;
+  padding-left: 18px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-2);
+  line-height: 1.55;
+}
+.detail-note {
+  margin-top: 8px;
+  padding: 6px 8px;
+  background: var(--paper-2);
+  border-left: 2px solid var(--amber);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--ink-2);
+}
+.detail-trace-steps {
+  margin-top: 10px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--ink-2);
+}
+.detail-trace-steps .step {
+  background: var(--paper-2);
+  padding: 2px 6px;
+  border: 1px solid var(--hair);
+}
+.detail-trace-steps .step-sep { color: var(--ink-4); }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   TERTIARY FADE - visual hierarchy pass
+   ──────────────────────────────────────────────────────────────────────────
+   File paths, code references, internal-process bullets, and read/write
+   markers are present so the diagram doubles as a codebase map - but at
+   full ink density they dominate the visual field and crowd the primary
+   labels and shapes. Fade them at rest; restore full opacity when the node
+   is hovered, pinned, or part of the active trace (the same surfaces that
+   already get visual emphasis).
+
+   Information is not removed; it only stops competing for the eye when
+   you're scanning the high-level structure. */
+.node-code,
+.psfile-path,
+.psfile-rw,
+.ext-internals {
+  opacity: 0.5;
+  transition: opacity 120ms ease-out;
+}
+.node:is(.is-hover, .is-traced) :is(.node-code, .psfile-path, .psfile-rw, .ext-internals) {
+  opacity: 1;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   DECORATION CULL - readability pass
+   ──────────────────────────────────────────────────────────────────────────
+   Strip purely-decorative layers that competed with the actual structure:
+   - lane labels: the band they sit next to is already titled
+   - region ordinals (01, 02, ...): implicit in vertical stack order
+   - gutter labels: still visible, just smaller and softer
+   - corner marks full-hide when [data-annotations=off] (was opacity 0.4
+     before, which still read as visual noise)
+
+   No diagram content removed, just chrome. The Tweaks panel "Plate marks"
+   toggle now defaults to off; flip it on to bring decoration back. */
+.lane-labels,
+.region-ord {
+  display: none;
+}
+[data-annotations="off"] .corner-marks {
+  display: none;
+}
+.gutter .gutter-label {
+  font-size: 9px;
+  fill: var(--ink-4);
+  letter-spacing: 0.04em;
+}
+
+/* Hide static edges at rest - they add visual noise without information
+   unless a specific flow is being traced. When a trace is active the
+   existing .edge.is-fade rule (opacity 0.10) keeps the architecture
+   context visible as a backdrop under the bright trace overlay. */
+.edge:not(.trace-edge):not(.is-fade) {
+  opacity: 0;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   LEVEL TOGGLE - three-state detail control
+   ──────────────────────────────────────────────────────────────────────────
+   Topbar pills switch root [data-level] between:
+   - minimal      : compact layout - only tier-1 nodes render, regions are
+                    repacked vertically. The hide+repack happens in JS
+                    (computeMinimalLayout) since regions and nodes are
+                    sibling absolutely-positioned divs. Picking a trace
+                    auto-switches out of minimal (trace nodes need the
+                    original layout).
+   - descriptive  : every node visible, inline details still hidden.
+   - detailed     : every node visible plus inline bullets, code refs,
+                    paths, R/W markers (drives [data-details=on] from
+                    app.jsx).
+*/
+
+/* Minimal strips every card down to its title - sub, code, port, PID, env,
+   internals, all hidden. Cards also center their remaining content so the
+   single visible line sits in the middle of the (now small) box. Borders
+   pick up the region accent so each tier-1 card carries its region color.
+   Cards in the .is-expanded state are exempt: clicking a card toggles
+   inline expansion and pops every hidden field back in. */
+[data-level="minimal"] .node:not(.is-expanded) :is(
+  .generic-sub, .generic-bullets, .generic-note,
+  .api-sub, .api-ipc, .api-port,
+  .state-badge, .router-badge,
+  .ext-sub, .ext-pid, .ext-meta, .ext-internals,
+  .platform-bullets, .platform-note,
+  .psfile-path, .psfile-rw, .psfile-env,
+  .node-code, .store-path, .store-badge
+) {
+  display: none;
+}
+[data-level="minimal"] .node {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  border-color: color-mix(in srgb, var(--region-accent, var(--ink-3)) 40%, var(--hair));
+  border-width: 1.5px;
+}
+/* Kind-specific glyph prefixes (▷ on input, ⇄ on store, etc.) are decoration
+   that compete with the now-larger label in minimal. Strip them. */
+[data-level="minimal"] .node :is(.generic-label, .platform-name, .api-label)::before {
+  content: none !important;
+}
+/* Some cards have inline rows (label + badge) that left-align their content.
+   In centered minimal mode we want the label to occupy the row centered. */
+[data-level="minimal"] :is(.api-row, .ext-row, .store-row, .psfile-head, .platform-header) {
+  justify-content: center;
+}
+[data-level="minimal"] .node.is-traced,
+[data-level="minimal"] .node.is-hover {
+  border-color: var(--region-accent, var(--ink));
+  box-shadow: 0 0 0 1.5px var(--region-accent, var(--ink)),
+              0 8px 18px -12px color-mix(in srgb, var(--region-accent, var(--ink)) 50%, transparent);
+}
+[data-level="minimal"] :is(
+  .generic-label, .api-label, .ext-label, .psfile-label, .platform-name
+) {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.012em;
+}
+/* The action executor is the central hub - bump it a notch more. */
+[data-level="minimal"] .node[data-node-id="pl-exec"] .generic-label {
+  font-size: 18px;
+}
+
+/* Synthesized minimal-mode flow edges. The descriptive/detailed hide-edges-
+   at-rest rule (line ~1290) would also hide these; override here so the
+   minimal-mode flow is always visible without a trace selection. */
+[data-level="minimal"] .edge:not(.trace-edge) {
+  opacity: 0.9;
+  stroke-width: 2;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   INLINE EXPAND - click a card to toggle a bespoke detail level
+   ──────────────────────────────────────────────────────────────────────────
+   Clicking any card adds .is-expanded; the card overrides its absolute
+   height to fit content, raises its z-index, and renders an accent border
+   with a soft shadow so it floats above neighbors. Hidden subs/code/etc
+   pop back in because the level/details hide rules above are scoped to
+   .node:not(.is-expanded).
+
+   Neighbors do not shift - the layout engine bakes positions absolutely,
+   so an expanded card overlays whatever sits below it. Cheap and good
+   enough; re-running layout per expansion would be substantially more
+   work for marginal visual gain. */
+.node.is-expanded {
+  height: auto !important;
+  z-index: 20;
+  border: 2px solid var(--region-accent, var(--ink));
+  box-shadow: 0 14px 40px -12px color-mix(in srgb, var(--region-accent, var(--ink)) 50%, transparent),
+              0 0 0 1px color-mix(in srgb, var(--region-accent, var(--ink)) 20%, transparent);
+  padding: 14px 16px;
+  background: var(--paper);
+  /* Expanded card is content-driven; cancel the minimal-mode flex centering
+     so all the popped-back fields render top-aligned and readable. */
+  justify-content: flex-start !important;
+}
+.node.is-expanded :is(
+  .generic-label, .api-label, .ext-label, .psfile-label, .platform-name
+) {
+  font-size: 15px;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   REGION ORDINAL WATERMARK - flow direction at-a-glance
+   ──────────────────────────────────────────────────────────────────────────
+   Large region number floats in the left gutter outside each region in
+   the compact levels. Outside the region body so cards never occlude it
+   (early iteration placed it inside top-right, where wide rows covered
+   it). With the rose→indigo color progression, "01, 02, ..., 06" reads
+   straight down the left edge as a numbered flow path.
+*/
+:is([data-level="minimal"], [data-level="descriptive"]) .region::after {
+  content: attr(data-region-ord);
+  position: absolute;
+  left: -56px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: var(--font-display);
+  font-size: 38px;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  color: color-mix(in srgb, var(--region-accent, var(--ink)) 70%, transparent);
+  pointer-events: none;
+  line-height: 1;
+  z-index: 1;
+}
+
+/* "Entry" pill on the region marked entry: true in data.js. */
+:is([data-level="minimal"], [data-level="descriptive"]) .region[data-entry] .region-label::after {
+  content: "entry";
+  margin-left: 4px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--region-accent);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   FLOW CHEVRONS - downward markers between regions in compact levels
+   ──────────────────────────────────────────────────────────────────────────
+   Drawn as one SVG strip the size of the canvas, with one chevron path
+   per inter-region gap, color-coded to the source region's accent so the
+   warm-to-cool progression carries across the gutter too. */
+.flow-chevrons {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 1;
+}
+.flow-chev path {
+  fill: none;
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.7;
+  /* Each <g> sets --region-accent inline based on the source region. */
+  stroke: var(--region-accent, var(--ink-3));
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   DETAIL TOGGLE - progressive disclosure, opt-in
+   ──────────────────────────────────────────────────────────────────────────
+   Default view (data-details="off") keeps the highest abstraction:
+   card labels, one-line summaries, and identity badges (port, PID-tag,
+   daemon/ephemeral, env). Bullets, code refs, IPC paths, persistence
+   file paths, R/W markers, and italic footnotes are hidden.
+
+   Toggle "Inline details" on in the Tweaks panel to bring everything
+   back inline. The right-side detail panel (click any card) also shows
+   the full structured view regardless of this toggle. */
+[data-details="off"] .node:not(.is-expanded) :is(
+  .platform-bullets, .platform-note,
+  .generic-bullets, .generic-note,
+  .ext-internals,
+  .node-code,
+  .api-ipc,
+  .psfile-path, .psfile-rw
+) {
+  display: none;
+}
+/* When the body of these cards is hidden the header sits at the top with
+   empty space under it, which reads as a half-finished card. Center the
+   remaining content vertically so the card looks like a deliberate label. */
+[data-details="off"] .platform-card,
+[data-details="off"] .ext-card {
+  justify-content: center;
+}
+
+/* In descriptive, the ext-meta "plugin.toml ▣ daemon" footer is micro-detail
+   that adds noise. Hidden by default; the detailed view still shows it. The
+   meta also carried margin-top:auto which would otherwise wedge it against
+   the card bottom even with content packed up top. */
+[data-details="off"] .ext-meta {
+  display: none;
+}
+/* ext-pid is dynamic runtime data; in descriptive zoom the label alone is
+   the identity. Keep the row layout but drop the pid chip so the title can
+   center properly inside its row. */
+[data-details="off"] .kind-ext:not(.is-expanded) .ext-pid {
+  display: none;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   CARD UNIFICATION - visual coherence pass
+   ──────────────────────────────────────────────────────────────────────────
+   Every kind-* variant previously had its own background tint, border
+   color, and border style. Together they read as "design all over the
+   place" - the eye has to re-orient at every card.
+
+   Unify the noisy variants onto one base: paper background + hairline
+   border. Identity moves to a 3px colored left-accent, same kind-color
+   the original border carried. Plugin processes keep the dashed accent
+   so they still read as ephemeral subprocesses.
+
+   Untouched: input (top-level user surfaces), core (daemon-core modules),
+   platform (special header card), actor (dark, intentional), ps-file
+   (already flat from earlier pass), and the Tokio runtime spine. */
+.kind-api,
+.kind-state,
+.kind-router,
+.kind-store,
+.kind-ext {
+  background: var(--paper);
+  border: 1px solid var(--hair);
+}
+.kind-api    { border-left: 3px solid var(--amber); }
+.kind-state  { border-left: 3px solid var(--slate); }
+.kind-router { border-left: 3px solid var(--amber); }
+.kind-store  { border-left: 3px solid var(--sage); }
+.kind-ext    { border-left: 3px dashed var(--slate); }
+
+/* The colored badges inside these cards (port, OS thread, unix·read-only)
+   used to carry the same identity signal as the now-removed background
+   tint. Tone them down to outlined chips so the left-accent border is
+   the single canonical identity marker. */
+.api-port {
+  background: var(--paper);
+  color: var(--amber);
+  border-color: var(--amber);
+}
+.state-badge,
+.router-badge {
+  background: var(--paper);
+  color: var(--ink-3);
+  border: 1px solid var(--hair);
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   CHAOS REDUCTION - quiet the loudest remaining elements
+   ──────────────────────────────────────────────────────────────────────────
+   The daemon-core region had three elements still shouting:
+     - The Tokio runtime card (full-bleed black stripe)
+     - The Tokio boundary divider (dashed line + end-ticks + boxed label)
+     - Region labels with caption + lifetime metadata pills
+   All carry small amounts of info but each was visually as heavy as a
+   full card. Quiet them so the actual cards become the primary read. */
+
+/* Tokio runtime card: drop the black bar treatment; match other cards.
+   The boundary line above the card already says "tokio starts here";
+   this card now just labels the runtime + its summary. */
+.node[data-node-id="d-tokio"] {
+  background: var(--paper);
+  color: var(--ink);
+  border: 1px solid var(--hair);
+  border-left: 3px solid var(--ink-3);
+  padding: 12px 16px;
+}
+.node[data-node-id="d-tokio"] .generic-label { color: var(--ink); font-size: 15px; }
+.node[data-node-id="d-tokio"] .generic-sub   { color: var(--ink-3); }
+.node[data-node-id="d-tokio"] .node-code     { color: var(--ink-4); }
+
+/* Tokio boundary divider: hairline only, no ticks, no boxed label. The
+   phase tags at the ends (pre-tokio main thread / async tasks) carry
+   the same info as the centered label box did. */
+.tokio-rule       { stroke: var(--ink-4); stroke-width: 1; stroke-dasharray: 6 6; }
+.tokio-tick       { display: none; }
+.tokio-label-bg   { display: none; }
+.tokio-label-text { fill: var(--ink-3); font-size: 9px; font-weight: 400; letter-spacing: 0.04em; }
+.tokio-phase-text { fill: var(--ink-4); font-size: 9px; }
+
+/* Region labels: smaller, lower-contrast caption + lifetime so the
+   region title is what reads. */
+.region-label    { padding: 3px 8px; gap: 6px; }
+.region-title    { font-size: 11px; font-weight: 600; }
+.region-caption  { font-size: 9px; color: var(--ink-4); }
+.region-lifetime { font-size: 9px; color: var(--ink-4); opacity: 0.7; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   MINIMAL POLISH - kept-tidy pass over the compact level
+   ──────────────────────────────────────────────────────────────────────────
+   The earlier passes settle descriptive/detailed. Minimal inherits several
+   asymmetric stripes and sticker-style sub-elements that read as orphaned
+   scaffolding when the rest of the card is collapsed. This pass quiets
+   them so every minimal card carries the same shape: paper body,
+   region-accent perimeter, soft elevation, no one-sided accent stripes. */
+
+/* Unify left-accent stripes. kind-* 3px colored borders and ps-file 2px
+   per-quadrant tints are descriptive signals. In minimal they read as
+   asymmetric one-side-only borders against the otherwise uniform 1.5px
+   region-accent perimeter. Normalise. */
+[data-level="minimal"] :is(.kind-api, .kind-state, .kind-router, .kind-store, .kind-ext) {
+  border-left-width: 1.5px;
+  border-left-color: color-mix(in srgb, var(--region-accent, var(--ink-3)) 40%, var(--hair));
+  border-left-style: solid;
+}
+[data-level="minimal"] .kind-ps-file[data-node-id] {
+  border-left-width: 1.5px;
+  border-left-color: color-mix(in srgb, var(--region-accent, var(--ink-3)) 40%, var(--hair));
+  border-left-style: solid;
+}
+[data-level="minimal"] .node[data-node-id="d-tokio"] {
+  border-left-width: 1.5px;
+  border-left-color: color-mix(in srgb, var(--region-accent, var(--ink-3)) 40%, var(--hair));
+  border-left-style: solid;
+}
+
+/* Platform card in minimal AND descriptive: drop the amber-tinted header
+   bg + bottom rule. With bullets and notes hidden the heavy amber header
+   is just a stuck-on sticker leaving a half-empty card underneath. Let
+   the region-accent border do the identity work. */
+:is([data-level="minimal"], [data-level="descriptive"]) .platform-header {
+  background: transparent;
+  border-bottom: none;
+}
+/* L/M/W glyph: smaller, region-accent fill so it integrates with the
+   card rather than competing with the name. */
+:is([data-level="minimal"], [data-level="descriptive"]) .platform-glyph {
+  width: 22px; height: 22px;
+  font-size: 11px;
+  background: color-mix(in srgb, var(--region-accent, var(--amber)) 65%, var(--paper));
+  color: var(--paper);
+  border-radius: 5px;
+}
+
+/* External plugin process (px-a/b/c): the dashed border was meant to pair
+   with ext-meta + pid as the "subprocess boundary" signal. In minimal and
+   descriptive ext-meta is hidden, so the dashed border reads as visual
+   noise. Solid integrates. (Detailed keeps the dashed signal.) */
+:is([data-level="minimal"], [data-level="descriptive"]) .kind-ext {
+  border-style: solid;
+}
+
+/* Soft elevation on every card in minimal and descriptive so cards sit
+   on the region tint rather than floating disconnected. The lower edge
+   of the shadow picks up a hint of region accent for tactile cohesion. */
+:is([data-level="minimal"], [data-level="descriptive"]) .node:not(.is-traced):not(.is-hover):not(.is-expanded) {
+  box-shadow:
+    0 1px 2px -1px color-mix(in srgb, var(--ink) 12%, transparent),
+    0 4px 10px -8px color-mix(in srgb, var(--region-accent, var(--ink)) 40%, transparent);
+}
+
+/* Strip the kind-* label glyph prefixes (▷ on input, ⇄ on store, etc.) in
+   descriptive too. Minimal already strips them (line 1333) - they were
+   decoration that competed with the label, and in descriptive the same
+   thing happens at a smaller scale. */
+[data-level="descriptive"] .node :is(.generic-label, .platform-name, .api-label)::before {
+  content: none !important;
+}
+
+/* Region-label lifetime badge: was a dashed-hair bracket that read as
+   leftover scaffolding. Soft solid pill with a hint of region tint reads
+   as intentional metadata. */
+.region-lifetime {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--region-accent, var(--ink-3)) 24%, var(--hair));
+  background: color-mix(in srgb, var(--region-accent, var(--ink-3)) 7%, var(--paper));
+  opacity: 0.85;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   MINIMAL LEVEL - arrow rhythm
+   ──────────────────────────────────────────────────────────────────────────
+   Minimal renders only 8 synthesized flow arrows (3 colored flows: ink
+   spine, amber hotkey, slate dashboard). With so few lines on screen they
+   should read more confidently than the dense detailed-view set; lift
+   weight + opacity. Bypass dash gets a longer pattern for cleaner reading
+   at this density.
+
+   Chevrons are hidden at this level: the spine arrows already carry the
+   region→region flow signal, so the chevron strip becomes redundant ink
+   that competes with the canonical arrows. Descriptive + detailed keep
+   chevrons because the much larger arrow set there benefits from a
+   neutral layer-orientation cue.
+
+   Why this exists in CSS rather than data: presentation policy. The
+   data layer says "what flows where"; styling says "how loud at each
+   level". Keeps minimalFlow free of level-conditional decoration. */
+[data-level="minimal"] .edge {
+  opacity: 0.78;
+  stroke-width: 1.6;
+}
+[data-level="minimal"] .edge.is-bypass {
+  stroke-dasharray: 5 4;
+  opacity: 0.62;
+}
+[data-level="minimal"] .flow-chevrons {
+  display: none;
+}

@@ -108,6 +108,21 @@ fmt-check:
 icons:
 	bash scripts/generate-icons.sh
 
+.PHONY: diagram diagram-build
+
+# Runtime Architecture Map - interactive SPA at diagram/Runtime Architecture Map.html.
+# `make diagram` opens the rendered HTML with the system default browser.
+# `make diagram-build` recompiles .jsx -> .js after editing the React sources.
+# data.js is plain JS; iterate on it and just refresh, no rebuild needed.
+diagram:
+	@open "diagram/Runtime Architecture Map.html" 2>/dev/null \
+		|| xdg-open "diagram/Runtime Architecture Map.html" 2>/dev/null \
+		|| echo "Open diagram/Runtime Architecture Map.html in a browser"
+
+diagram-build:
+	@cd diagram && [ -d node_modules ] || npm install
+	@cd diagram && npm run build
+
 SIBLINGS := $(shell for d in ../plugin-* ../qol-*; do \
   [ -d "$$d" ] && [ -f "$$d/Cargo.toml" ] && [ "$$d" != "../qol-tray" ] && basename "$$d"; \
 done | sort)
