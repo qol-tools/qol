@@ -10,8 +10,7 @@ pub(super) fn start_daemon(plugin: &mut Plugin) -> Result<()> {
         return Ok(());
     };
 
-    let mut child = spawn::spawn_daemon(plugin, daemon_config)?;
-    readiness::wait_for_daemon_ready(plugin, daemon_config, &mut child)?;
+    let child = spawn::spawn_daemon(plugin, daemon_config)?;
     register_daemon(plugin, child);
     Ok(())
 }
