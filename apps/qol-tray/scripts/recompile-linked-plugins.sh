@@ -48,6 +48,29 @@ extract_command() {
     ' "$file"
 }
 
+extract_platforms() {
+    # Read the `platforms = [...]` array from the [plugin] section as
+    # space-separated tokens. Empty output means "no constraint, all platforms".
+    local file=$1
+    awk '
+        $0 == "[plugin]" { in_sec=1; next }
+        in_sec && /^\[/ { exit }
+        in_sec && /^[[:space:]]*platforms[[:space:]]*=/ {
+            sub(/^[^=]*=[[:space:]]*/, "", $0)
+            gsub(/[][",]/, " ", $0)
+            print
+            exit
+        }
+    ' "$file"
+}
+
+case "$(uname -s)" in
+    Linux)  host_os=linux ;;
+    Darwin) host_os=macos ;;
+    MINGW*|MSYS*|CYGWIN*) host_os=windows ;;
+    *) host_os=unknown ;;
+esac
+
 failed=()
 built=0
 skipped=0
@@ -57,6 +80,12 @@ for plugin_dir in "${siblings[@]}"; do
     manifest="$plugin_dir/plugin.toml"
 
     if [ ! -f "$manifest" ]; then
+        skipped=$((skipped + 1))
+        continue
+    fi
+
+    platforms=$(extract_platforms "$manifest")
+    if [ -n "$platforms" ] && ! printf ' %s ' $platforms | grep -q " $host_os "; then
         skipped=$((skipped + 1))
         continue
     fi
