@@ -345,6 +345,16 @@ async fn async_init_inner(
         plugin_manager.clone(),
         shutdown_tx.subscribe(),
     );
+    {
+        let plugin_manager = plugin_manager.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Ok(mut manager) = plugin_manager.lock() {
+                manager.autostart_daemons();
+            } else {
+                log::error!("plugin manager lock poisoned during daemon autostart");
+            }
+        });
+    }
     tokio::task::spawn_blocking(sync_launcher_apps);
     Ok(InitResult {
         shutdown_tx,

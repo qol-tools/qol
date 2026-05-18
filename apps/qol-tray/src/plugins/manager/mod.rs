@@ -24,6 +24,10 @@ impl PluginManager {
         loading::load_plugins(self)
     }
 
+    pub fn autostart_daemons(&mut self) {
+        autostart::start_plugin_daemons(self.plugins.values_mut());
+    }
+
     pub fn reload_plugins(&mut self) -> Result<()> {
         runtime::reload_plugins(self)
     }
