@@ -5,7 +5,9 @@ use anyhow::Result;
 pub(super) fn reload_plugins(manager: &mut PluginManager) -> Result<()> {
     log::info!("Reloading all plugins...");
     stop_all_plugins(manager);
-    loading::load_plugins(manager)
+    loading::load_plugins(manager)?;
+    manager.autostart_daemons();
+    Ok(())
 }
 
 pub(super) fn shutdown(manager: &mut PluginManager) {

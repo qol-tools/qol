@@ -1,17 +1,16 @@
 use crate::plugins::resolver::PluginSource;
-use crate::plugins::{Plugin, PluginId};
-use std::collections::HashMap;
+use crate::plugins::Plugin;
 use std::path::Path;
 
 const DEV_DAEMON_AUTOSTART_MARKER: &str = ".qol-tray-dev-autostart";
 
-pub(super) fn start_plugin_daemons(
-    plugins: &mut [Plugin],
-    resolved_sources: &HashMap<PluginId, PluginSource>,
-) {
+pub(super) fn start_plugin_daemons<'a, I>(plugins: I)
+where
+    I: IntoIterator<Item = &'a mut Plugin>,
+{
     std::thread::scope(|scope| {
         for plugin in plugins {
-            if !should_start_daemon(plugin, resolved_sources) {
+            if !should_start_daemon(plugin) {
                 continue;
             }
             scope.spawn(|| start_daemon(plugin));
@@ -19,16 +18,17 @@ pub(super) fn start_plugin_daemons(
     });
 }
 
-fn should_start_daemon(
-    plugin: &Plugin,
-    resolved_sources: &HashMap<PluginId, PluginSource>,
-) -> bool {
+fn should_start_daemon(plugin: &Plugin) -> bool {
     let daemon_enabled = daemon_enabled(plugin);
     if !daemon_enabled {
         return true;
     }
-    let source = resolved_sources.get(&plugin.id);
-    should_autostart_daemon_for_source(plugin.id.as_str(), &plugin.path, daemon_enabled, source)
+    should_autostart_daemon_for_source(
+        plugin.id.as_str(),
+        &plugin.path,
+        daemon_enabled,
+        Some(&plugin.source),
+    )
 }
 
 fn daemon_enabled(plugin: &Plugin) -> bool {

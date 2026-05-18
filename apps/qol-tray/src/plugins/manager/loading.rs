@@ -1,10 +1,11 @@
-use super::{autostart, runtime, PluginManager};
+use super::{runtime, PluginManager};
 use crate::plugins::registry::ensure_registry_initialized;
 use crate::plugins::resolver::{
-    resolve_from_registry, PluginSource, PluginUnavailable, ResolutionReport, ResolvedPlugin,
+    resolve_from_registry, PluginUnavailable, ResolutionReport, ResolvedPlugin,
 };
-use crate::plugins::{Plugin, PluginId, PluginLoader};
+use crate::plugins::{Plugin, PluginLoader};
 use anyhow::{Context, Result};
+#[cfg(feature = "dev")]
 use std::collections::HashMap;
 use std::path::Path;
 #[cfg(feature = "dev")]
@@ -17,36 +18,23 @@ pub(super) fn load_plugins(manager: &mut PluginManager) -> Result<()> {
     Ok(())
 }
 
-struct ResolutionContext {
-    report: ResolutionReport,
-    resolved_sources: HashMap<PluginId, PluginSource>,
-}
-
 struct LoadedPlugins {
     plugins: Vec<Plugin>,
     report: ResolutionReport,
 }
 
 fn load_all_plugins() -> Result<LoadedPlugins> {
-    let context = resolution_context()?;
-    let mut plugins = PluginLoader::load_resolved(&context.report.plugins)?;
+    let report = resolution_report()?;
+    let plugins = PluginLoader::load_resolved(&report.plugins)?;
     super::super::daemon_tracker::clean_stale_sockets(&plugins);
-    autostart::start_plugin_daemons(&mut plugins, &context.resolved_sources);
-    Ok(LoadedPlugins {
-        plugins,
-        report: context.report,
-    })
+    Ok(LoadedPlugins { plugins, report })
 }
 
-fn resolution_context() -> Result<ResolutionContext> {
+fn resolution_report() -> Result<ResolutionReport> {
     let plugins_dir = PluginLoader::ensure_plugin_dir()?;
     let report = resolve_plugins(&plugins_dir)?;
     log_resolved_plugins(&report.plugins);
-    let resolved_sources = resolved_sources(&report.plugins);
-    Ok(ResolutionContext {
-        report,
-        resolved_sources,
-    })
+    Ok(report)
 }
 
 fn resolve_plugins(plugins_dir: &Path) -> Result<ResolutionReport> {
@@ -121,13 +109,6 @@ fn log_resolved_plugins(resolved: &[ResolvedPlugin]) {
             plugin.path
         );
     }
-}
-
-fn resolved_sources(resolved: &[ResolvedPlugin]) -> HashMap<PluginId, PluginSource> {
-    resolved
-        .iter()
-        .map(|plugin| (plugin.id.clone(), plugin.source.clone()))
-        .collect()
 }
 
 fn finalize_load(manager: &mut PluginManager, loaded: LoadedPlugins) {
