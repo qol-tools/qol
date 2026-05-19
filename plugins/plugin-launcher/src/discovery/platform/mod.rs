@@ -19,16 +19,28 @@ use std::path::PathBuf;
 
 use super::AppEntry;
 
+#[derive(Debug, Clone)]
+pub struct AppRoot {
+    pub path: PathBuf,
+    pub max_depth: usize,
+}
+
+impl AppRoot {
+    pub fn watch_recursive(&self) -> bool {
+        self.max_depth <= 1
+    }
+}
+
 pub fn cache_dir() -> Option<PathBuf> {
     imp::cache_dir()
 }
 
-pub fn app_watch_roots() -> Vec<PathBuf> {
-    imp::app_watch_roots()
+pub fn app_roots() -> Vec<AppRoot> {
+    imp::app_roots()
 }
 
-pub fn load_app_entries() -> Vec<AppEntry> {
-    imp::load_app_entries()
+pub fn scan_root(root: &AppRoot) -> Vec<AppEntry> {
+    imp::scan_root(root)
 }
 
 pub fn file_watch_roots() -> Vec<PathBuf> {

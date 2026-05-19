@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use super::super::AppEntry;
+use super::AppRoot;
 
 pub fn cache_dir() -> Option<PathBuf> {
     std::env::var("LOCALAPPDATA")
@@ -10,11 +11,11 @@ pub fn cache_dir() -> Option<PathBuf> {
         .or_else(|| Some(std::env::temp_dir()))
 }
 
-pub fn app_watch_roots() -> Vec<PathBuf> {
+pub fn app_roots() -> Vec<AppRoot> {
     Vec::new()
 }
 
-pub fn load_app_entries() -> Vec<AppEntry> {
+pub fn scan_root(_root: &AppRoot) -> Vec<AppEntry> {
     Vec::new()
 }
 

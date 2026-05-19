@@ -4,11 +4,14 @@ mod file_scan;
 pub(crate) mod platform;
 pub mod search;
 
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use notify::{RecursiveMode, Watcher};
+
+use platform::AppRoot;
 
 #[derive(Debug, Clone)]
 pub struct AppEntry {
@@ -35,13 +38,6 @@ impl PreloadedEntries {
             file_entries: Arc::new(Vec::new()),
         }
     }
-
-    pub fn load() -> Self {
-        Self {
-            app_entries: Arc::new(load_app_entries()),
-            file_entries: Arc::new(load_file_entries()),
-        }
-    }
 }
 
 pub struct SharedEntryState {
@@ -60,10 +56,6 @@ impl SharedEntryState {
 
 pub type SharedEntries = Arc<Mutex<SharedEntryState>>;
 
-pub fn load_app_entries() -> Vec<AppEntry> {
-    platform::load_app_entries()
-}
-
 pub fn load_file_entries() -> Vec<FileEntry> {
     let roots = platform::file_watch_roots();
     if let Some(entries) = file_cache::load(&roots) {
@@ -74,34 +66,68 @@ pub fn load_file_entries() -> Vec<FileEntry> {
     entries
 }
 
-pub fn watch_roots() -> Vec<PathBuf> {
-    let mut roots = platform::app_watch_roots();
-
-    // We explicitly do NOT watch `file_watch_roots()` with inotify!
-    // file_scan is cached statically for 15 minutes anyway. Watching `~/.config` or
-    // `~/Downloads` recursively just bombards the process with thousands of
-    // filesystem events, causing an aggressive 2% idle CPU loop that re-parses the
-    // static 15-min cache file continuously without actually updating anything.
-
-    roots.sort();
-    roots.dedup();
-    roots.retain(|r| r.is_dir());
-    roots
-}
-
 const DEBOUNCE: Duration = Duration::from_secs(2);
 const RECV_TIMEOUT: Duration = Duration::from_secs(60);
 
+#[derive(Default)]
+struct AppCache {
+    by_root: HashMap<PathBuf, Vec<AppEntry>>,
+}
+
+impl AppCache {
+    fn rescan(&mut self, root: &AppRoot) {
+        self.by_root
+            .insert(root.path.clone(), platform::scan_root(root));
+    }
+
+    fn rescan_all(&mut self, roots: &[AppRoot]) {
+        for root in roots {
+            self.rescan(root);
+        }
+    }
+
+    fn snapshot(&self) -> Vec<AppEntry> {
+        let mut entries: Vec<AppEntry> = self
+            .by_root
+            .values()
+            .flat_map(|v| v.iter().cloned())
+            .collect();
+        entries.sort_by_key(|e| e.name.to_lowercase());
+        entries.dedup_by(|a, b| a.name.to_lowercase() == b.name.to_lowercase());
+        entries
+    }
+}
+
+fn publish(entries: &SharedEntries, cache: &AppCache, file_entries: &Arc<Vec<FileEntry>>) {
+    let fresh = Arc::new(PreloadedEntries {
+        app_entries: Arc::new(cache.snapshot()),
+        file_entries: file_entries.clone(),
+    });
+    if let Ok(mut guard) = entries.lock() {
+        guard.entries = fresh;
+        guard.loaded_once = true;
+    }
+}
+
+fn find_containing_root<'a>(path: &Path, roots: &'a [AppRoot]) -> Option<&'a AppRoot> {
+    roots
+        .iter()
+        .filter(|r| path.starts_with(&r.path))
+        .max_by_key(|r| r.path.as_os_str().len())
+}
+
 pub(crate) fn start(entries: SharedEntries) {
     std::thread::spawn(move || {
-        let fresh = Arc::new(PreloadedEntries::load());
-        if let Ok(mut guard) = entries.lock() {
-            guard.entries = fresh;
-            guard.loaded_once = true;
-        }
-        eprintln!("[launcher] index: initial load complete");
+        let roots = platform::app_roots();
+        let mut cache = AppCache::default();
+        cache.rescan_all(&roots);
+        let file_entries = Arc::new(load_file_entries());
+        publish(&entries, &cache, &file_entries);
+        eprintln!(
+            "[launcher] index: initial load complete ({} roots)",
+            roots.len()
+        );
 
-        let roots = watch_roots();
         if roots.is_empty() {
             eprintln!("[launcher] index: no watch roots, exiting watcher thread");
             return;
@@ -114,18 +140,33 @@ pub(crate) fn start(entries: SharedEntries) {
         };
 
         for root in &roots {
-            if let Err(e) = watcher.watch(root, RecursiveMode::Recursive) {
-                eprintln!("[launcher] index: watch failed for {}: {e}", root.display());
+            let mode = if root.watch_recursive() {
+                RecursiveMode::Recursive
+            } else {
+                RecursiveMode::NonRecursive
+            };
+            if let Err(e) = watcher.watch(&root.path, mode) {
+                eprintln!(
+                    "[launcher] index: watch failed for {}: {e}",
+                    root.path.display()
+                );
             }
         }
-        eprintln!("[launcher] index: watching {} roots", roots.len());
 
-        let mut dirty = false;
+        let mut dirty: HashSet<PathBuf> = HashSet::new();
         loop {
-            let timeout = if dirty { DEBOUNCE } else { RECV_TIMEOUT };
+            let timeout = if !dirty.is_empty() {
+                DEBOUNCE
+            } else {
+                RECV_TIMEOUT
+            };
             match rx.recv_timeout(timeout) {
-                Ok(Ok(_event)) => {
-                    dirty = true;
+                Ok(Ok(event)) => {
+                    for path in &event.paths {
+                        if let Some(root) = find_containing_root(path, &roots) {
+                            dirty.insert(root.path.clone());
+                        }
+                    }
                     continue;
                 }
                 Ok(Err(e)) => {
@@ -136,16 +177,21 @@ pub(crate) fn start(entries: SharedEntries) {
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
 
-            if !dirty {
+            if dirty.is_empty() {
                 continue;
             }
-            dirty = false;
 
-            let fresh = Arc::new(PreloadedEntries::load());
-            if let Ok(mut guard) = entries.lock() {
-                guard.entries = fresh;
+            let dirty_now: Vec<PathBuf> = dirty.drain().collect();
+            for dirty_path in &dirty_now {
+                if let Some(root) = roots.iter().find(|r| r.path == *dirty_path) {
+                    cache.rescan(root);
+                }
             }
-            eprintln!("[launcher] index: reloaded after fs change");
+            publish(&entries, &cache, &file_entries);
+            eprintln!(
+                "[launcher] index: rescanned {} root(s) after fs change",
+                dirty_now.len()
+            );
         }
     });
 }
