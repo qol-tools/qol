@@ -1,6 +1,7 @@
 import { html } from '../../lib/html.js';
 import { ToggleSwitch } from '../../lib/components/ToggleSwitch.js';
 import { CustomSelect } from '../../lib/components/CustomSelect.js';
+import { ModalActions } from '../../lib/components/ModalPreact.js';
 
 const ACTION_TYPES = [
     { value: 'open_url', label: 'Open URL' },
@@ -31,6 +32,7 @@ export function ShortcutEditForm({ modal, fieldProps, onChange, onClose, onSave 
     const set = (key, value) => onChange({ ...modal.shortcut, [key]: value });
     const setAction = (patch) => onChange({ ...modal.shortcut, action: { ...modal.shortcut.action, ...patch } });
     const isUrl = modal.shortcut.action.type === 'open_url';
+    const canSave = computeCanSave(modal.shortcut);
     let fi = 0;
 
     return html`
@@ -55,8 +57,20 @@ export function ShortcutEditForm({ modal, fieldProps, onChange, onClose, onSave 
                 <${AppRefValue} app=${modal.shortcut.action.app} onChange=${(v) => setAction({ app: v })} fp=${fieldProps(fi++)} />
             `}
             <${OptionsFields} shortcut=${modal.shortcut} onChange=${set} fp1=${fieldProps(fi++)} fp2=${fieldProps(fi++)} />
+            <${ModalActions} onClose=${onClose} onSave=${onSave} disabled=${!canSave} />
         </div>
     `;
+}
+
+export function computeCanSave(shortcut) {
+    if (!shortcut) return false;
+    if (!shortcut.id || !shortcut.id.trim()) return false;
+    if (!shortcut.name || !shortcut.name.trim()) return false;
+    const action = shortcut.action;
+    if (!action) return false;
+    if (action.type === 'open_url') return !!(action.url && action.url.trim());
+    if (action.type === 'launch_app') return !!extractRefValue(action.app).trim();
+    return false;
 }
 
 function onTypeChange(shortcut, type, onChange) {
