@@ -79,7 +79,7 @@ function WorldViewSlot({ entry, cameraLayer, confinedPages, diveDepth, onJumpTo,
     const jumper = entry.layer === 0 && onJumpTo
         ? html`<button class="world-slot-jumper" tabindex="-1" aria-label=${`Jump to ${entry.id}`} onClick=${() => onJumpTo(entry.id)}></button>`
         : null;
-    return html`<div class="world-view-slot" tabindex="-1" data-view-id=${entry.id} data-layer=${entry.layer} style=${style}>${jumper}${children}</div>`;
+    return html`<div class="world-view-slot" data-view-id=${entry.id} data-layer=${entry.layer} style=${style}>${jumper}${children}</div>`;
 }
 
 export function renderWorldViews(ctx) {
