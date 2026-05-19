@@ -1,6 +1,6 @@
 [package]
 name = "launcher"
-version = "1.6.2"
+version = "1.7.0"
 edition = "2021"
 description = "Application and file launcher plugin for QoL Tray"
 license = "PolyForm-Noncommercial-1.0.0"
