@@ -45,6 +45,7 @@ export function createEditModalState(hotkey, keepPlugin, getAvailableActions) {
         pluginId,
         action: hotkey?.action || availableActions[0]?.id || '',
         key: hotkey?.key || '',
+        enabled: hotkey?.enabled !== false,
         availableActions
     };
 }

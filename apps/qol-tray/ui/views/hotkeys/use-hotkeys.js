@@ -60,6 +60,7 @@ export function useHotkeys({ onAfterSave, onAfterClose } = {}) {
         openEditModal: m.openEditModal,
         handlePluginChange: m.handlePluginChange,
         handleActionChange: m.handleActionChange,
+        handleEnabledChange: m.handleEnabledChange,
         startRecording: m.startRecording,
         closeModal: closeAndExit,
         saveHotkey: saveAndExit,
@@ -112,9 +113,10 @@ function useModalActions(d, recorder) {
     const saveHotkey = useCallback(() => executeSave(d, recorder), [recorder]);
     const handlePluginChange = useCallback((id) => d.setEditModal(prev => changeEditModalPlugin(prev, id, getActions)), [getActions]);
     const handleActionChange = useCallback((action) => d.setEditModal(prev => prev ? { ...prev, action } : prev), []);
+    const handleEnabledChange = useCallback((enabled) => d.setEditModal(prev => prev ? { ...prev, enabled } : prev), []);
     const startRecording = useCallback(() => recorder.start(''), [recorder.start]);
     const closeModal = useCallback(() => d.setEditModal(null), []);
-    return { openEditModal, saveHotkey, getActions, handlePluginChange, handleActionChange, startRecording, closeModal };
+    return { openEditModal, saveHotkey, getActions, handlePluginChange, handleActionChange, handleEnabledChange, startRecording, closeModal };
 }
 
 function executeSave(d, recorder) {
