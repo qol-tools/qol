@@ -2,10 +2,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::super::AppEntry;
+use super::AppRoot;
 
 const EXEC_FIELD_CODES: &[&str] = &[
     "%u", "%U", "%f", "%F", "%i", "%c", "%k", "%d", "%D", "%n", "%N", "%v", "%m",
 ];
+
+const XDG_ROOT_DEPTH: usize = 1;
+const LOOSE_ROOT_DEPTH: usize = 2;
 
 pub fn cache_dir() -> Option<PathBuf> {
     std::env::var("XDG_CACHE_HOME")
@@ -20,7 +24,53 @@ pub fn cache_dir() -> Option<PathBuf> {
         })
 }
 
-pub fn app_watch_roots() -> Vec<PathBuf> {
+pub fn app_roots() -> Vec<AppRoot> {
+    let mut roots: Vec<AppRoot> = xdg_app_dirs()
+        .into_iter()
+        .map(|path| AppRoot {
+            path,
+            max_depth: XDG_ROOT_DEPTH,
+        })
+        .collect();
+
+    roots.extend(loose_install_dirs().into_iter().map(|path| AppRoot {
+        path,
+        max_depth: LOOSE_ROOT_DEPTH,
+    }));
+
+    roots.sort_by(|a, b| a.path.cmp(&b.path));
+    roots.dedup_by(|a, b| a.path == b.path);
+    roots.retain(|r| r.path.is_dir());
+    roots
+}
+
+pub fn scan_root(root: &AppRoot) -> Vec<AppEntry> {
+    let mut out = Vec::new();
+    walk_for_desktop(&root.path, 0, root.max_depth, &mut out);
+    out
+}
+
+pub fn file_watch_roots() -> Vec<PathBuf> {
+    let home = std::env::var("HOME").unwrap_or_default();
+
+    let mut roots = vec![
+        PathBuf::from(format!("{home}/Desktop")),
+        PathBuf::from(format!("{home}/Documents")),
+        PathBuf::from(format!("{home}/Downloads")),
+        PathBuf::from(format!("{home}/Projects")),
+    ];
+
+    if let Some(config_root) = xdg_config_root(&home) {
+        roots.push(config_root);
+    }
+
+    roots.extend(user_dirs_from_config(&home));
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+fn xdg_app_dirs() -> Vec<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_default();
     let data_home = std::env::var("XDG_DATA_HOME")
         .ok()
@@ -45,49 +95,46 @@ pub fn app_watch_roots() -> Vec<PathBuf> {
         }
     }
 
-    dirs.sort();
-    dirs.dedup();
     dirs
 }
 
-pub fn load_app_entries() -> Vec<AppEntry> {
-    scan_desktop_entries(&app_watch_roots())
-}
-
-pub fn file_watch_roots() -> Vec<PathBuf> {
+fn loose_install_dirs() -> Vec<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_default();
-
-    let mut roots = vec![
-        PathBuf::from(format!("{home}/Desktop")),
-        PathBuf::from(format!("{home}/Documents")),
-        PathBuf::from(format!("{home}/Downloads")),
-        PathBuf::from(format!("{home}/Projects")),
-    ];
-
-    if let Some(config_root) = xdg_config_root(&home) {
-        roots.push(config_root);
+    let mut dirs = vec![PathBuf::from("/opt")];
+    if !home.is_empty() {
+        dirs.push(PathBuf::from(format!("{home}/.local")));
+        dirs.push(PathBuf::from(format!("{home}/Applications")));
     }
-
-    roots.extend(user_dirs_from_config(&home));
-    roots.sort();
-    roots.dedup();
-    roots
+    dirs
 }
 
-fn scan_desktop_entries(dirs: &[PathBuf]) -> Vec<AppEntry> {
-    let mut entries: Vec<AppEntry> = dirs
-        .iter()
-        .filter_map(|dir| fs::read_dir(dir).ok())
-        .flatten()
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|ext| ext == "desktop"))
-        .filter_map(|p| parse_desktop_entry(&p))
-        .collect();
+fn walk_for_desktop(dir: &Path, depth: usize, max_depth: usize, out: &mut Vec<AppEntry>) {
+    let Ok(read_dir) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(_) => continue,
+        };
 
-    entries.sort_by_key(|e| e.name.to_lowercase());
-    entries.dedup_by(|a, b| a.name.to_lowercase() == b.name.to_lowercase());
-    entries
+        if file_type.is_file() && path.extension().is_some_and(|ext| ext == "desktop") {
+            if let Some(parsed) = parse_desktop_entry(&path) {
+                out.push(parsed);
+            }
+            continue;
+        }
+
+        if !file_type.is_dir() || depth >= max_depth {
+            continue;
+        }
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if name.starts_with('.') || (depth == 0 && name == "share") {
+            continue;
+        }
+        walk_for_desktop(&path, depth + 1, max_depth, out);
+    }
 }
 
 fn parse_desktop_entry(path: &Path) -> Option<AppEntry> {
