@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use notify::event::EventKind;
 use notify::{RecursiveMode, Watcher};
 
 use platform::AppRoot;
@@ -109,6 +110,20 @@ fn publish(entries: &SharedEntries, cache: &AppCache, file_entries: &Arc<Vec<Fil
     }
 }
 
+fn is_mutating_kind(kind: &EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+    )
+}
+
+fn is_app_relevant(path: &Path) -> bool {
+    match path.extension() {
+        Some(ext) => ext == "desktop",
+        None => true,
+    }
+}
+
 fn find_containing_root<'a>(path: &Path, roots: &'a [AppRoot]) -> Option<&'a AppRoot> {
     roots
         .iter()
@@ -162,7 +177,13 @@ pub(crate) fn start(entries: SharedEntries) {
             };
             match rx.recv_timeout(timeout) {
                 Ok(Ok(event)) => {
+                    if !is_mutating_kind(&event.kind) {
+                        continue;
+                    }
                     for path in &event.paths {
+                        if !is_app_relevant(path) {
+                            continue;
+                        }
                         if let Some(root) = find_containing_root(path, &roots) {
                             dirty.insert(root.path.clone());
                         }
@@ -189,8 +210,13 @@ pub(crate) fn start(entries: SharedEntries) {
             }
             publish(&entries, &cache, &file_entries);
             eprintln!(
-                "[launcher] index: rescanned {} root(s) after fs change",
-                dirty_now.len()
+                "[launcher] index: rescanned {} root(s): {}",
+                dirty_now.len(),
+                dirty_now
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             );
         }
     });
