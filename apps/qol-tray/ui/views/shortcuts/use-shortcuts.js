@@ -1,9 +1,12 @@
-import { useState, useEffect, useCallback, useMemo } from 'preact/hooks';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'preact/hooks';
 import { useStateRef } from '../../lib/hooks/useStateRef.js';
 import { usePersistedId } from '../../lib/hooks/usePersistedIndex.js';
 import { useListKeyboard } from '../../lib/hooks/useListKeyboard.js';
 import { useModalKeyboard } from '../../lib/hooks/useModalKeyboard.js';
 import { diveViaSelector } from '../../lib/world-navigation-singleton.js';
+import { isShortcutValid } from './validation.js';
+
+const AUTO_SAVE_DEBOUNCE_MS = 400;
 
 const SHORTCUTS_EDITOR_DIVE_SELECTOR = '[data-view-id="shortcuts"]';
 import { matchesQuery } from '../../utils/collections.js';
@@ -73,22 +76,58 @@ function useShortcutsData(searchQuery) {
 }
 
 function useModalActions(d) {
+    const pendingTimer = useRef(null);
+
+    const cancelPending = useCallback(() => {
+        if (pendingTimer.current !== null) {
+            clearTimeout(pendingTimer.current);
+            pendingTimer.current = null;
+        }
+    }, []);
+
+    const autoSave = useCallback(async (shortcut) => {
+        if (!isShortcutValid(shortcut)) return;
+        try {
+            const config = await updateShortcut(shortcut);
+            d.setShortcuts(config.shortcuts || []);
+        } catch {
+            // Surfaced by the global fetch toast; intermediate edits should not
+            // re-alert during typing.
+        }
+    }, []);
+
+    useEffect(() => cancelPending, [cancelPending]);
+
     const openEditModal = useCallback((shortcut = null) => {
+        cancelPending();
         d.setEditModal({
             editing: !!shortcut,
             shortcut: shortcut ? { ...shortcut } : emptyShortcut()
         });
-    }, []);
+    }, [cancelPending]);
 
     const handleChange = useCallback((shortcut) => {
         d.setEditModal(prev => prev ? { ...prev, shortcut } : prev);
-    }, []);
+        if (!d.editModalRef.current?.editing) return;
+        cancelPending();
+        pendingTimer.current = setTimeout(() => {
+            pendingTimer.current = null;
+            autoSave(shortcut);
+        }, AUTO_SAVE_DEBOUNCE_MS);
+    }, [autoSave, cancelPending]);
 
-    const closeModal = useCallback(() => d.setEditModal(null), []);
+    const closeModal = useCallback(() => {
+        const modal = d.editModalRef.current;
+        const hadPending = pendingTimer.current !== null;
+        cancelPending();
+        if (modal?.editing && hadPending) autoSave(modal.shortcut);
+        d.setEditModal(null);
+    }, [autoSave, cancelPending]);
 
     const save = useCallback(async () => {
         const modal = d.editModalRef.current;
         if (!modal) return;
+        cancelPending();
         try {
             const config = modal.editing
                 ? await updateShortcut(modal.shortcut)
@@ -99,7 +138,7 @@ function useModalActions(d) {
         } catch (e) {
             alert(e.message || 'Failed to save shortcut');
         }
-    }, []);
+    }, [cancelPending]);
 
     return { openEditModal, handleChange, closeModal, save };
 }
