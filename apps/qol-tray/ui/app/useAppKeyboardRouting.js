@@ -139,11 +139,12 @@ function reconcileFocusForSlot(pageId, label) {
         return;
     }
     const surface = slot.querySelector('[data-selected-surface]');
-    log(`${label}:`, pageId, '→', surface ? surfaceLabel(surface) : 'no surfaces');
     if (!surface) {
-        if (focused instanceof HTMLElement && focused !== document.body) focused.blur();
+        slot.focus({ preventScroll: true });
+        log(`${label}:`, pageId, '→ focus on slot (no surfaces yet)');
         return;
     }
+    log(`${label}:`, pageId, '→', surfaceLabel(surface));
     surface.focus({ preventScroll: true });
     if (surface instanceof HTMLInputElement || surface instanceof HTMLTextAreaElement) {
         const end = surface.value?.length ?? 0;
