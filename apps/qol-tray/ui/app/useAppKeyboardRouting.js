@@ -184,8 +184,9 @@ function routeToView(event, viewKeyboard, cycleView) {
 }
 
 function shouldDelegateToViewKeyboard(active) {
+    if (!active) return true;
     if (!(active instanceof HTMLElement)) return false;
-    if (active === document.body) return true;
+    if (active === document.body || active === document.documentElement) return true;
     if (active.closest(MODAL_SELECTOR)) return false;
     return Boolean(active.closest('[data-view-id]'));
 }
