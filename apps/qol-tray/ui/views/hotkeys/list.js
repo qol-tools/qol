@@ -30,6 +30,7 @@ export function HotkeysList({ hotkeys, plugins, selectedIndex, onSelect, onEdit 
                     pluginName=${plugin?.name || hk.plugin_id}
                     actionLabel=${getActionLabel(plugin, hk.action)}
                     status=${plugin?.status || 'installed'}
+                    enabled=${hk.enabled !== false}
                     index=${i} selected=${i === selectedIndex} onSelect=${onSelect}
                     data-dive-target="hotkeys-editor"
                     data-secondary-label="Open hotkeys.json"

@@ -101,6 +101,14 @@
     opacity: 0.5;
 }
 
+.hotkey-disabled-badge {
+    font-size: var(--fs-xs);
+    color: var(--text-faint);
+    text-transform: uppercase;
+    letter-spacing: var(--ls-xl);
+    margin-left: var(--space-2);
+}
+
 .hotkey-row .col-key kbd {
     display: inline-flex;
     box-sizing: border-box;

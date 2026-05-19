@@ -8,6 +8,7 @@ import { ascend, diveViaSelector } from '../lib/world-navigation-singleton.js';
 
 import { PageHeader } from '../components/PageHeader.js';
 import { ModalActions } from '../lib/components/ModalPreact.js';
+import { ToggleSwitch } from '../lib/components/ToggleSwitch.js';
 import { DiveEditorSubPage } from '../lib/components/DiveEditorSubPage.js';
 import { useDiveEditor } from '../lib/hooks/useDiveEditor.js';
 import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
@@ -56,6 +57,7 @@ export function HotkeysView() {
             handlers: {
                 onPluginChange: hk.handlePluginChange,
                 onActionChange: hk.handleActionChange,
+                onEnabledChange: hk.handleEnabledChange,
                 onStartRecording: hk.startRecording,
                 onClose: hk.closeModal,
                 onSave: hk.saveHotkey,
@@ -132,15 +134,20 @@ function HotkeyEditorBody({ value }) {
     return html`
         <div class="edit-modal-content">
             <div class="form-group" ...${fieldProps(0)}>
+                <${ToggleSwitch} checked=${modal.enabled !== false}
+                    onChange=${handlers.onEnabledChange}
+                    label="Active" />
+            </div>
+            <div class="form-group" ...${fieldProps(1)}>
                 <label>Plugin</label>
                 <${PluginSelect} modal=${modal} plugins=${plugins} onChange=${handlers.onPluginChange} />
             </div>
-            <div class="form-group" ...${fieldProps(1)}>
+            <div class="form-group" ...${fieldProps(2)}>
                 <label>Action</label>
                 <${ActionSelect} modal=${modal} onChange=${handlers.onActionChange}
                     disabled=${modal.availableActions.length === 0} />
             </div>
-            <div class="form-group" ...${fieldProps(2)}>
+            <div class="form-group" ...${fieldProps(3)}>
                 <label>Shortcut</label>
                 <${KeyInput} modal=${modal} recording=${recording} onStartRecording=${handlers.onStartRecording} />
             </div>
