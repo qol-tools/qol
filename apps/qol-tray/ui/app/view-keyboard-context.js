@@ -44,12 +44,24 @@ export function ViewKeyboardProvider({ children }) {
 }
 
 export function useRegisterViewKeyboard(viewId, handleKey, isBlocking = null) {
-    const { registerViewKeyboard } = useViewKeyboardContext();
+    const ctx = useContext(ViewKeyboardContext);
+    const { registerViewKeyboard } = ctx || { registerViewKeyboard: () => () => {} };
+    const handlerRef = useRef({ handleKey, isBlocking });
+    handlerRef.current = { handleKey, isBlocking };
+    const unregRef = useRef(null);
 
-    useEffect(() => {
-        if (!viewId) {
-            return;
+    if (viewId) {
+        if (unregRef.current) unregRef.current();
+        unregRef.current = registerViewKeyboard(viewId, {
+            handleKey: (e) => handlerRef.current.handleKey?.(e),
+            isBlocking: () => handlerRef.current.isBlocking?.(),
+        });
+    }
+
+    useEffect(() => () => {
+        if (unregRef.current) {
+            unregRef.current();
+            unregRef.current = null;
         }
-        return registerViewKeyboard(viewId, { handleKey, isBlocking });
-    }, [viewId, handleKey, isBlocking, registerViewKeyboard]);
+    }, []);
 }
