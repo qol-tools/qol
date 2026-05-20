@@ -1,5 +1,5 @@
 import { html } from '../../lib/html.js';
-import { isStoreUpdateAvailable } from './reducer.js';
+import { displayedStoreVersion, isStoreUpdateAvailable } from './reducer.js';
 import { StoreCard, StoreCardGrid } from '../../components/domain-rows/StoreCard.js';
 
 export function StoreGrid({ plugins, loading, selectedIndex, isInstalling, onCardClick, onSelect }) {
@@ -13,7 +13,7 @@ export function StoreGrid({ plugins, loading, selectedIndex, isInstalling, onCar
                     <${StoreCard}
                         key=${plugin.id}
                         name=${plugin.name}
-                        version=${hasUpdate ? { from: plugin.installed_version, to: plugin.version } : plugin.version}
+                        version=${hasUpdate ? { from: plugin.installed_version, to: plugin.version } : displayedStoreVersion(plugin)}
                         description=${plugin.description}
                         installed=${plugin.installed}
                         installing=${isInstalling(plugin.id)}
