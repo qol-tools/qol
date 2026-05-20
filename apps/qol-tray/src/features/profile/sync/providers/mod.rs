@@ -21,7 +21,14 @@ pub(crate) enum ProviderError {
     Conflict(String),
     #[expect(dead_code)]
     Invalid(String),
+    Transport(String),
     Upstream(String),
+}
+
+impl ProviderError {
+    pub(crate) fn is_transport(&self) -> bool {
+        matches!(self, Self::Transport(_))
+    }
 }
 
 impl std::fmt::Display for ProviderError {
@@ -30,6 +37,7 @@ impl std::fmt::Display for ProviderError {
             Self::Auth(message) => write!(formatter, "{}", message),
             Self::Conflict(message) => write!(formatter, "{}", message),
             Self::Invalid(message) => write!(formatter, "{}", message),
+            Self::Transport(message) => write!(formatter, "{}", message),
             Self::Upstream(message) => write!(formatter, "{}", message),
         }
     }

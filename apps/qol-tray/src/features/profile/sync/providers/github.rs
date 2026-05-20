@@ -53,7 +53,7 @@ pub(super) async fn fetch_remote_document(
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
-        .map_err(|error| ProviderError::Upstream(error.to_string()))?;
+        .map_err(|error| ProviderError::Transport(error.to_string()))?;
 
     let status = response.status();
     if status == reqwest::StatusCode::NOT_FOUND {
@@ -117,7 +117,7 @@ pub(super) async fn push_remote_document(
         }))
         .send()
         .await
-        .map_err(|error| ProviderError::Upstream(error.to_string()))?;
+        .map_err(|error| ProviderError::Transport(error.to_string()))?;
 
     let status = response.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
@@ -154,7 +154,7 @@ async fn find_profile_gist(
             .header("Authorization", format!("Bearer {}", token))
             .send()
             .await
-            .map_err(|error| ProviderError::Upstream(error.to_string()))?;
+            .map_err(|error| ProviderError::Transport(error.to_string()))?;
 
         let gists: Vec<GistListEntry> = parse_github_response(response).await?;
         if gists.is_empty() {
@@ -199,7 +199,7 @@ async fn create_profile_gist(
         })
         .send()
         .await
-        .map_err(|error| ProviderError::Upstream(error.to_string()))?;
+        .map_err(|error| ProviderError::Transport(error.to_string()))?;
 
     let body: GistResponse = parse_github_response(response).await?;
     Ok(body.id)
@@ -217,7 +217,7 @@ async fn fetch_current_revision(
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
-        .map_err(|error| ProviderError::Upstream(error.to_string()))?;
+        .map_err(|error| ProviderError::Transport(error.to_string()))?;
 
     let body: GistResponse = parse_github_response(response).await?;
     Ok(gist_revision(&body.history))
