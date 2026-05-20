@@ -75,6 +75,7 @@ fn apply_daemon_env(command: &mut Command, daemon_config: &DaemonConfig) {
     }
     command.env("QOL_TRAY_DAEMON_REPLACE_EXISTING", "1");
     command.env("QOL_TRAY_STATE_SOCKET", crate::paths::STATE_SOCKET_PATH);
+    command.env_remove("XMODIFIERS");
 }
 
 fn apply_log_env(command: &mut Command) {
@@ -113,4 +114,36 @@ fn configure_log_relay(plugin: &Plugin, command: &mut Command) -> Vec<String> {
 
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     log_control.suppress_patterns
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    fn daemon_config() -> crate::plugins::manifest::DaemonConfig {
+        crate::plugins::manifest::DaemonConfig {
+            enabled: true,
+            command: "any".to_string(),
+            socket: None,
+        }
+    }
+
+    #[test]
+    fn apply_daemon_env_clears_xmodifiers_to_disable_gpui_xim_client() {
+        let mut command = Command::new("/bin/true");
+        command.env("XMODIFIERS", "@im=ibus");
+        apply_daemon_env(&mut command, &daemon_config());
+
+        let entry = command
+            .get_envs()
+            .find(|(key, _)| *key == OsStr::new("XMODIFIERS"));
+        let (_, value) = entry.expect(
+            "XMODIFIERS must appear in get_envs as an explicit removal so children do not inherit it",
+        );
+        assert!(
+            value.is_none(),
+            "XMODIFIERS must be cleared, not overridden with a value",
+        );
+    }
 }
