@@ -55,6 +55,13 @@ export function isStoreUpdateAvailable(plugin) {
     return isVersionNewer(plugin.version, plugin.installed_version);
 }
 
+export function displayedStoreVersion(plugin) {
+    if (plugin?.installed && plugin?.installed_version) {
+        return plugin.installed_version;
+    }
+    return plugin?.version ?? null;
+}
+
 export function isVersionNewer(available, installed) {
     const availableParts = parseVersionParts(available);
     const installedParts = parseVersionParts(installed);
