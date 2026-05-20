@@ -1,4 +1,4 @@
-use crate::plugins::registry::{Registry, Slot, SlotSource};
+use crate::plugins::registry::{Entry, Registry, Slot, SlotSource};
 use crate::plugins::PluginId;
 use std::path::PathBuf;
 
@@ -54,23 +54,23 @@ pub struct ResolutionReport {
 pub fn resolve_from_registry(registry: &Registry) -> ResolutionReport {
     let mut report = ResolutionReport::default();
     for entry in &registry.entries {
-        match validate_slot(&entry.id, &entry.active) {
+        let (active, fallback) = visible_slots(entry);
+        let Some(active) = active else {
+            continue;
+        };
+        match validate_slot(&entry.id, active) {
             Ok(()) => report.plugins.push(resolved_from_slot(
                 &entry.id,
-                &entry.active,
+                active,
                 ResolutionOrigin::Active,
                 None,
             )),
             Err(active_reason) => {
                 let active_fail = SlotFailure {
-                    path: entry.active.path.clone(),
+                    path: active.path.clone(),
                     reason: active_reason.clone(),
                 };
-                match entry
-                    .fallback
-                    .as_ref()
-                    .map(|s| (s, validate_slot(&entry.id, s)))
-                {
+                match fallback.map(|s| (s, validate_slot(&entry.id, s))) {
                     Some((slot, Ok(()))) => {
                         log::warn!(
                             "Plugin {} active slot invalid ({}); falling back to {}",
@@ -111,6 +111,26 @@ pub fn resolve_from_registry(registry: &Registry) -> ResolutionReport {
         .sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
     report.unavailable.sort_by(|a, b| a.id.cmp(&b.id));
     report
+}
+
+fn visible_slots(entry: &Entry) -> (Option<&Slot>, Option<&Slot>) {
+    let active = is_visible_slot(&entry.active).then_some(&entry.active);
+    let fallback = entry.fallback.as_ref().filter(|slot| is_visible_slot(slot));
+    match (active, fallback) {
+        (Some(active), fallback) => (Some(active), fallback),
+        (None, Some(promoted)) => (Some(promoted), None),
+        (None, None) => (None, None),
+    }
+}
+
+#[cfg(feature = "dev")]
+fn is_visible_slot(_slot: &Slot) -> bool {
+    true
+}
+
+#[cfg(not(feature = "dev"))]
+fn is_visible_slot(slot: &Slot) -> bool {
+    matches!(slot.source, SlotSource::ReleaseAsset)
 }
 
 fn resolved_from_slot(
@@ -247,6 +267,7 @@ mod tests {
         assert!(report.plugins[0].active_failure.is_none());
     }
 
+    #[cfg(feature = "dev")]
     #[test]
     fn resolve_from_registry_falls_back_when_active_missing() {
         let tmp = TempDir::new().unwrap();
@@ -285,6 +306,7 @@ mod tests {
         assert!(failure.reason.contains("not a directory"));
     }
 
+    #[cfg(feature = "dev")]
     #[test]
     fn resolve_from_registry_unavailable_when_both_missing() {
         let tmp = TempDir::new().unwrap();
@@ -314,6 +336,138 @@ mod tests {
         assert_eq!(u.id, "plugin-foo");
         assert!(u.active.reason.contains("not a directory"));
         assert!(u.fallback.is_some());
+    }
+
+    #[cfg(not(feature = "dev"))]
+    #[test]
+    fn prod_promotes_release_fallback_when_active_is_dev_link() {
+        let tmp = TempDir::new().unwrap();
+        let fallback_dir = tmp.path().join("plugin-foo");
+        fs::create_dir(&fallback_dir).unwrap();
+        write_valid_manifest(&fallback_dir, "plugin-foo");
+
+        let entry = Entry {
+            id: "plugin-foo".to_string(),
+            active: Slot {
+                path: tmp.path().join("any-dev-src"),
+                source: SlotSource::DevLink {
+                    origin_path: tmp.path().join("any-dev-src"),
+                },
+            },
+            fallback: Some(Slot {
+                path: fallback_dir.clone(),
+                source: SlotSource::ReleaseAsset,
+            }),
+        };
+        let registry = Registry {
+            version: 1,
+            entries: vec![entry],
+        };
+        let report = resolve_from_registry(&registry);
+
+        assert_eq!(report.plugins.len(), 1);
+        assert_eq!(report.unavailable.len(), 0);
+        assert_eq!(
+            report.plugins[0].resolved_from,
+            ResolutionOrigin::Active,
+            "prod must surface release-asset as active, not fallback",
+        );
+        assert!(
+            report.plugins[0].active_failure.is_none(),
+            "prod must not emit a FALLBACK chip when dev slot was filtered",
+        );
+        assert_eq!(report.plugins[0].path, fallback_dir);
+    }
+
+    #[cfg(not(feature = "dev"))]
+    #[test]
+    fn prod_drops_entry_when_only_slot_is_dev_link() {
+        let tmp = TempDir::new().unwrap();
+        let entry = Entry {
+            id: "plugin-foo".to_string(),
+            active: Slot {
+                path: tmp.path().join("dev-src"),
+                source: SlotSource::DevLink {
+                    origin_path: tmp.path().join("dev-src"),
+                },
+            },
+            fallback: None,
+        };
+        let registry = Registry {
+            version: 1,
+            entries: vec![entry],
+        };
+        let report = resolve_from_registry(&registry);
+
+        assert!(report.plugins.is_empty(), "no visible slots, no plugin");
+        assert!(
+            report.unavailable.is_empty(),
+            "dev-only entries do not appear as broken in prod, they simply do not exist",
+        );
+    }
+
+    #[cfg(not(feature = "dev"))]
+    #[test]
+    fn prod_ignores_worktree_link_active_with_release_fallback() {
+        let tmp = TempDir::new().unwrap();
+        let release_dir = tmp.path().join("plugin-foo");
+        fs::create_dir(&release_dir).unwrap();
+        write_valid_manifest(&release_dir, "plugin-foo");
+
+        let entry = Entry {
+            id: "plugin-foo".to_string(),
+            active: Slot {
+                path: tmp.path().join("worktree-src"),
+                source: SlotSource::WorktreeLink {
+                    origin_path: tmp.path().join("worktree-src"),
+                    branch: "feature-x".to_string(),
+                },
+            },
+            fallback: Some(Slot {
+                path: release_dir.clone(),
+                source: SlotSource::ReleaseAsset,
+            }),
+        };
+        let registry = Registry {
+            version: 1,
+            entries: vec![entry],
+        };
+        let report = resolve_from_registry(&registry);
+
+        assert_eq!(report.plugins.len(), 1);
+        assert_eq!(report.plugins[0].resolved_from, ResolutionOrigin::Active);
+        assert_eq!(report.plugins[0].path, release_dir);
+    }
+
+    #[cfg(not(feature = "dev"))]
+    #[test]
+    fn prod_filters_dev_fallback_when_release_active_fails() {
+        let tmp = TempDir::new().unwrap();
+        let entry = Entry {
+            id: "plugin-foo".to_string(),
+            active: Slot {
+                path: tmp.path().join("missing-release"),
+                source: SlotSource::ReleaseAsset,
+            },
+            fallback: Some(Slot {
+                path: tmp.path().join("dev-src"),
+                source: SlotSource::DevLink {
+                    origin_path: tmp.path().join("dev-src"),
+                },
+            }),
+        };
+        let registry = Registry {
+            version: 1,
+            entries: vec![entry],
+        };
+        let report = resolve_from_registry(&registry);
+
+        assert_eq!(report.plugins.len(), 0);
+        assert_eq!(report.unavailable.len(), 1);
+        assert!(
+            report.unavailable[0].fallback.is_none(),
+            "dev-link fallback must be invisible in prod",
+        );
     }
 
     #[test]
