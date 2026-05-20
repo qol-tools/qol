@@ -22,6 +22,19 @@ use super::types::{
 };
 use super::AUTO_PUSH_INTERVAL_SECS;
 
+const LAUNCH_PULL_BACKOFF: &[Duration] = &[
+    Duration::ZERO,
+    Duration::from_secs(2),
+    Duration::from_secs(8),
+    Duration::from_secs(30),
+];
+
+fn is_transport_error(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| matches!(cause.downcast_ref::<ProviderError>(), Some(error) if error.is_transport()))
+}
+
 impl SyncConnectRequest {
     async fn prepare(self, service: &SyncService) -> Result<PreparedSyncConnectRequest> {
         match self {
@@ -168,11 +181,39 @@ impl SyncService {
         };
         match decision {
             LaunchPullDecision::Skip(message) => Ok(self.noop(message)),
-            LaunchPullDecision::Proceed => match self.pull(PullMode::Launch).await {
-                Ok(result) => Ok(result),
-                Err(error) => self.return_error(error),
-            },
+            LaunchPullDecision::Proceed => self.pull_with_transport_retry().await,
         }
+    }
+
+    async fn pull_with_transport_retry(&self) -> Result<SyncActionResult> {
+        let mut last_transport_error: Option<anyhow::Error> = None;
+        for (attempt, delay) in LAUNCH_PULL_BACKOFF.iter().enumerate() {
+            if !delay.is_zero() {
+                tokio::time::sleep(*delay).await;
+            }
+            match self.pull(PullMode::Launch).await {
+                Ok(result) => return Ok(result),
+                Err(error) => {
+                    if !is_transport_error(&error) {
+                        return self.return_error(error);
+                    }
+                    let attempts_left = attempt + 1 < LAUNCH_PULL_BACKOFF.len();
+                    if !attempts_left {
+                        return self.return_error(error);
+                    }
+                    log::warn!(
+                        "Cloud sync launch pull transport failure (attempt {}/{}): {error:#}",
+                        attempt + 1,
+                        LAUNCH_PULL_BACKOFF.len()
+                    );
+                    last_transport_error = Some(error);
+                }
+            }
+        }
+        self.return_error(
+            last_transport_error
+                .unwrap_or_else(|| anyhow!("Cloud sync launch pull retry exhausted")),
+        )
     }
 
     pub async fn manual_pull(&self) -> Result<SyncActionResult> {
@@ -1068,6 +1109,42 @@ mod tests {
         assert_eq!(state.remote_revision.as_deref(), Some("preserved-rev"));
         assert_eq!(state.last_sync_at.as_deref(), Some("2026-05-01T00:00:00Z"));
         assert!(state.connection.is_some());
+    }
+
+    #[test]
+    fn is_transport_error_recognises_provider_transport_variant() {
+        let cases = [
+            (
+                anyhow::Error::new(ProviderError::Transport("dns".to_string())),
+                true,
+                "raw Transport",
+            ),
+            (
+                anyhow::Error::new(ProviderError::Upstream("500".to_string())),
+                false,
+                "raw Upstream",
+            ),
+            (
+                anyhow::Error::new(ProviderError::Auth("401".to_string())),
+                false,
+                "raw Auth",
+            ),
+            (
+                anyhow::Error::new(ProviderError::Conflict("etag".to_string())),
+                false,
+                "raw Conflict",
+            ),
+            (anyhow!("plain anyhow"), false, "no provider error in chain"),
+            (
+                anyhow::Error::new(ProviderError::Transport("net".to_string()))
+                    .context("while pulling"),
+                true,
+                "Transport buried under .context()",
+            ),
+        ];
+        for (error, expected, label) in &cases {
+            assert_eq!(is_transport_error(error), *expected, "case: {label}");
+        }
     }
 
     #[tokio::test]
