@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 use crate::MonitorBounds;
@@ -39,6 +41,7 @@ pub enum RuntimeEventKind {
     ActiveMonitorChanged,
     CursorMoved,
     FocusChanged,
+    LauncherAppsSynced,
     MonitorsChanged,
 }
 
@@ -57,6 +60,10 @@ pub enum RuntimeEvent {
         monitor_idx: Option<usize>,
         monitor: Option<MonitorBounds>,
     },
+    LauncherAppsSynced {
+        #[serde(default)]
+        dir: PathBuf,
+    },
     MonitorsChanged {
         monitors: Vec<MonitorBounds>,
     },
@@ -67,4 +74,44 @@ pub enum RuntimeEvent {
 pub enum SubscribeAck {
     Subscribed,
     Error { message: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn roundtrip(event: &RuntimeEvent) -> RuntimeEvent {
+        let wire = serde_json::to_string(event).expect("serialize");
+        serde_json::from_str(&wire).expect("deserialize")
+    }
+
+    #[test]
+    fn launcher_apps_synced_round_trips() {
+        let event = RuntimeEvent::LauncherAppsSynced {
+            dir: PathBuf::from("/home/u/Applications/QoL"),
+        };
+        let RuntimeEvent::LauncherAppsSynced { dir } = roundtrip(&event) else {
+            panic!("variant mismatch");
+        };
+        assert_eq!(dir, PathBuf::from("/home/u/Applications/QoL"));
+    }
+
+    #[test]
+    fn launcher_apps_synced_defaults_dir_when_missing() {
+        let wire = r#"{"event":"launcher_apps_synced"}"#;
+        let event: RuntimeEvent = serde_json::from_str(wire).expect("deserialize");
+        let RuntimeEvent::LauncherAppsSynced { dir } = event else {
+            panic!("variant mismatch");
+        };
+        assert_eq!(dir, PathBuf::new());
+    }
+
+    #[test]
+    fn event_kind_serializes_in_snake_case() {
+        let kind = RuntimeEventKind::LauncherAppsSynced;
+        assert_eq!(
+            serde_json::to_string(&kind).unwrap(),
+            "\"launcher_apps_synced\""
+        );
+    }
 }
