@@ -11,8 +11,15 @@ use std::time::Duration;
 
 use notify::event::EventKind;
 use notify::{RecursiveMode, Watcher};
+use qol_plugin_api::protocol::{RuntimeEvent, RuntimeEventKind};
+use qol_plugin_api::PlatformStateClient;
 
 use platform::AppRoot;
+
+enum WatchSignal {
+    FsEvent(notify::Result<notify::Event>),
+    HostHint(PathBuf),
+}
 
 #[derive(Debug, Clone)]
 pub struct AppEntry {
@@ -131,6 +138,24 @@ fn find_containing_root<'a>(path: &Path, roots: &'a [AppRoot]) -> Option<&'a App
         .max_by_key(|r| r.path.as_os_str().len())
 }
 
+fn spawn_host_subscriber(tx: std::sync::mpsc::Sender<WatchSignal>) {
+    std::thread::spawn(move || {
+        let client = PlatformStateClient::from_env();
+        let Some(mut sub) = client.subscribe(vec![RuntimeEventKind::LauncherAppsSynced]) else {
+            eprintln!("[launcher] index: host subscribe failed; running on fs watcher only");
+            return;
+        };
+        eprintln!("[launcher] index: subscribed to LauncherAppsSynced");
+        while let Some(event) = sub.next_event() {
+            if let RuntimeEvent::LauncherAppsSynced { dir } = event {
+                if tx.send(WatchSignal::HostHint(dir)).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+}
+
 pub(crate) fn start(entries: SharedEntries) {
     std::thread::spawn(move || {
         let roots = platform::app_roots();
@@ -148,8 +173,11 @@ pub(crate) fn start(entries: SharedEntries) {
             return;
         }
 
-        let (tx, rx) = std::sync::mpsc::channel();
-        let Ok(mut watcher) = notify::recommended_watcher(tx) else {
+        let (tx, rx) = std::sync::mpsc::channel::<WatchSignal>();
+        let fs_tx = tx.clone();
+        let Ok(mut watcher) = notify::recommended_watcher(move |e| {
+            let _ = fs_tx.send(WatchSignal::FsEvent(e));
+        }) else {
             eprintln!("[launcher] index: failed to create watcher");
             return;
         };
@@ -168,6 +196,8 @@ pub(crate) fn start(entries: SharedEntries) {
             }
         }
 
+        spawn_host_subscriber(tx);
+
         let mut dirty: HashSet<PathBuf> = HashSet::new();
         loop {
             let timeout = if !dirty.is_empty() {
@@ -176,7 +206,7 @@ pub(crate) fn start(entries: SharedEntries) {
                 RECV_TIMEOUT
             };
             match rx.recv_timeout(timeout) {
-                Ok(Ok(event)) => {
+                Ok(WatchSignal::FsEvent(Ok(event))) => {
                     if !is_mutating_kind(&event.kind) {
                         continue;
                     }
@@ -190,8 +220,24 @@ pub(crate) fn start(entries: SharedEntries) {
                     }
                     continue;
                 }
-                Ok(Err(e)) => {
+                Ok(WatchSignal::FsEvent(Err(e))) => {
                     eprintln!("[launcher] index: watcher error: {e}");
+                    continue;
+                }
+                Ok(WatchSignal::HostHint(dir)) => {
+                    if let Some(root) = find_containing_root(&dir, &roots) {
+                        dirty.insert(root.path.clone());
+                        eprintln!(
+                            "[launcher] index: host hint for {} -> rescan {}",
+                            dir.display(),
+                            root.path.display()
+                        );
+                    } else {
+                        eprintln!(
+                            "[launcher] index: host hint {} matches no root, ignoring",
+                            dir.display()
+                        );
+                    }
                     continue;
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
