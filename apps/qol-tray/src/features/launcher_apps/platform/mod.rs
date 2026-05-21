@@ -22,6 +22,7 @@ pub(super) fn sync(
     imp::sync(entries, binary_path)
 }
 
+#[cfg(unix)]
 pub(super) fn apps_dir() -> Option<std::path::PathBuf> {
     imp::apps_dir()
 }
