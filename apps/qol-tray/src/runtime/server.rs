@@ -26,6 +26,7 @@ impl RuntimeServer {
         );
 
         let shared = Arc::new(SharedState::new(initial_monitors));
+        super::publisher::install(shared.clone());
         spawn_poll_thread(shared.clone(), channels);
         spawn_socket_thread(shared);
         Self { _handle: () }

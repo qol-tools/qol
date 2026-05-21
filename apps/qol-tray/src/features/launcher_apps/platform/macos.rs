@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub(super) fn sync(entries: &[LauncherEntry], binary_path: &Path) -> Result<()> {
-    let dir = apps_dir()?;
+    let dir = apps_dir().context("Could not determine home directory")?;
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("Failed to create launcher apps dir {}", dir.display()))?;
 
@@ -24,9 +24,8 @@ pub(super) fn sync(entries: &[LauncherEntry], binary_path: &Path) -> Result<()> 
     Ok(())
 }
 
-fn apps_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("Could not determine home directory")?;
-    Ok(home.join("Applications").join("QoL"))
+pub(super) fn apps_dir() -> Option<PathBuf> {
+    Some(dirs::home_dir()?.join("Applications").join("QoL"))
 }
 
 fn app_dirnames(entries: &[LauncherEntry]) -> HashMap<String, String> {
