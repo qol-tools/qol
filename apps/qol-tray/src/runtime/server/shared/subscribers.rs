@@ -45,6 +45,7 @@ fn event_kind(event: &RuntimeEvent) -> RuntimeEventKind {
         RuntimeEvent::ActiveMonitorChanged { .. } => RuntimeEventKind::ActiveMonitorChanged,
         RuntimeEvent::CursorMoved { .. } => RuntimeEventKind::CursorMoved,
         RuntimeEvent::FocusChanged { .. } => RuntimeEventKind::FocusChanged,
+        RuntimeEvent::LauncherAppsSynced { .. } => RuntimeEventKind::LauncherAppsSynced,
         RuntimeEvent::MonitorsChanged { .. } => RuntimeEventKind::MonitorsChanged,
     }
 }
@@ -80,6 +81,12 @@ mod tests {
         }
     }
 
+    fn launcher_apps_synced() -> RuntimeEvent {
+        RuntimeEvent::LauncherAppsSynced {
+            dir: std::path::PathBuf::from("/a/b/Applications/QoL"),
+        }
+    }
+
     fn drain<T>(rx: &std_mpsc::Receiver<T>) -> Vec<T> {
         let mut out = Vec::new();
         while let Ok(event) = rx.recv_timeout(Duration::from_millis(1)) {
@@ -101,6 +108,7 @@ mod tests {
             ),
             (cursor_moved(1.0, 2.0), RuntimeEventKind::CursorMoved),
             (focus_changed(), RuntimeEventKind::FocusChanged),
+            (launcher_apps_synced(), RuntimeEventKind::LauncherAppsSynced),
             (monitors_changed(), RuntimeEventKind::MonitorsChanged),
         ];
         for (event, expected) in cases {
@@ -225,6 +233,7 @@ mod tests {
             (any::<f32>(), any::<f32>()).prop_map(|(x, y)| cursor_moved(x, y)),
             Just(active_monitor_changed()),
             Just(focus_changed()),
+            Just(launcher_apps_synced()),
             Just(monitors_changed()),
         ]
     }
@@ -235,9 +244,10 @@ mod tests {
                 Just(RuntimeEventKind::CursorMoved),
                 Just(RuntimeEventKind::FocusChanged),
                 Just(RuntimeEventKind::ActiveMonitorChanged),
+                Just(RuntimeEventKind::LauncherAppsSynced),
                 Just(RuntimeEventKind::MonitorsChanged),
             ],
-            0..=4,
+            0..=5,
         )
     }
 

@@ -4,3 +4,7 @@ pub(super) fn sync(
 ) -> anyhow::Result<()> {
     Ok(())
 }
+
+pub(super) fn apps_dir() -> Option<std::path::PathBuf> {
+    None
+}

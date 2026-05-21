@@ -21,3 +21,7 @@ pub(super) fn sync(
 ) -> anyhow::Result<()> {
     imp::sync(entries, binary_path)
 }
+
+pub(super) fn apps_dir() -> Option<std::path::PathBuf> {
+    imp::apps_dir()
+}

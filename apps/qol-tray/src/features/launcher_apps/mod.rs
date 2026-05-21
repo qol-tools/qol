@@ -1,6 +1,7 @@
 mod platform;
 
 use crate::shortcuts::model::{Shortcut, ShortcutAction};
+use qol_runtime::protocol::RuntimeEvent;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -58,7 +59,16 @@ pub fn trigger_full_sync() {
             Err(_) => return,
         };
         sync_entries(&entries, &bin);
+        publish_synced();
     });
+}
+
+fn publish_synced() {
+    let Some(dir) = platform::apps_dir() else {
+        log::warn!("launcher_apps: no apps dir on this platform; skipping LauncherAppsSynced");
+        return;
+    };
+    crate::runtime::publish(&[RuntimeEvent::LauncherAppsSynced { dir }]);
 }
 
 #[cfg(test)]

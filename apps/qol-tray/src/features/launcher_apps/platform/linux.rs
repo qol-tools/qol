@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 const DESKTOP_PREFIX: &str = "qol-";
 
 pub(super) fn sync(entries: &[LauncherEntry], binary_path: &Path) -> Result<()> {
-    let dir = apps_dir()?;
+    let dir = apps_dir().context("Could not determine local data directory")?;
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("Failed to create applications dir {}", dir.display()))?;
 
@@ -20,10 +20,8 @@ pub(super) fn sync(entries: &[LauncherEntry], binary_path: &Path) -> Result<()> 
     Ok(())
 }
 
-fn apps_dir() -> Result<PathBuf> {
-    dirs::data_local_dir()
-        .context("Could not determine local data directory")
-        .map(|p| p.join("applications"))
+pub(super) fn apps_dir() -> Option<PathBuf> {
+    dirs::data_local_dir().map(|p| p.join("applications"))
 }
 
 fn desktop_filename(entry: &LauncherEntry) -> String {
