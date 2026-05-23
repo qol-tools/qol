@@ -1,10 +1,13 @@
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 
+pub mod cloud;
 mod fs_util;
 mod journal;
 mod lock;
-#[cfg(not(test))]
+pub mod portability;
+pub mod sentinel;
+pub mod transforms;
 mod v3_15_to_v3_16;
 
 pub use fs_util::archive_path;
@@ -58,7 +61,9 @@ impl PreFlightRegistry {
     }
 
     pub fn current() -> Self {
-        Self::new()
+        let mut registry = Self::new();
+        registry.register(Box::new(v3_15_to_v3_16::V3_15ToV3_16));
+        registry
     }
 
     pub fn register(&mut self, migration: Box<dyn FileMigration>) {

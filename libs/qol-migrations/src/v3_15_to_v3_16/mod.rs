@@ -1,5 +1,5 @@
 use crate::fs_util::move_into_archive;
-use crate::{Migration, MigrationReport};
+use crate::{FileMigration, MigrationReport};
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
@@ -72,7 +72,7 @@ fn list_profile_dirs(profile_dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-impl Migration for V3_15ToV3_16 {
+impl FileMigration for V3_15ToV3_16 {
     fn name(&self) -> &'static str {
         "v3.15-to-v3.16"
     }

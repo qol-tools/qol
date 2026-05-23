@@ -16,8 +16,12 @@ async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 fs4 = "0.13"
 log = "0.4"
+rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 tempfile = "3.8"
