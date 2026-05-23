@@ -12,8 +12,12 @@ path = "src/lib.rs"
 
 [dependencies]
 anyhow = "1.0"
+async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+fs4 = "0.13"
 log = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
 
 [dev-dependencies]
 tempfile = "3.8"
