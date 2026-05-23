@@ -1,4 +1,5 @@
 import { createDebug, elLabel } from './debug.js';
+import { KEYBOARD_ISOLATION_SELECTOR } from './surface-traits.js';
 
 const log = createDebug('qol:focus-retention');
 
@@ -177,7 +178,7 @@ export function createFocusRetention(doc = typeof document !== 'undefined' ? doc
 }
 
 function hasModalCapturingFocus(doc) {
-    const modal = doc.querySelector('.edit-modal, .confirm-modal');
+    const modal = doc.querySelector(KEYBOARD_ISOLATION_SELECTOR);
     if (!modal) return false;
     const rects = typeof modal.getClientRects === 'function' ? modal.getClientRects() : null;
     return !rects || rects.length > 0;

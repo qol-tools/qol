@@ -8,7 +8,7 @@ import {
     activeContainer,
     directSurfaces,
     isVisible,
-    MODAL_SELECTOR,
+    KEYBOARD_ISOLATION_SELECTOR,
     parentContainer,
     surfaceContainsChildContainer,
     surfaceDepth,
@@ -186,7 +186,7 @@ function routeToView(event, viewKeyboard, cycleView) {
 function shouldDelegateToViewKeyboard(active) {
     if (!active) return true;
     if (!(active instanceof HTMLElement)) return true;
-    if (active.closest(MODAL_SELECTOR)) return false;
+    if (active.closest(KEYBOARD_ISOLATION_SELECTOR)) return false;
     if (isEditableInput(active)) return false;
     return true;
 }
@@ -351,7 +351,7 @@ function ascendWithinPage() {
     if (!current) return false;
     const container = activeContainer(current);
     if (!container) return false;
-    if (container.closest(MODAL_SELECTOR)) return false;
+    if (container.closest(KEYBOARD_ISOLATION_SELECTOR)) return false;
 
     const parent = parentContainer(container);
     if (!parent) return false;
@@ -797,7 +797,7 @@ function queryFieldElement(detail, fieldId) {
 }
 
 function hasVisibleModal() {
-    const modal = document.querySelector(MODAL_SELECTOR);
+    const modal = document.querySelector(KEYBOARD_ISOLATION_SELECTOR);
     if (!modal) return false;
     const rect = modal.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;

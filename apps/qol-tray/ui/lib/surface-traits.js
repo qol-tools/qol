@@ -1,4 +1,4 @@
-export const MODAL_SELECTOR = '.edit-modal, .confirm-modal';
+export const KEYBOARD_ISOLATION_SELECTOR = '[data-keyboard-isolated]';
 
 export function isVisible(el) {
     return el.getClientRects().length > 0;
