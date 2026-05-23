@@ -1,7 +1,7 @@
 import { html } from '../lib/html.js';
 import { useCallback } from 'preact/hooks';
 import { useViewTabs } from '../lib/hooks/useViewTabs.js';
-import { MODAL_SELECTOR } from '../lib/surface-traits.js';
+import { KEYBOARD_ISOLATION_SELECTOR } from '../lib/surface-traits.js';
 import { PageHeader } from './PageHeader.js';
 import { Surface } from '../lib/components/Surface.js';
 import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
@@ -17,7 +17,7 @@ export function ViewTabs({ title, subtitle, scramble, tabs, onActivate, onConten
         if (!onContentBlur) return;
         const content = e.currentTarget;
         if (!e.relatedTarget || !content.contains(e.relatedTarget)) {
-            if (e.relatedTarget?.closest(MODAL_SELECTOR)) return;
+            if (e.relatedTarget?.closest(KEYBOARD_ISOLATION_SELECTOR)) return;
             onContentBlur();
         }
     }, [onContentBlur]);

@@ -101,7 +101,7 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
 
     return html`
         <${SurfaceContainer} className="world-settings-panel" containerRef=${containerRef} onKeyDown=${onKeyDown}
-            data-surface-depth-base="1">
+            data-keyboard-isolated="" data-surface-depth-base="1">
             <div class="wsp-section">
                 <div class="wsp-heading">Navigation</div>
                 <div class="wsp-grid">
