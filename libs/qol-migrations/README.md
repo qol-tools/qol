@@ -1,90 +1,97 @@
 # qol-migrations
 
-On-disk format migrations between qol-tray releases.
+On-disk and cloud-stored data migrations between qol-tray releases.
 
 ## Why this crate exists
 
-When a qol-tray release changes the on-disk config layout (file paths, JSON
-schemas, directory structure), users upgrading from the previous release have
-data in the old layout. The daemon must either:
+When a qol-tray release changes the on-disk config layout (file paths, JSON schemas, directory structure) or the cloud backend that stores user data (gist vs repo, schema version), users upgrading from the previous release have data in the old shape. The daemon must either:
 
-1. Refuse to start until something migrates the layout, or
-2. Read both old and new layouts forever (interweaving migration code into
-   every feature).
+1. Refuse to start until something migrates the data, or
+2. Read both old and new shapes forever, interweaving migration code into every feature module.
 
-Option 2 is what most projects drift into. It rots the codebase: every feature
-gradually accumulates "if old format do this, if new format do that" branches,
-and removing the legacy branch becomes scary because callers everywhere depend
-on it.
+Option 2 is what most projects drift into. It rots the codebase: every feature gradually accumulates "if old format do this, if new format do that" branches, and removing the legacy branch becomes scary because callers everywhere depend on it.
 
-This crate enforces option 1, isolated from qol-tray's `src/`. Migrations live
-here and only here. The daemon calls one function at boot; if there's nothing
-to do, the call is free.
+This crate enforces option 1, isolated from `qol-tray/src/`. Migration logic lives here and only here. The daemon calls two functions at boot; if there's nothing to do, the calls are free. Pruning a migration is a single `rm -rf` of one folder.
 
-## Pattern: sliding-window release migrations
+## Two-phase boot model
 
-- Each release that breaks a contract ships exactly one migration file:
-  `src/v3_15_to_v3_16.rs`.
-- The active registry supports migrating from the previous **N** releases (3
-  by default). Anything older: the daemon refuses to start and points the user
-  at an intermediate release.
-- Once a release falls outside the window, its migration file is deleted in a
-  future release. The crate does not amass migration code forever.
+Migrations split into two phases because the runtime conditions they need are different:
 
-## Trigger
+- **PreFlight** - synchronous, file-only, runs before any feature module reads config. Used for on-disk format and layout changes. No network, no auth, no daemon. Must complete before housekeeping creates the new layout's empty directories.
+- **PostAuth** - asynchronous, network-aware, runs after the GitHub auth token loads. Used for backend swaps (gist to repo) and recovery of cloud-stored data. Requires an authenticated HTTP client.
 
-- Auto at startup, dry-run + swap.
-- The daemon calls `qol_migrations::run_if_needed(&config_dir)?` before any
-  feature module reads config.
-- Each migration runs in a temp dir, validates the result, then atomically
-  swaps and archives the previous layout to
-  `<config_dir>/archive/<migration-name>-<timestamp>/`.
-- Failure: refuse to start, return the error chain. Per qol-tray non-negotiable
-  #6 (failures are visible), the surfaced message must say what failed and
-  where the archived copy lives.
+Call sites in qol-tray:
 
-## Adding a new migration
+```rust
+// pre-flight (sync, in main.rs before housekeeping)
+qol_migrations::run_pre_flight(&config_dir)?;
 
-Default to **one folder per migration** so aux files (helpers, schema
-converters, HTTP clients, split tests) have a home and pruning is a single
-`rm -rf`. Layout:
+// post-auth (async, after github_auth loads)
+qol_migrations::run_post_auth(&MigrationContext {
+    config_dir,
+    github_token,
+    http,
+}).await?;
+```
+
+Both phases share the same journal, lock, and registry machinery. A migration declares its phase via the `Phase` enum on its trait impl; the runner only invokes migrations whose phase matches the current call.
+
+## Sliding-window release migrations
+
+- Each release that breaks a contract ships exactly one migration (file or cloud).
+- The supported upgrade window is the previous **N** releases (3 by default). Anything older: the daemon refuses to start with a clear "upgrade to vX first" message and points the user at an intermediate release.
+- Aged-out migrations are deleted in the same commit that introduces a new one. The crate never amasses migration code forever.
+
+## Pitfall guards
+
+Each guard exists because some other project paid for the lesson.
+
+**Strict in-order chain.** Migrations apply in registry order, period. No "newer migration first" or "skip the ones that look done". Flyway and goose both taught the industry that out-of-order application "sometimes works", which is the worst possible failure mode: it works on the dev's laptop and corrupts production.
+
+**`OLDEST_SUPPORTED` const refuses old installs.** When a user's data predates the window, the runner returns a refuse-to-start error naming the intermediate release they must upgrade through first. We do not fake-stamp the journal to pretend the missing migrations ran. Alembic and Django's squash features made this trap famous: silently marking old migrations as applied leaves data in an indeterminate state that no later migration can detect.
+
+**Per-step `.done` journal via rename-into-place.** Each completed migration writes `config_dir/migrations/applied/<name>.done` atomically (write temp, fsync, rename). Crash recovery consults the journal, not the filesystem shape. Filesystems have no transactions; a half-migrated layout can look "almost right" to a naive applies() check, and re-running the migration on partial state is how data gets duplicated or lost.
+
+**fs4 exclusive lock on `config_dir/.migration-lock` for both phases.** A tray app that the user double-launches during an update, or a stale daemon that didn't exit cleanly, must not race a fresh daemon's migration run. Flyway's dual-instance race is the canonical example: two runners both think they're alone, both apply the same step, one wins the rename and the other corrupts the journal.
+
+**Install-id sentinel on remotes.** Before reading or writing any cloud-stored data, the cloud migrations write and verify a `MarkerFile { install_id, profile_id, schema_version }` on the remote. If the marker disagrees with this install, the migration aborts rather than stomp on someone else's bucket. Mastodon's S3 cross-account-stomp class of incident is the lesson here.
+
+**Backend abstraction (`trait GistStore`).** Cloud migrations talk to a `GistStore` trait with `MemoryGistStore` for tests and `GitHubGistStore` for production. Tests never mock at the HTTP layer; they swap the backend. HTTP-layer mocking lets bugs in JSON shape, pagination, and error mapping leak past tests.
+
+**Cross-OS portability helpers.** Sync stability between Linux, macOS and Windows hinges on a few normalisations: profile names go through NFC unicode normalisation before being compared or written, repositories get a `.gitattributes` that enforces LF endings, and path helpers normalise separators. Without these, the same profile name encoded two ways on two OSes produces two profiles, and a CRLF auto-conversion on Windows produces a sync loop.
+
+## Folder layout
 
 ```
 src/
-  lib.rs                       # trait + Registry + runner ONLY
-  fs_util.rs                   # cross-migration helpers
-  vN_to_vNplus1/
-    mod.rs                     # Migration impl
-    transforms.rs              # optional, when logic splits
-    tests.rs                   # optional, when inline tests grow too long
-fixtures/
-  vN_to_vNplus1/before/        # snapshot of pre-migration config dir
-  vN_to_vNplus1/after/         # expected post-migration state
+  lib.rs                         trait + Phase + Registries + runners + OLDEST_SUPPORTED
+  fs_util.rs                     archive helpers
+  journal.rs                     .done markers
+  lock.rs                        fs4 wrapper
+  sentinel.rs                    install-id MarkerFile
+  cloud/gist_store/              {mod,memory,github}.rs - GistStore trait + impls
+  transforms/gist_v1_to_layout.rs  pure gist JSON -> {path -> bytes} map
+  portability/                   unicode.rs, paths.rs, gitattributes.rs
+  v3_15_to_v3_16/                file migration (PreFlight)
+  v3_15_to_v3_16_gist_to_repo/   cloud migration (PostAuth) - added by parallel assembly agent
+fixtures/<future migration>/before/, after/  (recommended for big migrations)
 ```
 
-Steps:
+## Adding a new migration
 
-1. `mkdir src/vN_to_vNplus1/` and create `mod.rs` implementing the `Migration`
-   trait.
-2. Append the migration to `Registry::current()` in `src/lib.rs`.
-3. Tests in `mod.rs` (inline) or `tests.rs` (split when inline grows past
-   ~150 lines). Cover both `applies()` true / false cases and a full
-   `migrate()` round trip asserting archive contents and resulting config-dir
-   state.
-4. If the new release pushes an old migration outside the support window,
-   `rm -rf src/vN_to_vNplus1_oldest/ fixtures/vN_to_vNplus1_oldest/` in the
-   same commit. Update `Registry::current()` to drop the entry. Bump the
-   `qol-migrations` minor version.
+1. Pick the trait. `FileMigration` for on-disk changes (sync, PreFlight). `CloudMigration` for anything that touches a remote (async, PostAuth, takes the `MigrationContext`). If a release needs both, ship two migrations and let them run in their respective phases.
+2. Folder-per-migration default. `mkdir src/vN_to_vNplus1_<short_name>/` and create `mod.rs`. Folder lets the migration grow aux files (transforms, schema converters, split tests) without polluting siblings, and pruning is a single `rm -rf`.
+3. Register it. Append the migration to the appropriate registry (`file_registry()` or `cloud_registry()`) in `src/lib.rs`. Registry order is application order; never reorder.
+4. Tests. Cover both `applies()` paths (true AND false), and a full `migrate()` round trip asserting archive contents and the resulting config-dir or remote state. Cloud migrations use `MemoryGistStore`. Inline tests in `mod.rs` until they grow past ~150 lines, then split into `tests.rs`.
+5. Prune. If this release pushes a migration outside the supported window, `rm -rf src/vN_oldest/ fixtures/vN_oldest/` in the same commit. Drop the entry from the registry. Bump the `qol-migrations` minor version.
 
-## Why a separate crate, not a separate process
+## Why a separate crate, not an HTTP service
 
-Migrations need to touch raw config files before the daemon can read them.
-There is no daemon listening yet, so an HTTP-based microservice does not fit
-the lifecycle. The crate is consumed two ways:
+PreFlight has no daemon to talk to: it runs before the daemon boots. The new daemon cannot start until the layout matches, and the old daemon has already exited. An HTTP-based microservice has nothing to bind to and no client to call it.
 
-- As a library from the qol-tray daemon (one-line call at boot).
-- As a standalone CLI via the `qol-tray-migrate` binary (in the qol-tray
-  repo), for manual `--dry-run` debugging or running on a config dir other
-  than the default.
+PostAuth could technically be a service (the daemon is up by then), but the lifecycle penalty of starting one - extra process, extra socket, extra failure surface - outweighs the cost of an in-process async call. Both phases are consumed two ways:
 
-Both paths share the same registry and the same migration implementations.
+- As a library from the qol-tray daemon (one call per phase at boot).
+- As a standalone CLI via the `qol-tray-migrate` binary in the qol-tray repo, for manual `--dry-run` debugging or running on a config dir other than the default.
+
+Both paths share the same registries and the same migration implementations.
