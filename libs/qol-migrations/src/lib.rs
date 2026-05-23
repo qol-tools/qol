@@ -9,6 +9,9 @@ pub mod portability;
 pub mod sentinel;
 pub mod transforms;
 mod v3_15_to_v3_16;
+mod v3_15_to_v3_16_gist_to_repo;
+
+pub use v3_15_to_v3_16_gist_to_repo::V3_15ToV3_16GistToRepo;
 
 pub use fs_util::archive_path;
 
@@ -93,7 +96,11 @@ impl PostAuthRegistry {
     }
 
     pub fn current() -> Self {
-        Self::new()
+        let mut registry = Self::new();
+        registry.register(Box::new(
+            v3_15_to_v3_16_gist_to_repo::V3_15ToV3_16GistToRepo::default_for_production(),
+        ));
+        registry
     }
 
     pub fn register(&mut self, migration: Box<dyn CloudMigration>) {
