@@ -43,18 +43,18 @@ fn handle_subscription(
     shared: &SharedState,
     events: Vec<RuntimeEventKind>,
 ) {
+    let interests: HashSet<_> = events.into_iter().collect();
+    let (tx, rx) = std_mpsc::channel::<RuntimeEvent>();
+
+    log::info!("[runtime/socket] new subscriber: {:?}", interests);
+    shared.add_subscriber(interests, tx);
+
     if !write_flushed_json_line(writer, &SubscribeAck::Subscribed) {
         return;
     }
 
     let _ = writer.set_write_timeout(Some(Duration::from_secs(SUBSCRIBER_WRITE_TIMEOUT_SECS)));
 
-    let interests: HashSet<_> = events.into_iter().collect();
-    let (tx, rx) = std_mpsc::channel::<RuntimeEvent>();
-
-    log::info!("[runtime/socket] new subscriber: {:?}", interests);
-
-    shared.add_subscriber(interests, tx);
     forward_events(writer, rx);
 
     log::info!("[runtime/socket] subscriber disconnected");
