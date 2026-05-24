@@ -108,6 +108,7 @@ mod tests {
             capabilities: Capabilities::default(),
             build: BuildInfo::default(),
             traits: None,
+            config: Default::default(),
         }
     }
 

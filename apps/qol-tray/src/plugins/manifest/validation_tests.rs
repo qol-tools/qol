@@ -30,6 +30,7 @@ fn base_manifest() -> PluginManifest {
         capabilities: Capabilities::default(),
         build: BuildInfo::default(),
         traits: None,
+        config: ConfigDeclarations::default(),
     }
 }
 

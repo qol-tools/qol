@@ -102,6 +102,7 @@ fn api_router(app_state: AppState) -> Router {
     let api = plugin_handlers::routes()
         .merge(settings::routes())
         .merge(crate::features::github_auth::routes())
+        .merge(crate::features::auth::routes())
         .merge(meta_handlers::routes())
         .merge(logs_handlers::routes());
     #[cfg(feature = "dev")]

@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod github_auth;
 pub mod launcher_apps;
 #[cfg(feature = "dev")]

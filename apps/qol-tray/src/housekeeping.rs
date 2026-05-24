@@ -73,7 +73,6 @@ fn is_stale_staging_dir(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use tempfile::TempDir;
 
     #[test]
@@ -166,47 +165,6 @@ mod tests {
 
         let content = std::fs::read_to_string(cfg.join("dev/active-worktree.txt")).unwrap();
         assert_eq!(content, "feature-x");
-    }
-
-    #[test]
-    fn migrate_core_files_into_profile_dir() {
-        let tmp = TempDir::new().unwrap();
-        let cfg = tmp.path();
-        std::fs::write(cfg.join("hotkeys.json"), r#"{"hotkeys":[]}"#).unwrap();
-        std::fs::write(cfg.join("shortcuts.json"), r#"{"shortcuts":[]}"#).unwrap();
-        std::fs::write(cfg.join("task-runner.json"), r#"{"actions":{}}"#).unwrap();
-
-        run_startup_cleanup(cfg).unwrap();
-
-        assert!(!cfg.join("hotkeys.json").exists());
-        assert!(!cfg.join("shortcuts.json").exists());
-        assert!(!cfg.join("task-runner.json").exists());
-        assert!(cfg.join("profile/core/hotkeys.json").exists());
-        assert!(cfg.join("profile/core/shortcuts.json").exists());
-        assert!(cfg.join("profile/core/task-runner.json").exists());
-    }
-
-    #[test]
-    fn migrate_legacy_plugin_configs_into_profile_dir() {
-        let tmp = TempDir::new().unwrap();
-        let cfg = tmp.path();
-        let legacy = json!({
-            "plugin-launcher": {"enabled": true},
-            "plugin-alt-tab": {"monitor": "cursor"}
-        });
-        std::fs::write(cfg.join("plugin-configs.json"), legacy.to_string()).unwrap();
-
-        run_startup_cleanup(cfg).unwrap();
-
-        assert!(!cfg.join("plugin-configs.json").exists());
-        let launcher =
-            std::fs::read_to_string(cfg.join("profile/plugin-configs/plugin-launcher.json"))
-                .unwrap();
-        let alt_tab =
-            std::fs::read_to_string(cfg.join("profile/plugin-configs/plugin-alt-tab.json"))
-                .unwrap();
-        assert!(launcher.contains("enabled"));
-        assert!(alt_tab.contains("monitor"));
     }
 
     #[test]

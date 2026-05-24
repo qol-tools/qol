@@ -19,7 +19,7 @@ pub struct HotkeyBinding {
     pub enabled: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HotkeyAction {
     pub plugin_id: String,
     pub action: String,

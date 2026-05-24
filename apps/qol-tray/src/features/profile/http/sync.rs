@@ -14,9 +14,9 @@ pub(crate) async fn get_sync_status(
 }
 
 pub(crate) async fn get_sync_providers(
-    State(state): State<super::ProfileHttpState>,
+    State(_state): State<super::ProfileHttpState>,
 ) -> impl IntoResponse {
-    Json(state.sync_service.providers())
+    Json(serde_json::json!([]))
 }
 
 pub(crate) async fn connect_sync(
@@ -124,7 +124,8 @@ fn sync_result_response(
 }
 
 fn sync_error_response(error: anyhow::Error) -> Response {
-    let message = error.to_string();
+    let message = format!("{:#}", error);
+    log::error!("sync error: {:#}", error);
     let status = if looks_like_bad_request(&message) {
         StatusCode::BAD_REQUEST
     } else if looks_like_upstream_error(&message) {

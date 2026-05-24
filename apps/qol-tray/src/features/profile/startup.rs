@@ -1,293 +1,47 @@
 use anyhow::Result;
 use std::path::Path;
 
-pub(crate) fn run_startup_cleanup(config_dir: &Path) -> Result<()> {
-    ensure_profile_dirs_at(config_dir)?;
-    migrate_core_file(
-        config_dir,
-        "hotkeys.json",
-        profile_core_path(config_dir, "hotkeys.json"),
-    )?;
-    migrate_core_file(
-        config_dir,
-        "shortcuts.json",
-        profile_core_path(config_dir, "shortcuts.json"),
-    )?;
-    migrate_core_file(
-        config_dir,
-        "task-runner.json",
-        profile_core_path(config_dir, "task-runner.json"),
-    )?;
-    migrate_legacy_plugin_configs(config_dir)?;
-    migrate_live_plugin_configs(config_dir)?;
-    Ok(())
-}
-
-fn migrate_core_file(
-    config_dir: &Path,
-    legacy_name: &str,
-    target_path: std::path::PathBuf,
-) -> Result<()> {
-    if target_path.exists() {
-        return Ok(());
-    }
-    let legacy_path = config_dir.join(legacy_name);
-    if !legacy_path.exists() {
-        return Ok(());
-    }
-    let Some(parent) = target_path.parent() else {
-        return Ok(());
-    };
-    std::fs::create_dir_all(parent)?;
-    std::fs::rename(legacy_path, target_path)?;
-    Ok(())
-}
-
-fn migrate_legacy_plugin_configs(config_dir: &Path) -> Result<()> {
-    let legacy_path = config_dir.join("plugin-configs.json");
-    if !legacy_path.exists() {
-        return Ok(());
-    }
-    let existing = read_profile_plugin_configs(config_dir)?;
-    if !existing.is_empty() {
-        let _ = std::fs::remove_file(legacy_path);
-        return Ok(());
-    }
-    let configs = crate::file_io::read_json::<crate::plugins::config::PluginConfigs>(&legacy_path)?;
-    for (plugin_id, config) in configs.configs {
-        if !crate::paths::is_safe_path_component(&plugin_id) {
-            continue;
-        }
-        crate::file_io::write_pretty_json(
-            &profile_plugin_config_path(config_dir, &plugin_id),
-            &config,
-        )?;
-    }
-    let _ = std::fs::remove_file(legacy_path);
-    Ok(())
-}
-
-fn migrate_live_plugin_configs(config_dir: &Path) -> Result<()> {
-    let plugins_dir = config_dir.join("plugins");
-    let Ok(entries) = std::fs::read_dir(plugins_dir) else {
-        return Ok(());
-    };
-    for entry in entries.filter_map(|entry| entry.ok()) {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let Some(plugin_id) = entry.file_name().to_str().map(str::to_string) else {
-            continue;
-        };
-        if !crate::paths::is_safe_path_component(&plugin_id) {
-            continue;
-        }
-        let target_path = profile_plugin_config_path(config_dir, &plugin_id);
-        if target_path.exists() {
-            continue;
-        }
-        let live_path = path.join("config.json");
-        if !live_path.exists() {
-            continue;
-        }
-        let Ok(config) = crate::file_io::read_json::<serde_json::Value>(&live_path) else {
-            continue;
-        };
-        crate::file_io::write_pretty_json(&target_path, &config)?;
-    }
-    Ok(())
-}
-
-fn ensure_profile_dirs_at(config_dir: &Path) -> Result<()> {
-    for path in [
-        config_dir.join("profile"),
-        config_dir.join("profile/core"),
-        config_dir.join("profile/plugin-configs"),
-    ] {
-        std::fs::create_dir_all(path)?;
-    }
-    crate::file_io::write_pretty_json(
-        &config_dir.join("profile/manifest.json"),
-        &crate::features::profile::core::ProfileManifest {
-            version: crate::features::profile::core::CURRENT_PROFILE_VERSION,
-        },
-    )
-}
-
-fn profile_core_path(config_dir: &Path, file_name: &str) -> std::path::PathBuf {
-    config_dir.join("profile").join("core").join(file_name)
-}
-
-fn profile_plugin_config_path(config_dir: &Path, plugin_id: &str) -> std::path::PathBuf {
-    config_dir
-        .join("profile")
-        .join("plugin-configs")
-        .join(format!("{}.json", plugin_id))
-}
-
-fn read_profile_plugin_configs(config_dir: &Path) -> Result<Vec<String>> {
-    let dir = config_dir.join("profile").join("plugin-configs");
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Ok(Vec::new());
-    };
-    Ok(entries
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| {
-            let path = entry.path();
-            if !path.is_file() {
-                return None;
-            }
-            let plugin_id = path.file_stem()?.to_str()?;
-            crate::paths::is_safe_path_component(plugin_id).then(|| plugin_id.to_string())
-        })
-        .collect())
+pub(crate) fn run_startup_cleanup(_config_dir: &Path) -> Result<()> {
+    let name = crate::paths::active_profile_name();
+    crate::features::profile::registry::ensure_profile_dirs_for(&name)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use tempfile::TempDir;
 
     #[test]
-    fn migrate_core_files_into_profile_dir() {
+    fn run_startup_cleanup_bootstraps_active_profile_dirs() {
         let tmp = TempDir::new().unwrap();
-        let cfg = tmp.path();
-        std::fs::write(cfg.join("hotkeys.json"), r#"{"hotkeys":[]}"#).unwrap();
-        std::fs::write(cfg.join("shortcuts.json"), r#"{"shortcuts":[]}"#).unwrap();
-        std::fs::write(cfg.join("task-runner.json"), r#"{"actions":{}}"#).unwrap();
+        let _guard = crate::paths::push_test_path_root(tmp.path());
 
-        run_startup_cleanup(cfg).unwrap();
+        run_startup_cleanup(tmp.path()).unwrap();
 
-        assert!(!cfg.join("hotkeys.json").exists());
-        assert!(!cfg.join("shortcuts.json").exists());
-        assert!(!cfg.join("task-runner.json").exists());
-        assert!(cfg.join("profile/core/hotkeys.json").exists());
-        assert!(cfg.join("profile/core/shortcuts.json").exists());
-        assert!(cfg.join("profile/core/task-runner.json").exists());
+        let root = crate::paths::profile_dir().unwrap();
+        let active = crate::paths::active_profile_name();
+        let profile_root = root.join(&active);
+        assert!(profile_root.join("core").is_dir());
+        assert!(profile_root
+            .join("os")
+            .join(crate::paths::current_os_subdir())
+            .is_dir());
+        assert!(profile_root.join("device").is_dir());
     }
 
     #[test]
-    fn migrate_legacy_plugin_configs_into_profile_dir() {
+    fn run_startup_cleanup_is_idempotent() {
         let tmp = TempDir::new().unwrap();
-        let cfg = tmp.path();
-        let legacy = json!({
-            "plugin-launcher": {"enabled": true},
-            "plugin-alt-tab": {"monitor": "cursor"}
-        });
-        std::fs::write(cfg.join("plugin-configs.json"), legacy.to_string()).unwrap();
+        let _guard = crate::paths::push_test_path_root(tmp.path());
 
-        run_startup_cleanup(cfg).unwrap();
-
-        assert!(!cfg.join("plugin-configs.json").exists());
-        let launcher =
-            std::fs::read_to_string(cfg.join("profile/plugin-configs/plugin-launcher.json"))
-                .unwrap();
-        let alt_tab =
-            std::fs::read_to_string(cfg.join("profile/plugin-configs/plugin-alt-tab.json"))
-                .unwrap();
-        assert!(launcher.contains("enabled"));
-        assert!(alt_tab.contains("monitor"));
-    }
-
-    #[test]
-    fn migrate_live_plugin_configs_into_profile_dir() {
-        let tmp = TempDir::new().unwrap();
-        let cfg = tmp.path();
-        let plugin_dir = cfg.join("plugins/plugin-live");
-        std::fs::create_dir_all(&plugin_dir).unwrap();
-        std::fs::write(
-            plugin_dir.join("config.json"),
-            json!({"enabled": true, "mode": "cursor"}).to_string(),
-        )
-        .unwrap();
-
-        run_startup_cleanup(cfg).unwrap();
-
-        let migrated = cfg.join("profile/plugin-configs/plugin-live.json");
-        assert!(migrated.exists());
-        assert_eq!(
-            std::fs::read_to_string(migrated).unwrap(),
-            "{\n  \"enabled\": true,\n  \"mode\": \"cursor\"\n}"
-        );
-    }
-
-    #[test]
-    fn migrate_core_file_keeps_target_when_target_already_exists() {
-        let tmp = TempDir::new().unwrap();
-        let cfg = tmp.path();
-        std::fs::create_dir_all(cfg.join("profile/core")).unwrap();
-        std::fs::write(
-            cfg.join("profile/core/hotkeys.json"),
-            r#"{"hotkeys":[{"id":"existing"}]}"#,
-        )
-        .unwrap();
-        std::fs::write(cfg.join("hotkeys.json"), r#"{"hotkeys":[{"id":"legacy"}]}"#).unwrap();
-
-        run_startup_cleanup(cfg).unwrap();
-
-        let kept = std::fs::read_to_string(cfg.join("profile/core/hotkeys.json")).unwrap();
-        assert!(
-            kept.contains("existing"),
-            "target preserved when both files exist: {kept}"
-        );
-        assert!(
-            cfg.join("hotkeys.json").exists(),
-            "legacy file is left in place when target already exists",
-        );
-    }
-
-    #[test]
-    fn migrate_core_file_skips_when_legacy_missing() {
-        let tmp = TempDir::new().unwrap();
-        let cfg = tmp.path();
-
-        run_startup_cleanup(cfg).unwrap();
-
-        for legacy_name in ["hotkeys.json", "shortcuts.json", "task-runner.json"] {
-            assert!(
-                !cfg.join("profile/core").join(legacy_name).exists(),
-                "no migration target should be created for {legacy_name} when no legacy file exists",
-            );
+        for _ in 0..3 {
+            run_startup_cleanup(tmp.path()).unwrap();
         }
-    }
-
-    #[test]
-    fn migrate_core_file_moves_empty_legacy_payload() {
-        let tmp = TempDir::new().unwrap();
-        let cfg = tmp.path();
-        let cases = [
-            ("hotkeys.json", r#"{"hotkeys":[]}"#),
-            ("shortcuts.json", r#"{"shortcuts":[]}"#),
-            ("task-runner.json", r#"{"actions":{}}"#),
-        ];
-        for (file_name, content) in cases {
-            std::fs::write(cfg.join(file_name), content).unwrap();
-        }
-
-        run_startup_cleanup(cfg).unwrap();
-
-        for (file_name, content) in cases {
-            assert!(!cfg.join(file_name).exists(), "legacy {file_name} removed",);
-            let migrated_path = cfg.join("profile/core").join(file_name);
-            let migrated = std::fs::read_to_string(&migrated_path).unwrap();
-            assert_eq!(migrated, content, "{file_name} content preserved verbatim");
-        }
-    }
-
-    #[test]
-    fn migrate_core_file_preserves_corrupt_legacy_bytes() {
-        let tmp = TempDir::new().unwrap();
-        let cfg = tmp.path();
-        std::fs::write(cfg.join("hotkeys.json"), "this is not valid json").unwrap();
-
-        run_startup_cleanup(cfg).unwrap();
-
-        let migrated = std::fs::read_to_string(cfg.join("profile/core/hotkeys.json")).unwrap();
-        assert_eq!(
-            migrated, "this is not valid json",
-            "migration is a pure rename and does not validate content",
-        );
+        let active = crate::paths::active_profile_name();
+        let core = crate::paths::profile_dir()
+            .unwrap()
+            .join(active)
+            .join("core");
+        assert!(core.is_dir());
     }
 }

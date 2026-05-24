@@ -10,6 +10,7 @@ use std::collections::HashMap;
 pub struct PluginManager {
     plugins: HashMap<PluginId, Plugin>,
     resolution_report: ResolutionReport,
+    last_state_hash: Option<String>,
 }
 
 impl PluginManager {
@@ -17,11 +18,14 @@ impl PluginManager {
         Self {
             plugins: HashMap::new(),
             resolution_report: ResolutionReport::default(),
+            last_state_hash: None,
         }
     }
 
     pub fn load_plugins(&mut self) -> Result<()> {
-        loading::load_plugins(self)
+        loading::load_plugins(self)?;
+        self.last_state_hash = Some(runtime::hash_active_plugin_state());
+        Ok(())
     }
 
     pub fn autostart_daemons(&mut self) {
@@ -29,7 +33,18 @@ impl PluginManager {
     }
 
     pub fn reload_plugins(&mut self) -> Result<()> {
-        runtime::reload_plugins(self)
+        runtime::reload_plugins(self)?;
+        self.last_state_hash = Some(runtime::hash_active_plugin_state());
+        Ok(())
+    }
+
+    pub fn reload_plugins_if_changed(&mut self) -> Result<bool> {
+        let current = runtime::hash_active_plugin_state();
+        if self.last_state_hash.as_ref() == Some(&current) {
+            return Ok(false);
+        }
+        self.reload_plugins()?;
+        Ok(true)
     }
 
     pub fn shutdown(&mut self) {

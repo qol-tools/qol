@@ -1,17 +1,14 @@
-const DEFAULT_PATH: &str = "qol-tray/profile.json";
-const AUTO_PUSH_INTERVAL_SECS: u64 = 3;
-
+pub mod git_repo;
 pub(crate) mod platform;
-mod providers;
-mod resolve;
+mod promote;
+mod scope;
 mod service;
 mod state;
 mod types;
 
+pub(crate) use scope::SCOPE_REQUIREMENTS;
 pub use service::SyncService;
 pub use types::{
-    GitHubSyncConnection, LocalFolderSyncConnection, SyncActionResult, SyncBackupEntry,
-    SyncBackupPreview, SyncConnectRequest, SyncConnection, SyncHealth, SyncIncident,
-    SyncIncidentKind, SyncProviderDefinition, SyncProviderFieldDefinition, SyncProviderFieldKey,
-    SyncProviderFieldKind, SyncProviderFieldSection, SyncProviderKind, SyncStatus,
+    SyncActionResult, SyncBackupEntry, SyncBackupPreview, SyncConnectRequest, SyncHealth,
+    SyncIncident, SyncIncidentKind, SyncStatus,
 };

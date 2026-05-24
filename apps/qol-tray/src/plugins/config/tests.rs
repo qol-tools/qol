@@ -7,10 +7,18 @@ use tempfile::TempDir;
 fn setup_test_env() -> (PluginConfigManager, TempDir, TempDir) {
     let temp_base = TempDir::new().unwrap();
     let temp_plugins = TempDir::new().unwrap();
-    let manager = PluginConfigManager {
-        configs_dir: temp_base.path().join("plugin-configs"),
-    };
+    let scope_store = crate::features::profile::ProfileScopeStore::at_dir(
+        temp_base.path().to_path_buf(),
+        crate::paths::current_os_subdir().to_string(),
+    )
+    .unwrap();
+    let manager = PluginConfigManager::with_store(scope_store);
     (manager, temp_base, temp_plugins)
+}
+
+fn store_at(profile: &std::path::Path, os: &str) -> crate::features::profile::ProfileScopeStore {
+    crate::features::profile::ProfileScopeStore::at_dir(profile.to_path_buf(), os.to_string())
+        .unwrap()
 }
 
 struct ConfigEnvGuard {
@@ -151,14 +159,20 @@ fn load_configs_parses_valid_json() {
         "plugin1": {"enabled": true},
         "plugin2": {"value": 42}
     });
-    fs::create_dir_all(&manager.configs_dir).unwrap();
+    fs::create_dir_all(&manager.store().core_plugin_configs_dir()).unwrap();
     fs::write(
-        manager.configs_dir.join("plugin1.json"),
+        manager
+            .store()
+            .core_plugin_configs_dir()
+            .join("plugin1.json"),
         serde_json::to_string(&test_data["plugin1"]).unwrap(),
     )
     .unwrap();
     fs::write(
-        manager.configs_dir.join("plugin2.json"),
+        manager
+            .store()
+            .core_plugin_configs_dir()
+            .join("plugin2.json"),
         serde_json::to_string(&test_data["plugin2"]).unwrap(),
     )
     .unwrap();
@@ -180,7 +194,7 @@ fn save_configs_creates_parent_directory() {
     let configs = PluginConfigs::default();
     let result = manager.save_configs(&configs);
     assert!(result.is_ok());
-    assert!(manager.configs_dir.exists());
+    assert!(manager.store().core_plugin_configs_dir().exists());
 }
 
 #[test]
@@ -191,7 +205,8 @@ fn save_configs_writes_pretty_json() {
         .configs
         .insert("test".to_string(), json!({"key": "value"}));
     manager.save_configs(&configs).unwrap();
-    let content = fs::read_to_string(manager.configs_dir.join("test.json")).unwrap();
+    let content =
+        fs::read_to_string(manager.store().core_plugin_configs_dir().join("test.json")).unwrap();
     assert!(content.contains('\n'));
     assert!(content.contains("key"));
     assert!(content.contains("value"));
@@ -217,25 +232,43 @@ fn save_configs_overwrites_existing_file() {
 }
 
 #[test]
-fn restore_from_backup_returns_none_when_no_backup_exists() {
+fn get_config_returns_none_when_no_runtime_and_no_profile_slices() {
+    let env_root = TempDir::new().unwrap();
+    let _env = ConfigEnvGuard::new(env_root.path());
     let (manager, _temp_base, _temp_plugins) = setup_test_env();
-    let result = manager.restore_from_backup("nonexistent").unwrap();
+    let result = manager.get_config_with("nonexistent", None, None).unwrap();
     assert!(result.is_none());
 }
 
 #[test]
-fn restore_from_backup_returns_config_when_backup_exists() {
+fn get_config_restores_from_core_slice_when_runtime_missing() {
     let env_root = TempDir::new().unwrap();
     let _env = ConfigEnvGuard::new(env_root.path());
     let (manager, _temp_base, _temp_plugins) = setup_test_env();
-    let mut configs = PluginConfigs::default();
     let expected_config = json!({"restored": true, "value": 123});
-    configs
-        .configs
-        .insert("test-plugin".to_string(), expected_config.clone());
-    manager.save_configs(&configs).unwrap();
-    let result = manager.restore_from_backup("test-plugin").unwrap();
-    assert_eq!(result, Some(expected_config));
+    fs::create_dir_all(&manager.store().core_plugin_configs_dir()).unwrap();
+    fs::write(
+        manager
+            .store()
+            .core_plugin_configs_dir()
+            .join("test-plugin.json"),
+        serde_json::to_string(&expected_config).unwrap(),
+    )
+    .unwrap();
+    let result = manager.get_config_with("test-plugin", None, None).unwrap();
+    assert_eq!(
+        result,
+        Some(expected_config.clone()),
+        "config in core slice must be returned when runtime path is missing"
+    );
+    let runtime = PluginConfigManager::plugin_config_path("test-plugin").unwrap();
+    assert!(
+        runtime.is_file(),
+        "restored config must be written to runtime path so the daemon picks it up"
+    );
+    let runtime_value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&runtime).unwrap()).unwrap();
+    assert_eq!(runtime_value, expected_config);
 }
 
 #[test]
@@ -432,5 +465,296 @@ fn load_plugin_traits_falls_back_on_non_object_traits_value() {
             serde_json::json!({ "confined": {} }),
             "case: {label}"
         );
+    }
+}
+
+mod scoped_io {
+    use super::*;
+    use crate::features::profile::core::PluginLockEntry;
+    use crate::plugins::manifest::{
+        Capabilities, ConfigDeclarations, ConfigScope, MenuConfig, PluginInfo, PluginManifest,
+    };
+    use std::collections::HashMap;
+    use std::path::Path;
+
+    fn lock_entry(id: &str, platforms: Option<Vec<&str>>) -> PluginLockEntry {
+        PluginLockEntry {
+            id: id.to_string(),
+            repo_url: "https://example/repo.git".to_string(),
+            version: "1.0.0".to_string(),
+            platforms: platforms.map(|v| v.into_iter().map(|s| s.to_string()).collect()),
+        }
+    }
+
+    fn manifest_with(
+        platforms: Option<Vec<&str>>,
+        default_scope: Option<ConfigScope>,
+        per_field: &[(&str, ConfigScope)],
+    ) -> PluginManifest {
+        let mut config = ConfigDeclarations::default();
+        config.default_scope = default_scope;
+        config.scope = per_field
+            .iter()
+            .map(|(k, s)| ((*k).to_string(), *s))
+            .collect::<HashMap<_, _>>();
+        PluginManifest {
+            manifest_version: 1,
+            plugin: PluginInfo {
+                name: "p".to_string(),
+                description: String::new(),
+                version: "1.0.0".to_string(),
+                author: None,
+                platforms: platforms.map(|v| v.into_iter().map(|s| s.to_string()).collect()),
+            },
+            menu: MenuConfig {
+                label: "p".to_string(),
+                icon: None,
+                items: vec![],
+            },
+            daemon: None,
+            dependencies: None,
+            runtime: None,
+            capabilities: Capabilities::default(),
+            build: Default::default(),
+            traits: None,
+            config,
+        }
+    }
+
+    fn read_json(path: &Path) -> serde_json::Value {
+        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    fn pre_seed(path: &Path, value: serde_json::Value) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn round_trips_single_field_without_manifest_into_core_slot() {
+        let tmp = TempDir::new().unwrap();
+        let profile = tmp.path();
+        let store = store_at(profile, "linux");
+        let config = json!({ "presets": ["a"] });
+
+        save_plugin_config_split(&store, "plugin-x", &config, None, None).unwrap();
+        let merged = load_plugin_config_merged(&store, "plugin-x", None, None).unwrap();
+        assert_eq!(merged, config);
+        assert!(profile.join("core/plugin-configs/plugin-x.json").is_file());
+        assert!(!profile
+            .join("os/linux/plugin-configs/plugin-x.json")
+            .exists());
+        assert!(!profile.join("device/plugin-configs/plugin-x.json").exists());
+    }
+
+    #[test]
+    fn merge_precedence_is_core_then_os_then_device_with_later_scope_winning() {
+        let tmp = TempDir::new().unwrap();
+        let profile = tmp.path();
+        let store = store_at(profile, "linux");
+        pre_seed(
+            &profile.join("core/plugin-configs/plugin-x.json"),
+            json!({ "k": "from-core", "shared": "core" }),
+        );
+        pre_seed(
+            &profile.join("os/linux/plugin-configs/plugin-x.json"),
+            json!({ "k": "from-os", "os_only": true }),
+        );
+        pre_seed(
+            &profile.join("device/plugin-configs/plugin-x.json"),
+            json!({ "k": "from-device", "device_only": 42 }),
+        );
+
+        let merged = load_plugin_config_merged(&store, "plugin-x", None, None).unwrap();
+        assert_eq!(merged["k"], json!("from-device"), "device wins for k");
+        assert_eq!(merged["shared"], json!("core"));
+        assert_eq!(merged["os_only"], json!(true));
+        assert_eq!(merged["device_only"], json!(42));
+    }
+
+    #[test]
+    fn save_routes_os_scoped_field_to_resolved_bucket_when_lock_pins_single_platform_from_another_os(
+    ) {
+        let tmp = TempDir::new().unwrap();
+        let profile = tmp.path();
+        let store = store_at(profile, "linux");
+        let lock = lock_entry("plugin-keyremap", Some(vec!["macos"]));
+        let manifest = manifest_with(Some(vec!["macos"]), None, &[("rules", ConfigScope::Os)]);
+        let config = json!({ "rules": ["caps_to_ctrl"], "enabled": true });
+
+        save_plugin_config_split(
+            &store,
+            "plugin-keyremap",
+            &config,
+            Some(&lock),
+            Some(&manifest),
+        )
+        .unwrap();
+
+        let os_macos = profile.join("os/macos/plugin-configs/plugin-keyremap.json");
+        assert!(
+            os_macos.is_file(),
+            "OS-scoped field on a Mac-only plugin written from Linux must land in os/macos, not os/linux"
+        );
+        assert_eq!(read_json(&os_macos), json!({ "rules": ["caps_to_ctrl"] }));
+        assert!(
+            !profile
+                .join("os/linux/plugin-configs/plugin-keyremap.json")
+                .exists(),
+            "must not create an os/linux slot for a Mac-only plugin"
+        );
+        let core_path = profile.join("core/plugin-configs/plugin-keyremap.json");
+        assert_eq!(read_json(&core_path), json!({ "enabled": true }));
+    }
+
+    #[test]
+    fn save_routes_explicit_device_scope_to_device_path() {
+        let tmp = TempDir::new().unwrap();
+        let profile = tmp.path();
+        let store = store_at(profile, "linux");
+        let manifest = manifest_with(None, None, &[("broker_url", ConfigScope::Device)]);
+        let config = json!({ "broker_url": "10.0.0.1", "presets": ["a"] });
+
+        save_plugin_config_split(&store, "plugin-x", &config, None, Some(&manifest)).unwrap();
+
+        let device = profile.join("device/plugin-configs/plugin-x.json");
+        assert_eq!(read_json(&device), json!({ "broker_url": "10.0.0.1" }));
+        let core = profile.join("core/plugin-configs/plugin-x.json");
+        assert_eq!(read_json(&core), json!({ "presets": ["a"] }));
+    }
+
+    #[test]
+    fn save_does_not_touch_other_plugin_files_in_any_scope() {
+        let tmp = TempDir::new().unwrap();
+        let profile = tmp.path();
+        let store = store_at(profile, "linux");
+        pre_seed(
+            &profile.join("core/plugin-configs/plugin-other.json"),
+            json!({ "untouched": "core" }),
+        );
+        pre_seed(
+            &profile.join("os/linux/plugin-configs/plugin-other.json"),
+            json!({ "untouched": "os" }),
+        );
+        pre_seed(
+            &profile.join("device/plugin-configs/plugin-other.json"),
+            json!({ "untouched": "device" }),
+        );
+
+        save_plugin_config_split(&store, "plugin-x", &json!({ "x": 1 }), None, None).unwrap();
+
+        assert_eq!(
+            read_json(&profile.join("core/plugin-configs/plugin-other.json")),
+            json!({ "untouched": "core" })
+        );
+        assert_eq!(
+            read_json(&profile.join("os/linux/plugin-configs/plugin-other.json")),
+            json!({ "untouched": "os" })
+        );
+        assert_eq!(
+            read_json(&profile.join("device/plugin-configs/plugin-other.json")),
+            json!({ "untouched": "device" })
+        );
+    }
+
+    #[test]
+    fn load_for_an_unknown_plugin_returns_anything_pre_existing_at_the_resolved_paths() {
+        let tmp = TempDir::new().unwrap();
+        let profile = tmp.path();
+        let store = store_at(profile, "linux");
+        pre_seed(
+            &profile.join("core/plugin-configs/plugin-unknown.json"),
+            json!({ "legacy_field": "preserved" }),
+        );
+
+        let merged = load_plugin_config_merged(&store, "plugin-unknown", None, None).unwrap();
+        assert_eq!(
+            merged,
+            json!({ "legacy_field": "preserved" }),
+            "unknown plugin with only a core file still loads cleanly"
+        );
+    }
+
+    #[test]
+    fn save_clears_a_slice_file_when_no_fields_in_that_scope_remain() {
+        let tmp = TempDir::new().unwrap();
+        let profile = tmp.path();
+        let store = store_at(profile, "linux");
+        let manifest = manifest_with(None, None, &[("broker_url", ConfigScope::Device)]);
+
+        save_plugin_config_split(
+            &store,
+            "plugin-x",
+            &json!({ "broker_url": "10.0.0.1", "presets": ["a"] }),
+            None,
+            Some(&manifest),
+        )
+        .unwrap();
+        let device = profile.join("device/plugin-configs/plugin-x.json");
+        assert!(device.is_file());
+
+        save_plugin_config_split(
+            &store,
+            "plugin-x",
+            &json!({ "presets": ["b"] }),
+            None,
+            Some(&manifest),
+        )
+        .unwrap();
+        assert!(
+            !device.exists(),
+            "device slice becomes empty so the slice file must be removed to keep storage tidy"
+        );
+        assert_eq!(
+            read_json(&profile.join("core/plugin-configs/plugin-x.json")),
+            json!({ "presets": ["b"] })
+        );
+    }
+
+    #[test]
+    fn default_scope_routes_every_unspecified_field_to_that_scope() {
+        let tmp = TempDir::new().unwrap();
+        let profile = tmp.path();
+        let store = store_at(profile, "macos");
+        let manifest = manifest_with(None, Some(ConfigScope::Os), &[]);
+
+        save_plugin_config_split(
+            &store,
+            "plugin-x",
+            &json!({ "a": 1, "b": 2 }),
+            None,
+            Some(&manifest),
+        )
+        .unwrap();
+
+        let os_file = profile.join("os/macos/plugin-configs/plugin-x.json");
+        assert_eq!(read_json(&os_file), json!({ "a": 1, "b": 2 }));
+        assert!(!profile.join("core/plugin-configs/plugin-x.json").exists());
+    }
+
+    #[test]
+    fn write_then_read_round_trip_with_multi_scope_manifest_preserves_every_field() {
+        let tmp = TempDir::new().unwrap();
+        let profile = tmp.path();
+        let store = store_at(profile, "macos");
+        let manifest = manifest_with(
+            Some(vec!["linux", "macos"]),
+            None,
+            &[
+                ("hotkey", ConfigScope::Os),
+                ("broker_url", ConfigScope::Device),
+            ],
+        );
+        let lock = lock_entry("p", Some(vec!["linux", "macos"]));
+        let config = json!({
+            "presets": ["a", "b"],
+            "hotkey": "Super+Space",
+            "broker_url": "10.0.0.1",
+            "deep": { "nested": true }
+        });
+
+        save_plugin_config_split(&store, "p", &config, Some(&lock), Some(&manifest)).unwrap();
+        let merged = load_plugin_config_merged(&store, "p", Some(&lock), Some(&manifest)).unwrap();
+        assert_eq!(merged, config, "round trip must preserve every field");
     }
 }

@@ -1,6 +1,45 @@
 use super::{loading, PluginManager};
 use crate::plugins::{action_executor::kill_all_plugin_processes, Plugin};
 use anyhow::Result;
+use sha2::{Digest, Sha256};
+
+pub(super) fn hash_active_plugin_state() -> String {
+    let mut hasher = Sha256::new();
+    hash_lock_file(&mut hasher);
+    hash_plugin_configs(&mut hasher);
+    format!("{:x}", hasher.finalize())
+}
+
+fn hash_lock_file(hasher: &mut Sha256) {
+    let Some(bytes) = crate::paths::profile_plugins_lock_path()
+        .ok()
+        .and_then(|p| std::fs::read(&p).ok())
+    else {
+        return;
+    };
+    hasher.update(b"lock:");
+    hasher.update(&bytes);
+}
+
+fn hash_plugin_configs(hasher: &mut Sha256) {
+    let Ok(dir) = crate::paths::profile_plugin_configs_dir() else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    let mut paths: Vec<_> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
+    paths.sort();
+    for path in paths {
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        hasher.update(b"cfg:");
+        hasher.update(path.to_string_lossy().as_bytes());
+        hasher.update(b":");
+        hasher.update(&bytes);
+    }
+}
 
 pub(super) fn reload_plugins(manager: &mut PluginManager) -> Result<()> {
     log::info!("Reloading all plugins...");

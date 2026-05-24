@@ -63,14 +63,15 @@ fn reload_after_profile_apply(state: &ProfileHttpState) {
             return;
         }
     };
-    let reload_ok = match manager.reload_plugins() {
-        Ok(()) => true,
+    let outcome = manager.reload_plugins_if_changed();
+    let plugins_changed = match outcome {
+        Ok(changed) => changed,
         Err(error) => {
             log::error!("Failed to reload plugins: {}", error);
             false
         }
     };
-    if reload_ok {
+    if plugins_changed {
         crate::features::launcher_apps::trigger_full_sync();
     }
     drop(manager);

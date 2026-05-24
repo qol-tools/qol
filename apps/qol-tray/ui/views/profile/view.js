@@ -1,10 +1,12 @@
 import { html } from '../../lib/html.js';
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { PageHeader } from '../../components/PageHeader.js';
 import { SurfaceContainer } from '../../lib/components/SurfaceContainer.js';
 import { Surface } from '../../lib/components/Surface.js';
 import { Expander, ExpanderTrigger, ExpanderBody } from '../../lib/components/Expander.js';
 import { Badge, HealthDot, Alert } from '../../lib/components/StatusIndicators.js';
+import { AuthHealthBanner } from '../../lib/components/AuthHealthBanner.js';
+import { insufficientScopeIssue } from '../../features/auth/actions.js';
 import { BackupDetailContent } from '../../components/domain-rows/BackupRow.js';
 import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../../app/view-keyboard-context.js';
@@ -48,6 +50,8 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
 
     const health = ctrl.syncStatus?.health || 'not_configured';
     const settingsSurface = ctrl.surfaceById.get('settings');
+    const githubAuthIssue = insufficientScopeIssue(ctrl.authHealth, 'github');
+    const reauthBusy = ctrl.busyAction === 'reauth';
 
     return html`
         <div id="profile-page" class="view-container content-shell profile-view-shell">
@@ -74,9 +78,18 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                                     <${Alert} variant="error">${ctrl.syncStatus.last_error}<//>
                                 `}
 
+                                ${!ctrl.authPrompt && githubAuthIssue && html`
+                                    <${AuthHealthBanner}
+                                        issue=${githubAuthIssue}
+                                        busy=${reauthBusy}
+                                        onReauthorize=${ctrl.handleReauthorize}
+                                    />
+                                `}
+
                                 ${ctrl.authPrompt && html`
                                     <${DeviceCodePrompt}
                                         userCode=${ctrl.authPrompt.userCode}
+                                        verificationUri=${ctrl.authPrompt.verificationUri}
                                         copied=${ctrl.authPrompt.copied}
                                         onOpenGitHub=${ctrl.openAuthLink}
                                     />
@@ -84,15 +97,17 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
 
                                 ${!ctrl.authPrompt && ctrl.configured && html`
                                     <div class="profile-actions-row">
-                                        <${ProfileActionButton} id="pull" ctrl=${ctrl} />
-                                        <${ProfileActionButton} id="push" ctrl=${ctrl} />
+                                        ${!githubAuthIssue && html`
+                                            <${ProfileActionButton} id="pull" ctrl=${ctrl} />
+                                            <${ProfileActionButton} id="push" ctrl=${ctrl} />
+                                        `}
                                         <${ProfileActionButton} id="acknowledge" ctrl=${ctrl} />
                                         <span class="profile-actions-spacer"></span>
                                         <${ProfileActionButton} id="disconnect" ctrl=${ctrl} />
                                     </div>
                                 `}
 
-                                ${!ctrl.authPrompt && !ctrl.configured && html`
+                                ${!ctrl.authPrompt && !githubAuthIssue && !ctrl.configured && html`
                                     <div class="profile-connect-row">
                                         <${ProfileActionButton} id="connect" ctrl=${ctrl} />
                                     </div>
@@ -259,26 +274,60 @@ function SettingsInfoField({ label, index, selected, onSelect, children }) {
     `;
 }
 
-function DeviceCodePrompt({ userCode, copied, onOpenGitHub }) {
-    const [justCopied, setJustCopied] = useState(copied);
+function DeviceCodePrompt({ userCode, verificationUri, copied, onOpenGitHub }) {
+    const [justCopiedCode, setJustCopiedCode] = useState(copied);
+    const [justCopiedUri, setJustCopiedUri] = useState(false);
+    const containerRef = useRef(null);
 
-    const handleCopy = async () => {
+    useEffect(() => {
+        const selected = containerRef.current?.querySelector('[data-selected="true"]');
+        const target = selected || containerRef.current?.querySelector('[data-selected-surface]');
+        target?.focus?.({ preventScroll: true });
+    }, []);
+
+    const copyToClipboard = async (text, setFlag) => {
+        if (!text) return;
         try {
-            await navigator.clipboard.writeText(userCode);
-            setJustCopied(true);
-            setTimeout(() => setJustCopied(false), 2000);
+            await navigator.clipboard.writeText(text);
+            setFlag(true);
+            setTimeout(() => setFlag(false), 2000);
         } catch (_) {}
     };
 
+    const copyCode = () => copyToClipboard(userCode, setJustCopiedCode);
+    const copyUri = () => copyToClipboard(verificationUri, setJustCopiedUri);
+
     return html`
-        <div class="profile-device-auth">
-            <div class="profile-device-code" onClick=${handleCopy} title="Click to copy">
-                ${userCode}
-            </div>
+        <div class="profile-device-auth" ref=${containerRef}>
+            <${Surface} as="button"
+                className="profile-device-code btn"
+                onActivate=${copyCode}
+                aria-label="Copy verification code ${userCode}"
+                title="Copy code"
+            >${userCode}<//>
             <p class="profile-device-hint">
-                ${justCopied ? 'Copied!' : 'Click code to copy'} — then paste it on GitHub
+                ${justCopiedCode ? 'Code copied' : 'Enter on code to copy'} - then authorize on GitHub
             </p>
-            <${Button} variant="btn-primary" onActivate=${onOpenGitHub}>Open GitHub<//>
+            ${verificationUri && html`
+                <${Surface} as="div"
+                    className="profile-device-uri"
+                    onActivate=${copyUri}
+                    aria-label="Copy verification URL ${verificationUri}"
+                    title="Copy URL"
+                >${verificationUri}<//>
+                <p class="profile-device-hint profile-device-hint-secondary">
+                    ${justCopiedUri ? 'URL copied' : 'Enter on URL to copy - paste into a non-incognito browser if Open GitHub lands in the wrong window'}
+                </p>
+            `}
+            <${Surface} as="button"
+                className="btn btn-primary"
+                selected=${true}
+                onActivate=${onOpenGitHub}
+            >Open GitHub<//>
+            <p class="profile-device-status">
+                <span class="profile-action-spinner" aria-hidden="true"></span>
+                Waiting for GitHub authorization...
+            </p>
         </div>
     `;
 }

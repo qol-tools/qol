@@ -10,12 +10,21 @@ pub(crate) fn github_auth_status() -> GitHubAuthStatus {
         login: credential
             .as_ref()
             .and_then(|credential| credential.login.clone()),
-        source: credential.map(|credential| credential.source),
+        source: credential.as_ref().map(|credential| credential.source),
+        scopes: credential
+            .map(|credential| credential.scopes)
+            .unwrap_or_default(),
     }
 }
 
 pub(crate) fn oauth_access_token() -> Option<String> {
     load_github_credential().map(|credential| credential.access_token)
+}
+
+pub(crate) fn oauth_scopes() -> Vec<String> {
+    load_github_credential()
+        .map(|credential| credential.scopes)
+        .unwrap_or_default()
 }
 
 pub(crate) fn load_github_credential() -> Option<GitHubCredentialRecord> {

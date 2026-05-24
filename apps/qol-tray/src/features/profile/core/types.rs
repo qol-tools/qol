@@ -1,6 +1,6 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 pub const CURRENT_PROFILE_VERSION: u32 = 1;
 
@@ -40,21 +40,6 @@ pub struct ProfileExportBundle {
     pub task_runner: Value,
     #[serde(default)]
     pub plugin_configs: HashMap<String, Value>,
-    #[serde(default)]
-    pub plugins: Vec<PluginLockEntry>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProfileSyncDocument {
-    #[serde(default = "default_profile_version")]
-    pub version: u32,
-    #[serde(default)]
-    pub hotkeys: Vec<Value>,
-    #[serde(default)]
-    pub shortcuts: Vec<Value>,
-    pub task_runner: Value,
-    #[serde(default)]
-    pub plugin_configs: BTreeMap<String, Value>,
     #[serde(default)]
     pub plugins: Vec<PluginLockEntry>,
 }

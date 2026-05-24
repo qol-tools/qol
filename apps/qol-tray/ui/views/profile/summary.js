@@ -72,20 +72,17 @@ export function profileHealthLabel(syncStatus) {
 }
 
 export function profileRemoteSummary(syncStatus) {
-    if (!syncStatus?.target_summary) {
+    if (!syncStatus?.repo_url) {
         return 'Cloud sync is not configured yet';
     }
-    return `${syncStatus.provider_label || 'Cloud'} · ${syncStatus.target_summary}`;
+    return `GitHub · ${syncStatus.repo_url}`;
 }
 
-export function connectActionLabel(configured, providerKind) {
-    if (providerKind === 'github' && !configured) {
-        return 'Connect GitHub';
-    }
+export function connectActionLabel(configured, _providerKind) {
     if (configured) {
         return 'Save and Sync';
     }
-    return 'Connect Sync';
+    return 'Set up sync for this profile';
 }
 
 const ACTION_BUSY_LABELS = {

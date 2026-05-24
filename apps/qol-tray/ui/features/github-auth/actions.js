@@ -12,7 +12,11 @@ export async function disconnectGitHubAuth() {
 }
 
 export async function startGitHubAuth() {
-    return apiJson('/api/github-auth/start', { method: 'POST' });
+    return apiJson('/api/auth/reauth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: 'github' }),
+    });
 }
 
 export async function waitForGitHubAuth(sessionId, interval) {

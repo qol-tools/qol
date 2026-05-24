@@ -6,6 +6,8 @@ use crate::file_io;
 
 const APP_NAME: &str = "qol-tray";
 const ACTIVE_INSTALL_ID_FILE: &str = "active-install-id";
+const ACTIVE_PROFILE_FILE: &str = "active";
+pub const DEFAULT_PROFILE_NAME: &str = "default";
 #[cfg(any(test, debug_assertions))]
 const TEST_PATH_ROOT_ENV: &str = "QOL_TRAY_TEST_PATH_ROOT";
 
@@ -136,31 +138,83 @@ pub fn profile_dir() -> Result<PathBuf> {
     shared_config_dir().map(|p| p.join("profile"))
 }
 
+pub fn current_os_subdir() -> &'static str {
+    std::env::consts::OS
+}
+
+fn active_profile_marker_path() -> Result<PathBuf> {
+    profile_dir().map(|p| p.join(ACTIVE_PROFILE_FILE))
+}
+
+pub fn active_profile_name() -> String {
+    active_profile_marker_path()
+        .ok()
+        .and_then(|path| fs::read_to_string(&path).ok())
+        .map(|raw| raw.trim().to_string())
+        .filter(|name| is_safe_path_component(name))
+        .unwrap_or_else(|| DEFAULT_PROFILE_NAME.to_string())
+}
+
+pub fn set_active_profile_name(name: &str) -> Result<()> {
+    if !is_safe_path_component(name) {
+        return Err(anyhow!("invalid profile name"));
+    }
+    let path = active_profile_marker_path()?;
+    file_io::ensure_parent_dir(&path)?;
+    fs::write(&path, format!("{}\n", name))
+        .with_context(|| format!("Failed to write active profile marker {}", path.display()))
+}
+
+pub fn profile_active_dir() -> Result<PathBuf> {
+    active_scope_store().map(|s| s.dir())
+}
+
 pub fn profile_manifest_path() -> Result<PathBuf> {
-    profile_dir().map(|p| p.join("manifest.json"))
+    active_scope_store().map(|s| s.manifest_path())
+}
+
+pub fn profile_sync_config_path() -> Result<PathBuf> {
+    profile_dir().map(|p| p.join("sync.json"))
 }
 
 pub fn profile_core_dir() -> Result<PathBuf> {
-    profile_dir().map(|p| p.join("core"))
+    active_scope_store().map(|s| s.core_dir())
+}
+
+pub fn profile_os_dir() -> Result<PathBuf> {
+    active_scope_store().map(|s| s.os_dir())
+}
+
+pub fn profile_device_dir() -> Result<PathBuf> {
+    active_scope_store().map(|s| s.device_dir())
 }
 
 pub fn profile_plugins_lock_path() -> Result<PathBuf> {
-    profile_dir().map(|p| p.join("plugins.lock.json"))
+    active_scope_store().map(|s| s.plugins_lock_path())
 }
 
 pub fn profile_plugin_configs_dir() -> Result<PathBuf> {
-    profile_dir().map(|p| p.join("plugin-configs"))
+    active_scope_store().map(|s| s.core_plugin_configs_dir())
 }
 
 pub fn profile_plugin_config_path(plugin_id: &str) -> Result<PathBuf> {
-    if !is_safe_path_component(plugin_id) {
-        return Err(anyhow!("invalid plugin id"));
-    }
-    profile_plugin_configs_dir().map(|p| p.join(format!("{}.json", plugin_id)))
+    active_scope_store()?.core_plugin_config_path(plugin_id)
 }
 
 pub fn hotkeys_path() -> Result<PathBuf> {
-    preferred_profile_path(profile_core_dir()?.join("hotkeys.json"), "hotkeys.json")
+    active_scope_store().map(|s| s.hotkeys_path())
+}
+
+pub fn shortcuts_path() -> Result<PathBuf> {
+    active_scope_store().map(|s| s.shortcuts_path())
+}
+
+pub fn task_runner_config_path() -> Result<PathBuf> {
+    active_scope_store().map(|s| s.task_runner_path())
+}
+
+fn active_scope_store() -> Result<crate::features::profile::ProfileScopeStore> {
+    crate::features::profile::ProfileScopeStore::from_active()
 }
 
 pub fn github_token_path() -> Result<PathBuf> {
@@ -172,15 +226,15 @@ pub fn github_auth_path() -> Result<PathBuf> {
 }
 
 pub fn sync_dir() -> Result<PathBuf> {
-    shared_config_dir().map(|p| p.join("sync"))
+    active_scope_store().map(|s| s.device_sync_dir())
 }
 
 pub fn sync_state_path() -> Result<PathBuf> {
-    sync_dir().map(|p| p.join("state.json"))
+    active_scope_store().map(|s| s.sync_state_path())
 }
 
 pub fn sync_backups_dir() -> Result<PathBuf> {
-    sync_dir().map(|p| p.join("backups"))
+    active_scope_store().map(|s| s.sync_backups_dir())
 }
 
 pub fn suppressed_errors_path() -> Result<PathBuf> {
@@ -189,17 +243,6 @@ pub fn suppressed_errors_path() -> Result<PathBuf> {
 
 pub fn plugin_cache_path() -> Result<PathBuf> {
     Ok(runtime_cache_dir().join("plugin-cache.json"))
-}
-
-pub fn shortcuts_path() -> Result<PathBuf> {
-    preferred_profile_path(profile_core_dir()?.join("shortcuts.json"), "shortcuts.json")
-}
-
-pub fn task_runner_config_path() -> Result<PathBuf> {
-    preferred_profile_path(
-        profile_core_dir()?.join("task-runner.json"),
-        "task-runner.json",
-    )
 }
 
 #[cfg(feature = "dev")]
@@ -261,29 +304,24 @@ pub fn repo_root_from_manifest_dir() -> PathBuf {
     }
 }
 
-fn preferred_profile_path(profile_path: PathBuf, legacy_name: &str) -> Result<PathBuf> {
-    if profile_path.exists() {
-        return Ok(profile_path);
-    }
-    let legacy_path = shared_config_dir()?.join(legacy_name);
-    if legacy_path.exists() {
-        return Ok(legacy_path);
-    }
-    Ok(profile_path)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn paths_have_correct_suffixes() {
+        let tmp = TempDir::new().unwrap();
+        let _guard = push_test_path_root(tmp.path());
+
         let cases: Vec<(Result<PathBuf>, &str)> = vec![
             (plugins_dir(), "plugins"),
             (profile_dir(), "profile"),
-            (hotkeys_path(), "hotkeys.json"),
             (profile_plugins_lock_path(), "plugins.lock.json"),
             (profile_plugin_configs_dir(), "plugin-configs"),
+            (hotkeys_path(), "hotkeys.json"),
+            (shortcuts_path(), "shortcuts.json"),
+            (task_runner_config_path(), "task-runner.json"),
             (github_token_path(), ".github-token"),
             (github_auth_path(), ".github-auth.json"),
             (sync_dir(), "sync"),
@@ -402,5 +440,122 @@ mod tests {
         for s in invalid {
             assert!(!is_safe_path_component(s), "should be invalid: {:?}", s);
         }
+    }
+
+    #[test]
+    fn active_profile_name_defaults_when_no_marker() {
+        let tmp = TempDir::new().unwrap();
+        let _guard = push_test_path_root(tmp.path());
+        assert_eq!(active_profile_name(), DEFAULT_PROFILE_NAME);
+    }
+
+    #[test]
+    fn active_profile_name_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let _guard = push_test_path_root(tmp.path());
+
+        let cases = ["work", "personal", "p1", "MixedCase"];
+        for name in cases {
+            set_active_profile_name(name).unwrap();
+            assert_eq!(active_profile_name(), name, "roundtrip: {}", name);
+        }
+    }
+
+    #[test]
+    fn active_profile_name_falls_back_on_invalid_marker_content() {
+        let tmp = TempDir::new().unwrap();
+        let _guard = push_test_path_root(tmp.path());
+
+        let marker = active_profile_marker_path().unwrap();
+        file_io::ensure_parent_dir(&marker).unwrap();
+        fs::write(&marker, "../escape\n").unwrap();
+
+        assert_eq!(active_profile_name(), DEFAULT_PROFILE_NAME);
+    }
+
+    #[test]
+    fn set_active_profile_name_rejects_invalid_names() {
+        let tmp = TempDir::new().unwrap();
+        let _guard = push_test_path_root(tmp.path());
+
+        let invalid = [
+            "",
+            "../escape",
+            "with space",
+            "-leading-dash",
+            "with/slash",
+            "with\\backslash",
+        ];
+        for name in invalid {
+            assert!(
+                set_active_profile_name(name).is_err(),
+                "should reject: {:?}",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn profile_dirs_reflect_active_profile() {
+        let tmp = TempDir::new().unwrap();
+        let _guard = push_test_path_root(tmp.path());
+
+        set_active_profile_name("work").unwrap();
+        let cases: [(Result<PathBuf>, &str); 4] = [
+            (profile_active_dir(), "work"),
+            (profile_core_dir(), "work/core"),
+            (profile_device_dir(), "work/device"),
+            (profile_plugins_lock_path(), "work/core/plugins.lock.json"),
+        ];
+        for (result, expected_suffix) in cases {
+            let path = result.unwrap();
+            assert!(
+                path.ends_with(expected_suffix),
+                "{:?} should end with {}",
+                path,
+                expected_suffix
+            );
+        }
+    }
+
+    #[test]
+    fn profile_os_dir_uses_current_os() {
+        let tmp = TempDir::new().unwrap();
+        let _guard = push_test_path_root(tmp.path());
+
+        let os_dir = profile_os_dir().unwrap();
+        let expected_tail = format!("os/{}", std::env::consts::OS);
+        assert!(
+            os_dir.to_string_lossy().contains(&expected_tail),
+            "os dir should include current OS: {:?}",
+            os_dir
+        );
+    }
+
+    #[test]
+    fn switching_profile_changes_resolved_paths() {
+        let tmp = TempDir::new().unwrap();
+        let _guard = push_test_path_root(tmp.path());
+
+        set_active_profile_name("personal").unwrap();
+        let personal_hotkeys = hotkeys_path().unwrap();
+        let personal_shortcuts = shortcuts_path().unwrap();
+
+        set_active_profile_name("work").unwrap();
+        let work_hotkeys = hotkeys_path().unwrap();
+        let work_shortcuts = shortcuts_path().unwrap();
+
+        assert!(personal_hotkeys
+            .to_string_lossy()
+            .contains("/profile/personal/os/"));
+        assert!(work_hotkeys.to_string_lossy().contains("/profile/work/os/"));
+        assert!(personal_shortcuts
+            .to_string_lossy()
+            .contains("/profile/personal/os/"));
+        assert!(work_shortcuts
+            .to_string_lossy()
+            .contains("/profile/work/os/"));
+        assert_ne!(personal_hotkeys, work_hotkeys);
+        assert_ne!(personal_shortcuts, work_shortcuts);
     }
 }

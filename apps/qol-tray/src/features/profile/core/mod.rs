@@ -6,9 +6,7 @@ mod storage;
 mod tests;
 mod types;
 
-pub use bundle::{
-    build_export_bundle, build_export_bundle_json, build_sync_document, build_sync_document_json,
-};
+pub use bundle::{build_export_bundle, build_export_bundle_json};
 pub use import::apply_import_bundle;
 pub use plugins_lock::{import_plugins, sync_plugins_lock_from_plugins};
 pub use storage::{
@@ -18,5 +16,5 @@ pub use storage::{
 };
 pub use types::{
     ApplyProfileResult, ImportPluginResult, PluginLockEntry, PluginsLock, ProfileExportBundle,
-    ProfileImportBundle, ProfileManifest, ProfileSyncDocument, CURRENT_PROFILE_VERSION,
+    ProfileImportBundle, ProfileManifest, CURRENT_PROFILE_VERSION,
 };

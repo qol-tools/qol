@@ -18,12 +18,34 @@ export function useSyncActions({
     applySyncStatus,
     form,
     refreshSyncStatus,
+    refreshAuthHealth,
 }) {
     const [busyAction, setBusyAction] = useState('');
     const [lastImport, setLastImport] = useState(null);
     const [authPrompt, setAuthPrompt] = useState(null);
     const syncBusy = isSyncBusy(busyAction);
     const importBusy = isImportBusy(busyAction);
+
+    const handleReauthorize = useCallback(async () => {
+        setBusyAction('reauth');
+        try {
+            const start = await startGitHubAuth();
+            try { await navigator.clipboard.writeText(start.user_code); } catch (_) {}
+            setAuthPrompt({
+                userCode: start.user_code,
+                verificationUri: start.verification_uri,
+                copied: true,
+            });
+            await waitForGitHubAuth(start.session_id, start.interval);
+            setAuthPrompt(null);
+            await refreshAuthHealth?.();
+            toast('success', 'GitHub reauthorized.');
+        } catch (error) {
+            setAuthPrompt(null);
+            toast('error', `Reauthorization failed: ${error.message}`);
+        }
+        setBusyAction('');
+    }, [refreshAuthHealth]);
 
     const openAuthLink = useCallback(() => {
         if (authPrompt?.verificationUri) {
@@ -65,7 +87,7 @@ export function useSyncActions({
             const providerKind = activeProvider?.kind || form?.provider || '';
             if (providerKind === 'github') {
                 const authStatus = await fetchGitHubAuthStatus();
-                if (!authStatus?.connected || authStatus?.source !== 'oauth') {
+                if (needsGitHubReauth(authStatus)) {
                     const start = await startGitHubAuth();
                     try { await navigator.clipboard.writeText(start.user_code); } catch (_) {}
                     setAuthPrompt({
@@ -75,6 +97,7 @@ export function useSyncActions({
                     });
                     await waitForGitHubAuth(start.session_id, start.interval);
                     setAuthPrompt(null);
+                    await refreshAuthHealth?.();
                 }
                 const result = await bootstrapGitHubProfileSync();
                 applySyncStatus(result.status);
@@ -90,7 +113,7 @@ export function useSyncActions({
             refreshSyncStatus?.();
         }
         setBusyAction('');
-    }, [activeProvider, applySyncStatus, form, refreshSyncStatus]);
+    }, [activeProvider, applySyncStatus, form, refreshAuthHealth, refreshSyncStatus]);
 
     const handlePull = useCallback(async () => {
         setBusyAction('pull');
@@ -119,11 +142,12 @@ export function useSyncActions({
         try {
             const result = await disconnectProfileSync();
             applySyncStatus(result.status);
+            await refreshAuthHealth?.();
         } catch (error) {
             toast('error', `Failed to disconnect cloud sync: ${error.message}`);
         }
         setBusyAction('');
-    }, [applySyncStatus]);
+    }, [applySyncStatus, refreshAuthHealth]);
 
     const handleAcknowledge = useCallback(async () => {
         setBusyAction('acknowledge');
@@ -146,11 +170,19 @@ export function useSyncActions({
         handleImport,
         handlePull,
         handlePush,
+        handleReauthorize,
         importBusy,
         lastImport,
         openAuthLink,
         syncBusy,
     };
+}
+
+function needsGitHubReauth(authStatus) {
+    if (!authStatus?.connected) return true;
+    if (authStatus?.source !== 'oauth') return true;
+    const scopes = authStatus?.scopes || [];
+    return !scopes.includes('repo');
 }
 
 function isSyncBusy(busyAction) {

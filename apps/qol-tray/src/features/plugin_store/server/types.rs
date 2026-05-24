@@ -104,6 +104,14 @@ impl FromRef<AppState> for crate::features::github_auth::GitHubAuthHttpState {
     }
 }
 
+impl FromRef<AppState> for crate::features::auth::AuthHttpState {
+    fn from_ref(state: &AppState) -> Self {
+        Self {
+            github_auth_service: state.github_auth_service.clone(),
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub(super) struct PluginInfo {
     pub(super) id: String,

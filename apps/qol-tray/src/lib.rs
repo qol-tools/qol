@@ -12,6 +12,7 @@ pub mod housekeeping;
 pub mod installer;
 pub mod logging;
 pub mod menu;
+pub mod migrations_startup;
 pub mod mode;
 pub mod paths;
 pub mod plugins;
