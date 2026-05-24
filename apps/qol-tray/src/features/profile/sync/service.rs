@@ -540,13 +540,15 @@ fn create_staging_dir(profile_dir: &Path) -> Result<PathBuf> {
         let name = format!(".sync-staging-{pid}-{attempt}");
         let candidate = parent.join(&name);
         if !candidate.exists() {
-            std::fs::create_dir_all(&candidate).with_context(|| {
-                format!("create staging dir {}", candidate.display())
-            })?;
+            std::fs::create_dir_all(&candidate)
+                .with_context(|| format!("create staging dir {}", candidate.display()))?;
             return Ok(candidate);
         }
     }
-    anyhow::bail!("could not allocate a staging directory under {}", parent.display())
+    anyhow::bail!(
+        "could not allocate a staging directory under {}",
+        parent.display()
+    )
 }
 
 fn ensure_gitignore(repo_path: &Path) -> Result<()> {

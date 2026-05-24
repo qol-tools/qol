@@ -255,7 +255,9 @@ mod tests {
 
     fn init_bare_origin(dir: &Path) -> String {
         Repository::init_bare(dir).unwrap();
-        format!("file://{}", dir.display())
+        let normalized = dir.display().to_string().replace('\\', "/");
+        let trimmed = normalized.trim_start_matches('/');
+        format!("file:///{}", trimmed)
     }
 
     fn write_file(path: &Path, contents: &str) {
