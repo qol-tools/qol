@@ -233,13 +233,13 @@ mod tests {
         default_scope: Option<ConfigScope>,
         per_field: &[(&str, ConfigScope)],
     ) -> ConfigDeclarations {
-        let mut decl = ConfigDeclarations::default();
-        decl.default_scope = default_scope;
-        decl.scope = per_field
-            .iter()
-            .map(|(k, s)| ((*k).to_string(), *s))
-            .collect();
-        decl
+        ConfigDeclarations {
+            default_scope,
+            scope: per_field
+                .iter()
+                .map(|(k, s)| ((*k).to_string(), *s))
+                .collect(),
+        }
     }
 
     #[test]

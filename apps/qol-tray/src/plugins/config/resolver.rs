@@ -99,8 +99,10 @@ mod tests {
         platforms: Option<Vec<&str>>,
         default_scope: Option<ConfigScope>,
     ) -> PluginManifest {
-        let mut config = ConfigDeclarations::default();
-        config.default_scope = default_scope;
+        let config = ConfigDeclarations {
+            default_scope,
+            ..Default::default()
+        };
         PluginManifest {
             manifest_version: 1,
             plugin: PluginInfo {
