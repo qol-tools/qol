@@ -65,7 +65,7 @@ export function ProfileSelectField({ label, hint = '', value, options, labels, c
     if (!sel) return null;
     if (compact) {
         return html`<${Surface} className="profile-select-surface profile-select-compact" ...${sel} onActivate=${activateSelect}>
-            <${CustomSelect} value=${value} options=${options} labels=${labels} onChange=${onChange} />
+            <${CustomSelect} value=${value} options=${options} labels=${labels} onChange=${onChange} compact=${compact} />
         <//>`;
     }
     const cls = ['form-group', 'profile-input-surface', 'profile-select-surface', className].filter(Boolean).join(' ');
@@ -166,4 +166,3 @@ export function ImportFeedback({ lastImport }) {
         </div>
     `;
 }
-

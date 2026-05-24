@@ -1,13 +1,13 @@
 import { html } from '../../lib/html.js';
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { PageHeader } from '../../components/PageHeader.js';
 import { SurfaceContainer } from '../../lib/components/SurfaceContainer.js';
-import { Surface } from '../../lib/components/Surface.js';
-import { Expander, ExpanderTrigger, ExpanderBody } from '../../lib/components/Expander.js';
+import { Surface, useInputSurface } from '../../lib/components/Surface.js';
 import { Badge, HealthDot, Alert } from '../../lib/components/StatusIndicators.js';
 import { AuthHealthBanner } from '../../lib/components/AuthHealthBanner.js';
 import { insufficientScopeIssue } from '../../features/auth/actions.js';
 import { BackupDetailContent } from '../../components/domain-rows/BackupRow.js';
+import { IconChevron } from '../../assets/icon-chevron.js';
 import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../../app/view-keyboard-context.js';
 import { toast } from '../../lib/toast.js';
@@ -39,6 +39,8 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
     useRegisterViewKeyboard('profile', ctrl.handleKey, ctrl.isBlocking);
     useRegisterCommands('profile', ctrl.commands);
     const [showSettings, setShowSettings] = useState(false);
+    const settingsPanelRef = useRef(null);
+    const shouldDiveSettingsRef = useRef(false);
 
     useEffect(() => {
         backupPreviewSlot.set({
@@ -52,6 +54,42 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
     const settingsSurface = ctrl.surfaceById.get('settings');
     const githubAuthIssue = insufficientScopeIssue(ctrl.authHealth, 'github');
     const reauthBusy = ctrl.busyAction === 'reauth';
+    const toggleSettings = () => {
+        ctrl.setSelectedIndex(settingsSurface?.index);
+        setShowSettings(current => {
+            const next = !current;
+            shouldDiveSettingsRef.current = next;
+            return next;
+        });
+    };
+    const settingsTrigger = useInputSurface({
+        index: settingsSurface?.index,
+        selected: settingsSurface?.index === ctrl.selectedIndex,
+        onSelect: ctrl.setSelectedIndex,
+        onActivate: toggleSettings,
+    });
+    const closeSettingsPanel = (event) => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        event.stopPropagation();
+        shouldDiveSettingsRef.current = false;
+        settingsTrigger.ref.current?.removeAttribute('data-dive-source');
+        settingsTrigger.ref.current?.focus?.({ preventScroll: true });
+        ctrl.setSelectedIndex(settingsSurface?.index);
+        setShowSettings(false);
+    };
+
+    useLayoutEffect(() => {
+        if (!showSettings) {
+            settingsTrigger.ref.current?.removeAttribute('data-dive-source');
+            return;
+        }
+        if (!shouldDiveSettingsRef.current) return;
+        shouldDiveSettingsRef.current = false;
+        settingsTrigger.ref.current?.setAttribute('data-dive-source', '');
+        const first = settingsPanelRef.current?.querySelector('[data-selected-surface]');
+        first?.focus?.({ preventScroll: true });
+    }, [showSettings]);
 
     return html`
         <div id="profile-page" class="view-container content-shell profile-view-shell">
@@ -114,15 +152,19 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                                 `}
 
                                 ${!ctrl.authPrompt && html`
-                                    <${Expander}
-                                        open=${showSettings}
-                                        onToggle=${() => { ctrl.setSelectedIndex(settingsSurface?.index); setShowSettings(!showSettings); }}
-                                        index=${settingsSurface?.index}
-                                        selected=${settingsSurface?.index === ctrl.selectedIndex}
-                                        onSelect=${ctrl.setSelectedIndex}
-                                    >
-                                        <${ExpanderTrigger}>Settings<//>
-                                        <${ExpanderBody}>
+                                    <div class="profile-settings-group" data-expanded=${showSettings ? 'true' : 'false'}>
+                                        <button
+                                            ref=${settingsTrigger.ref}
+                                            class=${`btn btn-ghost profile-settings-trigger ${showSettings ? 'is-open' : ''}`}
+                                            type="button"
+                                            aria-expanded=${showSettings ? 'true' : 'false'}
+                                            ...${settingsTrigger.attrs}
+                                        >
+                                            <span class="btn-icon btn-icon-chevron"><${IconChevron} size=${11} /></span>
+                                            <span>Settings</span>
+                                        </button>
+                                        ${showSettings && html`
+                                        <${SurfaceContainer} className="profile-settings-panel" containerRef=${settingsPanelRef} onKeyDown=${closeSettingsPanel}>
                                             <div class="profile-settings-field">
                                                 <span class="profile-settings-label">Provider</span>
                                                 <${ProfileSelectField}
@@ -145,7 +187,8 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                                                 })
                                             )}
                                         <//>
-                                    <//>
+                                        `}
+                                    </div>
                                 `}
                             </section>
 
