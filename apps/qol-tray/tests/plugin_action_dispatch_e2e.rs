@@ -1,5 +1,6 @@
 #![cfg(unix)]
 #![cfg(debug_assertions)]
+#![cfg(feature = "dev")]
 
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
@@ -98,6 +99,7 @@ fn install_plugin(plugin_id: &str, marker_path: &Path) -> (PathBuf, PathBuf) {
 
 struct FakeDaemon {
     handle: Option<JoinHandle<()>>,
+    socket_path: PathBuf,
 }
 
 impl FakeDaemon {
@@ -122,6 +124,7 @@ impl FakeDaemon {
             .expect("spawn fake daemon thread");
         Self {
             handle: Some(handle),
+            socket_path: socket_path.to_path_buf(),
         }
     }
 }
@@ -129,6 +132,7 @@ impl FakeDaemon {
 impl Drop for FakeDaemon {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
+            let _ = std::os::unix::net::UnixStream::connect(&self.socket_path);
             let _ = handle.join();
         }
     }
