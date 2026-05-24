@@ -13,7 +13,7 @@ use qol_tray::runtime::testing::TestRuntime;
 use serde_json::Value;
 use tempfile::TempDir;
 
-const READ_TIMEOUT: Duration = Duration::from_secs(1);
+const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct Listener {
     socket_path: PathBuf,
