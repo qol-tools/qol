@@ -159,7 +159,7 @@ fn load_configs_parses_valid_json() {
         "plugin1": {"enabled": true},
         "plugin2": {"value": 42}
     });
-    fs::create_dir_all(&manager.store().core_plugin_configs_dir()).unwrap();
+    fs::create_dir_all(manager.store().core_plugin_configs_dir()).unwrap();
     fs::write(
         manager
             .store()
@@ -246,7 +246,7 @@ fn get_config_restores_from_core_slice_when_runtime_missing() {
     let _env = ConfigEnvGuard::new(env_root.path());
     let (manager, _temp_base, _temp_plugins) = setup_test_env();
     let expected_config = json!({"restored": true, "value": 123});
-    fs::create_dir_all(&manager.store().core_plugin_configs_dir()).unwrap();
+    fs::create_dir_all(manager.store().core_plugin_configs_dir()).unwrap();
     fs::write(
         manager
             .store()
@@ -491,12 +491,13 @@ mod scoped_io {
         default_scope: Option<ConfigScope>,
         per_field: &[(&str, ConfigScope)],
     ) -> PluginManifest {
-        let mut config = ConfigDeclarations::default();
-        config.default_scope = default_scope;
-        config.scope = per_field
-            .iter()
-            .map(|(k, s)| ((*k).to_string(), *s))
-            .collect::<HashMap<_, _>>();
+        let config = ConfigDeclarations {
+            default_scope,
+            scope: per_field
+                .iter()
+                .map(|(k, s)| ((*k).to_string(), *s))
+                .collect::<HashMap<_, _>>(),
+        };
         PluginManifest {
             manifest_version: 1,
             plugin: PluginInfo {
