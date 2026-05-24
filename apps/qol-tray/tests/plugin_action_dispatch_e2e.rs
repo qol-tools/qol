@@ -112,6 +112,7 @@ impl FakeDaemon {
                 let Ok((mut stream, _)) = listener.accept() else {
                     return;
                 };
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
                 let mut reader =
                     BufReader::new(stream.try_clone().expect("clone fake daemon stream"));
                 let mut line = String::new();
