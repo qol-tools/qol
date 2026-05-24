@@ -19,7 +19,6 @@ function ReloadCard({ building, buildResults, lastReload, error, reloadPlugins }
                 ${lastReload && html`<span class="last-action">Last: ${lastReload}</span>`}
                 ${error && html`<span class="error-msg">${error}</span>`}
             </div>
-            <div class="dev-card-hint"><kbd>Ctrl+r</kbd></div>
         <//>
     `;
 }

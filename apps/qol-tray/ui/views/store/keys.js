@@ -6,11 +6,6 @@ export function handleStoreKey(e, showTokenInputRef, actions) {
         actions.closeTokenInput();
         return;
     }
-    if ((e.ctrlKey || e.metaKey) && e.key === 'r') {
-        e.preventDefault();
-        actions.refreshPlugins();
-        return;
-    }
     handleGridKey(e, actions);
 }
 

@@ -1,6 +1,4 @@
 import { html } from '../../../lib/html.js';
-import { useCallback } from 'preact/hooks';
-import { useRegisterViewKeyboard } from '../../../app/view-keyboard-context.js';
 import { PageHeader } from '../../../components/PageHeader.js';
 import { SurfaceContainer } from '../../../lib/components/SurfaceContainer.js';
 import { PluginsSection } from './PluginsSection.js';
@@ -9,12 +7,6 @@ import { ActionsSection } from './ActionsSection.js';
 import { ToolingGhAccountSection } from './ToolingGhAccountSection.js';
 
 export function DevLayout({ ctrl, containerRef }) {
-    const handleKey = useCallback((event) => {
-        ctrl.handleKey(event);
-    }, [ctrl.handleKey]);
-
-    useRegisterViewKeyboard('dev', handleKey);
-
     return html`
         <div class="view-container content-shell dev-view-shell" ref=${containerRef}>
             <${PageHeader} />

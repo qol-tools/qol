@@ -333,10 +333,6 @@
     font-size: var(--fs-md-minus);
 }
 
-.dev-card-hint {
-    color: var(--text-faint);
-}
-
 .dev-columns {
     display: grid;
     grid-template-columns: 1fr 1fr;

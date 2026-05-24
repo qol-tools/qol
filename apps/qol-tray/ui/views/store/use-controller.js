@@ -21,7 +21,7 @@ export function useStoreController() {
     const nav = useStoreNav(data.plugins, searchQuery);
     const install = useStoreInstall(data.pluginsRef, data.loadPlugins, installing);
     useInitialLoad(token.setHasToken, data.loadPlugins);
-    const handleKey = useKeyHandler(token.showTokenInputRef, token.view, data, nav, install, installing.has);
+    const handleKey = useKeyHandler(token.showTokenInputRef, token.view, nav, install, installing.has);
     const handleCardClick = useCardClick(install.installPlugin, nav.setSelectedIndex, nav.selectedIndexRef);
     return {
         handleKey, handleCardClick,
@@ -40,10 +40,9 @@ function useInitialLoad(setHasToken, loadPlugins) {
     }, [loadPlugins]);
 }
 
-function useKeyHandler(showTokenInputRef, tokenView, data, nav, install, isInstalling) {
+function useKeyHandler(showTokenInputRef, tokenView, nav, install, isInstalling) {
     return useCallback(e => {
         handleStoreKey(e, showTokenInputRef, {
-            refreshPlugins: data.refreshPlugins,
             closeTokenInput: tokenView.closeTokenInput,
             navigateInGrid: nav.navigateInGrid,
             filteredRef: nav.filteredRef,
@@ -51,7 +50,7 @@ function useKeyHandler(showTokenInputRef, tokenView, data, nav, install, isInsta
             isInstalling,
             installPlugin: install.installPlugin,
         });
-    }, [showTokenInputRef, tokenView, data, nav, install, isInstalling]);
+    }, [showTokenInputRef, tokenView, nav, install, isInstalling]);
 }
 
 function useCardClick(installPlugin, setSelectedIndex, selectedIndexRef) {
