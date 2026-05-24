@@ -68,7 +68,10 @@ mod tests {
         ensure_gitattributes(dir.path()).unwrap();
 
         let written = std::fs::read_to_string(dir.path().join(".gitattributes")).unwrap();
-        assert_eq!(written, custom, "user customizations must not be overwritten");
+        assert_eq!(
+            written, custom,
+            "user customizations must not be overwritten"
+        );
     }
 
     #[test]

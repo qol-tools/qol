@@ -208,7 +208,11 @@ mod tests {
         assert_eq!(tr["actions"]["run-foo"]["cmd"], json!("foo"));
 
         let alt_tab = parse(&out[&PathBuf::from("core/plugin-configs/plugin-alt-tab.json")]);
-        assert_eq!(alt_tab, json!({ "preview_size": 320 }), "plugin config unwrapped");
+        assert_eq!(
+            alt_tab,
+            json!({ "preview_size": 320 }),
+            "plugin config unwrapped"
+        );
     }
 
     #[test]

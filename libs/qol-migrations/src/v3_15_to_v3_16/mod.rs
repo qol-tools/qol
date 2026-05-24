@@ -219,7 +219,10 @@ mod tests {
         assert!(!profile.join("manifest.json").exists());
         assert!(!profile.join("plugins.lock.json").exists());
         assert!(!profile.join("plugin-configs").exists());
-        assert!(profile.join("registry.json").exists(), "registry must survive");
+        assert!(
+            profile.join("registry.json").exists(),
+            "registry must survive"
+        );
         assert!(archive_dir.join("manifest.json").exists());
         assert!(archive_dir.join("plugins.lock.json").exists());
         assert!(archive_dir.join("plugin-configs").join("foo.json").exists());
@@ -245,11 +248,17 @@ mod tests {
         let default = profile.join("default");
         write(&default.join("manifest.json"), b"{\"version\":1}");
         write(
-            &default.join("os").join(current_os_subdir()).join("hotkeys.json"),
+            &default
+                .join("os")
+                .join(current_os_subdir())
+                .join("hotkeys.json"),
             b"{}",
         );
         write(&default.join("device").join("shortcuts.json"), b"{}");
-        write(&default.join("core").join("plugin-configs").join("foo.json"), b"{}");
+        write(
+            &default.join("core").join("plugin-configs").join("foo.json"),
+            b"{}",
+        );
 
         assert!(!V3_15ToV3_16.applies(dir.path()).unwrap());
     }
@@ -264,9 +273,18 @@ mod tests {
         write(&profile.join("registry.json"), b"{}");
         let default = profile.join("default");
         write(&default.join("manifest.json"), b"{\"version\":1}");
-        write(&default.join("core").join("hotkeys.json"), b"{\"hotkeys\":[]}");
-        write(&default.join("core").join("shortcuts.json"), b"{\"shortcuts\":[]}");
-        write(&default.join("core").join("task-runner.json"), b"{\"actions\":{}}");
+        write(
+            &default.join("core").join("hotkeys.json"),
+            b"{\"hotkeys\":[]}",
+        );
+        write(
+            &default.join("core").join("shortcuts.json"),
+            b"{\"shortcuts\":[]}",
+        );
+        write(
+            &default.join("core").join("task-runner.json"),
+            b"{\"actions\":{}}",
+        );
         write(&default.join("plugin-configs").join("foo.json"), b"{}");
 
         V3_15ToV3_16.migrate(dir.path(), &archive_dir).unwrap();
@@ -275,11 +293,21 @@ mod tests {
         assert!(os_dir.join("hotkeys.json").is_file(), "hotkeys at os/<os>");
         assert!(default.join("device").join("shortcuts.json").is_file());
         assert!(default.join("device").join("task-runner.json").is_file());
-        assert!(default.join("core").join("plugin-configs").join("foo.json").is_file());
-        assert!(!default.join("core").join("hotkeys.json").exists(), "old hotkeys removed");
+        assert!(default
+            .join("core")
+            .join("plugin-configs")
+            .join("foo.json")
+            .is_file());
+        assert!(
+            !default.join("core").join("hotkeys.json").exists(),
+            "old hotkeys removed"
+        );
         assert!(!default.join("core").join("shortcuts.json").exists());
         assert!(!default.join("core").join("task-runner.json").exists());
-        assert!(!default.join("plugin-configs").exists(), "old plugin-configs dir removed");
+        assert!(
+            !default.join("plugin-configs").exists(),
+            "old plugin-configs dir removed"
+        );
     }
 
     #[test]
@@ -301,10 +329,16 @@ mod tests {
         for name in ["default", "work"] {
             let p = profile.join(name);
             assert!(
-                p.join("os").join(current_os_subdir()).join("hotkeys.json").is_file(),
+                p.join("os")
+                    .join(current_os_subdir())
+                    .join("hotkeys.json")
+                    .is_file(),
                 "{name}: hotkeys at os/<os>"
             );
-            assert!(!p.join("core").join("hotkeys.json").exists(), "{name}: old removed");
+            assert!(
+                !p.join("core").join("hotkeys.json").exists(),
+                "{name}: old removed"
+            );
         }
     }
 
@@ -318,7 +352,10 @@ mod tests {
         write(&profile.join("registry.json"), b"{}");
         let default = profile.join("default");
         write(&default.join("manifest.json"), b"{\"version\":1}");
-        write(&default.join("plugin-configs").join("foo.json"), b"{\"real\":true}");
+        write(
+            &default.join("plugin-configs").join("foo.json"),
+            b"{\"real\":true}",
+        );
         std::fs::create_dir_all(default.join("core").join("plugin-configs")).unwrap();
 
         V3_15ToV3_16.migrate(dir.path(), &archive_dir).unwrap();
@@ -342,18 +379,28 @@ mod tests {
         write(&default.join("manifest.json"), b"{\"version\":1}");
         write(&default.join("core").join("hotkeys.json"), b"old");
         write(
-            &default.join("os").join(current_os_subdir()).join("hotkeys.json"),
+            &default
+                .join("os")
+                .join(current_os_subdir())
+                .join("hotkeys.json"),
             b"new",
         );
 
         V3_15ToV3_16.migrate(dir.path(), &archive_dir).unwrap();
 
         let kept = std::fs::read_to_string(
-            default.join("os").join(current_os_subdir()).join("hotkeys.json"),
+            default
+                .join("os")
+                .join(current_os_subdir())
+                .join("hotkeys.json"),
         )
         .unwrap();
         assert_eq!(kept, "new", "destination wins on conflict");
         assert!(!default.join("core").join("hotkeys.json").exists());
-        assert!(archive_dir.join("default").join("core").join("hotkeys.json").is_file());
+        assert!(archive_dir
+            .join("default")
+            .join("core")
+            .join("hotkeys.json")
+            .is_file());
     }
 }

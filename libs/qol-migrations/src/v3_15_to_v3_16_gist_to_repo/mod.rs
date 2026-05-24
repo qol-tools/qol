@@ -49,8 +49,7 @@ impl V3_15ToV3_16GistToRepo {
         let matches: Vec<&GistMetadata> = gists
             .iter()
             .filter(|m| {
-                m.description == GIST_DESCRIPTION
-                    && m.files.iter().any(|f| f == GIST_FILE_NAME)
+                m.description == GIST_DESCRIPTION && m.files.iter().any(|f| f == GIST_FILE_NAME)
             })
             .collect();
 
@@ -130,9 +129,8 @@ impl CloudMigration for V3_15ToV3_16GistToRepo {
         let profile_dir = self.profile_dir(ctx.config_dir);
         for (rel_path, content) in &layout {
             let final_path = profile_dir.join(rel_path);
-            atomic_write_file(&final_path, content).with_context(|| {
-                format!("writing {} from gist", final_path.display())
-            })?;
+            atomic_write_file(&final_path, content)
+                .with_context(|| format!("writing {} from gist", final_path.display()))?;
         }
 
         ensure_marker_or_create(
@@ -163,15 +161,9 @@ fn atomic_write_file(final_path: &Path, content: &[u8]) -> Result<()> {
     let mut tmp = final_path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp: PathBuf = tmp.into();
-    std::fs::write(&tmp, content)
-        .with_context(|| format!("writing tmp {}", tmp.display()))?;
-    std::fs::rename(&tmp, final_path).with_context(|| {
-        format!(
-            "renaming {} -> {}",
-            tmp.display(),
-            final_path.display()
-        )
-    })?;
+    std::fs::write(&tmp, content).with_context(|| format!("writing tmp {}", tmp.display()))?;
+    std::fs::rename(&tmp, final_path)
+        .with_context(|| format!("renaming {} -> {}", tmp.display(), final_path.display()))?;
     Ok(())
 }
 
@@ -229,10 +221,7 @@ mod tests {
     fn store_with_matching_gist() -> Arc<MemoryGistStore> {
         let mut store = MemoryGistStore::new();
         let mut files = HashMap::new();
-        files.insert(
-            GIST_FILE_NAME.to_string(),
-            full_gist_blob().to_string(),
-        );
+        files.insert(GIST_FILE_NAME.to_string(), full_gist_blob().to_string());
         store.add_gist(
             meta("matching-gist-id", GIST_DESCRIPTION, &[GIST_FILE_NAME]),
             files,
@@ -260,10 +249,7 @@ mod tests {
     #[tokio::test]
     async fn applies_returns_false_when_marker_already_written() {
         let dir = tempfile::tempdir().unwrap();
-        let marker = dir
-            .path()
-            .join("profile/default")
-            .join(MARKER_FILE_NAME);
+        let marker = dir.path().join("profile/default").join(MARKER_FILE_NAME);
         std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
         std::fs::write(&marker, b"{}").unwrap();
         let migration = migration_with(store_with_matching_gist());
@@ -279,9 +265,7 @@ mod tests {
     #[tokio::test]
     async fn applies_returns_true_when_plugin_manager_wrote_lock_file_but_marker_absent() {
         let dir = tempfile::tempdir().unwrap();
-        let lock = dir
-            .path()
-            .join("profile/default/core/plugins.lock.json");
+        let lock = dir.path().join("profile/default/core/plugins.lock.json");
         std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
         std::fs::write(&lock, b"{}").unwrap();
         let migration = migration_with(store_with_matching_gist());
@@ -335,10 +319,7 @@ mod tests {
             meta("a", GIST_DESCRIPTION, &[GIST_FILE_NAME]),
             files.clone(),
         );
-        store.add_gist(
-            meta("b", GIST_DESCRIPTION, &[GIST_FILE_NAME]),
-            files,
-        );
+        store.add_gist(meta("b", GIST_DESCRIPTION, &[GIST_FILE_NAME]), files);
         let migration = migration_with(Arc::new(store));
         let ctx = MigrationContext {
             config_dir: dir.path(),
@@ -399,9 +380,10 @@ mod tests {
             "hotkeys at os/{target_os}/hotkeys.json"
         );
 
-        let lock: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(profile_dir.join("core/plugins.lock.json")).unwrap())
-                .unwrap();
+        let lock: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(profile_dir.join("core/plugins.lock.json")).unwrap(),
+        )
+        .unwrap();
         assert_eq!(lock["plugins"][0]["id"], json!("plugin-alt-tab"));
 
         let hk: serde_json::Value =

@@ -233,7 +233,12 @@ mod tests {
         let m = marker("abc", "default", 1);
         let err = check_marker_compatible(&m, "abc", "work").unwrap_err();
         let msg = format!("{err}");
-        let needles = ["profile_id", "default", "work", "different qol-tray profile"];
+        let needles = [
+            "profile_id",
+            "default",
+            "work",
+            "different qol-tray profile",
+        ];
         for needle in needles {
             assert!(msg.contains(needle), "missing {needle:?} in {msg}");
         }

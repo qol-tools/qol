@@ -62,7 +62,11 @@ mod tests {
         write_done(dir.path(), name).unwrap();
 
         let expected = dir.path().join(APPLIED_DIR).join(format!("{name}.done"));
-        assert!(expected.is_file(), "expected file at {}", expected.display());
+        assert!(
+            expected.is_file(),
+            "expected file at {}",
+            expected.display()
+        );
     }
 
     #[test]

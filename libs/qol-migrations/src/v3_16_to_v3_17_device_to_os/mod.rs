@@ -102,9 +102,8 @@ impl FileMigration for V3_16ToV3_17DeviceToOs {
                     }
                     let bak = legacy_sidecar_path(&src);
                     if bak.exists() {
-                        std::fs::remove_file(&bak).with_context(|| {
-                            format!("clearing prior sidecar {}", bak.display())
-                        })?;
+                        std::fs::remove_file(&bak)
+                            .with_context(|| format!("clearing prior sidecar {}", bak.display()))?;
                     }
                     std::fs::rename(&src, &bak).with_context(|| {
                         format!(
@@ -183,7 +182,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = setup_profile(dir.path(), "default");
         write(&root.join("device").join("sync").join("state.json"), b"{}");
-        write(&root.join("device").join("sync").join("toggles.json"), b"{}");
+        write(
+            &root.join("device").join("sync").join("toggles.json"),
+            b"{}",
+        );
         assert!(!migration(OS_MAC).applies(dir.path()).unwrap());
     }
 
@@ -255,7 +257,11 @@ mod tests {
             .unwrap();
 
         assert!(!root.join("device").join("task-runner.json").exists());
-        assert!(root.join("os").join(OS_LINUX).join("task-runner.json").is_file());
+        assert!(root
+            .join("os")
+            .join(OS_LINUX)
+            .join("task-runner.json")
+            .is_file());
     }
 
     #[test]
@@ -285,8 +291,16 @@ mod tests {
             .migrate(dir.path(), &empty_archive(dir.path()))
             .unwrap();
 
-        assert!(root.join("os").join(OS_MAC).join("shortcuts.json").is_file());
-        assert!(!root.join("os").join(OS_MAC).join("task-runner.json").exists());
+        assert!(root
+            .join("os")
+            .join(OS_MAC)
+            .join("shortcuts.json")
+            .is_file());
+        assert!(!root
+            .join("os")
+            .join(OS_MAC)
+            .join("task-runner.json")
+            .exists());
     }
 
     #[test]
@@ -432,7 +446,10 @@ mod tests {
     fn migrate_preserves_malformed_json_as_is() {
         let dir = tempfile::tempdir().unwrap();
         let root = setup_profile(dir.path(), "default");
-        write(&root.join("device").join("shortcuts.json"), b"not even json {");
+        write(
+            &root.join("device").join("shortcuts.json"),
+            b"not even json {",
+        );
 
         migration(OS_MAC)
             .migrate(dir.path(), &empty_archive(dir.path()))
@@ -449,15 +466,29 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = setup_profile(dir.path(), "default");
         write(&root.join("device").join("shortcuts.json"), b"{}");
-        write(&root.join("device").join("sync").join("state.json"), b"{\"x\":1}");
-        write(&root.join("device").join("sync").join("toggles.json"), b"{\"y\":2}");
+        write(
+            &root.join("device").join("sync").join("state.json"),
+            b"{\"x\":1}",
+        );
+        write(
+            &root.join("device").join("sync").join("toggles.json"),
+            b"{\"y\":2}",
+        );
 
         migration(OS_MAC)
             .migrate(dir.path(), &empty_archive(dir.path()))
             .unwrap();
 
-        assert!(root.join("device").join("sync").join("state.json").is_file());
-        assert!(root.join("device").join("sync").join("toggles.json").is_file());
+        assert!(root
+            .join("device")
+            .join("sync")
+            .join("state.json")
+            .is_file());
+        assert!(root
+            .join("device")
+            .join("sync")
+            .join("toggles.json")
+            .is_file());
         assert_eq!(
             std::fs::read(root.join("device").join("sync").join("state.json")).unwrap(),
             b"{\"x\":1}",
@@ -489,7 +520,11 @@ mod tests {
         migration("macos")
             .migrate(dir.path(), &empty_archive(dir.path()))
             .unwrap();
-        assert!(root.join("os").join("macos").join("shortcuts.json").is_file());
+        assert!(root
+            .join("os")
+            .join("macos")
+            .join("shortcuts.json")
+            .is_file());
     }
 
     #[test]
@@ -500,7 +535,11 @@ mod tests {
         migration("linux")
             .migrate(dir.path(), &empty_archive(dir.path()))
             .unwrap();
-        assert!(root.join("os").join("linux").join("shortcuts.json").is_file());
+        assert!(root
+            .join("os")
+            .join("linux")
+            .join("shortcuts.json")
+            .is_file());
     }
 
     #[test]
@@ -511,7 +550,11 @@ mod tests {
         migration("windows")
             .migrate(dir.path(), &empty_archive(dir.path()))
             .unwrap();
-        assert!(root.join("os").join("windows").join("shortcuts.json").is_file());
+        assert!(root
+            .join("os")
+            .join("windows")
+            .join("shortcuts.json")
+            .is_file());
     }
 
     #[test]

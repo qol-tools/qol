@@ -74,8 +74,7 @@ fn resolve_target_scope(
     current_os: &str,
 ) -> TargetScope {
     let lock_single = lock.and_then(|e| single_platform(e.platforms.as_deref()));
-    let manifest_single =
-        manifest.and_then(|m| single_platform(m.plugin.platforms.as_deref()));
+    let manifest_single = manifest.and_then(|m| single_platform(m.plugin.platforms.as_deref()));
 
     if let Some(scope) = manifest.and_then(|m| m.config.default_scope.as_deref()) {
         return match scope {
@@ -177,9 +176,9 @@ impl FileMigration for V3_17ToV3_18PluginConfigsByOs {
             if !core_configs.is_dir() {
                 continue;
             }
-            for entry in std::fs::read_dir(&core_configs).with_context(|| {
-                format!("reading {}", core_configs.display())
-            })? {
+            for entry in std::fs::read_dir(&core_configs)
+                .with_context(|| format!("reading {}", core_configs.display()))?
+            {
                 let entry = entry?;
                 if entry.file_type()?.is_file() {
                     return Ok(true);
@@ -275,9 +274,8 @@ impl FileMigration for V3_17ToV3_18PluginConfigsByOs {
                     let dst_bytes = std::fs::read(&dst)
                         .with_context(|| format!("reading {}", dst.display()))?;
                     if src_bytes == dst_bytes {
-                        std::fs::remove_file(&src).with_context(|| {
-                            format!("removing redundant src {}", src.display())
-                        })?;
+                        std::fs::remove_file(&src)
+                            .with_context(|| format!("removing redundant src {}", src.display()))?;
                         log::info!(
                             "[v3.17-to-v3.18] {plugin_id}: src and dst at {} are identical; removed src",
                             dst.display()
@@ -396,7 +394,10 @@ mod tests {
     fn applies_is_true_when_at_least_one_core_plugin_config_exists() {
         let dir = tempfile::tempdir().unwrap();
         let root = setup_profile(dir.path(), "default");
-        write(&root.join("core").join("plugin-configs").join("p.json"), b"{}");
+        write(
+            &root.join("core").join("plugin-configs").join("p.json"),
+            b"{}",
+        );
         assert!(migration(OS_MAC).applies(dir.path()).unwrap());
     }
 
@@ -404,7 +405,10 @@ mod tests {
     fn lock_single_platform_routes_core_config_to_that_os_bucket() {
         let dir = tempfile::tempdir().unwrap();
         let root = setup_profile(dir.path(), "default");
-        let src = root.join("core").join("plugin-configs").join("plugin-keyremap.json");
+        let src = root
+            .join("core")
+            .join("plugin-configs")
+            .join("plugin-keyremap.json");
         write(&src, br#"{"enabled":true}"#);
         write_lock(&root, &[("plugin-keyremap", &["macos"])]);
 
@@ -596,7 +600,10 @@ default_scope = "device"
             .migrate(dir.path(), &empty_archive(dir.path()))
             .unwrap();
 
-        assert!(!src.exists(), "redundant src removed when content matches dst");
+        assert!(
+            !src.exists(),
+            "redundant src removed when content matches dst"
+        );
         let legacy = root
             .join("core")
             .join("plugin-configs")
@@ -659,20 +666,15 @@ default_scope = "device"
         write_lock(&root, &[("plugin-keyremap", &["macos"])]);
 
         let m = migration(OS_LINUX);
-        let first = m
-            .migrate(dir.path(), &empty_archive(dir.path()))
-            .unwrap();
+        let first = m.migrate(dir.path(), &empty_archive(dir.path())).unwrap();
         assert_eq!(first.archived.len(), 1);
 
-        let second = m
-            .migrate(dir.path(), &empty_archive(dir.path()))
-            .unwrap();
+        let second = m.migrate(dir.path(), &empty_archive(dir.path())).unwrap();
         assert!(
             second.archived.is_empty(),
             "second pass moves nothing - core/plugin-configs is empty"
         );
-        let dst = root
-            .join("os/macos/plugin-configs/plugin-keyremap.json");
+        let dst = root.join("os/macos/plugin-configs/plugin-keyremap.json");
         assert_eq!(read(&dst), b"\"data\"");
     }
 
@@ -777,10 +779,7 @@ default_scope = "device"
         write(&collide_dst, b"\"different-dst\"");
         write_lock(
             &root,
-            &[
-                ("plugin-fresh", &["macos"]),
-                ("plugin-collide", &["macos"]),
-            ],
+            &[("plugin-fresh", &["macos"]), ("plugin-collide", &["macos"])],
         );
 
         let report = migration(OS_LINUX)

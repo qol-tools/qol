@@ -182,7 +182,10 @@ mod tests {
             "updated_at": "2026-05-23T12:00:00Z",
         });
         let meta = parse_metadata(&body).unwrap();
-        assert_eq!(meta.description, "", "missing description defaults to empty");
+        assert_eq!(
+            meta.description, "",
+            "missing description defaults to empty"
+        );
         assert!(!meta.public, "missing public defaults to false");
         assert!(meta.files.is_empty(), "missing files defaults to empty");
     }

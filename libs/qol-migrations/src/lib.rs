@@ -233,8 +233,8 @@ fn read_installed_version(config_dir: &Path) -> Result<String> {
     if !path.exists() {
         return Ok(OLDEST_SUPPORTED.to_string());
     }
-    let raw = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let raw =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     Ok(raw.trim().to_string())
 }
 
@@ -462,7 +462,10 @@ mod tests {
             "unexpected error: {msg}"
         );
         assert!(msg.contains("3.14.9"), "should mention installed: {msg}");
-        assert!(msg.contains(OLDEST_SUPPORTED), "should mention oldest: {msg}");
+        assert!(
+            msg.contains(OLDEST_SUPPORTED),
+            "should mention oldest: {msg}"
+        );
     }
 
     #[test]
@@ -525,7 +528,10 @@ mod tests {
                 msg.contains("older than the oldest supported"),
                 "wrong rejection message for {legacy}: {msg}"
             );
-            assert!(msg.contains(legacy), "should mention installed {legacy}: {msg}");
+            assert!(
+                msg.contains(legacy),
+                "should mention installed {legacy}: {msg}"
+            );
         }
     }
 
@@ -581,7 +587,9 @@ mod tests {
     async fn post_auth_writes_host_version_not_lib_version() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx_for(dir.path());
-        run_post_auth_with(&ctx, &PostAuthRegistry::new()).await.unwrap();
+        run_post_auth_with(&ctx, &PostAuthRegistry::new())
+            .await
+            .unwrap();
         let written = std::fs::read_to_string(dir.path().join(VERSION_FILE)).unwrap();
         assert_eq!(written, TEST_HOST);
         assert_ne!(written, env!("CARGO_PKG_VERSION"));
@@ -609,11 +617,7 @@ mod tests {
             ("3.15", "3.15.0", 0),
         ];
         for (a, b, expected) in cases {
-            assert_eq!(
-                compare_semver(a, b),
-                expected,
-                "compare_semver({a}, {b})"
-            );
+            assert_eq!(compare_semver(a, b), expected, "compare_semver({a}, {b})");
         }
     }
 }
