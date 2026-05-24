@@ -524,7 +524,8 @@ mod tests {
         let _guard = push_test_path_root(tmp.path());
 
         let os_dir = profile_os_dir().unwrap();
-        let expected_tail = format!("os/{}", std::env::consts::OS);
+        let sep = std::path::MAIN_SEPARATOR_STR;
+        let expected_tail = format!("os{sep}{}", current_os_subdir());
         assert!(
             os_dir.to_string_lossy().contains(&expected_tail),
             "os dir should include current OS: {:?}",
@@ -545,16 +546,15 @@ mod tests {
         let work_hotkeys = hotkeys_path().unwrap();
         let work_shortcuts = shortcuts_path().unwrap();
 
-        assert!(personal_hotkeys
-            .to_string_lossy()
-            .contains("/profile/personal/os/"));
-        assert!(work_hotkeys.to_string_lossy().contains("/profile/work/os/"));
+        let sep = std::path::MAIN_SEPARATOR_STR;
+        let personal_tail = format!("{sep}profile{sep}personal{sep}os{sep}");
+        let work_tail = format!("{sep}profile{sep}work{sep}os{sep}");
+        assert!(personal_hotkeys.to_string_lossy().contains(&personal_tail));
+        assert!(work_hotkeys.to_string_lossy().contains(&work_tail));
         assert!(personal_shortcuts
             .to_string_lossy()
-            .contains("/profile/personal/os/"));
-        assert!(work_shortcuts
-            .to_string_lossy()
-            .contains("/profile/work/os/"));
+            .contains(&personal_tail));
+        assert!(work_shortcuts.to_string_lossy().contains(&work_tail));
         assert_ne!(personal_hotkeys, work_hotkeys);
         assert_ne!(personal_shortcuts, work_shortcuts);
     }
