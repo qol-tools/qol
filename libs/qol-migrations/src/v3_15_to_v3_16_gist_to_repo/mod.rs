@@ -76,7 +76,7 @@ impl CloudMigration for V3_15ToV3_16GistToRepo {
         };
         if self
             .profile_dir(ctx.config_dir)
-            .join("core/plugins.lock.json")
+            .join(MARKER_FILE_NAME)
             .exists()
         {
             return Ok(false);
@@ -252,12 +252,32 @@ mod tests {
             config_dir: dir.path(),
             github_token: None,
             http: None,
+            host_version: "3.15.1",
         };
         assert!(!migration.applies(&ctx).await.unwrap());
     }
 
     #[tokio::test]
-    async fn applies_returns_false_when_local_profile_already_populated() {
+    async fn applies_returns_false_when_marker_already_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir
+            .path()
+            .join("profile/default")
+            .join(MARKER_FILE_NAME);
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(&marker, b"{}").unwrap();
+        let migration = migration_with(store_with_matching_gist());
+        let ctx = MigrationContext {
+            config_dir: dir.path(),
+            github_token: Some("tok"),
+            http: None,
+            host_version: "3.15.1",
+        };
+        assert!(!migration.applies(&ctx).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn applies_returns_true_when_plugin_manager_wrote_lock_file_but_marker_absent() {
         let dir = tempfile::tempdir().unwrap();
         let lock = dir
             .path()
@@ -269,8 +289,9 @@ mod tests {
             config_dir: dir.path(),
             github_token: Some("tok"),
             http: None,
+            host_version: "3.15.1",
         };
-        assert!(!migration.applies(&ctx).await.unwrap());
+        assert!(migration.applies(&ctx).await.unwrap());
     }
 
     #[tokio::test]
@@ -286,6 +307,7 @@ mod tests {
             config_dir: dir.path(),
             github_token: Some("tok"),
             http: None,
+            host_version: "3.15.1",
         };
         assert!(!migration.applies(&ctx).await.unwrap());
     }
@@ -298,6 +320,7 @@ mod tests {
             config_dir: dir.path(),
             github_token: Some("tok"),
             http: None,
+            host_version: "3.15.1",
         };
         assert!(migration.applies(&ctx).await.unwrap());
     }
@@ -321,6 +344,7 @@ mod tests {
             config_dir: dir.path(),
             github_token: Some("tok"),
             http: None,
+            host_version: "3.15.1",
         };
         let err = migration.applies(&ctx).await.unwrap_err();
         let msg = format!("{err:#}");
@@ -340,6 +364,7 @@ mod tests {
             config_dir: dir.path(),
             github_token: Some("tok"),
             http: None,
+            host_version: "3.15.1",
         };
         let report = migration.migrate(&ctx, &archive_dir).await.unwrap();
         assert_eq!(report.archived.len(), 0, "gist stays on GitHub");
@@ -350,19 +375,19 @@ mod tests {
             _ => "linux",
         };
 
-        let cases: &[&str] = &[
-            "manifest.json",
-            "core/plugins.lock.json",
-            "device/shortcuts.json",
-            "device/task-runner.json",
-            "core/plugin-configs/plugin-alt-tab.json",
-            "core/plugin-configs/plugin-launcher.json",
-            "core/plugin-configs/plugin-lights.json",
-            "core/plugin-configs/plugin-window-actions.json",
-            "core/plugin-configs/plugin-os-themes.json",
-            "core/plugin-configs/plugin-screen-recorder.json",
+        let cases: Vec<String> = vec![
+            "manifest.json".to_string(),
+            "core/plugins.lock.json".to_string(),
+            format!("os/{target_os}/shortcuts.json"),
+            format!("os/{target_os}/task-runner.json"),
+            "core/plugin-configs/plugin-alt-tab.json".to_string(),
+            "core/plugin-configs/plugin-launcher.json".to_string(),
+            "core/plugin-configs/plugin-lights.json".to_string(),
+            "core/plugin-configs/plugin-window-actions.json".to_string(),
+            "core/plugin-configs/plugin-os-themes.json".to_string(),
+            "core/plugin-configs/plugin-screen-recorder.json".to_string(),
         ];
-        for path in cases {
+        for path in &cases {
             assert!(
                 profile_dir.join(path).is_file(),
                 "expected file written: {path}"
@@ -383,9 +408,10 @@ mod tests {
             serde_json::from_slice(&std::fs::read(&hotkeys_path).unwrap()).unwrap();
         assert_eq!(hk["hotkeys"].as_array().unwrap().len(), 13);
 
-        let sc: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(profile_dir.join("device/shortcuts.json")).unwrap())
-                .unwrap();
+        let sc: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(profile_dir.join(format!("os/{target_os}/shortcuts.json"))).unwrap(),
+        )
+        .unwrap();
         assert_eq!(sc["shortcuts"].as_array().unwrap().len(), 3);
     }
 
@@ -399,6 +425,7 @@ mod tests {
             config_dir: dir.path(),
             github_token: Some("tok"),
             http: None,
+            host_version: "3.15.1",
         };
         migration.migrate(&ctx, &archive_dir).await.unwrap();
 
@@ -421,6 +448,7 @@ mod tests {
             config_dir: dir.path(),
             github_token: Some("tok"),
             http: None,
+            host_version: "3.15.1",
         };
         migration.migrate(&ctx, &archive_dir).await.unwrap();
 

@@ -76,12 +76,12 @@ pub fn transform_gist_v1_to_layout(
     );
 
     out.insert(
-        PathBuf::from("device/shortcuts.json"),
+        PathBuf::from(format!("os/{}/shortcuts.json", target_os)),
         serde_json::to_vec_pretty(&json!({ "shortcuts": shortcuts }))?,
     );
 
     out.insert(
-        PathBuf::from("device/task-runner.json"),
+        PathBuf::from(format!("os/{}/task-runner.json", target_os)),
         serde_json::to_vec_pretty(task_runner)?,
     );
 
@@ -171,8 +171,8 @@ mod tests {
             "manifest.json",
             "core/plugins.lock.json",
             "os/linux/hotkeys.json",
-            "device/shortcuts.json",
-            "device/task-runner.json",
+            "os/linux/shortcuts.json",
+            "os/linux/task-runner.json",
             "core/plugin-configs/plugin-alt-tab.json",
             "core/plugin-configs/plugin-launcher.json",
             "core/plugin-configs/plugin-lights.json",
@@ -201,10 +201,10 @@ mod tests {
         let hk = parse(&out[&PathBuf::from("os/linux/hotkeys.json")]);
         assert_eq!(hk["hotkeys"].as_array().unwrap().len(), 13);
 
-        let sc = parse(&out[&PathBuf::from("device/shortcuts.json")]);
+        let sc = parse(&out[&PathBuf::from("os/linux/shortcuts.json")]);
         assert_eq!(sc["shortcuts"].as_array().unwrap().len(), 3);
 
-        let tr = parse(&out[&PathBuf::from("device/task-runner.json")]);
+        let tr = parse(&out[&PathBuf::from("os/linux/task-runner.json")]);
         assert_eq!(tr["actions"]["run-foo"]["cmd"], json!("foo"));
 
         let alt_tab = parse(&out[&PathBuf::from("core/plugin-configs/plugin-alt-tab.json")]);
@@ -236,12 +236,12 @@ mod tests {
 
         let cases: &[(&str, Value)] = &[
             ("os/linux/hotkeys.json", json!({ "hotkeys": [] })),
-            ("device/shortcuts.json", json!({ "shortcuts": [] })),
+            ("os/linux/shortcuts.json", json!({ "shortcuts": [] })),
             (
                 "core/plugins.lock.json",
                 json!({ "version": 1, "plugins": [] }),
             ),
-            ("device/task-runner.json", json!({ "actions": {} })),
+            ("os/linux/task-runner.json", json!({ "actions": {} })),
             ("manifest.json", json!({ "version": 1 })),
         ];
         for (path, expected) in cases {
@@ -260,20 +260,26 @@ mod tests {
     }
 
     #[test]
-    fn target_os_places_hotkeys_in_correct_subdir() {
+    fn target_os_places_os_bucketed_files_in_correct_subdir() {
         let gist = full_gist();
         let cases = ["linux", "macos", "windows"];
+        let os_bucketed_files = ["hotkeys.json", "shortcuts.json", "task-runner.json"];
         for os in cases {
             let out = transform_gist_v1_to_layout(&gist, os).unwrap();
-            let expected = PathBuf::from(format!("os/{os}/hotkeys.json"));
-            assert!(out.contains_key(&expected), "missing {expected:?} for os {os}");
-            let other_os_keys: Vec<_> = out
+            let expected: Vec<PathBuf> = os_bucketed_files
+                .iter()
+                .map(|f| PathBuf::from(format!("os/{os}/{f}")))
+                .collect();
+            for path in &expected {
+                assert!(out.contains_key(path), "missing {path:?} for os {os}");
+            }
+            let stray_os_keys: Vec<_> = out
                 .keys()
-                .filter(|k| k.starts_with("os/") && **k != expected)
+                .filter(|k| k.starts_with("os/") && !expected.contains(k))
                 .collect();
             assert!(
-                other_os_keys.is_empty(),
-                "os {os}: unexpected other-os keys {other_os_keys:?}"
+                stray_os_keys.is_empty(),
+                "os {os}: unexpected other-os keys {stray_os_keys:?}"
             );
         }
     }
@@ -313,7 +319,7 @@ mod tests {
         let mut gist = full_gist();
         gist.as_object_mut().unwrap().remove("task_runner");
         let out = transform_gist_v1_to_layout(&gist, "linux").unwrap();
-        let tr = parse(&out[&PathBuf::from("device/task-runner.json")]);
+        let tr = parse(&out[&PathBuf::from("os/linux/task-runner.json")]);
         assert_eq!(tr, json!({ "actions": {} }));
     }
 
