@@ -1,4 +1,5 @@
 import { useProfileKeyHandler } from './key-router.js';
+import { useAuthHealth } from './use-auth-health.js';
 import { useBackups } from './use-backups.js';
 import { useSurfaceNav } from './use-surface-nav.js';
 import { useSyncActions } from './use-sync-actions.js';
@@ -10,6 +11,7 @@ export function useProfileController({
     onSyncStatusChange,
     refreshSyncStatus,
 }) {
+    const { authHealth, refreshAuthHealth } = useAuthHealth();
     const syncForm = useSyncForm({
         syncStatus,
         syncProviders,
@@ -24,6 +26,7 @@ export function useProfileController({
         applySyncStatus: syncForm.applySyncStatus,
         form: syncForm.form,
         refreshSyncStatus,
+        refreshAuthHealth,
     });
     const surfaceNav = useSurfaceNav({
         advancedProviderFields: syncForm.advancedProviderFields,
@@ -52,10 +55,12 @@ export function useProfileController({
 
     return {
         advancedProviderFields: syncForm.advancedProviderFields,
+        authHealth,
         authPrompt: syncActions.authPrompt,
         backupPreview: backups.backupPreview,
         backups: backups.backups,
         basicProviderFields: syncForm.basicProviderFields,
+        busyAction: syncActions.busyAction,
         commands: surfaceNav.commands,
         configured: syncForm.configured,
         form: syncForm.form,
@@ -63,12 +68,14 @@ export function useProfileController({
         handleKey,
         handleOpenBackupFile: backups.handleOpenBackupFile,
         handlePreviewBackup: backups.handlePreviewBackup,
+        handleReauthorize: syncActions.handleReauthorize,
         incident: syncForm.incident,
         isBlocking,
         lastImport: syncActions.lastImport,
         openAuthLink: syncActions.openAuthLink,
         providerLabels: syncForm.providerLabels,
         providerOptions: syncForm.providerOptions,
+        refreshAuthHealth,
         selectedIndex: surfaceNav.selectedIndex,
         setBackupPreview: backups.setBackupPreview,
         setSelectedIndex: surfaceNav.setSelectedIndex,

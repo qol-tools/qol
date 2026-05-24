@@ -17,7 +17,10 @@ jobs:
     env:
       RUSTFLAGS: -D warnings
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout qol-tray
+        uses: actions/checkout@v4
+        with:
+          path: qol-tray
 
       - name: Checkout qol-config
         uses: actions/checkout@v4
@@ -25,11 +28,32 @@ jobs:
           repository: qol-tools/qol-config
           path: qol-config
 
+      - name: Resolve sibling ref
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          REF_NAME: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          if [ -n "$HEAD_REF" ]; then
+            printf 'SIBLING_REF=%s\n' "$HEAD_REF" >> "$GITHUB_ENV"
+          else
+            printf 'SIBLING_REF=%s\n' "$REF_NAME" >> "$GITHUB_ENV"
+          fi
+
+      - name: Checkout qol-migrations at matching ref
+        uses: actions/checkout@v4
+        with:
+          repository: qol-tools/qol-migrations
+          ref: ${{ env.SIBLING_REF }}
+          path: qol-migrations
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: qol-tray
 
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-latest'
@@ -38,7 +62,9 @@ jobs:
           sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev libxdo-dev
 
       - name: Build
+        working-directory: qol-tray
         run: cargo build
 
       - name: Test
+        working-directory: qol-tray
         run: cargo test

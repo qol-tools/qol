@@ -43,8 +43,21 @@ fn main() -> Result<()> {
     }
 
     if let Ok(config_dir) = qol_tray::paths::shared_config_dir() {
+        match qol_migrations::run_pre_flight(&config_dir, env!("CARGO_PKG_VERSION")) {
+            Ok(reports) if reports.is_empty() => {}
+            Ok(reports) => {
+                for report in reports {
+                    log::info!(
+                        "qol-migrations[pre-flight]: applied {} (archived {} paths)",
+                        report.name,
+                        report.archived.len()
+                    );
+                }
+            }
+            Err(error) => log::error!("qol-migrations[pre-flight] failed: {error:#}"),
+        }
         if let Err(e) = qol_tray::housekeeping::run_startup_cleanup(&config_dir) {
-            log::error!("Migration failed: {}", e);
+            log::error!("Housekeeping failed: {}", e);
         }
     }
 
@@ -298,6 +311,12 @@ async fn async_init_inner(
     let _state_server = qol_tray::runtime::RuntimeServer::start();
     let plugins_dir = qol_tray::plugins::PluginLoader::ensure_plugin_dir()?;
     let sync_service = Arc::new(qol_tray::sync::SyncService::new(plugins_dir)?);
+    if let Ok(config_dir) = qol_tray::paths::shared_config_dir() {
+        if let Err(error) = qol_tray::migrations_startup::run_post_auth_if_authed(&config_dir).await
+        {
+            log::error!("qol-migrations[post-auth] failed: {error:#}");
+        }
+    }
     {
         let sync_for_pull = Arc::clone(&sync_service);
         tokio::spawn(async move {

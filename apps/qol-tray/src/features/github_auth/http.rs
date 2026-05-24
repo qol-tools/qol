@@ -21,20 +21,12 @@ where
 {
     Router::new()
         .route("/github-auth/status", get(get_status))
-        .route("/github-auth/start", post(start_auth))
         .route("/github-auth/poll/{id}", post(poll_session))
         .route("/github-auth", delete(disconnect))
 }
 
 async fn get_status(State(state): State<GitHubAuthHttpState>) -> Json<GitHubAuthStatus> {
     Json(state.github_auth_service.status())
-}
-
-async fn start_auth(State(state): State<GitHubAuthHttpState>) -> impl IntoResponse {
-    match state.github_auth_service.start().await {
-        Ok(response) => Json(response).into_response(),
-        Err(error) => auth_error_response(error),
-    }
 }
 
 async fn poll_session(

@@ -1,6 +1,6 @@
 use super::{
     read_hotkeys_list, read_plugin_configs, read_shortcuts_list, read_task_runner_value,
-    PluginLockEntry, ProfileExportBundle, ProfileSyncDocument, CURRENT_PROFILE_VERSION,
+    PluginLockEntry, ProfileExportBundle, CURRENT_PROFILE_VERSION,
 };
 use anyhow::Result;
 
@@ -24,19 +24,4 @@ pub fn build_export_bundle_json(
     plugins: Vec<PluginLockEntry>,
 ) -> Result<String> {
     serde_json::to_string_pretty(&build_export_bundle(exported_at, plugins)?).map_err(Into::into)
-}
-
-pub fn build_sync_document(plugins: Vec<PluginLockEntry>) -> Result<ProfileSyncDocument> {
-    Ok(ProfileSyncDocument {
-        version: CURRENT_PROFILE_VERSION,
-        hotkeys: read_hotkeys_list(),
-        shortcuts: read_shortcuts_list(),
-        task_runner: read_task_runner_value(),
-        plugin_configs: read_plugin_configs()?.into_iter().collect(),
-        plugins,
-    })
-}
-
-pub fn build_sync_document_json(plugins: Vec<PluginLockEntry>) -> Result<String> {
-    serde_json::to_string_pretty(&build_sync_document(plugins)?).map_err(Into::into)
 }

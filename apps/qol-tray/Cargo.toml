@@ -18,6 +18,10 @@ path = "src/installer/main.rs"
 name = "qol-tray-doctor"
 path = "src/doctor/main.rs"
 
+[[bin]]
+name = "qol-tray-migrate"
+path = "src/migrate/main.rs"
+
 [lib]
 name = "qol_tray"
 path = "src/lib.rs"
@@ -65,6 +69,9 @@ tower-http = { version = "0.6", default-features = false, features = ["set-heade
 # HTTP client for GitHub API
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 
+# Git sync (libgit2 bindings; vendored so the host needs no system git)
+git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2", "vendored-openssl"] }
+
 # Global hotkeys
 global-hotkey = "0.7"
 
@@ -87,6 +94,7 @@ qol-runtime = { git = "https://github.com/qol-tools/qol-runtime" }
 qol-plugin-api = { git = "https://github.com/qol-tools/qol-plugin-api", default-features = false, features = ["app-icons"] }
 png = "0.17"
 qol-config = { git = "https://github.com/qol-tools/qol-config" }
+qol-migrations = { path = "../qol-migrations" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"

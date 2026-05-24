@@ -1,153 +1,109 @@
-use anyhow::{anyhow, Context, Result};
-use std::path::PathBuf;
+use anyhow::{Context, Result};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::Mutex as AsyncMutex;
 
-use super::platform::{open_dir, open_path};
-use super::providers::{
-    ensure_profile_gist, normalize_folder_path, normalize_path, sync_provider_definitions,
-    validate_github_token, ProviderError, RemoteDocument,
-};
-use super::resolve::{resolve_sync_action, SyncAction};
+use super::git_repo::{GitRepo, PullOutcome, SignatureSpec};
 use super::state::{
-    backup_file_path, build_status, ensure_sync_dirs, filename_string, hash_text, incident_kind,
-    list_backup_entries, load_state_file, now_rfc3339, pull_conflict_message,
-    pull_local_ahead_message, pull_noop_message, pull_success_message, sanitize_reason,
-    save_state_file, PullMode, SyncStateFile,
+    backup_file_path, build_status, ensure_sync_dirs, filename_string, list_backup_entries,
+    load_state_file, load_toggles, now_rfc3339, save_state_file, save_toggles, PullMode,
+    SyncStateFile, SyncToggles,
 };
 use super::types::{
-    SyncActionResult, SyncBackupEntry, SyncBackupPreview, SyncConnectRequest, SyncConnection,
-    SyncIncidentKind, SyncProviderDefinition,
+    SyncActionResult, SyncBackupEntry, SyncBackupPreview, SyncConnectRequest, SyncIncident,
+    SyncStatus,
 };
-use super::AUTO_PUSH_INTERVAL_SECS;
+use crate::features::profile::registry::{
+    clear_sync_target, load_sync_target, save_sync_target, SyncTarget,
+};
 
-const LAUNCH_PULL_BACKOFF: &[Duration] = &[
-    Duration::ZERO,
-    Duration::from_secs(2),
-    Duration::from_secs(8),
-    Duration::from_secs(30),
-];
-
-fn is_transport_error(error: &anyhow::Error) -> bool {
-    error
-        .chain()
-        .any(|cause| matches!(cause.downcast_ref::<ProviderError>(), Some(error) if error.is_transport()))
-}
-
-impl SyncConnectRequest {
-    async fn prepare(self, service: &SyncService) -> Result<PreparedSyncConnectRequest> {
-        match self {
-            Self::Github {
-                gist_id,
-                pull_on_launch,
-                push_on_change,
-            } => {
-                service
-                    .prepare_github_connect(gist_id, pull_on_launch, push_on_change)
-                    .await
-            }
-            Self::Folder {
-                folder_path,
-                path,
-                pull_on_launch,
-                push_on_change,
-            } => service.prepare_folder_connect(folder_path, path, pull_on_launch, push_on_change),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct PreparedSyncConnectRequest {
-    connection: SyncConnection,
-    github_token: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct SyncOperationOutcome {
-    message: String,
-    applied_remote: bool,
-    remote_revision: String,
-    last_synced_hash_update: Option<String>,
-    incident: Option<super::types::SyncIncident>,
-}
+const AUTO_PUSH_INTERVAL_SECS: u64 = 3;
+const DEFAULT_REPO_NAME: &str = "qol-tray-profiles";
+const GITIGNORE_CONTENTS: &str = "/active\n/sync.json\n*/device/\n";
 
 pub struct SyncService {
-    client: reqwest::Client,
-    plugins_dir: PathBuf,
     state: Mutex<SyncStateFile>,
+    toggles: Mutex<SyncToggles>,
     operation_lock: AsyncMutex<()>,
+    http: reqwest::Client,
 }
 
 impl SyncService {
-    pub fn new(plugins_dir: PathBuf) -> Result<Self> {
-        ensure_sync_dirs()?;
+    pub fn new(_plugins_dir: PathBuf) -> Result<Self> {
+        ensure_sync_dirs().ok();
+        let state = load_state_file().unwrap_or_default();
+        let toggles = load_toggles().unwrap_or_default();
         Ok(Self {
-            client: reqwest::Client::new(),
-            plugins_dir,
-            state: Mutex::new(load_state_file().unwrap_or_default()),
+            state: Mutex::new(state),
+            toggles: Mutex::new(toggles),
             operation_lock: AsyncMutex::new(()),
+            http: reqwest::Client::new(),
         })
-    }
-
-    pub fn providers(&self) -> Vec<SyncProviderDefinition> {
-        sync_provider_definitions()
     }
 
     pub fn auto_push_interval() -> Duration {
         Duration::from_secs(AUTO_PUSH_INTERVAL_SECS)
     }
 
-    pub fn status(&self) -> super::types::SyncStatus {
-        let state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        build_status(&state)
+    pub fn status(&self) -> SyncStatus {
+        let state = self.snapshot_state();
+        let target = load_sync_target().ok().flatten();
+        self.build_status_with(&state, target.as_ref())
     }
 
     pub async fn connect(&self, request: SyncConnectRequest) -> Result<SyncActionResult> {
         let _operation = self.operation_lock.lock().await;
-        let prepared = match request.prepare(self).await {
-            Ok(prepared) => prepared,
+        let token = require_github_token()?;
+        let target = match resolve_target(&request, &self.http, &token).await {
+            Ok(target) => target,
             Err(error) => return self.return_unpersisted_error(error),
         };
-        let connection = prepared.connection.clone();
-        if let Err(error) = connection.validate() {
-            return self.return_unpersisted_error(error);
-        }
+        let repo_path = crate::paths::profile_dir()?;
+        std::fs::create_dir_all(&repo_path)?;
 
-        let remote = match connection
-            .fetch_remote_document(&self.client, prepared.github_token.as_deref())
-            .await
-        {
-            Ok(remote) => remote,
-            Err(error) => return self.return_unpersisted_error(anyhow!(error)),
+        let repo = if existing_remote_has_content(&self.http, &target, &token).await? {
+            clone_remote_via_staging(&target, &repo_path, &token)?
+        } else {
+            let repo = GitRepo::init(&repo_path, &target.repo_url)?;
+            ensure_gitignore(&repo_path)?;
+            repo.commit_all(
+                "qol-tray: initial commit",
+                &SignatureSpec::default_for_app(),
+            )?;
+            repo.push(Some(&token))?;
+            repo
         };
-        if let Some(remote) = remote {
-            return match self.apply_remote_document(remote, PullMode::Connect).await {
-                Ok(outcome) => self.finalize_connect(prepared, outcome),
-                Err(error) => self.return_unpersisted_error(error),
-            };
-        }
 
-        match self
-            .push_current_document(Some(connection), prepared.github_token.as_deref())
-            .await
-        {
-            Ok(outcome) => self.finalize_connect(prepared, outcome),
-            Err(error) => self.return_unpersisted_error(error),
-        }
+        save_sync_target(&target)?;
+        let new_toggles = SyncToggles {
+            pull_on_launch: request.pull_on_launch,
+            push_on_change: request.push_on_change,
+        };
+        save_toggles(new_toggles)?;
+        *self.toggles_mut() = new_toggles;
+
+        let head = repo.head_sha()?;
+        let mut state = self.state_mut();
+        state.head_sha = head;
+        state.last_sync_at = Some(now_rfc3339());
+        state.last_error = None;
+        state.incident = None;
+        save_state_file(&state)?;
+        let saved = state.clone();
+        drop(state);
+
+        Ok(SyncActionResult {
+            message: "Cloud sync connected".to_string(),
+            applied_remote: true,
+            status: self.build_status_with(&saved, Some(&target)),
+        })
     }
 
     pub async fn bootstrap_github_connect(&self) -> Result<SyncActionResult> {
-        let token = crate::features::github_auth::oauth_access_token()
-            .context("GitHub account is not connected")?;
-        let gist_id = ensure_profile_gist(&self.client, &token)
-            .await
-            .map_err(|error| anyhow!(error.to_string()))?;
-        self.connect(SyncConnectRequest::Github {
-            gist_id,
+        self.connect(SyncConnectRequest {
+            repo_url: None,
+            auto_create: true,
             pull_on_launch: true,
             push_on_change: true,
         })
@@ -156,1024 +112,451 @@ impl SyncService {
 
     pub async fn disconnect(&self) -> Result<SyncActionResult> {
         let _operation = self.operation_lock.lock().await;
-        {
-            let mut state = self
-                .state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            *state = SyncStateFile::default();
-            save_state_file(&state)?;
+        clear_sync_target()?;
+        let repo_path = crate::paths::profile_dir()?;
+        let git_dir = repo_path.join(".git");
+        if git_dir.exists() {
+            std::fs::remove_dir_all(&git_dir).ok();
         }
+        let mut state = self.state_mut();
+        *state = SyncStateFile::default();
+        save_state_file(&state)?;
+        let cleared = state.clone();
+        drop(state);
         Ok(SyncActionResult {
             message: "Cloud sync disconnected".to_string(),
             applied_remote: false,
-            status: self.status(),
+            status: self.build_status_with(&cleared, None),
         })
     }
 
-    pub async fn pull_on_launch(&self) -> Result<SyncActionResult> {
-        let decision = {
-            let state = self
-                .state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            launch_pull_decision(&state)
-        };
-        match decision {
-            LaunchPullDecision::Skip(message) => Ok(self.noop(message)),
-            LaunchPullDecision::Proceed => self.pull_with_transport_retry().await,
-        }
-    }
-
-    async fn pull_with_transport_retry(&self) -> Result<SyncActionResult> {
-        let mut last_transport_error: Option<anyhow::Error> = None;
-        for (attempt, delay) in LAUNCH_PULL_BACKOFF.iter().enumerate() {
-            if !delay.is_zero() {
-                tokio::time::sleep(*delay).await;
-            }
-            match self.pull(PullMode::Launch).await {
-                Ok(result) => return Ok(result),
-                Err(error) => {
-                    if !is_transport_error(&error) {
-                        return self.return_error(error);
-                    }
-                    let attempts_left = attempt + 1 < LAUNCH_PULL_BACKOFF.len();
-                    if !attempts_left {
-                        return self.return_error(error);
-                    }
-                    log::warn!(
-                        "Cloud sync launch pull transport failure (attempt {}/{}): {error:#}",
-                        attempt + 1,
-                        LAUNCH_PULL_BACKOFF.len()
-                    );
-                    last_transport_error = Some(error);
-                }
-            }
-        }
-        self.return_error(
-            last_transport_error
-                .unwrap_or_else(|| anyhow!("Cloud sync launch pull retry exhausted")),
-        )
-    }
-
     pub async fn manual_pull(&self) -> Result<SyncActionResult> {
-        match self.pull(PullMode::Manual).await {
-            Ok(result) => Ok(result),
-            Err(error) => self.return_error(error),
+        self.do_pull(PullMode::Manual).await
+    }
+
+    pub async fn pull_on_launch(&self) -> Result<SyncActionResult> {
+        if !self.snapshot_toggles().pull_on_launch {
+            return self.noop_result("Pull on launch disabled");
         }
+        self.do_pull(PullMode::Launch).await
     }
 
     pub async fn manual_push(&self) -> Result<SyncActionResult> {
-        let _operation = self.operation_lock.lock().await;
-        match self.push_current_document(None, None).await {
-            Ok(outcome) => {
-                self.persist_operation_state(None, &outcome, None)?;
-                Ok(self.operation_result(&outcome))
-            }
-            Err(error) => self.return_error(error),
-        }
+        self.do_push("manual push").await
     }
 
     pub async fn auto_push_if_dirty(&self) -> Result<SyncActionResult> {
-        let enabled = {
-            let state = self
-                .state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let blocked_by_conflict = state
-                .incident
-                .as_ref()
-                .is_some_and(|incident| incident.kind.blocks_auto_sync());
-            if blocked_by_conflict || state.last_error.is_some() {
-                false
-            } else {
-                state
-                    .connection
-                    .as_ref()
-                    .map(SyncConnection::push_on_change)
-                    .unwrap_or(false)
-            }
-        };
-        if !enabled {
-            return Ok(self.noop("Cloud sync auto-push is disabled"));
+        if !self.snapshot_toggles().push_on_change {
+            return self.noop_result("Auto-push disabled");
         }
-
-        let _operation = self.operation_lock.lock().await;
-        let current_hash = self.current_sync_hash()?;
-        let already_synced = {
-            let state = self
-                .state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            state.last_synced_hash.as_deref() == Some(current_hash.as_str())
-        };
-        if already_synced {
-            return Ok(self.noop("Cloud sync is already up to date"));
+        if self.snapshot_state().incident.is_some() {
+            return self.noop_result("Skipped auto-push (incident pending)");
         }
-
-        match self.push_current_document(None, None).await {
-            Ok(outcome) => {
-                self.persist_operation_state(None, &outcome, None)?;
-                Ok(self.operation_result(&outcome))
-            }
-            Err(error) => self.return_error(error),
-        }
+        self.do_push("auto push").await
     }
 
     pub async fn acknowledge_incident(&self) -> Result<SyncActionResult> {
         let _operation = self.operation_lock.lock().await;
-        {
-            let mut state = self
-                .state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            state.incident = None;
-            save_state_file(&state)?;
-        }
+        let mut state = self.state_mut();
+        state.incident = None;
+        state.last_error = None;
+        save_state_file(&state)?;
+        let cleared = state.clone();
+        drop(state);
         Ok(SyncActionResult {
-            message: "Sync review acknowledged".to_string(),
+            message: "Incident acknowledged".to_string(),
             applied_remote: false,
-            status: self.status(),
+            status: self.build_status_with(&cleared, load_sync_target().ok().flatten().as_ref()),
         })
     }
 
     pub fn open_backups_dir(&self) -> Result<()> {
         ensure_sync_dirs()?;
-        open_dir(&crate::paths::sync_backups_dir()?)
+        let dir = crate::paths::sync_backups_dir()?;
+        super::platform::open_dir(&dir)
     }
 
     pub fn open_backup_file(&self, file_name: &str) -> Result<()> {
-        ensure_sync_dirs()?;
-        open_path(&backup_file_path(file_name)?)
+        let path = backup_file_path(file_name)?;
+        if !path.exists() {
+            anyhow::bail!("backup not found");
+        }
+        super::platform::open_path(&path)
     }
 
     pub fn list_backups(&self) -> Result<Vec<SyncBackupEntry>> {
-        ensure_sync_dirs()?;
-        Ok(list_backup_entries(
-            Some(&crate::paths::sync_backups_dir()?),
-        ))
+        let dir = crate::paths::sync_backups_dir().ok();
+        Ok(list_backup_entries(dir.as_deref()))
     }
 
     pub fn preview_backup(&self, file_name: &str) -> Result<SyncBackupPreview> {
-        ensure_sync_dirs()?;
         let path = backup_file_path(file_name)?;
-        let metadata = std::fs::metadata(&path)
-            .with_context(|| format!("Backup file not found: {file_name}"))?;
-        if metadata.len() > 1024 * 1024 {
-            anyhow::bail!("Backup file is too large to preview");
-        }
         let content = std::fs::read_to_string(&path)
-            .with_context(|| format!("Failed to read backup file: {file_name}"))?;
+            .with_context(|| format!("read backup {}", path.display()))?;
         Ok(SyncBackupPreview {
-            file_name: file_name.to_string(),
+            file_name: filename_string(&path),
             content,
         })
     }
 
-    fn noop(&self, message: &str) -> SyncActionResult {
-        SyncActionResult {
-            message: message.to_string(),
-            applied_remote: false,
-            status: self.status(),
-        }
-    }
-
-    async fn prepare_github_connect(
-        &self,
-        gist_id: String,
-        pull_on_launch: bool,
-        push_on_change: bool,
-    ) -> Result<PreparedSyncConnectRequest> {
-        let token =
-            crate::credentials::github_bearer_token().context("GitHub account is not connected")?;
-        if let Err(error) = validate_github_token(&token).await {
-            anyhow::bail!(error.to_string());
-        }
-        let gist_id = if gist_id.trim().is_empty() {
-            ensure_profile_gist(&self.client, &token)
-                .await
-                .map_err(|error| anyhow!(error.to_string()))?
-        } else {
-            gist_id.trim().to_string()
-        };
-        Ok(PreparedSyncConnectRequest {
-            connection: SyncConnection::Github(super::types::GitHubSyncConnection {
-                gist_id,
-                pull_on_launch,
-                push_on_change,
-            }),
-            github_token: Some(token),
-        })
-    }
-
-    fn prepare_folder_connect(
-        &self,
-        folder_path: String,
-        path: String,
-        pull_on_launch: bool,
-        push_on_change: bool,
-    ) -> Result<PreparedSyncConnectRequest> {
-        Ok(PreparedSyncConnectRequest {
-            connection: SyncConnection::Folder(super::types::LocalFolderSyncConnection {
-                folder_path: normalize_folder_path(&folder_path)?,
-                path: normalize_path(&path)?,
-                pull_on_launch,
-                push_on_change,
-            }),
-            github_token: None,
-        })
-    }
-
-    async fn pull(&self, mode: PullMode) -> Result<SyncActionResult> {
+    async fn do_pull(&self, mode: PullMode) -> Result<SyncActionResult> {
         let _operation = self.operation_lock.lock().await;
-        let connection = self.current_connection()?;
-        let remote = connection.fetch_remote_document(&self.client, None).await?;
-        let Some(remote) = remote else {
-            return self.fail_error("Remote profile file was not found");
+        let Some(target) = load_sync_target()? else {
+            return self.noop_result("Sync not configured");
         };
-        let outcome = self.apply_remote_document(remote, mode).await?;
-        self.persist_operation_state(None, &outcome, None)?;
-        Ok(self.operation_result(&outcome))
-    }
-
-    async fn apply_remote_document(
-        &self,
-        remote: RemoteDocument,
-        mode: PullMode,
-    ) -> Result<SyncOperationOutcome> {
-        let local_json = self.current_sync_document_json()?;
-        let local_hash = hash_text(&local_json);
-        let remote_hash = hash_text(&remote.content);
-        let last_synced = {
-            let state = self
-                .state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            state.last_synced_hash.clone()
+        let token = require_github_token()?;
+        let repo_path = crate::paths::profile_dir()?;
+        let repo = match GitRepo::open(&repo_path) {
+            Ok(repo) => repo,
+            Err(_) => GitRepo::clone(&target.repo_url, &repo_path, Some(&token))?,
         };
-
-        let action = match mode {
-            PullMode::Connect if local_hash != remote_hash => SyncAction::FastForwardFromRemote,
-            _ => resolve_sync_action(&local_hash, &remote_hash, last_synced.as_deref()),
+        let outcome = match repo.pull(Some(&token)) {
+            Ok(outcome) => outcome,
+            Err(error) => return self.persisted_error(error, Some(&target)),
         };
-
-        match action {
-            SyncAction::NoOp => Ok(SyncOperationOutcome {
-                message: pull_noop_message(mode),
-                applied_remote: false,
-                remote_revision: remote.revision,
-                last_synced_hash_update: Some(remote_hash),
-                incident: None,
-            }),
-            SyncAction::PushLocal => Ok(SyncOperationOutcome {
-                message: pull_local_ahead_message(mode),
-                applied_remote: false,
-                remote_revision: remote.revision,
-                last_synced_hash_update: None,
-                incident: None,
-            }),
-            SyncAction::Conflict => {
-                let backup_file = self.write_backup_file("conflict")?;
-                let message = pull_conflict_message(mode);
-                Ok(SyncOperationOutcome {
-                    message: message.clone(),
-                    applied_remote: false,
-                    remote_revision: remote.revision,
-                    last_synced_hash_update: None,
-                    incident: Some(super::types::SyncIncident {
-                        kind: SyncIncidentKind::Conflict,
-                        message,
-                        backup_file: Some(filename_string(&backup_file)),
-                        created_at: now_rfc3339(),
-                    }),
-                })
-            }
-            SyncAction::FastForwardFromRemote => {
-                let backup_required = matches!(mode, PullMode::Connect);
-                let backup_file = if backup_required {
-                    Some(self.write_backup_file("remote-applied")?)
-                } else {
-                    None
-                };
-                let bundle: crate::features::profile::core::ProfileImportBundle =
-                    serde_json::from_str(&remote.content)
-                        .context("Remote profile JSON is invalid")?;
-                let result =
-                    crate::features::profile::core::apply_import_bundle(&self.plugins_dir, &bundle)
-                        .await?;
-                let message = pull_success_message(mode, backup_required, result.success);
-                let incident = if backup_required || !result.success {
-                    Some(super::types::SyncIncident {
-                        kind: incident_kind(mode),
-                        message: message.clone(),
-                        backup_file: backup_file.as_ref().map(|path| filename_string(path)),
-                        created_at: now_rfc3339(),
-                    })
-                } else {
-                    None
-                };
-                Ok(SyncOperationOutcome {
-                    message,
-                    applied_remote: true,
-                    remote_revision: remote.revision,
-                    last_synced_hash_update: Some(remote_hash),
-                    incident,
-                })
-            }
-        }
-    }
-
-    async fn push_current_document(
-        &self,
-        override_connection: Option<SyncConnection>,
-        github_token: Option<&str>,
-    ) -> Result<SyncOperationOutcome> {
-        let uses_current_connection = override_connection.is_none();
-        let connection = match override_connection {
-            Some(connection) => connection,
-            None => self.current_connection()?,
+        let (message, applied) = match &outcome {
+            PullOutcome::AlreadyUpToDate => ("Already up to date".to_string(), false),
+            PullOutcome::FastForwarded { .. } => ("Pulled changes from remote".to_string(), true),
+            PullOutcome::Diverged { .. } => ("Local and remote diverged".to_string(), false),
         };
-        let local_json = self.current_sync_document_json()?;
-        let local_hash = hash_text(&local_json);
-        let remote = connection
-            .fetch_remote_document(&self.client, github_token)
-            .await?;
-        if let Some(remote) = &remote {
-            let remote_hash = hash_text(&remote.content);
-            if remote_hash == local_hash {
-                return Ok(SyncOperationOutcome {
-                    message: "Cloud sync is already up to date".to_string(),
-                    applied_remote: false,
-                    remote_revision: remote.revision.clone(),
-                    last_synced_hash_update: Some(local_hash),
-                    incident: None,
-                });
-            }
-        }
-
-        let remote_revision = remote.as_ref().map(|document| document.revision.clone());
-        let stored_revision = {
-            let state = self
-                .state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            state.remote_revision.clone()
-        };
-        if should_resolve_push_conflict(
-            uses_current_connection,
-            stored_revision.as_deref(),
-            remote_revision.as_deref(),
-        ) {
-            let remote = remote.context("Remote profile changed before push")?;
-            return self.resolve_push_conflict(remote).await;
-        }
-
-        let next_revision = match connection
-            .push_remote_document(
-                &self.client,
-                &local_json,
-                remote_revision.as_deref(),
-                github_token,
-            )
-            .await
-        {
-            Ok(revision) => revision,
-            Err(ProviderError::Conflict(_)) => {
-                let remote = connection
-                    .fetch_remote_document(&self.client, github_token)
-                    .await
-                    .map_err(|error| anyhow!(error))?
-                    .context("Remote profile changed before push")?;
-                return self.resolve_push_conflict(remote).await;
-            }
-            Err(error) => return Err(anyhow!(error)),
-        };
-
-        Ok(SyncOperationOutcome {
-            message: "Cloud sync pushed local changes".to_string(),
-            applied_remote: false,
-            remote_revision: next_revision,
-            last_synced_hash_update: Some(local_hash),
-            incident: None,
-        })
-    }
-
-    async fn resolve_push_conflict(&self, remote: RemoteDocument) -> Result<SyncOperationOutcome> {
-        let backup_file = self.write_backup_file("push-conflict")?;
-        let bundle: crate::features::profile::core::ProfileImportBundle =
-            serde_json::from_str(&remote.content).context("Remote profile JSON is invalid")?;
-        let result =
-            crate::features::profile::core::apply_import_bundle(&self.plugins_dir, &bundle).await?;
-        let remote_hash = hash_text(&remote.content);
-        let message = if result.success {
-            "Remote profile changed first. Local profile was backed up and remote changes were applied."
-        } else {
-            "Remote profile changed first. Local profile was backed up and remote changes were applied with warnings."
-        };
-
-        Ok(SyncOperationOutcome {
-            message: message.to_string(),
-            applied_remote: true,
-            remote_revision: remote.revision,
-            last_synced_hash_update: Some(remote_hash),
-            incident: Some(super::types::SyncIncident {
-                kind: SyncIncidentKind::PushConflict,
-                message: message.to_string(),
-                backup_file: Some(filename_string(&backup_file)),
+        let mut state = self.state_mut();
+        if let PullOutcome::Diverged { local, remote } = &outcome {
+            state.incident = Some(SyncIncident {
+                kind: mode.incident_kind(),
+                message: format!(
+                    "Local {} differs from remote {}",
+                    short_sha(local),
+                    short_sha(remote)
+                ),
+                backup_file: None,
                 created_at: now_rfc3339(),
-            }),
+            });
+        } else {
+            state.incident = None;
+            state.last_error = None;
+        }
+        state.head_sha = repo.head_sha()?;
+        state.last_sync_at = Some(now_rfc3339());
+        save_state_file(&state)?;
+        let saved = state.clone();
+        drop(state);
+        Ok(SyncActionResult {
+            message,
+            applied_remote: applied,
+            status: self.build_status_with(&saved, Some(&target)),
         })
     }
 
-    fn finalize_connect(
-        &self,
-        prepared: PreparedSyncConnectRequest,
-        outcome: SyncOperationOutcome,
-    ) -> Result<SyncActionResult> {
-        self.persist_operation_state(Some(prepared.connection), &outcome, None)?;
-        Ok(self.operation_result(&outcome))
-    }
-
-    fn persist_operation_state(
-        &self,
-        connection: Option<SyncConnection>,
-        outcome: &SyncOperationOutcome,
-        last_error: Option<&str>,
-    ) -> Result<()> {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(connection) = connection {
-            state.connection = Some(connection);
-        }
-        state.remote_revision = Some(outcome.remote_revision.clone());
-        if let Some(hash) = &outcome.last_synced_hash_update {
-            state.last_synced_hash = Some(hash.clone());
-        }
-        state.last_sync_at = Some(now_rfc3339());
-        state.incident = outcome.incident.clone();
-        state.last_error = last_error.map(str::to_string);
-        save_state_file(&state)
-    }
-
-    fn operation_result(&self, outcome: &SyncOperationOutcome) -> SyncActionResult {
-        SyncActionResult {
-            message: outcome.message.clone(),
-            applied_remote: outcome.applied_remote,
-            status: self.status(),
-        }
-    }
-
-    fn current_connection(&self) -> Result<SyncConnection> {
-        let state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some(connection) = &state.connection else {
-            anyhow::bail!("Cloud sync is not configured");
+    async fn do_push(&self, reason: &str) -> Result<SyncActionResult> {
+        let _operation = self.operation_lock.lock().await;
+        let Some(target) = load_sync_target()? else {
+            return self.noop_result("Sync not configured");
         };
-        Ok(connection.clone())
-    }
-
-    fn current_sync_document_json(&self) -> Result<String> {
-        let plugins = crate::features::profile::core::load_plugins_lock()
-            .map(|lock| lock.plugins)
-            .unwrap_or_default();
-        crate::features::profile::core::build_sync_document_json(plugins)
-    }
-
-    fn current_sync_hash(&self) -> Result<String> {
-        Ok(hash_text(&self.current_sync_document_json()?))
-    }
-
-    fn write_backup_file(&self, reason: &str) -> Result<PathBuf> {
-        ensure_sync_dirs()?;
-        let filename = format!(
-            "{}-{}.json",
-            chrono::Local::now().format("%Y%m%d-%H%M%S"),
-            sanitize_reason(reason)
-        );
-        let path = crate::paths::sync_backups_dir()?.join(filename);
-        let plugins = crate::features::profile::core::load_plugins_lock()
-            .map(|lock| lock.plugins)
-            .unwrap_or_default();
-        let content =
-            crate::features::profile::core::build_export_bundle_json(now_rfc3339(), plugins)?;
-        crate::file_io::atomic_write(&path, content.as_bytes())?;
-        Ok(path)
-    }
-
-    fn return_error<T>(&self, error: anyhow::Error) -> Result<T> {
-        log::error!("Cloud sync failed: {error:#}");
-        if let Err(write_error) = self.store_last_error(&error.to_string()) {
-            log::error!("Failed to persist cloud sync error state: {write_error:#}");
+        let token = require_github_token()?;
+        let repo_path = crate::paths::profile_dir()?;
+        let repo = match GitRepo::open(&repo_path) {
+            Ok(repo) => repo,
+            Err(error) => return self.persisted_error(error, Some(&target)),
+        };
+        ensure_gitignore(&repo_path)?;
+        let signature = SignatureSpec::default_for_app();
+        let commit = match repo.commit_all(reason, &signature) {
+            Ok(info) => info,
+            Err(error) => return self.persisted_error(error, Some(&target)),
+        };
+        if let Err(error) = repo.push(Some(&token)) {
+            return self.persisted_error(error, Some(&target));
         }
-        Err(error)
-    }
-
-    fn return_unpersisted_error<T>(&self, error: anyhow::Error) -> Result<T> {
-        log::error!("Cloud sync failed: {error:#}");
-        Err(error)
-    }
-
-    fn store_last_error(&self, message: &str) -> Result<()> {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if state.connection.is_none() {
-            return Ok(());
-        }
-        state.last_error = Some(message.to_string());
-        save_state_file(&state)
-    }
-
-    fn fail_error(&self, message: &str) -> Result<SyncActionResult> {
-        log::error!("Cloud sync error: {}", message);
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.last_error = Some(message.to_string());
+        let message = if commit.is_some() {
+            "Pushed changes to remote".to_string()
+        } else {
+            "Nothing to push".to_string()
+        };
+        let mut state = self.state_mut();
+        state.head_sha = repo.head_sha()?;
+        state.last_sync_at = Some(now_rfc3339());
+        state.last_error = None;
         save_state_file(&state)?;
+        let saved = state.clone();
+        drop(state);
+        Ok(SyncActionResult {
+            message,
+            applied_remote: false,
+            status: self.build_status_with(&saved, Some(&target)),
+        })
+    }
+
+    fn noop_result(&self, message: &str) -> Result<SyncActionResult> {
+        let state = self.snapshot_state();
+        let target = load_sync_target().ok().flatten();
         Ok(SyncActionResult {
             message: message.to_string(),
             applied_remote: false,
-            status: build_status(&state),
+            status: self.build_status_with(&state, target.as_ref()),
         })
+    }
+
+    fn return_unpersisted_error(&self, error: anyhow::Error) -> Result<SyncActionResult> {
+        let state = self.snapshot_state();
+        let target = load_sync_target().ok().flatten();
+        Ok(SyncActionResult {
+            message: format!("Sync failed: {error:#}"),
+            applied_remote: false,
+            status: self.build_status_with(&state, target.as_ref()),
+        })
+    }
+
+    fn persisted_error(
+        &self,
+        error: anyhow::Error,
+        target: Option<&SyncTarget>,
+    ) -> Result<SyncActionResult> {
+        let mut state = self.state_mut();
+        state.last_error = Some(format!("{error:#}"));
+        save_state_file(&state)?;
+        let saved = state.clone();
+        drop(state);
+        Ok(SyncActionResult {
+            message: format!("Sync failed: {error:#}"),
+            applied_remote: false,
+            status: self.build_status_with(&saved, target),
+        })
+    }
+
+    fn build_status_with(&self, state: &SyncStateFile, target: Option<&SyncTarget>) -> SyncStatus {
+        let toggles = self.snapshot_toggles();
+        let backups_dir = crate::paths::sync_backups_dir().ok();
+        let backup_files = list_backup_entries(backups_dir.as_deref());
+        build_status(
+            state,
+            target,
+            toggles,
+            backups_dir.as_deref(),
+            &backup_files,
+        )
+    }
+
+    fn state_mut(&self) -> std::sync::MutexGuard<'_, SyncStateFile> {
+        self.state.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn snapshot_state(&self) -> SyncStateFile {
+        self.state_mut().clone()
+    }
+
+    fn toggles_mut(&self) -> std::sync::MutexGuard<'_, SyncToggles> {
+        self.toggles.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn snapshot_toggles(&self) -> SyncToggles {
+        *self.toggles_mut()
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum LaunchPullDecision {
-    Skip(&'static str),
-    Proceed,
+fn require_github_token() -> Result<String> {
+    let token = crate::features::github_auth::oauth_access_token()
+        .or_else(crate::credentials::github_bearer_token)
+        .context("GitHub account is not connected")?;
+    crate::features::auth::ensure_scope(crate::features::auth::Scope::GitHub(
+        crate::features::auth::GitHubScope::Repo,
+    ))?;
+    Ok(token)
 }
 
-pub(crate) fn launch_pull_decision(state: &SyncStateFile) -> LaunchPullDecision {
-    if state
-        .incident
+async fn resolve_target(
+    request: &SyncConnectRequest,
+    http: &reqwest::Client,
+    token: &str,
+) -> Result<SyncTarget> {
+    if let Some(url) = request
+        .repo_url
         .as_ref()
-        .is_some_and(|incident| incident.kind.blocks_auto_sync())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
     {
-        return LaunchPullDecision::Skip("Cloud sync pull skipped: unresolved conflict");
+        return Ok(SyncTarget {
+            repo_url: url,
+            auto_created: false,
+        });
     }
-    let pull_on_launch_enabled = state
-        .connection
-        .as_ref()
-        .map(SyncConnection::pull_on_launch)
-        .unwrap_or(false);
-    if !pull_on_launch_enabled {
-        return LaunchPullDecision::Skip("Cloud sync launch pull is disabled");
+    if !request.auto_create {
+        anyhow::bail!("repo_url is required when auto_create is false");
     }
-    LaunchPullDecision::Proceed
+    let url = ensure_auto_created_repo(http, token).await?;
+    Ok(SyncTarget {
+        repo_url: url,
+        auto_created: true,
+    })
 }
 
-fn should_resolve_push_conflict(
-    uses_current_connection: bool,
-    stored_revision: Option<&str>,
-    remote_revision: Option<&str>,
-) -> bool {
-    if !uses_current_connection {
-        return false;
+async fn ensure_auto_created_repo(http: &reqwest::Client, token: &str) -> Result<String> {
+    let login = fetch_github_login(http, token).await?;
+    let url = format!("https://github.com/{login}/{DEFAULT_REPO_NAME}.git");
+    if github_repo_exists(http, token, &login, DEFAULT_REPO_NAME).await? {
+        return Ok(url);
     }
-    if stored_revision.is_none() {
-        return false;
-    }
-    if remote_revision.is_none() {
-        return false;
-    }
-    remote_revision != stored_revision
+    create_github_private_repo(http, token, DEFAULT_REPO_NAME).await?;
+    Ok(url)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::features::profile::sync::types::{
-        GitHubSyncConnection, LocalFolderSyncConnection, SyncIncident,
+async fn fetch_github_login(http: &reqwest::Client, token: &str) -> Result<String> {
+    #[derive(serde::Deserialize)]
+    struct User {
+        login: String,
+    }
+    let response = http
+        .get("https://api.github.com/user")
+        .bearer_auth(token)
+        .header("User-Agent", "qol-tray")
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .context("fetch GitHub user")?;
+    if !response.status().is_success() {
+        anyhow::bail!("GitHub user lookup failed: {}", response.status());
+    }
+    let user: User = response.json().await.context("decode GitHub user")?;
+    Ok(user.login)
+}
+
+async fn github_repo_exists(
+    http: &reqwest::Client,
+    token: &str,
+    owner: &str,
+    name: &str,
+) -> Result<bool> {
+    let url = format!("https://api.github.com/repos/{owner}/{name}");
+    let response = http
+        .get(&url)
+        .bearer_auth(token)
+        .header("User-Agent", "qol-tray")
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .context("check GitHub repo existence")?;
+    Ok(response.status().is_success())
+}
+
+async fn create_github_private_repo(http: &reqwest::Client, token: &str, name: &str) -> Result<()> {
+    let body = serde_json::json!({
+        "name": name,
+        "private": true,
+        "auto_init": false,
+        "description": "qol-tray profile sync",
+    });
+    let response = http
+        .post("https://api.github.com/user/repos")
+        .bearer_auth(token)
+        .header("User-Agent", "qol-tray")
+        .header("Accept", "application/vnd.github+json")
+        .json(&body)
+        .send()
+        .await
+        .context("create GitHub repo")?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("create repo {name} failed: {status}: {body}");
+    }
+    Ok(())
+}
+
+async fn existing_remote_has_content(
+    http: &reqwest::Client,
+    target: &SyncTarget,
+    token: &str,
+) -> Result<bool> {
+    if !target.auto_created {
+        return Ok(true);
+    }
+    let Some((owner, name)) = parse_owner_name(&target.repo_url) else {
+        return Ok(true);
     };
-
-    #[test]
-    fn push_conflict_check_only_applies_to_current_connection() {
-        let cases = [
-            (false, Some("old"), None, false),
-            (false, Some("old"), Some("new"), false),
-            (true, None, None, false),
-            (true, None, Some("new"), false),
-            (true, Some("same"), Some("same"), false),
-            (true, Some("old"), Some("new"), true),
-            (true, Some("old"), None, false),
-        ];
-
-        for (uses_current_connection, stored_revision, remote_revision, expected) in cases {
-            assert_eq!(
-                should_resolve_push_conflict(
-                    uses_current_connection,
-                    stored_revision,
-                    remote_revision
-                ),
-                expected
-            );
-        }
+    let url = format!("https://api.github.com/repos/{owner}/{name}/branches");
+    let response = http
+        .get(&url)
+        .bearer_auth(token)
+        .header("User-Agent", "qol-tray")
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .context("list GitHub branches")?;
+    if !response.status().is_success() {
+        return Ok(false);
     }
+    let branches: Vec<serde_json::Value> = response.json().await.unwrap_or_default();
+    Ok(!branches.is_empty())
+}
 
-    fn github_connection(pull_on_launch: bool) -> SyncConnection {
-        SyncConnection::Github(GitHubSyncConnection {
-            gist_id: "abc123".to_string(),
-            pull_on_launch,
-            push_on_change: true,
-        })
+fn parse_owner_name(url: &str) -> Option<(String, String)> {
+    let stripped = url.trim_end_matches(".git");
+    let rest = stripped.split("github.com/").nth(1)?;
+    let mut parts = rest.split('/');
+    let owner = parts.next()?.to_string();
+    let name = parts.next()?.to_string();
+    if owner.is_empty() || name.is_empty() {
+        return None;
     }
+    Some((owner, name))
+}
 
-    fn incident_with_kind(kind: SyncIncidentKind) -> SyncIncident {
-        SyncIncident {
-            kind,
-            message: String::new(),
-            backup_file: None,
-            created_at: now_rfc3339(),
-        }
-    }
-
-    #[test]
-    fn launch_pull_decision_skips_without_connection() {
-        let state = SyncStateFile::default();
-        assert_eq!(
-            launch_pull_decision(&state),
-            LaunchPullDecision::Skip("Cloud sync launch pull is disabled"),
+fn clone_remote_via_staging(
+    target: &SyncTarget,
+    profile_dir: &Path,
+    token: &str,
+) -> Result<GitRepo> {
+    let staging = create_staging_dir(profile_dir)?;
+    let outcome = clone_into_staging_then_promote(target, &staging, profile_dir, token);
+    if let Err(error) = std::fs::remove_dir_all(&staging) {
+        log::warn!(
+            "[sync] cleanup of staging dir {} failed: {error:#}",
+            staging.display()
         );
     }
+    outcome
+}
 
-    #[test]
-    fn launch_pull_decision_skips_when_pull_on_launch_disabled() {
-        let state = SyncStateFile {
-            connection: Some(github_connection(false)),
-            ..SyncStateFile::default()
-        };
-        assert_eq!(
-            launch_pull_decision(&state),
-            LaunchPullDecision::Skip("Cloud sync launch pull is disabled"),
-        );
-    }
+fn clone_into_staging_then_promote(
+    target: &SyncTarget,
+    staging: &Path,
+    profile_dir: &Path,
+    token: &str,
+) -> Result<GitRepo> {
+    GitRepo::clone(&target.repo_url, staging, Some(token))?;
+    super::promote::promote_allowlisted_clone(staging, profile_dir)?;
+    super::promote::promote_clone_git_dir(staging, profile_dir)?;
+    GitRepo::open(profile_dir).context("open promoted profile repo")
+}
 
-    #[test]
-    fn launch_pull_decision_proceeds_when_connected_and_no_incident() {
-        let state = SyncStateFile {
-            connection: Some(github_connection(true)),
-            ..SyncStateFile::default()
-        };
-        assert_eq!(launch_pull_decision(&state), LaunchPullDecision::Proceed);
-    }
-
-    #[test]
-    fn launch_pull_decision_blocks_only_on_conflict_kinds() {
-        let cases = [
-            (
-                SyncIncidentKind::Conflict,
-                LaunchPullDecision::Skip(CONFLICT_SKIP),
-            ),
-            (
-                SyncIncidentKind::PushConflict,
-                LaunchPullDecision::Skip(CONFLICT_SKIP),
-            ),
-            (
-                SyncIncidentKind::LaunchPullReview,
-                LaunchPullDecision::Proceed,
-            ),
-            (
-                SyncIncidentKind::ManualPullReview,
-                LaunchPullDecision::Proceed,
-            ),
-            (
-                SyncIncidentKind::ConnectPullReview,
-                LaunchPullDecision::Proceed,
-            ),
-            (SyncIncidentKind::Unknown, LaunchPullDecision::Proceed),
-        ];
-        for (kind, expected) in cases {
-            let state = SyncStateFile {
-                connection: Some(github_connection(true)),
-                incident: Some(incident_with_kind(kind)),
-                ..SyncStateFile::default()
-            };
-            assert_eq!(launch_pull_decision(&state), expected, "kind: {kind:?}");
+fn create_staging_dir(profile_dir: &Path) -> Result<PathBuf> {
+    let parent = profile_dir.parent().ok_or_else(|| {
+        anyhow::anyhow!(
+            "profile dir {} has no parent for staging",
+            profile_dir.display()
+        )
+    })?;
+    let pid = std::process::id();
+    for attempt in 0..128 {
+        let name = format!(".sync-staging-{pid}-{attempt}");
+        let candidate = parent.join(&name);
+        if !candidate.exists() {
+            std::fs::create_dir_all(&candidate).with_context(|| {
+                format!("create staging dir {}", candidate.display())
+            })?;
+            return Ok(candidate);
         }
     }
+    anyhow::bail!("could not allocate a staging directory under {}", parent.display())
+}
 
-    #[test]
-    fn launch_pull_decision_blocks_even_when_pull_on_launch_disabled() {
-        let state = SyncStateFile {
-            connection: Some(github_connection(false)),
-            incident: Some(incident_with_kind(SyncIncidentKind::Conflict)),
-            ..SyncStateFile::default()
-        };
-        assert_eq!(
-            launch_pull_decision(&state),
-            LaunchPullDecision::Skip(CONFLICT_SKIP),
-            "conflict gate runs before the pull_on_launch flag check",
-        );
+fn ensure_gitignore(repo_path: &Path) -> Result<()> {
+    let path = repo_path.join(".gitignore");
+    if path.exists() {
+        return Ok(());
     }
+    std::fs::write(&path, GITIGNORE_CONTENTS).with_context(|| format!("write {}", path.display()))
+}
 
-    #[test]
-    fn launch_pull_decision_ignores_last_error() {
-        let state = SyncStateFile {
-            connection: Some(github_connection(true)),
-            last_error: Some("network unreachable".to_string()),
-            ..SyncStateFile::default()
-        };
-        assert_eq!(
-            launch_pull_decision(&state),
-            LaunchPullDecision::Proceed,
-            "last_error gates auto_push_if_dirty but not pull_on_launch",
-        );
-    }
-
-    const CONFLICT_SKIP: &str = "Cloud sync pull skipped: unresolved conflict";
-
-    struct SyncTestEnv {
-        _config_root: tempfile::TempDir,
-        remote_dir: tempfile::TempDir,
-        _path_guard: crate::paths::TestPathRootGuard,
-    }
-
-    impl SyncTestEnv {
-        fn new() -> Self {
-            let _config_root = tempfile::TempDir::new().unwrap();
-            let _path_guard = crate::paths::push_test_path_root(_config_root.path());
-            let remote_dir = tempfile::TempDir::new().unwrap();
-            std::fs::create_dir_all(crate::paths::plugins_dir().unwrap()).unwrap();
-            Self {
-                _config_root,
-                remote_dir,
-                _path_guard,
-            }
-        }
-
-        fn plugins_dir(&self) -> std::path::PathBuf {
-            crate::paths::plugins_dir().unwrap()
-        }
-
-        fn folder_request(&self, pull_on_launch: bool, push_on_change: bool) -> SyncConnectRequest {
-            SyncConnectRequest::Folder {
-                folder_path: self.remote_dir.path().display().to_string(),
-                path: "profile.json".to_string(),
-                pull_on_launch,
-                push_on_change,
-            }
-        }
-
-        fn folder_connection(&self, pull_on_launch: bool) -> SyncConnection {
-            SyncConnection::Folder(LocalFolderSyncConnection {
-                folder_path: self.remote_dir.path().display().to_string(),
-                path: "profile.json".to_string(),
-                pull_on_launch,
-                push_on_change: true,
-            })
-        }
-
-        fn write_remote_bundle(&self, bundle: serde_json::Value) {
-            std::fs::write(
-                self.remote_dir.path().join("profile.json"),
-                bundle.to_string(),
-            )
-            .unwrap();
-        }
-
-        fn write_local_hotkeys(&self, hotkeys: serde_json::Value) {
-            let path = crate::paths::hotkeys_path().unwrap();
-            crate::file_io::ensure_parent_dir(&path).unwrap();
-            std::fs::write(path, serde_json::json!({ "hotkeys": hotkeys }).to_string()).unwrap();
-        }
-
-        fn read_local_hotkeys(&self) -> serde_json::Value {
-            let path = crate::paths::hotkeys_path().unwrap();
-            let content = std::fs::read_to_string(&path).unwrap_or_default();
-            serde_json::from_str::<serde_json::Value>(&content)
-                .ok()
-                .and_then(|v| v.get("hotkeys").cloned())
-                .unwrap_or(serde_json::Value::Null)
-        }
-
-        fn list_backups(&self) -> Vec<String> {
-            let dir = match crate::paths::sync_backups_dir() {
-                Ok(dir) => dir,
-                Err(_) => return Vec::new(),
-            };
-            std::fs::read_dir(&dir)
-                .map(|entries| {
-                    entries
-                        .filter_map(|entry| entry.ok())
-                        .filter_map(|entry| entry.file_name().into_string().ok())
-                        .collect()
-                })
-                .unwrap_or_default()
-        }
-
-        fn load_persisted_state(&self) -> SyncStateFile {
-            super::load_state_file().unwrap()
-        }
-    }
-
-    #[tokio::test]
-    async fn connect_with_diverging_remote_writes_backup_and_applies_remote() {
-        let env = SyncTestEnv::new();
-        env.write_local_hotkeys(serde_json::json!([{ "id": "h1" }, { "id": "h2" }]));
-        env.write_remote_bundle(serde_json::json!({ "hotkeys": [] }));
-
-        let service = SyncService::new(env.plugins_dir()).unwrap();
-        let result = service
-            .connect(env.folder_request(true, true))
-            .await
-            .unwrap();
-
-        assert!(result.applied_remote, "Connect must apply diverging remote");
-        assert_eq!(
-            env.read_local_hotkeys(),
-            serde_json::json!([]),
-            "local hotkeys overwritten by empty remote (this is the user-reported wipe vector)",
-        );
-        let backups = env.list_backups();
-        assert_eq!(backups.len(), 1, "exactly one backup, got: {backups:?}");
-        assert!(
-            backups[0].contains("remote-applied"),
-            "backup name should include 'remote-applied' tag, got: {}",
-            backups[0],
-        );
-        let state = env.load_persisted_state();
-        assert_eq!(
-            state.incident.as_ref().map(|i| i.kind),
-            Some(SyncIncidentKind::ConnectPullReview),
-            "Connect mode incident is review, NOT Conflict - so the launch-pull conflict gate does NOT block subsequent pulls in this scenario",
-        );
-    }
-
-    #[tokio::test]
-    async fn pull_returns_conflict_when_local_and_remote_diverge_from_last_synced() {
-        let env = SyncTestEnv::new();
-        env.write_local_hotkeys(serde_json::json!([{ "id": "shared" }]));
-        env.write_remote_bundle(serde_json::json!({ "hotkeys": [{ "id": "shared" }] }));
-
-        let service = SyncService::new(env.plugins_dir()).unwrap();
-        service
-            .connect(env.folder_request(true, true))
-            .await
-            .unwrap();
-
-        env.write_local_hotkeys(serde_json::json!([{ "id": "local-only" }]));
-        env.write_remote_bundle(serde_json::json!({ "hotkeys": [{ "id": "remote-only" }] }));
-
-        let result = service.manual_pull().await.unwrap();
-
-        assert!(
-            !result.applied_remote,
-            "conflict path must not apply remote"
-        );
-        assert_eq!(
-            env.read_local_hotkeys(),
-            serde_json::json!([{ "id": "local-only" }]),
-            "local must be preserved through a conflict",
-        );
-        let state = env.load_persisted_state();
-        assert_eq!(
-            state.incident.as_ref().map(|i| i.kind),
-            Some(SyncIncidentKind::Conflict),
-            "incident kind must be Conflict so the launch-pull gate fires next restart",
-        );
-        assert!(
-            env.list_backups()
-                .iter()
-                .any(|name| name.contains("conflict")),
-            "conflict path must write a backup of local-at-divergence",
-        );
-    }
-
-    #[tokio::test]
-    async fn pull_on_launch_is_gated_when_persisted_state_has_conflict_incident() {
-        let env = SyncTestEnv::new();
-        env.write_local_hotkeys(serde_json::json!([{ "id": "preserved" }]));
-        env.write_remote_bundle(serde_json::json!({ "hotkeys": [{ "id": "tempting-but-stale" }] }));
-
-        let pre_state = SyncStateFile {
-            connection: Some(env.folder_connection(true)),
-            last_synced_hash: Some("any-stale-hash".to_string()),
-            incident: Some(SyncIncident {
-                kind: SyncIncidentKind::Conflict,
-                message: "diverged".to_string(),
-                backup_file: None,
-                created_at: now_rfc3339(),
-            }),
-            ..SyncStateFile::default()
-        };
-        save_state_file(&pre_state).unwrap();
-
-        let service = SyncService::new(env.plugins_dir()).unwrap();
-        let result = service.pull_on_launch().await.unwrap();
-
-        assert_eq!(result.message, CONFLICT_SKIP);
-        assert!(!result.applied_remote);
-        assert_eq!(
-            env.read_local_hotkeys(),
-            serde_json::json!([{ "id": "preserved" }]),
-            "gate must keep local intact across restart",
-        );
-    }
-
-    #[tokio::test]
-    async fn acknowledge_incident_clears_only_the_incident_field() {
-        let env = SyncTestEnv::new();
-        let pre_state = SyncStateFile {
-            connection: Some(env.folder_connection(true)),
-            last_synced_hash: Some("preserved-hash".to_string()),
-            remote_revision: Some("preserved-rev".to_string()),
-            last_sync_at: Some("2026-05-01T00:00:00Z".to_string()),
-            incident: Some(SyncIncident {
-                kind: SyncIncidentKind::Conflict,
-                message: "diverged".to_string(),
-                backup_file: Some("20260501-000000-conflict.json".to_string()),
-                created_at: now_rfc3339(),
-            }),
-            last_error: None,
-        };
-        save_state_file(&pre_state).unwrap();
-
-        let service = SyncService::new(env.plugins_dir()).unwrap();
-        service.acknowledge_incident().await.unwrap();
-
-        let state = env.load_persisted_state();
-        assert!(state.incident.is_none(), "incident must clear");
-        assert_eq!(
-            state.last_synced_hash.as_deref(),
-            Some("preserved-hash"),
-            "last_synced_hash is intentionally preserved by acknowledge",
-        );
-        assert_eq!(state.remote_revision.as_deref(), Some("preserved-rev"));
-        assert_eq!(state.last_sync_at.as_deref(), Some("2026-05-01T00:00:00Z"));
-        assert!(state.connection.is_some());
-    }
-
-    #[test]
-    fn is_transport_error_recognises_provider_transport_variant() {
-        let cases = [
-            (
-                anyhow::Error::new(ProviderError::Transport("dns".to_string())),
-                true,
-                "raw Transport",
-            ),
-            (
-                anyhow::Error::new(ProviderError::Upstream("500".to_string())),
-                false,
-                "raw Upstream",
-            ),
-            (
-                anyhow::Error::new(ProviderError::Auth("401".to_string())),
-                false,
-                "raw Auth",
-            ),
-            (
-                anyhow::Error::new(ProviderError::Conflict("etag".to_string())),
-                false,
-                "raw Conflict",
-            ),
-            (anyhow!("plain anyhow"), false, "no provider error in chain"),
-            (
-                anyhow::Error::new(ProviderError::Transport("net".to_string()))
-                    .context("while pulling"),
-                true,
-                "Transport buried under .context()",
-            ),
-        ];
-        for (error, expected, label) in &cases {
-            assert_eq!(is_transport_error(error), *expected, "case: {label}");
-        }
-    }
-
-    #[tokio::test]
-    async fn disconnect_zeroes_every_state_field() {
-        let env = SyncTestEnv::new();
-        let pre_state = SyncStateFile {
-            connection: Some(env.folder_connection(true)),
-            last_synced_hash: Some("hash".to_string()),
-            remote_revision: Some("rev".to_string()),
-            last_sync_at: Some("2026-01-01T00:00:00Z".to_string()),
-            incident: Some(SyncIncident {
-                kind: SyncIncidentKind::Conflict,
-                message: "test".to_string(),
-                backup_file: None,
-                created_at: now_rfc3339(),
-            }),
-            last_error: Some("err".to_string()),
-        };
-        save_state_file(&pre_state).unwrap();
-
-        let service = SyncService::new(env.plugins_dir()).unwrap();
-        service.disconnect().await.unwrap();
-
-        let state = env.load_persisted_state();
-        assert!(state.connection.is_none());
-        assert!(state.last_synced_hash.is_none());
-        assert!(state.remote_revision.is_none());
-        assert!(state.last_sync_at.is_none());
-        assert!(state.incident.is_none());
-        assert!(state.last_error.is_none());
-    }
+fn short_sha(sha: &str) -> String {
+    sha.chars().take(7).collect()
 }

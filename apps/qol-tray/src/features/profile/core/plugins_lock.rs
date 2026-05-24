@@ -105,7 +105,6 @@ fn build_plugins_lock_with_options<'a>(
     let existing_urls = existing_repo_urls(existing);
     let mut next = plugins
         .into_iter()
-        .filter(|plugin| plugin.source == crate::plugins::PluginSource::Installed)
         .map(|plugin| PluginLockEntry {
             id: plugin.id.to_string(),
             repo_url: resolve_repo_url(plugin.id.as_str(), &existing_urls, cached_urls),

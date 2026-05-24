@@ -5,13 +5,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub fn ensure_profile_dirs() -> Result<()> {
-    for path in [
-        crate::paths::profile_dir()?,
-        crate::paths::profile_core_dir()?,
-        crate::paths::profile_plugin_configs_dir()?,
-    ] {
-        std::fs::create_dir_all(path)?;
-    }
+    let name = crate::paths::active_profile_name();
+    super::super::registry::ensure_profile_dirs_for(&name)?;
     save_manifest(&ProfileManifest {
         version: CURRENT_PROFILE_VERSION,
     })

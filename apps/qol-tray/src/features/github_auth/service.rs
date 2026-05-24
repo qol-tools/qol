@@ -14,7 +14,6 @@ const DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 const ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const USER_URL: &str = "https://api.github.com/user";
 const SESSION_TTL: Duration = Duration::from_secs(900);
-const OAUTH_SCOPE: &str = "gist";
 const DEFAULT_OAUTH_CLIENT_ID: &str = "Ov23liCGJveN37QzFWGY";
 
 pub(crate) struct GitHubAuthService {
@@ -55,7 +54,7 @@ impl GitHubAuthService {
         github_auth_status()
     }
 
-    pub(crate) async fn start(&self) -> Result<GitHubAuthStartResponse> {
+    pub(crate) async fn start(&self, scopes: &[String]) -> Result<GitHubAuthStartResponse> {
         #[derive(Deserialize)]
         struct DeviceCodeResponse {
             device_code: String,
@@ -64,13 +63,18 @@ impl GitHubAuthService {
             interval: Option<u64>,
         }
 
+        if scopes.is_empty() {
+            anyhow::bail!("no scopes provided for GitHub authorization");
+        }
+        let scope_param = scopes.join(",");
+
         let response = self
             .client
             .post(DEVICE_CODE_URL)
             .header("Accept", "application/json")
             .json(&serde_json::json!({
                 "client_id": self.client_id,
-                "scope": OAUTH_SCOPE,
+                "scope": scope_param,
             }))
             .send()
             .await?;
@@ -228,6 +232,7 @@ impl GitHubAuthService {
             login: Some(login.clone()),
             scopes: token.scopes,
         })?;
+        run_post_auth_migrations().await;
         let mut sessions = self
             .sessions
             .lock()
@@ -288,6 +293,19 @@ enum DeviceFlowResult {
 struct OAuthAccessToken {
     access_token: String,
     scopes: Vec<String>,
+}
+
+async fn run_post_auth_migrations() {
+    let config_dir = match crate::paths::shared_config_dir() {
+        Ok(dir) => dir,
+        Err(error) => {
+            log::error!("post-auth migrations skipped: cannot resolve config dir: {error:#}");
+            return;
+        }
+    };
+    if let Err(error) = crate::migrations_startup::run_post_auth_if_authed(&config_dir).await {
+        log::error!("post-auth migrations failed after credential store: {error:#}");
+    }
 }
 
 fn parse_scopes(scope: Option<&str>) -> Vec<String> {

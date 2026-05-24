@@ -384,6 +384,139 @@ fn parse_manifest_without_traits_yields_none() {
 }
 
 #[test]
+fn manifest_without_config_block_has_empty_scope_map() {
+    let manifest: PluginManifest = toml::from_str(TRAITS_MANIFEST_HEAD).unwrap();
+    assert!(manifest.config.scope.is_empty());
+}
+
+#[test]
+fn manifest_config_scope_parses_each_variant() {
+    let toml = format!(
+        r#"{TRAITS_MANIFEST_HEAD}
+[config.scope]
+broker_url = "device"
+hotkey     = "os"
+presets    = "core"
+"#
+    );
+    let manifest: PluginManifest = toml::from_str(&toml).unwrap();
+    let cases = [
+        ("broker_url", ConfigScope::Device),
+        ("hotkey", ConfigScope::Os),
+        ("presets", ConfigScope::Core),
+    ];
+    for (field, expected) in cases {
+        assert_eq!(manifest.config.scope_for(field), expected, "field {field}");
+    }
+}
+
+#[test]
+fn config_scope_for_unlisted_field_returns_core_by_default() {
+    let manifest: PluginManifest = toml::from_str(TRAITS_MANIFEST_HEAD).unwrap();
+    assert_eq!(manifest.config.scope_for("anything"), ConfigScope::Core);
+}
+
+#[test]
+fn manifest_rejects_unknown_config_scope_value() {
+    let toml = format!(
+        r#"{TRAITS_MANIFEST_HEAD}
+[config.scope]
+broker_url = "global"
+"#
+    );
+    assert!(toml::from_str::<PluginManifest>(&toml).is_err());
+}
+
+#[test]
+fn manifest_accepts_legacy_any_string_as_alias_for_core() {
+    let toml = format!(
+        r#"{TRAITS_MANIFEST_HEAD}
+[config.scope]
+presets = "any"
+"#
+    );
+    let manifest: PluginManifest = toml::from_str(&toml).unwrap();
+    assert_eq!(
+        manifest.config.scope_for("presets"),
+        ConfigScope::Core,
+        "legacy `any` value must keep parsing as Core so old in-tree manifests do not regress"
+    );
+}
+
+#[test]
+fn manifest_default_scope_applies_to_fields_without_individual_declaration() {
+    let toml = format!(
+        r#"{TRAITS_MANIFEST_HEAD}
+[config]
+default_scope = "os"
+"#
+    );
+    let manifest: PluginManifest = toml::from_str(&toml).unwrap();
+    assert_eq!(
+        manifest.config.scope_for("any_unlisted_field"),
+        ConfigScope::Os,
+        "plugin-level default_scope is the fallback when a field is not in [config.scope]"
+    );
+}
+
+#[test]
+fn manifest_per_field_scope_overrides_default_scope() {
+    let toml = format!(
+        r#"{TRAITS_MANIFEST_HEAD}
+[config]
+default_scope = "os"
+
+[config.scope]
+broker_url = "device"
+"#
+    );
+    let manifest: PluginManifest = toml::from_str(&toml).unwrap();
+    assert_eq!(
+        manifest.config.scope_for("broker_url"),
+        ConfigScope::Device,
+        "explicit per-field scope must win over plugin-level default_scope"
+    );
+    assert_eq!(
+        manifest.config.scope_for("other_field"),
+        ConfigScope::Os,
+        "other fields still fall through to the default_scope"
+    );
+}
+
+#[test]
+fn manifest_default_scope_parses_each_variant() {
+    for (raw, expected) in [
+        ("core", ConfigScope::Core),
+        ("os", ConfigScope::Os),
+        ("device", ConfigScope::Device),
+        ("any", ConfigScope::Core),
+    ] {
+        let toml = format!(
+            r#"{TRAITS_MANIFEST_HEAD}
+[config]
+default_scope = "{raw}"
+"#
+        );
+        let manifest: PluginManifest = toml::from_str(&toml).unwrap();
+        assert_eq!(
+            manifest.config.scope_for("unspecified"),
+            expected,
+            "default_scope = {raw:?} must apply to unspecified fields"
+        );
+    }
+}
+
+#[test]
+fn manifest_without_default_scope_falls_through_to_core() {
+    let manifest: PluginManifest = toml::from_str(TRAITS_MANIFEST_HEAD).unwrap();
+    assert!(
+        manifest.config.default_scope.is_none(),
+        "default_scope is None when not declared, not Some(Core); keeps the field optional in TOML"
+    );
+    assert_eq!(manifest.config.scope_for("x"), ConfigScope::Core);
+}
+
+#[test]
 fn parse_manifest_traits_preserves_kebab_and_snake_keys() {
     let toml = format!(
         r#"{TRAITS_MANIFEST_HEAD}

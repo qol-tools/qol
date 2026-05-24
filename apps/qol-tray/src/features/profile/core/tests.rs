@@ -266,6 +266,7 @@ fn build_plugins_lock_preserves_unsupported_entries_and_resolves_repo_sources() 
         vec![
             "plugin-cached",
             "plugin-default",
+            "plugin-dev",
             "plugin-existing",
             "plugin-unsupported",
         ]
@@ -273,6 +274,10 @@ fn build_plugins_lock_preserves_unsupported_entries_and_resolves_repo_sources() 
     assert_eq!(
         repo_url_for(&lock, "plugin-existing"),
         "https://example.com/existing.git"
+    );
+    assert_eq!(
+        repo_url_for(&lock, "plugin-dev"),
+        "https://github.com/qol-tools/plugin-dev.git"
     );
     assert_eq!(
         repo_url_for(&lock, "plugin-cached"),
@@ -283,12 +288,12 @@ fn build_plugins_lock_preserves_unsupported_entries_and_resolves_repo_sources() 
         "https://github.com/qol-tools/plugin-default.git"
     );
     assert_eq!(version_for(&lock, "plugin-existing"), "1.2.3");
+    assert_eq!(version_for(&lock, "plugin-dev"), "8.8.8");
     assert_eq!(version_for(&lock, "plugin-unsupported"), "9.9.9");
     assert!(!lock
         .plugins
         .iter()
         .any(|plugin| plugin.id == "plugin-missing"));
-    assert!(!lock.plugins.iter().any(|plugin| plugin.id == "plugin-dev"));
 }
 
 #[test]
@@ -603,11 +608,11 @@ async fn unsupported_profile_plugins_are_preserved_in_lock_and_sync_output() {
     };
 
     let result = apply_import_bundle(&plugins_dir, &bundle).await.unwrap();
-    let document = build_sync_document(load_plugins_lock().unwrap().plugins).unwrap();
+    let lock = load_plugins_lock().unwrap();
 
     assert_eq!(result.plugins[0].status, "skipped");
     assert_eq!(
-        document.plugins,
+        lock.plugins,
         vec![PluginLockEntry {
             id: "plugin-skip".to_string(),
             repo_url: "https://github.com/qol-tools/plugin-skip.git".to_string(),
@@ -675,6 +680,7 @@ fn test_plugin(
             capabilities: Capabilities::default(),
             build: Default::default(),
             traits: None,
+            config: Default::default(),
         },
         PathBuf::from(format!("/tmp/{id}")),
         source,

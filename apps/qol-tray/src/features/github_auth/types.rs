@@ -24,6 +24,8 @@ pub(crate) struct GitHubAuthStatus {
     pub(crate) login: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) source: Option<GitHubCredentialSource>,
+    #[serde(default)]
+    pub(crate) scopes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

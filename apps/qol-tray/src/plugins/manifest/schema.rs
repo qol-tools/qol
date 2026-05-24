@@ -19,6 +19,36 @@ pub struct PluginManifest {
     pub build: BuildInfo,
     #[serde(default)]
     pub traits: Option<serde_json::Value>,
+    #[serde(default)]
+    pub config: ConfigDeclarations,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct ConfigDeclarations {
+    #[serde(default)]
+    pub default_scope: Option<ConfigScope>,
+    #[serde(default)]
+    pub scope: HashMap<String, ConfigScope>,
+}
+
+impl ConfigDeclarations {
+    pub fn scope_for(&self, field: &str) -> ConfigScope {
+        self.scope
+            .get(field)
+            .copied()
+            .or(self.default_scope)
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum ConfigScope {
+    #[default]
+    #[serde(alias = "any")]
+    Core,
+    Os,
+    Device,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
