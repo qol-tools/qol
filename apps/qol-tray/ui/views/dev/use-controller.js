@@ -8,7 +8,6 @@ import { createMockController } from './mock-controller.js';
 import { createCoreLogActions } from './core-log-actions.js';
 import { createPluginActionsController } from './plugin-actions-controller.js';
 import { nextDiscoveryCompletedState, nextDiscoveryStartedState } from './discovery/reducer.js';
-import { handleDevKey } from './keys.js';
 
 export function createInitialState() {
     return {
@@ -183,6 +182,5 @@ export function useDevController(containerRef) {
     useReconnectSubscription(state, ctrl);
     useHydration(state, ctrl, bump);
     const { onFocus, onBlur } = useFocusLifecycle(state, ctrl, bump);
-    const handleKey = useCallback(e => handleDevKey(e, state, ctrl), []);
-    return buildControllerInterface(state, ctrl, bump, { onFocus, onBlur, handleKey });
+    return buildControllerInterface(state, ctrl, bump, { onFocus, onBlur });
 }

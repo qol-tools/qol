@@ -194,7 +194,7 @@ function useKeyboard(d, m, deleteById, runById) {
             modalNav.handleKey(e);
             return;
         }
-        if (e.key === 'r' || e.key === 'R') {
+        if ((e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey && !e.altKey) {
             if (selected) { e.preventDefault(); runById(selected.id); }
             return;
         }
