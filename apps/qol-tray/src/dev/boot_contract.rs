@@ -1,7 +1,3 @@
-//! Single owner of the boot-target invariant: dev/active-worktree.txt and the
-//! OS autostart artifact must agree on which binary should boot qol-tray.
-//! Spec: docs/superpowers/specs/2026-05-24-boot-target-drift-fix-design.md.
-
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
