@@ -99,10 +99,17 @@ pub fn disable_window_shadow() {
 /// Calling `makeKeyAndOrderFront` here makes the visible transition synchronous; the
 /// later GPUI activate becomes idempotent.
 pub fn show_picker_onscreen() {
+    #[cfg(debug_assertions)]
+    let t = std::time::Instant::now();
     with_picker_window(|win| {
         win.makeKeyAndOrderFront(None);
         win.setAlphaValue(1.0);
     });
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[alt-tab/show_onscreen] orderFront+alpha=1 took {}us",
+        t.elapsed().as_micros()
+    );
 }
 
 /// Force alpha=0 before reposition/activate so fresh content can lay out without a flash

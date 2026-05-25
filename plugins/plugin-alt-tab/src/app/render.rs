@@ -8,6 +8,17 @@ use crate::{IconMap, PreviewMap};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use std::sync::Arc;
+#[cfg(debug_assertions)]
+use std::sync::atomic::AtomicU32;
+#[cfg(debug_assertions)]
+use std::sync::LazyLock;
+#[cfg(debug_assertions)]
+use std::time::Instant;
+
+#[cfg(debug_assertions)]
+static RENDER_COUNT: AtomicU32 = AtomicU32::new(0);
+#[cfg(debug_assertions)]
+static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
 
 struct RenderSnap {
     selected_index: Option<usize>,
@@ -19,6 +30,17 @@ struct RenderSnap {
 
 impl Render for AltTabApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(debug_assertions)]
+        {
+            let n = RENDER_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            let win_count = self.delegate.read(cx).windows.len();
+            eprintln!(
+                "[alt-tab/render] call={} windows={} t={}us",
+                n,
+                win_count,
+                PROCESS_START.elapsed().as_micros()
+            );
+        }
         let entity = cx.weak_entity();
         let key_handler = cx.listener(|this, event: &KeyDownEvent, window, cx| {
             super::input::handle_key_down(this, event, window, cx);
