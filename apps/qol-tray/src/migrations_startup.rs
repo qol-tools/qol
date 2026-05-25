@@ -1,7 +1,3 @@
-//! Post-auth migrations runner, called from async startup once the GitHub
-//! credential (if any) has been loaded. No-ops when the user is not signed
-//! in to GitHub - cloud migrations require an OAuth token.
-
 use std::path::Path;
 
 use crate::features::github_auth::oauth_access_token;

@@ -1,7 +1,3 @@
-//! Single-owner facade for the per-OS autostart artifact (plist on macOS,
-//! .desktop on Linux, .cmd on Windows). Both read and write live here so
-//! callers do not have to choose between two modules.
-
 mod platform;
 
 use anyhow::Result;

@@ -1,10 +1,3 @@
-//! Linux-only hotkey matcher: pure-logic types consumed by the evdev backend.
-//!
-//! Lives here (rather than in `capture/mod.rs`) because every consumer of these
-//! symbols is gated on `#[cfg(target_os = "linux")] feature = "linux_evdev"`.
-//! Keeping them with the consumer keeps the cross-platform `capture/mod.rs`
-//! surface tiny and avoids dead-code warnings on macOS / Windows.
-
 use super::super::super::binding::{Binding, Combo, Mod};
 use std::collections::BTreeSet;
 

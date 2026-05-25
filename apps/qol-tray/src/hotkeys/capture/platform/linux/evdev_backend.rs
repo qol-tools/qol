@@ -1,5 +1,3 @@
-//! evdev + uinput implementation. Only compiled with `linux_evdev` feature.
-
 use super::super::super::Binding;
 use super::matcher::{keycodes, BindingMatcher, CaptureDecision};
 use anyhow::{Context, Result};

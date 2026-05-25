@@ -1,7 +1,3 @@
-//! Per-OS hotkey capture backends. Each `<os>.rs` exports `pub(crate) fn install`
-//! conforming to the same signature; this module wires the active one in via a
-//! cfg-aliased re-export so business code calls a single symbol regardless of OS.
-
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
