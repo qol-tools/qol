@@ -113,11 +113,6 @@ impl PickerInit {
         }
     }
 
-    /// Seed the offscreen pre-warmed picker with a synthetic 7-card grid so GPUI
-    /// compiles its shaders, allocates atlas tiles for card + label + icon primitives,
-    /// and warms text shaping caches before the user's first real Alt+Tab.
-    /// The window is alpha=0 offscreen during this paint, so the placeholder content
-    /// is never visible. First real show overwrites the delegate with live windows.
     pub(crate) fn warmup_seed(config: &AltTabConfig) -> Self {
         const WARMUP_CARDS: usize = 7;
         let mut windows = Vec::with_capacity(WARMUP_CARDS);
@@ -136,7 +131,7 @@ impl PickerInit {
                 height: 120.0,
                 is_minimized: false,
             });
-            let pixels = vec![0u8; 4 * 4 * 4]; // 4x4 RGBA, transparent
+            let pixels = vec![0u8; 4 * 4 * 4];
             if let Some(buf) =
                 image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(4, 4, pixels)
             {

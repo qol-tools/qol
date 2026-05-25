@@ -90,14 +90,6 @@ pub fn disable_window_shadow() {
     window.setBackgroundColor(Some(&clear));
 }
 
-/// Bring the picker to front synchronously and fade it in.
-///
-/// GPUI's `activate_window()` dispatches `makeKeyAndOrderFront` through
-/// `executor.spawn().detach()`, so the orderFront does not happen until the main-thread
-/// queue drains. On a cold first show that delay is what the user perceives as a multi-
-/// second blank gap: alpha is already 1.0 but the window is still ordered out.
-/// Calling `makeKeyAndOrderFront` here makes the visible transition synchronous; the
-/// later GPUI activate becomes idempotent.
 pub fn show_picker_onscreen() {
     #[cfg(debug_assertions)]
     let t = std::time::Instant::now();
@@ -143,14 +135,6 @@ pub fn pre_create_if_supported(
     cx: &mut gpui::App,
 ) {
     crate::picker::create::pre_create_offscreen(config, current, cx);
-    disable_orderfront_animation();
-}
-
-/// `WindowKind::Normal` inherits `NSWindowAnimationBehaviorDefault`, which adds a system
-/// fade-in animation (~150-250ms) every time the window is ordered front. The picker is
-/// supposed to feel instant, so opt out at boot. The setting persists for the window's
-/// lifetime, including every reuse.
-fn disable_orderfront_animation() {
     with_picker_window(|win| {
         win.setAnimationBehavior(NSWindowAnimationBehavior::None);
     });
