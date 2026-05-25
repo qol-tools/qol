@@ -3,7 +3,7 @@ mod cli;
 mod de_bindings;
 mod diagnosis;
 mod install_id;
-mod platform;
+pub(crate) mod platform;
 mod report;
 pub mod trigger;
 

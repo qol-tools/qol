@@ -17,6 +17,7 @@ import { ViewKeyboardProvider } from '../app/view-keyboard-context.js';
 import { buildViewOrder, renderPageContent, renderWorldViews, CONTENT_SIZED_PAGES } from '../app/views.js';
 import { RecompileDissolve } from '../lib/components/RecompileDissolve.js';
 import { GlobalToast } from './ApiErrorToast.js';
+import { BootHealedBanner } from './BootHealedBanner.js';
 import { SelectionCursorOverlay } from '../lib/components/SelectionCursorOverlay.js';
 import { CommandPalette } from './CommandPalette.js';
 import { createCamera } from '../lib/world-camera.js';
@@ -666,6 +667,7 @@ function AppShell() {
                         repoBranch=${repoBranch} />
                     <${SelectionCursorOverlay} camera=${camera} />
                     <${RecompileDissolve} triggerRef=${dissolveRef} />
+                    <${BootHealedBanner} />
                     <${GlobalToast} />
                 </div>
             <//>

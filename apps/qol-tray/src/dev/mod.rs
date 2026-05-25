@@ -1,4 +1,5 @@
 pub mod adapters;
+pub mod boot_contract;
 mod build;
 mod config;
 pub mod core;
@@ -24,5 +25,5 @@ pub use config::DevConfig;
 pub use discovery::discover_plugins;
 pub use linking::{
     active_dev_links, create_link, get_active_worktree_branch, list_linked_plugins, remove_link,
-    set_active_worktree_branch, LinkRequest, LinkedPlugin,
+    LinkRequest, LinkedPlugin,
 };

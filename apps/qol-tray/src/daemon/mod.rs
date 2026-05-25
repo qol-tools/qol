@@ -91,6 +91,10 @@ pub enum DaemonEvent {
     UpdateFailed {
         message: String,
     },
+    #[cfg(feature = "dev")]
+    BootTargetHealed {
+        report: crate::dev::boot_contract::HealReport,
+    },
 }
 
 #[cfg(test)]
@@ -103,6 +107,26 @@ mod tests {
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "plugins_changed");
         assert_eq!(json["revision"], 7);
+    }
+}
+
+#[cfg(all(test, feature = "dev"))]
+mod boot_heal_tests {
+    use super::*;
+    use crate::dev::boot_contract::HealReport;
+
+    #[test]
+    fn boot_target_healed_serializes() {
+        let event = DaemonEvent::BootTargetHealed {
+            report: HealReport {
+                events: vec![],
+                actions: vec![],
+                failures: vec![],
+            },
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "boot_target_healed");
+        assert!(json["report"].is_object());
     }
 }
 
