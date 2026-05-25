@@ -90,10 +90,19 @@ pub fn disable_window_shadow() {
     window.setBackgroundColor(Some(&clear));
 }
 
-/// Fade the picker fully opaque. Called after `activate_window()` returns so the window is
-/// already key by the time any pixels are visible — avoids the alt-release key-window race.
+/// Bring the picker to front synchronously and fade it in.
+///
+/// GPUI's `activate_window()` dispatches `makeKeyAndOrderFront` through
+/// `executor.spawn().detach()`, so the orderFront does not happen until the main-thread
+/// queue drains. On a cold first show that delay is what the user perceives as a multi-
+/// second blank gap: alpha is already 1.0 but the window is still ordered out.
+/// Calling `makeKeyAndOrderFront` here makes the visible transition synchronous; the
+/// later GPUI activate becomes idempotent.
 pub fn show_picker_onscreen() {
-    with_picker_window(|win| win.setAlphaValue(1.0));
+    with_picker_window(|win| {
+        win.makeKeyAndOrderFront(None);
+        win.setAlphaValue(1.0);
+    });
 }
 
 /// Force alpha=0 before reposition/activate so fresh content can lay out without a flash
