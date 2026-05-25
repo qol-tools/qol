@@ -1,0 +1,19 @@
+[package]
+name = "qol"
+version = "0.1.0"
+edition = "2021"
+description = "qol-tray dev orchestrator (replaces make)"
+license = "PolyForm-Noncommercial-1.0.0"
+authors = ["KMRH47"]
+
+[[bin]]
+name = "qol"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+serde_json = "1.0"
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3.8"
