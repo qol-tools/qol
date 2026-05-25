@@ -4,7 +4,8 @@ mod store;
 use serde::{Deserialize, Serialize};
 
 pub use listing::list_linked_plugins;
-pub use store::{create_link, get_active_worktree_branch, remove_link, set_active_worktree_branch};
+pub(crate) use store::set_active_worktree_branch;
+pub use store::{create_link, get_active_worktree_branch, remove_link};
 
 pub fn active_dev_links(
     config_dir: &std::path::Path,

@@ -1,5 +1,4 @@
-use anyhow::{anyhow, Context, Result};
-use std::fs;
+use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -22,7 +21,7 @@ use windows as imp;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 compile_error!("installer platform implementation is required for this target OS");
 
-pub(super) fn binary_filename() -> String {
+pub(crate) fn binary_filename() -> String {
     if cfg!(target_os = "windows") {
         "qol-tray.exe".to_string()
     } else {
@@ -30,16 +29,12 @@ pub(super) fn binary_filename() -> String {
     }
 }
 
-pub(super) fn install_dir() -> Result<PathBuf> {
+pub(crate) fn install_dir() -> Result<PathBuf> {
     imp::install_dir()
 }
 
 pub(super) fn autostart_path() -> Result<PathBuf> {
     imp::autostart_path()
-}
-
-pub(super) fn write_autostart_entry(binary_path: &Path) -> Result<()> {
-    imp::write_autostart_entry(binary_path)
 }
 
 pub(super) fn start_now(binary_path: &Path) -> Result<()> {
@@ -86,17 +81,6 @@ pub(super) fn bundled_binary_candidates(installer_path: &Path) -> Vec<PathBuf> {
         .parent()
         .map(|dir| vec![dir.join(binary_filename())])
         .unwrap_or_default()
-}
-
-pub(super) fn write_text_file(path: &Path, content: &str) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow!("Autostart path has no parent directory"))?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("Failed to create directory {}", parent.display()))?;
-    fs::write(path, content)
-        .with_context(|| format!("Failed to write autostart file {}", path.display()))?;
-    Ok(())
 }
 
 pub(super) fn spawn_detached(binary_path: &Path) -> Result<()> {

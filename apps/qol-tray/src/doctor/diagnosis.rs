@@ -70,7 +70,7 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
             install_id,
         } => write_install_id_file(marker_path, install_id),
         FixAction::WriteAutostartEntry { binary_path } => {
-            crate::installer::write_autostart_entry(binary_path)
+            crate::installer::autostart::write_target(binary_path)
         }
         FixAction::EnsurePluginsDir { path } => {
             fs::create_dir_all(path).with_context(|| format!("failed to create {}", path.display()))

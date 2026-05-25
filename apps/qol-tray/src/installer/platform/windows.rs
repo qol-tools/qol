@@ -19,13 +19,6 @@ pub(super) fn autostart_path() -> Result<PathBuf> {
         .join("qol-tray.cmd"))
 }
 
-pub(super) fn write_autostart_entry(binary_path: &Path) -> Result<()> {
-    let path = autostart_path()?;
-    let binary = binary_path.display().to_string().replace('\"', "\"\"");
-    let content = format!("@echo off\r\nstart \"\" \"{}\"\r\n", binary);
-    super::write_text_file(&path, &content)
-}
-
 pub(super) fn start_now(binary_path: &Path) -> Result<()> {
     super::spawn_detached(binary_path)
 }

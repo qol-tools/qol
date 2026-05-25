@@ -101,6 +101,18 @@ fn exec_restart_after_cleanup(
         return;
     }
 
+    if let Ok(config_dir) = crate::paths::shared_config_dir() {
+        let env = crate::installer::boot_environment::default_boot_environment();
+        let lister = crate::dev::boot_contract::GitWorktreeLister;
+        let probe = crate::dev::boot_contract::FsBinaryProbe;
+        let _ = crate::dev::boot_contract::set_selected_worktree(
+            env.as_ref(),
+            &config_dir,
+            worktree_branch,
+            &lister,
+            &probe,
+        );
+    }
     worktree_branch.map_or_else(
         || std::env::remove_var("QOL_DEV_WORKTREE_BRANCH"),
         |branch| std::env::set_var("QOL_DEV_WORKTREE_BRANCH", branch),

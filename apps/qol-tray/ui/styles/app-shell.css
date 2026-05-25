@@ -617,3 +617,50 @@ body {
     from { opacity: 0; transform: translateX(12px); }
     to { opacity: 1; transform: translateX(0); }
 }
+
+.boot-healed-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-md-minus);
+}
+
+.boot-healed-banner.banner-info {
+    background: var(--state-success-bg);
+    color: var(--green-300);
+    border: var(--border-w-1) solid var(--state-success-border);
+}
+
+.boot-healed-banner.banner-danger {
+    background: var(--state-danger-bg);
+    color: var(--red-300);
+    border: var(--border-w-1) solid var(--state-danger-border);
+}
+
+.boot-healed-banner .banner-text {
+    flex: 1;
+}
+
+.boot-healed-banner .banner-action {
+    color: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.boot-healed-banner .banner-dismiss {
+    background: none;
+    border: 0;
+    color: inherit;
+    font-size: var(--fs-lg);
+    cursor: pointer;
+    padding: 0 var(--space-1);
+    opacity: 0.7;
+    line-height: 1;
+}
+
+.boot-healed-banner .banner-dismiss:hover {
+    opacity: 1;
+}

@@ -2,6 +2,10 @@ mod already_running_notification;
 
 use anyhow::Result;
 use qol_tray::daemon::Daemon;
+
+#[cfg(feature = "dev")]
+static PENDING_HEAL_REPORT: std::sync::OnceLock<qol_tray::dev::boot_contract::HealReport> =
+    std::sync::OnceLock::new();
 use qol_tray::features::{self, FeatureRegistry};
 use qol_tray::hotkeys;
 
@@ -58,6 +62,33 @@ fn main() -> Result<()> {
         }
         if let Err(e) = qol_tray::housekeeping::run_startup_cleanup(&config_dir) {
             log::error!("Housekeeping failed: {}", e);
+        }
+    }
+
+    #[cfg(feature = "dev")]
+    {
+        if let Ok(config_dir) = qol_tray::paths::shared_config_dir() {
+            let env = qol_tray::installer::boot_environment::default_boot_environment();
+            let lister = qol_tray::dev::boot_contract::GitWorktreeLister;
+            let probe = qol_tray::dev::boot_contract::FsBinaryProbe;
+            let report = qol_tray::dev::boot_contract::heal_drift_on_startup(
+                env.as_ref(),
+                &config_dir,
+                &lister,
+                &probe,
+            );
+            for event in &report.events {
+                log::warn!("[boot-contract] drift observed: {:?}", event);
+            }
+            for action in &report.actions {
+                log::info!("[boot-contract] applied: {:?}", action);
+            }
+            for failure in &report.failures {
+                log::error!("[boot-contract] failed: {:?}", failure);
+            }
+            if !report.events.is_empty() {
+                let _ = PENDING_HEAL_REPORT.set(report);
+            }
         }
     }
 
@@ -333,6 +364,14 @@ async fn async_init_inner(
         qol_tray::logging::file_logger::log_startup(&startup_info);
     }
     let daemon = Daemon::new();
+    #[cfg(feature = "dev")]
+    if let Some(report) = PENDING_HEAL_REPORT.get() {
+        daemon
+            .events
+            .send(qol_tray::daemon::DaemonEvent::BootTargetHealed {
+                report: report.clone(),
+            });
+    }
     let mut feature_registry = FeatureRegistry::new();
     feature_registry.register(Box::new(features::plugin_store::Plugins::new()));
     #[cfg(feature = "dev")]

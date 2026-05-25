@@ -1,4 +1,5 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 const ICNS_DATA: &[u8] = include_bytes!("../../../assets/qol-tray.icns");
@@ -20,32 +21,6 @@ pub(super) fn autostart_path() -> Result<PathBuf> {
         .join("Library")
         .join("LaunchAgents")
         .join(format!("{BUNDLE_ID}.plist")))
-}
-
-pub(super) fn write_autostart_entry(binary_path: &Path) -> Result<()> {
-    let path = autostart_path()?;
-    let binary = xml_escape(&binary_path.display().to_string());
-    let plist = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-         <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
-         \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
-         <plist version=\"1.0\">\n\
-         <dict>\n\
-         <key>Label</key>\n\
-         <string>{BUNDLE_ID}</string>\n\
-         <key>ProgramArguments</key>\n\
-         <array>\n\
-         <string>{}</string>\n\
-         </array>\n\
-         <key>RunAtLoad</key>\n\
-         <true/>\n\
-         <key>KeepAlive</key>\n\
-         <false/>\n\
-         </dict>\n\
-         </plist>\n",
-        binary
-    );
-    super::write_text_file(&path, &plist)
 }
 
 pub(super) fn register_application(binary_path: &Path) -> Result<()> {
@@ -168,7 +143,18 @@ fn write_info_plist(bundle_root: &Path) -> Result<()> {
          </dict>\n\
          </plist>\n"
     );
-    super::write_text_file(&plist_path, &plist)
+    write_text_file(&plist_path, &plist)
+}
+
+fn write_text_file(path: &Path, content: &str) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("Autostart path has no parent directory"))?;
+    fs::create_dir_all(parent)
+        .with_context(|| format!("Failed to create directory {}", parent.display()))?;
+    fs::write(path, content)
+        .with_context(|| format!("Failed to write autostart file {}", path.display()))?;
+    Ok(())
 }
 
 fn write_icon(bundle_root: &Path) -> Result<()> {
@@ -190,13 +176,6 @@ fn codesign_bundle(bundle_root: &Path) {
         ),
         Err(e) => log::warn!("codesign not available: {e}"),
     }
-}
-
-fn xml_escape(input: &str) -> String {
-    input
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 #[cfg(test)]

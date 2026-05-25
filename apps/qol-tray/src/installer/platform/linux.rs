@@ -5,9 +5,6 @@ const ICON_64: &[u8] = include_bytes!("../../../assets/icons/64.png");
 const ICON_128: &[u8] = include_bytes!("../../../assets/icons/128.png");
 const ICON_256: &[u8] = include_bytes!("../../../assets/icons/256.png");
 
-const DESKTOP_TEMPLATE: &str =
-    include_str!("../../../scripts/installer/platform/linux/desktop/qol-tray.desktop");
-
 pub(super) fn install_dir() -> Result<PathBuf> {
     super::unix_common::install_dir()
 }
@@ -15,29 +12,6 @@ pub(super) fn install_dir() -> Result<PathBuf> {
 pub(super) fn autostart_path() -> Result<PathBuf> {
     let config_dir = dirs::config_dir().context("Could not determine config directory")?;
     Ok(config_dir.join("autostart").join("qol-tray.desktop"))
-}
-
-pub(super) fn write_autostart_entry(binary_path: &Path) -> Result<()> {
-    let path = autostart_path()?;
-    let desktop = render_desktop_entry(binary_path);
-    super::write_text_file(&path, &desktop)
-}
-
-fn render_desktop_entry(binary_path: &Path) -> String {
-    let exec_line = format!("Exec={}", binary_path.display());
-    let mut rendered = DESKTOP_TEMPLATE
-        .lines()
-        .map(|line| {
-            if line.starts_with("Exec=") {
-                exec_line.as_str()
-            } else {
-                line
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    rendered.push('\n');
-    rendered
 }
 
 pub(super) fn start_now(binary_path: &Path) -> Result<()> {

@@ -1,7 +1,10 @@
-use std::path::Path;
+use anyhow::Result;
+use std::path::{Path, PathBuf};
 
-pub(crate) trait DoctorPlatformOps {
-    fn install_marker_required(&self, current_exe: &Path) -> bool;
+pub(crate) trait AutostartOps {
+    fn read_target(&self) -> Result<Option<PathBuf>>;
+    fn write_target(&self, binary: &Path) -> Result<()>;
+    fn autostart_path(&self) -> Result<PathBuf>;
 }
 
 #[cfg(target_os = "linux")]
@@ -22,6 +25,14 @@ pub(crate) use unsupported::Platform;
 #[cfg(target_os = "windows")]
 pub(crate) use windows::Platform;
 
-pub(super) fn install_marker_required(current_exe: &Path) -> bool {
-    Platform.install_marker_required(current_exe)
+pub(super) fn read_target() -> Result<Option<PathBuf>> {
+    Platform.read_target()
+}
+
+pub(super) fn write_target(binary: &Path) -> Result<()> {
+    Platform.write_target(binary)
+}
+
+pub(super) fn autostart_path() -> Result<PathBuf> {
+    Platform.autostart_path()
 }

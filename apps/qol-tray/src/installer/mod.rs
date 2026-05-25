@@ -6,19 +6,21 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::mode::{ModeConfig, ModeFlag};
 
+pub mod autostart;
+pub mod boot_environment;
 mod files;
 mod platform;
 mod shell_hook;
 mod source;
 
+pub use boot_environment::BootEnvironment;
+#[cfg(feature = "dev")]
+pub(crate) use platform::binary_filename;
+
 const INSTALL_ID_FILE: &str = "qol-tray.install-id";
 
 pub fn autostart_path() -> Result<PathBuf> {
     platform::autostart_path()
-}
-
-pub fn write_autostart_entry(binary_path: &Path) -> Result<()> {
-    platform::write_autostart_entry(binary_path)
 }
 
 pub fn install_shell_hook() -> Result<()> {
@@ -46,7 +48,20 @@ pub fn bootstrap_current_install() -> Result<()> {
     let install_id = create_install_id();
     crate::paths::set_active_install_id(&install_id)?;
     files::ensure_plugin_dir()?;
-    platform::write_autostart_entry(&current_exe)
+    #[cfg(feature = "dev")]
+    {
+        let env = boot_environment::InstallBootEnvironment {
+            installed_binary: current_exe.clone(),
+            honors_dev_selection: true,
+        };
+        let lister = crate::dev::boot_contract::GitWorktreeLister;
+        let probe = crate::dev::boot_contract::FsBinaryProbe;
+        let config_dir = crate::paths::shared_config_dir()?;
+        crate::dev::boot_contract::set_selected_worktree(&env, &config_dir, None, &lister, &probe)?;
+    }
+    #[cfg(not(feature = "dev"))]
+    autostart::write_target(&current_exe)?;
+    Ok(())
 }
 
 pub fn run() -> Result<()> {
@@ -91,7 +106,19 @@ fn run_install(
     platform::set_executable_permissions(&installed_binary)?;
     let install_id = register_install_id(&installed_binary)?;
     let plugins_dir = files::ensure_plugin_dir()?;
-    platform::write_autostart_entry(&installed_binary)?;
+    #[cfg(feature = "dev")]
+    {
+        let env = boot_environment::InstallBootEnvironment {
+            installed_binary: installed_binary.clone(),
+            honors_dev_selection: true,
+        };
+        let lister = crate::dev::boot_contract::GitWorktreeLister;
+        let probe = crate::dev::boot_contract::FsBinaryProbe;
+        let config_dir = crate::paths::shared_config_dir()?;
+        crate::dev::boot_contract::set_selected_worktree(&env, &config_dir, None, &lister, &probe)?;
+    }
+    #[cfg(not(feature = "dev"))]
+    autostart::write_target(&installed_binary)?;
     platform::warn_system_install_conflict();
     platform::register_application(&installed_binary)?;
     install_shell_hook_warn_only(skip_shell_hook);

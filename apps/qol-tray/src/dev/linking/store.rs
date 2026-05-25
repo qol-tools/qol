@@ -1,6 +1,9 @@
 use std::path::Path;
 
-pub fn set_active_worktree_branch(config_dir: &Path, branch: Option<&str>) -> Result<(), String> {
+pub(crate) fn set_active_worktree_branch(
+    config_dir: &Path,
+    branch: Option<&str>,
+) -> Result<(), String> {
     let path = config_dir.join("dev/active-worktree.txt");
     if let Some(branch) = branch {
         std::fs::create_dir_all(config_dir.join("dev"))
