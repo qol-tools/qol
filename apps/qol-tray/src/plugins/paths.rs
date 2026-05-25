@@ -18,9 +18,25 @@ pub(crate) fn resolve_plugin_root(plugin_id: &str) -> Result<PathBuf> {
 
 pub(crate) fn resolve_plugin_root_from_plugins_dir(plugins_dir: &Path, plugin_id: &str) -> PathBuf {
     if let Some(active) = crate::plugins::registry::current_active_path(plugin_id) {
-        return active;
+        let overridden = worktree_override_root(&active);
+        return overridden.unwrap_or(active);
     }
     plugins_dir.join(plugin_id)
+}
+
+#[cfg(feature = "dev")]
+fn worktree_override_root(dev_link: &Path) -> Option<PathBuf> {
+    let config_dir = crate::paths::shared_config_dir().ok()?;
+    let branch = crate::dev::get_active_worktree_branch(&config_dir)?;
+    let mut map = std::collections::HashMap::new();
+    map.insert("p".to_string(), dev_link.to_path_buf());
+    let resolved = crate::dev::resolve_worktree_paths(&map, Some(&branch));
+    resolved.into_values().next().filter(|p| p != dev_link)
+}
+
+#[cfg(not(feature = "dev"))]
+fn worktree_override_root(_dev_link: &Path) -> Option<PathBuf> {
+    None
 }
 
 pub(crate) fn config_path(plugin_root: &Path) -> PathBuf {
