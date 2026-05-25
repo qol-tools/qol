@@ -10,10 +10,15 @@ A system tray daemon for running desktop behavior plugins.
 ```bash
 git clone https://github.com/qol-tools/qol-tray
 cd qol-tray
-make install
+cargo setup
+qol install
 ```
 
 Run `qol-tray`, click the tray icon to open the UI at `http://127.0.0.1:42700`, and install plugins from the store.
+
+## Developer commands
+
+See [`docs/qol-commands.md`](docs/qol-commands.md).
 
 ## About
 
