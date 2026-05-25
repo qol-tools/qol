@@ -1,6 +1,6 @@
 use crate::picker::create::PICKER_WINDOW_TITLE;
 use objc2::rc::Retained;
-use objc2_app_kit::NSWindow;
+use objc2_app_kit::{NSWindow, NSWindowAnimationBehavior};
 use objc2_foundation::MainThreadMarker;
 
 /// Offscreen origin used while the pre-created picker is hidden. Placed far enough from any
@@ -135,7 +135,18 @@ pub fn pre_create_if_supported(
     current: &crate::PickerWindowState,
     cx: &mut gpui::App,
 ) {
-    crate::picker::create::pre_create_offscreen(config, current, cx)
+    crate::picker::create::pre_create_offscreen(config, current, cx);
+    disable_orderfront_animation();
+}
+
+/// `WindowKind::Normal` inherits `NSWindowAnimationBehaviorDefault`, which adds a system
+/// fade-in animation (~150-250ms) every time the window is ordered front. The picker is
+/// supposed to feel instant, so opt out at boot. The setting persists for the window's
+/// lifetime, including every reuse.
+fn disable_orderfront_animation() {
+    with_picker_window(|win| {
+        win.setAnimationBehavior(NSWindowAnimationBehavior::None);
+    });
 }
 
 pub fn offscreen_origin() -> (f64, f64) {
