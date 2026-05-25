@@ -113,13 +113,47 @@ impl PickerInit {
         }
     }
 
-    pub(crate) fn empty(config: &AltTabConfig) -> Self {
+    /// Seed the offscreen pre-warmed picker with a synthetic 7-card grid so GPUI
+    /// compiles its shaders, allocates atlas tiles for card + label + icon primitives,
+    /// and warms text shaping caches before the user's first real Alt+Tab.
+    /// The window is alpha=0 offscreen during this paint, so the placeholder content
+    /// is never visible. First real show overwrites the delegate with live windows.
+    pub(crate) fn warmup_seed(config: &AltTabConfig) -> Self {
+        const WARMUP_CARDS: usize = 7;
+        let mut windows = Vec::with_capacity(WARMUP_CARDS);
+        let mut icons = IconMap::new();
+        for i in 0..WARMUP_CARDS {
+            let app_name = format!("__warmup_{i}");
+            windows.push(WindowInfo {
+                id: 0,
+                title: "warmup".to_string(),
+                app_name: app_name.clone(),
+                preview_path: None,
+                icon: None,
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 120.0,
+                is_minimized: false,
+            });
+            let pixels = vec![0u8; 4 * 4 * 4]; // 4x4 RGBA, transparent
+            if let Some(buf) =
+                image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(4, 4, pixels)
+            {
+                icons.insert(
+                    app_name,
+                    Arc::new(gpui::RenderImage::new(smallvec::smallvec![
+                        image::Frame::new(buf)
+                    ])),
+                );
+            }
+        }
         Self::new(
             config,
             GatheredWindows {
-                windows: Vec::new(),
+                windows,
                 previews: PreviewMap::new(),
-                icons: IconMap::new(),
+                icons,
             },
             None,
         )
@@ -185,7 +219,7 @@ pub(crate) fn pre_create_offscreen(
     current: &PickerWindowState,
     cx: &mut App,
 ) {
-    let init = PickerInit::empty(config);
+    let init = PickerInit::warmup_seed(config);
     let bounds = offscreen_bounds();
     let Some(handle) = open_picker_window(bounds, init, false, cx) else {
         #[cfg(debug_assertions)]
@@ -198,7 +232,7 @@ pub(crate) fn pre_create_offscreen(
     // gates even though its WindowHandle is now permanently registered.
     PICKER_VISIBLE.store(false, Ordering::Relaxed);
     #[cfg(debug_assertions)]
-    eprintln!("[alt-tab/boot] pre-created picker window (hidden offscreen)");
+    eprintln!("[alt-tab/boot] pre-created picker window (hidden offscreen, warmup-seeded)");
 }
 
 fn offscreen_bounds() -> Bounds<Pixels> {
