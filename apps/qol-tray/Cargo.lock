@@ -1779,6 +1779,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "tempfile",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "qol-config"
 version = "1.3.0"
 source = "git+https://github.com/qol-tools/qol-config#1b11cec84e8024c4b97610ef04e0a2c970433b6a"

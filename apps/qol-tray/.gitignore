@@ -12,6 +12,5 @@ proptest-regressions/
 
 .cursor/
 .idea/
-.cargo/config.toml
 .worktrees/
 .superpowers/

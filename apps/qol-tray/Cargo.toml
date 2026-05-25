@@ -22,6 +22,9 @@ path = "src/doctor/main.rs"
 name = "qol-tray-migrate"
 path = "src/migrate/main.rs"
 
+[workspace]
+members = ["tools/qol-cli"]
+
 [lib]
 name = "qol_tray"
 path = "src/lib.rs"
