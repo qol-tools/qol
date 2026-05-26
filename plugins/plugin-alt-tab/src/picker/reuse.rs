@@ -33,14 +33,13 @@ pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
     // Stale handles can still happen after platform failures; those fall through to create.
     req.handle
         .update(cx, |view, window: &mut Window, cx| {
-            super::platform::prepare_picker_for_show();
             if !view.apply_reuse(req, window, cx) {
                 return false;
             }
-            resize_if_needed(window, req.layout.size);
+            resize_or_sync_scale(window, req.layout.size, "reuse", false);
             window.focus(&view.focus_handle(cx));
             window.activate_window();
-            super::platform::show_picker_onscreen();
+            super::platform::show_picker();
             true
         })
         .unwrap_or(false)
@@ -68,19 +67,93 @@ fn picker_size(input: &LayoutInput) -> Size<Pixels> {
     size(px(w), px(h))
 }
 
-fn resize_if_needed(window: &mut Window, target: Size<Pixels>) {
+pub(super) fn resize_or_sync_scale(
+    window: &mut Window,
+    target: Size<Pixels>,
+    log_tag: &str,
+    log_skip: bool,
+) {
     let current = window.window_bounds().get_bounds().size;
     let dw = (current.width.to_f64() - target.width.to_f64()).abs();
     let dh = (current.height.to_f64() - target.height.to_f64()).abs();
-    if dw < 1.0 && dh < 1.0 {
+    if dw >= 1.0 || dh >= 1.0 {
+        log_resize(log_tag, current, target, dw, dh, window.scale_factor());
+        window.resize(target);
         return;
+    }
+
+    if sync_scale_if_needed(window, target, log_tag) {
+        return;
+    }
+
+    if !log_skip {
+        return;
+    }
+
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[alt-tab/{log_tag}] skip (no-op) curr={:.1}x{:.1} target={:.1}x{:.1} scale={:.2}",
+        current.width.to_f64(),
+        current.height.to_f64(),
+        target.width.to_f64(),
+        target.height.to_f64(),
+        window.scale_factor(),
+    );
+}
+
+fn sync_scale_if_needed(window: &mut Window, target: Size<Pixels>, log_tag: &str) -> bool {
+    #[cfg(not(debug_assertions))]
+    let _ = log_tag;
+
+    let Some(backing_scale) = super::platform::picker_backing_scale() else {
+        return false;
+    };
+    let cached_scale = window.scale_factor();
+    if (cached_scale - backing_scale).abs() < 0.01 {
+        return false;
     }
     #[cfg(debug_assertions)]
     eprintln!(
-        "[alt-tab/reuse] resize {}x{} → {}x{}",
-        current.width, current.height, target.width, target.height
+        "[alt-tab/{log_tag}] sync scale cached={cached_scale:.2} backing={backing_scale:.2} size={:.1}x{:.1}",
+        target.width.to_f64(),
+        target.height.to_f64(),
     );
+    window.resize(size(target.width + px(1.0), target.height));
     window.resize(target);
+    true
+}
+
+fn log_resize(
+    log_tag: &str,
+    current: Size<Pixels>,
+    target: Size<Pixels>,
+    dw: f64,
+    dh: f64,
+    scale: f32,
+) {
+    #[cfg(not(debug_assertions))]
+    let _ = (current, target, dw, dh, scale);
+
+    if log_tag == "reuse" {
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[alt-tab/reuse] resize {}x{} → {}x{}",
+            current.width, current.height, target.width, target.height
+        );
+        return;
+    }
+
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[alt-tab/{log_tag}] APPLY curr={:.1}x{:.1} → target={:.1}x{:.1} delta=({:.1},{:.1}) scale={:.2}",
+        current.width.to_f64(),
+        current.height.to_f64(),
+        target.width.to_f64(),
+        target.height.to_f64(),
+        dw,
+        dh,
+        scale,
+    );
 }
 
 #[cfg(test)]

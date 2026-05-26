@@ -20,6 +20,7 @@ pub(super) struct CreateRequest<'a> {
     pub preview_cache: SharedPreviewCache,
     pub current: &'a PickerWindowState,
     pub placement_dirty: &'a AtomicBool,
+    pub has_shown_once: Arc<AtomicBool>,
 }
 
 pub(super) fn create_new(req: &CreateRequest, gathered: GatheredWindows, cx: &mut App) {
@@ -41,6 +42,7 @@ pub(super) fn create_new(req: &CreateRequest, gathered: GatheredWindows, cx: &mu
         handle,
         req.icon_cache.clone(),
         req.preview_cache.clone(),
+        req.has_shown_once.clone(),
         cx,
     );
 }
@@ -222,12 +224,10 @@ pub(crate) fn pre_create_offscreen(
         return;
     };
     current.borrow_mut().insert(super::BOOTSTRAP_KEY, handle);
-    super::platform::hide_picker_offscreen();
-    // Resetting PICKER_VISIBLE keeps the pre-created window out of dispatch_show / cache
-    // gates even though its WindowHandle is now permanently registered.
+    super::platform::hide_picker();
     PICKER_VISIBLE.store(false, Ordering::Relaxed);
     #[cfg(debug_assertions)]
-    eprintln!("[alt-tab/boot] pre-created picker window (hidden offscreen, warmup-seeded)");
+    eprintln!("[alt-tab/boot] pre-created picker window (alpha=0, warmup-seeded)");
 }
 
 fn offscreen_bounds() -> Bounds<Pixels> {
@@ -258,9 +258,11 @@ impl PostCreateData {
         handle: WindowHandle<AltTabApp>,
         icon_cache: SharedIconCache,
         preview_cache: SharedPreviewCache,
+        has_shown_once: Arc<AtomicBool>,
         cx: &mut App,
     ) {
         PICKER_VISIBLE.store(true, Ordering::Relaxed);
+        has_shown_once.store(true, Ordering::Release);
         cx.activate(true);
         if self.transparent_bg {
             super::platform::disable_window_shadow();

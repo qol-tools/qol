@@ -56,6 +56,10 @@ pub fn reposition_picker_window(x: f64, y: f64) -> bool {
     move_window_by_title("qol-alt-tab-picker", x as i32, y as i32)
 }
 
+pub fn picker_backing_scale() -> Option<f32> {
+    None
+}
+
 fn move_window_by_title(title: &str, x: i32, y: i32) -> bool {
     let Ok((conn, screen_num)) = x11rb::connect(None) else {
         return false;
@@ -169,11 +173,11 @@ fn intern(conn: &impl Connection, name: &[u8]) -> Option<u32> {
 
 pub fn disable_window_shadow() {}
 
-pub fn show_picker_onscreen() {}
+pub fn set_ghost_opacity(_opacity: Option<f32>) {}
 
-pub fn prepare_picker_for_show() {}
+pub fn show_picker() {}
 
-pub fn hide_picker_offscreen() {
+pub fn hide_picker() {
     let _ = minimize_window_by_title("qol-alt-tab-picker");
 }
 
@@ -181,7 +185,7 @@ pub fn offscreen_origin() -> (f64, f64) {
     (BOOTSTRAP_X, BOOTSTRAP_Y)
 }
 
-pub fn pre_create_if_supported(
+pub fn pre_create(
     config: &crate::config::AltTabConfig,
     current: &crate::PickerWindowState,
     cx: &mut gpui::App,

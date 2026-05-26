@@ -98,14 +98,27 @@ impl AltTabApp {
         let dirty = req.placement_dirty.load(Ordering::Acquire);
         #[cfg(debug_assertions)]
         eprintln!(
-            "[alt-tab/hold] reuse path (poll_task={}) — reset={} dirty={} last_applied={:?} target={:?}",
+            "[alt-tab/hold] reuse path (poll_task={}) - reset={} dirty={} last_applied={:?} target={:?}",
             self._alt_poll_task.is_some(),
             req.config.reset_selection_on_open,
             dirty,
             self.last_applied,
             req.layout.target,
         );
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[alt-tab/show] count={} max_cols={} hints={} layout.size={}x{} bounds.origin=({},{})",
+            req.gathered.windows.len(),
+            req.config.display.max_columns,
+            req.config.display.show_hotkey_hints,
+            req.layout.size.width.to_f64(),
+            req.layout.size.height.to_f64(),
+            req.layout.bounds.origin.x.to_f64(),
+            req.layout.bounds.origin.y.to_f64(),
+        );
         if !layout_needs_reposition(self.last_applied, req.layout.target, dirty) {
+            #[cfg(debug_assertions)]
+            eprintln!("[alt-tab/show] skip reposition (target unchanged)");
             return true;
         }
         let ok = picker::platform::reposition_picker_window(
@@ -197,6 +210,16 @@ impl AltTabApp {
             ctx.notify();
         });
         cx.notify();
+    }
+
+    pub(crate) fn apply_ghost_gathered(
+        &mut self,
+        gathered: &GatheredWindows,
+        reset: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_gathered(gathered, reset, window, cx);
     }
 
     pub(crate) fn update_icons(
@@ -303,11 +326,16 @@ fn subscribe_focus_out(
         handle,
         window,
         |this, _event, window, cx| match focus_out_decision(
+            PICKER_VISIBLE.load(Ordering::Relaxed),
             &this.action_mode,
             this.blur_guard_armed,
             Instant::now() < this.blur_guard_until,
             picker::is_modifier_held(),
         ) {
+            FocusOutDecision::IgnoreHidden => {
+                #[cfg(debug_assertions)]
+                eprintln!("[alt-tab/blur] ignored focus-out while picker is in ghost state");
+            }
             FocusOutDecision::IgnoreBlurGuard => {
                 this.blur_guard_armed = false;
                 #[cfg(debug_assertions)]
@@ -329,18 +357,27 @@ fn subscribe_focus_out(
 
 #[derive(Debug, PartialEq, Eq)]
 enum FocusOutDecision {
+    IgnoreHidden,
     IgnoreBlurGuard,
     IgnoreAltHeld,
     ActivateAndDismiss,
     Dismiss,
 }
 
+/// `hide_picker` keeps the NSWindow as `keyWindow` to hold Metal warm,
+/// so any later click steals key and fires `on_focus_out`. In that state
+/// dismissing is a no-op that still `cx.notify`s the hidden window and
+/// drops the visible alpha, so swallow it.
 fn focus_out_decision(
+    picker_visible: bool,
     action_mode: &ActionMode,
     blur_guard_armed: bool,
     in_blur_guard: bool,
     modifier_held: bool,
 ) -> FocusOutDecision {
+    if !picker_visible {
+        return FocusOutDecision::IgnoreHidden;
+    }
     if blur_guard_armed && in_blur_guard {
         return FocusOutDecision::IgnoreBlurGuard;
     }
@@ -383,9 +420,30 @@ mod focus_out_tests {
     use qol_plugin_api::window::MonitorKey;
 
     #[test]
+    fn ghost_state_focus_out_is_ignored_regardless_of_other_signals() {
+        // The picker is hidden via alpha=0 but still keyWindow. Every other
+        // flag combination must collapse to IgnoreHidden so we never re-enter
+        // the dismiss path on top of an already-hidden picker.
+        let cases = [
+            (ActionMode::HoldToSwitch, true, true, true),
+            (ActionMode::HoldToSwitch, false, false, true),
+            (ActionMode::HoldToSwitch, false, false, false),
+            (ActionMode::Sticky, false, false, true),
+            (ActionMode::Sticky, true, true, false),
+        ];
+        for (mode, blur_armed, in_guard, modifier) in cases {
+            assert_eq!(
+                focus_out_decision(false, &mode, blur_armed, in_guard, modifier),
+                FocusOutDecision::IgnoreHidden,
+                "ghost state must win over mode={mode:?}",
+            );
+        }
+    }
+
+    #[test]
     fn blur_guard_absorbs_first_focus_out() {
         assert_eq!(
-            focus_out_decision(&ActionMode::HoldToSwitch, true, true, true),
+            focus_out_decision(true, &ActionMode::HoldToSwitch, true, true, true),
             FocusOutDecision::IgnoreBlurGuard
         );
     }
@@ -393,7 +451,7 @@ mod focus_out_tests {
     #[test]
     fn hold_mode_ignores_focus_out_while_alt_is_held() {
         assert_eq!(
-            focus_out_decision(&ActionMode::HoldToSwitch, false, false, true),
+            focus_out_decision(true, &ActionMode::HoldToSwitch, false, false, true),
             FocusOutDecision::IgnoreAltHeld
         );
     }
@@ -401,7 +459,7 @@ mod focus_out_tests {
     #[test]
     fn hold_mode_activates_if_focus_out_races_alt_release() {
         assert_eq!(
-            focus_out_decision(&ActionMode::HoldToSwitch, false, false, false),
+            focus_out_decision(true, &ActionMode::HoldToSwitch, false, false, false),
             FocusOutDecision::ActivateAndDismiss
         );
     }
@@ -409,7 +467,7 @@ mod focus_out_tests {
     #[test]
     fn sticky_mode_keeps_focus_out_as_plain_dismiss() {
         assert_eq!(
-            focus_out_decision(&ActionMode::Sticky, false, false, true),
+            focus_out_decision(true, &ActionMode::Sticky, false, false, true),
             FocusOutDecision::Dismiss
         );
     }

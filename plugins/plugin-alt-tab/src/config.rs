@@ -10,6 +10,7 @@ pub struct DisplayConfig {
     pub show_minimized: bool,
     pub show_debug_overlay: bool,
     pub show_hotkey_hints: bool,
+    pub ghost_opacity: Option<f32>,
 }
 
 impl Default for DisplayConfig {
@@ -22,6 +23,7 @@ impl Default for DisplayConfig {
             show_minimized: true,
             show_debug_overlay: false,
             show_hotkey_hints: true,
+            ghost_opacity: None,
         }
     }
 }

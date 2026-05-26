@@ -15,7 +15,7 @@ pub(crate) type WindowCache = Arc<Mutex<Vec<WindowInfo>>>;
 pub(crate) type SharedPreviewCache = Arc<Mutex<crate::PreviewMap>>;
 
 #[derive(Clone)]
-struct PickerCaches {
+pub(super) struct PickerCaches {
     last_window_count: Arc<AtomicUsize>,
     window_cache: WindowCache,
     icon_cache: SharedIconCache,
@@ -28,6 +28,7 @@ struct PickerState {
     tracker: MonitorTracker,
     caches: PickerCaches,
     placement_dirty: Arc<AtomicBool>,
+    has_shown_once: Arc<AtomicBool>,
 }
 
 impl PickerCaches {
@@ -52,6 +53,7 @@ impl PickerState {
             window_cache: self.caches.window_cache.clone(),
             preview_cache: self.caches.preview_cache.clone(),
             placement_dirty: &self.placement_dirty,
+            has_shown_once: self.has_shown_once.clone(),
             reverse,
         };
         open_picker(&req, cx);
@@ -74,10 +76,24 @@ pub(crate) fn run_app(
             tracker: MonitorTracker::start(cx),
             caches: PickerCaches::new(),
             placement_dirty: Arc::new(AtomicBool::new(true)),
+            has_shown_once: Arc::new(AtomicBool::new(false)),
         };
 
-        spawn_monitor_dirty_listener(state.placement_dirty.clone());
-        super::platform::pre_create_if_supported(&config, &state.current, cx);
+        super::monitor_listener::spawn(
+            cx,
+            super::monitor_listener::ListenerInputs {
+                placement_dirty: state.placement_dirty.clone(),
+                tracker: state.tracker.clone(),
+                current: state.current.clone(),
+                last_window_count: state.caches.last_window_count.clone(),
+                window_cache: state.caches.window_cache.clone(),
+                icon_cache: state.caches.icon_cache.clone(),
+                preview_cache: state.caches.preview_cache.clone(),
+                has_shown_once: state.has_shown_once.clone(),
+                refresh_generation: Arc::new(AtomicUsize::new(0)),
+            },
+        );
+        super::platform::pre_create(&config, &state.current, cx);
 
         if show_on_start {
             state.open_picker(&config, false, cx);
@@ -85,31 +101,6 @@ pub(crate) fn run_app(
         spawn_daemon_loop(cx, rx, state);
     });
 }
-
-fn spawn_monitor_dirty_listener(placement_dirty: Arc<AtomicBool>) {
-    std::thread::spawn(move || monitor_dirty_loop(placement_dirty));
-}
-
-#[cfg(unix)]
-fn monitor_dirty_loop(placement_dirty: Arc<AtomicBool>) {
-    use qol_plugin_api::protocol::{RuntimeEvent, RuntimeEventKind};
-
-    let client = qol_plugin_api::PlatformStateClient::from_env();
-    let Some(mut subscription) = client.subscribe(vec![RuntimeEventKind::MonitorsChanged]) else {
-        return;
-    };
-    while let Some(event) = subscription.next_event() {
-        let RuntimeEvent::MonitorsChanged { .. } = event else {
-            continue;
-        };
-        placement_dirty.store(true, Ordering::Release);
-        #[cfg(debug_assertions)]
-        eprintln!("[alt-tab/monitor] placement dirty: monitors changed");
-    }
-}
-
-#[cfg(not(unix))]
-fn monitor_dirty_loop(_placement_dirty: Arc<AtomicBool>) {}
 
 fn picker_window_state() -> PickerWindowState {
     std::rc::Rc::new(std::cell::RefCell::new(
@@ -156,6 +147,7 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     let config = crate::config::load_alt_tab_config();
     #[cfg(debug_assertions)]
     let config_ms = t_config.elapsed().as_millis();
+    super::platform::set_ghost_opacity(config.display.ghost_opacity);
 
     let executor = cx.background_executor().clone();
     let show_minimized = config.display.show_minimized;
@@ -207,15 +199,29 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     }
 }
 
-fn apply_show_windows(caches: &PickerCaches, windows: Vec<WindowInfo>, app: &mut App) {
-    // App-level path: no Window is currently leased, so passing None to
-    // drop_image is correct (every window remains in App::windows).
-    caches
-        .last_window_count
-        .store(windows.len().max(1), Ordering::Relaxed);
-    prune_previews(&caches.preview_cache, &windows, app);
-    prune_icons(&caches.icon_cache, &windows, app);
-    replace_window_cache(&caches.window_cache, windows);
+pub(super) fn apply_show_windows(caches: &PickerCaches, windows: Vec<WindowInfo>, app: &mut App) {
+    apply_window_cache(
+        &caches.last_window_count,
+        &caches.window_cache,
+        &caches.icon_cache,
+        &caches.preview_cache,
+        windows,
+        app,
+    );
+}
+
+pub(super) fn apply_window_cache(
+    last_window_count: &AtomicUsize,
+    window_cache: &WindowCache,
+    icon_cache: &SharedIconCache,
+    preview_cache: &SharedPreviewCache,
+    windows: Vec<WindowInfo>,
+    app: &mut App,
+) {
+    last_window_count.store(windows.len().max(1), Ordering::Relaxed);
+    prune_previews(preview_cache, &windows, app);
+    prune_icons(icon_cache, &windows, app);
+    replace_window_cache(window_cache, windows);
 }
 
 fn replace_window_cache(window_cache: &WindowCache, windows: Vec<WindowInfo>) {
@@ -245,7 +251,7 @@ fn prune_icons(icon_cache: &SharedIconCache, windows: &[WindowInfo], app: &mut A
     });
 }
 
-async fn refresh_icon_cache(
+pub(super) async fn refresh_icon_cache(
     executor: &gpui::BackgroundExecutor,
     windows: &[WindowInfo],
     icon_cache: &SharedIconCache,
@@ -280,7 +286,7 @@ fn missing_icon_windows(windows: &[WindowInfo], cached_names: &HashSet<String>) 
         .collect()
 }
 
-fn commit_icons_to_shared_cache(
+pub(super) fn commit_icons_to_shared_cache(
     icon_cache: &SharedIconCache,
     rendered: crate::IconMap,
     app: &mut App,

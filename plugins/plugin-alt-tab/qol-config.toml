@@ -101,6 +101,17 @@ label = "Show Debug Overlay"
 section = "layout"
 default = false
 
+[field.display_ghost_opacity]
+type = "number"
+config_key = "display.ghost_opacity"
+label = "Ghost Opacity (debug)"
+description = "Opacity of the hidden picker window in debug builds. 0 = invisible."
+section = "layout"
+default = 0.0
+min = 0.0
+max = 1.0
+step = 0.05
+
 [field.display_card_background_color]
 type = "string"
 config_key = "display.card_background_color"

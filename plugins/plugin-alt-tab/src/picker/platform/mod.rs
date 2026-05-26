@@ -24,6 +24,9 @@ mod imp {
     pub fn reposition_picker_window(_x: f64, _y: f64) -> bool {
         false
     }
+    pub fn picker_backing_scale() -> Option<f32> {
+        None
+    }
     pub fn is_modifier_held() -> bool {
         false
     }
@@ -31,15 +34,10 @@ mod imp {
         false
     }
     pub fn disable_window_shadow() {}
-    pub fn show_picker_onscreen() {}
-    pub fn prepare_picker_for_show() {}
-    pub fn hide_picker_offscreen() {}
-    pub fn pre_create_if_supported(
-        _config: &AltTabConfig,
-        _current: &PickerWindowState,
-        _cx: &mut gpui::App,
-    ) {
-    }
+    pub fn show_picker() {}
+    pub fn hide_picker() {}
+    pub fn set_ghost_opacity(_opacity: Option<f32>) {}
+    pub fn pre_create(_config: &AltTabConfig, _current: &PickerWindowState, _cx: &mut gpui::App) {}
     pub fn offscreen_origin() -> (f64, f64) {
         (0.0, 0.0)
     }
@@ -74,6 +72,9 @@ pub fn set_accessory_policy() {
 pub fn reposition_picker_window(x: f64, y: f64) -> bool {
     imp::reposition_picker_window(x, y)
 }
+pub fn picker_backing_scale() -> Option<f32> {
+    imp::picker_backing_scale()
+}
 pub fn is_modifier_held() -> bool {
     imp::is_modifier_held()
 }
@@ -84,29 +85,22 @@ pub fn is_shift_held() -> bool {
 pub fn disable_window_shadow() {
     imp::disable_window_shadow()
 }
-/// Fade the picker to alpha=1 after `activate_window()` has returned. macOS-only; no-op on other platforms.
-pub fn show_picker_onscreen() {
-    imp::show_picker_onscreen()
+pub fn show_picker() {
+    imp::show_picker()
 }
-/// Force the picker to alpha=0 before repositioning/activation. macOS-only; no-op on other platforms.
-pub fn prepare_picker_for_show() {
-    imp::prepare_picker_for_show()
+pub fn hide_picker() {
+    imp::hide_picker()
 }
-/// Hide the picker without destroying the underlying platform window.
-pub fn hide_picker_offscreen() {
-    imp::hide_picker_offscreen()
+pub fn set_ghost_opacity(opacity: Option<f32>) {
+    imp::set_ghost_opacity(opacity)
 }
-/// Pre-create an offscreen picker window at boot so first show is instant.
-/// No-op on platforms that create/destroy per show.
-pub fn pre_create_if_supported(
+pub fn pre_create(
     config: &crate::config::AltTabConfig,
     current: &crate::PickerWindowState,
     cx: &mut gpui::App,
 ) {
-    imp::pre_create_if_supported(config, current, cx)
+    imp::pre_create(config, current, cx)
 }
-
-/// Offscreen origin for the keep-alive picker.
 pub fn offscreen_origin() -> (f64, f64) {
     imp::offscreen_origin()
 }

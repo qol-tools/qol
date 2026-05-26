@@ -1,5 +1,6 @@
 pub(crate) mod create;
 pub(crate) mod gather;
+mod monitor_listener;
 pub(crate) mod platform;
 mod reuse;
 pub(crate) mod run;
@@ -46,6 +47,7 @@ pub(crate) struct OpenPickerRequest<'a> {
     pub window_cache: WindowCache,
     pub preview_cache: SharedPreviewCache,
     pub placement_dirty: &'a AtomicBool,
+    pub has_shown_once: Arc<AtomicBool>,
     pub reverse: bool,
 }
 
@@ -123,7 +125,14 @@ fn try_reuse_existing(
             req.current.borrow_mut().remove(source_key);
             req.current.borrow_mut().insert(target, handle);
         }
-        finalize_reuse(handle, gathered, &req.icon_cache, &req.preview_cache, cx);
+        finalize_reuse(
+            handle,
+            gathered,
+            &req.icon_cache,
+            &req.preview_cache,
+            req.has_shown_once.clone(),
+            cx,
+        );
         return true;
     }
     discard_old_window(req, source_key, handle, cx);
@@ -161,6 +170,7 @@ fn create_from_request(
         preview_cache: req.preview_cache.clone(),
         current: req.current,
         placement_dirty: req.placement_dirty,
+        has_shown_once: req.has_shown_once.clone(),
     };
     create::create_new(&create_req, gathered, cx);
 }
@@ -204,10 +214,12 @@ fn finalize_reuse(
     gathered: &GatheredWindows,
     icon_cache: &SharedIconCache,
     preview_cache: &SharedPreviewCache,
+    has_shown_once: Arc<AtomicBool>,
     cx: &mut App,
 ) {
     let previews = gathered.previews.clone();
     PICKER_VISIBLE.store(true, Ordering::Relaxed);
+    has_shown_once.store(true, Ordering::Release);
     let _ = handle.update(cx, |view, window, cx| {
         view.ensure_live_preview(cx);
         view.delegate.update(cx, |state, ctx| {
