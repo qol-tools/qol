@@ -4,11 +4,16 @@ use super::super::Channel;
 use crate::desktop_state::SharedPlatform;
 
 const MIN_INTERVAL: Duration = Duration::from_millis(16);
+const NOISE_PX: f32 = 1.0;
+const INTENTIONAL_PX: f32 = 20.0;
+const REST_IDLE_POLLS: u32 = 5;
 
 pub(crate) struct CursorChannel {
     platform: SharedPlatform,
     last_pos: Option<(f32, f32)>,
     current_pos: Option<(f32, f32)>,
+    accumulated_px: f32,
+    idle_polls: u32,
 }
 
 impl CursorChannel {
@@ -17,6 +22,8 @@ impl CursorChannel {
             platform,
             last_pos: None,
             current_pos: None,
+            accumulated_px: 0.0,
+            idle_polls: 0,
         }
     }
 
@@ -30,13 +37,34 @@ impl Channel for CursorChannel {
         let pos = self.platform.cursor_position();
         self.current_pos = pos;
 
-        let changed = match (pos, self.last_pos) {
-            (Some((x, y)), Some((lx, ly))) => (x - lx).abs() > 1.0 || (y - ly).abs() > 1.0,
-            (Some(_), None) => true,
-            _ => false,
+        let intentional = match (pos, self.last_pos) {
+            (Some((x, y)), Some((lx, ly))) => {
+                let delta = (x - lx).abs() + (y - ly).abs();
+                if delta > NOISE_PX {
+                    self.accumulated_px += delta;
+                    self.idle_polls = 0;
+                } else {
+                    self.idle_polls = self.idle_polls.saturating_add(1);
+                    if self.idle_polls >= REST_IDLE_POLLS {
+                        self.accumulated_px = 0.0;
+                    }
+                }
+                self.accumulated_px > INTENTIONAL_PX
+            }
+            (Some(_), None) => {
+                self.accumulated_px = 0.0;
+                self.idle_polls = 0;
+                true
+            }
+            _ => {
+                self.accumulated_px = 0.0;
+                self.idle_polls = 0;
+                false
+            }
         };
+
         self.last_pos = pos;
-        changed
+        intentional
     }
 
     fn min_interval(&self) -> Duration {
@@ -149,24 +177,44 @@ mod tests {
                 vec![true, false],
             ),
             (
-                "delta just over 1.0 is changed",
+                "delta just over noise threshold not yet intentional",
                 vec![Some((10.0, 10.0)), Some((11.001, 10.0))],
-                vec![true, true],
+                vec![true, false],
             ),
             (
-                "x changes, y does not",
+                "single jump under intentional threshold",
+                vec![Some((-5.0, -5.0)), Some((-7.5, -5.0))],
+                vec![true, false],
+            ),
+            (
+                "single jump over intentional threshold is intentional",
                 vec![Some((0.0, 0.0)), Some((100.0, 0.0))],
                 vec![true, true],
             ),
             (
-                "y changes, x does not",
-                vec![Some((0.0, 0.0)), Some((0.0, 100.0))],
-                vec![true, true],
+                "cumulative accumulation crosses threshold",
+                vec![
+                    Some((0.0, 0.0)),
+                    Some((5.0, 0.0)),
+                    Some((10.0, 0.0)),
+                    Some((15.0, 0.0)),
+                    Some((22.0, 0.0)),
+                ],
+                vec![true, false, false, false, true],
             ),
             (
-                "negative coords cross threshold",
-                vec![Some((-5.0, -5.0)), Some((-7.5, -5.0))],
-                vec![true, true],
+                "idle polls reset accumulator after rest window",
+                vec![
+                    Some((0.0, 0.0)),
+                    Some((10.0, 0.0)),
+                    Some((10.0, 0.0)),
+                    Some((10.0, 0.0)),
+                    Some((10.0, 0.0)),
+                    Some((10.0, 0.0)),
+                    Some((10.0, 0.0)),
+                    Some((15.0, 0.0)),
+                ],
+                vec![true, false, false, false, false, false, false, false],
             ),
         ];
 
@@ -220,16 +268,28 @@ mod tests {
         }
 
         #[test]
-        fn prop_changed_iff_threshold_exceeded(
+        fn prop_small_single_jump_never_intentional(
             x in -1000.0f32..1000.0,
             y in -1000.0f32..1000.0,
-            dx in -3.0f32..3.0,
-            dy in -3.0f32..3.0,
+            dx in -9.0f32..9.0,
+            dy in -9.0f32..9.0,
         ) {
+            // |dx|+|dy| <= 18 < 20 (INTENTIONAL_PX), so one jump can never be intentional.
             let seq = vec![Some((x, y)), Some((x + dx, y + dy))];
             let (changed, _) = run(seq);
-            let exceeded = dx.abs() > 1.0 || dy.abs() > 1.0;
-            prop_assert_eq!(changed, vec![true, exceeded]);
+            prop_assert_eq!(changed[0], true);
+            prop_assert_eq!(changed[1], false);
+        }
+
+        #[test]
+        fn prop_single_large_jump_is_intentional(
+            x in -1000.0f32..1000.0,
+            y in -1000.0f32..1000.0,
+            dx in 30.0f32..200.0,
+        ) {
+            let seq = vec![Some((x, y)), Some((x + dx, y))];
+            let (changed, _) = run(seq);
+            prop_assert_eq!(changed, vec![true, true]);
         }
 
         #[test]

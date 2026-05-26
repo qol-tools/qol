@@ -15,24 +15,14 @@ pub(crate) struct InputState {
 
 impl InputState {
     pub(crate) fn update_cursor(&mut self, monitor: MonitorBounds, at: Instant, moved: bool) {
+        if !moved {
+            return;
+        }
         let same_monitor = self.cursor.as_ref().is_some_and(|c| c.monitor == monitor);
         let focus_is_newer = self
             .focus
             .as_ref()
             .is_some_and(|f| self.cursor.as_ref().is_none_or(|c| f.at > c.at));
-        let focus_elsewhere = self.focus.as_ref().is_some_and(|f| f.monitor != monitor);
-        if !moved {
-            if same_monitor && focus_is_newer && focus_elsewhere {
-                log::debug!(
-                    "[runtime/state] cursor STAMPED mon=({}, {}) at={:?} reason=still_here_reclaim",
-                    monitor.x,
-                    monitor.y,
-                    at,
-                );
-                self.cursor = Some(Stamped { monitor, at });
-            }
-            return;
-        }
         if !same_monitor || focus_is_newer {
             log::debug!(
                 "[runtime/state] cursor STAMPED mon=({}, {}) at={:?} reason={}",
@@ -378,12 +368,11 @@ mod tests {
     }
 
     #[test]
-    fn update_cursor_reclaims_when_not_moved_but_focus_is_newer_and_elsewhere() {
+    fn update_cursor_does_not_stamp_when_not_moved_even_if_focus_is_elsewhere() {
         let base = Instant::now();
         let mut state = InputState::default();
         let here = mon(0.0, 0.0, 100.0, 100.0);
         let elsewhere = mon(100.0, 0.0, 100.0, 100.0);
-        // Initial cursor stamp on `here`, older than the focus stamp on `elsewhere`.
         state.cursor = Some(Stamped {
             monitor: here,
             at: at(base, 0),
@@ -392,33 +381,11 @@ mod tests {
             monitor: elsewhere,
             at: at(base, 100),
         });
-        // Cursor poll says we are still on `here`, no movement.
-        state.update_cursor(here, at(base, 200), false);
-        assert_eq!(
-            state.cursor.as_ref().map(|s| s.at),
-            Some(at(base, 200)),
-            "stale cursor must be re-stamped to reclaim activity from focus",
-        );
-    }
-
-    #[test]
-    fn update_cursor_does_not_reclaim_when_focus_is_on_same_monitor() {
-        let base = Instant::now();
-        let mut state = InputState::default();
-        let here = mon(0.0, 0.0, 100.0, 100.0);
-        state.cursor = Some(Stamped {
-            monitor: here,
-            at: at(base, 0),
-        });
-        state.focus = Some(Stamped {
-            monitor: here,
-            at: at(base, 100),
-        });
         state.update_cursor(here, at(base, 200), false);
         assert_eq!(
             state.cursor.as_ref().map(|s| s.at),
             Some(at(base, 0)),
-            "focus on same monitor: no reclaim needed, stamp unchanged",
+            "moved=false must never refresh the cursor stamp; focus wins until cursor moves intentionally",
         );
     }
 
