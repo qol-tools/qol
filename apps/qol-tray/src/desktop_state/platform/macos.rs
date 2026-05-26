@@ -40,11 +40,14 @@ extern "C" {
     fn CGDisplayBounds(display: CGDirectDisplayID) -> CGRect;
     fn CGEventCreate(source: *const c_void) -> *const c_void;
     fn CGEventGetLocation(event: *const c_void) -> CGPoint;
+    fn CGWindowListCreate(list_option: u32, relative_to_window: u32) -> *const c_void;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
     fn CFRelease(cf: *const c_void);
+    fn CFArrayGetCount(arr: *const c_void) -> isize;
+    fn CFArrayGetValueAtIndex(arr: *const c_void, idx: isize) -> *const c_void;
     fn CFStringCreateWithBytes(
         alloc: *const c_void,
         bytes: *const u8,
@@ -234,5 +237,24 @@ impl Platform for MacQueries {
                 }
             })
             .collect()
+    }
+
+    fn window_list_fingerprint(&self) -> Option<u64> {
+        const ON_SCREEN_ONLY: u32 = 1;
+        const EXCLUDE_DESKTOP: u32 = 1 << 4;
+        const OPTS: u32 = ON_SCREEN_ONLY | EXCLUDE_DESKTOP;
+        let arr = unsafe { CGWindowListCreate(OPTS, 0) };
+        let guard = CfGuard::new(arr)?;
+        let n = unsafe { CFArrayGetCount(arr) };
+        let mut h: u64 = 0xCBF29CE484222325;
+        for i in 0..n {
+            let id = unsafe { CFArrayGetValueAtIndex(arr, i) } as usize as u64;
+            h ^= id;
+            h = h.wrapping_mul(0x100000001B3);
+        }
+        h ^= n as u64;
+        h = h.wrapping_mul(0x100000001B3);
+        drop(guard);
+        Some(h)
     }
 }

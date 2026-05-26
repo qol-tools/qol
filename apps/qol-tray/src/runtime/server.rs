@@ -1,6 +1,7 @@
 mod poll;
 pub(crate) mod shared;
 pub(crate) mod socket;
+mod window_list_thread;
 
 use std::sync::Arc;
 
@@ -16,7 +17,8 @@ pub struct RuntimeServer {
 
 impl RuntimeServer {
     pub fn start() -> Self {
-        let channels = RuntimeChannels::new(desktop_state::create_shared());
+        let platform = desktop_state::create_shared();
+        let channels = RuntimeChannels::new(platform.clone());
         let initial_monitors = channels.initial_monitors();
 
         log::info!(
@@ -28,6 +30,7 @@ impl RuntimeServer {
         let shared = Arc::new(SharedState::new(initial_monitors));
         super::publisher::install(shared.clone());
         spawn_poll_thread(shared.clone(), channels);
+        spawn_window_list_thread(shared.clone(), platform);
         spawn_socket_thread(shared);
         Self { _handle: () }
     }
@@ -38,6 +41,13 @@ fn spawn_poll_thread(shared: Arc<SharedState>, channels: RuntimeChannels) {
         .name("runtime-poll".into())
         .spawn(move || poll::run(shared, channels))
         .expect("failed to spawn runtime poll thread");
+}
+
+fn spawn_window_list_thread(shared: Arc<SharedState>, platform: desktop_state::SharedPlatform) {
+    std::thread::Builder::new()
+        .name("runtime-winlist".into())
+        .spawn(move || window_list_thread::run(shared, platform))
+        .expect("failed to spawn runtime window-list thread");
 }
 
 fn spawn_socket_thread(shared: Arc<SharedState>) {
