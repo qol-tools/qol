@@ -277,8 +277,13 @@ pub fn set_selected_worktree(
 }
 
 /// Runs resolve, observes drift events, applies the healing matrix:
-/// - If selection-missing or ignored-dev-marker: clear marker, then write autostart.
+/// - If ignored-dev-marker: clear marker, then write autostart.
 /// - Else if autostart drift only: keep marker, write autostart.
+/// - SelectionMissingFromWorktreeList does NOT clear the marker. The marker
+///   has a second role beyond qol-tray binary selection: plugin loading uses
+///   it to pick per-plugin worktrees. A branch that only exists as a plugin
+///   worktree is legitimate; binary selection already falls back to canonical
+///   in that case via `resolve`.
 /// - Else (only SelectionBinaryNotBuilt + autostart already aligned to fallback): no-op.
 pub fn heal_drift_on_startup(
     env: &dyn crate::installer::BootEnvironment,
@@ -296,13 +301,9 @@ pub fn heal_drift_on_startup(
         return report;
     }
 
-    let clear_selection = events.iter().any(|e| {
-        matches!(
-            e,
-            DriftEvent::SelectionMissingFromWorktreeList { .. }
-                | DriftEvent::IgnoredDevMarker { .. }
-        )
-    });
+    let clear_selection = events
+        .iter()
+        .any(|e| matches!(e, DriftEvent::IgnoredDevMarker { .. }));
     let autostart_disagrees = events
         .iter()
         .any(|e| matches!(e, DriftEvent::AutostartTargetDisagrees { .. }));
@@ -837,7 +838,7 @@ mod heal_tests {
     }
 
     #[test]
-    fn heal_clears_ghost_selection_and_writes_autostart() {
+    fn heal_keeps_marker_for_plugin_only_branch_and_writes_autostart() {
         let tmp = TempDir::new().unwrap();
         write_marker(tmp.path(), "ghost");
         let canonical = PathBuf::from("/main");
@@ -852,14 +853,19 @@ mod heal_tests {
             .events
             .iter()
             .any(|e| matches!(e, DriftEvent::AutostartTargetDisagrees { .. })));
-        assert!(r
-            .actions
-            .iter()
-            .any(|a| matches!(a, HealAction::ClearedSelection { .. })));
+        assert!(
+            !r.actions
+                .iter()
+                .any(|a| matches!(a, HealAction::ClearedSelection { .. })),
+            "marker must survive when branch has no qol-tray worktree"
+        );
         assert!(r.actions.iter().any(|a| matches!(
             a,
             HealAction::WroteAutostart { binary } if binary == &canonical
         )));
+        let marker_after = std::fs::read_to_string(tmp.path().join("dev/active-worktree.txt"))
+            .expect("marker file must still exist");
+        assert_eq!(marker_after.trim(), "ghost");
         assert!(r.failures.is_empty());
     }
 
