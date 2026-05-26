@@ -56,9 +56,19 @@ async fn active_worktree_handler() -> impl IntoResponse {
 }
 
 fn resolve_active_worktree() -> super::types::ActiveWorktreeResponse {
-    let branch = super::helpers::shared_config_dir()
-        .ok()
-        .and_then(|dir| crate::dev::get_active_worktree_branch(&dir));
+    let config_dir = super::helpers::shared_config_dir().ok();
+    let persisted = config_dir
+        .as_ref()
+        .and_then(|dir| crate::dev::get_active_worktree_branch(dir));
+    let known = dev_services::list_branches();
+    let branch = match persisted {
+        Some(b) if known.iter().any(|k| k == &b) => Some(b),
+        Some(_) => {
+            super::helpers::persist_worktree_branch(None);
+            None
+        }
+        None => None,
+    };
     let repo_branch = dev_services::current_repo_branch();
     super::types::ActiveWorktreeResponse {
         branch,
