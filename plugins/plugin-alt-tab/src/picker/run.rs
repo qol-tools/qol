@@ -10,9 +10,12 @@ use qol_plugin_api::monitor::MonitorTracker;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
+use std::time::{Duration, Instant};
 
 pub(crate) type WindowCache = Arc<Mutex<Vec<WindowInfo>>>;
 pub(crate) type SharedPreviewCache = Arc<Mutex<crate::PreviewMap>>;
+
+const DATA_FRESH_TTL: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub(super) struct PickerCaches {
@@ -20,6 +23,7 @@ pub(super) struct PickerCaches {
     window_cache: WindowCache,
     icon_cache: SharedIconCache,
     preview_cache: SharedPreviewCache,
+    data_fresh_at: Arc<Mutex<Option<Instant>>>,
 }
 
 #[derive(Clone)]
@@ -38,7 +42,22 @@ impl PickerCaches {
             window_cache: Arc::new(Mutex::new(Vec::new())),
             icon_cache: Arc::new(Mutex::new(HashMap::new())),
             preview_cache: Arc::new(Mutex::new(HashMap::new())),
+            data_fresh_at: Arc::new(Mutex::new(None)),
         }
+    }
+
+    fn is_fresh(&self) -> bool {
+        let Ok(guard) = self.data_fresh_at.lock() else {
+            return false;
+        };
+        matches!(*guard, Some(at) if at.elapsed() < DATA_FRESH_TTL)
+    }
+
+    fn snapshot_windows(&self) -> Vec<WindowInfo> {
+        self.window_cache
+            .lock()
+            .map(|c| c.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -91,6 +110,7 @@ pub(crate) fn run_app(
                 preview_cache: state.caches.preview_cache.clone(),
                 has_shown_once: state.has_shown_once.clone(),
                 refresh_generation: Arc::new(AtomicUsize::new(0)),
+                data_fresh_at: state.caches.data_fresh_at.clone(),
             },
         );
         super::platform::pre_create(&config, &state.current, cx);
@@ -151,20 +171,26 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
 
     let executor = cx.background_executor().clone();
     let show_minimized = config.display.show_minimized;
+    let fresh = state.caches.is_fresh();
 
     #[cfg(debug_assertions)]
     let t_query = std::time::Instant::now();
-    let windows = executor
-        .spawn(async move { Platform.visible_windows(show_minimized).unwrap_or_default() })
-        .await;
+    let (windows, rendered_icons) = if fresh {
+        let cached = state.caches.snapshot_windows();
+        if cached.is_empty() {
+            return;
+        }
+        (cached, None)
+    } else {
+        let windows = executor
+            .spawn(async move { Platform.visible_windows(show_minimized).unwrap_or_default() })
+            .await;
+        let rendered_icons =
+            refresh_icon_cache(&executor, &windows, &state.caches.icon_cache).await;
+        (windows, rendered_icons)
+    };
     #[cfg(debug_assertions)]
     let (query_ms, window_count) = (t_query.elapsed().as_millis(), windows.len());
-
-    #[cfg(debug_assertions)]
-    let t_icon = std::time::Instant::now();
-    let rendered_icons = refresh_icon_cache(&executor, &windows, &state.caches.icon_cache).await;
-    #[cfg(debug_assertions)]
-    let icon_ms = t_icon.elapsed().as_millis();
 
     if !has_windows(&windows) {
         #[cfg(debug_assertions)]
@@ -174,15 +200,12 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     let state_for_update = state.clone();
     #[cfg(debug_assertions)]
     let t_update = std::time::Instant::now();
-    // Previews are refreshed from inside open_picker via spawn_preview_fill so the show
-    // path stays snappy and the fresh frames land in the live view as they arrive.
     let _ = cx.update(move |app_cx| {
-        // App-level: no Window is leased here, so the SharedCache mutations
-        // pass None to drop_image. open_picker may itself call into a
-        // WindowHandle::update where window-aware releases run.
-        apply_show_windows(&state_for_update.caches, windows, app_cx);
-        if let Some(icons) = rendered_icons {
-            commit_icons_to_shared_cache(&state_for_update.caches.icon_cache, icons, app_cx);
+        if !fresh {
+            apply_show_windows(&state_for_update.caches, windows, app_cx);
+            if let Some(icons) = rendered_icons {
+                commit_icons_to_shared_cache(&state_for_update.caches.icon_cache, icons, app_cx);
+            }
         }
         state_for_update.open_picker(&config, reverse, app_cx);
     });
@@ -193,8 +216,8 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     {
         let total_ms = t_total.elapsed().as_millis();
         eprintln!(
-            "[alt-tab/timing] total={}ms config={}ms query={}ms({} windows) icon={}ms update={}ms (preview fill deferred to view)",
-            total_ms, config_ms, query_ms, window_count, icon_ms, update_ms
+            "[alt-tab/timing] total={}ms config={}ms query={}ms({} windows, fresh={}) update={}ms",
+            total_ms, config_ms, query_ms, window_count, fresh, update_ms
         );
     }
 }

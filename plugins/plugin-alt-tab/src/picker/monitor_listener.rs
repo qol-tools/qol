@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use gpui::*;
 use qol_plugin_api::monitor::MonitorTracker;
@@ -11,7 +11,9 @@ use crate::app::PICKER_VISIBLE;
 use crate::discovery::{Platform, WindowDiscovery};
 use crate::{PickerWindowState, SharedIconCache};
 
-const GHOST_REFRESH_DELAY_MS: u64 = 75;
+const DATA_REFRESH_DELAY_MS: u64 = 75;
+
+static DATA_REFRESH_TX: OnceLock<mpsc::Sender<()>> = OnceLock::new();
 
 #[derive(Clone)]
 pub(crate) struct ListenerInputs {
@@ -24,20 +26,31 @@ pub(crate) struct ListenerInputs {
     pub preview_cache: SharedPreviewCache,
     pub has_shown_once: Arc<AtomicBool>,
     pub refresh_generation: Arc<AtomicUsize>,
+    pub data_fresh_at: Arc<Mutex<Option<Instant>>>,
 }
 
 pub(crate) fn spawn(cx: &mut App, inputs: ListenerInputs) {
-    let (tx, rx) = mpsc::channel::<()>();
-    spawn_listener_thread(tx);
-    spawn_router_task(cx, rx, inputs);
+    let (placement_tx, placement_rx) = mpsc::channel::<()>();
+    let (refresh_tx, refresh_rx) = mpsc::channel::<()>();
+    let _ = DATA_REFRESH_TX.set(refresh_tx);
+    spawn_placement_listener_thread(placement_tx);
+    spawn_window_list_listener_thread();
+    spawn_placement_router(cx, placement_rx, inputs.clone());
+    spawn_data_refresh_router(cx, refresh_rx, inputs);
 }
 
-fn spawn_listener_thread(tx: mpsc::Sender<()>) {
-    std::thread::spawn(move || listener_loop(tx));
+pub(crate) fn request_data_refresh() {
+    if let Some(tx) = DATA_REFRESH_TX.get() {
+        let _ = tx.send(());
+    }
+}
+
+fn spawn_placement_listener_thread(tx: mpsc::Sender<()>) {
+    std::thread::spawn(move || placement_listener_loop(tx));
 }
 
 #[cfg(unix)]
-fn listener_loop(tx: mpsc::Sender<()>) {
+fn placement_listener_loop(tx: mpsc::Sender<()>) {
     use qol_plugin_api::protocol::RuntimeEventKind;
     let client = qol_plugin_api::PlatformStateClient::from_env();
     let Some(mut subscription) = client.subscribe(vec![RuntimeEventKind::ActiveMonitorChanged])
@@ -52,16 +65,48 @@ fn listener_loop(tx: mpsc::Sender<()>) {
 }
 
 #[cfg(not(unix))]
-fn listener_loop(_tx: mpsc::Sender<()>) {}
+fn placement_listener_loop(_tx: mpsc::Sender<()>) {}
 
-fn spawn_router_task(cx: &mut App, rx: mpsc::Receiver<()>, inputs: ListenerInputs) {
+fn spawn_window_list_listener_thread() {
+    std::thread::spawn(window_list_listener_loop);
+}
+
+#[cfg(unix)]
+fn window_list_listener_loop() {
+    use qol_plugin_api::protocol::RuntimeEventKind;
+    let client = qol_plugin_api::PlatformStateClient::from_env();
+    let Some(mut subscription) = client.subscribe(vec![RuntimeEventKind::WindowListChanged])
+    else {
+        return;
+    };
+    while subscription.next_event().is_some() {
+        request_data_refresh();
+    }
+}
+
+#[cfg(not(unix))]
+fn window_list_listener_loop() {}
+
+fn spawn_placement_router(cx: &mut App, rx: mpsc::Receiver<()>, inputs: ListenerInputs) {
     let rx = Arc::new(Mutex::new(rx));
     cx.spawn(async move |cx: &mut AsyncApp| loop {
         if recv(cx, rx.clone()).await.is_none() {
             return;
         };
         drain(&rx);
-        let _ = cx.update(|app_cx| invalidate_ghost(&inputs, app_cx));
+        let _ = cx.update(|app_cx| reposition_ghost_only(&inputs, app_cx));
+    })
+    .detach();
+}
+
+fn spawn_data_refresh_router(cx: &mut App, rx: mpsc::Receiver<()>, inputs: ListenerInputs) {
+    let rx = Arc::new(Mutex::new(rx));
+    cx.spawn(async move |cx: &mut AsyncApp| loop {
+        if recv(cx, rx.clone()).await.is_none() {
+            return;
+        };
+        drain(&rx);
+        let _ = cx.update(|app_cx| trigger_data_refresh(&inputs, app_cx));
     })
     .detach();
 }
@@ -78,7 +123,7 @@ fn drain(rx: &Arc<Mutex<mpsc::Receiver<()>>>) {
     }
 }
 
-fn invalidate_ghost(inputs: &ListenerInputs, app_cx: &mut App) {
+fn reposition_ghost_only(inputs: &ListenerInputs, app_cx: &mut App) {
     inputs.placement_dirty.store(true, Ordering::Release);
     if PICKER_VISIBLE.load(Ordering::Relaxed) {
         #[cfg(debug_assertions)]
@@ -90,11 +135,10 @@ fn invalidate_ghost(inputs: &ListenerInputs, app_cx: &mut App) {
         eprintln!("[alt-tab/listener] defer ghost layout until first show");
         return;
     }
-    spawn_ghost_window_refresh(inputs, app_cx);
     apply_ghost_layout_from_state(inputs, app_cx);
 }
 
-fn spawn_ghost_window_refresh(inputs: &ListenerInputs, app_cx: &mut App) {
+fn trigger_data_refresh(inputs: &ListenerInputs, app_cx: &mut App) {
     if !inputs.has_shown_once.load(Ordering::Acquire) {
         return;
     }
@@ -105,12 +149,12 @@ fn spawn_ghost_window_refresh(inputs: &ListenerInputs, app_cx: &mut App) {
     let inputs = inputs.clone();
     app_cx
         .spawn(async move |cx: &mut AsyncApp| {
-            refresh_ghost_windows(cx, inputs, generation).await;
+            refresh_data(cx, inputs, generation).await;
         })
         .detach();
 }
 
-async fn refresh_ghost_windows(cx: &mut AsyncApp, inputs: ListenerInputs, generation: usize) {
+async fn refresh_data(cx: &mut AsyncApp, inputs: ListenerInputs, generation: usize) {
     if PICKER_VISIBLE.load(Ordering::Relaxed) {
         return;
     }
@@ -118,7 +162,7 @@ async fn refresh_ghost_windows(cx: &mut AsyncApp, inputs: ListenerInputs, genera
     let show_minimized = config.display.show_minimized;
     let executor = cx.background_executor().clone();
     executor
-        .timer(Duration::from_millis(GHOST_REFRESH_DELAY_MS))
+        .timer(Duration::from_millis(DATA_REFRESH_DELAY_MS))
         .await;
     if inputs.refresh_generation.load(Ordering::Acquire) != generation {
         return;
@@ -134,6 +178,7 @@ async fn refresh_ghost_windows(cx: &mut AsyncApp, inputs: ListenerInputs, genera
     }
     let rendered_icons =
         super::run::refresh_icon_cache(&executor, &windows, &inputs.icon_cache).await;
+    let windows_for_previews = windows.clone();
     let _ = cx.update(move |app_cx| {
         if inputs.refresh_generation.load(Ordering::Acquire) != generation {
             return;
@@ -165,9 +210,29 @@ async fn refresh_ghost_windows(cx: &mut AsyncApp, inputs: ListenerInputs, genera
             app_cx,
         );
         apply_ghost_layout_from_state(&inputs, app_cx);
+        if let Some(handle) = inputs
+            .current
+            .borrow()
+            .iter()
+            .into_iter()
+            .next()
+            .map(|(_, h)| h)
+        {
+            super::gather::spawn_preview_fill(
+                super::gather::PreviewFillRequest {
+                    handle,
+                    windows: windows_for_previews,
+                    preview_cache: inputs.preview_cache.clone(),
+                },
+                app_cx,
+            );
+        }
+        if let Ok(mut fresh) = inputs.data_fresh_at.lock() {
+            *fresh = Some(Instant::now());
+        }
         #[cfg(debug_assertions)]
         eprintln!(
-            "[alt-tab/ghost-refresh] windows={} reset={}",
+            "[alt-tab/data-refresh] windows={} reset={}",
             gathered.windows.len(),
             config.reset_selection_on_open,
         );

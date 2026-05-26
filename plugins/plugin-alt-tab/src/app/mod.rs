@@ -265,8 +265,8 @@ impl AltTabApp {
         }));
     }
 
-    pub(crate) fn can_cycle_without_layout(&self, placement_dirty: bool) -> bool {
-        self.last_applied.is_some() && !placement_dirty
+    pub(crate) fn can_cycle_without_layout(&self) -> bool {
+        self.last_applied.is_some()
     }
 }
 
@@ -403,6 +403,7 @@ impl AltTabApp {
         self.blur_guard_armed = false;
         PICKER_VISIBLE.store(false, Ordering::Relaxed);
         picker::dismiss_picker(window);
+        picker::request_data_refresh();
         cx.notify();
     }
 }

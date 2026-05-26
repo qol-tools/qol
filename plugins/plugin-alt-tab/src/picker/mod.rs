@@ -5,6 +5,7 @@ pub(crate) mod platform;
 mod reuse;
 pub(crate) mod run;
 
+pub(crate) use monitor_listener::request_data_refresh;
 pub use platform::{dismiss_picker, is_modifier_held};
 pub(crate) use reuse::ReuseRequest;
 
@@ -84,7 +85,7 @@ fn try_cycle_existing(req: &OpenPickerRequest, cx: &mut App) -> bool {
         Some((_, h)) => h,
         None => return false,
     };
-    if !try_cycle_selection(&handle, req.reverse, req.placement_dirty, cx) {
+    if !try_cycle_selection(&handle, req.reverse, cx) {
         return false;
     }
     PICKER_VISIBLE.store(true, Ordering::Relaxed);
@@ -178,16 +179,14 @@ fn create_from_request(
 fn try_cycle_selection(
     handle: &WindowHandle<AltTabApp>,
     reverse: bool,
-    placement_dirty: &AtomicBool,
     cx: &mut App,
 ) -> bool {
     handle
         .update(cx, |view, window: &mut Window, cx| -> bool {
-            let dirty = placement_dirty.load(Ordering::Acquire);
-            if !view.can_cycle_without_layout(dirty) {
+            if !PICKER_VISIBLE.load(Ordering::Relaxed) {
                 return false;
             }
-            if !PICKER_VISIBLE.load(Ordering::Relaxed) {
+            if !view.can_cycle_without_layout() {
                 return false;
             }
             if view.action_mode != ActionMode::HoldToSwitch {
