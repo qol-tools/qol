@@ -71,14 +71,19 @@ pub(super) async fn recompile_self(
     body: Option<Json<super::types::RecompileSelfRequest>>,
 ) -> impl IntoResponse {
     let requested_branch = body.and_then(|Json(req)| req.worktree_branch);
-    // Branches without a matching qol-tray worktree (notably the current
-    // HEAD when no worktree exists for it) fall back to the active checkout.
     let worktree_path = requested_branch
         .as_deref()
         .and_then(resolve_path_for_branch);
 
-    dev_services::queue_self_recompile(&state, worktree_path)
-        .map(|_| (StatusCode::ACCEPTED, ""))
+    if worktree_path.is_some() || requested_branch.is_none() {
+        return dev_services::queue_self_recompile(&state, worktree_path)
+            .map(|_| (StatusCode::ACCEPTED, ""))
+            .unwrap_or_else(|msg| (StatusCode::CONFLICT, msg))
+            .into_response();
+    }
+
+    dev_services::queue_reload(&state, requested_branch)
+        .map(|_| (StatusCode::ACCEPTED, "Plugin reload queued"))
         .unwrap_or_else(|msg| (StatusCode::CONFLICT, msg))
         .into_response()
 }
