@@ -43,6 +43,7 @@ pub enum RuntimeEventKind {
     FocusChanged,
     LauncherAppsSynced,
     MonitorsChanged,
+    WindowListChanged,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +68,7 @@ pub enum RuntimeEvent {
     MonitorsChanged {
         monitors: Vec<MonitorBounds>,
     },
+    WindowListChanged,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

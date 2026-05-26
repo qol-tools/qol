@@ -118,9 +118,9 @@ name = "qol-runtime"
 version = "0.1.0"
 
 [[patch.unused]]
-name = "qol-plugin-api"
-version = "0.2.1"
-
-[[patch.unused]]
 name = "qol-tray"
 version = "3.15.1"
+
+[[patch.unused]]
+name = "qol-plugin-api"
+version = "0.2.1"
