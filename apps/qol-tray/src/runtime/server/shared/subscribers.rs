@@ -47,6 +47,7 @@ fn event_kind(event: &RuntimeEvent) -> RuntimeEventKind {
         RuntimeEvent::FocusChanged { .. } => RuntimeEventKind::FocusChanged,
         RuntimeEvent::LauncherAppsSynced { .. } => RuntimeEventKind::LauncherAppsSynced,
         RuntimeEvent::MonitorsChanged { .. } => RuntimeEventKind::MonitorsChanged,
+        RuntimeEvent::WindowListChanged => RuntimeEventKind::WindowListChanged,
     }
 }
 
@@ -87,6 +88,10 @@ mod tests {
         }
     }
 
+    fn window_list_changed() -> RuntimeEvent {
+        RuntimeEvent::WindowListChanged
+    }
+
     fn drain<T>(rx: &std_mpsc::Receiver<T>) -> Vec<T> {
         let mut out = Vec::new();
         while let Ok(event) = rx.recv_timeout(Duration::from_millis(1)) {
@@ -110,6 +115,7 @@ mod tests {
             (focus_changed(), RuntimeEventKind::FocusChanged),
             (launcher_apps_synced(), RuntimeEventKind::LauncherAppsSynced),
             (monitors_changed(), RuntimeEventKind::MonitorsChanged),
+            (window_list_changed(), RuntimeEventKind::WindowListChanged),
         ];
         for (event, expected) in cases {
             assert_eq!(event_kind(&event), expected, "event: {event:?}");
@@ -235,6 +241,7 @@ mod tests {
             Just(focus_changed()),
             Just(launcher_apps_synced()),
             Just(monitors_changed()),
+            Just(window_list_changed()),
         ]
     }
 
@@ -246,8 +253,9 @@ mod tests {
                 Just(RuntimeEventKind::ActiveMonitorChanged),
                 Just(RuntimeEventKind::LauncherAppsSynced),
                 Just(RuntimeEventKind::MonitorsChanged),
+                Just(RuntimeEventKind::WindowListChanged),
             ],
-            0..=5,
+            0..=6,
         )
     }
 

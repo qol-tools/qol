@@ -15,6 +15,10 @@ pub(crate) trait Platform: Send + Sync {
     fn poll_focused_window(&self) -> bool {
         true
     }
+
+    fn window_list_fingerprint(&self) -> Option<u64> {
+        None
+    }
 }
 
 pub(crate) fn create_shared() -> SharedPlatform {
