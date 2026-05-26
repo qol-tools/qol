@@ -108,7 +108,6 @@ pub(crate) fn run_app(
                 window_cache: state.caches.window_cache.clone(),
                 icon_cache: state.caches.icon_cache.clone(),
                 preview_cache: state.caches.preview_cache.clone(),
-                has_shown_once: state.has_shown_once.clone(),
                 refresh_generation: Arc::new(AtomicUsize::new(0)),
                 data_fresh_at: state.caches.data_fresh_at.clone(),
             },

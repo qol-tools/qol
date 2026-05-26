@@ -24,7 +24,6 @@ pub(crate) struct ListenerInputs {
     pub window_cache: WindowCache,
     pub icon_cache: SharedIconCache,
     pub preview_cache: SharedPreviewCache,
-    pub has_shown_once: Arc<AtomicBool>,
     pub refresh_generation: Arc<AtomicUsize>,
     pub data_fresh_at: Arc<Mutex<Option<Instant>>>,
 }
@@ -130,18 +129,10 @@ fn reposition_ghost_only(inputs: &ListenerInputs, app_cx: &mut App) {
         eprintln!("[alt-tab/listener] picker visible, skipping ghost reposition");
         return;
     }
-    if !inputs.has_shown_once.load(Ordering::Acquire) {
-        #[cfg(debug_assertions)]
-        eprintln!("[alt-tab/listener] defer ghost layout until first show");
-        return;
-    }
     apply_ghost_layout_from_state(inputs, app_cx);
 }
 
 fn trigger_data_refresh(inputs: &ListenerInputs, app_cx: &mut App) {
-    if !inputs.has_shown_once.load(Ordering::Acquire) {
-        return;
-    }
     if PICKER_VISIBLE.load(Ordering::Relaxed) {
         return;
     }
