@@ -12,10 +12,7 @@ pub(crate) use reuse::ReuseRequest;
 use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::config::{parse_hex_color, ActionMode, AltTabConfig, DisplayConfig};
 use crate::{PickerWindowState, SharedIconCache};
-use gather::{
-    gather, spawn_icon_fill, spawn_preview_fill, GatheredWindows, IconFillRequest,
-    PreviewFillRequest,
-};
+use gather::{gather, spawn_icon_fill, GatheredWindows, IconFillRequest};
 use gpui::*;
 use qol_plugin_api::monitor::MonitorTracker;
 use qol_plugin_api::window::{MonitorKey, PopupPlacement};
@@ -130,7 +127,6 @@ fn try_reuse_existing(
             handle,
             gathered,
             &req.icon_cache,
-            &req.preview_cache,
             req.has_shown_once.clone(),
             cx,
         );
@@ -168,7 +164,6 @@ fn create_from_request(
         placement,
         last_window_count: req.last_window_count.clone(),
         icon_cache: req.icon_cache.clone(),
-        preview_cache: req.preview_cache.clone(),
         current: req.current,
         placement_dirty: req.placement_dirty,
         has_shown_once: req.has_shown_once.clone(),
@@ -176,11 +171,7 @@ fn create_from_request(
     create::create_new(&create_req, gathered, cx);
 }
 
-fn try_cycle_selection(
-    handle: &WindowHandle<AltTabApp>,
-    reverse: bool,
-    cx: &mut App,
-) -> bool {
+fn try_cycle_selection(handle: &WindowHandle<AltTabApp>, reverse: bool, cx: &mut App) -> bool {
     handle
         .update(cx, |view, window: &mut Window, cx| -> bool {
             if !PICKER_VISIBLE.load(Ordering::Relaxed) {
@@ -212,7 +203,6 @@ fn finalize_reuse(
     handle: WindowHandle<AltTabApp>,
     gathered: &GatheredWindows,
     icon_cache: &SharedIconCache,
-    preview_cache: &SharedPreviewCache,
     has_shown_once: Arc<AtomicBool>,
     cx: &mut App,
 ) {
@@ -232,12 +222,6 @@ fn finalize_reuse(
         icon_cache: icon_cache.clone(),
     };
     spawn_icon_fill(icon_req, &gathered.icons, cx);
-    let preview_req = PreviewFillRequest {
-        handle,
-        windows: gathered.windows.clone(),
-        preview_cache: preview_cache.clone(),
-    };
-    spawn_preview_fill(preview_req, cx);
     cx.activate(true);
 }
 

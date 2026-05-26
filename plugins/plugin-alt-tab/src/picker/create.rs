@@ -2,7 +2,6 @@ use super::GatheredWindows;
 use crate::app::{AltTabApp, PICKER_VISIBLE};
 use crate::config::{ActionMode, AltTabConfig, LabelConfig};
 use crate::discovery::WindowInfo;
-use crate::picker::run::SharedPreviewCache;
 use crate::shared::layout::*;
 use crate::{IconMap, PickerWindowState, PreviewMap, SharedIconCache};
 use gpui::*;
@@ -17,7 +16,6 @@ pub(super) struct CreateRequest<'a> {
     pub placement: PopupPlacement,
     pub last_window_count: Arc<AtomicUsize>,
     pub icon_cache: SharedIconCache,
-    pub preview_cache: SharedPreviewCache,
     pub current: &'a PickerWindowState,
     pub placement_dirty: &'a AtomicBool,
     pub has_shown_once: Arc<AtomicBool>,
@@ -41,7 +39,6 @@ pub(super) fn create_new(req: &CreateRequest, gathered: GatheredWindows, cx: &mu
     post.finalize(
         handle,
         req.icon_cache.clone(),
-        req.preview_cache.clone(),
         req.has_shown_once.clone(),
         cx,
     );
@@ -257,7 +254,6 @@ impl PostCreateData {
         self,
         handle: WindowHandle<AltTabApp>,
         icon_cache: SharedIconCache,
-        preview_cache: SharedPreviewCache,
         has_shown_once: Arc<AtomicBool>,
         cx: &mut App,
     ) {
@@ -276,12 +272,6 @@ impl PostCreateData {
             icon_cache,
         };
         super::spawn_icon_fill(icon_req, &self.icons, cx);
-        let preview_req = super::PreviewFillRequest {
-            handle,
-            windows: self.windows,
-            preview_cache,
-        };
-        super::spawn_preview_fill(preview_req, cx);
         super::platform::set_accessory_policy();
     }
 }

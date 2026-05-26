@@ -74,8 +74,7 @@ fn spawn_window_list_listener_thread() {
 fn window_list_listener_loop() {
     use qol_plugin_api::protocol::RuntimeEventKind;
     let client = qol_plugin_api::PlatformStateClient::from_env();
-    let Some(mut subscription) = client.subscribe(vec![RuntimeEventKind::WindowListChanged])
-    else {
+    let Some(mut subscription) = client.subscribe(vec![RuntimeEventKind::WindowListChanged]) else {
         return;
     };
     while subscription.next_event().is_some() {
