@@ -7,6 +7,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 #[cfg(debug_assertions)]
 static GHOST_ALPHA: AtomicU32 = AtomicU32::new(0);
+#[cfg(debug_assertions)]
+const GHOST_COLOR_DEFAULT: u32 = 0xFF0000;
+#[cfg(debug_assertions)]
+static GHOST_COLOR: AtomicU32 = AtomicU32::new(GHOST_COLOR_DEFAULT);
 
 pub fn hide_picker() {
     with_picker_window(|win| {
@@ -153,7 +157,12 @@ fn apply_ghost_background(win: &NSWindow) {
     {
         let alpha = f32::from_bits(GHOST_ALPHA.load(Ordering::Relaxed));
         if alpha > 0.0 {
-            win.setBackgroundColor(Some(&NSColor::redColor()));
+            let rgb = GHOST_COLOR.load(Ordering::Relaxed);
+            let r = ((rgb >> 16) & 0xFF) as f64 / 255.0;
+            let g = ((rgb >> 8) & 0xFF) as f64 / 255.0;
+            let b = (rgb & 0xFF) as f64 / 255.0;
+            let color = NSColor::colorWithSRGBRed_green_blue_alpha(r, g, b, 1.0);
+            win.setBackgroundColor(Some(&color));
             return;
         }
     }
@@ -200,6 +209,7 @@ pub fn pre_create(
     cx: &mut gpui::App,
 ) {
     set_ghost_opacity(config.display.ghost_opacity);
+    set_ghost_color(config.display.ghost_debug_color.as_deref());
     crate::picker::create::pre_create_offscreen(config, current, cx);
     with_picker_window(|win| {
         win.setAnimationBehavior(NSWindowAnimationBehavior::None);
@@ -221,6 +231,19 @@ pub fn set_ghost_opacity(opacity: Option<f32>) {
     GHOST_ALPHA.store(opacity.unwrap_or(0.0).to_bits(), Ordering::Relaxed);
     #[cfg(not(debug_assertions))]
     let _ = opacity;
+}
+
+pub fn set_ghost_color(hex: Option<&str>) {
+    #[cfg(debug_assertions)]
+    {
+        let rgb = hex
+            .and_then(crate::config::parse_hex_color)
+            .map(|(r, g, b)| ((r as u32) << 16) | ((g as u32) << 8) | (b as u32))
+            .unwrap_or(GHOST_COLOR_DEFAULT);
+        GHOST_COLOR.store(rgb, Ordering::Relaxed);
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = hex;
 }
 
 pub fn destroy_non_target_windows(

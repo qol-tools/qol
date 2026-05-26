@@ -167,6 +167,7 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     #[cfg(debug_assertions)]
     let config_ms = t_config.elapsed().as_millis();
     super::platform::set_ghost_opacity(config.display.ghost_opacity);
+    super::platform::set_ghost_color(config.display.ghost_debug_color.as_deref());
 
     let executor = cx.background_executor().clone();
     let show_minimized = config.display.show_minimized;

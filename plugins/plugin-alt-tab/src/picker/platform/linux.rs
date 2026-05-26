@@ -175,6 +175,8 @@ pub fn disable_window_shadow() {}
 
 pub fn set_ghost_opacity(_opacity: Option<f32>) {}
 
+pub fn set_ghost_color(_hex: Option<&str>) {}
+
 pub fn show_picker() {}
 
 pub fn hide_picker() {

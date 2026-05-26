@@ -112,6 +112,15 @@ min = 0.0
 max = 1.0
 step = 0.05
 
+[field.display_ghost_debug_color]
+type = "string"
+config_key = "display.ghost_debug_color"
+label = "Ghost Color (debug)"
+description = "Background hex color of the hidden picker window in debug builds."
+section = "layout"
+placeholder = "ff0000"
+default = "ff0000"
+
 [field.display_card_background_color]
 type = "string"
 config_key = "display.card_background_color"

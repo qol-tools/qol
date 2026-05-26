@@ -37,6 +37,7 @@ mod imp {
     pub fn show_picker() {}
     pub fn hide_picker() {}
     pub fn set_ghost_opacity(_opacity: Option<f32>) {}
+    pub fn set_ghost_color(_hex: Option<&str>) {}
     pub fn pre_create(_config: &AltTabConfig, _current: &PickerWindowState, _cx: &mut gpui::App) {}
     pub fn offscreen_origin() -> (f64, f64) {
         (0.0, 0.0)
@@ -93,6 +94,9 @@ pub fn hide_picker() {
 }
 pub fn set_ghost_opacity(opacity: Option<f32>) {
     imp::set_ghost_opacity(opacity)
+}
+pub fn set_ghost_color(hex: Option<&str>) {
+    imp::set_ghost_color(hex)
 }
 pub fn pre_create(
     config: &crate::config::AltTabConfig,
