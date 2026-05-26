@@ -137,16 +137,27 @@ pub fn is_shift_held() -> bool {
 }
 
 pub fn disable_window_shadow() {
-    use objc2_app_kit::NSColor;
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
-    let clear = NSColor::clearColor();
     let Some(window) = find_picker_window(mtm) else {
         return;
     };
     window.setHasShadow(false);
-    window.setBackgroundColor(Some(&clear));
+    apply_ghost_background(&window);
+}
+
+fn apply_ghost_background(win: &NSWindow) {
+    use objc2_app_kit::NSColor;
+    #[cfg(debug_assertions)]
+    {
+        let alpha = f32::from_bits(GHOST_ALPHA.load(Ordering::Relaxed));
+        if alpha > 0.0 {
+            win.setBackgroundColor(Some(&NSColor::redColor()));
+            return;
+        }
+    }
+    win.setBackgroundColor(Some(&NSColor::clearColor()));
 }
 
 pub fn show_picker() {
@@ -188,8 +199,8 @@ pub fn pre_create(
     current: &crate::PickerWindowState,
     cx: &mut gpui::App,
 ) {
-    crate::picker::create::pre_create_offscreen(config, current, cx);
     set_ghost_opacity(config.display.ghost_opacity);
+    crate::picker::create::pre_create_offscreen(config, current, cx);
     with_picker_window(|win| {
         win.setAnimationBehavior(NSWindowAnimationBehavior::None);
         // Always-on-top: NSPopUpMenuWindowLevel (101) sits above normal + floating
@@ -197,14 +208,7 @@ pub fn pre_create(
         // makes the ghost invisible+click-through, so this is a no-op visually; in
         // debug builds with ghost_opacity > 0 it keeps the red ghost above other apps.
         win.setLevel(NSPopUpMenuWindowLevel);
-        #[cfg(debug_assertions)]
-        {
-            let alpha = f32::from_bits(GHOST_ALPHA.load(Ordering::Relaxed));
-            if alpha > 0.0 {
-                use objc2_app_kit::NSColor;
-                win.setBackgroundColor(Some(&NSColor::redColor()));
-            }
-        }
+        apply_ghost_background(win);
     });
 }
 
