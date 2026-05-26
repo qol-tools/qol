@@ -11,53 +11,43 @@ fn scan_with_branch_resolver<F>(manifest_dir: &Path, resolve_branch: F) -> Vec<W
 where
     F: Fn(&Path) -> Option<String> + Copy,
 {
-    let Some(repo_name) = repo_name(manifest_dir) else {
-        return vec![];
-    };
     let Some(root) = find_dir_in_ancestors(manifest_dir, "worktrees") else {
         return vec![];
     };
-    collect_feature_grouped(&root.join("worktrees"), repo_name, resolve_branch)
+    collect_feature_grouped(&root.join("worktrees"), resolve_branch)
 }
 
-/// Feature-grouped layout: `worktrees/<branch-path>/<repo_name>/` must
-/// be a git worktree with `Cargo.toml + .git`. `<branch-path>` may
-/// contain slashes - `feat/x` lives at `worktrees/feat/x/<repo_name>/`,
-/// matching the git ref naturally. The walk descends until it finds the
-/// `<repo_name>` anchor, then stops; foreign-repo worktrees never
-/// surface because the anchor must literally be named `<repo_name>`.
-fn collect_feature_grouped<F>(
-    worktrees_dir: &Path,
-    repo_name: &str,
-    resolve_branch: F,
-) -> Vec<WorktreeInfo>
+/// Feature-grouped layout: `worktrees/<branch-path>/<repo>/` must be a
+/// git worktree with `Cargo.toml + .git`. `<repo>` may be any sibling
+/// (qol-tray, qol-*, plugin-*), because the marker drives per-plugin
+/// worktree resolution as well as qol-tray binary selection. Branches
+/// with slashes nest naturally (`feat/x` → `worktrees/feat/x/<repo>/`).
+fn collect_feature_grouped<F>(worktrees_dir: &Path, resolve_branch: F) -> Vec<WorktreeInfo>
 where
     F: Fn(&Path) -> Option<String> + Copy,
 {
     const MAX_DEPTH: u8 = 5;
     let mut out: Vec<WorktreeInfo> = vec![];
     for child in read_child_dirs(worktrees_dir) {
-        walk_for_repo(&child, repo_name, resolve_branch, &mut out, MAX_DEPTH);
+        walk_for_any_repo(&child, resolve_branch, &mut out, MAX_DEPTH);
     }
     out
 }
 
-fn walk_for_repo<F>(
+fn walk_for_any_repo<F>(
     dir: &Path,
-    repo_name: &str,
     resolve_branch: F,
     out: &mut Vec<WorktreeInfo>,
     depth_remaining: u8,
 ) where
     F: Fn(&Path) -> Option<String> + Copy,
 {
-    let repo_dir = dir.join(repo_name);
-    if repo_dir.join("Cargo.toml").is_file() && repo_dir.join(".git").exists() {
-        if let Some(branch) = resolve_branch(&repo_dir) {
+    if dir.join("Cargo.toml").is_file() && dir.join(".git").exists() {
+        if let Some(branch) = resolve_branch(dir) {
             if !out.iter().any(|w| w.branch == branch) {
                 out.push(WorktreeInfo {
                     branch,
-                    path: repo_dir.to_string_lossy().into_owned(),
+                    path: dir.to_string_lossy().into_owned(),
                 });
             }
         }
@@ -67,7 +57,7 @@ fn walk_for_repo<F>(
         return;
     }
     for child in read_child_dirs(dir) {
-        walk_for_repo(&child, repo_name, resolve_branch, out, depth_remaining - 1);
+        walk_for_any_repo(&child, resolve_branch, out, depth_remaining - 1);
     }
 }
 
@@ -90,11 +80,7 @@ pub(super) fn resolve_git_branch(repo_dir: &Path) -> Option<String> {
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .filter(|s| !s.is_empty())
-}
-
-fn repo_name(manifest_dir: &Path) -> Option<&str> {
-    manifest_dir.file_name().and_then(|name| name.to_str())
+        .filter(|s| !s.is_empty() && s != "HEAD")
 }
 
 fn read_child_dirs(dir: &Path) -> Vec<std::path::PathBuf> {
@@ -112,7 +98,6 @@ fn read_child_dirs(dir: &Path) -> Vec<std::path::PathBuf> {
 #[cfg(all(test, feature = "dev"))]
 mod tests {
     use super::*;
-    use proptest::prelude::*;
     use std::fs;
     use tempfile::TempDir;
 
@@ -139,75 +124,20 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn scan_skips_feature_with_no_qol_tray_subdir() {
+    fn scan_surfaces_plugin_only_feature() {
         let tmp = TempDir::new().unwrap();
         let manifest_dir = create_manifest_dir(tmp.path(), "qol-tray");
         let feature = tmp.path().join("worktrees").join("feat-config-contract-v1");
         create_git_worktree(&feature.join("plugin-window-actions"));
         let result = scan_with_branch_resolver(&manifest_dir, fake_branch_resolver);
 
-        assert!(result.is_empty(), "result: {:?}", result);
+        assert_eq!(result.len(), 1, "result: {:?}", result);
+        assert_eq!(result[0].branch, "feat/config-contract-v1");
     }
 
     #[cfg(unix)]
     #[test]
-    fn scan_skips_flat_layout_without_repo_subdir() {
-        let tmp = TempDir::new().unwrap();
-        let manifest_dir = create_manifest_dir(tmp.path(), "qol-tray");
-        let flat = tmp
-            .path()
-            .join("worktrees")
-            .join("qol-tray-state-lifecycle");
-        create_git_worktree(&flat);
-        let result = scan_with_branch_resolver(&manifest_dir, fake_branch_resolver);
-
-        assert!(
-            result.is_empty(),
-            "flat layout (cargo at feature root, no <feature>/qol-tray/) is not supported: {:?}",
-            result
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn scan_skips_repo_grouped_layout() {
-        let tmp = TempDir::new().unwrap();
-        let manifest_dir = create_manifest_dir(tmp.path(), "qol-tray");
-        let grouping = tmp.path().join("worktrees").join("qol-tray");
-        for branch in ["wasm", "tray-2-boot"] {
-            create_git_worktree(&grouping.join(branch));
-        }
-        let result = scan_with_branch_resolver(&manifest_dir, leaf_branch_resolver);
-
-        assert!(
-            result.is_empty(),
-            "worktrees/<repo>/<branch>/ is not the supported layout: {:?}",
-            result
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn scan_does_not_leak_foreign_repo_worktrees() {
-        // The bug that motivated this convention: worktrees/qol-tray/qol-config/
-        // is a qol-config worktree (perhaps on `main`), not qol-tray's. The strict
-        // layout rejects it because there is no worktrees/qol-tray/qol-config/qol-tray/.
-        let tmp = TempDir::new().unwrap();
-        let manifest_dir = create_manifest_dir(tmp.path(), "qol-tray");
-        let foreign = tmp.path().join("worktrees").join("qol-tray");
-        create_git_worktree(&foreign.join("qol-config"));
-        let result = scan_with_branch_resolver(&manifest_dir, fake_branch_resolver);
-
-        assert!(
-            result.is_empty(),
-            "foreign-repo worktrees must not appear in the picker: {:?}",
-            result
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn scan_picks_qol_tray_when_feature_contains_many_repos() {
+    fn scan_dedupes_when_feature_contains_many_repos() {
         let tmp = TempDir::new().unwrap();
         let manifest_dir = create_manifest_dir(tmp.path(), "qol-tray");
         let feature = tmp.path().join("worktrees").join("feat-config-contract-v1");
@@ -216,12 +146,13 @@ mod tests {
         }
         let result = scan_with_branch_resolver(&manifest_dir, fake_branch_resolver);
 
-        assert_eq!(result.len(), 1, "result: {:?}", result);
-        assert!(
-            result[0].path.ends_with("qol-tray"),
-            "scan must resolve to qol-tray's own worktree, got: {}",
-            result[0].path
+        assert_eq!(
+            result.len(),
+            1,
+            "dedupe by branch must collapse multi-repo features: {:?}",
+            result
         );
+        assert_eq!(result[0].branch, "feat/config-contract-v1");
     }
 
     #[cfg(unix)]
@@ -288,22 +219,6 @@ mod tests {
         assert!(result.is_empty(), "result: {:?}", result);
     }
 
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(128))]
-
-        #[test]
-        fn prop_repo_name_uses_manifest_leaf(
-            segments in prop::collection::vec("[a-z0-9_-]{1,12}", 1..6)
-        ) {
-            let mut path = std::path::PathBuf::new();
-            for segment in &segments {
-                path.push(segment);
-            }
-
-            prop_assert_eq!(repo_name(&path), segments.last().map(|segment| segment.as_str()));
-        }
-    }
-
     #[cfg(unix)]
     fn create_manifest_dir(root: &Path, repo_name: &str) -> std::path::PathBuf {
         let manifest_dir = root.join(repo_name);
@@ -333,15 +248,5 @@ mod tests {
             .join(".git")
             .exists()
             .then(|| "feat/config-contract-v1".to_string())
-    }
-
-    #[cfg(unix)]
-    fn leaf_branch_resolver(repo_dir: &Path) -> Option<String> {
-        if !repo_dir.join(".git").exists() {
-            return None;
-        }
-        repo_dir
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
     }
 }
