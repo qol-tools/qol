@@ -5,7 +5,7 @@ mod boot_heal {
     use tempfile::TempDir;
 
     #[test]
-    fn startup_heal_clears_ghost_marker() {
+    fn startup_heal_keeps_marker_when_no_qol_tray_worktree_matches() {
         let tmp = TempDir::new().unwrap();
         let config_dir = tmp.path().to_path_buf();
         std::fs::create_dir_all(config_dir.join("dev")).unwrap();
@@ -26,19 +26,14 @@ mod boot_heal {
                 qol_tray::dev::boot_contract::HealAction::ClearedSelection { .. }
             )
         });
-        let failed = !report.failures.is_empty();
-
         assert!(
-            cleared || failed,
-            "heal must either clear the ghost marker or surface a failure; report = {:?}",
+            !cleared,
+            "marker must survive when the branch has no qol-tray worktree (plugin-only branches are valid); report = {:?}",
             (&report.events, &report.actions, &report.failures)
         );
 
-        if cleared {
-            let after = std::fs::read_to_string(config_dir.join("dev/active-worktree.txt"))
-                .ok()
-                .filter(|s| !s.trim().is_empty());
-            assert!(after.is_none(), "marker should be cleared after heal");
-        }
+        let after = std::fs::read_to_string(config_dir.join("dev/active-worktree.txt"))
+            .expect("marker file must still exist");
+        assert_eq!(after.trim(), "definitely-not-a-real-branch");
     }
 }
