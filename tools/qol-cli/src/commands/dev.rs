@@ -183,11 +183,23 @@ fn run_dev_hook(root: &Path, verbose: bool) -> Result<()> {
 }
 
 fn ensure_worktree_branch(root: &Path, branch: &str) -> Result<()> {
-    let branches = git_worktree_branches(root)?;
-    if branches.iter().any(|candidate| candidate == branch) {
+    if git_worktree_branches(root)
+        .unwrap_or_default()
+        .iter()
+        .any(|c| c == branch)
+    {
         return Ok(());
     }
-    bail!("no worktree for `{branch}`");
+    for sibling in sibling_crates(root).unwrap_or_default() {
+        if git_worktree_branches(&sibling)
+            .unwrap_or_default()
+            .iter()
+            .any(|c| c == branch)
+        {
+            return Ok(());
+        }
+    }
+    bail!("no worktree for `{branch}` in qol-tray or any sibling repo");
 }
 
 fn git_worktree_branches(root: &Path) -> Result<Vec<String>> {
