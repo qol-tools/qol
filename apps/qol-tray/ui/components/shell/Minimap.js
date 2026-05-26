@@ -170,18 +170,18 @@ function WorktreeSection({ branches, defaultBranch, setDefaultBranch, repoBranch
     const options = useMemo(() => {
         const seen = new Set();
         const out = [];
-        for (const branch of [head, ...branches]) {
+        for (const branch of [head, ...branches, defaultBranch]) {
             if (!branch || seen.has(branch)) continue;
             seen.add(branch);
             out.push(branch);
         }
         return out;
-    }, [head, branches]);
+    }, [head, branches, defaultBranch]);
     const labels = useMemo(() => {
         const acc = { [head]: `${head} (current)` };
-        for (const branch of branches) if (branch && branch !== head) acc[branch] = branch;
+        for (const branch of options) if (branch && branch !== head) acc[branch] = branch;
         return acc;
-    }, [head, branches]);
+    }, [head, options]);
     const value = defaultBranch || head;
     const onChange = useCallback(
         (next) => setDefaultBranch(next === head ? null : next),
