@@ -246,14 +246,17 @@ impl Platform for MacQueries {
         let arr = unsafe { CGWindowListCreate(OPTS, 0) };
         let guard = CfGuard::new(arr)?;
         let n = unsafe { CFArrayGetCount(arr) };
-        let mut h: u64 = 0xCBF29CE484222325;
+        let mut h: u64 = 0;
         for i in 0..n {
             let id = unsafe { CFArrayGetValueAtIndex(arr, i) } as usize as u64;
-            h ^= id;
-            h = h.wrapping_mul(0x100000001B3);
+            let mut x = id.wrapping_mul(0x9E3779B97F4A7C15);
+            x ^= x >> 32;
+            h ^= x;
         }
-        h ^= n as u64;
-        h = h.wrapping_mul(0x100000001B3);
+        let mut count_mix = n as u64;
+        count_mix = count_mix.wrapping_mul(0x9E3779B97F4A7C15);
+        count_mix ^= count_mix >> 32;
+        h ^= count_mix;
         drop(guard);
         Some(h)
     }
