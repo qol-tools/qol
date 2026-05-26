@@ -63,9 +63,7 @@ export function useApp({ onDissolve } = {}) {
             setBranches(nextBranches);
             setRepoBranch(active?.repoBranch ?? null);
             const resolved = resolveInitialBranch({
-                persisted: defaultBranchRef.current,
                 serverActive: active?.branch ?? null,
-                branches: nextBranches,
             });
             if (resolved === defaultBranchRef.current) return;
             setDefaultBranch(resolved);
