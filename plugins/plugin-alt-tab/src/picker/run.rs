@@ -28,7 +28,6 @@ struct PickerState {
     current: PickerWindowState,
     tracker: MonitorTracker,
     caches: PickerCaches,
-    placement_dirty: Arc<AtomicBool>,
     has_shown_once: Arc<AtomicBool>,
 }
 
@@ -53,7 +52,6 @@ impl PickerState {
             icon_cache: self.caches.icon_cache.clone(),
             window_cache: self.caches.window_cache.clone(),
             preview_cache: self.caches.preview_cache.clone(),
-            placement_dirty: &self.placement_dirty,
             has_shown_once: self.has_shown_once.clone(),
             reverse,
         };
@@ -76,14 +74,12 @@ pub(crate) fn run_app(
             current: picker_window_state(),
             tracker: MonitorTracker::start(cx),
             caches: PickerCaches::new(),
-            placement_dirty: Arc::new(AtomicBool::new(true)),
             has_shown_once: Arc::new(AtomicBool::new(false)),
         };
 
         super::monitor_listener::spawn(
             cx,
             super::monitor_listener::ListenerInputs {
-                placement_dirty: state.placement_dirty.clone(),
                 tracker: state.tracker.clone(),
                 current: state.current.clone(),
                 last_window_count: state.caches.last_window_count.clone(),

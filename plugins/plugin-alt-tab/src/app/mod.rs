@@ -9,7 +9,6 @@ use crate::picker::gather::GatheredWindows;
 use crate::picker::state::PickerState;
 use crate::{IconMap, PreviewMap};
 use gpui::*;
-use qol_gpui::window::MonitorKey;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -27,7 +26,6 @@ pub(crate) struct AltTabApp {
     pub(crate) blur_guard_armed: bool,
     pub(crate) _alt_poll_task: Option<Task<()>>,
     _live_preview_task: Option<Task<()>>,
-    last_applied: Option<MonitorKey>,
     _focus_out_sub: gpui::Subscription,
 }
 
@@ -35,7 +33,6 @@ impl AltTabApp {
     pub(crate) fn new(init: PickerInit, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let should_cycle = init.cycle_on_open && init.windows.len() >= 2;
         let action_mode = init.action_mode.clone();
-        let last_applied = init.applied_layout;
         let delegate: Entity<PickerState> = cx.new(|state_cx| {
             let state = PickerState::from_init(init);
             state_cx
@@ -69,7 +66,6 @@ impl AltTabApp {
             blur_guard_until: Instant::now() + Duration::from_millis(BLUR_GUARD_MS),
             blur_guard_armed: true,
             _alt_poll_task: None,
-            last_applied,
         };
 
         if action_mode == ActionMode::HoldToSwitch {
@@ -95,16 +91,6 @@ impl AltTabApp {
     }
 
     fn reposition_if_needed(&mut self, req: &crate::picker::ReuseRequest) -> bool {
-        let dirty = req.placement_dirty.load(Ordering::Acquire);
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[alt-tab/hold] reuse path (poll_task={}) - reset={} dirty={} last_applied={:?} target={:?}",
-            self._alt_poll_task.is_some(),
-            req.config.reset_selection_on_open,
-            dirty,
-            self.last_applied,
-            req.layout.target,
-        );
         #[cfg(debug_assertions)]
         eprintln!(
             "[alt-tab/show] count={} max_cols={} hints={} layout.size={}x{} bounds.origin=({},{})",
@@ -116,20 +102,10 @@ impl AltTabApp {
             req.layout.bounds.origin.x.to_f64(),
             req.layout.bounds.origin.y.to_f64(),
         );
-        if !layout_needs_reposition(self.last_applied, req.layout.target, dirty) {
-            #[cfg(debug_assertions)]
-            eprintln!("[alt-tab/show] skip reposition (target unchanged)");
-            return true;
-        }
-        let ok = picker::platform::reposition_picker_window(
+        picker::platform::reposition_picker_window(
             req.layout.bounds.origin.x.to_f64(),
             req.layout.bounds.origin.y.to_f64(),
-        );
-        if ok {
-            self.last_applied = Some(req.layout.target);
-            req.placement_dirty.store(false, Ordering::Release);
-        }
-        ok
+        )
     }
 
     /// Apply config changes to a reused picker window. Handles window-level
@@ -265,20 +241,6 @@ impl AltTabApp {
         }));
     }
 
-    pub(crate) fn can_cycle_without_layout(&self) -> bool {
-        self.last_applied.is_some()
-    }
-}
-
-fn layout_needs_reposition(
-    last_applied: Option<MonitorKey>,
-    target: MonitorKey,
-    placement_dirty: bool,
-) -> bool {
-    if placement_dirty {
-        return true;
-    }
-    last_applied != Some(target)
 }
 
 // on_modifiers_changed drives the common case, but it can be lost when the picker isn't yet
@@ -416,9 +378,8 @@ impl Focusable for AltTabApp {
 
 #[cfg(test)]
 mod focus_out_tests {
-    use super::{focus_out_decision, layout_needs_reposition, FocusOutDecision};
+    use super::{focus_out_decision, FocusOutDecision};
     use crate::config::ActionMode;
-    use qol_gpui::window::MonitorKey;
 
     #[test]
     fn ghost_state_focus_out_is_ignored_regardless_of_other_signals() {
@@ -473,32 +434,4 @@ mod focus_out_tests {
         );
     }
 
-    #[test]
-    fn dirty_layout_repositions_even_when_target_matches() {
-        let target = key(10, 20, 300, 200);
-        assert!(layout_needs_reposition(Some(target), target, true));
-    }
-
-    #[test]
-    fn clean_matching_layout_skips_reposition() {
-        let target = key(10, 20, 300, 200);
-        assert!(!layout_needs_reposition(Some(target), target, false));
-    }
-
-    #[test]
-    fn missing_or_different_layout_repositions() {
-        let target = key(10, 20, 300, 200);
-        let previous = key(30, 40, 300, 200);
-        assert!(layout_needs_reposition(None, target, false));
-        assert!(layout_needs_reposition(Some(previous), target, false));
-    }
-
-    fn key(x: i32, y: i32, width: i32, height: i32) -> MonitorKey {
-        MonitorKey {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
 }

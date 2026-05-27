@@ -44,7 +44,6 @@ pub(crate) struct OpenPickerRequest<'a> {
     pub icon_cache: SharedIconCache,
     pub window_cache: WindowCache,
     pub preview_cache: SharedPreviewCache,
-    pub placement_dirty: &'a AtomicBool,
     pub has_shown_once: Arc<AtomicBool>,
     pub reverse: bool,
 }
@@ -116,7 +115,6 @@ fn try_reuse_existing(
         config: req.config,
         gathered,
         reverse: req.reverse,
-        placement_dirty: req.placement_dirty,
     };
     if reuse::try_reuse(&reuse_req, cx) {
         if source_key != target {
@@ -165,7 +163,6 @@ fn create_from_request(
         last_window_count: req.last_window_count.clone(),
         icon_cache: req.icon_cache.clone(),
         current: req.current,
-        placement_dirty: req.placement_dirty,
         has_shown_once: req.has_shown_once.clone(),
     };
     create::create_new(&create_req, gathered, cx);
@@ -175,9 +172,6 @@ fn try_cycle_selection(handle: &WindowHandle<AltTabApp>, reverse: bool, cx: &mut
     handle
         .update(cx, |view, window: &mut Window, cx| -> bool {
             if !PICKER_VISIBLE.load(Ordering::Relaxed) {
-                return false;
-            }
-            if !view.can_cycle_without_layout() {
                 return false;
             }
             if view.action_mode != ActionMode::HoldToSwitch {
@@ -673,7 +667,6 @@ pub(crate) mod state {
                 cycle_on_open: false,
                 previews: HashMap::new(),
                 icons: HashMap::new(),
-                applied_layout: None,
             })
         }
 
@@ -776,7 +769,6 @@ pub(crate) mod state {
                 cycle_on_open: false,
                 previews: HashMap::new(),
                 icons: HashMap::new(),
-                applied_layout: None,
             });
             s.selected_index = selected;
             s

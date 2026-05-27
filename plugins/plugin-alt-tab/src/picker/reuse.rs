@@ -3,13 +3,11 @@ use crate::app::AltTabApp;
 use crate::config::AltTabConfig;
 use crate::shared::layout::*;
 use gpui::*;
-use qol_gpui::window::{MonitorKey, PopupPlacement};
-use std::sync::atomic::AtomicBool;
+use qol_gpui::window::PopupPlacement;
 
 pub(crate) struct ReuseLayout {
     pub bounds: Bounds<Pixels>,
     pub size: Size<Pixels>,
-    pub target: MonitorKey,
 }
 
 pub(crate) struct ReuseRequest<'a> {
@@ -18,7 +16,6 @@ pub(crate) struct ReuseRequest<'a> {
     pub config: &'a AltTabConfig,
     pub gathered: &'a GatheredWindows,
     pub reverse: bool,
-    pub placement_dirty: &'a AtomicBool,
 }
 
 pub(super) struct LayoutInput<'a> {
@@ -50,12 +47,7 @@ pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
 pub(super) fn compute_layout(input: &LayoutInput, cx: &mut App) -> ReuseLayout {
     let size = picker_size(input);
     let bounds = input.placement.centered_bounds(size, cx);
-    let target = MonitorKey::from_bounds(&bounds);
-    ReuseLayout {
-        bounds,
-        size,
-        target,
-    }
+    ReuseLayout { bounds, size }
 }
 
 fn picker_size(input: &LayoutInput) -> Size<Pixels> {

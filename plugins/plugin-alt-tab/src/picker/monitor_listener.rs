@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -17,7 +17,6 @@ static DATA_REFRESH_TX: OnceLock<mpsc::Sender<()>> = OnceLock::new();
 
 #[derive(Clone)]
 pub(crate) struct ListenerInputs {
-    pub placement_dirty: Arc<AtomicBool>,
     pub tracker: MonitorTracker,
     pub current: PickerWindowState,
     pub last_window_count: Arc<AtomicUsize>,
@@ -98,7 +97,6 @@ fn drain(rx: &Arc<Mutex<mpsc::Receiver<()>>>) {
 }
 
 fn reposition_ghost_only(inputs: &ListenerInputs, app_cx: &mut App) {
-    inputs.placement_dirty.store(true, Ordering::Release);
     if PICKER_VISIBLE.load(Ordering::Relaxed) {
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/listener] picker visible, skipping ghost reposition");
