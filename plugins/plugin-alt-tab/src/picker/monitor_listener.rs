@@ -31,7 +31,7 @@ pub(crate) struct ListenerInputs {
 pub(crate) fn spawn(cx: &mut App, inputs: ListenerInputs) {
     let (refresh_tx, refresh_rx) = mpsc::channel::<()>();
     let _ = DATA_REFRESH_TX.set(refresh_tx);
-    spawn_window_list_listener_thread();
+    spawn_data_refresh_listener_thread();
     qol_gpui::event_router::spawn_runtime_event_router(
         cx,
         vec![qol_gpui::protocol::RuntimeEventKind::ActiveMonitorChanged],
@@ -49,15 +49,21 @@ pub(crate) fn request_data_refresh() {
     }
 }
 
-fn spawn_window_list_listener_thread() {
-    std::thread::spawn(window_list_listener_loop);
+fn spawn_data_refresh_listener_thread() {
+    std::thread::spawn(data_refresh_listener_loop);
 }
 
 #[cfg(unix)]
-fn window_list_listener_loop() {
+fn data_refresh_listener_loop() {
     use qol_gpui::protocol::RuntimeEventKind;
     let client = qol_gpui::PlatformStateClient::from_env();
-    let Some(mut subscription) = client.subscribe(vec![RuntimeEventKind::WindowListChanged]) else {
+    // FocusChanged catches mouse-click focus shifts that don't add or remove a
+    // window; without it the picker keeps showing the prior MRU until 30s of
+    // freshness TTL expires or a window is opened/closed.
+    let Some(mut subscription) = client.subscribe(vec![
+        RuntimeEventKind::WindowListChanged,
+        RuntimeEventKind::FocusChanged,
+    ]) else {
         return;
     };
     while subscription.next_event().is_some() {
@@ -66,7 +72,7 @@ fn window_list_listener_loop() {
 }
 
 #[cfg(not(unix))]
-fn window_list_listener_loop() {}
+fn data_refresh_listener_loop() {}
 
 fn spawn_data_refresh_router(cx: &mut App, rx: mpsc::Receiver<()>, inputs: ListenerInputs) {
     let rx = Arc::new(Mutex::new(rx));
@@ -103,6 +109,12 @@ fn reposition_ghost_only(inputs: &ListenerInputs, app_cx: &mut App) {
 }
 
 fn trigger_data_refresh(inputs: &ListenerInputs, app_cx: &mut App) {
+    // Mark cached windows stale before any early returns - if dispatch_show fires
+    // before refresh_data finishes its 75ms debounce, it must see fresh=false and
+    // re-query inline rather than serve the cached pre-event order.
+    if let Ok(mut fresh) = inputs.data_fresh_at.lock() {
+        *fresh = None;
+    }
     if PICKER_VISIBLE.load(Ordering::Relaxed) {
         return;
     }
