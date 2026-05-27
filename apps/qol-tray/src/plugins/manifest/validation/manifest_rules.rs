@@ -1,5 +1,5 @@
 use crate::plugins::manifest::{PluginManifest, CURRENT_MANIFEST_VERSION};
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 
 impl PluginManifest {
     pub fn validate(&self) -> Result<()> {
@@ -16,6 +16,18 @@ impl PluginManifest {
 
     pub fn validate_version(&self) -> Result<()> {
         validate_manifest_version(self.manifest_version)
+    }
+
+    pub fn load_and_validate(path: impl AsRef<std::path::Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("read {}", path.display()))?;
+        let manifest: Self = toml::from_str(&raw)
+            .with_context(|| format!("parse {}", path.display()))?;
+        manifest
+            .validate()
+            .with_context(|| format!("validate {}", path.display()))?;
+        Ok(manifest)
     }
 }
 
