@@ -20,13 +20,12 @@ async fn serve_icon_inner(bundle_id: String) -> HttpResult<Response> {
 }
 
 async fn load_icon_rgba(bundle_id: String) -> HttpResult<(Vec<u8>, u32, u32)> {
-    let icon = tokio::task::spawn_blocking(move || {
-        qol_app_icon::icon_for_bundle_id(&bundle_id, 32)
-    })
-    .await
-    .ok()
-    .flatten()
-    .ok_or_else(|| Box::new(icon_not_found_response()))?;
+    let icon =
+        tokio::task::spawn_blocking(move || qol_app_icon::icon_for_bundle_id(&bundle_id, 32))
+            .await
+            .ok()
+            .flatten()
+            .ok_or_else(|| Box::new(icon_not_found_response()))?;
     Ok((icon.data, icon.width as u32, icon.height as u32))
 }
 
