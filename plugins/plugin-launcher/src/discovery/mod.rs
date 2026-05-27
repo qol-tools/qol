@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use notify::event::EventKind;
 use notify::{RecursiveMode, Watcher};
-use qol_plugin_api::protocol::{RuntimeEvent, RuntimeEventKind};
-use qol_plugin_api::PlatformStateClient;
+use qol_gpui::protocol::{RuntimeEvent, RuntimeEventKind};
+use qol_gpui::PlatformStateClient;
 
 use platform::AppRoot;
 
