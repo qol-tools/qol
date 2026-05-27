@@ -12,6 +12,7 @@ qol-runtime.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb.workspace = true
+qol-platform.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { workspace = true }

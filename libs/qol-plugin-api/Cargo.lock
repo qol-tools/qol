@@ -3947,7 +3947,6 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
- "qol-platform",
  "qol-runtime",
  "x11rb",
 ]
@@ -3977,6 +3976,7 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "qol-platform",
  "qol-runtime",
  "serde",
  "serde_json",
@@ -7340,3 +7340,19 @@ dependencies = [
 [[patch.unused]]
 name = "qol-tray"
 version = "3.15.1"
+
+[[patch.unused]]
+name = "qol-app-icon"
+version = "0.3.0"
+
+[[patch.unused]]
+name = "qol-gpui"
+version = "0.3.0"
+
+[[patch.unused]]
+name = "qol-plugin-api"
+version = "0.3.0"
+
+[[patch.unused]]
+name = "qol-plugin-daemon"
+version = "0.3.0"
