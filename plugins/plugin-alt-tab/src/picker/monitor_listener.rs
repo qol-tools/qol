@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use gpui::*;
 use qol_gpui::monitor::MonitorTracker;
@@ -25,7 +25,6 @@ pub(crate) struct ListenerInputs {
     pub icon_cache: SharedIconCache,
     pub preview_cache: SharedPreviewCache,
     pub refresh_generation: Arc<AtomicUsize>,
-    pub data_fresh_at: Arc<Mutex<Option<Instant>>>,
 }
 
 pub(crate) fn spawn(cx: &mut App, inputs: ListenerInputs) {
@@ -109,12 +108,6 @@ fn reposition_ghost_only(inputs: &ListenerInputs, app_cx: &mut App) {
 }
 
 fn trigger_data_refresh(inputs: &ListenerInputs, app_cx: &mut App) {
-    // Mark cached windows stale before any early returns - if dispatch_show fires
-    // before refresh_data finishes its 75ms debounce, it must see fresh=false and
-    // re-query inline rather than serve the cached pre-event order.
-    if let Ok(mut fresh) = inputs.data_fresh_at.lock() {
-        *fresh = None;
-    }
     if PICKER_VISIBLE.load(Ordering::Relaxed) {
         return;
     }
@@ -199,9 +192,6 @@ async fn refresh_data(cx: &mut AsyncApp, inputs: ListenerInputs, generation: usi
                 },
                 app_cx,
             );
-        }
-        if let Ok(mut fresh) = inputs.data_fresh_at.lock() {
-            *fresh = Some(Instant::now());
         }
         #[cfg(debug_assertions)]
         eprintln!(

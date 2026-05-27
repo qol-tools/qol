@@ -11,12 +11,9 @@ use qol_gpui::monitor::MonitorTracker;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::{Duration, Instant};
 
 pub(crate) type WindowCache = Arc<Mutex<Vec<WindowInfo>>>;
 pub(crate) type SharedPreviewCache = Arc<Mutex<crate::PreviewMap>>;
-
-const DATA_FRESH_TTL: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub(super) struct PickerCaches {
@@ -24,7 +21,6 @@ pub(super) struct PickerCaches {
     window_cache: WindowCache,
     icon_cache: SharedIconCache,
     preview_cache: SharedPreviewCache,
-    data_fresh_at: Arc<Mutex<Option<Instant>>>,
 }
 
 #[derive(Clone)]
@@ -43,22 +39,7 @@ impl PickerCaches {
             window_cache: Arc::new(Mutex::new(Vec::new())),
             icon_cache: Arc::new(Mutex::new(HashMap::new())),
             preview_cache: Arc::new(Mutex::new(HashMap::new())),
-            data_fresh_at: Arc::new(Mutex::new(None)),
         }
-    }
-
-    fn is_fresh(&self) -> bool {
-        let Ok(guard) = self.data_fresh_at.lock() else {
-            return false;
-        };
-        matches!(*guard, Some(at) if at.elapsed() < DATA_FRESH_TTL)
-    }
-
-    fn snapshot_windows(&self) -> Vec<WindowInfo> {
-        self.window_cache
-            .lock()
-            .map(|c| c.clone())
-            .unwrap_or_default()
     }
 }
 
@@ -110,7 +91,6 @@ pub(crate) fn run_app(
                 icon_cache: state.caches.icon_cache.clone(),
                 preview_cache: state.caches.preview_cache.clone(),
                 refresh_generation: Arc::new(AtomicUsize::new(0)),
-                data_fresh_at: state.caches.data_fresh_at.clone(),
             },
         );
         super::platform::pre_create(&config, &state.current, &state.tracker, cx);
@@ -165,24 +145,13 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
 
     let executor = cx.background_executor().clone();
     let show_minimized = config.display.show_minimized;
-    let fresh = state.caches.is_fresh();
 
     #[cfg(debug_assertions)]
     let t_query = std::time::Instant::now();
-    let (windows, rendered_icons) = if fresh {
-        let cached = state.caches.snapshot_windows();
-        if cached.is_empty() {
-            return;
-        }
-        (cached, None)
-    } else {
-        let windows = executor
-            .spawn(async move { Platform.visible_windows(show_minimized).unwrap_or_default() })
-            .await;
-        let rendered_icons =
-            refresh_icon_cache(&executor, &windows, &state.caches.icon_cache).await;
-        (windows, rendered_icons)
-    };
+    let windows = executor
+        .spawn(async move { Platform.visible_windows(show_minimized).unwrap_or_default() })
+        .await;
+    let rendered_icons = refresh_icon_cache(&executor, &windows, &state.caches.icon_cache).await;
     #[cfg(debug_assertions)]
     let (query_ms, window_count) = (t_query.elapsed().as_millis(), windows.len());
 
@@ -195,11 +164,9 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     #[cfg(debug_assertions)]
     let t_update = std::time::Instant::now();
     let _ = cx.update(move |app_cx| {
-        if !fresh {
-            apply_show_windows(&state_for_update.caches, windows, app_cx);
-            if let Some(icons) = rendered_icons {
-                commit_icons_to_shared_cache(&state_for_update.caches.icon_cache, icons, app_cx);
-            }
+        apply_show_windows(&state_for_update.caches, windows, app_cx);
+        if let Some(icons) = rendered_icons {
+            commit_icons_to_shared_cache(&state_for_update.caches.icon_cache, icons, app_cx);
         }
         state_for_update.open_picker(&config, reverse, app_cx);
     });
@@ -210,8 +177,8 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     {
         let total_ms = t_total.elapsed().as_millis();
         eprintln!(
-            "[alt-tab/timing] total={}ms config={}ms query={}ms({} windows, fresh={}) update={}ms",
-            total_ms, config_ms, query_ms, window_count, fresh, update_ms
+            "[alt-tab/timing] total={}ms config={}ms query={}ms({} windows) update={}ms",
+            total_ms, config_ms, query_ms, window_count, update_ms
         );
     }
 }
