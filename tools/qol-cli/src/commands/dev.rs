@@ -14,6 +14,9 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     let root = repo_root()?;
     print_title("qol dev");
     print_hint(verbose);
+    if branch.is_none() {
+        clear_active_worktree_marker();
+    }
     recompile_linked_plugins(&root, verbose, skip_plugins)?;
     run_dev_hook(&root, verbose)?;
     run_step(
@@ -166,6 +169,19 @@ fn section_command<'a>(manifest: &'a Value, section: &str) -> Option<&'a str> {
         .get(section)
         .and_then(|value| value.get("command"))
         .and_then(Value::as_str)
+}
+
+/// Bare `qol dev` (no worktree arg) means "canonical / main". Delete the
+/// persisted marker before qol-tray boots so heal_drift_on_startup resolves
+/// to the main clone and the UI dropdown shows main instead of whatever
+/// worktree was last selected. Silent on failure; a leftover marker only
+/// affects the boot the user is about to take, and they will see it.
+fn clear_active_worktree_marker() {
+    let Some(config_dir) = dirs::config_dir() else {
+        return;
+    };
+    let path = config_dir.join("qol-tray/dev/active-worktree.txt");
+    let _ = std::fs::remove_file(path);
 }
 
 fn run_dev_hook(root: &Path, verbose: bool) -> Result<()> {

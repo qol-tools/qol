@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0"
+dirs = "6.0"
 serde_json = "1.0"
 toml = "0.8"
 
