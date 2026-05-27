@@ -21,7 +21,7 @@ async fn serve_icon_inner(bundle_id: String) -> HttpResult<Response> {
 
 async fn load_icon_rgba(bundle_id: String) -> HttpResult<(Vec<u8>, u32, u32)> {
     let icon = tokio::task::spawn_blocking(move || {
-        qol_plugin_api::app_icon::icon_for_bundle_id(&bundle_id, 32)
+        qol_app_icon::icon_for_bundle_id(&bundle_id, 32)
     })
     .await
     .ok()

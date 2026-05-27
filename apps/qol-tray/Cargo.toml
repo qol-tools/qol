@@ -94,7 +94,7 @@ flate2 = "1"
 tar = "0.4"
 
 qol-runtime = { git = "https://github.com/qol-tools/qol-runtime" }
-qol-plugin-api = { git = "https://github.com/qol-tools/qol-plugin-api", default-features = false, features = ["app-icons"] }
+qol-app-icon = { git = "https://github.com/qol-tools/qol-libs" }
 png = "0.17"
 qol-config = { git = "https://github.com/qol-tools/qol-config" }
 qol-migrations = { path = "../qol-migrations" }
