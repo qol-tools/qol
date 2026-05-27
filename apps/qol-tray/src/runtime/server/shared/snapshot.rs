@@ -4,6 +4,7 @@ use super::SharedState;
 use crate::runtime::state::{self, InputState};
 
 pub(super) fn build_state(shared: &SharedState) -> PlatformState {
+    shared.refresh_focus_synchronously();
     let monitors = shared.monitors();
     let cursor = shared.cursor_pos().map(|(x, y)| CursorPos { x, y });
     let input = shared.input();
