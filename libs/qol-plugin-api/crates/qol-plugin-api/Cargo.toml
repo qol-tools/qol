@@ -1,0 +1,14 @@
+[package]
+name = "qol-plugin-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Plugin manifest and restore-claim wire contract for qol-tray plugins"
+
+[dependencies]
+serde.workspace = true
+qol-runtime.workspace = true
+
+[dev-dependencies]
+toml.workspace = true
+serde_json.workspace = true

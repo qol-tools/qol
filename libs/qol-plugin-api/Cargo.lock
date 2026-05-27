@@ -3930,27 +3930,56 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-app-icon"
+version = "0.3.0"
+dependencies = [
+ "objc2",
+ "objc2-app-kit",
+ "objc2-core-graphics",
+ "objc2-foundation",
+]
+
+[[package]]
+name = "qol-gpui"
+version = "0.3.0"
+dependencies = [
+ "gpui",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "qol-platform",
+ "qol-runtime",
+ "x11rb",
+]
+
+[[package]]
 name = "qol-platform"
 version = "0.2.0"
-source = "git+https://github.com/qol-tools/qol-platform#cdd234a4e1ec39f70457b03a99f2f7aed24c3bf6"
+source = "git+https://github.com/qol-tools/qol-platform#67204d267eec79910a1ab7c18fb3cb4d0eed4330"
 dependencies = [
  "dirs 6.0.0",
 ]
 
 [[package]]
 name = "qol-plugin-api"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
- "gpui",
- "objc2",
- "objc2-app-kit",
- "objc2-core-graphics",
- "objc2-foundation",
- "qol-platform",
  "qol-runtime",
  "serde",
  "serde_json",
  "toml 0.8.23",
+]
+
+[[package]]
+name = "qol-plugin-daemon"
+version = "0.3.0"
+dependencies = [
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "qol-runtime",
+ "serde",
+ "serde_json",
  "x11rb",
 ]
 

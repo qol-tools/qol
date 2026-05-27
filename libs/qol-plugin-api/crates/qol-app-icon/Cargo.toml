@@ -1,0 +1,21 @@
+[package]
+name = "qol-app-icon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Read OS app icon bytes (RGBA) by bundle id or pid"
+
+[dependencies]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true, features = ["NSString", "NSURL"] }
+objc2-app-kit = { workspace = true, features = [
+  "NSWorkspace",
+  "NSImage",
+  "NSImageRep",
+  "NSGraphicsContext",
+  "objc2-core-graphics",
+  "libc",
+] }
+objc2-core-graphics = { workspace = true }

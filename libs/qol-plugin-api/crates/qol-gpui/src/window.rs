@@ -44,6 +44,15 @@ impl PopupPlacement {
         }
     }
 
+    /// Build placement from the focused monitor (falls back to active, then cursor).
+    /// Use when the popup should follow "where the user is working" rather than
+    /// "the most recent input signal".
+    pub fn from_tracker_focus_first(tracker: &MonitorTracker) -> Self {
+        Self {
+            monitor: tracker.snapshot_monitor_focus_first(),
+        }
+    }
+
     pub fn from_monitor(monitor: Option<ActiveMonitor>) -> Self {
         Self { monitor }
     }
@@ -155,6 +164,30 @@ where
         window.activate_window();
         view
     })
+}
+
+/// Resize `window` to `target`. When the size already matches but GPUI's cached
+/// scale factor has drifted from `backing_scale` (the popup was pre-created on one
+/// monitor and shown on another with different DPI), nudge the width by 1px and
+/// back to force GPUI to recompute scale. Without this, content renders blurry at
+/// the stale scale. Pass the real backing scale from the windowing layer, or
+/// `None` to skip the scale check.
+pub fn resize_or_sync_scale(window: &mut Window, target: Size<Pixels>, backing_scale: Option<f32>) {
+    let current = window.window_bounds().get_bounds().size;
+    let dw = (current.width.to_f64() - target.width.to_f64()).abs();
+    let dh = (current.height.to_f64() - target.height.to_f64()).abs();
+    if dw >= 1.0 || dh >= 1.0 {
+        window.resize(target);
+        return;
+    }
+    let Some(backing) = backing_scale else {
+        return;
+    };
+    if (window.scale_factor() - backing).abs() < 0.01 {
+        return;
+    }
+    window.resize(size(target.width + px(1.0), target.height));
+    window.resize(target);
 }
 
 pub fn target_monitor_key(monitor: Option<&ActiveMonitor>) -> MonitorKey {

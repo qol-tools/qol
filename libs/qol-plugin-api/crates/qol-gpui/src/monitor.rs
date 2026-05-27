@@ -7,7 +7,7 @@ pub struct ActiveMonitor {
 }
 
 impl ActiveMonitor {
-    fn from_bounds(b: MonitorBounds) -> Self {
+    pub fn from_bounds(b: MonitorBounds) -> Self {
         Self { inner: b }
     }
 
@@ -44,6 +44,31 @@ impl MonitorTracker {
     /// Returns just the ActiveMonitor, dropping the index.
     pub fn snapshot_monitor(&self) -> Option<ActiveMonitor> {
         self.snapshot().map(|(monitor, _)| monitor)
+    }
+
+    /// Prefer the focused window's monitor; fall back to active, then cursor, then first.
+    /// Use this for popup placements that should follow "where the user is working"
+    /// rather than "where the cursor most recently moved".
+    pub fn snapshot_monitor_focus_first(&self) -> Option<ActiveMonitor> {
+        let state = self.client.get_state()?;
+        if state.monitors.is_empty() {
+            return None;
+        }
+        let monitor = state
+            .focus_monitor()
+            .or_else(|| state.active_monitor())
+            .or_else(|| state.cursor_monitor())
+            .unwrap_or(state.monitors[0]);
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[monitor] focus-first snapshot: cursor_idx={:?} focus_idx={:?} active_idx={:?} -> ({}, {})",
+            state.cursor_monitor_idx,
+            state.focus_monitor_idx,
+            state.active_monitor_idx,
+            monitor.x,
+            monitor.y,
+        );
+        Some(ActiveMonitor::from_bounds(monitor))
     }
 
     /// Returns (ActiveMonitor, active_monitor_idx) from one GET_STATE call.
