@@ -28,6 +28,7 @@ impl RuntimeServer {
         );
 
         let shared = Arc::new(SharedState::new(initial_monitors));
+        shared.attach_platform(platform.clone());
         super::publisher::install(shared.clone());
         spawn_poll_thread(shared.clone(), channels);
         spawn_window_list_thread(shared.clone(), platform);

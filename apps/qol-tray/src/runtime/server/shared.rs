@@ -3,12 +3,14 @@ mod subscribers;
 
 use std::collections::HashSet;
 use std::sync::mpsc as std_mpsc;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::time::Instant;
 
 use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind};
 use qol_runtime::MonitorBounds;
 
-use super::super::state::InputState;
+use super::super::state::{self, InputState, Stamped};
+use crate::desktop_state::SharedPlatform;
 use subscribers::SubscriberEntry;
 
 pub(crate) struct SharedState {
@@ -18,6 +20,7 @@ pub(crate) struct SharedState {
     focused_window: Mutex<Option<MonitorBounds>>,
     last_focus_bounds: Mutex<Option<MonitorBounds>>,
     subscribers: Mutex<Vec<SubscriberEntry>>,
+    platform: OnceLock<SharedPlatform>,
 }
 
 impl SharedState {
@@ -29,6 +32,44 @@ impl SharedState {
             focused_window: Mutex::new(None),
             last_focus_bounds: Mutex::new(None),
             subscribers: Mutex::new(Vec::new()),
+            platform: OnceLock::new(),
+        }
+    }
+
+    pub(crate) fn attach_platform(&self, facade: SharedPlatform) {
+        let _ = self.platform.set(facade);
+    }
+
+    /// Forces an inline AX focus query against the OS, bypassing the poll
+    /// loop's adaptive interval. Used by GET_STATE so callers (popup placement,
+    /// alt-tab) see the OS focus at request time, not the last poll tick.
+    /// No-op when no facade is attached (test builds).
+    pub(crate) fn refresh_focus_synchronously(&self) {
+        let Some(facade) = self.platform.get() else {
+            return;
+        };
+        if !facade.poll_focused_window() {
+            return;
+        }
+        let Some(fresh_bounds) = facade.focused_window_bounds() else {
+            return;
+        };
+        let monitors = self.monitors();
+        let Some(fresh_monitor) = state::monitor_for_bounds(&monitors, &fresh_bounds) else {
+            return;
+        };
+        *lock_or_recover(&self.focused_window) = Some(fresh_bounds);
+        *lock_or_recover(&self.last_focus_bounds) = Some(fresh_bounds);
+        let mut input = lock_or_recover(&self.input);
+        let needs_update = match input.focus.as_ref() {
+            Some(focus) => focus.monitor != fresh_monitor,
+            None => true,
+        };
+        if needs_update {
+            input.focus = Some(Stamped {
+                monitor: fresh_monitor,
+                at: Instant::now(),
+            });
         }
     }
 
