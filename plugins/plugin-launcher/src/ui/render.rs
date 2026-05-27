@@ -59,7 +59,7 @@ impl Render for LauncherView {
 
         if self.is_showing
             && !self.focus_poll_running
-            && qol_plugin_api::focus::should_poll_process_focus()
+            && qol_plugin_daemon::focus::should_poll_process_focus()
         {
             self.focus_poll_running = true;
             let guard_until = self.blur_guard_until;
@@ -213,7 +213,7 @@ impl LauncherView {
                 break;
             }
             let has_focus = cx
-                .background_spawn(async { qol_plugin_api::focus::has_process_focus() })
+                .background_spawn(async { qol_plugin_daemon::focus::has_process_focus() })
                 .await;
             if has_focus {
                 continue;

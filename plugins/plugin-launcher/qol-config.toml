@@ -56,3 +56,28 @@ options = ["basic", "momentum"]
 [field.strategy.option_labels]
 basic = "Basic"
 momentum = "Momentum"
+
+[section.appearance]
+label = "Appearance"
+description = "Debug visualisation for the hidden launcher ghost window."
+actions = ["open"]
+
+[field.display_ghost_opacity]
+type = "number"
+config_key = "display.ghost_opacity"
+label = "Ghost Opacity (debug)"
+description = "Opacity of the hidden launcher window in debug builds. 0 = invisible."
+section = "appearance"
+default = 0.0
+min = 0.0
+max = 1.0
+step = 0.05
+
+[field.display_ghost_debug_color]
+type = "string"
+config_key = "display.ghost_debug_color"
+label = "Ghost Color (debug)"
+description = "Background hex color of the hidden launcher window in debug builds."
+section = "appearance"
+placeholder = "00ff00"
+default = "00ff00"

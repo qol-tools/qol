@@ -7,8 +7,8 @@ mod render;
 pub mod run;
 mod state;
 mod view;
+mod window_host;
 mod window_ops;
-pub(crate) mod windows;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -26,6 +26,7 @@ pub use input::key_to_input_char;
 const BLUR_GUARD_MS: u64 = 400;
 const TRAIL_DECAY_TICK: Duration = Duration::from_millis(20);
 const LAUNCHER_APP_ID: &str = "qol-tray-launcher";
+pub(crate) const LAUNCHER_WINDOW_TITLE: &str = "qol-launcher";
 
 pub(crate) struct LauncherView {
     pub(super) state: LauncherState,
