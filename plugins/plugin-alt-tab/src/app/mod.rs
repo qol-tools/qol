@@ -9,7 +9,7 @@ use crate::picker::gather::GatheredWindows;
 use crate::picker::state::PickerState;
 use crate::{IconMap, PreviewMap};
 use gpui::*;
-use qol_plugin_api::window::MonitorKey;
+use qol_gpui::window::MonitorKey;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -418,7 +418,7 @@ impl Focusable for AltTabApp {
 mod focus_out_tests {
     use super::{focus_out_decision, layout_needs_reposition, FocusOutDecision};
     use crate::config::ActionMode;
-    use qol_plugin_api::window::MonitorKey;
+    use qol_gpui::window::MonitorKey;
 
     #[test]
     fn ghost_state_focus_out_is_ignored_regardless_of_other_signals() {

@@ -8,7 +8,7 @@ use crate::discovery::macos::ffi::{
     K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS, K_CG_WINDOW_LIST_OPTION_INCLUDING_WINDOW,
 };
 use crate::discovery::WindowInfo;
-use qol_plugin_api::app_icon::RgbaImage;
+use qol_app_icon::RgbaImage;
 use std::collections::HashMap;
 use std::ffi::c_void;
 
@@ -23,7 +23,7 @@ pub fn get_app_icons(windows: &[WindowInfo]) -> HashMap<String, RgbaImage> {
         if !needed.contains(name.as_str()) {
             continue;
         }
-        let Some(icon) = qol_plugin_api::app_icon::icon_for_pid(*pid, ICON_SIZE) else {
+        let Some(icon) = qol_app_icon::icon_for_pid(*pid, ICON_SIZE) else {
             continue;
         };
         icons.insert(name.clone(), icon);

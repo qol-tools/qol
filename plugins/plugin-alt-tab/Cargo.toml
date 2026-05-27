@@ -15,7 +15,9 @@ serde_json = "1.0"
 smallvec = "1.13"
 qol-color = { git = "https://github.com/qol-tools/qol-color" }
 qol-config = { git = "https://github.com/qol-tools/qol-config" }
-qol-plugin-api = { git = "https://github.com/qol-tools/qol-plugin-api", features = ["app-icons"] }
+qol-plugin-daemon = { git = "https://github.com/qol-tools/qol-libs" }
+qol-app-icon      = { git = "https://github.com/qol-tools/qol-libs" }
+qol-gpui          = { git = "https://github.com/qol-tools/qol-libs" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

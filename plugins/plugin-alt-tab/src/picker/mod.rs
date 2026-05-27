@@ -14,8 +14,8 @@ use crate::config::{parse_hex_color, ActionMode, AltTabConfig, DisplayConfig};
 use crate::{PickerWindowState, SharedIconCache};
 use gather::{gather, spawn_icon_fill, GatheredWindows, IconFillRequest};
 use gpui::*;
-use qol_plugin_api::monitor::MonitorTracker;
-use qol_plugin_api::window::{MonitorKey, PopupPlacement};
+use qol_gpui::monitor::MonitorTracker;
+use qol_gpui::window::{MonitorKey, PopupPlacement};
 use run::{SharedPreviewCache, WindowCache};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -146,7 +146,7 @@ fn destroy_non_target_windows(req: &OpenPickerRequest, placement: &PopupPlacemen
 
 fn discard_old_window(
     req: &OpenPickerRequest,
-    target: qol_plugin_api::window::MonitorKey,
+    target: qol_gpui::window::MonitorKey,
     handle: WindowHandle<AltTabApp>,
     cx: &mut App,
 ) {
@@ -528,7 +528,7 @@ pub(crate) mod state {
     }
 
     pub(crate) fn push_focus_hint(win: &WindowInfo) {
-        let client = qol_plugin_api::PlatformStateClient::from_env();
+        let client = qol_gpui::PlatformStateClient::from_env();
         let Some(state) = client.get_state() else {
             return;
         };
@@ -551,7 +551,7 @@ pub(crate) mod state {
     }
 
     pub(crate) fn find_containing_monitor(
-        monitors: &[qol_plugin_api::MonitorBounds],
+        monitors: &[qol_gpui::MonitorBounds],
         x: f32,
         y: f32,
     ) -> Option<usize> {

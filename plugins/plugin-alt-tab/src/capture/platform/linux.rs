@@ -1,5 +1,5 @@
 use crate::discovery::WindowInfo;
-use qol_plugin_api::app_icon::RgbaImage;
+use qol_app_icon::RgbaImage;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use x11rb::connection::Connection;

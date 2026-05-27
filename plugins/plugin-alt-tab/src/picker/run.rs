@@ -6,7 +6,8 @@ use crate::discovery::{Platform, WindowDiscovery, WindowInfo};
 use crate::picker::gather::build_icon_cache;
 use crate::{PickerWindowState, SharedIconCache};
 use gpui::*;
-use qol_plugin_api::monitor::MonitorTracker;
+use qol_gpui::command_loop::LoopFlow;
+use qol_gpui::monitor::MonitorTracker;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -87,7 +88,7 @@ pub(crate) fn run_app(
     let app = Application::new();
 
     app.run(move |cx: &mut App| {
-        qol_plugin_api::keepalive::open_keepalive(cx, None);
+        qol_gpui::keepalive::open_keepalive(cx, None);
         super::platform::set_accessory_policy();
 
         let state = PickerState {
@@ -112,7 +113,7 @@ pub(crate) fn run_app(
                 data_fresh_at: state.caches.data_fresh_at.clone(),
             },
         );
-        super::platform::pre_create(&config, &state.current, cx);
+        super::platform::pre_create(&config, &state.current, &state.tracker, cx);
 
         if show_on_start {
             state.open_picker(&config, false, cx);
@@ -123,36 +124,27 @@ pub(crate) fn run_app(
 
 fn picker_window_state() -> PickerWindowState {
     std::rc::Rc::new(std::cell::RefCell::new(
-        qol_plugin_api::window::ActiveWindows::default(),
+        qol_gpui::window::ActiveWindows::default(),
     ))
 }
 
 fn spawn_daemon_loop(cx: &mut App, rx: mpsc::Receiver<daemon::Command>, state: PickerState) {
-    let rx = Arc::new(Mutex::new(rx));
-    cx.spawn(async move |cx: &mut AsyncApp| loop {
-        let Some(cmd) = recv_command(cx, rx.clone()).await else {
-            shutdown_daemon(cx);
-            break;
-        };
-        match cmd {
-            daemon::Command::Show => dispatch_show(cx, false, &state).await,
-            daemon::Command::ShowReverse => dispatch_show(cx, true, &state).await,
-            daemon::Command::Kill => {
-                shutdown_daemon(cx);
-                break;
+    qol_gpui::command_loop::spawn_command_loop(cx, rx, move |cx, cmd| {
+        let state = state.clone();
+        async move {
+            match cmd {
+                daemon::Command::Show => {
+                    dispatch_show(&cx, false, &state).await;
+                    LoopFlow::Continue
+                }
+                daemon::Command::ShowReverse => {
+                    dispatch_show(&cx, true, &state).await;
+                    LoopFlow::Continue
+                }
+                daemon::Command::Kill => LoopFlow::Stop,
             }
         }
-    })
-    .detach();
-}
-
-async fn recv_command(
-    cx: &AsyncApp,
-    rx: Arc<Mutex<mpsc::Receiver<daemon::Command>>>,
-) -> Option<daemon::Command> {
-    cx.background_executor()
-        .spawn(async move { rx.lock().ok()?.recv().ok() })
-        .await
+    });
 }
 
 async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
@@ -166,8 +158,10 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     let config = crate::config::load_alt_tab_config();
     #[cfg(debug_assertions)]
     let config_ms = t_config.elapsed().as_millis();
-    super::platform::set_ghost_opacity(config.display.ghost_opacity);
-    super::platform::set_ghost_color(config.display.ghost_debug_color.as_deref());
+    qol_gpui::popup_window::set_ghost_debug(
+        config.display.ghost_opacity,
+        config.display.ghost_debug_color.as_deref(),
+    );
 
     let executor = cx.background_executor().clone();
     let show_minimized = config.display.show_minimized;
@@ -322,12 +316,6 @@ pub(super) fn commit_icons_to_shared_cache(
 
 fn has_windows(windows: &[WindowInfo]) -> bool {
     !windows.is_empty()
-}
-
-fn shutdown_daemon(cx: &AsyncApp) {
-    #[cfg(debug_assertions)]
-    eprintln!("[alt-tab/daemon] shutting down");
-    cx.update(|app_cx| app_cx.quit()).ok();
 }
 
 #[cfg(test)]

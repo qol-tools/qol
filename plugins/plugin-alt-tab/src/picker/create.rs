@@ -5,7 +5,7 @@ use crate::discovery::WindowInfo;
 use crate::shared::layout::*;
 use crate::{IconMap, PickerWindowState, PreviewMap, SharedIconCache};
 use gpui::*;
-use qol_plugin_api::window::{MonitorKey, PopupPlacement};
+use qol_gpui::window::{MonitorKey, PopupPlacement};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -205,34 +205,30 @@ fn on_open_failure() {
     PICKER_VISIBLE.store(false, Ordering::Relaxed);
 }
 
-/// Pre-create an offscreen picker window at daemon boot and register it under the
-/// `BOOTSTRAP_KEY` sentinel so subsequent opens reuse one GPUI window instead of paying
-/// platform window creation cost on the hotkey path.
-pub(crate) fn pre_create_offscreen(
+/// Pre-create the picker window at boot, centered on the active monitor and hidden
+/// at alpha=0 (drawn on-screen, never parked offscreen). Registered under
+/// `BOOTSTRAP_KEY` and reused on every open so the hotkey path never pays
+/// window-creation cost.
+pub(crate) fn pre_create_ghost(
     config: &AltTabConfig,
     current: &PickerWindowState,
+    placement: &PopupPlacement,
     cx: &mut App,
 ) {
     let init = PickerInit::warmup_seed(config);
-    let bounds = offscreen_bounds();
+    let bounds = placement.centered_bounds(size(px(720.0), px(320.0)), cx);
     let Some(handle) = open_picker_window(bounds, init, false, cx) else {
         #[cfg(debug_assertions)]
-        eprintln!("[alt-tab/boot] pre-create failed — falling back to on-demand creation");
+        eprintln!("[alt-tab/boot] pre-create failed; falling back to on-demand creation");
         return;
     };
     current.borrow_mut().insert(super::BOOTSTRAP_KEY, handle);
     super::platform::hide_picker();
     PICKER_VISIBLE.store(false, Ordering::Relaxed);
     #[cfg(debug_assertions)]
-    eprintln!("[alt-tab/boot] pre-created picker window (alpha=0, warmup-seeded)");
-}
-
-fn offscreen_bounds() -> Bounds<Pixels> {
-    let (x, y) = super::platform::offscreen_origin();
-    Bounds {
-        origin: point(px(x as f32), px(y as f32)),
-        size: size(px(720.0), px(320.0)),
-    }
+    eprintln!(
+        "[alt-tab/boot] pre-created picker window on active monitor (alpha=0, warmup-seeded)"
+    );
 }
 
 struct PostCreateData {

@@ -104,7 +104,7 @@ fn read_snapshot(delegate: &Entity<PickerState>, cx: &AsyncApp) -> Snapshot {
 async fn run_capture(
     targets: &[(usize, u32)],
     executor: &gpui::BackgroundExecutor,
-) -> Vec<(usize, Option<qol_plugin_api::app_icon::RgbaImage>)> {
+) -> Vec<(usize, Option<qol_app_icon::RgbaImage>)> {
     let owned = targets.to_vec();
     executor
         .spawn(async move {

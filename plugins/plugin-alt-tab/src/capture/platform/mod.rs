@@ -1,5 +1,5 @@
 use crate::discovery::WindowInfo;
-use qol_plugin_api::app_icon::RgbaImage;
+use qol_app_icon::RgbaImage;
 
 #[cfg(target_os = "linux")]
 mod linux;

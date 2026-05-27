@@ -13,7 +13,7 @@ mod imp {
     use crate::app::AltTabApp;
     use crate::config::AltTabConfig;
     use crate::PickerWindowState;
-    use qol_plugin_api::window::MonitorKey;
+    use qol_gpui::window::MonitorKey;
     pub fn picker_window_kind() -> gpui::WindowKind {
         gpui::WindowKind::PopUp
     }
@@ -24,9 +24,6 @@ mod imp {
     pub fn reposition_picker_window(_x: f64, _y: f64) -> bool {
         false
     }
-    pub fn picker_backing_scale() -> Option<f32> {
-        None
-    }
     pub fn is_modifier_held() -> bool {
         false
     }
@@ -36,11 +33,12 @@ mod imp {
     pub fn disable_window_shadow() {}
     pub fn show_picker() {}
     pub fn hide_picker() {}
-    pub fn set_ghost_opacity(_opacity: Option<f32>) {}
-    pub fn set_ghost_color(_hex: Option<&str>) {}
-    pub fn pre_create(_config: &AltTabConfig, _current: &PickerWindowState, _cx: &mut gpui::App) {}
-    pub fn offscreen_origin() -> (f64, f64) {
-        (0.0, 0.0)
+    pub fn pre_create(
+        _config: &AltTabConfig,
+        _current: &PickerWindowState,
+        _tracker: &qol_gpui::monitor::MonitorTracker,
+        _cx: &mut gpui::App,
+    ) {
     }
     pub fn destroy_non_target_windows(
         _current: &PickerWindowState,
@@ -73,9 +71,6 @@ pub fn set_accessory_policy() {
 pub fn reposition_picker_window(x: f64, y: f64) -> bool {
     imp::reposition_picker_window(x, y)
 }
-pub fn picker_backing_scale() -> Option<f32> {
-    imp::picker_backing_scale()
-}
 pub fn is_modifier_held() -> bool {
     imp::is_modifier_held()
 }
@@ -92,28 +87,20 @@ pub fn show_picker() {
 pub fn hide_picker() {
     imp::hide_picker()
 }
-pub fn set_ghost_opacity(opacity: Option<f32>) {
-    imp::set_ghost_opacity(opacity)
-}
-pub fn set_ghost_color(hex: Option<&str>) {
-    imp::set_ghost_color(hex)
-}
 pub fn pre_create(
     config: &crate::config::AltTabConfig,
     current: &crate::PickerWindowState,
+    tracker: &qol_gpui::monitor::MonitorTracker,
     cx: &mut gpui::App,
 ) {
-    imp::pre_create(config, current, cx)
-}
-pub fn offscreen_origin() -> (f64, f64) {
-    imp::offscreen_origin()
+    imp::pre_create(config, current, tracker, cx)
 }
 
 /// Destroy sibling picker windows on non-target monitors. macOS keeps a single
 /// keep-alive picker that gets repositioned, so this is a no-op there.
 pub fn destroy_non_target_windows(
     current: &crate::PickerWindowState,
-    target: qol_plugin_api::window::MonitorKey,
+    target: qol_gpui::window::MonitorKey,
     cx: &mut gpui::App,
 ) {
     imp::destroy_non_target_windows(current, target, cx)
@@ -124,7 +111,7 @@ pub fn destroy_non_target_windows(
 /// remove the underlying window too.
 pub fn discard_old_window(
     current: &crate::PickerWindowState,
-    target: qol_plugin_api::window::MonitorKey,
+    target: qol_gpui::window::MonitorKey,
     handle: gpui::WindowHandle<crate::app::AltTabApp>,
     cx: &mut gpui::App,
 ) {

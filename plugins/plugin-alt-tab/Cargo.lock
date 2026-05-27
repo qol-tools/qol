@@ -75,9 +75,11 @@ dependencies = [
  "objc2-foundation",
  "open",
  "proptest",
+ "qol-app-icon",
  "qol-color",
  "qol-config",
- "qol-plugin-api",
+ "qol-gpui",
+ "qol-plugin-daemon",
  "qol-tray",
  "serde",
  "serde_json",
@@ -1525,7 +1527,7 @@ version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330c60081dcc4c72131f8eb70510f1ac07223e5d4163db481a04a0befcffa412"
 dependencies = [
- "libloading 0.8.9",
+ "libloading 0.7.4",
 ]
 
 [[package]]
@@ -4729,6 +4731,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-app-icon"
+version = "0.3.0"
+dependencies = [
+ "objc2",
+ "objc2-app-kit",
+ "objc2-core-graphics",
+ "objc2-foundation",
+]
+
+[[package]]
 name = "qol-color"
 version = "0.2.0"
 source = "git+https://github.com/qol-tools/qol-color#b8c0e06aed24ac99856e1feeb164e2e947fda883"
@@ -4743,6 +4755,19 @@ dependencies = [
  "serde",
  "serde_json",
  "toml 0.9.12+spec-1.1.0",
+]
+
+[[package]]
+name = "qol-gpui"
+version = "0.3.0"
+dependencies = [
+ "gpui",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "qol-platform",
+ "qol-runtime",
+ "x11rb",
 ]
 
 [[package]]
@@ -4774,13 +4799,26 @@ dependencies = [
 [[package]]
 name = "qol-plugin-api"
 version = "0.2.1"
+source = "git+https://github.com/qol-tools/qol-plugin-api#f83bba9aba89689ad9cca2e74d1147d8fd8f39fa"
 dependencies = [
- "gpui",
  "objc2",
  "objc2-app-kit",
  "objc2-core-graphics",
  "objc2-foundation",
  "qol-platform",
+ "qol-runtime",
+ "serde",
+ "serde_json",
+ "x11rb",
+]
+
+[[package]]
+name = "qol-plugin-daemon"
+version = "0.3.0"
+dependencies = [
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "qol-runtime",
  "serde",
  "serde_json",
@@ -8532,3 +8570,7 @@ dependencies = [
  "syn 2.0.117",
  "winnow 0.7.14",
 ]
+
+[[patch.unused]]
+name = "qol-plugin-api"
+version = "0.3.0"

@@ -1,5 +1,5 @@
 use super::{DiscoveryError, WindowDiscovery, WindowInfo};
-use qol_plugin_api::app_icon::RgbaImage;
+use qol_app_icon::RgbaImage;
 use std::sync::{Mutex, OnceLock};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::ConnectionExt as _;

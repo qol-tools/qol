@@ -3,8 +3,8 @@ use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use gpui::*;
-use qol_plugin_api::monitor::MonitorTracker;
-use qol_plugin_api::window::PopupPlacement;
+use qol_gpui::monitor::MonitorTracker;
+use qol_gpui::window::PopupPlacement;
 
 use super::run::{SharedPreviewCache, WindowCache};
 use crate::app::PICKER_VISIBLE;
@@ -29,12 +29,17 @@ pub(crate) struct ListenerInputs {
 }
 
 pub(crate) fn spawn(cx: &mut App, inputs: ListenerInputs) {
-    let (placement_tx, placement_rx) = mpsc::channel::<()>();
     let (refresh_tx, refresh_rx) = mpsc::channel::<()>();
     let _ = DATA_REFRESH_TX.set(refresh_tx);
-    spawn_placement_listener_thread(placement_tx);
     spawn_window_list_listener_thread();
-    spawn_placement_router(cx, placement_rx, inputs.clone());
+    qol_gpui::event_router::spawn_runtime_event_router(
+        cx,
+        vec![qol_gpui::protocol::RuntimeEventKind::ActiveMonitorChanged],
+        {
+            let inputs = inputs.clone();
+            move |app_cx| reposition_ghost_only(&inputs, app_cx)
+        },
+    );
     spawn_data_refresh_router(cx, refresh_rx, inputs);
 }
 
@@ -44,36 +49,14 @@ pub(crate) fn request_data_refresh() {
     }
 }
 
-fn spawn_placement_listener_thread(tx: mpsc::Sender<()>) {
-    std::thread::spawn(move || placement_listener_loop(tx));
-}
-
-#[cfg(unix)]
-fn placement_listener_loop(tx: mpsc::Sender<()>) {
-    use qol_plugin_api::protocol::RuntimeEventKind;
-    let client = qol_plugin_api::PlatformStateClient::from_env();
-    let Some(mut subscription) = client.subscribe(vec![RuntimeEventKind::ActiveMonitorChanged])
-    else {
-        return;
-    };
-    while subscription.next_event().is_some() {
-        if tx.send(()).is_err() {
-            return;
-        }
-    }
-}
-
-#[cfg(not(unix))]
-fn placement_listener_loop(_tx: mpsc::Sender<()>) {}
-
 fn spawn_window_list_listener_thread() {
     std::thread::spawn(window_list_listener_loop);
 }
 
 #[cfg(unix)]
 fn window_list_listener_loop() {
-    use qol_plugin_api::protocol::RuntimeEventKind;
-    let client = qol_plugin_api::PlatformStateClient::from_env();
+    use qol_gpui::protocol::RuntimeEventKind;
+    let client = qol_gpui::PlatformStateClient::from_env();
     let Some(mut subscription) = client.subscribe(vec![RuntimeEventKind::WindowListChanged]) else {
         return;
     };
@@ -84,18 +67,6 @@ fn window_list_listener_loop() {
 
 #[cfg(not(unix))]
 fn window_list_listener_loop() {}
-
-fn spawn_placement_router(cx: &mut App, rx: mpsc::Receiver<()>, inputs: ListenerInputs) {
-    let rx = Arc::new(Mutex::new(rx));
-    cx.spawn(async move |cx: &mut AsyncApp| loop {
-        if recv(cx, rx.clone()).await.is_none() {
-            return;
-        };
-        drain(&rx);
-        let _ = cx.update(|app_cx| reposition_ghost_only(&inputs, app_cx));
-    })
-    .detach();
-}
 
 fn spawn_data_refresh_router(cx: &mut App, rx: mpsc::Receiver<()>, inputs: ListenerInputs) {
     let rx = Arc::new(Mutex::new(rx));
@@ -267,7 +238,9 @@ fn apply_ghost_layout(
         return;
     };
     let _ = handle.update(app_cx, |_, window: &mut Window, _| {
-        super::reuse::resize_or_sync_scale(window, layout.size, "ghost-resize", true);
+        let backing =
+            qol_gpui::popup_window::window_backing_scale(super::create::PICKER_WINDOW_TITLE);
+        qol_gpui::window::resize_or_sync_scale(window, layout.size, backing);
     });
 }
 

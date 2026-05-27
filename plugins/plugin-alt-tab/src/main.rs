@@ -15,7 +15,7 @@ type PreviewMap = std::collections::HashMap<u32, std::sync::Arc<gpui::RenderImag
 type IconMap = std::collections::HashMap<String, std::sync::Arc<gpui::RenderImage>>;
 type SharedIconCache = std::sync::Arc<std::sync::Mutex<IconMap>>;
 type PickerWindowState =
-    std::rc::Rc<std::cell::RefCell<qol_plugin_api::window::ActiveWindows<app::AltTabApp>>>;
+    std::rc::Rc<std::cell::RefCell<qol_gpui::window::ActiveWindows<app::AltTabApp>>>;
 
 const SETTINGS_URL: &str = "http://127.0.0.1:42700/plugins/plugin-alt-tab/";
 

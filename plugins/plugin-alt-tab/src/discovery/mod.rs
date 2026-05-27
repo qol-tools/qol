@@ -1,4 +1,4 @@
-pub use qol_plugin_api::app_icon::RgbaImage;
+pub use qol_app_icon::RgbaImage;
 
 #[derive(Debug, Clone)]
 pub struct WindowInfo {
