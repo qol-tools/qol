@@ -1,6 +1,6 @@
 use std::sync::mpsc::Sender;
 
-use qol_plugin_api::daemon::{self as core_daemon, DaemonConfig, ReadResult};
+use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult};
 
 use crate::domain::config::ServerConfig;
 use crate::utils;
