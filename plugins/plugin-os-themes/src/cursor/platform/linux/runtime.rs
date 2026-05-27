@@ -3,8 +3,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
-use qol_plugin_api::protocol::{RuntimeEvent, RuntimeEventKind};
-use qol_plugin_api::{PlatformStateClient, Subscription};
+use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind};
+use qol_runtime::{PlatformStateClient, Subscription};
 
 use crate::config::Config;
 use crate::cursor::{CursorEffect, RunControl};
