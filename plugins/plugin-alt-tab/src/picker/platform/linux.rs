@@ -1,6 +1,7 @@
 use crate::picker::create::PICKER_WINDOW_TITLE;
 use std::sync::{Mutex, OnceLock};
 use x11rb::connection::Connection;
+use x11rb::protocol::xproto::ConnectionExt;
 use x11rb::rust_connection::RustConnection;
 
 fn keymap_conn() -> &'static Mutex<Option<RustConnection>> {
