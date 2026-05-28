@@ -53,6 +53,7 @@ pub fn execute_action_once(action: &str) -> Result<()> {
 
 pub fn run(socket_path: &str) -> Result<()> {
     let listener = bind_listener(socket_path)?;
+    qol_runtime::spawn_host_death_watchdog();
     let mut runtime = runtime_state();
 
     for stream in listener.incoming() {
