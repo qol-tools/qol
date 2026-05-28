@@ -53,12 +53,12 @@ export function createCamera(options = {}) {
 
     function setBounds(rect) {
         bounds = rect;
-        if (bounds) {
-            const clamped = clampPanTarget(x, y);
-            x = clamped.x;
-            y = clamped.y;
-            apply();
-        }
+        if (!bounds) return;
+        const clamped = clampPanTarget(x, y);
+        if (clamped.x === x && clamped.y === y) return;
+        x = clamped.x;
+        y = clamped.y;
+        apply();
     }
 
     function notify() {
