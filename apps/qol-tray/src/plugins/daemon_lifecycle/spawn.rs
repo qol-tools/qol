@@ -63,6 +63,7 @@ fn daemon_path(plugin: &Plugin, daemon_config: &DaemonConfig) -> Result<PathBuf>
 fn daemon_command(plugin: &Plugin, daemon_config: &DaemonConfig, daemon_path: &Path) -> Command {
     let mut command = Command::new(daemon_path);
     command.current_dir(&plugin.path).stdin(Stdio::null());
+    command.env("QOL_TRAY_PLUGIN_ID", plugin.id.as_str());
     apply_log_env(&mut command);
     apply_daemon_env(&mut command, daemon_config);
     apply_process_group(&mut command);

@@ -3721,3 +3721,7 @@ version = "0.3.0"
 [[patch.unused]]
 name = "qol-plugin-daemon"
 version = "0.3.0"
+
+[[patch.unused]]
+name = "qol-tray"
+version = "3.15.1"

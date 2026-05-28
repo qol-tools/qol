@@ -3,7 +3,9 @@ use std::os::unix::net::UnixStream;
 use std::sync::mpsc as std_mpsc;
 use std::time::{Duration, Instant};
 
-use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind, RuntimeRequest, SubscribeAck};
+use qol_runtime::protocol::{
+    ArmedLifelinesResponse, RuntimeEvent, RuntimeEventKind, RuntimeRequest, SubscribeAck,
+};
 
 use super::super::shared::SharedState;
 use super::io::{write_flushed_json_line, write_state};
@@ -33,9 +35,37 @@ fn handle_json_request(request: &str, writer: &mut UnixStream, shared: &SharedSt
             apply_focus(shared, monitor_idx, "[runtime/socket] SET_FOCUS")
         }
         RuntimeRequest::Subscribe { events } => handle_subscription(writer, shared, events),
+        RuntimeRequest::Lifeline { plugin_id } => handle_lifeline(writer, shared, plugin_id),
+        RuntimeRequest::ArmedLifelines => {
+            let response = ArmedLifelinesResponse {
+                plugin_ids: shared.armed_lifelines(),
+            };
+            let _ = write_flushed_json_line(writer, &response);
+        }
     }
 
     true
+}
+
+fn handle_lifeline(writer: &mut UnixStream, shared: &SharedState, plugin_id: String) {
+    log::info!("[runtime/socket] host-death lifeline armed by {plugin_id}");
+    shared.arm_lifeline(plugin_id.clone());
+
+    if !write_flushed_json_line(writer, &SubscribeAck::Subscribed) {
+        shared.disarm_lifeline(&plugin_id);
+        return;
+    }
+
+    let _ = writer.set_write_timeout(Some(Duration::from_secs(SUBSCRIBER_WRITE_TIMEOUT_SECS)));
+
+    // No events ever flow on a lifeline; the held-open connection exists purely
+    // so the daemon's read sees EOF when this host process dies. Block until the
+    // daemon disconnects (it exited) or the probe detects the peer is gone.
+    let (_tx, rx) = std_mpsc::channel::<RuntimeEvent>();
+    forward_events(writer, rx);
+
+    shared.disarm_lifeline(&plugin_id);
+    log::info!("[runtime/socket] host-death lifeline dropped by {plugin_id}");
 }
 
 fn handle_subscription(
@@ -342,5 +372,52 @@ mod tests {
         let n = reader.read(&mut buf).unwrap_or(0);
         let body = String::from_utf8_lossy(&buf[..n]);
         assert!(body.contains("cursor_moved"), "got: {body:?}");
+    }
+
+    #[test]
+    fn armed_lifelines_request_returns_sorted_armed_set() {
+        let shared = SharedState::new(vec![mon(0.0)]);
+        shared.arm_lifeline("plugin-launcher".to_string());
+        shared.arm_lifeline("plugin-alt-tab".to_string());
+        let (mut writer, mut reader) = pair();
+
+        handle_request(r#"{"cmd":"armed_lifelines"}"#, &mut writer, &shared);
+        drop(writer);
+
+        let response = read_to_string(&mut reader);
+        assert!(response.contains("plugin-alt-tab"), "got: {response:?}");
+        assert!(response.contains("plugin-launcher"), "got: {response:?}");
+    }
+
+    #[test]
+    fn lifeline_arms_on_connect_and_disarms_on_disconnect() {
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let (server, mut client) = pair();
+
+        std::thread::scope(|scope| {
+            let handle = scope.spawn(|| {
+                let mut server = server;
+                handle_request(
+                    r#"{"cmd":"lifeline","plugin_id":"plugin-x"}"#,
+                    &mut server,
+                    &shared,
+                );
+            });
+
+            let ack = read_to_string(&mut client);
+            assert!(ack.contains("subscribed"), "ack: {ack:?}");
+            assert!(
+                shared.armed_lifelines().iter().any(|id| id == "plugin-x"),
+                "lifeline must be armed once the daemon connects",
+            );
+
+            drop(client);
+            handle.join().expect("lifeline handler thread");
+        });
+
+        assert!(
+            shared.armed_lifelines().is_empty(),
+            "lifeline must disarm when the daemon disconnects",
+        );
     }
 }
