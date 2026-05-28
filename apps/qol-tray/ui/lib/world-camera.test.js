@@ -75,6 +75,28 @@ test('zoomAround clamps to bounds min when target is too small', () => {
     assert.equal(camera.zoom, 3);
 });
 
+test('setBounds does not notify subscribers when clamping leaves the camera in place', () => {
+    const camera = createCamera({ getViewportSize: () => ({ w: 800, h: 600 }) });
+    camera.setBounds({ x: 0, y: 0, width: 2000, height: 2000, layer: 0 });
+    let calls = 0;
+    camera.subscribe(() => { calls += 1; });
+    camera.setBounds({ x: 0, y: 0, width: 2000, height: 2000, layer: 0 });
+    assert.equal(calls, 0);
+    assert.equal(camera.x, 0);
+    assert.equal(camera.y, 0);
+});
+
+test('setBounds still notifies when clamping moves the camera', () => {
+    const camera = createCamera({ getViewportSize: () => ({ w: 800, h: 600 }) });
+    camera.setBounds({ x: 0, y: 0, width: 2000, height: 2000, layer: 0 });
+    camera.panTo(1000, 1000);
+    let calls = 0;
+    camera.subscribe(() => { calls += 1; });
+    camera.setBounds({ x: 0, y: 0, width: 900, height: 900, layer: 0 });
+    assert.ok(calls >= 1, 'subscriber must fire when the camera position changes');
+    assert.equal(camera.x, 100);
+});
+
 test('zoomSmooth clamps target zoom and pan to bounds', () => {
     const rafCallbacks = [];
     const origRaf = globalThis.requestAnimationFrame;

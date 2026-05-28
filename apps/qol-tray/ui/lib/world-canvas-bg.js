@@ -10,8 +10,9 @@ export function createWorldCanvasBg(canvas, camera) {
     function draw() {
         if (!mounted) return;
         const dpr = window.devicePixelRatio || 1;
-        const w = canvas.clientWidth;
-        const h = canvas.clientHeight;
+        const host = canvas.parentElement || canvas;
+        const w = host.clientWidth;
+        const h = host.clientHeight;
         if (w === 0 || h === 0) return;
         if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
             canvas.width = w * dpr;
