@@ -2,7 +2,7 @@ use super::AltTabApp;
 use crate::config::{ActionMode, LabelConfig};
 use crate::discovery::WindowInfo;
 use crate::shared::layout::{
-    GRID_CARD_HEIGHT, GRID_CARD_WIDTH, GRID_PREVIEW_HEIGHT, GRID_PREVIEW_WIDTH,
+    picker_dimensions, GRID_CARD_HEIGHT, GRID_CARD_WIDTH, GRID_PREVIEW_HEIGHT, GRID_PREVIEW_WIDTH,
 };
 use crate::{IconMap, PreviewMap};
 use gpui::prelude::FluentBuilder;
@@ -30,13 +30,13 @@ struct RenderSnap {
 }
 
 impl Render for AltTabApp {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let visible = crate::app::PICKER_VISIBLE.load(std::sync::atomic::Ordering::Relaxed);
         #[cfg(debug_assertions)]
         {
             let n = RENDER_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             let win_count = self.delegate.read(cx).windows.len();
-            let b = _window.window_bounds().get_bounds();
+            let b = window.window_bounds().get_bounds();
             eprintln!(
                 "[alt-tab/render] call={} windows={} t={}us window=(origin=({:.1},{:.1}) size={:.1}x{:.1}) scale={:.2} visible={}",
                 n,
@@ -46,7 +46,7 @@ impl Render for AltTabApp {
                 b.origin.y.to_f64(),
                 b.size.width.to_f64(),
                 b.size.height.to_f64(),
-                _window.scale_factor(),
+                window.scale_factor(),
                 visible,
             );
         }
@@ -67,6 +67,11 @@ impl Render for AltTabApp {
                 .update(cx, |s, _| s.activate_selected_target());
             this.dismiss("modifiers/alt-up", window, cx);
         });
+        // Backdrop only absorbs clicks - it does NOT dismiss the picker. Dismissal is
+        // owned by explicit user intent (Enter, Escape, card click, alt release). A click
+        // anywhere on the active monitor must be swallowed (so macOS does not run
+        // Option+Click "hide others" or any other native gesture) but must not close the
+        // picker, otherwise the picker disappears every time the user clicks around.
 
         let d = self.delegate.read(cx);
         let alpha = (d.card_bg_opacity.clamp(0.0, 1.0) * 255.0) as u32;
@@ -79,6 +84,23 @@ impl Render for AltTabApp {
             card_bg_rgba: (d.card_bg_color << 8) | alpha,
         };
 
+        // The window is sized to the entire active monitor (so the backdrop can absorb
+        // any click on that monitor). The inner panel must stay sized to its content
+        // (max_columns wide, rows tall) so the card grid wraps correctly. Without this,
+        // 8 cards at 220px each fit in 1920px monitor width and never wrap.
+        //
+        // Pass None for monitor_size: window.window_bounds() can read 720x321 during
+        // the warmup ghost render before the resize lands, which would make max_w=648
+        // and panic the clamp(720, ..648..). picker_dimensions' fallback (1820, 980) is
+        // sane for any modern monitor and the real-show layout reshapes correctly.
+        let _ = window;
+        let (panel_w, panel_h) = picker_dimensions(
+            d.windows.len().max(1),
+            d.max_columns,
+            None,
+            d.show_hotkey_hints,
+        );
+
         let grid = render_grid(
             &d.windows,
             &snap,
@@ -88,16 +110,22 @@ impl Render for AltTabApp {
             entity,
         );
 
-        div()
+        // Inner panel sized to the card grid bounds (cards + optional header). Carries the
+        // focus handle and key handlers so all keyboard input still routes through it.
+        let panel = div()
+            .id("alt-tab-panel")
             .track_focus(&self.focus_handle)
             .flex()
             .flex_col()
+            .w(px(panel_w))
+            .h(px(panel_h))
             .when(!snap.transparent_bg, |s| s.bg(rgb(0x0f111a)))
-            .w_full()
-            .h_full()
             .when(snap.visible, |s| {
                 s.on_key_down(key_handler)
                     .on_modifiers_changed(modifiers_handler)
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+                    .on_click(|_, _, cx| cx.stop_propagation())
             })
             .when(snap.show_hotkey_hints, |s| {
                 s.child(header_bar(
@@ -111,7 +139,25 @@ impl Render for AltTabApp {
                     "↑↓←→ navigate  ·  ⏎ switch  ·  esc close",
                 ))
             })
-            .child(grid)
+            .child(grid);
+
+        // Outer backdrop fills the entire monitor. It absorbs every click on that monitor
+        // before macOS can interpret it (clicks on the Dock with Alt held would otherwise
+        // trigger "hide others", which is the bug this prevents). Clicks land here only
+        // when they miss the inner panel — those dismiss the picker.
+        div()
+            .id("alt-tab-backdrop")
+            .flex()
+            .items_center()
+            .justify_center()
+            .w_full()
+            .h_full()
+            .when(snap.visible, |s| {
+                s.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+                    .on_click(|_, _, cx| cx.stop_propagation())
+            })
+            .child(panel)
     }
 }
 

@@ -1,7 +1,6 @@
 use super::GatheredWindows;
 use crate::app::AltTabApp;
 use crate::config::AltTabConfig;
-use crate::shared::layout::*;
 use gpui::*;
 use qol_gpui::window::PopupPlacement;
 
@@ -19,8 +18,6 @@ pub(crate) struct ReuseRequest<'a> {
 }
 
 pub(super) struct LayoutInput<'a> {
-    pub config: &'a AltTabConfig,
-    pub window_count: usize,
     pub placement: &'a PopupPlacement,
 }
 
@@ -44,19 +41,21 @@ pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
         .unwrap_or(false)
 }
 
-pub(super) fn compute_layout(input: &LayoutInput, cx: &mut App) -> ReuseLayout {
-    let size = picker_size(input);
-    let bounds = input.placement.centered_bounds(size, cx);
-    ReuseLayout { bounds, size }
-}
-
-fn picker_size(input: &LayoutInput) -> Size<Pixels> {
-    let count = input.window_count.max(1);
-    let (w, h) = picker_dimensions(
-        count,
-        input.config.display.max_columns,
-        input.placement.monitor_size(),
-        input.config.display.show_hotkey_hints,
-    );
-    size(px(w), px(h))
+pub(super) fn compute_layout(input: &LayoutInput, _cx: &mut App) -> ReuseLayout {
+    // The picker covers the entire active monitor so it can absorb every click that lands
+    // on that monitor (clicks outside the centered card box dismiss the picker, clicks on
+    // a card activate that card). Click-through to native gestures like Option+Click on the
+    // Dock (which would "hide others") is the bug this prevents - we cannot react to those
+    // gestures after they fire, so we must capture the click first.
+    let (mw, mh) = input.placement.monitor_size().unwrap_or((1920.0, 1080.0));
+    let win_size = size(px(mw), px(mh));
+    let origin = input.placement.origin();
+    let bounds = Bounds {
+        origin,
+        size: win_size,
+    };
+    ReuseLayout {
+        bounds,
+        size: win_size,
+    }
 }

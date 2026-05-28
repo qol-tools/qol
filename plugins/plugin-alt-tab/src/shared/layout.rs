@@ -1,5 +1,3 @@
-use gpui::*;
-
 pub const GRID_CARD_WIDTH: f32 = 220.0;
 pub const GRID_CARD_HEIGHT: f32 = 156.0;
 pub const GRID_PREVIEW_WIDTH: f32 = 204.0;
@@ -69,11 +67,6 @@ pub fn picker_height_for(window_count: usize, columns: usize) -> f32 {
     RENDER_PAD_Y + rows as f32 * GRID_CARD_HEIGHT + rows.saturating_sub(1) as f32 * RENDER_GAP
 }
 
-pub fn rendered_column_count(window: &Window, total_items: usize) -> usize {
-    if total_items <= 1 {
-        return total_items.max(1);
-    }
-    let bounds = window.window_bounds().get_bounds();
-    let width = bounds.size.width.to_f64() as f32;
-    cols_for_width(width, total_items)
+pub fn rendered_column_count(max_columns: usize, total_items: usize) -> usize {
+    preferred_column_count(total_items, max_columns)
 }

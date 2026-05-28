@@ -92,10 +92,11 @@ fn on_tab(this: &mut AltTabApp, reverse: bool, cx: &mut Context<AltTabApp>) {
 fn on_arrow(
     this: &mut AltTabApp,
     nav: impl FnOnce(&mut crate::picker::state::PickerState, usize),
-    window: &Window,
+    _window: &Window,
     cx: &mut Context<AltTabApp>,
 ) {
-    let cols = rendered_column_count(window, this.delegate.read(cx).windows.len());
+    let state = this.delegate.read(cx);
+    let cols = rendered_column_count(state.max_columns, state.windows.len());
     this.delegate.update(cx, |s, _| nav(s, cols));
     cx.notify();
 }

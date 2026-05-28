@@ -307,11 +307,6 @@ fn subscribe_focus_out(
                 #[cfg(debug_assertions)]
                 eprintln!("[alt-tab/blur] ignored focus-out while Alt is still held");
             }
-            FocusOutDecision::ActivateAndDismiss => {
-                this.delegate
-                    .update(cx, |s, _| s.activate_selected_target());
-                this.dismiss("focus-out/alt-up", window, cx);
-            }
             FocusOutDecision::Dismiss => this.dismiss("focus-out", window, cx),
         },
     )
@@ -322,14 +317,14 @@ enum FocusOutDecision {
     IgnoreHidden,
     IgnoreBlurGuard,
     IgnoreAltHeld,
-    ActivateAndDismiss,
     Dismiss,
 }
 
-/// `hide_picker` keeps the NSWindow as `keyWindow` to hold Metal warm,
-/// so any later click steals key and fires `on_focus_out`. In that state
-/// dismissing is a no-op that still `cx.notify`s the hidden window and
-/// drops the visible alpha, so swallow it.
+/// Focus-out is passive: something else took key (usually a click outside the picker).
+/// It NEVER activates the selection. Activation is owned exclusively by explicit user
+/// intent: Enter, card click, alt-release via `on_modifiers_changed`, or alt-release
+/// via the `alt_poll` ground-truth fallback. Routing activation through focus-out
+/// conflated alt-release with click-outside and made clicks hijack the selected window.
 fn focus_out_decision(
     picker_visible: bool,
     action_mode: &ActionMode,
@@ -343,13 +338,10 @@ fn focus_out_decision(
     if blur_guard_armed && in_blur_guard {
         return FocusOutDecision::IgnoreBlurGuard;
     }
-    if action_mode != &ActionMode::HoldToSwitch {
-        return FocusOutDecision::Dismiss;
-    }
-    if modifier_held {
+    if action_mode == &ActionMode::HoldToSwitch && modifier_held {
         return FocusOutDecision::IgnoreAltHeld;
     }
-    FocusOutDecision::ActivateAndDismiss
+    FocusOutDecision::Dismiss
 }
 
 impl AltTabApp {
@@ -419,10 +411,13 @@ mod focus_out_tests {
     }
 
     #[test]
-    fn hold_mode_activates_if_focus_out_races_alt_release() {
+    fn hold_mode_dismisses_without_activating_on_click_outside() {
+        // Alt has been released (modifier_held=false) and a click stole key.
+        // Activation belongs to on_modifiers_changed / alt_poll, NOT focus-out;
+        // otherwise any click outside the picker hijacks the selected window.
         assert_eq!(
             focus_out_decision(true, &ActionMode::HoldToSwitch, false, false, false),
-            FocusOutDecision::ActivateAndDismiss
+            FocusOutDecision::Dismiss
         );
     }
 

@@ -1,6 +1,7 @@
 use super::ax::{AxCache, AxWindowMeta};
 use super::process::{
-    cached_process_identity, is_regular_app, known_window_ids_by_identity, ProcessIdentity,
+    cached_process_identity, is_app_hidden, is_regular_app, known_window_ids_by_identity,
+    ProcessIdentity,
 };
 use super::{ax, CgWindow};
 use crate::discovery::WindowInfo;
@@ -373,6 +374,7 @@ fn allowed_minimized_count(
     ax: &AxData,
     identity: Option<ProcessIdentity>,
     snapshot: &HashMap<ProcessIdentity, HashSet<u32>>,
+    is_hidden: bool,
 ) -> usize {
     if ax.has_data() && on_screen_count != 0 {
         return ax.minimized_count();
@@ -386,6 +388,9 @@ fn allowed_minimized_count(
         return count;
     }
     if ax.has_data() {
+        if is_hidden {
+            return ax.accepted.max(1);
+        }
         return ax.minimized_count();
     }
     if ax.accepted > on_screen_count {
@@ -427,41 +432,48 @@ fn passes_ax_filter(
     window: &CgWindow,
     state: &WindowEnumeration,
     other_space_pids: &HashSet<i32>,
+    hidden_pids: &HashSet<i32>,
     ax_cache: &AxCache,
 ) -> bool {
     let is_on_screen_pid = state.on_screen_pids.contains(&window.pid);
     let is_other_space_pid = other_space_pids.contains(&window.pid);
+    let is_hidden = hidden_pids.contains(&window.pid);
     let Some(ax_result) = ax_cache.get(&window.pid) else {
         return false;
     };
     let Some((id_map, all_meta, _)) = ax_result else {
         return false;
     };
-    if !id_map.is_empty() {
+    if let Some(meta) = id_map.get(&window.id) {
         if !is_on_screen_pid {
-            return id_map.get(&window.id).is_some_and(|m| m.is_minimized);
+            return meta.is_minimized || is_hidden;
         }
         if is_other_space_pid {
-            return id_map.contains_key(&window.id);
+            return true;
         }
-        return id_map.get(&window.id).is_some_and(|m| m.is_minimized);
+        return meta.is_minimized;
     }
     if !all_meta.is_empty() {
-        return ax_title_match(window, all_meta, is_other_space_pid);
+        return ax_title_match(window, all_meta, is_other_space_pid, is_hidden);
     }
     false
 }
 
-fn ax_title_match(window: &CgWindow, all_meta: &[AxWindowMeta], is_other_space: bool) -> bool {
+fn ax_title_match(
+    window: &CgWindow,
+    all_meta: &[AxWindowMeta],
+    is_other_space: bool,
+    is_hidden: bool,
+) -> bool {
     let title_match = all_meta.iter().find(|m| m.title == window.title);
     if is_other_space {
         return title_match.is_some();
     }
     if let Some(meta) = title_match {
-        return meta.is_minimized;
+        return meta.is_minimized || is_hidden;
     }
     if all_meta.len() == 1 {
-        return all_meta[0].is_minimized;
+        return all_meta[0].is_minimized || is_hidden;
     }
     false
 }
@@ -483,6 +495,7 @@ fn build_budget_context(
     state: &WindowEnumeration,
     tracker: &mut KnownWindowTracker,
     ax_cache: &mut AxCache,
+    is_hidden: bool,
 ) -> BudgetContext {
     tracker.identity_for_pid(window.pid);
     let ax = ax_cache
@@ -497,7 +510,8 @@ fn build_budget_context(
         })
         .cloned();
     let ax_accepted = ax.as_ref().map_or(0, |(_, _, c)| *c);
-    let (known_ids, allowed_count) = compute_allowed_count(window, state, tracker, ax_cache);
+    let (known_ids, allowed_count) =
+        compute_allowed_count(window, state, tracker, ax_cache, is_hidden);
     BudgetContext {
         known_ids,
         ax_meta,
@@ -511,6 +525,7 @@ fn compute_allowed_count(
     state: &WindowEnumeration,
     tracker: &KnownWindowTracker,
     ax_cache: &AxCache,
+    is_hidden: bool,
 ) -> (Option<HashSet<u32>>, usize) {
     let on_screen_count = state.on_screen_count(window.pid);
     let known_ids = tracker
@@ -534,6 +549,7 @@ fn compute_allowed_count(
                 &ax,
                 tracker.cached_identity(window.pid),
                 &tracker.snapshot,
+                is_hidden,
             )
         }
         _ => usize::MAX,
@@ -541,10 +557,17 @@ fn compute_allowed_count(
     (known_ids, count)
 }
 
-fn resolve_minimized_budget(ctx: &BudgetContext, window: &CgWindow) -> Option<ResolvedWindow> {
+fn resolve_minimized_budget(
+    ctx: &BudgetContext,
+    window: &CgWindow,
+    is_hidden: bool,
+) -> Option<ResolvedWindow> {
     let ax_has = ctx.ax_meta.is_some();
-    let ax_min = ctx.ax_meta.as_ref().is_some_and(|m| m.is_minimized);
-    if ctx.known_ids.is_none() && ax_has && !ax_min {
+    let ax_off_screen = ctx
+        .ax_meta
+        .as_ref()
+        .is_some_and(|m| m.is_minimized || is_hidden);
+    if ctx.known_ids.is_none() && ax_has && !ax_off_screen {
         return None;
     }
     if let Some(ids) = &ctx.known_ids {
@@ -580,10 +603,11 @@ pub(super) fn collect_minimized_windows(
     let candidate_pids = candidate_pids(&candidates);
     prefetch_missing_ax(&candidate_pids, ax_cache);
     let other_space_pids = detect_other_space_pids(state, ax_cache, &candidate_pids);
+    let hidden_pids = detect_hidden_pids(&candidate_pids);
     let mut budget_counts: HashMap<i32, usize> = HashMap::new();
 
     for window in candidates {
-        if !passes_ax_filter(&window, state, &other_space_pids, ax_cache) {
+        if !passes_ax_filter(&window, state, &other_space_pids, &hidden_pids, ax_cache) {
             #[cfg(debug_assertions)]
             eprintln!(
                 "[alt-tab/enum] MINIMIZED skip (AX filter): wid={} app={:?}",
@@ -591,8 +615,9 @@ pub(super) fn collect_minimized_windows(
             );
             continue;
         }
+        let is_hidden = hidden_pids.contains(&window.pid);
         let Some(resolved) =
-            try_accept_minimized(&window, state, tracker, ax_cache, &mut budget_counts)
+            try_accept_minimized(&window, state, tracker, ax_cache, &mut budget_counts, is_hidden)
         else {
             continue;
         };
@@ -614,6 +639,14 @@ pub(super) fn collect_minimized_windows(
 
 fn candidate_pids(candidates: &[CgWindow]) -> HashSet<i32> {
     candidates.iter().map(|window| window.pid).collect()
+}
+
+fn detect_hidden_pids(candidate_pids: &HashSet<i32>) -> HashSet<i32> {
+    candidate_pids
+        .iter()
+        .copied()
+        .filter(|&pid| is_app_hidden(pid))
+        .collect()
 }
 
 fn prefetch_missing_ax(pids: &HashSet<i32>, ax_cache: &mut AxCache) {
@@ -659,9 +692,10 @@ fn try_accept_minimized(
     tracker: &mut KnownWindowTracker,
     ax_cache: &mut AxCache,
     budget_counts: &mut HashMap<i32, usize>,
+    is_hidden: bool,
 ) -> Option<ResolvedWindow> {
-    let ctx = build_budget_context(window, state, tracker, ax_cache);
-    let resolved = resolve_minimized_budget(&ctx, window)?;
+    let ctx = build_budget_context(window, state, tracker, ax_cache, is_hidden);
+    let resolved = resolve_minimized_budget(&ctx, window, is_hidden)?;
     if resolved.allowed_count == 0 {
         return None;
     }

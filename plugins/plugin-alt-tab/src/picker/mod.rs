@@ -103,11 +103,7 @@ fn try_reuse_existing(
             None => return false,
         },
     };
-    let input = reuse::LayoutInput {
-        config: req.config,
-        window_count: gathered.windows.len(),
-        placement,
-    };
+    let input = reuse::LayoutInput { placement };
     let layout = reuse::compute_layout(&input, cx);
     let reuse_req = reuse::ReuseRequest {
         handle: &handle,
@@ -243,6 +239,7 @@ pub(crate) mod state {
         pub(crate) card_bg_opacity: f32,
         pub(crate) show_debug_overlay: bool,
         pub(crate) show_hotkey_hints: bool,
+        pub(crate) max_columns: usize,
         pub(crate) live_previews: PreviewMap,
         pub(crate) icon_cache: IconMap,
     }
@@ -270,6 +267,7 @@ pub(crate) mod state {
                 card_bg_opacity: init.card_opacity,
                 show_debug_overlay: init.show_debug_overlay,
                 show_hotkey_hints: init.show_hotkey_hints,
+                max_columns: init.max_columns,
                 live_previews: init.previews,
                 icon_cache: init.icons,
             }
@@ -597,26 +595,37 @@ pub(crate) mod state {
         }
     }
 
-    fn grid_left(current: usize, row: usize, g: &Grid) -> usize {
-        let row_start = row * g.cols;
-        if current > row_start {
-            current - 1
+    fn grid_left(current: usize, _row: usize, g: &Grid) -> usize {
+        // Linear wrap: start-of-grid wraps to last cell, otherwise step back one.
+        // Treats the grid as a flat sequence so left at column 0 jumps to the end
+        // of the previous row, and column 0 of row 0 lands on the final card.
+        if current == 0 {
+            g.total.saturating_sub(1)
         } else {
-            current
+            current - 1
         }
     }
 
-    fn grid_right(current: usize, row: usize, g: &Grid) -> usize {
-        if current + 1 < g.row_end(row) {
-            current + 1
+    fn grid_right(current: usize, _row: usize, g: &Grid) -> usize {
+        // Linear wrap: end-of-grid wraps to first cell, otherwise step forward one.
+        if current + 1 >= g.total {
+            0
         } else {
-            current
+            current + 1
         }
     }
 
     fn grid_up(current: usize, row: usize, col: usize, g: &Grid) -> usize {
         if row == 0 {
-            return current;
+            // Wrap to the same column in the last row. If that column has no cell
+            // (short final row), clamp to the rightmost populated cell in that row.
+            let last_row = g.rows.saturating_sub(1);
+            let target_start = last_row * g.cols;
+            let target_end = g.row_end(last_row);
+            if target_end <= target_start {
+                return current;
+            }
+            return target_start + col.min(target_end - target_start - 1);
         }
         let target_start = (row - 1) * g.cols;
         let target_end = g.row_end(row - 1);
@@ -625,7 +634,12 @@ pub(crate) mod state {
 
     fn grid_down(current: usize, row: usize, col: usize, g: &Grid) -> usize {
         if row + 1 >= g.rows {
-            return current;
+            // Wrap to the same column in the first row.
+            let target_end = g.row_end(0);
+            if target_end == 0 {
+                return current;
+            }
+            return col.min(target_end - 1);
         }
         let target_start = (row + 1) * g.cols;
         let target_end = g.row_end(row + 1);
@@ -665,6 +679,7 @@ pub(crate) mod state {
                 show_hotkey_hints: false,
                 action_mode: ActionMode::HoldToSwitch,
                 cycle_on_open: false,
+                max_columns: 6,
                 previews: HashMap::new(),
                 icons: HashMap::new(),
             })
@@ -729,6 +744,69 @@ pub(crate) mod state {
             s.select_next();
             assert_eq!(s.selected_index, None);
         }
+
+        #[test]
+        fn right_at_row_end_wraps_to_next_row_start() {
+            // 8 cards, 3 cols: rows are [0,1,2], [3,4,5], [6,7]. Right at idx 2 → 3.
+            let mut s = picker(8);
+            s.selected_index = Some(2);
+            s.select_right(3);
+            assert_eq!(s.selected_index, Some(3));
+        }
+
+        #[test]
+        fn right_at_grid_end_wraps_to_first() {
+            // 8 cards, 3 cols. Right at idx 7 (last) → 0.
+            let mut s = picker(8);
+            s.selected_index = Some(7);
+            s.select_right(3);
+            assert_eq!(s.selected_index, Some(0));
+        }
+
+        #[test]
+        fn left_at_row_start_wraps_to_prev_row_end() {
+            // 8 cards, 3 cols. Left at idx 3 → 2.
+            let mut s = picker(8);
+            s.selected_index = Some(3);
+            s.select_left(3);
+            assert_eq!(s.selected_index, Some(2));
+        }
+
+        #[test]
+        fn left_at_grid_start_wraps_to_last() {
+            // 8 cards, 3 cols. Left at idx 0 → 7.
+            let mut s = picker(8);
+            s.selected_index = Some(0);
+            s.select_left(3);
+            assert_eq!(s.selected_index, Some(7));
+        }
+
+        #[test]
+        fn up_at_top_row_wraps_to_bottom_row_same_column() {
+            // 8 cards, 3 cols: rows [0,1,2], [3,4,5], [6,7]. Up at col 1, row 0 → row 2 col 1 = idx 7.
+            let mut s = picker(8);
+            s.selected_index = Some(1);
+            s.select_up(3);
+            assert_eq!(s.selected_index, Some(7));
+        }
+
+        #[test]
+        fn up_at_top_row_clamps_to_last_populated_when_short_row() {
+            // 8 cards, 3 cols. Up at col 2, row 0 (idx 2) → last row has no col 2; clamp to idx 7.
+            let mut s = picker(8);
+            s.selected_index = Some(2);
+            s.select_up(3);
+            assert_eq!(s.selected_index, Some(7));
+        }
+
+        #[test]
+        fn down_at_bottom_row_wraps_to_top_row_same_column() {
+            // 8 cards, 3 cols. Down at idx 7 (col 1 of last row) → idx 1.
+            let mut s = picker(8);
+            s.selected_index = Some(7);
+            s.select_down(3);
+            assert_eq!(s.selected_index, Some(1));
+        }
     }
 
     #[cfg(test)]
@@ -767,6 +845,7 @@ pub(crate) mod state {
                 show_hotkey_hints: false,
                 action_mode: ActionMode::HoldToSwitch,
                 cycle_on_open: false,
+                max_columns: 6,
                 previews: HashMap::new(),
                 icons: HashMap::new(),
             });

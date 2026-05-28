@@ -101,3 +101,14 @@ pub(super) fn is_regular_app(pid: i32) -> bool {
         app.activationPolicy() == NSApplicationActivationPolicy::Regular
     })
 }
+
+pub(super) fn is_app_hidden(pid: i32) -> bool {
+    use objc2_app_kit::NSRunningApplication;
+
+    objc2::rc::autoreleasepool(|_pool| {
+        let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) else {
+            return false;
+        };
+        app.isHidden()
+    })
+}

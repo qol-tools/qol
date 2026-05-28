@@ -106,9 +106,6 @@ fn reposition_ghost_only(inputs: &ListenerInputs, app_cx: &mut App) {
 }
 
 fn trigger_data_refresh(inputs: &ListenerInputs, app_cx: &mut App) {
-    if PICKER_VISIBLE.load(Ordering::Relaxed) {
-        return;
-    }
     let generation = inputs.refresh_generation.fetch_add(1, Ordering::AcqRel) + 1;
     let inputs = inputs.clone();
     app_cx
@@ -119,9 +116,6 @@ fn trigger_data_refresh(inputs: &ListenerInputs, app_cx: &mut App) {
 }
 
 async fn refresh_data(cx: &mut AsyncApp, inputs: ListenerInputs, generation: usize) {
-    if PICKER_VISIBLE.load(Ordering::Relaxed) {
-        return;
-    }
     let config = crate::config::load_alt_tab_config();
     let show_minimized = config.display.show_minimized;
     let executor = cx.background_executor().clone();
@@ -129,9 +123,6 @@ async fn refresh_data(cx: &mut AsyncApp, inputs: ListenerInputs, generation: usi
         .timer(Duration::from_millis(DATA_REFRESH_DELAY_MS))
         .await;
     if inputs.refresh_generation.load(Ordering::Acquire) != generation {
-        return;
-    }
-    if PICKER_VISIBLE.load(Ordering::Relaxed) {
         return;
     }
     let windows = executor
@@ -145,9 +136,6 @@ async fn refresh_data(cx: &mut AsyncApp, inputs: ListenerInputs, generation: usi
     let windows_for_previews = windows.clone();
     let _ = cx.update(move |app_cx| {
         if inputs.refresh_generation.load(Ordering::Acquire) != generation {
-            return;
-        }
-        if PICKER_VISIBLE.load(Ordering::Relaxed) {
             return;
         }
         super::run::apply_window_cache(
@@ -167,13 +155,21 @@ async fn refresh_data(cx: &mut AsyncApp, inputs: ListenerInputs, generation: usi
             &inputs.window_cache,
             &inputs.preview_cache,
         );
-        apply_ghost_windows(
-            &inputs.current,
-            &gathered,
-            config.reset_selection_on_open,
-            app_cx,
-        );
-        apply_ghost_layout_from_state(&inputs, app_cx);
+        let picker_visible = PICKER_VISIBLE.load(Ordering::Relaxed);
+        let reset_selection = if picker_visible {
+            false
+        } else {
+            config.reset_selection_on_open
+        };
+        apply_view_windows(&inputs.current, &gathered, reset_selection, app_cx);
+        // While the picker is visible, do NOT touch its window geometry. The active
+        // monitor can change underneath us (cursor crosses to another screen, focus
+        // shifts) but the picker must stay where it was opened, at the size it was
+        // opened. Resizing or repositioning a visible picker yanks it under the user.
+        if !picker_visible {
+            let layout = compute_layout_from_state(&inputs, app_cx);
+            apply_ghost_layout(&inputs.current, &layout, app_cx);
+        }
         if let Some(handle) = inputs
             .current
             .borrow()
@@ -193,29 +189,25 @@ async fn refresh_data(cx: &mut AsyncApp, inputs: ListenerInputs, generation: usi
         }
         #[cfg(debug_assertions)]
         eprintln!(
-            "[alt-tab/data-refresh] windows={} reset={}",
+            "[alt-tab/data-refresh] windows={} reset={} visible={}",
             gathered.windows.len(),
-            config.reset_selection_on_open,
+            reset_selection,
+            picker_visible,
         );
     });
 }
 
 fn apply_ghost_layout_from_state(inputs: &ListenerInputs, app_cx: &mut App) {
-    let config = crate::config::load_alt_tab_config();
     let placement = PopupPlacement::from_tracker(&inputs.tracker);
-    let count = inputs.last_window_count.load(Ordering::Relaxed).max(1);
     let layout = super::reuse::compute_layout(
         &super::reuse::LayoutInput {
-            config: &config,
-            window_count: count,
             placement: &placement,
         },
         app_cx,
     );
     #[cfg(debug_assertions)]
     eprintln!(
-        "[alt-tab/ghost] count={} layout.size={}x{} bounds.origin=({},{}) monitor_size={:?}",
-        count,
+        "[alt-tab/ghost] layout.size={}x{} bounds.origin=({},{}) monitor_size={:?}",
         layout.size.width.to_f64(),
         layout.size.height.to_f64(),
         layout.bounds.origin.x.to_f64(),
@@ -230,10 +222,22 @@ fn apply_ghost_layout(
     layout: &super::reuse::ReuseLayout,
     app_cx: &mut App,
 ) {
+    reposition_to_layout(layout);
+    resize_to_layout(current, layout, app_cx);
+}
+
+fn reposition_to_layout(layout: &super::reuse::ReuseLayout) {
     super::platform::reposition_picker_window(
         layout.bounds.origin.x.to_f64(),
         layout.bounds.origin.y.to_f64(),
     );
+}
+
+fn resize_to_layout(
+    current: &PickerWindowState,
+    layout: &super::reuse::ReuseLayout,
+    app_cx: &mut App,
+) {
     let Some(handle) = current.borrow().iter().into_iter().next().map(|(_, h)| h) else {
         return;
     };
@@ -244,7 +248,20 @@ fn apply_ghost_layout(
     });
 }
 
-fn apply_ghost_windows(
+fn compute_layout_from_state(
+    inputs: &ListenerInputs,
+    app_cx: &mut App,
+) -> super::reuse::ReuseLayout {
+    let placement = PopupPlacement::from_tracker(&inputs.tracker);
+    super::reuse::compute_layout(
+        &super::reuse::LayoutInput {
+            placement: &placement,
+        },
+        app_cx,
+    )
+}
+
+fn apply_view_windows(
     current: &PickerWindowState,
     gathered: &super::gather::GatheredWindows,
     reset_selection: bool,
@@ -254,9 +271,6 @@ fn apply_ghost_windows(
         return;
     };
     let _ = handle.update(app_cx, |view, window: &mut Window, cx| {
-        if PICKER_VISIBLE.load(Ordering::Relaxed) {
-            return;
-        }
         view.apply_ghost_gathered(gathered, reset_selection, window, cx);
     });
 }
