@@ -33,6 +33,8 @@ pub enum RuntimeRequest {
     GetState,
     SetFocus { monitor_idx: usize },
     Subscribe { events: Vec<RuntimeEventKind> },
+    Lifeline { plugin_id: String },
+    ArmedLifelines,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -76,6 +78,11 @@ pub enum RuntimeEvent {
 pub enum SubscribeAck {
     Subscribed,
     Error { message: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArmedLifelinesResponse {
+    pub plugin_ids: Vec<String>,
 }
 
 #[cfg(test)]

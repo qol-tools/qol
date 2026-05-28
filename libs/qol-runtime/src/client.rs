@@ -1,4 +1,6 @@
-use crate::protocol::{RuntimeEvent, RuntimeEventKind, RuntimeRequest, SubscribeAck};
+use crate::protocol::{
+    ArmedLifelinesResponse, RuntimeEvent, RuntimeEventKind, RuntimeRequest, SubscribeAck,
+};
 use crate::PlatformState;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -61,11 +63,20 @@ impl PlatformStateClient {
     }
 
     pub fn subscribe(&self, events: Vec<RuntimeEventKind>) -> Option<Subscription> {
+        self.open_subscription(RuntimeRequest::Subscribe { events })
+    }
+
+    pub fn lifeline(&self, plugin_id: &str) -> Option<Subscription> {
+        self.open_subscription(RuntimeRequest::Lifeline {
+            plugin_id: plugin_id.to_string(),
+        })
+    }
+
+    fn open_subscription(&self, request: RuntimeRequest) -> Option<Subscription> {
         let mut stream = UnixStream::connect(&self.socket_path).ok()?;
         stream.set_write_timeout(Some(TIMEOUT)).ok()?;
         stream.set_read_timeout(None).ok()?;
 
-        let request = RuntimeRequest::Subscribe { events };
         let mut payload = serde_json::to_string(&request).ok()?;
         payload.push('\n');
         stream.write_all(payload.as_bytes()).ok()?;
@@ -80,6 +91,23 @@ impl PlatformStateClient {
         }
 
         Some(Subscription { reader })
+    }
+
+    pub fn armed_lifelines(&self) -> Option<Vec<String>> {
+        let mut stream = UnixStream::connect(&self.socket_path).ok()?;
+        stream.set_read_timeout(Some(TIMEOUT)).ok()?;
+        stream.set_write_timeout(Some(TIMEOUT)).ok()?;
+
+        let mut payload = serde_json::to_string(&RuntimeRequest::ArmedLifelines).ok()?;
+        payload.push('\n');
+        stream.write_all(payload.as_bytes()).ok()?;
+
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).ok()?;
+
+        let response: ArmedLifelinesResponse = serde_json::from_str(line.trim()).ok()?;
+        Some(response.plugin_ids)
     }
 }
 

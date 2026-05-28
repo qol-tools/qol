@@ -8,8 +8,13 @@ pub mod broker;
 mod client;
 mod types;
 
+#[cfg(unix)]
+mod watchdog;
+
 pub use pane_field::PaneField;
 
 #[cfg(unix)]
 pub use client::{PlatformStateClient, Subscription};
 pub use types::{CursorPos, MonitorBounds, PlatformState, WindowBounds};
+#[cfg(unix)]
+pub use watchdog::spawn_host_death_watchdog;
