@@ -121,6 +121,8 @@ pub fn start_listener<C: Send + 'static>(
         Err(_) => return false,
     };
 
+    qol_runtime::spawn_host_death_watchdog();
+
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             match stream {
