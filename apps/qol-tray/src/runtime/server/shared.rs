@@ -20,6 +20,7 @@ pub(crate) struct SharedState {
     focused_window: Mutex<Option<MonitorBounds>>,
     last_focus_bounds: Mutex<Option<MonitorBounds>>,
     subscribers: Mutex<Vec<SubscriberEntry>>,
+    armed_lifelines: Mutex<HashSet<String>>,
     platform: OnceLock<SharedPlatform>,
 }
 
@@ -32,8 +33,26 @@ impl SharedState {
             focused_window: Mutex::new(None),
             last_focus_bounds: Mutex::new(None),
             subscribers: Mutex::new(Vec::new()),
+            armed_lifelines: Mutex::new(HashSet::new()),
             platform: OnceLock::new(),
         }
+    }
+
+    pub(super) fn arm_lifeline(&self, plugin_id: String) {
+        lock_or_recover(&self.armed_lifelines).insert(plugin_id);
+    }
+
+    pub(super) fn disarm_lifeline(&self, plugin_id: &str) {
+        lock_or_recover(&self.armed_lifelines).remove(plugin_id);
+    }
+
+    pub(super) fn armed_lifelines(&self) -> Vec<String> {
+        let mut ids: Vec<String> = lock_or_recover(&self.armed_lifelines)
+            .iter()
+            .cloned()
+            .collect();
+        ids.sort();
+        ids
     }
 
     pub(crate) fn attach_platform(&self, facade: SharedPlatform) {
