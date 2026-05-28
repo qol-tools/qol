@@ -616,9 +616,14 @@ pub(super) fn collect_minimized_windows(
             continue;
         }
         let is_hidden = hidden_pids.contains(&window.pid);
-        let Some(resolved) =
-            try_accept_minimized(&window, state, tracker, ax_cache, &mut budget_counts, is_hidden)
-        else {
+        let Some(resolved) = try_accept_minimized(
+            &window,
+            state,
+            tracker,
+            ax_cache,
+            &mut budget_counts,
+            is_hidden,
+        ) else {
             continue;
         };
         #[cfg(debug_assertions)]

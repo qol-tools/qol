@@ -240,7 +240,6 @@ impl AltTabApp {
             alt_release_check(this, delegate, window_handle, cx.clone())
         }));
     }
-
 }
 
 // on_modifiers_changed drives the common case, but it can be lost when the picker isn't yet
@@ -428,5 +427,4 @@ mod focus_out_tests {
             FocusOutDecision::Dismiss
         );
     }
-
 }
