@@ -537,7 +537,7 @@ body {
     pointer-events: auto;
     cursor: pointer;
     animation: toast-in 200ms ease-out;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 4px 12px rgba(var(--ink-rgb), 0.3);
     overflow: hidden;
 }
 
@@ -565,7 +565,7 @@ body {
     height: 1.3em;
     padding: 0 0.35em;
     border-radius: var(--radius-pill, 99px);
-    background: rgba(255, 255, 255, 0.15);
+    background: var(--layer-paper-15);
     font-size: var(--fs-xs);
     font-weight: var(--fw-semibold);
     line-height: 1.3em;

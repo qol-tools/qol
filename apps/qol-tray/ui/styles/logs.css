@@ -14,9 +14,10 @@
 .logs-content:focus { outline: none; }
 
 .logs-list {
-    background: var(--bg-elevated);
-    border: var(--border-w-1) solid var(--border-subtle);
+    background: var(--surface-sheen), var(--bg-elevated);
+    border: var(--border-w-1) solid var(--hairline);
     border-radius: var(--radius-lg);
+    box-shadow: var(--elevation-crisp-1);
     overflow: visible;
 }
 
