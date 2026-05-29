@@ -140,7 +140,8 @@ function reconcileFocusForSlot(pageId, label) {
         log(`${label}:`, pageId, '→ already focused:', surfaceLabel(focused));
         return;
     }
-    const surface = slot.querySelector('[data-selected-surface]');
+    const surface = slot.querySelector('[data-selected-surface][data-selected="true"]')
+        || slot.querySelector('[data-selected-surface]');
     log(`${label}:`, pageId, '→', surface ? surfaceLabel(surface) : 'no surfaces');
     if (!surface) {
         if (focused instanceof HTMLElement && focused !== document.body) focused.blur();
