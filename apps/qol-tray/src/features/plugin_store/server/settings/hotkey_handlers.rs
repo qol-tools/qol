@@ -11,19 +11,48 @@ use super::http_json;
 type HttpResult<T> = Result<T, Box<Response>>;
 
 pub(in super::super) async fn get_hotkeys() -> impl IntoResponse {
-    get_hotkeys_inner().unwrap_or_else(|response| *response)
+    blocking(get_hotkeys_inner).await
 }
 
 pub(in super::super) async fn set_hotkeys(body: axum::body::Bytes) -> impl IntoResponse {
-    set_hotkeys_inner(body).unwrap_or_else(|response| *response)
+    blocking(move || set_hotkeys_inner(body)).await
 }
 
 pub(in super::super) async fn open_hotkeys_file() -> impl IntoResponse {
-    open_config_file(crate::paths::hotkeys_path())
+    let path = crate::paths::hotkeys_path();
+    blocking_open(move || open_config_file(path)).await
 }
 
 pub(in super::super) async fn open_shortcuts_file() -> impl IntoResponse {
-    open_config_file(crate::paths::shortcuts_path())
+    let path = crate::paths::shortcuts_path();
+    blocking_open(move || open_config_file(path)).await
+}
+
+async fn blocking<F>(work: F) -> Response
+where
+    F: FnOnce() -> HttpResult<Response> + Send + 'static,
+{
+    match tokio::task::spawn_blocking(work).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(boxed)) => *boxed,
+        Err(error) => {
+            log::error!("hotkey handler join error: {}", error);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Handler crashed").into_response()
+        }
+    }
+}
+
+async fn blocking_open<F>(work: F) -> Response
+where
+    F: FnOnce() -> Response + Send + 'static,
+{
+    match tokio::task::spawn_blocking(work).await {
+        Ok(response) => response,
+        Err(error) => {
+            log::error!("hotkey open handler join error: {}", error);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Handler crashed").into_response()
+        }
+    }
 }
 
 fn open_config_file(path: anyhow::Result<std::path::PathBuf>) -> Response {

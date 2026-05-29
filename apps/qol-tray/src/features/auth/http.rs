@@ -9,7 +9,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use super::health::{auth_health, cumulative_scopes_for};
-use super::types::{AuthHealth, AuthProvider};
+use super::types::AuthProvider;
 use crate::features::github_auth::GitHubAuthService;
 
 #[derive(Clone)]
@@ -32,8 +32,14 @@ where
         .route("/auth/reauth", post(start_reauth))
 }
 
-async fn get_health() -> Json<AuthHealth> {
-    Json(auth_health())
+async fn get_health() -> Response {
+    match tokio::task::spawn_blocking(auth_health).await {
+        Ok(health) => Json(health).into_response(),
+        Err(error) => {
+            log::error!("auth health join error: {}", error);
+            (StatusCode::INTERNAL_SERVER_ERROR, "auth health join error").into_response()
+        }
+    }
 }
 
 async fn start_reauth(

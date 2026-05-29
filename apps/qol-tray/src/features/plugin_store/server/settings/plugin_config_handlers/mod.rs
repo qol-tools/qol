@@ -17,13 +17,13 @@ type HttpResult<T> = Result<T, Box<Response>>;
 pub(in super::super) async fn get_plugin_config(
     Path(plugin_id): Path<String>,
 ) -> impl IntoResponse {
-    get_plugin_config_inner(plugin_id).unwrap_or_else(|response| *response)
+    blocking(move || get_plugin_config_inner(plugin_id)).await
 }
 
 pub(in super::super) async fn get_plugin_config_form(
     Path(plugin_id): Path<String>,
 ) -> impl IntoResponse {
-    get_plugin_config_form_inner(plugin_id).unwrap_or_else(|response| *response)
+    blocking(move || get_plugin_config_form_inner(plugin_id)).await
 }
 
 pub(in super::super) async fn set_plugin_config(
@@ -31,7 +31,21 @@ pub(in super::super) async fn set_plugin_config(
     State(state): State<AppState>,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
-    set_plugin_config_inner(plugin_id, &state, body).unwrap_or_else(|response| *response)
+    blocking(move || set_plugin_config_inner(plugin_id, &state, body)).await
+}
+
+async fn blocking<F>(work: F) -> Response
+where
+    F: FnOnce() -> HttpResult<Response> + Send + 'static,
+{
+    match tokio::task::spawn_blocking(work).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(boxed)) => *boxed,
+        Err(error) => {
+            log::error!("plugin config handler join error: {}", error);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Handler crashed").into_response()
+        }
+    }
 }
 
 fn get_plugin_config_inner(plugin_id: String) -> HttpResult<Response> {

@@ -157,9 +157,13 @@ fn upsert_log_control_response(
 
 pub(super) async fn get_log_controls(
 ) -> Json<std::collections::HashMap<String, crate::logging::LogControl>> {
-    let controls = shared_config_dir()
-        .ok()
-        .map(|dir| crate::logging::load_all_plugin_controls(&dir))
-        .unwrap_or_default();
+    let controls = tokio::task::spawn_blocking(|| {
+        shared_config_dir()
+            .ok()
+            .map(|dir| crate::logging::load_all_plugin_controls(&dir))
+            .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
     Json(controls)
 }

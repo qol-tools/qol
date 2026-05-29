@@ -7,10 +7,14 @@ use axum::{
     Json,
 };
 
-pub(crate) async fn get_sync_status(
-    State(state): State<super::ProfileHttpState>,
-) -> impl IntoResponse {
-    Json(state.sync_service.status())
+pub(crate) async fn get_sync_status(State(state): State<super::ProfileHttpState>) -> Response {
+    match tokio::task::spawn_blocking(move || state.sync_service.status()).await {
+        Ok(status) => Json(status).into_response(),
+        Err(error) => {
+            log::error!("get_sync_status join error: {}", error);
+            (StatusCode::INTERNAL_SERVER_ERROR, "sync status join error").into_response()
+        }
+    }
 }
 
 pub(crate) async fn get_sync_providers(
@@ -77,39 +81,57 @@ pub(crate) async fn acknowledge_sync(
 
 pub(crate) async fn open_sync_backups_dir(
     State(state): State<super::ProfileHttpState>,
-) -> impl IntoResponse {
-    match state.sync_service.open_backups_dir() {
-        Ok(()) => StatusCode::OK.into_response(),
-        Err(error) => sync_error_response(error),
-    }
+) -> Response {
+    blocking_sync_response(
+        move || state.sync_service.open_backups_dir(),
+        |()| StatusCode::OK.into_response(),
+    )
+    .await
 }
 
 pub(crate) async fn open_sync_backup_file(
     State(state): State<super::ProfileHttpState>,
     Path(file_name): Path<String>,
-) -> impl IntoResponse {
-    match state.sync_service.open_backup_file(&file_name) {
-        Ok(()) => StatusCode::OK.into_response(),
-        Err(error) => sync_error_response(error),
-    }
+) -> Response {
+    blocking_sync_response(
+        move || state.sync_service.open_backup_file(&file_name),
+        |()| StatusCode::OK.into_response(),
+    )
+    .await
 }
 
-pub(crate) async fn list_sync_backups(
-    State(state): State<super::ProfileHttpState>,
-) -> impl IntoResponse {
-    match state.sync_service.list_backups() {
-        Ok(backups) => Json(backups).into_response(),
-        Err(error) => sync_error_response(error),
-    }
+pub(crate) async fn list_sync_backups(State(state): State<super::ProfileHttpState>) -> Response {
+    blocking_sync_response(
+        move || state.sync_service.list_backups(),
+        |backups| Json(backups).into_response(),
+    )
+    .await
 }
 
 pub(crate) async fn preview_sync_backup(
     State(state): State<super::ProfileHttpState>,
     Path(file_name): Path<String>,
-) -> impl IntoResponse {
-    match state.sync_service.preview_backup(&file_name) {
-        Ok(preview) => Json(preview).into_response(),
-        Err(error) => sync_error_response(error),
+) -> Response {
+    blocking_sync_response(
+        move || state.sync_service.preview_backup(&file_name),
+        |preview| Json(preview).into_response(),
+    )
+    .await
+}
+
+async fn blocking_sync_response<T, F, M>(work: F, into_ok: M) -> Response
+where
+    T: Send + 'static,
+    F: FnOnce() -> anyhow::Result<T> + Send + 'static,
+    M: FnOnce(T) -> Response,
+{
+    match tokio::task::spawn_blocking(work).await {
+        Ok(Ok(value)) => into_ok(value),
+        Ok(Err(error)) => sync_error_response(error),
+        Err(error) => {
+            log::error!("sync backup join error: {}", error);
+            (StatusCode::INTERNAL_SERVER_ERROR, "sync backup join error").into_response()
+        }
     }
 }
 

@@ -33,24 +33,34 @@ pub(super) fn routes() -> Router<AppState> {
 }
 
 pub(super) async fn get_tooling_gh_account() -> Json<ToolingGhAccountPayload> {
-    let value = DevConfig::load()
-        .map(|c| c.tooling_gh_account)
-        .unwrap_or(None);
+    let value = tokio::task::spawn_blocking(|| {
+        DevConfig::load()
+            .map(|c| c.tooling_gh_account)
+            .unwrap_or(None)
+    })
+    .await
+    .unwrap_or(None);
     Json(ToolingGhAccountPayload { value })
 }
 
 pub(super) async fn set_tooling_gh_account(
     Json(payload): Json<ToolingGhAccountPayload>,
 ) -> impl IntoResponse {
-    match DevConfig::set_tooling_gh_account(payload.value) {
-        Ok(()) => StatusCode::OK.into_response(),
-        Err(error) => {
+    let result =
+        tokio::task::spawn_blocking(move || DevConfig::set_tooling_gh_account(payload.value)).await;
+    match result {
+        Ok(Ok(())) => StatusCode::OK.into_response(),
+        Ok(Err(error)) => {
             log::error!("Failed to write tooling_gh_account: {error:#}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Failed to persist tooling gh account",
             )
                 .into_response()
+        }
+        Err(error) => {
+            log::error!("set_tooling_gh_account join error: {}", error);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Handler crashed").into_response()
         }
     }
 }
