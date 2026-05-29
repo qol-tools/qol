@@ -11,7 +11,7 @@
 body {
     height: 100vh;
     overflow: hidden;
-    background: var(--bg-base);
+    background: var(--tui-bg-desktop);
     color: var(--cfg-text-strong);
     font-family: "Segoe UI", "SF Pro Text", -apple-system, sans-serif;
 }
@@ -36,7 +36,7 @@ body {
     min-width: 210px;
     display: flex;
     flex-direction: column;
-    border-right: 1px solid var(--layer-paper-08);
+    border-right: 1px solid var(--tui-line-soft);
     overflow-y: auto;
 }
 
@@ -123,8 +123,8 @@ body {
 }
 
 .card {
-    background: var(--layer-paper-04, rgba(255, 255, 255, 0.04));
-    border: 1px solid var(--layer-paper-08);
+    background: var(--tui-bg-card);
+    border: 1px solid var(--tui-line-soft);
     border-radius: 4px;
     padding: 0.5rem 0;
 }
@@ -202,8 +202,8 @@ body {
 .config-subsection {
     margin-top: 0.75rem;
     padding: 0.85rem 0.95rem 0.3rem;
-    background: var(--layer-paper-03);
-    border: 1px solid var(--layer-paper-08);
+    background: var(--tui-bg-screen);
+    border: 1px solid var(--tui-line-soft);
     border-radius: 12px;
 }
 
@@ -331,8 +331,8 @@ body {
 
 .variant-selector-card {
     padding: 0;
-    background: var(--layer-paper-05);
-    border: 1px solid var(--layer-paper-12);
+    background: var(--tui-bg-card);
+    border: 1px solid var(--tui-line-soft);
     border-radius: 4px;
     width: fit-content;
     max-width: 100%;

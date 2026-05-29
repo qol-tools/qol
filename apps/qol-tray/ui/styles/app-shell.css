@@ -46,7 +46,7 @@ body {
 }
 
 .version-item:hover {
-    background: var(--bg-surface);
+    background: rgba(var(--accent-rgb), 0.08);
 }
 
 .version-item .version-main {
@@ -313,8 +313,8 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--bg-elevated);
-    border: var(--border-w-1) solid var(--border-subtle);
+    background: var(--tui-bg-card);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-lg);
 }
 
@@ -348,7 +348,7 @@ body {
 }
 
 .wt-recompile-content:hover {
-    background: var(--bg-surface);
+    background: rgba(var(--accent-rgb), 0.08);
 }
 
 .wt-recompile-pick {
@@ -357,22 +357,22 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    border-left: var(--border-w-1) solid var(--border-subtle);
+    border-left: var(--border-w-1) solid var(--tui-line-soft);
     cursor: pointer;
     font-size: var(--fs-xl);
     color: var(--text-muted);
 }
 
 .wt-recompile-pick:hover {
-    background: var(--bg-surface);
+    background: rgba(var(--accent-rgb), 0.08);
     color: var(--accent);
 }
 
 .wt-picker {
-    background: var(--bg-surface);
-    border: var(--border-w-1) solid var(--border-default);
+    background: var(--tui-bg-panel);
+    border: var(--border-w-1) solid var(--tui-line);
     border-radius: var(--radius-lg);
-    box-shadow: 0 8px 24px var(--layer-ink-28);
+    box-shadow: var(--elevation-crisp-2);
     z-index: var(--z-popover);
     overflow: hidden;
 }
@@ -382,7 +382,7 @@ body {
     padding: var(--space-3) var(--space-4);
     background: transparent;
     border: none;
-    border-bottom: var(--border-w-1) solid var(--border-subtle);
+    border-bottom: var(--border-w-1) solid var(--tui-line-soft);
     color: var(--text-secondary);
     font-size: var(--fs-md);
     font-family: inherit;
@@ -536,15 +536,15 @@ body {
     align-items: flex-start;
     gap: var(--space-2);
     padding: var(--space-3) var(--space-5);
-    border: var(--border-w-1) solid var(--border-default);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-md);
-    background: var(--bg-elevated);
+    background: var(--tui-bg-card);
     color: var(--text-secondary);
     font-size: var(--fs-md-minus);
     pointer-events: auto;
     cursor: pointer;
     animation: toast-in 200ms ease-out;
-    box-shadow: 0 4px 12px rgba(var(--ink-rgb), 0.3);
+    box-shadow: var(--elevation-crisp-2);
     overflow: hidden;
 }
 
@@ -572,7 +572,7 @@ body {
     height: 1.3em;
     padding: 0 0.35em;
     border-radius: var(--radius-pill, 99px);
-    background: var(--layer-paper-15);
+    background: rgba(var(--accent-rgb), 0.14);
     font-size: var(--fs-xs);
     font-weight: var(--fw-semibold);
     line-height: 1.3em;
@@ -615,8 +615,8 @@ body {
 }
 
 .toast-info {
-    border-color: var(--border-hover);
-    background: var(--bg-elevated);
+    border-color: var(--tui-line-soft);
+    background: var(--tui-bg-card);
     color: var(--text-secondary);
 }
 

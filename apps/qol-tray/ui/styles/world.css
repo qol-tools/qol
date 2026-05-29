@@ -203,23 +203,23 @@ html.qol-bootstrapping-dive #app {
 
 .world-cog-btn:hover {
     color: rgba(255, 255, 255, 0.7);
-    background: var(--layer-paper-06);
+    background: rgba(var(--accent-rgb), 0.1);
 }
 
 .world-cog-btn.is-open {
     color: rgba(255, 255, 255, 0.8);
-    background: var(--layer-paper-08);
+    background: rgba(var(--accent-rgb), 0.14);
 }
 
 .world-settings-panel {
-    background: rgba(10, 10, 14, 0.92);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-2xl);
+    background: var(--tui-bg-panel);
+    border: 1px solid var(--tui-line);
+    border-radius: var(--radius-md);
     padding: 0;
     width: 400px;
     user-select: none;
     backdrop-filter: blur(16px);
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.03);
+    box-shadow: var(--elevation-crisp-2);
     overflow: hidden;
 }
 
@@ -231,7 +231,7 @@ html.qol-bootstrapping-dive #app {
 }
 
 .wsp-section + .wsp-section {
-    border-top: 1px solid var(--layer-paper-06);
+    border-top: 1px solid var(--tui-line-soft);
 }
 
 .wsp-heading {
@@ -250,7 +250,7 @@ html.qol-bootstrapping-dive #app {
     display: inline-block;
     padding: 1px 6px;
     border-radius: var(--radius-sm, 4px);
-    background: var(--layer-paper-10);
+    background: rgba(var(--accent-rgb), 0.1);
     color: var(--text-secondary);
     font-family: var(--font-mono);
     font-size: calc(var(--fs-caption-1) * 0.92);
@@ -371,9 +371,9 @@ html.qol-bootstrapping-dive #app {
 }
 
 .world-settings-panel select {
-    background: var(--layer-paper-06);
-    border: 1px solid var(--layer-paper-10);
-    border-radius: var(--radius-lg);
+    background: var(--tui-bg-screen);
+    border: 1px solid var(--tui-line);
+    border-radius: var(--radius-sm);
     color: var(--text-secondary);
     font-size: var(--fs-md);
     padding: var(--space-1-5) var(--space-2-5);
@@ -403,9 +403,9 @@ html.qol-bootstrapping-dive #app {
     font-size: var(--fs-sm);
     font-family: inherit;
     padding: var(--space-1-5) var(--space-4);
-    border-radius: var(--radius-lg-plus);
-    border: 1px solid var(--layer-paper-12);
-    background: var(--layer-paper-02);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--tui-line-soft);
+    background: var(--tui-bg-card);
     color: var(--text-muted);
     cursor: pointer;
     transition: color 0.12s, border-color 0.12s, background 0.12s;
@@ -413,8 +413,8 @@ html.qol-bootstrapping-dive #app {
 
 .wsp-version-btn:hover {
     color: var(--text-primary);
-    background: var(--layer-paper-08);
-    border-color: var(--layer-paper-16);
+    background: rgba(var(--accent-rgb), 0.08);
+    border-color: var(--tui-line);
 }
 
 .wsp-version-btn.has-update {
@@ -454,13 +454,10 @@ html.qol-bootstrapping-dive #app {
 }
 
 .app-container > .command-palette {
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-xl);
-    box-shadow:
-        0 8px 32px rgba(0, 0, 0, 0.5),
-        0 2px 8px rgba(0, 0, 0, 0.3),
-        0 0 0 1px rgba(255, 255, 255, 0.04);
+    background: var(--tui-bg-panel);
+    border: 1px solid var(--tui-line);
+    border-radius: var(--radius-md);
+    box-shadow: var(--elevation-crisp-2);
     backdrop-filter: blur(16px);
     overflow: hidden;
 }
@@ -483,8 +480,8 @@ html.qol-bootstrapping-dive #app {
 .app-container > .command-palette .palette-dropdown {
     position: static;
     border: none;
-    border-top: 1px solid var(--border-subtle);
-    border-radius: 0 0 var(--radius-xl) var(--radius-xl);
+    border-top: 1px solid var(--tui-line-soft);
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
     background: transparent;
     max-height: 280px;
     padding: var(--space-1) 0;
@@ -499,12 +496,12 @@ html.qol-bootstrapping-dive #app {
 
 .app-container > .command-palette .palette-item:hover,
 .app-container > .command-palette .palette-item.selected {
-    background: var(--layer-paper-06);
+    background: rgba(var(--accent-rgb), 0.1);
 }
 
 .app-container > .palette-hint {
-    background: var(--layer-paper-02);
-    border: 1px solid var(--layer-paper-06);
+    background: var(--tui-bg-panel);
+    border: 1px solid var(--tui-line-soft);
     border-radius: var(--radius-lg);
     padding: var(--space-1-5) var(--space-3-5);
     width: auto;
@@ -519,7 +516,7 @@ html.qol-bootstrapping-dive #app {
 
 .app-container > .palette-hint:hover {
     opacity: 0.8;
-    background: var(--layer-paper-06);
+    background: rgba(var(--accent-rgb), 0.08);
 }
 
 .app-container > .palette-hint .palette-hint-text {

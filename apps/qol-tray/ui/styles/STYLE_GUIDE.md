@@ -182,7 +182,7 @@ Audited against the dev component gallery (`ui/views/dev/components/ComponentsCa
 
 | Component | Base | Current | Target | Status |
 |-----------|------|---------|--------|--------|
-| `.card` (base) | - | standard elevation, hairline | single `--tui-line-soft`, `--tui-bg-card`, crisp shadow, accent ring | todo |
+| `.card` (base) | - | `--tui-bg-card`, `--tui-line-soft` hairline, `--elevation-crisp-1`, accent ring on select | - | done |
 | plugin media card | card | `--tui-line-soft` + accent gradient, **`#0a0b0d`** | migrate bg to `--tui-bg-card`; share one cartridge rule with store card | partial |
 | store card | card | `--tui-line-soft` + gradient, **`#0c0d10`**, `radius-lg` | unify radius + shadow with media card on one shared rule | partial |
 | cover + monogram | - | CRT screen + scanline + glow monogram, mono uppercase name | - | done |
@@ -234,6 +234,7 @@ Audited against the dev component gallery (`ui/views/dev/components/ComponentsCa
 5. **`.alert`** (n/a) - already a single rule (`.profile-sync-alert` + warning/error variants); no duplication to collapse.
 6. **`.tui-label`** (done) - the mono+uppercase+spacing trio, defined once.
 7. **Frame hierarchy** (done) - double line = chrome only; hairline = everything inside.
+8. **Surface ramp** (done) - one role->token map drives every structural surface (screen/card/panel + line/line-soft); the paper-card family (`--surface-sheen`, `--bg-surface/elevated/base` as a structural bg, `--layer-paper-*` panels) is gone. `--surface-sheen` + `--layer-overlay-surface-62` deleted as dead.
 
 ## Build Order
 
@@ -242,10 +243,12 @@ Audited against the dev component gallery (`ui/views/dev/components/ComponentsCa
 - **Phase 2 (cards) - DONE:** media + store merged into one cartridge skin; cog on the control hairline; literals migrated to `--tui-bg-*`.
 - **Phase 3 (rows) - DONE:** the three list/table containers collapsed into one recessed `--tui-bg-screen` hairline screen; mono uppercase table headers on the `.table-list-header` base; the 3px marker + cursor centralized on `.table-list-row`; `--slate-200` fixed.
 - **Phase 4 (atoms) - DONE:** `HealthDot` CSS defined (was rendering invisible - small glowing dot, color/glow per `data-health`). Reassessed the rest: `.empty-state` is a class-name collision (the `--cfg-*` config-primitives copy reaches the main app via `plugin-config.css`), not a component dup - deferred to a scoping pass. `Alert` is already a single semantic rule, no dedup needed.
+- **Phase 5 (surfaces + chrome) - DONE:** retired the whole pre-TUI paper-card layer. Deleted dead tokens `--surface-sheen` + `--layer-overlay-surface-62`. Mapped every structural surface onto the ramp by role: recessed screen / list / code & input wells -> `--tui-bg-screen` + `--tui-line(-soft)`; cards / cartridges / status cards -> `--tui-bg-card` + `--tui-line-soft` + `--elevation-crisp-1`; floating popovers / modals / menus -> `--tui-bg-panel` + `--tui-line` + `--elevation-crisp-2`; paper-token badges & hovers -> `rgba(var(--accent-rgb), a)`. The duplicate paper frames `.content-frame` ≡ `.dev-content-frame` converged on one recessed-screen treatment (still two rules in two files; a shared class is a future refactor). Covered the `.card` base, `.logs-list`, profile section/status/result/backup-list/input+select/settings-group, command palette + hint, world-settings popover, all modals, toasts, `.wt-picker`, context menus, `.code-block`, slider track, `.peripheral-mini`, dev cards/inputs, auto-config page. Fixed a latent bug: `.profile-sync-alert` referenced undefined `--layer-paper-18` (invalid shorthand silently dropped the border) -> `--tui-line-soft`. Adversarially reviewed (contrast / token-role / over-reach / regression); `.toast-info` kept neutral on purpose (in dev mode accent == success green, so an accent info wash would collide with success).
 - Verify each phase live; use an `about:blank` bounce to defeat the nested-`@import` cache.
 
 ### Deferred (each its own change)
 
 - The `data-accent` border-left COLOR palette is still duplicated in `list-row.css` + `table.css`. The real fix is a shared `.row` component primitive (touches the JS row components), not cross-file CSS coupling.
-- The `.card` base (`card.css`) is still generic; it also skins task-runner action cards, so migrate it once that impact is assessed.
 - The search input's "thin amber bottom rule" was intentionally skipped (specificity tie against the command-palette `border-bottom` override).
+- The `.empty-state` class-name collision still stands: the main-app `.empty-state` (app-shell.css) is now on the TUI ramp, but the standalone `--cfg-*` config page keeps its own `.empty-state`; scope the `--cfg-` copy rather than blind-merge.
+- `.content-frame` and `.dev-content-frame` now share an identical treatment but remain two rules in two files; collapse to a shared class if a third content frame appears.

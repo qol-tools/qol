@@ -220,7 +220,7 @@
     padding: var(--space-2) var(--space-4);
     font-size: var(--fs-md);
     color: var(--text-muted);
-    background: var(--layer-paper-05);
+    background: rgba(var(--accent-rgb), 0.1);
     border-radius: var(--radius-md);
     text-align: center;
 }
@@ -249,7 +249,7 @@
 
 .plugin-grid-media .plugin-card.ghost,
 .plugin-grid .plugin-card.ghost {
-    background: var(--bg-surface);
+    background: var(--tui-bg-card);
     opacity: 0.6;
     pointer-events: none;
     display: flex;
@@ -300,8 +300,8 @@
     position: absolute;
     top: calc(var(--size-control-md) + var(--space-1));
     right: var(--space-2);
-    background: var(--bg-surface);
-    border: var(--border-w-1) solid var(--border-default);
+    background: var(--tui-bg-panel);
+    border: var(--border-w-1) solid var(--tui-line);
     border-radius: var(--radius-md);
     overflow: hidden;
     opacity: 0;
@@ -490,8 +490,8 @@
 
 .plugin-grid-media .plugin-card.skeleton,
 .plugin-grid .plugin-card.skeleton {
-    background: var(--bg-surface);
-    border-color: var(--border-subtle);
+    background: var(--tui-bg-card);
+    border-color: var(--tui-line-soft);
     overflow: hidden;
     position: relative;
     pointer-events: none;

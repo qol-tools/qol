@@ -7,8 +7,8 @@
 
 .card {
     position: relative;
-    background: var(--surface-sheen), var(--bg-surface);
-    border: var(--border-w-1) solid var(--hairline);
+    background: var(--tui-bg-card);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-lg);
     box-shadow: var(--elevation-crisp-1);
     overflow: visible;
@@ -24,7 +24,7 @@
 }
 
 .card:hover:not([data-selected="true"]) {
-    border-color: var(--hairline-strong);
+    border-color: var(--tui-line);
     box-shadow: var(--elevation-crisp-2);
 }
 

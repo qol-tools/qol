@@ -110,7 +110,6 @@
     --layer-ink-45: rgba(var(--ink-rgb), 0.45);
     --layer-ink-62: rgba(var(--ink-rgb), 0.62);
     --layer-ink-70: rgba(var(--ink-rgb), 0.7);
-    --layer-overlay-surface-62: rgba(var(--overlay-surface-rgb), 0.62);
     --layer-overlay-ink-54: rgba(var(--overlay-ink-rgb), 0.54);
 
     --bg-base: var(--surface-canvas);
@@ -316,7 +315,6 @@
     --layer-ink-10: rgba(var(--ink-rgb), 0.1);
     --layer-ink-12: rgba(var(--ink-rgb), 0.12);
     --layer-ink-50: rgba(var(--ink-rgb), 0.5);
-    --surface-sheen: linear-gradient(180deg, var(--layer-paper-05) 0%, var(--layer-paper-02) 16%, var(--layer-ink-12) 100%);
     --hairline: var(--layer-paper-07);
     --hairline-strong: var(--layer-paper-10);
     --card-top-highlight: inset 0 1px 0 var(--layer-paper-08);

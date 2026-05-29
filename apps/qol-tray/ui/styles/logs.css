@@ -14,10 +14,9 @@
 .logs-content:focus { outline: none; }
 
 .logs-list {
-    background: var(--surface-sheen), var(--bg-elevated);
-    border: var(--border-w-1) solid var(--hairline);
+    background: var(--tui-bg-screen);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-lg);
-    box-shadow: var(--elevation-crisp-1);
     overflow: visible;
 }
 
@@ -120,7 +119,7 @@
     font-weight: var(--fw-semibold);
     padding: 0 0.3rem;
     border-radius: var(--radius-2xs);
-    background: var(--layer-paper-06);
+    background: rgba(var(--accent-rgb), 0.08);
     white-space: nowrap;
 }
 
@@ -156,8 +155,8 @@
 
 .suppressed-entry {
     padding: var(--space-3-5) var(--space-4);
-    background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
+    background: var(--tui-bg-card);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-lg);
     border-left: 3px solid rgba(var(--danger-rgb), 0.35);
     transition: background var(--dur-fast), border-color var(--dur-fast);
