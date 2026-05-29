@@ -54,6 +54,7 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus {
     width: 100%;
     min-width: 14rem;
     text-align: center;
+    text-transform: none;
 }
 
 .btn-confirm-input::placeholder {
@@ -120,14 +121,15 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     justify-content: center;
     gap: var(--space-2);
     padding: var(--pad-btn);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-sm);
     font-size: var(--fs-md);
     font-weight: var(--fw-medium);
-    letter-spacing: var(--ls-tight);
+    letter-spacing: var(--ls-md);
+    text-transform: uppercase;
     cursor: pointer;
     transition: transform var(--transition), background var(--transition), border-color var(--transition), color var(--transition), box-shadow var(--transition), opacity var(--transition);
     border: var(--border-w-1) solid transparent;
-    font-family: inherit;
+    font-family: var(--font-mono);
     box-shadow: var(--btn-raise-shadow);
 }
 
@@ -248,13 +250,14 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
 
 .btn-dropdown {
     border-style: dashed;
-    border-color: var(--border-default);
+    border-color: var(--tui-line);
     color: var(--text-primary);
+    text-transform: none;
 }
 
 .btn-dropdown:hover:not(:disabled) {
     border-style: dashed;
-    border-color: var(--border-hover);
+    border-color: var(--accent);
 }
 
 .btn-dropdown[aria-expanded="true"] {
@@ -292,10 +295,11 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     flex-direction: column;
     gap: var(--space-3);
     padding: var(--space-3);
-    border-top: var(--border-w-1) solid var(--border-subtle);
-    background: var(--bg-elevated);
+    border-top: var(--border-w-1) solid var(--tui-line-soft);
+    background: var(--tui-bg-panel);
     cursor: default;
     font-weight: normal;
+    text-transform: none;
 }
 
 .btn-hint {
@@ -538,6 +542,14 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     flex-shrink: 0;
 }
 
+.search-bar:not(.palette-hint)::before {
+    content: '>';
+    margin-right: var(--space-2);
+    color: rgba(var(--accent-rgb), 0.7);
+    font-family: var(--font-mono);
+    font-weight: var(--fw-bold);
+}
+
 .search-input {
     flex: 1;
     min-width: 0;
@@ -545,7 +557,7 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     background: transparent;
     color: var(--text-secondary);
     font-size: var(--fs-base);
-    font-family: inherit;
+    font-family: var(--font-mono);
     outline: none;
 }
 
