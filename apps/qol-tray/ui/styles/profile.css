@@ -318,8 +318,8 @@
 
 .profile-select-surface .custom-select-trigger {
     padding: var(--space-3) var(--space-4);
-    border: var(--border-w-1) solid var(--border-default);
-    border-radius: var(--radius-md);
+    border: var(--border-w-1) solid var(--tui-line);
+    border-radius: var(--radius-sm);
     background: var(--bg-base);
     color: var(--text-secondary);
     font-size: var(--fs-base);
