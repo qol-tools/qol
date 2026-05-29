@@ -206,6 +206,22 @@
     color: rgba(var(--danger-rgb), 0.95);
 }
 
+.profile-health-dot {
+    display: inline-block;
+    flex-shrink: 0;
+    vertical-align: middle;
+    width: var(--space-2);
+    height: var(--space-2);
+    border-radius: var(--radius-pill);
+    background: currentColor;
+    color: var(--text-faint);
+    box-shadow: 0 0 6px currentColor;
+}
+
+.profile-health-dot[data-health="healthy"] { color: var(--success); }
+.profile-health-dot[data-health="attention"] { color: var(--warning); }
+.profile-health-dot[data-health="error"] { color: var(--danger); }
+
 .auth-health-banner {
     display: flex;
     gap: var(--space-3);
