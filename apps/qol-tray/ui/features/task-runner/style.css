@@ -7,15 +7,15 @@
 }
 
 .action-card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
+    background: var(--tui-bg-card);
+    border: 1px solid var(--tui-line-soft);
     border-radius: var(--radius-lg);
     padding: 1rem 1.25rem;
     transition: border-color var(--transition), background var(--transition);
 }
 
 .action-card:hover {
-    background: var(--bg-hover);
+    background: rgba(var(--accent-rgb), 0.06);
 }
 
 .action-card.selected {
@@ -63,7 +63,7 @@
     font-family: var(--font-mono);
     font-size: 0.85rem;
     color: var(--text-faint);
-    background: var(--bg-elevated);
+    background: var(--tui-bg-screen);
     padding: 0.4rem 0.6rem;
     border-radius: var(--radius-sm);
     overflow-x: auto;
@@ -76,7 +76,7 @@
 }
 
 .action-params code {
-    background: var(--bg-elevated);
+    background: var(--tui-bg-screen);
     padding: 0.15rem 0.4rem;
     border-radius: var(--radius-sm);
     font-family: var(--font-mono);
@@ -86,7 +86,7 @@
 .test-panel {
     margin-top: 1rem;
     padding-top: 1rem;
-    border-top: 1px solid var(--border-subtle);
+    border-top: 1px solid var(--tui-line-soft);
     outline: none;
 }
 
@@ -143,9 +143,9 @@
 .test-param-input {
     flex: 1;
     padding: 0.4rem 0.6rem;
-    border: 1px solid var(--border-default);
+    border: 1px solid var(--tui-line);
     border-radius: var(--radius-sm);
-    background: var(--bg-elevated);
+    background: var(--tui-bg-screen);
     color: var(--text-primary);
     font-size: 0.85rem;
 }
@@ -206,7 +206,7 @@
 .test-result-output pre {
     margin: 0.25rem 0 0 0;
     padding: 0.5rem;
-    background: var(--bg-elevated);
+    background: var(--tui-bg-screen);
     border-radius: var(--radius-sm);
     font-family: var(--font-mono);
     font-size: 0.8rem;
@@ -222,8 +222,8 @@
 }
 
 .api-usage {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
+    background: var(--tui-bg-card);
+    border: 1px solid var(--tui-line-soft);
     border-radius: var(--radius-lg);
     padding: 1rem 1.25rem;
 }
@@ -249,7 +249,7 @@
 .api-usage-content pre {
     margin: 0;
     padding: 0.75rem;
-    background: var(--bg-elevated);
+    background: var(--tui-bg-screen);
     border-radius: var(--radius-sm);
     font-family: var(--font-mono);
     font-size: 0.8rem;

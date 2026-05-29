@@ -127,6 +127,9 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     letter-spacing: var(--ls-md);
     text-transform: uppercase;
     cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    background: var(--tui-bg-card);
     transition: transform var(--transition), background var(--transition), border-color var(--transition), color var(--transition), box-shadow var(--transition), opacity var(--transition);
     border: var(--border-w-1) solid transparent;
     font-family: var(--font-mono);
