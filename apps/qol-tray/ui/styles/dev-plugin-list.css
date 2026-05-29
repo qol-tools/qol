@@ -5,8 +5,8 @@
 
 .plugin-list,
 .discovered-list {
-    background: var(--bg-elevated);
-    border: var(--border-w-1) solid var(--border-subtle);
+    background: var(--tui-bg-screen);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-lg);
     overflow: visible;
 }
@@ -479,7 +479,7 @@
 }
 
 .plugin-build-overlay-sub {
-    color: var(--slate-200);
+    color: var(--text-secondary);
     font-size: var(--fs-caption-lg);
     line-height: var(--lh-snug);
     font-family: var(--font-mono);

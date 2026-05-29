@@ -1,8 +1,7 @@
 .list-group {
-    background: var(--surface-sheen), var(--bg-elevated);
-    border: var(--border-w-1) solid var(--hairline);
+    background: var(--tui-bg-screen);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-lg);
-    box-shadow: var(--elevation-crisp-1);
     overflow: visible;
 }
 

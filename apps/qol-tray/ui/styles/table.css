@@ -4,19 +4,30 @@
     --table-header-pad: var(--pad-header-row);
     --table-row-pad: var(--pad-list-row);
     --table-row-min-h: var(--size-row-sm);
-    background: var(--bg-elevated);
-    border: var(--border-w-1) solid var(--border-subtle);
+    background: var(--tui-bg-screen);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-lg);
     overflow: visible;
 }
 
 .table-list-header {
-    border-bottom: var(--border-w-1) solid var(--border-subtle);
+    border-bottom: var(--border-w-1) solid var(--tui-line-soft);
+}
+
+.table-list-header .table-cell {
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: var(--ls-md);
+    font-size: var(--fs-xs);
+    color: var(--text-faint);
 }
 
 .table-list-row {
     background: transparent;
     border-bottom: var(--border-w-1) solid var(--border-subtle);
+    border-left: var(--border-w-3) solid transparent;
+    box-sizing: border-box;
+    cursor: pointer;
     transition: background var(--transition), border-left-color var(--transition);
 }
 
