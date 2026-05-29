@@ -31,6 +31,7 @@ function cycleIndex(current, length, reverse) {
 }
 let _cameraRef = { current: null };
 let _ascendRef = { current: null };
+let _navRef = { current: null };
 
 export function useAppKeyboardRouting({
     activePluginId,
@@ -47,6 +48,7 @@ export function useAppKeyboardRouting({
     const { getViewKeyboard } = useViewKeyboardContext();
     _cameraRef.current = camera;
     _ascendRef.current = ascend;
+    _navRef.current = navigation;
     const viewOrderRef = useRef(viewOrder);
     viewOrderRef.current = viewOrder;
     const switchViewRef = useRef(switchView);
@@ -328,7 +330,11 @@ function descendIntoChild(surface) {
 }
 
 function restoreDiveSourceFocus() {
-    const source = document.querySelector('[data-dive-source]');
+    const pageId = _navRef.current?.getCurrentAnchor?.()?.pageId;
+    if (!pageId) return;
+    const slot = document.querySelector(`.world-view-slot[data-view-id="${CSS.escape(pageId)}"]`);
+    if (!slot) return;
+    const source = slot.querySelector('[data-dive-source=""]');
     if (!(source instanceof HTMLElement)) return;
     source.removeAttribute('data-dive-source');
     if (!isVisible(source)) return;
