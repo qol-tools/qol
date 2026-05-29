@@ -2,7 +2,8 @@ import { html } from '../../lib/html.js';
 import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { createDebug } from '../../lib/debug.js';
 import { resolveViewLabel } from '../../app/views.js';
-import { regionLabelPosition } from '../../lib/world-geometry.js';
+import { regionLabelPosition, computeSlotScale, computeBaseScale } from '../../lib/world-geometry.js';
+import { getWorldSettings } from '../../lib/world-settings.js';
 import { ScrambleText } from '../../lib/components/ScrambleText.js';
 
 const log = createDebug('qol:world');
@@ -16,10 +17,24 @@ const ANIMATIONS = {
 };
 
 function writePositions(labelRefs, entries, cam) {
+    const { ghostThreshold, uiScaleOnZoomOut } = getWorldSettings();
+    const baseScale = uiScaleOnZoomOut ? computeBaseScale(Math.max(cam.zoom, 0.05), ghostThreshold) : 1;
+    const vp = document.getElementById('viewport');
+    const viewportW = vp?.clientWidth || window.innerWidth;
+    const viewportH = vp?.clientHeight || window.innerHeight;
     for (const entry of entries) {
         const el = labelRefs.current.get(entry.id);
         if (!el) continue;
-        const pos = regionLabelPosition(entry, cam);
+        const slotScale = baseScale === 1 ? 1 : computeSlotScale({
+            entry,
+            cameraX: cam.x,
+            cameraY: cam.y,
+            viewportW,
+            viewportH,
+            zoom: cam.zoom,
+            baseScale,
+        });
+        const pos = regionLabelPosition(entry, cam, slotScale);
         if (pos.hidden) {
             el.style.display = 'none';
             continue;
