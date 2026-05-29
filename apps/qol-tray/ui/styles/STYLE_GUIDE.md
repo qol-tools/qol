@@ -219,7 +219,7 @@ Audited against the dev component gallery (`ui/views/dev/components/ComponentsCa
 | Component | Current | Target | Status |
 |-----------|---------|--------|--------|
 | Badge | uppercase semantic pills | keep | done |
-| HealthDot | **no CSS at all** (latent bug) | define: small dot, accent default + health variants, subtle glow | todo |
+| HealthDot | small glowing dot; color + glow follow `color` per `data-health` (default faint, success/warning/danger) | - | done |
 | Alert | `.profile-sync-alert` semantic rgba | one `.alert` rule: hairline in semantic color, `--tui-bg-panel`, mono label prefix | todo |
 | EmptyState | **3 inconsistent defs**, hardcoded italic | consolidate to one `.empty-state`: mono, faint, centered | todo |
 | KeyLegend | lowercase caps | optional `[key]` bracket keycaps | partial |
@@ -230,8 +230,8 @@ Audited against the dev component gallery (`ui/views/dev/components/ComponentsCa
 1. **Selection color** (done) - `--surface-selected` is an accent composite that follows the active accent; rows + minimap retint together. No more blue.
 2. **Near-black ramp** (done) - the `--tui-bg-*` tokens; the 5 scattered literals are gone.
 3. **One cartridge rule** (done) - media + store cards share a single selector set.
-4. **One `.empty-state`** (Phase 4) - collapse the three definitions.
-5. **One `.alert`** (Phase 4) - collapse semantic variants.
+4. **`.empty-state`** (deferred) - the two bare `.empty-state` defs are a contextual class-name collision (main app vs the `--cfg-*` config page, which reaches the app via `plugin-config.css`), not a component dup; scope the `--cfg-` one rather than blind-merge. The `EmptyState` component already uses the clean `.empty-state-block` family.
+5. **`.alert`** (n/a) - already a single rule (`.profile-sync-alert` + warning/error variants); no duplication to collapse.
 6. **`.tui-label`** (done) - the mono+uppercase+spacing trio, defined once.
 7. **Frame hierarchy** (done) - double line = chrome only; hairline = everything inside.
 
@@ -241,7 +241,7 @@ Audited against the dev component gallery (`ui/views/dev/components/ComponentsCa
 - **Phase 1 (controls) - DONE:** `.btn` mono+uppercase terminal voice (with `text-transform:none` resets where the text is data or content), CustomSelect terminal menu, `>` search prompt, squared toggle.
 - **Phase 2 (cards) - DONE:** media + store merged into one cartridge skin; cog on the control hairline; literals migrated to `--tui-bg-*`.
 - **Phase 3 (rows) - DONE:** the three list/table containers collapsed into one recessed `--tui-bg-screen` hairline screen; mono uppercase table headers on the `.table-list-header` base; the 3px marker + cursor centralized on `.table-list-row`; `--slate-200` fixed.
-- **Phase 4 (atoms) - TODO:** define `HealthDot` CSS (currently has none), consolidate `EmptyState` (3 defs) and `Alert` to one rule each, optional `[key]` keycaps.
+- **Phase 4 (atoms) - DONE:** `HealthDot` CSS defined (was rendering invisible - small glowing dot, color/glow per `data-health`). Reassessed the rest: `.empty-state` is a class-name collision (the `--cfg-*` config-primitives copy reaches the main app via `plugin-config.css`), not a component dup - deferred to a scoping pass. `Alert` is already a single semantic rule, no dedup needed.
 - Verify each phase live; use an `about:blank` bounce to defeat the nested-`@import` cache.
 
 ### Deferred (each its own change)
