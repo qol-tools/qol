@@ -229,17 +229,23 @@ Audited against the dev component gallery (`ui/views/dev/components/ComponentsCa
 
 1. **Selection color** (done) - `--surface-selected` is an accent composite that follows the active accent; rows + minimap retint together. No more blue.
 2. **Near-black ramp** (done) - the `--tui-bg-*` tokens; the 5 scattered literals are gone.
-3. **One cartridge rule** - media + store cards share a single selector set.
-4. **One `.empty-state`** - collapse the three definitions.
-5. **One `.alert`** - collapse semantic variants.
-6. **`.tui-label`** - the mono+uppercase+spacing trio, defined once.
-7. **Frame hierarchy** - double line = chrome only; hairline = everything inside.
+3. **One cartridge rule** (done) - media + store cards share a single selector set.
+4. **One `.empty-state`** (Phase 4) - collapse the three definitions.
+5. **One `.alert`** (Phase 4) - collapse semantic variants.
+6. **`.tui-label`** (done) - the mono+uppercase+spacing trio, defined once.
+7. **Frame hierarchy** (done) - double line = chrome only; hairline = everything inside.
 
 ## Build Order
 
-- **Phase 0 (foundation) - DONE:** `--surface-selected` is now an accent composite (follows the active accent; the minimap rect reads `--accent-rgb` live), the near-black ramp tokens exist, and the `.tui-label` utility is defined.
-- **Phase 1:** controls (button labels, CustomSelect terminal-menu, search prompt, toggle).
-- **Phase 2:** cards (unify cartridge rule, migrate literals, cog).
-- **Phase 3:** rows (verify retint reads well, fix `slate-200`, mono cells).
-- **Phase 4:** atoms (HealthDot CSS, alert + empty-state consolidation, keycaps).
-- Verify each phase live in the dev gallery showcases; use an `about:blank` bounce to defeat the nested-`@import` cache.
+- **Phase 0 (foundation) - DONE:** `--surface-selected` is an accent composite (follows the active accent; the minimap rect reads `--accent-rgb` live), the near-black ramp tokens exist, the `.tui-label` utility is defined.
+- **Phase 1 (controls) - DONE:** `.btn` mono+uppercase terminal voice (with `text-transform:none` resets where the text is data or content), CustomSelect terminal menu, `>` search prompt, squared toggle.
+- **Phase 2 (cards) - DONE:** media + store merged into one cartridge skin; cog on the control hairline; literals migrated to `--tui-bg-*`.
+- **Phase 3 (rows) - DONE:** the three list/table containers collapsed into one recessed `--tui-bg-screen` hairline screen; mono uppercase table headers on the `.table-list-header` base; the 3px marker + cursor centralized on `.table-list-row`; `--slate-200` fixed.
+- **Phase 4 (atoms) - TODO:** define `HealthDot` CSS (currently has none), consolidate `EmptyState` (3 defs) and `Alert` to one rule each, optional `[key]` keycaps.
+- Verify each phase live; use an `about:blank` bounce to defeat the nested-`@import` cache.
+
+### Deferred (each its own change)
+
+- The `data-accent` border-left COLOR palette is still duplicated in `list-row.css` + `table.css`. The real fix is a shared `.row` component primitive (touches the JS row components), not cross-file CSS coupling.
+- The `.card` base (`card.css`) is still generic; it also skins task-runner action cards, so migrate it once that impact is assessed.
+- The search input's "thin amber bottom rule" was intentionally skipped (specificity tie against the command-palette `border-bottom` override).
