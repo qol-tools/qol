@@ -70,7 +70,7 @@ function SelfUpdateCard() {
 
 function ComponentGalleryCard() {
     return html`
-        <${Surface} className="dev-card" data-dive-source="dev-component-gallery"
+        <${Surface} className="dev-card"
             onActivate=${() => diveViaSelector(GALLERY_DIVE_SELECTOR)}>
             <div class="dev-card-content">
                 <h3>Component Gallery</h3>
