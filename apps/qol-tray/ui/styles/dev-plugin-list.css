@@ -21,7 +21,7 @@
     gap: 0;
     padding: 0;
     min-height: var(--size-row-md);
-    border-bottom: var(--border-w-1) solid var(--border-subtle);
+    border-bottom: var(--border-w-1) solid var(--tui-line-soft);
     transition: background var(--transition), border-left-color var(--transition);
     border-left: var(--border-w-3) solid transparent;
     box-sizing: border-box;
@@ -133,8 +133,8 @@
     align-self: stretch;
     display: flex;
     position: relative;
-    border-left: var(--border-w-1) solid var(--layer-paper-08);
-    background: var(--layer-paper-03);
+    border-left: var(--border-w-1) solid var(--tui-line-soft);
+    background: var(--tui-bg-screen);
     overflow: visible;
 }
 
@@ -286,8 +286,8 @@
     top: calc(var(--size-control-sm) - var(--space-1));
     right: var(--space-1);
     min-width: var(--size-context-menu-min);
-    background: var(--bg-surface);
-    border: var(--border-w-1) solid var(--border-default);
+    background: var(--tui-bg-panel);
+    border: var(--border-w-1) solid var(--tui-line);
     border-radius: var(--radius-md);
     overflow: hidden;
     opacity: 0;
@@ -610,17 +610,17 @@
     align-items: center;
     margin-top: var(--space-3);
     padding: var(--space-3) var(--space-4);
-    background: var(--bg-elevated);
-    border: var(--border-w-1) solid var(--border-subtle);
+    background: var(--tui-bg-card);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-md);
 }
 
 .link-input-row input {
     flex: 1;
     padding: var(--space-2) var(--space-3);
-    border: var(--border-w-1) solid var(--border-default);
+    border: var(--border-w-1) solid var(--tui-line);
     border-radius: var(--radius-sm);
-    background: var(--bg-base);
+    background: var(--tui-bg-screen);
     color: var(--text-secondary);
     font-family: var(--font-mono);
     font-size: var(--fs-md-minus);

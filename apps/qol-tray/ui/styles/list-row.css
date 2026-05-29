@@ -55,8 +55,8 @@
 }
 
 .list-group-cards > .list-row {
-    background: var(--surface-sheen), var(--bg-elevated);
-    border: var(--border-w-1) solid var(--hairline);
+    background: var(--tui-bg-card);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-lg);
     border-left: var(--border-w-3) solid transparent;
     box-shadow: var(--elevation-crisp-1);
@@ -86,8 +86,8 @@
     align-items: stretch;
     flex-shrink: 0;
     width: var(--size-action-col-md);
-    border-left: var(--border-w-1) solid var(--layer-paper-08);
-    background: var(--layer-paper-03);
+    border-left: var(--border-w-1) solid var(--tui-line-soft);
+    background: var(--tui-bg-screen);
 }
 
 .list-row-action > button,
@@ -186,10 +186,10 @@
     flex-direction: column;
     min-width: 160px;
     padding: var(--space-1) 0;
-    background: var(--bg-surface);
-    border: var(--border-w-1) solid var(--border-default);
+    background: var(--tui-bg-panel);
+    border: var(--border-w-1) solid var(--tui-line);
     border-radius: var(--radius-md);
-    box-shadow: var(--elevation-3);
+    box-shadow: var(--elevation-crisp-2);
 }
 
 .dev-plugin-row-actions > .btn {

@@ -105,8 +105,8 @@
     grid-template-columns: auto auto;
     align-items: stretch;
     gap: 0;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-subtle);
+    background: var(--tui-bg-screen);
+    border: 1px solid var(--tui-line-soft);
     border-radius: 4px;
     overflow: hidden;
 }

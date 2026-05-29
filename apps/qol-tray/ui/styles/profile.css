@@ -103,10 +103,10 @@
 
 .profile-settings-group[data-expanded="true"] {
     align-items: stretch;
-    border: var(--border-w-1) solid var(--border-subtle);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-md);
-    background: var(--bg-elevated);
-    box-shadow: inset 0 1px 0 var(--layer-paper-06);
+    background: var(--tui-bg-card);
+    box-shadow: var(--card-top-highlight);
 }
 
 .profile-settings-trigger {
@@ -117,7 +117,7 @@
     align-self: stretch;
     justify-content: flex-start;
     border: none;
-    border-bottom: var(--border-w-1) solid var(--border-subtle);
+    border-bottom: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-md) var(--radius-md) 0 0;
     background: rgba(var(--accent-rgb), 0.04);
     box-shadow: none;
@@ -130,7 +130,7 @@
     padding: var(--space-3);
     border: none;
     border-radius: 0 0 var(--radius-md) var(--radius-md);
-    background: var(--bg-elevated);
+    background: transparent;
     box-shadow: none;
     overflow: visible;
 }
@@ -156,9 +156,9 @@
     flex-direction: column;
     gap: var(--space-4);
     padding: var(--space-4);
-    border: var(--border-w-1) solid var(--hairline);
-    border-radius: var(--radius-xl);
-    background: var(--surface-sheen), var(--bg-surface);
+    border: var(--border-w-1) solid var(--tui-line-soft);
+    border-radius: var(--radius-lg);
+    background: var(--tui-bg-card);
     box-shadow: var(--elevation-crisp-1);
 }
 
@@ -189,7 +189,7 @@
 .profile-sync-alert {
     padding: var(--space-3);
     border-radius: var(--radius-md);
-    border: var(--border-w-1) solid var(--layer-paper-18);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     color: var(--text-secondary);
     line-height: var(--lh-relaxed);
 }
@@ -299,9 +299,9 @@
 .profile-input-surface,
 .profile-toggle-surface {
     margin: 0;
-    border: var(--border-w-1) solid var(--layer-paper-12);
+    border: var(--border-w-1) solid var(--tui-line);
     border-radius: var(--radius-md);
-    background: var(--layer-paper-03);
+    background: var(--tui-bg-screen);
     transition: border-color var(--transition), background var(--transition), box-shadow var(--transition);
 }
 
@@ -336,7 +336,7 @@
     padding: var(--space-3) var(--space-4);
     border: var(--border-w-1) solid var(--tui-line);
     border-radius: var(--radius-sm);
-    background: var(--bg-base);
+    background: var(--tui-bg-screen);
     color: var(--text-secondary);
     font-size: var(--fs-base);
 }
@@ -487,8 +487,8 @@
     gap: var(--space-4);
     padding: var(--space-3) var(--space-4);
     border-radius: var(--radius-lg);
-    border: var(--border-w-1) solid var(--layer-paper-18);
-    background: var(--layer-paper-04);
+    border: var(--border-w-1) solid var(--tui-line-soft);
+    background: var(--tui-bg-card);
 }
 
 .profile-status[data-variant="success"] {
@@ -563,9 +563,9 @@
     gap: var(--space-3);
     align-items: flex-start;
     padding: var(--space-3);
-    border: var(--border-w-1) solid var(--layer-paper-18);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-md);
-    background: var(--layer-paper-04);
+    background: var(--tui-bg-card);
 }
 
 .profile-result-row[data-status="failed"] {
@@ -600,8 +600,8 @@
 }
 
 .profile-backup-list {
-    background: var(--bg-elevated);
-    border: var(--border-w-1) solid var(--border-subtle);
+    background: var(--tui-bg-screen);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-lg);
     overflow: visible;
 }
@@ -611,7 +611,7 @@
     flex-direction: column;
     gap: var(--space-1-5);
     padding: var(--space-3) var(--space-4);
-    border-bottom: var(--border-w-1) solid var(--border-subtle);
+    border-bottom: var(--border-w-1) solid var(--tui-line-soft);
     border-left: var(--border-w-3) solid rgba(var(--accent-rgb), 0.28);
     transition: background var(--transition), border-left-color var(--transition);
     box-sizing: border-box;

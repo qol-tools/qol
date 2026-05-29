@@ -14,11 +14,11 @@
 
 .confirm-modal-content,
 .edit-modal-content {
-    background: var(--bg-surface);
-    border: var(--border-w-1) solid var(--border-default);
-    border-radius: var(--radius-xl);
+    background: var(--tui-bg-panel);
+    border: var(--border-w-1) solid var(--tui-line);
+    border-radius: var(--radius-md);
     padding: var(--space-7);
-    box-shadow: var(--elevation-3);
+    box-shadow: var(--elevation-crisp-2);
 }
 
 .confirm-modal-content {

@@ -93,10 +93,10 @@
     height: 100%;
     position: relative;
     overflow: hidden;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
+    background: var(--tui-bg-card);
+    border: 1px solid var(--tui-line-soft);
     border-radius: var(--radius-lg);
-    box-shadow: var(--elevation-1);
+    box-shadow: var(--elevation-crisp-1);
 }
 
 .peripheral-mini-content {
