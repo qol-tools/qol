@@ -494,8 +494,12 @@ html.qol-bootstrapping-dive #app {
 .world-region-label {
     position: absolute;
     font-size: 42px;
-    font-weight: 700;
+    font-weight: var(--fw-bold);
     color: var(--text-primary);
+    background: linear-gradient(180deg, var(--slate-100) 0%, var(--slate-400) 145%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
     letter-spacing: 2px;
     pointer-events: none;
     user-select: none;

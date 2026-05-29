@@ -57,7 +57,7 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus {
 }
 
 .btn-confirm-input::placeholder {
-    color: rgba(255, 255, 255, 0.55);
+    color: rgba(var(--paper-rgb), 0.55);
     font-weight: var(--fw-regular);
     letter-spacing: 0.01em;
 }
@@ -84,7 +84,7 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(0, 0, 0, 0.6);
+    background: rgba(var(--ink-rgb), 0.6);
     backdrop-filter: blur(2px);
     border-radius: inherit;
     color: var(--accent);
@@ -128,7 +128,7 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
     transition: transform var(--transition), background var(--transition), border-color var(--transition), color var(--transition), box-shadow var(--transition), opacity var(--transition);
     border: var(--border-w-1) solid transparent;
     font-family: inherit;
-    box-shadow: inset 0 1px 0 var(--layer-paper-10), 0 1px 2px var(--layer-ink-20);
+    box-shadow: var(--btn-raise-shadow);
 }
 
 .btn:disabled {
@@ -147,8 +147,10 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
 }
 
 .btn-primary {
-    background: var(--accent);
+    background: var(--btn-primary-bg);
     color: var(--text-primary);
+    box-shadow: var(--btn-raise-shadow), var(--btn-primary-glow);
+    text-shadow: 0 1px 1px var(--layer-ink-35);
 }
 
 .btn-primary:hover:not(:disabled) {
@@ -156,8 +158,9 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
 }
 
 .btn-success {
-    background: var(--success);
+    background: var(--btn-success-bg);
     color: var(--slate-975);
+    box-shadow: var(--btn-raise-shadow), var(--btn-success-glow);
 }
 
 .btn-success:hover:not(:disabled) {

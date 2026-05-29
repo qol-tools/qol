@@ -1,7 +1,8 @@
 .list-group {
-    background: var(--bg-elevated);
-    border: var(--border-w-1) solid var(--border-subtle);
+    background: var(--surface-sheen), var(--bg-elevated);
+    border: var(--border-w-1) solid var(--hairline);
     border-radius: var(--radius-lg);
+    box-shadow: var(--elevation-crisp-1);
     overflow: visible;
 }
 
@@ -50,10 +51,11 @@
 }
 
 .list-group-cards > .list-row {
-    background: var(--bg-elevated);
-    border: var(--border-w-1) solid var(--border-subtle);
+    background: var(--surface-sheen), var(--bg-elevated);
+    border: var(--border-w-1) solid var(--hairline);
     border-radius: var(--radius-lg);
     border-left: var(--border-w-3) solid transparent;
+    box-shadow: var(--elevation-crisp-1);
 }
 
 .list-group-cards > .list-row:last-child {
