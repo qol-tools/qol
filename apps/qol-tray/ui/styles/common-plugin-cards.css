@@ -24,7 +24,7 @@
 
 .plugin-grid-media .plugin-card.no-ui,
 .plugin-grid .plugin-card.no-ui {
-    border-color: var(--border-default);
+    border-color: var(--tui-line-soft);
 }
 
 .plugin-grid-media .plugin-card.no-ui img,
@@ -149,7 +149,7 @@
 
 .plugin-grid-store .plugin-card:hover:not([data-selected="true"]),
 .plugins-grid .plugin-card:hover:not([data-selected="true"]) {
-    border-color: var(--hairline-strong);
+    border-color: var(--tui-line);
     box-shadow: var(--elevation-crisp-2);
     transform: translateY(-1px);
 }

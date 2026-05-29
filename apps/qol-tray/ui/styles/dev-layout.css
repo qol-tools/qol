@@ -294,7 +294,7 @@
     border-color: var(--state-info-border);
     background:
         linear-gradient(115deg, var(--accent-glow-soft) 0%, var(--state-info-bg-faint) 38%, transparent 70%),
-        var(--bg-surface);
+        var(--tui-bg-card);
 }
 
 .dev-card .refresh-btn {

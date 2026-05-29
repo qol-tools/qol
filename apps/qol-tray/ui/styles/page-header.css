@@ -14,7 +14,7 @@
     height: var(--size-page-header);
     padding: 0 var(--space-7);
     border-bottom: var(--border-w-1) solid transparent;
-    border-image: linear-gradient(90deg, var(--hairline-strong) 0%, var(--hairline) 45%, transparent 100%) 1;
+    border-image: linear-gradient(90deg, rgba(var(--accent-rgb), 0.5) 0%, rgba(var(--accent-rgb), 0.18) 45%, transparent 100%) 1;
     background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.03), transparent);
     position: relative;
 }

@@ -115,12 +115,12 @@
     --bg-base: var(--surface-canvas);
     --bg-elevated: var(--surface-elevated);
     --bg-surface: var(--surface-raised);
-    --bg-hover: var(--surface-hovered);
-    --bg-selected: var(--surface-selected);
+    --bg-hover: rgba(var(--accent-rgb), 0.08);
+    --bg-selected: rgba(var(--accent-rgb), 0.14);
 
-    --border-subtle: var(--border-weak);
-    --border-default: var(--border-default-2);
-    --border-hover: var(--border-strong);
+    --border-subtle: var(--tui-line-soft);
+    --border-default: var(--tui-line);
+    --border-hover: rgba(var(--accent-rgb), 0.7);
 
     --text-primary: var(--text-strong);
     --text-secondary: var(--text-default);

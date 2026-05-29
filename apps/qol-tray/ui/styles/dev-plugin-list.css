@@ -187,19 +187,19 @@
 
 .plugin-row .plugin-action-zone:not(.is-disabled):hover,
 .plugin-row .plugin-action-zone.is-hovered:not(.is-disabled) {
-    background: var(--layer-paper-05);
+    background: rgba(var(--accent-rgb), 0.06);
     box-shadow: inset 0 1px 0 var(--layer-paper-05), inset 0 -1px 0 var(--layer-ink-20);
 }
 
 .plugin-row .plugin-action-zone:not(.is-disabled):active {
-    background: var(--layer-paper-06);
+    background: rgba(var(--accent-rgb), 0.08);
     box-shadow: inset 0 2px 4px var(--layer-ink-24);
 }
 
 .plugin-row .plugin-action-zone.is-disabled {
     pointer-events: none;
     cursor: default;
-    background: var(--layer-paper-02);
+    background: rgba(var(--accent-rgb), 0.03);
 }
 
 .plugin-row .plugin-name {
@@ -328,7 +328,7 @@
 }
 
 .plugin-row .context-action:hover {
-    background: var(--layer-paper-07);
+    background: rgba(var(--accent-rgb), 0.08);
     color: var(--text-primary);
 }
 
@@ -529,7 +529,7 @@
     min-width: var(--size-action-col-sm);
     height: var(--size-icon-menu-dot-h);
     padding: var(--pad-sparkline);
-    border: var(--border-w-1) solid var(--layer-paper-13);
+    border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-md);
     background: var(--layer-ink-22);
 }

@@ -144,7 +144,7 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
 
 .btn:hover:not(:disabled) {
     transform: translateY(-1px);
-    box-shadow: var(--elevation-2);
+    box-shadow: var(--elevation-crisp-1);
 }
 
 .btn:active:not(:disabled) {
@@ -527,14 +527,14 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
 
 .badge-installed-dim {
     color: var(--text-muted);
-    background: var(--layer-paper-06);
-    border-color: var(--layer-paper-14);
+    background: rgba(var(--accent-rgb), 0.06);
+    border-color: rgba(var(--accent-rgb), 0.14);
 }
 
 .badge-build-skip {
     color: var(--text-faint);
-    background: var(--layer-paper-05);
-    border-color: var(--layer-paper-12);
+    background: rgba(var(--accent-rgb), 0.05);
+    border-color: rgba(var(--accent-rgb), 0.12);
 }
 
 .search-bar {
