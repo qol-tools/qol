@@ -1,4 +1,4 @@
-use super::{PluginMetadata, CACHE_FORMAT_VERSION, CACHE_TTL_SECS};
+use super::{PluginMetadata, CACHE_FORMAT_VERSION};
 use crate::paths;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -54,7 +54,7 @@ impl From<CachedPlugin> for PluginMetadata {
     }
 }
 
-fn current_timestamp() -> u64 {
+pub(crate) fn current_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
@@ -95,10 +95,6 @@ fn plugin_cache(plugins: &[PluginMetadata]) -> PluginCache {
     }
 }
 
-pub(crate) fn cache_age_secs() -> Option<u64> {
-    read_cache().map(|cache| current_timestamp() - cache.timestamp)
-}
-
 pub(crate) fn update_cached_version(plugin_id: &str, version: &str) {
     let Some(mut cache) = read_cache() else {
         return;
@@ -120,23 +116,4 @@ pub(crate) fn update_cached_version(plugin_id: &str, version: &str) {
     };
     let _ = std::fs::write(path, content);
     log::info!("Updated cache version for {}: {}", plugin_id, version);
-}
-
-pub(super) fn valid_cache() -> Option<Vec<PluginMetadata>> {
-    let cache = read_cache()?;
-    if cache.format_version != CACHE_FORMAT_VERSION {
-        return None;
-    }
-    let age = current_timestamp() - cache.timestamp;
-    if age >= CACHE_TTL_SECS {
-        return None;
-    }
-    log::info!("Using cached plugin data ({} seconds old)", age);
-    Some(
-        cache
-            .plugins
-            .into_iter()
-            .map(PluginMetadata::from)
-            .collect(),
-    )
 }

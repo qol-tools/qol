@@ -147,6 +147,21 @@
     text-align: center;
 }
 
+.installed-badge.dev-linked-badge {
+    color: var(--accent);
+    background: rgba(var(--accent-rgb), 0.16);
+    border: var(--border-w-1) solid rgba(var(--accent-rgb), 0.4);
+}
+
+.plugin-grid-store .plugin-card .button-group .btn.update {
+    background: var(--success);
+    color: var(--slate-975);
+}
+
+.plugin-grid-store .plugin-card .button-group .btn.update:hover {
+    background: var(--success-hover);
+}
+
 .plugin-grid-store .plugin-card.installing,
 .plugins-grid .plugin-card.installing {
     opacity: 0.7;
@@ -392,4 +407,27 @@
 .plugin-grid .plugin-card.unavailable[data-selected="true"] {
     box-shadow: 0 0 10px rgba(var(--danger-rgb), 0.35);
     opacity: 1;
+}
+
+.plugin-grid-media .plugin-card.skeleton,
+.plugin-grid .plugin-card.skeleton {
+    background: var(--bg-surface);
+    border-color: var(--border-subtle);
+    overflow: hidden;
+    position: relative;
+    pointer-events: none;
+}
+
+.plugin-grid-media .plugin-card.skeleton::after,
+.plugin-grid .plugin-card.skeleton::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, var(--layer-paper-05), transparent);
+    animation: plugin-skeleton-shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes plugin-skeleton-shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
 }

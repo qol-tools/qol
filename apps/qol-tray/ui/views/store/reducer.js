@@ -33,6 +33,15 @@ export function getFilteredPlugins(plugins, searchQuery) {
 
 export { clampIndex as clampSelectedIndex, sortByName as sortPluginsByName };
 
+export function resolveSelectedIndex(filtered, selectedId, fallbackIndex = 0) {
+    if (!Array.isArray(filtered) || filtered.length === 0) return 0;
+    if (selectedId) {
+        const idx = filtered.findIndex(p => p.id === selectedId);
+        if (idx >= 0) return idx;
+    }
+    return clampIndex(fallbackIndex, filtered.length);
+}
+
 export function isRateLimitedWithoutToken(plugins, hasToken) {
     return plugins.length === 0 && !hasToken;
 }
@@ -49,42 +58,16 @@ export function looksLikeGithubAuthFailure(message) {
 }
 
 export function isStoreUpdateAvailable(plugin) {
-    if (!plugin?.installed || !plugin?.installed_version || !plugin?.version) {
-        return false;
-    }
-    return isVersionNewer(plugin.version, plugin.installed_version);
+    return Boolean(plugin?.update_available) && !isStoreDevLinked(plugin);
+}
+
+export function isStoreDevLinked(plugin) {
+    return plugin?.source === 'dev_linked';
 }
 
 export function displayedStoreVersion(plugin) {
-    if (plugin?.installed && plugin?.installed_version) {
-        return plugin.installed_version;
+    if (plugin?.installed) {
+        return plugin.running_version ?? plugin.installed_version ?? plugin.version ?? null;
     }
     return plugin?.version ?? null;
-}
-
-export function isVersionNewer(available, installed) {
-    const availableParts = parseVersionParts(available);
-    const installedParts = parseVersionParts(installed);
-    const maxLen = Math.max(availableParts.length, installedParts.length);
-
-    for (let i = 0; i < maxLen; i += 1) {
-        const a = availableParts[i] ?? 0;
-        const b = installedParts[i] ?? 0;
-        if (a > b) return true;
-        if (a < b) return false;
-    }
-
-    return false;
-}
-
-export function parseVersionParts(version) {
-    return String(version)
-        .trim()
-        .replace(/^[vV]+/, '')
-        .split('.')
-        .map(part => {
-            const match = part.match(/\d+/);
-            return match ? Number.parseInt(match[0], 10) : null;
-        })
-        .filter(value => Number.isFinite(value));
 }

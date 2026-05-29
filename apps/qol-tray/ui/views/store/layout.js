@@ -12,7 +12,7 @@ export function StoreLayout({ ctrl }) {
                 badge=${html`<${StoreBadge} ...${ctrl} />`} />
             <${SurfaceContainer} className="view-body">
                 <${StoreCredentialBanner} rateLimited=${ctrl.rateLimited} hasToken=${ctrl.hasToken} />
-                <${StoreGrid} plugins=${ctrl.filtered} loading=${ctrl.loading}
+                <${StoreGrid} plugins=${ctrl.filtered} loading=${ctrl.firstLoad || ctrl.refreshing}
                     selectedIndex=${ctrl.selectedIndex} isInstalling=${ctrl.isInstalling}
                     onCardClick=${ctrl.handleCardClick} onSelect=${ctrl.setSelectedIndex} />
             <//>
@@ -20,10 +20,10 @@ export function StoreLayout({ ctrl }) {
     `;
 }
 
-function StoreBadge({ cacheAgeSecs, loading, refreshPlugins }) {
+function StoreBadge({ cacheAgeSecs, firstLoad, refreshing, refreshPlugins }) {
     return html`
         <span class="cache-age">${formatCacheAge(cacheAgeSecs)}</span>
-        <${RefreshButton} spinning=${loading} title="Refresh (r)"
+        <${RefreshButton} spinning=${firstLoad || refreshing} disabled=${firstLoad} title="Refresh (r)"
                 aria-label="Refresh" onClick=${refreshPlugins} />
     `;
 }

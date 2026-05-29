@@ -22,11 +22,12 @@ export function useStoreController() {
     const install = useStoreInstall(data.pluginsRef, data.loadPlugins, installing);
     useInitialLoad(token.setHasToken, data.loadPlugins);
     const handleKey = useKeyHandler(token.showTokenInputRef, token.view, nav, install, installing.has);
-    const handleCardClick = useCardClick(install.installPlugin, nav.setSelectedIndex, nav.selectedIndexRef);
+    const handleCardClick = useCardClick(install, nav.setSelectedIndex, nav.selectedIndexRef);
     return {
         handleKey, handleCardClick,
         ...token.view, ...data, ...nav, isInstalling: installing.has,
-        installPlugin: install.installPlugin
+        installPlugin: install.installPlugin,
+        updatePlugin: install.updatePlugin
     };
 }
 
@@ -49,13 +50,15 @@ function useKeyHandler(showTokenInputRef, tokenView, nav, install, isInstalling)
             selectedIndexRef: nav.selectedIndexRef,
             isInstalling,
             installPlugin: install.installPlugin,
+            updatePlugin: install.updatePlugin,
         });
     }, [showTokenInputRef, tokenView, nav, install, isInstalling]);
 }
 
-function useCardClick(installPlugin, setSelectedIndex, selectedIndexRef) {
+function useCardClick(install, setSelectedIndex, selectedIndexRef) {
     return useCallback((event, index, pluginId) => {
-        if (event.target.closest('button.install')) { installPlugin(pluginId); return; }
+        if (event.target.closest('button.install')) { install.installPlugin(pluginId); return; }
+        if (event.target.closest('button.update')) { install.updatePlugin(pluginId); return; }
         if (index !== selectedIndexRef.current) setSelectedIndex(index);
-    }, [installPlugin, setSelectedIndex, selectedIndexRef]);
+    }, [install, setSelectedIndex, selectedIndexRef]);
 }

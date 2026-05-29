@@ -6,6 +6,7 @@ use crate::plugins::PluginId;
 use axum::http::StatusCode;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use super::super::helpers::{
     extract_actions, infer_load_error, is_newer_version, read_installed_plugin_dirs,
@@ -15,11 +16,44 @@ use super::super::types::{AppState, InstalledPlugin, InstalledPluginsResponse, P
 
 pub(super) fn list_installed(state: &AppState) -> Result<InstalledPluginsResponse, StatusCode> {
     let revision = state.daemon.events.plugins_revision();
+    if let Some(cached) = cached_response_for_revision(state, revision) {
+        return Ok((*cached).clone());
+    }
+    let response = compute_response(state, revision)?;
+    let arc = Arc::new(response);
+    store_cached_response(state, revision, arc.clone());
+    Ok((*arc).clone())
+}
+
+fn cached_response_for_revision(
+    state: &AppState,
+    revision: u64,
+) -> Option<Arc<InstalledPluginsResponse>> {
+    let guard = state.installed_cache.lock().ok()?;
+    let (cached_revision, cached) = guard.as_ref()?;
+    if *cached_revision == revision {
+        Some(cached.clone())
+    } else {
+        None
+    }
+}
+
+fn store_cached_response(state: &AppState, revision: u64, response: Arc<InstalledPluginsResponse>) {
+    let Ok(mut guard) = state.installed_cache.lock() else {
+        return;
+    };
+    *guard = Some((revision, response));
+}
+
+fn compute_response(
+    state: &AppState,
+    revision: u64,
+) -> Result<InstalledPluginsResponse, StatusCode> {
     let manager = state
         .plugin_manager
         .lock()
         .map_err(plugin_manager_lock_failed)?;
-    let cached_versions = cached_versions();
+    let cached_versions = cached_versions(state);
     let report = manager.last_resolution_report().clone();
     let mut plugins_by_id = loaded_plugins_by_id(&manager, &report, &cached_versions);
     drop(manager);
@@ -38,18 +72,18 @@ fn plugin_manager_lock_failed(
     StatusCode::INTERNAL_SERVER_ERROR
 }
 
-fn cached_versions() -> HashMap<String, String> {
-    use super::super::super::github::read_cache;
-
-    read_cache()
-        .map(|cache| {
-            cache
-                .plugins
-                .into_iter()
-                .map(|plugin| (plugin.id, plugin.version))
-                .collect()
-        })
-        .unwrap_or_default()
+fn cached_versions(state: &AppState) -> HashMap<String, String> {
+    let Ok(guard) = state.plugins_cache.read() else {
+        return HashMap::new();
+    };
+    let Some(cache) = guard.as_ref() else {
+        return HashMap::new();
+    };
+    cache
+        .plugins
+        .iter()
+        .map(|plugin| (plugin.id.clone(), plugin.version.clone()))
+        .collect()
 }
 
 fn loaded_plugins_by_id(
@@ -264,4 +298,80 @@ fn check_update(
         })
         .unwrap_or(false);
     (available, update_available)
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    type Cache = Mutex<Option<(u64, Arc<InstalledPluginsResponse>)>>;
+
+    fn make_response(revision: u64) -> Arc<InstalledPluginsResponse> {
+        Arc::new(InstalledPluginsResponse {
+            revision,
+            plugins: vec![],
+        })
+    }
+
+    fn lookup(cache: &Cache, revision: u64) -> Option<Arc<InstalledPluginsResponse>> {
+        let guard = cache.lock().ok()?;
+        let (cached_rev, cached) = guard.as_ref()?;
+        if *cached_rev == revision {
+            Some(cached.clone())
+        } else {
+            None
+        }
+    }
+
+    fn store(cache: &Cache, revision: u64, response: Arc<InstalledPluginsResponse>) {
+        let mut guard = cache.lock().unwrap();
+        *guard = Some((revision, response));
+    }
+
+    #[test]
+    fn miss_on_empty_cache() {
+        let cache: Cache = Mutex::new(None);
+        assert!(lookup(&cache, 0).is_none());
+        assert!(lookup(&cache, 42).is_none());
+    }
+
+    #[test]
+    fn hit_when_revision_matches() {
+        let cache: Cache = Mutex::new(None);
+        let response = make_response(7);
+        store(&cache, 7, response.clone());
+        let hit = lookup(&cache, 7).expect("expected cache hit");
+        assert!(Arc::ptr_eq(&hit, &response));
+    }
+
+    #[test]
+    fn miss_when_revision_advances() {
+        let cache: Cache = Mutex::new(None);
+        store(&cache, 1, make_response(1));
+        assert!(lookup(&cache, 1).is_some());
+        assert!(lookup(&cache, 2).is_none());
+        assert!(lookup(&cache, 0).is_none());
+    }
+
+    #[test]
+    fn store_replaces_previous_revision() {
+        let cache: Cache = Mutex::new(None);
+        store(&cache, 1, make_response(1));
+        store(&cache, 2, make_response(2));
+        assert!(lookup(&cache, 1).is_none());
+        let hit = lookup(&cache, 2).unwrap();
+        assert_eq!(hit.revision, 2);
+    }
+
+    #[test]
+    fn hit_returns_arc_clone_not_realloc() {
+        let cache: Cache = Mutex::new(None);
+        let original = make_response(5);
+        let original_strong_before = Arc::strong_count(&original);
+        store(&cache, 5, original.clone());
+        let hit = lookup(&cache, 5).unwrap();
+        assert!(Arc::ptr_eq(&hit, &original));
+        assert!(Arc::strong_count(&original) > original_strong_before);
+    }
 }

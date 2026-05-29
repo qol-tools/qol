@@ -15,6 +15,14 @@ export async function fetchPluginsRequest(forceRefresh = false) {
     return apiJson(url);
 }
 
+export async function fetchInstalledRequest() {
+    return apiJson('/api/installed');
+}
+
 export async function installPluginRequest(id) {
     return apiJson(`/api/install/${id}`, { method: 'POST' });
+}
+
+export async function updatePluginRequest(id) {
+    return apiJson(`/api/update/${id}`, { method: 'POST' });
 }

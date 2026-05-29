@@ -1,22 +1,23 @@
 import { useCallback } from 'preact/hooks';
-import { installStorePlugin } from './data.js';
+import { installStorePlugin, updateStorePlugin } from './data.js';
 import { toast } from '../../lib/toast.js';
 
 export function useStoreInstall(pluginsRef, loadPlugins, installing) {
-    const installPlugin = useCallback(async (id) => {
+    const runJob = useCallback(async (id, run, verb) => {
         if (installing.has(id)) return;
-        const plugin = pluginsRef.current.find(p => p.id === id);
-        const label = plugin?.name || id;
+        const label = pluginsRef.current.find(p => p.id === id)?.name || id;
         installing.add(id, label);
         try {
-            await installStorePlugin(id);
-            toast('success', `Installed ${label}`);
+            await run(id);
+            toast('success', `${verb}d ${label}`);
         } catch (error) {
-            toast('error', `Failed to install ${label}: ${error.message}`);
+            toast('error', `Failed to ${verb.toLowerCase()} ${label}: ${error.message}`);
         } finally {
             installing.remove(id);
             loadPlugins();
         }
     }, [pluginsRef, loadPlugins, installing]);
-    return { installPlugin };
+    const installPlugin = useCallback(id => runJob(id, installStorePlugin, 'Install'), [runJob]);
+    const updatePlugin = useCallback(id => runJob(id, updateStorePlugin, 'Update'), [runJob]);
+    return { installPlugin, updatePlugin };
 }

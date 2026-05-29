@@ -4,15 +4,19 @@ mod manifests;
 mod releases;
 mod token;
 
-pub(crate) use cache::{cache_age_secs, read_cache, update_cached_version, write_cache};
+#[cfg(test)]
+pub(crate) use cache::CachedPlugin;
+pub(crate) use cache::{
+    current_timestamp, read_cache, update_cached_version, write_cache, PluginCache,
+};
 pub(crate) use catalog::PluginMetadata;
 pub(crate) use token::{build_github_request, get_stored_token, send_checked};
 
 use anyhow::Result;
 use catalog::{build_plugin_metadata, filter_plugin_repos, GitHubRepo};
 
-const CACHE_TTL_SECS: u64 = 3600;
-const CACHE_FORMAT_VERSION: u32 = 2;
+pub(crate) const CACHE_TTL_SECS: u64 = 3600;
+pub(crate) const CACHE_FORMAT_VERSION: u32 = 2;
 
 pub(crate) struct GitHubClient {
     org: String,
@@ -64,24 +68,6 @@ impl GitHubClient {
             Err(error) => return skip_release(&repo.name, &error),
         };
         Some(build_plugin_metadata(repo, manifest, version))
-    }
-
-    pub(crate) async fn list_plugins_cached(
-        &self,
-        force_refresh: bool,
-    ) -> Result<Vec<PluginMetadata>> {
-        if !force_refresh {
-            if let Some(plugins) = cache::valid_cache() {
-                return Ok(plugins);
-            }
-        }
-
-        log::info!("Fetching fresh plugin data from GitHub");
-        let plugins = self.list_plugins().await?;
-        if let Err(error) = write_cache(&plugins) {
-            log::warn!("Failed to write plugin cache: {}", error);
-        }
-        Ok(plugins)
     }
 }
 

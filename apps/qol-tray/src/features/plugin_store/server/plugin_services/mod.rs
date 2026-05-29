@@ -8,8 +8,11 @@ mod catalog;
 mod installed;
 mod operations;
 
-pub(super) async fn list_plugins(refresh: bool) -> Result<PluginsResponse, (StatusCode, String)> {
-    catalog::list_plugins(refresh).await
+pub(super) fn list_plugins(
+    state: &AppState,
+    refresh: bool,
+) -> Result<PluginsResponse, (StatusCode, String)> {
+    catalog::list_plugins(state, refresh)
 }
 
 pub(super) async fn install_plugin(

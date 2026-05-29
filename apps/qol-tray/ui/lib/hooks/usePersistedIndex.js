@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'preact/hooks';
+import { useEffect, useRef, useCallback } from 'preact/hooks';
 import { useStateRef } from './useStateRef.js';
 
 export function usePersistedIndex(storageKey, defaultValue = 0) {
@@ -13,7 +13,7 @@ export function usePersistedIndex(storageKey, defaultValue = 0) {
         localStorage.setItem(storageKey, String(value));
     }, [value, storageKey]);
 
-    function markRestored() { restoredRef.current = true; }
+    const markRestored = useCallback(() => { restoredRef.current = true; }, []);
 
     return [value, setValue, ref, markRestored];
 }
@@ -31,7 +31,7 @@ export function usePersistedId(storageKey) {
         localStorage.setItem(storageKey, value);
     }, [value, storageKey]);
 
-    function markRestored() { restoredRef.current = true; }
+    const markRestored = useCallback(() => { restoredRef.current = true; }, []);
 
     return [value, setValue, ref, markRestored];
 }
