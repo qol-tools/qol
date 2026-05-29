@@ -7,10 +7,15 @@ const ACTIVE_SCALE_Y = 1.12;
 const VIEWPORT_MIN_WIDTH = 8;
 const INACTIVE_OPACITY_FLOOR = 0.22;
 const ACTIVE_OPACITY_FLOOR = 0.55;
-// Keep in sync with --accent-rgb in theme-tokens.css; canvas can't read CSS vars.
-const ACCENT_R = 74;
-const ACCENT_G = 158;
-const ACCENT_B = 255;
+const ACCENT_FALLBACK = '255, 180, 84';
+
+function accentChannel() {
+    if (typeof document === 'undefined' || typeof getComputedStyle === 'undefined') {
+        return ACCENT_FALLBACK;
+    }
+    const v = getComputedStyle(document.documentElement).getPropertyValue('--accent-rgb');
+    return v.trim() || ACCENT_FALLBACK;
+}
 
 function slotAlpha(coverage, floor) {
     if (!(coverage >= 0)) return floor;
@@ -76,7 +81,7 @@ function drawActiveSlot(ctx, cw, label, slot, alpha) {
 
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.shadowColor = 'rgba(140, 200, 255, 0.55)';
+    ctx.shadowColor = `rgba(${accentChannel()}, 0.55)`;
     ctx.shadowBlur = 8;
     ctx.fillStyle = 'rgba(255,255,255,0.22)';
     roundRect(ctx, drawX, drawY, drawW, drawH, RADIUS);
@@ -137,14 +142,15 @@ export function drawViewportRect(ctx, cw, ch, rect) {
     const y = rect.y != null ? rect.y : 0;
     const h = rect.height != null ? rect.height : ch;
 
-    ctx.fillStyle = `rgba(${ACCENT_R}, ${ACCENT_G}, ${ACCENT_B}, 0.18)`;
+    const accent = accentChannel();
+    ctx.fillStyle = `rgba(${accent}, 0.18)`;
     roundRect(ctx, clamped.x, y, clamped.width, h, RADIUS);
     ctx.fill();
 
     ctx.save();
-    ctx.shadowColor = `rgba(${ACCENT_R}, ${ACCENT_G}, ${ACCENT_B}, 0.45)`;
+    ctx.shadowColor = `rgba(${accent}, 0.45)`;
     ctx.shadowBlur = 6;
-    ctx.strokeStyle = `rgba(${ACCENT_R}, ${ACCENT_G}, ${ACCENT_B}, 0.95)`;
+    ctx.strokeStyle = `rgba(${accent}, 0.95)`;
     ctx.lineWidth = 2;
     roundRect(ctx, clamped.x, y, clamped.width, h, RADIUS);
     ctx.stroke();

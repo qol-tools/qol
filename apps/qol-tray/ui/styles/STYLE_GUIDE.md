@@ -154,16 +154,13 @@ Defined in `theme-tokens.css`:
 - Textures: `--tui-scanline`, `--tui-glow-text`
 - Surfaces: `--tui-panel-bg`, `--tui-panel-shadow`, `--tui-screen-bg`, `--tui-sign-bg`, `--tui-desktop-bg`
 
-**Near-black ramp (to add as the foundation step).** Five dark bases are currently hardcoded
-(`#070809`, `#0a0b0d`, `#0c0d10`, `#0c0e12`, `#07080b`). Consolidate to:
+**Near-black ramp.** The dark bases are tokenized; the `--tui-*-bg` composites and the card
+backgrounds reference them. Never hardcode a near-black literal again.
 
 - `--tui-bg-screen` (deepest, CRT screen)
 - `--tui-bg-card` (cartridge body)
 - `--tui-bg-panel` (window + sign)
 - `--tui-bg-desktop` (backdrop)
-
-Then rewrite the `--tui-*-bg` composites to reference these, and migrate the literals in
-`common-plugin-cards.css`.
 
 ---
 
@@ -230,8 +227,8 @@ Audited against the dev component gallery (`ui/views/dev/components/ComponentsCa
 
 ## SSOT Consolidations (coherence wins)
 
-1. **Selection color** - retint `--surface-selected` (the lone `#18273d` blue) to warm amber-dark. Fixes rows + cards + minimap in one edit.
-2. **Near-black ramp** - the `--tui-bg-*` tokens above; kills 5 scattered literals.
+1. **Selection color** (done) - `--surface-selected` is an accent composite that follows the active accent; rows + minimap retint together. No more blue.
+2. **Near-black ramp** (done) - the `--tui-bg-*` tokens; the 5 scattered literals are gone.
 3. **One cartridge rule** - media + store cards share a single selector set.
 4. **One `.empty-state`** - collapse the three definitions.
 5. **One `.alert`** - collapse semantic variants.
@@ -240,7 +237,7 @@ Audited against the dev component gallery (`ui/views/dev/components/ComponentsCa
 
 ## Build Order
 
-- **Phase 0 (foundation):** selection retint + near-black ramp tokens + `.tui-label`. One token-file pass, propagates everywhere. Do first.
+- **Phase 0 (foundation) - DONE:** `--surface-selected` is now an accent composite (follows the active accent; the minimap rect reads `--accent-rgb` live), the near-black ramp tokens exist, and the `.tui-label` utility is defined.
 - **Phase 1:** controls (button labels, CustomSelect terminal-menu, search prompt, toggle).
 - **Phase 2:** cards (unify cartridge rule, migrate literals, cog).
 - **Phase 3:** rows (verify retint reads well, fix `slate-200`, mono cells).

@@ -20,6 +20,12 @@ body {
     overflow: hidden;
 }
 
+.tui-label {
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: var(--ls-md);
+}
+
 #app {
     height: 100%;
 }
