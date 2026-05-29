@@ -11,12 +11,12 @@ const PLACEHOLDER_SVG = 'data:image/svg+xml,' + encodeURIComponent(
     '</svg>'
 );
 
-export function PluginsGrid({ plugins, ghostPlugins, selectedIndex, updating, onCardClick, onSelect, onToggleMenu }) {
+export function PluginsGrid({ plugins, ghostPlugins, selectedIndex, updating, loaded, onCardClick, onSelect, onToggleMenu }) {
     return html`
         <${CardGrid} id="plugins-grid" className="plugin-grid-media grid-cards--zoom">
-            ${plugins.length === 0 && ghostPlugins.length === 0 && html`
-                <div class="empty">No plugins installed. Press Tab to open the store.</div>
-            `}
+            ${plugins.length === 0 && ghostPlugins.length === 0 && (loaded
+                ? html`<div class="empty">No plugins installed. Press Tab to open the store.</div>`
+                : Array.from({ length: 8 }, (_, i) => html`<div key=${'sk-' + i} class="plugin-card skeleton" aria-hidden="true"></div>`))}
             ${ghostPlugins.map(plugin => html`
                 <div key=${'ghost-' + plugin.id} class="plugin-card ghost">
                     <span class="refresh-btn spinning"></span>

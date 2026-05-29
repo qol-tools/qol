@@ -13,7 +13,12 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "dev")]
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, RwLock};
+
+use super::super::github::PluginCache;
+
+pub(super) type InstalledCache = Arc<Mutex<Option<(u64, Arc<InstalledPluginsResponse>)>>>;
 
 pub(super) const DEFAULT_UI_SERVER_PORT: u16 = 42700;
 pub(super) const MAX_COVER_SIZE: usize = 5 * 1024 * 1024;
@@ -33,6 +38,9 @@ pub(super) struct AppState {
     pub(super) daemon: Daemon,
     pub(super) github_auth_service: Arc<crate::features::github_auth::GitHubAuthService>,
     pub(super) sync_service: Arc<crate::features::profile::sync::SyncService>,
+    pub(super) installed_cache: InstalledCache,
+    pub(super) plugins_cache: Arc<RwLock<Option<PluginCache>>>,
+    pub(super) plugins_revalidating: Arc<AtomicBool>,
     #[cfg(feature = "dev")]
     pub(super) dev_state: Arc<crate::dev::state::DevState>,
     #[cfg(feature = "dev")]
@@ -65,6 +73,9 @@ impl AppState {
             daemon: daemon.clone(),
             github_auth_service,
             sync_service,
+            installed_cache: Arc::new(Mutex::new(None)),
+            plugins_cache: Arc::new(RwLock::new(super::super::github::read_cache())),
+            plugins_revalidating: Arc::new(AtomicBool::new(false)),
             #[cfg(feature = "dev")]
             dev_state: Arc::new(crate::dev::state::DevState::new()),
             #[cfg(feature = "dev")]
@@ -112,7 +123,7 @@ impl FromRef<AppState> for crate::features::auth::AuthHttpState {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(super) struct PluginInfo {
     pub(super) id: String,
     pub(super) name: String,
@@ -122,10 +133,14 @@ pub(super) struct PluginInfo {
     pub(super) installed_version: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(super) struct PluginsResponse {
     pub(super) plugins: Vec<PluginInfo>,
     pub(super) cache_age_secs: Option<u64>,
+    #[serde(default)]
+    pub(super) stale: bool,
+    #[serde(default)]
+    pub(super) revalidating: bool,
 }
 
 #[derive(Deserialize, Default)]
@@ -152,14 +167,14 @@ pub(super) struct PluginPermissionsResponse {
         std::collections::HashMap<String, crate::plugins::capabilities::PermissionStatus>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(super) struct PluginAction {
     pub(super) id: String,
     pub(super) label: String,
     pub(super) kind: ActionType,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(super) struct InstalledPlugin {
     pub(super) id: PluginId,
     pub(super) name: String,
@@ -179,7 +194,7 @@ pub(super) struct InstalledPlugin {
     pub(super) unavailable: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(super) struct InstalledPluginsResponse {
     pub(super) revision: u64,
     pub(super) plugins: Vec<InstalledPlugin>,

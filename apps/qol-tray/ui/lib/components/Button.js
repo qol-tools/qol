@@ -6,7 +6,7 @@ export function Button({ variant, small, className, children, ...rest }) {
     return html`<${Surface} as="button" className=${cls} ...${rest}>${children}<//>`;
 }
 
-export function RefreshButton({ spinning, className, ...rest }) {
+export function RefreshButton({ spinning, disabled = spinning, className, ...rest }) {
     const cls = ['refresh-btn', spinning && 'spinning', className].filter(Boolean).join(' ');
-    return html`<button class=${cls} disabled=${spinning} ...${rest}></button>`;
+    return html`<button class=${cls} disabled=${disabled} ...${rest}></button>`;
 }

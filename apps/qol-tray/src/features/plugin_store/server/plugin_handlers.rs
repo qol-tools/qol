@@ -56,8 +56,9 @@ pub(super) async fn query_plugin_handler(
 
 pub(super) async fn list_plugins(
     Query(query): Query<PluginsQuery>,
+    State(state): State<AppState>,
 ) -> Result<Json<PluginsResponse>, (StatusCode, String)> {
-    plugin_services::list_plugins(query.refresh).await.map(Json)
+    plugin_services::list_plugins(&state, query.refresh).map(Json)
 }
 
 pub(super) async fn get_registry(

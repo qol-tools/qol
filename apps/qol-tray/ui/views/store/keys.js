@@ -1,5 +1,13 @@
 import { withShiftVariants, dispatchKey } from '../../utils/keys.js';
 
+function activateSelected(actions) {
+    const plugin = actions.filteredRef.current[actions.selectedIndexRef.current];
+    if (!plugin || actions.isInstalling(plugin.id)) return;
+    if (plugin.source === 'dev_linked') return;
+    if (plugin.update_available) { actions.updatePlugin(plugin.id); return; }
+    if (!plugin.installed) actions.installPlugin(plugin.id);
+}
+
 export function handleStoreKey(e, showTokenInputRef, actions) {
     if (showTokenInputRef.current && e.key === 'Escape') {
         e.preventDefault();
@@ -15,11 +23,6 @@ function handleGridKey(e, actions) {
         ArrowDown: () => actions.navigateInGrid('down'),
         ArrowLeft: () => actions.navigateInGrid('left'),
         ArrowRight: () => actions.navigateInGrid('right'),
-        Enter: () => {
-            const plugin = actions.filteredRef.current[actions.selectedIndexRef.current];
-            if (plugin && !plugin.installed && !actions.isInstalling(plugin.id)) {
-                actions.installPlugin(plugin.id);
-            }
-        },
+        Enter: () => activateSelected(actions),
     }));
 }

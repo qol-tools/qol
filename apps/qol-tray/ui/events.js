@@ -3,6 +3,10 @@ const reconnectListeners = new Set();
 let eventSource = null;
 let connected = false;
 
+const RETRY_BASE_MS = 1000;
+const RETRY_MAX_MS = 30000;
+let retryDelay = RETRY_BASE_MS;
+
 export function subscribe(callback) {
     listeners.add(callback);
     ensureConnected();
@@ -19,6 +23,7 @@ function ensureConnected() {
 
     eventSource = new EventSource('/api/events');
     eventSource.onopen = () => {
+        retryDelay = RETRY_BASE_MS;
         if (connected) {
             for (const cb of reconnectListeners) cb();
         }
@@ -38,6 +43,8 @@ function ensureConnected() {
     eventSource.onerror = () => {
         eventSource?.close();
         eventSource = null;
-        setTimeout(ensureConnected, 1000);
+        const jitter = Math.random() * 0.3 * retryDelay;
+        setTimeout(ensureConnected, retryDelay + jitter);
+        retryDelay = Math.min(retryDelay * 2, RETRY_MAX_MS);
     };
 }
