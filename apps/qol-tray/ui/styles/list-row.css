@@ -32,13 +32,18 @@
     background: var(--bg-selected);
 }
 
-.list-row[data-accent="success"]     { border-left-color: var(--success); }
-.list-row[data-accent="danger"]      { border-left-color: var(--danger); }
-.list-row[data-accent="warning"]     { border-left-color: var(--warning); }
-.list-row[data-accent="accent"]      { border-left-color: var(--accent); }
-.list-row[data-accent="muted"]       { border-left-color: var(--text-faint); }
-.list-row[data-accent="danger-soft"] { border-left-color: rgba(var(--danger-rgb), 0.35); }
-.list-row[data-accent="accent-soft"] { border-left-color: rgba(var(--accent-rgb), 0.28); }
+.list-row[data-accent="success"],
+.table-list-row[data-accent="success"]     { border-left-color: var(--success); }
+.list-row[data-accent="danger"],
+.table-list-row[data-accent="danger"]      { border-left-color: var(--danger); }
+.list-row[data-accent="warning"],
+.table-list-row[data-accent="warning"]     { border-left-color: var(--warning); }
+.list-row[data-accent="accent"],
+.table-list-row[data-accent="accent"]      { border-left-color: var(--accent); }
+.list-row[data-accent="muted"],
+.table-list-row[data-accent="muted"]       { border-left-color: var(--text-faint); }
+.list-row[data-accent="danger-soft"]       { border-left-color: rgba(var(--danger-rgb), 0.35); }
+.list-row[data-accent="accent-soft"]       { border-left-color: rgba(var(--accent-rgb), 0.28); }
 
 .list-group-cards {
     background: none;

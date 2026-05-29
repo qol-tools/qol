@@ -75,9 +75,3 @@
 .table-list-row[data-status="linked"] { border-left-color: var(--success); }
 .table-list-row[data-status="local"] { border-left-color: var(--warning); }
 .table-list-row[data-status="installed"] { border-left-color: var(--accent); }
-
-.table-list-row[data-accent="success"]     { border-left-color: var(--success); }
-.table-list-row[data-accent="danger"]      { border-left-color: var(--danger); }
-.table-list-row[data-accent="warning"]     { border-left-color: var(--warning); }
-.table-list-row[data-accent="accent"]      { border-left-color: var(--accent); }
-.table-list-row[data-accent="muted"]       { border-left-color: var(--text-faint); }
