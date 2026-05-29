@@ -7,7 +7,7 @@ use axum::{
 };
 use std::sync::Arc;
 
-use super::{GitHubAuthService, GitHubAuthStatus};
+use super::GitHubAuthService;
 
 #[derive(Clone)]
 pub(crate) struct GitHubAuthHttpState {
@@ -25,8 +25,18 @@ where
         .route("/github-auth", delete(disconnect))
 }
 
-async fn get_status(State(state): State<GitHubAuthHttpState>) -> Json<GitHubAuthStatus> {
-    Json(state.github_auth_service.status())
+async fn get_status(State(state): State<GitHubAuthHttpState>) -> Response {
+    match tokio::task::spawn_blocking(move || state.github_auth_service.status()).await {
+        Ok(status) => Json(status).into_response(),
+        Err(error) => {
+            log::error!("github-auth status join error: {}", error);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "github-auth status join error",
+            )
+                .into_response()
+        }
+    }
 }
 
 async fn poll_session(

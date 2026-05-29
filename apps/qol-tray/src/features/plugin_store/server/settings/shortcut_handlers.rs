@@ -12,14 +12,14 @@ use super::http_json;
 type HttpResult<T> = Result<T, Box<Response>>;
 
 pub(in super::super) async fn list_shortcuts() -> impl IntoResponse {
-    list_inner().unwrap_or_else(|r| *r)
+    blocking(list_inner).await
 }
 
 pub(in super::super) async fn create_shortcut(
     State(state): State<AppState>,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
-    create_inner(&state, body).unwrap_or_else(|r| *r)
+    blocking(move || create_inner(&state, body)).await
 }
 
 pub(in super::super) async fn update_shortcut(
@@ -27,18 +27,32 @@ pub(in super::super) async fn update_shortcut(
     Path(id): Path<String>,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
-    update_inner(&state, &id, body).unwrap_or_else(|r| *r)
+    blocking(move || update_inner(&state, &id, body)).await
 }
 
 pub(in super::super) async fn delete_shortcut(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    delete_inner(&state, &id).unwrap_or_else(|r| *r)
+    blocking(move || delete_inner(&state, &id)).await
 }
 
 pub(in super::super) async fn run_shortcut(Path(id): Path<String>) -> impl IntoResponse {
-    run_inner(&id).unwrap_or_else(|r| *r)
+    blocking(move || run_inner(&id)).await
+}
+
+async fn blocking<F>(work: F) -> Response
+where
+    F: FnOnce() -> HttpResult<Response> + Send + 'static,
+{
+    match tokio::task::spawn_blocking(work).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(boxed)) => *boxed,
+        Err(error) => {
+            log::error!("shortcut handler join error: {}", error);
+            server_error("shortcut handler crashed")
+        }
+    }
 }
 
 fn list_inner() -> HttpResult<Response> {

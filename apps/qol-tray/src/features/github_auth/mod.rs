@@ -8,4 +8,4 @@ pub(crate) use service::GitHubAuthService;
 pub(crate) use storage::{
     delete_github_credential, oauth_access_token, oauth_scopes, store_github_credential,
 };
-pub(crate) use types::{GitHubAuthStatus, GitHubCredentialRecord, GitHubCredentialSource};
+pub(crate) use types::{GitHubCredentialRecord, GitHubCredentialSource};

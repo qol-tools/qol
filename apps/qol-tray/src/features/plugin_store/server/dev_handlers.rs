@@ -48,11 +48,23 @@ async fn reload_single_plugin(
 }
 
 async fn list_worktrees_handler() -> impl IntoResponse {
-    Json(dev_services::list_branches())
+    let branches = tokio::task::spawn_blocking(dev_services::list_branches)
+        .await
+        .unwrap_or_default();
+    Json(branches)
 }
 
 async fn active_worktree_handler() -> impl IntoResponse {
-    Json(resolve_active_worktree())
+    let response = tokio::task::spawn_blocking(resolve_active_worktree)
+        .await
+        .unwrap_or_else(|error| {
+            log::error!("active-worktree join error: {}", error);
+            super::types::ActiveWorktreeResponse {
+                branch: None,
+                repo_branch: None,
+            }
+        });
+    Json(response)
 }
 
 fn resolve_active_worktree() -> super::types::ActiveWorktreeResponse {

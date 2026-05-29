@@ -40,34 +40,45 @@ pub(super) async fn query_plugin_handler(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     validate_plugin_id_bad_request(&id)?;
-    let runtime = crate::plugins::config::load_runable_contract(&id)
-        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "no runable contract".to_string()))?;
-    if !runtime.queries.contains_key(&query) {
-        return Err((
-            StatusCode::NOT_FOUND,
-            format!("query not declared: {query}"),
-        ));
-    }
-    crate::plugins::action_executor::dispatch_query(&state.plugin_manager, &id, &query)
-        .map(Json)
-        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
+    tokio::task::spawn_blocking(move || {
+        let runtime = crate::plugins::config::load_runable_contract(&id)
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+            .ok_or_else(|| (StatusCode::NOT_FOUND, "no runable contract".to_string()))?;
+        if !runtime.queries.contains_key(&query) {
+            return Err((
+                StatusCode::NOT_FOUND,
+                format!("query not declared: {query}"),
+            ));
+        }
+        crate::plugins::action_executor::dispatch_query(&state.plugin_manager, &id, &query)
+            .map(Json)
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
+    })
+    .await
+    .map_err(join_error_response)?
 }
 
 pub(super) async fn list_plugins(
     Query(query): Query<PluginsQuery>,
     State(state): State<AppState>,
 ) -> Result<Json<PluginsResponse>, (StatusCode, String)> {
-    plugin_services::list_plugins(&state, query.refresh).map(Json)
+    tokio::task::spawn_blocking(move || plugin_services::list_plugins(&state, query.refresh))
+        .await
+        .map_err(join_error_response)?
+        .map(Json)
 }
 
 pub(super) async fn get_registry(
 ) -> Result<Json<crate::plugins::registry::Registry>, (StatusCode, String)> {
-    let config_dir = crate::paths::shared_config_dir()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let registry = crate::plugins::registry::load_registry(&config_dir)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    Ok(Json(registry))
+    tokio::task::spawn_blocking(|| {
+        let config_dir = crate::paths::shared_config_dir()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        crate::plugins::registry::load_registry(&config_dir)
+            .map(Json)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+    })
+    .await
+    .map_err(join_error_response)?
 }
 
 pub(super) async fn install_plugin(
@@ -125,7 +136,13 @@ pub(super) async fn execute_plugin_action(
 pub(super) async fn list_installed(
     State(state): State<AppState>,
 ) -> Result<Json<InstalledPluginsResponse>, StatusCode> {
-    plugin_services::list_installed(&state).map(Json)
+    match tokio::task::spawn_blocking(move || plugin_services::list_installed(&state)).await {
+        Ok(result) => result.map(Json),
+        Err(error) => {
+            log::error!("list_installed join error: {}", error);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }
 
 pub(super) async fn get_plugin_permissions(
@@ -197,6 +214,14 @@ fn plugin_manager_lock_failed(
 ) -> StatusCode {
     log::error!("Plugin manager mutex poisoned: {}", error);
     StatusCode::INTERNAL_SERVER_ERROR
+}
+
+fn join_error_response(error: tokio::task::JoinError) -> (StatusCode, String) {
+    log::error!("plugin handler join error: {}", error);
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Handler crashed".to_string(),
+    )
 }
 
 fn action_error_response(
