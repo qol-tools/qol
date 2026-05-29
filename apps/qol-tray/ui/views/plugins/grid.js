@@ -1,15 +1,16 @@
 import { html } from '../../lib/html.js';
+import { useState } from 'preact/hooks';
 import { Card, CardGrid } from '../../lib/components/Card.js';
 import { useModifierState } from '../../lib/hooks/modifier-state-context.js';
 
 const brokenCovers = new Set();
 
-const PLACEHOLDER_SVG = 'data:image/svg+xml,' + encodeURIComponent(
-    '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">' +
-    '<rect fill="#2f3644" width="300" height="200"/>' +
-    '<text fill="#67748f" x="50%" y="50%" text-anchor="middle" dy=".3em" font-family="sans-serif" font-size="14">No Cover</text>' +
-    '</svg>'
-);
+function pluginMonogram(name) {
+    const words = (name || '').trim().split(/[\s\-_]+/).filter(Boolean);
+    if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
+    if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+    return '?';
+}
 
 export function PluginsGrid({ plugins, ghostPlugins, selectedIndex, updating, loaded, onCardClick, onSelect, onToggleMenu }) {
     return html`
@@ -37,6 +38,8 @@ function PluginCard({ plugin, index, selected, updating, onCardClick, onSelect, 
     const cls = cardClassName(plugin);
     const chip = pluginStatusChip(plugin);
     const { shiftHeld } = useModifierState();
+    const [, markBroken] = useState(0);
+    const showCover = plugin.has_cover && !brokenCovers.has(plugin.id);
     const showShiftHint = selected && shiftHeld;
     const handleCogClick = (e) => {
         e.stopPropagation();
@@ -47,9 +50,12 @@ function PluginCard({ plugin, index, selected, updating, onCardClick, onSelect, 
              index=${index} selected=${selected} onSelect=${onSelect}
              onActivate=${(e) => onCardClick(e, index, plugin.id)}
              data-plugin-id=${plugin.id}>
-            <img src=${plugin.has_cover && !brokenCovers.has(plugin.id) ? `/api/cover/${plugin.id}` : PLACEHOLDER_SVG}
-                 alt=${plugin.name}
-                 onError=${(e) => { brokenCovers.add(plugin.id); e.target.src = PLACEHOLDER_SVG; }} />
+            ${showCover
+                ? html`<img src=${`/api/cover/${plugin.id}`} alt=${plugin.name}
+                         onError=${() => { brokenCovers.add(plugin.id); markBroken(n => n + 1); }} />`
+                : html`<div class="plugin-cover-placeholder" aria-hidden="true">
+                         <span class="plugin-cover-monogram">${pluginMonogram(plugin.name)}</span>
+                       </div>`}
             <div class="plugin-name" data-selected-text="">
                 <span class="plugin-name-text">${plugin.name}</span>
                 ${chip && html`<span class="plugin-status-chip ${chip.className}" title=${chip.tooltip}>${chip.label}</span>`}

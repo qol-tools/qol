@@ -4,6 +4,7 @@ import { resolveViewLabel } from '../../app/views.js';
 import { ALWAYS_ID } from '../../palette/registry.js';
 import { useRegisterCommands } from '../../palette/useRegisterCommands.js';
 import { getWorldSettings, setWorldSetting, subscribeWorldSettings } from '../../lib/world-settings.js';
+import { ACCENT_PRESETS } from '../../lib/accent-presets.js';
 import { IconCog } from '../../assets/icon-cog.js';
 import { useClickOutside } from '../../lib/hooks/useClickOutside.js';
 import { Peripheral } from './Peripheral.js';
@@ -127,6 +128,11 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
                     <//>
                 </div>
             </div>
+            <div class="wsp-section">
+                <div class="wsp-heading">Appearance</div>
+                <${AccentRow} value=${settings.accent} isDevMode=${isDevMode}
+                    onPick=${(key) => setWorldSetting('accent', key)} />
+            </div>
             ${isDevMode && branches && branches.length > 0 && html`
                 <${WorktreeSection} branches=${branches} defaultBranch=${defaultBranch}
                     setDefaultBranch=${setDefaultBranch} repoBranch=${repoBranch} />
@@ -135,6 +141,24 @@ function WorldSettingsPanel({ settings, version, updateState, isDevMode, onActio
                 onAction=${onAction} />`}
         <//>
     `;
+}
+
+function AccentRow({ value, isDevMode, onPick }) {
+    const autoLabel = `Auto (${isDevMode ? 'dev: green' : 'amber'})`;
+    return html`
+        <div class="wsp-accent">
+            <span class="wsp-label">Accent</span>
+            <div class="wsp-swatches">
+                <${Surface} as="button" className=${`wsp-swatch wsp-swatch-auto${value ? '' : ' is-active'}`}
+                    title=${autoLabel} onActivate=${() => onPick(null)}>A<//>
+                ${Object.entries(ACCENT_PRESETS).map(([key, preset]) => html`
+                    <${Surface} as="button" key=${key}
+                        className=${`wsp-swatch${value === key ? ' is-active' : ''}`}
+                        style=${`--sw: rgb(${preset.rgb})`} title=${preset.label}
+                        onActivate=${() => onPick(key)} />
+                `)}
+            </div>
+        </div>`;
 }
 
 function RangeRow({ label, settingKey, min, max, step, value, onInput, display, selected }) {

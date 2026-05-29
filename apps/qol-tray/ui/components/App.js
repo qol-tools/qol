@@ -6,6 +6,7 @@ import { prettyLabel } from '../auto-config/heuristics.js';
 import { createNavigation, selectorFor, animateTransition } from '../lib/world-navigation.js';
 import { setAscend, setDiveFromSurface, setDiveViaSelector } from '../lib/world-navigation-singleton.js';
 import { getWorldSettings, subscribeWorldSettings } from '../lib/world-settings.js';
+import { applyAccent, resolveAccent } from '../lib/accent-presets.js';
 
 const log = createDebug('qol:app');
 import { ModifierStateProvider } from '../lib/hooks/modifier-state-context.js';
@@ -305,6 +306,12 @@ function AppShell() {
         const el = document.getElementById('viewport');
         viewportRef.current = el;
     }, []);
+
+    useEffect(() => {
+        const apply = () => applyAccent(resolveAccent(getWorldSettings().accent, devEnabled));
+        apply();
+        return subscribeWorldSettings(apply);
+    }, [devEnabled]);
 
     useEffect(() => {
         const retention = createFocusRetention();

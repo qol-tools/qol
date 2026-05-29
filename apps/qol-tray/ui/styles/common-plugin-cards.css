@@ -2,6 +2,10 @@
 .plugin-grid .plugin-card {
     aspect-ratio: 16 / 9;
     min-height: var(--size-card-min-h);
+    background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.05), transparent 55%), #0a0b0d;
+    border: var(--border-w-1) solid var(--tui-line-soft);
+    border-radius: var(--radius-md);
+    box-shadow: inset 0 1px 0 rgba(var(--accent-rgb), 0.08), 0 6px 18px var(--layer-ink-45);
 }
 
 .plugin-grid-media .plugin-card.no-ui,
@@ -33,6 +37,41 @@
     border-radius: inherit;
 }
 
+.plugin-cover-placeholder {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: inherit;
+    overflow: hidden;
+    container-type: size;
+    background: var(--tui-screen-bg);
+    border: var(--border-w-1) solid var(--tui-line-soft);
+}
+
+.plugin-cover-placeholder::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: var(--tui-scanline);
+    z-index: 1;
+}
+
+.plugin-cover-monogram {
+    font-size: clamp(1.75rem, 26cqh, 3.25rem);
+    font-weight: var(--fw-bold);
+    letter-spacing: var(--ls-md);
+    line-height: var(--lh-tight);
+    color: rgba(var(--accent-rgb), 0.72);
+    text-shadow: var(--tui-glow-text);
+    font-family: var(--font-mono);
+    user-select: none;
+    position: relative;
+    z-index: 2;
+}
+
 .plugin-name {
     position: absolute;
     bottom: 0;
@@ -58,6 +97,10 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: var(--ls-md);
+    font-size: var(--fs-sm);
 }
 
 .plugin-load-state {
@@ -76,8 +119,8 @@
 
 .plugin-grid-store .plugin-card,
 .plugins-grid .plugin-card {
-    background: var(--surface-sheen), var(--bg-surface);
-    border: var(--border-w-1) solid var(--hairline);
+    background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.04), transparent 50%), #0c0d10;
+    border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-lg);
     box-shadow: var(--elevation-crisp-1);
     padding: var(--space-6);

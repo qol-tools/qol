@@ -1,13 +1,3 @@
-.view-container.content-shell {
-    --glow-x1: 18%;
-    --glow-y1: -12%;
-    --glow-x2: 88%;
-    --glow-y2: 0%;
-    background:
-        radial-gradient(circle at var(--glow-x1) var(--glow-y1), rgba(var(--accent-rgb), 0.14), transparent 30%),
-        radial-gradient(circle at var(--glow-x2) var(--glow-y2), rgba(var(--accent-rgb), 0.07), transparent 24%);
-}
-
 .view-body.content-shell-body {
     max-width: none;
     margin: 0;

@@ -58,6 +58,31 @@ html.qol-bootstrapping-dive #app {
     flex: 1;
     min-height: 0;
     overflow: visible;
+    padding-top: var(--space-7);
+}
+
+.view-container.content-shell {
+    position: relative;
+    isolation: isolate;
+    border: var(--border-w-3) double var(--tui-line);
+    border-radius: var(--radius-md);
+    background: var(--tui-panel-bg);
+    box-shadow: var(--tui-panel-shadow);
+}
+
+.view-container.content-shell::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    background: var(--tui-scanline);
+    z-index: 0;
+}
+
+.view-container.content-shell > * {
+    position: relative;
+    z-index: 1;
 }
 
 .world-view-slot .view-body {
@@ -300,6 +325,51 @@ html.qol-bootstrapping-dive #app {
     gap: var(--space-3);
 }
 
+.wsp-accent {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    column-gap: var(--space-4);
+    align-items: center;
+    min-height: 28px;
+}
+
+.wsp-accent .wsp-label {
+    font-size: var(--fs-md);
+    color: var(--text-secondary);
+}
+
+.wsp-swatches {
+    display: flex;
+    gap: var(--space-2);
+    justify-self: end;
+    flex-wrap: wrap;
+}
+
+.wsp-swatch {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--layer-paper-15);
+    background: var(--sw, var(--layer-paper-08));
+    color: var(--text-faint);
+    font-size: var(--fs-caption-1);
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    transition: transform var(--dur-fast), border-color var(--dur-fast), box-shadow var(--dur-fast);
+}
+
+.wsp-swatch:hover {
+    transform: scale(1.12);
+    border-color: var(--layer-paper-30);
+}
+
+.wsp-swatch.is-active {
+    border-color: transparent;
+    box-shadow: 0 0 0 2px var(--surface-elevated), 0 0 0 3px rgba(var(--paper-rgb), 0.85);
+}
+
 .world-settings-panel select {
     background: var(--layer-paper-06);
     border: 1px solid var(--layer-paper-10);
@@ -493,20 +563,22 @@ html.qol-bootstrapping-dive #app {
 
 .world-region-label {
     position: absolute;
-    font-size: 42px;
+    transform-origin: center;
+    padding: 8px 24px;
+    background: var(--tui-sign-bg);
+    border: var(--border-w-3) double var(--tui-line);
+    border-radius: var(--radius-md);
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 20px;
     font-weight: var(--fw-bold);
-    color: var(--text-primary);
-    background: linear-gradient(180deg, var(--slate-100) 0%, var(--slate-400) 145%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    letter-spacing: 2px;
+    letter-spacing: var(--ls-3xl);
+    text-transform: uppercase;
     pointer-events: none;
     user-select: none;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    transform: translateY(-100%);
+    text-shadow: var(--tui-glow-text);
+    box-shadow: 0 6px 22px var(--layer-ink-45), 0 0 24px rgba(var(--accent-rgb), 0.12);
 }
 
 @property --hide {

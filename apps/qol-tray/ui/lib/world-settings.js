@@ -11,6 +11,7 @@ const DEFAULTS = {
     resetZoomOnNav: true,
     ghostThreshold: 0.55,
     uiScaleOnZoomOut: true,
+    accent: null,
 };
 
 let current = load();

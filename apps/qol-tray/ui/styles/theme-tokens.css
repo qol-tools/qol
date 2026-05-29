@@ -37,7 +37,7 @@
     --amber-400: #ffd34e;
     --amber-300: #ffe08a;
 
-    --accent-rgb: 74, 158, 255;
+    --accent-rgb: 255, 180, 84;
     --success-rgb: 74, 222, 128;
     --danger-rgb: 255, 107, 107;
     --warning-rgb: 255, 193, 7;
@@ -129,8 +129,8 @@
     --text-faint: var(--text-subtle);
     --text-disabled: var(--text-disabled-2);
 
-    --accent: var(--blue-500);
-    --accent-hover: var(--blue-600);
+    --accent: rgb(var(--accent-rgb));
+    --accent-hover: #ffc77a;
     --accent-glow: rgba(var(--accent-rgb), 0.3);
     --accent-glow-soft: rgba(var(--accent-rgb), 0.2);
     --accent-glow-faint: rgba(var(--accent-rgb), 0.18);
@@ -325,11 +325,21 @@
     --selected-ring: 0 0 0 var(--border-w-1) rgba(var(--accent-rgb), 0.85), 0 0 0 4px rgba(var(--accent-rgb), 0.16);
     --selected-glow: 0 0 22px rgba(var(--accent-rgb), 0.22);
     --selected-edge: linear-gradient(180deg, var(--accent), rgba(var(--accent-rgb), 0.55));
-    --btn-primary-bg: linear-gradient(180deg, var(--blue-400) 0%, var(--accent) 52%, var(--blue-700) 100%);
+    --btn-primary-bg: linear-gradient(180deg, rgba(var(--accent-rgb), 0.24) 0%, rgba(var(--accent-rgb), 0.12) 100%), var(--surface-raised);
     --btn-success-bg: linear-gradient(180deg, var(--green-300) 0%, var(--success) 52%, var(--green-700) 100%);
     --btn-raise-shadow: inset 0 1px 0 var(--layer-paper-28), inset 0 -1px 0 var(--layer-ink-22), 0 1px 2px var(--layer-ink-45);
     --btn-primary-glow: 0 0 14px rgba(var(--accent-rgb), 0.3);
     --btn-success-glow: 0 0 14px rgba(var(--success-rgb), 0.3);
+
+    --tui-line: rgba(var(--accent-rgb), 0.5);
+    --tui-line-soft: rgba(var(--accent-rgb), 0.18);
+    --tui-scanline: repeating-linear-gradient(0deg, rgba(var(--accent-rgb), 0.05) 0 1px, transparent 1px 3px);
+    --tui-panel-bg: linear-gradient(180deg, rgba(var(--accent-rgb), 0.035), transparent 55%), #0c0e12;
+    --tui-panel-shadow: inset 0 1px 0 rgba(var(--accent-rgb), 0.1), inset 0 0 34px rgba(var(--accent-rgb), 0.035);
+    --tui-screen-bg: radial-gradient(120% 90% at 50% 25%, rgba(var(--accent-rgb), 0.07), transparent 70%), #070809;
+    --tui-sign-bg: linear-gradient(180deg, rgba(var(--accent-rgb), 0.08), transparent), #0c0e12;
+    --tui-glow-text: 0 0 22px rgba(var(--accent-rgb), 0.45);
+    --tui-desktop-bg: radial-gradient(125% 95% at 50% 0%, rgba(var(--accent-rgb), 0.05), transparent 58%), #07080b;
 }
 
 @keyframes slide-in {

@@ -63,8 +63,9 @@ export function regionLabelPosition(entry, cam) {
     if (screenW < HIDE_BELOW_SCREEN_W) return { hidden: true };
     return {
         hidden: false,
-        left: screenX,
-        top: screenY - LABEL_GAP_PX,
+        left: screenX + screenW / 2,
+        top: screenY,
+        scale: z,
         maxWidth: screenW,
     };
 }

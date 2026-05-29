@@ -27,6 +27,7 @@ function writePositions(labelRefs, entries, cam) {
         el.style.display = '';
         el.style.left = `${pos.left}px`;
         el.style.top = `${pos.top}px`;
+        el.style.transform = `translate(-50%, -50%) scale(${pos.scale})`;
         el.style.maxWidth = `${pos.maxWidth}px`;
     }
 }
