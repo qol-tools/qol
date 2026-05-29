@@ -51,7 +51,7 @@
     --surface-elevated: #14181f;
     --surface-raised: #171c26;
     --surface-hovered: #1f2531;
-    --surface-selected: #18273d;
+    --surface-selected: linear-gradient(0deg, rgba(var(--accent-rgb), 0.16), rgba(var(--accent-rgb), 0.16)), var(--surface-elevated);
 
     --text-strong: var(--slate-100);
     --text-default: var(--slate-300);
@@ -157,8 +157,8 @@
 
     --progress-track-bg: rgba(var(--ink-rgb, 0, 0, 0), 0.46);
     --progress-track-inset: inset 0 0 0 1px rgba(var(--paper-rgb, 255, 255, 255), 0.26), inset 0 2px 6px rgba(var(--ink-rgb, 0, 0, 0), 0.35);
-    --progress-fill-start: rgba(var(--accent-rgb, 74, 158, 255), 0.26);
-    --progress-fill-end: rgba(var(--accent-rgb, 74, 158, 255), 0.5);
+    --progress-fill-start: rgba(var(--accent-rgb, 255, 180, 84), 0.26);
+    --progress-fill-end: rgba(var(--accent-rgb, 255, 180, 84), 0.5);
     --progress-fill-outline: 1px solid rgba(var(--paper-rgb, 255, 255, 255), 0.16);
     --progress-fill-glow: inset 0 0 0 1px rgba(var(--paper-rgb, 255, 255, 255), 0.08);
     --progress-fill-stripe-a: rgba(var(--paper-rgb, 255, 255, 255), 0.24);
@@ -331,15 +331,19 @@
     --btn-primary-glow: 0 0 14px rgba(var(--accent-rgb), 0.3);
     --btn-success-glow: 0 0 14px rgba(var(--success-rgb), 0.3);
 
+    --tui-bg-desktop: #07080b;
+    --tui-bg-panel: #0c0e12;
+    --tui-bg-screen: #070809;
+    --tui-bg-card: #0a0b0d;
     --tui-line: rgba(var(--accent-rgb), 0.5);
     --tui-line-soft: rgba(var(--accent-rgb), 0.18);
     --tui-scanline: repeating-linear-gradient(0deg, rgba(var(--accent-rgb), 0.05) 0 1px, transparent 1px 3px);
-    --tui-panel-bg: linear-gradient(180deg, rgba(var(--accent-rgb), 0.035), transparent 55%), #0c0e12;
+    --tui-panel-bg: linear-gradient(180deg, rgba(var(--accent-rgb), 0.035), transparent 55%), var(--tui-bg-panel);
     --tui-panel-shadow: inset 0 1px 0 rgba(var(--accent-rgb), 0.1), inset 0 0 34px rgba(var(--accent-rgb), 0.035);
-    --tui-screen-bg: radial-gradient(120% 90% at 50% 25%, rgba(var(--accent-rgb), 0.07), transparent 70%), #070809;
-    --tui-sign-bg: linear-gradient(180deg, rgba(var(--accent-rgb), 0.08), transparent), #0c0e12;
+    --tui-screen-bg: radial-gradient(120% 90% at 50% 25%, rgba(var(--accent-rgb), 0.07), transparent 70%), var(--tui-bg-screen);
+    --tui-sign-bg: linear-gradient(180deg, rgba(var(--accent-rgb), 0.08), transparent), var(--tui-bg-panel);
     --tui-glow-text: 0 0 22px rgba(var(--accent-rgb), 0.45);
-    --tui-desktop-bg: radial-gradient(125% 95% at 50% 0%, rgba(var(--accent-rgb), 0.05), transparent 58%), #07080b;
+    --tui-desktop-bg: radial-gradient(125% 95% at 50% 0%, rgba(var(--accent-rgb), 0.05), transparent 58%), var(--tui-bg-desktop);
 }
 
 @keyframes slide-in {

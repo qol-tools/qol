@@ -2,7 +2,7 @@
 .plugin-grid .plugin-card {
     aspect-ratio: 16 / 9;
     min-height: var(--size-card-min-h);
-    background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.05), transparent 55%), #0a0b0d;
+    background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.05), transparent 55%), var(--tui-bg-card);
     border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-md);
     box-shadow: inset 0 1px 0 rgba(var(--accent-rgb), 0.08), 0 6px 18px var(--layer-ink-45);
@@ -119,7 +119,7 @@
 
 .plugin-grid-store .plugin-card,
 .plugins-grid .plugin-card {
-    background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.04), transparent 50%), #0c0d10;
+    background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.04), transparent 50%), var(--tui-bg-panel);
     border: var(--border-w-1) solid var(--tui-line-soft);
     border-radius: var(--radius-lg);
     box-shadow: var(--elevation-crisp-1);
