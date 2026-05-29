@@ -52,20 +52,21 @@ export function viewportPadding(vp, zoom, entries) {
     return maxEntryExtent(entries);
 }
 
-export const LABEL_GAP_PX = 10;
 export const HIDE_BELOW_SCREEN_W = 120;
 
-export function regionLabelPosition(entry, cam) {
+export function regionLabelPosition(entry, cam, slotScale = 1) {
     const z = cam.zoom;
-    const screenX = (entry.x - cam.x) * z;
-    const screenY = (entry.y - cam.y) * z;
-    const screenW = entry.width * z;
+    const s = slotScale > 0 ? slotScale : 1;
+    const eff = z * s;
+    const screenW = entry.width * eff;
     if (screenW < HIDE_BELOW_SCREEN_W) return { hidden: true };
+    const centerXWorld = entry.x + entry.width / 2;
+    const topYWorld = entry.y - (entry.height || 0) * (s - 1) / 2;
     return {
         hidden: false,
-        left: screenX + screenW / 2,
-        top: screenY,
-        scale: z,
+        left: (centerXWorld - cam.x) * z,
+        top: (topYWorld - cam.y) * z,
+        scale: eff,
         maxWidth: screenW,
     };
 }

@@ -2,7 +2,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     HIDE_BELOW_SCREEN_W,
-    LABEL_GAP_PX,
     PAGE_TOP_PAD_PX,
     boundsOfEntries,
     cameraTargetFor,
@@ -209,7 +208,7 @@ test('cameraTargetFor: x centers the entry horizontally regardless of width (pro
     }
 });
 
-test('regionLabelPosition: when camera is at cameraTargetFor, label.top lands PAGE_TOP_PAD_PX - LABEL_GAP_PX below viewport regardless of zoom', () => {
+test('regionLabelPosition: at cameraTargetFor, label.top sits on the page top edge (PAGE_TOP_PAD_PX) regardless of zoom', () => {
     const rng = seededRng(0xabc12345);
     for (let i = 0; i < 200; i++) {
         const zoom = 0.25 + rng() * 3.75;
@@ -222,13 +221,13 @@ test('regionLabelPosition: when camera is at cameraTargetFor, label.top lands PA
         const pos = regionLabelPosition(entry, cam);
         assert.equal(pos.hidden, false);
         assert.ok(
-            Math.abs(pos.top - (PAGE_TOP_PAD_PX - LABEL_GAP_PX)) < 1e-6,
-            `case ${i} zoom=${zoom}: pos.top=${pos.top} should equal ${PAGE_TOP_PAD_PX - LABEL_GAP_PX}`,
+            Math.abs(pos.top - PAGE_TOP_PAD_PX) < 1e-6,
+            `case ${i} zoom=${zoom}: pos.top=${pos.top} should equal ${PAGE_TOP_PAD_PX}`,
         );
     }
 });
 
-test('regionLabelPosition: label.left tracks the page and max-width scales with zoom (property)', () => {
+test('regionLabelPosition: label.left is the page center and max-width scales with zoom (property)', () => {
     const rng = seededRng(0x55cc77dd);
     for (let i = 0; i < 200; i++) {
         const zoom = 0.25 + rng() * 3.75;
@@ -244,9 +243,25 @@ test('regionLabelPosition: label.left tracks the page and max-width scales with 
             assert.equal(pos.hidden, true);
             continue;
         }
-        assert.ok(Math.abs(pos.left - (entry.x - cam.x) * zoom) < 1e-6);
+        assert.ok(Math.abs(pos.left - (entry.x + entry.width / 2 - cam.x) * zoom) < 1e-6);
         assert.ok(Math.abs(pos.maxWidth - entry.width * zoom) < 1e-6);
     }
+});
+
+test('regionLabelPosition: slot inflation scales the sign by zoom*slotScale and lifts it to the inflated top border', () => {
+    const entry = { x: 1000, y: 2000, width: 1280, height: 900 };
+    const cam = { x: 500, y: 1500, zoom: 0.5 };
+    const s = 1.6;
+    const base = regionLabelPosition(entry, cam, 1);
+    const inflated = regionLabelPosition(entry, cam, s);
+    assert.ok(Math.abs(inflated.scale - cam.zoom * s) < 1e-6);
+    assert.ok(Math.abs(inflated.maxWidth - entry.width * cam.zoom * s) < 1e-6);
+    assert.ok(Math.abs(inflated.left - base.left) < 1e-6);
+    const expectedLift = (entry.height * (s - 1) / 2) * cam.zoom;
+    assert.ok(
+        Math.abs((base.top - inflated.top) - expectedLift) < 1e-6,
+        `lift ${base.top - inflated.top} should equal ${expectedLift}`,
+    );
 });
 
 test('regionLabelPosition: hides below HIDE_BELOW_SCREEN_W screen pixels wide', () => {
