@@ -1,19 +1,43 @@
 import { toast } from '../lib/toast.js';
 
 const originalFetch = window.fetch.bind(window);
-window.fetch = async function (url, options) {
+const inflightGets = new Map();
+
+window.fetch = function (url, options) {
+    if (!isCoalescableGet(url, options)) {
+        return wrappedFetch(url, options);
+    }
+    const key = typeof url === 'string' ? url : url.url ?? String(url);
+    const pending = inflightGets.get(key);
+    if (pending) {
+        return pending.then(res => res.clone());
+    }
+    const promise = wrappedFetch(url, options);
+    inflightGets.set(key, promise);
+    const drop = () => inflightGets.delete(key);
+    promise.then(drop, drop);
+    return promise.then(res => res.clone());
+};
+
+function isCoalescableGet(url, options) {
+    const method = (options?.method ?? 'GET').toUpperCase();
+    return method === 'GET'
+        && options?.body == null
+        && (typeof url === 'string' || url instanceof URL);
+}
+
+async function wrappedFetch(url, options) {
     try {
         const response = await originalFetch(url, options);
         if (!response.ok) {
-            const path = extractPath(url);
-            toast('error', `${response.status} — ${path}`);
+            toast('error', `${response.status} — ${extractPath(url)}`);
         }
         return response;
     } catch (error) {
         toast('error', error.message);
         throw error;
     }
-};
+}
 
 function extractPath(url) {
     try { return new URL(url, location.origin).pathname; } catch { return String(url); }
