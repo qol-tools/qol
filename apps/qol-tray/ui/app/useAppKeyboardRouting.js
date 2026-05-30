@@ -106,6 +106,15 @@ export function useAppKeyboardRouting({
         requestAnimationFrame(() => reconcileFocusForSlot(activeViewId, 'viewChange'));
     }, [activeViewId]);
 
+    const prevPaletteActiveRef = useRef(palette.active);
+    useLayoutEffect(() => {
+        const was = prevPaletteActiveRef.current;
+        prevPaletteActiveRef.current = palette.active;
+        if (was && !palette.active) {
+            requestAnimationFrame(() => reconcileFocusForSlot(activeViewId, 'paletteClose'));
+        }
+    }, [palette.active, activeViewId]);
+
     useEffect(() => {
         if (!navigation?.subscribeAnchor) return undefined;
         let prevPageId = navigation.getCurrentAnchor?.()?.pageId || null;
@@ -121,6 +130,7 @@ export function useAppKeyboardRouting({
         const anchorPageId = navigation?.getCurrentAnchor?.()?.pageId || null;
         const viewKeyboard = resolveViewKeyboard(activeViewId, getViewKeyboard, anchorPageId);
         if (handlePaletteToggle(event, palette, activePluginId)) return;
+        if (handleFilterEscape(event, palette, activePluginId, navigation)) return;
         if (palette.active && event.key !== 'Tab') return;
         if (event.key === 'Tab' && activePluginId && !viewKeyboard?.isBlocking?.()) {
             event.preventDefault();
@@ -158,6 +168,16 @@ function handlePaletteToggle(event, palette, activePluginId) {
     if (!(event.ctrlKey || event.metaKey) || event.key !== 'e') return false;
     event.preventDefault();
     if (!palette.active && !activePluginId) palette.activate();
+    return true;
+}
+
+function handleFilterEscape(event, palette, activePluginId, navigation) {
+    if (event.key !== 'Escape') return false;
+    if (palette.active || activePluginId) return false;
+    if (!palette.committedFilter) return false;
+    if ((navigation?.stackDepth?.() ?? 0) > 0) return false;
+    event.preventDefault();
+    palette.clearFilter();
     return true;
 }
 

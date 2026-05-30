@@ -611,7 +611,7 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
 }
 
 .palette-item[data-selected-surface] {
-    --selected-surface-wedge-z: 31;
+    --selected-surface-wedge-z: 102;
     --selected-surface-wedge-max-glide: 56;
 }
 
@@ -619,6 +619,84 @@ body[data-shift-held] [data-selected-surface][data-secondary-label]:focus::after
 .palette-item.selected {
     background: rgba(var(--accent-rgb), 0.1);
     color: var(--text-primary);
+}
+
+.palette-titlebar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 22px;
+    padding: 0 var(--space-3);
+    background: rgba(var(--accent-rgb), 0.08);
+    border-bottom: var(--border-w-1) solid var(--tui-line-soft);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    user-select: none;
+}
+
+.palette-title {
+    color: rgba(var(--accent-rgb), 0.9);
+    font-weight: var(--fw-bold);
+}
+
+.palette-hintkeys {
+    color: var(--text-faint);
+    letter-spacing: 0.03em;
+    text-transform: none;
+}
+
+.palette-filter-pill {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: 26px;
+    padding: 0 var(--space-1) 0 var(--space-3);
+    background: var(--tui-bg-panel);
+    border: var(--border-w-1) solid var(--tui-line);
+    box-shadow: var(--elevation-crisp-1);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+}
+
+.palette-pill-body {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-secondary);
+    font: inherit;
+}
+
+.palette-pill-tag {
+    color: rgba(var(--accent-rgb), 0.8);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+}
+
+.palette-pill-value {
+    color: var(--text-primary);
+}
+
+.palette-pill-clear {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-faint);
+    font-size: var(--fs-xs);
+}
+
+.palette-pill-clear:hover {
+    color: var(--danger);
+    background: rgba(var(--danger-rgb), 0.14);
 }
 
 .btn-remove {

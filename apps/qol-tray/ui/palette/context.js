@@ -11,11 +11,13 @@ export function usePaletteContext() {
 export function PaletteProvider({ children }) {
     const [active, setActive] = useState(false);
     const [query, setQuery] = useState('');
+    const [committedFilter, setCommittedFilter] = useState('');
     const [activeViewId, setActiveViewId] = useState('plugins');
 
     const mode = query.startsWith('>') ? 'action' : 'search';
-    const searchQuery = mode === 'search' ? query : '';
+    const liveSearch = mode === 'search' ? query : '';
     const actionQuery = mode === 'action' ? query.slice(1) : '';
+    const searchQuery = active && mode === 'search' ? liveSearch : committedFilter;
 
     const activate = useCallback(() => {
         setActive(true);
@@ -27,10 +29,29 @@ export function PaletteProvider({ children }) {
         setQuery('');
     }, []);
 
+    const commitFilter = useCallback(() => {
+        const text = query.startsWith('>') ? '' : query.trim();
+        setCommittedFilter(text);
+        setActive(false);
+        setQuery('');
+    }, [query]);
+
+    const clearFilter = useCallback(() => {
+        setCommittedFilter('');
+        setActive(false);
+        setQuery('');
+    }, []);
+
+    const reopenFilter = useCallback(() => {
+        setActive(true);
+        setQuery(committedFilter);
+    }, [committedFilter]);
+
     const value = useMemo(() => ({
-        active, query, mode, searchQuery, actionQuery, activeViewId,
-        activate, deactivate, setQuery, setActiveViewId
-    }), [active, query, mode, searchQuery, actionQuery, activeViewId, activate, deactivate]);
+        active, query, mode, searchQuery, actionQuery, activeViewId, committedFilter,
+        activate, deactivate, setQuery, setActiveViewId, commitFilter, clearFilter, reopenFilter
+    }), [active, query, mode, searchQuery, actionQuery, activeViewId, committedFilter,
+        activate, deactivate, commitFilter, clearFilter, reopenFilter]);
 
     return html`<${PaletteContext.Provider} value=${value}>${children}<//>`;
 }
