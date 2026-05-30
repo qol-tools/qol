@@ -6,10 +6,30 @@
     <title>QoL Tray</title>
     <link rel="icon" href="data:,">
     <style>html.qol-bootstrapping-dive #app{visibility:hidden!important}</style>
+    <script>window.__QOL_BOOT__ = null; /* QOL_BOOT_INJECT */</script>
     <script>
         try {
             if (localStorage.getItem('qoltray.activePlugin')) {
                 document.documentElement.classList.add('qol-bootstrapping-dive');
+            }
+        } catch (e) {}
+        try {
+            var boot = window.__QOL_BOOT__;
+            if (boot && boot.accent) {
+                var ws = {};
+                try { ws = JSON.parse(localStorage.getItem('qol-world-settings') || '{}'); } catch (e) {}
+                var palette = boot.accent.palette || [];
+                var chosen = null;
+                for (var i = 0; i < palette.length; i++) {
+                    if (palette[i].key === ws.accent) { chosen = palette[i]; break; }
+                }
+                if (!chosen) for (var j = 0; j < palette.length; j++) {
+                    if (palette[j].key === boot.accent.defaultKey) { chosen = palette[j]; break; }
+                }
+                if (chosen) {
+                    document.documentElement.style.setProperty('--accent-rgb', chosen.rgb);
+                    document.documentElement.style.setProperty('--accent-hover', chosen.hover);
+                }
             }
         } catch (e) {}
     </script>

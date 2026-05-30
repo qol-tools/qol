@@ -1,5 +1,6 @@
 use super::plugin_ui;
 pub(crate) mod assets;
+mod boot;
 #[cfg(feature = "dev")]
 mod dev_core_log_handlers;
 #[cfg(feature = "dev")]
