@@ -467,9 +467,8 @@ html.qol-bootstrapping-dive #app {
 .app-container > .palette-hint,
 .app-container > .palette-filter-pill {
     position: fixed;
-    top: 56px;
-    left: 50%;
-    translate: -50% 0;
+    top: var(--space-3);
+    right: var(--space-4);
     z-index: var(--z-popover);
 }
 
@@ -534,11 +533,10 @@ html.qol-bootstrapping-dive #app {
     width: auto;
     backdrop-filter: blur(8px);
     transition: opacity 0.15s ease;
-    /* Base opacity 0.5 (subtle hint), but multiply by (1 - --hide) so the
-       useOverlayHide-driven --hide:1 state actually goes to 0. Without this
-       factor a leaked sliver sits at the top when the translate doesn't
-       fully clear the viewport. */
-    opacity: calc(0.5 * (1 - var(--hide, 0)));
+    /* Multiply the resting opacity by (1 - --hide) so the useOverlayHide-driven
+       --hide:1 state actually reaches 0. Without this factor a leaked sliver
+       sits in the corner when the translate doesn't fully clear the viewport. */
+    opacity: calc(0.68 * (1 - var(--hide, 0)));
 }
 
 .app-container > .palette-hint:hover {
