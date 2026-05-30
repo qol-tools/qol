@@ -125,6 +125,7 @@ export function CommandPalette({ camera, navigation }) {
             <//>`;
         }
         return html`<${Peripheral} camera=${camera} navigation=${navigation} edge="top"
+            occludeSelector=".world-view-slot, .world-region-label"
             className="search-bar palette-hint" onClick=${handleClick}>
             <span class="palette-hint-text">Ctrl+E to search & run actions...</span>
         <//>`;
