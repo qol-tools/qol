@@ -317,10 +317,16 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let repo_path = tmp.path().join("local");
         let repo = GitRepo::init(&repo_path, "https://example.invalid/repo.git").unwrap();
-        assert!(!repo.is_dirty().unwrap(), "fresh repo with no files is clean");
+        assert!(
+            !repo.is_dirty().unwrap(),
+            "fresh repo with no files is clean"
+        );
 
         write_file(&repo_path.join("note.txt"), "hello");
-        assert!(repo.is_dirty().unwrap(), "untracked file makes the tree dirty");
+        assert!(
+            repo.is_dirty().unwrap(),
+            "untracked file makes the tree dirty"
+        );
 
         repo.commit_all("seed", &signature()).unwrap();
         assert!(!repo.is_dirty().unwrap(), "committed tree is clean");

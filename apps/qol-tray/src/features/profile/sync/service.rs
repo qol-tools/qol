@@ -229,17 +229,18 @@ impl SyncService {
         let token = require_github_token()?;
         let repo_path = crate::paths::profile_dir()?;
         let repo_url = target.repo_url.clone();
-        let pulled = tokio::task::spawn_blocking(move || -> Result<(PullOutcome, Option<String>)> {
-            let repo = match GitRepo::open(&repo_path) {
-                Ok(repo) => repo,
-                Err(_) => GitRepo::clone(&repo_url, &repo_path, Some(&token))?,
-            };
-            let outcome = repo.pull(Some(&token))?;
-            let head = repo.head_sha()?;
-            Ok((outcome, head))
-        })
-        .await
-        .context("join sync pull task")?;
+        let pulled =
+            tokio::task::spawn_blocking(move || -> Result<(PullOutcome, Option<String>)> {
+                let repo = match GitRepo::open(&repo_path) {
+                    Ok(repo) => repo,
+                    Err(_) => GitRepo::clone(&repo_url, &repo_path, Some(&token))?,
+                };
+                let outcome = repo.pull(Some(&token))?;
+                let head = repo.head_sha()?;
+                Ok((outcome, head))
+            })
+            .await
+            .context("join sync pull task")?;
         let (outcome, head) = match pulled {
             Ok(value) => value,
             Err(error) => return self.persisted_error(error, Some(&target)),
