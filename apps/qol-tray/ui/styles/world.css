@@ -443,60 +443,87 @@ html.qol-bootstrapping-dive #app {
     text-overflow: ellipsis;
 }
 
-.app-container > .command-palette,
-.app-container > .palette-hint {
+.palette-layer {
     position: fixed;
-    top: 64px;
-    left: 50%;
-    translate: -50% 0;
-    width: min(520px, 80vw);
-    z-index: var(--z-popover, 200);
+    inset: 0;
+    z-index: var(--z-modal);
+    pointer-events: none;
 }
 
-.app-container > .command-palette {
+.palette-scrim {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: rgba(4, 5, 8, 0);
+    transition: background var(--dur-fast) ease, backdrop-filter var(--dur-fast) ease;
+}
+
+.palette-layer[data-mode="action"] .palette-scrim {
+    pointer-events: auto;
+    background: rgba(4, 5, 8, 0.55);
+    backdrop-filter: blur(3px);
+}
+
+.app-container > .palette-hint,
+.app-container > .palette-filter-pill {
+    position: fixed;
+    top: 56px;
+    left: 50%;
+    translate: -50% 0;
+    z-index: var(--z-popover);
+}
+
+.palette-layer .command-palette {
+    position: absolute;
+    top: 56px;
+    left: 50%;
+    translate: -50% 0;
+    width: min(560px, 82vw);
+    pointer-events: auto;
     background: var(--tui-bg-panel);
-    border: 1px solid var(--tui-line);
-    border-radius: var(--radius-md);
+    border: var(--border-w-1) solid var(--tui-line);
     box-shadow: var(--elevation-crisp-2);
-    backdrop-filter: blur(16px);
     overflow: hidden;
 }
 
-.app-container > .command-palette .search-bar {
-    height: 48px;
+.palette-layer .command-palette .search-bar {
+    height: 46px;
     padding: 0 var(--space-4);
-    border-bottom: none;
 }
 
-.app-container > .command-palette .search-input {
+.palette-layer[data-mode="action"] .search-bar::before {
+    content: none;
+}
+
+.palette-layer .command-palette .search-input {
     font-size: var(--fs-base);
     letter-spacing: 0.01em;
 }
 
-.app-container > .command-palette .search-input::placeholder {
+.palette-layer .command-palette .search-input::placeholder {
     color: var(--text-disabled);
 }
 
-.app-container > .command-palette .palette-dropdown {
+.palette-layer .command-palette .palette-dropdown {
     position: static;
     border: none;
-    border-top: 1px solid var(--tui-line-soft);
-    border-radius: 0 0 var(--radius-md) var(--radius-md);
+    border-top: var(--border-w-1) solid var(--tui-line-soft);
     background: transparent;
-    max-height: 280px;
+    max-height: 320px;
     padding: var(--space-1) 0;
 }
 
-.app-container > .command-palette .palette-item {
+.palette-layer .command-palette .palette-item {
     padding: var(--space-2) var(--space-4);
-    margin: 0 var(--space-1);
-    border-radius: var(--radius-md);
+    margin: 0;
     font-size: var(--fs-sm);
+    border-left: 2px solid transparent;
 }
 
-.app-container > .command-palette .palette-item:hover,
-.app-container > .command-palette .palette-item.selected {
-    background: rgba(var(--accent-rgb), 0.1);
+.palette-layer .command-palette .palette-item:hover,
+.palette-layer .command-palette .palette-item.selected {
+    background: rgba(var(--accent-rgb), 0.12);
+    border-left-color: var(--accent);
 }
 
 .app-container > .palette-hint {
