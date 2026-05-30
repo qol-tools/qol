@@ -2,7 +2,7 @@ name: Version
 
 on:
   workflow_run:
-    workflows: ["CI"]
+    workflows: ["tests"]
     types: [completed]
   workflow_dispatch:
 
