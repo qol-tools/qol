@@ -9,11 +9,36 @@ struct AccentEntry {
 }
 
 const PALETTE: &[AccentEntry] = &[
-    AccentEntry { key: "amber", label: "Amber", rgb: "255, 180, 84", hover: "#ffc77a" },
-    AccentEntry { key: "green", label: "Green", rgb: "70, 224, 138", hover: "#7ff0ab" },
-    AccentEntry { key: "cyan", label: "Cyan", rgb: "86, 214, 224", hover: "#8fe8f0" },
-    AccentEntry { key: "magenta", label: "Magenta", rgb: "232, 121, 198", hover: "#f49ad6" },
-    AccentEntry { key: "blue", label: "Blue", rgb: "74, 158, 255", hover: "#68b0ff" },
+    AccentEntry {
+        key: "amber",
+        label: "Amber",
+        rgb: "255, 180, 84",
+        hover: "#ffc77a",
+    },
+    AccentEntry {
+        key: "green",
+        label: "Green",
+        rgb: "70, 224, 138",
+        hover: "#7ff0ab",
+    },
+    AccentEntry {
+        key: "cyan",
+        label: "Cyan",
+        rgb: "86, 214, 224",
+        hover: "#8fe8f0",
+    },
+    AccentEntry {
+        key: "magenta",
+        label: "Magenta",
+        rgb: "232, 121, 198",
+        hover: "#f49ad6",
+    },
+    AccentEntry {
+        key: "blue",
+        label: "Blue",
+        rgb: "74, 158, 255",
+        hover: "#68b0ff",
+    },
 ];
 
 const PROD_DEFAULT: &str = "amber";
