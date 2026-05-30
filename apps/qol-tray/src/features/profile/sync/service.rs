@@ -152,7 +152,29 @@ impl SyncService {
         if self.snapshot_state().incident.is_some() {
             return self.noop_result("Skipped auto-push (incident pending)");
         }
+        if !self.needs_push().await? {
+            return self.noop_result("Nothing to push");
+        }
         self.do_push("auto push").await
+    }
+
+    async fn needs_push(&self) -> Result<bool> {
+        if load_sync_target()?.is_none() {
+            return Ok(false);
+        }
+        let repo_path = crate::paths::profile_dir()?;
+        let last_pushed = self.snapshot_state().head_sha;
+        tokio::task::spawn_blocking(move || -> Result<bool> {
+            let Ok(repo) = GitRepo::open(&repo_path) else {
+                return Ok(false);
+            };
+            if repo.is_dirty()? {
+                return Ok(true);
+            }
+            Ok(repo.head_sha()? != last_pushed)
+        })
+        .await
+        .context("join sync dirty-check")?
     }
 
     pub async fn acknowledge_incident(&self) -> Result<SyncActionResult> {
@@ -206,12 +228,20 @@ impl SyncService {
         };
         let token = require_github_token()?;
         let repo_path = crate::paths::profile_dir()?;
-        let repo = match GitRepo::open(&repo_path) {
-            Ok(repo) => repo,
-            Err(_) => GitRepo::clone(&target.repo_url, &repo_path, Some(&token))?,
-        };
-        let outcome = match repo.pull(Some(&token)) {
-            Ok(outcome) => outcome,
+        let repo_url = target.repo_url.clone();
+        let pulled = tokio::task::spawn_blocking(move || -> Result<(PullOutcome, Option<String>)> {
+            let repo = match GitRepo::open(&repo_path) {
+                Ok(repo) => repo,
+                Err(_) => GitRepo::clone(&repo_url, &repo_path, Some(&token))?,
+            };
+            let outcome = repo.pull(Some(&token))?;
+            let head = repo.head_sha()?;
+            Ok((outcome, head))
+        })
+        .await
+        .context("join sync pull task")?;
+        let (outcome, head) = match pulled {
+            Ok(value) => value,
             Err(error) => return self.persisted_error(error, Some(&target)),
         };
         let (message, applied) = match &outcome {
@@ -235,7 +265,7 @@ impl SyncService {
             state.incident = None;
             state.last_error = None;
         }
-        state.head_sha = repo.head_sha()?;
+        state.head_sha = head;
         state.last_sync_at = Some(now_rfc3339());
         save_state_file(&state)?;
         let saved = state.clone();
@@ -254,26 +284,28 @@ impl SyncService {
         };
         let token = require_github_token()?;
         let repo_path = crate::paths::profile_dir()?;
-        let repo = match GitRepo::open(&repo_path) {
-            Ok(repo) => repo,
+        let reason_owned = reason.to_string();
+        let pushed = tokio::task::spawn_blocking(move || -> Result<(bool, Option<String>)> {
+            let repo = GitRepo::open(&repo_path)?;
+            ensure_gitignore(&repo_path)?;
+            let commit = repo.commit_all(&reason_owned, &SignatureSpec::default_for_app())?;
+            repo.push(Some(&token))?;
+            let head = repo.head_sha()?;
+            Ok((commit.is_some(), head))
+        })
+        .await
+        .context("join sync push task")?;
+        let (committed, head) = match pushed {
+            Ok(value) => value,
             Err(error) => return self.persisted_error(error, Some(&target)),
         };
-        ensure_gitignore(&repo_path)?;
-        let signature = SignatureSpec::default_for_app();
-        let commit = match repo.commit_all(reason, &signature) {
-            Ok(info) => info,
-            Err(error) => return self.persisted_error(error, Some(&target)),
-        };
-        if let Err(error) = repo.push(Some(&token)) {
-            return self.persisted_error(error, Some(&target));
-        }
-        let message = if commit.is_some() {
+        let message = if committed {
             "Pushed changes to remote".to_string()
         } else {
             "Nothing to push".to_string()
         };
         let mut state = self.state_mut();
-        state.head_sha = repo.head_sha()?;
+        state.head_sha = head;
         state.last_sync_at = Some(now_rfc3339());
         state.last_error = None;
         save_state_file(&state)?;

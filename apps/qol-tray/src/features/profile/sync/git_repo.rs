@@ -186,6 +186,18 @@ impl GitRepo {
         Ok(sha)
     }
 
+    pub fn is_dirty(&self) -> Result<bool> {
+        let repo = self.open_repo()?;
+        let mut opts = git2::StatusOptions::new();
+        opts.include_untracked(true)
+            .recurse_untracked_dirs(true)
+            .include_ignored(false);
+        let statuses = repo
+            .statuses(Some(&mut opts))
+            .context("compute git status")?;
+        Ok(!statuses.is_empty())
+    }
+
     fn open_repo(&self) -> Result<Repository> {
         Repository::open(&self.repo_path)
             .with_context(|| format!("open git repo at {}", self.repo_path.display()))
@@ -298,6 +310,23 @@ mod tests {
 
         let second = repo.commit_all("second", &signature()).unwrap();
         assert!(second.is_none(), "clean tree should produce no commit");
+    }
+
+    #[test]
+    fn is_dirty_tracks_uncommitted_changes() {
+        let tmp = TempDir::new().unwrap();
+        let repo_path = tmp.path().join("local");
+        let repo = GitRepo::init(&repo_path, "https://example.invalid/repo.git").unwrap();
+        assert!(!repo.is_dirty().unwrap(), "fresh repo with no files is clean");
+
+        write_file(&repo_path.join("note.txt"), "hello");
+        assert!(repo.is_dirty().unwrap(), "untracked file makes the tree dirty");
+
+        repo.commit_all("seed", &signature()).unwrap();
+        assert!(!repo.is_dirty().unwrap(), "committed tree is clean");
+
+        write_file(&repo_path.join("note.txt"), "changed");
+        assert!(repo.is_dirty().unwrap(), "modified tracked file is dirty");
     }
 
     #[test]
