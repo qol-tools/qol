@@ -308,10 +308,10 @@ function AppShell() {
     }, []);
 
     useEffect(() => {
-        const apply = () => applyAccent(resolveAccent(getWorldSettings().accent, devEnabled));
+        const apply = () => applyAccent(resolveAccent(getWorldSettings().accent));
         apply();
         return subscribeWorldSettings(apply);
-    }, [devEnabled]);
+    }, []);
 
     useEffect(() => {
         const retention = createFocusRetention();

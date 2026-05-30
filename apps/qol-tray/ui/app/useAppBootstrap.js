@@ -1,17 +1,21 @@
 import { useEffect, useState } from 'preact/hooks';
 
+function bootDev() {
+    try { return window.__QOL_BOOT__?.dev === true; } catch { return false; }
+}
+
 export function useAppBootstrap() {
-    const [devEnabled, setDevEnabled] = useState(false);
+    const [devEnabled, setDevEnabled] = useState(bootDev);
     const [appVersion, setAppVersion] = useState(null);
 
     useEffect(() => {
         (async () => {
-            let dev = false;
-            try {
-                const res = await fetch('/api/dev/enabled');
-                dev = res.ok && await res.json();
-            } catch {}
-            setDevEnabled(dev);
+            if (!window.__QOL_BOOT__) {
+                try {
+                    const res = await fetch('/api/dev/enabled');
+                    if (res.ok) setDevEnabled(await res.json());
+                } catch {}
+            }
 
             try {
                 const res = await fetch('/api/version');

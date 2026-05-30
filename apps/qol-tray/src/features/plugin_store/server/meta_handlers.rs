@@ -17,12 +17,7 @@ pub(super) fn routes() -> Router<AppState> {
 }
 
 pub(super) async fn dev_enabled() -> Json<bool> {
-    let mode_is_dev = tokio::task::spawn_blocking(|| {
-        crate::mode::ModeConfig::load().unwrap_or_default().is_dev()
-    })
-    .await
-    .unwrap_or(false);
-    Json(cfg!(feature = "dev") && mode_is_dev)
+    Json(super::boot::current_dev().await)
 }
 
 pub(super) async fn get_version() -> &'static str {
