@@ -1,11 +1,8 @@
 use crate::plugins::resolver::PluginSource;
 use crate::plugins::Plugin;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::path::Path;
 
 const DEV_DAEMON_AUTOSTART_MARKER: &str = ".qol-tray-dev-autostart";
-const LIFELINE_AUDIT_INTERVAL: Duration = Duration::from_secs(2);
-const LIFELINE_AUDIT_ATTEMPTS: u32 = 6;
 
 pub(super) fn start_plugin_daemons<'a, I>(plugins: I)
 where
@@ -33,7 +30,7 @@ fn audit_host_death_lifelines(expected: Vec<String>) {
     std::thread::Builder::new()
         .name("qol-lifeline-audit".into())
         .spawn(move || {
-            let missing = settle_missing_lifelines(&expected);
+            let missing = super::lifeline_facade::settle_missing_lifelines(&expected);
             if missing.is_empty() {
                 log::debug!(
                     "host-death watchdog: all {} daemon(s) armed a lifeline",
@@ -51,25 +48,6 @@ fn audit_host_death_lifelines(expected: Vec<String>) {
             }
         })
         .ok();
-}
-
-/// Polls the armed set, returning daemons still missing after the last attempt.
-/// Daemons connect their lifeline shortly after spawn, and a dev recompile
-/// briefly resets the host's armed set; retrying until it settles avoids
-/// false alarms during those windows while still catching a real leak.
-fn settle_missing_lifelines(expected: &[String]) -> Vec<String> {
-    let client =
-        qol_runtime::PlatformStateClient::new(PathBuf::from(crate::paths::STATE_SOCKET_PATH));
-    let mut missing = expected.to_vec();
-    for _ in 0..LIFELINE_AUDIT_ATTEMPTS {
-        std::thread::sleep(LIFELINE_AUDIT_INTERVAL);
-        let armed = client.armed_lifelines().unwrap_or_default();
-        missing.retain(|id| !armed.contains(id));
-        if missing.is_empty() {
-            return missing;
-        }
-    }
-    missing
 }
 
 fn should_start_daemon(plugin: &Plugin) -> bool {

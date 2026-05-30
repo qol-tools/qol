@@ -1,4 +1,5 @@
 mod autostart;
+mod lifeline_facade;
 mod loading;
 mod runtime;
 
