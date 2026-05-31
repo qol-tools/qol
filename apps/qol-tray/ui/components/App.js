@@ -44,12 +44,20 @@ import { SHOWCASE_KEYS } from '../views/dev/components/ComponentsCatalog.js';
 function applySlotScales(worldEl, registry, camera, baseScale, viewportRef) {
     const slots = worldEl.querySelectorAll('.world-view-slot');
     if (baseScale === 1) {
-        for (const s of slots) s.style.removeProperty('--slot-scale');
+        if (!worldEl.__slotScalesActive) return;
+        for (const s of slots) {
+            if (s.__slotScale !== undefined) {
+                s.style.removeProperty('--slot-scale');
+                s.__slotScale = undefined;
+            }
+        }
+        worldEl.__slotScalesActive = false;
         return;
     }
     const vp = resolveViewport(viewportRef);
     const viewportW = vp?.clientWidth || window.innerWidth;
     const viewportH = vp?.clientHeight || window.innerHeight;
+    let active = false;
     for (const slot of slots) {
         const entry = registry.getEntry(slot.dataset.viewId);
         if (!entry) continue;
@@ -62,8 +70,14 @@ function applySlotScales(worldEl, registry, camera, baseScale, viewportRef) {
             zoom: camera.zoom,
             baseScale,
         });
-        slot.style.setProperty('--slot-scale', slotScale.toFixed(3));
+        const next = slotScale.toFixed(3);
+        if (slot.__slotScale !== next) {
+            slot.style.setProperty('--slot-scale', next);
+            slot.__slotScale = next;
+        }
+        active = true;
     }
+    worldEl.__slotScalesActive = active;
 }
 
 function measuredLayer0Entries(worldEl, entries, registry) {

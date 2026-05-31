@@ -1,7 +1,6 @@
 import { html } from '../../lib/html.js';
 import { useEffect, useState, useRef, useCallback } from 'preact/hooks';
-import { PageHeader } from '../../components/PageHeader.js';
-import { SurfaceContainer } from '../../lib/components/SurfaceContainer.js';
+import { PageShell } from '../../components/PageShell.js';
 import { Button } from '../../lib/components/Button.js';
 import { createSharedSlot } from '../../lib/shared-slot.js';
 import { extractParams } from './data.js';
@@ -39,9 +38,7 @@ export function TestRunnerSubPage({ slot }) {
     }, [slot]);
 
     if (!value.actionId || !value.action) {
-        return html`<div class="view-container content-shell">
-            <${PageHeader} title="Test Action" subtitle="Select an action to test" />
-        </div>`;
+        return html`<${PageShell} subtitle="Select an action to test" frame=${false} />`;
     }
 
     const params = extractParams(value.action.command);
@@ -50,30 +47,25 @@ export function TestRunnerSubPage({ slot }) {
     };
 
     return html`
-        <div class="view-container content-shell">
-            <${PageHeader} title="Test Action" subtitle=${value.actionId} />
-            <div class="view-body content-shell-body">
-                <div class="content-shell-inner">
-                    <${SurfaceContainer} className="content-frame test-runner-frame" onKeyDown=${onKey}>
-                        <${TestParams}
-                            params=${params}
-                            testParams=${value.testParams}
-                            onParamChange=${value.onParamChange}
-                            firstInputRef=${firstInputRef} />
-                        ${value.running && html`<div class="test-running">Running...</div>`}
-                        <${TestResult} result=${value.result} />
-                        <div class="test-runner-actions">
-                            <${Button} variant="btn-ghost" onActivate=${onCancel}>
-                                Close <kbd>Esc</kbd>
-                            <//>
-                            <${Button} variant="btn-primary" onActivate=${onRun} disabled=${value.running}>
-                                Run <kbd>Enter</kbd>
-                            <//>
-                        </div>
+        <${PageShell} subtitle=${value.actionId} frameClassName="test-runner-frame">
+            <div onKeyDown=${onKey}>
+                <${TestParams}
+                    params=${params}
+                    testParams=${value.testParams}
+                    onParamChange=${value.onParamChange}
+                    firstInputRef=${firstInputRef} />
+                ${value.running && html`<div class="test-running">Running...</div>`}
+                <${TestResult} result=${value.result} />
+                <div class="test-runner-actions">
+                    <${Button} variant="btn-ghost" onActivate=${onCancel}>
+                        Close <kbd>Esc</kbd>
+                    <//>
+                    <${Button} variant="btn-primary" onActivate=${onRun} disabled=${value.running}>
+                        Run <kbd>Enter</kbd>
                     <//>
                 </div>
             </div>
-        </div>
+        <//>
     `;
 }
 

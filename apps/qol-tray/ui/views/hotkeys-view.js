@@ -11,7 +11,7 @@ import { ModalActions } from '../lib/components/ModalPreact.js';
 import { ToggleSwitch } from '../lib/components/ToggleSwitch.js';
 import { DiveEditorSubPage } from '../lib/components/DiveEditorSubPage.js';
 import { useDiveEditor } from '../lib/hooks/useDiveEditor.js';
-import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
+import { PageShell } from '../components/PageShell.js';
 import { KeyLegend } from '../lib/components/KeyLegend.js';
 import { useViewBindings } from '../lib/hooks/useViewBindings.js';
 import { PluginSelect, ActionSelect, KeyInput } from './hotkeys/modal.js';
@@ -99,20 +99,13 @@ export function HotkeysView() {
 
     const bindings = useViewBindings('hotkeys');
     return html`
-        <div class="view-container content-shell">
-            <${PageHeader}
-                subtitle="Configure global keyboard shortcuts for plugin actions"
-                aside=${html`<${KeyLegend} bindings=${bindings} />`} />
+        <${PageShell}
+            subtitle="Configure global keyboard shortcuts for plugin actions"
+            aside=${html`<${KeyLegend} bindings=${bindings} />`}>
             ${hk.registrationErrors.length > 0 && html`<${RegistrationWarnings} errors=${hk.registrationErrors} />`}
-            <div class="view-body content-shell-body">
-                <div class="content-shell-inner">
-                    <${SurfaceContainer} className="content-frame">
-                        <${HotkeysList} hotkeys=${filtered} plugins=${hk.plugins}
-                            selectedIndex=${hk.selectedIndex} onSelect=${hk.setSelectedIndex} onEdit=${hk.openEditModal} />
-                    <//>
-                </div>
-            </div>
-        </div>
+            <${HotkeysList} hotkeys=${filtered} plugins=${hk.plugins}
+                selectedIndex=${hk.selectedIndex} onSelect=${hk.setSelectedIndex} onEdit=${hk.openEditModal} />
+        <//>
     `;
 }
 

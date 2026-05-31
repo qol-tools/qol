@@ -61,13 +61,37 @@ export function createCamera(options = {}) {
         apply();
     }
 
-    function notify() {
+    let notifyScheduled = 0;
+
+    function runNotify() {
+        notifyScheduled = 0;
         for (const fn of listeners) fn({ x, y, zoom, layer });
     }
 
-    function apply() {
+    function flushNotify() {
+        if (notifyScheduled && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(notifyScheduled);
+        notifyScheduled = 0;
+        runNotify();
+    }
+
+    function scheduleNotify() {
+        if (typeof requestAnimationFrame !== 'function') { runNotify(); return; }
+        if (notifyScheduled) return;
+        notifyScheduled = requestAnimationFrame(runNotify);
+    }
+
+    function writeTransform() {
         if (worldEl) worldEl.style.transform = `scale(${zoom}) translate(${-x}px, ${-y}px)`;
-        notify();
+    }
+
+    function apply() {
+        writeTransform();
+        flushNotify();
+    }
+
+    function applyHot() {
+        writeTransform();
+        scheduleNotify();
     }
 
     function panTo(nx, ny) {
@@ -75,7 +99,7 @@ export function createCamera(options = {}) {
         const clamped = clampPanTarget(nx, ny);
         x = clamped.x;
         y = clamped.y;
-        apply();
+        applyHot();
     }
 
     function panSmooth(tx, ty, duration, onComplete) {
@@ -95,7 +119,7 @@ export function createCamera(options = {}) {
         const clamped = clampPanTarget(x, y);
         x = clamped.x;
         y = clamped.y;
-        apply();
+        applyHot();
     }
 
     function zoomAround(anchorScreenX, anchorScreenY, nz) {
@@ -111,7 +135,7 @@ export function createCamera(options = {}) {
         );
         x = clamped.x;
         y = clamped.y;
-        apply();
+        applyHot();
     }
 
     function zoomSmooth(tx, ty, tz, duration, onComplete) {
@@ -179,13 +203,13 @@ export function createCamera(options = {}) {
         const clamped = clampPanTarget(x + dx, y + dy);
         x = clamped.x;
         y = clamped.y;
-        apply();
+        applyHot();
     }
 
     function setLayer(n) {
         log('setLayer:', layer, '→', n, `listeners=${listeners.size}`);
         layer = n;
-        notify();
+        flushNotify();
     }
 
     return {

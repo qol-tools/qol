@@ -217,20 +217,6 @@ body {
 }
 
 
-.plugin-config-detail {
-    flex: 1;
-    padding: 1.5rem 1.8rem 2.5rem;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-}
-
-.plugin-config-detail > .config-detail-content {
-    margin: 0;
-    width: 100%;
-    max-width: 720px;
-}
-
 .plugin-config-loading {
     flex: 1;
     display: flex;

@@ -4,7 +4,7 @@ import { usePaletteContext } from '../palette/context.js';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../app/view-keyboard-context.js';
 
-import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
+import { PageShell } from '../components/PageShell.js';
 import { PluginsGrid } from './plugins/grid.js';
 import { usePluginsList } from './plugins/use-list.js';
 import { usePluginsModal } from './plugins/use-modal.js';
@@ -50,13 +50,11 @@ export function PluginsView({ onOpenPluginConfig }) {
     ], []);
     useRegisterCommands('plugins', commands);
 
-    return html`<div class="view-container content-shell">
-        <${SurfaceContainer} className="view-body">
-            <${PluginsGrid}
-                plugins=${filtered} ghostPlugins=${list.ghostPlugins}
-                selectedIndex=${list.selectedIndex} loaded=${list.loaded}
-                updating=${actions.updating} onCardClick=${handleCardClick} onSelect=${list.setSelectedIndex}
-                onToggleMenu=${handleToggleMenu} />
-        <//>
-    </div>`;
+    return html`<${PageShell} frame=${false}>
+        <${PluginsGrid}
+            plugins=${filtered} ghostPlugins=${list.ghostPlugins}
+            selectedIndex=${list.selectedIndex} loaded=${list.loaded}
+            updating=${actions.updating} onCardClick=${handleCardClick} onSelect=${list.setSelectedIndex}
+            onToggleMenu=${handleToggleMenu} />
+    <//>`;
 }

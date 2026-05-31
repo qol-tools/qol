@@ -5,7 +5,7 @@ import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../app/view-keyboard-context.js';
 
 import { PageHeader } from '../components/PageHeader.js';
-import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
+import { PageShell } from '../components/PageShell.js';
 import { DiveEditorSubPage } from '../lib/components/DiveEditorSubPage.js';
 import { useDiveEditor } from '../lib/hooks/useDiveEditor.js';
 import { ShortcutEditForm } from './shortcuts/modal.js';
@@ -55,19 +55,12 @@ export function ShortcutsView() {
 
     const bindings = useViewBindings('shortcuts');
     return html`
-        <div class="view-container content-shell">
-            <${PageHeader}
-                subtitle="User-defined launcher shortcuts for URLs and apps"
-                aside=${html`<${KeyLegend} bindings=${bindings} />`} />
-            <div class="view-body content-shell-body">
-                <div class="content-shell-inner">
-                    <${SurfaceContainer} className="content-frame">
-                        <${ShortcutsList} shortcuts=${sc.filtered}
-                            selectedIndex=${sc.selectedIndex} onSelect=${sc.setSelectedId} onEdit=${sc.openEditModal} />
-                    <//>
-                </div>
-            </div>
-        </div>
+        <${PageShell}
+            subtitle="User-defined launcher shortcuts for URLs and apps"
+            aside=${html`<${KeyLegend} bindings=${bindings} />`}>
+            <${ShortcutsList} shortcuts=${sc.filtered}
+                selectedIndex=${sc.selectedIndex} onSelect=${sc.setSelectedId} onEdit=${sc.openEditModal} />
+        <//>
     `;
 }
 

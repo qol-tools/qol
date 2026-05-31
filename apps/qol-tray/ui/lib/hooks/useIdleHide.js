@@ -37,15 +37,15 @@ function attach(el, camera, navigation, alwaysVisible, occludeSelector) {
 
 function scheduleFrame(ctx) {
     if (ctx.rafId) return;
-    ctx.rafId = requestAnimationFrame(() => {
+    ctx.rafId = requestAnimationFrame((frameTs) => {
         ctx.rafId = 0;
-        evaluate(ctx);
+        evaluate(ctx, frameTs);
     });
 }
 
-function evaluate(ctx) {
+function evaluate(ctx, frameTs) {
     if (!ctx.home) return;
-    const overlaps = hasOverlap(ctx.home, ctx.el, ctx.occludeSelector);
+    const overlaps = hasOverlap(ctx.home, ctx.el, ctx.occludeSelector, frameTs);
     ctx.el.setAttribute('data-occluded', overlaps ? '1' : '0');
     if (overlaps) {
         if (ctx.hideTimer) return;
@@ -62,13 +62,27 @@ function evaluate(ctx) {
     ctx.el.style.setProperty('--hide', '0');
 }
 
-function hasOverlap(home, self, selector) {
+let occluderSnapshot = null;
+
+function occluders(selector, frameTs) {
+    if (occluderSnapshot && occluderSnapshot.ts === frameTs && occluderSnapshot.selector === selector) {
+        return occluderSnapshot.list;
+    }
+    const list = [];
     for (const el of document.querySelectorAll(selector)) {
-        if (self.contains(el) || el.contains(self)) continue;
         if (el.closest(OVERLAY_ANCESTOR)) continue;
         if (!hasVisibleContent(el)) continue;
         const r = el.getBoundingClientRect();
         if (r.width === 0 || r.height === 0) continue;
+        list.push({ el, r });
+    }
+    occluderSnapshot = { ts: frameTs, selector, list };
+    return list;
+}
+
+function hasOverlap(home, self, selector, frameTs) {
+    for (const { el, r } of occluders(selector, frameTs)) {
+        if (self.contains(el) || el.contains(self)) continue;
         if (rectsOverlap(home, r)) return true;
     }
     return false;

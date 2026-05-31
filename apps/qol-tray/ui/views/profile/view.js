@@ -1,6 +1,6 @@
 import { html } from '../../lib/html.js';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { PageHeader } from '../../components/PageHeader.js';
+import { PageShell } from '../../components/PageShell.js';
 import { SurfaceContainer } from '../../lib/components/SurfaceContainer.js';
 import { Surface, useInputSurface } from '../../lib/components/Surface.js';
 import { Badge, HealthDot, Alert } from '../../lib/components/StatusIndicators.js';
@@ -92,13 +92,13 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
     }, [showSettings]);
 
     return html`
-        <div id="profile-page" class="view-container content-shell profile-view-shell">
-            <${PageHeader} subtitle="Cloud sync, import and export, and recovery for your QoL Tray setup" />
-            <div class="view-body content-shell-body">
-                <div class="content-shell-inner">
-                    <div class="profile-page-stack">
-                        <${SurfaceContainer} id="profile-sections" className="content-frame profile-frame">
-                            ${ctrl.lastImport && html`<${ImportFeedback} lastImport=${ctrl.lastImport} />`}
+        <${PageShell}
+            subtitle="Cloud sync, import and export, and recovery for your QoL Tray setup"
+            className="profile-view-shell"
+            frameClassName="profile-frame"
+            frameId="profile-sections"
+        >
+            ${ctrl.lastImport && html`<${ImportFeedback} lastImport=${ctrl.lastImport} />`}
 
                             <section class="profile-section">
                                 <div class="profile-status-line">
@@ -226,12 +226,8 @@ export function ProfileView({ syncStatus, syncProviders, onSyncStatusChange, ref
                                         No sync backups yet. Recovery backups will appear here when remote state replaces local changes.
                                     </p>
                                 `}
-                            </section>
-                        <//>
-                    </div>
-                </div>
-            </div>
-        </div>
+            </section>
+        <//>
     `;
 }
 
@@ -260,29 +256,20 @@ export function BackupDetailSubPage({ slot, config }) {
 
     const { preview, incident, onAcknowledge } = slot.get();
     if (!preview) {
-        return html`<div class="view-container content-shell">
-            <${PageHeader} title="Backup Preview" subtitle="Select a backup to view" />
-        </div>`;
+        return html`<${PageShell} subtitle="Select a backup to view" frame=${false} />`;
     }
     const isIncidentBackup = incident?.backup_file === preview.file_name;
     return html`
-        <div class="view-container content-shell">
-            <${PageHeader} title=${preview.file_name} subtitle=${isIncidentBackup ? 'Backup awaiting review' : 'Backup preview'} />
-            <div class="view-body content-shell-body">
-                <div class="content-shell-inner">
-                    <${SurfaceContainer} className="content-frame backup-detail-frame">
-                        <${BackupDetailContent}
-                            text=${config.formatText(preview.content)}
-                            isIncidentBackup=${isIncidentBackup}
-                            onClose=${config.onClose}
-                            onOpenExternal=${() => config.onOpenExternal(preview.file_name)}
-                            onCopy=${() => config.onCopy(preview.content)}
-                            onRestore=${() => config.onRestore(preview.content)}
-                            onAcknowledge=${() => config.onAcknowledge(onAcknowledge)} />
-                    <//>
-                </div>
-            </div>
-        </div>
+        <${PageShell} subtitle=${isIncidentBackup ? 'Backup awaiting review' : 'Backup preview'} frameClassName="backup-detail-frame">
+            <${BackupDetailContent}
+                text=${config.formatText(preview.content)}
+                isIncidentBackup=${isIncidentBackup}
+                onClose=${config.onClose}
+                onOpenExternal=${() => config.onOpenExternal(preview.file_name)}
+                onCopy=${() => config.onCopy(preview.content)}
+                onRestore=${() => config.onRestore(preview.content)}
+                onAcknowledge=${() => config.onAcknowledge(onAcknowledge)} />
+        <//>
     `;
 }
 

@@ -2,8 +2,7 @@ import { html } from '../../lib/html.js';
 import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { createDebug } from '../../lib/debug.js';
 import { resolveViewLabel } from '../../app/views.js';
-import { regionLabelPosition, computeSlotScale, computeBaseScale } from '../../lib/world-geometry.js';
-import { getWorldSettings } from '../../lib/world-settings.js';
+import { HIDE_BELOW_SCREEN_W } from '../../lib/world-geometry.js';
 import { ScrambleText } from '../../lib/components/ScrambleText.js';
 
 const log = createDebug('qol:world');
@@ -16,34 +15,33 @@ const ANIMATIONS = {
     scramble: ScrambleText,
 };
 
-function writePositions(labelRefs, entries, cam) {
-    const { ghostThreshold, uiScaleOnZoomOut } = getWorldSettings();
-    const baseScale = uiScaleOnZoomOut ? computeBaseScale(Math.max(cam.zoom, 0.05), ghostThreshold) : 1;
-    const vp = document.getElementById('viewport');
-    const viewportW = vp?.clientWidth || window.innerWidth;
-    const viewportH = vp?.clientHeight || window.innerHeight;
+function writePositions(labelRefs, entries) {
+    const layerEl = document.querySelector('.world-region-label-layer');
+    if (!layerEl) return;
+    const slotById = new Map();
+    for (const slot of document.querySelectorAll('.world-view-slot')) {
+        slotById.set(slot.dataset.viewId, slot);
+    }
+    const layerRect = layerEl.getBoundingClientRect();
+    const work = [];
     for (const entry of entries) {
         const el = labelRefs.current.get(entry.id);
         if (!el) continue;
-        const slotScale = baseScale === 1 ? 1 : computeSlotScale({
-            entry,
-            cameraX: cam.x,
-            cameraY: cam.y,
-            viewportW,
-            viewportH,
-            zoom: cam.zoom,
-            baseScale,
-        });
-        const pos = regionLabelPosition(entry, cam, slotScale);
-        if (pos.hidden) {
+        const slot = slotById.get(entry.id);
+        if (!slot) { el.style.display = 'none'; continue; }
+        work.push({ el, rect: slot.getBoundingClientRect(), width: entry.width });
+    }
+    for (const { el, rect, width } of work) {
+        if (rect.width < HIDE_BELOW_SCREEN_W) {
             el.style.display = 'none';
             continue;
         }
+        const scale = width > 0 ? rect.width / width : 1;
         el.style.display = '';
-        el.style.left = `${pos.left}px`;
-        el.style.top = `${pos.top}px`;
-        el.style.transform = `translate(-50%, -50%) scale(${pos.scale})`;
-        el.style.maxWidth = `${pos.maxWidth}px`;
+        el.style.left = `${rect.left + rect.width / 2 - layerRect.left}px`;
+        el.style.top = `${rect.top - layerRect.top}px`;
+        el.style.transform = `translate(-50%, -50%) scale(${scale})`;
+        el.style.maxWidth = `${rect.width}px`;
     }
 }
 
@@ -59,26 +57,30 @@ export function RegionLabels({ registry, cameraLayer, navigation, diveDepth, cam
     const labelRefs = useRef(new Map());
     const entriesRef = useRef(entries);
     entriesRef.current = entries;
+    const rafRef = useRef(0);
+
+    const schedule = () => {
+        if (rafRef.current) return;
+        rafRef.current = requestAnimationFrame(() => {
+            rafRef.current = 0;
+            writePositions(labelRefs, entriesRef.current);
+        });
+    };
 
     useEffect(() => {
         if (!camera?.subscribe) return undefined;
-        writePositions(labelRefs, entriesRef.current, {
-            x: camera.x, y: camera.y, zoom: camera.zoom,
-        });
-        const unsub = camera.subscribe((cam) => {
-            writePositions(labelRefs, entriesRef.current, cam);
-        });
-        return unsub;
+        schedule();
+        const unsub = camera.subscribe(schedule);
+        return () => {
+            unsub();
+            if (rafRef.current) cancelAnimationFrame(rafRef.current);
+            rafRef.current = 0;
+        };
     }, [camera]);
 
     const entriesKey = entries.map(e => e.id).join('|');
     useLayoutEffect(() => {
-        if (!camera) return;
-        writePositions(labelRefs, entries, {
-            x: camera.x,
-            y: camera.y,
-            zoom: camera.zoom,
-        });
+        schedule();
     }, [entriesKey, camera]);
 
     const prevRef = useRef(null);
