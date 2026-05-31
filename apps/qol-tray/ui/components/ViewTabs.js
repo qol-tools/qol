@@ -2,16 +2,14 @@ import { html } from '../lib/html.js';
 import { useCallback } from 'preact/hooks';
 import { useViewTabs } from '../lib/hooks/useViewTabs.js';
 import { KEYBOARD_ISOLATION_SELECTOR } from '../lib/surface-traits.js';
-import { PageHeader } from './PageHeader.js';
 import { Surface } from '../lib/components/Surface.js';
 import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
+import { PageShell } from './PageShell.js';
 
-export function ViewTabs({ title, subtitle, scramble, tabs, onActivate, onContentBlur, trailing, children, vtRef, className, containerRef, initialTab }) {
+export function ViewTabs({ subtitle, tabs, onActivate, onContentBlur, trailing, children, vtRef, className, initialTab }) {
     const vt = useViewTabs(tabs, { onActivate, initialTab });
 
     if (vtRef) vtRef.current = vt;
-
-    const shellClass = ['view-container content-shell', className].filter(Boolean).join(' ');
 
     const handleContentFocusOut = useCallback((e) => {
         if (!onContentBlur) return;
@@ -23,34 +21,27 @@ export function ViewTabs({ title, subtitle, scramble, tabs, onActivate, onConten
     }, [onContentBlur]);
 
     return html`
-        <div class=${shellClass} ref=${containerRef}>
-            <${PageHeader} title=${title} subtitle=${subtitle} scramble=${scramble} />
-            <div class="view-body content-shell-body">
-                <div class="content-shell-inner">
-                    <${SurfaceContainer} className="content-frame">
-                        <div class="view-tabs" role="tablist" ref=${vt.rootRef}>
-                            ${tabs.map((tab, i) => html`
-                                <${Surface} as="button" key=${tab.id}
-                                    className="view-tab ${vt.activeTab === tab.id ? 'active' : ''}"
-                                    role="tab"
-                                    selected=${vt.activeTab === tab.id}
-                                    data-tab-id=${tab.id}
-                                    aria-selected=${vt.activeTab === tab.id}
-                                    onSelect=${() => vt.previewTab(i)}
-                                    onActivate=${() => vt.activateTab(i)}>
-                                    ${tab.label}
-                                    ${tab.count > 0 ? html`<span class="view-tab-count">${tab.count}</span>` : null}
-                                <//>
-                            `)}
-                            ${trailing}
-                        </div>
-                        <${SurfaceContainer} className="view-tab-content" role="tabpanel"
-                            onFocusOut=${handleContentFocusOut}>
-                            ${typeof children === 'function' ? children(vt) : children}
-                        <//>
+        <${PageShell} subtitle=${subtitle} className=${className}>
+            <div class="view-tabs" role="tablist" ref=${vt.rootRef}>
+                ${tabs.map((tab, i) => html`
+                    <${Surface} as="button" key=${tab.id}
+                        className="view-tab ${vt.activeTab === tab.id ? 'active' : ''}"
+                        role="tab"
+                        selected=${vt.activeTab === tab.id}
+                        data-tab-id=${tab.id}
+                        aria-selected=${vt.activeTab === tab.id}
+                        onSelect=${() => vt.previewTab(i)}
+                        onActivate=${() => vt.activateTab(i)}>
+                        ${tab.label}
+                        ${tab.count > 0 ? html`<span class="view-tab-count">${tab.count}</span>` : null}
                     <//>
-                </div>
+                `)}
+                ${trailing}
             </div>
-        </div>
+            <${SurfaceContainer} className="view-tab-content" role="tabpanel"
+                onFocusOut=${handleContentFocusOut}>
+                ${typeof children === 'function' ? children(vt) : children}
+            <//>
+        <//>
     `;
 }

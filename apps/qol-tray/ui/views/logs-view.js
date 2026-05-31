@@ -8,8 +8,7 @@ import { Button } from '../lib/components/Button.js';
 import { EmptyState } from '../lib/components/EmptyState.js';
 import { ListGroup } from '../lib/components/ListRow.js';
 import { LogRow, LogDetailContent } from '../components/domain-rows/LogRow.js';
-import { PageHeader } from '../components/PageHeader.js';
-import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
+import { PageShell } from '../components/PageShell.js';
 import { SuppressedRow } from '../components/domain-rows/SuppressedRow.js';
 
 import { createSharedSlot } from '../lib/shared-slot.js';
@@ -226,20 +225,11 @@ export function LogDetailSubPage({ slot }) {
 
     const { entry } = slot.get();
     if (!entry) {
-        return html`<div class="view-container content-shell">
-            <${PageHeader} title="Log Detail" subtitle="Select a log entry to view" />
-        </div>`;
+        return html`<${PageShell} subtitle="Select a log entry to view" frame=${false} />`;
     }
     return html`
-        <div class="view-container content-shell">
-            <${PageHeader} title="Log Detail" subtitle=${`${entry.level} — ${entry.src}`} />
-            <div class="view-body content-shell-body">
-                <div class="content-shell-inner">
-                    <${SurfaceContainer} className="content-frame">
-                        <${LogDetailContent} entry=${entry} />
-                    <//>
-                </div>
-            </div>
-        </div>
+        <${PageShell} subtitle=${`${entry.level} — ${entry.src}`}>
+            <${LogDetailContent} entry=${entry} />
+        <//>
     `;
 }

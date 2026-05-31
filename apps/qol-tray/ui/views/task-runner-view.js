@@ -3,7 +3,7 @@ import { html } from '../lib/html.js';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../app/view-keyboard-context.js';
 import { PageHeader } from '../components/PageHeader.js';
-import { SurfaceContainer } from '../lib/components/SurfaceContainer.js';
+import { PageShell } from '../components/PageShell.js';
 import { DiveEditorSubPage } from '../lib/components/DiveEditorSubPage.js';
 import { useDiveEditor } from '../lib/hooks/useDiveEditor.js';
 
@@ -113,15 +113,13 @@ export function TaskRunnerView() {
     useRegisterCommands('task-runner', commands);
 
     const bindings = useViewBindings('task-runner');
-    return html`<div class="view-container content-shell">
-        <${PageHeader}
-            subtitle="HTTP API for browser extensions to run local commands"
-            aside=${html`<${KeyLegend} bindings=${bindings} />`} />
-        <${SurfaceContainer} className="view-body">
-            <${ApiUsage} actions=${data.actions} actionIds=${data.actionIds} copyApiExample=${data.copyApiExample} />
-            <${ActionList} data=${data} edit=${edit} />
-        <//>
-    </div>`;
+    return html`<${PageShell}
+        frame=${false}
+        subtitle="HTTP API for browser extensions to run local commands"
+        aside=${html`<${KeyLegend} bindings=${bindings} />`}>
+        <${ApiUsage} actions=${data.actions} actionIds=${data.actionIds} copyApiExample=${data.copyApiExample} />
+        <${ActionList} data=${data} edit=${edit} />
+    <//>`;
 }
 
 export function ActionEditorSubPage({ slot }) {

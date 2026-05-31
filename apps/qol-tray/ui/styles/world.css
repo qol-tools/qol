@@ -53,7 +53,6 @@ html.qol-bootstrapping-dive #app {
 }
 
 .world-view-slot .view-container,
-.world-view-slot .plugin-config-detail,
 .world-view-slot .plugin-config-loading {
     flex: 1;
     min-height: 0;

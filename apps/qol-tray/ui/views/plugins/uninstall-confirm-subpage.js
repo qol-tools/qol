@@ -1,7 +1,6 @@
 import { html } from '../../lib/html.js';
 import { useEffect, useState, useCallback } from 'preact/hooks';
-import { PageHeader } from '../../components/PageHeader.js';
-import { SurfaceContainer } from '../../lib/components/SurfaceContainer.js';
+import { PageShell } from '../../components/PageShell.js';
 import { Button } from '../../lib/components/Button.js';
 import { createSharedSlot } from '../../lib/shared-slot.js';
 
@@ -31,32 +30,23 @@ export function UninstallConfirmSubPage({ slot }) {
     }, [slot]);
 
     if (!value.pluginId) {
-        return html`<div class="view-container content-shell">
-            <${PageHeader} title="Confirm Uninstall" subtitle="Select a plugin from the grid" />
-        </div>`;
+        return html`<${PageShell} subtitle="Select a plugin from the grid" frame=${false} />`;
     }
 
     const displayName = value.pluginName || value.pluginId;
     return html`
-        <div class="view-container content-shell">
-            <${PageHeader} title="Delete plugin?" subtitle=${displayName} />
-            <div class="view-body content-shell-body">
-                <div class="content-shell-inner">
-                    <${SurfaceContainer} className="content-frame uninstall-confirm-frame">
-                        <p class="uninstall-confirm-message">
-                            This will uninstall <strong>${displayName}</strong> and remove all of its data.
-                        </p>
-                        <div class="uninstall-confirm-actions">
-                            <${Button} variant="btn-ghost" onActivate=${onCancel}>
-                                Cancel <kbd>Esc</kbd>
-                            <//>
-                            <${Button} variant="btn-danger" onActivate=${onConfirm}>
-                                Delete <kbd>Enter</kbd>
-                            <//>
-                        </div>
-                    <//>
-                </div>
+        <${PageShell} subtitle=${displayName} frameClassName="uninstall-confirm-frame">
+            <p class="uninstall-confirm-message">
+                This will uninstall <strong>${displayName}</strong> and remove all of its data.
+            </p>
+            <div class="uninstall-confirm-actions">
+                <${Button} variant="btn-ghost" onActivate=${onCancel}>
+                    Cancel <kbd>Esc</kbd>
+                <//>
+                <${Button} variant="btn-danger" onActivate=${onConfirm}>
+                    Delete <kbd>Enter</kbd>
+                <//>
             </div>
-        </div>
+        <//>
     `;
 }

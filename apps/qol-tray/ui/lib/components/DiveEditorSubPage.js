@@ -5,7 +5,7 @@ import { useRegisterViewKeyboard } from '../../app/view-keyboard-context.js';
 import { setActiveModalContainer } from '../hooks/useModalKeyboard.js';
 import { ascend } from '../world-navigation-singleton.js';
 import { PageHeader } from '../../components/PageHeader.js';
-import { SurfaceContainer } from './SurfaceContainer.js';
+import { PageShell } from '../../components/PageShell.js';
 
 export function DiveEditorSubPage({
     slot,
@@ -41,21 +41,14 @@ export function DiveEditorSubPage({
     }, [hasModal]);
 
     if (!value?.modal) {
-        return html`<div class="view-container content-shell">
-            <${PageHeader} title=${fallbackTitle} subtitle=${fallbackSubtitle} />
-        </div>`;
+        return html`<${PageShell}
+            header=${html`<${PageHeader} title=${fallbackTitle} subtitle=${fallbackSubtitle} />`}
+            frame=${false} />`;
     }
 
     return html`
-        <div class="view-container content-shell">
-            ${renderHeader(value)}
-            <div class="view-body content-shell-body">
-                <div class="content-shell-inner">
-                    <${SurfaceContainer} className="content-frame" containerRef=${containerRef}>
-                        ${children(value)}
-                    <//>
-                </div>
-            </div>
-        </div>
+        <${PageShell} header=${renderHeader(value)} frameRef=${containerRef}>
+            ${children(value)}
+        <//>
     `;
 }

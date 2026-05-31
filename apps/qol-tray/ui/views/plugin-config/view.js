@@ -12,6 +12,7 @@ import {
 import { renderField, fieldSurfaceAttrs } from './field-map.js';
 import { dissolveIn, DISSOLVE_PRESETS } from '../../lib/dissolve.js';
 import { SurfaceContainer } from '../../lib/components/SurfaceContainer.js';
+import { PageShell } from '../../components/PageShell.js';
 
 function useEscapeFallback(onClose, active) {
     useEffect(() => {
@@ -69,12 +70,10 @@ export function PluginConfigSectionView({ pluginId, sectionId, onClose }) {
     if (ctx.loading || !ctx.sections) return null;
     const section = ctx.sections.find(s => s.id === sectionId);
     if (!section) return null;
+    const subtitle = section.id !== '_root' ? (section.description || '') : '';
     return html`
-        <${SurfaceContainer} className="plugin-config-detail" tabIndex="-1">
+        <${PageShell} subtitle=${subtitle} frameClassName="plugin-config-detail">
             <div class="config-detail-content">
-                ${section.id !== '_root' && section.description && html`
-                    <p class="section-copy">${section.description}</p>
-                `}
                 <${ConfigSection} fields=${section.fields} />
             </div>
         <//>

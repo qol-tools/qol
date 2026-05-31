@@ -1,7 +1,6 @@
 import { html } from '../../lib/html.js';
 import { useEffect, useState } from 'preact/hooks';
-import { PageHeader } from '../../components/PageHeader.js';
-import { SurfaceContainer } from '../../lib/components/SurfaceContainer.js';
+import { PageShell } from '../../components/PageShell.js';
 import { Button } from '../../lib/components/Button.js';
 import { createSharedSlot } from '../../lib/shared-slot.js';
 
@@ -21,9 +20,7 @@ export function PluginActionsSubPage({ slot }) {
     const value = slot.get();
 
     if (!value.rowId || !value.items?.length) {
-        return html`<div class="view-container content-shell">
-            <${PageHeader} title="Actions" subtitle="Select a row from the list" />
-        </div>`;
+        return html`<${PageShell} subtitle="Select a row from the list" frame=${false} />`;
     }
 
     const onActivate = (item) => {
@@ -32,20 +29,13 @@ export function PluginActionsSubPage({ slot }) {
     };
 
     return html`
-        <div class="view-container content-shell">
-            <${PageHeader} title="Actions" subtitle=${value.rowName || value.rowId} />
-            <div class="view-body content-shell-body">
-                <div class="content-shell-inner">
-                    <${SurfaceContainer} className="content-frame plugin-actions-frame">
-                        ${value.items.map(item => html`
-                            <${Button} key=${item.id || item.label} variant="btn-ghost"
-                                onActivate=${() => onActivate(item)}>
-                                ${item.label}
-                            <//>
-                        `)}
-                    <//>
-                </div>
-            </div>
-        </div>
+        <${PageShell} subtitle=${value.rowName || value.rowId} frameClassName="plugin-actions-frame">
+            ${value.items.map(item => html`
+                <${Button} key=${item.id || item.label} variant="btn-ghost"
+                    onActivate=${() => onActivate(item)}>
+                    ${item.label}
+                <//>
+            `)}
+        <//>
     `;
 }

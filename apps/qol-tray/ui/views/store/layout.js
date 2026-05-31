@@ -1,22 +1,18 @@
 import { html } from '../../lib/html.js';
 import { formatCacheAge } from './reducer.js';
-import { PageHeader } from '../../components/PageHeader.js';
-import { SurfaceContainer } from '../../lib/components/SurfaceContainer.js';
+import { PageShell } from '../../components/PageShell.js';
 import { Button, RefreshButton } from '../../lib/components/Button.js';
 import { StoreGrid } from './grid.js';
 
 export function StoreLayout({ ctrl }) {
     return html`
-        <div class="view-container content-shell">
-            <${PageHeader} subtitle="Browse and install plugins for QoL Tray"
-                badge=${html`<${StoreBadge} ...${ctrl} />`} />
-            <${SurfaceContainer} className="view-body">
-                <${StoreCredentialBanner} rateLimited=${ctrl.rateLimited} hasToken=${ctrl.hasToken} />
-                <${StoreGrid} plugins=${ctrl.filtered} loading=${ctrl.firstLoad || ctrl.refreshing}
-                    selectedIndex=${ctrl.selectedIndex} isInstalling=${ctrl.isInstalling}
-                    onCardClick=${ctrl.handleCardClick} onSelect=${ctrl.setSelectedIndex} />
-            <//>
-        </div>
+        <${PageShell} frame=${false} subtitle="Browse and install plugins for QoL Tray"
+            badge=${html`<${StoreBadge} ...${ctrl} />`}>
+            <${StoreCredentialBanner} rateLimited=${ctrl.rateLimited} hasToken=${ctrl.hasToken} />
+            <${StoreGrid} plugins=${ctrl.filtered} loading=${ctrl.firstLoad || ctrl.refreshing}
+                selectedIndex=${ctrl.selectedIndex} isInstalling=${ctrl.isInstalling}
+                onCardClick=${ctrl.handleCardClick} onSelect=${ctrl.setSelectedIndex} />
+        <//>
     `;
 }
 

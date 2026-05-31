@@ -41,7 +41,7 @@ test('world.css does not introduce overflow-y: auto on slot content', () => {
 const NO_CLIP_CSS_TARGETS = [
     { file: 'common-controls.css', selector: '.code-block' },
     { file: 'app-shell.css', selector: '.view-body' },
-    { file: 'app-shell.css', selector: '.plugin-config-detail' },
+    { file: 'common-settings.css', selector: '.content-frame' },
 ];
 
 for (const { file, selector } of NO_CLIP_CSS_TARGETS) {
