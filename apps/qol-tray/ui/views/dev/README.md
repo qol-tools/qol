@@ -21,5 +21,5 @@
 
 ## Security Notes
 
-- Dev view HTML rendering escapes plugin metadata before writing to `innerHTML`.
+- The dev view renders through Preact/htm, which escapes interpolated values; there is no `innerHTML` write path. Status tokens are constrained to an allow-list via `safeStatusToken`.
 - API mutation routes reject browser cross-site requests via fetch metadata/origin checks.

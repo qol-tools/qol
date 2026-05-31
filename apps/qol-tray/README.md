@@ -26,10 +26,7 @@ Plugins are standalone Rust binaries discovered from the [qol-tools](https://git
 
 ## Architecture
 
-Two views of the same system:
-
-- [`ARCHITECTURE.md`](ARCHITECTURE.md), code-grounded textual reference. Every claim anchors to a `file:line`. Covers the 21-step boot sequence, the three IPC channels, the plugin runtime, the hotkey backends, and the persistence quadrant.
-- [Runtime Architecture Map](diagram/Runtime%20Architecture%20Map.html), interactive SPA of the same material. Open with `make diagram`; `make diagram-build` rebuilds compiled JS after editing the `.jsx` sources. `data.js` is plain JS, edit and refresh.
+[Runtime Architecture Map](diagram/Runtime%20Architecture%20Map.html) - interactive SPA of the system. Open with `make diagram`; `make diagram-build` rebuilds compiled JS after editing the `.jsx` sources. `data.js` is plain JS, edit and refresh.
 
 ## License
 
