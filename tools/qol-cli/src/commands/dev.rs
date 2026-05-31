@@ -14,8 +14,14 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     let root = repo_root()?;
     print_title("qol dev");
     print_hint(verbose);
-    if branch.is_none() {
-        clear_active_worktree_marker();
+    // Validate the requested worktree exists before any destructive step
+    // (stopping the daemon, building, spawning). A missing branch must fail
+    // fast with no side effects, rather than leaving a freshly spawned daemon
+    // running against a stale active-worktree marker. Bare `qol dev` clears the
+    // marker so the boot resolves to the main clone.
+    match branch {
+        Some(branch) => ensure_worktree_branch(&root, branch)?,
+        None => clear_active_worktree_marker(),
     }
     recompile_linked_plugins(&root, verbose, skip_plugins)?;
     run_dev_hook(&root, verbose)?;
@@ -58,7 +64,6 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
 
     if let Some(branch) = branch {
         wait_for_health()?;
-        ensure_worktree_branch(&root, branch)?;
         post_recompile(branch)?;
     }
 
