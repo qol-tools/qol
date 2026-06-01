@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: lint + test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            clippy_args: --workspace --exclude keyremap --all-targets
+            test_args: --workspace --exclude keyremap
+          - os: macos-latest
+            clippy_args: --workspace --all-targets
+            test_args: --workspace
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libxi-dev libxtst-dev libxcb1-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libxdo-dev libvulkan-dev \
+            libwayland-dev libglib2.0-dev libgtk-3-dev libayatana-appindicator3-dev
+
+      - name: Format
+        if: runner.os == 'Linux'
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        env:
+          CLIPPY_ARGS: ${{ matrix.clippy_args }}
+        run: cargo clippy $CLIPPY_ARGS -- -D warnings
+
+      - name: Test
+        env:
+          TEST_ARGS: ${{ matrix.test_args }}
+        run: cargo test $TEST_ARGS
