@@ -42,4 +42,6 @@ core-foundation = { git = "https://github.com/servo/core-foundation-rs", tag = "
 core-foundation-sys = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
 
 [profile.release]
-incremental = true
+strip = true
+lto = true
+codegen-units = 1
