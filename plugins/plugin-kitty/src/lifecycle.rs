@@ -92,9 +92,7 @@ pub fn daemon_run() -> Result<()> {
                 eprintln!("plugin-kitty daemon: auto-restored {n} pane(s)");
                 if let Some(id) = crate::platform::current_boot_id() {
                     if let Err(err) = write_last_restored_boot_id(&id) {
-                        eprintln!(
-                            "plugin-kitty daemon: failed to persist boot-id marker: {err:#}"
-                        );
+                        eprintln!("plugin-kitty daemon: failed to persist boot-id marker: {err:#}");
                     }
                 }
             }
@@ -102,8 +100,7 @@ pub fn daemon_run() -> Result<()> {
         }
     }
 
-    let mut signals =
-        Signals::new([SIGTERM, SIGINT]).context("install SIGTERM/SIGINT handler")?;
+    let mut signals = Signals::new([SIGTERM, SIGINT]).context("install SIGTERM/SIGINT handler")?;
     if let Some(sig) = signals.forever().next() {
         eprintln!("plugin-kitty daemon: signal {sig}; snapshotting before exit");
         match snapshot() {
@@ -321,7 +318,11 @@ fn template_argv(claim: &RestoreClaim) -> Option<Vec<String>> {
     match claim.template_id.as_str() {
         "claude-session" => {
             let uuid = claim.params.get("session_id")?;
-            Some(vec!["claude".to_string(), "--resume".to_string(), uuid.clone()])
+            Some(vec![
+                "claude".to_string(),
+                "--resume".to_string(),
+                uuid.clone(),
+            ])
         }
         _ => None,
     }
