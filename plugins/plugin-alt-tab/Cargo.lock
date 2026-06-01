@@ -1527,7 +1527,7 @@ version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330c60081dcc4c72131f8eb70510f1ac07223e5d4163db481a04a0befcffa412"
 dependencies = [
- "libloading 0.7.4",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -2989,7 +2989,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.57.0",
 ]
 
 [[package]]
@@ -4765,7 +4765,6 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
- "qol-platform",
  "qol-runtime",
  "x11rb",
 ]
@@ -4803,6 +4802,7 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "qol-platform",
  "qol-runtime",
  "serde",
  "serde_json",
@@ -4820,7 +4820,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.15.1"
+version = "3.16.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4835,6 +4835,7 @@ dependencies = [
  "libc",
  "log",
  "mach2",
+ "objc2",
  "objc2-app-kit",
  "objc2-foundation",
  "open",
@@ -7427,7 +7428,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

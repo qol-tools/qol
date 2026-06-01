@@ -16,6 +16,9 @@ Better Alt+Tab for qol-tray (Linux + macOS). GPUI window list with live previews
 6. **Config and window cache reload per show**, so settings and MRU are current without a restart.
 7. **Debug logs under `#[cfg(debug_assertions)]`, prefixed `[alt-tab/...]`** so qol-tray's filters work. Never leak into release.
 8. **Data-driven dispatch over N-way switches.** Rule kinds, action handlers, and platform bindings go through `{ key, handler }` tables.
+9. **Every `Arc<RenderImage>` cache routes through the registry.** Inserts via `REGISTRY.retain`, removals via `REGISTRY.release`, so `App::drop_image` fires exactly once per `ImageId`. `MetalAtlas::remove` double-decrements on a double remove; a view that owns images must drain them in `Context::on_release`.
+10. **Focus-out is passive; it NEVER activates the selection.** Activation is owned solely by explicit user intent (Enter, card click, alt-release via `on_modifiers_changed` or the alt-poll fallback). Routing activation through focus-out lets a click-outside hijack the selected window.
+11. **Foregrounding the picked window is authoritative, not `NSRunningApplication.activate`** (inert on macOS 14+: returns true, does nothing). `_SLPSSetFrontProcessWithOptions` alone is silently ignored when an actively-front app holds front, so foreground via the target app's `kAXFrontmost` attribute plus the SkyLight `set_front` path, then re-assert both on a short generation-guarded loop until the target is frontmost. The picker teardown deactivates the daemon and the WindowServer restores the prior app, so a one-shot activation loses a timing race; the re-assert wins it. See the `macos-window-activation` skill.
 
 ## Ghost popup: active monitor is qol-runtime's single source of truth
 
