@@ -596,9 +596,6 @@ pub(crate) mod state {
     }
 
     fn grid_left(current: usize, _row: usize, g: &Grid) -> usize {
-        // Linear wrap: start-of-grid wraps to last cell, otherwise step back one.
-        // Treats the grid as a flat sequence so left at column 0 jumps to the end
-        // of the previous row, and column 0 of row 0 lands on the final card.
         if current == 0 {
             g.total.saturating_sub(1)
         } else {
@@ -607,7 +604,6 @@ pub(crate) mod state {
     }
 
     fn grid_right(current: usize, _row: usize, g: &Grid) -> usize {
-        // Linear wrap: end-of-grid wraps to first cell, otherwise step forward one.
         if current + 1 >= g.total {
             0
         } else {
@@ -634,7 +630,6 @@ pub(crate) mod state {
 
     fn grid_down(current: usize, row: usize, col: usize, g: &Grid) -> usize {
         if row + 1 >= g.rows {
-            // Wrap to the same column in the first row.
             let target_end = g.row_end(0);
             if target_end == 0 {
                 return current;
@@ -685,8 +680,6 @@ pub(crate) mod state {
             })
         }
 
-        // After fresh open with reset=Some(0), forward cycle picks idx 1 and reverse picks idx N-1.
-        // Regression: reuse path used to always select_next; reverse=true now correctly select_prev.
         #[test]
         fn first_cycle_after_reset_picks_idx_1_forward() {
             for n in 2..=8 {
@@ -727,7 +720,6 @@ pub(crate) mod state {
 
         #[test]
         fn n_forwards_equals_one_backward_for_two_windows() {
-            // Two-window edge: pressing prev once must equal pressing next once.
             let mut a = picker(2);
             let mut b = picker(2);
             a.select_prev();
@@ -747,7 +739,6 @@ pub(crate) mod state {
 
         #[test]
         fn right_at_row_end_wraps_to_next_row_start() {
-            // 8 cards, 3 cols: rows are [0,1,2], [3,4,5], [6,7]. Right at idx 2 → 3.
             let mut s = picker(8);
             s.selected_index = Some(2);
             s.select_right(3);
@@ -756,7 +747,6 @@ pub(crate) mod state {
 
         #[test]
         fn right_at_grid_end_wraps_to_first() {
-            // 8 cards, 3 cols. Right at idx 7 (last) → 0.
             let mut s = picker(8);
             s.selected_index = Some(7);
             s.select_right(3);
@@ -765,7 +755,6 @@ pub(crate) mod state {
 
         #[test]
         fn left_at_row_start_wraps_to_prev_row_end() {
-            // 8 cards, 3 cols. Left at idx 3 → 2.
             let mut s = picker(8);
             s.selected_index = Some(3);
             s.select_left(3);
@@ -774,7 +763,6 @@ pub(crate) mod state {
 
         #[test]
         fn left_at_grid_start_wraps_to_last() {
-            // 8 cards, 3 cols. Left at idx 0 → 7.
             let mut s = picker(8);
             s.selected_index = Some(0);
             s.select_left(3);
@@ -783,7 +771,6 @@ pub(crate) mod state {
 
         #[test]
         fn up_at_top_row_wraps_to_bottom_row_same_column() {
-            // 8 cards, 3 cols: rows [0,1,2], [3,4,5], [6,7]. Up at col 1, row 0 → row 2 col 1 = idx 7.
             let mut s = picker(8);
             s.selected_index = Some(1);
             s.select_up(3);
@@ -792,7 +779,6 @@ pub(crate) mod state {
 
         #[test]
         fn up_at_top_row_clamps_to_last_populated_when_short_row() {
-            // 8 cards, 3 cols. Up at col 2, row 0 (idx 2) → last row has no col 2; clamp to idx 7.
             let mut s = picker(8);
             s.selected_index = Some(2);
             s.select_up(3);
@@ -801,7 +787,6 @@ pub(crate) mod state {
 
         #[test]
         fn down_at_bottom_row_wraps_to_top_row_same_column() {
-            // 8 cards, 3 cols. Down at idx 7 (col 1 of last row) → idx 1.
             let mut s = picker(8);
             s.selected_index = Some(7);
             s.select_down(3);

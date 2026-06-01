@@ -299,7 +299,6 @@ mod preview_target_selection_tests {
 
     #[test]
     fn warm_cache_missing_id_is_also_captured() {
-        // 10 cached, 20 and 30 uncached (newly appeared). Expect [10 (frontmost), 20, 30].
         let windows = vec![w(10, false), w(20, false), w(30, false)];
         let cached: HashSet<u32> = [10].into_iter().collect();
         let got = select_capture_targets(&windows, &cached);
@@ -308,7 +307,6 @@ mod preview_target_selection_tests {
 
     #[test]
     fn warm_cache_missing_id_when_frontmost_already_cached() {
-        // Only idx 2 is missing. Frontmost (idx 0) always re-captured + the missing one.
         let windows = vec![w(10, false), w(20, false), w(30, false), w(40, false)];
         let cached: HashSet<u32> = [10, 20, 40].into_iter().collect();
         let got = select_capture_targets(&windows, &cached);
@@ -317,9 +315,6 @@ mod preview_target_selection_tests {
 
     #[test]
     fn minimized_frontmost_not_captured_even_when_first() {
-        // If the OS put a minimized window at idx 0, it must not be captured
-        // (and idx 1 is not promoted to "frontmost" — that's fine, the next non-
-        // minimized is still cached if present).
         let windows = vec![w(10, true), w(20, false)];
         let cached: HashSet<u32> = [20].into_iter().collect();
         let got = select_capture_targets(&windows, &cached);
@@ -331,7 +326,6 @@ mod preview_target_selection_tests {
 
     #[test]
     fn minimized_windows_without_cache_still_skipped() {
-        // Even on cold boot, minimized windows are skipped — matches capture_previews_cg's contract.
         let windows = vec![w(10, true), w(20, true), w(30, false)];
         let cached = HashSet::new();
         let got = select_capture_targets(&windows, &cached);
@@ -340,8 +334,6 @@ mod preview_target_selection_tests {
 
     #[test]
     fn cold_cache_with_minimized_frontmost_still_captures_visible_windows() {
-        // Cold-cache short-circuits to "all non-minimized". idx 0 being minimized must
-        // not accidentally pull in the minimized entry via the frontmost branch.
         let windows = vec![w(10, true), w(20, false), w(30, false)];
         let cached = HashSet::new();
         let got = select_capture_targets(&windows, &cached);
@@ -357,11 +349,9 @@ mod preview_target_selection_tests {
 
     #[test]
     fn indices_returned_are_the_original_window_positions() {
-        // idx 0 minimized → idx 1 is a "new" window (frontmost test should NOT match it since idx!=0)
         let windows = vec![w(10, true), w(20, false), w(30, false)];
         let cached: HashSet<u32> = [20, 30].into_iter().collect();
         let got = select_capture_targets(&windows, &cached);
-        // idx 0 is minimized → skipped. idx 1 is cached and not idx 0 → skipped. idx 2 cached → skipped.
         assert!(
             got.is_empty(),
             "no non-minimized frontmost + all cached = nothing to do"

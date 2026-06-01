@@ -10,7 +10,6 @@ mod shared;
 use crate::config::load_alt_tab_config;
 use std::sync::mpsc;
 
-// Shared type aliases for image caches used across picker, app, and icon modules.
 type PreviewMap = std::collections::HashMap<u32, std::sync::Arc<gpui::RenderImage>>;
 type IconMap = std::collections::HashMap<String, std::sync::Arc<gpui::RenderImage>>;
 type SharedIconCache = std::sync::Arc<std::sync::Mutex<IconMap>>;
@@ -45,7 +44,6 @@ fn main() {
         return;
     }
 
-    // If daemon is alive, forward command and exit
     if is_show_reverse && daemon::send_show_reverse() {
         return;
     }
@@ -53,7 +51,6 @@ fn main() {
         return;
     }
 
-    // Otherwise start as daemon
     let config = load_alt_tab_config();
     let (tx, rx) = mpsc::channel();
 

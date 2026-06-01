@@ -88,8 +88,6 @@ impl ImageRegistry {
     }
 }
 
-/// Insert into a cache keyed by `K`, retaining the new image and releasing any
-/// displaced predecessor through the global registry.
 pub fn replace_into<K, S>(
     cache: &mut HashMap<K, Arc<RenderImage>, S>,
     key: K,
@@ -106,7 +104,6 @@ pub fn replace_into<K, S>(
     }
 }
 
-/// Retain only entries matching the predicate; release the rest through the registry.
 pub fn retain_or_release<K, S>(
     cache: &mut HashMap<K, Arc<RenderImage>, S>,
     app: &mut App,
@@ -124,7 +121,6 @@ pub fn retain_or_release<K, S>(
     }
 }
 
-/// Replace the entire map. Releases each previous entry, retains each new entry.
 pub fn replace_map<K, S>(
     cache: &mut HashMap<K, Arc<RenderImage>, S>,
     new: HashMap<K, Arc<RenderImage>, S>,
@@ -143,7 +139,6 @@ pub fn replace_map<K, S>(
     }
 }
 
-/// Extend a cache with new entries; release each displaced predecessor.
 pub fn extend_with<K, S>(
     cache: &mut HashMap<K, Arc<RenderImage>, S>,
     new: HashMap<K, Arc<RenderImage>, S>,

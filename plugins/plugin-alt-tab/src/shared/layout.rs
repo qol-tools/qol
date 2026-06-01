@@ -16,8 +16,6 @@ pub fn preferred_column_count(window_count: usize, max_columns: usize) -> usize 
     if count == 1 {
         return 1;
     }
-    // Respect the user's max_columns preference.
-    // If they want a thin rectangle, this bounds the width.
     let max_cols = max_columns.max(2);
     count.min(max_cols)
 }

@@ -108,9 +108,6 @@ impl AltTabApp {
         )
     }
 
-    /// Apply config changes to a reused picker window. Handles window-level
-    /// properties (background appearance, shadow) that survive across opens,
-    /// plus delegate-level config (colors, labels, hotkey hints).
     fn apply_reuse_config(
         &mut self,
         req: &crate::picker::ReuseRequest,
@@ -411,9 +408,6 @@ mod focus_out_tests {
 
     #[test]
     fn hold_mode_dismisses_without_activating_on_click_outside() {
-        // Alt has been released (modifier_held=false) and a click stole key.
-        // Activation belongs to on_modifiers_changed / alt_poll, NOT focus-out;
-        // otherwise any click outside the picker hijacks the selected window.
         assert_eq!(
             focus_out_decision(true, &ActionMode::HoldToSwitch, false, false, false),
             FocusOutDecision::Dismiss

@@ -342,8 +342,6 @@ fn extract_x11_icon(reply: &GetPropertyReply) -> Option<RgbaImage> {
     Some(argb_to_bgra(&values[data_start..], src_w, src_h, 32))
 }
 
-/// Walk _NET_WM_ICON entries and pick the best icon ≤ 48px, or smallest available.
-/// Returns (data_start_offset, width, height).
 fn pick_best_icon(values: &[u32]) -> Option<(usize, usize, usize)> {
     let mut offset = 0;
     let mut best: Option<(usize, usize, usize)> = None;
@@ -378,7 +376,6 @@ fn better_icon(
     current.unwrap()
 }
 
-/// Nearest-neighbor resize from ARGB u32 pixels to BGRA byte buffer.
 fn argb_to_bgra(pixels: &[u32], src_w: usize, src_h: usize, target: usize) -> RgbaImage {
     let mut bgra = vec![0u8; target * target * 4];
     for y in 0..target {

@@ -110,8 +110,6 @@ impl Render for AltTabApp {
             entity,
         );
 
-        // Inner panel sized to the card grid bounds (cards + optional header). Carries the
-        // focus handle and key handlers so all keyboard input still routes through it.
         let panel = div()
             .id("alt-tab-panel")
             .track_focus(&self.focus_handle)
@@ -141,10 +139,6 @@ impl Render for AltTabApp {
             })
             .child(grid);
 
-        // Outer backdrop fills the entire monitor. It absorbs every click on that monitor
-        // before macOS can interpret it (clicks on the Dock with Alt held would otherwise
-        // trigger "hide others", which is the bug this prevents). Clicks land here only
-        // when they miss the inner panel — those dismiss the picker.
         div()
             .id("alt-tab-backdrop")
             .flex()
