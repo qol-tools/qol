@@ -1,0 +1,236 @@
+use std::collections::HashMap;
+
+use gpui::*;
+
+use crate::monitor::{ActiveMonitor, MonitorTracker};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct MonitorKey {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+impl MonitorKey {
+    pub fn from_bounds(bounds: &Bounds<Pixels>) -> Self {
+        Self {
+            x: bounds.origin.x.to_f64().round() as i32,
+            y: bounds.origin.y.to_f64().round() as i32,
+            width: bounds.size.width.to_f64().round() as i32,
+            height: bounds.size.height.to_f64().round() as i32,
+        }
+    }
+
+    pub fn fallback() -> Self {
+        Self {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct PopupPlacement {
+    monitor: Option<ActiveMonitor>,
+}
+
+impl PopupPlacement {
+    pub fn from_tracker(tracker: &MonitorTracker) -> Self {
+        Self {
+            monitor: tracker.snapshot_monitor(),
+        }
+    }
+
+    /// Build placement from the focused monitor (falls back to active, then cursor).
+    /// Use when the popup should follow "where the user is working" rather than
+    /// "the most recent input signal".
+    pub fn from_tracker_focus_first(tracker: &MonitorTracker) -> Self {
+        Self {
+            monitor: tracker.snapshot_monitor_focus_first(),
+        }
+    }
+
+    pub fn from_monitor(monitor: Option<ActiveMonitor>) -> Self {
+        Self { monitor }
+    }
+
+    pub fn target(&self) -> MonitorKey {
+        self.monitor
+            .as_ref()
+            .map(|monitor| MonitorKey::from_bounds(&monitor.bounds()))
+            .unwrap_or_else(MonitorKey::fallback)
+    }
+
+    pub fn centered_bounds(&self, win_size: Size<Pixels>, cx: &mut App) -> Bounds<Pixels> {
+        self.monitor
+            .as_ref()
+            .map(|monitor| monitor.centered_bounds(win_size))
+            .unwrap_or_else(|| Bounds::centered(None, win_size, cx))
+    }
+
+    pub fn monitor_size(&self) -> Option<(f32, f32)> {
+        self.monitor.as_ref().map(ActiveMonitor::size)
+    }
+
+    pub fn origin(&self) -> Point<Pixels> {
+        self.monitor
+            .as_ref()
+            .map(|monitor| monitor.bounds().origin)
+            .unwrap_or(point(px(0.0), px(0.0)))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct WindowPlacement {
+    pub target: MonitorKey,
+    pub bounds: Bounds<Pixels>,
+    pub display_id: Option<DisplayId>,
+}
+
+pub struct ActiveWindows<T> {
+    windows: HashMap<MonitorKey, WindowHandle<T>>,
+}
+
+impl<T> Default for ActiveWindows<T> {
+    fn default() -> Self {
+        Self {
+            windows: HashMap::new(),
+        }
+    }
+}
+
+impl<T: 'static> ActiveWindows<T> {
+    pub fn is_empty(&self) -> bool {
+        self.windows.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.windows.len()
+    }
+
+    pub fn existing(&self, target: MonitorKey) -> Option<WindowHandle<T>> {
+        self.windows.get(&target).cloned()
+    }
+
+    pub fn any_existing(&self) -> Option<(MonitorKey, WindowHandle<T>)> {
+        self.windows.iter().next().map(|(k, v)| (*k, *v))
+    }
+
+    pub fn insert(&mut self, target: MonitorKey, handle: WindowHandle<T>) {
+        self.windows.insert(target, handle);
+    }
+
+    pub fn remove(&mut self, target: MonitorKey) {
+        self.windows.remove(&target);
+    }
+
+    pub fn iter(&self) -> Vec<(MonitorKey, WindowHandle<T>)> {
+        self.windows.iter().map(|(k, v)| (*k, *v)).collect()
+    }
+
+    pub fn destroy_non_target(&mut self, target: MonitorKey, cx: &mut App)
+    where
+        T: Render,
+    {
+        let non_targets: Vec<MonitorKey> = self
+            .windows
+            .keys()
+            .filter(|k| **k != target)
+            .copied()
+            .collect();
+        for key in non_targets {
+            if let Some(handle) = self.windows.remove(&key) {
+                let _ = handle.update(cx, |_, window, _| window.remove_window());
+            }
+        }
+    }
+}
+
+pub fn open_window_with_focus<T, F>(
+    cx: &mut App,
+    options: WindowOptions,
+    build: F,
+) -> Result<WindowHandle<T>>
+where
+    T: Render + Focusable + 'static,
+    F: FnOnce(&mut Window, &mut Context<T>) -> T + 'static,
+{
+    cx.open_window(options, |window, cx| {
+        let view = cx.new(|cx| build(window, cx));
+        window.focus(&view.focus_handle(cx));
+        window.activate_window();
+        view
+    })
+}
+
+/// Resize `window` to `target`. When the size already matches but GPUI's cached
+/// scale factor has drifted from `backing_scale` (the popup was pre-created on one
+/// monitor and shown on another with different DPI), nudge the width by 1px and
+/// back to force GPUI to recompute scale. Without this, content renders blurry at
+/// the stale scale. Pass the real backing scale from the windowing layer, or
+/// `None` to skip the scale check.
+pub fn resize_or_sync_scale(window: &mut Window, target: Size<Pixels>, backing_scale: Option<f32>) {
+    let current = window.window_bounds().get_bounds().size;
+    let dw = (current.width.to_f64() - target.width.to_f64()).abs();
+    let dh = (current.height.to_f64() - target.height.to_f64()).abs();
+    if dw >= 1.0 || dh >= 1.0 {
+        window.resize(target);
+        return;
+    }
+    let Some(backing) = backing_scale else {
+        return;
+    };
+    if (window.scale_factor() - backing).abs() < 0.01 {
+        return;
+    }
+    window.resize(size(target.width + px(1.0), target.height));
+    window.resize(target);
+}
+
+pub fn target_monitor_key(monitor: Option<&ActiveMonitor>) -> MonitorKey {
+    let Some(monitor) = monitor else {
+        return MonitorKey::default();
+    };
+    MonitorKey::from_bounds(&monitor.bounds())
+}
+
+pub fn centered_window_placement(
+    monitor: Option<&ActiveMonitor>,
+    win_size: Size<Pixels>,
+    cx: &App,
+) -> WindowPlacement {
+    let bounds = match monitor {
+        Some(active) => active.centered_bounds(win_size),
+        None => Bounds::centered(None, win_size, cx),
+    };
+    WindowPlacement {
+        target: target_monitor_key(monitor),
+        bounds,
+        display_id: display_id_for_monitor(monitor, cx),
+    }
+}
+
+fn display_id_for_monitor(monitor: Option<&ActiveMonitor>, cx: &App) -> Option<DisplayId> {
+    let monitor = monitor?;
+    let target_bounds = monitor.bounds();
+    cx.displays()
+        .into_iter()
+        .find(|display| bounds_match(&display.bounds(), &target_bounds))
+        .map(|display| display.id())
+}
+
+fn bounds_match(a: &Bounds<Pixels>, b: &Bounds<Pixels>) -> bool {
+    let a = MonitorKey::from_bounds(a);
+    let b = MonitorKey::from_bounds(b);
+    coord_diff(a.x, b.x)
+        && coord_diff(a.y, b.y)
+        && coord_diff(a.width, b.width)
+        && coord_diff(a.height, b.height)
+}
+
+fn coord_diff(a: i32, b: i32) -> bool {
+    (a - b).abs() <= 4
+}
