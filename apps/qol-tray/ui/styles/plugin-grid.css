@@ -1,0 +1,5 @@
+:root {
+    --card-hover-scale: 1.02;
+    --grid-card-min-width: var(--size-grid-card-min);
+    --grid-card-max-width: var(--size-grid-card-max);
+}

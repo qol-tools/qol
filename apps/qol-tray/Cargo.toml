@@ -1,0 +1,149 @@
+[package]
+name = "qol-tray"
+version = "3.16.0"
+edition = "2021"
+description = "Quality of Life Tray - Pluggable system tray daemon for utility scripts"
+license = "PolyForm-Noncommercial-1.0.0"
+authors = ["KMRH47"]
+
+[[bin]]
+name = "qol-tray"
+path = "src/main.rs"
+
+[[bin]]
+name = "qol-tray-install"
+path = "src/installer/main.rs"
+
+[[bin]]
+name = "qol-tray-doctor"
+path = "src/doctor/main.rs"
+
+[[bin]]
+name = "qol-tray-migrate"
+path = "src/migrate/main.rs"
+
+
+[lib]
+name = "qol_tray"
+path = "src/lib.rs"
+
+[features]
+default = []
+dev = []
+linux_evdev = ["dep:evdev"]
+
+[dependencies]
+# Core async runtime
+tokio = { version = "1.35", features = ["rt-multi-thread", "fs", "process", "net", "sync", "time", "macros"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.9.8"
+base64 = "0.22"
+sha2 = "0.10"
+rand = "0.9"
+
+# Error handling
+anyhow = "1.0"
+
+# Logging
+log = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "registry"] }
+tracing-appender = "0.2"
+tracing-log = "0.2"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+# System tray
+tray-icon = "0.21.2"
+
+# Path utilities
+dirs = "6.0.0"
+open = "5"
+
+# Web server for plugin store UI
+axum = "0.8.7"
+tower-http = { version = "0.6", default-features = false, features = ["set-header"] }
+
+# HTTP client for GitHub API
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+
+# Git sync (libgit2 bindings; vendored so the host needs no system git)
+git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2", "vendored-openssl"] }
+
+# Global hotkeys
+global-hotkey = "0.7"
+
+# Event-driven channels for the hotkey listener (select! over reload + hotkey receivers)
+crossbeam-channel = "0.5"
+
+# Embed static files
+rust-embed = "8.0"
+
+semver = "1"
+
+# Filesystem traversal for dev plugin discovery
+walkdir = "2"
+
+# Archive extraction for self-update
+flate2 = "1"
+tar = "0.4"
+
+qol-runtime.workspace = true
+qol-app-icon.workspace = true
+png = "0.17"
+qol-config.workspace = true
+qol-migrations.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+x11rb = { version = "0.13", features = ["allow-unsafe-code"] }
+evdev = { version = "0.13", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSString", "NSURL", "NSObject"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSApplication", "NSResponder"] }
+mach2 = "0.6"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+proptest = "1.6"
+tempfile = "3.8"
+tower = { version = "0.5", features = ["util"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unreachable_pub = "warn"
+
+[lints.clippy]
+await_holding_lock = "warn"
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+unused_async = "warn"
+zombie_processes = "warn"
+
+
+[package.metadata.deb]
+maintainer = "KMRH47"
+copyright = "2025, KMRH47"
+extended-description = """\
+Quality of Life Tray - A pluggable system tray daemon for managing utility scripts and tools.
+Load custom plugins to extend functionality."""
+depends = "$auto, libgtk-3-0, libayatana-appindicator3-1"
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/qol-tray", "usr/bin/", "755"],
+    ["scripts/installer/platform/linux/desktop/qol-tray.desktop", "usr/share/applications/", "644"],
+    ["assets/icon.png", "usr/share/icons/hicolor/64x64/apps/qol-tray.png", "644"],
+]
+maintainer-scripts = "scripts/installer/platform/linux/debian/"

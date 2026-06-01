@@ -1,0 +1,155 @@
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ModeFlag {
+    Dev,
+    Prod,
+}
+
+impl Default for ModeFlag {
+    fn default() -> Self {
+        if cfg!(feature = "dev") {
+            ModeFlag::Dev
+        } else {
+            ModeFlag::Prod
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct ModeConfig {
+    #[serde(default)]
+    pub mode: ModeFlag,
+}
+
+impl ModeConfig {
+    pub fn load() -> Result<Self> {
+        let path = crate::paths::mode_config_path()?;
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let content = std::fs::read_to_string(&path)?;
+        let config: Self = serde_json::from_str(&content)?;
+        Ok(config)
+    }
+
+    pub fn save(&self) -> Result<()> {
+        let path = crate::paths::mode_config_path()?;
+        crate::file_io::write_pretty_json(&path, self)
+    }
+
+    pub fn set(mode: ModeFlag) -> Result<()> {
+        Self { mode }.save()
+    }
+
+    pub fn is_dev(&self) -> bool {
+        matches!(self.mode, ModeFlag::Dev)
+    }
+
+    pub fn is_prod(&self) -> bool {
+        matches!(self.mode, ModeFlag::Prod)
+    }
+}
+
+impl ModeFlag {
+    pub fn parse_cli(value: &str) -> Result<Self, String> {
+        match value {
+            "dev" => Ok(ModeFlag::Dev),
+            "prod" => Ok(ModeFlag::Prod),
+            other => Err(format!(
+                "Invalid mode value: '{}' (expected 'dev' or 'prod')",
+                other
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn capability_default() -> ModeFlag {
+        if cfg!(feature = "dev") {
+            ModeFlag::Dev
+        } else {
+            ModeFlag::Prod
+        }
+    }
+
+    #[test]
+    fn default_matches_capability() {
+        let expected = capability_default();
+        assert_eq!(ModeConfig::default().mode, expected);
+        assert_eq!(ModeFlag::default(), expected);
+        if cfg!(feature = "dev") {
+            assert!(ModeConfig::default().is_dev());
+        } else {
+            assert!(ModeConfig::default().is_prod());
+        }
+    }
+
+    #[test]
+    fn deserializes_dev_and_prod() {
+        let cases = [
+            (r#"{"mode":"dev"}"#, ModeFlag::Dev),
+            (r#"{"mode":"prod"}"#, ModeFlag::Prod),
+            (r#"{}"#, capability_default()),
+        ];
+        for (raw, expected) in cases {
+            let parsed: ModeConfig = serde_json::from_str(raw).unwrap();
+            assert_eq!(parsed.mode, expected, "raw: {raw}");
+        }
+    }
+
+    #[test]
+    fn load_returns_default_when_missing() {
+        let _guard = crate::test_support::env_lock().blocking_lock();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let _path_guard = crate::paths::push_test_path_root(tmp.path());
+
+        let loaded = ModeConfig::load().unwrap();
+        assert_eq!(loaded.mode, capability_default());
+    }
+
+    #[test]
+    fn parse_cli_table() {
+        let valid: &[(&str, ModeFlag)] = &[("dev", ModeFlag::Dev), ("prod", ModeFlag::Prod)];
+        for (raw, expected) in valid {
+            assert_eq!(ModeFlag::parse_cli(raw).unwrap(), *expected, "raw={raw}");
+        }
+        let invalid = [
+            "",
+            "Dev",
+            "PROD",
+            " dev",
+            "dev ",
+            "development",
+            "production",
+            "1",
+            "true",
+        ];
+        for raw in invalid {
+            let err = ModeFlag::parse_cli(raw).unwrap_err();
+            assert!(err.contains(&format!("'{}'", raw)), "raw={raw} err={err}");
+            assert!(
+                err.contains("expected 'dev' or 'prod'"),
+                "raw={raw} err={err}"
+            );
+        }
+    }
+
+    #[test]
+    fn set_persists_and_round_trips() {
+        let _guard = crate::test_support::env_lock().blocking_lock();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let _path_guard = crate::paths::push_test_path_root(tmp.path());
+
+        for mode in [ModeFlag::Dev, ModeFlag::Prod, ModeFlag::Dev] {
+            ModeConfig::set(mode).unwrap();
+            let loaded = ModeConfig::load().unwrap();
+            assert_eq!(loaded.mode, mode, "after set({mode:?})");
+        }
+    }
+}

@@ -1,0 +1,16 @@
+/target
+.env
+*.swp
+*.swo
+*~
+.DS_Store
+.github-token
+.plugin-cache.json
+.qol-tray-dev-hooks
+/.cursor.idea/
+proptest-regressions/
+
+.cursor/
+.idea/
+.worktrees/
+.superpowers/

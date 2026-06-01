@@ -1,0 +1,19 @@
+[package]
+name = "plugin-os-themes"
+version = "0.4.3"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+serde_json = "1"
+qol-plugin-daemon.workspace = true
+qol-runtime.workspace = true
+qol-config.workspace = true
+serde = { version = "1.0", features = ["derive"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11 = { version = "2", features = ["xlib", "xcursor", "xfixes"] }
+libc = "0.2"
+
+[dev-dependencies]
+qol-tray.workspace = true
