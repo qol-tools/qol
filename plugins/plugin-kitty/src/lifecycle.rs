@@ -104,13 +104,12 @@ pub fn daemon_run() -> Result<()> {
 
     let mut signals =
         Signals::new([SIGTERM, SIGINT]).context("install SIGTERM/SIGINT handler")?;
-    for sig in signals.forever() {
+    if let Some(sig) = signals.forever().next() {
         eprintln!("plugin-kitty daemon: signal {sig}; snapshotting before exit");
         match snapshot() {
             Ok(n) => eprintln!("plugin-kitty daemon: captured {n} pane(s) on shutdown"),
             Err(err) => eprintln!("plugin-kitty daemon: shutdown snapshot failed: {err:#}"),
         }
-        break;
     }
     Ok(())
 }
