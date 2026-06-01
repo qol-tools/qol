@@ -28,6 +28,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Free disk space
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker image prune --all --force || true
+          df -h /
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
