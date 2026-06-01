@@ -37,8 +37,6 @@ export function ShortcutEditForm({ modal, fieldProps, onChange, onClose, onSave 
 
     return html`
         <div class="edit-modal-content">
-            <${IdField} value=${modal.shortcut.id} disabled=${modal.editing}
-                onChange=${(v) => set('id', v)} fp=${fieldProps(fi++)} />
             <${NameField} value=${modal.shortcut.name} onChange=${(v) => set('name', v)} fp=${fieldProps(fi++)} />
             <${ActionTypeField} value=${modal.shortcut.action.type}
                 onChange=${(v) => onTypeChange(modal.shortcut, v, onChange)} fp=${fieldProps(fi++)} />
@@ -64,7 +62,6 @@ export function ShortcutEditForm({ modal, fieldProps, onChange, onClose, onSave 
 
 export function computeCanSave(shortcut) {
     if (!shortcut) return false;
-    if (!shortcut.id || !shortcut.id.trim()) return false;
     if (!shortcut.name || !shortcut.name.trim()) return false;
     const action = shortcut.action;
     if (!action) return false;
@@ -79,17 +76,6 @@ function onTypeChange(shortcut, type, onChange) {
         return;
     }
     onChange({ ...shortcut, action: { type: 'launch_app', app: { type: 'path', path: '' } } });
-}
-
-function IdField({ value, disabled, onChange, fp }) {
-    return html`
-        <div class="form-group" ...${fp}>
-            <label>ID</label>
-            <input type="text" value=${value}
-                   disabled=${disabled} placeholder="my-shortcut"
-                   onInput=${(e) => onChange(e.target.value)} />
-        </div>
-    `;
 }
 
 function NameField({ value, onChange, fp }) {

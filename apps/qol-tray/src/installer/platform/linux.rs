@@ -75,15 +75,19 @@ fn install_desktop_entry(binary_path: &Path) -> Result<()> {
 }
 
 fn render_app_desktop_entry(binary_path: &Path) -> String {
+    // `%u` passes a clicked `qol://` URL as argv (handled by `try_url_courier`);
+    // it expands to nothing for a plain daemon launch. `MimeType` registers the
+    // scheme so a browser/file manager routes `qol://` links here.
     format!(
         "[Desktop Entry]\n\
          Type=Application\n\
          Name=QoL Tray\n\
          Comment=Quality of Life Tray daemon\n\
-         Exec={}\n\
+         Exec={} %u\n\
          Icon=qol-tray\n\
          Terminal=false\n\
          Categories=Utility;\n\
+         MimeType=x-scheme-handler/qol;\n\
          StartupNotify=false\n",
         binary_path.display()
     )
@@ -99,6 +103,10 @@ fn refresh_caches() {
             .arg(dir.join("icons").join("hicolor"))
             .output();
     }
+    // Advisory: make qol-tray the default handler for the qol:// scheme.
+    let _ = std::process::Command::new("xdg-mime")
+        .args(["default", "qol-tray.desktop", "x-scheme-handler/qol"])
+        .output();
 }
 
 pub(super) fn warn_system_install_conflict() {
@@ -110,5 +118,18 @@ pub(super) fn warn_system_install_conflict() {
              The user-local install at ~/.local/bin/ takes precedence if it appears earlier in PATH.",
             system_binary.display()
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn desktop_entry_registers_qol_scheme_and_passes_url() {
+        let entry = render_app_desktop_entry(Path::new("/home/u/.local/bin/qol-tray"));
+        assert!(entry.contains("MimeType=x-scheme-handler/qol;"));
+        assert!(entry.contains("Exec=/home/u/.local/bin/qol-tray %u"));
+        assert!(entry.contains("Type=Application"));
     }
 }

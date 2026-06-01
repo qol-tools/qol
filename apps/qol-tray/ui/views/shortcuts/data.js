@@ -22,7 +22,6 @@ export async function runShortcut(id) {
 
 export function emptyShortcut() {
     return {
-        id: '',
         name: '',
         enabled: true,
         export_to_launcher: true,

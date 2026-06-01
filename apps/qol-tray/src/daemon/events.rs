@@ -37,6 +37,10 @@ impl EventBus {
     pub fn subscribe(&self) -> broadcast::Receiver<DaemonEvent> {
         self.tx.subscribe()
     }
+
+    pub fn subscriber_count(&self) -> usize {
+        self.tx.receiver_count()
+    }
 }
 
 impl Default for EventBus {
@@ -92,6 +96,20 @@ mod tests {
     fn send_without_subscribers_does_not_panic() {
         let bus = EventBus::new();
         bus.send_plugins_changed();
+    }
+
+    #[test]
+    fn subscriber_count_tracks_live_receivers() {
+        let bus = EventBus::new();
+        assert_eq!(bus.subscriber_count(), 0);
+        let rx = bus.subscribe();
+        assert_eq!(bus.subscriber_count(), 1);
+        let rx2 = bus.subscribe();
+        assert_eq!(bus.subscriber_count(), 2);
+        drop(rx);
+        assert_eq!(bus.subscriber_count(), 1);
+        drop(rx2);
+        assert_eq!(bus.subscriber_count(), 0);
     }
 
     #[test]

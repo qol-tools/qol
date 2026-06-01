@@ -32,6 +32,20 @@ pub fn collect_shortcut_entries(shortcuts: &[Shortcut]) -> Vec<LauncherEntry> {
         .collect()
 }
 
+pub fn collect_command_entries() -> Vec<LauncherEntry> {
+    crate::commands::EXPORTED
+        .iter()
+        .map(|c| LauncherEntry {
+            file_stem: format!("command-{}", c.id),
+            display_name: crate::commands::command_label(c),
+            description: format!("QoL command: {}", c.label),
+            bundle_id: format!("com.qol-tools.command.{}", c.id),
+            exec_args: vec!["open".into(), c.route.into()],
+            shortcut_action: None,
+        })
+        .collect()
+}
+
 pub fn sync_entries(entries: &[LauncherEntry], binary_path: &Path) {
     if let Err(e) = platform::sync(entries, binary_path) {
         log::error!("Failed to sync launcher apps: {}", e);
@@ -46,7 +60,8 @@ pub fn trigger_full_sync() {
             return;
         }
     };
-    let entries = collect_shortcut_entries(&shortcut_config.shortcuts);
+    let mut entries = collect_shortcut_entries(&shortcut_config.shortcuts);
+    entries.extend(collect_command_entries());
     let gen = SYNC_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     std::thread::spawn(move || {
         let _guard = SYNC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -137,5 +152,21 @@ mod tests {
             delta.shortcut_action.as_ref(),
             Some(ShortcutAction::LaunchApp { .. })
         ));
+    }
+
+    #[test]
+    fn collect_command_entries_maps_catalog_to_open_stubs() {
+        let entries = collect_command_entries();
+        assert_eq!(entries.len(), crate::commands::EXPORTED.len());
+        let add = entries
+            .iter()
+            .find(|e| e.file_stem == "command-shortcuts-add")
+            .expect("add-shortcut command entry");
+        assert_eq!(add.display_name, "QoL › Add Shortcut");
+        assert_eq!(
+            add.exec_args,
+            vec!["open".to_string(), "shortcuts/add".to_string()]
+        );
+        assert!(add.shortcut_action.is_none());
     }
 }
