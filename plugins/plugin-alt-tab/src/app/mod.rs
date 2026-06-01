@@ -1,0 +1,424 @@
+mod input;
+mod live_preview;
+mod render;
+
+use crate::config::ActionMode;
+use crate::picker;
+use crate::picker::create::PickerInit;
+use crate::picker::gather::GatheredWindows;
+use crate::picker::state::PickerState;
+use crate::{IconMap, PreviewMap};
+use gpui::*;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+
+pub(crate) static PICKER_VISIBLE: AtomicBool = AtomicBool::new(false);
+
+// PopUp windows on X11 fire one spurious blur right after creation; absorb only the first.
+const BLUR_GUARD_MS: u64 = 250;
+
+pub(crate) struct AltTabApp {
+    pub(crate) delegate: Entity<PickerState>,
+    pub(crate) focus_handle: FocusHandle,
+    pub(crate) action_mode: ActionMode,
+    pub(crate) alt_was_held: bool,
+    pub(crate) blur_guard_until: Instant,
+    pub(crate) blur_guard_armed: bool,
+    pub(crate) _alt_poll_task: Option<Task<()>>,
+    _live_preview_task: Option<Task<()>>,
+    _focus_out_sub: gpui::Subscription,
+}
+
+impl AltTabApp {
+    pub(crate) fn new(init: PickerInit, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let should_cycle = init.cycle_on_open && init.windows.len() >= 2;
+        let action_mode = init.action_mode.clone();
+        let delegate: Entity<PickerState> = cx.new(|state_cx| {
+            let state = PickerState::from_init(init);
+            state_cx
+                .on_release(|state: &mut PickerState, app: &mut App| {
+                    state.drain_to_registry(app);
+                })
+                .detach();
+            state
+        });
+
+        if should_cycle {
+            delegate.update(cx, |s, _| s.select_next());
+        }
+
+        let focus_handle = cx.focus_handle();
+        window.focus(&focus_handle);
+
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[alt-tab/hold] AltTabApp::new: action_mode={:?}",
+            action_mode
+        );
+
+        let mut app = Self {
+            _focus_out_sub: subscribe_focus_out(&focus_handle, window, cx),
+            _live_preview_task: None,
+            delegate,
+            focus_handle,
+            action_mode: action_mode.clone(),
+            alt_was_held: true,
+            blur_guard_until: Instant::now() + Duration::from_millis(BLUR_GUARD_MS),
+            blur_guard_armed: true,
+            _alt_poll_task: None,
+        };
+
+        if action_mode == ActionMode::HoldToSwitch {
+            app.start_alt_poll(window.to_async(cx).window_handle(), cx);
+        }
+
+        app
+    }
+
+    pub(crate) fn apply_reuse(
+        &mut self,
+        req: &crate::picker::ReuseRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.reposition_if_needed(req) {
+            return false;
+        }
+        self.apply_reuse_config(req, window, cx);
+        self.sync_alt_poll(window, cx);
+        self.apply_reuse_windows(req, window, cx);
+        true
+    }
+
+    fn reposition_if_needed(&mut self, req: &crate::picker::ReuseRequest) -> bool {
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[alt-tab/show] count={} max_cols={} hints={} layout.size={}x{} bounds.origin=({},{})",
+            req.gathered.windows.len(),
+            req.config.display.max_columns,
+            req.config.display.show_hotkey_hints,
+            req.layout.size.width.to_f64(),
+            req.layout.size.height.to_f64(),
+            req.layout.bounds.origin.x.to_f64(),
+            req.layout.bounds.origin.y.to_f64(),
+        );
+        picker::platform::reposition_picker_window(
+            req.layout.bounds.origin.x.to_f64(),
+            req.layout.bounds.origin.y.to_f64(),
+        )
+    }
+
+    fn apply_reuse_config(
+        &mut self,
+        req: &crate::picker::ReuseRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let was_transparent = self.delegate.read(cx).transparent_background;
+        let now_transparent = req.config.display.transparent_background;
+        if was_transparent != now_transparent {
+            let appearance = if now_transparent {
+                WindowBackgroundAppearance::Transparent
+            } else {
+                WindowBackgroundAppearance::Opaque
+            };
+            window.set_background_appearance(appearance);
+        }
+        if now_transparent {
+            picker::platform::disable_window_shadow();
+        }
+
+        let (card_color, card_opacity) = crate::picker::resolve_card_bg(&req.config.display);
+        self.action_mode = req.config.action_mode.clone();
+        self.alt_was_held = true;
+        self.blur_guard_until = Instant::now() + Duration::from_millis(BLUR_GUARD_MS);
+        self.blur_guard_armed = true;
+        self.delegate.update(cx, |s, _| {
+            s.apply_config(req.config, card_color, card_opacity)
+        });
+    }
+
+    fn sync_alt_poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.action_mode == ActionMode::HoldToSwitch {
+            self.start_alt_poll(window.window_handle(), cx);
+            return;
+        }
+        self._alt_poll_task = None;
+    }
+
+    fn apply_reuse_windows(
+        &mut self,
+        req: &crate::picker::ReuseRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_gathered(req.gathered, req.config.reset_selection_on_open, window, cx);
+        if req.config.open_behavior != crate::config::OpenBehavior::CycleOnce {
+            return;
+        }
+        if !req.config.reset_selection_on_open {
+            return;
+        }
+        if req.gathered.windows.len() < 2 {
+            return;
+        }
+        self.delegate.update(cx, |s, _| s.cycle(req.reverse));
+    }
+
+    fn apply_gathered(
+        &mut self,
+        gathered: &GatheredWindows,
+        reset: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.delegate.update(cx, |state, ctx| {
+            state.set_windows(gathered.windows.clone(), reset, ctx, Some(&mut *window));
+            state.replace_caches(
+                gathered.previews.clone(),
+                gathered.icons.clone(),
+                ctx,
+                Some(&mut *window),
+            );
+            ctx.notify();
+        });
+        cx.notify();
+    }
+
+    pub(crate) fn apply_ghost_gathered(
+        &mut self,
+        gathered: &GatheredWindows,
+        reset: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_gathered(gathered, reset, window, cx);
+    }
+
+    pub(crate) fn update_icons(
+        &mut self,
+        icons: IconMap,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.delegate.update(cx, |state, ctx| {
+            state.insert_icons(icons, ctx, Some(window))
+        });
+        cx.notify();
+    }
+
+    pub(crate) fn update_previews(
+        &mut self,
+        previews: PreviewMap,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.delegate.update(cx, |state, ctx| {
+            state.insert_previews(previews, ctx, Some(window))
+        });
+        cx.notify();
+    }
+
+    pub(crate) fn ensure_live_preview(&mut self, cx: &mut Context<Self>) {
+        if self._live_preview_task.is_some() {
+            return;
+        }
+        self._live_preview_task = Some(live_preview::spawn(self.delegate.clone(), cx));
+    }
+
+    pub(crate) fn start_alt_poll(
+        &mut self,
+        window_handle: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) {
+        let delegate = self.delegate.clone();
+        self.alt_was_held = true;
+        self._alt_poll_task = Some(cx.spawn(move |this, cx: &mut AsyncApp| {
+            alt_release_check(this, delegate, window_handle, cx.clone())
+        }));
+    }
+}
+
+// on_modifiers_changed drives the common case, but it can be lost when the picker isn't yet
+// key on reuse. Poll CGEventSource every ALT_POLL_INTERVAL_MS as a ground-truth fallback.
+const ALT_POLL_INTERVAL_MS: u64 = 30;
+
+async fn alt_release_check(
+    this: WeakEntity<AltTabApp>,
+    delegate: Entity<PickerState>,
+    window_handle: AnyWindowHandle,
+    mut cx: AsyncApp,
+) {
+    let executor = cx.background_executor().clone();
+    loop {
+        if this.upgrade().is_none() {
+            return;
+        }
+        if !PICKER_VISIBLE.load(Ordering::Relaxed) {
+            return;
+        }
+        if !picker::is_modifier_held() {
+            break;
+        }
+        executor
+            .timer(Duration::from_millis(ALT_POLL_INTERVAL_MS))
+            .await;
+    }
+    #[cfg(debug_assertions)]
+    eprintln!("[alt-tab/hold] Alt released via poll — activating selection");
+    let weak = this.clone();
+    let _ = cx.update_window(window_handle, move |_, window, cx| {
+        delegate.update(cx, |s, _| s.activate_selected_target());
+        if let Some(entity) = weak.upgrade() {
+            entity.update(cx, |app, cx| app.dismiss("alt-release/poll", window, cx));
+        }
+    });
+}
+
+fn subscribe_focus_out(
+    handle: &FocusHandle,
+    window: &mut Window,
+    cx: &mut Context<AltTabApp>,
+) -> gpui::Subscription {
+    cx.on_focus_out(
+        handle,
+        window,
+        |this, _event, window, cx| match focus_out_decision(
+            PICKER_VISIBLE.load(Ordering::Relaxed),
+            &this.action_mode,
+            this.blur_guard_armed,
+            Instant::now() < this.blur_guard_until,
+            picker::is_modifier_held(),
+        ) {
+            FocusOutDecision::IgnoreHidden => {
+                #[cfg(debug_assertions)]
+                eprintln!("[alt-tab/blur] ignored focus-out while picker is in ghost state");
+            }
+            FocusOutDecision::IgnoreBlurGuard => {
+                this.blur_guard_armed = false;
+                #[cfg(debug_assertions)]
+                eprintln!("[alt-tab/blur] absorbed spurious post-create blur");
+            }
+            FocusOutDecision::IgnoreAltHeld => {
+                #[cfg(debug_assertions)]
+                eprintln!("[alt-tab/blur] ignored focus-out while Alt is still held");
+            }
+            FocusOutDecision::Dismiss => this.dismiss("focus-out", window, cx),
+        },
+    )
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum FocusOutDecision {
+    IgnoreHidden,
+    IgnoreBlurGuard,
+    IgnoreAltHeld,
+    Dismiss,
+}
+
+/// Focus-out is passive: something else took key (usually a click outside the picker).
+/// It NEVER activates the selection. Activation is owned exclusively by explicit user
+/// intent: Enter, card click, alt-release via `on_modifiers_changed`, or alt-release
+/// via the `alt_poll` ground-truth fallback. Routing activation through focus-out
+/// conflated alt-release with click-outside and made clicks hijack the selected window.
+fn focus_out_decision(
+    picker_visible: bool,
+    action_mode: &ActionMode,
+    blur_guard_armed: bool,
+    in_blur_guard: bool,
+    modifier_held: bool,
+) -> FocusOutDecision {
+    if !picker_visible {
+        return FocusOutDecision::IgnoreHidden;
+    }
+    if blur_guard_armed && in_blur_guard {
+        return FocusOutDecision::IgnoreBlurGuard;
+    }
+    if action_mode == &ActionMode::HoldToSwitch && modifier_held {
+        return FocusOutDecision::IgnoreAltHeld;
+    }
+    FocusOutDecision::Dismiss
+}
+
+impl AltTabApp {
+    pub(crate) fn dismiss(
+        &mut self,
+        _source: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        #[cfg(debug_assertions)]
+        eprintln!("[alt-tab/dismiss] from={}", _source);
+        self._alt_poll_task = None;
+        self.blur_guard_armed = false;
+        PICKER_VISIBLE.store(false, Ordering::Relaxed);
+        picker::dismiss_picker(window);
+        picker::request_data_refresh();
+        cx.notify();
+    }
+}
+
+impl Focusable for AltTabApp {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+#[cfg(test)]
+mod focus_out_tests {
+    use super::{focus_out_decision, FocusOutDecision};
+    use crate::config::ActionMode;
+
+    #[test]
+    fn ghost_state_focus_out_is_ignored_regardless_of_other_signals() {
+        // The picker is hidden via alpha=0 but still keyWindow. Every other
+        // flag combination must collapse to IgnoreHidden so we never re-enter
+        // the dismiss path on top of an already-hidden picker.
+        let cases = [
+            (ActionMode::HoldToSwitch, true, true, true),
+            (ActionMode::HoldToSwitch, false, false, true),
+            (ActionMode::HoldToSwitch, false, false, false),
+            (ActionMode::Sticky, false, false, true),
+            (ActionMode::Sticky, true, true, false),
+        ];
+        for (mode, blur_armed, in_guard, modifier) in cases {
+            assert_eq!(
+                focus_out_decision(false, &mode, blur_armed, in_guard, modifier),
+                FocusOutDecision::IgnoreHidden,
+                "ghost state must win over mode={mode:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn blur_guard_absorbs_first_focus_out() {
+        assert_eq!(
+            focus_out_decision(true, &ActionMode::HoldToSwitch, true, true, true),
+            FocusOutDecision::IgnoreBlurGuard
+        );
+    }
+
+    #[test]
+    fn hold_mode_ignores_focus_out_while_alt_is_held() {
+        assert_eq!(
+            focus_out_decision(true, &ActionMode::HoldToSwitch, false, false, true),
+            FocusOutDecision::IgnoreAltHeld
+        );
+    }
+
+    #[test]
+    fn hold_mode_dismisses_without_activating_on_click_outside() {
+        assert_eq!(
+            focus_out_decision(true, &ActionMode::HoldToSwitch, false, false, false),
+            FocusOutDecision::Dismiss
+        );
+    }
+
+    #[test]
+    fn sticky_mode_keeps_focus_out_as_plain_dismiss() {
+        assert_eq!(
+            focus_out_decision(true, &ActionMode::Sticky, false, false, true),
+            FocusOutDecision::Dismiss
+        );
+    }
+}

@@ -1,0 +1,7 @@
+*.log
+.DS_Store
+target/
+plugin-lights
+plugin-lights.new
+.cargo/config.toml
+config.json

@@ -1,0 +1,159 @@
+schema_version = 1
+title = "Alt Tab"
+description = "Window switching behavior, layout, and labels."
+
+[section.behavior]
+label = "Behavior"
+description = "How Alt Tab opens and advances selection."
+actions = ["open", "open-reverse"]
+
+[field.action_mode]
+type = "select"
+label = "Action Mode"
+section = "behavior"
+default = "hold_to_switch"
+options = ["hold_to_switch", "sticky"]
+
+[field.action_mode.option_labels]
+hold_to_switch = "Hold To Switch"
+sticky = "Sticky"
+
+[field.open_behavior]
+type = "select"
+label = "Open Behavior"
+section = "behavior"
+default = "cycle_once"
+options = ["cycle_once", "show_only"]
+
+[field.open_behavior.option_labels]
+cycle_once = "Cycle Once"
+show_only = "Show Only"
+
+[field.reset_selection_on_open]
+type = "boolean"
+label = "Reset Selection On Open"
+section = "behavior"
+default = true
+
+[section.layout]
+label = "Layout"
+description = "Display tuning for the window picker."
+actions = ["open", "open-reverse"]
+
+[field.display_preview_mode]
+type = "select"
+config_key = "display.preview_mode"
+label = "Preview Mode"
+section = "layout"
+default = "below_list"
+options = ["below_list", "preview_only"]
+
+[field.display_preview_mode.option_labels]
+below_list = "Below List"
+preview_only = "Preview Only"
+
+[field.display_preview_fps]
+type = "number"
+config_key = "display.preview_fps"
+label = "Preview FPS"
+description = "Frames per second for window previews. 0 disables live updates."
+section = "layout"
+default = 10
+min = 0
+max = 60
+step = 1
+
+[field.display_max_columns]
+type = "number"
+config_key = "display.max_columns"
+label = "Max Columns"
+section = "layout"
+default = 6
+min = 2
+max = 10
+step = 1
+
+[field.display_show_hotkey_hints]
+type = "boolean"
+config_key = "display.show_hotkey_hints"
+label = "Show Hotkey Hints"
+section = "layout"
+default = true
+
+[field.display_show_minimized]
+type = "boolean"
+config_key = "display.show_minimized"
+label = "Show Minimized Windows"
+section = "layout"
+default = true
+
+[field.display_transparent_background]
+type = "boolean"
+config_key = "display.transparent_background"
+label = "Transparent Background"
+section = "layout"
+default = false
+
+[field.display_show_debug_overlay]
+type = "boolean"
+config_key = "display.show_debug_overlay"
+label = "Show Debug Overlay"
+section = "layout"
+default = false
+
+[field.display_ghost_opacity]
+type = "number"
+config_key = "display.ghost_opacity"
+label = "Ghost Opacity (debug)"
+description = "Opacity of the hidden picker window in debug builds. 0 = invisible."
+section = "layout"
+default = 0.0
+min = 0.0
+max = 1.0
+step = 0.05
+
+[field.display_ghost_debug_color]
+type = "string"
+config_key = "display.ghost_debug_color"
+label = "Ghost Color (debug)"
+description = "Background hex color of the hidden picker window in debug builds."
+section = "layout"
+placeholder = "ff0000"
+default = "ff0000"
+
+[field.display_card_background_color]
+type = "string"
+config_key = "display.card_background_color"
+label = "Card Background Color"
+section = "layout"
+placeholder = "1a1e2a"
+default = "1a1e2a"
+
+[field.display_card_background_opacity]
+type = "number"
+config_key = "display.card_background_opacity"
+label = "Card Background Opacity"
+section = "layout"
+default = 0.85
+min = 0.0
+max = 1.0
+step = 0.05
+
+[section.labels]
+label = "Labels"
+description = "What text each window row should show."
+actions = ["open", "open-reverse"]
+
+[field.label_show_app_name]
+type = "boolean"
+config_key = "label.show_app_name"
+label = "Show App Name"
+section = "labels"
+default = true
+
+[field.label_show_window_title]
+type = "boolean"
+config_key = "label.show_window_title"
+label = "Show Window Title"
+section = "labels"
+default = true

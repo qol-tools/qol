@@ -1,0 +1,79 @@
+schema_version = 1
+title = "Screen Recorder"
+description = "Audio and video capture defaults for screen recordings."
+
+[section.audio]
+label = "Audio"
+description = "Audio inputs and device sources used during recording."
+actions = ["record"]
+
+[field.audio_enabled]
+type = "boolean"
+config_key = "audio.enabled"
+label = "Enable Audio"
+section = "audio"
+default = true
+
+[field.audio_inputs]
+type = "string_array"
+config_key = "audio.inputs"
+label = "Audio Inputs"
+description = "Use values like mic and system."
+section = "audio"
+placeholder = "mic"
+default = ["mic", "system"]
+
+[field.audio_mic_device]
+type = "string"
+config_key = "audio.mic_device"
+label = "Mic Device"
+section = "audio"
+default = "default"
+
+[field.audio_system_device]
+type = "string"
+config_key = "audio.system_device"
+label = "System Device"
+section = "audio"
+default = "default"
+
+[section.video]
+label = "Video"
+description = "Encoding defaults for the recording output."
+actions = ["record"]
+
+[field.video_crf]
+type = "number"
+config_key = "video.crf"
+label = "CRF"
+section = "video"
+default = 18
+min = 0
+max = 51
+step = 1
+
+[field.video_preset]
+type = "select"
+config_key = "video.preset"
+label = "Preset"
+section = "video"
+default = "veryfast"
+options = ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"]
+
+[field.video_framerate]
+type = "number"
+config_key = "video.framerate"
+label = "Framerate"
+section = "video"
+default = 60
+min = 1
+max = 240
+step = 1
+
+[field.video_format]
+type = "select"
+config_key = "video.format"
+label = "Format"
+section = "video"
+default = "mkv"
+options = ["mkv", "mp4", "mov", "webm"]

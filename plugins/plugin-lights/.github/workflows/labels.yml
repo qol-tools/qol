@@ -1,0 +1,8 @@
+name: Auto-label
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+jobs:
+  label:
+    uses: qol-tools/qol-cicd/.github/workflows/pr-labeler.yml@main
+    secrets: inherit

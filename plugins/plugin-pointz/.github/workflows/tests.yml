@@ -1,0 +1,11 @@
+name: tests
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  tests:
+    uses: qol-tools/qol-cicd/.github/workflows/plugin-tests.yml@main

@@ -1,0 +1,119 @@
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "macos")]
+pub(crate) mod macos;
+
+#[cfg(target_os = "linux")]
+use linux as imp;
+#[cfg(target_os = "macos")]
+use macos as imp;
+
+#[cfg(target_os = "windows")]
+mod imp {
+    use crate::app::AltTabApp;
+    use crate::config::AltTabConfig;
+    use crate::PickerWindowState;
+    use qol_gpui::window::MonitorKey;
+    pub fn picker_window_kind() -> gpui::WindowKind {
+        gpui::WindowKind::PopUp
+    }
+    pub fn dismiss_picker(window: &mut gpui::Window) {
+        window.minimize_window();
+    }
+    pub fn set_accessory_policy() {}
+    pub fn reposition_picker_window(_x: f64, _y: f64) -> bool {
+        false
+    }
+    pub fn is_modifier_held() -> bool {
+        false
+    }
+    pub fn is_shift_held() -> bool {
+        false
+    }
+    pub fn disable_window_shadow() {}
+    pub fn show_picker() {}
+    pub fn hide_picker() {}
+    pub fn pre_create(
+        _config: &AltTabConfig,
+        _current: &PickerWindowState,
+        _tracker: &qol_gpui::monitor::MonitorTracker,
+        _cx: &mut gpui::App,
+    ) {
+    }
+    pub fn destroy_non_target_windows(
+        _current: &PickerWindowState,
+        _target: MonitorKey,
+        _cx: &mut gpui::App,
+    ) {
+    }
+    pub fn discard_old_window(
+        current: &PickerWindowState,
+        target: MonitorKey,
+        _handle: gpui::WindowHandle<AltTabApp>,
+        _cx: &mut gpui::App,
+    ) {
+        current.borrow_mut().remove(target);
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+compile_error!("plugin-alt-tab picker: unsupported target OS");
+
+pub fn picker_window_kind() -> gpui::WindowKind {
+    imp::picker_window_kind()
+}
+pub fn dismiss_picker(window: &mut gpui::Window) {
+    imp::dismiss_picker(window)
+}
+pub fn set_accessory_policy() {
+    imp::set_accessory_policy()
+}
+pub fn reposition_picker_window(x: f64, y: f64) -> bool {
+    imp::reposition_picker_window(x, y)
+}
+pub fn is_modifier_held() -> bool {
+    imp::is_modifier_held()
+}
+#[allow(dead_code)]
+pub fn is_shift_held() -> bool {
+    imp::is_shift_held()
+}
+pub fn disable_window_shadow() {
+    imp::disable_window_shadow()
+}
+pub fn show_picker() {
+    imp::show_picker()
+}
+pub fn hide_picker() {
+    imp::hide_picker()
+}
+pub fn pre_create(
+    config: &crate::config::AltTabConfig,
+    current: &crate::PickerWindowState,
+    tracker: &qol_gpui::monitor::MonitorTracker,
+    cx: &mut gpui::App,
+) {
+    imp::pre_create(config, current, tracker, cx)
+}
+
+/// Destroy sibling picker windows on non-target monitors. macOS keeps a single
+/// keep-alive picker that gets repositioned, so this is a no-op there.
+pub fn destroy_non_target_windows(
+    current: &crate::PickerWindowState,
+    target: qol_gpui::window::MonitorKey,
+    cx: &mut gpui::App,
+) {
+    imp::destroy_non_target_windows(current, target, cx)
+}
+
+/// Discard a picker window handle whose reuse attempt failed. macOS only drops
+/// the `ActiveWindows` slot where the platform keep-alive window must live; others
+/// remove the underlying window too.
+pub fn discard_old_window(
+    current: &crate::PickerWindowState,
+    target: qol_gpui::window::MonitorKey,
+    handle: gpui::WindowHandle<crate::app::AltTabApp>,
+    cx: &mut gpui::App,
+) {
+    imp::discard_old_window(current, target, handle, cx)
+}

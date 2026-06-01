@@ -1,0 +1,12 @@
+/target
+alt-tab
+alt-tab.new
+/.vscode
+*.log
+scratch.rs
+print_config.rs
+src/test_spawn.rs
+test_launch.sh
+
+.idea/
+.cargo/config.toml

@@ -1,0 +1,7 @@
+[
+  { "id": "da-DK", "name": "Danish", "lang": ["da"] },
+  { "id": "de-DE", "name": "German", "lang": ["de"] },
+  { "id": "sv-SE", "name": "Swedish", "lang": ["sv"] },
+  { "id": "no-NO", "name": "Norwegian", "lang": ["no", "nb", "nn"] },
+  { "id": "fi-FI", "name": "Finnish", "lang": ["fi"] }
+]

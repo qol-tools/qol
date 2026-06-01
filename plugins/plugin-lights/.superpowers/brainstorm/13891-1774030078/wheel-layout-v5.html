@@ -1,0 +1,94 @@
+<h2>Hue+Sat Disc + Two Sliders</h2>
+<p class="subtitle">Disc handles hue and saturation. Brightness and color temp as sliders.</p>
+
+<div style="display: flex; justify-content: center;">
+  <div style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f0f1a 100%); border-radius: 12px; padding: 28px; font-family: -apple-system, sans-serif; color: #eee; max-width: 480px; width: 100%;">
+    <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: #666; margin-bottom: 20px; font-weight: 600;">Controls</div>
+
+    <button style="width: 100%; padding: 16px; background: linear-gradient(135deg, #e94560, #c73550); border: none; border-radius: 14px; color: white; font-weight: 600; font-size: 16px; margin-bottom: 32px; cursor: pointer; letter-spacing: 0.03em; box-shadow: 0 2px 12px rgba(233, 69, 96, 0.3);">Toggle</button>
+
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 32px;">
+      <div style="position: relative; width: 280px; height: 280px;">
+        <canvas id="disc" width="280" height="280" style="border-radius: 50%; box-shadow: 0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.05);"></canvas>
+        <div style="position: absolute; top: 60%; left: 75%; transform: translate(-50%, -50%); width: 18px; height: 18px; border-radius: 50%; border: 3px solid white; box-shadow: 0 0 10px rgba(0,0,0,0.5), 0 0 0 1px rgba(0,0,0,0.2); pointer-events: none;"></div>
+      </div>
+
+      <div style="width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 20px;">
+        <div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 8px; align-items: baseline;">
+            <span style="font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 500;">Brightness</span>
+            <span style="font-size: 12px; color: #666; font-variant-numeric: tabular-nums;">75%</span>
+          </div>
+          <div style="height: 36px; border-radius: 18px; background: linear-gradient(to right, #0a0a0a, hsl(200, 70%, 55%)); position: relative; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05);">
+            <div style="position: absolute; left: 73%; top: 50%; transform: translate(-50%, -50%); width: 28px; height: 28px; border-radius: 50%; background: white; box-shadow: 0 2px 6px rgba(0,0,0,0.4);"></div>
+          </div>
+        </div>
+
+        <div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 8px; align-items: baseline;">
+            <span style="font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 500;">Color Temp</span>
+            <span style="font-size: 12px; color: #666; font-variant-numeric: tabular-nums;">300 mirek</span>
+          </div>
+          <div style="height: 36px; border-radius: 18px; background: linear-gradient(to right, #9dbfff, #fff5e6, #ffcc7a, #ffaa44); position: relative; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05);">
+            <div style="position: absolute; left: 42%; top: 50%; transform: translate(-50%, -50%); width: 28px; height: 28px; border-radius: 50%; background: white; box-shadow: 0 2px 6px rgba(0,0,0,0.4);"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function drawHueSatDisc(canvasId) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width;
+  const h = canvas.height;
+  const cx = w / 2;
+  const cy = h / 2;
+  const radius = Math.min(cx, cy) - 1;
+
+  const imageData = ctx.createImageData(w, h);
+  const data = imageData.data;
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const dx = x - cx;
+      const dy = y - cy;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist > radius) continue;
+
+      const angle = Math.atan2(dy, dx);
+      const hue = ((angle * 180 / Math.PI) + 360) % 360;
+      const sat = dist / radius;
+
+      const c = 1;
+      const xVal = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+      let r1, g1, b1;
+
+      if (hue < 60)       { r1 = c; g1 = xVal; b1 = 0; }
+      else if (hue < 120) { r1 = xVal; g1 = c; b1 = 0; }
+      else if (hue < 180) { r1 = 0; g1 = c; b1 = xVal; }
+      else if (hue < 240) { r1 = 0; g1 = xVal; b1 = c; }
+      else if (hue < 300) { r1 = xVal; g1 = 0; b1 = c; }
+      else                { r1 = c; g1 = 0; b1 = xVal; }
+
+      const r = Math.round((1 - sat + sat * r1) * 255);
+      const g = Math.round((1 - sat + sat * g1) * 255);
+      const b = Math.round((1 - sat + sat * b1) * 255);
+
+      const idx = (y * w + x) * 4;
+      data[idx] = r;
+      data[idx + 1] = g;
+      data[idx + 2] = b;
+      data[idx + 3] = 255;
+    }
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+}
+
+drawHueSatDisc('disc');
+</script>

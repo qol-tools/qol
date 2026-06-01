@@ -1,0 +1,413 @@
+use super::AltTabApp;
+use crate::config::{ActionMode, LabelConfig};
+use crate::discovery::WindowInfo;
+use crate::shared::layout::{
+    picker_dimensions, GRID_CARD_HEIGHT, GRID_CARD_WIDTH, GRID_PREVIEW_HEIGHT, GRID_PREVIEW_WIDTH,
+};
+use crate::{IconMap, PreviewMap};
+use gpui::prelude::FluentBuilder;
+use gpui::*;
+#[cfg(debug_assertions)]
+use std::sync::atomic::AtomicU32;
+use std::sync::Arc;
+#[cfg(debug_assertions)]
+use std::sync::LazyLock;
+#[cfg(debug_assertions)]
+use std::time::Instant;
+
+#[cfg(debug_assertions)]
+static RENDER_COUNT: AtomicU32 = AtomicU32::new(0);
+#[cfg(debug_assertions)]
+static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+struct RenderSnap {
+    selected_index: Option<usize>,
+    visible: bool,
+    transparent_bg: bool,
+    show_debug_overlay: bool,
+    show_hotkey_hints: bool,
+    card_bg_rgba: u32,
+}
+
+impl Render for AltTabApp {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let visible = crate::app::PICKER_VISIBLE.load(std::sync::atomic::Ordering::Relaxed);
+        #[cfg(debug_assertions)]
+        {
+            let n = RENDER_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            let win_count = self.delegate.read(cx).windows.len();
+            let b = window.window_bounds().get_bounds();
+            eprintln!(
+                "[alt-tab/render] call={} windows={} t={}us window=(origin=({:.1},{:.1}) size={:.1}x{:.1}) scale={:.2} visible={}",
+                n,
+                win_count,
+                PROCESS_START.elapsed().as_micros(),
+                b.origin.x.to_f64(),
+                b.origin.y.to_f64(),
+                b.size.width.to_f64(),
+                b.size.height.to_f64(),
+                window.scale_factor(),
+                visible,
+            );
+        }
+        let entity = cx.weak_entity();
+        let key_handler = cx.listener(|this, event: &KeyDownEvent, window, cx| {
+            super::input::handle_key_down(this, event, window, cx);
+        });
+        let modifiers_handler = cx.listener(|this, event: &ModifiersChangedEvent, window, cx| {
+            if this.action_mode != ActionMode::HoldToSwitch {
+                return;
+            }
+            if event.modifiers.alt {
+                return;
+            }
+            #[cfg(debug_assertions)]
+            eprintln!("[alt-tab/hold] Alt released via on_modifiers_changed");
+            this.delegate
+                .update(cx, |s, _| s.activate_selected_target());
+            this.dismiss("modifiers/alt-up", window, cx);
+        });
+        // Backdrop only absorbs clicks - it does NOT dismiss the picker. Dismissal is
+        // owned by explicit user intent (Enter, Escape, card click, alt release). A click
+        // anywhere on the active monitor must be swallowed (so macOS does not run
+        // Option+Click "hide others" or any other native gesture) but must not close the
+        // picker, otherwise the picker disappears every time the user clicks around.
+
+        let d = self.delegate.read(cx);
+        let alpha = (d.card_bg_opacity.clamp(0.0, 1.0) * 255.0) as u32;
+        let snap = RenderSnap {
+            selected_index: d.selected_index,
+            visible,
+            transparent_bg: d.transparent_background,
+            show_debug_overlay: d.show_debug_overlay,
+            show_hotkey_hints: d.show_hotkey_hints,
+            card_bg_rgba: (d.card_bg_color << 8) | alpha,
+        };
+
+        // The window is sized to the entire active monitor (so the backdrop can absorb
+        // any click on that monitor). The inner panel must stay sized to its content
+        // (max_columns wide, rows tall) so the card grid wraps correctly. Without this,
+        // 8 cards at 220px each fit in 1920px monitor width and never wrap.
+        //
+        // Pass None for monitor_size: window.window_bounds() can read 720x321 during
+        // the warmup ghost render before the resize lands, which would make max_w=648
+        // and panic the clamp(720, ..648..). picker_dimensions' fallback (1820, 980) is
+        // sane for any modern monitor and the real-show layout reshapes correctly.
+        let _ = window;
+        let (panel_w, panel_h) = picker_dimensions(
+            d.windows.len().max(1),
+            d.max_columns,
+            None,
+            d.show_hotkey_hints,
+        );
+
+        let grid = render_grid(
+            &d.windows,
+            &snap,
+            &d.label_config,
+            &d.live_previews,
+            &d.icon_cache,
+            entity,
+        );
+
+        let panel = div()
+            .id("alt-tab-panel")
+            .track_focus(&self.focus_handle)
+            .flex()
+            .flex_col()
+            .w(px(panel_w))
+            .h(px(panel_h))
+            .when(!snap.transparent_bg, |s| s.bg(rgb(0x0f111a)))
+            .when(snap.visible, |s| {
+                s.on_key_down(key_handler)
+                    .on_modifiers_changed(modifiers_handler)
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+                    .on_click(|_, _, cx| cx.stop_propagation())
+            })
+            .when(snap.show_hotkey_hints, |s| {
+                s.child(header_bar(
+                    "Alt Tab",
+                    "W close  ·  Q quit  ·  R minimize  ·  ↑↓←→ navigate  ·  ⏎ switch  ·  esc close",
+                ))
+            })
+            .when(!snap.transparent_bg && snap.show_debug_overlay, |s| {
+                s.child(header_bar(
+                    "Alt Tab  ·  Live Window Grid",
+                    "↑↓←→ navigate  ·  ⏎ switch  ·  esc close",
+                ))
+            })
+            .child(grid);
+
+        div()
+            .id("alt-tab-backdrop")
+            .flex()
+            .items_center()
+            .justify_center()
+            .w_full()
+            .h_full()
+            .when(snap.visible, |s| {
+                s.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+                    .on_click(|_, _, cx| cx.stop_propagation())
+            })
+            .child(panel)
+    }
+}
+
+fn header_bar(left: &str, right: &str) -> Div {
+    div()
+        .px_4()
+        .py_2()
+        .border_b_1()
+        .border_color(rgb(0x1e2333))
+        .bg(rgb(0x13151f))
+        .flex()
+        .items_center()
+        .justify_between()
+        .child(
+            div()
+                .text_color(rgb(0x5e6a84))
+                .text_xs()
+                .child(left.to_string()),
+        )
+        .child(
+            div()
+                .text_color(rgb(0x3a4252))
+                .text_xs()
+                .child(right.to_string()),
+        )
+}
+
+fn render_grid(
+    windows: &[WindowInfo],
+    snap: &RenderSnap,
+    label_config: &LabelConfig,
+    previews: &PreviewMap,
+    icons: &IconMap,
+    entity: WeakEntity<AltTabApp>,
+) -> Div {
+    div().flex_1().w_full().min_h_0().child(
+        div()
+            .id("preview-grid")
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .content_start()
+            .w_full()
+            .h_full()
+            .overflow_y_scroll()
+            .px_5()
+            .py_4()
+            .gap_3()
+            .when(windows.is_empty(), |s| {
+                s.items_center().justify_center().child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(0x5e6a84))
+                        .child("Scanning windows..."),
+                )
+            })
+            .children(windows.iter().enumerate().map(|(i, win)| {
+                render_card(i, win, snap, label_config, previews, icons, entity.clone())
+            })),
+    )
+}
+
+fn render_card(
+    i: usize,
+    win: &WindowInfo,
+    snap: &RenderSnap,
+    label_config: &LabelConfig,
+    previews: &PreviewMap,
+    icons: &IconMap,
+    entity: WeakEntity<AltTabApp>,
+) -> Stateful<Div> {
+    let is_selected = snap.selected_index == Some(i);
+
+    div()
+        .id(ElementId::Integer(i as u64))
+        .when(snap.visible, |el| {
+            el.on_click({
+                let entity = entity.clone();
+                move |_, window, cx| {
+                    let _ = entity.update(cx, |this, cx| {
+                        this.delegate.update(cx, |s, _| {
+                            s.selected_index = Some(i);
+                            s.activate_selected_target();
+                        });
+                        this.dismiss("click/card", window, cx);
+                    });
+                }
+            })
+        })
+        .flex()
+        .flex_col()
+        .items_center()
+        .w(px(GRID_CARD_WIDTH))
+        .h(px(GRID_CARD_HEIGHT))
+        .p_2()
+        .rounded_xl()
+        .when(snap.visible, |el| el.cursor_pointer())
+        .map(|el| {
+            card_bg(
+                el,
+                is_selected,
+                snap.visible,
+                snap.transparent_bg,
+                snap.card_bg_rgba,
+            )
+        })
+        .child(render_preview(win, previews, icons))
+        .child(render_label(
+            i,
+            win,
+            is_selected,
+            label_config,
+            icons,
+            snap.show_debug_overlay,
+        ))
+}
+
+fn card_bg(
+    el: Stateful<Div>,
+    selected: bool,
+    visible: bool,
+    transparent: bool,
+    card_rgba: u32,
+) -> Stateful<Div> {
+    if selected && transparent {
+        return el
+            .bg(rgba(card_rgba))
+            .border_1()
+            .border_color(rgb(0x4a6fa5));
+    }
+    if selected {
+        return el.bg(rgb(0x233050)).border_1().border_color(rgb(0x4a6fa5));
+    }
+    if transparent {
+        return el.bg(rgba(card_rgba));
+    }
+    if !visible {
+        return el.bg(rgb(0x1a1e2a));
+    }
+    el.bg(rgb(0x1a1e2a)).hover(|mut h| {
+        h.background = Some(rgb(0x1e2640).into());
+        h
+    })
+}
+
+fn render_preview(win: &WindowInfo, live_previews: &PreviewMap, icon_cache: &IconMap) -> Div {
+    let minimized_icon = if win.is_minimized {
+        icon_cache.get(&win.app_name)
+    } else {
+        None
+    };
+    div().rounded_md().overflow_hidden().child(preview_tile(
+        live_previews.get(&win.id),
+        &win.preview_path,
+        minimized_icon,
+    ))
+}
+
+fn render_label(
+    i: usize,
+    win: &WindowInfo,
+    selected: bool,
+    label_config: &LabelConfig,
+    icons: &IconMap,
+    show_debug: bool,
+) -> Div {
+    let label = label_config.format(&win.app_name, &win.title);
+    let text = if show_debug {
+        format!("[{}] {}", i, label)
+    } else {
+        label
+    };
+    let color = if selected {
+        rgb(0xffffff)
+    } else {
+        rgb(0x7a849e)
+    };
+    let app_icon = icons.get(&win.app_name).cloned();
+
+    div()
+        .mt_2()
+        .w_full()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .px_1()
+        .text_color(color)
+        .when_some(app_icon, |el, icon| {
+            el.child(
+                img(icon)
+                    .w(px(16.0))
+                    .h(px(16.0))
+                    .rounded_sm()
+                    .flex_shrink_0(),
+            )
+        })
+        .child(
+            div()
+                .text_xs()
+                .text_ellipsis()
+                .overflow_hidden()
+                .child(text),
+        )
+}
+
+fn preview_tile(
+    live_image: Option<&Arc<RenderImage>>,
+    preview_path: &Option<String>,
+    minimized_icon: Option<&Arc<RenderImage>>,
+) -> AnyElement {
+    if let Some(icon) = minimized_icon {
+        return minimized_placeholder(icon);
+    }
+    if let Some(render_image) = live_image {
+        return img(render_image.clone())
+            .w(px(GRID_PREVIEW_WIDTH))
+            .h(px(GRID_PREVIEW_HEIGHT))
+            .object_fit(ObjectFit::Fill)
+            .rounded_md()
+            .into_any_element();
+    }
+    if let Some(path) = preview_path {
+        return img(std::path::PathBuf::from(path))
+            .w(px(GRID_PREVIEW_WIDTH))
+            .h(px(GRID_PREVIEW_HEIGHT))
+            .object_fit(ObjectFit::Fill)
+            .rounded_md()
+            .into_any_element();
+    }
+    empty_placeholder()
+}
+
+fn minimized_placeholder(icon: &Arc<RenderImage>) -> AnyElement {
+    placeholder_frame()
+        .child(img(icon.clone()).w(px(48.0)).h(px(48.0)).rounded_md())
+        .into_any_element()
+}
+
+fn empty_placeholder() -> AnyElement {
+    placeholder_frame()
+        .text_xs()
+        .text_color(rgb(0x4a5268))
+        .child("...")
+        .into_any_element()
+}
+
+fn placeholder_frame() -> Div {
+    div()
+        .w(px(GRID_PREVIEW_WIDTH))
+        .h(px(GRID_PREVIEW_HEIGHT))
+        .bg(rgb(0x1e2130))
+        .rounded_md()
+        .border_1()
+        .border_color(rgb(0x3a4252))
+        .flex()
+        .items_center()
+        .justify_center()
+}

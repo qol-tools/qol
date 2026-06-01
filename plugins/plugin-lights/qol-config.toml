@@ -1,0 +1,69 @@
+schema_version = 1
+title = "Lights"
+description = "Zigbee light control."
+
+[section.connection]
+label = "Connection"
+
+[section.controls]
+label = "Controls"
+
+[field.coordinator_status]
+type = "status"
+label = "Coordinator"
+section = "connection"
+query = "connection_status"
+value_from = "state"
+label_map = { ok = "Connected", offline = "Offline", no_target = "No target" }
+tone_map = { ok = "success", offline = "danger", no_target = "danger" }
+
+[field.reconnect]
+type = "action"
+label = "Reconnect"
+section = "connection"
+action = "reload"
+variant = "ghost"
+
+[field.pair_device]
+type = "action"
+label = "Pair Device"
+section = "connection"
+action = "pair"
+variant = "primary"
+
+[field.known_devices]
+type = "list"
+label = "Devices"
+section = "connection"
+query = "list_devices"
+row_label = "{name}"
+row_subtitle = "{address}"
+empty_message = "No devices paired. Click Pair Device to start."
+
+[field.toggle_power]
+type = "action"
+label = "Toggle"
+section = "controls"
+action = "toggle_main"
+variant = "primary"
+
+[field.live_color_hex]
+type = "color"
+config_key = "live_color_hex"
+label = "Color"
+section = "controls"
+default = "#FFFFFF"
+stream = "live_color"
+
+[field.live_brightness]
+type = "number"
+config_key = "live_brightness"
+label = "Brightness"
+section = "controls"
+default = 100
+min = 1
+max = 100
+step = 1
+variant = "slider"
+stream = "live_color"
+action = "set_brightness_main"

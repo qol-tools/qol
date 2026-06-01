@@ -1,0 +1,29 @@
+[plugin]
+name = "Alt Tab"
+description = "Better alt-tab experience with window previews"
+version = "0.13.7"
+author = "KMRH47"
+platforms = ["linux", "macos"]
+
+[runtime]
+command = "alt-tab"
+actions = { open = ["--show"], open-reverse = ["--show-reverse"], settings = ["--settings"] }
+
+[daemon]
+enabled = true
+command = "alt-tab"
+socket = "/tmp/qol-alt-tab.sock"
+
+[menu]
+label = "Alt Tab"
+items = [
+  { type = "action", id = "open", label = "Alt Tab (Open/Next)", action = "run" },
+  { type = "action", id = "open-reverse", label = "Alt Tab (Previous)", action = "run" },
+  { type = "separator" },
+  { type = "action", id = "settings", label = "Settings", action = "settings" },
+]
+
+[[dependencies.binaries]]
+name = "alt-tab"
+repo = "qol-tools/plugin-alt-tab"
+pattern = "alt-tab-{os}-{arch}"
