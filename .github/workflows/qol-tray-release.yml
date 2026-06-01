@@ -1,0 +1,278 @@
+name: QoL Tray Release
+
+on:
+  push:
+    tags:
+      - 'qol-tray-v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: qol-tray-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  detect_macos_signing:
+    name: Detect macOS signing configuration
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.detect.outputs.enabled }}
+    steps:
+      - name: Detect signing secrets
+        id: detect
+        shell: bash
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [[ -z "${MACOS_CERT_P12_BASE64}" || -z "${MACOS_CERT_PASSWORD}" || -z "${MACOS_KEYCHAIN_PASSWORD}" || -z "${APPLE_ID}" || -z "${APPLE_APP_PASSWORD}" || -z "${APPLE_TEAM_ID}" ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+  build_linux_deb:
+    name: Build Linux .deb
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-deb
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libxi-dev libxtst-dev libxcb1-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libxdo-dev libvulkan-dev \
+            libwayland-dev libglib2.0-dev libgtk-3-dev libayatana-appindicator3-dev
+
+      - name: Build Debian package
+        run: cargo deb -p qol-tray
+
+      - name: Prepare artifacts
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/debian/*.deb dist/
+          ARCH=$(uname -m)
+          BUNDLE="qol-tray-linux-${ARCH}"
+          mkdir -p "${BUNDLE}"
+          cp target/release/qol-tray "${BUNDLE}/"
+          tar czf "${BUNDLE}.tar.gz" "${BUNDLE}"
+          cp "${BUNDLE}.tar.gz" dist/
+          ls -lh dist/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-dist
+          path: dist/*
+          if-no-files-found: error
+
+  build_macos:
+    name: Build macOS release
+    needs: detect_macos_signing
+    if: needs.detect_macos_signing.outputs.enabled == 'true'
+    runs-on: macos-latest
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build macOS binaries
+        run: |
+          cargo build --release --target aarch64-apple-darwin --bin qol-tray
+          cargo build --release --target x86_64-apple-darwin --bin qol-tray
+
+      - name: Import signing credentials
+        shell: bash
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          KEYCHAIN_PATH="${RUNNER_TEMP}/qol-tray-signing.keychain-db"
+          CERT_PATH="${RUNNER_TEMP}/qol-tray-cert.p12"
+
+          CERT_PATH="${CERT_PATH}" MACOS_CERT_P12_BASE64="${MACOS_CERT_P12_BASE64}" python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          Path(os.environ["CERT_PATH"]).write_bytes(
+              base64.b64decode(os.environ["MACOS_CERT_P12_BASE64"])
+          )
+          PY
+
+          security create-keychain -p "${MACOS_KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${MACOS_KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+          security list-keychains -d user -s "${KEYCHAIN_PATH}"
+          security default-keychain -s "${KEYCHAIN_PATH}"
+          security import "${CERT_PATH}" -k "${KEYCHAIN_PATH}" -P "${MACOS_CERT_PASSWORD}" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${MACOS_KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+
+          CERT_NAME=$(security find-identity -v -p codesigning "${KEYCHAIN_PATH}" | sed -n 's/.*"\(.*\)"/\1/p' | head -n 1)
+          if [[ -z "${CERT_NAME}" ]]; then
+            echo "No signing identity found in ${KEYCHAIN_PATH}"
+            exit 1
+          fi
+
+          xcrun notarytool store-credentials "qol-tray-notary" \
+            --apple-id "${APPLE_ID}" \
+            --password "${APPLE_APP_PASSWORD}" \
+            --team-id "${APPLE_TEAM_ID}" \
+            --keychain "${KEYCHAIN_PATH}"
+
+          {
+            echo "KEYCHAIN_PATH=${KEYCHAIN_PATH}"
+            echo "CERT_NAME=${CERT_NAME}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Assemble universal app bundle
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#qol-tray-v}"
+          APP_DIR="${RUNNER_TEMP}/QoL Tray.app"
+          CONTENTS_DIR="${APP_DIR}/Contents"
+          MACOS_DIR="${CONTENTS_DIR}/MacOS"
+          RESOURCES_DIR="${CONTENTS_DIR}/Resources"
+
+          rm -rf "${APP_DIR}"
+          mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
+
+          lipo -create \
+            target/aarch64-apple-darwin/release/qol-tray \
+            target/x86_64-apple-darwin/release/qol-tray \
+            -output "${MACOS_DIR}/qol-tray"
+
+          chmod +x "${MACOS_DIR}/qol-tray"
+          cp apps/qol-tray/assets/qol-tray.icns "${RESOURCES_DIR}/qol-tray.icns"
+
+          cat > "${CONTENTS_DIR}/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+          <key>CFBundleIdentifier</key>
+          <string>com.qol-tools.qol-tray</string>
+          <key>CFBundleName</key>
+          <string>QoL Tray</string>
+          <key>CFBundleExecutable</key>
+          <string>qol-tray</string>
+          <key>CFBundleIconFile</key>
+          <string>qol-tray</string>
+          <key>CFBundleVersion</key>
+          <string>${VERSION}</string>
+          <key>CFBundleShortVersionString</key>
+          <string>${VERSION}</string>
+          <key>LSUIElement</key>
+          <true/>
+          <key>LSMinimumSystemVersion</key>
+          <string>11.0</string>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Sign and notarize app bundle
+        shell: bash
+        env:
+          CERT_NAME: ${{ env.CERT_NAME }}
+          KEYCHAIN_PATH: ${{ env.KEYCHAIN_PATH }}
+        run: |
+          APP_DIR="${RUNNER_TEMP}/QoL Tray.app"
+          APP_ZIP="${RUNNER_TEMP}/qol-tray-macos-universal.zip"
+
+          codesign --force --options runtime --timestamp --sign "${CERT_NAME}" "${APP_DIR}/Contents/MacOS/qol-tray"
+          codesign --force --options runtime --timestamp --sign "${CERT_NAME}" "${APP_DIR}"
+          codesign --verify --deep --strict "${APP_DIR}"
+
+          ditto -c -k --keepParent "${APP_DIR}" "${APP_ZIP}"
+          xcrun notarytool submit "${APP_ZIP}" --keychain-profile "qol-tray-notary" --keychain "${KEYCHAIN_PATH}" --wait
+          xcrun stapler staple "${APP_DIR}"
+          xcrun stapler validate "${APP_DIR}"
+          spctl --assess --type execute "${APP_DIR}"
+
+      - name: Build updater archive and DMG
+        shell: bash
+        run: |
+          APP_DIR="${RUNNER_TEMP}/QoL Tray.app"
+          DIST_DIR="${RUNNER_TEMP}/dist"
+          DMG_SRC="${RUNNER_TEMP}/dmg-src"
+
+          rm -rf "${DIST_DIR}" "${DMG_SRC}"
+          mkdir -p "${DIST_DIR}" "${DMG_SRC}"
+
+          tar -C "${RUNNER_TEMP}" -czf "${DIST_DIR}/qol-tray-macos-universal.tar.gz" "QoL Tray.app"
+
+          cp -R "${APP_DIR}" "${DMG_SRC}/QoL Tray.app"
+          ln -s /Applications "${DMG_SRC}/Applications"
+          hdiutil create -volname "QoL Tray" -srcfolder "${DMG_SRC}" -ov -format UDZO "${DIST_DIR}/qol-tray-macos-universal.dmg"
+
+      - name: Notarize DMG
+        shell: bash
+        env:
+          KEYCHAIN_PATH: ${{ env.KEYCHAIN_PATH }}
+        run: |
+          DMG_PATH="${RUNNER_TEMP}/dist/qol-tray-macos-universal.dmg"
+          xcrun notarytool submit "${DMG_PATH}" --keychain-profile "qol-tray-notary" --keychain "${KEYCHAIN_PATH}" --wait
+          xcrun stapler staple "${DMG_PATH}"
+          xcrun stapler validate "${DMG_PATH}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dist
+          path: ${{ runner.temp }}/dist/*
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: [build_linux_deb, build_macos]
+    if: always() && needs.build_linux_deb.result == 'success' && (needs.build_macos.result == 'success' || needs.build_macos.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: QoL Tray ${{ github.ref_name }}
+          generate_release_notes: true
+          files: artifacts/**/*
+          fail_on_unmatched_files: true
+          allow_updates: false
+          draft: false
+          prerelease: false
