@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["libs/*"]
+members = ["apps/*", "libs/*", "plugins/*", "tools/*"]
 
 [workspace.package]
 version = "1.0.0"
@@ -21,6 +21,7 @@ qol-app-icon = { path = "libs/qol-app-icon" }
 qol-gpui = { path = "libs/qol-gpui" }
 qol-plugin-api = { path = "libs/qol-plugin-api" }
 qol-plugin-daemon = { path = "libs/qol-plugin-daemon" }
+qol-tray = { path = "apps/qol-tray" }
 
 # shared external deps (hoisted from the ex-qol-libs workspace)
 gpui = "0.2"
@@ -39,3 +40,6 @@ core-text = { git = "https://github.com/servo/core-foundation-rs", tag = "core-t
 core-graphics = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
 core-foundation = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
 core-foundation-sys = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
+
+[profile.release]
+incremental = true

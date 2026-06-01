@@ -1,0 +1,143 @@
+use super::router::{EventHandler, EventPattern, EventRoute, EventRouter, HandlerResult};
+use crate::daemon::EventBus;
+use crate::features::FeatureRegistry;
+use crate::plugins::MenuItem as PluginMenuItem;
+use crate::updates;
+use anyhow::Result;
+use std::sync::Arc;
+use tray_icon::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+
+pub fn build_menu(
+    feature_registry: Arc<FeatureRegistry>,
+    update_available: bool,
+    events: Arc<EventBus>,
+) -> Result<(Menu, EventRouter)> {
+    let menu = Menu::new();
+    let mut all_routes = Vec::new();
+    for (idx, feature) in feature_registry.features().iter().enumerate() {
+        let items = feature.menu_items();
+        if items.is_empty() {
+            continue;
+        }
+        let feature_id = format!("feature_{}", idx);
+        append_feature_items(&menu, &items, &feature_id);
+        let route = create_feature_route(feature_registry.clone(), idx, &feature_id);
+        all_routes.push(route);
+    }
+    let _ = menu.append(&PredefinedMenuItem::separator());
+    if update_available {
+        all_routes.push(create_update_route(&menu, events));
+    }
+    all_routes.push(create_quit_route(&menu));
+    Ok((menu, EventRouter::new(all_routes)))
+}
+
+fn append_feature_items(menu: &Menu, items: &[PluginMenuItem], feature_id: &str) {
+    for item in items {
+        append_item(
+            &|i| {
+                let _ = menu.append(i);
+            },
+            item,
+            feature_id,
+        );
+    }
+}
+
+fn create_feature_route(
+    feature_registry: Arc<FeatureRegistry>,
+    idx: usize,
+    feature_id: &str,
+) -> EventRoute {
+    EventRoute {
+        pattern: EventPattern::Prefix(format!("{}::", feature_id)),
+        handler: EventHandler::Sync(Box::new(move |event_id| {
+            if let Some(feature) = feature_registry.features().get(idx) {
+                feature.handle_event(event_id)?;
+            }
+            Ok(HandlerResult::Continue)
+        })),
+    }
+}
+
+fn create_update_route(menu: &Menu, events: Arc<EventBus>) -> EventRoute {
+    let version_label = updates::latest_version()
+        .map(|v| format!("⬆ Update to v{}", v))
+        .unwrap_or_else(|| "⬆ Update Available".to_string());
+    let _ = menu.append(&MenuItem::with_id("__update__", &version_label, true, None));
+
+    EventRoute {
+        pattern: EventPattern::Exact("__update__".to_string()),
+        handler: EventHandler::Sync(Box::new(move |_| {
+            log::info!("Starting update download and install");
+            spawn_update_task(events.clone());
+            Ok(HandlerResult::Continue)
+        })),
+    }
+}
+
+fn spawn_update_task(events: Arc<EventBus>) {
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                log::error!("Failed to create runtime for update: {}", e);
+                return;
+            }
+        };
+        if let Err(e) = rt.block_on(updates::download_and_install(events.clone())) {
+            log::error!("Update failed: {}", e);
+            events.send(crate::daemon::DaemonEvent::UpdateFailed {
+                message: e.to_string(),
+            });
+        }
+    });
+}
+
+fn create_quit_route(menu: &Menu) -> EventRoute {
+    let _ = menu.append(&MenuItem::with_id("__quit__", "Quit", true, None));
+
+    EventRoute {
+        pattern: EventPattern::Exact("__quit__".to_string()),
+        handler: EventHandler::Sync(Box::new(|_| {
+            log::info!("Quit requested");
+            Ok(HandlerResult::Quit)
+        })),
+    }
+}
+
+fn append_item(
+    append: &dyn Fn(&dyn tray_icon::menu::IsMenuItem),
+    item: &PluginMenuItem,
+    prefix_id: &str,
+) {
+    match item {
+        PluginMenuItem::Action { id, label, .. } => {
+            let full_id = format!("{}::{}", prefix_id, id);
+            append(&MenuItem::with_id(full_id, label, true, None));
+        }
+        PluginMenuItem::Checkbox {
+            id, label, checked, ..
+        } => {
+            let full_id = format!("{}::{}", prefix_id, id);
+            append(&CheckMenuItem::with_id(
+                full_id, label, true, *checked, None,
+            ));
+        }
+        PluginMenuItem::Separator => {
+            append(&PredefinedMenuItem::separator());
+        }
+        PluginMenuItem::Submenu { id, label, items } => {
+            let full_id = format!("{}::{}", prefix_id, id);
+            log::debug!("Creating submenu with ID: {}", full_id);
+            let submenu = Submenu::with_id(&full_id, label, true);
+            let sub_append: &dyn Fn(&dyn tray_icon::menu::IsMenuItem) = &|i| {
+                let _ = submenu.append(i);
+            };
+            items
+                .iter()
+                .for_each(|sub| append_item(sub_append, sub, prefix_id));
+            append(&submenu);
+        }
+    }
+}

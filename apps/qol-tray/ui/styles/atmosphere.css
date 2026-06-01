@@ -1,0 +1,39 @@
+.atmosphere-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: var(--z-base);
+    opacity: 0;
+    transition: opacity 400ms ease-out;
+}
+
+.atmosphere-layer.active {
+    opacity: 1;
+}
+
+.atmosphere-preset-wood {
+    background-color: #120a05;
+    background-image:
+        radial-gradient(ellipse at 25% 30%, rgba(101, 61, 30, 0.18), transparent 55%),
+        radial-gradient(ellipse at 75% 70%, rgba(60, 34, 15, 0.18), transparent 60%);
+}
+
+.atmosphere-preset-parchment {
+    background-color: #141210;
+    background-image:
+        radial-gradient(ellipse at 30% 25%, rgba(140, 105, 60, 0.12), transparent 55%),
+        radial-gradient(ellipse at 70% 75%, rgba(95, 72, 40, 0.14), transparent 60%);
+}
+
+.atmosphere-preset-terminal {
+    background-color: #030a06;
+    background-image:
+        radial-gradient(ellipse at 50% 50%, rgba(50, 205, 115, 0.08), transparent 65%);
+}
+
+.atmosphere-preset-spacecraft {
+    background-color: #080a14;
+    background-image:
+        radial-gradient(ellipse at 25% 20%, rgba(255, 105, 180, 0.1), transparent 55%),
+        radial-gradient(ellipse at 75% 80%, rgba(120, 60, 180, 0.12), transparent 60%);
+}

@@ -1,0 +1,23 @@
+name: Version
+
+on:
+  workflow_run:
+    workflows: ["tests"]
+    types: [completed]
+  workflow_dispatch:
+
+jobs:
+  version:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       (github.event.workflow_run.head_branch == 'main' ||
+        github.event.workflow_run.head_branch == 'main'))
+    permissions:
+      contents: write
+    uses: qol-tools/qol-cicd/.github/workflows/plugin-version.yml@main
+    with:
+      cargo_manifest: Cargo.toml
+      plugin_manifest: Cargo.toml
+      tag_prefix: v
+    secrets: inherit

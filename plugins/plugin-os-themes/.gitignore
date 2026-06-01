@@ -1,0 +1,7 @@
+config.json
+*.log
+.DS_Store
+target/
+plugin-os-themes
+plugin-os-themes.new
+.cargo/config.toml

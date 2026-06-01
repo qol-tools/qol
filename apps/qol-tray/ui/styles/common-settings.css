@@ -1,0 +1,250 @@
+.view-body.content-shell-body {
+    max-width: none;
+    margin: 0;
+    width: 100%;
+    flex: 1;
+    padding-left: 0;
+    padding-right: 0;
+}
+
+.content-shell-inner {
+    max-width: var(--size-content-max);
+    margin: 0 auto;
+    width: 100%;
+    padding: var(--space-4) var(--space-7) var(--space-5);
+}
+
+.content-frame {
+    border: var(--border-w-1) solid var(--tui-line-soft);
+    border-radius: var(--radius-lg);
+    padding: var(--space-5);
+    background: var(--tui-bg-screen);
+    box-shadow: var(--card-top-highlight);
+}
+
+.rate-limit-banner {
+    background: var(--warning-bg);
+    border: var(--border-w-1) solid var(--warning);
+    border-radius: var(--radius-lg);
+    padding: var(--space-4);
+    margin-bottom: var(--space-6);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+}
+
+.rate-limit-banner span {
+    color: var(--warning);
+}
+
+.hotkeys-warnings {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 0 var(--space-7) var(--space-3);
+    padding: var(--space-3);
+    background: rgba(var(--danger-rgb), 0.06);
+    border: 1px solid rgba(var(--danger-rgb), 0.2);
+    border-left: 3px solid rgba(var(--danger-rgb), 0.5);
+    border-radius: var(--radius-md);
+    font-size: var(--fs-xs);
+}
+
+.hotkeys-warning-item {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    color: var(--text-secondary);
+}
+
+.hotkeys-warning-item kbd {
+    font-size: var(--fs-caption);
+    font-weight: var(--fw-semibold);
+    color: rgba(var(--danger-rgb), 0.85);
+}
+
+.hotkeys-list {
+    flex: 1;
+    --hotkey-col-shortcut: 10rem;
+    --table-cols: var(--hotkey-col-shortcut) minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.hotkey-row.disabled {
+    opacity: 0.5;
+}
+
+.hotkey-disabled-badge {
+    font-size: var(--fs-xs);
+    color: var(--text-faint);
+    text-transform: uppercase;
+    letter-spacing: var(--ls-xl);
+    margin-left: var(--space-2);
+}
+
+.hotkey-row .col-key kbd {
+    display: inline-flex;
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    justify-content: center;
+    align-items: center;
+    padding: var(--pad-keycap);
+    font-size: var(--fs-md);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.hotkey-row .col-key {
+    display: flex;
+    justify-content: flex-start;
+}
+
+.hotkey-row .col-status {
+    text-align: center;
+    font-size: var(--fs-sm);
+}
+
+.hotkey-row:not(.disabled) .col-status {
+    color: var(--success);
+}
+
+.form-group {
+    margin-bottom: var(--space-5);
+}
+
+.form-group-children {
+    margin-left: var(--space-5);
+    padding-left: var(--space-5);
+    border-left: 2px solid var(--border-subtle);
+}
+
+.form-group-children > .form-group:last-child {
+    margin-bottom: 0;
+}
+
+.form-group[data-selected-surface] {
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    transition: border-color var(--dur-fast);
+}
+
+.form-group label {
+    display: block;
+    color: var(--text-muted);
+    font-size: var(--fs-md);
+    margin-bottom: var(--space-2);
+}
+
+.form-group label .hint {
+    color: var(--text-faint);
+    font-size: var(--fs-sm);
+}
+
+.form-group input[type="text"],
+.form-group input[type="number"],
+.form-group input[type="password"],
+.form-group select {
+    width: 100%;
+    padding: var(--space-3) var(--space-4);
+    border: var(--border-w-1) solid var(--tui-line);
+    border-radius: var(--radius-md);
+    background: var(--tui-bg-screen);
+    color: var(--text-secondary);
+    font-size: var(--fs-base);
+}
+
+.form-group input[type="text"]:focus,
+.form-group input[type="number"]:focus,
+.form-group input[type="password"]:focus,
+.form-group select:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.key-input-row {
+    display: flex;
+    gap: var(--space-2);
+}
+
+.key-input-row input {
+    flex: 1;
+    font-family: var(--font-mono);
+    cursor: pointer;
+}
+
+.key-input-row input:focus {
+    border-color: var(--accent);
+}
+
+.key-input-row input.recording {
+    border-color: var(--danger);
+    animation: pulse-border 1s ease-in-out infinite;
+}
+
+.checkbox-label {
+    display: flex !important;
+    align-items: center;
+    gap: var(--space-2);
+    cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: var(--size-control-dot);
+    height: var(--size-control-dot);
+    accent-color: var(--accent);
+}
+
+.checkbox-label input[type="checkbox"]:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+kbd {
+    display: inline-block;
+    padding: var(--pad-pill-tight);
+    background: var(--state-info-bg-faint);
+    border: var(--border-w-1) solid var(--state-info-border-soft);
+    border-radius: var(--radius-xs);
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    color: var(--state-info-text);
+}
+
+.shortcuts-list {
+    flex: 1;
+    --table-cols: minmax(0, 1.2fr) 5rem minmax(0, 2fr) 5rem;
+}
+
+.shortcut-row[data-enabled="false"] {
+    opacity: 0.5;
+}
+
+.form-group-inline {
+    display: flex;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+}
+
+.form-group-inline select {
+    width: auto;
+    min-width: 8rem;
+}
+
+.form-group-inline input {
+    flex: 1;
+}
+
+.form-group-row {
+    display: flex;
+    gap: var(--space-6);
+}
+
+.form-group-row label {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    cursor: pointer;
+}

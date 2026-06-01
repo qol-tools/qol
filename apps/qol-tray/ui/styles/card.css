@@ -1,0 +1,34 @@
+.card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(var(--grid-card-min-width, 220px), var(--grid-card-max-width, 1fr)));
+    gap: var(--space-6);
+    align-content: start;
+}
+
+.card {
+    position: relative;
+    background: var(--tui-bg-card);
+    border: var(--border-w-1) solid var(--tui-line-soft);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--elevation-crisp-1);
+    overflow: visible;
+    transition: transform var(--transition), border-color var(--transition), box-shadow var(--transition);
+    cursor: pointer;
+}
+
+.card[data-selected="true"] {
+    border-color: rgba(var(--accent-rgb), 0.85);
+    box-shadow: var(--selected-ring), var(--selected-glow), var(--elevation-crisp-1);
+    transform: translateY(-1px);
+    z-index: var(--z-selected);
+}
+
+.card:hover:not([data-selected="true"]) {
+    border-color: var(--tui-line);
+    box-shadow: var(--elevation-crisp-2);
+}
+
+.card-grid--zoom .card:hover:not([data-selected="true"]) {
+    transform: scale(var(--card-hover-scale));
+    box-shadow: var(--elevation-crisp-2);
+}

@@ -1,0 +1,63 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - name: Checkout qol-tray
+        uses: actions/checkout@v4
+        with:
+          path: qol-tray
+
+      - name: Checkout qol-config
+        uses: actions/checkout@v4
+        with:
+          repository: qol-tools/qol-config
+          path: qol-config
+
+      - name: Resolve sibling ref
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          REF_NAME: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          if [ -n "$HEAD_REF" ]; then
+            printf 'SIBLING_REF=%s\n' "$HEAD_REF" >> "$GITHUB_ENV"
+          else
+            printf 'SIBLING_REF=%s\n' "$REF_NAME" >> "$GITHUB_ENV"
+          fi
+
+      - name: Checkout qol-migrations at matching ref
+        uses: actions/checkout@v4
+        with:
+          repository: qol-tools/qol-migrations
+          ref: ${{ env.SIBLING_REF }}
+          path: qol-migrations
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: qol-tray
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev libxdo-dev
+
+      - name: Lint
+        working-directory: qol-tray
+        run: make lint

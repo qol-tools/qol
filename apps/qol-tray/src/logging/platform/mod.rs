@@ -1,0 +1,34 @@
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "windows")]
+mod windows;
+
+use std::path::PathBuf;
+
+pub(crate) fn log_dir() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    return linux::log_dir();
+    #[cfg(target_os = "macos")]
+    return macos::log_dir();
+    #[cfg(target_os = "windows")]
+    return windows::log_dir();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_dir_is_absolute_and_contains_app_name() {
+        let dir = log_dir();
+        assert!(dir.is_absolute(), "log dir {:?} should be absolute", dir);
+        let path_str = dir.to_string_lossy();
+        assert!(
+            path_str.contains("qol-tray"),
+            "log dir {:?} should contain qol-tray",
+            dir
+        );
+    }
+}
