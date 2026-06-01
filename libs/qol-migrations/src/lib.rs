@@ -453,8 +453,7 @@ mod tests {
         write_version(dir.path(), "3.14.9");
 
         let err = run_pre_flight_with(dir.path(), "3.14.9", &PreFlightRegistry::new())
-            .err()
-            .expect("pre-flight should reject older install");
+            .expect_err("pre-flight should reject older install");
 
         let msg = format!("{err:#}");
         assert!(
