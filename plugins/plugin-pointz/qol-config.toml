@@ -1,0 +1,45 @@
+schema_version = 1
+title = "PointZerver"
+description = "Control your PC from mobile devices."
+
+[field.connection_status]
+type = "status"
+label = "Pointzerver"
+query = "connection_status"
+value_from = "state"
+label_map = { ok = "Running", offline = "Offline" }
+tone_map = { ok = "success", offline = "danger" }
+
+[field.command_port]
+type = "status"
+label = "Command Port"
+query = "connection_info"
+value_from = "command_port"
+span = 1
+
+[field.discovery_port]
+type = "status"
+label = "Discovery Port"
+query = "connection_info"
+value_from = "discovery_port"
+span = 1
+
+[field.hostname]
+type = "status"
+label = "Hostname"
+query = "connection_info"
+value_from = "hostname"
+span = 1
+
+[field.ip]
+type = "status"
+label = "IP Address"
+query = "connection_info"
+value_from = "ip"
+span = 1
+
+[field.download_qr]
+type = "qr_code"
+label = "Scan to download"
+query = "connection_info"
+value_from = "app_download_url"

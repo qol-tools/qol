@@ -27,7 +27,3 @@ apple-codesign = "0.29"
 [dev-dependencies]
 tempfile = "3"
 
-[profile.release]
-strip = true
-lto = true
-codegen-units = 1

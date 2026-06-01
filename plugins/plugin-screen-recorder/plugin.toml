@@ -1,0 +1,26 @@
+[plugin]
+name = "Screen Recorder"
+description = "Record screen regions with optional audio support"
+version = "1.3.1"
+author = "KMRH47"
+platforms = ["linux"]
+
+[runtime]
+command = "screen-recorder"
+actions = { record = ["record"], settings = ["settings"] }
+
+[menu]
+label = "🎬 Screen Recorder"
+items = [
+    { type = "action", id = "record", label = "Start/Stop Recording", action = "run" },
+    { type = "separator" },
+    { type = "checkbox", id = "audio-enable", label = "Enable Audio", checked = true, action = "toggle-config", config_key = "audio.enabled" },
+    { type = "action", id = "settings", label = "Settings...", action = "settings" },
+]
+
+# No background daemon needed for this plugin
+
+[[dependencies.binaries]]
+name = "screen-recorder"
+repo = "qol-tools/plugin-screen-recorder"
+pattern = "screen-recorder-{os}-{arch}"

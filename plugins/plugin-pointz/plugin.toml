@@ -1,0 +1,26 @@
+[plugin]
+name = "PointZerver"
+description = "Control your PC from mobile devices"
+version = "1.3.2"
+author = "KMRH47"
+platforms = ["linux", "macos"]
+
+[runtime]
+command = "pointzerver"
+actions = { settings = ["--action", "settings"] }
+
+[menu]
+label = "PointZ"
+items = [
+    { type = "action", id = "settings", label = "Settings", action = "settings" },
+]
+
+[daemon]
+enabled = true
+command = "pointzerver"
+socket = "/tmp/qol-pointz.sock"
+
+[[dependencies.binaries]]
+name = "pointzerver"
+repo = "qol-tools/pointzerver"
+pattern = "pointzerver-{os}-{arch}"

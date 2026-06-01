@@ -1,0 +1,12 @@
+name: lint
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  lint:
+    uses: qol-tools/qol-cicd/.github/workflows/plugin-lint.yml@main
