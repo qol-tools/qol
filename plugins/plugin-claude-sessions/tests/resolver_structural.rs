@@ -8,8 +8,8 @@
 //! - exe != "claude" -> `Err(ResolveError::NotClaude { .. })`. We refuse
 //!   to even probe the fd table for non-Claude processes; this is the
 //!   first line of defense against PID spoofing.
-//! - Linux / Windows -> `Err(ResolveError::PlatformUnsupported)`. macOS
-//!   is the only supported host today; future work tracks the others.
+//! - Windows -> `Err(ResolveError::PlatformUnsupported)`. macOS (libproc)
+//!   and Linux (`/proc`) are implemented; Windows support is future work.
 //!
 //! Concerns that need a running Claude (live fd walking, jsonl regex
 //! match) live under `tests/macos_resolver_live.rs` and are gated to
@@ -44,12 +44,14 @@ fn resolver_not_claude_carries_seen_exe_verbatim() {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 #[test]
-fn resolver_platform_unsupported_on_linux_and_windows() {
-    // On non-macOS hosts the resolver compiles (per qol-arch-code's
-    // no-`compile_error!` rule) and returns a typed error at runtime so
-    // the broker can decide UX without panicking.
+fn resolver_platform_unsupported_on_windows() {
+    // Windows is the one remaining unsupported host: the resolver
+    // compiles (per qol-arch-code's no-`compile_error!` rule) and returns
+    // a typed error at runtime so the broker can decide UX without
+    // panicking. Linux is implemented in platform/linux.rs and covered by
+    // its own tests, so it is no longer asserted as unsupported here.
     let res = resolve_session_jsonl(1, "claude");
     assert_eq!(res, Err(ResolveError::PlatformUnsupported));
 }
