@@ -1,6 +1,6 @@
 [package]
 name = "keyremap"
-version = "1.2.1"
+version = "1.2.2"
 edition = "2021"
 description = "Keyboard and mouse remapping plugin for QoL Tray"
 license = "PolyForm-Noncommercial-1.0.0"
