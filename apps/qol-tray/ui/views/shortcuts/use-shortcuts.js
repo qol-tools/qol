@@ -5,6 +5,7 @@ import { useListKeyboard } from '../../lib/hooks/useListKeyboard.js';
 import { useModalKeyboard } from '../../lib/hooks/useModalKeyboard.js';
 import { diveViaSelector } from '../../lib/world-navigation-singleton.js';
 import { isShortcutValid } from './validation.js';
+import { deriveShortcutId } from './derive-id.js';
 
 const AUTO_SAVE_DEBOUNCE_MS = 400;
 
@@ -75,6 +76,10 @@ function useShortcutsData(searchQuery) {
     };
 }
 
+function hostFromUrl(url) {
+    try { return new URL(url).host; } catch { return ''; }
+}
+
 function useModalActions(d) {
     const pendingTimer = useRef(null);
 
@@ -98,10 +103,10 @@ function useModalActions(d) {
 
     useEffect(() => cancelPending, [cancelPending]);
 
-    const openEditModal = useCallback((shortcut = null) => {
+    const openEditModal = useCallback((shortcut = null, opts = {}) => {
         cancelPending();
         d.setEditModal({
-            editing: !!shortcut,
+            editing: opts.editing ?? !!shortcut,
             shortcut: shortcut ? { ...shortcut } : emptyShortcut()
         });
     }, [cancelPending]);
@@ -129,11 +134,18 @@ function useModalActions(d) {
         if (!modal) return;
         cancelPending();
         try {
+            let shortcut = modal.shortcut;
+            if (!modal.editing) {
+                const host = shortcut.action?.type === 'open_url'
+                    ? hostFromUrl(shortcut.action.url) : '';
+                const existing = d.shortcuts.map(s => s.id);
+                shortcut = { ...shortcut, id: deriveShortcutId(shortcut.name, existing, host) };
+            }
             const config = modal.editing
                 ? await updateShortcut(modal.shortcut)
-                : await createShortcut(modal.shortcut);
+                : await createShortcut(shortcut);
             d.setShortcuts(config.shortcuts || []);
-            if (!modal.editing) d.setSelectedId(modal.shortcut.id);
+            if (!modal.editing) d.setSelectedId(shortcut.id);
             d.setEditModal(null);
         } catch (e) {
             alert(e.message || 'Failed to save shortcut');

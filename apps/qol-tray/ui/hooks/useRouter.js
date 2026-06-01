@@ -1,6 +1,9 @@
-import { useState, useEffect, useCallback } from 'preact/hooks';
+import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 import { tryFetchJson } from '../api/client.js';
 import { preloadConfigForm } from '../views/plugin-config/usePluginConfig.js';
+import { parseDeepRoute } from '../lib/deeplink-route.js';
+import { resolveDeepLink } from '../lib/deeplink-resolve.js';
+import { setPendingShortcutPrefill } from '../lib/deeplink-intent.js';
 
 const VIEW_STORAGE_KEY = 'qoltray.activeView';
 const PLUGIN_STORAGE_KEY = 'qoltray.activePlugin';
@@ -23,13 +26,25 @@ function readStoredView() {
     try { return window.localStorage.getItem(VIEW_STORAGE_KEY); } catch { return null; }
 }
 
+function hashBaseViewId() {
+    const raw = window.location.hash.replace(/^#/, '').trim();
+    return raw.split(/[/?]/)[0] || null;
+}
+
+function isPluginConfigHash() {
+    const raw = window.location.hash.replace(/^#/, '').trim();
+    return /^plugins\/(.+)\/config$/.test(raw);
+}
+
 function persistView(viewId, { updateHash = true } = {}) {
     try { window.localStorage.setItem(VIEW_STORAGE_KEY, viewId); } catch {}
     if (!updateHash) return;
-    const target = `#${viewId}`;
-    if (window.location.hash !== target) {
-        window.history.replaceState(null, '', target);
-    }
+    // Keep a deep-link route already in the hash (e.g. `#shortcuts/add?type=url`)
+    // when it targets this same view, so resolving it does not flatten the URL
+    // back to `#shortcuts` (which loses the prefill on reload/share). Plugin
+    // config routes are still flattened so closing config returns to the base.
+    if (hashBaseViewId() === viewId && !isPluginConfigHash()) return;
+    window.history.replaceState(null, '', `#${viewId}`);
 }
 
 function initActiveView() {
@@ -63,6 +78,10 @@ async function handleHashChange(viewOrder, setActivePluginId, setActiveViewId) {
     if (route.viewId && viewOrder.includes(route.viewId)) {
         setActiveViewId(route.viewId);
     }
+    const deep = parseDeepRoute(window.location.hash);
+    if (deep.action && viewOrder.includes(deep.page)) {
+        resolveDeepLink(deep, { setPendingShortcutPrefill });
+    }
 }
 
 function doSwitchView(viewId, viewOrder, setActivePluginId, setActiveViewId) {
@@ -84,6 +103,7 @@ function doClosePluginConfig(setActivePluginId, setActiveViewId) {
 export function useRouter({ viewOrder }) {
     const [activeViewId, setActiveViewId] = useState(initActiveView);
     const [activePluginId, setActivePluginId] = useState(null);
+    const bootResolvedRef = useRef(false);
     const switchView = useCallback(id => doSwitchView(id, viewOrder, setActivePluginId, setActiveViewId), [viewOrder]);
     const openPluginConfig = useCallback(async (pluginId) => {
         if (!await validatePluginConfig(pluginId)) return false;
@@ -103,6 +123,13 @@ export function useRouter({ viewOrder }) {
     useEffect(() => {
         const handler = () => handleHashChange(viewOrder, setActivePluginId, setActiveViewId);
         window.addEventListener('hashchange', handler);
+        if (!bootResolvedRef.current) {
+            bootResolvedRef.current = true;
+            const deepBoot = parseDeepRoute(window.location.hash);
+            if (deepBoot.action && viewOrder.includes(deepBoot.page)) {
+                resolveDeepLink(deepBoot, { setPendingShortcutPrefill });
+            }
+        }
         return () => window.removeEventListener('hashchange', handler);
     }, [viewOrder]);
     useEffect(() => { if (!activePluginId) persistView(activeViewId); }, [activeViewId, activePluginId]);

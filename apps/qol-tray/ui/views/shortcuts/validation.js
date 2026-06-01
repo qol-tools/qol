@@ -1,6 +1,5 @@
 export function isShortcutValid(shortcut) {
     if (!shortcut) return false;
-    if (!isNonBlank(shortcut.id)) return false;
     if (!isNonBlank(shortcut.name)) return false;
     return isActionValid(shortcut.action);
 }

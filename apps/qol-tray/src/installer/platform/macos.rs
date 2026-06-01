@@ -28,6 +28,7 @@ pub(super) fn register_application(binary_path: &Path) -> Result<()> {
     write_info_plist(&bundle_root)?;
     write_icon(&bundle_root)?;
     codesign_bundle(&bundle_root);
+    rebind_url_scheme(&bundle_root);
     Ok(())
 }
 
@@ -117,8 +118,14 @@ fn bootstrap_allowed_for_bundle_root(bundle_root: &Path, home: Option<&Path>) ->
 
 fn write_info_plist(bundle_root: &Path) -> Result<()> {
     let plist_path = bundle_root.join("Contents").join("Info.plist");
-    let version = env!("CARGO_PKG_VERSION");
-    let plist = format!(
+    write_text_file(&plist_path, &info_plist_xml(env!("CARGO_PKG_VERSION")))
+}
+
+/// The bundle `Info.plist`. `CFBundleURLTypes` registers the `qol://` scheme so
+/// AppKit auto-installs the GetURL Apple-Event handler and bridges it to the
+/// `application:openURLs:` delegate (see `tray::platform::macos`).
+fn info_plist_xml(version: &str) -> String {
+    format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
          \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
@@ -136,14 +143,43 @@ fn write_info_plist(bundle_root: &Path) -> Result<()> {
          <string>{version}</string>\n\
          <key>CFBundleShortVersionString</key>\n\
          <string>{version}</string>\n\
+         <key>CFBundleURLTypes</key>\n\
+         <array>\n\
+         <dict>\n\
+         <key>CFBundleURLName</key>\n\
+         <string>{BUNDLE_ID}</string>\n\
+         <key>CFBundleURLSchemes</key>\n\
+         <array>\n\
+         <string>qol</string>\n\
+         </array>\n\
+         </dict>\n\
+         </array>\n\
          <key>LSUIElement</key>\n\
          <true/>\n\
          <key>LSMinimumSystemVersion</key>\n\
          <string>11.0</string>\n\
          </dict>\n\
          </plist>\n"
-    );
-    write_text_file(&plist_path, &plist)
+    )
+}
+
+/// Re-register the bundle with LaunchServices so an updated existing bundle
+/// rebinds the `qol://` scheme. Advisory: failures never block install.
+fn rebind_url_scheme(bundle_root: &Path) {
+    const LSREGISTER: &str = "/System/Library/Frameworks/CoreServices.framework/\
+        Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister";
+    match std::process::Command::new(LSREGISTER)
+        .arg("-f")
+        .arg(bundle_root)
+        .output()
+    {
+        Ok(out) if out.status.success() => {}
+        Ok(out) => log::warn!(
+            "lsregister rebind failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ),
+        Err(e) => log::warn!("lsregister not run: {e}"),
+    }
 }
 
 fn write_text_file(path: &Path, content: &str) -> Result<()> {
@@ -181,6 +217,18 @@ fn codesign_bundle(bundle_root: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn info_plist_registers_qol_url_scheme() {
+        let xml = info_plist_xml("9.9.9");
+        assert!(xml.contains("<key>CFBundleURLTypes</key>"));
+        assert!(xml.contains("<key>CFBundleURLSchemes</key>"));
+        assert!(xml.contains("<string>qol</string>"));
+        // Existing keys are preserved.
+        assert!(xml.contains("<key>CFBundleIdentifier</key>"));
+        assert!(xml.contains("<string>9.9.9</string>"));
+        assert!(xml.contains("<key>LSUIElement</key>"));
+    }
 
     #[test]
     fn bootstrap_current_install_only_allows_installed_app_locations() {

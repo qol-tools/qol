@@ -91,6 +91,9 @@ pub enum DaemonEvent {
     UpdateFailed {
         message: String,
     },
+    Navigate {
+        route: String,
+    },
     #[cfg(feature = "dev")]
     BootTargetHealed {
         report: crate::dev::boot_contract::HealReport,
@@ -107,6 +110,16 @@ mod tests {
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "plugins_changed");
         assert_eq!(json["revision"], 7);
+    }
+
+    #[test]
+    fn navigate_serializes_with_route() {
+        let event = DaemonEvent::Navigate {
+            route: "shortcuts/add?type=url".to_string(),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "navigate");
+        assert_eq!(json["route"], "shortcuts/add?type=url");
     }
 }
 

@@ -6,6 +6,7 @@ import { useUpdateChecker } from './use-update-checker.js';
 import { useDevFlows } from './use-dev-flows.js';
 import { useDevActions } from './use-dev-actions.js';
 import { MOCK_FLOWS_DONE } from '../views/dev/mock/events.js';
+import { applyNavigateRoute } from '../lib/deeplink-navigate.js';
 
 function routeDevSSE(event, applyDevFlowTransition) {
     const key = devFlowKey(event.type);
@@ -20,6 +21,7 @@ function routeUpdateSSE(event, setUpdateState, checkForUpdate) {
 }
 
 function routeSSEEvent(event, devEnabled, applyDevFlowTransition, checkForUpdate, setUpdateState) {
+    if (event.type === 'navigate' && typeof event.route === 'string') { applyNavigateRoute(event.route); return; }
     if (devEnabled) { routeDevSSE(event, applyDevFlowTransition); return; }
     routeUpdateSSE(event, setUpdateState, checkForUpdate);
 }

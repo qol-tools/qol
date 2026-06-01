@@ -1,8 +1,10 @@
 import { html } from '../lib/html.js';
-import { useMemo } from 'preact/hooks';
+import { useEffect, useMemo } from 'preact/hooks';
 import { usePaletteContext } from '../palette/context.js';
 import { useRegisterCommands } from '../palette/useRegisterCommands.js';
 import { useRegisterViewKeyboard } from '../app/view-keyboard-context.js';
+import { takePendingShortcutPrefill, subscribeShortcutPrefill } from '../lib/deeplink-intent.js';
+import { diveViaSelector } from '../lib/world-navigation-singleton.js';
 
 import { PageHeader } from '../components/PageHeader.js';
 import { PageShell } from '../components/PageShell.js';
@@ -26,6 +28,24 @@ export const shortcutEditorSlot = createSharedSlot({
 export function ShortcutsView() {
     const { searchQuery } = usePaletteContext();
     const sc = useShortcuts(searchQuery);
+    useEffect(() => {
+        const consume = () => {
+            const pending = takePendingShortcutPrefill();
+            if (!pending) return;
+            sc.openEditModal(pending.shortcut, { editing: pending.editing });
+            // The dive target may not be registered yet (parent registers after this
+            // child mounts) and the boot camera may still be animating, so retry across
+            // frames until the dive into the editor actually takes.
+            let attempts = 12;
+            const tryDive = () => {
+                if (diveViaSelector('[data-view-id="shortcuts"]')) return;
+                if (attempts-- > 0) requestAnimationFrame(tryDive);
+            };
+            requestAnimationFrame(tryDive);
+        };
+        consume();                              // prefill stashed before this view mounted
+        return subscribeShortcutPrefill(consume); // prefill arriving after mount (boot order / warm nav)
+    }, []);
     useRegisterViewKeyboard('shortcuts', sc.handleKey, sc.isBlocking);
 
     useDiveEditor({

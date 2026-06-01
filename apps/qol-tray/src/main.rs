@@ -25,6 +25,12 @@ fn main() -> Result<()> {
     if let Some(code) = try_exec_subcommand() {
         std::process::exit(code);
     }
+    if let Some(code) = try_open_subcommand() {
+        std::process::exit(code);
+    }
+    if let Some(code) = try_url_courier() {
+        std::process::exit(code);
+    }
 
     #[cfg(feature = "dev")]
     let core_log_controls = qol_tray::logging::init_logger();
@@ -169,9 +175,120 @@ fn print_usage() {
         "    qol-tray exec <plugin_id> <action>    Trigger a plugin action via the running daemon"
     );
     println!("    qol-tray exec shortcut <id>           Run a shortcut via the running daemon");
+    println!(
+        "    qol-tray open <route>                 Open the app at an in-app route (e.g. shortcuts/add)"
+    );
     println!("    qol-tray --write-mode=<dev|prod>      Write mode.json then run the tray");
     println!("    qol-tray --version, -V                Print version and exit");
     println!("    qol-tray --help, -h                   Print this message and exit");
+}
+
+fn try_open_subcommand() -> Option<i32> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(|s| s.as_str()) != Some("open") {
+        return None;
+    }
+    let Some(route) = args.get(2) else {
+        eprintln!("Usage: qol-tray open <route>   e.g. qol-tray open shortcuts/add");
+        return Some(1);
+    };
+    Some(forward_route(route))
+}
+
+/// Route stashed when a bare `qol://` URL arrives in argv on a Linux cold launch
+/// (daemon not yet running); opened once the server is listening. macOS cold
+/// launches do not use this - the daemon process never sees the URL in argv;
+/// it arrives post-launch via the `openURLs` delegate, which spawns a separate
+/// courier process. See `try_url_courier`.
+static PENDING_COLD_ROUTE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Navigate an already-open UI tab to `route`, falling back to opening a fresh
+/// browser tab. Shared by `qol-tray open` and the `qol://` courier.
+fn forward_route(route: &str) -> i32 {
+    if navigated_open_tab(route) {
+        return 0;
+    }
+    let url = qol_tray::commands::deeplink_url(route, DEFAULT_PORT);
+    match qol_tray::paths::open_url(&url) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("Failed to open {url}: {e}");
+            1
+        }
+    }
+}
+
+/// How this invocation carries a `qol://` URL, decided purely from argv.
+#[derive(Debug, PartialEq, Eq)]
+enum UrlInvocation {
+    /// macOS `openURLs` delegate re-exec (`URL_COURIER_FLAG` + URL): forward the
+    /// route (when valid) to the running daemon and exit. NEVER starts a daemon.
+    Courier(Option<String>),
+    /// Bare `qol://` URL in argv (Linux `.desktop %u`, or any direct invocation):
+    /// forward if a daemon is running, otherwise become the daemon for it.
+    Argv(String),
+    /// Not a `qol://` invocation; normal startup continues.
+    NotUrl,
+}
+
+fn classify_url_args(args: &[String]) -> UrlInvocation {
+    if args.get(1).map(String::as_str) == Some(qol_tray::commands::URL_COURIER_FLAG) {
+        let route = args
+            .get(2)
+            .and_then(|u| qol_tray::commands::parse_qol_url(u));
+        return UrlInvocation::Courier(route);
+    }
+    match args
+        .get(1)
+        .and_then(|u| qol_tray::commands::parse_qol_url(u))
+    {
+        Some(route) => UrlInvocation::Argv(route),
+        None => UrlInvocation::NotUrl,
+    }
+}
+
+/// Handle a `qol://<route>` URL. Linux `.desktop %u` passes it bare in argv; the
+/// macOS `openURLs` delegate re-execs us as a courier (`URL_COURIER_FLAG`). A
+/// courier always forwards-then-exits so it can never race the parent daemon for
+/// the port. A bare argv URL forwards to a running daemon, or - on a cold launch
+/// where this process becomes the daemon - stashes the route for `app_init_inner`
+/// to open once the server is listening.
+fn try_url_courier() -> Option<i32> {
+    let args: Vec<String> = std::env::args().collect();
+    match classify_url_args(&args) {
+        UrlInvocation::Courier(Some(route)) => Some(courier_forward_with_retry(&route)),
+        UrlInvocation::Courier(None) => Some(1),
+        UrlInvocation::Argv(route) => {
+            if is_already_running() {
+                Some(forward_route(&route))
+            } else {
+                let _ = PENDING_COLD_ROUTE.set(route);
+                None
+            }
+        }
+        UrlInvocation::NotUrl => None,
+    }
+}
+
+/// A macOS courier is spawned by the running daemon's URL delegate, but that
+/// daemon's HTTP server may still be binding. Wait briefly (up to ~2s) for it to
+/// accept connections so we navigate the live tab instead of opening a dead one,
+/// then forward.
+fn courier_forward_with_retry(route: &str) -> i32 {
+    for _ in 0..40 {
+        if is_already_running() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    forward_route(route)
+}
+
+fn open_pending_cold_route(route: &str) {
+    // Let the HTTP server bind before pointing a browser at the route.
+    std::thread::sleep(Duration::from_millis(1500));
+    let url = qol_tray::commands::deeplink_url(route, DEFAULT_PORT);
+    let _ = qol_tray::paths::open_url(&url);
 }
 
 fn try_exec_subcommand() -> Option<i32> {
@@ -226,57 +343,77 @@ fn exec_shortcut(id: &str) -> i32 {
     0
 }
 
-fn fire_action_request(plugin_id: &str, action_id: &str) -> i32 {
+/// Send a POST to the running daemon over loopback. Returns the HTTP status
+/// code and the response body. The `Origin` header is set to the loopback UI
+/// origin so the request passes `reject_cross_site_mutations`.
+fn post_to_daemon(path: &str, body: &str) -> std::io::Result<(u16, String)> {
     use std::io::{Read, Write};
     use std::net::{SocketAddr, TcpStream};
 
     let addr: SocketAddr = ([127, 0, 0, 1], DEFAULT_PORT).into();
-    let mut stream = match TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
-        Ok(s) => s,
-        Err(_) => {
-            eprintln!("qol-tray is not running");
-            return 1;
-        }
-    };
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))?;
     let timeout = Some(Duration::from_secs(5));
     let _ = stream.set_read_timeout(timeout);
     let _ = stream.set_write_timeout(timeout);
 
     let request = format!(
-        "POST /api/plugins/{}/actions/{} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-        plugin_id, action_id, DEFAULT_PORT
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n{body}",
+        port = DEFAULT_PORT,
+        len = body.len(),
     );
-    if stream.write_all(request.as_bytes()).is_err() {
-        eprintln!("Failed to send request");
-        return 1;
-    }
+    stream.write_all(request.as_bytes())?;
 
     let mut buf = Vec::new();
     let _ = stream.read_to_end(&mut buf);
     let response = String::from_utf8_lossy(&buf);
-
     let status = response
         .lines()
         .next()
         .and_then(|line| line.split_whitespace().nth(1))
         .and_then(|code| code.parse::<u16>().ok())
         .unwrap_or(0);
-
-    if (200..300).contains(&status) {
-        return 0;
-    }
-
     let body = response
         .split_once("\r\n\r\n")
-        .map(|(_, b)| b)
-        .unwrap_or("");
-    let msg = if body.is_empty() {
-        format!("Request failed (HTTP {})", status)
-    } else {
-        body.to_string()
-    };
-    eprintln!("{}", msg);
-    1
+        .map(|(_, b)| b.to_string())
+        .unwrap_or_default();
+    Ok((status, body))
+}
+
+/// Ask the running daemon to navigate an already-open UI tab to `route`.
+/// Returns true only when a tab was subscribed and the event was delivered;
+/// any connection error or `delivered:false` returns false so the caller
+/// falls back to opening a fresh browser tab.
+fn navigated_open_tab(route: &str) -> bool {
+    let body = serde_json::json!({ "route": route }).to_string();
+    match post_to_daemon("/api/navigate", &body) {
+        Ok((status, body)) if (200..300).contains(&status) => {
+            serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("delivered").and_then(|d| d.as_bool()))
+                .unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
+fn fire_action_request(plugin_id: &str, action_id: &str) -> i32 {
+    let path = format!("/api/plugins/{plugin_id}/actions/{action_id}");
+    match post_to_daemon(&path, "") {
+        Ok((status, _)) if (200..300).contains(&status) => 0,
+        Ok((status, body)) => {
+            let msg = if body.is_empty() {
+                format!("Request failed (HTTP {})", status)
+            } else {
+                body
+            };
+            eprintln!("{}", msg);
+            1
+        }
+        Err(_) => {
+            eprintln!("qol-tray is not running");
+            1
+        }
+    }
 }
 
 fn is_already_running() -> bool {
@@ -329,6 +466,10 @@ fn app_init_inner(
     log::info!("QoL Tray daemon started successfully");
     if is_first_run() {
         std::thread::spawn(show_first_run_welcome);
+    }
+    if let Some(route) = PENDING_COLD_ROUTE.get() {
+        let route = route.clone();
+        std::thread::spawn(move || open_pending_cold_route(&route));
     }
     Ok((tray, init.plugin_manager))
 }
@@ -512,5 +653,57 @@ async fn check_for_updates() -> bool {
             log::debug!("Update check timed out");
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod url_courier_tests {
+    use super::{classify_url_args, UrlInvocation};
+    use qol_tray::commands::URL_COURIER_FLAG;
+
+    fn args(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn courier_flag_with_valid_url_is_courier_with_route() {
+        let a = args(&["qol-tray", URL_COURIER_FLAG, "qol://shortcuts/add?type=url"]);
+        assert_eq!(
+            classify_url_args(&a),
+            UrlInvocation::Courier(Some("shortcuts/add?type=url".to_string()))
+        );
+    }
+
+    #[test]
+    fn courier_flag_with_bad_url_stays_courier_so_it_never_starts_a_daemon() {
+        let a = args(&["qol-tray", URL_COURIER_FLAG, "https://evil.example"]);
+        assert_eq!(classify_url_args(&a), UrlInvocation::Courier(None));
+        let missing = args(&["qol-tray", URL_COURIER_FLAG]);
+        assert_eq!(classify_url_args(&missing), UrlInvocation::Courier(None));
+    }
+
+    #[test]
+    fn bare_qol_url_in_argv_is_argv_route() {
+        let a = args(&["qol-tray", "qol://shortcuts"]);
+        assert_eq!(
+            classify_url_args(&a),
+            UrlInvocation::Argv("shortcuts".to_string())
+        );
+    }
+
+    #[test]
+    fn non_url_invocations_are_not_url() {
+        assert_eq!(
+            classify_url_args(&args(&["qol-tray"])),
+            UrlInvocation::NotUrl
+        );
+        assert_eq!(
+            classify_url_args(&args(&["qol-tray", "exec", "p", "a"])),
+            UrlInvocation::NotUrl
+        );
+        assert_eq!(
+            classify_url_args(&args(&["qol-tray", "open", "shortcuts"])),
+            UrlInvocation::NotUrl
+        );
     }
 }

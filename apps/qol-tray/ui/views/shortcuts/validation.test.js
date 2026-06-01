@@ -25,9 +25,11 @@ test('null or undefined is invalid', () => {
     assert.equal(isShortcutValid(undefined), false);
 });
 
-test('empty id is invalid', () => {
-    const s = validUrlShortcut(); s.id = '';
-    assert.equal(isShortcutValid(s), false);
+test('valid without an id (id is derived, not entered)', () => {
+    assert.equal(isShortcutValid({
+        name: 'X',
+        action: { type: 'open_url', url: 'https://x.io' }
+    }), true);
 });
 
 test('whitespace-only name is invalid', () => {
