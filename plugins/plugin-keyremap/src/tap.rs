@@ -1,11 +1,17 @@
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
-use core_foundation::runloop::CFRunLoop;
+use core_foundation::base::TCFType;
+use core_foundation::mach_port::CFMachPortRef;
+use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
 use core_graphics::event::{
     CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
     CGEventType, CallbackResult, EventField,
 };
 use foreign_types_shared::ForeignType;
+
+extern "C" {
+    fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
+}
 
 use crate::app_tracker::AppTracker;
 use crate::remap::{
@@ -82,27 +88,57 @@ fn run_tap(state: Arc<TapState>) {
         CGEventType::ScrollWheel,
     ];
 
-    let result = CGEventTap::with_enabled(
+    // The callback cannot borrow the tap (the tap owns the callback), so the
+    // tap's mach port is published here and read back in the callback to re-arm
+    // the tap when macOS disables it. Without re-arming, the tap stays dead
+    // after the first disable and all remapping silently stops until restart.
+    let tap_port: Arc<OnceLock<usize>> = Arc::new(OnceLock::new());
+    let tap_port_cb = Arc::clone(&tap_port);
+
+    let tap = CGEventTap::new(
         CGEventTapLocation::HID,
         CGEventTapPlacement::HeadInsertEventTap,
         CGEventTapOptions::Default,
         events,
-        move |_proxy, event_type, event| match std::panic::catch_unwind(
-            std::panic::AssertUnwindSafe(|| handle_event(&state, event_type, event)),
-        ) {
-            Ok(result) => result,
-            Err(_) => {
-                eprintln!("[keyremap] panic in event callback — passing event through");
-                CallbackResult::Keep
+        move |_proxy, event_type, event| {
+            if matches!(
+                event_type,
+                CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput
+            ) {
+                if let Some(&port) = tap_port_cb.get() {
+                    unsafe { CGEventTapEnable(port as CFMachPortRef, true) };
+                }
+                return CallbackResult::Keep;
+            }
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                handle_event(&state, event_type, event)
+            })) {
+                Ok(result) => result,
+                Err(_) => {
+                    eprintln!("[keyremap] panic in event callback — passing event through");
+                    CallbackResult::Keep
+                }
             }
         },
-        CFRunLoop::run_current,
     );
 
-    if result.is_err() {
-        eprintln!("[keyremap] failed to create event tap (even with Accessibility granted)");
-        std::process::exit(1);
-    }
+    let tap = match tap {
+        Ok(tap) => tap,
+        Err(()) => {
+            eprintln!("[keyremap] failed to create event tap (even with Accessibility granted)");
+            std::process::exit(1);
+        }
+    };
+
+    let _ = tap_port.set(tap.mach_port().as_concrete_TypeRef() as usize);
+
+    let loop_source = tap
+        .mach_port()
+        .create_runloop_source(0)
+        .expect("failed to create run loop source for event tap");
+    CFRunLoop::get_current().add_source(&loop_source, unsafe { kCFRunLoopCommonModes });
+    tap.enable();
+    CFRunLoop::run_current();
 }
 
 fn handle_event(
@@ -110,13 +146,6 @@ fn handle_event(
     event_type: CGEventType,
     event: &core_graphics::event::CGEvent,
 ) -> CallbackResult {
-    if matches!(
-        event_type,
-        CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput
-    ) {
-        return CallbackResult::Keep;
-    }
-
     if matches!(event_type, CGEventType::FlagsChanged) {
         return CallbackResult::Keep;
     }
