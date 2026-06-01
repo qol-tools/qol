@@ -62,13 +62,6 @@ objc2-core-graphics = { version = "0.3", features = [
   "CGDataProvider",
 ] }
 
-# macOS only: fix zed-font-kit core-graphics version mismatch
-[patch.crates-io]
-core-text = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
-core-graphics = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
-core-foundation = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
-core-foundation-sys = { git = "https://github.com/servo/core-foundation-rs", tag = "core-text-v21.0.0" }
-
 [dev-dependencies]
 proptest = "1.10.0"
 qol-tray.workspace = true
