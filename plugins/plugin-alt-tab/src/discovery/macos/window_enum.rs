@@ -208,10 +208,7 @@ fn use_current_window_order(
     focused: Option<StableWindowKey>,
     previous: &[StableWindowKey],
 ) -> bool {
-    let Some(focused) = focused else {
-        return true;
-    };
-    previous.first().copied() != Some(focused)
+    focused.is_none() || previous.is_empty()
 }
 
 fn merge_stable_keys(
@@ -757,12 +754,21 @@ mod tests {
     }
 
     #[test]
-    fn use_current_window_order_when_frontmost_changes() {
+    fn keeps_stable_order_when_a_known_window_is_focused() {
         let a1 = key(10, 1, 101);
         let b1 = key(20, 2, 201);
         let c1 = key(30, 3, 301);
 
-        assert!(use_current_window_order(Some(b1), &[a1, c1, b1]));
+        assert!(!use_current_window_order(Some(b1), &[a1, c1, b1]));
+    }
+
+    #[test]
+    fn uses_current_order_only_on_cold_start() {
+        let a1 = key(10, 1, 101);
+        let b1 = key(20, 2, 201);
+
+        assert!(use_current_window_order(Some(a1), &[]));
+        assert!(!use_current_window_order(Some(a1), &[a1, b1]));
     }
 
     #[test]
