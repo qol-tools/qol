@@ -49,10 +49,10 @@ share one origin.
 | Crate | Mono path | Source repo |
 |-------|-----------|-------------|
 | plugin-alt-tab | plugins/plugin-alt-tab | https://github.com/qol-tools/plugin-alt-tab.git |
-| plugin-claude-sessions | plugins/plugin-claude-sessions | https://github.com/qol-tools/plugin-claude-sessions.git |
+| plugin-claude-sessions | _removed 2026-06-02 (archived upstream)_ | https://github.com/qol-tools/plugin-claude-sessions.git |
 | plugin-ide-checkout | plugins/plugin-ide-checkout | https://github.com/qol-tools/plugin-ide-checkout.git |
 | plugin-keyremap | plugins/plugin-keyremap | https://github.com/qol-tools/plugin-keyremap.git |
-| plugin-kitty | plugins/plugin-kitty | https://github.com/qol-tools/plugin-kitty.git |
+| plugin-kitty | _removed 2026-06-02 (archived upstream)_ | https://github.com/qol-tools/plugin-kitty.git |
 | plugin-launcher | plugins/plugin-launcher | https://github.com/qol-tools/plugin-launcher.git |
 | plugin-lights | plugins/plugin-lights | https://github.com/qol-tools/plugin-lights.git |
 | plugin-os-themes | plugins/plugin-os-themes | https://github.com/qol-tools/plugin-os-themes.git |
@@ -60,3 +60,7 @@ share one origin.
 | plugin-screen-recorder | plugins/plugin-screen-recorder | https://github.com/qol-tools/plugin-screen-recorder.git |
 | plugin-template | plugins/plugin-template | https://github.com/qol-tools/plugin-template.git |
 | plugin-window-actions | plugins/plugin-window-actions | https://github.com/qol-tools/plugin-window-actions.git |
+
+`plugin-kitty` and `plugin-claude-sessions` were part of the 22-repo
+consolidation on 2026-06-01, then archived upstream and removed from the tree on
+2026-06-02 (commit `e898146`). Their rows are kept for provenance.
