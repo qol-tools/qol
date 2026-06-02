@@ -4,7 +4,7 @@ pub mod validation;
 
 use serde::de::DeserializeOwned;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub fn base_data_dir() -> Option<PathBuf> {
     dirs::data_local_dir()
@@ -13,24 +13,29 @@ pub fn base_data_dir() -> Option<PathBuf> {
 }
 
 pub fn config_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    let base = match base_data_dir() {
-        Some(base) => base,
-        None => return roots,
+    let Some(base) = base_data_dir() else {
+        return Vec::new();
     };
-    if let Some(id) = install_id_from_env() {
+    assemble_config_roots(
+        base,
+        install_id_from_env(),
+        dirs::config_dir().map(|p| p.join("qol-tray")),
+    )
+}
+
+fn assemble_config_roots(
+    base: PathBuf,
+    install_id: Option<String>,
+    user_config_dir: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(id) = install_id {
         roots.push(base.join("installs").join(id));
-    }
-    if let Some(id) = install_id_from_active_file(&base) {
-        let candidate = base.join("installs").join(id);
-        if !roots.contains(&candidate) {
-            roots.push(candidate);
-        }
     }
     if !roots.contains(&base) {
         roots.push(base);
     }
-    if let Some(config_dir) = dirs::config_dir().map(|p| p.join("qol-tray")) {
+    if let Some(config_dir) = user_config_dir {
         if !roots.contains(&config_dir) {
             roots.push(config_dir);
         }
@@ -79,19 +84,52 @@ pub fn install_id_from_env() -> Option<String> {
     Some(trimmed.to_string())
 }
 
-pub fn install_id_from_active_file(base_data_dir: &Path) -> Option<String> {
-    let content = fs::read_to_string(base_data_dir.join("active-install-id")).ok()?;
-    let trimmed = content.trim();
-    if !valid_install_id(trimmed) {
-        return None;
-    }
-    Some(trimmed.to_string())
-}
-
 pub fn valid_install_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64
         && value
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn without_pinned_install_base_is_the_only_data_root() {
+        let base = PathBuf::from("/data/qol-tray");
+        assert_eq!(assemble_config_roots(base.clone(), None, None), vec![base]);
+    }
+
+    #[test]
+    fn explicit_install_env_is_searched_before_base() {
+        let base = PathBuf::from("/data/qol-tray");
+        let user_cfg = PathBuf::from("/home/user/.config/qol-tray");
+        let roots =
+            assemble_config_roots(base.clone(), Some("install-123".into()), Some(user_cfg.clone()));
+        assert_eq!(
+            roots,
+            vec![base.join("installs").join("install-123"), base, user_cfg]
+        );
+    }
+
+    #[test]
+    fn no_installs_dir_resolved_without_explicit_env() {
+        let base = PathBuf::from("/data/qol-tray");
+        let roots = assemble_config_roots(base.clone(), None, None);
+        assert!(roots
+            .iter()
+            .all(|root| !root.to_string_lossy().contains("installs")));
+        assert_eq!(roots.first(), Some(&base));
+    }
+
+    #[test]
+    fn user_config_dir_equal_to_base_is_deduped() {
+        let base = PathBuf::from("/data/qol-tray");
+        assert_eq!(
+            assemble_config_roots(base.clone(), None, Some(base.clone())),
+            vec![base]
+        );
+    }
 }
