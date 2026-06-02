@@ -212,13 +212,7 @@ fn trim_trailing_newline(content: &str, end: usize) -> usize {
 mod tests {
     use super::*;
     use std::ffi::OsString;
-    use std::sync::{Mutex, OnceLock};
     use tempfile::TempDir;
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
 
     struct HomeGuard {
         previous: Option<OsString>,
@@ -260,7 +254,7 @@ mod tests {
 
     #[test]
     fn install_appends_canonical_block_when_missing() {
-        let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::env_lock().blocking_lock();
         let (_home_guard, home) = HomeGuard::new();
         let zshrc = home.join(".zshrc");
         write_rc(&zshrc, "export FOO=1\n");
@@ -274,7 +268,7 @@ mod tests {
 
     #[test]
     fn install_is_idempotent() {
-        let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::env_lock().blocking_lock();
         let (_home_guard, home) = HomeGuard::new();
         let zshrc = home.join(".zshrc");
         write_rc(&zshrc, "export FOO=1\n");
@@ -288,7 +282,7 @@ mod tests {
 
     #[test]
     fn install_appends_block_when_rc_missing_trailing_newline() {
-        let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::env_lock().blocking_lock();
         let (_home_guard, home) = HomeGuard::new();
         let zshrc = home.join(".zshrc");
         write_rc(&zshrc, "export FOO=1");
@@ -304,7 +298,7 @@ mod tests {
 
     #[test]
     fn install_replaces_drifted_block() {
-        let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::env_lock().blocking_lock();
         let (_home_guard, home) = HomeGuard::new();
         let zshrc = home.join(".zshrc");
         let drifted = format!(
@@ -322,7 +316,7 @@ mod tests {
 
     #[test]
     fn install_replaces_partial_block_missing_body() {
-        let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::env_lock().blocking_lock();
         let (_home_guard, home) = HomeGuard::new();
         let zshrc = home.join(".zshrc");
         let partial = format!("alias g=git\n{}\n{}\n", BEGIN_MARKER, END_MARKER);
@@ -337,7 +331,7 @@ mod tests {
 
     #[test]
     fn install_skips_missing_rc_files() {
-        let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::env_lock().blocking_lock();
         let (_home_guard, home) = HomeGuard::new();
         install().unwrap();
         assert!(!home.join(".zshrc").exists());
@@ -346,7 +340,7 @@ mod tests {
 
     #[test]
     fn install_writes_to_both_existing_rc_files() {
-        let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::env_lock().blocking_lock();
         let (_home_guard, home) = HomeGuard::new();
         let zshrc = home.join(".zshrc");
         let bashrc = home.join(".bashrc");
@@ -361,7 +355,7 @@ mod tests {
 
     #[test]
     fn uninstall_removes_only_block_preserves_neighbors() {
-        let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::env_lock().blocking_lock();
         let (_home_guard, home) = HomeGuard::new();
         let zshrc = home.join(".zshrc");
         let initial = format!("before line\n\n{}\n\nafter line\n", canonical_block());
@@ -375,7 +369,7 @@ mod tests {
 
     #[test]
     fn uninstall_when_block_at_eof() {
-        let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::env_lock().blocking_lock();
         let (_home_guard, home) = HomeGuard::new();
         let zshrc = home.join(".zshrc");
         let initial = format!("export FOO=1\n\n{}\n", canonical_block());
@@ -389,7 +383,7 @@ mod tests {
 
     #[test]
     fn uninstall_when_block_at_start() {
-        let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::env_lock().blocking_lock();
         let (_home_guard, home) = HomeGuard::new();
         let zshrc = home.join(".zshrc");
         let initial = format!("{}\n\nexport FOO=1\n", canonical_block());
@@ -403,7 +397,7 @@ mod tests {
 
     #[test]
     fn uninstall_no_op_when_block_absent() {
-        let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::env_lock().blocking_lock();
         let (_home_guard, home) = HomeGuard::new();
         let zshrc = home.join(".zshrc");
         write_rc(&zshrc, "export FOO=1\n");
@@ -415,7 +409,7 @@ mod tests {
 
     #[test]
     fn is_installed_reports_all_present() {
-        let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::env_lock().blocking_lock();
         let (_home_guard, home) = HomeGuard::new();
         write_rc(&home.join(".zshrc"), &format!("{}\n", canonical_block()));
         write_rc(&home.join(".bashrc"), &format!("{}\n", canonical_block()));
@@ -425,14 +419,14 @@ mod tests {
 
     #[test]
     fn is_installed_reports_none_when_no_rc_files() {
-        let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::env_lock().blocking_lock();
         let (_home_guard, _home) = HomeGuard::new();
         assert_eq!(is_installed().unwrap(), ShellHookStatus::NoneInstalled);
     }
 
     #[test]
     fn is_installed_reports_none_when_all_existing_lack_block() {
-        let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::env_lock().blocking_lock();
         let (_home_guard, home) = HomeGuard::new();
         write_rc(&home.join(".zshrc"), "alias g=git\n");
         write_rc(&home.join(".bashrc"), "alias b=bash\n");
@@ -442,7 +436,7 @@ mod tests {
 
     #[test]
     fn is_installed_reports_partial() {
-        let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::env_lock().blocking_lock();
         let (_home_guard, home) = HomeGuard::new();
         write_rc(&home.join(".zshrc"), &format!("{}\n", canonical_block()));
         write_rc(&home.join(".bashrc"), "alias b=bash\n");
@@ -457,7 +451,7 @@ mod tests {
 
     #[test]
     fn any_rc_file_exists_table() {
-        let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::env_lock().blocking_lock();
         let (_home_guard, home) = HomeGuard::new();
         assert!(!any_rc_file_exists().unwrap());
         write_rc(&home.join(".zshrc"), "");
@@ -466,7 +460,7 @@ mod tests {
 
     #[test]
     fn install_then_uninstall_round_trips_to_original() {
-        let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_support::env_lock().blocking_lock();
         let (_home_guard, home) = HomeGuard::new();
         let zshrc = home.join(".zshrc");
         let original = "export FOO=1\nalias g=git\n";
