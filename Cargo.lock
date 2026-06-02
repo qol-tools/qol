@@ -9326,12 +9326,12 @@ dependencies = [
 ]
 
 [[patch.unused]]
-name = "qol-runtime"
-version = "0.1.0"
-
-[[patch.unused]]
 name = "qol-tray"
 version = "3.16.0"
+
+[[patch.unused]]
+name = "qol-runtime"
+version = "0.1.0"
 
 [[patch.unused]]
 name = "qol-app-icon"

@@ -12,6 +12,7 @@ objc2 = { workspace = true }
 objc2-foundation = { workspace = true, features = ["NSString", "NSURL"] }
 objc2-app-kit = { workspace = true, features = [
   "NSWorkspace",
+  "NSRunningApplication",
   "NSImage",
   "NSImageRep",
   "NSGraphicsContext",
