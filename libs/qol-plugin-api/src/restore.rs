@@ -3,8 +3,8 @@
 //! The structural invariant: `RestoreClaim` carries a `template_id` and
 //! validated `params` only. It cannot carry a program, argv, or any other
 //! field that would let a plugin communicate "run this command after the
-//! reboot". Authority over which programs may run lives in plugin-kitty's
-//! user-owned template registry, never in plugin returns.
+//! reboot". Authority over which programs may run lives in the restore-host
+//! plugin's user-owned template registry, never in plugin returns.
 //!
 //! `#[serde(deny_unknown_fields)]` enforces the same invariant at parse time
 //! for any wire payload, so a forged JSON object carrying e.g. `"program"`
