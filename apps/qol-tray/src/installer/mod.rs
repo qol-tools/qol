@@ -14,7 +14,6 @@ mod shell_hook;
 mod source;
 
 pub use boot_environment::BootEnvironment;
-#[cfg(feature = "dev")]
 pub(crate) use platform::binary_filename;
 
 const INSTALL_ID_FILE: &str = "qol-tray.install-id";
