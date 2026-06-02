@@ -6,18 +6,22 @@ use std::path::{Path, PathBuf};
 use toml::Value;
 
 pub(crate) fn repo_root() -> Result<PathBuf> {
+    workspace_root_from_cwd()
+}
+
+pub(crate) fn workspace_root_from_cwd() -> Result<PathBuf> {
     let mut current = env::current_dir().context("failed to read current directory")?;
     loop {
-        if is_qol_tray_root(&current)? {
+        if cargo_manifest_declares_workspace(&current)? {
             return Ok(current);
         }
         if !current.pop() {
-            bail!("run this from inside the qol-tray repo");
+            bail!("run this from inside a qol-tray cargo workspace");
         }
     }
 }
 
-fn is_qol_tray_root(path: &Path) -> Result<bool> {
+fn cargo_manifest_declares_workspace(path: &Path) -> Result<bool> {
     let manifest = path.join("Cargo.toml");
     if !manifest.is_file() {
         return Ok(false);
@@ -26,11 +30,7 @@ fn is_qol_tray_root(path: &Path) -> Result<bool> {
         .with_context(|| format!("failed to read {}", manifest.display()))?;
     let parsed: Value = toml::from_str(&content)
         .with_context(|| format!("failed to parse {}", manifest.display()))?;
-    let name = parsed
-        .get("package")
-        .and_then(|package| package.get("name"))
-        .and_then(Value::as_str);
-    Ok(name == Some("qol-tray"))
+    Ok(parsed.get("workspace").is_some())
 }
 
 pub(crate) fn workspace_root(repo: &Path) -> Result<PathBuf> {
@@ -50,6 +50,9 @@ pub(crate) fn workspace_root(repo: &Path) -> Result<PathBuf> {
 
 pub(crate) fn sibling_crates(repo: &Path) -> Result<Vec<PathBuf>> {
     let workspace = workspace_root(repo)?;
+    if !workspace.is_dir() {
+        return Ok(Vec::new());
+    }
     let mut paths = Vec::new();
     for entry in fs::read_dir(&workspace)
         .with_context(|| format!("failed to read {}", workspace.display()))?
@@ -77,11 +80,67 @@ pub(crate) fn sibling_crates(repo: &Path) -> Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
+pub(crate) fn monorepo_plugins_dir(workspace_root: &Path) -> Option<PathBuf> {
+    let candidate = workspace_root.join("plugins");
+    if candidate.is_dir() {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
+pub(crate) fn monorepo_plugin_dirs(workspace_root: &Path) -> Result<Vec<PathBuf>> {
+    let Some(plugins_dir) = monorepo_plugins_dir(workspace_root) else {
+        return Ok(Vec::new());
+    };
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(&plugins_dir)
+        .with_context(|| format!("failed to read {}", plugins_dir.display()))?
+    {
+        let path = entry?.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if !path.join("plugin.toml").is_file() {
+            continue;
+        }
+        paths.push(path);
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+pub(crate) fn discover_plugin_dirs(workspace_root: &Path) -> Result<Vec<PathBuf>> {
+    let mono = monorepo_plugin_dirs(workspace_root)?;
+    if !mono.is_empty() {
+        return Ok(mono);
+    }
+    sibling_crates(workspace_root)
+}
+
+pub(crate) fn cargo_package_name(crate_dir: &Path) -> Result<String> {
+    let manifest = crate_dir.join("Cargo.toml");
+    let content = fs::read_to_string(&manifest)
+        .with_context(|| format!("failed to read {}", manifest.display()))?;
+    let parsed: Value = toml::from_str(&content)
+        .with_context(|| format!("failed to parse {}", manifest.display()))?;
+    parsed
+        .get("package")
+        .and_then(|package| package.get("name"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| anyhow!("{} has no [package].name", manifest.display()))
+}
+
 pub(crate) fn resolve_crate_target(root: &Path, name: &str) -> Result<PathBuf> {
     let mut candidates = vec![(root.to_path_buf(), "qol-tray".to_string())];
     for sibling in sibling_crates(root)? {
         let dn = display_name(&sibling);
         candidates.push((sibling, dn));
+    }
+    for plugin in monorepo_plugin_dirs(root)? {
+        let dn = display_name(&plugin);
+        candidates.push((plugin, dn));
     }
     let matches: Vec<&(PathBuf, String)> = candidates
         .iter()
@@ -115,6 +174,37 @@ pub(crate) fn exe_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_workspace(dir: &Path) {
+        fs::write(
+            dir.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"apps/*\", \"plugins/*\"]\n",
+        )
+        .unwrap();
+    }
+
+    fn write_package(dir: &Path, name: &str) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(
+            dir.join("Cargo.toml"),
+            format!("[package]\nname = \"{name}\"\n"),
+        )
+        .unwrap();
+    }
+
+    fn write_plugin_dir(dir: &Path, pkg_name: &str, platforms: &str) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(
+            dir.join("Cargo.toml"),
+            format!("[package]\nname = \"{pkg_name}\"\n"),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("plugin.toml"),
+            format!("[plugin]\nname = \"{pkg_name}\"\nversion = \"0.0.0\"\nplatforms = [{platforms}]\n\n[menu]\nlabel = \"x\"\nitems = []\n"),
+        )
+        .unwrap();
+    }
 
     #[test]
     fn discovers_sibling_crates_from_main_clone() {
@@ -194,5 +284,147 @@ mod tests {
             err.contains("plugin-foo") && err.contains("qol-foo"),
             "got: {err}"
         );
+    }
+
+    #[test]
+    fn cargo_manifest_declares_workspace_recognizes_workspace_and_package_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("ws");
+        fs::create_dir_all(&workspace).unwrap();
+        write_workspace(&workspace);
+        let package_only = tmp.path().join("pkg");
+        fs::create_dir_all(&package_only).unwrap();
+        fs::write(package_only.join("Cargo.toml"), "[package]\nname = \"a\"\n").unwrap();
+        let hybrid = tmp.path().join("hybrid");
+        fs::create_dir_all(&hybrid).unwrap();
+        fs::write(
+            hybrid.join("Cargo.toml"),
+            "[package]\nname = \"a\"\n[workspace]\nmembers = [\"tools/*\"]\n",
+        )
+        .unwrap();
+        let empty = tmp.path().join("empty");
+        fs::create_dir_all(&empty).unwrap();
+
+        let cases = [
+            (workspace.as_path(), true, "pure workspace"),
+            (package_only.as_path(), false, "package only"),
+            (hybrid.as_path(), true, "package + workspace (old layout)"),
+            (empty.as_path(), false, "no Cargo.toml"),
+        ];
+        for (path, expected, label) in cases {
+            assert_eq!(
+                cargo_manifest_declares_workspace(path).unwrap(),
+                expected,
+                "case: {label}"
+            );
+        }
+    }
+
+    #[test]
+    fn monorepo_plugin_dirs_discovers_under_plugins_subdir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("mono");
+        fs::create_dir_all(&workspace).unwrap();
+        write_workspace(&workspace);
+        let plugins = workspace.join("plugins");
+        fs::create_dir_all(&plugins).unwrap();
+        write_plugin_dir(&plugins.join("plugin-a"), "a-pkg", "\"linux\"");
+        write_plugin_dir(&plugins.join("plugin-b"), "b-pkg", "\"linux\", \"macos\"");
+        fs::create_dir_all(plugins.join("not-a-plugin")).unwrap();
+
+        let names: Vec<_> = monorepo_plugin_dirs(&workspace)
+            .unwrap()
+            .into_iter()
+            .map(|p| display_name(&p))
+            .collect();
+        assert_eq!(names, vec!["plugin-a".to_string(), "plugin-b".to_string()]);
+    }
+
+    #[test]
+    fn monorepo_plugin_dirs_returns_empty_when_plugins_subdir_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("plain");
+        fs::create_dir_all(&workspace).unwrap();
+        write_workspace(&workspace);
+        assert!(monorepo_plugin_dirs(&workspace).unwrap().is_empty());
+    }
+
+    #[test]
+    fn discover_plugin_dirs_prefers_mono_layout_over_siblings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("mono");
+        fs::create_dir_all(&workspace).unwrap();
+        write_workspace(&workspace);
+        let plugins = workspace.join("plugins");
+        write_plugin_dir(&plugins.join("plugin-x"), "x-pkg", "\"linux\"");
+        write_package(&workspace.join("plugin-sibling"), "y-pkg");
+
+        let names: Vec<_> = discover_plugin_dirs(&workspace)
+            .unwrap()
+            .into_iter()
+            .map(|p| display_name(&p))
+            .collect();
+        assert_eq!(names, vec!["plugin-x".to_string()]);
+    }
+
+    #[test]
+    fn discover_plugin_dirs_falls_back_to_siblings_when_no_mono_plugins_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("qol-tray");
+        write_package(&repo, "qol-tray");
+        write_package(&tmp.path().join("plugin-old"), "old-pkg");
+        let names: Vec<_> = discover_plugin_dirs(&repo)
+            .unwrap()
+            .into_iter()
+            .map(|p| display_name(&p))
+            .collect();
+        assert_eq!(names, vec!["plugin-old".to_string()]);
+    }
+
+    #[test]
+    fn cargo_package_name_reads_real_package_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cases = [
+            ("plugin-alt-tab", "alt-tab"),
+            ("plugin-ide-checkout", "task-runner"),
+            ("plugin-pointz", "pointzerver"),
+            ("plugin-keyremap", "keyremap"),
+            ("plugin-lights", "plugin-lights"),
+        ];
+        for (dir_name, pkg_name) in cases {
+            let dir = tmp.path().join(dir_name);
+            write_package(&dir, pkg_name);
+            assert_eq!(
+                cargo_package_name(&dir).unwrap(),
+                pkg_name,
+                "dir: {dir_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn cargo_package_name_errors_on_missing_field() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("broken");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
+        let err = cargo_package_name(&dir).unwrap_err().to_string();
+        assert!(err.contains("[package].name"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_crate_target_includes_monorepo_plugins() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("mono");
+        fs::create_dir_all(&workspace).unwrap();
+        write_workspace(&workspace);
+        write_plugin_dir(
+            &workspace.join("plugins").join("plugin-alt-tab"),
+            "alt-tab",
+            "\"linux\"",
+        );
+
+        let resolved = resolve_crate_target(&workspace, "plugin-alt-tab").unwrap();
+        assert_eq!(display_name(&resolved), "plugin-alt-tab");
     }
 }

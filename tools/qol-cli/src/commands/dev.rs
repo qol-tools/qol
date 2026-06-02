@@ -1,11 +1,13 @@
 use crate::cli::optional_single_arg;
-use crate::dev_server::{post_recompile, wait_for_health};
+use crate::dev_server::{post_dev_link, post_recompile, wait_for_health, DevLinkOutcome};
 use crate::host_facade;
-use crate::progress::{print_hint, print_title, run_step, step_label, LoopProgress, StepKind};
-use crate::workspace::{display_name, repo_root, sibling_crates, workspace_root};
+use crate::progress::{print_hint, print_title, run_step, step_label, StepKind};
+use crate::workspace::{
+    cargo_package_name, discover_plugin_dirs, display_name, repo_root, sibling_crates,
+};
 use anyhow::{bail, Context, Result};
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use toml::Value;
 
@@ -14,16 +16,12 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     let root = repo_root()?;
     print_title("qol dev");
     print_hint(verbose);
-    // Validate the requested worktree exists before any destructive step
-    // (stopping the daemon, building, spawning). A missing branch must fail
-    // fast with no side effects, rather than leaving a freshly spawned daemon
-    // running against a stale active-worktree marker. Bare `qol dev` clears the
-    // marker so the boot resolves to the main clone.
     match branch {
         Some(branch) => ensure_worktree_branch(&root, branch)?,
         None => clear_active_worktree_marker(),
     }
-    recompile_linked_plugins(&root, verbose, skip_plugins)?;
+    let buildable = collect_buildable_plugins(&root, skip_plugins)?;
+    build_plugins_batch(&root, &buildable, verbose)?;
     run_dev_hook(&root, verbose)?;
     run_step(
         "check",
@@ -53,7 +51,7 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         .join("debug")
         .join(host_facade::exe_name("qol-tray"));
     step_label("run", StepKind::Pending, &binary.display().to_string());
-    let mut child = Command::new(binary)
+    let mut child = Command::new(&binary)
         .current_dir(&root)
         .arg("--write-mode=dev")
         .stdin(Stdio::inherit())
@@ -61,6 +59,14 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         .stderr(Stdio::inherit())
         .spawn()
         .context("failed to start qol-tray dev process")?;
+
+    if !buildable.is_empty() {
+        if let Err(error) = wait_for_health() {
+            eprintln!("qol dev: dev server did not become healthy: {error:#}");
+        } else {
+            register_dev_links(&buildable);
+        }
+    }
 
     if let Some(branch) = branch {
         wait_for_health()?;
@@ -76,78 +82,106 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     Ok(())
 }
 
-fn recompile_linked_plugins(repo: &Path, verbose: bool, skip_plugins: bool) -> Result<()> {
+struct BuildablePlugin {
+    dir: PathBuf,
+    package_name: String,
+}
+
+fn collect_buildable_plugins(root: &Path, skip_plugins: bool) -> Result<Vec<BuildablePlugin>> {
     if skip_plugins {
         step_label("plugins", StepKind::Info, "skipped (-n)");
-        return Ok(());
+        return Ok(Vec::new());
     }
-    let siblings = sibling_crates(repo)?;
-    if siblings.is_empty() {
-        step_label(
-            "plugins",
-            StepKind::Info,
-            &format!("none under {}", workspace_root(repo)?.display()),
-        );
-        return Ok(());
+    let candidates = discover_plugin_dirs(root)?;
+    if candidates.is_empty() {
+        step_label("plugins", StepKind::Info, "no plugins discovered");
+        return Ok(Vec::new());
     }
-    let mut to_build = Vec::new();
-    let mut skipped = 0;
-    for sibling in siblings {
-        if PluginBuildStrategy::for_path(&sibling)?.is_none() {
-            skipped += 1;
-            continue;
-        }
-        to_build.push(sibling);
-    }
-    let mut failed = Vec::new();
-    let mut progress = LoopProgress::new("plugins", to_build.len(), verbose);
-    for sibling in &to_build {
-        let result = progress.step_inline(
-            "build",
-            StepKind::Pending,
-            &display_name(sibling),
-            Command::new("cargo").current_dir(sibling).arg("build"),
-            verbose,
-        );
-        if result.is_err() {
-            failed.push(display_name(sibling));
+    let mut buildable = Vec::new();
+    let mut skipped_unsupported = 0;
+    let mut skipped_no_runtime = 0;
+    for dir in candidates {
+        match PluginEligibility::for_path(&dir)? {
+            PluginEligibility::Buildable => {
+                let package_name = cargo_package_name(&dir)
+                    .with_context(|| format!("reading package name for {}", dir.display()))?;
+                buildable.push(BuildablePlugin { dir, package_name });
+            }
+            PluginEligibility::SkippedHost => skipped_unsupported += 1,
+            PluginEligibility::SkippedNoRuntime => skipped_no_runtime += 1,
         }
     }
-    progress.finish();
-    let built = to_build.len() - failed.len();
     step_label(
         "plugins",
         StepKind::Info,
-        &format!("built {built}, skipped {skipped}, failed {}", failed.len()),
+        &format!(
+            "{} buildable, {} unsupported here, {} without runtime",
+            buildable.len(),
+            skipped_unsupported,
+            skipped_no_runtime
+        ),
     );
-    if !failed.is_empty() {
-        eprintln!("qol dev: failed plugins: {}", failed.join(" "));
+    Ok(buildable)
+}
+
+fn build_plugins_batch(root: &Path, plugins: &[BuildablePlugin], verbose: bool) -> Result<()> {
+    if plugins.is_empty() {
+        return Ok(());
+    }
+    let label = plugins
+        .iter()
+        .map(|p| display_name(&p.dir))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut command = Command::new("cargo");
+    command.current_dir(root).arg("build");
+    for plugin in plugins {
+        command.arg("-p").arg(&plugin.package_name);
+    }
+    let result = run_step("build", StepKind::Pending, &label, &mut command, verbose);
+    if result.is_err() {
+        eprintln!("qol dev: plugin batch build failed");
         eprintln!("qol dev: continuing - recover via qol-tray GUI Recompile pane.");
     }
     Ok(())
 }
 
-struct PluginBuildStrategy;
+fn register_dev_links(plugins: &[BuildablePlugin]) {
+    for plugin in plugins {
+        let display = display_name(&plugin.dir);
+        match post_dev_link(&plugin.dir) {
+            Ok(DevLinkOutcome::Created) => step_label("link", StepKind::Success, &display),
+            Ok(DevLinkOutcome::AlreadyLinked) => step_label("link", StepKind::Info, &display),
+            Err(error) => eprintln!("qol dev: failed to link {display}: {error:#}"),
+        }
+    }
+}
 
-impl PluginBuildStrategy {
-    fn for_path(path: &Path) -> Result<Option<Self>> {
+enum PluginEligibility {
+    Buildable,
+    SkippedHost,
+    SkippedNoRuntime,
+}
+
+impl PluginEligibility {
+    fn for_path(path: &Path) -> Result<Self> {
         let manifest_path = path.join("plugin.toml");
         if !manifest_path.is_file() {
-            return Ok(None);
+            return Ok(Self::SkippedNoRuntime);
         }
         let content = std::fs::read_to_string(&manifest_path)
             .with_context(|| format!("failed to read {}", manifest_path.display()))?;
         let manifest: Value = toml::from_str(&content)
             .with_context(|| format!("failed to parse {}", manifest_path.display()))?;
         if !supports_host(&manifest) {
-            return Ok(None);
+            return Ok(Self::SkippedHost);
         }
         if section_command(&manifest, "runtime").is_none()
             && section_command(&manifest, "daemon").is_none()
         {
-            return Ok(None);
+            return Ok(Self::SkippedNoRuntime);
         }
-        Ok(Some(Self))
+        Ok(Self::Buildable)
     }
 }
 
@@ -176,11 +210,6 @@ fn section_command<'a>(manifest: &'a Value, section: &str) -> Option<&'a str> {
         .and_then(Value::as_str)
 }
 
-/// Bare `qol dev` (no worktree arg) means "canonical / main". Delete the
-/// persisted marker before qol-tray boots so heal_drift_on_startup resolves
-/// to the main clone and the UI dropdown shows main instead of whatever
-/// worktree was last selected. Silent on failure; a leftover marker only
-/// affects the boot the user is about to take, and they will see it.
 fn clear_active_worktree_marker() {
     let Some(config_dir) = dirs::config_dir() else {
         return;
@@ -248,6 +277,8 @@ fn parse_worktree_branches(input: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn parses_worktree_branches_skipping_detached() {
@@ -256,5 +287,53 @@ mod tests {
             parse_worktree_branches(input),
             vec!["main".to_string(), "feat/x".to_string()]
         );
+    }
+
+    fn write_plugin(dir: &Path, manifest_body: &str) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join("plugin.toml"), manifest_body).unwrap();
+    }
+
+    #[test]
+    fn plugin_eligibility_classifies_manifests() {
+        let tmp = TempDir::new().unwrap();
+        let buildable = tmp.path().join("buildable");
+        write_plugin(
+            &buildable,
+            "[plugin]\nname = \"a\"\nversion = \"0\"\nplatforms = [\"linux\", \"macos\", \"windows\"]\n[runtime]\ncommand = \"x\"\n",
+        );
+        let unsupported = tmp.path().join("unsupported");
+        write_plugin(
+            &unsupported,
+            "[plugin]\nname = \"b\"\nversion = \"0\"\nplatforms = [\"plan9\"]\n[runtime]\ncommand = \"x\"\n",
+        );
+        let no_runtime = tmp.path().join("no_runtime");
+        write_plugin(
+            &no_runtime,
+            "[plugin]\nname = \"c\"\nversion = \"0\"\nplatforms = [\"linux\", \"macos\", \"windows\"]\n",
+        );
+        let missing = tmp.path().join("missing");
+        fs::create_dir_all(&missing).unwrap();
+        let daemon_only = tmp.path().join("daemon_only");
+        write_plugin(
+            &daemon_only,
+            "[plugin]\nname = \"d\"\nversion = \"0\"\nplatforms = [\"linux\", \"macos\", \"windows\"]\n[daemon]\nenabled = true\ncommand = \"x\"\n",
+        );
+
+        let cases: &[(&Path, &str)] = &[
+            (&buildable, "Buildable"),
+            (&unsupported, "SkippedHost"),
+            (&no_runtime, "SkippedNoRuntime"),
+            (&missing, "SkippedNoRuntime"),
+            (&daemon_only, "Buildable"),
+        ];
+        for (path, want) in cases {
+            let got = match PluginEligibility::for_path(path).unwrap() {
+                PluginEligibility::Buildable => "Buildable",
+                PluginEligibility::SkippedHost => "SkippedHost",
+                PluginEligibility::SkippedNoRuntime => "SkippedNoRuntime",
+            };
+            assert_eq!(got, *want, "path: {}", path.display());
+        }
     }
 }
