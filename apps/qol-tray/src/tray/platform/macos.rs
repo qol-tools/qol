@@ -93,10 +93,13 @@ mod url_scheme {
             return;
         }
         if let Ok(exe) = std::env::current_exe() {
-            let _ = std::process::Command::new(exe)
+            if let Err(error) = std::process::Command::new(exe)
                 .arg(crate::commands::URL_COURIER_FLAG)
                 .arg(url)
-                .spawn();
+                .spawn()
+            {
+                log::warn!("failed to spawn deep-link courier for {url}: {error}");
+            }
         }
     }
 
