@@ -224,7 +224,6 @@ mod tests {
         assert!(xml.contains("<key>CFBundleURLTypes</key>"));
         assert!(xml.contains("<key>CFBundleURLSchemes</key>"));
         assert!(xml.contains("<string>qol</string>"));
-        // Existing keys are preserved.
         assert!(xml.contains("<key>CFBundleIdentifier</key>"));
         assert!(xml.contains("<string>9.9.9</string>"));
         assert!(xml.contains("<key>LSUIElement</key>"));

@@ -85,7 +85,6 @@ fn schedule_post_restart_rebuild(app_state: &AppState) {
         Ok(b) if !b.is_empty() => b,
         _ => return,
     };
-    // Consume the env var so it doesn't persist across future restarts
     std::env::remove_var("QOL_DEV_WORKTREE_BRANCH");
     log::info!(
         "[worktree] post-restart plugin rebuild for branch: {}",

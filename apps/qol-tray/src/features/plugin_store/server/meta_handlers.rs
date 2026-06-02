@@ -118,7 +118,6 @@ mod tests {
         let bus = EventBus::new();
         let mut rx = bus.subscribe();
         assert!(decide_delivery(bus.subscriber_count()));
-        // Mirror the handler: deliver only when a subscriber is present.
         if decide_delivery(bus.subscriber_count()) {
             bus.send(DaemonEvent::Navigate {
                 route: "shortcuts/add?type=url".to_string(),
@@ -135,7 +134,6 @@ mod tests {
         use crate::daemon::EventBus;
         let bus = EventBus::new();
         assert!(!decide_delivery(bus.subscriber_count()));
-        // A late subscriber must not receive an event that the handler skipped.
         let mut rx = bus.subscribe();
         assert!(rx.try_recv().is_err());
     }

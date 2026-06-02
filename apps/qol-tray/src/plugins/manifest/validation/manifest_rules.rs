@@ -55,8 +55,6 @@ mod tests {
         validate_manifest_version(CURRENT_MANIFEST_VERSION).unwrap();
     }
 
-    // Identity with accepts_current_version while MIN == CURRENT = 1; diverges once
-    // CURRENT_MANIFEST_VERSION is bumped and exercises the low end of the range.
     #[test]
     fn accepts_minimum_supported_version() {
         validate_manifest_version(MIN_SUPPORTED_MANIFEST_VERSION).unwrap();

@@ -95,13 +95,6 @@ mod tests {
 
 /// Resolves the binary the autostart artifact should point at when no dev
 /// worktree is selected, or when the selected worktree is unusable.
-///
-/// Priority (from the spec's "canonical_binary priority chain"):
-///   1. (handled by InstallBootEnvironment short-circuit, not by this fn)
-///   2. current_exe if it equals the installed binary
-///   3. main-clone-debug when honors_dev_selection is true
-///   4. installed binary, if it exists
-///   5. current_exe
 pub fn canonical_boot_binary() -> Result<PathBuf> {
     let install_binary = installed_binary_path().ok();
     let install_exists = install_binary.as_ref().is_some_and(|p| p.is_file());
@@ -129,13 +122,11 @@ struct CanonicalProbes {
 }
 
 fn canonical_boot_binary_inner(probes: &CanonicalProbes, honors_dev: bool) -> PathBuf {
-    // Step 2: current_exe == installed binary
     if let Some(install) = probes.install_binary.as_ref() {
         if probes.install_binary_exists && paths_equal_canonicalized(&probes.current_exe, install) {
             return install.clone();
         }
     }
-    // Step 3: main-clone-debug when honors_dev_selection
     if honors_dev {
         if let Some(main) = probes.main_clone_debug.as_ref() {
             if probes.main_clone_debug_exists {
@@ -143,13 +134,11 @@ fn canonical_boot_binary_inner(probes: &CanonicalProbes, honors_dev: bool) -> Pa
             }
         }
     }
-    // Step 4: installed binary
     if let Some(install) = probes.install_binary.as_ref() {
         if probes.install_binary_exists {
             return install.clone();
         }
     }
-    // Step 5: current_exe
     probes.current_exe.clone()
 }
 
