@@ -4,7 +4,7 @@ pub mod validation;
 
 use serde::de::DeserializeOwned;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub fn base_data_dir() -> Option<PathBuf> {
     dirs::data_local_dir()
@@ -16,9 +16,11 @@ pub fn config_roots() -> Vec<PathBuf> {
     let Some(base) = base_data_dir() else {
         return Vec::new();
     };
+    let active_install_id = install_id_from_active_file(&base);
     assemble_config_roots(
         base,
         install_id_from_env(),
+        active_install_id,
         dirs::config_dir().map(|p| p.join("qol-tray")),
     )
 }
@@ -26,11 +28,18 @@ pub fn config_roots() -> Vec<PathBuf> {
 fn assemble_config_roots(
     base: PathBuf,
     install_id: Option<String>,
+    active_install_id: Option<String>,
     user_config_dir: Option<PathBuf>,
 ) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(id) = install_id {
         roots.push(base.join("installs").join(id));
+    }
+    if let Some(id) = active_install_id {
+        let candidate = base.join("installs").join(id);
+        if !roots.contains(&candidate) {
+            roots.push(candidate);
+        }
     }
     if !roots.contains(&base) {
         roots.push(base);
@@ -84,6 +93,15 @@ pub fn install_id_from_env() -> Option<String> {
     Some(trimmed.to_string())
 }
 
+pub fn install_id_from_active_file(base_data_dir: &Path) -> Option<String> {
+    let content = fs::read_to_string(base_data_dir.join("active-install-id")).ok()?;
+    let trimmed = content.trim();
+    if !valid_install_id(trimmed) {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
 pub fn valid_install_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64
@@ -99,7 +117,10 @@ mod tests {
     #[test]
     fn without_pinned_install_base_is_the_only_data_root() {
         let base = PathBuf::from("/data/qol-tray");
-        assert_eq!(assemble_config_roots(base.clone(), None, None), vec![base]);
+        assert_eq!(
+            assemble_config_roots(base.clone(), None, None, None),
+            vec![base]
+        );
     }
 
     #[test]
@@ -109,6 +130,7 @@ mod tests {
         let roots = assemble_config_roots(
             base.clone(),
             Some("install-123".into()),
+            None,
             Some(user_cfg.clone()),
         );
         assert_eq!(
@@ -118,9 +140,45 @@ mod tests {
     }
 
     #[test]
+    fn active_install_file_id_is_searched_after_env_and_deduped() {
+        let base = PathBuf::from("/data/qol-tray");
+        assert_eq!(
+            assemble_config_roots(
+                base.clone(),
+                Some("env-id".into()),
+                Some("active-id".into()),
+                None,
+            ),
+            vec![
+                base.join("installs").join("env-id"),
+                base.join("installs").join("active-id"),
+                base.clone(),
+            ]
+        );
+        assert_eq!(
+            assemble_config_roots(
+                base.clone(),
+                Some("same-id".into()),
+                Some("same-id".into()),
+                None,
+            ),
+            vec![base.join("installs").join("same-id"), base]
+        );
+    }
+
+    #[test]
+    fn active_install_file_id_searched_when_env_absent() {
+        let base = PathBuf::from("/data/qol-tray");
+        assert_eq!(
+            assemble_config_roots(base.clone(), None, Some("active-id".into()), None),
+            vec![base.join("installs").join("active-id"), base]
+        );
+    }
+
+    #[test]
     fn no_installs_dir_resolved_without_explicit_env() {
         let base = PathBuf::from("/data/qol-tray");
-        let roots = assemble_config_roots(base.clone(), None, None);
+        let roots = assemble_config_roots(base.clone(), None, None, None);
         assert!(roots
             .iter()
             .all(|root| !root.to_string_lossy().contains("installs")));
@@ -131,7 +189,7 @@ mod tests {
     fn user_config_dir_equal_to_base_is_deduped() {
         let base = PathBuf::from("/data/qol-tray");
         assert_eq!(
-            assemble_config_roots(base.clone(), None, Some(base.clone())),
+            assemble_config_roots(base.clone(), None, None, Some(base.clone())),
             vec![base]
         );
     }
