@@ -125,11 +125,11 @@ mod tests {
     async fn isolated_env() -> (
         tokio::sync::MutexGuard<'static, ()>,
         TempDir,
-        crate::paths::TestPathRootGuard,
+        crate::paths::TestEnvPathRootGuard,
     ) {
         let guard = crate::test_support::env_lock().lock().await;
         let tmp = TempDir::new().unwrap();
-        let path_guard = crate::paths::push_test_path_root(tmp.path());
+        let path_guard = crate::paths::push_test_env_path_root(tmp.path());
         (guard, tmp, path_guard)
     }
 

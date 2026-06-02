@@ -22,6 +22,11 @@ thread_local! {
 #[cfg(test)]
 pub(crate) struct TestPathRootGuard;
 
+#[cfg(all(test, feature = "dev"))]
+pub(crate) struct TestEnvPathRootGuard {
+    previous: Option<std::ffi::OsString>,
+}
+
 #[cfg(test)]
 impl Drop for TestPathRootGuard {
     fn drop(&mut self) {
@@ -31,12 +36,30 @@ impl Drop for TestPathRootGuard {
     }
 }
 
+#[cfg(all(test, feature = "dev"))]
+impl Drop for TestEnvPathRootGuard {
+    fn drop(&mut self) {
+        if let Some(previous) = &self.previous {
+            std::env::set_var(TEST_PATH_ROOT_ENV, previous);
+            return;
+        }
+        std::env::remove_var(TEST_PATH_ROOT_ENV);
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn push_test_path_root(root: &Path) -> TestPathRootGuard {
     TEST_PATH_ROOTS.with(|roots| {
         roots.borrow_mut().push(root.to_path_buf());
     });
     TestPathRootGuard
+}
+
+#[cfg(all(test, feature = "dev"))]
+pub(crate) fn push_test_env_path_root(root: &Path) -> TestEnvPathRootGuard {
+    let previous = std::env::var_os(TEST_PATH_ROOT_ENV);
+    std::env::set_var(TEST_PATH_ROOT_ENV, root);
+    TestEnvPathRootGuard { previous }
 }
 
 #[cfg(test)]
