@@ -6,9 +6,16 @@ use std::time::{Duration, Instant};
 
 const DEV_HEALTH_URL: &str = "http://127.0.0.1:42700/api/dev/worktrees";
 const DEV_RECOMPILE_URL: &str = "http://127.0.0.1:42700/api/dev/recompile-self";
+const DEV_LINKS_URL: &str = "http://127.0.0.1:42700/api/dev/links";
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
 const HEALTH_INTERVAL: Duration = Duration::from_millis(250);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(1);
+
+#[derive(Debug)]
+pub(crate) enum DevLinkOutcome {
+    Created,
+    AlreadyLinked,
+}
 
 pub(crate) fn wait_for_health() -> Result<()> {
     let deadline = Instant::now() + HEALTH_TIMEOUT;
@@ -28,6 +35,21 @@ pub(crate) fn post_recompile(branch: &str) -> Result<()> {
         return Ok(());
     }
     bail!("recompile request failed with HTTP {status}");
+}
+
+pub(crate) fn post_dev_link(plugin_dir: &std::path::Path) -> Result<DevLinkOutcome> {
+    let path = plugin_dir.to_string_lossy().to_string();
+    let body = json!({ "path": path }).to_string();
+    let status = http_request("POST", DEV_LINKS_URL, Some(&body))?;
+    classify_link_status(status)
+}
+
+fn classify_link_status(status: u16) -> Result<DevLinkOutcome> {
+    match status {
+        200..=299 => Ok(DevLinkOutcome::Created),
+        409 => Ok(DevLinkOutcome::AlreadyLinked),
+        other => bail!("dev-link request failed with HTTP {other}"),
+    }
 }
 
 fn http_get_ok(url: &str) -> Result<bool> {
@@ -117,5 +139,32 @@ mod tests {
             parse_http_status("HTTP/1.1 202 Accepted\r\n\r\n").unwrap(),
             202
         );
+    }
+
+    #[test]
+    fn classify_link_status_handles_known_codes() {
+        let cases = [
+            (200, Some(false)),
+            (201, Some(false)),
+            (204, Some(false)),
+            (409, Some(true)),
+            (400, None),
+            (500, None),
+            (502, None),
+        ];
+        for (status, want) in cases {
+            let got = classify_link_status(status);
+            match want {
+                Some(already) => {
+                    let outcome = got.unwrap_or_else(|e| panic!("status {status}: {e}"));
+                    let is_already = matches!(outcome, DevLinkOutcome::AlreadyLinked);
+                    assert_eq!(is_already, already, "status {status}");
+                }
+                None => {
+                    let err = got.unwrap_err().to_string();
+                    assert!(err.contains(&status.to_string()), "status {status}: {err}");
+                }
+            }
+        }
     }
 }
