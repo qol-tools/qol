@@ -21,7 +21,21 @@ pub fn clean_stale_sockets(plugins: &[Plugin]) {
 }
 
 pub fn managed_processes() -> Vec<ManagedProcess> {
-    platform::managed_processes()
+    without_host_binaries(platform::managed_processes())
+}
+
+fn without_host_binaries(processes: Vec<ManagedProcess>) -> Vec<ManagedProcess> {
+    processes
+        .into_iter()
+        .filter(|process| !is_host_binary(&process.executable))
+        .collect()
+}
+
+fn is_host_binary(executable: &Path) -> bool {
+    let Some(name) = executable.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    name == crate::installer::binary_filename() || name == "qol"
 }
 
 pub fn leaked_processes() -> Vec<ManagedProcess> {
@@ -221,5 +235,32 @@ mod tests {
         };
 
         assert!(!kill_managed_process(&process, &ManagedRoots::load()));
+    }
+
+    #[test]
+    fn without_host_binaries_drops_tray_and_cli_keeps_plugins() {
+        let tray = format!("/qol/target/debug/{}", crate::installer::binary_filename());
+        let processes = vec![
+            ManagedProcess {
+                pid: 100,
+                executable: PathBuf::from(&tray),
+            },
+            ManagedProcess {
+                pid: 150,
+                executable: PathBuf::from("/qol/target/debug/qol"),
+            },
+            ManagedProcess {
+                pid: 200,
+                executable: PathBuf::from("/qol/target/debug/keyremap"),
+            },
+        ];
+
+        assert_eq!(
+            without_host_binaries(processes),
+            vec![ManagedProcess {
+                pid: 200,
+                executable: PathBuf::from("/qol/target/debug/keyremap"),
+            }]
+        );
     }
 }
