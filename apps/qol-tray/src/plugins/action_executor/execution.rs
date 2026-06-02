@@ -114,7 +114,8 @@ fn runtime_command(resolved: &ResolvedAction, command_path: &Path) -> std::proce
         .args(&resolved.args)
         .current_dir(&resolved.plugin_dir)
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::inherit());
+        .stderr(std::process::Stdio::inherit())
+        .env("QOL_TRAY_PLUGIN_ID", resolved.plugin_id.as_str());
     if let Some(socket_path) = &resolved.daemon_socket {
         command.env("QOL_TRAY_DAEMON_SOCKET", socket_path);
     }

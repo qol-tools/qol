@@ -65,6 +65,46 @@ pub fn plugin_config_paths(names: &[&str]) -> Vec<PathBuf> {
     paths
 }
 
+/// Load a plugin's config using the identity the host injects at launch.
+///
+/// The host sets `QOL_TRAY_PLUGIN_ID` on every plugin process it spawns, so a
+/// plugin never has to hardcode its own id. `fallback_id` is used only when the
+/// plugin is run standalone, outside the host (no env var). A present-but-invalid
+/// injected id is a host bug and aborts loudly rather than silently loading
+/// defaults.
+pub fn load_plugin_config_from_env<T: DeserializeOwned + Default>(fallback_id: &str) -> T {
+    let id = plugin_id_from_env(fallback_id);
+    load_plugin_config(&[id.as_str()])
+}
+
+/// Config file paths for the host-injected (or standalone-fallback) plugin id.
+pub fn plugin_config_paths_from_env(fallback_id: &str) -> Vec<PathBuf> {
+    let id = plugin_id_from_env(fallback_id);
+    plugin_config_paths(&[id.as_str()])
+}
+
+/// The canonical plugin id the host injected at launch, or `fallback_id` when
+/// run standalone. Aborts loudly on a present-but-invalid injected id.
+pub fn plugin_id_from_env(fallback_id: &str) -> String {
+    match std::env::var("QOL_TRAY_PLUGIN_ID") {
+        Ok(value) => {
+            let trimmed = value.trim();
+            assert!(
+                valid_install_id(trimmed),
+                "QOL_TRAY_PLUGIN_ID {value:?} injected by the host is not a valid plugin id"
+            );
+            trimmed.to_string()
+        }
+        Err(_) => {
+            assert!(
+                valid_install_id(fallback_id),
+                "standalone fallback plugin id {fallback_id:?} is not a valid plugin id"
+            );
+            fallback_id.to_string()
+        }
+    }
+}
+
 pub fn load_plugin_config<T: DeserializeOwned + Default>(names: &[&str]) -> T {
     for path in plugin_config_paths(names) {
         let contents = match fs::read_to_string(&path) {
