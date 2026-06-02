@@ -16,7 +16,7 @@ pub(super) fn check() -> Diagnosis {
         Err(error) => return ok_outcome(ID, format!("could not read plugin registry: {error}")),
     };
     let linked = dev::list_linked_plugins(&config_dir).unwrap_or_default();
-    let workspace_root = workspace_root();
+    let workspace_root = plugin_sources_dir();
 
     let findings = collect_findings(&registry, &linked, &workspace_root, &dir_has_plugin_toml);
 
@@ -84,11 +84,8 @@ fn dev_link_stale_findings(linked: &[dev::LinkedPlugin]) -> Vec<Finding> {
         .collect()
 }
 
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("/"))
+fn plugin_sources_dir() -> PathBuf {
+    crate::paths::repo_root_from_manifest_dir().join("plugins")
 }
 
 fn dir_has_plugin_toml(path: &Path) -> bool {
