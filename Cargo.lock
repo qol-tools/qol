@@ -9323,27 +9323,3 @@ dependencies = [
  "syn 2.0.117",
  "winnow 1.0.3",
 ]
-
-[[patch.unused]]
-name = "qol-tray"
-version = "3.16.0"
-
-[[patch.unused]]
-name = "qol-runtime"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "qol-app-icon"
-version = "0.3.0"
-
-[[patch.unused]]
-name = "qol-gpui"
-version = "0.3.0"
-
-[[patch.unused]]
-name = "qol-plugin-api"
-version = "0.3.0"
-
-[[patch.unused]]
-name = "qol-plugin-daemon"
-version = "0.3.0"
