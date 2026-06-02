@@ -25,22 +25,35 @@ pub fn init() {
     let version_tag = format!("v{}@{}", version, commit);
     let limiter = RateLimiter::load(&suppressed_path, version_tag);
 
-    let file_appender = tracing_appender::rolling::RollingFileAppender::builder()
-        .rotation(tracing_appender::rolling::Rotation::DAILY)
-        .filename_prefix("qol-tray")
-        .filename_suffix("log")
-        .max_log_files(7)
-        .build(&log_dir)
-        .unwrap_or_else(|e| {
-            eprintln!("Failed to create log file appender: {}", e);
-            tracing_appender::rolling::RollingFileAppender::builder()
-                .rotation(tracing_appender::rolling::Rotation::DAILY)
-                .filename_prefix("qol-tray")
-                .filename_suffix("log")
-                .max_log_files(7)
-                .build("/tmp/qol-tray/logs")
-                .expect("fallback log dir also failed")
-        });
+    let build_appender = |dir: &std::path::Path| {
+        tracing_appender::rolling::RollingFileAppender::builder()
+            .rotation(tracing_appender::rolling::Rotation::DAILY)
+            .filename_prefix("qol-tray")
+            .filename_suffix("log")
+            .max_log_files(7)
+            .build(dir)
+    };
+
+    let file_appender = match build_appender(&log_dir) {
+        Ok(appender) => appender,
+        Err(primary) => {
+            eprintln!(
+                "Failed to create log file appender at {}: {primary}",
+                log_dir.display()
+            );
+            let fallback = std::env::temp_dir().join("qol-tray/logs");
+            match build_appender(&fallback) {
+                Ok(appender) => appender,
+                Err(secondary) => {
+                    eprintln!(
+                        "Fallback log dir {} also failed: {secondary}",
+                        fallback.display()
+                    );
+                    return;
+                }
+            }
+        }
+    };
 
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
