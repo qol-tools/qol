@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Conventional-commit gate for the qol monorepo.
+# Enable in a fresh clone with:  git config core.hooksPath .githooks
+
+msg_file="$1"
+subject="$(head -n1 "$msg_file")"
+body="$(cat "$msg_file")"
+
+# Auto-generated / in-progress messages git itself produces.
+case "$subject" in
+  "Merge "* | "Revert "* | "fixup! "* | "squash! "* | "#"*) exit 0 ;;
+esac
+
+fail() {
+  printf '\n  commit-msg rejected: %s\n' "$1" >&2
+  printf '  subject: %s\n\n' "$subject" >&2
+  printf '  format: <type>(scope?): imperative summary\n' >&2
+  printf '  types : feat fix refactor chore docs test perf wip style ci build revert\n\n' >&2
+  exit 1
+}
+
+# Hard rule: no AI attribution, in any form.
+if printf '%s\n' "$body" | grep -qiE 'co-authored-by:.*(claude|anthropic|\bai\b)|generated with|🤖|noreply@anthropic\.com'; then
+  fail "AI attribution / co-author trailers are not allowed"
+fi
+
+types='feat|fix|refactor|chore|docs|test|perf|wip|style|ci|build|revert'
+printf '%s\n' "$subject" | grep -qE "^($types)(\([a-z0-9._/-]+\))?!?: .+" \
+  || fail "subject is not a conventional commit"
+
+summary="${subject#*: }"
+[ "${#subject}" -le 72 ] || fail "subject too long (${#subject} > 72 chars)"
+case "$summary" in
+  *.) fail "drop the trailing period in the subject" ;;
+esac
+
+first="$(printf '%s' "$summary" | awk '{print tolower($1)}')"
+case "$first" in
+  added | fixed | changed | removed | updated | refactored | implemented | \
+  adds | fixes | changes | removes | updates | adding | fixing | changing | removing | updating)
+    fail "use imperative mood, not '$first' (e.g. add / fix / remove)" ;;
+esac
+
+exit 0
