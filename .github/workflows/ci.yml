@@ -12,37 +12,65 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  plan:
+    name: Plan affected crates
+    runs-on: ubuntu-latest
+    outputs:
+      ubuntu_clippy: ${{ steps.affected.outputs.ubuntu_clippy }}
+      ubuntu_test: ${{ steps.affected.outputs.ubuntu_test }}
+      ubuntu_skip: ${{ steps.affected.outputs.ubuntu_skip }}
+      macos_clippy: ${{ steps.affected.outputs.macos_clippy }}
+      macos_test: ${{ steps.affected.outputs.macos_test }}
+      macos_skip: ${{ steps.affected.outputs.macos_skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute affected crates
+        id: affected
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: python3 .github/scripts/affected_crates.py
+
   check:
     name: lint + test (${{ matrix.os }})
+    needs: plan
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            clippy_args: --workspace --exclude keyremap --all-targets
-            test_args: --workspace --exclude keyremap
+            clippy_args: ${{ needs.plan.outputs.ubuntu_clippy }}
+            test_args: ${{ needs.plan.outputs.ubuntu_test }}
+            skip: ${{ needs.plan.outputs.ubuntu_skip }}
           - os: macos-latest
-            clippy_args: --workspace --all-targets
-            test_args: --workspace
+            clippy_args: ${{ needs.plan.outputs.macos_clippy }}
+            test_args: ${{ needs.plan.outputs.macos_test }}
+            skip: ${{ needs.plan.outputs.macos_skip }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        if: matrix.skip != 'true'
 
       - name: Free disk space
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.skip != 'true'
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL /usr/local/share/boost
           sudo docker image prune --all --force || true
           df -h /
 
       - uses: dtolnay/rust-toolchain@stable
+        if: matrix.skip != 'true'
         with:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
+        if: matrix.skip != 'true'
 
       - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.skip != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -51,15 +79,17 @@ jobs:
             libwayland-dev libglib2.0-dev libgtk-3-dev libayatana-appindicator3-dev
 
       - name: Format
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.skip != 'true'
         run: cargo fmt --all -- --check
 
       - name: Clippy
+        if: matrix.skip != 'true'
         env:
           CLIPPY_ARGS: ${{ matrix.clippy_args }}
         run: cargo clippy $CLIPPY_ARGS -- -D warnings
 
       - name: Test
+        if: matrix.skip != 'true'
         env:
           TEST_ARGS: ${{ matrix.test_args }}
         run: cargo test $TEST_ARGS
