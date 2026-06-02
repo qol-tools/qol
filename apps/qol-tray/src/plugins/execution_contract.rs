@@ -116,20 +116,23 @@ fn resolve_dev_candidate(
 ) -> Option<PathBuf> {
     #[cfg(feature = "dev")]
     {
-        let debug_target = plugin_dir
-            .join("target")
-            .join("debug")
-            .join(command_path.as_os_str());
-        if is_allowed_candidate(&debug_target, canonical_plugin_dir) {
-            return Some(debug_target);
+        for profile in ["debug", "release"] {
+            let candidate = plugin_dir.join("target").join(profile).join(command_path);
+            if is_allowed_candidate(&candidate, canonical_plugin_dir) {
+                return Some(candidate);
+            }
         }
 
-        let release_target = plugin_dir
-            .join("target")
-            .join("release")
-            .join(command_path.as_os_str());
-        if is_allowed_candidate(&release_target, canonical_plugin_dir) {
-            return Some(release_target);
+        // Cargo workspace (monorepo): every member builds into the one
+        // shared target dir at the workspace root, not the plugin's own
+        // folder. Trust that target dir as the allowed root.
+        if let Some(workspace_target) = workspace_target_dir(plugin_dir) {
+            for profile in ["debug", "release"] {
+                let candidate = workspace_target.join(profile).join(command_path);
+                if is_allowed_candidate(&candidate, &workspace_target) {
+                    return Some(candidate);
+                }
+            }
         }
     }
 
@@ -141,6 +144,30 @@ fn resolve_dev_candidate(
     }
 
     None
+}
+
+/// Walk up from a plugin dir to the cargo workspace root (the first
+/// ancestor whose `Cargo.toml` declares `[workspace]`) and return its
+/// canonical `target` dir. `None` when the plugin is not inside a
+/// workspace (the classic one-repo-per-plugin layout).
+#[cfg(feature = "dev")]
+fn workspace_target_dir(plugin_dir: &Path) -> Option<PathBuf> {
+    let mut dir = std::fs::canonicalize(plugin_dir).ok()?;
+    loop {
+        let manifest = dir.join("Cargo.toml");
+        if manifest.is_file() {
+            let is_workspace = std::fs::read_to_string(&manifest)
+                .ok()
+                .and_then(|text| toml::from_str::<toml::Value>(&text).ok())
+                .is_some_and(|value| value.get("workspace").is_some());
+            if is_workspace {
+                return std::fs::canonicalize(dir.join("target")).ok();
+            }
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
 }
 
 fn resolve_windows_candidate(

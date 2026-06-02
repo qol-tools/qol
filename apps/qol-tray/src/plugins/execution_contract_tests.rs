@@ -72,3 +72,36 @@ fn resolve_plugin_command_path_prefers_debug_binary_for_dev_linked_plugins() {
 
     assert_eq!(resolved, Some(debug_binary));
 }
+
+#[cfg(feature = "dev")]
+#[test]
+fn resolve_plugin_command_path_finds_binary_in_workspace_target() {
+    let temp_dir = TempDir::new().unwrap();
+    let root = temp_dir.path();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"plugins/p\"]\n",
+    )
+    .unwrap();
+
+    // Plugin member with no binary in its own folder.
+    let plugin_dir = root.join("plugins").join("p");
+    fs::create_dir_all(&plugin_dir).unwrap();
+
+    // The binary lives only in the shared workspace target dir.
+    let ws_binary = root.join("target").join("debug").join("binary");
+    fs::create_dir_all(ws_binary.parent().unwrap()).unwrap();
+    fs::write(&ws_binary, "ws").unwrap();
+
+    let resolved = resolve_plugin_command_path_for_source(
+        &plugin_dir,
+        "binary",
+        Some(&PluginSource::DevLinked),
+    );
+
+    assert_eq!(
+        resolved.map(|p| fs::canonicalize(p).unwrap()),
+        Some(fs::canonicalize(&ws_binary).unwrap()),
+        "dev-linked plugin must resolve its binary from the workspace target"
+    );
+}
