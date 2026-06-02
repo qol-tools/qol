@@ -369,8 +369,6 @@ fn read_patched_version(binary: &[u8]) -> Option<String> {
     if pos.is_some() {
         return None; // sentinel intact, not patched
     }
-    // Find the patched region by looking for the version string
-    // The patch wrote a null-terminated string where the sentinel was
     let current = env!("CARGO_PKG_VERSION");
     let test_prefix = format!("{current}-test");
     let start = binary

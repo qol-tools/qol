@@ -99,7 +99,6 @@ mod tests {
                  worktree /detached\nHEAD 789\ndetached\n\n"
             );
 
-            // target matches exact nested path
             prop_assert_eq!(
                 parse_worktree_for_branch(&porcelain, &branch_a),
                 Some(PathBuf::from(&path_a))
@@ -110,13 +109,11 @@ mod tests {
                 Some(PathBuf::from(&path_b))
             );
 
-            // missing branch safely returns None
             prop_assert_eq!(
                 parse_worktree_for_branch(&porcelain, "missing/branch/xyz"),
                 None
             );
 
-            // base extraction securely picks the first absolute path
             prop_assert_eq!(
                 parse_worktree_base(&porcelain),
                 Some(PathBuf::from(&path_a))
