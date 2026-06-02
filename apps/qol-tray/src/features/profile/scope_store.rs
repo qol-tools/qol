@@ -29,16 +29,6 @@ pub enum ScopeKind {
     Device,
 }
 
-impl ScopeKind {
-    pub fn subdir_name(self) -> &'static str {
-        match self {
-            Self::Core => CORE_SUBDIR,
-            Self::Os => OS_SUBDIR,
-            Self::Device => DEVICE_SUBDIR,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct ProfileScopeStore {
     profile_root: PathBuf,
@@ -164,16 +154,8 @@ impl ProfileScopeStore {
             .join(format!("{}.json", plugin_id)))
     }
 
-    pub fn os_plugin_configs_dir(&self) -> PathBuf {
-        self.os_plugin_configs_dir_for(&self.os_bucket)
-    }
-
     pub fn os_plugin_configs_dir_for(&self, bucket: &str) -> PathBuf {
         self.os_dir_for(bucket).join(PLUGIN_CONFIGS_SUBDIR)
-    }
-
-    pub fn os_plugin_config_path(&self, plugin_id: &str) -> Result<PathBuf> {
-        self.os_plugin_config_path_for(plugin_id, &self.os_bucket)
     }
 
     pub fn os_plugin_config_path_for(&self, plugin_id: &str, bucket: &str) -> Result<PathBuf> {

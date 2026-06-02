@@ -24,12 +24,6 @@ pub enum SyncIncidentKind {
     Unknown,
 }
 
-impl SyncIncidentKind {
-    pub fn blocks_auto_sync(self) -> bool {
-        matches!(self, Self::Conflict | Self::PushConflict)
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SyncIncident {
     pub kind: SyncIncidentKind,

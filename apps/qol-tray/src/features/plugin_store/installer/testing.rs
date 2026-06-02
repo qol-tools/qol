@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::Result;
 
@@ -18,10 +17,6 @@ pub fn acquire_operation_lock(plugins_dir: &Path, plugin_id: &str) -> Result<Ope
 
 pub fn lockfile_path(plugins_dir: &Path, plugin_id: &str) -> PathBuf {
     operation_lock::lock_path(plugins_dir, plugin_id)
-}
-
-pub fn lockfile_max_age() -> Duration {
-    super::LOCKFILE_MAX_AGE
 }
 
 pub fn install_staging_dir(plugins_dir: &Path, plugin_id: &str) -> PathBuf {
