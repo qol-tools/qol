@@ -62,7 +62,7 @@ impl Default for WindowActionsConfig {
 }
 
 pub fn load_config() -> WindowActionsConfig {
-    qol_config::load_plugin_config(&["plugin-window-actions"])
+    qol_config::load_plugin_config_from_env("plugin-window-actions")
 }
 
 impl WindowActionsConfig {

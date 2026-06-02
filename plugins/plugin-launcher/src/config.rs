@@ -13,10 +13,10 @@ pub struct LauncherConfig {
     pub display: DisplayConfig,
 }
 
-const PLUGIN_NAMES: &[&str] = &["plugin-launcher", "launcher"];
+const PLUGIN_ID: &str = "plugin-launcher";
 
 pub fn load_launcher_config() -> LauncherConfig {
-    qol_config::load_plugin_config(PLUGIN_NAMES)
+    qol_config::load_plugin_config_from_env(PLUGIN_ID)
 }
 
 /// Reload the launcher config and push the ghost debug opacity/colour into the

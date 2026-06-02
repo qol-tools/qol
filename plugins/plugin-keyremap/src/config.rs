@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-const PLUGIN_NAMES: &[&str] = &["plugin-keyremap", "keyremap"];
+const PLUGIN_ID: &str = "plugin-keyremap";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -89,11 +89,11 @@ pub struct ScrollRule {
 }
 
 pub fn load_config() -> RemapConfig {
-    let paths = qol_config::plugin_config_paths(PLUGIN_NAMES);
+    let paths = qol_config::plugin_config_paths_from_env(PLUGIN_ID);
     let has_file = paths.iter().any(|p| p.exists());
 
     let config = if has_file {
-        qol_config::load_plugin_config(PLUGIN_NAMES)
+        qol_config::load_plugin_config_from_env(PLUGIN_ID)
     } else {
         let defaults = builtin_defaults();
         if let Some(path) = paths.first() {
