@@ -36,6 +36,14 @@ fn build_from_legacy_state(config_dir: &Path, plugins_dir: &Path) -> Registry {
     let mut by_id: HashMap<String, Entry> = HashMap::new();
 
     for (id, path) in scan_installed_plugins(plugins_dir) {
+        if by_id.contains_key(&id) {
+            log::error!(
+                "Duplicate plugin id {:?} at {}; skipping the duplicate rather than merging two plugins' state",
+                id,
+                path.display()
+            );
+            continue;
+        }
         by_id.insert(
             id.clone(),
             Entry {
@@ -148,16 +156,43 @@ fn scan_installed_plugins(plugins_dir: &Path) -> Vec<(String, PathBuf)> {
         if !manifest.exists() {
             continue;
         }
-        if !manifest_parses_and_version_valid(&manifest) {
+        let Some(id) = declared_or_folder_id(&manifest, &name) else {
             log::warn!(
-                "Skipping {} during migration: manifest parse or version check failed",
+                "Skipping {} during migration: manifest parse, version, or id check failed",
                 path.display()
             );
             continue;
-        }
-        result.push((name, path));
+        };
+        result.push((id, path));
     }
     result
+}
+
+/// The plugin's declared id (the single source of identity), falling back to
+/// the folder name only when the manifest predates the id field, so an
+/// upgrading user with an id-less installed plugin keeps it instead of having
+/// it silently dropped. Parses leniently because the id field is required by
+/// the strict manifest schema but must still be readable from older manifests.
+fn declared_or_folder_id(manifest_path: &Path, folder: &str) -> Option<String> {
+    let content = std::fs::read_to_string(manifest_path).ok()?;
+    let value: toml::Value = toml::from_str(&content).ok()?;
+    let max_version = crate::plugins::manifest::CURRENT_MANIFEST_VERSION as i64;
+    let version = value
+        .get("manifest_version")
+        .and_then(|v| v.as_integer())
+        .unwrap_or(max_version);
+    if !(1..=max_version).contains(&version) {
+        return None;
+    }
+    match value
+        .get("plugin")
+        .and_then(|plugin| plugin.get("id"))
+        .and_then(|id| id.as_str())
+    {
+        Some(id) if crate::plugins::manifest::is_valid_plugin_id(id) => Some(id.to_string()),
+        Some(_) => None,
+        None => Some(folder.to_string()),
+    }
 }
 
 fn manifest_parses_and_version_valid(manifest_path: &Path) -> bool {
@@ -446,5 +481,64 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(second.entries.len(), 1);
         assert_eq!(second.entries[0].id, "plugin-a");
+    }
+
+    fn make_plugin_dir_with_manifest(plugins_dir: &Path, folder: &str, manifest: &str) -> PathBuf {
+        let dir = plugins_dir.join(folder);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("plugin.toml"), manifest).unwrap();
+        dir
+    }
+
+    #[test]
+    fn registry_id_comes_from_the_manifest_not_the_folder() {
+        let tmp = TempDir::new().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        fs::create_dir(&plugins_dir).unwrap();
+        make_plugin_dir_with_manifest(
+            &plugins_dir,
+            "renamed-folder",
+            &valid_manifest("declared-id"),
+        );
+
+        let registry = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
+        assert_eq!(registry.entries.len(), 1);
+        assert_eq!(
+            registry.entries[0].id, "declared-id",
+            "identity must follow the manifest so folders are free to rename"
+        );
+    }
+
+    #[test]
+    fn duplicate_declared_ids_keep_one_entry_and_reject_the_rest() {
+        let tmp = TempDir::new().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        fs::create_dir(&plugins_dir).unwrap();
+        make_plugin_dir_with_manifest(&plugins_dir, "folder-a", &valid_manifest("dup"));
+        make_plugin_dir_with_manifest(&plugins_dir, "folder-b", &valid_manifest("dup"));
+
+        let registry = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
+        assert_eq!(
+            registry.entries.len(),
+            1,
+            "two plugins declaring the same id must not silently merge"
+        );
+        assert_eq!(registry.entries[0].id, "dup");
+    }
+
+    #[test]
+    fn id_less_manifest_falls_back_to_folder_name() {
+        let tmp = TempDir::new().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        fs::create_dir(&plugins_dir).unwrap();
+        let legacy = "[plugin]\nname = \"Legacy\"\ndescription = \"\"\nversion = \"1.0.0\"\n\n[menu]\nlabel = \"L\"\nitems = []\n";
+        make_plugin_dir_with_manifest(&plugins_dir, "legacy-plugin", legacy);
+
+        let registry = ensure_registry_initialized(tmp.path(), &plugins_dir).unwrap();
+        assert_eq!(registry.entries.len(), 1);
+        assert_eq!(
+            registry.entries[0].id, "legacy-plugin",
+            "an id-less installed plugin keeps its folder identity instead of being dropped"
+        );
     }
 }
