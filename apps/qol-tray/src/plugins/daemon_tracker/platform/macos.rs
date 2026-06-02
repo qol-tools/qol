@@ -30,7 +30,7 @@ pub(super) fn kill_orphan_daemons() {
 }
 
 fn kill_orphan_plugin_processes() {
-    for process in managed_processes() {
+    for process in super::super::managed_processes() {
         terminate_process(process.pid, &process.executable);
     }
 }
