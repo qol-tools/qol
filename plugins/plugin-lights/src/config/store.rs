@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use super::model::PluginConfig;
 
-const PLUGIN_NAMES: &[&str] = &["plugin-lights"];
+const PLUGIN_ID: &str = "plugin-lights";
 
 pub fn load() -> Result<PluginConfig> {
     let path = existing_config_path();
@@ -55,7 +55,7 @@ fn existing_config_path() -> Option<PathBuf> {
 
 fn writable_config_path() -> Result<PathBuf> {
     preferred_write_path(
-        qol_config::plugin_config_paths(PLUGIN_NAMES),
+        qol_config::plugin_config_paths_from_env(PLUGIN_ID),
         legacy_config_path(),
     )
     .context("plugin-lights could not resolve a writable config path")
@@ -63,7 +63,7 @@ fn writable_config_path() -> Result<PathBuf> {
 
 fn config_paths() -> Vec<PathBuf> {
     merged_config_paths(
-        qol_config::plugin_config_paths(PLUGIN_NAMES),
+        qol_config::plugin_config_paths_from_env(PLUGIN_ID),
         legacy_config_path(),
     )
 }

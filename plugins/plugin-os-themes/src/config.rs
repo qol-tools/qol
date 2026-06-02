@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-const PLUGIN_NAMES: &[&str] = &["plugin-os-themes"];
+const PLUGIN_ID: &str = "plugin-os-themes";
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -39,7 +39,7 @@ pub fn load() -> Config {
 
 fn load_from_disk() -> Config {
     if config_paths().iter().any(|path| path.exists()) {
-        return qol_config::load_plugin_config(PLUGIN_NAMES);
+        return qol_config::load_plugin_config_from_env(PLUGIN_ID);
     }
     Config::default()
 }
@@ -74,5 +74,5 @@ fn log_config(config: &Config) {
 }
 
 fn config_paths() -> Vec<std::path::PathBuf> {
-    qol_config::plugin_config_paths(PLUGIN_NAMES)
+    qol_config::plugin_config_paths_from_env(PLUGIN_ID)
 }

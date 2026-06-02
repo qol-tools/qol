@@ -152,7 +152,7 @@ fn run_record_action() -> Result<()> {
         remove_pidfile();
     }
 
-    let config: Config = qol_config::load_plugin_config(&["plugin-screen-recorder"]);
+    let config: Config = qol_config::load_plugin_config_from_env("plugin-screen-recorder");
     let mut rect = match platform::select_region()? {
         Some(region) => region,
         None => return Ok(()),
