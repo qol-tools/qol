@@ -83,11 +83,6 @@ pub fn dev_linked_paths(config_dir: &Path) -> std::collections::HashMap<String, 
         .collect()
 }
 
-/// Record a release-asset install in the registry per the "Plugin-store install
-/// as a pointer write" transition rules. If the plugin isn't in the registry,
-/// creates an entry with ReleaseAsset active. If it is and active is already
-/// ReleaseAsset, replaces active. If active is DevLink/WorktreeLink, leaves
-/// active untouched and writes the release asset into the fallback slot.
 pub fn record_release_install(
     config_dir: &Path,
     plugin_id: &str,
@@ -116,10 +111,6 @@ pub fn record_release_install(
     save_registry(config_dir, &registry)
 }
 
-/// Record a dev-link create per the "Dev-link as a pointer write" transition
-/// rules. If no entry: create with DevLink active. If active is ReleaseAsset:
-/// preserve as fallback, replace active. If active is already DevLink or
-/// WorktreeLink: replace active (fallback untouched).
 pub fn record_dev_link_create(
     config_dir: &Path,
     plugin_id: &str,
@@ -148,8 +139,6 @@ pub fn record_dev_link_create(
     save_registry(config_dir, &registry)
 }
 
-/// Record a dev-link removal. If fallback exists, promote it to active and
-/// clear the fallback slot. If no fallback, remove the entry entirely.
 pub fn record_dev_link_remove(config_dir: &Path, plugin_id: &str) -> Result<(), String> {
     let mut registry = load_registry(config_dir).unwrap_or_default();
     let Some(idx) = registry.entries.iter().position(|e| e.id == plugin_id) else {
@@ -167,11 +156,6 @@ pub fn record_dev_link_remove(config_dir: &Path, plugin_id: &str) -> Result<(), 
     save_registry(config_dir, &registry)
 }
 
-/// Record a release-asset uninstall per the transition rules. If active is
-/// ReleaseAsset without a fallback, drops the whole entry. If active is
-/// DevLink/WorktreeLink, clears the fallback slot. If active is ReleaseAsset
-/// with a fallback (unexpected per install rules but handled defensively),
-/// promotes the fallback to active.
 pub fn record_release_uninstall(config_dir: &Path, plugin_id: &str) -> Result<(), String> {
     let mut registry = load_registry(config_dir).unwrap_or_default();
     let Some(idx) = registry.entries.iter().position(|e| e.id == plugin_id) else {

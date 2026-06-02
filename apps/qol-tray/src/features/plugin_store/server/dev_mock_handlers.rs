@@ -248,7 +248,6 @@ async fn dry_run_self_update() -> impl IntoResponse {
     let mut steps: Vec<serde_json::Value> = Vec::new();
     let mut ok = true;
 
-    // Step 1: Download
     let dest = std::env::temp_dir().join("qol-tray-test-update.tar.gz");
     let download_result = async {
         let client = reqwest::Client::new();
@@ -279,7 +278,6 @@ async fn dry_run_self_update() -> impl IntoResponse {
         }
     }
 
-    // Step 2: Extract
     if ok {
         match extract_and_verify(&dest) {
             Ok((binary_path, binary_size)) => {
@@ -289,7 +287,6 @@ async fn dry_run_self_update() -> impl IntoResponse {
                     "detail": format!("found qol-tray ({binary_size} bytes) at {}", binary_path.display())
                 }));
 
-                // Step 3: Compare with running binary
                 match verify_binary_matches(&binary_path) {
                     Ok(detail) => steps.push(serde_json::json!({
                         "step": "verify",
@@ -317,7 +314,6 @@ async fn dry_run_self_update() -> impl IntoResponse {
         }
     }
 
-    // Cleanup
     let _ = std::fs::remove_file(&dest);
     let _ = std::fs::remove_dir_all(dest.with_extension("extracted"));
 

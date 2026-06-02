@@ -14,7 +14,6 @@ pub(super) fn exec_restart(binary: &Path) -> Result<(), String> {
         );
     }
 
-    // Box the closure data so we can pass it through a raw pointer.
     type ExecData = (std::path::PathBuf, Vec<std::ffi::OsString>);
     let data = Box::into_raw(Box::new((binary, args))) as *mut std::ffi::c_void;
 

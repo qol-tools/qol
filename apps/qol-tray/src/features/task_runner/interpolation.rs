@@ -340,7 +340,6 @@ mod tests {
         fn prop_interpolate_shell_in_command_position_does_not_split_words(
             value in "[\x20-\x7e]{1,40}".prop_filter("no NUL", |s| !s.contains('\0')),
         ) {
-            // Any payload, when interpolated into an argv slot, must read as ONE arg.
             let map = [("value".to_string(), value.clone())].into_iter().collect();
             let escaped = interpolate_shell("{{value}}", &map);
             let script = format!("set -- {escaped}; printf '%d' \"$#\"");
