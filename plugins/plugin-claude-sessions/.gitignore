@@ -1,6 +1,0 @@
-config.json
-*.log
-.DS_Store
-target/
-plugin-claude-sessions
-plugin-claude-sessions.new
