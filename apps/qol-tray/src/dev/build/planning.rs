@@ -147,7 +147,7 @@ mod tests {
         fs::write(
             plugin_dir.join("plugin.toml"),
             format!(
-                "[plugin]\nname = \"Test\"\ndescription = \"\"\nversion = \"1.0.0\"\nplatforms = [\"{unsupported}\"]\n\n[menu]\nlabel = \"Test\"\nitems = []\n"
+                "[plugin]\nid = \"test-plugin\"\nname = \"Test\"\ndescription = \"\"\nversion = \"1.0.0\"\nplatforms = [\"{unsupported}\"]\n\n[menu]\nlabel = \"Test\"\nitems = []\n"
             ),
         )
         .unwrap();
@@ -171,7 +171,7 @@ mod tests {
         fs::write(
             plugin_dir.join("plugin.toml"),
             format!(
-                "[plugin]\nname = \"Test\"\ndescription = \"\"\nversion = \"1.0.0\"\nplatforms = [\"{}\"]\n\n[menu]\nlabel = \"Test\"\nitems = []\n",
+                "[plugin]\nid = \"test-plugin\"\nname = \"Test\"\ndescription = \"\"\nversion = \"1.0.0\"\nplatforms = [\"{}\"]\n\n[menu]\nlabel = \"Test\"\nitems = []\n",
                 std::env::consts::OS
             ),
         )

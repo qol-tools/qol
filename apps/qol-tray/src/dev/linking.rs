@@ -42,11 +42,11 @@ mod tests {
     use tempfile::TempDir;
 
     fn write_plugin_toml(dir: &Path, name: &str) {
+        let id = dir.file_name().unwrap().to_str().unwrap();
         fs::write(
             dir.join("plugin.toml"),
             format!(
-                "[plugin]\nname = \"{}\"\ndescription = \"\"\nversion = \"1.0.0\"\n\n[menu]\nlabel = \"Test\"\nitems = []\n",
-                name
+                "[plugin]\nid = \"{id}\"\nname = \"{name}\"\ndescription = \"\"\nversion = \"1.0.0\"\n\n[menu]\nlabel = \"Test\"\nitems = []\n",
             ),
         )
         .unwrap();

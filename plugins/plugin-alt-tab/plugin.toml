@@ -1,4 +1,5 @@
 [plugin]
+id = "plugin-alt-tab"
 name = "Alt Tab"
 description = "Better alt-tab experience with window previews"
 version = "0.13.7"

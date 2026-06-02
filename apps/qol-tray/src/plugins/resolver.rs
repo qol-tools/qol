@@ -193,32 +193,31 @@ mod tests {
     use std::path::Path;
     use tempfile::TempDir;
 
-    fn write_valid_manifest(plugin_dir: &Path, name: &str) {
+    fn write_valid_manifest(plugin_dir: &Path, id: &str) {
         fs::write(
             plugin_dir.join("plugin.toml"),
             format!(
-                "[plugin]\nname = \"{}\"\ndescription = \"\"\nversion = \"1.0.0\"\n\n[menu]\nlabel = \"Test\"\nitems = []\n",
-                name
+                "[plugin]\nid = \"{id}\"\nname = \"{id}\"\ndescription = \"\"\nversion = \"1.0.0\"\n\n[menu]\nlabel = \"Test\"\nitems = []\n",
             ),
         )
         .unwrap();
     }
 
-    fn write_runtime_manifest(plugin_dir: &Path, name: &str, command: &str) {
+    fn write_runtime_manifest(plugin_dir: &Path, id: &str, command: &str) {
         fs::write(
             plugin_dir.join("plugin.toml"),
             format!(
-                "[plugin]\nname = \"{name}\"\ndescription = \"\"\nversion = \"1.0.0\"\n\n[menu]\nlabel = \"Test\"\nitems = []\n\n[runtime]\ncommand = \"{command}\"\n",
+                "[plugin]\nid = \"{id}\"\nname = \"{id}\"\ndescription = \"\"\nversion = \"1.0.0\"\n\n[menu]\nlabel = \"Test\"\nitems = []\n\n[runtime]\ncommand = \"{command}\"\n",
             ),
         )
         .unwrap();
     }
 
-    fn write_daemon_manifest(plugin_dir: &Path, name: &str, command: &str) {
+    fn write_daemon_manifest(plugin_dir: &Path, id: &str, command: &str) {
         fs::write(
             plugin_dir.join("plugin.toml"),
             format!(
-                "[plugin]\nname = \"{name}\"\ndescription = \"\"\nversion = \"1.0.0\"\n\n[menu]\nlabel = \"Test\"\nitems = []\n\n[daemon]\nenabled = true\ncommand = \"{command}\"\n",
+                "[plugin]\nid = \"{id}\"\nname = \"{id}\"\ndescription = \"\"\nversion = \"1.0.0\"\n\n[menu]\nlabel = \"Test\"\nitems = []\n\n[daemon]\nenabled = true\ncommand = \"{command}\"\n",
             ),
         )
         .unwrap();

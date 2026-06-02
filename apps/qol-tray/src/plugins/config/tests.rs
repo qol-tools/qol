@@ -373,6 +373,7 @@ const MANIFEST_HEAD: &str = r#"
 manifest_version = 2
 
 [plugin]
+id = "test-plugin"
 name = "Traits Test"
 description = "Traits serialization test"
 version = "0.0.0"
@@ -501,6 +502,7 @@ mod scoped_io {
         PluginManifest {
             manifest_version: 1,
             plugin: PluginInfo {
+                id: "test-plugin".into(),
                 name: "p".to_string(),
                 description: String::new(),
                 version: "1.0.0".to_string(),

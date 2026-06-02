@@ -202,10 +202,9 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    fn valid_manifest(name: &str) -> String {
+    fn valid_manifest(id: &str) -> String {
         format!(
-            "[plugin]\nname = \"{}\"\ndescription = \"\"\nversion = \"1.0.0\"\n\n[menu]\nlabel = \"Test\"\nitems = []\n",
-            name
+            "[plugin]\nid = \"{id}\"\nname = \"{id}\"\ndescription = \"\"\nversion = \"1.0.0\"\n\n[menu]\nlabel = \"Test\"\nitems = []\n",
         )
     }
 

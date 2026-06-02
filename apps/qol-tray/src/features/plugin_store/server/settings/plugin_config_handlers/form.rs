@@ -329,6 +329,7 @@ default = 3
 manifest_version = 2
 
 [plugin]
+id = "test-plugin"
 name = "Traits Only"
 description = "No config, traits only"
 version = "0.0.0"
@@ -385,6 +386,7 @@ default = true
 manifest_version = 2
 
 [plugin]
+id = "test-plugin"
 name = "Both"
 description = "Config + traits"
 version = "0.0.0"

@@ -10,9 +10,9 @@ pub use schema::{
     ActionType, BinaryDependency, BuildInfo, Capabilities, ConfigDeclarations, ConfigScope,
     DaemonConfig, Dependencies, MenuConfig, MenuItem, PluginInfo, PluginManifest, RuntimeConfig,
 };
-pub use validation::{is_valid_action_id, is_valid_command_basename};
+pub use validation::{is_valid_action_id, is_valid_command_basename, is_valid_plugin_id};
 
-pub const CURRENT_MANIFEST_VERSION: u32 = 2;
+pub const CURRENT_MANIFEST_VERSION: u32 = 3;
 
 pub fn default_manifest_version() -> u32 {
     CURRENT_MANIFEST_VERSION

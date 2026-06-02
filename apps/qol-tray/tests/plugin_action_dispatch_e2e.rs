@@ -49,9 +49,11 @@ fn write_executable(path: &Path, body: &str) {
 }
 
 fn write_manifest(plugin_dir: &Path, socket_path: &Path) {
+    let id = plugin_dir.file_name().unwrap().to_str().unwrap();
     let manifest = format!(
         r#"
 [plugin]
+id = "{id}"
 name = "Action Dispatch Target"
 description = "test"
 version = "0.0.0"

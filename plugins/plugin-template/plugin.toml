@@ -1,4 +1,5 @@
 [plugin]
+id = "plugin-template"
 name = "My Plugin"
 description = "A qol-tray plugin"
 

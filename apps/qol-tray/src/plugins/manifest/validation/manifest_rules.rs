@@ -4,6 +4,7 @@ use anyhow::{bail, Context, Result};
 impl PluginManifest {
     pub fn validate(&self) -> Result<()> {
         self.validate_version()?;
+        self.plugin.validate_identity()?;
         let action_ids = super::menu_rules::collect_menu_action_ids(&self.menu.items)?;
         super::runtime_rules::validate_optional_runtime_config(
             self.runtime.as_ref(),
