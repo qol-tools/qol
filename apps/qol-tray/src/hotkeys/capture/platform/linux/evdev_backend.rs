@@ -43,14 +43,17 @@ pub(super) fn install(
     if keyboards.is_empty() {
         anyhow::bail!("no keyboard input devices found under /dev/input");
     }
+    let keyboard_count = keyboards.len();
 
     let on_fire: Arc<dyn Fn(&Binding) + Send + Sync> = Arc::from(on_fire);
 
+    let mut grabbed = 0usize;
     for (path, mut device) in keyboards {
         if let Err(error) = device.grab() {
             log::warn!("evdev: failed to grab {}: {error}", path.display());
             continue;
         }
+        grabbed += 1;
         log::info!("evdev: grabbed {}", path.display());
 
         let matcher = matcher.clone();
@@ -60,6 +63,12 @@ pub(super) fn install(
         std::thread::spawn(move || {
             run_reader(path, device, matcher, virtual_device, on_fire);
         });
+    }
+
+    if grabbed == 0 {
+        anyhow::bail!(
+            "evdev: found {keyboard_count} keyboard(s) but grabbed none (EVIOCGRAB denied; check input-group / udev permissions)"
+        );
     }
 
     Ok(())
