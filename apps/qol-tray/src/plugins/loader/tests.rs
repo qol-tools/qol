@@ -2,8 +2,24 @@ use super::*;
 use std::fs;
 use tempfile::TempDir;
 
+fn valid_manifest(id: &str) -> String {
+    format!(
+        r#"[plugin]
+id = "{id}"
+name = "Test Plugin"
+description = "A test plugin"
+version = "1.0.0"
+
+[menu]
+label = "Test"
+items = []
+"#
+    )
+}
+
 const VALID_MANIFEST: &str = r#"
 [plugin]
+id = "test-plugin"
 name = "Test Plugin"
 description = "A test plugin"
 version = "1.0.0"
@@ -15,6 +31,7 @@ items = []
 
 const RUNTIME_MANIFEST: &str = r#"
 [plugin]
+id = "runtime-plugin"
 name = "Runtime Plugin"
 description = "A runtime plugin"
 version = "1.0.0"
@@ -29,6 +46,7 @@ command = "runtime-plugin"
 
 const DAEMON_MANIFEST: &str = r#"
 [plugin]
+id = "daemon-plugin"
 name = "Daemon Plugin"
 description = "A daemon plugin"
 version = "1.0.0"
@@ -44,6 +62,7 @@ command = "daemon-plugin"
 
 const DISABLED_DAEMON_MANIFEST: &str = r#"
 [plugin]
+id = "disabled-daemon-plugin"
 name = "Disabled Daemon Plugin"
 description = "A daemon plugin"
 version = "1.0.0"
@@ -117,15 +136,23 @@ fn load_plugin_fails_for_invalid_dirs() {
 }
 
 #[test]
-fn load_plugin_extracts_id_from_directory_name() {
+fn load_plugin_uses_declared_manifest_id() {
     let temp_dir = TempDir::new().unwrap();
-    let plugin_dir = temp_dir.path().join("my-custom-plugin");
+    let plugin_dir = temp_dir.path().join("any-folder-name");
     fs::create_dir(&plugin_dir).unwrap();
-    fs::write(plugin_dir.join("plugin.toml"), VALID_MANIFEST).unwrap();
+    fs::write(
+        plugin_dir.join("plugin.toml"),
+        valid_manifest("declared-id"),
+    )
+    .unwrap();
 
     let plugin = PluginLoader::load_plugin(&plugin_dir).unwrap();
 
-    assert_eq!(plugin.id.as_str(), "my-custom-plugin");
+    assert_eq!(
+        plugin.id.as_str(),
+        "declared-id",
+        "identity must come from the manifest, not the folder name"
+    );
 }
 
 #[test]
@@ -159,7 +186,7 @@ fn load_from_dir_handles_mixed_valid_and_invalid() {
 
     let valid = temp_dir.path().join("valid-plugin");
     fs::create_dir(&valid).unwrap();
-    fs::write(valid.join("plugin.toml"), VALID_MANIFEST).unwrap();
+    fs::write(valid.join("plugin.toml"), valid_manifest("valid-plugin")).unwrap();
 
     let no_manifest = temp_dir.path().join("no-manifest");
     fs::create_dir(&no_manifest).unwrap();
@@ -177,17 +204,17 @@ fn load_from_dir_handles_mixed_valid_and_invalid() {
 }
 
 #[test]
-fn load_plugin_handles_special_characters_in_id() {
+fn load_plugin_accepts_declared_ids_with_safe_special_characters() {
     let temp_dir = TempDir::new().unwrap();
     let cases = ["plugin-with-dashes", "plugin_with_underscores", "plugin123"];
 
-    for name in cases {
-        let plugin_dir = temp_dir.path().join(name);
+    for id in cases {
+        let plugin_dir = temp_dir.path().join(id);
         fs::create_dir(&plugin_dir).unwrap();
-        fs::write(plugin_dir.join("plugin.toml"), VALID_MANIFEST).unwrap();
+        fs::write(plugin_dir.join("plugin.toml"), valid_manifest(id)).unwrap();
 
         let plugin = PluginLoader::load_plugin(&plugin_dir).unwrap();
-        assert_eq!(plugin.id.as_str(), name, "plugin name: {}", name);
+        assert_eq!(plugin.id.as_str(), id, "declared id: {id}");
     }
 }
 
@@ -207,16 +234,7 @@ fn load_plugin_accepts_runtime_binary_when_present() {
     fs::write(temp_dir.path().join("runtime-plugin"), b"binary").unwrap();
 
     let plugin = PluginLoader::load_plugin(temp_dir.path()).unwrap();
-    assert_eq!(
-        plugin.id,
-        temp_dir
-            .path()
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .into()
-    );
+    assert_eq!(plugin.id.as_str(), "runtime-plugin");
 }
 
 #[test]
@@ -238,16 +256,7 @@ fn load_plugin_allows_missing_daemon_binary_when_disabled() {
     .unwrap();
 
     let plugin = PluginLoader::load_plugin(temp_dir.path()).unwrap();
-    assert_eq!(
-        plugin.id,
-        temp_dir
-            .path()
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .into()
-    );
+    assert_eq!(plugin.id.as_str(), "disabled-daemon-plugin");
 }
 
 #[test]
@@ -270,6 +279,7 @@ fn unsupported_platform_manifest() -> String {
     };
     format!(
         r#"[plugin]
+id = "unsupported"
 name = "Unsupported"
 description = ""
 version = "1.0.0"

@@ -1,4 +1,5 @@
 [plugin]
+id = "plugin-launcher"
 name = "Launcher"
 description = "Universal search with action modifiers"
 version = "1.8.0"

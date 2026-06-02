@@ -11,11 +11,13 @@ pub(super) fn load_resolved_plugin(resolved: &ResolvedPlugin) -> Result<Plugin> 
     load_plugin_with_source(resolved.id.clone(), &resolved.path, resolved.source.clone())
 }
 
-fn load_plugin_with_source(id: PluginId, path: &Path, source: PluginSource) -> Result<Plugin> {
+fn load_plugin_with_source(locator: PluginId, path: &Path, source: PluginSource) -> Result<Plugin> {
     let manifest_path = manifest_path(path);
     ensure_manifest_exists(path, &manifest_path)?;
     let manifest_content = read_manifest(&manifest_path)?;
     let manifest = parse_manifest(&manifest_content)?;
+    let id = manifest.plugin.id.clone();
+    warn_on_locator_drift(&locator, &id, path);
     validate_manifest_contract(id.as_str(), &manifest, path, &source)?;
     Ok(Plugin::new_with_source(
         id,
@@ -23,6 +25,20 @@ fn load_plugin_with_source(id: PluginId, path: &Path, source: PluginSource) -> R
         path.to_path_buf(),
         source,
     ))
+}
+
+fn warn_on_locator_drift(locator: &PluginId, declared: &PluginId, path: &Path) {
+    if locator == declared {
+        return;
+    }
+
+    log::warn!(
+        "Plugin at {:?} is keyed as {:?} but its manifest declares id {:?}; using the declared id. \
+         Registry/profile state may need migration.",
+        path,
+        locator.as_str(),
+        declared.as_str()
+    );
 }
 
 fn manifest_path(path: &Path) -> std::path::PathBuf {

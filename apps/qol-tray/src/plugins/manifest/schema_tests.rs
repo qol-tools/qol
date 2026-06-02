@@ -3,6 +3,7 @@ use serde::Deserialize;
 
 fn make_plugin_info(platforms: Option<Vec<&str>>) -> PluginInfo {
     PluginInfo {
+        id: "test-plugin".into(),
         name: "Test".to_string(),
         description: "Test".to_string(),
         version: "1.0.0".to_string(),
@@ -140,6 +141,7 @@ fn parse_action_type_cases() {
 fn parse_full_manifest() {
     let toml = r#"
         [plugin]
+        id = "test-plugin"
         name = "Test Plugin"
         description = "A test"
         version = "1.2.3"
@@ -180,6 +182,7 @@ fn parse_full_manifest() {
 fn parse_minimal_manifest() {
     let toml = r#"
         [plugin]
+        id = "test-plugin"
         name = "Minimal"
         description = ""
         version = "0.0.1"
@@ -202,6 +205,7 @@ fn parse_minimal_manifest() {
 fn parse_capabilities_section() {
     let toml = r#"
         [plugin]
+        id = "test-plugin"
         name = "Serial Plugin"
         description = ""
         version = "0.0.1"
@@ -226,6 +230,7 @@ fn parse_forward_compat_unknown_capability() {
     // loading across schema gaps.
     let toml = r#"
         [plugin]
+        id = "test-plugin"
         name = "Forward"
         description = ""
         version = "0.0.1"
@@ -250,6 +255,7 @@ fn parse_forward_compat_unknown_capability() {
 fn parse_runtime_config() {
     let toml = r#"
         [plugin]
+        id = "test-plugin"
         name = "P"
         description = ""
         version = "0.0.1"
@@ -275,6 +281,7 @@ fn parse_runtime_config() {
 fn parse_runtime_without_actions() {
     let toml = r#"
         [plugin]
+        id = "test-plugin"
         name = "P"
         description = ""
         version = "0.0.1"
@@ -297,6 +304,7 @@ fn parse_runtime_without_actions() {
 fn parse_daemon_socket_config() {
     let toml = r#"
         [plugin]
+        id = "test-plugin"
         name = "P"
         description = ""
         version = "0.0.1"
@@ -320,6 +328,7 @@ fn parse_daemon_socket_config() {
 fn manifest_without_runtime_is_none() {
     let toml = r#"
         [plugin]
+        id = "test-plugin"
         name = "P"
         description = ""
         version = "0.0.1"
@@ -337,6 +346,7 @@ fn manifest_without_runtime_is_none() {
 fn manifest_version_defaults_to_current() {
     let toml = r#"
         [plugin]
+        id = "test-plugin"
         name = "P"
         description = ""
         version = "0.0.1"
@@ -368,6 +378,7 @@ fn checkbox_defaults_to_unchecked() {
 
 const TRAITS_MANIFEST_HEAD: &str = r#"
 [plugin]
+id = "test-plugin"
 name = "Traits Plugin"
 description = ""
 version = "0.0.0"

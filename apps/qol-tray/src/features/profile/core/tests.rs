@@ -663,6 +663,7 @@ fn test_plugin(
         PluginManifest {
             manifest_version: crate::plugins::manifest::CURRENT_MANIFEST_VERSION,
             plugin: PluginInfo {
+                id: id.into(),
                 name: id.to_string(),
                 description: String::new(),
                 version: version.to_string(),
@@ -718,6 +719,7 @@ fn write_installed_plugin_manifest(plugins_dir: &Path, plugin_id: &str, version:
         format!(
             r#"
 [plugin]
+id = "{plugin_id}"
 name = "{plugin_id}"
 description = "Test plugin"
 version = "{version}"
@@ -749,6 +751,7 @@ fn create_installable_plugin_repo(
         format!(
             r#"
 [plugin]
+id = "{plugin_id}"
 name = "{plugin_id}"
 description = "Test plugin"
 version = "1.0.0"

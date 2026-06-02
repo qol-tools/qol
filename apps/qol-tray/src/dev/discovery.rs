@@ -18,6 +18,7 @@ mod tests {
         fs::write(
             dir.join("plugin.toml"),
             r#"[plugin]
+id = "test-plugin"
 name = "Test Plugin"
 description = "A test"
 version = "1.0.0"
@@ -181,6 +182,7 @@ items = []
         fs::write(
             plugin_dir.join("plugin.toml"),
             r#"[plugin]
+id = "minimal-plugin"
 name = "Minimal"
 description = "Desc"
 version = "0.1.0"

@@ -1,4 +1,5 @@
 [plugin]
+id = "plugin-os-themes"
 name = "OS Themes"
 description = "Cursor effects and OS-wide theming"
 version = "0.4.3"

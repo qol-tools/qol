@@ -1,3 +1,4 @@
+use crate::plugins::PluginId;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -79,6 +80,7 @@ pub struct BinaryDependency {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PluginInfo {
+    pub id: PluginId,
     pub name: String,
     pub description: String,
     pub version: String,

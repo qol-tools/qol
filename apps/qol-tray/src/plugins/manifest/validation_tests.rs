@@ -13,6 +13,7 @@ fn base_manifest() -> PluginManifest {
     PluginManifest {
         manifest_version: CURRENT_MANIFEST_VERSION,
         plugin: PluginInfo {
+            id: "test-plugin".into(),
             name: "P".to_string(),
             description: "".to_string(),
             version: "0.0.1".to_string(),
@@ -47,6 +48,7 @@ mod manifest_rules {
             manifest_version = 999
 
             [plugin]
+            id = "test-plugin"
             name = "P"
             description = ""
             version = "0.0.1"
@@ -67,6 +69,7 @@ mod command_rules {
     fn validate_rejects_absolute_runtime_command() {
         let toml = r#"
             [plugin]
+            id = "test-plugin"
             name = "P"
             description = ""
             version = "0.0.1"
@@ -86,6 +89,7 @@ mod command_rules {
     fn validate_rejects_relative_daemon_socket() {
         let toml = r#"
             [plugin]
+            id = "test-plugin"
             name = "P"
             description = ""
             version = "0.0.1"
@@ -107,6 +111,7 @@ mod command_rules {
     fn validate_rejects_script_runtime_command() {
         let toml = r#"
             [plugin]
+            id = "test-plugin"
             name = "P"
             description = ""
             version = "0.0.1"
@@ -162,6 +167,7 @@ mod menu_rules {
     fn validate_rejects_invalid_action_id_in_menu() {
         let toml = r#"
             [plugin]
+            id = "test-plugin"
             name = "P"
             description = ""
             version = "0.0.1"
@@ -180,6 +186,7 @@ mod menu_rules {
     fn validate_rejects_duplicate_action_id_in_menu() {
         let toml = r#"
             [plugin]
+            id = "test-plugin"
             name = "P"
             description = ""
             version = "0.0.1"
@@ -203,6 +210,7 @@ mod runtime_rules {
     fn validate_rejects_invalid_action_id_in_runtime_map() {
         let toml = r#"
             [plugin]
+            id = "test-plugin"
             name = "P"
             description = ""
             version = "0.0.1"
@@ -223,6 +231,7 @@ mod runtime_rules {
     fn validate_rejects_runtime_actions_missing_menu_action_mapping() {
         let toml = r#"
             [plugin]
+            id = "test-plugin"
             name = "P"
             description = ""
             version = "0.0.1"
@@ -246,6 +255,7 @@ mod runtime_rules {
     fn validate_accepts_runtime_actions_covering_all_menu_actions() {
         let toml = r#"
             [plugin]
+            id = "test-plugin"
             name = "P"
             description = ""
             version = "0.0.1"
@@ -269,6 +279,7 @@ mod runtime_rules {
     fn validate_does_not_require_runtime_mapping_for_checkbox_items() {
         let toml = r#"
             [plugin]
+            id = "test-plugin"
             name = "P"
             description = ""
             version = "0.0.1"

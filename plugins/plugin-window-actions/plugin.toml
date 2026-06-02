@@ -1,4 +1,5 @@
 [plugin]
+id = "plugin-window-actions"
 name = "Window Actions"
 description = "Window snapping, centering, and multi-monitor management"
 version = "2.0.6"

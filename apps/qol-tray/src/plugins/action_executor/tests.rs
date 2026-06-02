@@ -33,6 +33,7 @@ fn make_plugin(
     let manifest = PluginManifest {
         manifest_version: CURRENT_MANIFEST_VERSION,
         plugin: PluginInfo {
+            id: "test-plugin".into(),
             name: "Test".to_string(),
             description: "Test".to_string(),
             version: "1.0.0".to_string(),
