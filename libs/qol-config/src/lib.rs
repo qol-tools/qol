@@ -106,8 +106,11 @@ mod tests {
     fn explicit_install_env_is_searched_before_base() {
         let base = PathBuf::from("/data/qol-tray");
         let user_cfg = PathBuf::from("/home/user/.config/qol-tray");
-        let roots =
-            assemble_config_roots(base.clone(), Some("install-123".into()), Some(user_cfg.clone()));
+        let roots = assemble_config_roots(
+            base.clone(),
+            Some("install-123".into()),
+            Some(user_cfg.clone()),
+        );
         assert_eq!(
             roots,
             vec![base.join("installs").join("install-123"), base, user_cfg]
