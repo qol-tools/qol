@@ -11,4 +11,3 @@ anyhow = "1"
 
 [dev-dependencies]
 qol-tray.workspace = true
-toml = "0.9"
