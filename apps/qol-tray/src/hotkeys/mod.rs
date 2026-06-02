@@ -22,7 +22,12 @@ pub fn start_capture(
     use crate::plugins::action_executor;
 
     let manager = HotkeyManager::new()?;
-    let config = manager.load_config().unwrap_or_default();
+    let config = manager.load_config().unwrap_or_else(|error| {
+        log::error!(
+            "hotkey config failed to load; starting with no hotkeys until corrected: {error:#}"
+        );
+        HotkeyConfig::default()
+    });
     let bindings: Vec<capture::Binding> = config
         .hotkeys
         .into_iter()

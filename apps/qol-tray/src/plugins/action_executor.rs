@@ -84,7 +84,7 @@ pub fn execute_action(
     action_id: &str,
 ) {
     if let Err(error) = try_execute_action(plugin_manager, plugin_id, action_id) {
-        log::warn!(
+        log::error!(
             "Plugin action execution failed for {}::{}: {}",
             plugin_id,
             action_id,
