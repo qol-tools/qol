@@ -1,0 +1,2 @@
+[alias]
+setup = "install --path tools/qol-cli --locked --force --debug"
