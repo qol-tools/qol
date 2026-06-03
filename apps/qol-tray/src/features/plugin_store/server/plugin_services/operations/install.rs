@@ -4,7 +4,7 @@ use crate::features::plugin_store::installer::PluginInstaller;
 
 use super::super::super::helpers::{read_plugin_version, reload_manager_and_notify};
 use super::super::super::types::{AppState, PluginInfo};
-use super::repo_url;
+use super::source_for;
 
 pub(super) async fn install_plugin(
     state: &AppState,
@@ -12,9 +12,10 @@ pub(super) async fn install_plugin(
 ) -> Result<PluginInfo, (StatusCode, String)> {
     log::info!("Install requested for plugin: {}", id);
     ensure_plugins_dir(state)?;
+    let source = source_for(id)?;
     let installer = PluginInstaller::new(state.plugins_dir.clone());
     installer
-        .install(&repo_url(id), id)
+        .install(&source, id)
         .await
         .map_err(|error| {
             log::error!("Failed to install plugin {}: {}", id, error);

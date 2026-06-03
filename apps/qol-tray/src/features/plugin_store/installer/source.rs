@@ -1,27 +1,71 @@
+use super::super::github::{build_github_request, get_stored_token, send_checked};
+use super::super::source::PluginSource;
 use super::command::{run_git, run_git_checked};
 use super::InstallSource;
 use anyhow::Result;
+use serde::Deserialize;
 use std::path::Path;
 use std::time::Duration;
 
-pub(super) async fn clone_plugin_repo(
-    repo_url: &str,
+pub(super) async fn resolve_latest_plugin_version(
+    source: &PluginSource,
+    plugin_id: &str,
+) -> Result<String> {
+    let url = source.releases_api_url();
+    let client = reqwest::Client::new();
+    let token = get_stored_token();
+    let request = build_github_request(&client, &url, token.as_deref());
+    let response = send_checked(request).await?;
+    let releases: Vec<ReleaseListEntry> = response.json().await?;
+    let tags: Vec<&str> = releases.iter().map(|r| r.tag_name.as_str()).collect();
+    let tag = super::super::source::select_release_tag(tags.into_iter(), plugin_id)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no release tag prefixed with '{}-v' found in {}",
+                plugin_id,
+                source.repo
+            )
+        })?;
+    super::super::source::version_from_plugin_tag(tag, plugin_id).ok_or_else(|| {
+        anyhow::anyhow!(
+            "selected release tag '{}' for {} is not valid semver",
+            tag,
+            plugin_id
+        )
+    })
+}
+
+#[derive(Deserialize)]
+struct ReleaseListEntry {
+    tag_name: String,
+}
+
+pub(super) async fn clone_source_repo(
+    source: &PluginSource,
     staging_dir: &Path,
+    plugin_id: &str,
     install_source: &InstallSource,
 ) -> Result<()> {
     let staging_str = path_utf8(staging_dir)?;
-    log::info!("Cloning plugin from {} to {:?}", repo_url, staging_dir);
-    run_git_checked(["clone", repo_url, staging_str], None, "clone").await?;
-    checkout_install_source(staging_dir, install_source).await?;
+    let url = source.repo_clone_url();
+    log::info!(
+        "Cloning plugin source {} (repo={}) to {:?}",
+        source.name,
+        source.repo,
+        staging_dir
+    );
+    run_git_checked(["clone", url.as_str(), staging_str], None, "clone").await?;
+    checkout_install_source(source, staging_dir, plugin_id, install_source).await?;
     Ok(())
 }
 
 pub(super) async fn prepare_update_repo(
+    source: &PluginSource,
     staging_dir: &Path,
-    repo_url: &str,
+    plugin_id: &str,
     install_source: &InstallSource,
 ) -> Result<()> {
-    clone_plugin_repo(repo_url, staging_dir, install_source).await?;
+    clone_source_repo(source, staging_dir, plugin_id, install_source).await?;
     if matches!(install_source, InstallSource::TaggedVersion(_)) {
         return Ok(());
     }
@@ -110,11 +154,16 @@ async fn reset_to_branch(plugin_dir: &Path, branch: &str) -> Result<std::process
     .await
 }
 
-async fn checkout_install_source(plugin_dir: &Path, install_source: &InstallSource) -> Result<()> {
+async fn checkout_install_source(
+    source: &PluginSource,
+    plugin_dir: &Path,
+    plugin_id: &str,
+    install_source: &InstallSource,
+) -> Result<()> {
     let InstallSource::TaggedVersion(version) = install_source else {
         return Ok(());
     };
-    let tag = version_tag(version)?;
+    let tag = plugin_release_tag(source, plugin_id, version)?;
     run_git_checked(
         ["checkout", "--detach", tag.as_str()],
         Some(plugin_dir),
@@ -124,11 +173,14 @@ async fn checkout_install_source(plugin_dir: &Path, install_source: &InstallSour
     .map(|_| ())
 }
 
-fn version_tag(version: &str) -> Result<String> {
+fn plugin_release_tag(source: &PluginSource, plugin_id: &str, version: &str) -> Result<String> {
     if !is_safe_ref_component(version) {
         anyhow::bail!("invalid plugin version ref: {}", version);
     }
-    Ok(format!("v{}", version))
+    if !is_safe_ref_component(plugin_id) {
+        anyhow::bail!("invalid plugin id for ref: {}", plugin_id);
+    }
+    Ok(source.plugin_release_tag(plugin_id, version))
 }
 
 fn is_safe_ref_component(value: &str) -> bool {
@@ -156,6 +208,10 @@ fn is_safe_branch_name(branch: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn core_source() -> PluginSource {
+        PluginSource::new("core", "qol-tools/qol", "main")
+    }
 
     #[test]
     fn is_safe_branch_name_cases() {
@@ -193,15 +249,51 @@ mod tests {
     }
 
     #[test]
-    fn version_tag_cases() {
-        let valid = [("1.2.3", "v1.2.3"), ("1.2.3-beta.1", "v1.2.3-beta.1")];
-        for (input, expected) in valid {
-            assert_eq!(version_tag(input).unwrap(), expected);
+    fn plugin_release_tag_builds_monorepo_tag_format() {
+        let s = core_source();
+        let cases = [
+            (
+                "plugin-alt-tab",
+                "1.2.3",
+                Some("plugin-alt-tab-v1.2.3"),
+            ),
+            (
+                "plugin-launcher",
+                "0.1.0-beta.1",
+                Some("plugin-launcher-v0.1.0-beta.1"),
+            ),
+        ];
+        for (plugin_id, version, expected) in cases {
+            assert_eq!(
+                plugin_release_tag(&s, plugin_id, version)
+                    .ok()
+                    .as_deref(),
+                expected,
+                "plugin_id={:?}, version={:?}",
+                plugin_id,
+                version
+            );
         }
+    }
 
-        let invalid = ["", "../x", "has space", ".hidden", "-leading"];
-        for input in invalid {
-            assert!(version_tag(input).is_err(), "input: {input}");
+    #[test]
+    fn plugin_release_tag_rejects_unsafe_input() {
+        let s = core_source();
+        let bad_versions = ["", "../x", "has space", ".hidden", "-leading"];
+        for version in bad_versions {
+            assert!(
+                plugin_release_tag(&s, "plugin-alt-tab", version).is_err(),
+                "version: {:?}",
+                version
+            );
+        }
+        let bad_ids = ["", "../id", "has space"];
+        for id in bad_ids {
+            assert!(
+                plugin_release_tag(&s, id, "1.0.0").is_err(),
+                "id: {:?}",
+                id
+            );
         }
     }
 }

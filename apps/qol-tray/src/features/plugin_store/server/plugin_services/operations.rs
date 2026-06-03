@@ -1,5 +1,6 @@
 use axum::http::StatusCode;
 
+use super::super::super::source::{resolve_source_for_plugin, PluginSource};
 use super::super::types::{AppState, PluginInfo, UninstallResult};
 
 mod install;
@@ -21,18 +22,23 @@ pub(super) async fn uninstall_plugin(state: &AppState, id: &str) -> UninstallRes
     uninstall::uninstall_plugin(state, id).await
 }
 
-fn repo_url(id: &str) -> String {
-    format!("https://github.com/qol-tools/{}.git", id)
+pub(super) fn source_for(id: &str) -> Result<PluginSource, (StatusCode, String)> {
+    resolve_source_for_plugin(id).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            format!("No plugin source provides {}", id),
+        )
+    })
 }
 
-fn success_uninstall_result(message: &str) -> UninstallResult {
+pub(super) fn success_uninstall_result(message: &str) -> UninstallResult {
     UninstallResult {
         success: true,
         message: message.to_string(),
     }
 }
 
-fn failed_uninstall_result(message: String) -> UninstallResult {
+pub(super) fn failed_uninstall_result(message: String) -> UninstallResult {
     UninstallResult {
         success: false,
         message,

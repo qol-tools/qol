@@ -9,6 +9,7 @@ use super::super::super::github::{
     current_timestamp, write_cache, GitHubClient, PluginCache, PluginMetadata,
     CACHE_FORMAT_VERSION, CACHE_TTL_SECS,
 };
+use super::super::super::source::{builtin_sources, fold_collected_plugins};
 use super::super::helpers::{read_installed_plugin_dirs, read_plugin_version};
 use super::super::types::{AppState, PluginInfo, PluginsResponse};
 
@@ -94,8 +95,7 @@ fn maybe_spawn_revalidation(state: &AppState, refresh: bool, stale: bool) {
     let flag = state.plugins_revalidating.clone();
     let events = state.daemon.events.clone();
     tokio::spawn(async move {
-        let client = GitHubClient::new("qol-tools");
-        let result = client.list_plugins().await;
+        let result = revalidate_from_sources().await;
         match result {
             Ok(plugins) if plugins.is_empty() => {
                 log::warn!("Plugin revalidation returned empty list; keeping previous cache");
@@ -120,6 +120,30 @@ fn maybe_spawn_revalidation(state: &AppState, refresh: bool, stale: bool) {
         }
         flag.store(false, Ordering::SeqCst);
     });
+}
+
+async fn revalidate_from_sources() -> anyhow::Result<Vec<PluginMetadata>> {
+    let sources = builtin_sources();
+    let mut buckets = Vec::with_capacity(sources.len());
+    let mut last_error: Option<anyhow::Error> = None;
+    for source in sources {
+        let source_label = format!("{} ({})", source.name, source.repo);
+        let client = GitHubClient::new(source);
+        match client.list_plugins().await {
+            Ok(plugins) => buckets.push(plugins),
+            Err(error) => {
+                log::warn!("Source {} discovery failed: {:#}", source_label, error);
+                last_error = Some(error);
+            }
+        }
+    }
+    let folded = fold_collected_plugins(buckets);
+    if folded.is_empty() {
+        if let Some(error) = last_error {
+            return Err(error);
+        }
+    }
+    Ok(folded)
 }
 
 fn plugins_dir() -> Result<std::path::PathBuf, (StatusCode, String)> {

@@ -2,12 +2,16 @@ use crate::features::plugin_store::installer::PluginInstaller;
 
 use super::super::super::helpers::{read_plugin_version, reload_manager_and_notify};
 use super::super::super::types::{AppState, UninstallResult};
-use super::{failed_uninstall_result, repo_url, success_uninstall_result};
+use super::{failed_uninstall_result, source_for, success_uninstall_result};
 
 pub(super) async fn update_plugin(state: &AppState, id: &str) -> UninstallResult {
     log::info!("Update requested for plugin: {}", id);
+    let source = match source_for(id) {
+        Ok(source) => source,
+        Err((_, message)) => return failed_uninstall_result(message),
+    };
     let installer = PluginInstaller::new(state.plugins_dir.clone());
-    if let Err(error) = installer.update(&repo_url(id), id).await {
+    if let Err(error) = installer.update(&source, id).await {
         log::error!("Failed to update plugin {}: {}", id, error);
         return failed_uninstall_result(format!("Update failed: {:#}", error));
     }

@@ -83,17 +83,20 @@ async fn restore_plugin(
 ) -> ImportPluginResult {
     let exists = plugin_dir.exists();
     let action = action_for_install(exists);
+    let Some(source) =
+        crate::features::plugin_store::source::resolve_source_for_plugin(&plugin.id)
+    else {
+        return ImportPluginResult {
+            id: plugin.id.clone(),
+            status: "failed".to_string(),
+            message: format!("{action} failed: no plugin source provides {}", plugin.id),
+        };
+    };
+
     let result = if plugin.version.is_empty() {
-        restore_latest(installer, &plugin.repo_url, &plugin.id, exists).await
+        restore_latest(installer, &source, &plugin.id, exists).await
     } else {
-        restore_exact(
-            installer,
-            &plugin.repo_url,
-            &plugin.id,
-            &plugin.version,
-            exists,
-        )
-        .await
+        restore_exact(installer, &source, &plugin.id, &plugin.version, exists).await
     };
 
     if let Some(error) = result.err() {
@@ -120,27 +123,27 @@ fn action_for_install(exists: bool) -> &'static str {
 
 async fn restore_latest(
     installer: &crate::features::plugin_store::installer::PluginInstaller,
-    repo_url: &str,
+    source: &crate::features::plugin_store::source::PluginSource,
     plugin_id: &str,
     exists: bool,
 ) -> Result<()> {
     if exists {
-        return installer.update(repo_url, plugin_id).await;
+        return installer.update(source, plugin_id).await;
     }
-    installer.install(repo_url, plugin_id).await
+    installer.install(source, plugin_id).await
 }
 
 async fn restore_exact(
     installer: &crate::features::plugin_store::installer::PluginInstaller,
-    repo_url: &str,
+    source: &crate::features::plugin_store::source::PluginSource,
     plugin_id: &str,
     version: &str,
     exists: bool,
 ) -> Result<()> {
     if exists {
-        return installer.update_exact(repo_url, plugin_id, version).await;
+        return installer.update_exact(source, plugin_id, version).await;
     }
-    installer.install_exact(repo_url, plugin_id, version).await
+    installer.install_exact(source, plugin_id, version).await
 }
 
 fn plugin_restore_message(plugin: &PluginLockEntry, action: &str) -> String {
@@ -229,9 +232,17 @@ async fn load_validation_contract(
     let Some(requested_plugin) = requested_plugin else {
         return Ok(None);
     };
+    let Some(source) =
+        crate::features::plugin_store::source::resolve_source_for_plugin(&requested_plugin.id)
+    else {
+        anyhow::bail!(
+            "No plugin source provides {} for contract validation",
+            requested_plugin.id
+        );
+    };
     installer
         .load_source_config_contract(
-            requested_plugin.repo_url.as_str(),
+            &source,
             requested_plugin.id.as_str(),
             requested_plugin.version_option(),
         )

@@ -1,81 +1,117 @@
 use super::super::release_assets::PlatformTarget;
-use super::catalog::{normalized_release_tag, required_release_assets};
+use super::super::source::{required_release_asset_names, select_release_tag, version_from_plugin_tag};
+use super::catalog::normalized_release_tag;
 use super::GitHubClient;
 use anyhow::Result;
 use serde::Deserialize;
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct GitHubRelease {
-    tag_name: String,
-    assets: Vec<GitHubAsset>,
+    pub(super) tag_name: String,
+    pub(super) assets: Vec<GitHubAsset>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct GitHubAsset {
-    name: String,
+pub(super) struct GitHubAsset {
+    pub(super) name: String,
 }
 
 impl GitHubClient {
-    pub(super) async fn fetch_release_version(
+    pub(super) async fn fetch_source_releases(&self) -> Result<Vec<GitHubRelease>> {
+        let url = self.source.releases_api_url();
+        let response = super::send_checked(self.build_request(&url)).await?;
+        let releases: Vec<GitHubRelease> = response.json().await?;
+        Ok(releases)
+    }
+
+    pub(super) fn select_plugin_version(
         &self,
-        repo_name: &str,
+        plugin_id: &str,
+        releases: &[GitHubRelease],
         manifest: &crate::plugins::PluginManifest,
     ) -> Result<String> {
         let target = PlatformTarget::current()?;
-        let plugin_repo = format!("{}/{}", self.org, repo_name);
-        let plugin_release = self.fetch_latest_release(&plugin_repo).await?;
-        self.verify_platform_binary_support(manifest, target, &plugin_repo, &plugin_release)
-            .await?;
-        normalized_release_tag(&plugin_release.tag_name)
+        let tags: Vec<&str> = releases.iter().map(|r| r.tag_name.as_str()).collect();
+        let Some(tag) = select_release_tag(tags.into_iter(), plugin_id) else {
+            anyhow::bail!(
+                "no release tag prefixed with '{}-v' found in {}",
+                plugin_id,
+                self.source.repo
+            );
+        };
+        let release = releases
+            .iter()
+            .find(|r| r.tag_name == tag)
+            .expect("selected tag came from releases list");
+        verify_release_assets(plugin_id, release, manifest, target, &self.source.repo)?;
+        version_from_plugin_tag(tag, plugin_id)
+            .or_else(|| normalized_release_tag(tag).ok())
+            .ok_or_else(|| {
+                anyhow::anyhow!("release tag '{}' for {} is not valid semver", tag, plugin_id)
+            })
     }
+}
 
-    async fn verify_platform_binary_support(
-        &self,
-        manifest: &crate::plugins::PluginManifest,
-        target: PlatformTarget,
-        plugin_repo: &str,
-        plugin_release: &GitHubRelease,
-    ) -> Result<()> {
-        let required_assets = required_release_assets(manifest, target)?;
-        let mut release_cache = HashMap::from([(plugin_repo.to_string(), plugin_release.clone())]);
-        for required_asset in required_assets {
-            let release = self
-                .release_for_repo(&mut release_cache, &required_asset.repo)
-                .await?;
-            if !release_has_asset(release, &required_asset.name) {
-                anyhow::bail!(
-                    "missing asset '{}' in latest release of {}",
-                    required_asset.name,
-                    required_asset.repo
-                );
-            }
+fn verify_release_assets(
+    plugin_id: &str,
+    release: &GitHubRelease,
+    manifest: &crate::plugins::PluginManifest,
+    target: PlatformTarget,
+    source_repo: &str,
+) -> Result<()> {
+    let dependencies = manifest
+        .dependencies
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("manifest is missing dependencies.binaries"))?;
+    if dependencies.binaries.is_empty() {
+        anyhow::bail!("manifest has empty dependencies.binaries");
+    }
+    let names = required_release_asset_names(&dependencies.binaries, target);
+    for asset_name in names {
+        if !release_has_asset(release, &asset_name) {
+            anyhow::bail!(
+                "missing asset '{}' in release {} of {} (required by plugin '{}')",
+                asset_name,
+                release.tag_name,
+                source_repo,
+                plugin_id
+            );
         }
-        Ok(())
     }
-
-    async fn release_for_repo<'a>(
-        &self,
-        release_cache: &'a mut HashMap<String, GitHubRelease>,
-        repo: &str,
-    ) -> Result<&'a GitHubRelease> {
-        if !release_cache.contains_key(repo) {
-            let release = self.fetch_latest_release(repo).await?;
-            release_cache.insert(repo.to_string(), release);
-        }
-
-        Ok(release_cache
-            .get(repo)
-            .expect("release cache entry inserted"))
-    }
-
-    async fn fetch_latest_release(&self, repo: &str) -> Result<GitHubRelease> {
-        let url = format!("https://api.github.com/repos/{}/releases/latest", repo);
-        let response = super::send_checked(self.build_request(&url)).await?;
-        Ok(response.json().await?)
-    }
+    Ok(())
 }
 
 fn release_has_asset(release: &GitHubRelease, asset_name: &str) -> bool {
     release.assets.iter().any(|asset| asset.name == asset_name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn release(tag: &str, asset_names: &[&str]) -> GitHubRelease {
+        GitHubRelease {
+            tag_name: tag.to_string(),
+            assets: asset_names
+                .iter()
+                .map(|n| GitHubAsset {
+                    name: (*n).to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn release_has_asset_table() {
+        let r = release("plugin-alt-tab-v1.0.0", &["alt-tab-linux-x86_64", "alt-tab-macos-aarch64"]);
+        let cases: &[(&str, bool)] = &[
+            ("alt-tab-linux-x86_64", true),
+            ("alt-tab-macos-aarch64", true),
+            ("alt-tab-windows-x86_64", false),
+            ("", false),
+        ];
+        for (name, expected) in cases {
+            assert_eq!(release_has_asset(&r, name), *expected, "asset: {:?}", name);
+        }
+    }
 }
