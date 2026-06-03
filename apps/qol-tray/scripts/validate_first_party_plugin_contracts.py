@@ -27,6 +27,26 @@ def is_valid_command_name(value: str) -> bool:
     return all(char.isascii() and (char.isalnum() or char in "-_") for char in value)
 
 
+def is_valid_plugin_id(value: str) -> bool:
+    if not value or value.strip() != value or "\0" in value:
+        return False
+    if value.startswith("-") or len(value) > 64:
+        return False
+    return all(char.isascii() and (char.isalnum() or char in "-_") for char in value)
+
+
+def validate_plugin_identity(plugin_id: str, data: dict) -> list[str]:
+    plugin = data.get("plugin")
+    if not isinstance(plugin, dict):
+        return [f"{plugin_id}: missing [plugin] section"]
+    declared_id = plugin.get("id")
+    if not isinstance(declared_id, str) or not declared_id:
+        return [f"{plugin_id}: [plugin].id is required"]
+    if not is_valid_plugin_id(declared_id):
+        return [f"{plugin_id}: invalid [plugin].id {declared_id!r}"]
+    return []
+
+
 def validate_socket(value: str) -> list[str]:
     errors: list[str] = []
     if not value:
@@ -208,15 +228,19 @@ def validate_plugin(plugin_id: str, plugin_dir: pathlib.Path) -> list[str]:
     except Exception as error:
         return [f"{plugin_id}: failed to parse plugin.toml: {error}"]
 
+    errors = validate_plugin_identity(plugin_id, data)
+
     menu = data.get("menu")
     if not isinstance(menu, dict):
-        return [f"{plugin_id}: missing [menu] section"]
+        errors.append(f"{plugin_id}: missing [menu] section")
+        return errors
     menu_items = menu.get("items")
     if not isinstance(menu_items, list):
-        return [f"{plugin_id}: menu.items must be an array"]
+        errors.append(f"{plugin_id}: menu.items must be an array")
+        return errors
 
     _, executable_menu_action_ids, menu_errors = collect_menu_actions(menu_items)
-    errors = [f"{plugin_id}: {error}" for error in menu_errors]
+    errors.extend(f"{plugin_id}: {error}" for error in menu_errors)
 
     runtime_command, runtime_errors = validate_runtime_section(
         plugin_id, data.get("runtime"), executable_menu_action_ids
