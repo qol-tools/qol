@@ -133,6 +133,7 @@ impl<'a> UpdatePlan<'a> {
 async fn install_plugin(plan: &InstallPlan<'_>) -> Result<()> {
     clone_plugin_repo(plan.repo_url, &plan.staging_dir, &plan.install_source).await?;
     install_dependencies(plan.plugin_id, &plan.staging_dir, &plan.install_source).await?;
+    validate_staged_contract(&plan.staging_dir)?;
     finalize_install(&plan.staging_dir, &plan.target_dir).await?;
     log::info!("Plugin {} installed successfully", plan.plugin_id);
     Ok(())
@@ -147,6 +148,7 @@ async fn update_plugin(plan: &UpdatePlan<'_>) -> Result<()> {
     )
     .await?;
     install_dependencies(plan.plugin_id, &plan.staging_dir, &plan.install_source).await?;
+    validate_staged_contract(&plan.staging_dir)?;
     swap_plugin_dirs(&plan.plugin_dir, &plan.staging_dir, &plan.backup_dir).await?;
     log::info!("Plugin {} updated successfully", plan.plugin_id);
     Ok(())
@@ -157,6 +159,14 @@ async fn finish_with_cleanup(staging_dir: &Path, result: Result<()>) -> Result<(
         cleanup_temp_dir(staging_dir).await;
     }
     result
+}
+
+fn validate_staged_contract(staging_dir: &Path) -> Result<()> {
+    let manifest = crate::plugins::manifest::PluginManifest::load_and_validate(
+        staging_dir.join("plugin.toml"),
+    )?;
+    manifest.plugin.require_declared_id()?;
+    Ok(())
 }
 
 async fn finalize_install(staging_dir: &Path, target_dir: &Path) -> Result<()> {
