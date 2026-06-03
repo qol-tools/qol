@@ -83,8 +83,7 @@ async fn restore_plugin(
 ) -> ImportPluginResult {
     let exists = plugin_dir.exists();
     let action = action_for_install(exists);
-    let Some(source) =
-        crate::features::plugin_store::source::resolve_source_for_plugin(&plugin.id)
+    let Some(source) = crate::features::plugin_store::source::resolve_source_for_plugin(&plugin.id)
     else {
         return ImportPluginResult {
             id: plugin.id.clone(),

@@ -41,13 +41,7 @@ impl PluginInstaller {
     pub(crate) async fn install(&self, source: &PluginSource, plugin_id: &str) -> Result<()> {
         validate_plugin_id(plugin_id)?;
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
-        operations::install(
-            &self.plugins_dir,
-            source,
-            plugin_id,
-            InstallSource::Latest,
-        )
-        .await?;
+        operations::install(&self.plugins_dir, source, plugin_id, InstallSource::Latest).await?;
         self.record_release_install(plugin_id)
     }
 
@@ -72,13 +66,7 @@ impl PluginInstaller {
     pub(crate) async fn update(&self, source: &PluginSource, plugin_id: &str) -> Result<()> {
         validate_plugin_id(plugin_id)?;
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
-        operations::update(
-            &self.plugins_dir,
-            source,
-            plugin_id,
-            InstallSource::Latest,
-        )
-        .await?;
+        operations::update(&self.plugins_dir, source, plugin_id, InstallSource::Latest).await?;
         self.record_release_install(plugin_id)
     }
 

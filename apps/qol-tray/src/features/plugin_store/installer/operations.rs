@@ -166,7 +166,13 @@ fn extracted_plugin_path(clone_dir: &Path) -> PathBuf {
 }
 
 async fn install_plugin(plan: &InstallPlan<'_>) -> Result<()> {
-    clone_source_repo(plan.source, &plan.clone_dir, plan.plugin_id, &plan.install_source).await?;
+    clone_source_repo(
+        plan.source,
+        &plan.clone_dir,
+        plan.plugin_id,
+        &plan.install_source,
+    )
+    .await?;
     extract_plugin_subdir(&plan.clone_dir, &plan.extracted_dir, plan.plugin_id).await?;
     install_dependencies(
         plan.source,
@@ -233,12 +239,7 @@ async fn extract_plugin_subdir(
     if extracted_dir.exists() {
         tokio::fs::remove_dir_all(extracted_dir)
             .await
-            .with_context(|| {
-                format!(
-                    "Failed to clear stale extracted dir {:?}",
-                    extracted_dir
-                )
-            })?;
+            .with_context(|| format!("Failed to clear stale extracted dir {:?}", extracted_dir))?;
     }
     tokio::fs::rename(&source_subdir, extracted_dir)
         .await

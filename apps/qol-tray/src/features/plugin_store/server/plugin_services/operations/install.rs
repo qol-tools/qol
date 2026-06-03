@@ -14,16 +14,13 @@ pub(super) async fn install_plugin(
     ensure_plugins_dir(state)?;
     let source = source_for(id)?;
     let installer = PluginInstaller::new(state.plugins_dir.clone());
-    installer
-        .install(&source, id)
-        .await
-        .map_err(|error| {
-            log::error!("Failed to install plugin {}: {}", id, error);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Installation failed: {:#}", error),
-            )
-        })?;
+    installer.install(&source, id).await.map_err(|error| {
+        log::error!("Failed to install plugin {}: {}", id, error);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Installation failed: {:#}", error),
+        )
+    })?;
     reload_manager_and_notify(state);
     log::info!("Plugin {} installed successfully", id);
     Ok(installed_plugin_info(state, id))

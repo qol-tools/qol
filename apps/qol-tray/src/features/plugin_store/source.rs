@@ -229,12 +229,12 @@ mod tests {
     fn repo_clone_url_resolves_owner_repo_to_https_and_local_paths_verbatim() {
         let cases: &[(&str, &str)] = &[
             ("qol-tools/qol", "https://github.com/qol-tools/qol.git"),
-            ("some-org/some-repo", "https://github.com/some-org/some-repo.git"),
-            ("/tmp/local-fixture-repo", "/tmp/local-fixture-repo"),
             (
-                "/var/folders/x/local repo",
-                "/var/folders/x/local repo",
+                "some-org/some-repo",
+                "https://github.com/some-org/some-repo.git",
             ),
+            ("/tmp/local-fixture-repo", "/tmp/local-fixture-repo"),
+            ("/var/folders/x/local repo", "/var/folders/x/local repo"),
             ("file:///tmp/local-fixture", "/tmp/local-fixture"),
             ("file:///abs/path/with spaces", "/abs/path/with spaces"),
         ];
@@ -254,7 +254,10 @@ mod tests {
         )];
         let _guard = test_seam::install(custom.clone());
         assert_eq!(builtin_sources(), custom);
-        assert_eq!(resolve_source_for_plugin("plugin-x"), Some(custom[0].clone()));
+        assert_eq!(
+            resolve_source_for_plugin("plugin-x"),
+            Some(custom[0].clone())
+        );
     }
 
     #[tokio::test]
@@ -266,7 +269,10 @@ mod tests {
                 "/tmp/some-fixture-repo",
                 "main",
             )]);
-            assert_eq!(builtin_sources().first().map(|s| s.name.as_str()), Some("fixture"));
+            assert_eq!(
+                builtin_sources().first().map(|s| s.name.as_str()),
+                Some("fixture")
+            );
         }
         let sources = builtin_sources();
         assert_eq!(sources.len(), 1);
@@ -303,10 +309,7 @@ mod tests {
     #[test]
     fn plugin_id_from_tree_path_table() {
         let cases: &[(&str, Option<&str>)] = &[
-            (
-                "plugins/plugin-alt-tab/plugin.toml",
-                Some("plugin-alt-tab"),
-            ),
+            ("plugins/plugin-alt-tab/plugin.toml", Some("plugin-alt-tab")),
             (
                 "plugins/plugin-launcher/plugin.toml",
                 Some("plugin-launcher"),
@@ -341,11 +344,7 @@ mod tests {
     fn version_from_plugin_tag_strips_id_prefix() {
         let cases: &[(&str, &str, Option<&str>)] = &[
             ("plugin-alt-tab-v1.2.3", "plugin-alt-tab", Some("1.2.3")),
-            (
-                "plugin-launcher-v0.1.0",
-                "plugin-launcher",
-                Some("0.1.0"),
-            ),
+            ("plugin-launcher-v0.1.0", "plugin-launcher", Some("0.1.0")),
             (
                 "plugin-alt-tab-v1.2.3-beta.1",
                 "plugin-alt-tab",

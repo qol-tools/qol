@@ -47,7 +47,10 @@ pub async fn check_for_updates() -> Result<bool> {
 
 fn pick_latest_host_version(releases: &[GitHubRelease]) -> Option<String> {
     use crate::features::plugin_store::source::{select_release_tag, version_from_plugin_tag};
-    let tag = select_release_tag(releases.iter().map(|r| r.tag_name.as_str()), HOST_TAG_PREFIX)?;
+    let tag = select_release_tag(
+        releases.iter().map(|r| r.tag_name.as_str()),
+        HOST_TAG_PREFIX,
+    )?;
     version_from_plugin_tag(tag, HOST_TAG_PREFIX)
 }
 
