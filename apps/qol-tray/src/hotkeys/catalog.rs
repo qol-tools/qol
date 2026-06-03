@@ -91,7 +91,7 @@ mod tests {
         PluginManifest {
             manifest_version: 1,
             plugin: PluginInfo {
-                id: "test-plugin".into(),
+                id: Some("test-plugin".into()),
                 name: "Plugin Foo".to_string(),
                 description: "test".to_string(),
                 version: "0.0.0".to_string(),

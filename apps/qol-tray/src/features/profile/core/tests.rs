@@ -663,7 +663,7 @@ fn test_plugin(
         PluginManifest {
             manifest_version: crate::plugins::manifest::CURRENT_MANIFEST_VERSION,
             plugin: PluginInfo {
-                id: id.into(),
+                id: Some(id.into()),
                 name: id.to_string(),
                 description: String::new(),
                 version: version.to_string(),

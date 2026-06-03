@@ -13,7 +13,7 @@ fn base_manifest() -> PluginManifest {
     PluginManifest {
         manifest_version: CURRENT_MANIFEST_VERSION,
         plugin: PluginInfo {
-            id: "test-plugin".into(),
+            id: Some("test-plugin".into()),
             name: "P".to_string(),
             description: "".to_string(),
             version: "0.0.1".to_string(),

@@ -17,6 +17,19 @@ items = []
     )
 }
 
+fn manifest_without_id() -> String {
+    r#"[plugin]
+name = "Test Plugin"
+description = "A test plugin"
+version = "1.0.0"
+
+[menu]
+label = "Test"
+items = []
+"#
+    .to_string()
+}
+
 const VALID_MANIFEST: &str = r#"
 [plugin]
 id = "test-plugin"
@@ -136,22 +149,34 @@ fn load_plugin_fails_for_invalid_dirs() {
 }
 
 #[test]
-fn load_plugin_uses_declared_manifest_id() {
+fn load_plugin_identity_comes_from_locator_not_manifest() {
     let temp_dir = TempDir::new().unwrap();
-    let plugin_dir = temp_dir.path().join("any-folder-name");
+    let plugin_dir = temp_dir.path().join("locator-id");
     fs::create_dir(&plugin_dir).unwrap();
-    fs::write(
-        plugin_dir.join("plugin.toml"),
-        valid_manifest("declared-id"),
-    )
-    .unwrap();
+    fs::write(plugin_dir.join("plugin.toml"), valid_manifest("declared-id")).unwrap();
 
     let plugin = PluginLoader::load_plugin(&plugin_dir).unwrap();
 
     assert_eq!(
         plugin.id.as_str(),
-        "declared-id",
-        "identity must come from the manifest, not the folder name"
+        "locator-id",
+        "identity must come from the resolved locator, not the manifest's declared id"
+    );
+}
+
+#[test]
+fn load_plugin_tolerates_manifest_without_declared_id() {
+    let temp_dir = TempDir::new().unwrap();
+    let plugin_dir = temp_dir.path().join("id-less-plugin");
+    fs::create_dir(&plugin_dir).unwrap();
+    fs::write(plugin_dir.join("plugin.toml"), manifest_without_id()).unwrap();
+
+    let plugin = PluginLoader::load_plugin(&plugin_dir).unwrap();
+
+    assert_eq!(
+        plugin.id.as_str(),
+        "id-less-plugin",
+        "an id-less manifest must still load, keyed by the locator"
     );
 }
 
@@ -230,10 +255,12 @@ fn load_plugin_rejects_missing_runtime_binary() {
 #[test]
 fn load_plugin_accepts_runtime_binary_when_present() {
     let temp_dir = TempDir::new().unwrap();
-    fs::write(temp_dir.path().join("plugin.toml"), RUNTIME_MANIFEST).unwrap();
-    fs::write(temp_dir.path().join("runtime-plugin"), b"binary").unwrap();
+    let plugin_dir = temp_dir.path().join("runtime-plugin");
+    fs::create_dir(&plugin_dir).unwrap();
+    fs::write(plugin_dir.join("plugin.toml"), RUNTIME_MANIFEST).unwrap();
+    fs::write(plugin_dir.join("runtime-plugin"), b"binary").unwrap();
 
-    let plugin = PluginLoader::load_plugin(temp_dir.path()).unwrap();
+    let plugin = PluginLoader::load_plugin(&plugin_dir).unwrap();
     assert_eq!(plugin.id.as_str(), "runtime-plugin");
 }
 
@@ -249,13 +276,11 @@ fn load_plugin_rejects_missing_daemon_binary_when_enabled() {
 #[test]
 fn load_plugin_allows_missing_daemon_binary_when_disabled() {
     let temp_dir = TempDir::new().unwrap();
-    fs::write(
-        temp_dir.path().join("plugin.toml"),
-        DISABLED_DAEMON_MANIFEST,
-    )
-    .unwrap();
+    let plugin_dir = temp_dir.path().join("disabled-daemon-plugin");
+    fs::create_dir(&plugin_dir).unwrap();
+    fs::write(plugin_dir.join("plugin.toml"), DISABLED_DAEMON_MANIFEST).unwrap();
 
-    let plugin = PluginLoader::load_plugin(temp_dir.path()).unwrap();
+    let plugin = PluginLoader::load_plugin(&plugin_dir).unwrap();
     assert_eq!(plugin.id.as_str(), "disabled-daemon-plugin");
 }
 
