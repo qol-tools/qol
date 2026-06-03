@@ -4,6 +4,7 @@ mod plugin_paths;
 mod plugin_ui;
 mod release_assets;
 pub(crate) mod server;
+pub(crate) mod source;
 mod validation;
 
 use crate::daemon::Daemon;

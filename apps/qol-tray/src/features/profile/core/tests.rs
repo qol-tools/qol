@@ -553,9 +553,10 @@ async fn apply_import_bundle_rejects_wrong_typed_new_plugin_configs_before_insta
         plugins: Vec::new(),
     })
     .unwrap();
-    let install_repo = create_installable_plugin_repo(
+    let source_repo = create_monorepo_style_source_repo(
         &plugins_dir,
         "plugin-install",
+        "0.0.1",
         Some(
             r#"
 schema_version = 1
@@ -566,6 +567,13 @@ default = 3
 "#,
         ),
     );
+    let _source_guard = crate::features::plugin_store::source::test_seam::install(vec![
+        crate::features::plugin_store::source::PluginSource::new(
+            "fixture",
+            source_repo.repo.as_str(),
+            "main",
+        ),
+    ]);
 
     let result = apply_import_bundle(
         &plugins_dir,
@@ -573,8 +581,8 @@ default = 3
             task_runner: Some(json!({"actions": {"sync": {}}})),
             plugins: vec![PluginLockEntry {
                 id: "plugin-install".to_string(),
-                repo_url: install_repo,
-                version: String::new(),
+                repo_url: source_repo.repo.clone(),
+                version: "0.0.1".to_string(),
                 platforms: None,
             }],
             plugin_configs: Some(HashMap::from([(
@@ -587,10 +595,22 @@ default = 3
     .await;
 
     let error = result.unwrap_err().to_string();
-    assert!(error.contains("Invalid config for plugin-install"));
-    assert!(error.contains("value does not match field type number"));
-    assert!(!plugins_dir.join("plugin-install").exists());
-    assert!(load_plugins_lock().unwrap().plugins.is_empty());
+    assert!(
+        error.contains("Invalid config for plugin-install"),
+        "expected contract rejection, got: {error}"
+    );
+    assert!(
+        error.contains("value does not match field type number"),
+        "expected type-mismatch detail, got: {error}"
+    );
+    assert!(
+        !plugins_dir.join("plugin-install").exists(),
+        "plugin must not be installed when import is rejected"
+    );
+    assert!(
+        load_plugins_lock().unwrap().plugins.is_empty(),
+        "lock must stay empty when import is rejected"
+    );
     assert!(!crate::paths::task_runner_config_path().unwrap().exists());
 }
 
@@ -775,6 +795,55 @@ items = []
         ["-c", "commit.gpgsign=false", "commit", "-m", "init"],
     );
     repo_dir.display().to_string()
+}
+
+struct MonorepoSourceRepo {
+    repo: String,
+}
+
+fn create_monorepo_style_source_repo(
+    plugins_dir: &Path,
+    plugin_id: &str,
+    version: &str,
+    contract: Option<&str>,
+) -> MonorepoSourceRepo {
+    let repo_dir = plugins_dir.join(format!("{plugin_id}-source-monorepo"));
+    let plugin_subdir = repo_dir.join("plugins").join(plugin_id);
+    fs::create_dir_all(&plugin_subdir).unwrap();
+    fs::write(
+        plugin_subdir.join("plugin.toml"),
+        format!(
+            r#"
+[plugin]
+id = "{plugin_id}"
+name = "{plugin_id}"
+description = "Test plugin"
+version = "{version}"
+
+[menu]
+label = "{plugin_id}"
+items = []
+"#
+        ),
+    )
+    .unwrap();
+    if let Some(contract) = contract {
+        fs::write(plugin_subdir.join("qol-config.toml"), contract).unwrap();
+    }
+    run_git(&repo_dir, ["-c", "init.defaultBranch=main", "init"]);
+    run_git(&repo_dir, ["config", "user.email", "test@example.com"]);
+    run_git(&repo_dir, ["config", "user.name", "Test User"]);
+    run_git(&repo_dir, ["config", "commit.gpgsign", "false"]);
+    run_git(&repo_dir, ["add", "."]);
+    run_git(
+        &repo_dir,
+        ["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+    let tag = format!("{plugin_id}-v{version}");
+    run_git(&repo_dir, ["tag", tag.as_str()]);
+    MonorepoSourceRepo {
+        repo: repo_dir.display().to_string(),
+    }
 }
 
 fn run_git<const N: usize>(repo_dir: &Path, args: [&str; N]) {

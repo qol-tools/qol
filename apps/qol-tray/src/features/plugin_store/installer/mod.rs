@@ -2,6 +2,8 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use super::source::PluginSource;
+
 mod command;
 mod dependency;
 mod lock;
@@ -36,12 +38,12 @@ impl PluginInstaller {
         Self { plugins_dir }
     }
 
-    pub(crate) async fn install(&self, repo_url: &str, plugin_id: &str) -> Result<()> {
+    pub(crate) async fn install(&self, source: &PluginSource, plugin_id: &str) -> Result<()> {
         validate_plugin_id(plugin_id)?;
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
         operations::install(
             &self.plugins_dir,
-            repo_url,
+            source,
             plugin_id,
             InstallSource::Latest,
         )
@@ -51,7 +53,7 @@ impl PluginInstaller {
 
     pub(crate) async fn install_exact(
         &self,
-        repo_url: &str,
+        source: &PluginSource,
         plugin_id: &str,
         version: &str,
     ) -> Result<()> {
@@ -59,7 +61,7 @@ impl PluginInstaller {
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
         operations::install(
             &self.plugins_dir,
-            repo_url,
+            source,
             plugin_id,
             InstallSource::TaggedVersion(version.to_string()),
         )
@@ -67,12 +69,12 @@ impl PluginInstaller {
         self.record_release_install(plugin_id)
     }
 
-    pub(crate) async fn update(&self, repo_url: &str, plugin_id: &str) -> Result<()> {
+    pub(crate) async fn update(&self, source: &PluginSource, plugin_id: &str) -> Result<()> {
         validate_plugin_id(plugin_id)?;
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
         operations::update(
             &self.plugins_dir,
-            repo_url,
+            source,
             plugin_id,
             InstallSource::Latest,
         )
@@ -82,7 +84,7 @@ impl PluginInstaller {
 
     pub(crate) async fn update_exact(
         &self,
-        repo_url: &str,
+        source: &PluginSource,
         plugin_id: &str,
         version: &str,
     ) -> Result<()> {
@@ -90,7 +92,7 @@ impl PluginInstaller {
         let _operation_lock = operation_lock::acquire_operation_lock(&self.plugins_dir, plugin_id)?;
         operations::update(
             &self.plugins_dir,
-            repo_url,
+            source,
             plugin_id,
             InstallSource::TaggedVersion(version.to_string()),
         )
@@ -122,7 +124,7 @@ impl PluginInstaller {
 
     pub(crate) async fn load_source_config_contract(
         &self,
-        repo_url: &str,
+        source: &PluginSource,
         plugin_id: &str,
         version: Option<&str>,
     ) -> Result<Option<qol_config::contract::ConfigSpec>> {
@@ -134,9 +136,19 @@ impl PluginInstaller {
             }
             _ => InstallSource::Latest,
         };
-        let result = source::clone_plugin_repo(repo_url, &staging_dir, &install_source)
+        let result = source::clone_source_repo(source, &staging_dir, plugin_id, &install_source)
             .await
-            .and_then(|_| crate::plugins::config::load_config_contract_from_root(&staging_dir));
+            .and_then(|_| {
+                let plugin_subdir = staging_dir.join("plugins").join(plugin_id);
+                if !plugin_subdir.is_dir() {
+                    anyhow::bail!(
+                        "Cloned source {} does not contain plugins/{}/",
+                        source.repo,
+                        plugin_id
+                    );
+                }
+                crate::plugins::config::load_config_contract_from_root(&plugin_subdir)
+            });
         staging::cleanup_temp_dir(&staging_dir).await;
         result
     }

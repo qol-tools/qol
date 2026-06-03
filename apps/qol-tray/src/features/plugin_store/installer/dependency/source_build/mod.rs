@@ -24,7 +24,7 @@ fn ensure_source_fallback_available(plan: &DependencyPlan<'_>) -> Result<()> {
     anyhow::bail!(
         "Asset '{}' not available for {} and source-build fallback is unavailable",
         plan.asset_name,
-        plan.dependency.repo
+        plan.asset_repo()
     )
 }
 
