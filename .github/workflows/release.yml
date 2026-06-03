@@ -110,5 +110,5 @@ jobs:
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" release_files/* --clobber
           else
-            gh release create "$tag" --title "$tag" --generate-notes release_files/*
+            gh release create "$tag" --title "$tag" --generate-notes --latest=false release_files/*
           fi
