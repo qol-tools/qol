@@ -13,12 +13,12 @@ import tomllib
 from pathlib import Path
 
 RUNNERS = {
-    "linux": [("ubuntu-latest", "x86_64-unknown-linux-gnu", "")],
+    "linux": [("ubuntu-latest", "x86_64-unknown-linux-gnu", "linux", "x86_64", "")],
     "macos": [
-        ("macos-latest", "aarch64-apple-darwin", ""),
-        ("macos-latest", "x86_64-apple-darwin", ""),
+        ("macos-latest", "aarch64-apple-darwin", "macos", "aarch64", ""),
+        ("macos-latest", "x86_64-apple-darwin", "macos", "x86_64", ""),
     ],
-    "windows": [("windows-latest", "x86_64-pc-windows-msvc", ".exe")],
+    "windows": [("windows-latest", "x86_64-pc-windows-msvc", "windows", "x86_64", ".exe")],
 }
 
 
@@ -32,6 +32,7 @@ def main() -> int:
     package = cargo["package"]["name"]
     binaries = plugin.get("dependencies", {}).get("binaries", [])
     bin_name = binaries[0]["name"] if binaries else package
+    asset_pattern = (binaries[0].get("pattern") if binaries else None) or f"{plugin_id}-{{os}}-{{arch}}"
     platforms = plugin.get("plugin", {}).get("platforms", ["linux"])
 
     include = [
@@ -39,10 +40,10 @@ def main() -> int:
             "os": runner,
             "target": target,
             "ext": ext,
-            "artifact_name": f"{plugin_id}-{target}",
+            "artifact_name": asset_pattern.replace("{os}", os_token).replace("{arch}", arch_token),
         }
         for platform in platforms
-        for runner, target, ext in RUNNERS.get(platform, [])
+        for runner, target, os_token, arch_token, ext in RUNNERS.get(platform, [])
     ]
     if not include:
         print(f"::error::no buildable platforms for {plugin_id}", file=sys.stderr)
