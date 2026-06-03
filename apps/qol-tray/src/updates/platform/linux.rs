@@ -11,7 +11,7 @@ use super::InstallKind;
 
 fn asset_url(version: &str) -> String {
     format!(
-        "https://github.com/{}/releases/download/v{}/qol-tray-linux-{}.tar.gz",
+        "https://github.com/{}/releases/download/qol-tray-v{}/qol-tray-linux-{}.tar.gz",
         GITHUB_REPO,
         version,
         common::arch_suffix()
@@ -81,4 +81,32 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     let error = std::process::Command::new(&current_exe).args(&args).exec();
     anyhow::bail!("exec restart failed: {error}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn linux_release_asset_contract_is_stable() {
+        let arch = common::arch_suffix();
+        let cases = [
+            (
+                "1.2.3",
+                format!(
+                    "https://github.com/qol-tools/qol/releases/download/qol-tray-v1.2.3/qol-tray-linux-{arch}.tar.gz"
+                ),
+            ),
+            (
+                "9.9.9-beta.1",
+                format!(
+                    "https://github.com/qol-tools/qol/releases/download/qol-tray-v9.9.9-beta.1/qol-tray-linux-{arch}.tar.gz"
+                ),
+            ),
+        ];
+
+        for (version, expected_url) in cases {
+            assert_eq!(asset_url(version), expected_url, "version: {version}");
+        }
+    }
 }
