@@ -153,7 +153,11 @@ fn load_plugin_identity_comes_from_locator_not_manifest() {
     let temp_dir = TempDir::new().unwrap();
     let plugin_dir = temp_dir.path().join("locator-id");
     fs::create_dir(&plugin_dir).unwrap();
-    fs::write(plugin_dir.join("plugin.toml"), valid_manifest("declared-id")).unwrap();
+    fs::write(
+        plugin_dir.join("plugin.toml"),
+        valid_manifest("declared-id"),
+    )
+    .unwrap();
 
     let plugin = PluginLoader::load_plugin(&plugin_dir).unwrap();
 
