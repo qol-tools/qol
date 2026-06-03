@@ -15,7 +15,7 @@ const MACOS_RELEASE_ASSET: &str = "qol-tray-macos-universal.tar.gz";
 
 fn asset_url(version: &str) -> String {
     format!(
-        "https://github.com/{}/releases/download/v{}/{}",
+        "https://github.com/{}/releases/download/qol-tray-v{}/{}",
         GITHUB_REPO, version, MACOS_RELEASE_ASSET
     )
 }
@@ -312,12 +312,12 @@ mod tests {
             (
                 "1.2.3",
                 "qol-tray-macos-universal.tar.gz",
-                "https://github.com/qol-tools/qol-tray/releases/download/v1.2.3/qol-tray-macos-universal.tar.gz",
+                "https://github.com/qol-tools/qol/releases/download/qol-tray-v1.2.3/qol-tray-macos-universal.tar.gz",
             ),
             (
                 "9.9.9-beta.1",
                 "qol-tray-macos-universal.tar.gz",
-                "https://github.com/qol-tools/qol-tray/releases/download/v9.9.9-beta.1/qol-tray-macos-universal.tar.gz",
+                "https://github.com/qol-tools/qol/releases/download/qol-tray-v9.9.9-beta.1/qol-tray-macos-universal.tar.gz",
             ),
         ];
 
