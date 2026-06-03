@@ -76,10 +76,17 @@ fn validate_link_source(source: &Path) -> Result<String, String> {
         )
     })?;
 
-    let plugin_id = canonical
-        .file_name()
-        .ok_or_else(|| "Invalid path".to_string())?
-        .to_string_lossy()
+    let plugin_id = manifest
+        .plugin
+        .require_declared_id()
+        .map_err(|e| {
+            format!(
+                "Manifest validation failed for {}: {}",
+                manifest_path.display(),
+                e
+            )
+        })?
+        .as_str()
         .to_string();
 
     Ok(plugin_id)
