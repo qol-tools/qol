@@ -502,7 +502,7 @@ mod scoped_io {
         PluginManifest {
             manifest_version: 1,
             plugin: PluginInfo {
-                id: "test-plugin".into(),
+                id: Some("test-plugin".into()),
                 name: "p".to_string(),
                 description: String::new(),
                 version: "1.0.0".to_string(),

@@ -80,7 +80,8 @@ pub struct BinaryDependency {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PluginInfo {
-    pub id: PluginId,
+    #[serde(default)]
+    pub id: Option<PluginId>,
     pub name: String,
     pub description: String,
     pub version: String,

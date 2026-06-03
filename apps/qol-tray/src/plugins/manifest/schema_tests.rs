@@ -3,7 +3,7 @@ use serde::Deserialize;
 
 fn make_plugin_info(platforms: Option<Vec<&str>>) -> PluginInfo {
     PluginInfo {
-        id: "test-plugin".into(),
+        id: Some("test-plugin".into()),
         name: "Test".to_string(),
         description: "Test".to_string(),
         version: "1.0.0".to_string(),

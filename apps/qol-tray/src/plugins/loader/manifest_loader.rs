@@ -16,25 +16,27 @@ fn load_plugin_with_source(locator: PluginId, path: &Path, source: PluginSource)
     ensure_manifest_exists(path, &manifest_path)?;
     let manifest_content = read_manifest(&manifest_path)?;
     let manifest = parse_manifest(&manifest_content)?;
-    let id = manifest.plugin.id.clone();
-    warn_on_locator_drift(&locator, &id, path);
-    validate_manifest_contract(id.as_str(), &manifest, path, &source)?;
+    warn_on_locator_drift(&locator, manifest.plugin.id.as_ref(), path);
+    validate_manifest_contract(locator.as_str(), &manifest, path, &source)?;
     Ok(Plugin::new_with_source(
-        id,
+        locator,
         manifest,
         path.to_path_buf(),
         source,
     ))
 }
 
-fn warn_on_locator_drift(locator: &PluginId, declared: &PluginId, path: &Path) {
+fn warn_on_locator_drift(locator: &PluginId, declared: Option<&PluginId>, path: &Path) {
+    let Some(declared) = declared else {
+        return;
+    };
     if locator == declared {
         return;
     }
 
     log::warn!(
-        "Plugin at {:?} is keyed as {:?} but its manifest declares id {:?}; using the declared id. \
-         Registry/profile state may need migration.",
+        "Plugin at {:?} is keyed as {:?} but its manifest declares id {:?}; using the keyed id. \
+         Re-link or reinstall the plugin to adopt the declared id.",
         path,
         locator.as_str(),
         declared.as_str()

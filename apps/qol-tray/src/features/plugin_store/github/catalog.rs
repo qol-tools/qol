@@ -158,7 +158,7 @@ mod tests {
         PluginManifest {
             manifest_version: crate::plugins::manifest::CURRENT_MANIFEST_VERSION,
             plugin: PluginInfo {
-                id: "test-plugin".into(),
+                id: Some("test-plugin".into()),
                 name: name.to_string(),
                 description: "Test plugin".to_string(),
                 version: version.to_string(),
