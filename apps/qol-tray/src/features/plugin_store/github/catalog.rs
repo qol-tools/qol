@@ -132,8 +132,7 @@ mod tests {
         assert_eq!(metadata.description, "Test plugin");
         assert_eq!(metadata.version, "3.0.0");
         assert_eq!(
-            metadata.repo_url,
-            "https://github.com/qol-tools/qol/tree/main/plugins/plugin-example",
+            metadata.repo_url, "https://github.com/qol-tools/qol/tree/main/plugins/plugin-example",
             "repo_url must point at the subdir within the source repo, not a per-plugin repo"
         );
     }

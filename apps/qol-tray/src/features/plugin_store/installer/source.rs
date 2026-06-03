@@ -18,14 +18,13 @@ pub(super) async fn resolve_latest_plugin_version(
     let response = send_checked(request).await?;
     let releases: Vec<ReleaseListEntry> = response.json().await?;
     let tags: Vec<&str> = releases.iter().map(|r| r.tag_name.as_str()).collect();
-    let tag = super::super::source::select_release_tag(tags.into_iter(), plugin_id)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "no release tag prefixed with '{}-v' found in {}",
-                plugin_id,
-                source.repo
-            )
-        })?;
+    let tag = super::super::source::select_release_tag(tags, plugin_id).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no release tag prefixed with '{}-v' found in {}",
+            plugin_id,
+            source.repo
+        )
+    })?;
     super::super::source::version_from_plugin_tag(tag, plugin_id).ok_or_else(|| {
         anyhow::anyhow!(
             "selected release tag '{}' for {} is not valid semver",
@@ -252,11 +251,7 @@ mod tests {
     fn plugin_release_tag_builds_monorepo_tag_format() {
         let s = core_source();
         let cases = [
-            (
-                "plugin-alt-tab",
-                "1.2.3",
-                Some("plugin-alt-tab-v1.2.3"),
-            ),
+            ("plugin-alt-tab", "1.2.3", Some("plugin-alt-tab-v1.2.3")),
             (
                 "plugin-launcher",
                 "0.1.0-beta.1",
@@ -265,9 +260,7 @@ mod tests {
         ];
         for (plugin_id, version, expected) in cases {
             assert_eq!(
-                plugin_release_tag(&s, plugin_id, version)
-                    .ok()
-                    .as_deref(),
+                plugin_release_tag(&s, plugin_id, version).ok().as_deref(),
                 expected,
                 "plugin_id={:?}, version={:?}",
                 plugin_id,
@@ -289,11 +282,7 @@ mod tests {
         }
         let bad_ids = ["", "../id", "has space"];
         for id in bad_ids {
-            assert!(
-                plugin_release_tag(&s, id, "1.0.0").is_err(),
-                "id: {:?}",
-                id
-            );
+            assert!(plugin_release_tag(&s, id, "1.0.0").is_err(), "id: {:?}", id);
         }
     }
 }

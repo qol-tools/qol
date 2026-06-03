@@ -1,5 +1,7 @@
 use super::super::release_assets::PlatformTarget;
-use super::super::source::{required_release_asset_names, select_release_tag, version_from_plugin_tag};
+use super::super::source::{
+    required_release_asset_names, select_release_tag, version_from_plugin_tag,
+};
 use super::catalog::normalized_release_tag;
 use super::GitHubClient;
 use anyhow::Result;
@@ -32,7 +34,7 @@ impl GitHubClient {
     ) -> Result<String> {
         let target = PlatformTarget::current()?;
         let tags: Vec<&str> = releases.iter().map(|r| r.tag_name.as_str()).collect();
-        let Some(tag) = select_release_tag(tags.into_iter(), plugin_id) else {
+        let Some(tag) = select_release_tag(tags, plugin_id) else {
             anyhow::bail!(
                 "no release tag prefixed with '{}-v' found in {}",
                 plugin_id,
@@ -47,7 +49,11 @@ impl GitHubClient {
         version_from_plugin_tag(tag, plugin_id)
             .or_else(|| normalized_release_tag(tag).ok())
             .ok_or_else(|| {
-                anyhow::anyhow!("release tag '{}' for {} is not valid semver", tag, plugin_id)
+                anyhow::anyhow!(
+                    "release tag '{}' for {} is not valid semver",
+                    tag,
+                    plugin_id
+                )
             })
     }
 }
@@ -103,7 +109,10 @@ mod tests {
 
     #[test]
     fn release_has_asset_table() {
-        let r = release("plugin-alt-tab-v1.0.0", &["alt-tab-linux-x86_64", "alt-tab-macos-aarch64"]);
+        let r = release(
+            "plugin-alt-tab-v1.0.0",
+            &["alt-tab-linux-x86_64", "alt-tab-macos-aarch64"],
+        );
         let cases: &[(&str, bool)] = &[
             ("alt-tab-linux-x86_64", true),
             ("alt-tab-macos-aarch64", true),
