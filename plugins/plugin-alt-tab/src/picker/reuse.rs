@@ -48,7 +48,11 @@ pub(super) fn compute_layout(input: &LayoutInput, _cx: &mut App) -> ReuseLayout 
     // Dock (which would "hide others") is the bug this prevents - we cannot react to those
     // gestures after they fire, so we must capture the click first.
     let (mw, mh) = input.placement.monitor_size().unwrap_or((1920.0, 1080.0));
+    #[cfg(target_os = "linux")]
+    let win_size = size(px(mw), px(mh - 1.0));
+    #[cfg(not(target_os = "linux"))]
     let win_size = size(px(mw), px(mh));
+
     let origin = input.placement.origin();
     let bounds = Bounds {
         origin,
