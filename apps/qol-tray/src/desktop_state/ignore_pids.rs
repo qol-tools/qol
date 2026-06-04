@@ -21,7 +21,7 @@ pub(crate) fn remove_ignore_pid(pid: u32) {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn is_ignored_pid(pid: u32) -> bool {
     ignore_pids()
         .read()

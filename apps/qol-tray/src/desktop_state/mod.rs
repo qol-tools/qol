@@ -25,6 +25,6 @@ pub(crate) fn create_shared() -> SharedPlatform {
     Arc::new(platform::create())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) use ignore_pids::is_ignored_pid;
 pub(crate) use ignore_pids::{add_ignore_pid, remove_ignore_pid};
