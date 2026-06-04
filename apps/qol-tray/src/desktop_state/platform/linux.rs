@@ -57,7 +57,8 @@ impl Platform for LinuxQueries {
     fn focused_window_bounds(&self) -> Option<MonitorBounds> {
         let conn = self.conn.as_ref()?;
         let window_id = get_active_window_id(conn, self.root, self.active_window_atom)?;
-        if is_own_window(conn, window_id, self.wm_pid_atom, self.own_pid) {
+        let pid = window_pid(conn, window_id, self.wm_pid_atom);
+        if pid.is_some_and(|pid| is_self_or_ignored(pid, self.own_pid)) {
             return None;
         }
         get_window_bounds(conn, self.root, window_id)
@@ -88,23 +89,18 @@ fn get_active_window_id(conn: &RustConnection, root: u32, active_window_atom: u3
     Some(window_id)
 }
 
-fn is_own_window(
-    conn: &RustConnection,
-    window_id: u32,
-    wm_pid_atom: Option<u32>,
-    own_pid: u32,
-) -> bool {
-    let Some(pid_atom) = wm_pid_atom else {
-        return false;
-    };
+fn window_pid(conn: &RustConnection, window_id: u32, wm_pid_atom: Option<u32>) -> Option<u32> {
+    let pid_atom = wm_pid_atom?;
     let pid_prop = conn
         .get_property(false, window_id, pid_atom, AtomEnum::CARDINAL, 0, 1)
-        .ok()
-        .and_then(|c| c.reply().ok());
-    if let Some(pp) = pid_prop {
-        return pp.value32().and_then(|mut v| v.next()) == Some(own_pid);
-    }
-    false
+        .ok()?
+        .reply()
+        .ok()?;
+    pid_prop.value32().and_then(|mut v| v.next())
+}
+
+fn is_self_or_ignored(pid: u32, own_pid: u32) -> bool {
+    pid == own_pid || super::super::is_ignored_pid(pid)
 }
 
 fn get_window_bounds(conn: &RustConnection, root: u32, window_id: u32) -> Option<MonitorBounds> {
@@ -161,4 +157,30 @@ fn is_wayland() -> bool {
         .map(|v| v == "wayland")
         .unwrap_or(false)
         || std::env::var_os("WAYLAND_DISPLAY").is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_self_or_ignored;
+    use crate::desktop_state::{add_ignore_pid, remove_ignore_pid};
+
+    #[test]
+    fn skips_own_pid_and_registered_daemon_pids_only() {
+        let own_pid = 424_242;
+        let daemon_pid = 535_353;
+        add_ignore_pid(daemon_pid);
+        let cases = [
+            (own_pid, true, "own pid is always skipped"),
+            (daemon_pid, true, "registered plugin-daemon pid is skipped"),
+            (
+                999_999,
+                false,
+                "unrelated foreign window pid is not skipped",
+            ),
+        ];
+        for (pid, expected, label) in cases {
+            assert_eq!(is_self_or_ignored(pid, own_pid), expected, "{label}");
+        }
+        remove_ignore_pid(daemon_pid);
+    }
 }
