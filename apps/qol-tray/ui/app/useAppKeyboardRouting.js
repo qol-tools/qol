@@ -17,6 +17,7 @@ import { nearestSurfaceInDirection, surfaceLabel } from '../lib/spatial-nav.js';
 import { focusGridRows, nextFocusGridElement } from '../lib/focus-grid.js';
 import { getWorldSettings } from '../lib/world-settings.js';
 import { resolveViewKeyboard } from '../lib/view-keyboard-fallback.js';
+import { hasModalCapturingFocus } from '../lib/focus-retention.js';
 
 const log = createDebug('qol:nav');
 const PLUGIN_CONFIG_FIELD = '[data-plugin-config-field-id]';
@@ -143,6 +144,10 @@ export function useAppKeyboardRouting({
 }
 
 function reconcileFocusForSlot(pageId, label) {
+    if (hasModalCapturingFocus(document)) {
+        log(`${label}: isolated panel holds focus, skip`);
+        return;
+    }
     const slot = document.querySelector(`.world-view-slot[data-view-id="${pageId}"]`);
     if (!slot) { log(`${label}: no slot for`, pageId); return; }
     const focused = document.activeElement;
