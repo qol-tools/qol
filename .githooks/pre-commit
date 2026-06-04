@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# rustfmt gate for the qol monorepo - mirrors the CI "Format" step (.github/workflows/ci.yml).
+# Enable in a fresh clone with:  git config core.hooksPath .githooks
+# Formatting is fast and deterministic, so it always runs before a commit.
+# Compile/clippy/test stay out of the commit path - they run in `qol dev` and CI.
+set -u
+
+command -v cargo >/dev/null 2>&1 || exit 0
+
+root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+[ -n "$root" ] && cd "$root" || exit 0
+
+if ! cargo fmt --all -- --check >/dev/null 2>&1; then
+  printf '\n  pre-commit rejected: rustfmt check failed\n' >&2
+  printf '  fix    : cargo fmt --all\n' >&2
+  printf '  then re-stage the changes and commit again\n\n' >&2
+  exit 1
+fi
+
+exit 0
