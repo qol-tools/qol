@@ -21,11 +21,11 @@ fn query_keymap_keys() -> Option<[u8; 32]> {
 }
 
 pub fn picker_window_kind() -> gpui::WindowKind {
-    gpui::WindowKind::PopUp
+    gpui::WindowKind::Normal
 }
 
-pub fn dismiss_picker(window: &mut gpui::Window) {
-    window.minimize_window();
+pub fn dismiss_picker(_window: &mut gpui::Window) {
+    hide_picker();
 }
 
 pub fn is_modifier_held() -> bool {
@@ -71,26 +71,33 @@ pub fn pre_create(
     tracker: &qol_gpui::monitor::MonitorTracker,
     cx: &mut gpui::App,
 ) {
+    qol_gpui::popup_window::set_ghost_debug(
+        config.display.ghost_opacity,
+        config.display.ghost_debug_color.as_deref(),
+    );
     let placement = qol_gpui::window::PopupPlacement::from_tracker(tracker);
-    crate::picker::create::pre_create_ghost(config, current, &placement, cx)
+    crate::picker::create::pre_create_ghost(config, current, &placement, cx);
+    qol_gpui::popup_window::configure_popup_window(PICKER_WINDOW_TITLE);
+    qol_gpui::popup_window::disable_window_shadow(PICKER_WINDOW_TITLE);
 }
 
 pub fn destroy_non_target_windows(
-    current: &crate::PickerWindowState,
-    target: qol_gpui::window::MonitorKey,
-    cx: &mut gpui::App,
+    _current: &crate::PickerWindowState,
+    _target: qol_gpui::window::MonitorKey,
+    _cx: &mut gpui::App,
 ) {
-    current.borrow_mut().destroy_non_target(target, cx);
 }
 
 pub fn discard_old_window(
     current: &crate::PickerWindowState,
     target: qol_gpui::window::MonitorKey,
-    handle: gpui::WindowHandle<crate::app::AltTabApp>,
-    cx: &mut gpui::App,
+    _handle: gpui::WindowHandle<crate::app::AltTabApp>,
+    _cx: &mut gpui::App,
 ) {
     #[cfg(debug_assertions)]
-    eprintln!("[alt-tab/open] closing old window — will recreate on correct monitor");
-    let _ = handle.update(cx, |_, window, _| window.remove_window());
+    eprintln!(
+        "[alt-tab/open] keep-alive reuse failed; dropping stale slot {:?}",
+        target
+    );
     current.borrow_mut().remove(target);
 }
