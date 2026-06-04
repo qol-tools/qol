@@ -1,5 +1,6 @@
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::*;
+use x11rb::wrapper::ConnectionExt as _;
 
 pub fn reposition_window_by_title(title: &str, gpui_x: f64, gpui_y: f64) -> bool {
     let Ok((conn, screen_num)) = x11rb::connect(None) else {
@@ -83,9 +84,37 @@ pub fn disable_window_shadow(_title: &str) -> bool {
     true
 }
 
-/// Stacking and animation are window-manager driven on X11; no per-window
-/// API. Returns `true` so callers can treat it uniformly with macOS.
-pub fn configure_popup_window(_title: &str) -> bool {
+pub fn configure_popup_window(title: &str) -> bool {
+    let Ok((conn, screen_num)) = x11rb::connect(None) else {
+        return false;
+    };
+    let root = conn.setup().roots[screen_num].root;
+    let list_atom = intern(&conn, b"_NET_CLIENT_LIST");
+    let name_atom = intern(&conn, b"_NET_WM_NAME");
+    let utf8_atom = intern(&conn, b"UTF8_STRING");
+    let (Some(list_atom), Some(name_atom), Some(utf8_atom)) = (list_atom, name_atom, utf8_atom)
+    else {
+        return false;
+    };
+    let Some(wid) = find_window_by_title(&conn, root, list_atom, name_atom, utf8_atom, title)
+    else {
+        return false;
+    };
+
+    // Mark the window as a utility so the WM does not treat a monitor-spanning
+    // borderless window as fullscreen and auto-hide panels/docks.
+    let type_atom = intern(&conn, b"_NET_WM_WINDOW_TYPE");
+    let utility_atom = intern(&conn, b"_NET_WM_WINDOW_TYPE_UTILITY");
+    if let (Some(type_atom), Some(utility_atom)) = (type_atom, utility_atom) {
+        let _ = conn.change_property32(
+            PropMode::REPLACE,
+            wid,
+            type_atom,
+            AtomEnum::ATOM,
+            &[utility_atom],
+        );
+    }
+    let _ = conn.flush();
     true
 }
 

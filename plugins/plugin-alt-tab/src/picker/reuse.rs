@@ -33,6 +33,10 @@ pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
             let backing =
                 qol_gpui::popup_window::window_backing_scale(super::create::PICKER_WINDOW_TITLE);
             qol_gpui::window::resize_or_sync_scale(window, req.layout.size, backing);
+            super::platform::reposition_picker_window(
+                req.layout.bounds.origin.x.to_f64(),
+                req.layout.bounds.origin.y.to_f64(),
+            );
             window.focus(&view.focus_handle(cx));
             window.activate_window();
             super::platform::show_picker();
@@ -48,9 +52,6 @@ pub(super) fn compute_layout(input: &LayoutInput, _cx: &mut App) -> ReuseLayout 
     // Dock (which would "hide others") is the bug this prevents - we cannot react to those
     // gestures after they fire, so we must capture the click first.
     let (mw, mh) = input.placement.monitor_size().unwrap_or((1920.0, 1080.0));
-    #[cfg(target_os = "linux")]
-    let win_size = size(px(mw), px(mh - 1.0));
-    #[cfg(not(target_os = "linux"))]
     let win_size = size(px(mw), px(mh));
 
     let origin = input.placement.origin();
