@@ -3,13 +3,12 @@ use crate::dev_server::{post_dev_link, post_recompile, wait_for_health, DevLinkO
 use crate::host_facade;
 use crate::progress::{print_hint, print_title, run_step, step_label, StepKind};
 use crate::workspace::{
-    cargo_package_name, discover_plugin_dirs, display_name, repo_root, sibling_crates,
+    display_name, repo_root, scan_buildable_plugins, sibling_crates, BuildablePlugin,
 };
 use anyhow::{bail, Context, Result};
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
-use toml::Value;
 
 pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()> {
     let branch = optional_single_arg(args, "qol dev [worktree]")?;
@@ -82,46 +81,27 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
     Ok(())
 }
 
-struct BuildablePlugin {
-    dir: PathBuf,
-    package_name: String,
-}
-
 fn collect_buildable_plugins(root: &Path, skip_plugins: bool) -> Result<Vec<BuildablePlugin>> {
     if skip_plugins {
         step_label("plugins", StepKind::Info, "skipped (-n)");
         return Ok(Vec::new());
     }
-    let candidates = discover_plugin_dirs(root)?;
-    if candidates.is_empty() {
+    let scan = scan_buildable_plugins(root)?;
+    if scan.buildable.is_empty() && scan.skipped_host == 0 && scan.skipped_no_runtime == 0 {
         step_label("plugins", StepKind::Info, "no plugins discovered");
         return Ok(Vec::new());
-    }
-    let mut buildable = Vec::new();
-    let mut skipped_unsupported = 0;
-    let mut skipped_no_runtime = 0;
-    for dir in candidates {
-        match PluginEligibility::for_path(&dir)? {
-            PluginEligibility::Buildable => {
-                let package_name = cargo_package_name(&dir)
-                    .with_context(|| format!("reading package name for {}", dir.display()))?;
-                buildable.push(BuildablePlugin { dir, package_name });
-            }
-            PluginEligibility::SkippedHost => skipped_unsupported += 1,
-            PluginEligibility::SkippedNoRuntime => skipped_no_runtime += 1,
-        }
     }
     step_label(
         "plugins",
         StepKind::Info,
         &format!(
             "{} buildable, {} unsupported here, {} without runtime",
-            buildable.len(),
-            skipped_unsupported,
-            skipped_no_runtime
+            scan.buildable.len(),
+            scan.skipped_host,
+            scan.skipped_no_runtime
         ),
     );
-    Ok(buildable)
+    Ok(scan.buildable)
 }
 
 fn build_plugins_batch(root: &Path, plugins: &[BuildablePlugin], verbose: bool) -> Result<()> {
@@ -155,59 +135,6 @@ fn register_dev_links(plugins: &[BuildablePlugin]) {
             Err(error) => eprintln!("qol dev: failed to link {display}: {error:#}"),
         }
     }
-}
-
-enum PluginEligibility {
-    Buildable,
-    SkippedHost,
-    SkippedNoRuntime,
-}
-
-impl PluginEligibility {
-    fn for_path(path: &Path) -> Result<Self> {
-        let manifest_path = path.join("plugin.toml");
-        if !manifest_path.is_file() {
-            return Ok(Self::SkippedNoRuntime);
-        }
-        let content = std::fs::read_to_string(&manifest_path)
-            .with_context(|| format!("failed to read {}", manifest_path.display()))?;
-        let manifest: Value = toml::from_str(&content)
-            .with_context(|| format!("failed to parse {}", manifest_path.display()))?;
-        if !supports_host(&manifest) {
-            return Ok(Self::SkippedHost);
-        }
-        if section_command(&manifest, "runtime").is_none()
-            && section_command(&manifest, "daemon").is_none()
-        {
-            return Ok(Self::SkippedNoRuntime);
-        }
-        Ok(Self::Buildable)
-    }
-}
-
-fn supports_host(manifest: &Value) -> bool {
-    let entries = manifest
-        .get("plugin")
-        .and_then(|plugin| plugin.get("platforms"))
-        .and_then(Value::as_array);
-    let entries = match entries {
-        Some(entries) => entries,
-        None => return true,
-    };
-    if entries.is_empty() {
-        return true;
-    }
-    entries
-        .iter()
-        .filter_map(Value::as_str)
-        .any(|entry| entry == host_facade::os_name())
-}
-
-fn section_command<'a>(manifest: &'a Value, section: &str) -> Option<&'a str> {
-    manifest
-        .get(section)
-        .and_then(|value| value.get("command"))
-        .and_then(Value::as_str)
 }
 
 fn clear_active_worktree_marker() {
@@ -277,8 +204,6 @@ fn parse_worktree_branches(input: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use tempfile::TempDir;
 
     #[test]
     fn parses_worktree_branches_skipping_detached() {
@@ -287,53 +212,5 @@ mod tests {
             parse_worktree_branches(input),
             vec!["main".to_string(), "feat/x".to_string()]
         );
-    }
-
-    fn write_plugin(dir: &Path, manifest_body: &str) {
-        fs::create_dir_all(dir).unwrap();
-        fs::write(dir.join("plugin.toml"), manifest_body).unwrap();
-    }
-
-    #[test]
-    fn plugin_eligibility_classifies_manifests() {
-        let tmp = TempDir::new().unwrap();
-        let buildable = tmp.path().join("buildable");
-        write_plugin(
-            &buildable,
-            "[plugin]\nname = \"a\"\nversion = \"0\"\nplatforms = [\"linux\", \"macos\", \"windows\"]\n[runtime]\ncommand = \"x\"\n",
-        );
-        let unsupported = tmp.path().join("unsupported");
-        write_plugin(
-            &unsupported,
-            "[plugin]\nname = \"b\"\nversion = \"0\"\nplatforms = [\"plan9\"]\n[runtime]\ncommand = \"x\"\n",
-        );
-        let no_runtime = tmp.path().join("no_runtime");
-        write_plugin(
-            &no_runtime,
-            "[plugin]\nname = \"c\"\nversion = \"0\"\nplatforms = [\"linux\", \"macos\", \"windows\"]\n",
-        );
-        let missing = tmp.path().join("missing");
-        fs::create_dir_all(&missing).unwrap();
-        let daemon_only = tmp.path().join("daemon_only");
-        write_plugin(
-            &daemon_only,
-            "[plugin]\nname = \"d\"\nversion = \"0\"\nplatforms = [\"linux\", \"macos\", \"windows\"]\n[daemon]\nenabled = true\ncommand = \"x\"\n",
-        );
-
-        let cases: &[(&Path, &str)] = &[
-            (&buildable, "Buildable"),
-            (&unsupported, "SkippedHost"),
-            (&no_runtime, "SkippedNoRuntime"),
-            (&missing, "SkippedNoRuntime"),
-            (&daemon_only, "Buildable"),
-        ];
-        for (path, want) in cases {
-            let got = match PluginEligibility::for_path(path).unwrap() {
-                PluginEligibility::Buildable => "Buildable",
-                PluginEligibility::SkippedHost => "SkippedHost",
-                PluginEligibility::SkippedNoRuntime => "SkippedNoRuntime",
-            };
-            assert_eq!(got, *want, "path: {}", path.display());
-        }
     }
 }
