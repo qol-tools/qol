@@ -132,6 +132,103 @@ pub(crate) fn cargo_package_name(crate_dir: &Path) -> Result<String> {
         .ok_or_else(|| anyhow!("{} has no [package].name", manifest.display()))
 }
 
+pub(crate) struct BuildablePlugin {
+    pub(crate) dir: PathBuf,
+    pub(crate) package_name: String,
+}
+
+pub(crate) struct PluginScan {
+    pub(crate) buildable: Vec<BuildablePlugin>,
+    pub(crate) skipped_host: usize,
+    pub(crate) skipped_no_runtime: usize,
+}
+
+pub(crate) fn scan_buildable_plugins(root: &Path) -> Result<PluginScan> {
+    let mut scan = PluginScan {
+        buildable: Vec::new(),
+        skipped_host: 0,
+        skipped_no_runtime: 0,
+    };
+    for dir in discover_plugin_dirs(root)? {
+        match PluginEligibility::for_path(&dir)? {
+            PluginEligibility::Buildable => {
+                let package_name = cargo_package_name(&dir)
+                    .with_context(|| format!("reading package name for {}", dir.display()))?;
+                scan.buildable.push(BuildablePlugin { dir, package_name });
+            }
+            PluginEligibility::SkippedHost => scan.skipped_host += 1,
+            PluginEligibility::SkippedNoRuntime => scan.skipped_no_runtime += 1,
+        }
+    }
+    Ok(scan)
+}
+
+pub(crate) fn non_host_plugin_packages(root: &Path) -> Result<Vec<String>> {
+    let mut excluded = Vec::new();
+    for dir in discover_plugin_dirs(root)? {
+        if matches!(
+            PluginEligibility::for_path(&dir)?,
+            PluginEligibility::SkippedHost
+        ) {
+            excluded.push(cargo_package_name(&dir)?);
+        }
+    }
+    Ok(excluded)
+}
+
+enum PluginEligibility {
+    Buildable,
+    SkippedHost,
+    SkippedNoRuntime,
+}
+
+impl PluginEligibility {
+    fn for_path(path: &Path) -> Result<Self> {
+        let manifest_path = path.join("plugin.toml");
+        if !manifest_path.is_file() {
+            return Ok(Self::SkippedNoRuntime);
+        }
+        let content = fs::read_to_string(&manifest_path)
+            .with_context(|| format!("failed to read {}", manifest_path.display()))?;
+        let manifest: Value = toml::from_str(&content)
+            .with_context(|| format!("failed to parse {}", manifest_path.display()))?;
+        if !supports_host(&manifest) {
+            return Ok(Self::SkippedHost);
+        }
+        if section_command(&manifest, "runtime").is_none()
+            && section_command(&manifest, "daemon").is_none()
+        {
+            return Ok(Self::SkippedNoRuntime);
+        }
+        Ok(Self::Buildable)
+    }
+}
+
+fn supports_host(manifest: &Value) -> bool {
+    let entries = manifest
+        .get("plugin")
+        .and_then(|plugin| plugin.get("platforms"))
+        .and_then(Value::as_array);
+    let entries = match entries {
+        Some(entries) => entries,
+        None => return true,
+    };
+    if entries.is_empty() {
+        return true;
+    }
+    entries
+        .iter()
+        .filter_map(Value::as_str)
+        .any(|entry| entry == host_facade::os_name())
+}
+
+fn section_command<'a>(manifest: &'a Value, section: &str) -> Option<&'a str> {
+    manifest
+        .get(section)
+        .and_then(|value| value.get("command"))
+        .and_then(Value::as_str)
+}
+
 pub(crate) fn resolve_crate_target(root: &Path, name: &str) -> Result<PathBuf> {
     let mut candidates = vec![(root.to_path_buf(), "qol-tray".to_string())];
     for sibling in sibling_crates(root)? {
@@ -426,5 +523,53 @@ mod tests {
 
         let resolved = resolve_crate_target(&workspace, "plugin-alt-tab").unwrap();
         assert_eq!(display_name(&resolved), "plugin-alt-tab");
+    }
+
+    fn write_manifest(dir: &Path, body: &str) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join("plugin.toml"), body).unwrap();
+    }
+
+    #[test]
+    fn plugin_eligibility_classifies_manifests() {
+        let tmp = tempfile::tempdir().unwrap();
+        let buildable = tmp.path().join("buildable");
+        write_manifest(
+            &buildable,
+            "[plugin]\nname = \"a\"\nversion = \"0\"\nplatforms = [\"linux\", \"macos\", \"windows\"]\n[runtime]\ncommand = \"x\"\n",
+        );
+        let unsupported = tmp.path().join("unsupported");
+        write_manifest(
+            &unsupported,
+            "[plugin]\nname = \"b\"\nversion = \"0\"\nplatforms = [\"plan9\"]\n[runtime]\ncommand = \"x\"\n",
+        );
+        let no_runtime = tmp.path().join("no_runtime");
+        write_manifest(
+            &no_runtime,
+            "[plugin]\nname = \"c\"\nversion = \"0\"\nplatforms = [\"linux\", \"macos\", \"windows\"]\n",
+        );
+        let missing = tmp.path().join("missing");
+        fs::create_dir_all(&missing).unwrap();
+        let daemon_only = tmp.path().join("daemon_only");
+        write_manifest(
+            &daemon_only,
+            "[plugin]\nname = \"d\"\nversion = \"0\"\nplatforms = [\"linux\", \"macos\", \"windows\"]\n[daemon]\nenabled = true\ncommand = \"x\"\n",
+        );
+
+        let cases: &[(&Path, &str)] = &[
+            (&buildable, "Buildable"),
+            (&unsupported, "SkippedHost"),
+            (&no_runtime, "SkippedNoRuntime"),
+            (&missing, "SkippedNoRuntime"),
+            (&daemon_only, "Buildable"),
+        ];
+        for (path, want) in cases {
+            let got = match PluginEligibility::for_path(path).unwrap() {
+                PluginEligibility::Buildable => "Buildable",
+                PluginEligibility::SkippedHost => "SkippedHost",
+                PluginEligibility::SkippedNoRuntime => "SkippedNoRuntime",
+            };
+            assert_eq!(got, *want, "path: {}", path.display());
+        }
     }
 }
