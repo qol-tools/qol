@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { pickFallbackSurface } from './focus-retention.js';
+import { pickFallbackSurface, hasModalCapturingFocus } from './focus-retention.js';
 
 function makeSurface({ id, selected = false, connected = true, visible = true, disabled = false }) {
     return {
@@ -243,5 +243,21 @@ test('property: 200 random shapes — selected-true in container always wins ove
         const viewport = makeRoot({ id: 'viewport', surfaces: vpSurfaces });
         const fallback = pickFallbackSurface({ lostContainer: container, lostSlot: slot, viewport });
         assert.equal(fallback?.id, 'c-selected', `case ${i}: container's selected must win`);
+    }
+});
+
+function makeDoc(modal) {
+    return { querySelector: (sel) => (sel === '[data-keyboard-isolated]' ? modal : null) };
+}
+
+test('hasModalCapturingFocus reports isolated-panel presence by visibility', () => {
+    const cases = [
+        ['no isolated panel', null, false],
+        ['visible panel (has client rects)', { getClientRects: () => [{ width: 10, height: 10 }] }, true],
+        ['hidden panel (zero client rects)', { getClientRects: () => [] }, false],
+        ['panel without measurable rects', {}, true],
+    ];
+    for (const [label, modal, expected] of cases) {
+        assert.equal(hasModalCapturingFocus(makeDoc(modal)), expected, label);
     }
 });

@@ -177,7 +177,7 @@ export function createFocusRetention(doc = typeof document !== 'undefined' ? doc
     };
 }
 
-function hasModalCapturingFocus(doc) {
+export function hasModalCapturingFocus(doc) {
     const modal = doc.querySelector(KEYBOARD_ISOLATION_SELECTOR);
     if (!modal) return false;
     const rects = typeof modal.getClientRects === 'function' ? modal.getClientRects() : null;
