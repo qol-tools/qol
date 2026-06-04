@@ -217,6 +217,7 @@ mod tests {
 
     #[test]
     fn builtin_sources_has_one_core_entry() {
+        let _env = crate::test_support::env_lock().blocking_lock();
         let sources = builtin_sources();
         assert_eq!(sources.len(), 1, "v1 ships one source: {:?}", sources);
         let core = &sources[0];
