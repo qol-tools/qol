@@ -40,6 +40,18 @@ mod tests {
         )
         .unwrap();
         fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        write_plugin_toml_for_current_os(root);
+    }
+
+    fn write_plugin_toml_for_current_os(root: &Path) {
+        fs::write(
+            root.join("plugin.toml"),
+            format!(
+                "[plugin]\nid = \"test-plugin\"\nname = \"Test\"\ndescription = \"\"\nversion = \"1.0.0\"\nplatforms = [\"{}\"]\n\n[menu]\nlabel = \"Test\"\nitems = []\n",
+                std::env::consts::OS
+            ),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -91,6 +103,7 @@ mod tests {
             "[package]\nname = \"test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nmy-lib = { path = \"../my-lib\" }\n",
         ).unwrap();
         fs::write(plugin_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+        write_plugin_toml_for_current_os(&plugin_dir);
 
         let links = HashMap::from([("plugin-a".to_string(), plugin_dir.clone())]);
         let fingerprint = fingerprint_plugin(&plugin_dir).unwrap();
@@ -186,16 +199,52 @@ mod tests {
     }
 
     #[test]
-    fn plan_defaults_to_supported_without_plugin_toml() {
+    fn plan_skips_plugin_when_plugin_toml_is_missing() {
         let tmp = TempDir::new().unwrap();
         let plugin_dir = tmp.path().join("plugin-a");
         write_basic_plugin(&plugin_dir);
+        fs::remove_file(plugin_dir.join("plugin.toml")).unwrap();
 
         let links = HashMap::from([("plugin-a".to_string(), plugin_dir)]);
         let plans = plan_linked_plugin_builds(&links, &HashMap::new(), None);
 
         assert_eq!(plans.len(), 1);
-        assert!(plans[0].supports_platform);
+        assert!(
+            !plans[0].supports_platform,
+            "missing plugin.toml must not fall through to a workspace build"
+        );
+        assert!(!plans[0].needs_rebuild);
+        assert!(
+            plans[0].reason.contains("plugin.toml"),
+            "skip reason should mention plugin.toml, got: {}",
+            plans[0].reason
+        );
+    }
+
+    #[test]
+    fn plan_skips_plugin_when_plugin_toml_is_unparseable() {
+        let tmp = TempDir::new().unwrap();
+        let plugin_dir = tmp.path().join("plugin-a");
+        write_basic_plugin(&plugin_dir);
+        fs::write(
+            plugin_dir.join("plugin.toml"),
+            "this is not = valid ::: toml",
+        )
+        .unwrap();
+
+        let links = HashMap::from([("plugin-a".to_string(), plugin_dir)]);
+        let plans = plan_linked_plugin_builds(&links, &HashMap::new(), None);
+
+        assert_eq!(plans.len(), 1);
+        assert!(
+            !plans[0].supports_platform,
+            "unparseable plugin.toml must not fall through to a workspace build"
+        );
+        assert!(
+            plans[0].reason.contains("plugin.toml"),
+            "skip reason should mention plugin.toml, got: {}",
+            plans[0].reason
+        );
     }
 
     #[test]
