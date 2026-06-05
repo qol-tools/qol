@@ -177,16 +177,30 @@ fn read_and_parse<C>(stream: &mut UnixStream, parser: fn(&str) -> ReadResult<C>)
     let mut reader = BufReader::new(&*stream);
     let mut line = String::new();
     match reader.read_line(&mut line) {
-        Ok(0) | Err(_) => return ReadResult::Ignore,
+        Ok(0) => {
+            #[cfg(debug_assertions)]
+            eprintln!("[daemon] read_line EOF (0 bytes)");
+            return ReadResult::Ignore;
+        }
+        Err(e) => {
+            #[cfg(debug_assertions)]
+            eprintln!("[daemon] read_line error: {:?}", e);
+            return ReadResult::Ignore;
+        }
         Ok(_) => {}
     }
 
     let trimmed = line.trim();
+    #[cfg(debug_assertions)]
+    eprintln!("[daemon] read line: {:?}", trimmed);
+
     if trimmed.is_empty() {
         return ReadResult::Ignore;
     }
 
     if let Ok(request) = serde_json::from_str::<DaemonRequest>(trimmed) {
+        #[cfg(debug_assertions)]
+        eprintln!("[daemon] parsed DaemonRequest action: {:?}", request.action);
         return parser(&request.action);
     }
 

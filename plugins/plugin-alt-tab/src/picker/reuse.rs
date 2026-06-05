@@ -2,9 +2,10 @@ use super::GatheredWindows;
 use crate::app::AltTabApp;
 use crate::config::AltTabConfig;
 use gpui::*;
-use qol_gpui::window::PopupPlacement;
+use qol_gpui::window::{MonitorKey, PopupPlacement};
 
 pub(crate) struct ReuseLayout {
+    pub target: MonitorKey,
     pub bounds: Bounds<Pixels>,
     pub size: Size<Pixels>,
 }
@@ -30,37 +31,39 @@ pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
             if !view.apply_reuse(req, window, cx) {
                 return false;
             }
-            let backing =
-                qol_gpui::popup_window::window_backing_scale(super::create::PICKER_WINDOW_TITLE);
-            qol_gpui::window::resize_or_sync_scale(window, req.layout.size, backing);
-            super::platform::reposition_picker_window(
-                req.layout.bounds.origin.x.to_f64(),
-                req.layout.bounds.origin.y.to_f64(),
-            );
+            let title = view.picker_title.clone();
+            if !super::platform::sync_picker_window_layout(
+                &title,
+                window,
+                req.layout.bounds.origin,
+                req.layout.size,
+            ) {
+                return false;
+            }
             window.focus(&view.focus_handle(cx));
             window.activate_window();
-            super::platform::show_picker();
+            super::platform::show_picker(&title);
             true
         })
         .unwrap_or(false)
 }
 
 pub(super) fn compute_layout(input: &LayoutInput, _cx: &mut App) -> ReuseLayout {
-    // The picker covers the entire active monitor so it can absorb every click that lands
-    // on that monitor (clicks outside the centered card box dismiss the picker, clicks on
-    // a card activate that card). Click-through to native gestures like Option+Click on the
-    // Dock (which would "hide others") is the bug this prevents - we cannot react to those
-    // gestures after they fire, so we must capture the click first.
+    // The picker covers the active monitor so it can absorb clicks outside the
+    // centered card box. Platform code may shave a pixel from the requested
+    // bounds when a window manager treats exact monitor-sized windows specially.
     let (mw, mh) = input.placement.monitor_size().unwrap_or((1920.0, 1080.0));
     let win_size = size(px(mw), px(mh));
 
+    let target = input.placement.target();
     let origin = input.placement.origin();
-    let bounds = Bounds {
+    let bounds = super::platform::adjust_picker_bounds(Bounds {
         origin,
         size: win_size,
-    };
+    });
     ReuseLayout {
+        target,
         bounds,
-        size: win_size,
+        size: bounds.size,
     }
 }

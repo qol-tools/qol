@@ -10,7 +10,7 @@ gpui.workspace = true
 qol-runtime.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-x11rb.workspace = true
+x11rb = { workspace = true, features = ["shape"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { workspace = true }
