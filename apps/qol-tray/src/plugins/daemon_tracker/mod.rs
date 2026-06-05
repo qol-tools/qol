@@ -35,6 +35,7 @@ fn is_host_binary(executable: &Path) -> bool {
     let Some(name) = executable.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
+    let name = name.strip_suffix(" (deleted)").unwrap_or(name);
     name == crate::installer::binary_filename() || name == "qol"
 }
 
@@ -235,6 +236,33 @@ mod tests {
         };
 
         assert!(!kill_managed_process(&process, &ManagedRoots::load()));
+    }
+
+    #[test]
+    fn without_host_binaries_drops_tray_even_when_binary_replaced_on_disk() {
+        let tray_deleted = format!(
+            "/qol/target/debug/{} (deleted)",
+            crate::installer::binary_filename()
+        );
+        let processes = vec![
+            ManagedProcess {
+                pid: 100,
+                executable: PathBuf::from(&tray_deleted),
+            },
+            ManagedProcess {
+                pid: 200,
+                executable: PathBuf::from("/qol/target/debug/keyremap"),
+            },
+        ];
+
+        assert_eq!(
+            without_host_binaries(processes),
+            vec![ManagedProcess {
+                pid: 200,
+                executable: PathBuf::from("/qol/target/debug/keyremap"),
+            }],
+            "tray must be recognized as host even when /proc/<pid>/exe shows '(deleted)'",
+        );
     }
 
     #[test]
