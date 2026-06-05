@@ -13,7 +13,8 @@ pub use fallback::{
 #[cfg(target_os = "linux")]
 pub use linux::{
     configure_popup_window, disable_window_shadow, hide_window_by_title,
-    reposition_window_by_title, set_ghost_debug, show_window_by_title, window_backing_scale,
+    reposition_window_by_title, set_ghost_debug, set_window_bounds_by_title, show_window_by_title,
+    window_backing_scale,
 };
 #[cfg(target_os = "macos")]
 pub use macos::{

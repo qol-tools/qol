@@ -222,29 +222,28 @@ fn apply_ghost_layout(
     layout: &super::reuse::ReuseLayout,
     app_cx: &mut App,
 ) {
-    reposition_to_layout(layout);
-    resize_to_layout(current, layout, app_cx);
-}
-
-fn reposition_to_layout(layout: &super::reuse::ReuseLayout) {
-    super::platform::reposition_picker_window(
-        layout.bounds.origin.x.to_f64(),
-        layout.bounds.origin.y.to_f64(),
-    );
-}
-
-fn resize_to_layout(
-    current: &PickerWindowState,
-    layout: &super::reuse::ReuseLayout,
-    app_cx: &mut App,
-) {
-    let Some(handle) = current.borrow().iter().into_iter().next().map(|(_, h)| h) else {
+    let target = layout.target;
+    let handle = {
+        let current = current.borrow();
+        current.existing(target).or_else(|| {
+            if super::platform::reuse_picker_across_targets() {
+                current.iter().into_iter().next().map(|(_, h)| h)
+            } else {
+                None
+            }
+        })
+    };
+    let Some(handle) = handle else {
         return;
     };
-    let _ = handle.update(app_cx, |_, window: &mut Window, _| {
-        let backing =
-            qol_gpui::popup_window::window_backing_scale(super::create::PICKER_WINDOW_TITLE);
-        qol_gpui::window::resize_or_sync_scale(window, layout.size, backing);
+    let _ = handle.update(app_cx, |view, window: &mut Window, _| {
+        let title = view.picker_title.clone();
+        super::platform::sync_picker_window_layout(
+            &title,
+            window,
+            layout.bounds.origin,
+            layout.size,
+        );
     });
 }
 
@@ -267,10 +266,9 @@ fn apply_view_windows(
     reset_selection: bool,
     app_cx: &mut App,
 ) {
-    let Some(handle) = current.borrow().iter().into_iter().next().map(|(_, h)| h) else {
-        return;
-    };
-    let _ = handle.update(app_cx, |view, window: &mut Window, cx| {
-        view.apply_ghost_gathered(gathered, reset_selection, window, cx);
-    });
+    for (_, handle) in current.borrow().iter() {
+        let _ = handle.update(app_cx, |view, window: &mut Window, cx| {
+            view.apply_ghost_gathered(gathered, reset_selection, window, cx);
+        });
+    }
 }

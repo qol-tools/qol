@@ -1,8 +1,8 @@
 use crate::picker::create::PICKER_WINDOW_TITLE;
 use objc2_foundation::MainThreadMarker;
 
-pub fn hide_picker() {
-    qol_gpui::popup_window::hide_window_by_title(PICKER_WINDOW_TITLE);
+pub fn hide_picker(title: &str) {
+    qol_gpui::popup_window::hide_window_by_title(title);
 }
 
 pub fn set_accessory_policy() {
@@ -12,16 +12,51 @@ pub fn set_accessory_policy() {
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 }
 
+pub fn picker_window_title(_target: qol_gpui::window::MonitorKey) -> String {
+    PICKER_WINDOW_TITLE.to_string()
+}
+
+pub fn configure_picker_window(title: &str) {
+    qol_gpui::popup_window::configure_popup_window(title);
+}
+
 pub fn picker_window_kind() -> gpui::WindowKind {
     gpui::WindowKind::Normal
 }
 
-pub fn dismiss_picker(_window: &mut gpui::Window) {
-    hide_picker();
+pub fn picker_window_decorations(transparent: bool) -> gpui::WindowDecorations {
+    if transparent {
+        gpui::WindowDecorations::Server
+    } else {
+        gpui::WindowDecorations::Client
+    }
 }
 
-pub fn reposition_picker_window(gpui_x: f64, gpui_y: f64) -> bool {
-    qol_gpui::popup_window::reposition_window_by_title(PICKER_WINDOW_TITLE, gpui_x, gpui_y)
+pub fn reposition_picker_window(title: &str, gpui_x: f64, gpui_y: f64) -> bool {
+    qol_gpui::popup_window::reposition_window_by_title(title, gpui_x, gpui_y)
+}
+
+pub fn sync_picker_window_layout(
+    title: &str,
+    window: &mut gpui::Window,
+    origin: gpui::Point<gpui::Pixels>,
+    size: gpui::Size<gpui::Pixels>,
+) -> bool {
+    let backing = qol_gpui::popup_window::window_backing_scale(title);
+    qol_gpui::window::resize_or_sync_scale(window, size, backing);
+    reposition_picker_window(title, origin.x.to_f64(), origin.y.to_f64())
+}
+
+pub fn adjust_picker_bounds(bounds: gpui::Bounds<gpui::Pixels>) -> gpui::Bounds<gpui::Pixels> {
+    bounds
+}
+
+pub fn reuse_hidden_picker_across_shows() -> bool {
+    true
+}
+
+pub fn reuse_picker_across_targets() -> bool {
+    true
 }
 
 fn cg_event_flags() -> u64 {
@@ -45,14 +80,14 @@ pub fn is_shift_held() -> bool {
     cg_event_flags() & K_CG_EVENT_FLAG_MASK_SHIFT != 0
 }
 
-pub fn disable_window_shadow() {
-    qol_gpui::popup_window::disable_window_shadow(PICKER_WINDOW_TITLE);
+pub fn disable_window_shadow(title: &str) {
+    qol_gpui::popup_window::disable_window_shadow(title);
 }
 
-pub fn show_picker() {
+pub fn show_picker(title: &str) {
     #[cfg(debug_assertions)]
     let t = std::time::Instant::now();
-    qol_gpui::popup_window::show_window_by_title(PICKER_WINDOW_TITLE);
+    qol_gpui::popup_window::show_window_by_title(title);
     #[cfg(debug_assertions)]
     eprintln!(
         "[alt-tab/show] ignores=false+orderFront+alpha=1 took {}us",
@@ -72,8 +107,6 @@ pub fn pre_create(
     );
     let placement = qol_gpui::window::PopupPlacement::from_tracker(tracker);
     crate::picker::create::pre_create_ghost(config, current, &placement, cx);
-    qol_gpui::popup_window::configure_popup_window(PICKER_WINDOW_TITLE);
-    qol_gpui::popup_window::disable_window_shadow(PICKER_WINDOW_TITLE);
 }
 
 pub fn destroy_non_target_windows(

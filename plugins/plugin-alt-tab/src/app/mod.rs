@@ -18,6 +18,7 @@ pub(crate) static PICKER_VISIBLE: AtomicBool = AtomicBool::new(false);
 const BLUR_GUARD_MS: u64 = 250;
 
 pub(crate) struct AltTabApp {
+    pub(crate) picker_title: String,
     pub(crate) delegate: Entity<PickerState>,
     pub(crate) focus_handle: FocusHandle,
     pub(crate) action_mode: ActionMode,
@@ -33,6 +34,7 @@ impl AltTabApp {
     pub(crate) fn new(init: PickerInit, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let should_cycle = init.cycle_on_open && init.windows.len() >= 2;
         let action_mode = init.action_mode.clone();
+        let picker_title = init.picker_title.clone();
         let delegate: Entity<PickerState> = cx.new(|state_cx| {
             let state = PickerState::from_init(init);
             state_cx
@@ -59,6 +61,7 @@ impl AltTabApp {
         let mut app = Self {
             _focus_out_sub: subscribe_focus_out(&focus_handle, window, cx),
             _live_preview_task: None,
+            picker_title,
             delegate,
             focus_handle,
             action_mode: action_mode.clone(),
@@ -81,16 +84,14 @@ impl AltTabApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.reposition_if_needed(req) {
-            return false;
-        }
+        self.log_reuse_layout(req);
         self.apply_reuse_config(req, window, cx);
         self.sync_alt_poll(window, cx);
         self.apply_reuse_windows(req, window, cx);
         true
     }
 
-    fn reposition_if_needed(&mut self, req: &crate::picker::ReuseRequest) -> bool {
+    fn log_reuse_layout(&self, req: &crate::picker::ReuseRequest) {
         #[cfg(debug_assertions)]
         eprintln!(
             "[alt-tab/show] count={} max_cols={} hints={} layout.size={}x{} bounds.origin=({},{})",
@@ -102,10 +103,6 @@ impl AltTabApp {
             req.layout.bounds.origin.x.to_f64(),
             req.layout.bounds.origin.y.to_f64(),
         );
-        picker::platform::reposition_picker_window(
-            req.layout.bounds.origin.x.to_f64(),
-            req.layout.bounds.origin.y.to_f64(),
-        )
     }
 
     fn apply_reuse_config(
@@ -124,10 +121,6 @@ impl AltTabApp {
             };
             window.set_background_appearance(appearance);
         }
-        if now_transparent {
-            picker::platform::disable_window_shadow();
-        }
-
         let (card_color, card_opacity) = crate::picker::resolve_card_bg(&req.config.display);
         self.action_mode = req.config.action_mode.clone();
         self.alt_was_held = true;
@@ -136,6 +129,9 @@ impl AltTabApp {
         self.delegate.update(cx, |s, _| {
             s.apply_config(req.config, card_color, card_opacity)
         });
+        if now_transparent {
+            picker::platform::disable_window_shadow(&self.picker_title);
+        }
     }
 
     fn sync_alt_poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -344,7 +340,7 @@ impl AltTabApp {
     pub(crate) fn dismiss(
         &mut self,
         _source: &'static str,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         #[cfg(debug_assertions)]
@@ -352,7 +348,7 @@ impl AltTabApp {
         self._alt_poll_task = None;
         self.blur_guard_armed = false;
         PICKER_VISIBLE.store(false, Ordering::Relaxed);
-        picker::dismiss_picker(window);
+        picker::platform::hide_picker(&self.picker_title);
         picker::request_data_refresh();
         cx.notify();
     }

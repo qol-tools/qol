@@ -22,12 +22,19 @@ pub(super) struct CreateRequest<'a> {
 
 pub(super) fn create_new(req: &CreateRequest, gathered: GatheredWindows, cx: &mut App) {
     let bounds = compute_create_bounds(req, &gathered, cx);
-    let post = PostCreateData::new(req.config, &gathered);
-    let handle = open_picker_window(bounds, PickerInit::new(req.config, gathered), true, cx);
+    let target = req.placement.target();
+    let title = super::platform::picker_window_title(target);
+    let post = PostCreateData::new(req.config, &gathered, title.clone());
+    let handle = open_picker_window(
+        bounds,
+        title.clone(),
+        PickerInit::new(req.config, gathered, title),
+        true,
+        cx,
+    );
     let Some(handle) = handle else {
         return on_open_failure();
     };
-    let target = req.placement.target();
     req.current.borrow_mut().insert(target, handle);
     post.finalize(
         handle,
@@ -61,6 +68,7 @@ fn estimate_picker_size(req: &CreateRequest, gathered: &GatheredWindows) -> Size
 }
 
 pub(crate) struct PickerInit {
+    pub(crate) picker_title: String,
     pub(crate) action_mode: ActionMode,
     pub(crate) label_config: LabelConfig,
     pub(crate) transparent_bg: bool,
@@ -76,9 +84,10 @@ pub(crate) struct PickerInit {
 }
 
 impl PickerInit {
-    fn new(config: &AltTabConfig, gathered: GatheredWindows) -> Self {
+    fn new(config: &AltTabConfig, gathered: GatheredWindows, picker_title: String) -> Self {
         let (card_color, card_opacity) = super::resolve_card_bg(&config.display);
         Self {
+            picker_title,
             action_mode: config.action_mode.clone(),
             label_config: config.label.clone(),
             transparent_bg: config.display.transparent_background,
@@ -94,7 +103,7 @@ impl PickerInit {
         }
     }
 
-    pub(crate) fn warmup_seed(config: &AltTabConfig) -> Self {
+    pub(crate) fn warmup_seed(config: &AltTabConfig, picker_title: String) -> Self {
         const WARMUP_CARDS: usize = 7;
         let mut windows = Vec::with_capacity(WARMUP_CARDS);
         let mut icons = IconMap::new();
@@ -131,6 +140,7 @@ impl PickerInit {
                 previews: PreviewMap::new(),
                 icons,
             },
+            picker_title,
         )
     }
 
@@ -141,13 +151,15 @@ impl PickerInit {
 
 fn open_picker_window(
     bounds: Bounds<Pixels>,
+    title: String,
     init: PickerInit,
     activate: bool,
     cx: &mut App,
 ) -> Option<WindowHandle<AltTabApp>> {
     let opts = picker_window_options(bounds, init.transparent_bg, activate);
+    let window_title = title.clone();
     cx.open_window(opts, move |window, cx| {
-        window.set_window_title(PICKER_WINDOW_TITLE);
+        window.set_window_title(&window_title);
         let view = cx.new(|cx| init.into_app(window, cx));
         if activate {
             window.focus(&view.focus_handle(cx));
@@ -164,11 +176,7 @@ fn picker_window_options(bounds: Bounds<Pixels>, transparent: bool, focus: bool)
     } else {
         WindowBackgroundAppearance::Opaque
     };
-    let decor = if transparent {
-        WindowDecorations::Server
-    } else {
-        WindowDecorations::Client
-    };
+    let decor = super::platform::picker_window_decorations(transparent);
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: None,
@@ -186,41 +194,53 @@ fn on_open_failure() {
     PICKER_VISIBLE.store(false, Ordering::Relaxed);
 }
 
-/// Pre-create the picker window at boot, centered on the active monitor and hidden
-/// at alpha=0 (drawn on-screen, never parked offscreen). Registered under
-/// `BOOTSTRAP_KEY` and reused on every open so the hotkey path never pays
-/// window-creation cost.
+/// Pre-create a picker window using the same monitor-covering layout as the show
+/// path. Linux creates one per monitor; macOS keeps a single repositioned ghost.
 pub(crate) fn pre_create_ghost(
     config: &AltTabConfig,
     current: &PickerWindowState,
     placement: &PopupPlacement,
     cx: &mut App,
 ) {
-    let init = PickerInit::warmup_seed(config);
-    let bounds = placement.centered_bounds(size(px(720.0), px(320.0)), cx);
-    let Some(handle) = open_picker_window(bounds, init, false, cx) else {
+    let layout = super::reuse::compute_layout(&super::reuse::LayoutInput { placement }, cx);
+    let target = placement.target();
+    if current.borrow().existing(target).is_some() {
+        return;
+    }
+    let title = super::platform::picker_window_title(target);
+    let init = PickerInit::warmup_seed(config, title.clone());
+    let bounds = layout.bounds;
+    let Some(handle) = open_picker_window(bounds, title.clone(), init, false, cx) else {
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/boot] pre-create failed; falling back to on-demand creation");
         return;
     };
-    current.borrow_mut().insert(super::BOOTSTRAP_KEY, handle);
-    super::platform::hide_picker();
+    current.borrow_mut().insert(target, handle);
+    super::platform::configure_picker_window(&title);
+    let _ = handle.update(cx, |_view, window, _cx| {
+        super::platform::sync_picker_window_layout(&title, window, bounds.origin, bounds.size)
+    });
+    super::platform::disable_window_shadow(&title);
+    super::platform::hide_picker(&title);
     PICKER_VISIBLE.store(false, Ordering::Relaxed);
     #[cfg(debug_assertions)]
     eprintln!(
-        "[alt-tab/boot] pre-created picker window on active monitor (alpha=0, warmup-seeded)"
+        "[alt-tab/boot] pre-created picker window target={:?} title={:?}",
+        target, title
     );
 }
 
 struct PostCreateData {
+    title: String,
     transparent_bg: bool,
     windows: Vec<WindowInfo>,
     icons: IconMap,
 }
 
 impl PostCreateData {
-    fn new(config: &AltTabConfig, gathered: &GatheredWindows) -> Self {
+    fn new(config: &AltTabConfig, gathered: &GatheredWindows, title: String) -> Self {
         Self {
+            title,
             transparent_bg: config.display.transparent_background,
             windows: gathered.windows.clone(),
             icons: gathered.icons.clone(),
@@ -238,8 +258,9 @@ impl PostCreateData {
         has_shown_once.store(true, Ordering::Release);
         cx.activate(true);
         if self.transparent_bg {
-            super::platform::disable_window_shadow();
+            super::platform::disable_window_shadow(&self.title);
         }
+        super::platform::configure_picker_window(&self.title);
         let _ = handle.update(cx, |view, _window, cx| {
             view.ensure_live_preview(cx);
         });

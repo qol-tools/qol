@@ -6,7 +6,7 @@ mod reuse;
 pub(crate) mod run;
 
 pub(crate) use monitor_listener::request_data_refresh;
-pub use platform::{dismiss_picker, is_modifier_held};
+pub use platform::is_modifier_held;
 pub(crate) use reuse::ReuseRequest;
 
 use crate::app::{AltTabApp, PICKER_VISIBLE};
@@ -21,16 +21,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 const DEFAULT_ESTIMATED_WINDOW_COUNT: usize = 8;
-
-/// Sentinel MonitorKey slot that holds the pre-created keep-alive picker before it has
-/// ever been shown on a real monitor. Chosen to not collide with any real monitor
-/// (negative width/height) nor with `MonitorKey::fallback()` (all zeroes).
-pub(crate) const BOOTSTRAP_KEY: MonitorKey = MonitorKey {
-    x: i32::MIN,
-    y: i32::MIN,
-    width: -1,
-    height: -1,
-};
 
 pub(crate) fn default_estimated_window_count() -> usize {
     DEFAULT_ESTIMATED_WINDOW_COUNT
@@ -52,14 +42,14 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
     #[cfg(debug_assertions)]
     eprintln!("[alt-tab/open] show request (reverse={})", req.reverse);
 
+    let placement = PopupPlacement::from_tracker(req.tracker);
     if req.reverse && req.current.borrow().is_empty() {
         return;
     }
-    if try_cycle_existing(req, cx) {
+    if try_cycle_existing(req, &placement, cx) {
         return;
     }
 
-    let placement = PopupPlacement::from_tracker(req.tracker);
     let gathered = gather(
         req.config,
         &req.icon_cache,
@@ -69,16 +59,21 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
     if try_reuse_existing(req, &placement, &gathered, cx) {
         return;
     }
-    // macOS keeps the pre-created picker alive across opens — the reuse path above should
-    // always succeed. The fallback below exists for first-ever open before bootstrap completes
-    // and for Linux's create-on-demand lifecycle.
+    // macOS keeps the pre-created picker alive across opens, so the reuse path above
+    // should always succeed. The fallback below exists for first-ever open before
+    // bootstrap completes and for Linux's create-on-demand lifecycle.
     destroy_non_target_windows(req, &placement, cx);
     create_from_request(req, placement, gathered, cx);
 }
 
-fn try_cycle_existing(req: &OpenPickerRequest, cx: &mut App) -> bool {
-    let handle = match any_existing(req.current) {
-        Some((_, h)) => h,
+fn try_cycle_existing(req: &OpenPickerRequest, placement: &PopupPlacement, cx: &mut App) -> bool {
+    let handle = match req
+        .current
+        .borrow()
+        .existing(placement.target())
+        .or_else(|| any_existing(req.current).map(|(_, h)| h))
+    {
+        Some(h) => h,
         None => return false,
     };
     if !try_cycle_selection(&handle, req.reverse, cx) {
@@ -95,14 +90,25 @@ fn try_reuse_existing(
     gathered: &GatheredWindows,
     cx: &mut App,
 ) -> bool {
+    if !platform::reuse_hidden_picker_across_shows() {
+        discard_any_existing_window(req, cx);
+        return false;
+    }
     let target = placement.target();
-    let (handle, source_key) = match req.current.borrow().existing(target) {
-        Some(h) => (h, target),
-        None => match any_existing(req.current) {
+    let (handle, source_key) = if let Some(h) = req.current.borrow().existing(target) {
+        (h, target)
+    } else if platform::reuse_picker_across_targets() {
+        match any_existing(req.current) {
             Some((key, h)) => (h, key),
             None => return false,
-        },
+        }
+    } else {
+        return false;
     };
+    if source_key != target && !platform::reuse_picker_across_targets() {
+        discard_old_window(req, source_key, handle, cx);
+        return false;
+    }
     let input = reuse::LayoutInput { placement };
     let layout = reuse::compute_layout(&input, cx);
     let reuse_req = reuse::ReuseRequest {
@@ -136,6 +142,13 @@ fn any_existing(current: &PickerWindowState) -> Option<(MonitorKey, WindowHandle
 
 fn destroy_non_target_windows(req: &OpenPickerRequest, placement: &PopupPlacement, cx: &mut App) {
     platform::destroy_non_target_windows(req.current, placement.target(), cx);
+}
+
+fn discard_any_existing_window(req: &OpenPickerRequest, cx: &mut App) {
+    let Some((key, handle)) = any_existing(req.current) else {
+        return;
+    };
+    discard_old_window(req, key, handle, cx);
 }
 
 fn discard_old_window(
@@ -665,6 +678,7 @@ pub(crate) mod state {
                 })
                 .collect();
             PickerState::from_init(PickerInit {
+                picker_title: String::new(),
                 windows,
                 label_config: LabelConfig::default(),
                 transparent_bg: false,
@@ -821,6 +835,7 @@ pub(crate) mod state {
 
         fn picker_at(count: usize, selected: Option<usize>) -> PickerState {
             let mut s = PickerState::from_init(PickerInit {
+                picker_title: String::new(),
                 windows: windows(count),
                 label_config: LabelConfig::default(),
                 transparent_bg: false,

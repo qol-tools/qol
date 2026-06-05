@@ -17,12 +17,31 @@ mod imp {
     pub fn picker_window_kind() -> gpui::WindowKind {
         gpui::WindowKind::PopUp
     }
-    pub fn dismiss_picker(window: &mut gpui::Window) {
-        window.minimize_window();
+    pub fn picker_window_decorations(_transparent: bool) -> gpui::WindowDecorations {
+        gpui::WindowDecorations::Client
     }
     pub fn set_accessory_policy() {}
-    pub fn reposition_picker_window(_x: f64, _y: f64) -> bool {
-        false
+    pub fn picker_window_title(_target: MonitorKey) -> String {
+        "qol-alt-tab-picker".to_string()
+    }
+    pub fn configure_picker_window(_title: &str) {}
+    pub fn sync_picker_window_layout(
+        _title: &str,
+        window: &mut gpui::Window,
+        _origin: gpui::Point<gpui::Pixels>,
+        size: gpui::Size<gpui::Pixels>,
+    ) -> bool {
+        qol_gpui::window::resize_or_sync_scale(window, size, None);
+        true
+    }
+    pub fn adjust_picker_bounds(bounds: gpui::Bounds<gpui::Pixels>) -> gpui::Bounds<gpui::Pixels> {
+        bounds
+    }
+    pub fn reuse_hidden_picker_across_shows() -> bool {
+        true
+    }
+    pub fn reuse_picker_across_targets() -> bool {
+        true
     }
     pub fn is_modifier_held() -> bool {
         false
@@ -30,9 +49,9 @@ mod imp {
     pub fn is_shift_held() -> bool {
         false
     }
-    pub fn disable_window_shadow() {}
-    pub fn show_picker() {}
-    pub fn hide_picker() {}
+    pub fn disable_window_shadow(_title: &str) {}
+    pub fn show_picker(_title: &str) {}
+    pub fn hide_picker(_title: &str) {}
     pub fn pre_create(
         _config: &AltTabConfig,
         _current: &PickerWindowState,
@@ -62,14 +81,34 @@ compile_error!("plugin-alt-tab picker: unsupported target OS");
 pub fn picker_window_kind() -> gpui::WindowKind {
     imp::picker_window_kind()
 }
-pub fn dismiss_picker(window: &mut gpui::Window) {
-    imp::dismiss_picker(window)
+pub fn picker_window_decorations(transparent: bool) -> gpui::WindowDecorations {
+    imp::picker_window_decorations(transparent)
 }
 pub fn set_accessory_policy() {
     imp::set_accessory_policy()
 }
-pub fn reposition_picker_window(x: f64, y: f64) -> bool {
-    imp::reposition_picker_window(x, y)
+pub fn picker_window_title(target: qol_gpui::window::MonitorKey) -> String {
+    imp::picker_window_title(target)
+}
+pub fn configure_picker_window(title: &str) {
+    imp::configure_picker_window(title)
+}
+pub fn sync_picker_window_layout(
+    title: &str,
+    window: &mut gpui::Window,
+    origin: gpui::Point<gpui::Pixels>,
+    size: gpui::Size<gpui::Pixels>,
+) -> bool {
+    imp::sync_picker_window_layout(title, window, origin, size)
+}
+pub fn adjust_picker_bounds(bounds: gpui::Bounds<gpui::Pixels>) -> gpui::Bounds<gpui::Pixels> {
+    imp::adjust_picker_bounds(bounds)
+}
+pub fn reuse_hidden_picker_across_shows() -> bool {
+    imp::reuse_hidden_picker_across_shows()
+}
+pub fn reuse_picker_across_targets() -> bool {
+    imp::reuse_picker_across_targets()
 }
 pub fn is_modifier_held() -> bool {
     imp::is_modifier_held()
@@ -78,14 +117,14 @@ pub fn is_modifier_held() -> bool {
 pub fn is_shift_held() -> bool {
     imp::is_shift_held()
 }
-pub fn disable_window_shadow() {
-    imp::disable_window_shadow()
+pub fn disable_window_shadow(title: &str) {
+    imp::disable_window_shadow(title)
 }
-pub fn show_picker() {
-    imp::show_picker()
+pub fn show_picker(title: &str) {
+    imp::show_picker(title)
 }
-pub fn hide_picker() {
-    imp::hide_picker()
+pub fn hide_picker(title: &str) {
+    imp::hide_picker(title)
 }
 pub fn pre_create(
     config: &crate::config::AltTabConfig,
