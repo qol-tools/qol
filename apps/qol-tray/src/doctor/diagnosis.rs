@@ -42,6 +42,11 @@ pub(super) enum FixAction {
         app_key: String,
         qol_combo: String,
     },
+    #[cfg(feature = "dev")]
+    RelocateDevLink {
+        plugin_id: String,
+        to: PathBuf,
+    },
 }
 
 impl FixAction {
@@ -56,6 +61,8 @@ impl FixAction {
             FixAction::UnshadowDeBinding { .. }
             | FixAction::DisableSymbolicHotkey { .. }
             | FixAction::ClearWindowsAppKey { .. } => false,
+            #[cfg(feature = "dev")]
+            FixAction::RelocateDevLink { .. } => true,
         }
     }
 }
@@ -91,6 +98,12 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
         } => apply_disable_symbolic_hotkey(*hotkey_id, qol_combo, &mut DefaultsCli),
         FixAction::ClearWindowsAppKey { app_key, qol_combo } => {
             apply_clear_windows_app_key(app_key, qol_combo, &mut RegEditor)
+        }
+        #[cfg(feature = "dev")]
+        FixAction::RelocateDevLink { plugin_id, to } => {
+            let config_dir = crate::paths::shared_config_dir()?;
+            super::checks::relocate_dev_link(&config_dir, plugin_id, to)
+                .map_err(|e| anyhow!("failed to relocate dev-link for {plugin_id}: {e}"))
         }
     }
 }
@@ -344,6 +357,16 @@ mod tests {
                 .insert((schema.to_string(), key.to_string()), value.to_string());
             Ok(())
         }
+    }
+
+    #[cfg(feature = "dev")]
+    #[test]
+    fn relocate_dev_link_is_safe_to_auto_apply() {
+        let action = FixAction::RelocateDevLink {
+            plugin_id: "plugin-foo".into(),
+            to: PathBuf::from("/ws/plugins/plugin-foo"),
+        };
+        assert!(action.is_safe_to_auto_apply());
     }
 
     #[test]
