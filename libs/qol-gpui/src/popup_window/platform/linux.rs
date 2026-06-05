@@ -1,14 +1,11 @@
 use x11rb::connection::Connection;
-#[cfg(debug_assertions)]
 use x11rb::protocol::shape;
 use x11rb::protocol::xproto::*;
 use x11rb::wrapper::ConnectionExt as _;
 
-#[cfg(debug_assertions)]
 use std::sync::atomic::{AtomicU32, Ordering};
 
-#[cfg(debug_assertions)]
-static GHOST_DEBUG_ALPHA: AtomicU32 = AtomicU32::new(0);
+static GHOST_ALPHA: AtomicU32 = AtomicU32::new(0);
 
 pub fn reposition_window_by_title(title: &str, gpui_x: f64, gpui_y: f64) -> bool {
     let Ok((conn, screen_num)) = x11rb::connect(None) else {
@@ -65,6 +62,14 @@ pub fn set_window_bounds_by_title(
 }
 
 pub fn hide_window_by_title(title: &str) -> bool {
+    hide_window_with_opacity(title, ghost_opacity())
+}
+
+pub fn hide_window_invisible(title: &str) -> bool {
+    hide_window_with_opacity(title, 0.0)
+}
+
+fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
     let Ok((conn, screen_num)) = x11rb::connect(None) else {
         return false;
     };
@@ -78,36 +83,25 @@ pub fn hide_window_by_title(title: &str) -> bool {
     };
     let Some(wid) = find_window_by_title(&conn, root, list_atom, name_atom, utf8_atom, title)
     else {
+        crate::probe::probe("HIDE_WIN", &format!("title={title} wid=NONE"));
         return false;
     };
-    #[cfg(debug_assertions)]
-    {
-        let opacity = ghost_debug_opacity();
-        if compositor_running(&conn, screen_num) && set_input_passthrough(&conn, wid, true) {
-            let _ = set_window_opacity(&conn, wid, opacity);
-            let _ = conn.map_window(wid);
-            let _ = conn.flush();
-            return true;
-        }
+    if compositor_running(&conn, screen_num) && set_input_passthrough(&conn, wid, true) {
+        let applied = set_window_opacity(&conn, wid, opacity);
+        let _ = conn.map_window(wid);
+        let _ = conn.flush();
+        crate::probe::probe(
+            "HIDE_WIN",
+            &format!("title={title} wid={wid} path=compositor opacity={opacity} applied={applied}"),
+        );
+        return true;
     }
-    let Some(state_atom) = intern(&conn, b"WM_CHANGE_STATE") else {
-        return false;
-    };
-    #[cfg(debug_assertions)]
-    {
-        let _ = clear_window_opacity(&conn, wid);
-        let _ = set_input_passthrough(&conn, wid, false);
-    }
-    const WINDOW_ICONIC_STATE: u32 = 3;
-    let event = ClientMessageEvent::new(32, wid, state_atom, [WINDOW_ICONIC_STATE, 0, 0, 0, 0]);
-    let mask = EventMask::SUBSTRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_REDIRECT;
-    let _ = conn.send_event(false, root, mask, event);
+    let _ = conn.unmap_window(wid);
     let _ = conn.flush();
+    crate::probe::probe("HIDE_WIN", &format!("title={title} wid={wid} path=unmap"));
     true
 }
 
-/// Reverse of [`hide_window_by_title`]. Sends `_NET_ACTIVE_WINDOW` so the
-/// WM deiconifies and raises the window in one round trip.
 pub fn show_window_by_title(title: &str) -> bool {
     let Ok((conn, screen_num)) = x11rb::connect(None) else {
         return false;
@@ -122,27 +116,27 @@ pub fn show_window_by_title(title: &str) -> bool {
     };
     let Some(wid) = find_window_by_title(&conn, root, list_atom, name_atom, utf8_atom, title)
     else {
+        crate::probe::probe("SHOW_WIN", &format!("title={title} wid=NONE"));
         return false;
     };
     let Some(active_atom) = intern(&conn, b"_NET_ACTIVE_WINDOW") else {
         return false;
     };
-    #[cfg(debug_assertions)]
-    {
-        let _ = clear_window_opacity(&conn, wid);
-        let _ = set_input_passthrough(&conn, wid, false);
-    }
+    let _ = clear_window_opacity(&conn, wid);
+    let _ = set_input_passthrough(&conn, wid, false);
     let _ = conn.map_window(wid);
     const SOURCE_APPLICATION: u32 = 1;
     let event = ClientMessageEvent::new(32, wid, active_atom, [SOURCE_APPLICATION, 0, 0, 0, 0]);
     let mask = EventMask::SUBSTRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_REDIRECT;
     let _ = conn.send_event(false, root, mask, event);
     let _ = conn.flush();
+    crate::probe::probe(
+        "SHOW_WIN",
+        &format!("title={title} wid={wid} cleared_opacity->1"),
+    );
     true
 }
 
-/// X11 shadows are window-manager driven; no per-window API. Returns
-/// `true` so callers can treat it uniformly with macOS.
 pub fn disable_window_shadow(_title: &str) -> bool {
     true
 }
@@ -164,25 +158,60 @@ pub fn configure_popup_window(title: &str) -> bool {
         return false;
     };
 
+    set_window_type_dock(&conn, wid);
     set_window_manager_decorations(&conn, wid, false);
     set_window_manager_state(&conn, wid);
     let _ = conn.flush();
     true
 }
 
-/// Debug-only: keep the hidden ghost mapped and faintly visible. X11 does not
-/// have a native per-window alpha API, so this uses the EWMH compositor opacity
-/// property and removes the input shape while hidden so the ghost cannot block
-/// clicks. No-op in release builds.
 pub fn set_ghost_debug(opacity: Option<f32>, _color_hex: Option<&str>) {
-    #[cfg(debug_assertions)]
-    GHOST_DEBUG_ALPHA.store(normalize_opacity(opacity).to_bits(), Ordering::Relaxed);
+    GHOST_ALPHA.store(normalize_opacity(opacity).to_bits(), Ordering::Relaxed);
 }
 
-/// No per-window backing scale to query here; GPUI manages scaling itself, so
-/// there is nothing to resync. Returns `None`.
 pub fn window_backing_scale(_title: &str) -> Option<f32> {
     None
+}
+
+pub fn dump_ghost_windows(context: &str) {
+    #[cfg(debug_assertions)]
+    {
+        let context = context.to_string();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            let Ok((conn, screen_num)) = x11rb::connect(None) else {
+                crate::probe::probe("GHOSTDUMP", &format!("ctx={context} x11=unavailable"));
+                return;
+            };
+            let root = conn.setup().roots[screen_num].root;
+            let (Some(name_atom), Some(utf8_atom), Some(list_atom)) = (
+                intern(&conn, b"_NET_WM_NAME"),
+                intern(&conn, b"UTF8_STRING"),
+                intern(&conn, b"_NET_CLIENT_LIST"),
+            ) else {
+                return;
+            };
+            let mut ids = root_window_ids(&conn, root, list_atom);
+            append_tree_window_ids(&conn, root, &mut ids);
+            crate::probe::probe("GHOSTDUMP", &format!("ctx={context} begin"));
+            let mut count = 0u32;
+            for wid in ids {
+                let Some(title) = read_window_name(&conn, wid, name_atom, utf8_atom) else {
+                    continue;
+                };
+                if !title.starts_with("qol-") {
+                    continue;
+                }
+                crate::probe::probe("GHOSTWIN", &inspect_ghost_window(&conn, root, wid, &title));
+                count += 1;
+            }
+            crate::probe::probe("GHOSTDUMP", &format!("ctx={context} end n={count}"));
+        });
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = context;
+    }
 }
 
 fn find_window_by_title(
@@ -316,6 +345,22 @@ fn set_window_manager_decorations(conn: &impl Connection, wid: u32, enabled: boo
     let _ = conn.change_property32(PropMode::REPLACE, wid, atom, atom, &hints);
 }
 
+fn set_window_type_dock(conn: &impl Connection, wid: u32) {
+    let Some(type_atom) = intern(conn, b"_NET_WM_WINDOW_TYPE") else {
+        return;
+    };
+    let Some(dock_atom) = intern(conn, b"_NET_WM_WINDOW_TYPE_DOCK") else {
+        return;
+    };
+    let _ = conn.change_property32(
+        PropMode::REPLACE,
+        wid,
+        type_atom,
+        AtomEnum::ATOM,
+        &[dock_atom],
+    );
+}
+
 fn set_window_manager_state(conn: &impl Connection, wid: u32) {
     let Some(state_atom) = intern(conn, b"_NET_WM_STATE") else {
         return;
@@ -332,12 +377,10 @@ fn set_window_manager_state(conn: &impl Connection, wid: u32) {
     let _ = conn.change_property32(PropMode::REPLACE, wid, state_atom, AtomEnum::ATOM, &values);
 }
 
-#[cfg(debug_assertions)]
-fn ghost_debug_opacity() -> f32 {
-    f32::from_bits(GHOST_DEBUG_ALPHA.load(Ordering::Relaxed))
+fn ghost_opacity() -> f32 {
+    f32::from_bits(GHOST_ALPHA.load(Ordering::Relaxed))
 }
 
-#[cfg(debug_assertions)]
 fn normalize_opacity(opacity: Option<f32>) -> f32 {
     let value = opacity.unwrap_or(0.0);
     if !value.is_finite() {
@@ -346,31 +389,140 @@ fn normalize_opacity(opacity: Option<f32>) -> f32 {
     value.clamp(0.0, 1.0)
 }
 
-#[cfg(debug_assertions)]
 fn opacity_to_cardinal(opacity: f32) -> u32 {
     (normalize_opacity(Some(opacity)) * u32::MAX as f32).round() as u32
 }
 
-#[cfg(debug_assertions)]
 fn set_window_opacity(conn: &impl Connection, wid: u32, opacity: f32) -> bool {
     let Some(atom) = intern(conn, b"_NET_WM_WINDOW_OPACITY") else {
         return false;
     };
     let value = opacity_to_cardinal(opacity);
-    let _ = conn.change_property32(PropMode::REPLACE, wid, atom, AtomEnum::CARDINAL, &[value]);
-    true
+    conn.change_property32(PropMode::REPLACE, wid, atom, AtomEnum::CARDINAL, &[value])
+        .ok()
+        .and_then(|cookie| cookie.check().ok())
+        .is_some()
 }
 
-#[cfg(debug_assertions)]
 fn clear_window_opacity(conn: &impl Connection, wid: u32) -> bool {
     let Some(atom) = intern(conn, b"_NET_WM_WINDOW_OPACITY") else {
         return false;
     };
-    let _ = conn.delete_property(wid, atom);
-    true
+    conn.delete_property(wid, atom)
+        .ok()
+        .and_then(|cookie| cookie.check().ok())
+        .is_some()
 }
 
 #[cfg(debug_assertions)]
+fn read_window_name(
+    conn: &impl Connection,
+    wid: u32,
+    name_atom: u32,
+    utf8_atom: u32,
+) -> Option<String> {
+    let reply = conn
+        .get_property(false, wid, name_atom, utf8_atom, 0, 256)
+        .ok()?
+        .reply()
+        .ok()?;
+    if reply.value.is_empty() {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&reply.value)
+            .trim_end_matches('\0')
+            .to_string(),
+    )
+}
+
+#[cfg(debug_assertions)]
+fn inspect_ghost_window(conn: &impl Connection, root: u32, wid: u32, title: &str) -> String {
+    let owner = window_pid(conn, wid)
+        .map(|pid| pid.to_string())
+        .unwrap_or_else(|| "?".to_string());
+    let (x, y, w, h) = absolute_geometry(conn, root, wid).unwrap_or((i32::MIN, i32::MIN, 0, 0));
+    let opacity = window_opacity(conn, wid);
+    let opacity_str = opacity
+        .map(|value| format!("{value:.2}"))
+        .unwrap_or_else(|| "unset".to_string());
+    let map = map_state(conn, wid);
+    let role = ghost_role(map, opacity);
+    format!(
+        "title={title} owner_pid={owner} wid={wid} pos=({x},{y}) size={w}x{h} opacity={opacity_str} map={map} role={role}"
+    )
+}
+
+#[cfg(debug_assertions)]
+fn ghost_role(map: &str, opacity: Option<f32>) -> &'static str {
+    if map != "viewable" {
+        return "hidden";
+    }
+    match opacity {
+        Some(value) if value <= 0.01 => "invisible",
+        Some(value) if value < 0.99 => "ghost",
+        _ => "live",
+    }
+}
+
+#[cfg(debug_assertions)]
+fn window_pid(conn: &impl Connection, wid: u32) -> Option<u32> {
+    let atom = intern(conn, b"_NET_WM_PID")?;
+    let reply = conn
+        .get_property(false, wid, atom, AtomEnum::CARDINAL, 0, 1)
+        .ok()?
+        .reply()
+        .ok()?;
+    reply.value32().and_then(|mut values| values.next())
+}
+
+#[cfg(debug_assertions)]
+fn window_opacity(conn: &impl Connection, wid: u32) -> Option<f32> {
+    let atom = intern(conn, b"_NET_WM_WINDOW_OPACITY")?;
+    let reply = conn
+        .get_property(false, wid, atom, AtomEnum::CARDINAL, 0, 1)
+        .ok()?
+        .reply()
+        .ok()?;
+    let raw = reply.value32()?.next()?;
+    Some(raw as f32 / u32::MAX as f32)
+}
+
+#[cfg(debug_assertions)]
+fn map_state(conn: &impl Connection, wid: u32) -> &'static str {
+    let Ok(cookie) = conn.get_window_attributes(wid) else {
+        return "err";
+    };
+    let Ok(attrs) = cookie.reply() else {
+        return "err";
+    };
+    if attrs.map_state == MapState::VIEWABLE {
+        "viewable"
+    } else if attrs.map_state == MapState::UNMAPPED {
+        "unmapped"
+    } else if attrs.map_state == MapState::UNVIEWABLE {
+        "unviewable"
+    } else {
+        "unknown"
+    }
+}
+
+#[cfg(debug_assertions)]
+fn absolute_geometry(conn: &impl Connection, root: u32, wid: u32) -> Option<(i32, i32, u16, u16)> {
+    let geometry = conn.get_geometry(wid).ok()?.reply().ok()?;
+    let translated = conn
+        .translate_coordinates(wid, root, 0, 0)
+        .ok()?
+        .reply()
+        .ok()?;
+    Some((
+        translated.dst_x as i32,
+        translated.dst_y as i32,
+        geometry.width,
+        geometry.height,
+    ))
+}
+
 fn compositor_running(conn: &impl Connection, screen_num: usize) -> bool {
     let selection = format!("_NET_WM_CM_S{screen_num}");
     let Some(atom) = intern(conn, selection.as_bytes()) else {
@@ -385,7 +537,6 @@ fn compositor_running(conn: &impl Connection, screen_num: usize) -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(debug_assertions)]
 fn set_input_passthrough(conn: &impl Connection, wid: u32, passthrough: bool) -> bool {
     let full_rect;
     let rectangles: &[Rectangle] = if passthrough {
@@ -428,7 +579,29 @@ fn root_window_ids(conn: &impl Connection, root: u32, list_atom: u32) -> Vec<u32
     prop.value32().map(|ids| ids.collect()).unwrap_or_default()
 }
 
-#[cfg(all(test, debug_assertions))]
+fn append_tree_window_ids(conn: &impl Connection, root: u32, ids: &mut Vec<u32>) {
+    let Ok(reply) = conn.query_tree(root) else {
+        return;
+    };
+    let Ok(tree) = reply.reply() else {
+        return;
+    };
+    for child in tree.children {
+        if !ids.contains(&child) {
+            ids.push(child);
+        }
+    }
+}
+
+fn intern(conn: &impl Connection, name: &[u8]) -> Option<u32> {
+    conn.intern_atom(false, name)
+        .ok()?
+        .reply()
+        .ok()
+        .map(|r| r.atom)
+}
+
+#[cfg(test)]
 mod tests {
     use super::{normalize_opacity, opacity_to_cardinal};
 
@@ -452,26 +625,4 @@ mod tests {
         assert_eq!(opacity_to_cardinal(0.0), 0);
         assert_eq!(opacity_to_cardinal(1.0), u32::MAX);
     }
-}
-
-fn append_tree_window_ids(conn: &impl Connection, root: u32, ids: &mut Vec<u32>) {
-    let Ok(reply) = conn.query_tree(root) else {
-        return;
-    };
-    let Ok(tree) = reply.reply() else {
-        return;
-    };
-    for child in tree.children {
-        if !ids.contains(&child) {
-            ids.push(child);
-        }
-    }
-}
-
-fn intern(conn: &impl Connection, name: &[u8]) -> Option<u32> {
-    conn.intern_atom(false, name)
-        .ok()?
-        .reply()
-        .ok()
-        .map(|r| r.atom)
 }

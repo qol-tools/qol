@@ -1,7 +1,6 @@
 use gpui::{ClipboardItem, Context, KeyDownEvent};
 
 use super::input::InputEffect;
-use super::window_ops::hide;
 use super::LauncherView;
 
 enum ClipboardShortcut {
@@ -69,7 +68,7 @@ impl LauncherView {
             InputEffect::Launch => self.launch_selected(window, cx),
             InputEffect::Dismiss => {
                 self.set_showing(false);
-                hide(window);
+                qol_gpui::popup_window::hide_window_by_title(&self.window_title);
             }
         }
     }
@@ -144,7 +143,7 @@ impl LauncherView {
         self.store.adjust_boost(&name, delta);
     }
 
-    fn launch_selected(&mut self, window: &mut gpui::Window, _cx: &mut Context<Self>) {
+    fn launch_selected(&mut self, _window: &mut gpui::Window, _cx: &mut Context<Self>) {
         self.store
             .ensure_filtered(&self.state.query, self.state.mode, self.state.fuzziness);
         let Some(scored) = self.store.get(self.state.selected) else {
@@ -176,6 +175,6 @@ impl LauncherView {
             self.store.record_launch(&name);
         }
         self.set_showing(false);
-        hide(window);
+        qol_gpui::popup_window::hide_window_by_title(&self.window_title);
     }
 }

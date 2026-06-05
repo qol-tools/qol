@@ -2,13 +2,11 @@ mod controller;
 mod input;
 pub(crate) mod keepalive;
 mod layout;
-pub(crate) mod platform;
 mod render;
 pub mod run;
 mod state;
 mod view;
 mod window_host;
-mod window_ops;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -34,19 +32,18 @@ pub(crate) struct LauncherView {
     shared_entries: SharedEntries,
     last_entries_snapshot: Arc<PreloadedEntries>,
     pub(super) focus_handle: FocusHandle,
-    blur_sub: Option<Subscription>,
-    activation_sub: Option<Subscription>,
+    dismiss_sub: Option<(Subscription, Subscription, Option<Task<()>>)>,
     trail_decay_task_running: bool,
-    focus_poll_running: bool,
     entry_watch_running: bool,
     pub(super) dismiss_requested: bool,
     pub(crate) is_showing: bool,
     pub(crate) showing_flag: Arc<std::sync::atomic::AtomicBool>,
     blur_guard_until: Instant,
+    pub(crate) window_title: String,
 }
 
 impl LauncherView {
-    pub(crate) fn new(shared: SharedEntries, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(title: String, shared: SharedEntries, cx: &mut Context<Self>) -> Self {
         let entries = shared
             .lock()
             .map(|g| g.entries.clone())
@@ -57,15 +54,14 @@ impl LauncherView {
             shared_entries: shared,
             last_entries_snapshot: entries,
             focus_handle: cx.focus_handle(),
-            blur_sub: None,
-            activation_sub: None,
+            dismiss_sub: None,
             trail_decay_task_running: false,
-            focus_poll_running: false,
             entry_watch_running: false,
             dismiss_requested: false,
             is_showing: true,
             showing_flag: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             blur_guard_until: Instant::now() + Duration::from_millis(BLUR_GUARD_MS),
+            window_title: title,
         }
     }
 
@@ -83,7 +79,6 @@ impl LauncherView {
         let should_resize = (self.state.window_height - HEADER_HEIGHT).abs() > f32::EPSILON;
         self.state = LauncherState::new();
         self.trail_decay_task_running = false;
-        self.focus_poll_running = false;
         self.dismiss_requested = false;
         self.set_showing(true);
         self.blur_guard_until = Instant::now() + Duration::from_millis(BLUR_GUARD_MS);
