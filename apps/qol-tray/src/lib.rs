@@ -17,6 +17,7 @@ pub mod migrations_startup;
 pub mod mode;
 pub mod paths;
 pub mod plugins;
+pub mod probe;
 pub mod process_utils;
 pub mod profile;
 #[cfg(unix)]

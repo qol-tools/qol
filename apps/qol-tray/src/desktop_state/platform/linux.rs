@@ -8,6 +8,8 @@ pub(super) struct LinuxQueries {
     conn: Option<RustConnection>,
     root: u32,
     active_window_atom: u32,
+    client_list_stacking_atom: u32,
+    client_list_atom: u32,
     wm_pid_atom: Option<u32>,
     own_pid: u32,
 }
@@ -28,6 +30,8 @@ impl LinuxQueries {
             conn: None,
             root: 0,
             active_window_atom: 0,
+            client_list_stacking_atom: 0,
+            client_list_atom: 0,
             wm_pid_atom: None,
             own_pid: 0,
         }
@@ -36,11 +40,16 @@ impl LinuxQueries {
     fn from_x11_conn(conn: RustConnection, screen_num: usize) -> Self {
         let root = conn.setup().roots[screen_num].root;
         let active_window_atom = intern_atom_id(&conn, b"_NET_ACTIVE_WINDOW").unwrap_or(0);
+        let client_list_stacking_atom =
+            intern_atom_id(&conn, b"_NET_CLIENT_LIST_STACKING").unwrap_or(0);
+        let client_list_atom = intern_atom_id(&conn, b"_NET_CLIENT_LIST").unwrap_or(0);
         let wm_pid_atom = intern_atom_id(&conn, b"_NET_WM_PID");
         Self {
             conn: Some(conn),
             root,
             active_window_atom,
+            client_list_stacking_atom,
+            client_list_atom,
             wm_pid_atom,
             own_pid: std::process::id(),
         }
@@ -58,14 +67,56 @@ impl Platform for LinuxQueries {
         let conn = self.conn.as_ref()?;
         let window_id = get_active_window_id(conn, self.root, self.active_window_atom)?;
         let pid = window_pid(conn, window_id, self.wm_pid_atom);
-        if pid.is_some_and(|pid| is_self_or_ignored(pid, self.own_pid)) {
+        let ignored = pid.is_some_and(|pid| is_self_or_ignored(pid, self.own_pid));
+        let bounds = if ignored {
+            None
+        } else {
+            get_window_bounds(conn, self.root, window_id)
+        };
+        #[cfg(debug_assertions)]
+        log_focus_change(conn, window_id, pid, ignored, bounds.as_ref());
+        if ignored {
             return None;
         }
-        get_window_bounds(conn, self.root, window_id)
+        bounds
     }
 
     fn physical_monitors(&self) -> Vec<MonitorBounds> {
         xrandr_monitors()
+    }
+
+    fn window_list_fingerprint(&self) -> Option<u64> {
+        let conn = self.conn.as_ref()?;
+        let list_atom = if self.client_list_stacking_atom != 0 {
+            self.client_list_stacking_atom
+        } else {
+            self.client_list_atom
+        };
+        if list_atom == 0 {
+            return None;
+        }
+        let prop = conn
+            .get_property(false, self.root, list_atom, AtomEnum::WINDOW, 0, 1024)
+            .ok()?
+            .reply()
+            .ok()?;
+        let value32 = prop.value32()?;
+        let ids: Vec<u32> = value32.collect();
+        if ids.is_empty() {
+            return None;
+        }
+        let active_window =
+            get_active_window_id(conn, self.root, self.active_window_atom).unwrap_or(0);
+        let mut h: u64 = 0;
+        for id in ids {
+            let mut x = (id as u64).wrapping_mul(0x9E3779B97F4A7C15);
+            x ^= x >> 32;
+            h ^= x;
+        }
+        let mut x = (active_window as u64).wrapping_mul(0x9E3779B97F4A7C15);
+        x ^= x >> 32;
+        h ^= x;
+        Some(h)
     }
 }
 
@@ -101,6 +152,64 @@ fn window_pid(conn: &RustConnection, window_id: u32, wm_pid_atom: Option<u32>) -
 
 fn is_self_or_ignored(pid: u32, own_pid: u32) -> bool {
     pid == own_pid || super::super::is_ignored_pid(pid)
+}
+
+#[cfg(debug_assertions)]
+static LAST_FOCUS_WID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+#[cfg(debug_assertions)]
+fn log_focus_change(
+    conn: &RustConnection,
+    window_id: u32,
+    pid: Option<u32>,
+    ignored: bool,
+    bounds: Option<&MonitorBounds>,
+) {
+    use std::sync::atomic::Ordering;
+    if LAST_FOCUS_WID.swap(window_id, Ordering::Relaxed) == window_id {
+        return;
+    }
+    let pid_str = pid
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| "?".to_string());
+    let winpos = bounds
+        .map(|b| {
+            format!(
+                "({},{},{}x{})",
+                b.x as i32, b.y as i32, b.width as i32, b.height as i32
+            )
+        })
+        .unwrap_or_else(|| "none".to_string());
+    let title = focus_window_title(conn, window_id).unwrap_or_default();
+    crate::probe::probe(
+        "FOCUS_WIN",
+        &format!("wid={window_id} pid={pid_str} ignored={ignored} winpos={winpos} title={title:?}"),
+    );
+}
+
+#[cfg(debug_assertions)]
+fn focus_window_title(conn: &RustConnection, window_id: u32) -> Option<String> {
+    let read = |atom: u32, ty: u32| -> Option<String> {
+        let reply = conn
+            .get_property(false, window_id, atom, ty, 0, 256)
+            .ok()?
+            .reply()
+            .ok()?;
+        if reply.value.is_empty() {
+            return None;
+        }
+        Some(
+            String::from_utf8_lossy(&reply.value)
+                .trim_end_matches('\0')
+                .to_string(),
+        )
+    };
+    let net_wm_name = intern_atom_id(conn, b"_NET_WM_NAME");
+    let utf8 = intern_atom_id(conn, b"UTF8_STRING");
+    net_wm_name
+        .zip(utf8)
+        .and_then(|(atom, ty)| read(atom, ty))
+        .or_else(|| read(AtomEnum::WM_NAME.into(), AtomEnum::STRING.into()))
 }
 
 fn get_window_bounds(conn: &RustConnection, root: u32, window_id: u32) -> Option<MonitorBounds> {
