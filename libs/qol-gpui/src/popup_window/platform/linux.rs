@@ -164,7 +164,6 @@ pub fn configure_popup_window(title: &str) -> bool {
         return false;
     };
 
-    set_window_type_dock(&conn, wid);
     set_window_manager_decorations(&conn, wid, false);
     set_window_manager_state(&conn, wid);
     let _ = conn.flush();
@@ -315,22 +314,6 @@ fn set_window_manager_decorations(conn: &impl Connection, wid: u32, enabled: boo
     let decorations = u32::from(enabled);
     let hints = [MWM_HINTS_DECORATIONS, 0, decorations, 0, 0];
     let _ = conn.change_property32(PropMode::REPLACE, wid, atom, atom, &hints);
-}
-
-fn set_window_type_dock(conn: &impl Connection, wid: u32) {
-    let Some(type_atom) = intern(conn, b"_NET_WM_WINDOW_TYPE") else {
-        return;
-    };
-    let Some(dock_atom) = intern(conn, b"_NET_WM_WINDOW_TYPE_DOCK") else {
-        return;
-    };
-    let _ = conn.change_property32(
-        PropMode::REPLACE,
-        wid,
-        type_atom,
-        AtomEnum::ATOM,
-        &[dock_atom],
-    );
 }
 
 fn set_window_manager_state(conn: &impl Connection, wid: u32) {

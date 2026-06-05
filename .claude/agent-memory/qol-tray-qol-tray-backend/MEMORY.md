@@ -13,3 +13,7 @@
 - When adding a new `FixAction` variant gated behind `#[cfg(feature = "dev")]`, also gate the matching arm in `doctor::mod::log_applied` — exhaustiveness check fires under `--features dev`.
 - `make test` in `apps/qol-tray` runs without `--features dev`, so dev-gated tests are silently filtered; verify them separately via `cargo test -p qol-tray --features dev`.
 - `cargo test -p qol-tray <filter>` (without `--lib`) runs integration bins first and reports "0 passed" with the lib filtered out; use `--lib` to actually see lib-tests results.
+
+## 2026-06-05
+- In qol-tray registry, `WorktreeLink` variant exists but is never created in production code; only dev code paths produce `DevLink`, with worktree overrides mutating `entry.active.path` while leaving variant as `DevLink`.
+- `auto_fix_startup` runs pre-tokio before plugin load, so registry-mutating fixes (like `RelocateDevLink`) take effect on first plugin resolution with no daemon restart needed.
