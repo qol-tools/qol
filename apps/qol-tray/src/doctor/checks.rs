@@ -1,4 +1,6 @@
 mod autostart_target;
+#[cfg(feature = "dev")]
+mod dev_link_paths;
 mod hotkey_shadows;
 mod install_identity;
 mod plugin_process_leaks;
@@ -7,12 +9,13 @@ mod plugin_staleness;
 mod runtime_prereqs;
 mod shell_hook_present;
 
+#[cfg(feature = "dev")]
+pub(super) use dev_link_paths::relocate_dev_link;
+
 use super::diagnosis::Diagnosis;
 use super::CheckId;
 
 pub(super) fn collect_diagnoses() -> Vec<Diagnosis> {
-    // `mut` is conditionally needed (dev push). Suppress unused_mut when
-    // the dev branch is absent.
     #[allow(unused_mut)]
     let mut diagnoses = vec![
         install_identity::check(),
@@ -23,7 +26,10 @@ pub(super) fn collect_diagnoses() -> Vec<Diagnosis> {
         hotkey_shadows::check(),
     ];
     #[cfg(feature = "dev")]
-    diagnoses.push(plugin_staleness::check());
+    {
+        diagnoses.push(plugin_staleness::check());
+        diagnoses.push(dev_link_paths::check());
+    }
     diagnoses
 }
 

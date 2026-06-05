@@ -238,6 +238,14 @@ fn log_applied(action: &FixAction) {
         | FixAction::EnsurePluginsDir { .. }
         | FixAction::KillPluginProcessLeaks { .. }
         | FixAction::InstallShellHook => {}
+        #[cfg(feature = "dev")]
+        FixAction::RelocateDevLink { plugin_id, to } => {
+            log::info!(
+                "doctor: relocated dev-link for {} to {}",
+                plugin_id,
+                to.display()
+            );
+        }
     }
 }
 
