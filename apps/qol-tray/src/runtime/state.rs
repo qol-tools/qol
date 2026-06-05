@@ -1,5 +1,5 @@
 use qol_runtime::MonitorBounds;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug)]
 pub(crate) struct Stamped {
@@ -69,11 +69,14 @@ pub(crate) fn monitor_for_point(
         .copied()
 }
 
+const CURSOR_ACTIVE_WINDOW: Duration = Duration::from_millis(1500);
+
 pub(crate) fn pick_active_monitor(state: &InputState, fallback: MonitorBounds) -> MonitorBounds {
     match (state.cursor.as_ref(), state.focus.as_ref()) {
         (Some(cursor), Some(focus)) => {
-            log_pick_both(cursor, focus);
-            if cursor.at > focus.at {
+            let cursor_wins = cursor.at > focus.at && cursor.at.elapsed() < CURSOR_ACTIVE_WINDOW;
+            log_pick_both(cursor, focus, cursor_wins);
+            if cursor_wins {
                 cursor.monitor
             } else {
                 focus.monitor
@@ -102,12 +105,8 @@ pub(crate) fn pick_active_monitor(state: &InputState, fallback: MonitorBounds) -
     }
 }
 
-fn log_pick_both(cursor: &Stamped, focus: &Stamped) {
-    let winner = if cursor.at > focus.at {
-        "cursor"
-    } else {
-        "focus"
-    };
+fn log_pick_both(cursor: &Stamped, focus: &Stamped, cursor_wins: bool) {
+    let winner = if cursor_wins { "cursor" } else { "focus" };
     log::debug!(
         "[runtime/pick] cursor_mon=({},{}) cursor_at={:?} focus_mon=({},{}) focus_at={:?} → {}",
         cursor.monitor.x,
@@ -117,6 +116,25 @@ fn log_pick_both(cursor: &Stamped, focus: &Stamped) {
         focus.monitor.y,
         focus.at,
         winner
+    );
+    #[cfg(debug_assertions)]
+    probe_pick_to_file(cursor, focus, winner);
+}
+
+#[cfg(debug_assertions)]
+fn probe_pick_to_file(cursor: &Stamped, focus: &Stamped, winner: &str) {
+    crate::probe::probe(
+        "PICK",
+        &format!(
+            "cursor=({},{}) cursor_age_ms={} focus=({},{}) focus_age_ms={} winner={}",
+            cursor.monitor.x as i32,
+            cursor.monitor.y as i32,
+            cursor.at.elapsed().as_millis(),
+            focus.monitor.x as i32,
+            focus.monitor.y as i32,
+            focus.at.elapsed().as_millis(),
+            winner,
+        ),
     );
 }
 
@@ -183,13 +201,9 @@ mod tests {
     fn monitor_for_point_treats_left_top_inclusive_right_bottom_exclusive() {
         let m = mon(100.0, 200.0, 50.0, 25.0);
         let monitors = vec![m];
-        // Inclusive top-left:
         assert_eq!(monitor_for_point(&monitors, 100.0, 200.0), Some(m));
-        // Just inside the lower-right:
         assert_eq!(monitor_for_point(&monitors, 149.9, 224.9), Some(m));
-        // Exclusive right edge:
         assert_eq!(monitor_for_point(&monitors, 150.0, 200.0), None);
-        // Exclusive bottom edge:
         assert_eq!(monitor_for_point(&monitors, 100.0, 225.0), None);
     }
 
@@ -211,7 +225,6 @@ mod tests {
         let a = mon(0.0, 0.0, 100.0, 100.0);
         let b = mon(50.0, 50.0, 100.0, 100.0);
         let monitors = vec![a, b];
-        // Point (60, 60) is inside both; first match wins.
         assert_eq!(monitor_for_point(&monitors, 60.0, 60.0), Some(a));
     }
 
@@ -279,6 +292,28 @@ mod tests {
     }
 
     #[test]
+    fn pick_active_monitor_prefers_focus_over_a_stale_cursor() {
+        let cursor_mon = mon(100.0, 0.0, 800.0, 600.0);
+        let focus_mon = mon(900.0, 0.0, 800.0, 600.0);
+        let now = Instant::now();
+        let state = InputState {
+            cursor: Some(Stamped {
+                monitor: cursor_mon,
+                at: now.checked_sub(Duration::from_secs(5)).unwrap(),
+            }),
+            focus: Some(Stamped {
+                monitor: focus_mon,
+                at: now.checked_sub(Duration::from_secs(10)).unwrap(),
+            }),
+        };
+        assert_eq!(
+            pick_active_monitor(&state, mon(0.0, 0.0, 1.0, 1.0)),
+            focus_mon,
+            "stale cursor (5s) yields to the focused window despite a newer stamp",
+        );
+    }
+
+    #[test]
     fn pick_active_monitor_breaks_equal_timestamp_tie_in_favor_of_focus() {
         let now = Instant::now();
         let cursor_mon = mon(100.0, 0.0, 800.0, 600.0);
@@ -293,7 +328,6 @@ mod tests {
                 at: now,
             }),
         };
-        // cursor.at > focus.at is false when equal; falls through to focus.
         assert_eq!(
             pick_active_monitor(&state, mon(0.0, 0.0, 1.0, 1.0)),
             focus_mon,
@@ -305,10 +339,8 @@ mod tests {
         let left = mon(0.0, 0.0, 1000.0, 1000.0);
         let right = mon(1000.0, 0.0, 1000.0, 1000.0);
         let monitors = vec![left, right];
-        // Window straddling the seam, 80% on the right:
         let window = mon(800.0, 0.0, 1000.0, 1000.0);
         assert_eq!(monitor_for_bounds(&monitors, &window), Some(right));
-        // Window fully on the left:
         assert_eq!(
             monitor_for_bounds(&monitors, &mon(10.0, 10.0, 100.0, 100.0)),
             Some(left),
@@ -324,9 +356,8 @@ mod tests {
 
     #[test]
     fn monitor_for_bounds_treats_zero_area_overlap_as_no_match() {
-        // Window touching the right edge but with zero overlap (right = left of the next monitor).
         let monitors = vec![mon(0.0, 0.0, 100.0, 100.0), mon(100.0, 0.0, 100.0, 100.0)];
-        let window = mon(100.0, 0.0, 0.0, 100.0); // zero-width window at the seam
+        let window = mon(100.0, 0.0, 0.0, 100.0);
         assert_eq!(monitor_for_bounds(&monitors, &window), None);
     }
 
@@ -399,8 +430,6 @@ mod tests {
             at: at(base, 100),
         });
         state.update_cursor(here, at(base, 200), true);
-        // Movement on the same monitor without a newer focus elsewhere doesn't refresh the
-        // timestamp - the cursor is the source of truth and was already on this monitor.
         assert_eq!(
             state.cursor.as_ref().map(|s| s.at),
             Some(at(base, 100)),
