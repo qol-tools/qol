@@ -17,10 +17,11 @@ export function NumberField({ field }) {
     const [editing, setEditing] = useState(false);
 
     const apply = useCallback((v) => {
-        const clamped = clamp(v, min, max);
+        const snapped = snapToStep(v, min, resolvedStep);
+        const clamped = clamp(snapped, min, max);
         ctx.setFieldValue(field, clamped);
         ctx.save();
-    }, [field, ctx, min, max]);
+    }, [field, ctx, min, max, resolvedStep]);
 
     const onKeyDown = useCallback((e) => {
         if (e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); apply(value + resolvedStep); return; }
@@ -103,6 +104,13 @@ function clamp(value, min, max) {
     if (min !== null && value < min) return min;
     if (max !== null && value > max) return max;
     return value;
+}
+
+function snapToStep(value, min, step) {
+    if (!step || step <= 0) return value;
+    const origin = typeof min === 'number' ? min : 0;
+    const snapped = origin + Math.round((value - origin) / step) * step;
+    return parseFloat(snapped.toFixed(6));
 }
 
 function inferUnit(field) {
