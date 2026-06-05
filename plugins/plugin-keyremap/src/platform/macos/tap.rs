@@ -13,7 +13,7 @@ extern "C" {
     fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
 }
 
-use crate::app_tracker::AppTracker;
+use super::app_tracker::AppTracker;
 use crate::remap::{
     self, KeyAction, Modifiers, MouseAction, MouseButton, ResolvedConfig, ScrollAction,
 };
