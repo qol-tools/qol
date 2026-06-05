@@ -13,8 +13,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 pub(crate) static PICKER_VISIBLE: AtomicBool = AtomicBool::new(false);
+pub(crate) static ACTIVE_PICKER_MONITOR: std::sync::Mutex<Option<qol_gpui::window::MonitorKey>> =
+    std::sync::Mutex::new(None);
 
-// PopUp windows on X11 fire one spurious blur right after creation; absorb only the first.
 const BLUR_GUARD_MS: u64 = 250;
 
 pub(crate) struct AltTabApp {
@@ -27,7 +28,7 @@ pub(crate) struct AltTabApp {
     pub(crate) blur_guard_armed: bool,
     pub(crate) _alt_poll_task: Option<Task<()>>,
     _live_preview_task: Option<Task<()>>,
-    _focus_out_sub: gpui::Subscription,
+    _dismiss_sub: (Subscription, Subscription, Option<Task<()>>),
 }
 
 impl AltTabApp {
@@ -58,8 +59,30 @@ impl AltTabApp {
             action_mode
         );
 
+        let dismiss_sub = qol_gpui::ghost::track_dismiss(
+            &focus_handle,
+            window,
+            |this: &Self| this.blur_guard_until,
+            |_this: &Self| PICKER_VISIBLE.load(Ordering::Relaxed),
+            cx,
+            |this, window, cx| match focus_out_decision(
+                PICKER_VISIBLE.load(Ordering::Relaxed),
+                &this.action_mode,
+                this.blur_guard_armed,
+                Instant::now() < this.blur_guard_until,
+                picker::is_modifier_held(),
+            ) {
+                FocusOutDecision::IgnoreHidden => {}
+                FocusOutDecision::IgnoreBlurGuard => {
+                    this.blur_guard_armed = false;
+                }
+                FocusOutDecision::IgnoreAltHeld => {}
+                FocusOutDecision::Dismiss => this.dismiss("focus-lost", window, cx),
+            },
+        );
+
         let mut app = Self {
-            _focus_out_sub: subscribe_focus_out(&focus_handle, window, cx),
+            _dismiss_sub: dismiss_sub,
             _live_preview_task: None,
             picker_title,
             delegate,
@@ -227,6 +250,7 @@ impl AltTabApp {
         window_handle: AnyWindowHandle,
         cx: &mut Context<Self>,
     ) {
+        qol_gpui::probe::probe("ALT_POLL_START", &format!("title={}", self.picker_title));
         let delegate = self.delegate.clone();
         self.alt_was_held = true;
         self._alt_poll_task = Some(cx.spawn(move |this, cx: &mut AsyncApp| {
@@ -235,8 +259,6 @@ impl AltTabApp {
     }
 }
 
-// on_modifiers_changed drives the common case, but it can be lost when the picker isn't yet
-// key on reuse. Poll CGEventSource every ALT_POLL_INTERVAL_MS as a ground-truth fallback.
 const ALT_POLL_INTERVAL_MS: u64 = 30;
 
 async fn alt_release_check(
@@ -246,11 +268,10 @@ async fn alt_release_check(
     mut cx: AsyncApp,
 ) {
     let executor = cx.background_executor().clone();
+    qol_gpui::probe::probe("ALT_POLL", "start");
     loop {
         if this.upgrade().is_none() {
-            return;
-        }
-        if !PICKER_VISIBLE.load(Ordering::Relaxed) {
+            qol_gpui::probe::probe("ALT_POLL", "entity gone, NO dismiss");
             return;
         }
         if !picker::is_modifier_held() {
@@ -260,48 +281,21 @@ async fn alt_release_check(
             .timer(Duration::from_millis(ALT_POLL_INTERVAL_MS))
             .await;
     }
+    qol_gpui::probe::probe("ALT_POLL", "release detected -> activate+dismiss");
     #[cfg(debug_assertions)]
     eprintln!("[alt-tab/hold] Alt released via poll — activating selection");
     let weak = this.clone();
-    let _ = cx.update_window(window_handle, move |_, window, cx| {
+    let updated = cx.update_window(window_handle, move |_, window, cx| {
         delegate.update(cx, |s, _| s.activate_selected_target());
         if let Some(entity) = weak.upgrade() {
             entity.update(cx, |app, cx| app.dismiss("alt-release/poll", window, cx));
+        } else {
+            qol_gpui::probe::probe("ALT_POLL", "weak gone in update, NO dismiss");
         }
     });
-}
-
-fn subscribe_focus_out(
-    handle: &FocusHandle,
-    window: &mut Window,
-    cx: &mut Context<AltTabApp>,
-) -> gpui::Subscription {
-    cx.on_focus_out(
-        handle,
-        window,
-        |this, _event, window, cx| match focus_out_decision(
-            PICKER_VISIBLE.load(Ordering::Relaxed),
-            &this.action_mode,
-            this.blur_guard_armed,
-            Instant::now() < this.blur_guard_until,
-            picker::is_modifier_held(),
-        ) {
-            FocusOutDecision::IgnoreHidden => {
-                #[cfg(debug_assertions)]
-                eprintln!("[alt-tab/blur] ignored focus-out while picker is in ghost state");
-            }
-            FocusOutDecision::IgnoreBlurGuard => {
-                this.blur_guard_armed = false;
-                #[cfg(debug_assertions)]
-                eprintln!("[alt-tab/blur] absorbed spurious post-create blur");
-            }
-            FocusOutDecision::IgnoreAltHeld => {
-                #[cfg(debug_assertions)]
-                eprintln!("[alt-tab/blur] ignored focus-out while Alt is still held");
-            }
-            FocusOutDecision::Dismiss => this.dismiss("focus-out", window, cx),
-        },
-    )
+    if updated.is_err() {
+        qol_gpui::probe::probe("ALT_POLL", "update_window FAILED, NO dismiss");
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -312,11 +306,6 @@ enum FocusOutDecision {
     Dismiss,
 }
 
-/// Focus-out is passive: something else took key (usually a click outside the picker).
-/// It NEVER activates the selection. Activation is owned exclusively by explicit user
-/// intent: Enter, card click, alt-release via `on_modifiers_changed`, or alt-release
-/// via the `alt_poll` ground-truth fallback. Routing activation through focus-out
-/// conflated alt-release with click-outside and made clicks hijack the selected window.
 fn focus_out_decision(
     picker_visible: bool,
     action_mode: &ActionMode,
@@ -345,10 +334,18 @@ impl AltTabApp {
     ) {
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/dismiss] from={}", _source);
+        qol_gpui::probe::probe(
+            "DISMISS",
+            &format!("from={_source} title={}", self.picker_title),
+        );
         self._alt_poll_task = None;
         self.blur_guard_armed = false;
         PICKER_VISIBLE.store(false, Ordering::Relaxed);
+        if let Ok(mut lock) = ACTIVE_PICKER_MONITOR.lock() {
+            *lock = None;
+        }
         picker::platform::hide_picker(&self.picker_title);
+        qol_gpui::popup_window::dump_ghost_windows(&format!("dismiss title={}", self.picker_title));
         picker::request_data_refresh();
         cx.notify();
     }
@@ -367,9 +364,6 @@ mod focus_out_tests {
 
     #[test]
     fn ghost_state_focus_out_is_ignored_regardless_of_other_signals() {
-        // The picker is hidden via alpha=0 but still keyWindow. Every other
-        // flag combination must collapse to IgnoreHidden so we never re-enter
-        // the dismiss path on top of an already-hidden picker.
         let cases = [
             (ActionMode::HoldToSwitch, true, true, true),
             (ActionMode::HoldToSwitch, false, false, true),

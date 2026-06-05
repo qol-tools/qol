@@ -11,7 +11,6 @@ use crate::monitor::MonitorTracker;
 use qol_gpui::command_loop::LoopFlow;
 
 use super::keepalive;
-use super::platform;
 use super::window_host::{
     activate_or_open_launcher, pre_create_ghost, spawn_ghost_reposition_listener, ActiveLaunchers,
 };
@@ -47,12 +46,11 @@ pub fn run() {
             Rc::new(RefCell::new(ActiveLaunchers::default()));
 
         keepalive::open_keepalive_window(cx);
-        platform::set_activation_policy();
+        qol_gpui::platform::set_accessory_policy();
 
         crate::config::apply_ghost_debug();
 
-        let boot_monitor = focus_cache.snapshot_monitor();
-        pre_create_ghost(entries.clone(), active.clone(), boot_monitor, cx);
+        pre_create_ghost(entries.clone(), active.clone(), focus_cache.clone(), cx);
         spawn_ghost_reposition_listener(active.clone(), focus_cache.clone(), cx);
 
         spawn_command_poll(entries.clone(), active.clone(), rx, focus_cache.clone(), cx);

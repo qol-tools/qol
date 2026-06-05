@@ -1,23 +1,16 @@
-//! Bridge runtime monitor/window events to an app-thread callback.
-//!
-//! Subscribes to the given [`RuntimeEventKind`]s on a background thread,
-//! coalesces bursts, and runs `on_event` on the GPUI app thread once per
-//! batch. A ghost popup uses this to stay positioned on the active monitor
-//! while it is hidden, so the next show lands in the right place instantly.
-
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 use gpui::{App, AppContext, AsyncApp};
 
-use crate::protocol::RuntimeEventKind;
+use crate::protocol::{RuntimeEvent, RuntimeEventKind};
 use crate::PlatformStateClient;
 
 pub fn spawn_runtime_event_router<F>(cx: &mut App, kinds: Vec<RuntimeEventKind>, mut on_event: F)
 where
-    F: FnMut(&mut App) + 'static,
+    F: FnMut(&mut App, &RuntimeEvent) + 'static,
 {
-    let (tx, rx) = mpsc::channel::<()>();
+    let (tx, rx) = mpsc::channel::<RuntimeEvent>();
     spawn_subscriber(kinds, tx);
     let rx = Arc::new(Mutex::new(rx));
     cx.spawn(async move |cx: &mut AsyncApp| loop {
@@ -26,31 +19,37 @@ where
             cx.background_spawn(async move { rx.lock().ok()?.recv().ok() })
                 .await
         };
-        if received.is_none() {
+        let Some(first) = received else {
             break;
-        }
-        coalesce(&rx);
-        let _ = cx.update(|app| on_event(app));
+        };
+        let latest = coalesce(&rx, first);
+        let _ = cx.update(|app| on_event(app, &latest));
     })
     .detach();
 }
 
-fn spawn_subscriber(kinds: Vec<RuntimeEventKind>, tx: mpsc::Sender<()>) {
+fn spawn_subscriber(kinds: Vec<RuntimeEventKind>, tx: mpsc::Sender<RuntimeEvent>) {
     std::thread::spawn(move || {
         let client = PlatformStateClient::from_env();
         let Some(mut subscription) = client.subscribe(kinds) else {
             return;
         };
-        while subscription.next_event().is_some() {
-            if tx.send(()).is_err() {
+        while let Some(event) = subscription.next_event() {
+            if tx.send(event).is_err() {
                 return;
             }
         }
     });
 }
 
-fn coalesce(rx: &Arc<Mutex<mpsc::Receiver<()>>>) {
+fn coalesce(
+    rx: &Arc<Mutex<mpsc::Receiver<RuntimeEvent>>>,
+    mut latest: RuntimeEvent,
+) -> RuntimeEvent {
     if let Ok(guard) = rx.lock() {
-        while guard.try_recv().is_ok() {}
+        while let Ok(event) = guard.try_recv() {
+            latest = event;
+        }
     }
+    latest
 }

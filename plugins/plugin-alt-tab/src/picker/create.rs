@@ -192,10 +192,11 @@ fn on_open_failure() {
     #[cfg(debug_assertions)]
     eprintln!("[alt-tab/open] failed to open picker window");
     PICKER_VISIBLE.store(false, Ordering::Relaxed);
+    if let Ok(mut lock) = crate::app::ACTIVE_PICKER_MONITOR.lock() {
+        *lock = None;
+    }
 }
 
-/// Pre-create a picker window using the same monitor-covering layout as the show
-/// path. Linux creates one per monitor; macOS keeps a single repositioned ghost.
 pub(crate) fn pre_create_ghost(
     config: &AltTabConfig,
     current: &PickerWindowState,

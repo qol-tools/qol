@@ -2,19 +2,15 @@
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "windows")]
+mod windows;
 
 #[cfg(target_os = "linux")]
 use linux as imp;
 #[cfg(target_os = "macos")]
 use macos as imp;
-
 #[cfg(target_os = "windows")]
-mod imp {
-    pub fn activate_window(_window_id: u32) {}
-    pub fn close_window(_window_id: u32) {}
-    pub fn quit_app(_window_id: u32) {}
-    pub fn minimize_window_by_id(_window_id: u32) {}
-}
+use windows as imp;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 compile_error!("plugin-alt-tab actions: unsupported target OS");

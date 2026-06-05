@@ -42,7 +42,23 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
     #[cfg(debug_assertions)]
     eprintln!("[alt-tab/open] show request (reverse={})", req.reverse);
 
-    let placement = PopupPlacement::from_tracker(req.tracker);
+    let is_visible = PICKER_VISIBLE.load(Ordering::Relaxed);
+    let mut placement = PopupPlacement::from_tracker(req.tracker);
+    if is_visible {
+        if let Some(active_target) = *crate::app::ACTIVE_PICKER_MONITOR.lock().unwrap() {
+            if let Some(monitor) =
+                req.tracker.all_monitors().into_iter().find(|m| {
+                    qol_gpui::window::MonitorKey::from_bounds(&m.bounds()) == active_target
+                })
+            {
+                placement = PopupPlacement::from_monitor(Some(monitor));
+            }
+        }
+    } else {
+        let target = placement.target();
+        *crate::app::ACTIVE_PICKER_MONITOR.lock().unwrap() = Some(target);
+    }
+
     if req.reverse && req.current.borrow().is_empty() {
         return;
     }
@@ -59,9 +75,6 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
     if try_reuse_existing(req, &placement, &gathered, cx) {
         return;
     }
-    // macOS keeps the pre-created picker alive across opens, so the reuse path above
-    // should always succeed. The fallback below exists for first-ever open before
-    // bootstrap completes and for Linux's create-on-demand lifecycle.
     destroy_non_target_windows(req, &placement, cx);
     create_from_request(req, placement, gathered, cx);
 }
@@ -264,7 +277,6 @@ pub(crate) mod state {
             } else {
                 Some(0)
             };
-            // Construction is the first long-lived owner of these images.
             for v in init.previews.values() {
                 REGISTRY.retain(v);
             }
@@ -286,13 +298,6 @@ pub(crate) mod state {
             }
         }
 
-        /// Release every image this state still owns to the registry. Called
-        /// from `Context::on_release` when GPUI tears down the entity (the
-        /// Linux destroy paths in `picker/platform/linux.rs` and any future
-        /// macOS teardown). Without this drain, refcounts stay inflated and
-        /// future releases never reach zero, so `drop_image` never fires for
-        /// successor windows. The dying window's atlas is GC'd by the platform
-        /// regardless, so passing `None` is correct here.
         pub(crate) fn drain_to_registry(&mut self, app: &mut App) {
             for (_, arc) in self.live_previews.drain() {
                 REGISTRY.release(arc, app, None);
@@ -458,7 +463,6 @@ pub(crate) mod state {
             self.set_windows(reordered, false, app, window);
         }
 
-        // Caller is responsible for dismissing the picker after this returns.
         pub(crate) fn activate_selected_target(&self) {
             let Some(ix) = self.selected_index else {
                 #[cfg(debug_assertions)]
@@ -626,8 +630,6 @@ pub(crate) mod state {
 
     fn grid_up(current: usize, row: usize, col: usize, g: &Grid) -> usize {
         if row == 0 {
-            // Wrap to the same column in the last row. If that column has no cell
-            // (short final row), clamp to the rightmost populated cell in that row.
             let last_row = g.rows.saturating_sub(1);
             let target_start = last_row * g.cols;
             let target_end = g.row_end(last_row);

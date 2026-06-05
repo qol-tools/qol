@@ -1,4 +1,4 @@
-.PHONY: dev release test
+.PHONY: dev release test trace
 
 BINARY=alt-tab
 OUTPUT=./$(BINARY)
@@ -16,3 +16,6 @@ release:
 
 test:
 	cargo test --tests
+
+trace:
+	python3 tools/compact_trace.py

@@ -55,10 +55,6 @@ pub fn hide_window_by_title(title: &str) -> bool {
     true
 }
 
-/// Debug-only: keep the hidden ghost faintly visible at `opacity` (tinted with
-/// `color_hex`, e.g. `"#00ff00"`) instead of alpha=0, so you can see where it is
-/// parked. `opacity` of `None`/`Some(0.0)` restores a fully invisible hide.
-/// No-op in release builds.
 pub fn set_ghost_debug(opacity: Option<f32>, color_hex: Option<&str>) {
     #[cfg(debug_assertions)]
     {
@@ -102,11 +98,6 @@ pub fn show_window_by_title(title: &str) -> bool {
     true
 }
 
-/// Drop the window shadow and clear its background so a transparent view (e.g.
-/// floating cards) composites without a chrome backdrop. Debug-aware: when the
-/// ghost is set visible via [`set_ghost_debug`] (`opacity > 0`), the background
-/// is tinted with the debug colour instead of cleared, so the parked ghost shows
-/// up. No tint in release.
 pub fn disable_window_shadow(title: &str) -> bool {
     let Some(mtm) = MainThreadMarker::new() else {
         return false;
@@ -127,9 +118,6 @@ pub fn disable_window_shadow(title: &str) -> bool {
     true
 }
 
-/// Make a window behave as an instant always-on-top popup: no open/close
-/// animation, and a level above normal and floating windows (below screen
-/// savers). Pairs with [`disable_window_shadow`] for the ghost look.
 pub fn configure_popup_window(title: &str) -> bool {
     let Some(mtm) = MainThreadMarker::new() else {
         return false;
@@ -142,14 +130,13 @@ pub fn configure_popup_window(title: &str) -> bool {
     true
 }
 
-/// The real backing scale factor (points-to-pixels) of the titled window. Used
-/// to detect when GPUI's cached scale has drifted after the window moved to a
-/// monitor with different DPI. `None` if unavailable.
 pub fn window_backing_scale(title: &str) -> Option<f32> {
     let mtm = MainThreadMarker::new()?;
     let window = find_window_by_title(mtm, title)?;
     Some(window.backingScaleFactor() as f32)
 }
+
+pub fn dump_ghost_windows(_context: &str) {}
 
 fn find_window_by_title(mtm: MainThreadMarker, title: &str) -> Option<Retained<NSWindow>> {
     let app = NSApplication::sharedApplication(mtm);

@@ -7,13 +7,6 @@ use crate::monitor::ActiveMonitor;
 use crate::popup_window;
 use crate::protocol::RuntimeEvent;
 
-/// Position and size a ghost window on its target monitor in one move.
-///
-/// On X11 a single `ConfigureNotify` carries both origin and size, so the move
-/// is atomic: we set bounds and let gpui learn both from that event. Pushing the
-/// size into gpui early (`window.resize`) would land a frame before the async
-/// position update - new size at the old origin, i.e. an off-center flash. macOS
-/// has no async configure, so it resizes the gpui window directly.
 pub fn sync_window_layout(
     title: &str,
     window: &mut Window,
@@ -48,12 +41,6 @@ pub fn sync_window_layout(
 
 static ACTIVE_MONITOR: Mutex<Option<ActiveMonitor>> = Mutex::new(None);
 
-/// Record the monitor an event carries as this process's active monitor and
-/// return it. Every ghost reposition - the monitor-event path and any auxiliary
-/// path such as a data refresh - resolves placement from this one value, so the
-/// ghost follows the single runtime signal instead of an independent state query
-/// that can disagree with what another plugin saw. Returns `None` for events
-/// without a monitor, leaving the recorded value untouched.
 pub fn record_active_monitor(event: &RuntimeEvent) -> Option<ActiveMonitor> {
     let monitor = ActiveMonitor::from_event(event)?;
     if let Ok(mut slot) = ACTIVE_MONITOR.lock() {
@@ -62,12 +49,10 @@ pub fn record_active_monitor(event: &RuntimeEvent) -> Option<ActiveMonitor> {
     Some(monitor)
 }
 
-/// The monitor delivered by the most recent runtime event, if one has arrived.
 pub fn active_monitor() -> Option<ActiveMonitor> {
     ACTIVE_MONITOR.lock().ok().and_then(|slot| slot.clone())
 }
 
-/// Formats a monitor-specific window title using coordinates and dimensions.
 pub fn ghost_window_title(prefix: &str, target: crate::window::MonitorKey) -> String {
     format!(
         "{}@{},{},{}x{}",
@@ -75,7 +60,6 @@ pub fn ghost_window_title(prefix: &str, target: crate::window::MonitorKey) -> St
     )
 }
 
-/// Shows the target ghost window and hides the others.
 pub fn show_ghost_window(target_title: &str, all_titles: &[String]) {
     crate::probe::probe(
         "SHOW_GHOST",
@@ -93,9 +77,6 @@ pub fn show_ghost_window(target_title: &str, all_titles: &[String]) {
     ));
 }
 
-/// Park a non-active per-monitor ghost. On Linux it is mapped but fully
-/// invisible (opacity 0) so the debug ghost never shows on a non-active
-/// monitor; elsewhere it is an ordinary hide.
 fn hide_non_active(title: &str) {
     #[cfg(target_os = "linux")]
     {
@@ -107,7 +88,6 @@ fn hide_non_active(title: &str) {
     }
 }
 
-/// Invoked on active monitor changes to hide non-target windows and ensure the target window is mapped as a ghost.
 pub fn active_monitor_changed(target_title: &str, all_titles: &[String]) {
     #[cfg(target_os = "linux")]
     {

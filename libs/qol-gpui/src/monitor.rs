@@ -11,6 +11,18 @@ impl ActiveMonitor {
         Self { inner: b }
     }
 
+    pub fn from_event(event: &crate::protocol::RuntimeEvent) -> Option<Self> {
+        use crate::protocol::RuntimeEvent;
+        match event {
+            RuntimeEvent::ActiveMonitorChanged { monitor, .. }
+            | RuntimeEvent::FocusChanged { monitor, .. } => (*monitor).map(Self::from_bounds),
+            RuntimeEvent::CursorMoved { .. }
+            | RuntimeEvent::LauncherAppsSynced { .. }
+            | RuntimeEvent::MonitorsChanged { .. }
+            | RuntimeEvent::WindowListChanged => None,
+        }
+    }
+
     pub fn centered_bounds(&self, win_size: Size<Pixels>) -> Bounds<Pixels> {
         let x = px(self.inner.x) + (px(self.inner.width) - win_size.width) / 2.0;
         let y = px(self.inner.y) + (px(self.inner.height) - win_size.height) / 3.0;
@@ -41,14 +53,10 @@ impl MonitorTracker {
         }
     }
 
-    /// Returns just the ActiveMonitor, dropping the index.
     pub fn snapshot_monitor(&self) -> Option<ActiveMonitor> {
         self.snapshot().map(|(monitor, _)| monitor)
     }
 
-    /// Prefer the focused window's monitor; fall back to active, then cursor, then first.
-    /// Use this for popup placements that should follow "where the user is working"
-    /// rather than "where the cursor most recently moved".
     pub fn snapshot_monitor_focus_first(&self) -> Option<ActiveMonitor> {
         let state = self.client.get_state()?;
         if state.monitors.is_empty() {
@@ -71,7 +79,6 @@ impl MonitorTracker {
         Some(ActiveMonitor::from_bounds(monitor))
     }
 
-    /// Returns (ActiveMonitor, active_monitor_idx) from one GET_STATE call.
     pub fn snapshot(&self) -> Option<(ActiveMonitor, Option<usize>)> {
         let state = self.client.get_state()?;
 
@@ -101,5 +108,17 @@ impl MonitorTracker {
             ActiveMonitor::from_bounds(monitor),
             state.active_monitor_idx,
         ))
+    }
+
+    pub fn all_monitors(&self) -> Vec<ActiveMonitor> {
+        let Some(state) = self.client.get_state() else {
+            return Vec::new();
+        };
+        state
+            .monitors
+            .iter()
+            .copied()
+            .map(ActiveMonitor::from_bounds)
+            .collect()
     }
 }

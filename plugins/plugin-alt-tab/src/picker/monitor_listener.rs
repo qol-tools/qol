@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use gpui::*;
 use qol_gpui::monitor::MonitorTracker;
+use qol_gpui::protocol::RuntimeEvent;
 use qol_gpui::window::PopupPlacement;
 
 use super::run::{SharedPreviewCache, WindowCache};
@@ -35,7 +36,7 @@ pub(crate) fn spawn(cx: &mut App, inputs: ListenerInputs) {
         vec![qol_gpui::protocol::RuntimeEventKind::ActiveMonitorChanged],
         {
             let inputs = inputs.clone();
-            move |app_cx| reposition_ghost_only(&inputs, app_cx)
+            move |_app_cx, event| reposition_ghost_only(&inputs, event)
         },
     );
     spawn_data_refresh_router(cx, refresh_rx, inputs);
@@ -55,9 +56,6 @@ fn spawn_data_refresh_listener_thread() {
 fn data_refresh_listener_loop() {
     use qol_gpui::protocol::RuntimeEventKind;
     let client = qol_gpui::PlatformStateClient::from_env();
-    // FocusChanged catches mouse-click focus shifts that don't add or remove a
-    // window; without it the picker keeps showing the prior MRU until 30s of
-    // freshness TTL expires or a window is opened/closed.
     let Some(mut subscription) = client.subscribe(vec![
         RuntimeEventKind::WindowListChanged,
         RuntimeEventKind::FocusChanged,
@@ -96,13 +94,28 @@ fn drain(rx: &Arc<Mutex<mpsc::Receiver<()>>>) {
     }
 }
 
-fn reposition_ghost_only(inputs: &ListenerInputs, app_cx: &mut App) {
+fn reposition_ghost_only(inputs: &ListenerInputs, event: &RuntimeEvent) {
     if PICKER_VISIBLE.load(Ordering::Relaxed) {
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/listener] picker visible, skipping ghost reposition");
         return;
     }
-    apply_ghost_layout_from_state(inputs, app_cx);
+    let Some(monitor) =
+        qol_gpui::ghost::record_active_monitor(event).or_else(|| inputs.tracker.snapshot_monitor())
+    else {
+        return;
+    };
+    let placement = PopupPlacement::from_monitor(Some(monitor));
+    let target = placement.target();
+    let target_title = super::platform::picker_window_title(target);
+    let all_titles: Vec<String> = inputs
+        .current
+        .borrow()
+        .iter()
+        .into_iter()
+        .map(|(key, _)| super::platform::picker_window_title(key))
+        .collect();
+    qol_gpui::ghost::active_monitor_changed(&target_title, &all_titles);
 }
 
 fn trigger_data_refresh(inputs: &ListenerInputs, app_cx: &mut App) {
@@ -161,23 +174,35 @@ async fn refresh_data(cx: &mut AsyncApp, inputs: ListenerInputs, generation: usi
         } else {
             config.reset_selection_on_open
         };
-        apply_view_windows(&inputs.current, &gathered, reset_selection, app_cx);
-        // While the picker is visible, do NOT touch its window geometry. The active
-        // monitor can change underneath us (cursor crosses to another screen, focus
-        // shifts) but the picker must stay where it was opened, at the size it was
-        // opened. Resizing or repositioning a visible picker yanks it under the user.
-        if !picker_visible {
-            let layout = compute_layout_from_state(&inputs, app_cx);
-            apply_ghost_layout(&inputs.current, &layout, app_cx);
-        }
-        if let Some(handle) = inputs
-            .current
-            .borrow()
-            .iter()
-            .into_iter()
-            .next()
-            .map(|(_, h)| h)
-        {
+        let active_target = if picker_visible {
+            *crate::app::ACTIVE_PICKER_MONITOR.lock().unwrap()
+        } else {
+            let active_monitor =
+                qol_gpui::ghost::active_monitor().or_else(|| inputs.tracker.snapshot_monitor());
+            active_monitor.map(|m| PopupPlacement::from_monitor(Some(m)).target())
+        };
+
+        apply_view_windows(
+            &inputs.current,
+            active_target,
+            &gathered,
+            reset_selection,
+            app_cx,
+        );
+
+        let active_handle = active_target
+            .and_then(|target| inputs.current.borrow().existing(target))
+            .or_else(|| {
+                inputs
+                    .current
+                    .borrow()
+                    .iter()
+                    .into_iter()
+                    .next()
+                    .map(|(_, h)| h)
+            });
+
+        if let Some(handle) = active_handle {
             super::gather::spawn_preview_fill(
                 super::gather::PreviewFillRequest {
                     handle,
@@ -197,76 +222,18 @@ async fn refresh_data(cx: &mut AsyncApp, inputs: ListenerInputs, generation: usi
     });
 }
 
-fn apply_ghost_layout_from_state(inputs: &ListenerInputs, app_cx: &mut App) {
-    let placement = PopupPlacement::from_tracker(&inputs.tracker);
-    let layout = super::reuse::compute_layout(
-        &super::reuse::LayoutInput {
-            placement: &placement,
-        },
-        app_cx,
-    );
-    #[cfg(debug_assertions)]
-    eprintln!(
-        "[alt-tab/ghost] layout.size={}x{} bounds.origin=({},{}) monitor_size={:?}",
-        layout.size.width.to_f64(),
-        layout.size.height.to_f64(),
-        layout.bounds.origin.x.to_f64(),
-        layout.bounds.origin.y.to_f64(),
-        placement.monitor_size(),
-    );
-    apply_ghost_layout(&inputs.current, &layout, app_cx);
-}
-
-fn apply_ghost_layout(
-    current: &PickerWindowState,
-    layout: &super::reuse::ReuseLayout,
-    app_cx: &mut App,
-) {
-    let target = layout.target;
-    let handle = {
-        let current = current.borrow();
-        current.existing(target).or_else(|| {
-            if super::platform::reuse_picker_across_targets() {
-                current.iter().into_iter().next().map(|(_, h)| h)
-            } else {
-                None
-            }
-        })
-    };
-    let Some(handle) = handle else {
-        return;
-    };
-    let _ = handle.update(app_cx, |view, window: &mut Window, _| {
-        let title = view.picker_title.clone();
-        super::platform::sync_picker_window_layout(
-            &title,
-            window,
-            layout.bounds.origin,
-            layout.size,
-        );
-    });
-}
-
-fn compute_layout_from_state(
-    inputs: &ListenerInputs,
-    app_cx: &mut App,
-) -> super::reuse::ReuseLayout {
-    let placement = PopupPlacement::from_tracker(&inputs.tracker);
-    super::reuse::compute_layout(
-        &super::reuse::LayoutInput {
-            placement: &placement,
-        },
-        app_cx,
-    )
-}
-
 fn apply_view_windows(
     current: &PickerWindowState,
+    active_target: Option<qol_gpui::window::MonitorKey>,
     gathered: &super::gather::GatheredWindows,
     reset_selection: bool,
     app_cx: &mut App,
 ) {
-    for (_, handle) in current.borrow().iter() {
+    let target_handle = active_target
+        .and_then(|target| current.borrow().existing(target))
+        .or_else(|| current.borrow().iter().into_iter().next().map(|(_, h)| h));
+
+    if let Some(handle) = target_handle {
         let _ = handle.update(app_cx, |view, window: &mut Window, cx| {
             view.apply_ghost_gathered(gathered, reset_selection, window, cx);
         });

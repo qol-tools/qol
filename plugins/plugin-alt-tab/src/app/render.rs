@@ -61,17 +61,13 @@ impl Render for AltTabApp {
             if event.modifiers.alt {
                 return;
             }
+            qol_gpui::probe::probe("MODS_UP", "alt released -> activate+dismiss");
             #[cfg(debug_assertions)]
             eprintln!("[alt-tab/hold] Alt released via on_modifiers_changed");
             this.delegate
                 .update(cx, |s, _| s.activate_selected_target());
             this.dismiss("modifiers/alt-up", window, cx);
         });
-        // Backdrop only absorbs clicks - it does NOT dismiss the picker. Dismissal is
-        // owned by explicit user intent (Enter, Escape, card click, alt release). A click
-        // anywhere on the active monitor must be swallowed (so macOS does not run
-        // Option+Click "hide others" or any other native gesture) but must not close the
-        // picker, otherwise the picker disappears every time the user clicks around.
 
         let d = self.delegate.read(cx);
         let alpha = (d.card_bg_opacity.clamp(0.0, 1.0) * 255.0) as u32;
@@ -84,15 +80,6 @@ impl Render for AltTabApp {
             card_bg_rgba: (d.card_bg_color << 8) | alpha,
         };
 
-        // The window is sized to the entire active monitor (so the backdrop can absorb
-        // any click on that monitor). The inner panel must stay sized to its content
-        // (max_columns wide, rows tall) so the card grid wraps correctly. Without this,
-        // 8 cards at 220px each fit in 1920px monitor width and never wrap.
-        //
-        // Pass None for monitor_size: window.window_bounds() can read 720x321 during
-        // the warmup ghost render before the resize lands, which would make max_w=648
-        // and panic the clamp(720, ..648..). picker_dimensions' fallback (1820, 980) is
-        // sane for any modern monitor and the real-show layout reshapes correctly.
         let _ = window;
         let (panel_w, panel_h) = picker_dimensions(
             d.windows.len().max(1),
