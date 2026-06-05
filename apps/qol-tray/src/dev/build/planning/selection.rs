@@ -39,18 +39,51 @@ struct PlatformSupport {
 }
 
 fn check_plugin_platform(path: &Path) -> PlatformSupport {
-    let Some(manifest) = load_manifest(path) else {
-        return supported_platform();
-    };
-    if manifest.plugin.supports_current_platform() {
-        return supported_platform();
+    match load_manifest(path) {
+        ManifestLoad::Ok(manifest) => {
+            if manifest.plugin.supports_current_platform() {
+                return supported_platform();
+            }
+            unsupported_platform(*manifest)
+        }
+        ManifestLoad::Missing => missing_manifest(),
+        ManifestLoad::Unparseable(error) => unparseable_manifest(error),
     }
-    unsupported_platform(manifest)
 }
 
-fn load_manifest(path: &Path) -> Option<crate::plugins::PluginManifest> {
-    let content = std::fs::read_to_string(path.join("plugin.toml")).ok()?;
-    toml::from_str(&content).ok()
+enum ManifestLoad {
+    Ok(Box<crate::plugins::PluginManifest>),
+    Missing,
+    Unparseable(String),
+}
+
+fn load_manifest(path: &Path) -> ManifestLoad {
+    let manifest_path = path.join("plugin.toml");
+    let content = match std::fs::read_to_string(&manifest_path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return ManifestLoad::Missing;
+        }
+        Err(error) => return ManifestLoad::Unparseable(error.to_string()),
+    };
+    match toml::from_str::<crate::plugins::PluginManifest>(&content) {
+        Ok(manifest) => ManifestLoad::Ok(Box::new(manifest)),
+        Err(error) => ManifestLoad::Unparseable(error.to_string()),
+    }
+}
+
+fn missing_manifest() -> PlatformSupport {
+    PlatformSupport {
+        supported: false,
+        reason: "plugin.toml missing at dev-link path".to_string(),
+    }
+}
+
+fn unparseable_manifest(error: String) -> PlatformSupport {
+    PlatformSupport {
+        supported: false,
+        reason: format!("plugin.toml unreadable: {}", error),
+    }
 }
 
 fn supported_platform() -> PlatformSupport {
