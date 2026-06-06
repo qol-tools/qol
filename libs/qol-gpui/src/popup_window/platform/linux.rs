@@ -3,9 +3,60 @@ use x11rb::protocol::shape;
 use x11rb::protocol::xproto::*;
 use x11rb::wrapper::ConnectionExt as _;
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
 
 static GHOST_ALPHA: AtomicU32 = AtomicU32::new(0);
+
+static OPACITY_CACHE: Mutex<BTreeMap<String, (u32, Option<u32>)>> = Mutex::new(BTreeMap::new());
+
+fn cached_card(title: &str) -> Option<u32> {
+    OPACITY_CACHE
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(title).and_then(|entry| entry.1))
+}
+
+fn store_card(title: &str, wid: u32, card: Option<u32>) {
+    if let Ok(mut cache) = OPACITY_CACHE.lock() {
+        cache.insert(title.to_string(), (wid, card));
+    }
+}
+
+fn cached_valid_wid(
+    conn: &impl Connection,
+    name_atom: u32,
+    utf8_atom: u32,
+    title: &str,
+) -> Option<u32> {
+    let wid = OPACITY_CACHE.lock().ok()?.get(title).map(|entry| entry.0)?;
+    let matches = window_title_matches(conn, wid, name_atom, utf8_atom, title)
+        || window_title_matches(
+            conn,
+            wid,
+            AtomEnum::WM_NAME.into(),
+            AtomEnum::ANY.into(),
+            title,
+        );
+    matches.then_some(wid)
+}
+
+fn resolve_window(
+    conn: &impl Connection,
+    root: u32,
+    list_atom: u32,
+    name_atom: u32,
+    utf8_atom: u32,
+    title: &str,
+) -> Option<u32> {
+    if let Some(wid) = cached_valid_wid(conn, name_atom, utf8_atom, title) {
+        return Some(wid);
+    }
+    let wid = find_window_by_title(conn, root, list_atom, name_atom, utf8_atom, title)?;
+    store_card(title, wid, None);
+    Some(wid)
+}
 
 pub fn reposition_window_by_title(title: &str, gpui_x: f64, gpui_y: f64) -> bool {
     let Ok((conn, screen_num)) = x11rb::connect(None) else {
@@ -71,6 +122,7 @@ pub fn hide_window_invisible(title: &str) -> bool {
 
 fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
     let reason = crate::popup_window::change_reason();
+    let target = opacity_to_cardinal(opacity);
     let Ok((conn, screen_num)) = x11rb::connect(None) else {
         return false;
     };
@@ -82,17 +134,22 @@ fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
     else {
         return false;
     };
-    let Some(wid) = find_window_by_title(&conn, root, list_atom, name_atom, utf8_atom, title)
-    else {
+    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
         crate::probe::probe(
             "HIDE_WIN",
             &format!("title={title} wid=NONE reason={reason}"),
         );
         return false;
     };
+    if cached_card(title) == Some(target) {
+        return true;
+    }
     if compositor_running(&conn, screen_num) && set_input_passthrough(&conn, wid, true) {
         let applied = set_window_opacity(&conn, wid, opacity);
         let _ = conn.flush();
+        if applied {
+            store_card(title, wid, Some(target));
+        }
         crate::probe::probe(
             "HIDE_WIN",
             &format!("title={title} wid={wid} path=compositor opacity={opacity} applied={applied} reason={reason}"),
@@ -101,6 +158,7 @@ fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
     }
     let _ = conn.unmap_window(wid);
     let _ = conn.flush();
+    store_card(title, wid, None);
     crate::probe::probe(
         "HIDE_WIN",
         &format!("title={title} wid={wid} path=unmap reason={reason}"),
@@ -133,6 +191,7 @@ pub fn show_window_by_title(title: &str) -> bool {
         return false;
     };
     let _ = clear_window_opacity(&conn, wid);
+    store_card(title, wid, None);
     let _ = set_input_passthrough(&conn, wid, false);
     let _ = conn.map_window(wid);
     const SOURCE_APPLICATION: u32 = 1;
