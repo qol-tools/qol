@@ -1,3 +1,6 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::*;
 use x11rb::protocol::Event;
@@ -5,19 +8,57 @@ use x11rb::wrapper::ConnectionExt as _;
 
 mod trace;
 
+static ACTIVATE_GEN: AtomicU64 = AtomicU64::new(0);
+
+const REASSERT_STEPS_MS: [u64; 5] = [16, 24, 40, 60, 100];
+
 pub fn activate_window(window_id: u32) {
     if window_id == 0 {
         return;
     }
+    let generation = ACTIVATE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
     let Some((conn, root)) = connect() else {
         return;
     };
-    let Some(atom) = intern(&conn, b"_NET_ACTIVE_WINDOW") else {
-        return;
-    };
-    let time = server_time(&conn, root).unwrap_or(0);
+    let time = send_activate(&conn, root, window_id).unwrap_or(0);
     trace::activating(&conn, window_id, time);
-    send_to_root(&conn, root, window_id, atom, [2, time, 0, 0, 0]);
+    spawn_reassert(window_id, generation);
+}
+
+fn send_activate(conn: &impl Connection, root: u32, window_id: u32) -> Option<u32> {
+    let atom = intern(conn, b"_NET_ACTIVE_WINDOW")?;
+    let time = server_time(conn, root).unwrap_or(0);
+    send_to_root(conn, root, window_id, atom, [2, time, 0, 0, 0]);
+    Some(time)
+}
+
+fn spawn_reassert(window_id: u32, generation: u64) {
+    std::thread::spawn(move || {
+        for step_ms in REASSERT_STEPS_MS {
+            std::thread::sleep(Duration::from_millis(step_ms));
+            if ACTIVATE_GEN.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            let Some((conn, root)) = connect() else {
+                return;
+            };
+            if active_window(&conn, root) == Some(window_id) {
+                return;
+            }
+            let _ = send_activate(&conn, root, window_id);
+        }
+    });
+}
+
+fn active_window(conn: &impl Connection, root: u32) -> Option<u32> {
+    let atom = intern(conn, b"_NET_ACTIVE_WINDOW")?;
+    let reply = conn
+        .get_property(false, root, atom, AtomEnum::WINDOW, 0, 1)
+        .ok()?
+        .reply()
+        .ok()?;
+    let mut values = reply.value32()?;
+    values.next()
 }
 
 fn server_time(conn: &impl Connection, root: u32) -> Option<u32> {
