@@ -57,9 +57,6 @@ pub fn is_shift_held() -> bool {
 pub fn disable_window_shadow(title: &str) {
     imp::disable_window_shadow(title)
 }
-pub fn show_picker(title: &str) {
-    imp::show_picker(title)
-}
 #[cfg(not(target_os = "linux"))]
 pub fn hide_picker(title: &str) {
     imp::hide_picker(title)

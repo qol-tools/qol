@@ -124,11 +124,19 @@ fn try_reuse_existing(
     }
     let input = reuse::LayoutInput { placement };
     let layout = reuse::compute_layout(&input, cx);
+    let all_titles: Vec<String> = req
+        .current
+        .borrow()
+        .iter()
+        .into_iter()
+        .map(|(key, _)| platform::picker_window_title(key))
+        .collect();
     let reuse_req = reuse::ReuseRequest {
         handle: &handle,
         layout: &layout,
         config: req.config,
         gathered,
+        all_titles: &all_titles,
         reverse: req.reverse,
     };
     if reuse::try_reuse(&reuse_req, cx) {

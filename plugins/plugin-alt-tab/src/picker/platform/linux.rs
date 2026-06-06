@@ -24,10 +24,6 @@ pub fn disable_window_shadow(title: &str) {
     qol_gpui::popup_window::disable_window_shadow(title);
 }
 
-pub fn show_picker(title: &str) {
-    qol_gpui::popup_window::show_window_by_title(title);
-}
-
 pub fn pre_create(
     config: &crate::config::AltTabConfig,
     current: &crate::PickerWindowState,
