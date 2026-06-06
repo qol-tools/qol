@@ -1,17 +1,19 @@
 use x11rb::connection::Connection;
 
-pub(super) fn activating(conn: &impl Connection, window_id: u32) {
+pub(super) fn activating(conn: &impl Connection, window_id: u32, time: u32) {
     #[cfg(debug_assertions)]
     {
         let title = window_name(conn, window_id).unwrap_or_else(|| "Unknown".to_string());
         qol_gpui::probe::probe(
             "ACTIVATE_WIN",
-            &format!("wid={window_id} title=\"{title}\" source=2 timestamp=0 requester_active=0"),
+            &format!(
+                "wid={window_id} title=\"{title}\" source=2 timestamp={time} requester_active=0"
+            ),
         );
     }
     #[cfg(not(debug_assertions))]
     {
-        let _ = (conn, window_id);
+        let _ = (conn, window_id, time);
     }
 }
 

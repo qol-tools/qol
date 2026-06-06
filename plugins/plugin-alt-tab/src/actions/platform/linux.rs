@@ -1,17 +1,56 @@
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::*;
+use x11rb::protocol::Event;
+use x11rb::wrapper::ConnectionExt as _;
 
 mod trace;
 
 pub fn activate_window(window_id: u32) {
+    if window_id == 0 {
+        return;
+    }
     let Some((conn, root)) = connect() else {
         return;
     };
-    trace::activating(&conn, window_id);
     let Some(atom) = intern(&conn, b"_NET_ACTIVE_WINDOW") else {
         return;
     };
-    send_to_root(&conn, root, window_id, atom, [2, 0, 0, 0, 0]);
+    let time = server_time(&conn, root).unwrap_or(0);
+    trace::activating(&conn, window_id, time);
+    send_to_root(&conn, root, window_id, atom, [2, time, 0, 0, 0]);
+}
+
+fn server_time(conn: &impl Connection, root: u32) -> Option<u32> {
+    let window = conn.generate_id().ok()?;
+    conn.create_window(
+        0,
+        window,
+        root,
+        -100,
+        -100,
+        1,
+        1,
+        0,
+        WindowClass::INPUT_ONLY,
+        x11rb::COPY_FROM_PARENT,
+        &CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE),
+    )
+    .ok()?;
+    let probe = intern(conn, b"_QOL_ALT_TAB_TIME")?;
+    let empty: &[u8] = &[];
+    conn.change_property8(PropMode::APPEND, window, probe, AtomEnum::STRING, empty)
+        .ok()?;
+    conn.flush().ok()?;
+
+    let time = loop {
+        match conn.wait_for_event().ok()? {
+            Event::PropertyNotify(notify) if notify.window == window => break notify.time,
+            _ => continue,
+        }
+    };
+    let _ = conn.destroy_window(window);
+    let _ = conn.flush();
+    Some(time)
 }
 
 pub fn close_window(window_id: u32) {
