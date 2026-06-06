@@ -81,23 +81,29 @@ pub(crate) fn pick_active_monitor(state: &InputState) -> Option<MonitorBounds> {
             })
         }
         (Some(cursor), None) => {
-            log::debug!(
-                "[runtime/pick] cursor only → ({}, {})",
-                cursor.monitor.x,
-                cursor.monitor.y
-            );
+            if pick_log_changed(PickLog::CursorOnly(imon(&cursor.monitor))) {
+                log::debug!(
+                    "[runtime/pick] cursor only → ({}, {})",
+                    cursor.monitor.x,
+                    cursor.monitor.y
+                );
+            }
             Some(cursor.monitor)
         }
         (None, Some(focus)) => {
-            log::debug!(
-                "[runtime/pick] focus only → ({}, {})",
-                focus.monitor.x,
-                focus.monitor.y
-            );
+            if pick_log_changed(PickLog::FocusOnly(imon(&focus.monitor))) {
+                log::debug!(
+                    "[runtime/pick] focus only → ({}, {})",
+                    focus.monitor.x,
+                    focus.monitor.y
+                );
+            }
             Some(focus.monitor)
         }
         (None, None) => {
-            log::debug!("[runtime/pick] no input");
+            if pick_log_changed(PickLog::NoInput) {
+                log::debug!("[runtime/pick] no input");
+            }
             None
         }
     }
@@ -105,18 +111,53 @@ pub(crate) fn pick_active_monitor(state: &InputState) -> Option<MonitorBounds> {
 
 fn log_pick_both(cursor: &Stamped, focus: &Stamped, cursor_wins: bool) {
     let winner = if cursor_wins { "cursor" } else { "focus" };
-    log::debug!(
-        "[runtime/pick] cursor_mon=({},{}) cursor_at={:?} focus_mon=({},{}) focus_at={:?} → {}",
-        cursor.monitor.x,
-        cursor.monitor.y,
-        cursor.at,
-        focus.monitor.x,
-        focus.monitor.y,
-        focus.at,
-        winner
-    );
+    if pick_log_changed(PickLog::Both {
+        cursor: imon(&cursor.monitor),
+        focus: imon(&focus.monitor),
+        cursor_wins,
+    }) {
+        log::debug!(
+            "[runtime/pick] cursor_mon=({},{}) cursor_at={:?} focus_mon=({},{}) focus_at={:?} → {}",
+            cursor.monitor.x,
+            cursor.monitor.y,
+            cursor.at,
+            focus.monitor.x,
+            focus.monitor.y,
+            focus.at,
+            winner
+        );
+    }
     #[cfg(debug_assertions)]
     probe_pick_to_file(cursor, focus, winner);
+}
+
+#[derive(PartialEq, Eq)]
+enum PickLog {
+    Both {
+        cursor: (i32, i32),
+        focus: (i32, i32),
+        cursor_wins: bool,
+    },
+    CursorOnly((i32, i32)),
+    FocusOnly((i32, i32)),
+    NoInput,
+}
+
+fn imon(monitor: &MonitorBounds) -> (i32, i32) {
+    (monitor.x as i32, monitor.y as i32)
+}
+
+fn pick_log_changed(key: PickLog) -> bool {
+    if !log::log_enabled!(log::Level::Debug) {
+        return false;
+    }
+    static LAST: std::sync::Mutex<Option<PickLog>> = std::sync::Mutex::new(None);
+    let mut last = LAST.lock().unwrap_or_else(|poison| poison.into_inner());
+    if last.as_ref() == Some(&key) {
+        return false;
+    }
+    *last = Some(key);
+    true
 }
 
 #[cfg(debug_assertions)]
