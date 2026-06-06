@@ -81,6 +81,12 @@ impl TestWindow {
         );
     }
 
+    fn rename(&mut self, new_title: &str) {
+        self.title = new_title.to_string();
+        self.set_title();
+        let _ = self.conn.flush();
+    }
+
     fn intern(&self, name: &[u8]) -> u32 {
         self.conn
             .intern_atom(false, name)
@@ -245,4 +251,44 @@ fn popup_lifecycle_writes_expected_x11_state() {
             "without a compositor, hide should iconify the window"
         );
     }
+}
+
+#[test]
+#[ignore = "needs a real X11 display + WM; run with `cargo test -p qol-gpui --test popup_x11 -- --ignored`"]
+fn hide_rewrites_when_the_cached_window_no_longer_holds_the_title() {
+    if !display_available() {
+        eprintln!("[popup_x11] no DISPLAY; skipping");
+        return;
+    }
+    if !wm_running() {
+        eprintln!("[popup_x11] no usable window manager on $DISPLAY; skipping");
+        return;
+    }
+    let title = format!("qol-gpui-popup-recreate-{}", std::process::id());
+    let Some(mut win_a) = TestWindow::spawn(&title) else {
+        panic!("WM did not manage the first test window");
+    };
+    if !win_a.compositor_running() {
+        eprintln!("[popup_x11] no compositor; opacity cache path is inactive, skipping");
+        return;
+    }
+    let opacity_atom = win_a.intern(b"_NET_WM_WINDOW_OPACITY");
+
+    qol_gpui::popup_window::hide_window_invisible(&title);
+    assert!(
+        poll(Duration::from_secs(2), || win_a.cardinal(opacity_atom)
+            == Some(0)),
+        "first hide should make the cached window fully transparent"
+    );
+
+    win_a.rename(&format!("{title}-moved"));
+    let Some(win_b) = TestWindow::spawn(&title) else {
+        panic!("WM did not manage the replacement test window");
+    };
+
+    qol_gpui::popup_window::hide_window_invisible(&title);
+    assert!(
+        poll(Duration::from_secs(2), || win_b.cardinal(opacity_atom) == Some(0)),
+        "hide must re-resolve to the window that currently holds the title, not skip on the stale cached id"
+    );
 }
