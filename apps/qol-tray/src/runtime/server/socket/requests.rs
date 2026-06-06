@@ -34,7 +34,9 @@ fn handle_json_request(request: &str, writer: &mut UnixStream, shared: &SharedSt
         RuntimeRequest::SetFocus { monitor_idx } => {
             apply_focus(shared, monitor_idx, "[runtime/socket] SET_FOCUS")
         }
-        RuntimeRequest::Subscribe { events } => handle_subscription(writer, shared, events),
+        RuntimeRequest::Subscribe { plugin_id, events } => {
+            handle_subscription(writer, shared, plugin_id, events)
+        }
         RuntimeRequest::Lifeline { plugin_id } => handle_lifeline(writer, shared, plugin_id),
         RuntimeRequest::ArmedLifelines => {
             let response = ArmedLifelinesResponse {
@@ -71,23 +73,55 @@ fn handle_lifeline(writer: &mut UnixStream, shared: &SharedState, plugin_id: Str
 fn handle_subscription(
     writer: &mut UnixStream,
     shared: &SharedState,
+    plugin_id: String,
     events: Vec<RuntimeEventKind>,
 ) {
-    let interests: HashSet<_> = events.into_iter().collect();
+    let interests: HashSet<_> = events.iter().copied().collect();
     let (tx, rx) = std_mpsc::channel::<RuntimeEvent>();
 
-    log::info!("[runtime/socket] new subscriber: {:?}", interests);
-    shared.add_subscriber(interests, tx);
+    let clean_id = plugin_id.strip_prefix("plugin-").unwrap_or(&plugin_id);
+    log::info!(
+        "[runtime/socket] new subscriber ({}): {:?}",
+        clean_id,
+        interests
+    );
+    shared.add_subscriber(plugin_id.clone(), interests, tx);
 
     if !write_flushed_json_line(writer, &SubscribeAck::Subscribed) {
         return;
     }
 
+    let replayed_idx = replay_active_monitor(writer, shared, &events);
+    super::super::trace::subscribed(clean_id, &events, replayed_idx);
+
     let _ = writer.set_write_timeout(Some(Duration::from_secs(SUBSCRIBER_WRITE_TIMEOUT_SECS)));
 
     forward_events(writer, rx);
 
-    log::info!("[runtime/socket] subscriber disconnected");
+    log::info!("[runtime/socket] subscriber disconnected: {}", clean_id);
+}
+
+fn replay_active_monitor(
+    writer: &mut UnixStream,
+    shared: &SharedState,
+    events: &[RuntimeEventKind],
+) -> Option<usize> {
+    if !events.contains(&RuntimeEventKind::ActiveMonitorChanged) {
+        return None;
+    }
+    let monitors = shared.monitors();
+    let input = shared.input();
+    let active =
+        crate::runtime::state::pick_active_monitor(&input).or_else(|| monitors.first().copied())?;
+    let idx = monitors.iter().position(|m| *m == active)?;
+    let _ = write_flushed_json_line(
+        writer,
+        &RuntimeEvent::ActiveMonitorChanged {
+            monitor_idx: Some(idx),
+            monitor: Some(active),
+        },
+    );
+    Some(idx)
 }
 
 fn forward_events(writer: &mut UnixStream, rx: std_mpsc::Receiver<RuntimeEvent>) {

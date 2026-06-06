@@ -94,10 +94,11 @@ impl SharedState {
 
     pub(super) fn add_subscriber(
         &self,
+        plugin_id: String,
         interests: HashSet<RuntimeEventKind>,
         tx: std_mpsc::Sender<RuntimeEvent>,
     ) {
-        subscribers::push(&self.subscribers, interests, tx);
+        subscribers::push(&self.subscribers, plugin_id, interests, tx);
     }
 
     pub(super) fn build_state(&self) -> qol_runtime::PlatformState {
@@ -125,7 +126,9 @@ impl SharedState {
     }
 
     pub(crate) fn publish(&self, events: &[RuntimeEvent]) {
-        subscribers::publish(&self.subscribers, events);
+        let lifelines = self.armed_lifelines();
+        let monitors = self.monitors();
+        subscribers::publish(&self.subscribers, events, &lifelines, &monitors);
     }
 
     pub(super) fn remember_focus_bounds(&self, bounds: Option<MonitorBounds>) -> bool {

@@ -71,16 +71,16 @@ pub(crate) fn monitor_for_point(
 
 const CURSOR_ACTIVE_WINDOW: Duration = Duration::from_millis(1500);
 
-pub(crate) fn pick_active_monitor(state: &InputState, fallback: MonitorBounds) -> MonitorBounds {
+pub(crate) fn pick_active_monitor(state: &InputState) -> Option<MonitorBounds> {
     match (state.cursor.as_ref(), state.focus.as_ref()) {
         (Some(cursor), Some(focus)) => {
             let cursor_wins = cursor.at > focus.at && cursor.at.elapsed() < CURSOR_ACTIVE_WINDOW;
             log_pick_both(cursor, focus, cursor_wins);
-            if cursor_wins {
+            Some(if cursor_wins {
                 cursor.monitor
             } else {
                 focus.monitor
-            }
+            })
         }
         (Some(cursor), None) => {
             log::debug!(
@@ -88,7 +88,7 @@ pub(crate) fn pick_active_monitor(state: &InputState, fallback: MonitorBounds) -
                 cursor.monitor.x,
                 cursor.monitor.y
             );
-            cursor.monitor
+            Some(cursor.monitor)
         }
         (None, Some(focus)) => {
             log::debug!(
@@ -96,11 +96,11 @@ pub(crate) fn pick_active_monitor(state: &InputState, fallback: MonitorBounds) -
                 focus.monitor.x,
                 focus.monitor.y
             );
-            focus.monitor
+            Some(focus.monitor)
         }
         (None, None) => {
-            log::debug!("[runtime/pick] fallback");
-            fallback
+            log::debug!("[runtime/pick] no input");
+            None
         }
     }
 }
@@ -123,18 +123,16 @@ fn log_pick_both(cursor: &Stamped, focus: &Stamped, cursor_wins: bool) {
 
 #[cfg(debug_assertions)]
 fn probe_pick_to_file(cursor: &Stamped, focus: &Stamped, winner: &str) {
-    crate::probe::probe(
+    qol_runtime::probe!(
         "PICK",
-        &format!(
-            "cursor=({},{}) cursor_age_ms={} focus=({},{}) focus_age_ms={} winner={}",
-            cursor.monitor.x as i32,
-            cursor.monitor.y as i32,
-            cursor.at.elapsed().as_millis(),
-            focus.monitor.x as i32,
-            focus.monitor.y as i32,
-            focus.at.elapsed().as_millis(),
-            winner,
-        ),
+        "cursor=({},{}) cursor_age_ms={} focus=({},{}) focus_age_ms={} winner={}",
+        cursor.monitor.x as i32,
+        cursor.monitor.y as i32,
+        cursor.at.elapsed().as_millis(),
+        focus.monitor.x as i32,
+        focus.monitor.y as i32,
+        focus.at.elapsed().as_millis(),
+        winner,
     );
 }
 
@@ -229,9 +227,8 @@ mod tests {
     }
 
     #[test]
-    fn pick_active_monitor_returns_fallback_when_state_is_empty() {
-        let fb = mon(0.0, 0.0, 1920.0, 1080.0);
-        assert_eq!(pick_active_monitor(&InputState::default(), fb), fb);
+    fn pick_active_monitor_is_none_when_state_is_empty() {
+        assert_eq!(pick_active_monitor(&InputState::default()), None);
     }
 
     #[test]
@@ -244,7 +241,7 @@ mod tests {
             }),
             ..InputState::default()
         };
-        assert_eq!(pick_active_monitor(&state, mon(0.0, 0.0, 1.0, 1.0)), m);
+        assert_eq!(pick_active_monitor(&state), Some(m));
     }
 
     #[test]
@@ -257,7 +254,7 @@ mod tests {
             }),
             ..InputState::default()
         };
-        assert_eq!(pick_active_monitor(&state, mon(0.0, 0.0, 1.0, 1.0)), m);
+        assert_eq!(pick_active_monitor(&state), Some(m));
     }
 
     #[test]
@@ -276,8 +273,8 @@ mod tests {
             }),
         };
         assert_eq!(
-            pick_active_monitor(&state, mon(0.0, 0.0, 1.0, 1.0)),
-            cursor_mon,
+            pick_active_monitor(&state),
+            Some(cursor_mon),
             "cursor is newer, cursor wins",
         );
         state.focus = Some(Stamped {
@@ -285,8 +282,8 @@ mod tests {
             at: at(base, 200),
         });
         assert_eq!(
-            pick_active_monitor(&state, mon(0.0, 0.0, 1.0, 1.0)),
-            focus_mon,
+            pick_active_monitor(&state),
+            Some(focus_mon),
             "focus is newer, focus wins",
         );
     }
@@ -307,8 +304,8 @@ mod tests {
             }),
         };
         assert_eq!(
-            pick_active_monitor(&state, mon(0.0, 0.0, 1.0, 1.0)),
-            focus_mon,
+            pick_active_monitor(&state),
+            Some(focus_mon),
             "stale cursor (5s) yields to the focused window despite a newer stamp",
         );
     }
@@ -328,10 +325,7 @@ mod tests {
                 at: now,
             }),
         };
-        assert_eq!(
-            pick_active_monitor(&state, mon(0.0, 0.0, 1.0, 1.0)),
-            focus_mon,
-        );
+        assert_eq!(pick_active_monitor(&state), Some(focus_mon));
     }
 
     #[test]
@@ -520,16 +514,9 @@ mod tests {
                 cursor: Some(Stamped { monitor: cursor_mon, at: cursor_at }),
                 focus: Some(Stamped { monitor: focus_mon, at: focus_at }),
             };
-            let fallback = mon(0.0, 0.0, 1.0, 1.0);
-            let picked = pick_active_monitor(&state, fallback);
+            let picked = pick_active_monitor(&state);
             let expected = if cursor_at > focus_at { cursor_mon } else { focus_mon };
-            prop_assert_eq!(picked, expected);
-        }
-
-        #[test]
-        fn prop_pick_active_monitor_falls_back_when_both_absent(m in monitor_strategy()) {
-            let picked = pick_active_monitor(&InputState::default(), m);
-            prop_assert_eq!(picked, m);
+            prop_assert_eq!(picked, Some(expected));
         }
 
         #[test]

@@ -31,9 +31,17 @@ pub enum DaemonResponse {
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum RuntimeRequest {
     GetState,
-    SetFocus { monitor_idx: usize },
-    Subscribe { events: Vec<RuntimeEventKind> },
-    Lifeline { plugin_id: String },
+    SetFocus {
+        monitor_idx: usize,
+    },
+    Subscribe {
+        #[serde(default)]
+        plugin_id: String,
+        events: Vec<RuntimeEventKind>,
+    },
+    Lifeline {
+        plugin_id: String,
+    },
     ArmedLifelines,
 }
 

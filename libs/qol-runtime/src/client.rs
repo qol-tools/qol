@@ -63,7 +63,9 @@ impl PlatformStateClient {
     }
 
     pub fn subscribe(&self, events: Vec<RuntimeEventKind>) -> Option<Subscription> {
-        self.open_subscription(RuntimeRequest::Subscribe { events })
+        let plugin_id =
+            std::env::var("QOL_TRAY_PLUGIN_ID").unwrap_or_else(|_| "unknown".to_string());
+        self.open_subscription(RuntimeRequest::Subscribe { plugin_id, events })
     }
 
     pub fn lifeline(&self, plugin_id: &str) -> Option<Subscription> {

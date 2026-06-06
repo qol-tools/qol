@@ -89,6 +89,7 @@ dependencies = [
  "qol-config",
  "qol-gpui",
  "qol-plugin-daemon",
+ "qol-runtime",
  "qol-tray",
  "serde",
  "serde_json",

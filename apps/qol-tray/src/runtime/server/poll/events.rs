@@ -54,7 +54,11 @@ impl EventTracker {
             return None;
         }
 
+        let is_boot = self.prev_active_idx.is_none();
         self.prev_active_idx = current_idx;
+
+        qol_runtime::probe!("HOST_EMIT_AMC", "new_idx={current_idx:?} is_boot={is_boot}");
+
         Some(RuntimeEvent::ActiveMonitorChanged {
             monitor_idx: current_idx,
             monitor: monitor_at(monitors, current_idx),
@@ -97,7 +101,7 @@ fn monitors_changed_event(shared: &SharedState, changed: bool) -> Option<Runtime
 }
 
 fn active_monitor_idx(input: &InputState, monitors: &[MonitorBounds]) -> Option<usize> {
-    let active = state::pick_active_monitor(input, fallback_monitor(monitors));
+    let active = state::pick_active_monitor(input).or_else(|| monitors.first().copied())?;
     monitor_idx(monitors, active)
 }
 
@@ -112,15 +116,6 @@ fn monitor_idx(monitors: &[MonitorBounds], monitor: MonitorBounds) -> Option<usi
 
 fn monitor_at(monitors: &[MonitorBounds], idx: Option<usize>) -> Option<MonitorBounds> {
     idx.and_then(|idx| monitors.get(idx).copied())
-}
-
-fn fallback_monitor(monitors: &[MonitorBounds]) -> MonitorBounds {
-    monitors.first().copied().unwrap_or(MonitorBounds {
-        x: 0.0,
-        y: 0.0,
-        width: 1920.0,
-        height: 1080.0,
-    })
 }
 
 #[cfg(test)]

@@ -191,7 +191,12 @@ impl AltTabApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let title = self.picker_title.clone();
         self.delegate.update(cx, |state, ctx| {
+            let was_stale = state
+                .windows
+                .iter()
+                .any(|w| w.app_name.starts_with("__warmup_"));
             state.set_windows(gathered.windows.clone(), reset, ctx, Some(&mut *window));
             state.replace_caches(
                 gathered.previews.clone(),
@@ -199,6 +204,13 @@ impl AltTabApp {
                 ctx,
                 Some(&mut *window),
             );
+            let is_stale = state
+                .windows
+                .iter()
+                .any(|w| w.app_name.starts_with("__warmup_"));
+            if was_stale && !is_stale {
+                qol_runtime::probe!("PICKER_READY", "title={title}");
+            }
             ctx.notify();
         });
         cx.notify();
@@ -250,7 +262,7 @@ impl AltTabApp {
         window_handle: AnyWindowHandle,
         cx: &mut Context<Self>,
     ) {
-        qol_gpui::probe::probe("ALT_POLL_START", &format!("title={}", self.picker_title));
+        qol_runtime::probe!("ALT_POLL_START", "title={}", self.picker_title);
         let delegate = self.delegate.clone();
         self.alt_was_held = true;
         self._alt_poll_task = Some(cx.spawn(move |this, cx: &mut AsyncApp| {
@@ -334,10 +346,7 @@ impl AltTabApp {
     ) {
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/dismiss] from={}", _source);
-        qol_gpui::probe::probe(
-            "DISMISS",
-            &format!("from={_source} title={}", self.picker_title),
-        );
+        qol_runtime::probe!("DISMISS", "from={_source} title={}", self.picker_title);
         self._alt_poll_task = None;
         self.blur_guard_armed = false;
         PICKER_VISIBLE.store(false, Ordering::Relaxed);

@@ -51,20 +51,19 @@ fn log_state_change(input: &InputState, before: (MonitorStamp, MonitorStamp), sa
         return;
     }
 
-    let active = state::pick_active_monitor(input, zero_monitor());
+    let active = state::pick_active_monitor(input).map(|m| (m.x, m.y));
     let focus_bounds = sample.focus_bounds.map(|b| (b.x, b.y, b.width, b.height));
     let cursor = input.cursor.as_ref().map(|c| (c.monitor.x, c.monitor.y));
     let focus = input.focus.as_ref().map(|f| (f.monitor.x, f.monitor.y));
 
     log::debug!(
-        "[runtime/poll] STATE CHANGE committed={} focus_changed={} focus_bounds={:?} cursor=({:?}) focus=({:?}) → active=({}, {})",
+        "[runtime/poll] STATE CHANGE committed={} focus_changed={} focus_bounds={:?} cursor=({:?}) focus=({:?}) → active={:?}",
         sample.committed,
         sample.focus_changed,
         focus_bounds,
         cursor,
         focus,
-        active.x,
-        active.y,
+        active,
     );
 }
 
@@ -77,15 +76,6 @@ fn snapshot_input(input: &InputState) -> (MonitorStamp, MonitorStamp) {
 
 fn snapshot_stamp(stamp: Option<&Stamped>) -> MonitorStamp {
     stamp.map(|stamp| (stamp.monitor, stamp.at))
-}
-
-fn zero_monitor() -> MonitorBounds {
-    MonitorBounds {
-        x: 0.0,
-        y: 0.0,
-        width: 0.0,
-        height: 0.0,
-    }
 }
 
 #[cfg(test)]

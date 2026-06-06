@@ -132,7 +132,7 @@ pub fn show_window_by_title(title: &str) -> bool {
     let _ = conn.flush();
     crate::probe::probe(
         "SHOW_WIN",
-        &format!("title={title} wid={wid} cleared_opacity->1"),
+        &format!("title={title} wid={wid} cleared_opacity->1 source={SOURCE_APPLICATION} timestamp=0 requester_active=0"),
     );
     true
 }

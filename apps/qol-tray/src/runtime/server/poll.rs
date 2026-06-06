@@ -112,6 +112,7 @@ impl PollRuntime {
             return;
         }
         self.shared.set_monitors(self.monitors.monitors().to_vec());
+        super::trace::print_monitor_legend();
     }
 
     fn refresh_monitors(&mut self) -> bool {
@@ -122,6 +123,7 @@ impl PollRuntime {
         let changed = self.monitors.poll();
         if changed {
             self.shared.set_monitors(self.monitors.monitors().to_vec());
+            super::trace::print_monitor_legend();
         }
 
         self.last_monitor_poll = Instant::now();
@@ -278,7 +280,7 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        shared.add_subscriber(interests, tx);
+        shared.add_subscriber("test-plugin".to_string(), interests, tx);
         rx
     }
 

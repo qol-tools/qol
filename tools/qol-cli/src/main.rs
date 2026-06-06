@@ -32,6 +32,7 @@ fn run(args: Vec<OsString>) -> Result<()> {
         "build" => commands::build::run(rest, args.verbose),
         "clean" => commands::clean::run(rest, args.verbose),
         "install" => commands::install::run(args.verbose),
+        "trace" => commands::trace::run(rest),
         "sync" => bail!("`qol sync` is not implemented yet - use `make sync` for now"),
         "help" | "-h" | "--help" => print_help(),
         other => bail!("unknown command `{other}`\n\n{}", help_text()),
