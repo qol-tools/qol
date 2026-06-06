@@ -1,3 +1,4 @@
+use crate::discovery::WindowDiscovery;
 use crate::picker::create::PICKER_WINDOW_TITLE;
 
 pub fn hide_picker(title: &str) {
@@ -53,8 +54,11 @@ pub fn pre_create(
         config.display.ghost_opacity,
         config.display.ghost_debug_color.as_deref(),
     );
+    let windows = crate::discovery::Platform
+        .visible_windows(config.display.show_minimized)
+        .unwrap_or_default();
     let placement = qol_gpui::window::PopupPlacement::from_tracker(tracker);
-    crate::picker::create::pre_create_ghost(config, current, &placement, cx);
+    crate::picker::create::pre_create_ghost(config, current, &placement, &windows, cx);
 }
 
 pub fn destroy_non_target_windows(
