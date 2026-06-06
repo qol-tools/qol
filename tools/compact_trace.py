@@ -168,6 +168,12 @@ def get_process_name(pid):
     except Exception:
         return str(pid)
 
+def reason_suffix(msg):
+    m = re.search(r"\breason=(?P<reason>\S+)", msg)
+    if not m or m.group("reason") == "?":
+        return ""
+    return f" {COLOR_DIM}(why: {m.group('reason')}){COLOR_RESET}"
+
 def percentile(values, p):
     if not values:
         return 0
@@ -387,7 +393,7 @@ def process_line(ts_raw, pid, tag, msg):
             last_printed_opacities[comp_title] = opacity
             
             op_color = COLOR_OK if opacity > 0.0 else COLOR_DIM
-            text = f"{comp_title} -> {op_color}{opacity}{COLOR_RESET}"
+            text = f"{comp_title} -> {op_color}{opacity}{COLOR_RESET}{reason_suffix(msg)}"
             event_buffer.append((int(ts_raw), ts, "HIDE_WIN", proc_name, text))
             last_event_real_time = time.time()
 
@@ -415,7 +421,7 @@ def process_line(ts_raw, pid, tag, msg):
                 req = payload_m.group("req")
                 payload_details = f" {COLOR_DIM}(EWMH: source={src}, timestamp={ts_val}, active={req}){COLOR_RESET}"
             
-            text = f"{comp_title} -> {COLOR_OK}{opacity}{COLOR_RESET}{payload_details}"
+            text = f"{comp_title} -> {COLOR_OK}{opacity}{COLOR_RESET}{reason_suffix(msg)}{payload_details}"
             event_buffer.append((int(ts_raw), ts, "SHOW_WIN", proc_name, text))
             last_event_real_time = time.time()
 

@@ -203,6 +203,7 @@ pub(crate) fn pre_create_ghost(
     placement: &PopupPlacement,
     cx: &mut App,
 ) {
+    let _reason = qol_gpui::popup_window::reason_scope("boot");
     let layout = super::reuse::compute_layout(&super::reuse::LayoutInput { placement }, cx);
     let target = placement.target();
     if current.borrow().existing(target).is_some() {

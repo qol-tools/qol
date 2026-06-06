@@ -70,6 +70,7 @@ pub fn hide_window_invisible(title: &str) -> bool {
 }
 
 fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
+    let reason = crate::popup_window::change_reason();
     let Ok((conn, screen_num)) = x11rb::connect(None) else {
         return false;
     };
@@ -83,7 +84,10 @@ fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
     };
     let Some(wid) = find_window_by_title(&conn, root, list_atom, name_atom, utf8_atom, title)
     else {
-        crate::probe::probe("HIDE_WIN", &format!("title={title} wid=NONE"));
+        crate::probe::probe(
+            "HIDE_WIN",
+            &format!("title={title} wid=NONE reason={reason}"),
+        );
         return false;
     };
     if compositor_running(&conn, screen_num) && set_input_passthrough(&conn, wid, true) {
@@ -91,17 +95,21 @@ fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
         let _ = conn.flush();
         crate::probe::probe(
             "HIDE_WIN",
-            &format!("title={title} wid={wid} path=compositor opacity={opacity} applied={applied}"),
+            &format!("title={title} wid={wid} path=compositor opacity={opacity} applied={applied} reason={reason}"),
         );
         return true;
     }
     let _ = conn.unmap_window(wid);
     let _ = conn.flush();
-    crate::probe::probe("HIDE_WIN", &format!("title={title} wid={wid} path=unmap"));
+    crate::probe::probe(
+        "HIDE_WIN",
+        &format!("title={title} wid={wid} path=unmap reason={reason}"),
+    );
     true
 }
 
 pub fn show_window_by_title(title: &str) -> bool {
+    let reason = crate::popup_window::change_reason();
     let Ok((conn, screen_num)) = x11rb::connect(None) else {
         return false;
     };
@@ -115,7 +123,10 @@ pub fn show_window_by_title(title: &str) -> bool {
     };
     let Some(wid) = find_window_by_title(&conn, root, list_atom, name_atom, utf8_atom, title)
     else {
-        crate::probe::probe("SHOW_WIN", &format!("title={title} wid=NONE"));
+        crate::probe::probe(
+            "SHOW_WIN",
+            &format!("title={title} wid=NONE reason={reason}"),
+        );
         return false;
     };
     let Some(active_atom) = intern(&conn, b"_NET_ACTIVE_WINDOW") else {
@@ -131,7 +142,7 @@ pub fn show_window_by_title(title: &str) -> bool {
     let _ = conn.flush();
     crate::probe::probe(
         "SHOW_WIN",
-        &format!("title={title} wid={wid} cleared_opacity->1 source={SOURCE_APPLICATION} timestamp=0 requester_active=0"),
+        &format!("title={title} wid={wid} cleared_opacity->1 source={SOURCE_APPLICATION} timestamp=0 requester_active=0 reason={reason}"),
     );
     true
 }

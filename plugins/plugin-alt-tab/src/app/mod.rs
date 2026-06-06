@@ -353,6 +353,7 @@ impl AltTabApp {
         if let Ok(mut lock) = ACTIVE_PICKER_MONITOR.lock() {
             *lock = None;
         }
+        let _reason = qol_gpui::popup_window::reason_scope("dismiss");
         picker::platform::hide_picker(&self.picker_title);
         qol_gpui::popup_window::dump_ghost_windows(&format!("dismiss title={}", self.picker_title));
         picker::request_data_refresh();
