@@ -46,6 +46,22 @@ picker_status = {}
 # Dynamic monitor bounds registry: list of (x, y, w, h)
 monitors = []
 
+# Aggregate stats for --stats / --replay summaries
+stats = {
+    "focus_req": 0,
+    "focus_ok": 0,
+    "focus_misdirect": 0,
+    "focus_timeout": 0,
+    "supersede": 0,
+    "divergence": 0,
+    "oscillation": 0,
+    "latencies": [],
+    "focus_history": [],
+}
+last_divergence = None
+
+ANOMALY_MARKERS = ("MISDIRECTED", "FOCUS FAILURE", "SUPERSEDED", "DIVERGENCE", "Timed out", "THRASH")
+
 import argparse
 
 # Pre-process arguments for legacy positional command style
@@ -72,6 +88,9 @@ parser.add_argument("--topic", choices=["focus", "monitor", "boot", "opacity", "
 parser.add_argument("--grep", help="Filter output lines by substring")
 parser.add_argument("--since", help="Filter events since duration (e.g. 5s, 10m)")
 parser.add_argument("--mark", help="Inject a custom marker label into the log and exit")
+parser.add_argument("--stats", action="store_true", help="Accumulate focus/latency stats and print a summary on exit")
+parser.add_argument("--replay", action="store_true", help="Process the whole existing log from the start, then exit (pairs with --stats)")
+parser.add_argument("--anomalies", action="store_true", help="Show only anomalies: misdirects, timeouts, supersedes, divergences")
 
 args = parser.parse_args(sys_args)
 
@@ -149,6 +168,42 @@ def get_process_name(pid):
     except Exception:
         return str(pid)
 
+def percentile(values, p):
+    if not values:
+        return 0
+    ordered = sorted(values)
+    k = int(round((p / 100.0) * (len(ordered) - 1)))
+    return ordered[max(0, min(len(ordered) - 1, k))]
+
+def record_focus_ok(ts_ms, wid, latency):
+    stats["focus_ok"] += 1
+    stats["latencies"].append(latency)
+    history = stats["focus_history"]
+    history.append((ts_ms, wid))
+    while history and ts_ms - history[0][0] > 2000:
+        history.pop(0)
+    if len(history) >= 3 and history[-1][1] == history[-3][1] != history[-2][1]:
+        stats["oscillation"] += 1
+
+def print_stats():
+    if not args.stats:
+        return
+    resolved = stats["focus_ok"] + stats["focus_misdirect"] + stats["focus_timeout"]
+    lat = stats["latencies"]
+    print(f"\n{COLOR_HEADER}═══ SESSION STATS ═══{COLOR_RESET}")
+    print(f"  Focus requests sent:  {stats['focus_req']}")
+    print(f"  Focus resolved:       {resolved}")
+    print(f"    {COLOR_OK}✔ success{COLOR_RESET}      {stats['focus_ok']}")
+    print(f"    {COLOR_WARN}⚠ misdirected{COLOR_RESET}  {stats['focus_misdirect']}")
+    print(f"    {COLOR_FAIL}✖ timed out{COLOR_RESET}    {stats['focus_timeout']}")
+    print(f"    ⚡ superseded   {stats['supersede']}")
+    print(f"    ⟳ oscillations {stats['oscillation']}")
+    print(f"    ⚠ divergences  {stats['divergence']}")
+    if lat:
+        print(f"  Focus latency ms: p50={percentile(lat, 50)} p95={percentile(lat, 95)} "
+              f"max={max(lat)} min={min(lat)} (n={len(lat)})")
+    print(f"{COLOR_HEADER}═════════════════════{COLOR_RESET}")
+
 def parse_line(line):
     m = re.match(r"(?P<ts>\d+)\s+pid=(?P<pid>\d+)\s+(?P<tag>\w+)\s+(?P<msg>.*)", line)
     if m:
@@ -171,13 +226,14 @@ def process_line(ts_raw, pid, tag, msg):
     global last_printed_opacities, last_printed_statuses
     global event_buffer, last_event_real_time, ghost_dump_active, dumped_windows
     global target_opacities, picker_status
-    global pending_activation, last_parsed_ts
-    
+    global pending_activation, last_parsed_ts, last_divergence
+
     last_parsed_ts = int(ts_raw)
     
     # Check timeout for pending activation relative to parsed log time
     if pending_activation:
         if last_parsed_ts - pending_activation["ts_raw"] > 600:
+            stats["focus_timeout"] += 1
             if not filter_plugin or pending_activation.get("source") == filter_plugin:
                 target = pending_activation["title"]
                 wid = pending_activation["wid"]
@@ -239,36 +295,45 @@ def process_line(ts_raw, pid, tag, msg):
             x, y = m.group("x"), m.group("y")
             short_title = title[:30] + "..." if len(title) > 30 else title
             mon = get_monitor_name(x, y)
-            
-            pid_m = re.search(r"pid=(?P<pid>\d+)", msg)
+
+            wid_m = re.search(r"\bwid=(?P<wid>\d+)", msg)
+            focused_wid = wid_m.group("wid") if wid_m else None
+            ignored_tag = f" {COLOR_WARN}(ignored){COLOR_RESET}" if re.search(r"\bignored=true", msg) else ""
+
+            pid_m = re.search(r"\bpid=(?P<pid>\d+)", msg)
             proc_info = ""
             if pid_m:
-                pid = pid_m.group("pid")
-                try:
-                    with open(f"/proc/{pid}/comm", "r") as f:
-                        proc_name = f.read().strip()
-                    proc_info = f" (proc: {proc_name}, pid: {pid})"
-                except Exception:
-                    proc_info = f" (pid: {pid})"
-            
+                fpid = pid_m.group("pid")
+                proc_info = f" (proc: {get_process_name(fpid)}, pid: {fpid})"
+
             if pending_activation:
                 if filter_plugin and pending_activation.get("source") != filter_plugin:
                     return
                 target = pending_activation["title"]
-                is_match = (target.lower() in title.lower()) or (title.lower() in target.lower())
+                req_wid = pending_activation.get("wid")
                 latency = int(ts_raw) - pending_activation["ts_raw"]
-                
-                if is_match:
-                    text = f"{COLOR_SUCCESS}✔ FOCUS SUCCESS{COLOR_RESET}: Focused \"{title}\" (wid: {pending_activation['wid']}) in {COLOR_SUCCESS}{latency}ms{COLOR_RESET}"
+
+                if focused_wid is not None and req_wid is not None:
+                    is_match = focused_wid == req_wid
                 else:
-                    text = f"{COLOR_WARN}⚠ MISDIRECTED FOCUS{COLOR_RESET}: Requested \"{target}\", but focused \"{title}\"{proc_info} instead after {latency}ms."
-                
+                    is_match = (target.lower() in title.lower()) or (title.lower() in target.lower())
+
+                if is_match:
+                    text = (f"{COLOR_SUCCESS}✔ FOCUS SUCCESS{COLOR_RESET}: Focused \"{title}\" "
+                            f"(wid: {req_wid}) in {COLOR_SUCCESS}{latency}ms{COLOR_RESET}{ignored_tag}")
+                    record_focus_ok(int(ts_raw), req_wid, latency)
+                else:
+                    text = (f"{COLOR_WARN}⚠ MISDIRECTED FOCUS{COLOR_RESET}: Requested \"{target}\" "
+                            f"(wid: {req_wid}), but focused \"{title}\" (wid: {focused_wid}){proc_info} "
+                            f"after {latency}ms.")
+                    stats["focus_misdirect"] += 1
+
                 pending_activation = None
                 event_buffer.append((int(ts_raw), ts, "FOCUS", "host", text))
             else:
                 if filter_plugin:
                     return
-                text = f"Active window: \"{short_title}\"{proc_info} on {mon}"
+                text = f"Active window: \"{short_title}\"{proc_info} on {mon}{ignored_tag}"
                 event_buffer.append((int(ts_raw), ts, "FOCUS", "host", text))
             last_event_real_time = time.time()
                    
@@ -399,9 +464,11 @@ def process_line(ts_raw, pid, tag, msg):
                 
             if pending_activation:
                 prev_target = pending_activation["title"]
+                stats["supersede"] += 1
                 text = f"{COLOR_WARN}⚠ SUPERSEDED{COLOR_RESET}: New request to focus \"{title}\" arrived before focus on \"{prev_target}\" was confirmed."
                 event_buffer.append((int(ts_raw), ts, "FOCUS_WARN", proc_name, text))
-                
+
+            stats["focus_req"] += 1
             pending_activation = {
                 "ts_raw": int(ts_raw),
                 "wid": wid,
@@ -548,6 +615,12 @@ def process_line(ts_raw, pid, tag, msg):
             all_divergences = inactive_visible + divergence_msgs
             if all_divergences:
                 status = COLOR_FAIL + f"DIVERGENCE: {', '.join(all_divergences)}" + COLOR_RESET
+                divergence_key = ", ".join(sorted(all_divergences))
+                if divergence_key != last_divergence:
+                    stats["divergence"] += 1
+                    last_divergence = divergence_key
+            else:
+                last_divergence = None
                 
             active_parts = []
             if active_ghosts:
@@ -723,6 +796,8 @@ def flush_buffer():
     for ts_val, ts_str, tag, source, text in event_buffer:
         if args.grep and args.grep.lower() not in text.lower():
             continue
+        if args.anomalies and not any(mk in text for mk in ANOMALY_MARKERS):
+            continue
         if tag == "SUMMARY":
             if text == last_printed_state_summary:
                 continue
@@ -773,6 +848,21 @@ def query_initial_monitors():
     except Exception:
         pass
 
+REPLAY_GAP_MS = 120
+
+def replay_log(f, start_ts):
+    prev_ts = None
+    for line in f:
+        ts, pid, tag, msg = parse_line(line.strip())
+        if not (ts and pid and tag and msg):
+            continue
+        if start_ts > 0 and int(ts) < start_ts:
+            continue
+        if prev_ts is not None and int(ts) - prev_ts > REPLAY_GAP_MS and event_buffer:
+            flush_buffer()
+        process_line(ts, pid, tag, msg)
+        prev_ts = int(ts)
+
 def main():
     global last_event_real_time, pending_activation
     if args.mark:
@@ -813,11 +903,18 @@ def main():
             start_ts = int((time.time() - val * mult) * 1000)
 
     f = open(LOG_FILE, "r")
+    if args.replay:
+        f.seek(0)
+        print(f"{COLOR_DIM}Replaying full log...{COLOR_RESET}\n")
+        replay_log(f, start_ts)
+        flush_buffer()
+        print_stats()
+        sys.exit(0)
     if start_ts > 0:
         print(f"Reading events since {args.since}...")
     else:
         f.seek(0, os.SEEK_END)
-    
+
     try:
         while True:
             # Check timeout for pending activation in real-time
@@ -848,6 +945,7 @@ def main():
                 process_line(ts, pid, tag, msg)
     except KeyboardInterrupt:
         flush_buffer()
+        print_stats()
         print(f"\n{COLOR_HEADER}Exiting tailer.{COLOR_RESET}")
         sys.exit(0)
 
