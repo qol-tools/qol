@@ -14,6 +14,7 @@ pub(crate) struct ReuseRequest<'a> {
     pub layout: &'a ReuseLayout,
     pub config: &'a AltTabConfig,
     pub gathered: &'a GatheredWindows,
+    pub all_titles: &'a [String],
     pub reverse: bool,
 }
 
@@ -39,8 +40,7 @@ pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
             }
             window.focus(&view.focus_handle(cx));
             window.activate_window();
-            super::platform::show_picker(&title);
-            qol_gpui::popup_window::dump_ghost_windows(&format!("alt-tab-show title={title}"));
+            qol_gpui::ghost::show_ghost_window(&title, req.all_titles);
             true
         })
         .unwrap_or(false)
