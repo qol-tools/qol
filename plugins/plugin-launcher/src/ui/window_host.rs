@@ -50,7 +50,36 @@ pub(crate) fn pre_create_ghost(
         active.borrow_mut().insert(target, handle);
         let _ = handle.update(cx, |view, _window, _cx| view.set_showing(false));
 
-        qol_gpui::ghost::spawn_boot_reassert(cx, title, placement.bounds);
+        #[cfg(target_os = "linux")]
+        {
+            popup_window::configure_popup_window(&title);
+            popup_window::disable_window_shadow(&title);
+            popup_window::hide_window_invisible(&title);
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            popup_window::configure_popup_window(&title);
+            popup_window::hide_window_by_title(&title);
+        }
+    }
+    let active_monitor = qol_gpui::ghost::active_monitor().or_else(|| {
+        qol_gpui::PlatformStateClient::from_env()
+            .get_state()
+            .and_then(|s| {
+                s.active_monitor()
+                    .map(qol_gpui::monitor::ActiveMonitor::from_bounds)
+            })
+    });
+    if let Some(active_mon) = active_monitor {
+        let active_key = qol_gpui::window::MonitorKey::from_bounds(&active_mon.bounds());
+        let active_title = qol_gpui::ghost::ghost_window_title(LAUNCHER_WINDOW_TITLE, active_key);
+        let all_titles: Vec<String> = active
+            .borrow()
+            .iter()
+            .into_iter()
+            .map(|(key, _)| qol_gpui::ghost::ghost_window_title(LAUNCHER_WINDOW_TITLE, key))
+            .collect();
+        qol_gpui::ghost::reconcile(&active_title, &all_titles);
     }
 }
 
@@ -88,7 +117,7 @@ fn reposition_idle_ghost(
         .map(|(key, _)| qol_gpui::ghost::ghost_window_title(LAUNCHER_WINDOW_TITLE, key))
         .collect();
 
-    qol_gpui::ghost::active_monitor_changed(&target_title, &all_titles);
+    qol_gpui::ghost::reconcile(&target_title, &all_titles);
 }
 
 pub(crate) fn activate_or_open_launcher(

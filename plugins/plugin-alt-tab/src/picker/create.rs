@@ -222,7 +222,33 @@ pub(crate) fn pre_create_ghost(
         super::platform::sync_picker_window_layout(&title, window, bounds.origin, bounds.size)
     });
     super::platform::disable_window_shadow(&title);
-    super::platform::hide_picker(&title);
+    #[cfg(target_os = "linux")]
+    {
+        qol_gpui::popup_window::hide_window_invisible(&title);
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        super::platform::hide_picker(&title);
+    }
+    let active_monitor = qol_gpui::ghost::active_monitor().or_else(|| {
+        qol_gpui::PlatformStateClient::from_env()
+            .get_state()
+            .and_then(|s| {
+                s.active_monitor()
+                    .map(qol_gpui::monitor::ActiveMonitor::from_bounds)
+            })
+    });
+    if let Some(active) = active_monitor {
+        let active_key = qol_gpui::window::MonitorKey::from_bounds(&active.bounds());
+        let active_title = super::platform::picker_window_title(active_key);
+        let all_titles: Vec<String> = current
+            .borrow()
+            .iter()
+            .into_iter()
+            .map(|(key, _)| super::platform::picker_window_title(key))
+            .collect();
+        qol_gpui::ghost::reconcile(&active_title, &all_titles);
+    }
     PICKER_VISIBLE.store(false, Ordering::Relaxed);
     qol_runtime::probe!("PICKER_STALE", "title={title}");
     qol_gpui::popup_window::dump_ghost_windows(&format!("pre-create title={title}"));

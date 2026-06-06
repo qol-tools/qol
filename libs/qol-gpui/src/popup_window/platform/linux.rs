@@ -88,7 +88,6 @@ fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
     };
     if compositor_running(&conn, screen_num) && set_input_passthrough(&conn, wid, true) {
         let applied = set_window_opacity(&conn, wid, opacity);
-        let _ = conn.map_window(wid);
         let _ = conn.flush();
         crate::probe::probe(
             "HIDE_WIN",

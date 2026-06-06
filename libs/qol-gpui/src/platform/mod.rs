@@ -43,3 +43,28 @@ pub fn should_poll_focus() -> bool {
 pub fn has_process_focus() -> bool {
     imp::has_process_focus()
 }
+
+pub fn spawn_reassert_driver<F, G>(
+    gen: &'static std::sync::atomic::AtomicU64,
+    commit_gen: u64,
+    steps_ms: &[u64],
+    mut is_active: F,
+    mut reassert: G,
+) where
+    F: FnMut() -> bool + Send + 'static,
+    G: FnMut() + Send + 'static,
+{
+    let steps = steps_ms.to_vec();
+    std::thread::spawn(move || {
+        for step_ms in steps {
+            std::thread::sleep(std::time::Duration::from_millis(step_ms));
+            if gen.load(std::sync::atomic::Ordering::SeqCst) != commit_gen {
+                return;
+            }
+            if is_active() {
+                continue;
+            }
+            reassert();
+        }
+    });
+}
