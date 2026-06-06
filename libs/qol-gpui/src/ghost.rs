@@ -168,7 +168,7 @@ fn configure_and_hide(title: &str, bounds: Bounds<Pixels>) -> bool {
         bounds.size.height.to_f64(),
     );
     popup_window::disable_window_shadow(title);
-    popup_window::hide_window_by_title(title);
+    popup_window::hide_window_invisible(title);
     true
 }
 
@@ -180,7 +180,7 @@ async fn rehide_after_settle(cx: &AsyncApp, title: &str) {
             .await;
         let title = title.to_string();
         let _ = cx.update(move |_| {
-            popup_window::hide_window_by_title(&title);
+            popup_window::hide_window_invisible(&title);
         });
     }
 }
