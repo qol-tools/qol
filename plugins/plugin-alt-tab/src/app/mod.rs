@@ -354,10 +354,26 @@ impl AltTabApp {
             *lock = None;
         }
         let _reason = qol_gpui::popup_window::reason_scope("dismiss");
-        picker::platform::hide_picker(&self.picker_title);
+        self.ghost_after_dismiss();
         qol_gpui::popup_window::dump_ghost_windows(&format!("dismiss title={}", self.picker_title));
         picker::request_data_refresh();
         cx.notify();
+    }
+
+    fn ghost_after_dismiss(&self) {
+        let active_title = qol_gpui::ghost::resolve_active_monitor().map(|monitor| {
+            picker::platform::picker_window_title(qol_gpui::window::MonitorKey::from_bounds(
+                &monitor.bounds(),
+            ))
+        });
+        if active_title.as_deref() == Some(self.picker_title.as_str()) {
+            picker::platform::hide_picker(&self.picker_title);
+            return;
+        }
+        #[cfg(target_os = "linux")]
+        qol_gpui::popup_window::hide_window_invisible(&self.picker_title);
+        #[cfg(not(target_os = "linux"))]
+        picker::platform::hide_picker(&self.picker_title);
     }
 }
 
