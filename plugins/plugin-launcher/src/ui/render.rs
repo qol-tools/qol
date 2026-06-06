@@ -47,6 +47,13 @@ impl Render for LauncherView {
             }
         }
 
+        if !self.is_showing {
+            return div()
+                .id("launcher")
+                .track_focus(&self.focus_handle)
+                .size_full();
+        }
+
         let render_start = std::time::Instant::now();
         let now_abs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
