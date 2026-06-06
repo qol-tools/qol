@@ -13,21 +13,6 @@ pub fn configure_picker_window(title: &str) {
     qol_gpui::popup_window::configure_popup_window(title);
 }
 
-pub fn reposition_picker_window(title: &str, gpui_x: f64, gpui_y: f64) -> bool {
-    qol_gpui::popup_window::reposition_window_by_title(title, gpui_x, gpui_y)
-}
-
-pub fn sync_picker_window_layout(
-    title: &str,
-    window: &mut gpui::Window,
-    origin: gpui::Point<gpui::Pixels>,
-    size: gpui::Size<gpui::Pixels>,
-) -> bool {
-    let backing = qol_gpui::popup_window::window_backing_scale(title);
-    qol_gpui::window::resize_or_sync_scale(window, size, backing);
-    reposition_picker_window(title, origin.x.to_f64(), origin.y.to_f64())
-}
-
 pub fn reuse_hidden_picker_across_shows() -> bool {
     true
 }
