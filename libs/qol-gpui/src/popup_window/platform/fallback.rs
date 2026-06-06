@@ -25,3 +25,5 @@ pub fn window_backing_scale(_title: &str) -> Option<f32> {
 }
 
 pub fn dump_ghost_windows(_context: &str) {}
+
+pub fn prime_hidden_ghost(_window: &gpui::Window, _title: &str) {}
