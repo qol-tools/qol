@@ -224,6 +224,8 @@ pub(crate) fn pre_create_ghost(
     super::platform::disable_window_shadow(&title);
     super::platform::hide_picker(&title);
     PICKER_VISIBLE.store(false, Ordering::Relaxed);
+    qol_runtime::probe!("PICKER_STALE", "title={title}");
+    qol_gpui::popup_window::dump_ghost_windows(&format!("pre-create title={title}"));
     #[cfg(debug_assertions)]
     eprintln!(
         "[alt-tab/boot] pre-created picker window target={:?} title={:?}",
@@ -257,6 +259,7 @@ impl PostCreateData {
     ) {
         PICKER_VISIBLE.store(true, Ordering::Relaxed);
         has_shown_once.store(true, Ordering::Release);
+        qol_runtime::probe!("PICKER_READY", "title={}", self.title);
         cx.activate(true);
         if self.transparent_bg {
             super::platform::disable_window_shadow(&self.title);

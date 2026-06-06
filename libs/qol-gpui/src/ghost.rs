@@ -61,9 +61,10 @@ pub fn ghost_window_title(prefix: &str, target: crate::window::MonitorKey) -> St
 }
 
 pub fn show_ghost_window(target_title: &str, all_titles: &[String]) {
-    crate::probe::probe(
+    qol_runtime::probe!(
         "SHOW_GHOST",
-        &format!("target={target_title} n_titles={}", all_titles.len()),
+        "target={target_title} n_titles={}",
+        all_titles.len()
     );
     for title in all_titles {
         if title != target_title {
@@ -91,12 +92,10 @@ fn hide_non_active(title: &str) {
 pub fn active_monitor_changed(target_title: &str, all_titles: &[String]) {
     #[cfg(target_os = "linux")]
     {
-        crate::probe::probe(
+        qol_runtime::probe!(
             "AMC",
-            &format!(
-                "active_visible={target_title} others_invisible n={}",
-                all_titles.len()
-            ),
+            "active_visible={target_title} others_invisible n={}",
+            all_titles.len()
         );
         for title in all_titles {
             if title != target_title {

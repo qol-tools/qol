@@ -7,37 +7,91 @@ use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind};
 use super::lock_or_recover;
 
 pub(super) struct SubscriberEntry {
+    pub(super) plugin_id: String,
     pub(super) interests: HashSet<RuntimeEventKind>,
     pub(super) tx: Sender<RuntimeEvent>,
 }
 
 pub(super) fn push(
     subscribers: &Mutex<Vec<SubscriberEntry>>,
+    plugin_id: String,
     interests: HashSet<RuntimeEventKind>,
     tx: Sender<RuntimeEvent>,
 ) {
-    lock_or_recover(subscribers).push(SubscriberEntry { interests, tx });
+    lock_or_recover(subscribers).push(SubscriberEntry {
+        plugin_id,
+        interests,
+        tx,
+    });
 }
 
 pub(super) fn has_subscribers(subscribers: &Mutex<Vec<SubscriberEntry>>) -> bool {
     !lock_or_recover(subscribers).is_empty()
 }
 
-pub(super) fn publish(subscribers: &Mutex<Vec<SubscriberEntry>>, events: &[RuntimeEvent]) {
+pub(super) fn publish(
+    subscribers: &Mutex<Vec<SubscriberEntry>>,
+    events: &[RuntimeEvent],
+    armed_lifelines: &[String],
+    monitors: &[qol_runtime::MonitorBounds],
+) {
     let mut subscribers = lock_or_recover(subscribers);
-    subscribers.retain(|entry| publish_to_subscriber(entry, events));
+    let results = fan_out(&subscribers, events);
+
+    let amc_interested = amc_interested_ids(&subscribers);
+    super::super::trace::publish_summary(
+        events,
+        &results,
+        &amc_interested,
+        armed_lifelines,
+        monitors,
+    );
+
+    retain_succeeded(&mut subscribers, &results);
 }
 
-fn publish_to_subscriber(entry: &SubscriberEntry, events: &[RuntimeEvent]) -> bool {
-    for event in events {
-        if !entry.interests.contains(&event_kind(event)) {
-            continue;
-        }
-        if entry.tx.send(event.clone()).is_err() {
-            return false;
-        }
-    }
-    true
+fn fan_out(subscribers: &[SubscriberEntry], events: &[RuntimeEvent]) -> Vec<(String, bool, bool)> {
+    subscribers
+        .iter()
+        .map(|entry| {
+            let mut success = true;
+            let mut amc_delivered = false;
+            for event in events {
+                if !entry.interests.contains(&event_kind(event)) {
+                    continue;
+                }
+                if entry.tx.send(event.clone()).is_err() {
+                    success = false;
+                    break;
+                }
+                if matches!(event, RuntimeEvent::ActiveMonitorChanged { .. }) {
+                    amc_delivered = true;
+                }
+            }
+            (entry.plugin_id.clone(), success, amc_delivered)
+        })
+        .collect()
+}
+
+fn retain_succeeded(subscribers: &mut Vec<SubscriberEntry>, results: &[(String, bool, bool)]) {
+    let mut i = 0;
+    subscribers.retain(|_| {
+        let success = results[i].1;
+        i += 1;
+        success
+    });
+}
+
+fn amc_interested_ids(subscribers: &[SubscriberEntry]) -> Vec<String> {
+    subscribers
+        .iter()
+        .filter(|entry| {
+            entry
+                .interests
+                .contains(&RuntimeEventKind::ActiveMonitorChanged)
+        })
+        .map(|entry| entry.plugin_id.clone())
+        .collect()
 }
 
 fn event_kind(event: &RuntimeEvent) -> RuntimeEventKind {
@@ -80,6 +134,18 @@ mod tests {
         RuntimeEvent::MonitorsChanged {
             monitors: Vec::new(),
         }
+    }
+
+    fn publish_to_subscriber(entry: &SubscriberEntry, events: &[RuntimeEvent]) -> bool {
+        for event in events {
+            if !entry.interests.contains(&event_kind(event)) {
+                continue;
+            }
+            if entry.tx.send(event.clone()).is_err() {
+                return false;
+            }
+        }
+        true
     }
 
     fn launcher_apps_synced() -> RuntimeEvent {
@@ -127,7 +193,12 @@ mod tests {
         let subs = Mutex::new(Vec::new());
         assert!(!has_subscribers(&subs));
         let (tx, _rx) = std_mpsc::channel();
-        push(&subs, interests(&[RuntimeEventKind::CursorMoved]), tx);
+        push(
+            &subs,
+            "test".to_string(),
+            interests(&[RuntimeEventKind::CursorMoved]),
+            tx,
+        );
         assert!(has_subscribers(&subs));
     }
 
@@ -135,7 +206,12 @@ mod tests {
     fn publish_delivers_only_subscribed_event_kinds() {
         let subs = Mutex::new(Vec::new());
         let (tx, rx) = std_mpsc::channel();
-        push(&subs, interests(&[RuntimeEventKind::CursorMoved]), tx);
+        push(
+            &subs,
+            "test".to_string(),
+            interests(&[RuntimeEventKind::CursorMoved]),
+            tx,
+        );
 
         publish(
             &subs,
@@ -144,6 +220,8 @@ mod tests {
                 focus_changed(),
                 cursor_moved(30.0, 40.0),
             ],
+            &[],
+            &[],
         );
 
         let received = drain(&rx);
@@ -161,10 +239,15 @@ mod tests {
     fn publish_drops_subscribers_whose_receiver_is_gone() {
         let subs = Mutex::new(Vec::new());
         let (tx, rx) = std_mpsc::channel();
-        push(&subs, interests(&[RuntimeEventKind::CursorMoved]), tx);
+        push(
+            &subs,
+            "test".to_string(),
+            interests(&[RuntimeEventKind::CursorMoved]),
+            tx,
+        );
         drop(rx);
 
-        publish(&subs, &[cursor_moved(1.0, 1.0)]);
+        publish(&subs, &[cursor_moved(1.0, 1.0)], &[], &[]);
 
         assert!(
             !has_subscribers(&subs),
@@ -176,9 +259,19 @@ mod tests {
     fn publish_keeps_subscribers_when_no_relevant_events_fire() {
         let subs = Mutex::new(Vec::new());
         let (tx, _rx) = std_mpsc::channel();
-        push(&subs, interests(&[RuntimeEventKind::FocusChanged]), tx);
+        push(
+            &subs,
+            "test".to_string(),
+            interests(&[RuntimeEventKind::FocusChanged]),
+            tx,
+        );
 
-        publish(&subs, &[cursor_moved(1.0, 2.0), monitors_changed()]);
+        publish(
+            &subs,
+            &[cursor_moved(1.0, 2.0), monitors_changed()],
+            &[],
+            &[],
+        );
 
         assert!(
             has_subscribers(&subs),
@@ -193,11 +286,13 @@ mod tests {
         let (tx_focus, rx_focus) = std_mpsc::channel();
         push(
             &subs,
+            "test-cursor".to_string(),
             interests(&[RuntimeEventKind::CursorMoved]),
             tx_cursor,
         );
         push(
             &subs,
+            "test-focus".to_string(),
             interests(&[RuntimeEventKind::FocusChanged]),
             tx_focus,
         );
@@ -209,6 +304,8 @@ mod tests {
                 focus_changed(),
                 cursor_moved(2.0, 2.0),
             ],
+            &[],
+            &[],
         );
 
         let cursor_events = drain(&rx_cursor);
@@ -221,6 +318,7 @@ mod tests {
     fn publish_to_subscriber_returns_false_when_send_fails_mid_batch() {
         let (tx, rx) = std_mpsc::channel();
         let entry = SubscriberEntry {
+            plugin_id: "test".to_string(),
             interests: interests(&[
                 RuntimeEventKind::CursorMoved,
                 RuntimeEventKind::FocusChanged,
@@ -271,10 +369,10 @@ mod tests {
             let subs = Mutex::new(Vec::new());
             let (tx_a, rx_a) = std_mpsc::channel();
             let (tx_b, rx_b) = std_mpsc::channel();
-            push(&subs, interests_a.clone(), tx_a);
-            push(&subs, interests_b.clone(), tx_b);
+            push(&subs, "test-a".to_string(), interests_a.clone(), tx_a);
+            push(&subs, "test-b".to_string(), interests_b.clone(), tx_b);
 
-            publish(&subs, &events);
+            publish(&subs, &events, &[], &[]);
 
             let received_a = drain(&rx_a);
             let received_b = drain(&rx_b);
@@ -308,10 +406,10 @@ mod tests {
 
             let subs = Mutex::new(Vec::new());
             let (tx, rx) = std_mpsc::channel();
-            push(&subs, interests, tx);
+            push(&subs, "test".to_string(), interests, tx);
             drop(rx);
 
-            publish(&subs, &events);
+            publish(&subs, &events, &[], &[]);
 
             prop_assert!(!has_subscribers(&subs), "disconnected sub must be evicted");
         }

@@ -181,9 +181,9 @@ fn log_focus_change(
         })
         .unwrap_or_else(|| "none".to_string());
     let title = focus_window_title(conn, window_id).unwrap_or_default();
-    crate::probe::probe(
+    qol_runtime::probe!(
         "FOCUS_WIN",
-        &format!("wid={window_id} pid={pid_str} ignored={ignored} winpos={winpos} title={title:?}"),
+        "wid={window_id} pid={pid_str} ignored={ignored} winpos={winpos} title={title:?}"
     );
 }
 

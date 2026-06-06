@@ -1,10 +1,13 @@
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::*;
 
+mod trace;
+
 pub fn activate_window(window_id: u32) {
     let Some((conn, root)) = connect() else {
         return;
     };
+    trace::activating(&conn, window_id);
     let Some(atom) = intern(&conn, b"_NET_ACTIVE_WINDOW") else {
         return;
     };

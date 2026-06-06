@@ -1,6 +1,7 @@
 mod poll;
 pub(crate) mod shared;
 pub(crate) mod socket;
+mod trace;
 mod window_list_thread;
 
 use std::sync::Arc;
@@ -30,6 +31,7 @@ impl RuntimeServer {
         let shared = Arc::new(SharedState::new(initial_monitors));
         shared.attach_platform(platform.clone());
         super::publisher::install(shared.clone());
+        trace::print_monitor_legend();
         spawn_poll_thread(shared.clone(), channels);
         spawn_window_list_thread(shared.clone(), platform);
         spawn_socket_thread(shared);

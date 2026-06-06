@@ -1,4 +1,5 @@
 pub mod pane_field;
+pub mod probe;
 pub mod protocol;
 
 #[cfg(unix)]

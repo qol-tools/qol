@@ -95,6 +95,9 @@ fn drain(rx: &Arc<Mutex<mpsc::Receiver<()>>>) {
 }
 
 fn reposition_ghost_only(inputs: &ListenerInputs, event: &RuntimeEvent) {
+    if let RuntimeEvent::ActiveMonitorChanged { monitor_idx, .. } = event {
+        qol_runtime::probe!("PLUGIN_RECV_AMC", "monitor_idx={:?}", monitor_idx);
+    }
     if PICKER_VISIBLE.load(Ordering::Relaxed) {
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/listener] picker visible, skipping ghost reposition");

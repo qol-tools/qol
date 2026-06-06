@@ -18,6 +18,7 @@ qol-config.workspace = true
 qol-plugin-daemon.workspace = true
 qol-app-icon.workspace = true
 qol-gpui.workspace = true
+qol-runtime.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

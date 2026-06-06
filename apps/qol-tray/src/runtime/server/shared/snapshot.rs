@@ -38,7 +38,7 @@ fn focus_monitor_idx(input: &InputState, monitors: &[MonitorBounds]) -> Option<u
 }
 
 fn active_monitor_idx(input: &InputState, monitors: &[MonitorBounds]) -> Option<usize> {
-    let active = state::pick_active_monitor(input, fallback_monitor(monitors));
+    let active = state::pick_active_monitor(input).or_else(|| monitors.first().copied())?;
     monitor_idx(monitors, active)
 }
 
@@ -52,15 +52,6 @@ fn focused_window(shared: &SharedState) -> Option<WindowBounds> {
         y: bounds.y,
         width: bounds.width,
         height: bounds.height,
-    })
-}
-
-fn fallback_monitor(monitors: &[MonitorBounds]) -> MonitorBounds {
-    monitors.first().copied().unwrap_or(MonitorBounds {
-        x: 0.0,
-        y: 0.0,
-        width: 1920.0,
-        height: 1080.0,
     })
 }
 
