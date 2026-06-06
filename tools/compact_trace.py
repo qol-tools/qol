@@ -43,6 +43,19 @@ dumped_windows = []
 target_opacities = {}
 picker_status = {}
 
+# Opacity write churn instrumentation: every HIDE_WIN/SHOW_WIN is one X connect +
+# full _NET_CLIENT_LIST scan, so a redundant or reverted write is a burned round-trip.
+REVERT_WINDOW_MS = 200
+opacity_state = {}
+waste = {
+    "writes": 0,
+    "redundant": 0,
+    "reverts": 0,
+    "by_reason": {},
+    "redundant_by_reason": {},
+    "revert_pairs": {},
+}
+
 # Dynamic monitor bounds registry: list of (x, y, w, h)
 monitors = []
 
@@ -60,7 +73,7 @@ stats = {
 }
 last_divergence = None
 
-ANOMALY_MARKERS = ("MISDIRECTED", "FOCUS FAILURE", "SUPERSEDED", "DIVERGENCE", "Timed out", "THRASH")
+ANOMALY_MARKERS = ("MISDIRECTED", "FOCUS FAILURE", "SUPERSEDED", "DIVERGENCE", "Timed out", "THRASH", "REVERT")
 
 import argparse
 
@@ -173,6 +186,66 @@ def reason_suffix(msg):
     if not m or m.group("reason") == "?":
         return ""
     return f" {COLOR_DIM}(why: {m.group('reason')}){COLOR_RESET}"
+
+def extract_reason(msg):
+    m = re.search(r"\breason=(?P<reason>\S+)", msg)
+    return m.group("reason") if m else "?"
+
+def record_opacity_write(comp_title, opacity, reason, ts_raw):
+    waste["writes"] += 1
+    waste["by_reason"][reason] = waste["by_reason"].get(reason, 0) + 1
+    st = opacity_state.get(comp_title)
+    classification = None
+    if st is not None:
+        if abs(st["op"] - opacity) < 0.001:
+            waste["redundant"] += 1
+            waste["redundant_by_reason"][reason] = waste["redundant_by_reason"].get(reason, 0) + 1
+            classification = ("redundant", st["reason"], ts_raw - st["ts"])
+        elif (st["prev_op"] is not None and abs(st["prev_op"] - opacity) < 0.001
+              and st["reason"] != reason and ts_raw - st["ts"] <= REVERT_WINDOW_MS):
+            waste["reverts"] += 1
+            pair = f"{st['reason']}->{reason}"
+            waste["revert_pairs"][pair] = waste["revert_pairs"].get(pair, 0) + 1
+            classification = ("revert", st["reason"], ts_raw - st["ts"])
+    if st is None:
+        opacity_state[comp_title] = {"op": opacity, "reason": reason, "ts": ts_raw, "prev_op": None}
+    elif abs(st["op"] - opacity) >= 0.001:
+        opacity_state[comp_title] = {"op": opacity, "reason": reason, "ts": ts_raw, "prev_op": st["op"]}
+    else:
+        st["reason"] = reason
+        st["ts"] = ts_raw
+    return classification
+
+def churn_suffix(cls):
+    if cls and cls[0] == "revert":
+        return f" {COLOR_FAIL}⟲ REVERT {cls[1]}@{cls[2]}ms{COLOR_RESET}"
+    return ""
+
+def write_attribution(comp_title, now_ts):
+    st = opacity_state.get(comp_title)
+    if not st:
+        return ""
+    return f" ←{st['reason']} {now_ts - st['ts']}ms ago"
+
+def print_waste():
+    total = waste["writes"]
+    if total == 0:
+        return
+    print(f"\n{COLOR_HEADER}═══ OPACITY CHURN ═══{COLOR_RESET}")
+    print(f"  Opacity writes:      {total}  {COLOR_DIM}(each = 1 X connect + client-list scan){COLOR_RESET}")
+    print(f"  {COLOR_WARN}Redundant (no-op){COLOR_RESET}:   {waste['redundant']} ({100 * waste['redundant'] // total}%)  {COLOR_DIM}burned round-trips{COLOR_RESET}")
+    print(f"  {COLOR_FAIL}Reverts (self-heal){COLOR_RESET}: {waste['reverts']}")
+    if waste["by_reason"]:
+        print("  Writes by reason:")
+        for reason, c in sorted(waste["by_reason"].items(), key=lambda kv: -kv[1]):
+            red = waste["redundant_by_reason"].get(reason, 0)
+            redstr = f"  {COLOR_DIM}({red} redundant){COLOR_RESET}" if red else ""
+            print(f"    {reason:<10} {c}{redstr}")
+    if waste["revert_pairs"]:
+        print(f"  {COLOR_FAIL}Self-heal pairs{COLOR_RESET} {COLOR_DIM}(firepit -> firefighter){COLOR_RESET}:")
+        for pair, c in sorted(waste["revert_pairs"].items(), key=lambda kv: -kv[1]):
+            print(f"    {pair:<22} ×{c}")
+    print(f"{COLOR_HEADER}═════════════════════{COLOR_RESET}")
 
 def percentile(values, p):
     if not values:
@@ -383,17 +456,17 @@ def process_line(ts_raw, pid, tag, msg):
             opacity = float(m.group("opacity"))
             comp_title = format_title_compact(title)
             target_opacities[comp_title] = opacity
-            
+            cls = record_opacity_write(comp_title, opacity, extract_reason(msg), int(ts_raw))
+
             proc_name = get_process_name(pid)
             if filter_plugin and proc_name != filter_plugin:
                 return
-            
-            if last_printed_opacities.get(comp_title) == opacity:
+
+            if cls and cls[0] == "redundant":
                 return
-            last_printed_opacities[comp_title] = opacity
-            
+
             op_color = COLOR_OK if opacity > 0.0 else COLOR_DIM
-            text = f"{comp_title} -> {op_color}{opacity}{COLOR_RESET}{reason_suffix(msg)}"
+            text = f"{comp_title} -> {op_color}{opacity}{COLOR_RESET}{reason_suffix(msg)}{churn_suffix(cls)}"
             event_buffer.append((int(ts_raw), ts, "HIDE_WIN", proc_name, text))
             last_event_real_time = time.time()
 
@@ -404,15 +477,15 @@ def process_line(ts_raw, pid, tag, msg):
             opacity = float(m.group("opacity"))
             comp_title = format_title_compact(title)
             target_opacities[comp_title] = opacity
-            
+            cls = record_opacity_write(comp_title, opacity, extract_reason(msg), int(ts_raw))
+
             proc_name = get_process_name(pid)
             if filter_plugin and proc_name != filter_plugin:
                 return
-            
-            if last_printed_opacities.get(comp_title) == opacity:
+
+            if cls and cls[0] == "redundant":
                 return
-            last_printed_opacities[comp_title] = opacity
-            
+
             payload_details = ""
             payload_m = re.search(r"source=(?P<src>\d+)\s+timestamp=(?P<ts>\d+)\s+requester_active=(?P<req>\d+)", msg)
             if payload_m:
@@ -421,7 +494,7 @@ def process_line(ts_raw, pid, tag, msg):
                 req = payload_m.group("req")
                 payload_details = f" {COLOR_DIM}(EWMH: source={src}, timestamp={ts_val}, active={req}){COLOR_RESET}"
             
-            text = f"{comp_title} -> {COLOR_OK}{opacity}{COLOR_RESET}{reason_suffix(msg)}{payload_details}"
+            text = f"{comp_title} -> {COLOR_OK}{opacity}{COLOR_RESET}{reason_suffix(msg)}{payload_details}{churn_suffix(cls)}"
             event_buffer.append((int(ts_raw), ts, "SHOW_WIN", proc_name, text))
             last_event_real_time = time.time()
 
@@ -592,7 +665,7 @@ def process_line(ts_raw, pid, tag, msg):
                 if not (is_actually_hidden and is_expected_hidden):
                     if abs(opacity - expected_opacity) > 0.01:
                         divergence_msgs.append(
-                            f"{comp_title} opacity is {opacity}{map_suffix}, expected {expected_opacity}"
+                            f"{comp_title} opacity is {opacity}{map_suffix}, expected {expected_opacity}{write_attribution(comp_title, int(ts_raw))}"
                         )
                 
                 if expected_opacity >= 0.9 and picker_status.get(comp_title, "stale") == "stale":
@@ -614,7 +687,7 @@ def process_line(ts_raw, pid, tag, msg):
             
             for proc, wins in plugin_wins.items():
                 if proc != "unknown" and len(wins) > 1:
-                    comp_wins = [f"{t}({op}{ms})" for t, op, ms in wins]
+                    comp_wins = [f"{t}({op}{ms}){write_attribution(t, int(ts_raw))}" for t, op, ms in wins]
                     inactive_visible.append(f"Multiple active {proc}: {', '.join(comp_wins)}")
                         
             status = COLOR_OK + "OK" + COLOR_RESET
@@ -915,6 +988,7 @@ def main():
         replay_log(f, start_ts)
         flush_buffer()
         print_stats()
+        print_waste()
         sys.exit(0)
     if start_ts > 0:
         print(f"Reading events since {args.since}...")
@@ -952,6 +1026,7 @@ def main():
     except KeyboardInterrupt:
         flush_buffer()
         print_stats()
+        print_waste()
         print(f"\n{COLOR_HEADER}Exiting tailer.{COLOR_RESET}")
         sys.exit(0)
 
