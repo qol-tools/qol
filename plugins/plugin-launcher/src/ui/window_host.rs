@@ -62,25 +62,15 @@ pub(crate) fn pre_create_ghost(
             popup_window::hide_window_by_title(&title);
         }
     }
-    let active_monitor = qol_gpui::ghost::active_monitor().or_else(|| {
-        qol_gpui::PlatformStateClient::from_env()
-            .get_state()
-            .and_then(|s| {
-                s.active_monitor()
-                    .map(qol_gpui::monitor::ActiveMonitor::from_bounds)
-            })
+    let keys: Vec<_> = active
+        .borrow()
+        .iter()
+        .into_iter()
+        .map(|(key, _)| key)
+        .collect();
+    qol_gpui::ghost::reconcile_active(&keys, |key| {
+        qol_gpui::ghost::ghost_window_title(LAUNCHER_WINDOW_TITLE, key)
     });
-    if let Some(active_mon) = active_monitor {
-        let active_key = qol_gpui::window::MonitorKey::from_bounds(&active_mon.bounds());
-        let active_title = qol_gpui::ghost::ghost_window_title(LAUNCHER_WINDOW_TITLE, active_key);
-        let all_titles: Vec<String> = active
-            .borrow()
-            .iter()
-            .into_iter()
-            .map(|(key, _)| qol_gpui::ghost::ghost_window_title(LAUNCHER_WINDOW_TITLE, key))
-            .collect();
-        qol_gpui::ghost::reconcile(&active_title, &all_titles);
-    }
 }
 
 pub(crate) fn spawn_ghost_reposition_listener(

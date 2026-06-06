@@ -52,6 +52,14 @@ pub fn active_monitor() -> Option<ActiveMonitor> {
     ACTIVE_MONITOR.lock().ok().and_then(|slot| slot.clone())
 }
 
+pub fn resolve_active_monitor() -> Option<ActiveMonitor> {
+    active_monitor().or_else(|| {
+        crate::PlatformStateClient::from_env()
+            .get_state()
+            .and_then(|state| state.active_monitor().map(ActiveMonitor::from_bounds))
+    })
+}
+
 pub fn ghost_window_title(prefix: &str, target: crate::window::MonitorKey) -> String {
     format!(
         "{}@{},{},{}x{}",
@@ -109,6 +117,18 @@ pub fn reconcile(active_title: &str, all_titles: &[String]) {
         "reconcile target={active_title} active_mon={:?}",
         active_monitor()
     ));
+}
+
+pub fn reconcile_active<F>(keys: &[crate::window::MonitorKey], title_of: F)
+where
+    F: Fn(crate::window::MonitorKey) -> String,
+{
+    let Some(active) = resolve_active_monitor() else {
+        return;
+    };
+    let active_key = crate::window::MonitorKey::from_bounds(&active.bounds());
+    let all_titles: Vec<String> = keys.iter().map(|key| title_of(*key)).collect();
+    reconcile(&title_of(active_key), &all_titles);
 }
 
 pub fn track_dismiss<V: gpui::Focusable + 'static>(
