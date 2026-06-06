@@ -36,6 +36,7 @@ impl AltTabApp {
         let should_cycle = init.cycle_on_open && init.windows.len() >= 2;
         let action_mode = init.action_mode.clone();
         let picker_title = init.picker_title.clone();
+        let shown = init.shown;
         let delegate: Entity<PickerState> = cx.new(|state_cx| {
             let state = PickerState::from_init(init);
             state_cx
@@ -94,7 +95,7 @@ impl AltTabApp {
             _alt_poll_task: None,
         };
 
-        if action_mode == ActionMode::HoldToSwitch {
+        if shown && action_mode == ActionMode::HoldToSwitch {
             app.start_alt_poll(window.to_async(cx).window_handle(), cx);
         }
 

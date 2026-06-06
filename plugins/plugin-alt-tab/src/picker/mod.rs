@@ -681,6 +681,7 @@ pub(crate) mod state {
                 .collect();
             PickerState::from_init(PickerInit {
                 picker_title: String::new(),
+                shown: false,
                 windows,
                 label_config: LabelConfig::default(),
                 transparent_bg: false,
@@ -838,6 +839,7 @@ pub(crate) mod state {
         fn picker_at(count: usize, selected: Option<usize>) -> PickerState {
             let mut s = PickerState::from_init(PickerInit {
                 picker_title: String::new(),
+                shown: false,
                 windows: windows(count),
                 label_config: LabelConfig::default(),
                 transparent_bg: false,
