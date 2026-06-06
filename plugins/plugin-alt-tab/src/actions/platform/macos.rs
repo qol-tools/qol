@@ -54,21 +54,18 @@ pub fn activate_window(window_id: u32) {
     }
     unsafe { ax_app_frontmost(pid) };
     let commit_gen = ACTIVATE_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-    std::thread::spawn(move || {
-        for step_ms in [16u64, 24, 40, 60, 100, 150] {
-            std::thread::sleep(std::time::Duration::from_millis(step_ms));
-            if ACTIVATE_GEN.load(std::sync::atomic::Ordering::SeqCst) != commit_gen {
-                return;
-            }
-            if cg_frontmost_pid() == pid {
-                continue;
-            }
+    qol_gpui::platform::spawn_reassert_driver(
+        &ACTIVATE_GEN,
+        commit_gen,
+        &[16u64, 24, 40, 60, 100, 150],
+        move || cg_frontmost_pid() == pid,
+        move || {
             if forced {
                 force_front(pid, window_id);
             }
             unsafe { ax_app_frontmost(pid) };
-        }
-    });
+        },
+    );
 }
 
 fn cg_frontmost_pid() -> i32 {

@@ -1,5 +1,4 @@
 use std::sync::Mutex;
-use std::time::Duration;
 
 use gpui::*;
 
@@ -89,100 +88,27 @@ fn hide_non_active(title: &str) {
     }
 }
 
-pub fn active_monitor_changed(target_title: &str, all_titles: &[String]) {
+pub fn reconcile(active_title: &str, all_titles: &[String]) {
     #[cfg(target_os = "linux")]
     {
-        qol_runtime::probe!(
-            "AMC",
-            "active_visible={target_title} others_invisible n={}",
-            all_titles.len()
-        );
+        qol_runtime::probe!("RECONCILE", "active={active_title} n={}", all_titles.len());
         for title in all_titles {
-            if title != target_title {
-                hide_non_active(title);
+            if title == active_title {
+                popup_window::hide_window_by_title(title);
+            } else {
+                popup_window::hide_window_invisible(title);
             }
         }
-        popup_window::hide_window_by_title(target_title);
     }
     #[cfg(not(target_os = "linux"))]
     {
+        let _ = active_title;
         let _ = all_titles;
     }
     popup_window::dump_ghost_windows(&format!(
-        "amc target={target_title} active_mon={:?}",
+        "reconcile target={active_title} active_mon={:?}",
         active_monitor()
     ));
-}
-
-pub fn spawn_boot_reassert(cx: &mut App, title: String, bounds: Bounds<Pixels>) {
-    #[cfg(target_os = "linux")]
-    {
-        cx.spawn(move |cx: &mut AsyncApp| {
-            let cx = cx.clone();
-            async move {
-                let configured = reassert_until_configured(&cx, &title, bounds).await;
-                if configured {
-                    rehide_after_settle(&cx, &title).await;
-                }
-                #[cfg(debug_assertions)]
-                if !configured {
-                    eprintln!("[ghost/boot] failed to configure and hide window {title:?}");
-                }
-            }
-        })
-        .detach();
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = bounds;
-        popup_window::configure_popup_window(&title);
-        popup_window::hide_window_by_title(&title);
-    }
-}
-
-#[cfg(target_os = "linux")]
-async fn reassert_until_configured(cx: &AsyncApp, title: &str, bounds: Bounds<Pixels>) -> bool {
-    for _ in 0..10 {
-        cx.background_executor()
-            .timer(Duration::from_millis(50))
-            .await;
-        let title = title.to_string();
-        let configured = cx.update(move |_| configure_and_hide(&title, bounds));
-        if let Ok(true) = configured {
-            return true;
-        }
-    }
-    false
-}
-
-#[cfg(target_os = "linux")]
-fn configure_and_hide(title: &str, bounds: Bounds<Pixels>) -> bool {
-    if !popup_window::configure_popup_window(title) {
-        return false;
-    }
-    popup_window::set_window_bounds_by_title(
-        title,
-        bounds.origin.x.to_f64(),
-        bounds.origin.y.to_f64(),
-        bounds.size.width.to_f64(),
-        bounds.size.height.to_f64(),
-    );
-    popup_window::disable_window_shadow(title);
-    popup_window::hide_window_invisible(title);
-    true
-}
-
-#[cfg(target_os = "linux")]
-async fn rehide_after_settle(cx: &AsyncApp, title: &str) {
-    for delay_ms in [150u64, 400] {
-        cx.background_executor()
-            .timer(Duration::from_millis(delay_ms))
-            .await;
-        let title = title.to_string();
-        let _ = cx.update(move |_| {
-            popup_window::hide_window_invisible(&title);
-        });
-    }
 }
 
 pub fn track_dismiss<V: gpui::Focusable + 'static>(

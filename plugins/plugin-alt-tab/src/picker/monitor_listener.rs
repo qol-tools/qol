@@ -118,7 +118,7 @@ fn reposition_ghost_only(inputs: &ListenerInputs, event: &RuntimeEvent) {
         .into_iter()
         .map(|(key, _)| super::platform::picker_window_title(key))
         .collect();
-    qol_gpui::ghost::active_monitor_changed(&target_title, &all_titles);
+    qol_gpui::ghost::reconcile(&target_title, &all_titles);
 }
 
 fn trigger_data_refresh(inputs: &ListenerInputs, app_cx: &mut App) {

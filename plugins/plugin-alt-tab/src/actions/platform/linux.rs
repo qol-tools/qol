@@ -1,5 +1,4 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
 
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::*;
@@ -9,8 +8,6 @@ use x11rb::wrapper::ConnectionExt as _;
 mod trace;
 
 static ACTIVATE_GEN: AtomicU64 = AtomicU64::new(0);
-
-const REASSERT_STEPS_MS: [u64; 5] = [16, 24, 40, 60, 100];
 
 pub fn activate_window(window_id: u32) {
     if window_id == 0 {
@@ -33,21 +30,23 @@ fn send_activate(conn: &impl Connection, root: u32, window_id: u32) -> Option<u3
 }
 
 fn spawn_reassert(window_id: u32, generation: u64) {
-    std::thread::spawn(move || {
-        for step_ms in REASSERT_STEPS_MS {
-            std::thread::sleep(Duration::from_millis(step_ms));
-            if ACTIVATE_GEN.load(Ordering::SeqCst) != generation {
-                return;
-            }
+    qol_gpui::platform::spawn_reassert_driver(
+        &ACTIVATE_GEN,
+        generation,
+        &[16u64, 24, 40, 60, 100],
+        move || {
+            let Some((conn, root)) = connect() else {
+                return true;
+            };
+            active_window(&conn, root) == Some(window_id)
+        },
+        move || {
             let Some((conn, root)) = connect() else {
                 return;
             };
-            if active_window(&conn, root) == Some(window_id) {
-                return;
-            }
             let _ = send_activate(&conn, root, window_id);
-        }
-    });
+        },
+    );
 }
 
 fn active_window(conn: &impl Connection, root: u32) -> Option<u32> {
