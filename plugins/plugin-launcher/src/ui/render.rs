@@ -39,6 +39,12 @@ impl Render for LauncherView {
                     );
                 },
             ));
+            if !self.is_showing {
+                #[cfg(target_os = "linux")]
+                qol_gpui::popup_window::hide_window_invisible(&self.window_title);
+                #[cfg(not(target_os = "linux"))]
+                qol_gpui::popup_window::hide_window_by_title(&self.window_title);
+            }
         }
 
         let render_start = std::time::Instant::now();
