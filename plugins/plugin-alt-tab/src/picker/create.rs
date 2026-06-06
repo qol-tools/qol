@@ -190,11 +190,6 @@ pub(crate) fn pre_create_ghost(
         return;
     };
     current.borrow_mut().insert(target, handle);
-    super::platform::configure_picker_window(&title);
-    let _ = handle.update(cx, |_view, window, _cx| {
-        super::platform::sync_picker_window_layout(&title, window, bounds.origin, bounds.size)
-    });
-    super::platform::disable_window_shadow(&title);
     #[cfg(target_os = "linux")]
     {
         qol_gpui::popup_window::hide_window_invisible(&title);
@@ -203,6 +198,11 @@ pub(crate) fn pre_create_ghost(
     {
         super::platform::hide_picker(&title);
     }
+    super::platform::configure_picker_window(&title);
+    let _ = handle.update(cx, |_view, window, _cx| {
+        super::platform::sync_picker_window_layout(&title, window, bounds.origin, bounds.size)
+    });
+    super::platform::disable_window_shadow(&title);
     let keys: Vec<_> = current
         .borrow()
         .iter()

@@ -190,11 +190,20 @@ fn open_hidden_ghost(
     title: &str,
 ) -> Option<WindowHandle<LauncherView>> {
     let title = title.to_string();
-    cx.open_window(ghost_window_options(placement, false), move |window, cx| {
-        window.set_window_title(&title);
-        cx.new(move |cx| LauncherView::new(title.clone(), entries, cx))
-    })
-    .ok()
+    let handle = cx
+        .open_window(ghost_window_options(placement, false), {
+            let title = title.clone();
+            move |window, cx| {
+                window.set_window_title(&title);
+                cx.new(move |cx| LauncherView::new(title.clone(), entries, cx))
+            }
+        })
+        .ok()?;
+    #[cfg(target_os = "linux")]
+    popup_window::hide_window_invisible(&title);
+    #[cfg(not(target_os = "linux"))]
+    let _ = title;
+    Some(handle)
 }
 
 fn open_visible_ghost(
