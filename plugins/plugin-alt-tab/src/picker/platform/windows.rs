@@ -9,16 +9,6 @@ pub fn picker_window_title(_target: MonitorKey) -> String {
 
 pub fn configure_picker_window(_title: &str) {}
 
-pub fn sync_picker_window_layout(
-    _title: &str,
-    window: &mut gpui::Window,
-    _origin: gpui::Point<gpui::Pixels>,
-    size: gpui::Size<gpui::Pixels>,
-) -> bool {
-    qol_gpui::window::resize_or_sync_scale(window, size, None);
-    true
-}
-
 pub fn reuse_hidden_picker_across_shows() -> bool {
     true
 }
