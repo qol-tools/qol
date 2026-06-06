@@ -144,20 +144,8 @@ fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
     if cached_card(title) == Some(target) {
         return true;
     }
-    hide_wid_with_opacity(&conn, screen_num, wid, title, opacity)
-}
-
-fn hide_wid_with_opacity(
-    conn: &impl Connection,
-    screen_num: usize,
-    wid: u32,
-    title: &str,
-    opacity: f32,
-) -> bool {
-    let reason = crate::popup_window::change_reason();
-    let target = opacity_to_cardinal(opacity);
-    if compositor_running(conn, screen_num) && set_input_passthrough(conn, wid, true) {
-        let applied = set_window_opacity(conn, wid, opacity);
+    if compositor_running(&conn, screen_num) && set_input_passthrough(&conn, wid, true) {
+        let applied = set_window_opacity(&conn, wid, opacity);
         let _ = conn.flush();
         if applied {
             store_card(title, wid, Some(target));
@@ -176,25 +164,6 @@ fn hide_wid_with_opacity(
         &format!("title={title} wid={wid} path=unmap reason={reason}"),
     );
     true
-}
-
-pub fn prime_hidden_ghost(window: &gpui::Window, title: &str) {
-    let Some(wid) = x11_window_id(window) else {
-        return;
-    };
-    let Ok((conn, screen_num)) = x11rb::connect(None) else {
-        return;
-    };
-    hide_wid_with_opacity(&conn, screen_num, wid, title, 0.0);
-}
-
-fn x11_window_id(window: &gpui::Window) -> Option<u32> {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    match HasWindowHandle::window_handle(window).ok()?.as_raw() {
-        RawWindowHandle::Xcb(handle) => Some(handle.window.get()),
-        RawWindowHandle::Xlib(handle) => u32::try_from(handle.window).ok(),
-        _ => None,
-    }
 }
 
 pub fn show_window_by_title(title: &str) -> bool {

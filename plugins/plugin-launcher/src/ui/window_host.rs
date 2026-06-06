@@ -192,7 +192,6 @@ fn open_hidden_ghost(
     let title = title.to_string();
     cx.open_window(ghost_window_options(placement, false), move |window, cx| {
         window.set_window_title(&title);
-        popup_window::prime_hidden_ghost(window, &title);
         cx.new(move |cx| LauncherView::new(title.clone(), entries, cx))
     })
     .ok()
