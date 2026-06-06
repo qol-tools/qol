@@ -131,6 +131,28 @@ where
     reconcile(&title_of(active_key), &all_titles);
 }
 
+pub fn dismiss_to_ghost(prefix: &str, my_title: &str) {
+    let _reason = popup_window::reason_scope("dismiss");
+    let on_active = resolve_active_monitor()
+        .map(|monitor| {
+            ghost_window_title(
+                prefix,
+                crate::window::MonitorKey::from_bounds(&monitor.bounds()),
+            )
+        })
+        .as_deref()
+        == Some(my_title);
+    if on_active {
+        popup_window::hide_window_by_title(my_title);
+    } else {
+        hide_non_active(my_title);
+    }
+    popup_window::dump_ghost_windows(&format!(
+        "dismiss title={my_title} active_mon={:?}",
+        active_monitor()
+    ));
+}
+
 pub fn track_dismiss<V: gpui::Focusable + 'static>(
     focus_handle: &gpui::FocusHandle,
     window: &mut gpui::Window,

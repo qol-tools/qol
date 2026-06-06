@@ -21,7 +21,7 @@ impl Render for LauncherView {
         if self.dismiss_requested {
             self.dismiss_requested = false;
             self.set_showing(false);
-            qol_gpui::popup_window::hide_window_by_title(&self.window_title);
+            qol_gpui::ghost::dismiss_to_ghost(super::LAUNCHER_WINDOW_TITLE, &self.window_title);
         }
 
         if self.dismiss_sub.is_none() {
@@ -33,7 +33,10 @@ impl Render for LauncherView {
                 cx,
                 |this, _window, _cx| {
                     this.set_showing(false);
-                    qol_gpui::popup_window::hide_window_by_title(&this.window_title);
+                    qol_gpui::ghost::dismiss_to_ghost(
+                        super::LAUNCHER_WINDOW_TITLE,
+                        &this.window_title,
+                    );
                 },
             ));
         }
@@ -126,7 +129,10 @@ impl Render for LauncherView {
                 match event.keystroke.key.as_str() {
                     "escape" | "esc" => {
                         this.set_showing(false);
-                        qol_gpui::popup_window::hide_window_by_title(&this.window_title);
+                        qol_gpui::ghost::dismiss_to_ghost(
+                            super::LAUNCHER_WINDOW_TITLE,
+                            &this.window_title,
+                        );
                     }
                     _ => this.handle_key(event, window, cx),
                 }
