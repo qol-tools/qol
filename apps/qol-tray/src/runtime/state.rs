@@ -1,5 +1,5 @@
 use qol_runtime::MonitorBounds;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 #[derive(Clone, Debug)]
 pub(crate) struct Stamped {
@@ -69,12 +69,10 @@ pub(crate) fn monitor_for_point(
         .copied()
 }
 
-const CURSOR_ACTIVE_WINDOW: Duration = Duration::from_millis(1500);
-
 pub(crate) fn pick_active_monitor(state: &InputState) -> Option<MonitorBounds> {
     match (state.cursor.as_ref(), state.focus.as_ref()) {
         (Some(cursor), Some(focus)) => {
-            let cursor_wins = cursor.at > focus.at && cursor.at.elapsed() < CURSOR_ACTIVE_WINDOW;
+            let cursor_wins = cursor.at > focus.at;
             log_pick_both(cursor, focus, cursor_wins);
             Some(if cursor_wins {
                 cursor.monitor
@@ -289,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn pick_active_monitor_prefers_focus_over_a_stale_cursor() {
+    fn pick_active_monitor_newer_cursor_wins_regardless_of_age() {
         let cursor_mon = mon(100.0, 0.0, 800.0, 600.0);
         let focus_mon = mon(900.0, 0.0, 800.0, 600.0);
         let now = Instant::now();
@@ -305,8 +303,8 @@ mod tests {
         };
         assert_eq!(
             pick_active_monitor(&state),
-            Some(focus_mon),
-            "stale cursor (5s) yields to the focused window despite a newer stamp",
+            Some(cursor_mon),
+            "a parked cursor holds the active monitor: newer stamp wins at any age",
         );
     }
 
