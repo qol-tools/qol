@@ -103,47 +103,6 @@ impl PickerInit {
         }
     }
 
-    pub(crate) fn warmup_seed(config: &AltTabConfig, picker_title: String) -> Self {
-        const WARMUP_CARDS: usize = 7;
-        let mut windows = Vec::with_capacity(WARMUP_CARDS);
-        let mut icons = IconMap::new();
-        for i in 0..WARMUP_CARDS {
-            let app_name = format!("__warmup_{i}");
-            windows.push(WindowInfo {
-                id: 0,
-                title: "warmup".to_string(),
-                app_name: app_name.clone(),
-                preview_path: None,
-                icon: None,
-                x: 0.0,
-                y: 0.0,
-                width: 200.0,
-                height: 120.0,
-                is_minimized: false,
-            });
-            let pixels = vec![0u8; 4 * 4 * 4];
-            if let Some(buf) =
-                image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(4, 4, pixels)
-            {
-                icons.insert(
-                    app_name,
-                    Arc::new(gpui::RenderImage::new(smallvec::smallvec![
-                        image::Frame::new(buf)
-                    ])),
-                );
-            }
-        }
-        Self::new(
-            config,
-            GatheredWindows {
-                windows,
-                previews: PreviewMap::new(),
-                icons,
-            },
-            picker_title,
-        )
-    }
-
     pub(crate) fn into_app(self, window: &mut Window, cx: &mut Context<AltTabApp>) -> AltTabApp {
         AltTabApp::new(self, window, cx)
     }
@@ -201,6 +160,7 @@ pub(crate) fn pre_create_ghost(
     config: &AltTabConfig,
     current: &PickerWindowState,
     placement: &PopupPlacement,
+    windows: &[WindowInfo],
     cx: &mut App,
 ) {
     let _reason = qol_gpui::popup_window::reason_scope("boot");
@@ -210,7 +170,12 @@ pub(crate) fn pre_create_ghost(
         return;
     }
     let title = super::platform::picker_window_title(target);
-    let init = PickerInit::warmup_seed(config, title.clone());
+    let gathered = GatheredWindows {
+        windows: windows.to_vec(),
+        previews: PreviewMap::new(),
+        icons: IconMap::new(),
+    };
+    let init = PickerInit::new(config, gathered, title.clone());
     let bounds = layout.bounds;
     let Some(handle) = open_picker_window(bounds, title.clone(), init, false, cx) else {
         #[cfg(debug_assertions)]
@@ -239,7 +204,7 @@ pub(crate) fn pre_create_ghost(
         .collect();
     qol_gpui::ghost::reconcile_active(&keys, super::platform::picker_window_title);
     PICKER_VISIBLE.store(false, Ordering::Relaxed);
-    qol_runtime::probe!("PICKER_STALE", "title={title}");
+    qol_runtime::probe!("PICKER_READY", "title={title}");
     qol_gpui::popup_window::dump_ghost_windows(&format!("pre-create title={title}"));
     #[cfg(debug_assertions)]
     eprintln!(

@@ -1,3 +1,4 @@
+use crate::discovery::WindowDiscovery;
 use crate::picker::create::PICKER_WINDOW_TITLE;
 
 pub fn picker_window_title(target: qol_gpui::window::MonitorKey) -> String {
@@ -41,6 +42,9 @@ pub fn pre_create(
         config.display.ghost_opacity,
         config.display.ghost_debug_color.as_deref(),
     );
+    let windows = crate::discovery::Platform
+        .visible_windows(config.display.show_minimized)
+        .unwrap_or_default();
     let state = qol_gpui::PlatformStateClient::from_env().get_state();
     let monitors = state
         .map(|state| state.monitors)
@@ -50,12 +54,12 @@ pub fn pre_create(
             let placement = qol_gpui::window::PopupPlacement::from_monitor(Some(
                 qol_gpui::monitor::ActiveMonitor::from_bounds(monitor),
             ));
-            crate::picker::create::pre_create_ghost(config, current, &placement, cx);
+            crate::picker::create::pre_create_ghost(config, current, &placement, &windows, cx);
         }
         return;
     }
     let placement = qol_gpui::window::PopupPlacement::from_tracker(tracker);
-    crate::picker::create::pre_create_ghost(config, current, &placement, cx);
+    crate::picker::create::pre_create_ghost(config, current, &placement, &windows, cx);
 }
 
 pub fn destroy_non_target_windows(
