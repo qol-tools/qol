@@ -50,6 +50,12 @@ impl Render for AltTabApp {
                 visible,
             );
         }
+        if !visible {
+            return div()
+                .id("alt-tab-backdrop")
+                .track_focus(&self.focus_handle)
+                .size_full();
+        }
         let entity = cx.weak_entity();
         let key_handler = cx.listener(|this, event: &KeyDownEvent, window, cx| {
             super::input::handle_key_down(this, event, window, cx);
