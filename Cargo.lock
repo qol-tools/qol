@@ -5272,6 +5272,7 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation",
  "qol-runtime",
+ "raw-window-handle",
  "x11rb",
 ]
 

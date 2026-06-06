@@ -154,3 +154,5 @@ fn sync_backing_properties(window: &NSWindow) {
     };
     gpui_view.viewDidChangeBackingProperties();
 }
+
+pub fn prime_hidden_ghost(_window: &gpui::Window, _title: &str) {}

@@ -130,6 +130,8 @@ fn open_picker_window(
         if activate {
             window.focus(&view.focus_handle(cx));
             window.activate_window();
+        } else {
+            qol_gpui::popup_window::prime_hidden_ghost(window, &window_title);
         }
         view
     })
