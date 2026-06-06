@@ -120,6 +120,7 @@ fn reposition_ghost_only(inputs: &ListenerInputs, event: &RuntimeEvent) {
         .collect();
     let _reason = qol_gpui::popup_window::reason_scope("amc");
     qol_gpui::ghost::reconcile(&target_title, &all_titles);
+    request_data_refresh();
 }
 
 fn trigger_data_refresh(inputs: &ListenerInputs, app_cx: &mut App) {
@@ -186,13 +187,7 @@ async fn refresh_data(cx: &mut AsyncApp, inputs: ListenerInputs, generation: usi
             active_monitor.map(|m| PopupPlacement::from_monitor(Some(m)).target())
         };
 
-        apply_view_windows(
-            &inputs.current,
-            active_target,
-            &gathered,
-            reset_selection,
-            app_cx,
-        );
+        apply_view_windows(&inputs.current, &gathered, reset_selection, app_cx);
 
         let active_handle = active_target
             .and_then(|target| inputs.current.borrow().existing(target))
@@ -228,16 +223,17 @@ async fn refresh_data(cx: &mut AsyncApp, inputs: ListenerInputs, generation: usi
 
 fn apply_view_windows(
     current: &PickerWindowState,
-    active_target: Option<qol_gpui::window::MonitorKey>,
     gathered: &super::gather::GatheredWindows,
     reset_selection: bool,
     app_cx: &mut App,
 ) {
-    let target_handle = active_target
-        .and_then(|target| current.borrow().existing(target))
-        .or_else(|| current.borrow().iter().into_iter().next().map(|(_, h)| h));
-
-    if let Some(handle) = target_handle {
+    let handles: Vec<_> = current
+        .borrow()
+        .iter()
+        .into_iter()
+        .map(|(_, handle)| handle)
+        .collect();
+    for handle in handles {
         let _ = handle.update(app_cx, |view, window: &mut Window, cx| {
             view.apply_ghost_gathered(gathered, reset_selection, window, cx);
         });
