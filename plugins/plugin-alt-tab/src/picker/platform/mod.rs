@@ -60,6 +60,7 @@ pub fn disable_window_shadow(title: &str) {
 pub fn show_picker(title: &str) {
     imp::show_picker(title)
 }
+#[cfg(not(target_os = "linux"))]
 pub fn hide_picker(title: &str) {
     imp::hide_picker(title)
 }
