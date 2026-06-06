@@ -28,7 +28,7 @@ pub(super) fn create_new(req: &CreateRequest, gathered: GatheredWindows, cx: &mu
     let handle = open_picker_window(
         bounds,
         title.clone(),
-        PickerInit::new(req.config, gathered, title),
+        PickerInit::new(req.config, gathered, title, true),
         true,
         cx,
     );
@@ -69,6 +69,7 @@ fn estimate_picker_size(req: &CreateRequest, gathered: &GatheredWindows) -> Size
 
 pub(crate) struct PickerInit {
     pub(crate) picker_title: String,
+    pub(crate) shown: bool,
     pub(crate) action_mode: ActionMode,
     pub(crate) label_config: LabelConfig,
     pub(crate) transparent_bg: bool,
@@ -84,10 +85,16 @@ pub(crate) struct PickerInit {
 }
 
 impl PickerInit {
-    fn new(config: &AltTabConfig, gathered: GatheredWindows, picker_title: String) -> Self {
+    fn new(
+        config: &AltTabConfig,
+        gathered: GatheredWindows,
+        picker_title: String,
+        shown: bool,
+    ) -> Self {
         let (card_color, card_opacity) = super::resolve_card_bg(&config.display);
         Self {
             picker_title,
+            shown,
             action_mode: config.action_mode.clone(),
             label_config: config.label.clone(),
             transparent_bg: config.display.transparent_background,
@@ -175,7 +182,7 @@ pub(crate) fn pre_create_ghost(
         previews: PreviewMap::new(),
         icons: IconMap::new(),
     };
-    let init = PickerInit::new(config, gathered, title.clone());
+    let init = PickerInit::new(config, gathered, title.clone(), false);
     let bounds = layout.bounds;
     let Some(handle) = open_picker_window(bounds, title.clone(), init, false, cx) else {
         #[cfg(debug_assertions)]
