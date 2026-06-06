@@ -118,6 +118,7 @@ fn reposition_ghost_only(inputs: &ListenerInputs, event: &RuntimeEvent) {
         .into_iter()
         .map(|(key, _)| super::platform::picker_window_title(key))
         .collect();
+    let _reason = qol_gpui::popup_window::reason_scope("amc");
     qol_gpui::ghost::reconcile(&target_title, &all_titles);
 }
 

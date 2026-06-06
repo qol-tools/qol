@@ -22,6 +22,7 @@ pub(super) struct LayoutInput<'a> {
 }
 
 pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
+    let _reason = qol_gpui::popup_window::reason_scope("show");
     req.handle
         .update(cx, |view, window: &mut Window, cx| {
             if !view.apply_reuse(req, window, cx) {
