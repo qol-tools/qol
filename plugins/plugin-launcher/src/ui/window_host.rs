@@ -224,6 +224,7 @@ fn ghost_window_options(placement: &WindowPlacement, focus: bool) -> WindowOptio
         kind: qol_gpui::platform::ghost_window_kind(),
         focus,
         is_movable: true,
+        window_background: WindowBackgroundAppearance::Transparent,
         app_id: Some(LAUNCHER_APP_ID.to_string()),
         ..Default::default()
     }
