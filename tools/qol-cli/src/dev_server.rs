@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 const DEV_HEALTH_URL: &str = "http://127.0.0.1:42700/api/dev/worktrees";
 const DEV_RECOMPILE_URL: &str = "http://127.0.0.1:42700/api/dev/recompile-self";
+const DEV_RELOAD_URL: &str = "http://127.0.0.1:42700/api/dev/reload";
 const DEV_LINKS_URL: &str = "http://127.0.0.1:42700/api/dev/links";
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
 const HEALTH_INTERVAL: Duration = Duration::from_millis(250);
@@ -39,6 +40,14 @@ pub(crate) fn health_ok() -> bool {
 
 pub(crate) fn post_recompile_current() -> Result<()> {
     post_recompile_body("{}")
+}
+
+pub(crate) fn post_reload_plugins() -> Result<()> {
+    let status = http_request("POST", DEV_RELOAD_URL, Some("{}"))?;
+    if status / 100 == 2 {
+        return Ok(());
+    }
+    bail!("plugin reload request failed with HTTP {status}");
 }
 
 fn post_recompile_body(body: &str) -> Result<()> {

@@ -12,7 +12,7 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
-use crate::dev_server::{health_ok, post_recompile_current};
+use crate::dev_server::{health_ok, post_recompile_current, post_reload_plugins};
 use crate::host_facade;
 
 const LOG_CAP: usize = 2000;
@@ -30,6 +30,7 @@ pub(crate) enum SessionEnd {
 enum Action {
     ToggleView,
     Rebuild,
+    ReloadPlugins,
     Quit,
     ScrollUp,
     ScrollDown,
@@ -43,6 +44,7 @@ fn action_for(code: KeyCode, mods: KeyModifiers) -> Action {
     if mods.contains(KeyModifiers::CONTROL) {
         return match code {
             KeyCode::Char('r') => Action::Rebuild,
+            KeyCode::Char('p') => Action::ReloadPlugins,
             KeyCode::Char('c') => Action::Quit,
             _ => Action::Ignore,
         };
@@ -116,6 +118,7 @@ struct Dash {
     health: Health,
     started: Instant,
     rebuild: RebuildState,
+    plugin_reload: RebuildState,
     plugins: usize,
     log_height: usize,
 }
@@ -129,6 +132,7 @@ impl Dash {
             health: Health::Checking,
             started: Instant::now(),
             rebuild: RebuildState::Idle,
+            plugin_reload: RebuildState::Idle,
             plugins,
             log_height: 0,
         }
@@ -243,6 +247,12 @@ fn apply_action(dash: &mut Dash, action: Action) {
                 Err(error) => RebuildState::Failed(format!("{error:#}")),
             };
         }
+        Action::ReloadPlugins => {
+            dash.plugin_reload = match post_reload_plugins() {
+                Ok(()) => RebuildState::Requested(Instant::now()),
+                Err(error) => RebuildState::Failed(format!("{error:#}")),
+            };
+        }
         Action::ScrollUp => dash.scroll_offset = dash.scroll_offset.saturating_add(1),
         Action::ScrollDown => dash.scroll_offset = dash.scroll_offset.saturating_sub(1),
         Action::PageUp => dash.scroll_offset = dash.scroll_offset.saturating_add(page),
@@ -261,8 +271,8 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
         View::Logs => draw_logs(frame, dash, main),
     }
     let keys = match dash.view {
-        View::Dashboard => " L logs · ^R rebuild · q quit ",
-        View::Logs => " L dashboard · ^R rebuild · ↑/↓ scroll · f follow · q quit ",
+        View::Dashboard => " L logs · ^R rebuild · ^P plugins · q quit ",
+        View::Logs => " L dashboard · ^R rebuild · ^P plugins · ↑/↓ scroll · f follow · q quit ",
     };
     frame.render_widget(Paragraph::new(keys).style(Style::new().dim()), footer);
 }
@@ -285,13 +295,29 @@ fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: ratatui::layout::Rect) {
             format!(" · {error}").into(),
         ]),
     };
+    let plugins_row = match &dash.plugin_reload {
+        RebuildState::Idle => Line::from(format!(
+            "  plugins   {} linked · ctrl+p to reload",
+            dash.plugins
+        )),
+        RebuildState::Requested(at) => Line::from(format!(
+            "  plugins   {} linked · reload requested {} ago",
+            dash.plugins,
+            format_duration(at.elapsed())
+        )),
+        RebuildState::Failed(error) => Line::from(vec![
+            format!("  plugins   {} linked · reload ", dash.plugins).into(),
+            "failed".fg(Color::Red).bold(),
+            format!(" · {error}").into(),
+        ]),
+    };
     let rows = vec![
         Line::from(vec![
             "  tray      ".into(),
             health_text.fg(health_color).bold(),
             format!(" · up {}", format_duration(dash.started.elapsed())).into(),
         ]),
-        Line::from(format!("  plugins   {} linked", dash.plugins)),
+        plugins_row,
         rebuild_row,
         Line::from(format!(
             "  logs      {} buffered · L to view",
@@ -423,6 +449,7 @@ mod tests {
             (KeyCode::Char('l'), none, Action::ToggleView),
             (KeyCode::Char('L'), none, Action::ToggleView),
             (KeyCode::Char('r'), ctrl, Action::Rebuild),
+            (KeyCode::Char('p'), ctrl, Action::ReloadPlugins),
             (KeyCode::Char('c'), ctrl, Action::Quit),
             (KeyCode::Char('q'), none, Action::Quit),
             (KeyCode::Up, none, Action::ScrollUp),
@@ -432,6 +459,7 @@ mod tests {
             (KeyCode::End, none, Action::Follow),
             (KeyCode::Char('f'), none, Action::Follow),
             (KeyCode::Char('r'), none, Action::Ignore),
+            (KeyCode::Char('p'), none, Action::Ignore),
             (KeyCode::Char('x'), none, Action::Ignore),
         ];
         for (code, mods, expected) in cases {
