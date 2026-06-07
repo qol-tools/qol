@@ -51,7 +51,7 @@ export function usePluginsList() {
     const selectedIndexRef = useRef(0);
     const { items: installingItems } = useInstalling();
     const [nextToken, isCurrentToken] = useAsyncToken();
-    const latestRevisionRef = useRef(initialCache?.revision ?? 0);
+    const latestRevisionRef = useRef(0);
     const applyPayload = useCallback((revision, items, restore) => {
         if (!samePluginList(pluginsRef.current, items)) setPlugins(items);
         writeInstalledCache(revision, items);
