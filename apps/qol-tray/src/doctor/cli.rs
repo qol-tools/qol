@@ -1,16 +1,24 @@
-use super::{check, fix_with_policy, FixPolicy, FixReport, Outcome, OutcomeStatus, Report};
+use super::{
+    check, check_single, fix_single_with_policy, fix_with_policy, FixPolicy, FixReport, Outcome,
+    OutcomeStatus, Report,
+};
 use anyhow::{anyhow, Result};
 
 pub(super) fn run_cli_from_env() -> Result<i32> {
     match command()? {
-        DoctorCommand::Check => run_check(),
-        DoctorCommand::Fix(policy) => run_fix(policy),
+        DoctorCommand::Check { id } => run_check(id),
+        DoctorCommand::Fix { id, policy } => run_fix(id, policy),
     }
 }
 
 enum DoctorCommand {
-    Check,
-    Fix(FixPolicy),
+    Check {
+        id: Option<String>,
+    },
+    Fix {
+        id: Option<String>,
+        policy: FixPolicy,
+    },
 }
 
 fn command() -> Result<DoctorCommand> {
@@ -19,43 +27,72 @@ fn command() -> Result<DoctorCommand> {
     let rest: Vec<String> = args.collect();
 
     match command.as_str() {
-        "check" => {
-            if !rest.is_empty() {
-                return Err(unknown_args_error(&rest));
-            }
-            Ok(DoctorCommand::Check)
+        "check" => Ok(DoctorCommand::Check {
+            id: parse_check_flags(&rest)?,
+        }),
+        "fix" => {
+            let (id, policy) = parse_fix_flags(&rest)?;
+            Ok(DoctorCommand::Fix { id, policy })
         }
-        "fix" => Ok(DoctorCommand::Fix(parse_fix_flags(&rest)?)),
         _ => Err(anyhow!("Unknown command: {}", command)),
     }
 }
 
-fn parse_fix_flags(rest: &[String]) -> Result<FixPolicy> {
-    let mut policy = FixPolicy::safe();
-    for arg in rest {
+fn parse_check_flags(rest: &[String]) -> Result<Option<String>> {
+    let mut id = None;
+    let mut args = rest.iter();
+    while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--apply-de-fixes" => policy.apply_de_fixes = true,
-            other => return Err(anyhow!("Unknown flag: {}", other)),
+            "--id" => id = Some(take_id_value(&mut args)?),
+            _ => return Err(usage_error("check [--id <CHECK_ID>]", rest)),
         }
     }
-    Ok(policy)
+    Ok(id)
 }
 
-fn unknown_args_error(rest: &[String]) -> anyhow::Error {
-    anyhow!(
-        "Usage: qol-tray-doctor [check|fix [--apply-de-fixes]] (got extras: {})",
-        rest.join(" ")
-    )
+fn parse_fix_flags(rest: &[String]) -> Result<(Option<String>, FixPolicy)> {
+    let mut id = None;
+    let mut policy = FixPolicy::safe();
+    let mut args = rest.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--id" => id = Some(take_id_value(&mut args)?),
+            "--apply-de-fixes" => policy.apply_de_fixes = true,
+            _ => {
+                return Err(usage_error(
+                    "fix [--id <CHECK_ID>] [--apply-de-fixes]",
+                    rest,
+                ))
+            }
+        }
+    }
+    Ok((id, policy))
 }
 
-fn run_check() -> Result<i32> {
-    let report = check();
+fn take_id_value<'a>(args: &mut impl Iterator<Item = &'a String>) -> Result<String> {
+    args.next()
+        .cloned()
+        .ok_or_else(|| anyhow!("--id requires a check id"))
+}
+
+fn usage_error(usage: &str, rest: &[String]) -> anyhow::Error {
+    anyhow!("Usage: qol-tray-doctor {usage} (got: {})", rest.join(" "))
+}
+
+fn run_check(id: Option<String>) -> Result<i32> {
+    let report = match id {
+        Some(id) => check_single(&id),
+        None => check(),
+    };
     print_report("Doctor Check", &report);
     Ok(exit_code_for_report(&report))
 }
 
-fn run_fix(policy: FixPolicy) -> Result<i32> {
-    let report = fix_with_policy(policy);
+fn run_fix(id: Option<String>, policy: FixPolicy) -> Result<i32> {
+    let report = match id {
+        Some(id) => fix_single_with_policy(&id, policy),
+        None => fix_with_policy(policy),
+    };
     print_fix_report(&report);
     Ok(exit_code_for_report(&report.after))
 }

@@ -41,6 +41,10 @@ pub(super) enum FixAction {
         plugin_id: String,
         to: PathBuf,
     },
+    #[cfg(feature = "dev")]
+    PruneOrphanFingerprints {
+        ids: Vec<String>,
+    },
 }
 
 impl FixAction {
@@ -56,7 +60,7 @@ impl FixAction {
             | FixAction::DisableSymbolicHotkey { .. }
             | FixAction::ClearWindowsAppKey { .. } => false,
             #[cfg(feature = "dev")]
-            FixAction::RelocateDevLink { .. } => true,
+            FixAction::RelocateDevLink { .. } | FixAction::PruneOrphanFingerprints { .. } => true,
         }
     }
 }
@@ -99,7 +103,24 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
             super::checks::relocate_dev_link(&config_dir, plugin_id, to)
                 .map_err(|e| anyhow!("failed to relocate dev-link for {plugin_id}: {e}"))
         }
+        #[cfg(feature = "dev")]
+        FixAction::PruneOrphanFingerprints { ids } => prune_orphan_fingerprints(ids),
     }
+}
+
+#[cfg(feature = "dev")]
+fn prune_orphan_fingerprints(ids: &[String]) -> Result<()> {
+    let config_dir = crate::paths::shared_config_dir()?;
+    let mut fingerprints = crate::dev::load_build_fingerprints(&config_dir);
+    let before = fingerprints.len();
+    for id in ids {
+        fingerprints.remove(id);
+    }
+    if fingerprints.len() == before {
+        return Ok(());
+    }
+    crate::dev::save_build_fingerprints(&config_dir, &fingerprints)
+        .map_err(|error| anyhow!("failed to save build fingerprints: {error}"))
 }
 
 pub(super) trait SymbolicHotkeyWriter {
@@ -315,6 +336,15 @@ mod tests {
         let action = FixAction::RelocateDevLink {
             plugin_id: "plugin-foo".into(),
             to: PathBuf::from("/ws/plugins/plugin-foo"),
+        };
+        assert!(action.is_safe_to_auto_apply());
+    }
+
+    #[cfg(feature = "dev")]
+    #[test]
+    fn prune_orphan_fingerprints_is_safe_to_auto_apply() {
+        let action = FixAction::PruneOrphanFingerprints {
+            ids: vec!["plugin-orphan".into()],
         };
         assert!(action.is_safe_to_auto_apply());
     }
