@@ -60,8 +60,8 @@ export function usePluginActions(list, modal, onOpenPluginConfig) {
             ? list.pluginsRef.current?.find(p => p.id === pluginId)
             : list.pluginsRef.current?.[list.selectedIndexRef.current];
         if (!plugin) return;
-        modal.triggerActionsMenu(plugin.id, apiRef.current);
-    }, [modal.triggerActionsMenu]);
+        modal.triggerActionsMenu(plugin.id, { actions: apiRef.current, modal });
+    }, [modal]);
     const isBlocking = useCallback(() => false, []);
     const api = { updating, updatePlugin, openSelected, openConfig, navigateInGrid, focusSelectedCard, openActionsMenu, isBlocking };
     apiRef.current = api;
