@@ -7,7 +7,7 @@ use axum::{
 };
 
 use crate::dev::state::DiscoveryStatus;
-use crate::dev::{DevConfig, GpuiRuntimeConfig};
+use crate::dev::{normalize_ghost_debug_color, DevConfig, GpuiRuntimeConfig};
 
 use super::dev_services;
 use super::dev_validation::sanitize_monitored_plugin_ids;
@@ -42,12 +42,20 @@ pub(super) async fn get_runtime_gpui() -> Json<RuntimeGpuiPayload> {
         .unwrap_or_default();
     Json(RuntimeGpuiPayload {
         ghost_opacity: cfg.ghost_opacity,
+        ghost_debug_color: cfg.ghost_debug_color,
     })
 }
 
 pub(super) async fn set_runtime_gpui(Json(payload): Json<RuntimeGpuiPayload>) -> impl IntoResponse {
-    let result = tokio::task::spawn_blocking(move || {
-        GpuiRuntimeConfig::set_ghost_opacity(payload.ghost_opacity)
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let mut cfg = GpuiRuntimeConfig::load().unwrap_or_default();
+        if let Some(field) = payload.ghost_opacity {
+            cfg.ghost_opacity = clamp_payload_opacity(Some(field));
+        }
+        if let Some(field) = payload.ghost_debug_color.as_deref() {
+            cfg.ghost_debug_color = normalize_ghost_debug_color(Some(field));
+        }
+        cfg.save()
     })
     .await;
     match result {
@@ -65,6 +73,14 @@ pub(super) async fn set_runtime_gpui(Json(payload): Json<RuntimeGpuiPayload>) ->
             (StatusCode::INTERNAL_SERVER_ERROR, "Handler crashed").into_response()
         }
     }
+}
+
+fn clamp_payload_opacity(value: Option<f32>) -> Option<f32> {
+    let raw = value?;
+    if !raw.is_finite() {
+        return None;
+    }
+    Some(raw.clamp(0.0, 1.0))
 }
 
 pub(super) async fn get_tooling_gh_account() -> Json<ToolingGhAccountPayload> {
@@ -253,6 +269,105 @@ mod tests {
             let payload: ToolingGhAccountPayload =
                 serde_json::from_str(raw).unwrap_or_else(|e| panic!("failed to parse {raw}: {e}"));
             assert_eq!(payload.value.as_deref(), *expected, "for input {raw}");
+        }
+    }
+
+    #[tokio::test]
+    async fn gpui_payload_round_trips_opacity_and_color() {
+        let (_guard, _tmp, _path_guard) = isolated_env().await;
+
+        let response = set_runtime_gpui(Json(RuntimeGpuiPayload {
+            ghost_opacity: Some(0.42),
+            ghost_debug_color: Some("FF8800".to_string()),
+        }))
+        .await;
+        assert_eq!(extract_status(response.into_response()), StatusCode::OK);
+
+        let Json(payload) = get_runtime_gpui().await;
+        assert_eq!(payload.ghost_opacity, Some(0.42));
+        assert_eq!(payload.ghost_debug_color.as_deref(), Some("#ff8800"));
+    }
+
+    #[tokio::test]
+    async fn gpui_partial_payload_preserves_other_field() {
+        let (_guard, _tmp, _path_guard) = isolated_env().await;
+
+        set_runtime_gpui(Json(RuntimeGpuiPayload {
+            ghost_opacity: Some(0.5),
+            ghost_debug_color: Some("#112233".to_string()),
+        }))
+        .await;
+
+        let opacity_only = set_runtime_gpui(Json(RuntimeGpuiPayload {
+            ghost_opacity: Some(0.9),
+            ghost_debug_color: None,
+        }))
+        .await;
+        assert_eq!(extract_status(opacity_only.into_response()), StatusCode::OK);
+
+        let Json(after_opacity) = get_runtime_gpui().await;
+        assert_eq!(after_opacity.ghost_opacity, Some(0.9));
+        assert_eq!(after_opacity.ghost_debug_color.as_deref(), Some("#112233"));
+
+        let color_only = set_runtime_gpui(Json(RuntimeGpuiPayload {
+            ghost_opacity: None,
+            ghost_debug_color: Some("#445566".to_string()),
+        }))
+        .await;
+        assert_eq!(extract_status(color_only.into_response()), StatusCode::OK);
+
+        let Json(after_color) = get_runtime_gpui().await;
+        assert_eq!(after_color.ghost_opacity, Some(0.9));
+        assert_eq!(after_color.ghost_debug_color.as_deref(), Some("#445566"));
+    }
+
+    #[tokio::test]
+    async fn gpui_invalid_hex_color_clears_color_field() {
+        let (_guard, _tmp, _path_guard) = isolated_env().await;
+
+        set_runtime_gpui(Json(RuntimeGpuiPayload {
+            ghost_opacity: None,
+            ghost_debug_color: Some("#abcdef".to_string()),
+        }))
+        .await;
+
+        let response = set_runtime_gpui(Json(RuntimeGpuiPayload {
+            ghost_opacity: None,
+            ghost_debug_color: Some("not-a-color".to_string()),
+        }))
+        .await;
+        assert_eq!(extract_status(response.into_response()), StatusCode::OK);
+
+        let Json(payload) = get_runtime_gpui().await;
+        assert_eq!(payload.ghost_debug_color, None);
+    }
+
+    #[test]
+    fn gpui_payload_deserialization_table() {
+        let cases: &[(&str, Option<f32>, Option<&str>)] = &[
+            (r##"{}"##, None, None),
+            (r##"{"ghost_opacity":0.5}"##, Some(0.5), None),
+            (r##"{"ghost_debug_color":"#abc"}"##, None, Some("#abc")),
+            (
+                r##"{"ghost_opacity":0.3,"ghost_debug_color":"#ff8800"}"##,
+                Some(0.3),
+                Some("#ff8800"),
+            ),
+            (
+                r##"{"ghost_opacity":null,"ghost_debug_color":null}"##,
+                None,
+                None,
+            ),
+        ];
+        for (raw, opacity, color) in cases {
+            let payload: RuntimeGpuiPayload =
+                serde_json::from_str(raw).unwrap_or_else(|e| panic!("failed to parse {raw}: {e}"));
+            assert_eq!(payload.ghost_opacity, *opacity, "opacity for {raw}");
+            assert_eq!(
+                payload.ghost_debug_color.as_deref(),
+                *color,
+                "color for {raw}"
+            );
         }
     }
 

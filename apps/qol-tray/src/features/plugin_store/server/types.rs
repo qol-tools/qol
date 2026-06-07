@@ -289,6 +289,8 @@ pub(super) struct ToolingGhAccountPayload {
 pub(super) struct RuntimeGpuiPayload {
     #[serde(default)]
     pub(super) ghost_opacity: Option<f32>,
+    #[serde(default)]
+    pub(super) ghost_debug_color: Option<String>,
 }
 
 #[cfg(all(test, feature = "dev"))]
