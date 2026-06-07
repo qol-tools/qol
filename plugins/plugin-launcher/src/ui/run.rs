@@ -102,9 +102,34 @@ fn spawn_command_poll(
                         .update(move |cx| activate_or_open_launcher(entries, active, snapshot, cx));
                     LoopFlow::Continue
                 }
+                daemon::Command::Reload => {
+                    let _ = cx.update(move |cx| reload_ghost_debug(&active, cx));
+                    LoopFlow::Continue
+                }
                 daemon::Command::Kill => LoopFlow::Stop,
             }
         }
+    });
+}
+
+fn reload_ghost_debug(active: &Rc<RefCell<ActiveLaunchers>>, cx: &mut App) {
+    crate::config::apply_ghost_debug();
+    let any_showing = active
+        .borrow()
+        .iter()
+        .into_iter()
+        .any(|(_, handle)| handle.read(cx).map(|view| view.is_showing).unwrap_or(false));
+    if any_showing {
+        return;
+    }
+    let keys: Vec<_> = active
+        .borrow()
+        .iter()
+        .into_iter()
+        .map(|(key, _)| key)
+        .collect();
+    qol_gpui::ghost::reconcile_active(&keys, |key| {
+        qol_gpui::ghost::ghost_window_title(super::LAUNCHER_WINDOW_TITLE, key)
     });
 }
 
