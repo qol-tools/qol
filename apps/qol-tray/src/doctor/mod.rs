@@ -57,6 +57,10 @@ pub fn fix_single(id: &str) -> FixReport {
     fix_with_selector_and_policy(Selector::Id(id.to_string()), FixPolicy::safe())
 }
 
+pub fn fix_single_with_policy(id: &str, policy: FixPolicy) -> FixReport {
+    fix_with_selector_and_policy(Selector::Id(id.to_string()), policy)
+}
+
 pub fn fix_with_policy(policy: FixPolicy) -> FixReport {
     fix_with_selector_and_policy(Selector::All, policy)
 }
@@ -229,6 +233,14 @@ fn log_applied(action: &FixAction) {
                 "doctor: relocated dev-link for {} to {}",
                 plugin_id,
                 to.display()
+            );
+        }
+        #[cfg(feature = "dev")]
+        FixAction::PruneOrphanFingerprints { ids } => {
+            log::info!(
+                "doctor: pruned {} orphan build fingerprint(s): {}",
+                ids.len(),
+                ids.join(", ")
             );
         }
     }
@@ -416,7 +428,7 @@ mod tests {
     fn registry_includes_dev_loop_group_members() {
         let dev_loop_ids: Vec<&str> = checks::registry()
             .iter()
-            .filter(|check| check.meta().groups.iter().any(|g| *g == "dev-loop"))
+            .filter(|check| check.meta().groups.contains(&"dev-loop"))
             .map(|check| check.meta().id)
             .collect();
         assert!(

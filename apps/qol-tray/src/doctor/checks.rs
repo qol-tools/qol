@@ -1,6 +1,8 @@
 mod autostart_target;
 #[cfg(feature = "dev")]
 mod dev_link_paths;
+#[cfg(feature = "dev")]
+mod fingerprint_health;
 mod hotkey_shadows;
 mod install_identity;
 mod plugin_process_leaks;
@@ -28,6 +30,7 @@ pub(super) fn registry() -> Vec<Box<dyn DoctorCheck>> {
     {
         checks.push(Box::new(plugin_staleness::PluginStalenessCheck));
         checks.push(Box::new(dev_link_paths::DevLinkPathsCheck));
+        checks.push(Box::new(fingerprint_health::FingerprintHealthCheck));
     }
     checks
 }
