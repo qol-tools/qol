@@ -1,8 +1,11 @@
+use super::framework::DoctorCheckResult;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutcomeStatus {
     Ok,
     Warn,
     Error,
+    Crash,
 }
 
 #[derive(Clone, Debug)]
@@ -15,28 +18,35 @@ pub struct Outcome {
 
 #[derive(Clone, Debug, Default)]
 pub struct Report {
-    pub outcomes: Vec<Outcome>,
+    pub(super) results: Vec<DoctorCheckResult>,
 }
 
 impl Report {
+    pub fn outcomes(&self) -> impl Iterator<Item = &Outcome> {
+        self.results.iter().map(|result| &result.outcome)
+    }
+
     pub fn count_ok(&self) -> usize {
-        self.outcomes
-            .iter()
+        self.outcomes()
             .filter(|outcome| matches!(outcome.status, OutcomeStatus::Ok))
             .count()
     }
 
     pub fn count_warn(&self) -> usize {
-        self.outcomes
-            .iter()
+        self.outcomes()
             .filter(|outcome| matches!(outcome.status, OutcomeStatus::Warn))
             .count()
     }
 
     pub fn count_error(&self) -> usize {
-        self.outcomes
-            .iter()
+        self.outcomes()
             .filter(|outcome| matches!(outcome.status, OutcomeStatus::Error))
+            .count()
+    }
+
+    pub fn count_crash(&self) -> usize {
+        self.outcomes()
+            .filter(|outcome| matches!(outcome.status, OutcomeStatus::Crash))
             .count()
     }
 
@@ -46,6 +56,10 @@ impl Report {
 
     pub fn has_errors(&self) -> bool {
         self.count_error() > 0
+    }
+
+    pub fn has_crashes(&self) -> bool {
+        self.count_crash() > 0
     }
 }
 
@@ -59,6 +73,6 @@ pub struct FixReport {
     pub failures: Vec<String>,
 }
 
-pub(super) fn report(outcomes: Vec<Outcome>) -> Report {
-    Report { outcomes }
+pub(super) fn report(results: Vec<DoctorCheckResult>) -> Report {
+    Report { results }
 }

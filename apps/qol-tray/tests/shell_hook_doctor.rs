@@ -53,8 +53,7 @@ fn write_rc(path: &Path, content: &str) {
 
 fn shell_hook_outcome(report: &doctor::Report) -> &doctor::Outcome {
     report
-        .outcomes
-        .iter()
+        .outcomes()
         .find(|o| o.id == "shell_hook_present")
         .expect("expected shell_hook_present in report")
 }

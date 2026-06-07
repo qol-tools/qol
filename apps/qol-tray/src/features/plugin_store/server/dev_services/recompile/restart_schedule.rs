@@ -148,14 +148,14 @@ fn shutdown_plugin_manager(plugin_manager: &Arc<Mutex<crate::plugins::PluginMana
 }
 
 fn verify_plugin_process_leaks() -> Result<(), String> {
-    let report = crate::doctor::fix_single(crate::doctor::CheckId::PluginProcessLeaks);
+    let report = crate::doctor::fix_single("plugin_process_leaks");
     if !report.failures.is_empty() {
         return Err(format!(
             "plugin process leak cleanup failed: {}",
             report.failures.join("; ")
         ));
     }
-    if report.after.has_warnings() || report.after.has_errors() {
+    if report.after.has_warnings() || report.after.has_errors() || report.after.has_crashes() {
         return Err(format_plugin_leak_report(&report.after));
     }
     if report.applied > 0 {
@@ -169,8 +169,7 @@ fn verify_plugin_process_leaks() -> Result<(), String> {
 
 fn format_plugin_leak_report(report: &crate::doctor::Report) -> String {
     report
-        .outcomes
-        .iter()
+        .outcomes()
         .filter(|outcome| !matches!(outcome.status, crate::doctor::OutcomeStatus::Ok))
         .map(|outcome| outcome.message.clone())
         .collect::<Vec<_>>()

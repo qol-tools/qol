@@ -1,16 +1,10 @@
 use super::de_bindings::{filter_unshadow, parse_gsettings_list, serialize_gsettings_list};
 use super::install_id::write_install_id_file;
-use super::report::{Outcome, OutcomeStatus};
 use crate::plugins::daemon_tracker::ManagedProcess;
 use anyhow::{anyhow, Context, Result};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-
-pub(super) struct Diagnosis {
-    pub(super) outcome: Outcome,
-    pub(super) fixes: Vec<FixAction>,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum FixAction {
@@ -250,50 +244,6 @@ pub(super) fn apply_unshadow(
         .ok_or_else(|| anyhow!("failed to normalize qol combo: {qol_combo}"))?;
     let serialized = serialize_gsettings_list(&filtered);
     backend.write(schema, key, &serialized)
-}
-
-pub(super) fn ok_outcome(id: &'static str, message: String) -> Diagnosis {
-    Diagnosis {
-        outcome: Outcome {
-            id,
-            status: OutcomeStatus::Ok,
-            message,
-            fix_available: false,
-        },
-        fixes: Vec::new(),
-    }
-}
-
-pub(super) fn warn_outcome(id: &'static str, message: String, fix: Option<FixAction>) -> Diagnosis {
-    warn_outcome_with_fixes(id, message, fix.into_iter().collect())
-}
-
-pub(super) fn warn_outcome_with_fixes(
-    id: &'static str,
-    message: String,
-    fixes: Vec<FixAction>,
-) -> Diagnosis {
-    Diagnosis {
-        outcome: Outcome {
-            id,
-            status: OutcomeStatus::Warn,
-            message,
-            fix_available: !fixes.is_empty(),
-        },
-        fixes,
-    }
-}
-
-pub(super) fn error_outcome(id: &'static str, message: String) -> Diagnosis {
-    Diagnosis {
-        outcome: Outcome {
-            id,
-            status: OutcomeStatus::Error,
-            message,
-            fix_available: false,
-        },
-        fixes: Vec::new(),
-    }
 }
 
 #[cfg(test)]

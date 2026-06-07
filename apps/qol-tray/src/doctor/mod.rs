@@ -2,30 +2,16 @@ mod checks;
 mod cli;
 mod de_bindings;
 mod diagnosis;
+mod framework;
 mod install_id;
 pub(crate) mod platform;
-mod report;
+pub mod report;
 pub mod trigger;
 
 use anyhow::Result;
-use diagnosis::{apply_fix, Diagnosis, FixAction};
+use diagnosis::{apply_fix, FixAction};
+use framework::{run_check, DoctorCheckResult, DoctorContext, Selector};
 pub use report::{FixReport, Outcome, OutcomeStatus, Report};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CheckId {
-    PluginProcessLeaks,
-    HotkeyShadows,
-}
-
-impl CheckId {
-    fn from_str(value: &str) -> Option<Self> {
-        match value {
-            "plugin_process_leaks" => Some(Self::PluginProcessLeaks),
-            "hotkey_shadows" => Some(Self::HotkeyShadows),
-            _ => None,
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FixPolicy {
@@ -52,52 +38,27 @@ impl FixPolicy {
 }
 
 pub fn check() -> Report {
-    let diagnoses = checks::collect_diagnoses();
-    report::report(
-        diagnoses
-            .into_iter()
-            .map(|diagnosis| diagnosis.outcome)
-            .collect(),
-    )
+    let ctx = DoctorContext::new();
+    let results = run_selected(&Selector::All, &ctx);
+    report::report(results)
 }
 
 pub fn fix_safe() -> FixReport {
     fix_with_policy(FixPolicy::safe())
 }
 
-pub fn check_single(id: CheckId) -> Report {
-    let diagnosis = checks::collect_diagnosis(id);
-    report::report(vec![diagnosis.outcome])
+pub fn check_single(id: &str) -> Report {
+    let ctx = DoctorContext::new();
+    let results = run_selected(&Selector::Id(id.to_string()), &ctx);
+    report::report(results)
 }
 
-pub fn fix_single(id: CheckId) -> FixReport {
-    let diagnoses = vec![checks::collect_diagnosis(id)];
-    let before = report_from_diagnoses(&diagnoses);
-    let summary = apply_fixes(diagnoses, FixPolicy::safe());
-    let after = check_single(id);
-    FixReport {
-        before,
-        after,
-        attempted: summary.attempted,
-        applied: summary.applied,
-        skipped: summary.skipped,
-        failures: summary.failures,
-    }
+pub fn fix_single(id: &str) -> FixReport {
+    fix_with_selector_and_policy(Selector::Id(id.to_string()), FixPolicy::safe())
 }
 
 pub fn fix_with_policy(policy: FixPolicy) -> FixReport {
-    let diagnoses = checks::collect_diagnoses();
-    let before = report_from_diagnoses(&diagnoses);
-    let summary = apply_fixes(diagnoses, policy);
-    let after = check();
-    FixReport {
-        before,
-        after,
-        attempted: summary.attempted,
-        applied: summary.applied,
-        skipped: summary.skipped,
-        failures: summary.failures,
-    }
+    fix_with_selector_and_policy(Selector::All, policy)
 }
 
 pub fn auto_fix_startup() -> FixReport {
@@ -112,7 +73,7 @@ pub fn auto_fix_startup() -> FixReport {
 }
 
 fn run_triggered_check(trigger: &trigger::Trigger) {
-    let Some(check_id) = CheckId::from_str(&trigger.check_id) else {
+    if !is_known_check_id(&trigger.check_id) {
         log::warn!(
             "doctor: triggered run skipped, unknown check_id={} (reason={})",
             trigger.check_id,
@@ -125,16 +86,26 @@ fn run_triggered_check(trigger: &trigger::Trigger) {
         trigger.check_id,
         trigger.reason
     );
-    let report = fix_single_with_policy(check_id, FixPolicy::with_de_fixes());
+    let report = fix_with_selector_and_policy(
+        Selector::Id(trigger.check_id.clone()),
+        FixPolicy::with_de_fixes(),
+    );
     log_fix_attempts(&report);
     log_fix_failures(&report);
 }
 
-fn fix_single_with_policy(id: CheckId, policy: FixPolicy) -> FixReport {
-    let diagnoses = vec![checks::collect_diagnosis(id)];
-    let before = report_from_diagnoses(&diagnoses);
-    let summary = apply_fixes(diagnoses, policy);
-    let after = check_single(id);
+fn is_known_check_id(id: &str) -> bool {
+    checks::registry().iter().any(|check| check.meta().id == id)
+}
+
+fn fix_with_selector_and_policy(selector: Selector, policy: FixPolicy) -> FixReport {
+    let ctx = DoctorContext::new();
+    let before_results = run_selected(&selector, &ctx);
+    let before = report::report(before_results.clone());
+    let summary = apply_fixes(before_results, policy);
+    let after_ctx = DoctorContext::new();
+    let after_results = run_selected(&selector, &after_ctx);
+    let after = report::report(after_results);
     FixReport {
         before,
         after,
@@ -145,29 +116,43 @@ fn fix_single_with_policy(id: CheckId, policy: FixPolicy) -> FixReport {
     }
 }
 
+fn run_selected(selector: &Selector, ctx: &DoctorContext) -> Vec<DoctorCheckResult> {
+    checks::registry()
+        .iter()
+        .filter(|check| {
+            let meta = check.meta();
+            selector.matches(&meta)
+                && meta.platform.matches_current()
+                && check_enabled_for_build(meta.dev_only)
+        })
+        .map(|check| run_check(check.as_ref(), ctx))
+        .collect()
+}
+
+#[cfg(feature = "dev")]
+fn check_enabled_for_build(_dev_only: bool) -> bool {
+    true
+}
+
+#[cfg(not(feature = "dev"))]
+fn check_enabled_for_build(dev_only: bool) -> bool {
+    !dev_only
+}
+
 pub fn run_cli_from_env() -> Result<i32> {
     cli::run_cli_from_env()
 }
 
-fn report_from_diagnoses(diagnoses: &[Diagnosis]) -> Report {
-    report::report(
-        diagnoses
-            .iter()
-            .map(|diagnosis| diagnosis.outcome.clone())
-            .collect(),
-    )
-}
-
-fn apply_fixes(diagnoses: Vec<Diagnosis>, policy: FixPolicy) -> FixSummary {
+fn apply_fixes(results: Vec<DoctorCheckResult>, policy: FixPolicy) -> FixSummary {
     let mut summary = FixSummary::default();
-    for diagnosis in diagnoses {
-        apply_diagnosis_fixes(&mut summary, diagnosis, policy);
+    for result in results {
+        apply_result_fixes(&mut summary, result, policy);
     }
     summary
 }
 
-fn apply_diagnosis_fixes(summary: &mut FixSummary, diagnosis: Diagnosis, policy: FixPolicy) {
-    for action in diagnosis.fixes {
+fn apply_result_fixes(summary: &mut FixSummary, result: DoctorCheckResult, policy: FixPolicy) {
+    for action in result.fixes {
         if !policy.allows(&action) {
             summary.skipped += 1;
             continue;
@@ -176,7 +161,7 @@ fn apply_diagnosis_fixes(summary: &mut FixSummary, diagnosis: Diagnosis, policy:
         if let Err(error) = apply_fix(&action) {
             summary
                 .failures
-                .push(format!("{}: {}", diagnosis.outcome.id, error));
+                .push(format!("{}: {}", result.outcome.id, error));
             continue;
         }
         summary.applied += 1;
@@ -250,7 +235,7 @@ fn log_applied(action: &FixAction) {
 }
 
 fn log_remaining_outcomes(report: &Report) {
-    for outcome in &report.outcomes {
+    for outcome in report.outcomes() {
         if matches!(outcome.status, OutcomeStatus::Ok) {
             continue;
         }
@@ -269,23 +254,40 @@ struct FixSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::doctor::diagnosis::{warn_outcome_with_fixes, FixAction};
+    use crate::doctor::diagnosis::FixAction;
+    use crate::doctor::framework::{
+        CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorCheckResult, DoctorContext,
+        Severity,
+    };
 
-    fn unshadow_diagnosis() -> Diagnosis {
-        warn_outcome_with_fixes(
-            "hotkey_shadows",
-            "test shadow".into(),
-            vec![FixAction::UnshadowDeBinding {
-                schema: "org.cinnamon.desktop.keybindings.wm".into(),
-                key: "switch-input-source".into(),
-                qol_combo: "Super+Space".into(),
-            }],
-        )
+    fn unshadow_result() -> DoctorCheckResult {
+        struct StubUnshadowCheck;
+        impl DoctorCheck for StubUnshadowCheck {
+            fn meta(&self) -> CheckMeta {
+                CheckMeta::new(
+                    "hotkey_shadows",
+                    "Hotkey Shadows",
+                    CheckCategory::HostSurface,
+                )
+            }
+            fn run(&self, _: &DoctorContext) -> CheckReport {
+                CheckReport::warn(
+                    "test shadow".to_string(),
+                    "hotkey_shadows",
+                    vec![FixAction::UnshadowDeBinding {
+                        schema: "org.cinnamon.desktop.keybindings.wm".into(),
+                        key: "switch-input-source".into(),
+                        qol_combo: "Super+Space".into(),
+                    }],
+                )
+            }
+        }
+        run_check(&StubUnshadowCheck, &DoctorContext::new())
     }
 
     #[test]
     fn safe_policy_skips_de_fixes_without_invoking_them() {
-        let summary = apply_fixes(vec![unshadow_diagnosis()], FixPolicy::safe());
+        let summary = apply_fixes(vec![unshadow_result()], FixPolicy::safe());
         assert_eq!(
             summary.attempted, 0,
             "FixPolicy::safe (CLI default `fix` without --apply-de-fixes) must not attempt DE fixes"
@@ -297,7 +299,7 @@ mod tests {
 
     #[test]
     fn with_de_fixes_policy_attempts_de_fixes_at_startup() {
-        let summary = apply_fixes(vec![unshadow_diagnosis()], FixPolicy::with_de_fixes());
+        let summary = apply_fixes(vec![unshadow_result()], FixPolicy::with_de_fixes());
         assert_eq!(
             summary.attempted, 1,
             "auto_fix_startup uses with_de_fixes and must attempt the unshadow"
@@ -396,5 +398,64 @@ mod tests {
                 std::mem::discriminant(&action)
             );
         }
+    }
+
+    #[test]
+    fn registry_check_ids_are_unique() {
+        let ids: Vec<&str> = checks::registry()
+            .iter()
+            .map(|check| check.meta().id)
+            .collect();
+        let mut unique = ids.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(ids.len(), unique.len(), "duplicate check ids: {ids:?}");
+    }
+
+    #[test]
+    fn registry_includes_dev_loop_group_members() {
+        let dev_loop_ids: Vec<&str> = checks::registry()
+            .iter()
+            .filter(|check| check.meta().groups.iter().any(|g| *g == "dev-loop"))
+            .map(|check| check.meta().id)
+            .collect();
+        assert!(
+            dev_loop_ids.contains(&"plugin_process_leaks"),
+            "plugin_process_leaks must be in dev-loop group, got {dev_loop_ids:?}"
+        );
+        #[cfg(feature = "dev")]
+        {
+            assert!(
+                dev_loop_ids.contains(&"plugin_staleness"),
+                "plugin_staleness must be in dev-loop group, got {dev_loop_ids:?}"
+            );
+            assert!(
+                dev_loop_ids.contains(&"dev_link_paths"),
+                "dev_link_paths must be in dev-loop group, got {dev_loop_ids:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_known_check_id_matches_registry_only() {
+        assert!(is_known_check_id("plugin_process_leaks"));
+        assert!(!is_known_check_id("nonexistent_check_xyz"));
+    }
+
+    #[test]
+    fn crash_status_rolls_up_in_report() {
+        struct PanicCheck;
+        impl DoctorCheck for PanicCheck {
+            fn meta(&self) -> CheckMeta {
+                CheckMeta::new("panic_test", "Panic", CheckCategory::Runtime)
+            }
+            fn run(&self, _: &DoctorContext) -> CheckReport {
+                panic!("simulated");
+            }
+        }
+        let ctx = DoctorContext::new();
+        let result = run_check(&PanicCheck, &ctx);
+        assert_eq!(result.outcome.status, OutcomeStatus::Crash);
+        assert!(result.issues.iter().any(|i| i.severity == Severity::Crash));
     }
 }

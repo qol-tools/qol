@@ -1,4 +1,5 @@
-use super::super::diagnosis::{error_outcome, ok_outcome, warn_outcome, Diagnosis, FixAction};
+use super::super::diagnosis::FixAction;
+use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
 use super::super::install_id::{active_install_id_path, marker_path_for, read_install_id_file};
 use super::runtime_prereqs;
 use anyhow::Result;
@@ -6,13 +7,20 @@ use std::path::PathBuf;
 
 const ID: &str = "install_identity";
 
-pub(super) fn check() -> Diagnosis {
-    let context = match build_context() {
-        Ok(context) => context,
-        Err(error) => return error_outcome(ID, error.to_string()),
-    };
+pub(super) struct InstallIdentityCheck;
 
-    diagnose(context)
+impl DoctorCheck for InstallIdentityCheck {
+    fn meta(&self) -> CheckMeta {
+        CheckMeta::new(ID, "Install identity", CheckCategory::Install)
+    }
+
+    fn run(&self, _ctx: &DoctorContext) -> CheckReport {
+        let context = match build_context() {
+            Ok(context) => context,
+            Err(error) => return CheckReport::error(error.to_string(), ID),
+        };
+        diagnose(context)
+    }
 }
 
 struct Context {
@@ -35,58 +43,58 @@ fn build_context() -> Result<Context> {
     })
 }
 
-fn diagnose_both(marker: String, active: String) -> Diagnosis {
+fn diagnose_both(marker: String, active: String) -> CheckReport {
     if marker == active {
-        return ok_outcome(
-            ID,
-            format!("marker and active install id are aligned ({})", marker),
-        );
+        return CheckReport::ok(format!(
+            "marker and active install id are aligned ({})",
+            marker
+        ));
     }
-    warn_outcome(
-        ID,
+    CheckReport::warn(
         format!(
             "marker install id ({}) differs from active install id ({})",
             marker, active
         ),
-        Some(FixAction::SetActiveInstallId(marker)),
-    )
-}
-
-fn diagnose_marker_only(marker: String) -> Diagnosis {
-    warn_outcome(
         ID,
-        format!("active install id is missing; marker has {}", marker),
-        Some(FixAction::SetActiveInstallId(marker)),
+        vec![FixAction::SetActiveInstallId(marker)],
     )
 }
 
-fn diagnose_active_only(context: &Context, active: String) -> Diagnosis {
+fn diagnose_marker_only(marker: String) -> CheckReport {
+    CheckReport::warn(
+        format!("active install id is missing; marker has {}", marker),
+        ID,
+        vec![FixAction::SetActiveInstallId(marker)],
+    )
+}
+
+fn diagnose_active_only(context: &Context, active: String) -> CheckReport {
     if !context.marker_required {
-        return ok_outcome(ID, format!("active install id is present ({})", active));
+        return CheckReport::ok(format!("active install id is present ({})", active));
     }
 
-    warn_outcome(
-        ID,
+    CheckReport::warn(
         format!(
             "install marker missing near executable; active install id is {}",
             active
         ),
-        Some(FixAction::WriteInstallMarker {
+        ID,
+        vec![FixAction::WriteInstallMarker {
             marker_path: context.marker_path.clone(),
             install_id: active,
-        }),
+        }],
     )
 }
 
-fn diagnose(context: Context) -> Diagnosis {
+fn diagnose(context: Context) -> CheckReport {
     match (&context.marker_id, &context.active_id) {
         (Some(marker), Some(active)) => diagnose_both(marker.clone(), active.clone()),
         (Some(marker), None) => diagnose_marker_only(marker.clone()),
         (None, Some(active)) => diagnose_active_only(&context, active.clone()),
-        (None, None) => warn_outcome(
-            ID,
+        (None, None) => CheckReport::warn(
             "no install marker or active install id found".to_string(),
-            None,
+            ID,
+            Vec::new(),
         ),
     }
 }
@@ -94,7 +102,6 @@ fn diagnose(context: Context) -> Diagnosis {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::doctor::OutcomeStatus;
 
     #[test]
     fn active_install_id_is_ok_without_marker_for_app_bundle_installs() {
@@ -105,9 +112,9 @@ mod tests {
             marker_required: false,
         };
 
-        let diagnosis = diagnose(context);
-        assert_eq!(diagnosis.outcome.status, OutcomeStatus::Ok);
-        assert!(!diagnosis.outcome.fix_available);
+        let report = diagnose(context);
+        assert!(report.issues.is_empty(), "Ok report must have no issues");
+        assert!(report.fixes.is_empty());
     }
 
     #[test]
@@ -119,8 +126,8 @@ mod tests {
             marker_required: true,
         };
 
-        let diagnosis = diagnose(context);
-        assert_eq!(diagnosis.outcome.status, OutcomeStatus::Warn);
-        assert!(diagnosis.outcome.fix_available);
+        let report = diagnose(context);
+        assert_eq!(report.issues.len(), 1);
+        assert_eq!(report.fixes.len(), 1);
     }
 }

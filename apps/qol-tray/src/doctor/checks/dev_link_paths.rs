@@ -1,4 +1,5 @@
-use super::super::diagnosis::{ok_outcome, warn_outcome_with_fixes, Diagnosis, FixAction};
+use super::super::diagnosis::FixAction;
+use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
 use crate::plugins::registry::{self, Registry, SlotSource};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -6,27 +7,35 @@ use std::path::{Path, PathBuf};
 
 const ID: &str = "dev_link_paths";
 
-pub(super) fn check() -> Diagnosis {
-    let config_dir = match crate::paths::shared_config_dir() {
-        Ok(dir) => dir,
-        Err(error) => return ok_outcome(ID, format!("could not resolve config dir: {error}")),
-    };
-    let registry = match registry::load_registry(&config_dir) {
-        Ok(registry) => registry,
-        Err(error) => return ok_outcome(ID, format!("could not read plugin registry: {error}")),
-    };
+pub(super) struct DevLinkPathsCheck;
 
-    let findings = collect_findings(&registry, &fs_manifest_probe, &fs_subplugins_probe);
-
-    if findings.is_empty() {
-        return ok_outcome(ID, "no dev-link path corruption detected".into());
+impl DoctorCheck for DevLinkPathsCheck {
+    fn meta(&self) -> CheckMeta {
+        CheckMeta::new(ID, "Dev-link paths", CheckCategory::DevBuild)
+            .group(&["dev-loop"])
+            .dev_only()
     }
 
-    let fixes = findings
-        .iter()
-        .filter_map(|finding| finding.fix_action())
-        .collect::<Vec<_>>();
-    warn_outcome_with_fixes(ID, format_message(&findings), fixes)
+    fn run(&self, ctx: &DoctorContext) -> CheckReport {
+        let registry = match ctx.registry() {
+            Ok(registry) => registry,
+            Err(error) => {
+                return CheckReport::ok(format!("could not read plugin registry: {error}"));
+            }
+        };
+
+        let findings = collect_findings(registry, &fs_manifest_probe, &fs_subplugins_probe);
+
+        if findings.is_empty() {
+            return CheckReport::ok("no dev-link path corruption detected".to_string());
+        }
+
+        let fixes = findings
+            .iter()
+            .filter_map(|finding| finding.fix_action())
+            .collect::<Vec<_>>();
+        CheckReport::warn(format_message(&findings), ID, fixes)
+    }
 }
 
 pub(crate) fn relocate_dev_link(
