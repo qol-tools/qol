@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use std::process::{Command, ExitCode, Stdio};
 use std::time::Duration;
 
+const PORT: u16 = 42720;
+
 fn main() -> ExitCode {
     match env::args().nth(1).as_deref() {
         None | Some("daemon") => run_daemon(),
@@ -51,17 +53,17 @@ fn run_daemon() -> ExitCode {
 
 fn run_status() -> ExitCode {
     let message = if daemon_is_running() {
-        "Task Runner daemon is running on port 42710"
+        format!("Task Runner daemon is running on port {PORT}")
     } else {
-        "Task Runner daemon is NOT running"
+        "Task Runner daemon is NOT running".to_string()
     };
 
-    send_notification("Task Runner", message);
+    send_notification("Task Runner", &message);
     ExitCode::SUCCESS
 }
 
 fn daemon_is_running() -> bool {
-    let mut stream = match TcpStream::connect("127.0.0.1:42710") {
+    let mut stream = match TcpStream::connect(("127.0.0.1", PORT)) {
         Ok(stream) => stream,
         Err(_) => return false,
     };
