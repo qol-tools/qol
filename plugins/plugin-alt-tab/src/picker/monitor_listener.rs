@@ -172,21 +172,20 @@ fn recenter_single_ghost(inputs: &ListenerInputs, event: &RuntimeEvent, app_cx: 
 }
 
 fn rebuild_ghosts_for_topology(inputs: &ListenerInputs, event: &RuntimeEvent, app_cx: &mut App) {
-    if !matches!(event, RuntimeEvent::MonitorsChanged { .. }) {
-        return;
-    }
     if PICKER_VISIBLE.load(Ordering::Relaxed) {
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/listener] picker visible, skipping topology rebuild");
         return;
     }
     let _reason = qol_gpui::popup_window::reason_scope("topology");
-    qol_gpui::ghost::refresh_active_monitor_from_state();
     let config = crate::config::load_alt_tab_config();
-    let mut stale = std::mem::take(&mut *inputs.current.borrow_mut());
-    stale.destroy_all(app_cx);
-    super::platform::pre_create(&config, &inputs.current, &inputs.tracker, app_cx);
-    request_data_refresh();
+    let rebuilt =
+        qol_gpui::ghost::rebuild_on_topology(event, false, &inputs.current, app_cx, |cx| {
+            super::platform::pre_create(&config, &inputs.current, &inputs.tracker, cx);
+        });
+    if rebuilt {
+        request_data_refresh();
+    }
 }
 
 fn trigger_data_refresh(inputs: &ListenerInputs, app_cx: &mut App) {

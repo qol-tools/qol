@@ -17,9 +17,11 @@ rest), never a geometry move**. Both plugins go through the shared `ghost` layer
 mechanism is identical.
 
 Topology changes invalidate the set: on `RuntimeEvent::MonitorsChanged`
-(resolution change, monitor added/removed) each plugin destroys its hidden ghost
-set (`ActiveWindows::destroy_all`) and re-runs its boot pre-create, after
-`ghost::refresh_active_monitor_from_state()` flushes the cached active monitor.
+(resolution change, monitor added/removed) the shared `ghost::rebuild_on_topology`
+flushes the cached active monitor (`refresh_active_monitor_from_state`), destroys
+the plugin's hidden ghost set (`ActiveWindows::destroy_all`), and invokes the
+plugin's boot pre-create - the ordering lives in the lib; plugins pass only their
+visibility bool and pre-create closure.
 Keys are geometry (`MonitorKey`), so any geometry change is a new key; stale
 ghosts the OS displaced during reconfiguration must never be shown again.
 `MonitorsChanged` needs its **own** event-router subscription - the router
