@@ -131,6 +131,21 @@ where
     reconcile(&title_of(active_key), &all_titles);
 }
 
+pub fn reconcile_from_event<T: 'static>(
+    event: &RuntimeEvent,
+    active: &crate::window::ActiveWindows<T>,
+    title_of: impl Fn(crate::window::MonitorKey) -> String,
+    fallback: impl FnOnce() -> Option<ActiveMonitor>,
+) -> bool {
+    let Some(monitor) = record_active_monitor(event).or_else(fallback) else {
+        return false;
+    };
+    let target = crate::window::target_monitor_key(Some(&monitor));
+    let all_titles = active.titles_with(&title_of);
+    reconcile(&title_of(target), &all_titles);
+    true
+}
+
 pub fn dismiss_to_ghost(prefix: &str, my_title: &str) {
     let _reason = popup_window::reason_scope("dismiss");
     let on_active = resolve_active_monitor()
