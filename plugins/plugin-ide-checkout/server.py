@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 import re
+import signal
 import urllib.request
 from pathlib import Path
 
@@ -534,22 +535,83 @@ def request_existing_shutdown():
         return False
 
 
+def pids_listening_on_port():
+    try:
+        result = subprocess.run(
+            ['lsof', '-nP', f'-iTCP:{PORT}', '-sTCP:LISTEN', '-t'],
+            capture_output=True, text=True, timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    pids = []
+    for token in result.stdout.split():
+        try:
+            pids.append(int(token))
+        except ValueError:
+            continue
+    return pids
+
+
+def is_our_daemon(pid):
+    try:
+        result = subprocess.run(
+            ['ps', '-p', str(pid), '-o', 'command='],
+            capture_output=True, text=True, timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    command = result.stdout
+    if 'server.py' not in command:
+        return False
+    return 'plugin-ide-checkout' in command or os.path.abspath(__file__) in command
+
+
+def force_kill_stale_listeners():
+    for pid in pids_listening_on_port():
+        if pid == os.getpid() or not is_our_daemon(pid):
+            continue
+        print(f"[task-runner] Force-stopping unresponsive instance pid={pid}", flush=True)
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            continue
+        time.sleep(0.5)
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+
+def try_bind(deadline):
+    while True:
+        try:
+            return ReuseAddrServer(('127.0.0.1', PORT), TaskRunnerHandler)
+        except OSError as error:
+            if error.errno != errno.EADDRINUSE or time.monotonic() >= deadline:
+                return None
+            time.sleep(0.1)
+
+
 def bind_with_takeover():
     try:
         return ReuseAddrServer(('127.0.0.1', PORT), TaskRunnerHandler)
     except OSError as error:
         if error.errno != errno.EADDRINUSE or not replace_existing_enabled():
             raise
+
     print(f"[task-runner] Port {PORT} busy, replacing existing instance", flush=True)
     request_existing_shutdown()
-    deadline = time.monotonic() + 3.0
-    while True:
-        try:
-            return ReuseAddrServer(('127.0.0.1', PORT), TaskRunnerHandler)
-        except OSError as error:
-            if error.errno != errno.EADDRINUSE or time.monotonic() >= deadline:
-                raise
-            time.sleep(0.1)
+    server = try_bind(time.monotonic() + 1.5)
+    if server is not None:
+        return server
+
+    print("[task-runner] Existing instance did not yield; forcing takeover", flush=True)
+    force_kill_stale_listeners()
+    server = try_bind(time.monotonic() + 3.0)
+    if server is not None:
+        return server
+
+    return ReuseAddrServer(('127.0.0.1', PORT), TaskRunnerHandler)
 
 
 if __name__ == '__main__':
