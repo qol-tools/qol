@@ -1,0 +1,77 @@
+.gpui-subpage-frame {
+    padding: var(--space-6);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+}
+
+.gpui-settings {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    max-width: var(--size-modal-md);
+}
+
+.gpui-setting-row {
+    display: grid;
+    grid-template-columns: minmax(140px, max-content) 1fr auto;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background: var(--tui-bg-card);
+    border: var(--border-w-1) solid transparent;
+    border-radius: var(--radius-md);
+}
+
+.gpui-setting-row[data-selected="true"] {
+    border-color: var(--accent);
+}
+
+.gpui-setting-label {
+    color: var(--text-secondary);
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-medium);
+}
+
+.gpui-setting-range {
+    width: 100%;
+    accent-color: var(--accent);
+}
+
+.gpui-setting-value {
+    color: var(--text-muted);
+    font-size: var(--fs-sm);
+    font-variant-numeric: tabular-nums;
+    min-width: 3ch;
+    text-align: right;
+}
+
+.gpui-setting-swatch {
+    width: var(--size-control-sm);
+    height: var(--size-control-sm);
+    border-radius: var(--radius-sm);
+    border: var(--border-w-1) solid var(--border-default);
+}
+
+.gpui-setting-color {
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    background: var(--bg-base);
+    border: var(--border-w-1) solid var(--border-default);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+}
+
+.gpui-setting-color:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.gpui-hint {
+    color: var(--text-muted);
+    font-size: var(--fs-sm);
+    line-height: 1.5;
+    margin: 0;
+}

@@ -5,7 +5,10 @@ import {
     formatOpacityPercent,
     normalizeOpacityForServer,
     parseGpuiResponse,
+    normalizeGhostColor,
+    isValidGhostColor,
     GHOST_OPACITY_DEFAULT,
+    GHOST_DEBUG_COLOR_DEFAULT,
 } from './runtime-gpui-opacity.js';
 
 test('clampOpacity table', () => {
@@ -72,7 +75,7 @@ test('normalizeOpacityForServer table', () => {
     }
 });
 
-test('parseGpuiResponse table', () => {
+test('parseGpuiResponse opacity table', () => {
     const cases = [
         [null, GHOST_OPACITY_DEFAULT],
         [undefined, GHOST_OPACITY_DEFAULT],
@@ -85,5 +88,82 @@ test('parseGpuiResponse table', () => {
     ];
     for (const [input, expected] of cases) {
         assert.equal(parseGpuiResponse(input).ghostOpacity, expected, `input: ${JSON.stringify(input)}`);
+    }
+});
+
+test('parseGpuiResponse color table', () => {
+    const cases = [
+        [null, GHOST_DEBUG_COLOR_DEFAULT],
+        [undefined, GHOST_DEBUG_COLOR_DEFAULT],
+        [{}, GHOST_DEBUG_COLOR_DEFAULT],
+        [{ ghost_debug_color: null }, GHOST_DEBUG_COLOR_DEFAULT],
+        [{ ghost_debug_color: '#ff8800' }, '#ff8800'],
+        [{ ghost_debug_color: 'FF8800' }, '#ff8800'],
+        [{ ghost_debug_color: '#FF8800' }, '#ff8800'],
+        [{ ghost_debug_color: '   #ff8800   ' }, '#ff8800'],
+        [{ ghost_debug_color: '#fff' }, GHOST_DEBUG_COLOR_DEFAULT],
+        [{ ghost_debug_color: 'bogus' }, GHOST_DEBUG_COLOR_DEFAULT],
+        [{ ghost_debug_color: '' }, GHOST_DEBUG_COLOR_DEFAULT],
+    ];
+    for (const [input, expected] of cases) {
+        assert.equal(parseGpuiResponse(input).ghostColor, expected, `input: ${JSON.stringify(input)}`);
+    }
+});
+
+test('normalizeGhostColor table', () => {
+    const cases = [
+        [null, GHOST_DEBUG_COLOR_DEFAULT],
+        [undefined, GHOST_DEBUG_COLOR_DEFAULT],
+        ['', GHOST_DEBUG_COLOR_DEFAULT],
+        ['   ', GHOST_DEBUG_COLOR_DEFAULT],
+        ['#ff8800', '#ff8800'],
+        ['ff8800', '#ff8800'],
+        ['#FF8800', '#ff8800'],
+        ['  #FFAACC  ', '#ffaacc'],
+        ['#fff', GHOST_DEBUG_COLOR_DEFAULT],
+        ['#ff88000', GHOST_DEBUG_COLOR_DEFAULT],
+        ['#zzzzzz', GHOST_DEBUG_COLOR_DEFAULT],
+        ['not-a-color', GHOST_DEBUG_COLOR_DEFAULT],
+    ];
+    for (const [input, expected] of cases) {
+        assert.equal(normalizeGhostColor(input), expected, `input: ${String(input)}`);
+    }
+});
+
+test('isValidGhostColor table', () => {
+    const cases = [
+        [null, false],
+        [undefined, false],
+        ['', false],
+        ['   ', false],
+        ['#ff8800', true],
+        ['ff8800', true],
+        ['#FF8800', true],
+        ['#fff', false],
+        ['#zzzzzz', false],
+        ['bogus', false],
+    ];
+    for (const [input, expected] of cases) {
+        assert.equal(isValidGhostColor(input), expected, `input: ${String(input)}`);
+    }
+});
+
+test('parseGpuiResponse property: ghostColor is always either "" or "#" + 6 lowercase hex', () => {
+    let rng = 31;
+    const next = () => {
+        rng = (rng * 1664525 + 1013904223) >>> 0;
+        return rng / 0xffffffff;
+    };
+    const randomChar = () => {
+        const all = 'abcdefABCDEF0123456789#xyzZ ';
+        return all.charAt(Math.floor(next() * all.length));
+    };
+    for (let i = 0; i < 250; i++) {
+        const len = Math.floor(next() * 10);
+        let raw = '';
+        for (let j = 0; j < len; j++) raw += randomChar();
+        const out = parseGpuiResponse({ ghost_debug_color: raw }).ghostColor;
+        const ok = out === '' || /^#[0-9a-f]{6}$/.test(out);
+        assert.ok(ok, `bad ghostColor: ${JSON.stringify(out)} from ${JSON.stringify(raw)}`);
     }
 });

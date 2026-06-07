@@ -7,6 +7,7 @@ export const VIEW_LABELS = {
     profile: 'Profile',
     logs: 'Logs',
     dev: { text: 'Developer', animation: 'scramble' },
+    'dev-gpui': 'GPUI',
 };
 
 export function getViewLabel(id) {

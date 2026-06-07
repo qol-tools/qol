@@ -12,6 +12,7 @@ import { backupPreviewSlot } from '../views/profile/use-backups.js';
 import { DevView } from '../views/dev/view.js';
 import { LogsView, LogDetailSubPage, detailSlot as logDetailSlot } from '../views/logs-view.js';
 import { LogFiltersSubPage, logFiltersSlot } from '../views/dev/log-filters-subpage.js';
+import { GpuiSubPage } from '../views/dev/gpui-subpage.js';
 import { GalleryShowcasePage } from '../views/dev/gallery-showcase-page.js';
 import { GalleryLogRowDetailSubPage } from '../views/dev/gallery-log-row-detail-subpage.js';
 import { GalleryBackupRowDetailSubPage } from '../views/dev/gallery-backup-row-detail-subpage.js';
@@ -45,6 +46,7 @@ const WORLD_PAGES = [
     { id: 'task-runner-test-runner', render: () => html`<${TestRunnerSubPage} slot=${testRunnerSlot} />` },
     { id: 'profile-backup-detail', render: () => html`<${BackupDetailSubPage} slot=${backupPreviewSlot} config=${prodBackupDetailConfig} />` },
     { id: 'dev-log-filters',   devOnly: true, render: () => html`<${LogFiltersSubPage} slot=${logFiltersSlot} />` },
+    { id: 'dev-gpui',          devOnly: true, contentSized: true, render: () => html`<${GpuiSubPage} /> ` },
     { id: 'dev-gallery-log-row-detail', devOnly: true, render: () => html`<${GalleryLogRowDetailSubPage} />` },
     { id: 'dev-gallery-backup-row-detail', devOnly: true, render: () => html`<${GalleryBackupRowDetailSubPage} />` },
     { id: 'dev-gallery-hotkey-row-editor', devOnly: true, render: () => html`<${GalleryHotkeyEditorSubPage} />` },
