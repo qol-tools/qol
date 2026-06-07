@@ -179,7 +179,15 @@ async fn refresh_data(cx: &mut AsyncApp, inputs: ListenerInputs, generation: usi
             active_monitor.map(|m| PopupPlacement::from_monitor(Some(m)).target())
         };
 
-        apply_view_windows(&inputs.current, &gathered, reset_selection, app_cx);
+        let rest_forward =
+            reset_selection && config.open_behavior == crate::config::OpenBehavior::CycleOnce;
+        apply_view_windows(
+            &inputs.current,
+            &gathered,
+            reset_selection,
+            rest_forward,
+            app_cx,
+        );
 
         let active_handle = active_target
             .and_then(|target| inputs.current.borrow().existing(target))
@@ -217,6 +225,7 @@ fn apply_view_windows(
     current: &PickerWindowState,
     gathered: &super::gather::GatheredWindows,
     reset_selection: bool,
+    rest_forward: bool,
     app_cx: &mut App,
 ) {
     let handles: Vec<_> = current
@@ -227,7 +236,7 @@ fn apply_view_windows(
         .collect();
     for handle in handles {
         let _ = handle.update(app_cx, |view, window: &mut Window, cx| {
-            view.apply_ghost_gathered(gathered, reset_selection, window, cx);
+            view.apply_ghost_gathered(gathered, reset_selection, rest_forward, window, cx);
         });
     }
 }
