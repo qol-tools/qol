@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """Task Runner Daemon - Generic HTTP API for browser extensions to execute local tasks"""
 
+import errno
 import http.server
 import json
 import subprocess
 import os
 import socketserver
 import tempfile
+import threading
+import time
 import re
+import urllib.request
 from pathlib import Path
 
 PORT = 42710
-VERSION = "1.0.0"
+REPLACE_EXISTING_ENV = 'QOL_TRAY_DAEMON_REPLACE_EXISTING'
+VERSION = "1.1.0"
 DEFAULT_TEMP_DIR = os.path.join(tempfile.gettempdir(), 'task-runner')
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
@@ -404,6 +409,11 @@ class TaskRunnerHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(404, {'error': 'Not found'})
 
     def do_POST(self):
+        if self.path == '/shutdown':
+            self.send_json(200, {'status': 'shutting-down', 'version': VERSION})
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+            return
+
         content_length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(content_length).decode('utf-8')
 
@@ -508,6 +518,40 @@ class ReuseAddrServer(socketserver.TCPServer):
     allow_reuse_address = True
 
 
+def replace_existing_enabled():
+    value = os.environ.get(REPLACE_EXISTING_ENV, '')
+    return value.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def request_existing_shutdown():
+    request = urllib.request.Request(
+        f'http://127.0.0.1:{PORT}/shutdown', data=b'', method='POST'
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+def bind_with_takeover():
+    try:
+        return ReuseAddrServer(('127.0.0.1', PORT), TaskRunnerHandler)
+    except OSError as error:
+        if error.errno != errno.EADDRINUSE or not replace_existing_enabled():
+            raise
+    print(f"[task-runner] Port {PORT} busy, replacing existing instance", flush=True)
+    request_existing_shutdown()
+    deadline = time.monotonic() + 3.0
+    while True:
+        try:
+            return ReuseAddrServer(('127.0.0.1', PORT), TaskRunnerHandler)
+        except OSError as error:
+            if error.errno != errno.EADDRINUSE or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.1)
+
+
 if __name__ == '__main__':
     config = load_config()
     TaskRunnerHandler.config = config
@@ -516,5 +560,5 @@ if __name__ == '__main__':
     print(f"[task-runner] Temp directory: {config.get('tempDir', DEFAULT_TEMP_DIR)}", flush=True)
     print(f"[task-runner] Config: {CONFIG_PATH}", flush=True)
 
-    with ReuseAddrServer(('127.0.0.1', PORT), TaskRunnerHandler) as httpd:
+    with bind_with_takeover() as httpd:
         httpd.serve_forever()
