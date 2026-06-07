@@ -13,26 +13,47 @@ pub fn resolve_worktree_paths(
 }
 
 fn resolve_plugin_worktree(dev_link_path: &Path, branch: Option<&str>) -> PathBuf {
-    let match_path = match branch {
+    let target_root = match branch {
         Some(b) => find_git_worktree_by_branch(dev_link_path, b),
         None => find_git_worktree_base(dev_link_path),
     };
 
-    let Some(match_path) = match_path else {
+    let Some(target_root) = target_root else {
         return dev_link_path.to_path_buf();
     };
 
-    if match_path == dev_link_path {
+    let current_root = git_toplevel(dev_link_path);
+    let resolved = remap_to_worktree(dev_link_path, current_root.as_deref(), &target_root);
+
+    if resolved == dev_link_path {
         log::debug!("[worktree] already on target: {}", dev_link_path.display());
-        return dev_link_path.to_path_buf();
+        return resolved;
     }
 
     log::debug!(
         "[worktree] resolved {} -> {}",
         dev_link_path.display(),
-        match_path.display()
+        resolved.display()
     );
-    match_path
+    resolved
+}
+
+fn remap_to_worktree(dev_link_path: &Path, current_root: Option<&Path>, target_root: &Path) -> PathBuf {
+    let relative = current_root.and_then(|root| dev_link_path.strip_prefix(root).ok());
+    match relative {
+        Some(relative) => target_root.join(relative),
+        None => target_root.to_path_buf(),
+    }
+}
+
+fn git_toplevel(path: &Path) -> Option<PathBuf> {
+    Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(path)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()))
 }
 
 fn run_git_worktree_list(repo_path: &Path) -> Option<String> {
@@ -117,6 +138,48 @@ mod tests {
             prop_assert_eq!(
                 parse_worktree_base(&porcelain),
                 Some(PathBuf::from(&path_a))
+            );
+        }
+    }
+
+    #[test]
+    fn remap_preserves_plugin_subpath_within_monorepo() {
+        let cases = [
+            (
+                "/repo/plugins/plugin-x",
+                Some("/repo"),
+                "/wt/feat",
+                "/wt/feat/plugins/plugin-x",
+            ),
+            (
+                "/repo/plugins/plugin-x",
+                Some("/repo"),
+                "/repo",
+                "/repo/plugins/plugin-x",
+            ),
+            (
+                "/standalone-plugin",
+                Some("/standalone-plugin"),
+                "/standalone-plugin",
+                "/standalone-plugin",
+            ),
+            (
+                "/repo/plugins/plugin-x",
+                None,
+                "/wt/feat",
+                "/wt/feat",
+            ),
+        ];
+        for (dev_link, current_root, target_root, expected) in cases {
+            let got = remap_to_worktree(
+                Path::new(dev_link),
+                current_root.map(Path::new),
+                Path::new(target_root),
+            );
+            assert_eq!(
+                got,
+                PathBuf::from(expected),
+                "dev_link={dev_link} current_root={current_root:?} target_root={target_root}"
             );
         }
     }
