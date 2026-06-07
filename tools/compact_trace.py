@@ -191,6 +191,17 @@ def extract_reason(msg):
     m = re.search(r"\breason=(?P<reason>\S+)", msg)
     return m.group("reason") if m else "?"
 
+def set_opacity_state(comp_title, opacity, reason, ts_raw):
+    st = opacity_state.get(comp_title)
+    if st is None:
+        opacity_state[comp_title] = {"op": opacity, "reason": reason, "ts": ts_raw, "prev_op": None}
+    elif abs(st["op"] - opacity) >= 0.001:
+        opacity_state[comp_title] = {"op": opacity, "reason": reason, "ts": ts_raw, "prev_op": st["op"]}
+    else:
+        st["reason"] = reason
+        st["ts"] = ts_raw
+
+
 def record_opacity_write(comp_title, opacity, reason, ts_raw):
     waste["writes"] += 1
     waste["by_reason"][reason] = waste["by_reason"].get(reason, 0) + 1
@@ -207,13 +218,7 @@ def record_opacity_write(comp_title, opacity, reason, ts_raw):
             pair = f"{st['reason']}->{reason}"
             waste["revert_pairs"][pair] = waste["revert_pairs"].get(pair, 0) + 1
             classification = ("revert", st["reason"], ts_raw - st["ts"])
-    if st is None:
-        opacity_state[comp_title] = {"op": opacity, "reason": reason, "ts": ts_raw, "prev_op": None}
-    elif abs(st["op"] - opacity) >= 0.001:
-        opacity_state[comp_title] = {"op": opacity, "reason": reason, "ts": ts_raw, "prev_op": st["op"]}
-    else:
-        st["reason"] = reason
-        st["ts"] = ts_raw
+    set_opacity_state(comp_title, opacity, reason, ts_raw)
     return classification
 
 def churn_suffix(cls):
@@ -504,10 +509,12 @@ def process_line(ts_raw, pid, tag, msg):
         comp_title = format_title_compact(title)
         
         target_opacities[comp_title] = 1.0
+        set_opacity_state(comp_title, 1.0, "open", int(ts_raw))
         prefix = comp_title.split("@")[0]
         for k in list(target_opacities.keys()):
             if k.startswith(prefix) and k != comp_title:
                 target_opacities[k] = 0.0
+                set_opacity_state(k, 0.0, "open", int(ts_raw))
                 
         proc_name = get_process_name(pid)
         if filter_plugin and proc_name != filter_plugin:
@@ -620,7 +627,7 @@ def process_line(ts_raw, pid, tag, msg):
             plugin_wins = {}
             divergence_msgs = []
             for w_info in dumped_windows:
-                title, opacity, role, map_state, owner_pid, actual_x, actual_y, actual_w, actual_h = w_info
+                sample_ts, title, opacity, role, map_state, owner_pid, actual_x, actual_y, actual_w, actual_h = w_info
                 if title in seen_titles:
                     continue
                 seen_titles.add(title)
@@ -662,17 +669,14 @@ def process_line(ts_raw, pid, tag, msg):
                 is_actually_hidden = (map_state != "viewable" or opacity <= 0.01)
                 is_expected_hidden = (expected_opacity <= 0.01)
                 
-                if not (is_actually_hidden and is_expected_hidden):
+                written = opacity_state.get(comp_title)
+                is_stale_sample = written is not None and sample_ts < written["ts"]
+                if not (is_actually_hidden and is_expected_hidden) and not is_stale_sample:
                     if abs(opacity - expected_opacity) > 0.01:
                         divergence_msgs.append(
                             f"{comp_title} opacity is {opacity}{map_suffix}, expected {expected_opacity}{write_attribution(comp_title, int(ts_raw))}"
                         )
-                
-                if expected_opacity >= 0.9 and picker_status.get(comp_title, "stale") == "stale":
-                    divergence_msgs.append(
-                        f"{comp_title} is stale"
-                    )
-                
+
                 if not is_actually_hidden:
                     title_m = re.match(r"qol-[^@]+@(?P<tx>-?\d+),(?P<ty>-?\d+)", title)
                     if title_m:
@@ -728,7 +732,7 @@ def process_line(ts_raw, pid, tag, msg):
             y = int(m.group("y"))
             w = int(m.group("w"))
             h = int(m.group("h"))
-            dumped_windows.append((title, opacity, role, map_state, owner_pid, x, y, w, h))
+            dumped_windows.append((int(ts_raw), title, opacity, role, map_state, owner_pid, x, y, w, h))
 
     elif tag == "PUBLISH":
         m = re.search(r'idx=(?P<idx>\d+)\s+"(?P<name>[^"]+)"\s+is_boot=(?P<is_boot>\w+)\s+->\s+delivered=\[(?P<delivered>[^\]]*)\]\s+missed=\[(?P<missed>[^\]]*)\]', msg)
