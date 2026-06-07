@@ -11,6 +11,8 @@ mod plugin_staleness;
 #[cfg(feature = "dev")]
 mod reserved_plugin_ids;
 mod runtime_prereqs;
+#[cfg(feature = "dev")]
+mod rust_formatting;
 mod shell_hook_present;
 
 #[cfg(feature = "dev")]
@@ -34,6 +36,7 @@ pub(super) fn registry() -> Vec<Box<dyn DoctorCheck>> {
         checks.push(Box::new(dev_link_paths::DevLinkPathsCheck));
         checks.push(Box::new(fingerprint_health::FingerprintHealthCheck));
         checks.push(Box::new(reserved_plugin_ids::ReservedPluginIdsCheck));
+        checks.push(Box::new(rust_formatting::RustFormattingCheck));
     }
     checks
 }

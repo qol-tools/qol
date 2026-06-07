@@ -49,6 +49,10 @@ pub(super) enum FixAction {
     PruneReservedPlugins {
         ids: Vec<String>,
     },
+    #[cfg(feature = "dev")]
+    FormatRustSources {
+        workspace: PathBuf,
+    },
 }
 
 // Extend with ManualOnly / Destructive when a real FixAction first needs those tiers.
@@ -74,7 +78,8 @@ impl FixAction {
             #[cfg(feature = "dev")]
             FixAction::RelocateDevLink { .. }
             | FixAction::PruneOrphanFingerprints { .. }
-            | FixAction::PruneReservedPlugins { .. } => FixApplicability::SafeAutomatic,
+            | FixAction::PruneReservedPlugins { .. }
+            | FixAction::FormatRustSources { .. } => FixApplicability::SafeAutomatic,
         }
     }
 }
@@ -121,7 +126,26 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
         FixAction::PruneOrphanFingerprints { ids } => prune_orphan_fingerprints(ids),
         #[cfg(feature = "dev")]
         FixAction::PruneReservedPlugins { ids } => prune_reserved_plugins(ids),
+        #[cfg(feature = "dev")]
+        FixAction::FormatRustSources { workspace } => format_rust_sources(workspace),
     }
+}
+
+#[cfg(feature = "dev")]
+fn format_rust_sources(workspace: &std::path::Path) -> Result<()> {
+    let output = Command::new("cargo")
+        .args(["fmt", "--all"])
+        .current_dir(workspace)
+        .output()
+        .with_context(|| format!("failed to run cargo fmt in {}", workspace.display()))?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "cargo fmt exited with status {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(feature = "dev")]
@@ -389,6 +413,15 @@ mod tests {
     fn prune_reserved_plugins_is_safe_automatic() {
         let action = FixAction::PruneReservedPlugins {
             ids: vec!["plugin-template".into()],
+        };
+        assert_eq!(action.applicability(), FixApplicability::SafeAutomatic);
+    }
+
+    #[cfg(feature = "dev")]
+    #[test]
+    fn format_rust_sources_is_safe_automatic() {
+        let action = FixAction::FormatRustSources {
+            workspace: PathBuf::from("/ws"),
         };
         assert_eq!(action.applicability(), FixApplicability::SafeAutomatic);
     }
