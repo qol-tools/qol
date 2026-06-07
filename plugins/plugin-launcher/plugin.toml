@@ -15,6 +15,9 @@ enabled = true
 command = "launcher"
 socket = "/tmp/qol-launcher.sock"
 
+[capabilities]
+gpui = true
+
 [menu]
 label = "Launcher"
 items = [

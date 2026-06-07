@@ -153,6 +153,8 @@ pub struct DaemonConfig {
 pub struct Capabilities {
     #[serde(default)]
     pub serial: bool,
+    #[serde(default)]
+    pub gpui: bool,
     #[serde(flatten)]
     pub extras: HashMap<String, toml::Value>,
 }
