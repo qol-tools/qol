@@ -71,8 +71,7 @@ pub fn reposition_window_by_title(title: &str, gpui_x: f64, gpui_y: f64) -> bool
         return false;
     };
 
-    let Some(wid) = find_window_by_title(&conn, root, list_atom, name_atom, utf8_atom, title)
-    else {
+    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
         return false;
     };
     move_window(&conn, root, wid, gpui_x as i32, gpui_y as i32)
@@ -97,8 +96,7 @@ pub fn set_window_bounds_by_title(
         return false;
     };
 
-    let Some(wid) = find_window_by_title(&conn, root, list_atom, name_atom, utf8_atom, title)
-    else {
+    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
         return false;
     };
     set_window_bounds(
@@ -121,6 +119,7 @@ pub fn hide_window_invisible(title: &str) -> bool {
 }
 
 fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
+    #[cfg(debug_assertions)]
     let reason = crate::popup_window::change_reason();
     let target = opacity_to_cardinal(opacity);
     let Ok((conn, screen_num)) = x11rb::connect(None) else {
@@ -135,10 +134,7 @@ fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
         return false;
     };
     let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
-        crate::probe::probe(
-            "HIDE_WIN",
-            &format!("title={title} wid=NONE reason={reason}"),
-        );
+        qol_runtime::probe!("HIDE_WIN", "title={title} wid=NONE reason={reason}");
         return false;
     };
     if cached_card(title) == Some(target) {
@@ -150,23 +146,24 @@ fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
         if applied {
             store_card(title, wid, Some(target));
         }
-        crate::probe::probe(
+        qol_runtime::probe!(
             "HIDE_WIN",
-            &format!("title={title} wid={wid} path=compositor opacity={opacity} applied={applied} reason={reason}"),
+            "title={title} wid={wid} path=compositor opacity={opacity} applied={applied} reason={reason}",
         );
         return true;
     }
     let _ = conn.unmap_window(wid);
     let _ = conn.flush();
     store_card(title, wid, None);
-    crate::probe::probe(
+    qol_runtime::probe!(
         "HIDE_WIN",
-        &format!("title={title} wid={wid} path=unmap reason={reason}"),
+        "title={title} wid={wid} path=unmap reason={reason}"
     );
     true
 }
 
 pub fn show_window_by_title(title: &str) -> bool {
+    #[cfg(debug_assertions)]
     let reason = crate::popup_window::change_reason();
     let Ok((conn, screen_num)) = x11rb::connect(None) else {
         return false;
@@ -179,12 +176,8 @@ pub fn show_window_by_title(title: &str) -> bool {
     else {
         return false;
     };
-    let Some(wid) = find_window_by_title(&conn, root, list_atom, name_atom, utf8_atom, title)
-    else {
-        crate::probe::probe(
-            "SHOW_WIN",
-            &format!("title={title} wid=NONE reason={reason}"),
-        );
+    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
+        qol_runtime::probe!("SHOW_WIN", "title={title} wid=NONE reason={reason}");
         return false;
     };
     let Some(active_atom) = intern(&conn, b"_NET_ACTIVE_WINDOW") else {
@@ -199,9 +192,9 @@ pub fn show_window_by_title(title: &str) -> bool {
     let mask = EventMask::SUBSTRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_REDIRECT;
     let _ = conn.send_event(false, root, mask, event);
     let _ = conn.flush();
-    crate::probe::probe(
+    qol_runtime::probe!(
         "SHOW_WIN",
-        &format!("title={title} wid={wid} cleared_opacity->1 source={SOURCE_APPLICATION} timestamp=0 requester_active=0 reason={reason}"),
+        "title={title} wid={wid} cleared_opacity->1 source={SOURCE_APPLICATION} timestamp=0 requester_active=0 reason={reason}",
     );
     true
 }
@@ -222,8 +215,7 @@ pub fn configure_popup_window(title: &str) -> bool {
     else {
         return false;
     };
-    let Some(wid) = find_window_by_title(&conn, root, list_atom, name_atom, utf8_atom, title)
-    else {
+    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
         return false;
     };
 

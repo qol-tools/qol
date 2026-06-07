@@ -136,10 +136,6 @@ fn search_bar_content(query: &str, cursor: usize, selection: Option<(usize, usiz
             .min(char_count.saturating_sub(SEARCH_VISIBLE_CHARS))
     };
     let view_end = (view_start + SEARCH_VISIBLE_CHARS).min(char_count);
-    eprintln!(
-        "[search_bar] chars={char_count} cursor={cursor} view={view_start}..{view_end} display_len={} VISIBLE_CHARS={SEARCH_VISIBLE_CHARS}",
-        view_end - view_start,
-    );
 
     let start_byte = char_to_byte(query, view_start);
     let end_byte = char_to_byte(query, view_end);

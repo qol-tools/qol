@@ -36,10 +36,7 @@ pub fn activate_window(window_id: u32) {
     let Some((pid, title)) = cg_window_pid_and_title(window_id) else {
         return;
     };
-    qol_gpui::probe::probe(
-        "ACTIVATE_WIN",
-        &format!("wid={window_id} title=\"{title}\""),
-    );
+    qol_runtime::probe!("ACTIVATE_WIN", "wid={window_id} title=\"{title}\"");
     let win = unsafe { ax_find_window(pid, window_id, &title) };
     if !win.is_null() {
         unsafe {
