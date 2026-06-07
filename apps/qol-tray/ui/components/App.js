@@ -110,6 +110,7 @@ function registerStaticDiveTargets(registry) {
         { parentId: 'profile', subId: 'profile-backup-detail', label: 'Backup Detail' },
         { parentId: 'dev', subId: 'dev-log-filters', label: 'Edit Log Filters' },
         { parentId: 'dev', subId: 'dev-plugin-actions', label: 'Plugin Actions', sourceSelector: '[data-dive-source="dev-plugin-actions"]' },
+        { parentId: 'dev', subId: 'dev-gpui', label: 'GPUI', sourceSelector: '[data-dive-source="dev-gpui"]' },
         { parentId: 'plugins', subId: 'plugins-uninstall-confirm', label: 'Confirm Uninstall' },
         { parentId: 'plugins', subId: 'plugins-actions', label: 'Plugin Actions', sourceSelector: '[data-dive-source="plugins-actions"]' },
     ];

@@ -7,8 +7,8 @@ import { pluginActionsSlot } from '../../views/plugins/plugin-actions-subpage.js
 const STATUS_ACCENT = { linked: 'success', local: 'warning', installed: 'accent' };
 const DEV_PLUGIN_ACTIONS_DIVE_SELECTOR = '[data-dive-source="dev-plugin-actions"]';
 
-export function DevPluginRow({ name, path, status, pluginId, badges, meta, actions, actionIcon, overlay, index, selected, onSelect, className, ...rest }) {
-    const activate = useCallback(() => {
+export function DevPluginRow({ name, path, status, pluginId, badges, meta, actions, actionIcon, overlay, index, selected, onSelect, onActivate, className, ...rest }) {
+    const defaultActivate = useCallback(() => {
         if (!actions?.length) return;
         pluginActionsSlot.set({
             rowId: pluginId || name || 'dev-row',
@@ -17,6 +17,7 @@ export function DevPluginRow({ name, path, status, pluginId, badges, meta, actio
         });
         diveViaSelector(DEV_PLUGIN_ACTIONS_DIVE_SELECTOR);
     }, [actions, pluginId, name]);
+    const activate = onActivate || defaultActivate;
 
     const statusCls = status ? `status-${status}` : '';
     const cls = ['plugin-row', statusCls, className].filter(Boolean).join(' ');

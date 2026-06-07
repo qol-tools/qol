@@ -14,6 +14,10 @@ test('getViewLabel falls back to id for unknown view', () => {
     assert.deepEqual(getViewLabel('hotkeys-editor'), { text: 'hotkeys-editor', animation: null });
 });
 
+test('getViewLabel returns declared text for dev-gpui subpage', () => {
+    assert.deepEqual(getViewLabel('dev-gpui'), { text: 'GPUI', animation: null });
+});
+
 test('resolveViewLabel prefers VIEW_LABELS entry for known top-level id', () => {
     const entry = { id: 'plugins', label: 'Override Should Lose' };
     assert.deepEqual(resolveViewLabel(entry), { text: 'Plugins', animation: null });
