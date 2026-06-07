@@ -922,8 +922,8 @@ fn endpoint_line(status: &EndpointStatus) -> Line<'static> {
     };
     Line::from(vec![
         format!("  {symbol} ").fg(color).bold(),
-        status.label.to_string().fg(Color::White),
-        format!(" · {}", if status.ok { "up" } else { "down" }).fg(Color::DarkGray),
+        format!("{:<8}", status.label).fg(Color::White),
+        format!("  {}", status.url).fg(Color::DarkGray),
     ])
 }
 
