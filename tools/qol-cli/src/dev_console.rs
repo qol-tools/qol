@@ -34,6 +34,7 @@ enum Action {
     Doctor,
     Back,
     Activate,
+    Dive,
     Quit,
     ScrollUp,
     ScrollDown,
@@ -55,8 +56,9 @@ fn action_for(code: KeyCode, mods: KeyModifiers) -> Action {
     match code {
         KeyCode::Char('l') | KeyCode::Char('L') => Action::ToggleView,
         KeyCode::Char('d') | KeyCode::Char('D') => Action::Doctor,
-        KeyCode::Esc => Action::Back,
+        KeyCode::Esc | KeyCode::Left => Action::Back,
         KeyCode::Enter => Action::Activate,
+        KeyCode::Right => Action::Dive,
         KeyCode::Char('q') => Action::Quit,
         KeyCode::Up => Action::ScrollUp,
         KeyCode::Down => Action::ScrollDown,
@@ -103,24 +105,18 @@ enum View {
     Dashboard,
     Logs,
     Doctor,
+    Plugins,
 }
 
 #[derive(Clone, Copy)]
 enum Row {
     Tray,
     Plugins,
-    Rebuild,
     Doctor,
     Logs,
 }
 
-const ROWS: [Row; 5] = [
-    Row::Tray,
-    Row::Plugins,
-    Row::Rebuild,
-    Row::Doctor,
-    Row::Logs,
-];
+const ROWS: [Row; 4] = [Row::Tray, Row::Plugins, Row::Doctor, Row::Logs];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Health {
@@ -168,7 +164,7 @@ struct Dash {
     started: Instant,
     rebuild: RebuildState,
     plugin_reload: RebuildState,
-    plugins: usize,
+    plugin_names: Vec<String>,
     log_height: usize,
     cursor: usize,
     doctor: DoctorState,
@@ -177,7 +173,7 @@ struct Dash {
 }
 
 impl Dash {
-    fn new(plugins: usize) -> Self {
+    fn new(plugin_names: Vec<String>) -> Self {
         Self {
             view: View::Dashboard,
             logs: LogRing::new(),
@@ -186,7 +182,7 @@ impl Dash {
             started: Instant::now(),
             rebuild: RebuildState::Idle,
             plugin_reload: RebuildState::Idle,
-            plugins,
+            plugin_names,
             log_height: 0,
             cursor: 0,
             doctor: DoctorState::Running,
@@ -201,7 +197,11 @@ impl Dash {
     }
 }
 
-pub(crate) fn run_session(child: &mut Child, verbose: bool, plugins: usize) -> Result<SessionEnd> {
+pub(crate) fn run_session(
+    child: &mut Child,
+    verbose: bool,
+    plugins: Vec<String>,
+) -> Result<SessionEnd> {
     let lines = spawn_forwarders(child);
     if verbose || !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
         return plain_session(child, &lines);
@@ -321,7 +321,16 @@ fn apply_action(dash: &mut Dash, action: Action) {
         Action::Rebuild => trigger_rebuild(dash),
         Action::ReloadPlugins => trigger_reload(dash),
         Action::Doctor => open_doctor(dash),
-        Action::Activate => activate_row(dash),
+        Action::Activate => {
+            if dash.view == View::Dashboard {
+                act_row(dash);
+            }
+        }
+        Action::Dive => {
+            if dash.view == View::Dashboard {
+                dive_row(dash);
+            }
+        }
         Action::Back => {
             dash.view = View::Dashboard;
             dash.scroll_offset = 0;
@@ -348,14 +357,22 @@ fn apply_action(dash: &mut Dash, action: Action) {
     dash.scroll_offset = clamp_offset(dash.logs.len(), dash.log_height, dash.scroll_offset);
 }
 
-fn activate_row(dash: &mut Dash) {
-    if dash.view != View::Dashboard {
-        return;
+fn act_row(dash: &mut Dash) {
+    match ROWS[dash.cursor] {
+        Row::Tray => trigger_rebuild(dash),
+        Row::Plugins => trigger_reload(dash),
+        Row::Doctor => dash.start_doctor(),
+        Row::Logs => {}
     }
+}
+
+fn dive_row(dash: &mut Dash) {
     match ROWS[dash.cursor] {
         Row::Tray => {}
-        Row::Plugins => trigger_reload(dash),
-        Row::Rebuild => trigger_rebuild(dash),
+        Row::Plugins => {
+            dash.view = View::Plugins;
+            dash.scroll_offset = 0;
+        }
         Row::Doctor => open_doctor(dash),
         Row::Logs => {
             dash.view = View::Logs;
@@ -391,6 +408,7 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
         View::Dashboard => draw_dashboard(frame, dash, main),
         View::Logs => draw_logs(frame, dash, main),
         View::Doctor => draw_doctor(frame, dash, main),
+        View::Plugins => draw_plugins(frame, dash, main),
     }
     frame.render_widget(
         Paragraph::new(footer_text(dash)).style(Style::new().dim()),
@@ -401,50 +419,62 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
 fn footer_text(dash: &Dash) -> String {
     match dash.view {
         View::Dashboard => {
-            let enter = match ROWS[dash.cursor] {
-                Row::Tray => "",
-                Row::Plugins => "enter reload · ",
-                Row::Rebuild => "enter rebuild · ",
-                Row::Doctor => "enter open doctor · ",
-                Row::Logs => "enter open logs · ",
+            let hints = match ROWS[dash.cursor] {
+                Row::Tray => "enter rebuild tray",
+                Row::Plugins => "enter reload · → list",
+                Row::Doctor => "enter run · → steps",
+                Row::Logs => "→ open",
             };
-            format!(" ↑/↓ move · {enter}d doctor · L logs · q quit ")
+            format!(" ↑/↓ move · {hints} · q quit ")
         }
-        View::Logs => {
-            " ↑/↓ scroll · f follow · ^R rebuild · ^P plugins · d doctor · esc back · q quit "
-                .to_string()
-        }
-        View::Doctor => " d refresh · ↑/↓ scroll · L logs · esc back · q quit ".to_string(),
+        View::Logs => " ↑/↓ scroll · f follow · ← back · q quit ".to_string(),
+        View::Doctor => " d refresh · ↑/↓ scroll · ← back · q quit ".to_string(),
+        View::Plugins => " ↑/↓ scroll · ← back · q quit ".to_string(),
     }
 }
 
 fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: ratatui::layout::Rect) {
-    let (tray_text, tray_color) = match dash.health {
-        Health::Checking => ("starting", Color::Yellow),
-        Health::Up => ("running", Color::Green),
-        Health::Down => ("down", Color::Red),
-    };
-    let tray_value = vec![
-        tray_text.fg(tray_color).bold(),
-        format!(" · up {}", format_duration(dash.started.elapsed())).fg(Color::DarkGray),
-    ];
-    let (plugins_color, plugins_value) = plugins_status(&dash.plugin_reload, dash.plugins);
-    let (rebuild_color, rebuild_value) = rebuild_status(&dash.rebuild);
+    let (tray_color, tray_value) = tray_status(dash);
+    let (plugins_color, plugins_value) =
+        plugins_status(&dash.plugin_reload, dash.plugin_names.len());
     let (doctor_color, doctor_value) = doctor_status(&dash.doctor);
 
     let rows = vec![
         dash_row(dash.cursor == 0, tray_color, "tray", tray_value),
         dash_row(dash.cursor == 1, plugins_color, "plugins", plugins_value),
-        dash_row(dash.cursor == 2, rebuild_color, "rebuild", rebuild_value),
-        dash_row(dash.cursor == 3, doctor_color, "doctor", doctor_value),
+        dash_row(dash.cursor == 2, doctor_color, "doctor", doctor_value),
         dash_row(
-            dash.cursor == 4,
+            dash.cursor == 3,
             Color::DarkGray,
             "logs",
             vec![format!("{} buffered", dash.logs.len()).fg(Color::DarkGray)],
         ),
     ];
     frame.render_widget(Paragraph::new(rows).block(panel(" qol dev ")), area);
+}
+
+fn tray_status(dash: &Dash) -> (Color, Vec<Span<'static>>) {
+    let (text, color) = match dash.health {
+        Health::Checking => ("starting", Color::Yellow),
+        Health::Up => ("running", Color::Green),
+        Health::Down => ("down", Color::Red),
+    };
+    let mut value = vec![
+        text.fg(color).bold(),
+        format!(" · up {}", format_duration(dash.started.elapsed())).fg(Color::DarkGray),
+    ];
+    match &dash.rebuild {
+        RebuildState::Idle => {}
+        RebuildState::Requested(at) => value.push(
+            format!(" · rebuild requested {} ago", format_duration(at.elapsed())).fg(Color::Yellow),
+        ),
+        RebuildState::Failed(error) => {
+            value.push(" · rebuild ".fg(Color::DarkGray));
+            value.push("failed".fg(Color::Red).bold());
+            value.push(format!(" · {error}").fg(Color::DarkGray));
+        }
+    }
+    (color, value)
 }
 
 fn dash_row(selected: bool, color: Color, label: &str, value: Vec<Span<'static>>) -> Line<'static> {
@@ -466,7 +496,7 @@ fn dash_row(selected: bool, color: Color, label: &str, value: Vec<Span<'static>>
 fn panel(title: &str) -> Block<'static> {
     Block::bordered()
         .border_style(Style::new().fg(Color::DarkGray))
-        .title(Span::from(title.to_string()).fg(Color::Green).bold())
+        .title(Line::from(Span::from(title.to_string()).fg(Color::Green).bold()).centered())
 }
 
 fn plugins_status(state: &RebuildState, plugins: usize) -> (Color, Vec<Span<'static>>) {
@@ -494,21 +524,32 @@ fn plugins_status(state: &RebuildState, plugins: usize) -> (Color, Vec<Span<'sta
     }
 }
 
-fn rebuild_status(state: &RebuildState) -> (Color, Vec<Span<'static>>) {
-    match state {
-        RebuildState::Idle => (Color::DarkGray, vec!["idle".fg(Color::DarkGray)]),
-        RebuildState::Requested(at) => (
-            Color::Yellow,
-            vec![format!("requested {} ago", format_duration(at.elapsed())).fg(Color::Yellow)],
-        ),
-        RebuildState::Failed(error) => (
-            Color::Red,
-            vec![
-                "failed".fg(Color::Red).bold(),
-                format!(" · {error}").fg(Color::DarkGray),
-            ],
-        ),
+fn draw_plugins(frame: &mut Frame, dash: &mut Dash, area: ratatui::layout::Rect) {
+    if dash.plugin_names.is_empty() {
+        frame.render_widget(
+            Paragraph::new("  no dev-linked plugins").block(panel(" plugins ")),
+            area,
+        );
+        return;
     }
+    let total = dash.plugin_names.len();
+    let (start, height) = list_window(dash, area, total);
+    let visible: Vec<Line> = dash
+        .plugin_names
+        .iter()
+        .skip(start)
+        .take(height)
+        .map(|name| {
+            Line::from(vec![
+                "  ".into(),
+                "●".fg(Color::Green).bold(),
+                format!(" {name}").fg(Color::White),
+                " · dev-linked".fg(Color::DarkGray),
+            ])
+        })
+        .collect();
+    let title = format!(" plugins · {} ", list_status(total, dash.scroll_offset));
+    frame.render_widget(Paragraph::new(visible).block(panel(&title)), area);
 }
 
 fn doctor_status(state: &DoctorState) -> (Color, Vec<Span<'static>>) {
@@ -787,7 +828,9 @@ mod tests {
             (KeyCode::Char('d'), none, Action::Doctor),
             (KeyCode::Char('D'), none, Action::Doctor),
             (KeyCode::Esc, none, Action::Back),
+            (KeyCode::Left, none, Action::Back),
             (KeyCode::Enter, none, Action::Activate),
+            (KeyCode::Right, none, Action::Dive),
             (KeyCode::Char('r'), ctrl, Action::Rebuild),
             (KeyCode::Char('p'), ctrl, Action::ReloadPlugins),
             (KeyCode::Char('c'), ctrl, Action::Quit),
@@ -809,7 +852,7 @@ mod tests {
 
     #[test]
     fn dashboard_cursor_moves_and_clamps() {
-        let mut dash = Dash::new(3);
+        let mut dash = Dash::new(Vec::new());
         assert_eq!(dash.cursor, 0);
         apply_action(&mut dash, Action::ScrollUp);
         assert_eq!(dash.cursor, 0, "clamps at top");
