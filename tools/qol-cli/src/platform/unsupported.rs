@@ -15,4 +15,6 @@ impl PlatformOps for Platform {
     fn stop_qol_tray(&self) -> Result<()> {
         Ok(())
     }
+
+    fn open_url(&self, _url: &str) {}
 }

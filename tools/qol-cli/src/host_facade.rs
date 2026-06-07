@@ -12,3 +12,7 @@ pub(crate) fn os_name() -> &'static str {
 pub(crate) fn stop_qol_tray() -> Result<()> {
     Platform.stop_qol_tray()
 }
+
+pub(crate) fn open_url(url: &str) {
+    Platform.open_url(url)
+}
