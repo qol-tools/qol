@@ -122,6 +122,7 @@ pub fn rebuild_on_topology<T: Render + 'static>(
     }
     refresh_active_monitor_from_state();
     let mut stale = std::mem::take(&mut *active.borrow_mut());
+    #[cfg(debug_assertions)]
     let n_stale = stale.len();
     stale.destroy_all(cx);
     pre_create(cx);
