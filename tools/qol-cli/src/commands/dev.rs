@@ -2,7 +2,7 @@ use crate::cli::optional_single_arg;
 use crate::dev_console;
 use crate::dev_server::{post_dev_link, post_recompile, wait_for_health, DevLinkOutcome};
 use crate::host_facade;
-use crate::progress::{print_hint, print_title, run_step, step_label, StepKind};
+use crate::progress::{print_hint, print_title, run_step, run_step_inline, step_label, StepKind};
 use crate::workspace::{
     display_name, repo_root, scan_buildable_plugins, sibling_crates, BuildablePlugin,
 };
@@ -20,6 +20,7 @@ pub(crate) fn run(args: &[OsString], verbose: bool, skip_plugins: bool) -> Resul
         Some(branch) => ensure_worktree_branch(&root, branch)?,
         None => clear_active_worktree_marker(),
     }
+    run_doctor_preflight(&root, verbose);
     let buildable = collect_buildable_plugins(&root, skip_plugins)?;
     build_plugins_batch(&root, &buildable, verbose)?;
     run_dev_hook(&root, verbose)?;
@@ -144,6 +145,48 @@ fn clear_active_worktree_marker() {
     };
     let path = config_dir.join("qol-tray/dev/active-worktree.txt");
     let _ = std::fs::remove_file(path);
+}
+
+fn run_doctor_preflight(root: &Path, verbose: bool) {
+    let mut build = Command::new("cargo");
+    build.current_dir(root).args([
+        "build",
+        "-p",
+        "qol-tray",
+        "--features",
+        "dev",
+        "--bin",
+        "qol-tray-doctor",
+    ]);
+    if run_step_inline(
+        "doctor",
+        StepKind::Pending,
+        "building checks",
+        &mut build,
+        verbose,
+    )
+    .is_err()
+    {
+        step_label("doctor", StepKind::Info, "skipped (checks failed to build)");
+        return;
+    }
+
+    let binary = root
+        .join("target")
+        .join("debug")
+        .join(host_facade::exe_name("qol-tray-doctor"));
+    step_label("doctor", StepKind::Pending, "preflight checks");
+    match Command::new(&binary)
+        .current_dir(root)
+        .arg("check")
+        .status()
+    {
+        Ok(status) if status.success() => {
+            step_label("doctor", StepKind::Success, "all checks passed")
+        }
+        Ok(_) => step_label("doctor", StepKind::Info, "review the warnings above"),
+        Err(error) => eprintln!("qol dev: failed to run doctor: {error:#}"),
+    }
 }
 
 fn run_dev_hook(root: &Path, verbose: bool) -> Result<()> {
