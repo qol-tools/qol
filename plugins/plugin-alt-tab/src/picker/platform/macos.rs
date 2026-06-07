@@ -1,10 +1,6 @@
 use crate::discovery::WindowDiscovery;
 use crate::picker::create::PICKER_WINDOW_TITLE;
 
-pub fn hide_picker(title: &str) {
-    qol_gpui::popup_window::hide_window_by_title(title);
-}
-
 pub fn picker_window_title(_target: qol_gpui::window::MonitorKey) -> String {
     PICKER_WINDOW_TITLE.to_string()
 }

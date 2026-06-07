@@ -50,17 +50,10 @@ pub(crate) fn pre_create_ghost(
         active.borrow_mut().insert(target, handle);
         let _ = handle.update(cx, |view, _window, _cx| view.set_showing(false));
 
+        popup_window::configure_popup_window(&title);
         #[cfg(target_os = "linux")]
-        {
-            popup_window::configure_popup_window(&title);
-            popup_window::disable_window_shadow(&title);
-            popup_window::hide_window_invisible(&title);
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            popup_window::configure_popup_window(&title);
-            popup_window::hide_window_by_title(&title);
-        }
+        popup_window::disable_window_shadow(&title);
+        qol_gpui::ghost::hide_invisible(&title);
     }
     let keys: Vec<_> = active
         .borrow()
@@ -99,14 +92,7 @@ fn reposition_idle_ghost(
     let placement = centered_window_placement(Some(&monitor), header_size(), cx);
     let target = placement.target;
     let target_title = qol_gpui::ghost::ghost_window_title(LAUNCHER_WINDOW_TITLE, target);
-
-    let all_titles: Vec<String> = active
-        .borrow()
-        .iter()
-        .into_iter()
-        .map(|(key, _)| qol_gpui::ghost::ghost_window_title(LAUNCHER_WINDOW_TITLE, key))
-        .collect();
-
+    let all_titles = active.borrow().titles(LAUNCHER_WINDOW_TITLE);
     qol_gpui::ghost::reconcile(&target_title, &all_titles);
 }
 
@@ -135,13 +121,7 @@ fn show_ghost(
         return false;
     };
     let title = qol_gpui::ghost::ghost_window_title(LAUNCHER_WINDOW_TITLE, target);
-
-    let all_titles: Vec<String> = active
-        .borrow()
-        .iter()
-        .into_iter()
-        .map(|(key, _)| qol_gpui::ghost::ghost_window_title(LAUNCHER_WINDOW_TITLE, key))
-        .collect();
+    let all_titles = active.borrow().titles(LAUNCHER_WINDOW_TITLE);
 
     let prepared = handle
         .update(cx, |view, window, cx| {
@@ -199,10 +179,7 @@ fn open_hidden_ghost(
             }
         })
         .ok()?;
-    #[cfg(target_os = "linux")]
-    popup_window::hide_window_invisible(&title);
-    #[cfg(not(target_os = "linux"))]
-    let _ = title;
+    qol_gpui::ghost::hide_invisible(&title);
     Some(handle)
 }
 

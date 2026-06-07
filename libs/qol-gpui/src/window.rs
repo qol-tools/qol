@@ -131,6 +131,14 @@ impl<T: 'static> ActiveWindows<T> {
         self.windows.iter().map(|(k, v)| (*k, *v)).collect()
     }
 
+    pub fn titles_with(&self, title_of: impl Fn(MonitorKey) -> String) -> Vec<String> {
+        self.windows.keys().map(|key| title_of(*key)).collect()
+    }
+
+    pub fn titles(&self, prefix: &str) -> Vec<String> {
+        self.titles_with(|key| crate::ghost::ghost_window_title(prefix, key))
+    }
+
     pub fn destroy_non_target(&mut self, target: MonitorKey, cx: &mut App)
     where
         T: Render,

@@ -111,13 +111,10 @@ fn reposition_ghost_only(inputs: &ListenerInputs, event: &RuntimeEvent) {
     let placement = PopupPlacement::from_monitor(Some(monitor));
     let target = placement.target();
     let target_title = super::platform::picker_window_title(target);
-    let all_titles: Vec<String> = inputs
+    let all_titles = inputs
         .current
         .borrow()
-        .iter()
-        .into_iter()
-        .map(|(key, _)| super::platform::picker_window_title(key))
-        .collect();
+        .titles_with(super::platform::picker_window_title);
     let _reason = qol_gpui::popup_window::reason_scope("amc");
     qol_gpui::ghost::reconcile(&target_title, &all_titles);
     request_data_refresh();

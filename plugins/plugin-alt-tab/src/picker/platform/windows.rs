@@ -19,8 +19,6 @@ pub fn reuse_picker_across_targets() -> bool {
 
 pub fn disable_window_shadow(_title: &str) {}
 
-pub fn hide_picker(_title: &str) {}
-
 pub fn pre_create(
     _config: &AltTabConfig,
     _current: &PickerWindowState,

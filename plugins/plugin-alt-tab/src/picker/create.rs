@@ -190,14 +190,7 @@ pub(crate) fn pre_create_ghost(
         return;
     };
     current.borrow_mut().insert(target, handle);
-    #[cfg(target_os = "linux")]
-    {
-        qol_gpui::popup_window::hide_window_invisible(&title);
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        super::platform::hide_picker(&title);
-    }
+    qol_gpui::ghost::hide_invisible(&title);
     super::platform::configure_picker_window(&title);
     let _ = handle.update(cx, |_view, window, _cx| {
         super::platform::sync_picker_window_layout(&title, window, bounds.origin, bounds.size)

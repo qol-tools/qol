@@ -75,7 +75,7 @@ pub fn show_ghost_window(target_title: &str, all_titles: &[String]) {
     );
     for title in all_titles {
         if title != target_title {
-            hide_non_active(title);
+            hide_invisible(title);
         }
     }
     popup_window::show_window_by_title(target_title);
@@ -85,7 +85,7 @@ pub fn show_ghost_window(target_title: &str, all_titles: &[String]) {
     ));
 }
 
-fn hide_non_active(title: &str) {
+pub fn hide_invisible(title: &str) {
     #[cfg(target_os = "linux")]
     {
         popup_window::hide_window_invisible(title);
@@ -145,7 +145,7 @@ pub fn dismiss_to_ghost(prefix: &str, my_title: &str) {
     if on_active {
         popup_window::hide_window_by_title(my_title);
     } else {
-        hide_non_active(my_title);
+        hide_invisible(my_title);
     }
     popup_window::dump_ghost_windows(&format!(
         "dismiss title={my_title} active_mon={:?}",
