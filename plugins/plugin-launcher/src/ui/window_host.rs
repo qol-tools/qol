@@ -74,7 +74,7 @@ pub(crate) fn spawn_ghost_reposition_listener(
     qol_gpui::event_router::spawn_runtime_event_router(
         cx,
         vec![qol_gpui::protocol::RuntimeEventKind::ActiveMonitorChanged],
-        move |app, event| reposition_idle_ghost(&active, &focus_cache, event, app),
+        move |_app, event| reposition_idle_ghost(&active, &focus_cache, event),
     );
 }
 
@@ -82,18 +82,13 @@ fn reposition_idle_ghost(
     active: &Rc<RefCell<ActiveLaunchers>>,
     focus_cache: &MonitorTracker,
     event: &qol_gpui::protocol::RuntimeEvent,
-    cx: &mut App,
 ) {
-    let Some(monitor) =
-        qol_gpui::ghost::record_active_monitor(event).or_else(|| focus_cache.snapshot_monitor())
-    else {
-        return;
-    };
-    let placement = centered_window_placement(Some(&monitor), header_size(), cx);
-    let target = placement.target;
-    let target_title = qol_gpui::ghost::ghost_window_title(LAUNCHER_WINDOW_TITLE, target);
-    let all_titles = active.borrow().titles(LAUNCHER_WINDOW_TITLE);
-    qol_gpui::ghost::reconcile(&target_title, &all_titles);
+    qol_gpui::ghost::reconcile_from_event(
+        event,
+        &active.borrow(),
+        |key| qol_gpui::ghost::ghost_window_title(LAUNCHER_WINDOW_TITLE, key),
+        || focus_cache.snapshot_monitor(),
+    );
 }
 
 pub(crate) fn activate_or_open_launcher(

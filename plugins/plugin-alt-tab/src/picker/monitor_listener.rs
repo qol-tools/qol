@@ -103,21 +103,16 @@ fn reposition_ghost_only(inputs: &ListenerInputs, event: &RuntimeEvent) {
         eprintln!("[alt-tab/listener] picker visible, skipping ghost reposition");
         return;
     }
-    let Some(monitor) =
-        qol_gpui::ghost::record_active_monitor(event).or_else(|| inputs.tracker.snapshot_monitor())
-    else {
-        return;
-    };
-    let placement = PopupPlacement::from_monitor(Some(monitor));
-    let target = placement.target();
-    let target_title = super::platform::picker_window_title(target);
-    let all_titles = inputs
-        .current
-        .borrow()
-        .titles_with(super::platform::picker_window_title);
     let _reason = qol_gpui::popup_window::reason_scope("amc");
-    qol_gpui::ghost::reconcile(&target_title, &all_titles);
-    request_data_refresh();
+    let reconciled = qol_gpui::ghost::reconcile_from_event(
+        event,
+        &inputs.current.borrow(),
+        super::platform::picker_window_title,
+        || inputs.tracker.snapshot_monitor(),
+    );
+    if reconciled {
+        request_data_refresh();
+    }
 }
 
 fn trigger_data_refresh(inputs: &ListenerInputs, app_cx: &mut App) {
