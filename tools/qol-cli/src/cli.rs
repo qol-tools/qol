@@ -38,7 +38,7 @@ pub(crate) fn print_help() -> Result<()> {
 }
 
 pub(crate) fn help_text() -> &'static str {
-    "qol commands:\n  qol setup\n  qol dev [worktree]\n  qol build [name]\n  qol clean [name]\n  qol install\n  qol sync\n  qol trace [name]\n\nOptions:\n  -v, --verbose     show child command output\n  -n, --no-plugins  qol dev: skip plugin rebuilds\n"
+    "qol commands:\n  qol setup\n  qol dev [worktree]\n  qol build [name]\n  qol clean [name]\n  qol install\n  qol sync\n  qol trace [name]\n  qol doctor [step]\n\nOptions:\n  -v, --verbose     show child command output\n  -n, --no-plugins  qol dev: skip plugin rebuilds\n"
 }
 
 pub(crate) fn optional_single_arg<'a>(
