@@ -192,8 +192,10 @@ impl AltTabApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(debug_assertions)]
         let title = self.picker_title.clone();
         self.delegate.update(cx, |state, ctx| {
+            #[cfg(debug_assertions)]
             let was_stale = state
                 .windows
                 .iter()
@@ -205,12 +207,15 @@ impl AltTabApp {
                 ctx,
                 Some(&mut *window),
             );
-            let is_stale = state
-                .windows
-                .iter()
-                .any(|w| w.app_name.starts_with("__warmup_"));
-            if was_stale && !is_stale {
-                qol_runtime::probe!("PICKER_READY", "title={title}");
+            #[cfg(debug_assertions)]
+            {
+                let is_stale = state
+                    .windows
+                    .iter()
+                    .any(|w| w.app_name.starts_with("__warmup_"));
+                if was_stale && !is_stale {
+                    qol_runtime::probe!("PICKER_READY", "title={title}");
+                }
             }
             ctx.notify();
         });

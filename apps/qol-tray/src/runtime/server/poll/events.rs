@@ -54,9 +54,11 @@ impl EventTracker {
             return None;
         }
 
+        #[cfg(debug_assertions)]
         let is_boot = self.prev_active_idx.is_none();
         self.prev_active_idx = current_idx;
 
+        #[cfg(debug_assertions)]
         qol_runtime::probe!("HOST_EMIT_AMC", "new_idx={current_idx:?} is_boot={is_boot}");
 
         Some(RuntimeEvent::ActiveMonitorChanged {

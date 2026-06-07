@@ -43,8 +43,8 @@ dumped_windows = []
 target_opacities = {}
 picker_status = {}
 
-# Opacity write churn instrumentation: every HIDE_WIN/SHOW_WIN is one X connect +
-# full _NET_CLIENT_LIST scan, so a redundant or reverted write is a burned round-trip.
+# Opacity write churn instrumentation: every HIDE_WIN/SHOW_WIN is a popup
+# visibility write. Cached window ids avoid repeat _NET_CLIENT_LIST scans on hot paths.
 REVERT_WINDOW_MS = 200
 opacity_state = {}
 waste = {
@@ -232,7 +232,7 @@ def print_waste():
     if total == 0:
         return
     print(f"\n{COLOR_HEADER}═══ OPACITY CHURN ═══{COLOR_RESET}")
-    print(f"  Opacity writes:      {total}  {COLOR_DIM}(each = 1 X connect + client-list scan){COLOR_RESET}")
+    print(f"  Opacity writes:      {total}  {COLOR_DIM}(each = popup visibility write; cached WID avoids repeat scans){COLOR_RESET}")
     print(f"  {COLOR_WARN}Redundant (no-op){COLOR_RESET}:   {waste['redundant']} ({100 * waste['redundant'] // total}%)  {COLOR_DIM}burned round-trips{COLOR_RESET}")
     print(f"  {COLOR_FAIL}Reverts (self-heal){COLOR_RESET}: {waste['reverts']}")
     if waste["by_reason"]:

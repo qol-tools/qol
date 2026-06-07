@@ -95,6 +95,7 @@ fn drain(rx: &Arc<Mutex<mpsc::Receiver<()>>>) {
 }
 
 fn reposition_ghost_only(inputs: &ListenerInputs, event: &RuntimeEvent) {
+    #[cfg(debug_assertions)]
     if let RuntimeEvent::ActiveMonitorChanged { monitor_idx, .. } = event {
         qol_runtime::probe!("PLUGIN_RECV_AMC", "monitor_idx={:?}", monitor_idx);
     }
