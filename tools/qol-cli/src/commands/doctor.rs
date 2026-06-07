@@ -26,7 +26,10 @@ pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
         std::process::exit(built.code().unwrap_or(1));
     }
 
-    let binary = root.join("target/debug/qol-tray-doctor");
+    let binary = root
+        .join("target")
+        .join("debug")
+        .join(crate::host_facade::exe_name("qol-tray-doctor"));
     let mut doctor = Command::new(&binary);
     doctor.current_dir(&root).arg("check");
     if let Some(step) = step {
