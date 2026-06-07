@@ -20,6 +20,7 @@ const TICK: Duration = Duration::from_millis(150);
 const HEALTH_PROBE_INTERVAL: Duration = Duration::from_secs(2);
 const STOP_GRACE: Duration = Duration::from_secs(5);
 const CRASH_TAIL: usize = 40;
+const ACK_TTL: Duration = Duration::from_secs(6);
 
 pub(crate) enum SessionEnd {
     ChildExited(ExitStatus),
@@ -464,10 +465,10 @@ fn tray_status(dash: &Dash) -> (Color, Vec<Span<'static>>) {
         format!(" · up {}", format_duration(dash.started.elapsed())).fg(Color::DarkGray),
     ];
     match &dash.rebuild {
-        RebuildState::Idle => {}
-        RebuildState::Requested(at) => value.push(
-            format!(" · rebuild requested {} ago", format_duration(at.elapsed())).fg(Color::Yellow),
-        ),
+        RebuildState::Requested(at) if at.elapsed() < ACK_TTL => {
+            value.push(" · rebuild sent".fg(Color::Yellow))
+        }
+        RebuildState::Idle | RebuildState::Requested(_) => {}
         RebuildState::Failed(error) => {
             value.push(" · rebuild ".fg(Color::DarkGray));
             value.push("failed".fg(Color::Red).bold());
@@ -496,31 +497,34 @@ fn dash_row(selected: bool, color: Color, label: &str, value: Vec<Span<'static>>
 fn panel(title: &str) -> Block<'static> {
     Block::bordered()
         .border_style(Style::new().fg(Color::DarkGray))
-        .title(Line::from(Span::from(title.to_string()).fg(Color::Green).bold()).centered())
+        .title(
+            Line::from(vec![
+                "┤ ".fg(Color::DarkGray),
+                title.trim().to_string().fg(Color::Green).bold(),
+                " ├".fg(Color::DarkGray),
+            ])
+            .centered(),
+        )
 }
 
 fn plugins_status(state: &RebuildState, plugins: usize) -> (Color, Vec<Span<'static>>) {
+    let base = format!("{plugins} linked");
     match state {
-        RebuildState::Idle => (
+        RebuildState::Requested(at) if at.elapsed() < ACK_TTL => (
             Color::Green,
-            vec![format!("{plugins} linked").fg(Color::Green)],
-        ),
-        RebuildState::Requested(at) => (
-            Color::Green,
-            vec![
-                format!("{plugins} linked").fg(Color::Green),
-                format!(" · reload requested {} ago", format_duration(at.elapsed()))
-                    .fg(Color::Yellow),
-            ],
+            vec![base.fg(Color::Green), " · reload sent".fg(Color::Yellow)],
         ),
         RebuildState::Failed(error) => (
             Color::Red,
             vec![
-                format!("{plugins} linked · reload ").fg(Color::DarkGray),
+                format!("{base} · reload ").fg(Color::DarkGray),
                 "failed".fg(Color::Red).bold(),
                 format!(" · {error}").fg(Color::DarkGray),
             ],
         ),
+        RebuildState::Idle | RebuildState::Requested(_) => {
+            (Color::Green, vec![base.fg(Color::Green)])
+        }
     }
 }
 
