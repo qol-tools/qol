@@ -45,6 +45,10 @@ pub(super) enum FixAction {
     PruneOrphanFingerprints {
         ids: Vec<String>,
     },
+    #[cfg(feature = "dev")]
+    PruneReservedPlugins {
+        ids: Vec<String>,
+    },
 }
 
 // Extend with ManualOnly / Destructive when a real FixAction first needs those tiers.
@@ -68,9 +72,9 @@ impl FixAction {
             | FixAction::DisableSymbolicHotkey { .. }
             | FixAction::ClearWindowsAppKey { .. } => FixApplicability::ReversibleHostMutation,
             #[cfg(feature = "dev")]
-            FixAction::RelocateDevLink { .. } | FixAction::PruneOrphanFingerprints { .. } => {
-                FixApplicability::SafeAutomatic
-            }
+            FixAction::RelocateDevLink { .. }
+            | FixAction::PruneOrphanFingerprints { .. }
+            | FixAction::PruneReservedPlugins { .. } => FixApplicability::SafeAutomatic,
         }
     }
 }
@@ -115,7 +119,23 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
         }
         #[cfg(feature = "dev")]
         FixAction::PruneOrphanFingerprints { ids } => prune_orphan_fingerprints(ids),
+        #[cfg(feature = "dev")]
+        FixAction::PruneReservedPlugins { ids } => prune_reserved_plugins(ids),
     }
+}
+
+#[cfg(feature = "dev")]
+fn prune_reserved_plugins(ids: &[String]) -> Result<()> {
+    let config_dir = crate::paths::shared_config_dir()?;
+    let mut registry = crate::plugins::registry::load_registry(&config_dir)
+        .map_err(|error| anyhow!("failed to load registry: {error}"))?;
+    let before = registry.entries.len();
+    registry.entries.retain(|entry| !ids.contains(&entry.id));
+    if registry.entries.len() == before {
+        return Ok(());
+    }
+    crate::plugins::registry::save_registry(&config_dir, &registry)
+        .map_err(|error| anyhow!("failed to save registry: {error}"))
 }
 
 #[cfg(feature = "dev")]
@@ -360,6 +380,15 @@ mod tests {
     fn prune_orphan_fingerprints_is_safe_automatic() {
         let action = FixAction::PruneOrphanFingerprints {
             ids: vec!["plugin-orphan".into()],
+        };
+        assert_eq!(action.applicability(), FixApplicability::SafeAutomatic);
+    }
+
+    #[cfg(feature = "dev")]
+    #[test]
+    fn prune_reserved_plugins_is_safe_automatic() {
+        let action = FixAction::PruneReservedPlugins {
+            ids: vec!["plugin-template".into()],
         };
         assert_eq!(action.applicability(), FixApplicability::SafeAutomatic);
     }

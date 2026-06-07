@@ -54,6 +54,13 @@ pub struct ResolutionReport {
 pub fn resolve_from_registry(registry: &Registry) -> ResolutionReport {
     let mut report = ResolutionReport::default();
     for entry in &registry.entries {
+        if crate::plugins::is_reserved_plugin_id(&entry.id) {
+            log::warn!(
+                "Refusing to resolve reserved plugin id from registry: {}",
+                entry.id
+            );
+            continue;
+        }
         let (active, fallback) = visible_slots(entry);
         let Some(active) = active else {
             continue;
@@ -264,6 +271,27 @@ mod tests {
         assert_eq!(report.plugins[0].resolved_from, ResolutionOrigin::Active);
         assert_eq!(report.plugins[0].source, PluginSource::Installed);
         assert!(report.plugins[0].active_failure.is_none());
+    }
+
+    #[test]
+    fn resolve_from_registry_skips_reserved_ids() {
+        let tmp = TempDir::new().unwrap();
+        let plugin_dir = tmp.path().join("plugin-template");
+        fs::create_dir(&plugin_dir).unwrap();
+        write_valid_manifest(&plugin_dir, "plugin-template");
+
+        let registry = Registry {
+            version: 1,
+            entries: vec![installed_entry("plugin-template", &plugin_dir)],
+        };
+        let report = resolve_from_registry(&registry);
+
+        assert!(
+            report.plugins.is_empty(),
+            "reserved id must never resolve: {:?}",
+            report.plugins
+        );
+        assert!(report.unavailable.is_empty());
     }
 
     #[cfg(feature = "dev")]

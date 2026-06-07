@@ -77,7 +77,7 @@ fn read_source(path: &Path) -> Option<SourceInfo> {
     }
 
     let id = path.file_name()?.to_string_lossy().into_owned();
-    if id == "plugin-template" {
+    if crate::plugins::is_reserved_plugin_id(&id) {
         return None;
     }
 
