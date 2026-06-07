@@ -19,4 +19,8 @@ impl PlatformOps for Platform {
             .status();
         Ok(())
     }
+
+    fn open_url(&self, url: &str) {
+        let _ = Command::new("cmd").args(["/C", "start", "", url]).spawn();
+    }
 }

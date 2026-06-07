@@ -22,4 +22,5 @@ pub(crate) trait PlatformOps {
     fn os_name(&self) -> &'static str;
     fn exe_name(&self, name: &str) -> String;
     fn stop_qol_tray(&self) -> Result<()>;
+    fn open_url(&self, url: &str);
 }

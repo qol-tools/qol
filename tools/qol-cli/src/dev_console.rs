@@ -12,7 +12,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 
-use crate::dev_server::{health_ok, post_recompile_current, post_reload_plugins};
+use crate::dev_server::{
+    health_ok, post_recompile_current, post_reload_plugins, probe_endpoints, web_ok,
+    EndpointStatus, WEBSITE_URL,
+};
 use crate::host_facade;
 
 const LOG_CAP: usize = 2000;
@@ -110,24 +113,43 @@ enum View {
     Doctor,
     Plugins,
     Trace,
+    Endpoints,
 }
 
 #[derive(Clone, Copy)]
 enum Row {
     Tray,
+    Web,
     Plugins,
     Doctor,
     Logs,
     Trace,
 }
 
-const ROWS: [Row; 5] = [Row::Tray, Row::Plugins, Row::Doctor, Row::Logs, Row::Trace];
+const ROWS: [Row; 6] = [
+    Row::Tray,
+    Row::Web,
+    Row::Plugins,
+    Row::Doctor,
+    Row::Logs,
+    Row::Trace,
+];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Health {
     Checking,
     Up,
     Down,
+}
+
+struct HealthSnapshot {
+    api: bool,
+    web: bool,
+}
+
+enum EndpointsState {
+    Probing,
+    Done(Vec<EndpointStatus>),
 }
 
 #[derive(Clone, Copy)]
@@ -166,6 +188,9 @@ struct Dash {
     logs: LogRing,
     scroll_offset: usize,
     health: Health,
+    web: Health,
+    endpoints: EndpointsState,
+    endpoints_rx: Option<Receiver<Vec<EndpointStatus>>>,
     started: Instant,
     rebuild: RebuildState,
     plugin_reload: RebuildState,
@@ -189,6 +214,9 @@ impl Dash {
             logs: LogRing::new(),
             scroll_offset: 0,
             health: Health::Checking,
+            web: Health::Checking,
+            endpoints: EndpointsState::Probing,
+            endpoints_rx: None,
             started: Instant::now(),
             rebuild: RebuildState::Idle,
             plugin_reload: RebuildState::Idle,
@@ -267,15 +295,20 @@ fn tui_session(
     terminal: &mut DefaultTerminal,
     child: &mut Child,
     lines: &Receiver<String>,
-    health: &Receiver<bool>,
+    health: &Receiver<HealthSnapshot>,
     dash: &mut Dash,
 ) -> Result<SessionEnd> {
     loop {
         while let Ok(line) = lines.try_recv() {
             dash.logs.push(line);
         }
-        while let Ok(up) = health.try_recv() {
-            dash.health = if up { Health::Up } else { Health::Down };
+        while let Ok(snapshot) = health.try_recv() {
+            dash.health = health_state(snapshot.api);
+            dash.web = health_state(snapshot.web);
+        }
+        if let Some(results) = dash.endpoints_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            dash.endpoints = EndpointsState::Done(results);
+            dash.endpoints_rx = None;
         }
         let doctor_outcome = dash.doctor_rx.as_ref().and_then(|rx| rx.try_recv().ok());
         if let Some(outcome) = doctor_outcome {
@@ -425,6 +458,7 @@ fn apply_action(dash: &mut Dash, action: Action) {
 fn act_row(dash: &mut Dash) {
     match ROWS[dash.cursor] {
         Row::Tray => trigger_rebuild(dash),
+        Row::Web => host_facade::open_url(WEBSITE_URL),
         Row::Plugins => trigger_reload(dash),
         Row::Doctor => dash.start_doctor(),
         Row::Logs | Row::Trace => {}
@@ -434,6 +468,7 @@ fn act_row(dash: &mut Dash) {
 fn dive_row(dash: &mut Dash) {
     match ROWS[dash.cursor] {
         Row::Tray => {}
+        Row::Web => open_endpoints(dash),
         Row::Plugins => {
             dash.view = View::Plugins;
             dash.scroll_offset = 0;
@@ -444,6 +479,21 @@ fn dive_row(dash: &mut Dash) {
             dash.scroll_offset = 0;
         }
         Row::Trace => open_trace(dash),
+    }
+}
+
+fn open_endpoints(dash: &mut Dash) {
+    dash.view = View::Endpoints;
+    dash.scroll_offset = 0;
+    dash.endpoints = EndpointsState::Probing;
+    dash.endpoints_rx = Some(spawn_endpoints_probe());
+}
+
+fn health_state(up: bool) -> Health {
+    if up {
+        Health::Up
+    } else {
+        Health::Down
     }
 }
 
@@ -516,6 +566,7 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
         View::Doctor => draw_doctor(frame, dash, main),
         View::Plugins => draw_plugins(frame, dash, main),
         View::Trace => draw_trace(frame, dash, main),
+        View::Endpoints => draw_endpoints(frame, dash, main),
     }
     frame.render_widget(
         Paragraph::new(footer_text(dash)).style(Style::new().dim()),
@@ -531,6 +582,7 @@ fn footer_text(dash: &Dash) -> String {
         View::Dashboard => {
             let hints = match ROWS[dash.cursor] {
                 Row::Tray => "enter rebuild tray",
+                Row::Web => "enter open site · → endpoints",
                 Row::Plugins => "enter reload · → list",
                 Row::Doctor => "enter run · → steps",
                 Row::Logs => "→ open",
@@ -541,6 +593,7 @@ fn footer_text(dash: &Dash) -> String {
         View::Logs | View::Trace => stream_footer(dash),
         View::Doctor => " d refresh · ↑/↓ scroll · ← back · q quit ".to_string(),
         View::Plugins => " ↑/↓ scroll · ← back · q quit ".to_string(),
+        View::Endpoints => " ← back · q quit ".to_string(),
     }
 }
 
@@ -555,22 +608,24 @@ fn stream_footer(dash: &Dash) -> String {
 
 fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: Rect) {
     let (tray_color, tray_value) = tray_status(dash);
+    let (web_color, web_value) = web_status(dash.web);
     let (plugins_color, plugins_value) =
         plugins_status(&dash.plugin_reload, dash.plugin_names.len());
     let (doctor_color, doctor_value) = doctor_status(&dash.doctor);
 
     let rows = vec![
         dash_row(dash.cursor == 0, tray_color, "tray", tray_value),
-        dash_row(dash.cursor == 1, plugins_color, "plugins", plugins_value),
-        dash_row(dash.cursor == 2, doctor_color, "doctor", doctor_value),
+        dash_row(dash.cursor == 1, web_color, "web", web_value),
+        dash_row(dash.cursor == 2, plugins_color, "plugins", plugins_value),
+        dash_row(dash.cursor == 3, doctor_color, "doctor", doctor_value),
         dash_row(
-            dash.cursor == 3,
+            dash.cursor == 4,
             Color::DarkGray,
             "logs",
             vec![format!("{} buffered", dash.logs.len()).fg(Color::DarkGray)],
         ),
         dash_row(
-            dash.cursor == 4,
+            dash.cursor == 5,
             Color::DarkGray,
             "trace",
             trace_value(dash),
@@ -633,6 +688,9 @@ fn tray_status(dash: &Dash) -> (Color, Vec<Span<'static>>) {
         text.fg(color).bold(),
         format!(" · up {}", format_duration(dash.started.elapsed())).fg(Color::DarkGray),
     ];
+    if dash.health == Health::Up {
+        value.push(" · api ✓".fg(Color::Green));
+    }
     match &dash.rebuild {
         RebuildState::Requested(at) if at.elapsed() < ACK_TTL => {
             value.push(" · rebuild sent".fg(Color::Yellow))
@@ -645,6 +703,20 @@ fn tray_status(dash: &Dash) -> (Color, Vec<Span<'static>>) {
         }
     }
     (color, value)
+}
+
+fn web_status(web: Health) -> (Color, Vec<Span<'static>>) {
+    match web {
+        Health::Checking => (Color::Yellow, vec!["checking".fg(Color::Yellow)]),
+        Health::Up => (
+            Color::Green,
+            vec![
+                "up".fg(Color::Green).bold(),
+                " · localhost:42700".fg(Color::DarkGray),
+            ],
+        ),
+        Health::Down => (Color::Red, vec!["down".fg(Color::Red).bold()]),
+    }
 }
 
 fn dash_row(selected: bool, color: Color, label: &str, value: Vec<Span<'static>>) -> Line<'static> {
@@ -834,6 +906,27 @@ fn trace_value(dash: &Dash) -> Vec<Span<'static>> {
     }
 }
 
+fn draw_endpoints(frame: &mut Frame, dash: &Dash, area: Rect) {
+    let lines: Vec<Line> = match &dash.endpoints {
+        EndpointsState::Probing => vec![Line::from("  probing endpoints".fg(Color::DarkGray))],
+        EndpointsState::Done(items) => items.iter().map(endpoint_line).collect(),
+    };
+    frame.render_widget(Paragraph::new(lines).block(panel(" endpoints ")), area);
+}
+
+fn endpoint_line(status: &EndpointStatus) -> Line<'static> {
+    let (symbol, color) = if status.ok {
+        ("✓", Color::Green)
+    } else {
+        ("✗", Color::Red)
+    };
+    Line::from(vec![
+        format!("  {symbol} ").fg(color).bold(),
+        status.label.to_string().fg(Color::White),
+        format!(" · {}", if status.ok { "up" } else { "down" }).fg(Color::DarkGray),
+    ])
+}
+
 fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: Rect) {
     if dash.doctor_lines.is_empty() {
         let message = match dash.doctor {
@@ -980,13 +1073,25 @@ fn spawn_forwarder(reader: impl Read + Send + 'static, tx: Sender<String>) {
     });
 }
 
-fn spawn_health_probe() -> Receiver<bool> {
+fn spawn_health_probe() -> Receiver<HealthSnapshot> {
     let (tx, rx) = channel();
     std::thread::spawn(move || loop {
-        if tx.send(health_ok()).is_err() {
+        let snapshot = HealthSnapshot {
+            api: health_ok(),
+            web: web_ok(),
+        };
+        if tx.send(snapshot).is_err() {
             return;
         }
         std::thread::sleep(HEALTH_PROBE_INTERVAL);
+    });
+    rx
+}
+
+fn spawn_endpoints_probe() -> Receiver<Vec<EndpointStatus>> {
+    let (tx, rx) = channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(probe_endpoints());
     });
     rx
 }

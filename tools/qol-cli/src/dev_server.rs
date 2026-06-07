@@ -4,10 +4,14 @@ use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
+pub(crate) const WEBSITE_URL: &str = "http://localhost:42700";
+const WEB_HEALTH_URL: &str = "http://127.0.0.1:42700/";
 const DEV_HEALTH_URL: &str = "http://127.0.0.1:42700/api/dev/worktrees";
 const DEV_RECOMPILE_URL: &str = "http://127.0.0.1:42700/api/dev/recompile-self";
 const DEV_RELOAD_URL: &str = "http://127.0.0.1:42700/api/dev/reload";
 const DEV_LINKS_URL: &str = "http://127.0.0.1:42700/api/dev/links";
+const AUTH_HEALTH_URL: &str = "http://127.0.0.1:42700/api/auth/health";
+const LOGS_HEALTH_URL: &str = "http://127.0.0.1:42700/api/logs/entries";
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
 const HEALTH_INTERVAL: Duration = Duration::from_millis(250);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(1);
@@ -36,6 +40,31 @@ pub(crate) fn post_recompile(branch: &str) -> Result<()> {
 
 pub(crate) fn health_ok() -> bool {
     http_get_ok(DEV_HEALTH_URL).unwrap_or(false)
+}
+
+pub(crate) fn web_ok() -> bool {
+    http_get_ok(WEB_HEALTH_URL).unwrap_or(false)
+}
+
+pub(crate) struct EndpointStatus {
+    pub(crate) label: &'static str,
+    pub(crate) ok: bool,
+}
+
+pub(crate) fn probe_endpoints() -> Vec<EndpointStatus> {
+    const ENDPOINTS: [(&str, &str); 4] = [
+        ("website", WEB_HEALTH_URL),
+        ("dev api", DEV_HEALTH_URL),
+        ("auth", AUTH_HEALTH_URL),
+        ("logs", LOGS_HEALTH_URL),
+    ];
+    ENDPOINTS
+        .iter()
+        .map(|(label, url)| EndpointStatus {
+            label,
+            ok: http_get_ok(url).unwrap_or(false),
+        })
+        .collect()
 }
 
 pub(crate) fn post_recompile_current() -> Result<()> {
