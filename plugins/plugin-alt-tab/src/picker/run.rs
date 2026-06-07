@@ -117,9 +117,34 @@ fn spawn_daemon_loop(cx: &mut App, rx: mpsc::Receiver<daemon::Command>, state: P
                     dispatch_show(&cx, true, &state).await;
                     LoopFlow::Continue
                 }
+                daemon::Command::Reload => {
+                    dispatch_reload(&cx, &state).await;
+                    LoopFlow::Continue
+                }
                 daemon::Command::Kill => LoopFlow::Stop,
             }
         }
+    });
+}
+
+async fn dispatch_reload(cx: &AsyncApp, state: &PickerState) {
+    let config = crate::config::load_alt_tab_config();
+    let current = state.current.clone();
+    let _ = cx.update(move |_cx| {
+        qol_gpui::popup_window::set_ghost_debug(
+            config.display.ghost_opacity,
+            config.display.ghost_debug_color.as_deref(),
+        );
+        if crate::app::PICKER_VISIBLE.load(Ordering::Relaxed) {
+            return;
+        }
+        let keys: Vec<_> = current
+            .borrow()
+            .iter()
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect();
+        qol_gpui::ghost::reconcile_active(&keys, super::platform::picker_window_title);
     });
 }
 
