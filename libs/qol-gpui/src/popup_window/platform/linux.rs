@@ -235,6 +235,7 @@ pub fn configure_popup_window(title: &str) -> bool {
     };
 
     set_window_type_dock(&conn, wid);
+    set_qol_ghost(&conn, wid);
     set_window_manager_decorations(&conn, wid, false);
     set_window_manager_state(&conn, wid);
     let _ = conn.flush();
@@ -272,12 +273,12 @@ pub fn dump_ghost_windows(context: &str) {
             crate::probe::probe("GHOSTDUMP", &format!("ctx={context} begin"));
             let mut count = 0u32;
             for wid in ids {
+                if !is_qol_ghost(&conn, wid) {
+                    continue;
+                }
                 let Some(title) = read_window_name(&conn, wid, name_atom, utf8_atom) else {
                     continue;
                 };
-                if !title.starts_with("qol-") {
-                    continue;
-                }
                 crate::probe::probe("GHOSTWIN", &inspect_ghost_window(&conn, root, wid, &title));
                 count += 1;
             }
@@ -437,6 +438,13 @@ fn set_window_type_dock(conn: &impl Connection, wid: u32) {
     );
 }
 
+fn set_qol_ghost(conn: &impl Connection, wid: u32) {
+    let Some(atom) = intern(conn, b"_QOL_GHOST") else {
+        return;
+    };
+    let _ = conn.change_property32(PropMode::REPLACE, wid, atom, AtomEnum::CARDINAL, &[1]);
+}
+
 fn set_window_manager_state(conn: &impl Connection, wid: u32) {
     let Some(state_atom) = intern(conn, b"_NET_WM_STATE") else {
         return;
@@ -550,6 +558,18 @@ fn window_pid(conn: &impl Connection, wid: u32) -> Option<u32> {
         .reply()
         .ok()?;
     reply.value32().and_then(|mut values| values.next())
+}
+
+#[cfg(debug_assertions)]
+fn is_qol_ghost(conn: &impl Connection, wid: u32) -> bool {
+    let Some(atom) = intern(conn, b"_QOL_GHOST") else {
+        return false;
+    };
+    conn.get_property(false, wid, atom, AtomEnum::CARDINAL, 0, 1)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .and_then(|reply| reply.value32()?.next())
+        == Some(1)
 }
 
 #[cfg(debug_assertions)]
