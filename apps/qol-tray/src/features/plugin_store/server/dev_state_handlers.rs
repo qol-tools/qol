@@ -7,13 +7,13 @@ use axum::{
 };
 
 use crate::dev::state::DiscoveryStatus;
-use crate::dev::DevConfig;
+use crate::dev::{DevConfig, GpuiRuntimeConfig};
 
 use super::dev_services;
 use super::dev_validation::sanitize_monitored_plugin_ids;
 use super::types::{
-    AppState, BuildStateResponse, DiscoveryStateResponse, SetPluginCpuMonitoringRequest,
-    ToolingGhAccountPayload,
+    AppState, BuildStateResponse, DiscoveryStateResponse, RuntimeGpuiPayload,
+    SetPluginCpuMonitoringRequest, ToolingGhAccountPayload,
 };
 
 pub(super) fn routes() -> Router<AppState> {
@@ -30,6 +30,41 @@ pub(super) fn routes() -> Router<AppState> {
             "/dev/tooling-gh-account",
             get(get_tooling_gh_account).post(set_tooling_gh_account),
         )
+        .route(
+            "/dev/runtime/gpui",
+            get(get_runtime_gpui).post(set_runtime_gpui),
+        )
+}
+
+pub(super) async fn get_runtime_gpui() -> Json<RuntimeGpuiPayload> {
+    let cfg = tokio::task::spawn_blocking(|| GpuiRuntimeConfig::load().unwrap_or_default())
+        .await
+        .unwrap_or_default();
+    Json(RuntimeGpuiPayload {
+        ghost_opacity: cfg.ghost_opacity,
+    })
+}
+
+pub(super) async fn set_runtime_gpui(Json(payload): Json<RuntimeGpuiPayload>) -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        GpuiRuntimeConfig::set_ghost_opacity(payload.ghost_opacity)
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => StatusCode::OK.into_response(),
+        Ok(Err(error)) => {
+            log::error!("Failed to write runtime gpui config: {error:#}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to persist runtime gpui config",
+            )
+                .into_response()
+        }
+        Err(error) => {
+            log::error!("set_runtime_gpui join error: {}", error);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Handler crashed").into_response()
+        }
+    }
 }
 
 pub(super) async fn get_tooling_gh_account() -> Json<ToolingGhAccountPayload> {

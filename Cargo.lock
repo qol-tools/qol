@@ -5271,7 +5271,10 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "qol-config",
  "qol-runtime",
+ "serde",
+ "serde_json",
  "x11rb",
 ]
 

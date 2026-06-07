@@ -7,7 +7,10 @@ description = "GPUI windowing helpers for resident qol-tray plugins: ghost popup
 
 [dependencies]
 gpui.workspace = true
+qol-config.workspace = true
 qol-runtime.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { workspace = true, features = ["shape"] }

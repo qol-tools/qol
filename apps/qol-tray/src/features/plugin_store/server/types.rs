@@ -284,6 +284,13 @@ pub(super) struct ToolingGhAccountPayload {
     pub(super) value: Option<String>,
 }
 
+#[cfg(feature = "dev")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub(super) struct RuntimeGpuiPayload {
+    #[serde(default)]
+    pub(super) ghost_opacity: Option<f32>,
+}
+
 #[cfg(all(test, feature = "dev"))]
 mod tests {
     use super::RecompileSelfRequest;
