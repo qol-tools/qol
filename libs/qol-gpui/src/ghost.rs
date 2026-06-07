@@ -6,37 +6,7 @@ use crate::monitor::ActiveMonitor;
 use crate::popup_window;
 use crate::protocol::RuntimeEvent;
 
-pub fn sync_window_layout(
-    title: &str,
-    window: &mut Window,
-    origin: Point<Pixels>,
-    size: Size<Pixels>,
-) -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        let _ = window;
-        popup_window::set_window_bounds_by_title(
-            title,
-            origin.x.to_f64(),
-            origin.y.to_f64(),
-            size.width.to_f64(),
-            size.height.to_f64(),
-        )
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let backing = popup_window::window_backing_scale(title);
-        crate::window::resize_or_sync_scale(window, size, backing);
-        popup_window::reposition_window_by_title(title, origin.x.to_f64(), origin.y.to_f64())
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = origin;
-        let backing = popup_window::window_backing_scale(title);
-        crate::window::resize_or_sync_scale(window, size, backing);
-        true
-    }
-}
+pub use crate::popup_window::{hide_invisible, sync_window_layout};
 
 static ACTIVE_MONITOR: Mutex<Option<ActiveMonitor>> = Mutex::new(None);
 
@@ -58,6 +28,15 @@ pub fn resolve_active_monitor() -> Option<ActiveMonitor> {
             .get_state()
             .and_then(|state| state.active_monitor().map(ActiveMonitor::from_bounds))
     })
+}
+
+pub fn refresh_active_monitor_from_state() {
+    let fresh = crate::PlatformStateClient::from_env()
+        .get_state()
+        .and_then(|state| state.active_monitor().map(ActiveMonitor::from_bounds));
+    if let Ok(mut slot) = ACTIVE_MONITOR.lock() {
+        *slot = fresh;
+    }
 }
 
 pub fn ghost_window_title(prefix: &str, target: crate::window::MonitorKey) -> String {
@@ -85,33 +64,14 @@ pub fn show_ghost_window(target_title: &str, all_titles: &[String]) {
     ));
 }
 
-pub fn hide_invisible(title: &str) {
-    #[cfg(target_os = "linux")]
-    {
-        popup_window::hide_window_invisible(title);
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        popup_window::hide_window_by_title(title);
-    }
-}
-
 pub fn reconcile(active_title: &str, all_titles: &[String]) {
-    #[cfg(target_os = "linux")]
-    {
-        qol_runtime::probe!("RECONCILE", "active={active_title} n={}", all_titles.len());
-        for title in all_titles {
-            if title == active_title {
-                popup_window::hide_window_by_title(title);
-            } else {
-                popup_window::hide_window_invisible(title);
-            }
+    qol_runtime::probe!("RECONCILE", "active={active_title} n={}", all_titles.len());
+    for title in all_titles {
+        if title == active_title {
+            popup_window::hide_window_by_title(title);
+        } else {
+            popup_window::hide_invisible(title);
         }
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = active_title;
-        let _ = all_titles;
     }
     popup_window::dump_ghost_windows(&format!(
         "reconcile target={active_title} active_mon={:?}",
@@ -147,20 +107,24 @@ pub fn reconcile_from_event<T: 'static>(
 }
 
 pub fn dismiss_to_ghost(prefix: &str, my_title: &str) {
+    dismiss_to_ghost_with(my_title, |key| ghost_window_title(prefix, key));
+}
+
+pub fn dismiss_to_ghost_with(
+    my_title: &str,
+    title_of: impl Fn(crate::window::MonitorKey) -> String,
+) {
     let _reason = popup_window::reason_scope("dismiss");
-    let on_active = resolve_active_monitor()
-        .map(|monitor| {
-            ghost_window_title(
-                prefix,
-                crate::window::MonitorKey::from_bounds(&monitor.bounds()),
-            )
-        })
-        .as_deref()
-        == Some(my_title);
-    if on_active {
-        popup_window::hide_window_by_title(my_title);
-    } else {
-        hide_invisible(my_title);
+    let active_title = resolve_active_monitor()
+        .map(|monitor| title_of(crate::window::MonitorKey::from_bounds(&monitor.bounds())));
+    match active_title {
+        Some(active_title) if active_title != my_title => {
+            hide_invisible(my_title);
+            popup_window::hide_window_by_title(&active_title);
+        }
+        _ => {
+            popup_window::hide_window_by_title(my_title);
+        }
     }
     popup_window::dump_ghost_windows(&format!(
         "dismiss title={my_title} active_mon={:?}",

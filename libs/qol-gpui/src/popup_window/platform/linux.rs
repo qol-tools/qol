@@ -110,12 +110,31 @@ pub fn set_window_bounds_by_title(
     )
 }
 
+pub fn sync_window_layout(
+    title: &str,
+    _window: &mut gpui::Window,
+    origin: gpui::Point<gpui::Pixels>,
+    size: gpui::Size<gpui::Pixels>,
+) -> bool {
+    set_window_bounds_by_title(
+        title,
+        origin.x.to_f64(),
+        origin.y.to_f64(),
+        size.width.to_f64(),
+        size.height.to_f64(),
+    )
+}
+
 pub fn hide_window_by_title(title: &str) -> bool {
     hide_window_with_opacity(title, ghost_opacity())
 }
 
 pub fn hide_window_invisible(title: &str) -> bool {
     hide_window_with_opacity(title, 0.0)
+}
+
+pub fn hide_invisible(title: &str) -> bool {
+    hide_window_invisible(title)
 }
 
 fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {

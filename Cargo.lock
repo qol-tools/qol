@@ -3684,6 +3684,7 @@ dependencies = [
  "qol-gpui",
  "qol-platform",
  "qol-plugin-daemon",
+ "qol-runtime",
  "qol-search",
  "qol-tray",
  "serde",

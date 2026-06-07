@@ -12,7 +12,8 @@ use qol_gpui::command_loop::LoopFlow;
 
 use super::keepalive;
 use super::window_host::{
-    activate_or_open_launcher, pre_create_ghost, spawn_ghost_reposition_listener, ActiveLaunchers,
+    activate_or_open_launcher, any_showing, pre_create_ghost, spawn_ghost_reposition_listener,
+    spawn_topology_listener, ActiveLaunchers,
 };
 
 pub fn run() {
@@ -52,6 +53,7 @@ pub fn run() {
 
         pre_create_ghost(entries.clone(), active.clone(), focus_cache.clone(), cx);
         spawn_ghost_reposition_listener(active.clone(), focus_cache.clone(), cx);
+        spawn_topology_listener(entries.clone(), active.clone(), focus_cache.clone(), cx);
 
         spawn_command_poll(entries.clone(), active.clone(), rx, focus_cache.clone(), cx);
         discovery::start(entries.clone());
@@ -114,12 +116,7 @@ fn spawn_command_poll(
 
 fn reload_ghost_debug(active: &Rc<RefCell<ActiveLaunchers>>, cx: &mut App) {
     crate::config::apply_ghost_debug();
-    let any_showing = active
-        .borrow()
-        .iter()
-        .into_iter()
-        .any(|(_, handle)| handle.read(cx).map(|view| view.is_showing).unwrap_or(false));
-    if any_showing {
+    if any_showing(active, cx) {
         return;
     }
     let keys: Vec<_> = active

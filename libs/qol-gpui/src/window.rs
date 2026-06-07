@@ -139,6 +139,17 @@ impl<T: 'static> ActiveWindows<T> {
         self.titles_with(|key| crate::ghost::ghost_window_title(prefix, key))
     }
 
+    pub fn destroy_all(&mut self, cx: &mut App)
+    where
+        T: Render,
+    {
+        let handles: Vec<WindowHandle<T>> =
+            self.windows.drain().map(|(_, handle)| handle).collect();
+        for handle in handles {
+            let _ = handle.update(cx, |_, window, _| window.remove_window());
+        }
+    }
+
     pub fn destroy_non_target(&mut self, target: MonitorKey, cx: &mut App)
     where
         T: Render,
