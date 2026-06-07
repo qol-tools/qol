@@ -24,8 +24,8 @@ export function PluginActionsSubPage({ slot }) {
     }
 
     const onActivate = (item) => {
-        try { item.run?.(); }
-        finally { dispatchEscape(); }
+        dispatchEscape();
+        item.run?.();
     };
 
     return html`
