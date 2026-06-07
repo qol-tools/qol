@@ -77,7 +77,7 @@ pub fn reposition_window_by_title(title: &str, gpui_x: f64, gpui_y: f64) -> bool
     move_window(&conn, root, wid, gpui_x as i32, gpui_y as i32)
 }
 
-pub fn set_window_bounds_by_title(
+fn set_window_bounds_by_title(
     title: &str,
     gpui_x: f64,
     gpui_y: f64,
@@ -129,12 +129,8 @@ pub fn hide_window_by_title(title: &str) -> bool {
     hide_window_with_opacity(title, ghost_opacity())
 }
 
-pub fn hide_window_invisible(title: &str) -> bool {
-    hide_window_with_opacity(title, 0.0)
-}
-
 pub fn hide_invisible(title: &str) -> bool {
-    hide_window_invisible(title)
+    hide_window_with_opacity(title, 0.0)
 }
 
 fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
