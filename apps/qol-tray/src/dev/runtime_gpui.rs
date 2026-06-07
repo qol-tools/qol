@@ -32,6 +32,12 @@ impl GpuiRuntimeConfig {
         config.ghost_opacity = clamp_opacity(value);
         config.save()
     }
+
+    pub fn set_ghost_debug_color(value: Option<&str>) -> Result<()> {
+        let mut config = Self::load().unwrap_or_default();
+        config.ghost_debug_color = normalize_color(value);
+        config.save()
+    }
 }
 
 fn clamp_opacity(value: Option<f32>) -> Option<f32> {
@@ -40,6 +46,21 @@ fn clamp_opacity(value: Option<f32>) -> Option<f32> {
         return None;
     }
     Some(raw.clamp(0.0, 1.0))
+}
+
+pub fn normalize_color(value: Option<&str>) -> Option<String> {
+    let raw = value?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let body = raw.strip_prefix('#').unwrap_or(raw);
+    if body.len() != 6 {
+        return None;
+    }
+    if !body.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(format!("#{}", body.to_ascii_lowercase()))
 }
 
 #[cfg(test)]
@@ -108,6 +129,85 @@ mod tests {
 
         let loaded = GpuiRuntimeConfig::load().unwrap();
         assert_eq!(loaded, GpuiRuntimeConfig::default());
+    }
+
+    #[test]
+    fn normalize_color_table() {
+        let cases: &[(Option<&str>, Option<&str>)] = &[
+            (None, None),
+            (Some(""), None),
+            (Some("   "), None),
+            (Some("#ff8800"), Some("#ff8800")),
+            (Some("ff8800"), Some("#ff8800")),
+            (Some("  #FF8800  "), Some("#ff8800")),
+            (Some("#FFAACC"), Some("#ffaacc")),
+            (Some("#fff"), None),
+            (Some("#ff88000"), None),
+            (Some("#zzzzzz"), None),
+            (Some("not-a-color"), None),
+            (Some("#12 3456"), None),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                normalize_color(*input).as_deref(),
+                *expected,
+                "input: {:?}",
+                input
+            );
+        }
+    }
+
+    #[test]
+    fn set_ghost_debug_color_writes_and_reads_back() {
+        let _guard = crate::test_support::env_lock().blocking_lock();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let _path_guard = crate::paths::push_test_path_root(tmp.path());
+
+        GpuiRuntimeConfig::set_ghost_debug_color(Some("FF8800")).unwrap();
+        let loaded = GpuiRuntimeConfig::load().unwrap();
+        assert_eq!(loaded.ghost_debug_color.as_deref(), Some("#ff8800"));
+    }
+
+    #[test]
+    fn set_ghost_debug_color_rejects_invalid_hex_by_clearing() {
+        let _guard = crate::test_support::env_lock().blocking_lock();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let _path_guard = crate::paths::push_test_path_root(tmp.path());
+
+        GpuiRuntimeConfig::set_ghost_debug_color(Some("#ff8800")).unwrap();
+        GpuiRuntimeConfig::set_ghost_debug_color(Some("not-a-color")).unwrap();
+        let loaded = GpuiRuntimeConfig::load().unwrap();
+        assert_eq!(loaded.ghost_debug_color, None);
+    }
+
+    #[test]
+    fn set_ghost_debug_color_clears_with_none() {
+        let _guard = crate::test_support::env_lock().blocking_lock();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let _path_guard = crate::paths::push_test_path_root(tmp.path());
+
+        GpuiRuntimeConfig::set_ghost_debug_color(Some("#abcdef")).unwrap();
+        GpuiRuntimeConfig::set_ghost_debug_color(None).unwrap();
+        let loaded = GpuiRuntimeConfig::load().unwrap();
+        assert_eq!(loaded.ghost_debug_color, None);
+    }
+
+    #[test]
+    fn opacity_and_color_persist_independently() {
+        let _guard = crate::test_support::env_lock().blocking_lock();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let _path_guard = crate::paths::push_test_path_root(tmp.path());
+
+        GpuiRuntimeConfig::set_ghost_opacity(Some(0.3)).unwrap();
+        GpuiRuntimeConfig::set_ghost_debug_color(Some("#112233")).unwrap();
+        let after_color = GpuiRuntimeConfig::load().unwrap();
+        assert_eq!(after_color.ghost_opacity, Some(0.3));
+        assert_eq!(after_color.ghost_debug_color.as_deref(), Some("#112233"));
+
+        GpuiRuntimeConfig::set_ghost_opacity(None).unwrap();
+        let after_clear = GpuiRuntimeConfig::load().unwrap();
+        assert_eq!(after_clear.ghost_opacity, None);
+        assert_eq!(after_clear.ghost_debug_color.as_deref(), Some("#112233"));
     }
 
     #[test]
