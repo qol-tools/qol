@@ -172,7 +172,7 @@ export function GpuiSubPage() {
                 <${OpacityRow} value=${ghostOpacity} onInput=${onOpacityInput} />
                 <${ColorRow} value=${ghostColor} onInput=${onColorInput} />
                 <p class="gpui-hint">
-                    Changes take effect next time a GPUI plugin opens its window.
+                    Changes apply live to running GPUI plugin windows.
                     Leave the color empty to clear the debug tint.
                 </p>
                 ${error && html`<p class="error-msg">${error}</p>`}
