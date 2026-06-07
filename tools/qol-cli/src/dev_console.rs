@@ -32,6 +32,7 @@ enum Action {
     Rebuild,
     ReloadPlugins,
     Doctor,
+    Back,
     Quit,
     ScrollUp,
     ScrollDown,
@@ -53,6 +54,7 @@ fn action_for(code: KeyCode, mods: KeyModifiers) -> Action {
     match code {
         KeyCode::Char('l') | KeyCode::Char('L') => Action::ToggleView,
         KeyCode::Char('d') | KeyCode::Char('D') => Action::Doctor,
+        KeyCode::Esc => Action::Back,
         KeyCode::Char('q') => Action::Quit,
         KeyCode::Up => Action::ScrollUp,
         KeyCode::Down => Action::ScrollDown,
@@ -98,6 +100,7 @@ fn clamp_offset(len: usize, height: usize, offset: usize) -> usize {
 enum View {
     Dashboard,
     Logs,
+    Doctor,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -127,6 +130,11 @@ enum DoctorState {
     Failed(String),
 }
 
+struct DoctorRun {
+    report: DoctorReport,
+    lines: Vec<String>,
+}
+
 enum RebuildState {
     Idle,
     Requested(Instant),
@@ -144,7 +152,8 @@ struct Dash {
     plugins: usize,
     log_height: usize,
     doctor: DoctorState,
-    doctor_rx: Option<Receiver<Result<DoctorReport, String>>>,
+    doctor_lines: Vec<String>,
+    doctor_rx: Option<Receiver<Result<DoctorRun, String>>>,
 }
 
 impl Dash {
@@ -160,6 +169,7 @@ impl Dash {
             plugins,
             log_height: 0,
             doctor: DoctorState::Running,
+            doctor_lines: Vec::new(),
             doctor_rx: None,
         }
     }
@@ -233,10 +243,16 @@ fn tui_session(
         }
         let doctor_outcome = dash.doctor_rx.as_ref().and_then(|rx| rx.try_recv().ok());
         if let Some(outcome) = doctor_outcome {
-            dash.doctor = match outcome {
-                Ok(report) => DoctorState::Done(report),
-                Err(error) => DoctorState::Failed(error),
-            };
+            match outcome {
+                Ok(run) => {
+                    dash.doctor = DoctorState::Done(run.report);
+                    dash.doctor_lines = run.lines;
+                }
+                Err(error) => {
+                    dash.doctor_lines = vec![format!("[ERR] doctor: {error}")];
+                    dash.doctor = DoctorState::Failed(error);
+                }
+            }
             dash.doctor_rx = None;
         }
         if let Some(status) = try_wait(child)? {
@@ -276,8 +292,8 @@ fn apply_action(dash: &mut Dash, action: Action) {
     match action {
         Action::ToggleView => {
             dash.view = match dash.view {
-                View::Dashboard => View::Logs,
                 View::Logs => View::Dashboard,
+                _ => View::Logs,
             };
             dash.scroll_offset = 0;
         }
@@ -293,7 +309,15 @@ fn apply_action(dash: &mut Dash, action: Action) {
                 Err(error) => RebuildState::Failed(format!("{error:#}")),
             };
         }
-        Action::Doctor => dash.start_doctor(),
+        Action::Doctor => {
+            dash.view = View::Doctor;
+            dash.scroll_offset = 0;
+            dash.start_doctor();
+        }
+        Action::Back => {
+            dash.view = View::Dashboard;
+            dash.scroll_offset = 0;
+        }
         Action::ScrollUp => dash.scroll_offset = dash.scroll_offset.saturating_add(1),
         Action::ScrollDown => dash.scroll_offset = dash.scroll_offset.saturating_sub(1),
         Action::PageUp => dash.scroll_offset = dash.scroll_offset.saturating_add(page),
@@ -310,12 +334,14 @@ fn draw(frame: &mut Frame, dash: &mut Dash) {
     match dash.view {
         View::Dashboard => draw_dashboard(frame, dash, main),
         View::Logs => draw_logs(frame, dash, main),
+        View::Doctor => draw_doctor(frame, dash, main),
     }
     let keys = match dash.view {
         View::Dashboard => " L logs · ^R rebuild · ^P plugins · d doctor · q quit ",
         View::Logs => {
             " L dashboard · ^R rebuild · ^P plugins · d doctor · ↑/↓ scroll · f follow · q quit "
         }
+        View::Doctor => " d refresh · L logs · ↑/↓ scroll · esc back · q quit ",
     };
     frame.render_widget(Paragraph::new(keys).style(Style::new().dim()), footer);
 }
@@ -398,10 +424,8 @@ fn draw_dashboard(frame: &mut Frame, dash: &Dash, area: ratatui::layout::Rect) {
 }
 
 fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: ratatui::layout::Rect) {
-    let height = area.height.saturating_sub(2) as usize;
-    dash.log_height = height;
-    dash.scroll_offset = clamp_offset(dash.logs.len(), height, dash.scroll_offset);
-    let start = window_start(dash.logs.len(), height, dash.scroll_offset);
+    let total = dash.logs.len();
+    let (start, height) = list_window(dash, area, total);
     let visible: Vec<Line> = dash
         .logs
         .lines
@@ -410,14 +434,88 @@ fn draw_logs(frame: &mut Frame, dash: &mut Dash, area: ratatui::layout::Rect) {
         .take(height)
         .map(|line| styled_line(line))
         .collect();
-    let mode = if dash.scroll_offset == 0 {
+    let title = format!(" logs · {} ", list_status(total, dash.scroll_offset));
+    frame.render_widget(
+        Paragraph::new(visible).block(Block::bordered().title(title)),
+        area,
+    );
+}
+
+fn draw_doctor(frame: &mut Frame, dash: &mut Dash, area: ratatui::layout::Rect) {
+    if dash.doctor_lines.is_empty() {
+        let message = match dash.doctor {
+            DoctorState::Running => "  running checks",
+            _ => "  no checks reported · press d to run",
+        };
+        frame.render_widget(
+            Paragraph::new(message).block(Block::bordered().title(" doctor ")),
+            area,
+        );
+        return;
+    }
+    let total = dash.doctor_lines.len();
+    let (start, height) = list_window(dash, area, total);
+    let visible: Vec<Line> = dash
+        .doctor_lines
+        .iter()
+        .skip(start)
+        .take(height)
+        .map(|line| styled_doctor_line(line))
+        .collect();
+    let title = format!(" doctor · {} ", list_status(total, dash.scroll_offset));
+    frame.render_widget(
+        Paragraph::new(visible).block(Block::bordered().title(title)),
+        area,
+    );
+}
+
+fn list_window(dash: &mut Dash, area: ratatui::layout::Rect, total: usize) -> (usize, usize) {
+    let height = area.height.saturating_sub(2) as usize;
+    dash.log_height = height;
+    dash.scroll_offset = clamp_offset(total, height, dash.scroll_offset);
+    (window_start(total, height, dash.scroll_offset), height)
+}
+
+fn list_status(total: usize, scroll_offset: usize) -> String {
+    let mode = if scroll_offset == 0 {
         "follow"
     } else {
         "scroll"
     };
-    let title = format!(" logs · {} lines · {mode} ", dash.logs.len());
-    let block = Block::bordered().title(title);
-    frame.render_widget(Paragraph::new(visible).block(block), area);
+    format!("{total} lines · {mode}")
+}
+
+fn doctor_line_style(raw: &str) -> Option<(&'static str, Color)> {
+    let trimmed = raw.trim_start();
+    if trimmed.starts_with("[OK]") {
+        return Some(("✓", Color::Green));
+    }
+    if trimmed.starts_with("[WARN]") {
+        return Some(("▲", Color::Yellow));
+    }
+    if trimmed.starts_with("[ERR]") {
+        return Some(("✗", Color::Red));
+    }
+    if trimmed.starts_with("[CRASH]") {
+        return Some(("✗", Color::Magenta));
+    }
+    None
+}
+
+fn styled_doctor_line(raw: &str) -> Line<'static> {
+    let Some((symbol, color)) = doctor_line_style(raw) else {
+        return Line::from(format!("  {}", raw.trim_start()));
+    };
+    let rest = raw
+        .trim_start()
+        .split_once(']')
+        .map(|(_, rest)| rest)
+        .unwrap_or("")
+        .trim_start();
+    Line::from(vec![
+        format!("  {symbol} ").fg(color).bold(),
+        rest.to_string().into(),
+    ])
 }
 
 fn styled_line(raw: &str) -> Line<'_> {
@@ -506,7 +604,7 @@ fn spawn_health_probe() -> Receiver<bool> {
     rx
 }
 
-fn spawn_doctor_run() -> Receiver<Result<DoctorReport, String>> {
+fn spawn_doctor_run() -> Receiver<Result<DoctorRun, String>> {
     let (tx, rx) = channel();
     std::thread::spawn(move || {
         let _ = tx.send(run_doctor_once());
@@ -514,7 +612,7 @@ fn spawn_doctor_run() -> Receiver<Result<DoctorReport, String>> {
     rx
 }
 
-fn run_doctor_once() -> Result<DoctorReport, String> {
+fn run_doctor_once() -> Result<DoctorRun, String> {
     let root = crate::workspace::repo_root().map_err(|error| format!("{error:#}"))?;
     let binary = root
         .join("target")
@@ -525,8 +623,15 @@ fn run_doctor_once() -> Result<DoctorReport, String> {
         .arg("check")
         .output()
         .map_err(|error| error.to_string())?;
-    parse_doctor_summary(&String::from_utf8_lossy(&output.stdout))
-        .ok_or_else(|| "could not read doctor summary".to_string())
+    let text = String::from_utf8_lossy(&output.stdout);
+    let report =
+        parse_doctor_summary(&text).ok_or_else(|| "could not read doctor summary".to_string())?;
+    let lines = text
+        .lines()
+        .filter(|line| line.trim_start().starts_with('['))
+        .map(|line| line.to_string())
+        .collect();
+    Ok(DoctorRun { report, lines })
 }
 
 fn parse_doctor_summary(text: &str) -> Option<DoctorReport> {
@@ -561,6 +666,7 @@ mod tests {
             (KeyCode::Char('L'), none, Action::ToggleView),
             (KeyCode::Char('d'), none, Action::Doctor),
             (KeyCode::Char('D'), none, Action::Doctor),
+            (KeyCode::Esc, none, Action::Back),
             (KeyCode::Char('r'), ctrl, Action::Rebuild),
             (KeyCode::Char('p'), ctrl, Action::ReloadPlugins),
             (KeyCode::Char('c'), ctrl, Action::Quit),
@@ -577,6 +683,20 @@ mod tests {
         ];
         for (code, mods, expected) in cases {
             assert_eq!(action_for(code, mods), expected, "{code:?} {mods:?}");
+        }
+    }
+
+    #[test]
+    fn doctor_line_style_colors_by_status() {
+        let cases = [
+            ("[OK] x: y", Some(("✓", Color::Green))),
+            ("[WARN] x: y", Some(("▲", Color::Yellow))),
+            ("[ERR] x: y", Some(("✗", Color::Red))),
+            ("[CRASH] x: y", Some(("✗", Color::Magenta))),
+            ("Summary: ok=1", None),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(doctor_line_style(input), expected, "input: {input}");
         }
     }
 
