@@ -38,7 +38,11 @@ fn resolve_plugin_worktree(dev_link_path: &Path, branch: Option<&str>) -> PathBu
     resolved
 }
 
-fn remap_to_worktree(dev_link_path: &Path, current_root: Option<&Path>, target_root: &Path) -> PathBuf {
+fn remap_to_worktree(
+    dev_link_path: &Path,
+    current_root: Option<&Path>,
+    target_root: &Path,
+) -> PathBuf {
     let relative = current_root.and_then(|root| dev_link_path.strip_prefix(root).ok());
     match relative {
         Some(relative) => target_root.join(relative),
@@ -163,12 +167,7 @@ mod tests {
                 "/standalone-plugin",
                 "/standalone-plugin",
             ),
-            (
-                "/repo/plugins/plugin-x",
-                None,
-                "/wt/feat",
-                "/wt/feat",
-            ),
+            ("/repo/plugins/plugin-x", None, "/wt/feat", "/wt/feat"),
         ];
         for (dev_link, current_root, target_root, expected) in cases {
             let got = remap_to_worktree(
