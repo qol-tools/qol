@@ -54,6 +54,7 @@ pub fn hide_window_by_title(title: &str) -> bool {
     let Some(window) = find_window_by_title(mtm, title) else {
         return false;
     };
+    window.setLevel(NSPopUpMenuWindowLevel);
     #[cfg(debug_assertions)]
     {
         let alpha = f32::from_bits(GHOST_DEBUG_ALPHA.load(Ordering::Relaxed));
@@ -89,6 +90,7 @@ pub fn hide_invisible(title: &str) -> bool {
     let Some(window) = find_window_by_title(mtm, title) else {
         return false;
     };
+    window.setLevel(NSPopUpMenuWindowLevel);
     window.setAlphaValue(0.0);
     window.setIgnoresMouseEvents(true);
     qol_runtime::probe!(
@@ -140,6 +142,7 @@ pub fn show_window_by_title(title: &str) -> bool {
     let Some(window) = find_window_by_title(mtm, title) else {
         return false;
     };
+    window.setLevel(NSPopUpMenuWindowLevel);
     window.setBackgroundColor(Some(&NSColor::clearColor()));
     window.setIgnoresMouseEvents(false);
     window.makeKeyAndOrderFront(None);
@@ -219,7 +222,8 @@ fn find_window_by_title(mtm: MainThreadMarker, title: &str) -> Option<Retained<N
     let found = app
         .windows()
         .iter()
-        .find(|win| win.title().to_string() == title);
+        .filter(|win| win.title().to_string() == title)
+        .last();
     if found.is_none() {
         qol_runtime::probe!(
             "WIN_MISS",
