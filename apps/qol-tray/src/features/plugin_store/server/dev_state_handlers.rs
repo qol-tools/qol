@@ -50,68 +50,56 @@ pub(super) async fn set_runtime_gpui(
     State(state): State<AppState>,
     Json(payload): Json<RuntimeGpuiPayload>,
 ) -> impl IntoResponse {
-    match persist_runtime_gpui(payload).await {
-        Ok(()) => {
-            notify_daemons_runtime_gpui_changed(state);
-            StatusCode::OK.into_response()
-        }
-        Err(response) => response,
-    }
-}
-
-async fn persist_runtime_gpui(payload: RuntimeGpuiPayload) -> Result<(), axum::response::Response> {
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        let mut cfg = GpuiRuntimeConfig::load().unwrap_or_default();
-        if let Some(field) = payload.ghost_opacity {
-            cfg.ghost_opacity = clamp_payload_opacity(Some(field));
-        }
-        if let Some(field) = payload.ghost_debug_color.as_deref() {
-            cfg.ghost_debug_color = normalize_ghost_debug_color(Some(field));
-        }
-        cfg.save()
+        persist_runtime_gpui(payload)?;
+        notify_gpui_plugins(&state);
+        Ok(())
     })
     .await;
     match result {
-        Ok(Ok(())) => Ok(()),
+        Ok(Ok(())) => StatusCode::OK.into_response(),
         Ok(Err(error)) => {
             log::error!("Failed to write runtime gpui config: {error:#}");
-            Err((
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Failed to persist runtime gpui config",
             )
-                .into_response())
+                .into_response()
         }
         Err(error) => {
             log::error!("set_runtime_gpui join error: {}", error);
-            Err((StatusCode::INTERNAL_SERVER_ERROR, "Handler crashed").into_response())
+            (StatusCode::INTERNAL_SERVER_ERROR, "Handler crashed").into_response()
         }
     }
 }
 
-fn notify_daemons_runtime_gpui_changed(state: AppState) {
-    tokio::task::spawn_blocking(move || {
-        for socket in running_daemon_sockets(&state) {
-            let _ = crate::plugins::action_transport::dispatch_daemon_action(
-                std::path::Path::new(&socket),
-                "reload",
-            );
-        }
-    });
+fn persist_runtime_gpui(payload: RuntimeGpuiPayload) -> anyhow::Result<()> {
+    let mut cfg = GpuiRuntimeConfig::load().unwrap_or_default();
+    if let Some(field) = payload.ghost_opacity {
+        cfg.ghost_opacity = clamp_payload_opacity(Some(field));
+    }
+    if let Some(field) = payload.ghost_debug_color.as_deref() {
+        cfg.ghost_debug_color = normalize_ghost_debug_color(Some(field));
+    }
+    cfg.save()
 }
 
-fn running_daemon_sockets(state: &AppState) -> Vec<String> {
+fn notify_gpui_plugins(state: &AppState) {
+    for plugin_id in gpui_plugin_ids(state) {
+        if let Err(error) = super::settings::notify_plugin_reload(state, &plugin_id) {
+            log::warn!("runtime gpui reload notify failed for {plugin_id}: {error}");
+        }
+    }
+}
+
+fn gpui_plugin_ids(state: &AppState) -> Vec<String> {
     let Ok(manager) = state.plugin_manager.lock() else {
         return Vec::new();
     };
     manager
         .plugins()
-        .filter_map(|plugin| {
-            let daemon = plugin.manifest.daemon.as_ref()?;
-            if !daemon.enabled || plugin.daemon_pid().is_none() {
-                return None;
-            }
-            daemon.socket.clone()
-        })
+        .filter(|plugin| plugin.manifest.capabilities.gpui)
+        .map(|plugin| plugin.id.as_str().to_string())
         .collect()
 }
 
@@ -316,12 +304,11 @@ mod tests {
     async fn gpui_payload_round_trips_opacity_and_color() {
         let (_guard, _tmp, _path_guard) = isolated_env().await;
 
-        let response = persist_runtime_gpui(RuntimeGpuiPayload {
+        persist_runtime_gpui(RuntimeGpuiPayload {
             ghost_opacity: Some(0.42),
             ghost_debug_color: Some("FF8800".to_string()),
         })
-        .await;
-        assert!(response.is_ok(), "persist must succeed");
+        .unwrap();
 
         let Json(payload) = get_runtime_gpui().await;
         assert_eq!(payload.ghost_opacity, Some(0.42));
@@ -332,29 +319,27 @@ mod tests {
     async fn gpui_partial_payload_preserves_other_field() {
         let (_guard, _tmp, _path_guard) = isolated_env().await;
 
-        let _ = persist_runtime_gpui(RuntimeGpuiPayload {
+        persist_runtime_gpui(RuntimeGpuiPayload {
             ghost_opacity: Some(0.5),
             ghost_debug_color: Some("#112233".to_string()),
         })
-        .await;
+        .unwrap();
 
-        let opacity_only = persist_runtime_gpui(RuntimeGpuiPayload {
+        persist_runtime_gpui(RuntimeGpuiPayload {
             ghost_opacity: Some(0.9),
             ghost_debug_color: None,
         })
-        .await;
-        assert!(opacity_only.is_ok(), "opacity-only persist must succeed");
+        .unwrap();
 
         let Json(after_opacity) = get_runtime_gpui().await;
         assert_eq!(after_opacity.ghost_opacity, Some(0.9));
         assert_eq!(after_opacity.ghost_debug_color.as_deref(), Some("#112233"));
 
-        let color_only = persist_runtime_gpui(RuntimeGpuiPayload {
+        persist_runtime_gpui(RuntimeGpuiPayload {
             ghost_opacity: None,
             ghost_debug_color: Some("#445566".to_string()),
         })
-        .await;
-        assert!(color_only.is_ok(), "color-only persist must succeed");
+        .unwrap();
 
         let Json(after_color) = get_runtime_gpui().await;
         assert_eq!(after_color.ghost_opacity, Some(0.9));
@@ -365,18 +350,17 @@ mod tests {
     async fn gpui_invalid_hex_color_clears_color_field() {
         let (_guard, _tmp, _path_guard) = isolated_env().await;
 
-        let _ = persist_runtime_gpui(RuntimeGpuiPayload {
+        persist_runtime_gpui(RuntimeGpuiPayload {
             ghost_opacity: None,
             ghost_debug_color: Some("#abcdef".to_string()),
         })
-        .await;
+        .unwrap();
 
-        let response = persist_runtime_gpui(RuntimeGpuiPayload {
+        persist_runtime_gpui(RuntimeGpuiPayload {
             ghost_opacity: None,
             ghost_debug_color: Some("not-a-color".to_string()),
         })
-        .await;
-        assert!(response.is_ok(), "invalid color still persists as cleared");
+        .unwrap();
 
         let Json(payload) = get_runtime_gpui().await;
         assert_eq!(payload.ghost_debug_color, None);

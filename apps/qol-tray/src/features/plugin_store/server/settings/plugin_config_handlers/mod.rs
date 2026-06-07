@@ -12,6 +12,8 @@ mod form;
 mod io;
 mod notify;
 
+pub(in super::super) use notify::notify_plugin_reload;
+
 type HttpResult<T> = Result<T, Box<Response>>;
 
 pub(in super::super) async fn get_plugin_config(

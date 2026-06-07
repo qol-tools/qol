@@ -1,5 +1,6 @@
 use super::{DiscoveryError, WindowDiscovery, WindowInfo};
 use qol_app_icon::RgbaImage;
+use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::ConnectionExt as _;
@@ -24,9 +25,36 @@ struct DiscoverySession {
     atoms: AtomMap,
 }
 
+#[derive(Default)]
+struct IconCache {
+    by_window: HashMap<u32, RgbaImage>,
+    by_app: HashMap<String, RgbaImage>,
+}
+
+impl IconCache {
+    fn get(&self, window_id: u32, app_name: &str) -> Option<RgbaImage> {
+        if !app_name.is_empty() {
+            return self.by_app.get(app_name).cloned();
+        }
+        self.by_window.get(&window_id).cloned()
+    }
+
+    fn store(&mut self, window_id: u32, app_name: &str, icon: RgbaImage) {
+        self.by_window.insert(window_id, icon.clone());
+        if !app_name.is_empty() {
+            self.by_app.entry(app_name.to_string()).or_insert(icon);
+        }
+    }
+}
+
 fn discovery_session() -> &'static Mutex<Option<DiscoverySession>> {
     static SESSION: OnceLock<Mutex<Option<DiscoverySession>>> = OnceLock::new();
     SESSION.get_or_init(|| Mutex::new(connect_session()))
+}
+
+fn icon_cache() -> &'static Mutex<IconCache> {
+    static CACHE: OnceLock<Mutex<IconCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(IconCache::default()))
 }
 
 fn connect_session() -> Option<DiscoverySession> {
@@ -202,7 +230,6 @@ struct ResolvedProps {
     net_name: Vec<Option<GetPropertyReply>>,
     wm_name: Vec<Option<GetPropertyReply>>,
     wm_class: Vec<Option<GetPropertyReply>>,
-    icon: Vec<Option<GetPropertyReply>>,
     state: Vec<Option<GetPropertyReply>>,
     geom: Vec<Option<x11rb::protocol::xproto::GetGeometryReply>>,
 }
@@ -217,6 +244,7 @@ fn collect_window_info(conn: &impl Connection, ids: &[u32], atoms: &AtomMap) -> 
         let Some(info) = info else { continue };
         windows.push(info);
     }
+    hydrate_icons(conn, atoms, &mut windows);
     windows
 }
 
@@ -224,7 +252,6 @@ fn pipeline_and_resolve(conn: &impl Connection, ids: &[u32], atoms: &AtomMap) ->
     let state_atom = atoms.get("_NET_WM_STATE").copied();
     let net_name_atom = atoms.get("_NET_WM_NAME").copied();
     let wm_class_atom = atoms.get("WM_CLASS").copied().unwrap_or(0);
-    let wm_icon_atom = atoms.get("_NET_WM_ICON").copied().unwrap_or(0);
 
     ResolvedProps {
         state: batch_prop(conn, ids, |c, id| {
@@ -240,14 +267,6 @@ fn pipeline_and_resolve(conn: &impl Connection, ids: &[u32], atoms: &AtomMap) ->
         wm_class: batch_prop(conn, ids, |c, id| {
             c.get_property(false, id, wm_class_atom, AtomEnum::STRING, 0, 1024)
                 .ok()
-        }),
-        icon: batch_prop(conn, ids, |c, id| {
-            if wm_icon_atom != 0 {
-                c.get_property(false, id, wm_icon_atom, AtomEnum::CARDINAL, 0, 65536)
-                    .ok()
-            } else {
-                None
-            }
         }),
         geom: {
             let cookies: Vec<_> = ids.iter().map(|&id| conn.get_geometry(id).ok()).collect();
@@ -281,18 +300,92 @@ fn build_window_info(
     if title.is_empty() || title == "Desktop" {
         return None;
     }
+    let app_name = resolve_app_name(idx, props);
     Some(WindowInfo {
         id,
         title,
-        app_name: resolve_app_name(idx, props),
+        app_name,
         preview_path: None,
-        icon: props.icon[idx].take().and_then(|r| extract_x11_icon(&r)),
+        icon: None,
         x: props.geom[idx].as_ref().map_or(0.0, |r| r.x as f32),
         y: props.geom[idx].as_ref().map_or(0.0, |r| r.y as f32),
         width: props.geom[idx].as_ref().map_or(0.0, |r| r.width as f32),
         height: props.geom[idx].as_ref().map_or(0.0, |r| r.height as f32),
         is_minimized: resolve_minimized(idx, props, hidden_atom),
     })
+}
+
+fn hydrate_icons(conn: &impl Connection, atoms: &AtomMap, windows: &mut [WindowInfo]) {
+    let wm_icon_atom = atoms.get("_NET_WM_ICON").copied().unwrap_or(0);
+    if wm_icon_atom == 0 || windows.is_empty() {
+        return;
+    }
+
+    let missing = fill_cached_icons(windows);
+    if missing.is_empty() {
+        return;
+    }
+
+    let replies = batch_icon_props(conn, &missing, wm_icon_atom);
+    remember_fetched_icons(windows, missing, replies);
+}
+
+fn fill_cached_icons(windows: &mut [WindowInfo]) -> Vec<(usize, u32)> {
+    let Ok(cache) = icon_cache().lock() else {
+        return windows
+            .iter()
+            .enumerate()
+            .map(|(idx, window)| (idx, window.id))
+            .collect();
+    };
+    let mut missing = Vec::new();
+    for (idx, window) in windows.iter_mut().enumerate() {
+        if let Some(icon) = cache.get(window.id, &window.app_name) {
+            window.icon = Some(icon);
+        } else {
+            missing.push((idx, window.id));
+        }
+    }
+    missing
+}
+
+fn batch_icon_props(
+    conn: &impl Connection,
+    missing: &[(usize, u32)],
+    wm_icon_atom: u32,
+) -> Vec<Option<GetPropertyReply>> {
+    let cookies: Vec<_> = missing
+        .iter()
+        .map(|&(_, id)| {
+            conn.get_property(false, id, wm_icon_atom, AtomEnum::CARDINAL, 0, 65536)
+                .ok()
+        })
+        .collect();
+    cookies
+        .into_iter()
+        .map(|cookie| cookie.and_then(|cookie| cookie.reply().ok()))
+        .collect()
+}
+
+fn remember_fetched_icons(
+    windows: &mut [WindowInfo],
+    missing: Vec<(usize, u32)>,
+    replies: Vec<Option<GetPropertyReply>>,
+) {
+    let Ok(mut cache) = icon_cache().lock() else {
+        for ((idx, _), reply) in missing.into_iter().zip(replies) {
+            windows[idx].icon = reply.and_then(|reply| extract_x11_icon(&reply));
+        }
+        return;
+    };
+
+    for ((idx, window_id), reply) in missing.into_iter().zip(replies) {
+        let Some(icon) = reply.and_then(|reply| extract_x11_icon(&reply)) else {
+            continue;
+        };
+        cache.store(window_id, &windows[idx].app_name, icon.clone());
+        windows[idx].icon = Some(icon);
+    }
 }
 
 fn resolve_title(idx: usize, props: &mut ResolvedProps) -> String {
@@ -394,5 +487,48 @@ fn argb_to_bgra(pixels: &[u32], src_w: usize, src_h: usize, target: usize) -> Rg
         data: bgra,
         width: target,
         height: target,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn icon(byte: u8) -> RgbaImage {
+        RgbaImage {
+            data: vec![byte; 4],
+            width: 1,
+            height: 1,
+        }
+    }
+
+    fn assert_icon(actual: Option<RgbaImage>, expected_byte: u8) {
+        let actual = actual.expect("expected cached icon");
+        assert_eq!(actual.data, vec![expected_byte; 4]);
+        assert_eq!((actual.width, actual.height), (1, 1));
+    }
+
+    #[test]
+    fn icon_cache_reuses_app_icon_for_new_window() {
+        let mut cache = IconCache::default();
+        cache.store(1, "Terminal", icon(7));
+
+        assert_icon(cache.get(2, "Terminal"), 7);
+    }
+
+    #[test]
+    fn icon_cache_ignores_reused_window_id_for_different_app() {
+        let mut cache = IconCache::default();
+        cache.store(1, "Terminal", icon(7));
+
+        assert!(cache.get(1, "Browser").is_none());
+    }
+
+    #[test]
+    fn icon_cache_uses_window_id_when_app_name_is_empty() {
+        let mut cache = IconCache::default();
+        cache.store(1, "", icon(9));
+
+        assert_icon(cache.get(1, ""), 9);
     }
 }
