@@ -48,6 +48,7 @@ pub(crate) fn web_ok() -> bool {
 
 pub(crate) struct EndpointStatus {
     pub(crate) label: &'static str,
+    pub(crate) url: &'static str,
     pub(crate) ok: bool,
 }
 
@@ -62,6 +63,7 @@ pub(crate) fn probe_endpoints() -> Vec<EndpointStatus> {
         .iter()
         .map(|(label, url)| EndpointStatus {
             label,
+            url,
             ok: http_get_ok(url).unwrap_or(false),
         })
         .collect()
